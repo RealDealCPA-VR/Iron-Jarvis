@@ -212,6 +212,15 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   agent_update: { did: "Changed an agent", noun: "agent change" },
   agent_pause: { did: "Switched an agent on or off", noun: "agent switch" },
   agent_delete: { did: "Removed an agent", noun: "agent removal" },
+  // v1.438.0 (chat-first plan Wave 4 group C): preferences, lessons and
+  // personas from chat (agents/mission.py _RUN_TOOL_WORDS is the twin).
+  preference_list: { did: "Listed your kept preferences", noun: "preference list" },
+  preference_edit: { did: "Changed a kept preference", noun: "preference change" },
+  preference_forget: { did: "Forgot a kept preference", noun: "preference removal" },
+  lesson_add: { did: "Added a lesson", noun: "lesson" },
+  persona_create: { did: "Made a chat persona", noun: "persona creation" },
+  persona_update: { did: "Changed a chat persona", noun: "persona change" },
+  persona_delete: { did: "Removed or reset a chat persona", noun: "persona removal" },
 };
 
 /** One failed call of a KNOWN step kind (lib/stepWords), as a noun. A kind

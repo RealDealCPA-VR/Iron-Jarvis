@@ -106,6 +106,27 @@ _EXTENDERS = frozenset(
         "component", "variable",
     }
 )
+#: v1.438.0 (Wave 4 group C): after "…windows", a word that names one of
+#: WINDOWS' own things — "start Windows Update", "start Windows Defender" —
+#: is never "start Iron Jarvis with Windows".
+_WINDOWS_THINGS = frozenset(
+    {
+        "update", "updates", "defender", "explorer", "firewall", "terminal", "security", "store",
+        "search", "installer", "install", "installation", "license", "key", "activation", "backup",
+        "restore", "recovery", "repair", "troubleshooter", "sandbox", "subsystem", "shell", "server",
+        "machine", "machines", "vm", "laptop", "pc", "computer", "computers", "box", "partition",
+        "drive", "service", "services", "task", "tasks", "event", "events", "media", "photos",
+        "mail", "calendar", "hello", "ink", "insider", "safe", "settings", "control", "registry",
+    }
+)
+#: v1.438.0 review: a machine named right before "…start with Windows".
+_DEVICES = frozenset(
+    {
+        "laptop", "laptops", "pc", "pcs", "computer", "computers", "machine", "machines",
+        "workstation", "server", "servers", "printer", "scanner", "tablet", "surface", "vm",
+        "monitor", "dell", "lenovo", "thinkpad",
+    }
+)
 #: …unless the thing after it is this app ("the theme in the app").
 _APP_WORDS = frozenset(
     {"app", "jarvis", "iron", "chat", "chats", "settings", "setting", "dashboard", "build", "code"}
@@ -136,6 +157,33 @@ _CUE = re.compile(
     re.IGNORECASE,
 )
 
+#: v1.438.0 (Wave 4 group C): the languages the profile can answer in
+#: (``profile.language.LANGUAGES``' names, and Mandarin) — for "answer me in
+#: Spanish from now on".
+_LANG_NAMES = (
+    r"(?:english|spanish|french|german|portuguese|italian|dutch|polish|swedish|turkish|russian"
+    r"|ukrainian|greek|hebrew|arabic|hindi|thai|chinese|mandarin|japanese|korean)"
+)
+#: A clause that opens as a REQUEST (the start of a line or a sentence, after
+#: "please", "can you", "I want you to"…) — never "I always answer in Spanish"
+#: (a sentence about the user), never "my clients reply in French".
+_ASKS_AT = (
+    r"(?:^|(?<=[.!?;:,\n])\s*|\bplease\s+|\b(?:can|could|would|will)\s+you\s+(?:please\s+)?"
+    r"|\bi\s+(?:want|need|would\s+like)\s+you\s+to\s+|\bi'?d\s+like\s+you\s+to\s+|\band\s+)"
+)
+#: Words that make a request LASTING ("from now on", "by default", "always").
+_LASTING_WORDS = (
+    r"(?:from\s+now\s+on|by\s+default|going\s+forward|from\s+here\s+on|every\s+time|always"
+    r"|in\s+(?:all|every)\s+(?:of\s+)?(?:your\s+)?(?:answers?|repl(?:y|ies)|responses?)"
+    r"|even\s+(?:if|when)\b|no\s+matter\s+what|whatever\s+language)"
+)
+_ANSWER_VERB = r"(?:answer|reply|respond|talk|speak|write|chat)"
+#: The answer formats the profile's Formatting row has words for.
+_FORMATS = (
+    r"(?:bullet(?:\s+points?|ed\s+lists?)?|bullets|headings|numbered\s+lists?|tables|short\s+paragraphs"
+    r"|plain\s+prose|prose|paragraphs)"
+)
+
 #: Request shapes a phrase cannot spell. Each one names a setting AND asks for
 #: a change, so it counts as both.
 _MODEL_NAMES = (
@@ -153,6 +201,28 @@ _EXTRA_REFERENCES: tuple[re.Pattern[str], ...] = tuple(
         r"(?:model|ai|provider)\b",
         # "talk to me like a pirate by default", "answer in French by default".
         r"\b(?:talk|speak|answer|reply|respond|write|sound)\b[^.?!\n]{0,60}?\bby\s+default\b",
+        # v1.438.0 (Wave 4 group C): the profile's answer language — "answer
+        # me in Spanish from now on", "always reply in French", "from now on,
+        # write to me in German", "stick to Spanish even if I write English".
+        _ASKS_AT + r"(?:always\s+)?" + _ANSWER_VERB + r"\s+(?:to\s+)?(?:me\s+)?(?:only\s+)?in\s+" + _LANG_NAMES
+        + r"\b[^.?!\n]{0,40}?\b" + _LASTING_WORDS,
+        _ASKS_AT + r"(?:from\s+now\s+on|going\s+forward|always)\s*,?\s+(?:please\s+)?" + _ANSWER_VERB
+        + r"\s+(?:to\s+)?(?:me\s+)?(?:only\s+)?in\s+" + _LANG_NAMES + r"\b",
+        _ASKS_AT + r"stick\s+(?:to|with)\s+" + _LANG_NAMES + r"\b\s*(?:[.!]|$|" + _LASTING_WORDS + r")",
+        _ASKS_AT + r"(?:switch|change|set)\s+(?:my\s+|your\s+|the\s+)?(?:answer\s+|reply\s+|response\s+)?"
+        r"language\s+to\s+" + _LANG_NAMES + r"\b",
+        # …and its answer format: "use bullet points by default", "from now
+        # on, answer with headings".
+        _ASKS_AT + r"(?:always\s+)?(?:use|prefer|give\s+me|answer\s+(?:with|in)|reply\s+(?:with|in)"
+        r"|write\s+(?:with|in)|format\s+(?:your\s+)?(?:answers?|repl(?:y|ies))\s+(?:with|as|in))\s+"
+        + _FORMATS + r"\b[^.?!\n]{0,30}?\b" + _LASTING_WORDS,
+        _ASKS_AT + r"(?:from\s+now\s+on|going\s+forward|always)\s*,?\s+(?:please\s+)?(?:use|answer\s+(?:with|in)"
+        r"|reply\s+(?:with|in)|write\s+(?:with|in))\s+" + _FORMATS + r"\b",
+        # v1.438.0 review: the app named, then it starting by itself at
+        # sign-in — "make Jarvis open automatically when I log in".
+        r"\b(?:iron\s+jarvis|jarvis|the\s+desktop\s+app)\s+(?:to\s+)?(?:open|start|launch|run)s?\b"
+        r"[^.?!\n]{0,24}?\b(?:when\s+i\s+(?:log|sign)\s+(?:in|on)|at\s+(?:login|log\s*in|sign\s*in|startup)"
+        r"|on\s+startup|with\s+windows)\b",
         # "open files in Cursor", "use VS Code for files".
         r"\b(?:open|edit|show)\b[^.?!\n]{0,30}?\b(?:in|with)\s+(?:cursor|vs\s*code|vscode)\b",
         r"\b(?:use|switch\s+to|set|pick|choose)\s+(?:cursor|vs\s*code|vscode)\b",
@@ -424,6 +494,15 @@ def _about_something_else(toks: list[str], start: int, end: int, *, before: bool
     if before and end > 0 and toks[end - 1] in _NOT_OURS_BEFORE:
         return True
     if nxt in _EXTENDERS:
+        return True
+    if toks[end] in ("windows", "window's") and nxt in _WINDOWS_THINGS:
+        return True
+    if toks[end] in ("windows", "window's", "login", "startup") and _DEVICES.intersection(
+        toks[max(0, start - 4): start]
+    ):
+        # Review (v1.438.0): a MACHINE that starts with Windows — "my laptop
+        # doesn't start with Windows anymore" — is a PC problem, never the
+        # app's Start with Windows switch.
         return True
     if (
         nxt in ("of", "in", "inside", "into")

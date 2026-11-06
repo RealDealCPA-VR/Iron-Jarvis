@@ -73,6 +73,17 @@ def wants_settings(text: str) -> bool:
 # ------------------------------------------------------------------ helpers
 
 
+def _profile_on(platform: Any) -> bool:
+    """Is "Use my profile" on? Blocking; an unreadable profile reads on (the
+    note is only ever extra words)."""
+    try:
+        from ..profile.store import ProfileStore
+
+        return bool(getattr(ProfileStore(platform.engine).get(), "enabled", True))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _writer(platform: Any) -> Any:
     w = getattr(platform, "config_writer", None)
     if w is None:
@@ -383,9 +394,22 @@ class _ConfigChangeBase(Tool):
             )
         c = change.changed[0]
         restart = " It takes full effect after Iron Jarvis restarts." if d.restart else ""
+        # v1.438.0: a row the daemon does not act on itself says WHEN it
+        # applies ("The desktop app on this PC picks this up…").
+        applies = f" {d.applies}" if d.applies else ""
+        # v1.438.0 review: a profile row (the answer language, formatting
+        # rules…) reaches no prompt while "Use my profile" is off — the
+        # change is saved, and the reply must not read as "done".
+        if d.store == "profile" and key != "profile.enabled" and not await asyncio.to_thread(
+            _profile_on, self.platform
+        ):
+            applies += (
+                " Your profile is switched off (“Use my profile”), so answers do not follow this "
+                "until it is turned on."
+            )
         return ToolResult(
             ok=True,
-            output=f"Changed {c['label']}: {_show(c['old'])} → {_show(c['new'])}.{apps}{restart}",
+            output=f"Changed {c['label']}: {_show(c['old'])} → {_show(c['new'])}.{apps}{restart}{applies}",
             data={
                 "config_change": {
                     "key": key,

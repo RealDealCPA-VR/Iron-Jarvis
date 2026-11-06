@@ -131,6 +131,14 @@ _RECORD_TOOLS: dict[str, frozenset[str]] = {
     "grant": frozenset({"grant_revoke"}),
     "project": frozenset({"project_create", "project_update", "project_archive", "project_focus"}),
     "agent": frozenset({"agent_create", "agent_update", "agent_pause", "agent_delete", "create_agent"}),
+    # v1.438.0 (Wave 4 group C, settings/records_self): a kept preference or
+    # lesson (``remember_preference`` keeps one too), and a chat persona.
+    "preference": frozenset(
+        {"preference_edit", "preference_forget", "lesson_add", "remember_preference",
+         # …or kept in another of the user's memories ("saved to memory").
+         "memory_write", "memory_propose", "ltm_append", "brain_save", "notebook"}
+    ),
+    "persona": frozenset({"persona_create", "persona_update", "persona_delete"}),
 }
 #: A record card's key starts with these (``records._card``).
 _RECORD_CARD_PREFIX: dict[str, tuple[str, ...]] = {
@@ -144,6 +152,8 @@ _RECORD_CARD_PREFIX: dict[str, tuple[str, ...]] = {
     "grant": ("grant.",),
     "project": ("project.",),
     "agent": ("agent.",),
+    "preference": ("preference.",),
+    "persona": ("persona.",),
 }
 _APP_CONNECTORS = frozenset({"app_connect", "app_switch", "app_import", "channel_connect", "channel_toggle"})
 _APP_REMOVERS = frozenset({"app_disconnect", "app_switch", "app_import", "channel_remove", "channel_toggle"})
@@ -170,6 +180,8 @@ _RECORD_NOUN = {
     "project": "project",
     "agent": "agent",
     "app": "app",
+    "preference": "preference",
+    "persona": "persona",
 }
 
 ON, OFF, CHANGE, CREATE, REMOVE, PAUSE, CONNECT, DISCONNECT, UNDO = (
@@ -187,7 +199,7 @@ _VERBS: dict[str, str] = {
     "enabled": ON, "activated": ON, "unpaused": ON,
     "disabled": OFF, "deactivated": OFF, "muted": OFF,
     "deleted": REMOVE, "removed": REMOVE, "archived": REMOVE, "cancelled": REMOVE,
-    "canceled": REMOVE, "revoked": REMOVE,
+    "canceled": REMOVE, "revoked": REMOVE, "forgotten": REMOVE, "erased": REMOVE,
     "paused": PAUSE, "resumed": PAUSE, "stopped": PAUSE, "restarted": PAUSE,
     "connected": CONNECT, "imported": CONNECT, "installed": CONNECT, "linked": CONNECT,
     "disconnected": DISCONNECT, "uninstalled": DISCONNECT, "unlinked": DISCONNECT,
@@ -567,6 +579,9 @@ class Claim:
     apps: list[str] = field(default_factory=list)  # catalog ids ("" = an app, unnamed)
     local_only: bool = False
     undo: bool = False
+    #: v1.438.0: a LASTING PROMISE ("I'll answer in Spanish from now on") —
+    #: its note names the setting, even when a kept preference answers it too.
+    promise: bool = False
 
     def named(self) -> bool:
         return bool(self.settings or self.records or self.apps or self.local_only or self.undo)
@@ -722,6 +737,28 @@ def _np(phrase: list[str]) -> list[str]:
     return phrase
 
 
+#: v1.438.0 (Wave 4 group C): before "preference" / "lesson" and "persona",
+#: words that make it someone else's ("your seat preference", "a guitar
+#: lesson", "the buyer persona").
+_NOT_OUR_PREFERENCE_BEFORE = frozenset(
+    {"seat", "meal", "dietary", "cookie", "cookies", "privacy", "email", "marketing", "notification",
+     "notifications", "browser", "chrome", "edge", "windows", "outlook", "account", "customer", "travel",
+     "flight", "hotel", "font", "display", "keyboard", "printer", "system", "sharing", "shipping",
+     "guitar", "piano", "music", "driving", "tennis", "swimming", "online", "private", "first", "next",
+     "spanish", "french", "math", "history", "science", "student", "students", "valuable", "important"}
+)
+#: v1.438.0 review: teaching material a lesson is added to.
+_COURSE_WORDS = frozenset(
+    {"course", "courses", "class", "classes", "curriculum", "syllabus", "module", "workshop", "webinar",
+     "seminar", "training", "binder", "workbook", "cpe", "lms", "onboarding", "students", "slides", "deck",
+     "outline", "intern", "interns", "staff", "trainees", "textbook", "lecture"}
+)
+_NOT_OUR_PERSONA_BEFORE = frozenset(
+    {"buyer", "customer", "user", "marketing", "target", "audience", "brand", "ideal", "client",
+     "shopper", "fictional", "character", "ux", "player", "public", "online", "social", "stage",
+     "alter", "narrator's", "agent", "agents", "villain", "hero"}
+)
+
 #: A recurring "rule" is a reflex rule: "a rule that sends …".
 _RULE_VERBS = frozenset({"runs", "fires", "starts", "sends", "notifies", "triggers", "watches", "alerts", "will"})
 
@@ -770,6 +807,25 @@ def _record_kind(np: list[str], rest: list[str], sentence_toks: list[str]) -> st
         return "project" if (_DETS.intersection(mods) or nxt in ("called", "named")) else ""
     if head in ("agent", "agents"):
         return "" if (prv in _NOT_OUR_AGENT_BEFORE or prv == "sub") else "agent"
+    if head in ("preference", "preferences", "lesson", "lessons"):
+        # v1.438.0 (Wave 4 group C): a kept preference or lesson — never a
+        # seat's, a browser's, a cookie's, a guitar lesson.
+        if prv in _NOT_OUR_PREFERENCE_BEFORE or nxt in ("plan", "plans", "learned") or prv.endswith(("'s", "’s")):
+            return ""
+        # Review (v1.438.0): a lesson added TO a course, a class or a deck
+        # ("I added a lesson about depreciation to your CPE course") is a
+        # teacher's, never a kept lesson.
+        if head.startswith("lesson") and _COURSE_WORDS.intersection(rest[:14]):
+            return ""
+        return "preference"
+    if head in ("persona", "personas"):
+        if prv in _NOT_OUR_PERSONA_BEFORE:
+            return ""
+        # "…a new agent persona FOR THE STORY", "a persona for my campaign":
+        # a story's or a plan's, never one of the chat's.
+        if nxt == "for" and after not in ("you", "this", "chat", "chats", "jarvis", "iron", "me", "us"):
+            return ""
+        return "persona"
     if head in ("destination", "destinations"):
         return "destination" if _NOTIFY_WORDS.intersection(sentence_toks) else ""
     if head in ("notification", "notifications", "alert", "alerts"):
@@ -909,7 +965,13 @@ def _fill(claim: Claim, phrase: list[str], phrase_text: str, sentence_toks: list
     if _head(phrase) in _CONTENT_HEAD:
         return  # "I changed the email to ask first": the user's own content
     if {"preference", "preferences", "memory", "memories", "lesson", "lessons"}.intersection(phrase):
-        return  # a kept preference is memory (``remember_preference``), not a setting
+        # A kept preference is memory, never a setting. v1.438.0 (Wave 4
+        # group C): a preference or a lesson is a RECORD of the user's own
+        # now (``settings/records_self``) — "I've forgotten that preference",
+        # "I added a lesson" are judged; "memory" still names nothing here.
+        if claim.verb in _KIND_VERBS["record"]:
+            claim.records = [k for k in _records_in(phrase, claim.word, sentence_toks) if k == "preference"]
+        return
     if "local" in phrase and "only" in phrase and phrase.index("local") + 1 < len(phrase) and (
         phrase[phrase.index("local") + 1] == "only"
     ):
@@ -1010,6 +1072,93 @@ def _undo_object_ok(obj: list[str]) -> bool:
     )
 
 
+#: v1.438.0 (Wave 4 group C): a LASTING PROMISE is a claim too — "I'll
+#: answer in Spanish from now on", "From now on I'll use bullet points",
+#: "Iron Jarvis will now start with Windows". Each says a lasting change
+#: exists; it exists only when a setting (the profile's answer language or
+#: formatting, the desktop app's switch) — or, for the answer, a kept
+#: preference — changed THIS turn. Bounded, on the cleaned lower-case
+#: sentence; a denial ("won't", "no longer") never matches the forward form,
+#: and the desktop forms need "now" (or "no longer"): "Iron Jarvis will
+#: start with Windows" with no "now" DESCRIBES how it works — never a claim.
+_LANG_WORDS = (
+    r"(?:english|spanish|french|german|portuguese|italian|dutch|polish|swedish|turkish|russian"
+    r"|ukrainian|greek|hebrew|arabic|hindi|thai|chinese|mandarin|japanese|korean)"
+)
+_I_WILL = r"(?:i\s*'ll|i\s+will|i\s+am\s+going\s+to|i\s*'m\s+going\s+to)"
+_LASTING_RX = re.compile(
+    r"\b(?:from\s+now\s+on|from\s+here\s+on|going\s+forward|always|by\s+default|in\s+future"
+    r"|every\s+(?:reply|answer|response|time)|in\s+(?:all|every)\s+(?:of\s+)?(?:my\s+)?"
+    r"(?:answers?|repl(?:y|ies)|responses?))\b"
+)
+_PROMISE_LANGUAGE = re.compile(
+    r"\b" + _I_WILL + r"\s+(?:now\s+|always\s+|only\s+){0,2}(?:answer|reply|respond|write|talk|speak)\b"
+    r"[^.!?\n]{0,40}?\bin\s+" + _LANG_WORDS + r"\b"
+)
+_PROMISE_FORMAT = re.compile(
+    r"\b" + _I_WILL + r"\s+(?:now\s+|always\s+){0,2}(?:use|answer\s+(?:with|in)|reply\s+(?:with|in)"
+    r"|write\s+(?:with|in)|format\s+(?:my\s+)?(?:answers?|repl(?:y|ies))\s+(?:with|as|in))\s+"
+    r"(?:short\s+)?(?:bullet(?:\s+points?|ed\s+lists?)?|bullets|headings|numbered\s+lists?|tables"
+    r"|short\s+paragraphs|plain\s+prose|prose)\b"
+)
+_APP_NAME = r"(?:iron\s+jarvis|jarvis|the\s+(?:desktop\s+)?app|it)"
+_PROMISE_START_ON = re.compile(
+    r"\b" + _APP_NAME + r"\s+(?:will\s+now\s+|now\s+|will\s+from\s+now\s+on\s+)(?:start|open|launch|run)s?\s+(?:by\s+itself\s+|"
+    r"automatically\s+|on\s+its\s+own\s+)?(?:with\s+windows|when\s+(?:you\s+(?:log|sign)\s+in|windows\s+starts)"
+    r"|at\s+(?:login|startup|sign\s*-?\s*in))\b"
+)
+_PROMISE_START_OFF = re.compile(
+    r"\b" + _APP_NAME + r"\s+(?:will\s+no\s+longer|no\s+longer)\s+(?:start|open|launch|run)s?"
+    r"\s+(?:by\s+itself\s+|automatically\s+)?(?:with\s+windows|when\s+(?:you\s+(?:log|sign)\s+in|windows"
+    r"\s+starts)|at\s+(?:login|startup))\b"
+)
+_PROMISE_TRAY_ON = re.compile(
+    r"\b" + _APP_NAME + r"\s+(?:will\s+now\s+|now\s+|will\s+from\s+now\s+on\s+)(?:keep\s+running|stay\s+(?:open|running)|run)\s+"
+    r"(?:in\s+the\s+(?:background|tray))\b[^.!?\n]{0,40}?\bclose\b"
+)
+_PROMISE_TRAY_OFF = re.compile(
+    r"\b" + _APP_NAME + r"\s+(?:will\s+now\s+|now\s+|will\s+from\s+now\s+on\s+)(?:quit|close|stop|exit)s?\s+(?:completely\s+)?"
+    r"when\s+you\s+close\s+(?:the|its)\s+window\b"
+)
+
+
+#: Review (v1.438.0): words that make a promise an offer or a condition.
+_PROMISE_CONDITION = re.compile(
+    r"\b(?:if|unless|once|confirm|confirmed|would\s+you|do\s+you\s+want|want\s+me\s+to|shall\s+i|should\s+i"
+    r"|let\s+me\s+know|just\s+say|say\s+the\s+word)\b"
+)
+
+
+def _promise_claims(sentence: str) -> list[Claim]:
+    """The lasting promises one sentence makes (see :data:`_LASTING_RX`)."""
+    low = sentence.lower()
+    out: list[Claim] = []
+    if _PROMISE_CONDITION.search(low):
+        # Review (v1.438.0): an OFFER or a condition ("If you want, I'll
+        # always reply in German — confirm and I'll set it", "Once you
+        # confirm, I will answer in Spanish from now on") promises nothing.
+        return out
+    if _LASTING_RX.search(low):
+        if _PROMISE_LANGUAGE.search(low):
+            out.append(Claim(verb=CHANGE, word="changed", phrase=["answer", "language"],
+                             settings=["profile.language"], records=["preference"], promise=True))
+        if _PROMISE_FORMAT.search(low):
+            out.append(Claim(verb=CHANGE, word="changed", phrase=["formatting"],
+                             settings=["profile.formatting"], records=["preference"], promise=True))
+    for rx, verb, word in (
+        (_PROMISE_START_ON, ON, "turned on"),
+        (_PROMISE_START_OFF, OFF, "turned off"),
+    ):
+        if rx.search(low):
+            out.append(Claim(verb=verb, word=word, phrase=["start", "windows"],
+                             settings=["start_with_windows"], promise=True))
+    for rx, verb, word in ((_PROMISE_TRAY_ON, ON, "turned on"), (_PROMISE_TRAY_OFF, OFF, "turned off")):
+        if rx.search(low):
+            out.append(Claim(verb=verb, word=word, phrase=["keep", "running", "background"],
+                             settings=["keep_running_in_background"], promise=True))
+    return out
+
+
 def _claims_in_sentence(sentence: str, after_done: bool = False) -> list[Claim]:
     """Every change claim one sentence makes. *after_done*: the sentence
     before this one was only a completion ("Done!"). Never raises."""
@@ -1019,6 +1168,8 @@ def _claims_in_sentence(sentence: str, after_done: bool = False) -> list[Claim]:
     if not toks or _earlier(toks):
         return []
     out: list[Claim] = []
+    if not _user_acted(toks):
+        out.extend(_promise_claims(sentence))
     used: set[int] = set()
     # "Undone." / "Reverted." on their own.
     core = [t for t in toks if t not in _INTERJECTIONS and t not in _BOUNDARY]
@@ -1335,6 +1486,8 @@ class TurnRecord:
         for kind in claim.records:
             if self.used & _RECORD_TOOLS.get(kind, frozenset()):
                 return True
+            if kind == "preference" and any(k.startswith("profile.") for k in self.setting_keys):
+                return True  # v1.438.0: "your preference" kept in the profile (formatting, language)
             if any(key.startswith(_RECORD_CARD_PREFIX.get(kind, ("\x00",))) for key in self.record_card_keys):
                 return True
         if claim.apps:
@@ -1447,6 +1600,15 @@ def sentence_for(claim: Claim, record: "TurnRecord | None" = None) -> str:
         return (
             f"{name} is not connected yet: it waits for its key on the card {IN_THIS_REPLY}."
         )
+    if claim.promise:
+        label = _setting_label(claim)
+        if label:
+            return (
+                f"“{label}” was not changed {IN_THIS_REPLY}, so this lasts only while this chat's "
+                "history does."
+                if claim.records
+                else f"“{label}” was not changed {IN_THIS_REPLY}."
+            )
     if claim.records:
         return f"No {_RECORD_NOUN.get(claim.records[0], 'record')} was {_participle(claim)} {IN_THIS_REPLY}."
     if claim.apps:

@@ -92,6 +92,7 @@
     "image_resize",
     "integration_list",
     "integration_test",
+    "lesson_add",
     "list_agents",
     "list_files",
     "list_folder",
@@ -124,12 +125,18 @@
     "pdf_form_fields",
     "pdf_form_fill",
     "pdf_split",
+    "persona_create",
+    "persona_delete",
+    "persona_update",
     "pixio_generate",
     "pixio_models",
     "pixio_params",
     "pixio_status",
     "pixio_upload",
     "plan_update",
+    "preference_edit",
+    "preference_forget",
+    "preference_list",
     "process_read",
     "process_start",
     "process_stop",
@@ -284,6 +291,7 @@
     "image_resize": "make a file",
     "integration_list": "list your web services",
     "integration_test": "test a web service",
+    "lesson_add": "add a lesson to your preferences",
     "list_agents": "list the agents",
     "list_files": "look in a folder",
     "list_folder": "look in a folder",
@@ -316,12 +324,18 @@
     "pdf_form_fields": "read a file",
     "pdf_form_fill": "change a file",
     "pdf_split": "make a file",
+    "persona_create": "make a chat persona",
+    "persona_delete": "remove or reset a chat persona",
+    "persona_update": "change a chat persona",
     "pixio_generate": "make an image, video or sound",
     "pixio_models": "list the media models",
     "pixio_params": "check a media model's options",
     "pixio_status": "check on a media generation",
     "pixio_upload": "publish a file for a media generation",
     "plan_update": "update its plan",
+    "preference_edit": "change one of your kept preferences",
+    "preference_forget": "forget one of your kept preferences",
+    "preference_list": "list your kept preferences",
     "process_read": "read a running program's output",
     "process_start": "start a program that keeps running",
     "process_stop": "stop a running program",
@@ -637,6 +651,10 @@
       "Tested a web service",
       "Testing a web service"
     ],
+    "lesson_add": [
+      "Added a lesson",
+      "Adding a lesson"
+    ],
     "list_agents": [
       "Listed the agents",
       "Listing the agents"
@@ -713,6 +731,18 @@
       "Waited for a terminal",
       "Waiting for a terminal"
     ],
+    "persona_create": [
+      "Made a chat persona",
+      "Making a chat persona"
+    ],
+    "persona_delete": [
+      "Removed or reset a chat persona",
+      "Removing or reset a chat persona"
+    ],
+    "persona_update": [
+      "Changed a chat persona",
+      "Changing a chat persona"
+    ],
     "pixio_generate": [
       "Made an image, video or sound",
       "Making an image, video or sound"
@@ -736,6 +766,18 @@
     "plan_update": [
       "Updated its plan",
       "Updating its plan"
+    ],
+    "preference_edit": [
+      "Changed a kept preference",
+      "Changing a kept preference"
+    ],
+    "preference_forget": [
+      "Forgot a kept preference",
+      "Forgetting a kept preference"
+    ],
+    "preference_list": [
+      "Listed your kept preferences",
+      "Listing your kept preferences"
     ],
     "process_read": [
       "Read a running program's output",
@@ -1018,6 +1060,7 @@
     "image_resize": "make",
     "integration_list": "",
     "integration_test": "",
+    "lesson_add": "",
     "list_agents": "",
     "list_files": "folder",
     "list_folder": "folder",
@@ -1050,12 +1093,18 @@
     "pdf_form_fields": "read",
     "pdf_form_fill": "change",
     "pdf_split": "make",
+    "persona_create": "",
+    "persona_delete": "",
+    "persona_update": "",
     "pixio_generate": "",
     "pixio_models": "",
     "pixio_params": "",
     "pixio_status": "",
     "pixio_upload": "",
     "plan_update": "",
+    "preference_edit": "",
+    "preference_forget": "",
+    "preference_list": "",
     "process_read": "",
     "process_start": "command",
     "process_stop": "",

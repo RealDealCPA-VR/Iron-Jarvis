@@ -367,6 +367,14 @@ ASK_WORDS: dict[str, str] = {
     "agent_update": "change an agent",
     "agent_pause": "pause or resume an agent",
     "agent_delete": "remove an agent",
+    # v1.438.0 (chat-first plan Wave 4 group C): the user's preferences,
+    # lessons and personas from chat (settings.records_self).
+    "preference_edit": "change one of your kept preferences",
+    "preference_forget": "forget one of your kept preferences",
+    "lesson_add": "add a lesson to your preferences",
+    "persona_create": "make a chat persona",
+    "persona_update": "change a chat persona",
+    "persona_delete": "remove or reset a chat persona",
 }
 
 
@@ -571,6 +579,15 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "agent_update": ("changed an agent", "agent change"),
     "agent_pause": ("switched an agent on or off", "agent switch"),
     "agent_delete": ("removed an agent", "agent removal"),
+    # v1.438.0 (chat-first plan Wave 4 group C): preferences, lessons and
+    # personas from chat. Twin: lib/runWords.ts AGENT_TOOLS.
+    "preference_list": ("listed your kept preferences", "preference list"),
+    "preference_edit": ("changed a kept preference", "preference change"),
+    "preference_forget": ("forgot a kept preference", "preference removal"),
+    "lesson_add": ("added a lesson", "lesson"),
+    "persona_create": ("made a chat persona", "persona creation"),
+    "persona_update": ("changed a chat persona", "persona change"),
+    "persona_delete": ("removed or reset a chat persona", "persona removal"),
 }
 
 #: browser/tools.py's 15 built-in browser tools, by EXACT name (the
@@ -782,6 +799,8 @@ _PRESENT: dict[str, str] = {
     "clicked": "click",
     # v1.435.0 (Wave 3 group H).
     "disconnected": "disconnect",
+    # v1.438.0 (Wave 4 group C).
+    "forgot": "forget",
 }
 
 
@@ -882,7 +901,7 @@ _ING: dict[str, str] = {
     "switched": "switching", "tested": "testing", "took": "taking", "typed": "typing",
     "undid": "undoing", "waited": "waiting", "worked": "working", "applied": "applying",
     "stopped": "stopping", "presented": "presenting", "clicked": "clicking",
-    "disconnected": "disconnecting",
+    "disconnected": "disconnecting", "forgot": "forgetting",
 }
 
 

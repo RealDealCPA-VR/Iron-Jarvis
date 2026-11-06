@@ -64,6 +64,77 @@ class PersonaStore:
         return True
 
 
+class PersonaError(ValueError):
+    """A persona could not be saved; ``str()`` is the route's own words."""
+
+
+def _saved(store: PersonaStore, builtins: dict[str, dict[str, str]], slug: str) -> dict[str, Any] | None:
+    return next((p for p in merged(store, builtins) if p["name"] == slug), None)
+
+
+def save_persona_record(
+    engine: Engine,
+    builtins: dict[str, dict[str, str]],
+    name: str,
+    *,
+    title: str = "",
+    description: str = "",
+    prompt: str = "",
+) -> dict[str, Any]:
+    """Create or update the persona ``name`` (a built-in name -> an override;
+    a new name -> a new persona) — THE body of ``PUT /chat/personas/{name}``
+    (v1.438.0: lifted so chat's ``persona_update`` takes the same path).
+    Raises :class:`PersonaError` for an empty prompt. Blocking."""
+    slug = slugify(name)
+    if not (prompt or "").strip():
+        raise PersonaError("a persona prompt is required")
+    store = PersonaStore(engine)
+    store.upsert(
+        slug,
+        title=((title or "").strip() or slug.capitalize()),
+        description=(description or "").strip(),
+        prompt=(prompt or "").strip(),
+    )
+    return {"saved": slug, "persona": _saved(store, builtins, slug)}
+
+
+def create_persona_record(
+    engine: Engine,
+    builtins: dict[str, dict[str, str]],
+    *,
+    name: str = "",
+    title: str = "",
+    description: str = "",
+    prompt: str = "",
+) -> dict[str, Any]:
+    """Create a NEW persona, its id slugified from ``name`` or ``title`` —
+    THE body of ``POST /chat/personas`` (v1.438.0: lifted for chat's
+    ``persona_create``). Raises :class:`PersonaError`. Blocking."""
+    if not (prompt or "").strip():
+        raise PersonaError("a persona prompt is required")
+    slug = slugify(name or title)
+    store = PersonaStore(engine)
+    store.upsert(
+        slug,
+        title=((title or "").strip() or slug.capitalize()),
+        description=(description or "").strip(),
+        prompt=(prompt or "").strip(),
+    )
+    return {"created": slug, "persona": _saved(store, builtins, slug)}
+
+
+def delete_persona_record(engine: Engine, builtins: dict[str, dict[str, str]], name: str) -> dict[str, Any]:
+    """Remove a saved persona — reverts a built-in to its default, or deletes
+    a custom one — THE body of ``DELETE /chat/personas/{name}`` (v1.438.0:
+    lifted for chat's ``persona_delete``). Raises ``KeyError`` when the name
+    is neither saved nor a built-in. Blocking."""
+    slug = slugify(name)
+    removed = PersonaStore(engine).delete(slug)
+    if not removed and slug not in builtins:
+        raise KeyError(slug)
+    return {"deleted": slug, "reverted_to_builtin": slug in builtins}
+
+
 def merged(store: PersonaStore, builtins: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
     """The effective persona catalog: built-ins (with any user override applied)
     first, then the user's own personas. Every entry is fully EDITABLE and carries

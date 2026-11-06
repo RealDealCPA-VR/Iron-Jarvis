@@ -75,24 +75,15 @@ def register(app: FastAPI, d) -> None:
     def create_lesson(body: LessonCreateBody) -> dict[str, Any]:
         """User-authored lesson ('remember that I prefer…') — injected into
         future runs like any learned one, weighted as an explicit preference."""
-        from ...learning.models import LessonRecord
+        from ...learning.preferences import PreferenceInvalid, add_lesson
 
-        text = (body.text or "").strip()
-        if not text:
-            raise HTTPException(status_code=400, detail="text is required")
-        with session_scope(d.platform.engine) as db:
-            rec = LessonRecord(text=text[:2000], scope=body.scope or "user",
-                               source="preference", weight=3,
-                               # v1.305.0: typed by the user = said + kept.
-                               status="confirmed", origin="said")
-            db.add(rec)
-            db.commit()
-            db.refresh(rec)
-            out = {"id": rec.id, "text": rec.text}
-        from ...profile.share import notify_changed
-
-        notify_changed()  # v1.306.0: a shared block re-renders (debounced)
-        return out
+        # v1.438.0: the body lives in learning.preferences (chat's lesson_add
+        # takes the same path; it also re-renders a shared Build block).
+        try:
+            rec = add_lesson(d.platform.engine, body.text, body.scope or "user")
+        except PreferenceInvalid as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        return {"id": rec.id, "text": rec.text}
 
     @app.post("/memory")
     def memory_write(body: MemoryWrite) -> dict[str, Any]:

@@ -135,6 +135,15 @@ const WORDS: Record<string, string> = {
   agent_update: "change an agent",
   agent_pause: "pause or resume an agent",
   agent_delete: "remove an agent",
+  // v1.438.0 (chat-first plan Wave 4 group C): preferences, lessons and
+  // personas from chat (settings/records_self.py). desktop/main.js
+  // TOOL_WORDS and agents/mission.ASK_WORDS say the same (pinned equal).
+  preference_edit: "change one of your kept preferences",
+  preference_forget: "forget one of your kept preferences",
+  lesson_add: "add a lesson to your preferences",
+  persona_create: "make a chat persona",
+  persona_update: "change a chat persona",
+  persona_delete: "remove or reset a chat persona",
 };
 
 // The 15 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

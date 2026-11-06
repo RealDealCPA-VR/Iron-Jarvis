@@ -55,6 +55,10 @@ _MUST_NEVER_BE_ALLOW = DENY_FLOOR_TOOLS | {"tool_create", "tool_delete", "create
     # user's own made, changed, archived or removed from chat — always a card.
     "project_create", "project_update", "project_archive", "project_focus",
     "agent_create", "agent_update", "agent_pause", "agent_delete",
+    # v1.438.0 (chat-first plan Wave 4 group C): a kept preference or lesson,
+    # or a chat persona, changed from chat — always a card quoting the words.
+    "preference_edit", "preference_forget", "lesson_add",
+    "persona_create", "persona_update", "persona_delete",
 }
 
 

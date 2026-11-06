@@ -142,9 +142,12 @@ class ConfigWriter:
                 d = schema.get(key)
             except KeyError:
                 raise SettingError(f"There is no setting called {key!r}.") from None
-            if value is None and (d.store == "device" or (d.pattern and key.startswith("permissions."))):
+            if value is None and (
+                d.store == "device" or d.unset_ok or (d.pattern and key.startswith("permissions."))
+            ):
                 # "Not set" — a device preference never chosen, a tool with no
-                # rule of its own. Restoring it removes the entry.
+                # rule of its own, a desktop-app switch never chosen here
+                # (v1.438.0, ``unset_ok``). Restoring it removes the entry.
                 clean[key] = None
                 continue
             if d.type == "bool":

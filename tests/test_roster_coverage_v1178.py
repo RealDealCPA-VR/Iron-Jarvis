@@ -219,6 +219,13 @@ _OFF_ROSTER_BY_DESIGN = {
     # (settings.records_history.history_tools_for); pinned by
     # tests/test_chat_history_tools_v14350.py.
     "chat_local_only", "changes_list", "change_undo",
+    # v1.438.0 (chat-first plan Wave 4 group C): the user's own preferences,
+    # lessons and chat personas — read, changed and removed where the user is
+    # present (the card quotes the words; the Undo is on it). Chat arms them
+    # (settings.records_self.self_tools_for); pinned by
+    # tests/test_records_self_v14380.py.
+    "preference_list", "preference_edit", "preference_forget", "lesson_add",
+    "persona_create", "persona_update", "persona_delete",
     # SELF-CARE (v1.344.0): chat arms the readers via autoselect.AUTO_SAFE_TOOLS
     # and the repairers via ASK_TIER_TOOLS; pinned by
     # tests/test_autoselect_failure_vocab_v1344.py
