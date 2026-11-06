@@ -53,6 +53,13 @@ from .events import (
     unified_replace,
 )
 
+def _hint(command: dict[str, Any]) -> str:
+    """v1.439.0: an ACP command's argument hint (``input: {hint}``), or ""."""
+    given = command.get("input")
+    hint = given.get("hint") if isinstance(given, dict) else None
+    return str(hint).strip() if isinstance(hint, str) else ""
+
+
 #: The ACP version both drivers speak (opencode 1.18.18 and grok 1.0.70 answer 1).
 PROTOCOL_VERSION = 1
 REQUEST_TIMEOUT_S = 60.0
@@ -568,14 +575,19 @@ class AcpDriver(Driver):
         kind = u.get("sessionUpdate")
         if kind == "available_commands_update":
             cmds = u.get("availableCommands")
+            # v1.439.0: each command keeps its argument hint (ACP's
+            # ``input: {hint}``, e.g. OpenCode's /review "commit").
             self.commands = [
-                {"name": str(c.get("name") or ""), "description": clip(c.get("description") or "", 200)}
+                {"name": str(c.get("name") or ""), "description": clip(c.get("description") or "", 200),
+                 **({"argument_hint": clip(_hint(c), 80)} if _hint(c) else {})}
                 for c in (cmds or []) if isinstance(c, dict) and c.get("name")
             ][:300]
             if self.commands:
-                from .claude import LAST_COMMANDS
+                from .claude import LAST_COMMANDS, commands_key
 
-                LAST_COMMANDS[self.harness] = list(self.commands)
+                # v1.439.0: OpenCode's list is its FOLDER's (a project's own
+                # commands): kept per folder.
+                LAST_COMMANDS[commands_key(self.harness, self.cwd)] = list(self.commands)
             return
         if kind == "usage_update":
             self.on_usage_update(u)

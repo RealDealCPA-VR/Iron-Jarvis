@@ -102,6 +102,7 @@ from .events import TEXT_CHARS, EventLog, clip, coalesce_into, make, session_dir
 from . import history as HIST  # v1.418.0 (C4.6, C4.11)
 from . import queued as Q  # v1.418.0 (C4.8)
 from . import programs as PG  # v1.422.0 (B4, C4.7)
+from . import typed as T  # v1.439.0: Claude Code's and Grok's typed built-ins
 from .process import HarnessGone, HarnessProcess, binary_for, build_env
 from . import hostlink as HL  # v1.422.0: the code host
 from . import open_steps as OS  # v1.427.2: a step runs only while its tool does
@@ -376,6 +377,31 @@ def efforts_for(harness: str, model: Any = "", pi_rows: list[dict[str, Any]] | N
                     return tuple(str(x) for x in r["efforts"])  # OpenCode's own names, its order
                 return tuple(x for x in EFFORTS[harness] if x in r["efforts"])
     return EFFORTS[harness]
+
+
+def _kept_commands(harness: str, folder: str = "") -> list[dict[str, Any]]:
+    """v1.439.0: the `/` list a tool's process said last (this process). For a
+    tool whose list is its FOLDER's (OpenCode: a project's own commands) only
+    that folder's; with none kept for it, or no folder, only the commands
+    EVERY folder seen had (two or more), so one project's commands never show
+    in another project's session."""
+    from .claude import FOLDER_COMMANDS, LAST_COMMANDS, commands_key
+
+    if harness not in FOLDER_COMMANDS:
+        return list(LAST_COMMANDS.get(harness, []))
+    if folder:
+        own = LAST_COMMANDS.get(commands_key(harness, folder))
+        if own:
+            return list(own)
+    prefix = f"{harness}@"
+    # (review) a COPY: the harnesses listing reads this on a worker thread
+    # while the loop may keep another folder's list (a dict that changes size
+    # during iteration raises).
+    lists = [v for k, v in LAST_COMMANDS.copy().items() if k.startswith(prefix) and v]
+    if len(lists) < 2:
+        return []
+    common = set.intersection(*({str(c.get("name") or "") for c in v} for v in lists))
+    return [dict(c) for c in lists[0] if str(c.get("name") or "") in common]
 
 
 def _codex_efforts(model: Any) -> "tuple[str, ...] | None":
@@ -1250,14 +1276,14 @@ class HostedService:
         return rows
 
     def commands_for(self, harness: str, live: "LiveSession | None" = None, *,
-                     disk: bool = False) -> list[dict[str, str]]:
+                     disk: bool = False, folder: str = "") -> list[dict[str, str]]:
         """The harness's own `/` commands: what its running process said, else
         what it said last in this process (never a start just to ask).
         ``disk`` (v1.429.0, a caller OFF the loop): Pi's kept list may be read
-        from its file when nothing is in memory yet."""
-        from .claude import LAST_COMMANDS
-
-        rows = live.driver.commands if (live and live.driver and live.driver.commands) else LAST_COMMANDS.get(harness, [])
+        from its file when nothing is in memory yet. ``folder`` (v1.439.0):
+        the session's folder (OpenCode's list is kept per folder)."""
+        rows = (live.driver.commands if (live and live.driver and live.driver.commands)
+                else _kept_commands(harness, folder))
         if harness == PI:
             # v1.429.0: Pi's own commands (done here, or said why not), then
             # the extensions, templates and skills Pi listed — a session's own
@@ -1271,6 +1297,11 @@ class HostedService:
             from .tool_setup import CODEX_COMPACT_ROW
 
             rows = [dict(CODEX_COMPACT_ROW)]
+        # v1.439.0: Grok without its approval commands (they would change what
+        # it runs without asking, outside the cards) and with /model and
+        # /effort; Claude Code with a note row for each built-in that needs its
+        # own terminal and is not in its own list.
+        rows = T.menu_rows(harness, rows)
         # v1.418.0 (C4.8): the `/` menu shows each command's argument hint.
         # v1.426.0 (E4): a Codex skill is typed ``$<name>`` (``prefix``).
         return [{"name": c["name"], "description": c.get("description", ""),
@@ -1283,7 +1314,7 @@ class HostedService:
 
     async def commands(self, sid: str) -> list[dict[str, str]]:
         row = await self._row(sid)
-        return self.commands_for(row.harness, self.live.get(sid))
+        return self.commands_for(row.harness, self.live.get(sid), folder=row.folder or "")
 
     # -- v1.415.0: the Session tab's Context drop-down ---------------------------
     async def context_view(self, row: Any, events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1666,7 +1697,7 @@ class HostedService:
             "turn_id": running,
             "pending": [a.event for a in (live.asks.values() if live else [])],
         }
-        out["commands"] = self.commands_for(row.harness, live)
+        out["commands"] = self.commands_for(row.harness, live, folder=row.folder or "")
         if row.harness in LISTED_MODELS:
             out["keeps_last"] = await asyncio.to_thread(pi_keeps_last, row)
         if row.harness == PI:
@@ -1881,8 +1912,17 @@ class HostedService:
         applied: dict[str, str] = {}
         live = self.live.get(sid)
         running_turn = bool(live and live.turn and live.turn.running)
+        tell_title = ""
         if "title" in body and body["title"] is not None:
             fields["title"] = clip(body["title"], 120)
+            if fields["title"].strip() and fields["title"] != (row.title or ""):
+                # v1.439.0: the name reaches the tool too (Claude Code's
+                # rename_session, Codex's thread/name/set), in the
+                # background, never failing or delaying the rename — and
+                # (review) only once the rename is SAVED: a PATCH a later
+                # field refuses (Full access with no confirm, a mode the
+                # tool refused) renames nothing, the tool included.
+                tell_title = fields["title"].strip()
         if body.get("mode") is not None:
             mode = check_mode(row.harness, body["mode"], bool(body.get("confirm")))
             if live and live.running and live.driver:
@@ -2001,12 +2041,26 @@ class HostedService:
             applied["load_folder_resources"] = "next"
         if fields:
             row = await asyncio.to_thread(store.update, self.engine, sid, **fields)
+        if tell_title and live is not None and live.running and live.driver is not None:
+            self._tell_rename(live.driver, tell_title)
         out: dict[str, Any] = {"session": self._with_live(store.view(row)), "applied": applied}
         if row.harness in LISTED_MODELS:
             out["keeps_last"] = await asyncio.to_thread(pi_keeps_last, row)
         if row.harness == PI:
             out["pi_folder"] = await asyncio.to_thread(self._pi_folder_view, row)
         return out
+
+    def _tell_rename(self, driver: Driver, title: str) -> None:
+        """v1.439.0: best effort, in the background (``Driver.rename``)."""
+        from ..harness.stall import keep
+
+        async def tell() -> None:
+            try:
+                await driver.rename(title)
+            except Exception:  # noqa: BLE001 — the tool's own name is a nicety
+                log.debug("could not tell the coding tool its new name", exc_info=True)
+
+        keep(asyncio.ensure_future(tell()))
 
     def _pi_folder_view(self, row: Any) -> dict[str, Any] | None:
         """BLOCKING. The view's ``pi_folder`` key (``hosted/pi_trust``), or None."""
@@ -2706,6 +2760,16 @@ class HostedService:
             # v1.429.0: a note reaches Pi as plain words — one of Pi's own
             # commands goes as a message of its own, after this reply.
             raise Refused(W.PI_COMMAND_NOT_A_NOTE, 400)
+        typed = T.typed_builtin(row.harness, text, self.commands_for(row.harness, live, folder=row.folder or ""))
+        if typed is not None:
+            # v1.439.0: Grok's approval commands are never sent (as a note
+            # either); a setting or a terminal-only built-in is a message of
+            # its own.
+            # (review) a command done nowhere — Grok's approval commands, a
+            # Claude Code built-in that needs its terminal — says its OWN
+            # words: "send it once it has finished" would only be refused then.
+            why = T.refusal(row.harness, typed[0])
+            raise Refused(why or T.NOT_A_NOTE.format(label=label), 400)
         problems = await asyncio.to_thread(self._file_problems, files, row.folder or "")
         if problems:
             raise Refused(problems, 400)
@@ -2807,6 +2871,8 @@ class HostedService:
         if live.working_alone:
             raise Refused(W.PI_STILL_WORKING)
         builtin = await self._pi_typed(row, live, text, files) if row.harness == PI and not carry else None
+        if row.harness in (CLAUDE, GROK) and not carry:
+            builtin = await self._typed_setting(row, live, text, files)
         if row.terminal_id:
             if await asyncio.to_thread(self._opened_terminal_runs, row):
                 raise Refused(W.OPEN_IN_TERMINAL.format(label=W.label(row.harness), exit=W.exit_command(row.harness)))
@@ -2877,7 +2943,7 @@ class HostedService:
         does it: ``(name, words)`` to run, a Refused (one line) for one only
         Pi's terminal has, None for any other message (an extension, template
         or skill of the user's with that name included — Pi runs theirs)."""
-        typed = P.typed_builtin(text, self.commands_for(row.harness, live))
+        typed = P.typed_builtin(text, self.commands_for(row.harness, live, folder=row.folder or ""))
         if typed is None:
             return None
         name, args = typed
@@ -2898,6 +2964,75 @@ class HostedService:
             rows = await asyncio.to_thread(self._models, PI)
             args = check_effort(PI, args.split()[0], row.model, rows)
         return name, args
+
+    async def _typed_setting(self, row: Any, live: "LiveSession", text: str,
+                             files: list[str]) -> tuple[str, str] | None:
+        """v1.439.0: the message is one of Claude Code's or Grok's own commands
+        done here (``hosted/typed``)? ``(name, value)`` for ``/model`` and
+        ``/effort`` (resolved against that tool's own lists), a Refused (one
+        line) for one Iron Jarvis does not send, None for anything else."""
+        typed = T.typed_builtin(row.harness, text, self.commands_for(row.harness, live, folder=row.folder or ""))
+        if typed is None:
+            return None
+        name, args = typed
+        label = W.label(row.harness)
+        why = T.refusal(row.harness, name)
+        if why:
+            raise Refused(why, 400)
+        if files:
+            raise Refused(T.TAKES_NO_FILES.format(label=label), 400)
+        rows = await asyncio.to_thread(self._models_with_efforts, row.harness)
+        if name == "model":
+            if not args:
+                raise Refused(T.MODEL_NEEDS_NAME, 400)
+            got = T.resolve_model(args, rows)
+            if got is None:
+                raise Refused(T.NO_SUCH_MODEL.format(label=label, name=clip(args, 80)), 400)
+            return name, got
+        if not args:
+            raise Refused(T.EFFORT_NEEDS_LEVEL, 400)
+        level = args.split()[0].lower()
+        if level in T.DEFAULT_WORDS:
+            return name, ""
+        return name, check_effort(row.harness, level, row.model,
+                                  rows if row.harness in LISTED_MODELS else None)
+
+    async def _typed_setting_run(self, live: "LiveSession", row: Any, name: str, value: str) -> None:
+        """v1.439.0: a typed ``/model`` or ``/effort`` through the chips' own
+        path (``patch``), said in one line; no turn of the tool's."""
+        label = W.label(row.harness)
+        # (review) Claude Code's own "now answers with …" line is held while
+        # the typed /model switches it: the switch is said ONCE, below.
+        drv = live.driver
+        quiet = name == "model" and drv is not None and getattr(drv, "say_model_switch", None) is True
+        if quiet:
+            drv.say_model_switch = False
+        try:
+            out = await self.patch(live.sid, {"model": value} if name == "model" else {"effort": value})
+        except Refused as r:
+            self._emit(live, W.error(r.sentence, "", ""))
+            await self._end_turn(live, "failed")
+            return
+        finally:
+            if quiet:
+                drv.say_model_switch = True
+        when = (out.get("applied") or {}).get(name)
+        later = " from your next message" if when == "next" and live.running else ""
+        if name == "model":
+            if value:
+                rows = await asyncio.to_thread(self._models, row.harness)
+                hit = next((r for r in rows if r.get("id") == value), {})
+                said = f"{label} now uses {hit.get('label') or value}{later}."
+            else:
+                said = f"{label} goes back to its own default model{later}."
+            cleared = (out.get("applied") or {}).get("effort_cleared")
+            if cleared:
+                said += f" This model does not take the {cleared} effort level, so {label}'s default level applies."
+        else:
+            said = (f"{label}'s effort level is now {value}{later}." if value
+                    else f"{label} goes back to its own default effort level{later}.")
+        self._emit(live, make("notice", text=said))
+        await self._end_turn(live, "completed")
 
     async def _pi_setting(self, live: "LiveSession", row: Any, name: str, args: str) -> None:
         """v1.429.0: ``/model``, ``/thinking`` and ``/reload`` — the session's
@@ -2959,6 +3094,11 @@ class HostedService:
             # dropped (the tool may already be working).
             from . import panes as PN
 
+            if builtin is not None and row.harness in (CLAUDE, GROK):
+                # v1.439.0: /model or /effort typed for Claude Code or Grok —
+                # the chips' own path, no turn of the tool's.
+                await self._typed_setting_run(live, row, *builtin)
+                return
             if builtin is not None and builtin[0] in P.SETTING_BUILTINS:
                 # v1.429.0: the session's own setting — no Pi process needed.
                 await self._pi_setting(live, row, *builtin)

@@ -183,6 +183,24 @@ MAX_IMAGES = 8
 #: The `/` list Claude Code last answered ``initialize`` with (this process):
 #: the harnesses listing shows it without starting anything.
 LAST_COMMANDS: dict[str, list[dict[str, str]]] = {}
+#: v1.439.0: the tools whose `/` list depends on the FOLDER (OpenCode reads a
+#: project's own commands from it): kept per folder, so one project's commands
+#: never show in another project's session.
+FOLDER_COMMANDS: tuple[str, ...] = ("opencode",)
+
+
+def folder_key(folder: Any) -> str:
+    """How a folder is spelled as a key (case and separators folded)."""
+    text = str(folder or "").strip()
+    return os.path.normcase(os.path.normpath(text)) if text else ""
+
+
+def commands_key(harness: str, folder: Any = "") -> str:
+    """The :data:`LAST_COMMANDS` key a tool's list is kept under: the tool,
+    or (for :data:`FOLDER_COMMANDS`) the tool and its folder."""
+    if harness in FOLDER_COMMANDS:
+        return f"{harness}@{folder_key(folder)}"
+    return harness
 
 #: How long a control request (initialize, set_model …) may take.
 CONTROL_TIMEOUT_S = 30.0
@@ -926,15 +944,30 @@ class ClaudeDriver(Driver):
         self.mode = mode
         return "now"
 
+    #: v1.439.0 (review): off while a typed ``/model`` sets the model — that
+    #: path says the switch itself, in one line (never two).
+    say_model_switch = True
+
     async def set_model(self, model: str) -> str:
         try:
             res = await self.control("set_model", model=model)
         except ControlRefused as exc:
             raise ControlRefused(f"Claude Code did not switch models: {exc}") from None
         self.model = model
-        if isinstance(res, dict) and res.get("model"):
+        if self.say_model_switch and isinstance(res, dict) and res.get("model"):
             self.emit(make("notice", text=f"Claude Code now answers with {clip(res['model'], 80)}."))
         return "now"
+
+    async def rename(self, title: str) -> None:
+        """v1.439.0: Claude Code's own ``rename_session`` control request —
+        READ from claude 2.1.316's own schema: ``{subtype: "rename_session",
+        title, source?: "remote" | "host", session_id?}``; ``host`` is a
+        rename the user made in the hosting application, which Claude Code
+        counts as a user rename (``claude --resume`` shows it)."""
+        name = str(title or "").strip()
+        if not name or not self.session_id:
+            return
+        await self.control("rename_session", title=name, source="host", session_id=self.session_id)
 
     async def context_breakdown(self) -> dict[str, Any] | None:
         """v1.415.0: Claude Code's OWN ``/context`` — its ``get_context_usage``

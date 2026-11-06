@@ -112,6 +112,7 @@ real cause in plain words.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import sys
@@ -133,6 +134,8 @@ from .events import (
     unified_new_file,
     with_full,
 )
+
+log = logging.getLogger(__name__)
 
 HARNESS = "codex"
 #: v1.418.0 (C4.2): a running command's output arriving
@@ -335,6 +338,74 @@ def user_input(text: str, files: list[str]) -> list[dict[str, Any]]:
         body = f"{body}\n\nFiles I attached:\n{listed}" if body.strip() else f"Files I attached:\n{listed}"
     items.insert(0, {"type": "text", "text": body})
     return items
+
+
+#: v1.439.0: the Codex notifications said as one notice line each — shapes
+#: READ from codex 0.157.0's own ``codex app-server generate-json-schema``
+#: (``ServerNotification``): ``configWarning`` {summary, details?, path?,
+#: range?}, ``warning`` {message, threadId?}, ``deprecationNotice`` {summary,
+#: details?}, ``hook/completed`` {threadId, turnId?, run: HookRunSummary
+#: {eventName, status: running|completed|failed|blocked|stopped,
+#: statusMessage?, entries: [{kind: warning|stop|feedback|context|error,
+#: text}], …}}.
+CODEX_NOTICES: tuple[str, ...] = ("configWarning", "warning", "deprecationNotice", "hook/completed")
+#: A hook run's status, as a person says it ("completed" only with a warning
+#: or an error entry; otherwise it is quiet).
+HOOK_STATUS_WORDS: dict[str, str] = {"failed": "failed", "blocked": "blocked the step",
+                                     "stopped": "stopped the turn", "completed": "ran"}
+#: A deprecation about how Iron Jarvis ITSELF calls Codex (measured on codex
+#: 0.157.0 at every ``thread/resume``: "Full-history hydration is deprecated
+#: for paginated threads; use `excludeTurns: true` …") — nothing the person
+#: can act on: logged, never shown.
+OWN_DEPRECATIONS: tuple[str, ...] = ("excludeTurns", "Full-history hydration")
+#: The entry kinds a hook that otherwise ran well is worth a line for.
+HOOK_SAYS_KINDS: tuple[str, ...] = ("error", "warning", "stop")
+
+
+def _said(*parts: Any, cap: int = 400) -> str:
+    """Codex's own words, joined (masked, one line, cut)."""
+    words = [one_line(x, cap) for x in parts if isinstance(x, str) and x.strip()]
+    words = [w if w[-1] in ".!?…" else w + "." for w in words if w]
+    return one_line(" ".join(words), cap) if words else ""
+
+
+def codex_notice(method: str, p: Any, thread: str = "") -> str:
+    """v1.439.0: one of :data:`CODEX_NOTICES` as one notice line ("" = nothing
+    worth a line). A warning or hook of ANOTHER thread (a sub-agent's) is
+    not this conversation's."""
+    p = p if isinstance(p, dict) else {}
+    other = str(p.get("threadId") or "")
+    if other and thread and other != thread:
+        return ""
+    if method == "configWarning":
+        said = _said(p.get("summary"), p.get("details"))
+        if not said:
+            return ""
+        where = one_line(p.get("path") or "", 200)
+        return f"Codex found a problem in its settings{f' ({where})' if where else ''}: {said}"
+    if method == "warning":
+        said = _said(p.get("message"))
+        return f"Codex warns: {said}" if said else ""
+    if method == "deprecationNotice":
+        if any(m in str(p.get("summary") or "") for m in OWN_DEPRECATIONS):
+            log.info("Codex deprecation about how Iron Jarvis calls it: %s", one_line(p.get("summary"), 200))
+            return ""
+        said = _said(p.get("summary"), p.get("details"))
+        return f"Codex says something is going away: {said}" if said else ""
+    if method == "hook/completed":
+        run = p.get("run") if isinstance(p.get("run"), dict) else {}
+        status = str(run.get("status") or "")
+        entries = [e for e in run.get("entries") or [] if isinstance(e, dict)]
+        loud = [e for e in entries if str(e.get("kind") or "") in HOOK_SAYS_KINDS]
+        if status == "completed" and not loud:
+            return ""
+        if status not in HOOK_STATUS_WORDS:
+            return ""
+        said = _said(run.get("statusMessage"), *(e.get("text") for e in loud[:2]))
+        event = one_line(run.get("eventName") or "", 60)
+        return (f"Codex's {event + ' ' if event else ''}hook {HOOK_STATUS_WORDS[status]}"
+                f"{': ' + said if said else '.'}")
+    return ""
 
 
 class CodexDriver(Driver):
@@ -614,6 +685,15 @@ class CodexDriver(Driver):
         self.model = model
         return "next"
 
+    async def rename(self, title: str) -> None:
+        """v1.439.0: Codex's own ``thread/name/set`` {threadId, name} (codex
+        0.157.0's schema: ThreadSetNameParams) — the name ``codex resume``
+        and Codex's own picker show."""
+        name = str(title or "").strip()
+        if not name or not self.session_id:
+            return
+        await self.request("thread/name/set", {"threadId": self.session_id, "name": name})
+
     def on_exit(self) -> None:
         from .process import HarnessGone
 
@@ -784,6 +864,12 @@ class CodexDriver(Driver):
             self.emit(make("notice", text="Codex compacted the conversation to make room."))
         elif method == "model/rerouted":
             self.emit(make("notice", text="Codex moved this turn to another model."))
+        elif method in CODEX_NOTICES:
+            # v1.439.0: Codex's own warnings and a hook that did not go well,
+            # one masked line each (a hook that ran and said nothing: none).
+            text = codex_notice(method, p, self.session_id)
+            if text:
+                self.emit(make("notice", text=text))
         elif method == "account/rateLimits/updated":
             from . import seen as _seen  # v1.414.0: the Usage tab's windows
 

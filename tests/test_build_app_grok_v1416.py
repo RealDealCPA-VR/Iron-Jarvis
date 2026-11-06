@@ -518,7 +518,10 @@ def test_groks_own_notifications_are_never_drawn():
 
 def test_a_failure_says_groks_own_fix_and_offers_no_other_tools_press():
     out = G.failure_event("Not logged in. Run grok login.")
-    assert out["title"] == "Grok isn't signed in" and "grok" in out["fix"] and "fix_kind" not in out
+    # v1.439.0 (moved on purpose): Grok's OWN Sign in press (provider
+    # grok-cli), never another tool's.
+    assert out["title"] == "Grok isn't signed in" and "Grok" in out["fix"]
+    assert out["fix_kind"] == "sign_in" and out["provider"] == "grok-cli"
     assert G.failure_event("HTTP 429 Too Many Requests")["title"] == "Grok hit its usage limit"
     assert G.failure_event("boom")["title"] == "Grok's model answered with an error"
 
