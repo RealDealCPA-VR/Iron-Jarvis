@@ -1537,6 +1537,9 @@ _FAMILIES: tuple[frozenset[str], ...] = (
     frozenset({"iron_proxy_enabled", "account_groups", "accounts_share_claude_setup"}),
     frozenset({"sentinels_enabled", "sentinels_tick_seconds"}),
     frozenset({"chat_new_local_only"}),
+    # v1.442.0 (Wave 7 group C): "I changed your theme to green" is the
+    # theme of your own colours (setting one clears the other).
+    frozenset({"device.theme", "device.theme_colors"}),
 )
 #: Keys sharing these first words are one family too ("autonomy_level" and
 #: "autonomy_dry_run" are both "autonomy").

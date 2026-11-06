@@ -63,18 +63,62 @@ import {
   deviceSettingsState as state,
   type DeviceValue,
 } from "@/lib/deviceSettingsState";
-import { THEMES, THEME_STORAGE_KEY, allThemes, applyTheme, isCustomTheme, type Mark } from "@/lib/theme";
+import {
+  DEFAULT_THEME,
+  THEMES,
+  THEME_STORAGE_KEY,
+  allThemes,
+  applyTheme,
+  isCustomTheme,
+  type Mark,
+} from "@/lib/theme";
+import {
+  CHAT_PALETTE_ID,
+  MAX_NAME,
+  loadPalettes,
+  makePalette,
+  upsertPalette,
+  type CustomPalette,
+  type PaletteMode,
+  type Surface,
+} from "@/lib/themePalette";
 
 export { __resetDeviceSettings } from "@/lib/deviceSettingsState";
 
-/** The four rows this module applies (settings/schema.py). */
+/** The rows this module applies (settings/schema.py). */
 export const DEVICE_THEME_KEY = "device.theme";
+/** v1.442.0 (Wave 7 group C): a theme of the user's OWN colours, settable
+ *  from chat ("change the theme to something green and calm"). The row holds
+ *  the theme maker's picks; this module builds the theme with the theme
+ *  maker's own generator (lib/themePalette `makePalette` →
+ *  `generatePalette`, readability fitting and all), keeps it among this
+ *  device's own themes under ONE id (`CHAT_PALETTE_ID`, replaced, never
+ *  piled up — so the layout's pre-paint script restores it after a reload)
+ *  and paints it. This row and `device.theme` name the same thing two ways:
+ *  the daemon's writer clears one when the other gets a value, so the one set
+ *  LAST is what the screen shows. When this row goes back to "not set" with
+ *  no built-in theme set either (an Undo of the first chat theme), the screen
+ *  goes back to the theme it showed before (`THEME_BEFORE_CHAT_KEY`). */
+export const DEVICE_THEME_COLORS_KEY = "device.theme_colors";
 export const DEVICE_PERSONA_KEY = "device.chat_persona";
 export const DEVICE_AUTO_TOOLS_KEY = "device.auto_tools";
 export const DEVICE_READ_ALOUD_KEY = "device.read_aloud";
 
+/** The two rows that name "the theme on this device" (settings/theme_colors
+ *  LINKED): a save of one owns the other too (refreshDeviceSettings). */
+const THEME_PARTNER: Record<string, string> = {
+  [DEVICE_THEME_KEY]: DEVICE_THEME_COLORS_KEY,
+  [DEVICE_THEME_COLORS_KEY]: DEVICE_THEME_KEY,
+};
+
+/** Where the theme shown before chat's own colours is kept (an Undo goes back to it). */
+export const THEME_BEFORE_CHAT_KEY = "ij_theme_before_chat";
+/** The chat theme's name when chat gave none. */
+export const CHAT_THEME_NAME = "Theme from chat";
+
 export const APPLIED_DEVICE_KEYS = [
   DEVICE_THEME_KEY,
+  DEVICE_THEME_COLORS_KEY,
   DEVICE_PERSONA_KEY,
   DEVICE_AUTO_TOOLS_KEY,
   DEVICE_READ_ALOUD_KEY,
@@ -107,8 +151,10 @@ function knownMap(): Record<string, Value> {
     const raw = JSON.parse(window.localStorage.getItem(KNOWN_STORAGE_KEY) || "{}") as unknown;
     if (raw && typeof raw === "object" && !Array.isArray(raw)) {
       for (const key of APPLIED_DEVICE_KEYS) {
+        if (!(key in (raw as Record<string, unknown>))) continue;
         const v = (raw as Record<string, unknown>)[key];
         if (v === null || typeof v === "string" || typeof v === "boolean") known[key] = v;
+        else if (key === DEVICE_THEME_COLORS_KEY) known[key] = themeColorsFrom(v);
       }
     }
   } catch {
@@ -173,6 +219,120 @@ export function isBuiltinThemeId(id: unknown): id is string {
   return typeof id === "string" && THEMES.some((t) => t.id === id);
 }
 
+/* ---- a theme of the user's own colours (v1.442.0) ------------------------- */
+
+/** The picks `device.theme_colors` holds (settings/theme_colors.py). */
+export interface ThemeColors {
+  accent: string;
+  second?: string;
+  surface: Surface;
+  mode: PaletteMode;
+  name?: string;
+}
+
+const SURFACE_IDS: readonly Surface[] = ["neutral", "cool", "warm", "tinted"];
+const MODE_IDS: readonly PaletteMode[] = ["dark", "light", "system"];
+
+function hexOf(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const m = /^#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.exec(raw.trim());
+  if (!m) return null;
+  const h = m[1].toLowerCase();
+  return "#" + (h.length === 3 ? h.split("").map((c) => c + c).join("") : h);
+}
+
+/** The picks, checked and in the daemon's one canonical form
+ *  (settings/theme_colors.normalize: lower-case six-digit hex; `second` and
+ *  `name` only when given), or null when this is no set of colours. */
+export function themeColorsFrom(raw: unknown): ThemeColors | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const accent = hexOf(r.accent);
+  if (!accent) return null;
+  const out: ThemeColors = {
+    accent,
+    surface: SURFACE_IDS.includes(r.surface as Surface) ? (r.surface as Surface) : "neutral",
+    mode: MODE_IDS.includes(r.mode as PaletteMode) ? (r.mode as PaletteMode) : "dark",
+  };
+  const second = hexOf(r.second);
+  if (second) out.second = second;
+  if (typeof r.name === "string") {
+    const name = r.name.replace(/[\u0000-\u001f\u007f]/g, " ").split(/\s+/).filter(Boolean).join(" ");
+    if (name) out.name = name.slice(0, MAX_NAME);
+  }
+  return out;
+}
+
+/** The picks of one of this device's palettes, as the row holds them. */
+export function themeColorsOf(p: CustomPalette): ThemeColors {
+  return themeColorsFrom({
+    accent: p.accent,
+    second: p.second,
+    surface: p.surface,
+    mode: p.mode,
+    name: p.name,
+  }) as ThemeColors;
+}
+
+/** One value's identity (an object by its keys, in any order). */
+function valueKey(v: unknown): string {
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    const rec = v as Record<string, unknown>;
+    return JSON.stringify(Object.keys(rec).sort().map((k) => [k, rec[k]]));
+  }
+  return JSON.stringify(v ?? null);
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return valueKey(a) === valueKey(b);
+}
+
+/** Build the chat theme from the picks with the theme maker's own generator,
+ *  keep it among this device's themes, and paint it. False when it could not
+ *  be kept (storage refused it). */
+function applyThemeColors(colors: ThemeColors): boolean {
+  const existing = loadPalettes().find((p) => p.id === CHAT_PALETTE_ID);
+  const palette = makePalette({
+    id: CHAT_PALETTE_ID,
+    name: colors.name ?? CHAT_THEME_NAME,
+    accent: colors.accent,
+    second: colors.second ?? null,
+    surface: colors.surface,
+    mode: colors.mode,
+    // A background the person chose for this theme on screen stays with it.
+    background: existing?.background ?? null,
+  });
+  if (!upsertPalette(palette)) return false;
+  const on = typeof document !== "undefined" ? document.documentElement.dataset.theme : undefined;
+  if (on && on !== CHAT_PALETTE_ID) store(THEME_BEFORE_CHAT_KEY, on);
+  applyTheme(CHAT_PALETTE_ID);
+  return true;
+}
+
+/** The colours went back to "not set" and no built-in theme is set either
+ *  (an Undo of the first chat theme): if the screen still shows the chat
+ *  theme, go back to the theme it showed before (else the default). */
+function leaveChatTheme(): void {
+  if (typeof document === "undefined" || document.documentElement.dataset.theme !== CHAT_PALETTE_ID) return;
+  let stored: string | null = null;
+  let before: string | null = null;
+  try {
+    stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    before = window.localStorage.getItem(THEME_BEFORE_CHAT_KEY);
+  } catch {
+    stored = before = null;
+  }
+  const usable = (id: string | null): id is string =>
+    !!id && id !== CHAT_PALETTE_ID && allThemes().some((t) => t.id === id);
+  // v1.442.0 review: ANOTHER window of this device that picked a theme of
+  // the user's own (which clears both rows) has already written it to the
+  // shared storage: that newer pick wins over the theme before chat (going
+  // back to that one also overwrote the other window's pick for the next
+  // load). In this window the storage still names the chat theme.
+  const target = usable(stored) ? stored : usable(before) ? before : DEFAULT_THEME;
+  applyTheme(target);
+}
+
 /** Apply ONE value to the screen. False = not a value this key takes
  *  (ignored, nothing changed). */
 function applyOne(key: AppliedDeviceKey, value: unknown): boolean {
@@ -182,6 +342,10 @@ function applyOne(key: AppliedDeviceKey, value: unknown): boolean {
       const on = typeof document !== "undefined" ? document.documentElement.dataset.theme : undefined;
       if (on !== value) applyTheme(value);
       return true;
+    }
+    case DEVICE_THEME_COLORS_KEY: {
+      const colors = themeColorsFrom(value);
+      return colors ? applyThemeColors(colors) : false;
     }
     case DEVICE_PERSONA_KEY: {
       if (typeof value !== "string" || !value.trim()) return false;
@@ -210,6 +374,9 @@ function applyOne(key: AppliedDeviceKey, value: unknown): boolean {
  *  `undefined` when it keeps nothing (it shows the default). A theme of the
  *  user's own is kept as `null`: the row only holds built-in themes. */
 function screenValue(key: AppliedDeviceKey): Value | undefined {
+  // v1.442.0: chat's own colours are only ever set from chat (or by picking
+  // that theme on screen, which saves the row): the row decides.
+  if (key === DEVICE_THEME_COLORS_KEY) return undefined;
   let raw: string | null = null;
   try {
     raw = window.localStorage.getItem(
@@ -266,8 +433,13 @@ export function applyDeviceValues(
     // A row an older daemon does not have: leave the screen as it is.
     if (!(key in values)) continue;
     const raw = values[key];
-    const v: Value = raw === null || typeof raw === "string" || typeof raw === "boolean" ? raw : null;
-    if (key in map && map[key] === v) {
+    const v: Value =
+      raw === null || typeof raw === "string" || typeof raw === "boolean"
+        ? raw
+        : key === DEVICE_THEME_COLORS_KEY
+          ? themeColorsFrom(raw)
+          : null;
+    if (key in map && sameValue(map[key], v)) {
       state.confirmed.set(key, v);
       continue;
     }
@@ -283,9 +455,24 @@ export function applyDeviceValues(
         continue;
       }
     }
+    const before = key in map ? map[key] : null;
     map[key] = v;
     moved = true;
     if (v !== null) applyOne(key, v);
+    else if (key === DEVICE_THEME_COLORS_KEY && before !== null) {
+      const builtin = values[DEVICE_THEME_KEY];
+      if (!isBuiltinThemeId(builtin)) {
+        // v1.442.0: chat's colours were taken away and no built-in theme took
+        // their place.
+        leaveChatTheme();
+      } else if (typeof document !== "undefined" && document.documentElement.dataset.theme === CHAT_PALETTE_ID) {
+        // v1.442.0 review: a built-in theme took their place and is normally
+        // painted by its own row above — but not when this window already
+        // knew that theme (a read taken while its pick was out), and then
+        // the chat theme stayed on screen under a row naming Daylight.
+        applyTheme(builtin);
+      }
+    }
   }
   if (moved) saveKnown();
   if (Object.keys(reconcile).length > 0) void writeDeviceValues(reconcile);
@@ -315,12 +502,17 @@ export function refreshDeviceSettings(): Promise<void> {
       const values = await readDeviceValues();
       if (values) {
         applyDeviceValues(values, (key) => {
-          if ((state.pending.get(key) ?? 0) > 0) {
+          // v1.442.0 review: the two theme rows are ONE choice (the daemon's
+          // writer clears one when the other is set), so a save of either
+          // owns both — a read that answered before a Daylight pick landed
+          // painted chat's colours over it, and nothing painted it back.
+          const owners = key in THEME_PARTNER ? [key, THEME_PARTNER[key]] : [key];
+          if (owners.some((k) => (state.pending.get(k) ?? 0) > 0)) {
             // A save still out owns this key: read again once it answers.
             state.recheck = true;
             return true;
           }
-          if ((state.seq.get(key) ?? 0) !== (startSeq.get(key) ?? 0)) {
+          if (owners.some((k) => (state.seq.get(k) ?? 0) !== (startSeq.get(k) ?? 0))) {
             // A save landed while this read was out: read again now.
             state.again = true;
             return true;
@@ -419,6 +611,27 @@ function writeDeviceValues(values: Partial<Record<AppliedDeviceKey, Value>>): Pr
 export function chooseTheme(id: string): Mark | null {
   const mark = applyTheme(id);
   if (!mark) return null;
-  void writeDeviceSetting(DEVICE_THEME_KEY, isCustomTheme(mark.id) ? null : mark.id);
+  // v1.442.0 (Wave 7 group C): the two theme rows go together, so the
+  // screen's pick is the one set last: a built-in theme clears chat's own
+  // colours; the chat theme (picked again, or edited in the theme maker)
+  // saves its picks as those colours; any other theme of your own clears
+  // both (it is a screen-only choice).
+  let colors: ThemeColors | null = null;
+  if (mark.id === CHAT_PALETTE_ID) {
+    const p = loadPalettes().find((x) => x.id === CHAT_PALETTE_ID);
+    colors = p ? themeColorsOf(p) : null;
+  }
+  const values: Partial<Record<AppliedDeviceKey, Value>> = {
+    [DEVICE_THEME_KEY]: isCustomTheme(mark.id) ? null : mark.id,
+  };
+  // Only when there is something to say: colours to keep, or colours this
+  // window knows the row still holds (a press otherwise PUTs exactly what it
+  // did before this release; the writer clears the colours itself when a
+  // built-in theme is set).
+  const known = knownMap();
+  if (colors || (DEVICE_THEME_COLORS_KEY in known && known[DEVICE_THEME_COLORS_KEY] !== null)) {
+    values[DEVICE_THEME_COLORS_KEY] = colors;
+  }
+  void writeDeviceValues(values);
   return mark;
 }

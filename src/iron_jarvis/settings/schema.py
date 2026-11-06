@@ -35,6 +35,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from . import theme_colors as _theme_colors
+
 GROUPS: tuple[tuple[str, str, str], ...] = (
     ("models", "Models", "Which AI answers, and how."),
     ("connections", "Connections", "Accounts, keys, apps and where alerts go."),
@@ -90,6 +92,10 @@ class SettingDef:
     #: desktop app picks this up within about 15 seconds."), for a row the
     #: daemon does not act on itself. "" = at once (or ``restart``).
     applies: str = ""
+    #: v1.442.0 (Wave 7 group C): checks the value AND returns its one stored
+    #: form (raises ValueError with words, like ``check``). For a value with
+    #: a shape of its own (``device.theme_colors``).
+    normalize: Callable[[Any], Any] | None = field(default=None, compare=False, repr=False)
 
     @property
     def field_name(self) -> str:
@@ -910,11 +916,30 @@ SETTINGS: tuple[SettingDef, ...] = (
     # the user made is kept on that screen only, so the row says "not set".
     S("device.theme", "Theme", "appearance", "enum",
       "The theme on this device. A theme you made yourself is picked on the screen only, "
-      "so this shows as not set while one is on.",
+      "so this shows as not set while one is on. For colours of your own (green, purple…) use "
+      "Your own theme colours (device.theme_colors).",
       options=(("mark1", "Daylight"), ("mark2", "Arc Cyan"), ("mark8", "Liquid Glass"),
                ("mark23", "Gold & Red"), ("mark29", "Silver & Red")),
       tier="allow", store="device",
       aliases=("theme", "colors", "dark mode", "light mode")),
+    # v1.442.0 (Wave 7 group C): a theme of the user's OWN colours, from chat
+    # ("change the theme to something green and calm"). The theme maker's
+    # picks; the screen builds the theme with the theme maker's own generator
+    # (dashboard/lib/deviceSettings.ts). Setting it clears device.theme and
+    # setting a built-in theme clears it (settings/theme_colors.LINKED, in the
+    # writer), so the last one set is what the screen shows.
+    S("device.theme_colors", "Your own theme colours", "appearance", "dict",
+      "A theme of your own colours on this device: a main colour (accent, #RRGGBB), an "
+      "optional second colour for background glows (second), a background feel (surface: "
+      "neutral, cool, warm or tinted), dark, light or following Windows (mode), and a name. "
+      "Every text colour is kept readable. Setting it replaces the built-in theme.",
+      tier="allow", store="device", normalize=_theme_colors.normalize,
+      # Every alias is also a TRIGGER phrase (settings/trigger.py): only
+      # words that name this app's theme ("a custom theme for my blog" must
+      # arm nothing). The request shapes ("make the app purple", "use a dark
+      # blue theme") are the trigger's own patterns.
+      aliases=("theme colors", "theme colours", "theme color", "theme colour",
+               "own theme colours", "own theme colors")),
     # v1.406.0 part 2: five levels (Ask before every action / Ask first /
     # Accept edits / Auto / Don't ask) — the chip's words, pinned equal.
     # v1.352.0 (G24): the chat chip's OWN words for the three levels
