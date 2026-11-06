@@ -126,6 +126,7 @@ import {
   groupByFolder,
   keepsLastOf,
   piFolderOf,
+  piShellHint,
   PI_FOLDER_LOAD_LABEL,
   PI_FOLDER_SKIP_LABEL,
   type PiFolder,
@@ -1638,6 +1639,13 @@ function SessionPane({
                 {piFolder.offer ? PI_FOLDER_LOAD_LABEL : PI_FOLDER_SKIP_LABEL}
               </button>
             </div>
+          ) : null}
+          {/* v1.441.0 review: Pi runs `!words` as a shell command (its own
+              terminal colours the box; here one quiet line says it). */}
+          {piShellHint(session.tool, text) ? (
+            <p role="status" data-testid="code-pi-shell" className="mb-2 px-1 text-[12px] text-zinc-500">
+              {piShellHint(session.tool, text)}
+            </p>
           ) : null}
           {asking ? (
             <>

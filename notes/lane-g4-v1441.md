@@ -179,3 +179,95 @@ server and press i. Iron Jarvis never shows or keeps a server's address or key.
 In a Pi session you can run a command yourself: start the message with `!`
 (Pi's model sees the command and its output) or `!!` (it doesn't). Settings ›
 Memory & you › Share with Build now has a switch for Grok too.
+
+## Review (independent reviewer, v1.441.0)
+
+Every builder claim was checked against the code; 15 mutations (8 of the
+builder's claims, 7 of the fixes below) all went RED (one survived first —
+an unknown Grok `reason` word shown raw — because the secret pin compared
+case-sensitively and Grok lower-cases the word; the pin now compares
+lower-cased and goes red). The dashboard line: 2 mutations, both red.
+
+Re-measured (scratch homes only, no model call, no sign-in):
+- pi 1.3.0 `--mode rpc --no-session --offline`: `abort_bash` answered at
+  once, then the `bash` answer with `cancelled: true`; a flooding command
+  answered `truncated: true` + `fullOutputPath` (~50 KB kept, ~1,200 updates
+  in under a second — the driver's 1/s row update holds); `!important: …`
+  ran through Git bash and exited 127.
+- agy 1.5.2 + the stand-in model answering TWO function calls in one reply:
+  ONE `PLANNER_RESPONSE` holding both calls, then both `GENERIC` results in
+  call order, then the next `PLANNER_RESPONSE` (`GENERIC` names no call).
+- grok 1.0.70 `grok inspect --json` (scratch GROK_HOME + USERPROFILE): the
+  Grok home's `AGENTS.md` AND `~/.claude/CLAUDE.md` are both global
+  instructions; Grok reads the latter from the USER FOLDER (not
+  `CLAUDE_CONFIG_DIR`); `GROK_CLAUDE_AGENTS_ENABLED=false` or
+  `[compat.claude] agents = false` in Grok's config.toml turns it off
+  (`compatibilityStatus: disabled`). Grok's own docs confirm "Authenticate an
+  OAuth server with `i`" in `/mcps`.
+
+Defects found and fixed (each pin red first; `tests/test_build_app_g4_review_v14410.py`
+unless named):
+1. **A `!` command kept across a restart could never end.** The code host
+   keeps Pi alive; the waiter for Pi's `bash` answer has no kept form and was
+   not re-armed, and `interrupt` only sent `abort_bash` — so neither the
+   answer nor Stop ended the turn and the session refused every later
+   message as busy. `PiDriver._rearm_shell` (from `after_restore`) re-makes
+   the waiter for THAT turn only; a Stop on a restored command waits
+   `ABORT_ANSWER_WAIT_S` (3 s) for the answer, then ends the turn anyway.
+   The tail is lifted into `_finish_shell` (one path).
+2. **A command past `BASH_TIMEOUT_S` said "Stopped."** as if the user had
+   pressed Stop. It now says `SHELL_TIME_LIMIT` ("Stopped: it ran longer
+   than 30 minutes.").
+3. **A restart that cut off a `!` turn was carried on BY ITSELF** with
+   "carry on with the task", so Pi's MODEL started work on a message the
+   user meant as a command (for `!!`, one it never saw). `_drive` marks the
+   turn's `user` event `command: true` (Pi shell builtins only);
+   `carry_on.analyse_tail` / `note_cut` keep it and `_restart_refusal`
+   answers `WHY_COMMAND` ("it was a command you ran, not a reply — run it
+   again if you still need it"): offered, never carried on by itself.
+4. **Antigravity: a call left with no result took the next call's result**
+   (pairing is positional; `GENERIC` names no call). A new
+   `PLANNER_RESPONSE` now closes the open calls (`pending.clear()`), as the
+   measured order says the model answers only after every result.
+5. **"!important: remember…" ran as a command with no cue on screen** (Pi's
+   terminal colours the box; the Code view said nothing). One quiet line
+   under a Pi session's box while the words would run (`lib/buildApp.
+   piShellHint`, `code-pi-shell`; `!!` says the model won't see it).
+   Pin: `dashboard/__tests__/pi-shell-hint-v1441-0.test.tsx` (3).
+
+Checked, no defect: a fake key in EVERY field of Grok's MCP notifications
+(url, headers, env, args, command, source, type, transport, nested config,
+detail, tool descriptions, unknown status/reason words, `_x.ai/mcp/list`,
+`init_progress`) reaches no driver event, view, kept list or log line (DEBUG
+captured); a secret-shaped server NAME is masked; Grok's `system` record, its
+workspace note, its reminders and its encrypted reasoning never reach the
+imported conversation, and a key in an MCP tool's args/result is masked. `!`
+runs ONLY from the user's own words (box, queue, Retry): carry-ons skip
+`_pi_typed`; Build › Code has no Local only, trust posture or night shift;
+Pi has no Plan mode here. Old configs load (`profile_share_grok` defaults
+off; a v1.440.0 daemon drops the key). Schema/vocabulary scans green.
+
+DECISION — Grok reading `~/.claude/CLAUDE.md`: NO write guard. OpenCode's
+`create_guard` prevents a LOSS (its AGENTS.md replaces the Claude fallback);
+here nothing is lost — Grok loads both, so with both shares on it reads the
+same ≤ 4,000-char block twice. A guard that skips Grok's block while Claude's
+is on would make Grok's profile silently depend on another switch; setting
+`GROK_CLAUDE_AGENTS_ENABLED=false` in the child would hide the user's own
+Claude instructions from Grok. Left OPEN as words (below).
+
+OPEN after the review:
+- With Claude Code's share ON and Grok's OFF, xAI still sees the profile
+  through `~/.claude/CLAUDE.md` (true since Grok joined in v1.416.0); the
+  Grok row could say so and name `[compat.claude] agents = false` — a words
+  decision for the owner.
+- Pre-existing, older than this lane: a cut Pi `/compact`, `/session`… turn is
+  still carried on by itself (only `!` turns are marked); `_records` reads the
+  FIRST 50 MB of a transcript, so a Grok/agy transcript past that shows its
+  oldest part (as Claude Code's reader does).
+- Pre-existing flaky pin: `test_build_app_carry_followups_v14220::
+  test_an_unreadable_marker_never_lets_an_older_cut_carry_on` (and its
+  sibling) fail about 1 run in 3 on the BASE commit too: the cut's events
+  and the rewritten marker can share one 15.6 ms clock tick, and the rule is
+  `cut_at < since`.
+- The `!` line is drawn from the dashboard alone; a dashboard served against
+  an older daemon (which sends `!` text to the model) would show it wrongly.

@@ -846,6 +846,11 @@ def _antigravity_events(path: Path) -> list[dict[str, Any]]:
                 out.append(_user(at, text))
             pending.clear()
         elif kind == "PLANNER_RESPONSE":
+            # v1.441.0 review: the model answers only after every result of its
+            # last calls (measured: two calls in one reply, then both results
+            # in call order, then the next reply) — a call still open here got
+            # none, and must never take a later call's result.
+            pending.clear()
             text = rec.get("content")
             if isinstance(text, str) and text.strip():
                 n += 1

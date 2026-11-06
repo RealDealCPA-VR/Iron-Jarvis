@@ -565,6 +565,23 @@ export function jarvisToolHint(key: keyof JarvisTools, toolName: string, tool: s
   return `${toolName} may use your browser through Iron Jarvis. Every click, typing or page change asks you first.`;
 }
 
+/** v1.441.0 review: a Pi session runs a message that starts with `!` as a
+ *  command in Pi's own shell (`!!` keeps it out of the conversation), as Pi's
+ *  terminal does — where the box changes colour. The Code view says it in one
+ *  quiet line while the words would run, so "!important…" is never sent as a
+ *  command unseen. Pi's own reading: the trimmed words start with `!` and a
+ *  command follows. */
+export const PI_SHELL_HINT = "Runs as a command in Pi's shell, not as a message to Pi.";
+export const PI_SHELL_HINT_KEPT_OUT = "Runs as a command in Pi's shell; Pi's model won't see it or its output.";
+export function piShellHint(tool: string, text: string): string {
+  if (tool !== "pi") return "";
+  const t = text.trim();
+  if (!t.startsWith("!")) return "";
+  const keptOut = t.startsWith("!!");
+  if (!t.slice(keptOut ? 2 : 1).trim()) return "";
+  return keptOut ? PI_SHELL_HINT_KEPT_OUT : PI_SHELL_HINT;
+}
+
 /** v1.414.0: the "Share my profile with" switch (profile/share.CLIS) of a
  *  coding tool. */
 export function shareCliOf(tool: string): string {
