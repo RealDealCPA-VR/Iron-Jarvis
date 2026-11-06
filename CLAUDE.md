@@ -14921,6 +14921,88 @@ does not need a bump, stop and bump it.
   holding the mocked `/settings/schema` 300 ms reproduced the gate's exact
   "Unable to find … Appearance" on the old wait.
 
+- **Wave 4 of the chat-first plan: the night shift, a folder's coding setup,
+  model servers, accounts, memory bases, preferences, personas, answer
+  language and the desktop's start settings, from chat** (v1.438.0; three
+  groups, each built then independently reviewed — the reviewers found 7, 10
+  and 14 more defects, every fix red first and mutation-checked). Every tool
+  is a RECORD tool on Wave 3's pattern (ask tier unless a reader, a card,
+  `record_restore` Undo that refuses in words over newer work, in
+  `LOW_TRUST_DENY`, armed only by `records.record_tools_for` → each module's
+  own `<area>_tools_for`, both-ways arming tables, linear regexes with a
+  child-process pathological-input pin), and `daemon/change_claims.py` knows
+  every new kind.
+  - GROUP A, `settings/records_build.py`: `night_task_add` (its
+    `spend_check` names the live night window and folder; Allow-once card in
+    every posture but Don't ask; refused unattended and in a Local only chat
+    whose task model, default, try-on or team leaves the network —
+    `_local_only_night_problem`), `night_task_list`/`build_folder_show`
+    (allow), `night_task_cancel`, `night_task_move`, `build_defaults_set/
+    clear`, `build_team_set/clear`. Route bodies lifted: `routes/night.
+    add_night_task`/`cancel_night_task`, `routes/team.member_for_model`.
+    Folder = the one named, else the chat project's root, else refused in
+    words (never "this repo" guessed); `\\host` refused by text first; Don't ask
+    and Full access refused. `harness.team.validate(pending=)` checks a team
+    BEFORE any model-team member is made. An account is not a folder default
+    (said in words).
+  - GROUP B, `settings/records_connections.py`: `model_server_add` (Fleet's
+    own body; the card says this network vs the internet; key only on the
+    secure card `model_server.<id>`; a node id whose vault key row is empty —
+    `_fresh_node_id`, else an old key went to a new server; `make_default`
+    picks from the server's OWN list), `model_server_default` (says where the
+    model answers, `egress.stays_on_this_network(model=)`),
+    `model_server_remove`, `account_add` (Iron-Proxy creates it, then its own
+    sign-in terminal; never a token; Undo only after `client.refresh` says it
+    still needs sign-in), `memory_base_add` (Notion token on the secure card,
+    live, or a notes folder; optional memory profile; keeps a token it did
+    not make). Any credential-named argument is refused and every shown
+    address drops user:pass, query and fragment. Under Local only an
+    internet server, Notion or a cloud default keeps its card even in Don't
+    ask. `account_groups` from chat is MERGED
+    (`merged_account_groups`; `[]` removes a group; `config_list` says so via
+    `settings/tools.ACCOUNT_GROUPS_HOW`), names resolved from the CACHED
+    snapshot. Route bodies lifted in routes/fleet, connections, iron_proxy,
+    knowledge.
+  - GROUP C, `settings/records_self.py` + schema: `preference_list` (allow),
+    `preference_edit`, `preference_forget`, `lesson_add`, `persona_create/
+    update/delete` over lifted bodies (`learning.preferences`, `add_lesson`
+    out of POST /lessons, `personas.store.*_persona_record`), promptguard
+    on every text, profile share notified; someone else's preference, a
+    course's lesson, a marketing persona arm nothing; Undo never duplicates a
+    preference or removes a persona that became the default. Profile rows
+    `profile.language`, `profile.enforce_language`, `profile.formatting_rules`
+    (allow, through the settings tools; a change says so when "Use my
+    profile" is off). Desktop rows `start_with_windows` (ON ask-floor) and
+    `keep_running_in_background`, nullable; `SettingDef.unset_ok`/`applies`;
+    `PUT /settings/values` takes `actor: "desktop"`. `desktop/main.js`
+    `readDesktopAppSettings` reads config.toml at start and every 15 s, applies
+    a value only when it differs from the last one the shell saw
+    (`appSwitchesSeen`), a tray press PUTs it one write at a time per switch
+    (`appSwitchesPending`), an Undo back to "not set" restores the shell's own
+    earlier switch (`appSwitchesBefore`); dev runs never touch the login item.
+  - TESTING TRAP FOUND: a fresh agent worktree's `uv run pytest` used a GLOBAL
+    pytest and imported the MAIN checkout's code until `uv sync --extra dev`;
+    a worktree's first step is that sync, then check `iron_jarvis.__file__`.
+  - Pins: `tests/test_records_{build,connections,self}{,_review}_v14380.py`,
+    `tests/_records_build_table_v14380.py`, `tests/test_change_claims_self
+    {,_review}_v14380.py`, `tests/test_desktop_start_settings{,_review}
+    _v14380.py`, `tests/test_profile_language_rows_v14380.py`; moved on
+    purpose: `test_change_claims_v14360` (a preference is a record now), the
+    v1178 coverage lists, the regenerated word tables and the three fixtures.
+  - OPEN: "Don't ask" queues a night task with no card; a tool picked by hand
+    from + Tools still runs uncarded (the owner's open decision); templates
+    were not built; no persona reader; an account is not a folder default;
+    the open session's own team is not offered from chat; a cloud team member
+    named by name passes Local only (only model seats are checked); a mapped
+    drive or a junction to a share is still opened by the memory-base folder
+    check; Undo of `account_add` leaves its sign-in terminal open; "make
+    llama3 the default" with no server words arms only the plain settings
+    tools; the language change reads "(not set) → es"; the start question's
+    "No" is not written back; the REST persona/profile routes and POST
+    /lessons still skip the promptguard scan chat applies; "the night shift
+    at the hospital starts at 7" arms `config_set` (Wave 2 trigger); never
+    driven with a real model, Iron-Proxy, Notion or the packaged app.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

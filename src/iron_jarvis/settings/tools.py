@@ -52,6 +52,13 @@ ASK_CONFIG_TOOLS = ("config_change", "config_change_protected")
 #: Carded even when the chat's approval posture is Auto-approve, and never
 #: offered "Always" (AUDIT §6 ask-floor).
 ALWAYS_CARD_TOOLS = frozenset({"config_change_protected"})
+#: v1.438.0 (Wave 4): how chat changes ``account_groups`` — the value is
+#: MERGED into the user's groups (``records_connections.merged_account_groups``),
+#: so the model is told how to remove one; leaving a group out keeps it.
+ACCOUNT_GROUPS_HOW = (
+    " (send only the groups to change, by account name: a group you name is set to that list, "
+    "an empty list [] removes that group, groups you leave out are kept)"
+)
 
 _CHANGE_ID: ContextVar[str] = ContextVar("ij_config_change_id", default="")
 
@@ -285,7 +292,11 @@ class ConfigListTool(Tool):
             for s in schema.SECRETS
             if not words or any(word in " ".join([s.name, s.label, *s.aliases]).lower() for word in words)
         ]
-        lines = [f"{r['label']} ({r['key']}) = {_show(r['value'])} → {r['tool']}" for r in rows]
+        lines = [
+            f"{r['label']} ({r['key']}) = {_show(r['value'])} → {r['tool']}"
+            + (ACCOUNT_GROUPS_HOW if r["key"] == "account_groups" else "")
+            for r in rows
+        ]
         lines += [f"{s['label']} ({s['key']}) → config_secret (a secure card; never ask for the value)" for s in secrets]
         return ToolResult(
             ok=True,

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.437.1 (2026-11-05).*
+holds itself to. Current as of v1.438.0 (2026-11-06).*
 
 ---
 
@@ -2019,6 +2019,47 @@ the current level's full description when you rest the pointer on it.
 
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
+
+## More setup from chat (v1.438.0)
+
+Each of these shows a card before anything changes, and each change has an
+Undo that puts back only what that change did. If you changed the same thing
+again since, Undo says so and leaves your newer work alone. Keys and tokens
+go only on the secure card, never in the chat.
+
+- **The night shift.** "Queue 'update the README' for tonight in
+  D:\code\shop", "what's queued for tonight?", "cancel the README task",
+  "move it to the top". The card says when the task runs and in which folder,
+  and you click it to allow it once. A chat set to Local only cannot queue
+  work that would run on a cloud model.
+- **A folder's coding setup.** "Use Codex for D:\code\shop", "Codex writes,
+  Claude reviews in this folder", "stop using the team here". Chat uses the
+  folder you name, or the chat's project folder, and asks which folder when
+  neither is known. Full access and "Don't ask" can't be a folder's default,
+  and an account is picked when a session starts, not saved for the folder.
+- **Model servers.** "Add my LM Studio server at 192.168.1.20:1234 and make it
+  the default", "remove the DGX server". The card says whether the server is
+  on this PC or your network, or on the internet. The default can only be a
+  model that server lists itself; if the list can't be read, chat says so.
+- **Accounts.** "Add a second Claude account" makes it in Iron-Proxy and opens
+  its own sign-in window; you sign in there, and Iron Jarvis never sees the
+  login. "Put TSI and VR2 in a group called Work" changes only that group;
+  your other groups stay.
+- **Memory bases.** "Use Notion as your long-term memory" (the token goes on
+  the secure card and it works without a restart), or a notes folder such as
+  an Obsidian vault. Chat can also make it where Jarvis saves what it learns.
+- **Preferences, lessons and personas.** "Forget the preference about short
+  answers", "change it to bullet points", "add a lesson: always cite the IRS
+  section", "make a persona that answers like a CPA", "delete the CPA
+  persona". A preference about someone else ("the client's preference for
+  paper statements") or a lesson in a course is left alone.
+- **Answer language.** "Answer me in Spanish from now on", "stick to Spanish
+  even when I write English", "use bullet points by default". These change
+  your profile, so every later chat and agent follows them.
+- **The desktop app.** "Start Iron Jarvis with Windows" (always asks first) and
+  "keep running in the background when I close the window". The desktop app
+  picks the change up within about 15 seconds, and the tray switch and these
+  settings always agree; the newer choice wins.
 
 ## Set up a coding session before it starts (v1.437.0)
 

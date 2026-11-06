@@ -469,3 +469,20 @@ def test_the_review_matchers_are_linear_on_pathological_input():
     )
     assert out.returncode == 0, out.stderr
     assert float(out.stdout.strip().splitlines()[-1]) < 5.0
+
+
+def test_config_list_tells_the_model_how_account_groups_merge(tmp_path):
+    """v1.438.0 (Wave 4 merge): chat's account_groups value is MERGED, so
+    leaving a group out keeps it. The reader's line says how to remove one."""
+    import asyncio
+
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.tools.base import ToolContext
+
+    p = create_app(str(tmp_path)).state.platform
+    ctx = ToolContext(workspace=tmp_path, session_id="chat", agent_run_id="chat", config=p.config,
+                      event_bus=p.event_bus, engine=p.engine)
+    out = asyncio.run(p.registry.get("config_list").execute({"query": "account groups"}, ctx))
+    line = next(x for x in out.output.splitlines() if "(account_groups)" in x)
+    assert "empty list [] removes that group" in line, line
+    assert "groups you leave out are kept" in line, line
