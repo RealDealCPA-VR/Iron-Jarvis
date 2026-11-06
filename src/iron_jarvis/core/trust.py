@@ -82,6 +82,13 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         # it off would let what this run read leave the network).
         "change_undo",
         "chat_local_only",
+        # v1.438.0 (Wave 4 group B): nor a model server, an account or a memory
+        # base (each changes where later chats are answered or saved).
+        "model_server_add",
+        "model_server_default",
+        "model_server_remove",
+        "account_add",
+        "memory_base_add",
         "create_agent",
         "remember_preference",
         "skill_create",

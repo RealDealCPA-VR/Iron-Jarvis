@@ -77,11 +77,26 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       "pack_restart",
       "provider_rescan",
       "delegate_remote",
+      // v1.438.0 (Wave 4 group B): a model server, an account.
+      "model_server_add",
+      "model_server_default",
+      "model_server_remove",
+      "account_add",
     ],
   },
   {
     words: "memory",
-    tools: ["memory_write", "memory_propose", "ltm_append", "notebook", "remember_preference", "brain_save", "brain_change"],
+    tools: [
+      "memory_write",
+      "memory_propose",
+      "ltm_append",
+      "notebook",
+      "remember_preference",
+      "brain_save",
+      "brain_change",
+      // v1.438.0 (Wave 4 group B).
+      "memory_base_add",
+    ],
   },
   // v1.435.0 (chat-first plan Wave 3 group G): projects from chat — a
   // project grounds every later chat filed in it.

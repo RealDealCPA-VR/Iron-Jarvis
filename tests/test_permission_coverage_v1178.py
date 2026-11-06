@@ -55,6 +55,9 @@ _MUST_NEVER_BE_ALLOW = DENY_FLOOR_TOOLS | {"tool_create", "tool_delete", "create
     # user's own made, changed, archived or removed from chat — always a card.
     "project_create", "project_update", "project_archive", "project_focus",
     "agent_create", "agent_update", "agent_pause", "agent_delete",
+    # v1.438.0 (chat-first plan Wave 4 group B): a model server, the default
+    # model, an Iron-Proxy account or a memory base from chat — always a card.
+    "model_server_add", "model_server_default", "model_server_remove", "account_add", "memory_base_add",
 }
 
 

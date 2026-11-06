@@ -219,6 +219,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # (settings.records_history.history_tools_for); pinned by
     # tests/test_chat_history_tools_v14350.py.
     "chat_local_only", "changes_list", "change_undo",
+    # v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections):
+    # a model server, its default model, an Iron-Proxy account and a memory
+    # base from chat — a card + Undo where the user is present; pinned by
+    # tests/test_records_connections_v14380.py.
+    "model_server_add", "model_server_default", "model_server_remove", "account_add", "memory_base_add",
     # SELF-CARE (v1.344.0): chat arms the readers via autoselect.AUTO_SAFE_TOOLS
     # and the repairers via ASK_TIER_TOOLS; pinned by
     # tests/test_autoselect_failure_vocab_v1344.py

@@ -131,6 +131,10 @@ _RECORD_TOOLS: dict[str, frozenset[str]] = {
     "grant": frozenset({"grant_revoke"}),
     "project": frozenset({"project_create", "project_update", "project_archive", "project_focus"}),
     "agent": frozenset({"agent_create", "agent_update", "agent_pause", "agent_delete", "create_agent"}),
+    # v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections).
+    "model_server": frozenset({"model_server_add", "model_server_remove"}),
+    "account": frozenset({"account_add"}),
+    "memory_base": frozenset({"memory_base_add"}),
 }
 #: A record card's key starts with these (``records._card``).
 _RECORD_CARD_PREFIX: dict[str, tuple[str, ...]] = {
@@ -144,8 +148,22 @@ _RECORD_CARD_PREFIX: dict[str, tuple[str, ...]] = {
     "grant": ("grant.",),
     "project": ("project.",),
     "agent": ("agent.",),
+    "model_server": ("model_server.", "model_default."),
+    "account": ("account.",),
+    "memory_base": ("memory_base.", "memory_profile."),
 }
-_APP_CONNECTORS = frozenset({"app_connect", "app_switch", "app_import", "channel_connect", "channel_toggle"})
+#: v1.438.0 (Wave 4 group B): a record card that ALSO changed a setting (a
+#: model server made the default, a memory base made the memory profile's) —
+#: its key's prefix and the settings it answers.
+_CARD_SETTINGS: dict[str, tuple[str, ...]] = {
+    "model_default.": ("default_model", "default_provider"),
+    "memory_profile.": ("brain_profile",),
+}
+_APP_CONNECTORS = frozenset(
+    {"app_connect", "app_switch", "app_import", "channel_connect", "channel_toggle",
+     # v1.438.0: "I connected Notion as your memory" — a memory base.
+     "memory_base_add"}
+)
 _APP_REMOVERS = frozenset({"app_disconnect", "app_switch", "app_import", "channel_remove", "channel_toggle"})
 _LOCAL_ONLY_TOOL = "chat_local_only"
 _LOCAL_ONLY_NEW_KEY = "chat_new_local_only"
@@ -170,6 +188,9 @@ _RECORD_NOUN = {
     "project": "project",
     "agent": "agent",
     "app": "app",
+    "model_server": "model server",
+    "account": "account",
+    "memory_base": "memory base",
 }
 
 ON, OFF, CHANGE, CREATE, REMOVE, PAUSE, CONNECT, DISCONNECT, UNDO = (
@@ -742,6 +763,9 @@ def _record_kind(np: list[str], rest: list[str], sentence_toks: list[str]) -> st
     brand = _EXTERNAL.intersection(mods)
     if nxt in _NOT_THE_RECORD_AFTER:
         return ""  # "a schedule OF payments", "the goal OF this essay": a document's
+    conn = _connection_kind(head, prv, mods, np)
+    if conn is not None:
+        return conn
     if head in ("schedule", "schedules"):
         if prv in _NOT_OUR_SCHEDULE_BEFORE or brand or nxt in _NOT_OUR_SCHEDULE:
             return ""
@@ -775,6 +799,34 @@ def _record_kind(np: list[str], rest: list[str], sentence_toks: list[str]) -> st
     if head in ("notification", "notifications", "alert", "alerts"):
         return "destination"
     return ""
+
+
+#: v1.438.0 (Wave 4 group B): what a model server, an Iron-Proxy account and
+#: a memory base are called. A server's words must say it serves MODELS (a
+#: program that does, or "model / inference / AI server"): "the mail server",
+#: "a Minecraft server" are someone else's.
+_MODEL_SERVER_MODS = frozenset(
+    {"model", "inference", "llm", "ai", "gpu", "studio", "lm", "ollama", "vllm", "llama", "cpp", "litellm",
+     "sglang", "koboldcpp", "localai"}
+)
+_ACCOUNT_VENDORS = frozenset({"claude", "codex", "chatgpt", "openai", "grok", "xai"})
+_MEMORY_PLACES = frozenset({"notion", "obsidian", "vault", "folder"})
+
+
+def _connection_kind(head: str, prv: str, mods: list[str], np: list[str]) -> "str | None":
+    """The connection record a noun phrase names (``model_server``,
+    ``account``, ``memory_base``), or None to let the other rules read it."""
+    if head in ("server", "servers", "endpoint", "gateway"):
+        return "model_server" if _MODEL_SERVER_MODS.intersection(mods) else None
+    if head == "box":
+        return "model_server" if prv in _MODEL_SERVER_MODS else None
+    if head in ("account", "accounts"):
+        return "account" if _ACCOUNT_VENDORS.intersection(mods) else None
+    if head in ("base", "bases") and prv == "memory":
+        return "memory_base"
+    if head in ("memory", "memories") and "as" in mods and _MEMORY_PLACES.intersection(np):
+        return "memory_base"
+    return None
 
 
 def _records_in(phrase: list[str], verb_word: str, sentence_toks: list[str]) -> list[str]:
@@ -909,7 +961,14 @@ def _fill(claim: Claim, phrase: list[str], phrase_text: str, sentence_toks: list
     if _head(phrase) in _CONTENT_HEAD:
         return  # "I changed the email to ask first": the user's own content
     if {"preference", "preferences", "memory", "memories", "lesson", "lessons"}.intersection(phrase):
-        return  # a kept preference is memory (``remember_preference``), not a setting
+        # A kept preference is memory (``remember_preference``), not a setting
+        # — but a memory BASE is a record (v1.438.0, Wave 4 group B): "I added
+        # Notion as your memory base".
+        if claim.verb in _KIND_VERBS["record"] and not _elsewhere(phrase):
+            np = _np(phrase)
+            if np and _connection_kind(np[-1], np[-2] if len(np) > 1 else "", np[:-1], np) == "memory_base":
+                claim.records = ["memory_base"]
+        return
     if "local" in phrase and "only" in phrase and phrase.index("local") + 1 < len(phrase) and (
         phrase[phrase.index("local") + 1] == "only"
     ):
@@ -1294,6 +1353,9 @@ class TurnRecord:
             key = str(c["key"])
             if c.get("title"):
                 record_keys.append(key)
+                for prefix, keys in _CARD_SETTINGS.items():
+                    if key.startswith(prefix):
+                        setting_keys.update(keys)
                 if key.startswith("app."):
                     app_id = key[4:]
                     if str(c.get("new") or "").startswith(_WAITING_STATE):

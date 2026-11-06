@@ -307,6 +307,57 @@ def shell_line(shell: str, argv: list[str]) -> str:
 # --------------------------------------------------------------------------- #
 # Routes
 # --------------------------------------------------------------------------- #
+async def open_account_signin(d: Any, svc: Any, client: Any, account_id: str) -> dict[str, Any]:
+    """THE sign-in pane of one Iron-Proxy account (v1.438.0: lifted out of
+    ``POST /iron-proxy/accounts/{id}/signin`` so chat's ``account_add`` opens
+    the same one). A Build terminal named ``Sign in: <title>`` whose shell runs
+    the account's login command AS that account; the user signs in there, in
+    their own browser — Iron Jarvis never handles the login. Answers
+    ``{terminal_id, name}``. Raises ``HTTPException`` (404 no such account,
+    400 not a subscription account, 502 no login command, 429 the terminal
+    cap) or :class:`IronProxyError` (the caller words it)."""
+    profiles = await asyncio.to_thread(client.profiles)
+    prof = next(
+        (p for p in (profiles or []) if isinstance(p, dict) and p.get("id") == account_id),
+        None,
+    )
+    if prof is None:
+        raise HTTPException(status_code=404, detail="Iron-Proxy has no account with that id.")
+    if prof.get("lane") != "cli":
+        raise HTTPException(
+            status_code=400,
+            detail="Only a subscription (CLI) account signs in from a terminal; "
+            "API-key accounts are managed in Iron-Proxy.",
+        )
+    cmd = await asyncio.to_thread(client.login_command, account_id)
+    binary = str((cmd or {}).get("binary") or "").strip()
+    if not binary:
+        raise HTTPException(status_code=502, detail="Iron-Proxy gave no login command.")
+    args = [str(a) for a in ((cmd or {}).get("args") or [])]
+    env = _signin_env((cmd or {}).get("env") or {})
+    name = f"Sign in: {prof.get('title') or account_id}"
+    # A sign-in is now IN PROGRESS: the card's reads re-check this account
+    # for the next few minutes (and while its pane stays open).
+    svc.note_signin_started(account_id)
+    try:
+        session = await asyncio.to_thread(
+            d.platform.terminals.create, None, None, 100, 30, env=env, name=name
+        )
+    except RuntimeError as exc:  # the session cap
+        raise HTTPException(status_code=429, detail=str(exc)) from None
+    # Nobody is attached until the dashboard opens Build: keep the output
+    # (the sign-in URL/code) in the pane's tail so the attach replays it.
+    session.start_autodrain()
+    # v1.303.3: the pane knows which account it signs in, so the activity
+    # step can see the CLI's own "Login successful" and have Iron-Proxy
+    # re-check that account at once (``terminals.signin_watch``).
+    session.signin_for = str(account_id)
+    session.signin_provider = str(prof.get("provider") or "")
+    line = _command_line(getattr(session, "shell", ""), binary, args, env)
+    await asyncio.to_thread(session.write, line + "\r")
+    return {"terminal_id": session.id, "name": session.pane_name or name}
+
+
 def register(app: FastAPI, d) -> None:
     """Attach the Iron-Proxy routes; ``d`` is the create_app deps object."""
 
@@ -621,49 +672,14 @@ def register(app: FastAPI, d) -> None:
         """Open a Build pane named ``Sign in: <title>`` whose shell runs the
         account's login command AS that account (its home variable set, API-key
         variables cleared). Answers ``{terminal_id, name}``; the dashboard opens
-        Build focused on it."""
+        Build focused on it. The body is :func:`open_account_signin` (chat's
+        ``account_add`` opens the same pane)."""
         svc = _svc()
         client = await _client(svc)
-        profiles = await _call(client.profiles)
-        prof = next(
-            (p for p in (profiles or []) if isinstance(p, dict) and p.get("id") == account_id),
-            None,
-        )
-        if prof is None:
-            raise HTTPException(status_code=404, detail="Iron-Proxy has no account with that id.")
-        if prof.get("lane") != "cli":
-            raise HTTPException(
-                status_code=400,
-                detail="Only a subscription (CLI) account signs in from a terminal; "
-                "API-key accounts are managed in Iron-Proxy.",
-            )
-        cmd = await _call(client.login_command, account_id)
-        binary = str((cmd or {}).get("binary") or "").strip()
-        if not binary:
-            raise HTTPException(status_code=502, detail="Iron-Proxy gave no login command.")
-        args = [str(a) for a in ((cmd or {}).get("args") or [])]
-        env = _signin_env((cmd or {}).get("env") or {})
-        name = f"Sign in: {prof.get('title') or account_id}"
-        # A sign-in is now IN PROGRESS: the card's reads re-check this account
-        # for the next few minutes (and while its pane stays open).
-        svc.note_signin_started(account_id)
         try:
-            session = await asyncio.to_thread(
-                d.platform.terminals.create, None, None, 100, 30, env=env, name=name
-            )
-        except RuntimeError as exc:  # the session cap
-            raise HTTPException(status_code=429, detail=str(exc)) from None
-        # Nobody is attached until the dashboard opens Build: keep the output
-        # (the sign-in URL/code) in the pane's tail so the attach replays it.
-        session.start_autodrain()
-        # v1.303.3: the pane knows which account it signs in, so the activity
-        # step can see the CLI's own "Login successful" and have Iron-Proxy
-        # re-check that account at once (``terminals.signin_watch``).
-        session.signin_for = str(account_id)
-        session.signin_provider = str(prof.get("provider") or "")
-        line = _command_line(getattr(session, "shell", ""), binary, args, env)
-        await asyncio.to_thread(session.write, line + "\r")
-        return {"terminal_id": session.id, "name": session.pane_name or name}
+            return await open_account_signin(d, svc, client, account_id)
+        except IronProxyError as exc:
+            raise _fail(exc) from None
 
     @app.post("/iron-proxy/accounts/{account_id}/open")
     async def iron_proxy_open(

@@ -1,6 +1,7 @@
 {
   "about": "Readiness 12A (G22/G24): every built-in the REAL registry holds, with the card's words (agents/mission.card_words) and, for the ones the work line does not word by kind, its line words (step_line_words). Written by tests/test_tool_words_everywhere_v1387.py (IJ_REGEN_TOOL_WORDS_EVERYWHERE=1); read by dashboard/__tests__/tool-words-everywhere-v1387.test.tsx through the real card and work line.",
   "builtins": [
+    "account_add",
     "agent_create",
     "agent_delete",
     "agent_pause",
@@ -99,11 +100,15 @@
     "ltm_search",
     "mcp_list_resources",
     "mcp_read_resource",
+    "memory_base_add",
     "memory_propose",
     "memory_read",
     "memory_search",
     "memory_write",
     "message_agent",
+    "model_server_add",
+    "model_server_default",
+    "model_server_remove",
     "multi_edit",
     "notebook",
     "notebook_edit",
@@ -193,6 +198,7 @@
     "write_file"
   ],
   "card": {
+    "account_add": "add an account",
     "agent_create": "make an agent",
     "agent_delete": "remove an agent",
     "agent_pause": "pause or resume an agent",
@@ -291,11 +297,15 @@
     "ltm_search": "search your knowledge base",
     "mcp_list_resources": "list an app's resources",
     "mcp_read_resource": "read something from one of your apps",
+    "memory_base_add": "add a memory base",
     "memory_propose": "suggest something to remember",
     "memory_read": "look up a memory",
     "memory_search": "search its memory",
     "memory_write": "save to its memory",
     "message_agent": "message a teammate",
+    "model_server_add": "add a model server",
+    "model_server_default": "set the default model to one of a model server's",
+    "model_server_remove": "remove a model server",
     "multi_edit": "change a file",
     "notebook": "update its notebook",
     "notebook_edit": "change a notebook",
@@ -385,6 +395,10 @@
     "write_file": "save a file"
   },
   "line": {
+    "account_add": [
+      "Added an account",
+      "Adding an account"
+    ],
     "agent_create": [
       "Made an agent",
       "Making an agent"
@@ -657,6 +671,10 @@
       "Read an app's resource",
       "Reading an app's resource"
     ],
+    "memory_base_add": [
+      "Added a memory base",
+      "Adding a memory base"
+    ],
     "memory_propose": [
       "Suggested something to remember",
       "Suggesting something to remember"
@@ -676,6 +694,18 @@
     "message_agent": [
       "Messaged a teammate",
       "Messaging a teammate"
+    ],
+    "model_server_add": [
+      "Added a model server",
+      "Adding a model server"
+    ],
+    "model_server_default": [
+      "Set the default model",
+      "Setting the default model"
+    ],
+    "model_server_remove": [
+      "Removed a model server",
+      "Removing a model server"
     ],
     "notebook": [
       "Updated its notebook",
@@ -927,6 +957,7 @@
     ]
   },
   "kind": {
+    "account_add": "",
     "agent_create": "",
     "agent_delete": "",
     "agent_pause": "",
@@ -1025,11 +1056,15 @@
     "ltm_search": "",
     "mcp_list_resources": "",
     "mcp_read_resource": "",
+    "memory_base_add": "",
     "memory_propose": "",
     "memory_read": "",
     "memory_search": "",
     "memory_write": "",
     "message_agent": "",
+    "model_server_add": "",
+    "model_server_default": "",
+    "model_server_remove": "",
     "multi_edit": "change",
     "notebook": "",
     "notebook_edit": "change",

@@ -870,6 +870,17 @@ SECRETS: tuple[SecretDef, ...] = (
               pattern=True, aliases=("connect notion", "connect github")),
     SecretDef("secret.{name}", "A named secret", "connections",
               "Any secret in the vault.", vault_key="{name}", pattern=True),
+    # v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections):
+    # a model server's key and a Notion memory base's token, under the vault
+    # names the Fleet page and the Memory page already use
+    # (``endpoint_<id>_key``, ``ltm_<name>_notion``) — so the key a card saves
+    # is the key the server or base is read with, at once, with no restart.
+    SecretDef("model_server.{name}", "A model server's key", "models",
+              "The key of a model server you added (LM Studio, vLLM, a gateway).",
+              vault_key="endpoint_{name}_key", pattern=True),
+    SecretDef("memory.{name}", "A memory base's token", "memory",
+              "The Notion integration token of a memory base you added.",
+              vault_key="ltm_{name}_notion", pattern=True),
 )
 
 BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTINGS}

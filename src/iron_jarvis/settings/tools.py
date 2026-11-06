@@ -324,6 +324,16 @@ class _ConfigChangeBase(Tool):
             d, key, value = self._resolve(args)
         except KeyError:
             return ToolResult(ok=False, output="", error=f"There is no setting {args.get('key')!r}. Call config_list.")
+        if key in ("account_groups", "brain_profile"):
+            # v1.438.0 (Wave 4 group B): chat names accounts and memory
+            # profiles by their NAMES ("put TSI and VR2 in a group called
+            # Work", "use my memory profile Work"); the setting holds ids.
+            # Off the loop: the profile table is read.
+            from .records_connections import named_setting_value
+
+            value, named_problem = await asyncio.to_thread(named_setting_value, self.platform, key, value)
+            if named_problem:
+                return ToolResult(ok=False, output="", error=f"{d.label}: {named_problem}.")
         tier = d.tier_for(value)
         if tier != self.TIER:
             right = TOOL_FOR_TIER[tier]

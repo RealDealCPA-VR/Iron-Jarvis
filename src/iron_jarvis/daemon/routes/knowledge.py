@@ -42,6 +42,99 @@ def _unprobed(conn: Any, reason: str) -> dict[str, Any]:
     }
 
 
+def add_ltm_source_record(d: Any, body: LTMSourceBody) -> dict[str, Any]:
+    """THE add of a custom memory base (v1.438.0: lifted out of ``POST
+    /ltm/sources`` so chat's ``memory_base_add`` adds the same way): a new
+    secret goes into the vault (only its NAME on the record), the record is
+    saved, and the base is registered LIVE (no restart). BLOCKING; raises
+    ``HTTPException(400)``."""
+    import re
+
+    from ...ltm.sources import CustomSourceStore, connector_from_record
+
+    import json
+
+    store = CustomSourceStore(d.platform.engine)
+    _slug = re.sub(r"[^a-zA-Z0-9_]+", "_", body.name.strip().lower())
+    # A NEW secret (SSH password / http_rag bearer) is stored in the ENCRYPTED
+    # vault (never in the DB); only its secret NAME is persisted on the record.
+    token_secret = body.token_secret
+    if body.kind == "ssh" and body.password.strip():
+        token_secret = f"ltm_{_slug}_ssh"
+        d.platform.secrets.set(token_secret, body.password.strip(), kind="token")
+    elif body.kind == "http_rag" and body.token.strip():
+        token_secret = f"ltm_{_slug}_http_rag"
+        d.platform.secrets.set(token_secret, body.token.strip(), kind="token")
+    elif body.kind == "notion" and body.token.strip():
+        # Notion gets the same one-step setup as ssh/http_rag: paste the
+        # integration token inline, it lands in the vault, only the secret
+        # NAME persists. (Previously Notion alone required pre-creating a
+        # secret on the Secrets page and referencing it by name.)
+        token_secret = f"ltm_{_slug}_notion"
+        d.platform.secrets.set(token_secret, body.token.strip(), kind="token")
+    elif body.kind == "mcp" and body.token.strip():
+        # An MCP brain's bearer token (pasted or parsed out of a Claude-
+        # Desktop-style config) — vaulted, never on the record/config.toml.
+        token_secret = f"ltm_{_slug}_mcp"
+        d.platform.secrets.set(token_secret, body.token.strip(), kind="token")
+    try:
+        rec = store.add(
+            body.name,
+            body.kind,
+            path=body.path,
+            database_id=body.database_id,
+            token_secret=token_secret,
+            host=body.host,
+            port=body.port,
+            username=body.username,
+            key_path=body.key_path,
+            endpoint_url=body.endpoint_url,
+            config_json=json.dumps(body.config) if body.config else "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:  # register it live so it's searchable without a restart
+        conn = connector_from_record(
+            rec,
+            secret_resolver=d.platform.secrets.get,
+            http_factory=lambda: httpx.Client(timeout=30),
+            credential_resolver=d.platform.connections.credential,
+            # The SHARED embedder (same as the boot-time sources) — falling
+            # back to memory's mock only when the platform predates the field.
+            embedder=(
+                getattr(d.platform, "embedder", None)
+                or getattr(getattr(d.platform, "memory", None), "embedder", None)
+            ),
+        )
+        d.platform.ltm.register(conn)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=400, detail=f"source saved but not loadable: {exc}"
+        )
+    return {"name": rec.name, "kind": rec.kind}
+
+
+def remove_ltm_source_record(d: Any, name: str) -> dict[str, Any]:
+    """THE removal of a custom memory base, from the record AND the live set
+    (v1.438.0: lifted out of ``DELETE /ltm/sources/{name}``). BLOCKING."""
+    from ...ltm.sources import CustomSourceStore
+
+    removed = CustomSourceStore(d.platform.engine).remove(name)
+    unloaded = False
+    if removed:
+        conn = d.platform.ltm.get(name)
+        unloaded = bool(d.platform.ltm.deregister(name))
+        close = getattr(getattr(conn, "_client", None), "close", None)
+        if callable(close):
+            try:
+                from ...ltm.mcp_brain import _resolve_maybe_async
+
+                _resolve_maybe_async(close())
+            except Exception:  # noqa: BLE001 — the base is gone either way
+                pass
+    return {"removed": removed, "unloaded": unloaded}
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/artifacts")
@@ -386,70 +479,9 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/ltm/sources")
     def add_ltm_source(body: LTMSourceBody) -> dict[str, Any]:
-        import re
-
-        from ...ltm.sources import CustomSourceStore, connector_from_record
-
-        import json
-
-        store = CustomSourceStore(d.platform.engine)
-        _slug = re.sub(r"[^a-zA-Z0-9_]+", "_", body.name.strip().lower())
-        # A NEW secret (SSH password / http_rag bearer) is stored in the ENCRYPTED
-        # vault (never in the DB); only its secret NAME is persisted on the record.
-        token_secret = body.token_secret
-        if body.kind == "ssh" and body.password.strip():
-            token_secret = f"ltm_{_slug}_ssh"
-            d.platform.secrets.set(token_secret, body.password.strip(), kind="token")
-        elif body.kind == "http_rag" and body.token.strip():
-            token_secret = f"ltm_{_slug}_http_rag"
-            d.platform.secrets.set(token_secret, body.token.strip(), kind="token")
-        elif body.kind == "notion" and body.token.strip():
-            # Notion gets the same one-step setup as ssh/http_rag: paste the
-            # integration token inline, it lands in the vault, only the secret
-            # NAME persists. (Previously Notion alone required pre-creating a
-            # secret on the Secrets page and referencing it by name.)
-            token_secret = f"ltm_{_slug}_notion"
-            d.platform.secrets.set(token_secret, body.token.strip(), kind="token")
-        elif body.kind == "mcp" and body.token.strip():
-            # An MCP brain's bearer token (pasted or parsed out of a Claude-
-            # Desktop-style config) — vaulted, never on the record/config.toml.
-            token_secret = f"ltm_{_slug}_mcp"
-            d.platform.secrets.set(token_secret, body.token.strip(), kind="token")
-        try:
-            rec = store.add(
-                body.name,
-                body.kind,
-                path=body.path,
-                database_id=body.database_id,
-                token_secret=token_secret,
-                host=body.host,
-                port=body.port,
-                username=body.username,
-                key_path=body.key_path,
-                endpoint_url=body.endpoint_url,
-                config_json=json.dumps(body.config) if body.config else "",
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        try:  # register it live so it's searchable without a restart
-            conn = connector_from_record(
-                rec,
-                secret_resolver=d.platform.secrets.get,
-                http_factory=lambda: httpx.Client(timeout=30),
-                credential_resolver=d.platform.connections.credential,
-                # The SHARED embedder (same as the boot-time sources) — falling
-                # back to memory's mock only when the platform predates the field.
-                embedder=(
-                    getattr(d.platform, "embedder", None)
-                    or getattr(getattr(d.platform, "memory", None), "embedder", None)
-                ),
-            )
-            d.platform.ltm.register(conn)
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(
-                status_code=400, detail=f"source saved but not loadable: {exc}"
-            )
-        return {"name": rec.name, "kind": rec.kind}
+        """Add a memory base and register it live (:func:`add_ltm_source_record`
+        — chat's ``memory_base_add`` calls the same body)."""
+        return add_ltm_source_record(d, body)
 
     @app.delete("/ltm/sources/{name}")
     def remove_ltm_source(name: str) -> dict[str, Any]:
@@ -457,22 +489,7 @@ def register(app: FastAPI, d) -> None:
         Only the record was deleted before, so the base kept answering
         searches (and took saves) until the next restart. A built-in base
         has no record and is left alone."""
-        from ...ltm.sources import CustomSourceStore
-
-        removed = CustomSourceStore(d.platform.engine).remove(name)
-        unloaded = False
-        if removed:
-            conn = d.platform.ltm.get(name)
-            unloaded = bool(d.platform.ltm.deregister(name))
-            close = getattr(getattr(conn, "_client", None), "close", None)
-            if callable(close):
-                try:
-                    from ...ltm.mcp_brain import _resolve_maybe_async
-
-                    _resolve_maybe_async(close())
-                except Exception:  # noqa: BLE001 — the base is gone either way
-                    pass
-        return {"removed": removed, "unloaded": unloaded}
+        return remove_ltm_source_record(d, name)
 
     # -- v1.408.0: which tool of an MCP memory base does what ---------------
     def _mcp_record(name: str):
