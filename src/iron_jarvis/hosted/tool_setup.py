@@ -38,10 +38,29 @@ MEASURED, not recalled (scratch homes, ``scratchpad/w6b-builder/measure``):
   ``item/started|completed {type: contextCompaction}`` → ``turn/completed``
   (status completed).
 
-Pi has no MCP servers; OpenCode and Grok are not asked here (OpenCode's ACP
-reports none; Grok's ``_x.ai/mcp/servers_updated`` carries the user's MCP
-CONFIG, keys in URLs included, and stays dropped unread) — the Session tab
-says so in words.
+v1.441.0, Grok 1.0.70 (a scratch ``GROK_HOME`` + ``USERPROFILE`` whose
+``config.toml`` named a working stdio server, an HTTP server on a closed
+port with a made-up key in its URL and a header, and a turned-off server;
+the session opened on a stand-in model entry so no xAI sign-in was used and
+no model was called): after ``session/new`` Grok pushes
+``_x.ai/mcp/servers_updated {mcpServers: [{name, source, type, url |
+command, args}]}`` — the turned-on servers' CONFIG, the URL with its key
+in it — then ``_x.ai/mcp/server_status {sessionId, name, source, status:
+ready | unavailable, reason: initialized | handshake_failed | spawn_failed |
+timeout | auth_required | client_error, detail, tools}`` once per server
+(``detail`` repeats the URL, key included). Only ``name``, ``status`` and
+``reason`` are ever read (:func:`grok_servers`, :func:`grok_status`): never
+a URL, a command, its arguments, a header, ``detail`` or anything else.
+(Grok's own ``_x.ai/mcp/list`` request answers the same per server with
+``session.enabled``; it is not asked — one more round-trip for a turned-off
+server's name.)
+
+Pi 1.3.0 has MCP servers of its own (``~/.pi/agent/mcp.json``) but no RPC
+command or event that lists them: their state reaches the Code view only as
+the text of its own notices — the start-up "MCP servers need attention"
+warning, and ``/mcp`` typed in the box (an extension command; Pi answers it
+with a status notice, measured). OpenCode's ACP reports none. The Session
+tab says so in words.
 """
 
 from __future__ import annotations
@@ -79,14 +98,41 @@ CODEX_STATUS: dict[str, str] = {
 #: in. Run `codex mcp login <name>`"), and its own failure reason.
 _CODEX_SIGN_IN_RX = re.compile(r"not logged in|codex mcp login|re-?authenticat", re.IGNORECASE)
 
+#: v1.441.0: Grok's ``_x.ai/mcp/server_status`` ``status`` words -> ours.
+GROK_STATUS: dict[str, str] = {
+    "ready": CONNECTED,
+    "connected": CONNECTED,
+    "unavailable": FAILED,
+    "failed": FAILED,
+    "pending": STARTING,
+    "starting": STARTING,
+    "connecting": STARTING,
+    "reconnecting": STARTING,
+    "needs_auth": NEEDS_SIGN_IN,
+    "needs-auth": NEEDS_SIGN_IN,
+    "disabled": OFF,
+}
+#: Grok's ``reason`` words for a server that did not start, said plainly
+#: (Grok's own ``detail`` is never read: it repeats the server's URL).
+GROK_REASON_WORDS: dict[str, str] = {
+    "spawn_failed": "its program did not start",
+    "timeout": "it did not answer in time",
+    "handshake_failed": "it did not answer when Grok connected",
+    "client_error": "Grok could not reach it",
+}
+
 #: Bounds: a session never lists more servers than this, nor longer words.
 MAX_SERVERS = 50
 NAME_CHARS = 120
 ERROR_CHARS = 300
 
 #: The tools that report their MCP servers here (the others: :data:`NOT_REPORTED`).
-REPORTS_MCP: frozenset[str] = frozenset({"claude-code", "codex"})
+REPORTS_MCP: frozenset[str] = frozenset({"claude-code", "codex", "grok"})
 NOT_REPORTED = "{tool} does not report its own MCP servers here."
+#: v1.441.0: where a tool that does not report them says their state itself.
+NOT_REPORTED_HOW: dict[str, str] = {
+    "pi": "Type /mcp in the box and Pi says each one's state.",
+}
 NOT_YET = "{tool} says which of its own MCP servers started when it starts — they show after its next start."
 NONE_REPORTED = "{tool} reported no MCP servers of its own."
 
@@ -106,6 +152,11 @@ SIGN_IN_WORDS: dict[str, str] = {
     "codex": (
         "To sign in, press Open in terminal, leave Codex there with /exit, then run "
         "`codex mcp login {name}` in that terminal; Codex uses it from its next start here."
+    ),
+    # v1.441.0: Grok's own MCP screen (/mcps; ``i`` signs in, its docs).
+    "grok": (
+        "To sign in, press Open in terminal, type /mcps there, choose {name} and press i; "
+        "Grok uses it from its next start here."
     ),
 }
 STATE_WORDS: dict[str, str] = {
@@ -177,21 +228,72 @@ def codex_update(current: list[dict[str, str]] | None, params: Any) -> list[dict
     return rows
 
 
+def grok_servers(current: list[dict[str, str]] | None, params: Any) -> list[dict[str, str]] | None:
+    """v1.441.0: Grok's ``_x.ai/mcp/servers_updated`` folded into the list:
+    ONLY each server's ``name`` is read (the rest is the user's config — a URL
+    with its key, a command line). A server Grok has said nothing more about
+    is "starting"; one it no longer lists is gone; one already known keeps its
+    state. None for a frame that is not a list (not known)."""
+    p = params if isinstance(params, dict) else {}
+    raw = p.get("mcpServers")
+    if not isinstance(raw, list):
+        return current
+    known = {r.get("name"): r for r in current or []}
+    rows: list[dict[str, str]] = []
+    for item in raw[:MAX_SERVERS]:
+        if not isinstance(item, dict):
+            continue
+        name = _name(item.get("name"))
+        if not name or any(r["name"] == name for r in rows):
+            continue
+        rows.append(dict(known.get(name) or _row(name, STARTING)))
+    return rows
+
+
+def grok_status(current: list[dict[str, str]] | None, params: Any) -> list[dict[str, str]] | None:
+    """v1.441.0: one ``_x.ai/mcp/server_status`` folded in: ``name``,
+    ``status`` and ``reason`` only — never ``detail`` (it repeats the URL,
+    key included). A server it names that the list did not is added."""
+    p = params if isinstance(params, dict) else {}
+    name = _name(p.get("name"))
+    if not name:
+        return current
+    status = str(p.get("status") or "").strip().lower()
+    reason = str(p.get("reason") or "").strip().lower()
+    state = GROK_STATUS.get(status, FAILED)
+    if reason == "auth_required" and state in (FAILED, STARTING):
+        state = NEEDS_SIGN_IN
+    error = GROK_REASON_WORDS.get(reason, "") if state == FAILED else ""
+    rows = [dict(r) for r in (current or [])]
+    row = _row(name, state, error)
+    for i, r in enumerate(rows):
+        if r.get("name") == name:
+            rows[i] = row
+            return rows
+    if len(rows) >= MAX_SERVERS:
+        return rows
+    rows.append(row)
+    return rows
+
+
 def setup_event(servers: list[dict[str, str]]) -> dict[str, Any]:
     """The ``setup`` event a driver emits when the list it knows CHANGED."""
     return make("setup", mcp_servers=[dict(s) for s in servers])
 
 
-def note_servers(driver: Any, servers: list[dict[str, str]] | None) -> None:
+def note_servers(driver: Any, servers: list[dict[str, str]] | None, attr: str = "mcp_servers") -> None:
     """Keep ``servers`` on the driver and emit a ``setup`` event — only when
     the list is known and differs from the last one said (a tool restating
-    the same list every turn writes nothing). Never raises."""
+    the same list every turn writes nothing). Never raises. v1.441.0:
+    ``attr`` names where the list is kept — an ACP driver's own
+    ``mcp_servers`` holds the servers Iron Jarvis HANDS it (``acp_servers``),
+    so Grok keeps its reported list as ``reported_mcp``."""
     if servers is None:
         return
     try:
-        if servers == getattr(driver, "mcp_servers", None):
+        if servers == getattr(driver, attr, None):
             return
-        driver.mcp_servers = [dict(s) for s in servers]
+        setattr(driver, attr, [dict(s) for s in servers])
         driver.emit(setup_event(servers))
     except Exception:  # noqa: BLE001 — a status list never breaks a reply
         return
@@ -216,7 +318,9 @@ def view(harness: str, events: Iterable[dict[str, Any]], running: bool = False) 
     one that has not started yet: :data:`NOT_YET`). Never raises."""
     tool = _tool_label(harness)
     if harness not in REPORTS_MCP:
-        return {"known": False, "servers": [], "note": NOT_REPORTED.format(tool=tool)}
+        note = NOT_REPORTED.format(tool=tool)
+        how = NOT_REPORTED_HOW.get(harness, "")
+        return {"known": False, "servers": [], "note": f"{note} {how}" if how else note}
     newest: dict[str, Any] | None = None
     try:
         for ev in events:

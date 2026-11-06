@@ -754,6 +754,10 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("profile_share_opencode", "Share my profile with OpenCode", "memory", "bool",
       "Write your profile into OpenCode's own instructions file on this PC.",
       tier="ask", put=False, section="Share with Build"),
+    # v1.441.0: Grok.
+    S("profile_share_grok", "Share my profile with Grok", "memory", "bool",
+      "Write your profile into Grok's own instructions file on this PC.",
+      tier="ask", put=False, section="Share with Build"),
     # v1.370.0 (IJ harness Phase 7): the Build experience library.
     S("build_reflect", "Learn from Build sessions", "memory", "bool",
       "When a Build session has been idle for 10 minutes after replies that changed files or ran "

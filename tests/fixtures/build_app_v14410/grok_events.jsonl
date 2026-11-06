@@ -1,0 +1,7 @@
+{"ts": "2026-10-31T19:18:54.307Z", "type": "mcp_config_resolved", "servers": [{"name": "Accounting", "transport": "http", "source": "local"}], "disabled": []}
+{"ts": "2026-10-31T19:18:54.467Z", "type": "mcp_server_starting", "server_name": "Accounting", "transport": "http", "target": "https://mcp.example.com/mcp?api_key=FAKE-KEY-IN-GROKS-OWN-LOG", "timeout_sec": 30}
+{"ts": "2026-10-31T19:18:54.468Z", "type": "turn_started", "session_id": "S", "turn_number": 0, "model_id": "grok-4.5", "yolo_mode": false, "conversation_message_count": 3, "session_relationship": "primary", "schema_version": "1.0"}
+{"ts": "2026-10-31T19:18:56.100Z", "type": "tool_completed", "duration_ms": 12, "outcome": "success", "tool_call_id": "call-a-0", "tool_name": "read_file"}
+{"ts": "2026-10-31T19:19:00.200Z", "type": "tool_completed", "duration_ms": 3000, "outcome": "error", "tool_call_id": "call-b-0", "tool_name": "run_terminal_command"}
+{"ts": "2026-10-31T19:19:01.000Z", "type": "turn_ended", "cancellation_category": null, "cancellation_context": null, "outcome": "completed"}
+{"ts": "2026-10-31T19:20:10.000Z", "type": "turn_started", "session_id": "S", "turn_number": 1, "model_id": "grok-4.7", "yolo_mode": false, "conversation_message_count": 9, "session_relationship": "primary", "schema_version": "1.0"}

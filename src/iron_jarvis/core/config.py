@@ -1041,6 +1041,9 @@ class Config(BaseModel):
     #: OpenCode ``<XDG_CONFIG_HOME or ~/.config>/opencode/AGENTS.md``).
     profile_share_pi: bool = False
     profile_share_opencode: bool = False
+    #: v1.441.0: Grok (``<GROK_HOME or ~/.grok>/AGENTS.md``, measured with
+    #: ``grok inspect --json``).
+    profile_share_grok: bool = False
 
     @field_validator("autonomy_level")
     @classmethod

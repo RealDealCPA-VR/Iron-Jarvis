@@ -3023,6 +3023,8 @@ class HostedService:
         name, args = typed
         if name in P.TERMINAL_ONLY:
             raise Refused(P.TERMINAL_ONLY[name], 400)
+        if name in P.SHELL_BUILTINS and not args:
+            raise Refused(P.SHELL_NEEDS_COMMAND, 400)  # v1.441.0
         if files:
             raise Refused("Pi's own commands take no files — send the files in a message of their own.", 400)
         if name == "model":
@@ -3157,6 +3159,12 @@ class HostedService:
             user["files"] = [clip(f, 500) for f in files]
         if carry:
             user["carry"] = dict(carry)  # v1.422.0: Iron Jarvis carried it on
+        if builtin is not None and row.harness == PI and builtin[0] in P.SHELL_BUILTINS:
+            # v1.441.0 review: a command the user ran with ``!`` — a restart
+            # that cuts it off never carries it on by itself
+            # (``carry_on.WHY_COMMAND``): there is no reply for the model to
+            # carry on, and Iron Jarvis never starts the model's work on it.
+            user["command"] = True
         self._emit(live, user)
         started = False
         turn.unsent = True  # v1.425.0 (review, B7): not the tool's yet (``interrupt``)

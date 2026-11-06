@@ -138,6 +138,8 @@ WHY_NEWER = "a newer message was sent"
 WHY_BUSY = "the session is already working"
 WHY_POOL = "too many coding sessions were working at once"
 WHY_STOP = "Emergency stop is on"
+#: v1.441.0 review: the cut message was a command the user ran (Pi's ``!``).
+WHY_COMMAND = "it was a command you ran, not a reply — run it again if you still need it"
 NOTHING_CUT = "Nothing here was cut off by a restart — send your message instead."
 NO_WAIT = "This session is not waiting for an account's limit to reset."
 MOVED_NOTE = (
@@ -322,11 +324,13 @@ def analyse_tail(events: list[dict[str, Any]], *, stopped_title: str) -> dict[st
     expired_last: set[str] = set()
     carried = False
     limit = False
+    command = False
     for ev in mine:
         t = ev.get("type")
         if t == "user":
             carry = ev.get("carry")
             carried = isinstance(carry, dict) and carry.get("why") == "restart"
+            command = ev.get("command") is True
         elif t in ("approval", "question") and ev.get("request_id"):
             open_asks.add(str(ev["request_id"]))
             expired_last.clear()
@@ -352,6 +356,7 @@ def analyse_tail(events: list[dict[str, Any]], *, stopped_title: str) -> dict[st
         "waiting": bool(open_asks or expired_last),
         "carried": carried,
         "limit": limit,
+        "command": command,
         "cut_at": _iso(max(times)) if times else "",
     }
 
@@ -375,6 +380,7 @@ def note_cut(home: Any, sid: str, facts: dict[str, Any]) -> None:
             "waiting": bool(facts.get("waiting")),
             "carried": bool(facts.get("carried")) or (bool(turn) and old.get("to") == turn),
             "limit": bool(facts.get("limit")),
+            "command": bool(facts.get("command")),
             "at": _iso(CLOCK()),
             "cut_at": str(facts.get("cut_at") or ""),
             "auto": "",
@@ -442,6 +448,8 @@ def _restart_refusal(svc: Any, sid: str, rec: dict[str, Any], since: datetime | 
         return WHY_WAITING
     if rec.get("carried"):
         return WHY_CARRIED
+    if rec.get("command"):
+        return WHY_COMMAND
     cut_at = _parse(rec.get("cut_at"))
     if cut_at is None or CLOCK() - cut_at > timedelta(days=CUT_KEEP_DAYS):
         return WHY_OLD

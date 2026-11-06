@@ -54,7 +54,7 @@ _LOCAL_ENDPOINT_KEYS = ("ollama_base_url", "ollama_model", "custom_base_url", "c
 #: also clears every app's own "run without asking" flag (``_mcp_auto_approve``).
 _HOOK_KEYS = frozenset(
     {"iron_proxy_enabled", "profile_share_claude_code", "profile_share_codex",
-     "profile_share_pi", "profile_share_opencode", "agent_browser_enabled",
+     "profile_share_pi", "profile_share_opencode", "profile_share_grok", "agent_browser_enabled",
      "mcp_auto_approve"}
 )
 
@@ -66,6 +66,7 @@ _SHARE_KEYS: dict[str, str] = {
     "profile_share_codex": "codex",
     "profile_share_pi": "pi",
     "profile_share_opencode": "opencode",
+    "profile_share_grok": "grok",
 }
 
 

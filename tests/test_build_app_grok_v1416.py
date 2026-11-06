@@ -513,7 +513,11 @@ def test_groks_own_notifications_are_never_drawn():
     d.on_message({"jsonrpc": "2.0", "method": "_x.ai/mcp/servers_updated",
                   "params": {"mcpServers": [{"url": "https://x?api_key=SECRET"}]}})
     d.on_message({"jsonrpc": "2.0", "method": "_x.ai/settings/update", "params": {"tips": ["x"]}})
-    assert seen == []
+    # v1.441.0 (moved on purpose): the MCP list is read for its NAMES only
+    # (``tool_setup.grok_servers``) — a server with no name adds nothing, and
+    # its URL never reaches an event.
+    assert [e["type"] for e in seen] == ["setup"] and seen[0]["mcp_servers"] == []
+    assert "SECRET" not in repr(seen)
 
 
 def test_a_failure_says_groks_own_fix_and_offers_no_other_tools_press():

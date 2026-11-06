@@ -72,6 +72,7 @@ MEASURED on this PC (pi 1.3.0, live, in scratch folders; the recordings are
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import base64
 import json
 import logging
@@ -616,6 +617,27 @@ TERMINAL_ONLY: dict[str, str] = {
               "open this session there with Open in terminal."),
     "quit": "There is nothing to quit here: Iron Jarvis stops Pi after the session has been idle a while.",
 }
+#: v1.441.0: ``!command`` / ``!!command`` typed in the box, as Pi's own
+#: terminal reads them: Pi's RPC ``bash`` {command, excludeFromContext} runs it
+#: (measured on pi 1.3.0 with a scratch PI_CODING_AGENT_DIR, no model call):
+#: ``bash_execution_update {id, delta}`` streams its output and the answer is
+#: {output, exitCode, cancelled, truncated, fullOutputPath}; ``abort_bash``
+#: stops it. Pi records it as a ``bashExecution`` message — with ``!!``
+#: (``excludeFromContext``) the model never sees it. Pi runs it in ITS shell
+#: under Pi's own rules (an extension's ``user_bash`` hook may take it); Pi
+#: asks nothing before it — the user typed it.
+SHELL_BUILTINS = ("!", "!!")
+SHELL_NEEDS_COMMAND = "Type the command after the ! (or !! to keep it out of the conversation)."
+SHELL_KEPT_OUT = "Kept out of the conversation: Pi's model will not see this command or its output."
+#: How long one typed command may run before it is stopped.
+BASH_TIMEOUT_S = 1800.0
+#: v1.441.0 review: said when a typed command ran past :data:`BASH_TIMEOUT_S`
+#: (never the bare "Stopped." a Stop gets — the user pressed nothing).
+SHELL_TIME_LIMIT = "Stopped: it ran longer than {minutes} minutes."
+#: v1.441.0 review: a Stop on a ``!`` command kept across a restart waits this
+#: long for Pi's ``bash`` answer after the abort, then ends the turn anyway
+#: (the answer may have come while Iron Jarvis was down).
+ABORT_ANSWER_WAIT_S = 3.0
 MODEL_NEEDS_NAME = "Choose the model from the model menu under the box, or type /model provider/model."
 THINKING_NEEDS_LEVEL = "Choose the thinking level from the effort menu under the box, or type /thinking low."
 #: How long Pi's own compaction (a model call) may take.
@@ -639,6 +661,12 @@ def typed_builtin(text: str, commands: list[dict[str, Any]] | None) -> tuple[str
     commands — unless an extension, template or skill of the user's offers a
     command by that name (Pi runs theirs). None for anything else."""
     stripped = str(text or "").strip()
+    if stripped.startswith("!"):
+        # v1.441.0: Pi's own ``!command`` (in the conversation) and
+        # ``!!command`` (kept out of it), as its terminal reads them.
+        if stripped.startswith("!!"):
+            return "!!", stripped[2:].strip()
+        return "!", stripped[1:].strip()
     if not stripped.startswith("/"):
         return None
     word, _, rest = stripped[1:].partition(" ")
@@ -764,6 +792,10 @@ class PiDriver(Driver):
         #: v1.429.0: the Pi command this turn runs (``run_builtin``), "" = none.
         self._builtin = ""
         self._manual_compact = False
+        #: v1.441.0: the ``!`` command running now (its request id, its step).
+        self._bash: dict[str, Any] | None = None
+        #: Review: the waiter :meth:`_rearm_shell` made (no kept form).
+        self._bash_waiter: asyncio.Future | None = None
         self._reread: asyncio.Future | None = None
         #: v1.431.0: the user pressed "Load them for this session" — Pi trusts
         #: the folder's own extensions, skills and settings for THIS process
@@ -866,6 +898,9 @@ class PiDriver(Driver):
         self._waiting_run = False
         self._builtin = name
         try:
+            if name in SHELL_BUILTINS:
+                await self._run_shell(args, keep_out=name == "!!")
+                return
             if name == "compact":
                 self._manual_compact = True
                 got = await self.request("compact", _timeout=COMPACT_TIMEOUT_S,
@@ -904,6 +939,119 @@ class PiDriver(Driver):
         finally:
             self._builtin = ""
             self._manual_compact = False
+
+    async def _run_shell(self, command: str, *, keep_out: bool) -> None:
+        """v1.441.0: a ``!`` / ``!!`` command through Pi's RPC ``bash``, drawn
+        as one command step (its output as it comes, then its exit)."""
+        self._n += 1
+        rid = f"ij-bash-{self._n}"
+        item = f"{self._tag}-bash{self._turn_n}"
+        self._bash = {"rid": rid, "item": item, "command": command, "out": ""}
+        self.emit(self._shell_event("running"))
+        if keep_out:
+            self.emit(make("notice", text=SHELL_KEPT_OUT))
+        fut = self._replies.make(rid)
+        timed_out = False
+        try:
+            await self.write({"id": rid, "type": "bash", "command": command, "excludeFromContext": keep_out})
+            try:
+                got = await asyncio.wait_for(fut, timeout=BASH_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                timed_out = True
+                await self._abort_bash()
+                got = {"output": self._bash["out"], "exitCode": None, "cancelled": True}
+        except ControlRefused as exc:
+            if self.turn_open:
+                ev = self._shell_event("failed")
+                ev["output"] = clip(f"Pi said: {exc}", 600)
+                self.emit(ev)
+                self._end("failed")
+            return
+        finally:
+            done = self._bash
+            self._bash = None
+        self._finish_shell(got, done, timed_out=timed_out)
+
+    def _finish_shell(self, got: Any, done: dict[str, Any] | None, *, timed_out: bool = False) -> None:
+        """The command's last row (its exit, or why it stopped) and the end of
+        its turn — from :meth:`_run_shell`, or from the waiter
+        :meth:`_rearm_shell` re-made after a restart."""
+        data = got if isinstance(got, dict) else {}
+        code = data.get("exitCode")
+        code = code if isinstance(code, int) and not isinstance(code, bool) else None
+        stopped = bool(data.get("cancelled")) or self._interrupting or timed_out
+        ok = code == 0 and not stopped
+        ev = self._shell_event("done" if ok else "failed", done)
+        output = str(data.get("output") if data.get("output") is not None else (done or {}).get("out") or "")
+        if timed_out:
+            output = (output + "\n" if output.strip() else "") + SHELL_TIME_LIMIT.format(
+                minutes=int(BASH_TIMEOUT_S // 60))
+        elif stopped:
+            output = (output + "\n" if output.strip() else "") + "Stopped."
+        elif code not in (0, None):
+            output = (output + "\n" if output.strip() else "") + f"exit code {code}"
+        with_full(ev, output_text=output)
+        self.emit(ev)
+        if self.turn_open:
+            self._end("interrupted" if self._interrupting else "completed")
+
+    def _rearm_shell(self) -> None:
+        """v1.441.0 review: a ``!`` command still running when Iron Jarvis
+        restarted (the code host kept Pi): its ``bash`` answer settles a
+        waiter with no kept form — re-made so the answer (or a Stop) ends the
+        turn. Only THAT turn: a late answer never ends a later one."""
+        b = self._bash
+        if not (self._builtin in SHELL_BUILTINS and isinstance(b, dict) and b.get("rid") and self.turn_open):
+            return
+        turn = self._turn_n
+        fut = self._replies.make(str(b["rid"]))
+        self._bash_waiter = fut
+
+        def done(f: asyncio.Future) -> None:
+            if self._turn_n != turn or not self.turn_open or self._bash is not b:
+                return
+            self._bash = None
+            self._builtin = ""
+            if f.cancelled():
+                return
+            exc = f.exception()
+            if isinstance(exc, ControlRefused):
+                ev = self._shell_event("failed", b)
+                ev["output"] = clip(f"Pi said: {exc}", 600)
+                self.emit(ev)
+                self._end("failed")
+                return
+            if exc is not None:
+                return  # Pi went away: its exit ends the turn
+            self._finish_shell(f.result(), b)
+
+        fut.add_done_callback(done)
+
+    def _shell_event(self, status: str, bash: dict[str, Any] | None = None) -> dict[str, Any]:
+        b = bash or self._bash or {}
+        command = str(b.get("command") or "")
+        return make("tool", item=str(b.get("item") or ""), kind="command", name="bash",
+                    title=tool_title("bash", {"command": command}), input=clip(command, 4000), status=status)
+
+    def _on_bash_output(self, obj: dict[str, Any]) -> None:
+        b = self._bash
+        if not b or str(obj.get("id") or "") != b["rid"]:
+            return
+        b["out"] = (b["out"] + str(obj.get("delta") or ""))[-(OUTPUT_CHARS * 4):]
+        now = asyncio.get_running_loop().time()
+        if now - b.get("shown", -UPDATE_EVERY_S) < UPDATE_EVERY_S:
+            return  # at most one row update a second, as a tool's own output
+        b["shown"] = now
+        ev = self._shell_event("running")
+        ev["output"] = clip(b["out"][-OUTPUT_CHARS * 2:], OUTPUT_CHARS)
+        ev["partial"] = True
+        self.emit(ev)
+
+    async def _abort_bash(self) -> None:
+        try:
+            await self.request("abort_bash")
+        except Exception:  # noqa: BLE001 — a gone process runs nothing
+            pass
 
     # -- the user's side ----------------------------------------------------------
     @property
@@ -975,6 +1123,7 @@ class PiDriver(Driver):
         if rid and self.turn_open and self._waiting_run:
             fut = self._replies.make(rid)
             fut.add_done_callback(self._prompt_answered)
+        self._rearm_shell()
 
     async def steer(self, ref: str, text: str, files: list[str]) -> str:
         """v1.412.0: Pi's own ``steer`` command — the note is QUEUED and Pi
@@ -1092,6 +1241,22 @@ class PiDriver(Driver):
 
     async def interrupt(self) -> None:
         self._interrupting = True
+        if self._builtin in SHELL_BUILTINS:
+            # v1.441.0: a typed command: Pi's own ``abort_bash`` stops it; its
+            # answer (cancelled) ends the turn as stopped.
+            b = self._bash
+            await self._abort_bash()
+            waiter = self._bash_waiter
+            if waiter is not None and not waiter.done() and b is not None and self._bash is b:
+                # Review: kept across a restart — Pi's ``bash`` answer may have
+                # come while Iron Jarvis was down; the turn ends anyway.
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(asyncio.shield(waiter), ABORT_ANSWER_WAIT_S)
+                if self._bash is b and self.turn_open:
+                    self._bash = None
+                    self._builtin = ""
+                    self._finish_shell({"output": b.get("out") or "", "cancelled": True}, b)
+            return
         if self._builtin:
             # v1.429.0: one of Pi's own commands (no run to abort): the turn
             # ends now. Pi may still finish it by itself (a compaction).
@@ -1268,6 +1433,9 @@ class PiDriver(Driver):
             return
         if kind == "queue_update":
             self._queue_changed(obj.get("steering"))
+            return
+        if kind == "bash_execution_update":
+            self._on_bash_output(obj)
             return
 
     def _item(self, idx: Any) -> str:
