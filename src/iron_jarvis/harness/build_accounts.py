@@ -390,7 +390,7 @@ def accounts_view(svc: Any) -> dict[str, Any]:
     from ..iron_proxy.usage_read import decorate
 
     for vendor in VENDORS:
-        out[vendor] = [decorate(r) for r in vendor_rows(snap, vendor)]
+        out[vendor] = [decorate(r, svc) for r in vendor_rows(snap, vendor)]
     return out
 
 

@@ -13,6 +13,15 @@ The user's own Claude settings (CLAUDE_CONFIG_DIR, …) are not markers.
 from __future__ import annotations
 
 CLAUDE_SESSION_MARKERS: tuple[str, ...] = (
+    # v1.441.0 (review X5): the parent session's ACCOUNT. MEASURED in Claude
+    # Code 2.1.316's own code: when all three are set and the config has no
+    # ``oauthAccount`` yet, it WRITES them into that config's ``.claude.json``
+    # as ``oauthAccount`` — so a child started on an Iron-Proxy account's home
+    # recorded the parent's login there and ``same_login_as`` read two
+    # different accounts as one. A child is its own login's session.
+    "CLAUDE_CODE_ACCOUNT_UUID",
+    "CLAUDE_CODE_USER_EMAIL",
+    "CLAUDE_CODE_ORGANIZATION_UUID",
     "CLAUDECODE",
     "CLAUDE_CODE_CHILD_SESSION",
     "CLAUDE_CODE_ENTRYPOINT",

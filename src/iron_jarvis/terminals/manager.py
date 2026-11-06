@@ -725,6 +725,12 @@ class TerminalManager:
         with self._lock:
             return self._sessions.get(id)
 
+    def sessions(self) -> list[TerminalSession]:
+        """Every registered pane object (a snapshot taken under the lock).
+        v1.441.0: the usage loop reads each pane's account and activity."""
+        with self._lock:
+            return list(self._sessions.values())
+
     def list(self) -> list[dict[str, Any]]:
         with self._lock:  # snapshot under the lock; query alive/info outside it
             items = list(self._sessions.values())

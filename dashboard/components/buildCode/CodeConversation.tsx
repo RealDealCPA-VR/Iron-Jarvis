@@ -97,6 +97,36 @@ export const COPY_FAILED_WORDS = "Couldn't copy";
 /** v1.439.0: how long "Copied" stays. */
 export const COPIED_MS = 1500;
 
+/** v1.441.0 (review D4): what "Copy reply" copies — the WHOLE reply, every
+ *  finished text of the turn from the user's message to the next one (a
+ *  reply with tool steps between its words used to copy one piece), keyed by
+ *  the LAST finished text of that turn: the one row that shows the button.
+ *  A message Iron Jarvis sent by itself to carry the reply on is not a new
+ *  turn. Steps' own words, thinking and notes are not the reply. Only the
+ *  conversation's top-level rows are read (a helper's text is its own). */
+export function replyCopyTexts(items: readonly ConvItem[]): Map<string, string> {
+  const out = new Map<string, string>();
+  let parts: string[] = [];
+  let lastKey = "";
+  const close = () => {
+    if (lastKey && parts.length) out.set(lastKey, parts.join("\n\n"));
+    parts = [];
+    lastKey = "";
+  };
+  for (const it of items) {
+    if (it.kind === "user" && !it.carry) {
+      close();
+      continue;
+    }
+    if (it.kind === "text" && it.done && it.text.trim()) {
+      parts.push(it.text.trim());
+      lastKey = it.key;
+    }
+  }
+  close();
+  return out;
+}
+
 /** v1.439.0: a quiet copy icon under a finished reply — shown on hover and
  *  keyboard focus, always on a touch screen. It copies the reply's text as
  *  plain text through the app's own copy path (copyPlain: the desktop
@@ -265,6 +295,8 @@ const ToolStep = memo(function ToolStep({
           data-testid="code-helper-children"
           className="ml-[7px] mt-1 grid min-w-0 gap-2 border-l border-white/[0.08] pl-3"
         >
+          {/* A helper's rows have no Copy reply (v1.441.0, review D4): its words
+              are the helper's, not the reply. */}
           {kids!.map((child) => (
             <Item key={child.key} item={child} folder={folder} press={null} toolName={toolName} onExpand={onExpand} />
           ))}
@@ -346,6 +378,7 @@ const Item = memo(function Item({
   toolName,
   facts,
   onExpand,
+  copyText = "",
 }: {
   item: ConvItem;
   folder: string;
@@ -353,6 +386,8 @@ const Item = memo(function Item({
   toolName: string;
   facts?: ReceiptFacts;
   onExpand?: ExpandStep;
+  /** v1.441.0 (review D4): the whole reply this row ends ("" = no Copy here). */
+  copyText?: string;
 }) {
   codeRowDraws.items += 1;
   switch (item.kind) {
@@ -397,7 +432,7 @@ const Item = memo(function Item({
           <div data-testid="code-text" data-done={item.done ? "true" : "false"} className={HARNESS_REPLY_PROSE}>
             <MemoMarkdown content={item.text} />
           </div>
-          {item.done && item.text.trim() ? <ReplyCopy text={item.text} /> : null}
+          {item.done && copyText ? <ReplyCopy text={copyText} /> : null}
         </div>
       );
     case "thinking":
@@ -621,6 +656,7 @@ export const CodeConversation = memo(function CodeConversation({
   onExpand?: ExpandStep;
 }) {
   const facts = useMemo(() => ({ model, account }), [model, account]);
+  const copies = useMemo(() => replyCopyTexts(items), [items]);
   let lastError = -1;
   items.forEach((it, i) => {
     if (it.kind === "error") lastError = i;
@@ -643,6 +679,7 @@ export const CodeConversation = memo(function CodeConversation({
           toolName={toolLabel(tool)}
           facts={facts}
           onExpand={onExpand}
+          copyText={copies.get(item.key) ?? ""}
         />
       ))}
     </div>

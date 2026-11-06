@@ -78,6 +78,11 @@ THROTTLE_S = 20.0
 POLL_S = 60.0
 #: ... re-reading an account that is IN USE when its last read is this old.
 IN_USE_EVERY_S = 180.0
+#: v1.441.0 (review U7/X1): an account whose CLI answered with NO usage
+#: numbers (a login with no plan, or a shape we cannot read) is re-read by the
+#: loop only after IN_USE_EVERY_S doubled per such answer in a row, never
+#: later than this; a login that said it has no plan waits this long at once.
+EMPTY_BACKOFF_MAX_S = 3600.0
 
 #: Vendors whose CLI answers a usage question without a model call.
 SUPPORTED = ("claude", "codex")
@@ -88,6 +93,14 @@ SIGN_IN_WORDS = "This account needs to sign in again before its usage can be rea
 PROXY_OFF = "Iron-Proxy is off; turn it on in Connections first."
 PROXY_UPDATE = "Iron-Proxy needs an update to keep usage numbers."
 PROXY_NOT_ANSWERING = "Iron-Proxy is not answering, so the usage could not be kept."
+#: v1.441.0 (review X1, MEASURED on Claude Code 2.1.316 with a scratch
+#: CLAUDE_CONFIG_DIR that holds no sign-in, no model call): ``get_usage``
+#: answers ``{subscription_type: null, rate_limits_available: false,
+#: rate_limits: null}``. That is a login with no Claude plan to report, never
+#: a passing hiccup, so it never says "try again".
+NO_PLAN_WORDS = (
+    "This login has no Claude plan usage to report; sign in with a Claude plan to see it."
+)
 UNKNOWN_ACCOUNT = "Iron-Proxy does not list that account."
 NO_HOME_WORDS = "Iron-Proxy does not say where this account's sign-in is kept, so its usage cannot be read."
 
@@ -97,8 +110,8 @@ _BINARY = {"claude": "claude", "codex": "codex"}
 
 class Refused(Exception):
     """A read that is not made at all. ``code``: ``unknown`` (404) |
-    ``not_supported`` | ``off`` | ``sign_in`` | ``proxy_off`` | ``no_home``
-    (409)."""
+    ``not_supported`` | ``off`` | ``sign_in`` | ``proxy_off`` | ``no_home`` |
+    ``proxy_update`` | ``proxy_not_answering`` (409)."""
 
     def __init__(self, code: str, words: str) -> None:
         super().__init__(words)
@@ -114,6 +127,10 @@ _READ_MONO: dict[str, float] = {}
 #: Review (v1.439.0): when each account's usage was last read SUCCESSFULLY.
 #: "as of" speaks for the number shown, and a failed read read no number.
 _OK_AT: dict[str, str] = {}
+#: v1.441.0: how many answers IN A ROW held no usage numbers (dropped after a
+#: read that worked); a login that said it has no plan adds enough to reach
+#: EMPTY_BACKOFF_MAX_S at once. Only the in-use loop reads it.
+_EMPTY: dict[str, int] = {}
 _LOCKS: dict[str, threading.Lock] = {}
 _STATE_LOCK = threading.Lock()
 
@@ -124,6 +141,7 @@ def reset() -> None:
         _READS.clear()
         _READ_MONO.clear()
         _OK_AT.clear()
+        _EMPTY.clear()
         _LOCKS.clear()
 
 
@@ -155,7 +173,7 @@ def _age_s(account_id: str) -> float | None:
     return None if at is None else time.monotonic() - at
 
 
-def _remember(account_id: str, ok: bool, words: str) -> dict[str, Any]:
+def _remember(account_id: str, ok: bool, words: str, *, empty: int = 0) -> dict[str, Any]:
     read = {
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "ok": bool(ok),
@@ -166,29 +184,60 @@ def _remember(account_id: str, ok: bool, words: str) -> dict[str, Any]:
         _READ_MONO[account_id] = time.monotonic()
         if read["ok"]:
             _OK_AT[account_id] = read["at"]
+            _EMPTY.pop(account_id, None)
+        elif empty:
+            _EMPTY[account_id] = _EMPTY.get(account_id, 0) + empty
     return dict(read)
+
+
+def _reread_after_s(account_id: str) -> float:
+    """How old the last read must be before the in-use loop reads again:
+    :data:`IN_USE_EVERY_S`, doubled for every answer in a row that held no
+    usage numbers, capped at :data:`EMPTY_BACKOFF_MAX_S`."""
+    with _STATE_LOCK:
+        n = _EMPTY.get(account_id, 0)
+    return min(IN_USE_EVERY_S * (2 ** min(n, 16)), max(IN_USE_EVERY_S, EMPTY_BACKOFF_MAX_S))
 
 
 # --------------------------------------------------------------------------- #
 # which accounts can be read
 # --------------------------------------------------------------------------- #
-def can_refresh(row: Mapping[str, Any] | None) -> bool:
+def proxy_can_keep(svc: Any) -> bool:
+    """Can Iron-Proxy keep a usage read (v1.441.0, review U1/X2)? It
+    advertises ``plan-usage``. CACHED (``has_feature`` reads the last health
+    answer). No service in hand reads True, so such a caller keeps its old
+    answer; a service whose answer cannot be read reads False. Never raises."""
+    if svc is None:
+        return True
+    try:
+        from .service import PLAN_USAGE_FEATURE
+
+        return bool(svc.has_feature(PLAN_USAGE_FEATURE))
+    except Exception:  # noqa: BLE001 — cannot tell: do not start a CLI for nothing
+        return False
+
+
+def can_refresh(row: Mapping[str, Any] | None, svc: Any = None) -> bool:
     """Can ``row`` (a ``build_accounts`` row) have its usage read now? A
     Claude Code or Codex account that is on and signed in (a limit is fine:
-    that is when a fresh number matters most)."""
+    that is when a fresh number matters most). v1.441.0: with ``svc`` given,
+    also only while Iron-Proxy can keep the number (``plan-usage``): an
+    older one would start the CLI and throw its answer away."""
     from ..harness import build_accounts as BA
 
     if not isinstance(row, Mapping) or row.get("vendor") not in SUPPORTED:
         return False
-    return row.get("status") in (BA.READY, BA.USAGE, BA.LIMIT)
+    if row.get("status") not in (BA.READY, BA.USAGE, BA.LIMIT):
+        return False
+    return proxy_can_keep(svc)
 
 
-def decorate(row: dict[str, Any]) -> dict[str, Any]:
+def decorate(row: dict[str, Any], svc: Any = None) -> dict[str, Any]:
     """``row`` with ``usage_read_at`` (the last SUCCESSFUL read's time, or
     None) and ``can_refresh`` added. Mutates and returns it; never raises."""
     try:
         row["usage_read_at"] = last_ok_at(str(row.get("id") or ""))
-        row["can_refresh"] = can_refresh(row)
+        row["can_refresh"] = can_refresh(row, svc)
     except Exception:  # noqa: BLE001 — a list never breaks over a decoration
         row.setdefault("usage_read_at", None)
         row.setdefault("can_refresh", False)
@@ -222,6 +271,18 @@ def _argv(vendor: str, base: list[str]) -> list[str]:
     return [*base, "app-server", "--listen", "stdio://"]
 
 
+#: v1.441.0 (review U4): API keys and tokens a usage read never inherits —
+#: Iron-Proxy's own ``COMMON_STRIP`` (every vendor CLI it starts loses them,
+#: so the SUBSCRIPTION answers) plus Codex's own sign-in variables, which the
+#: 0.157.0 source reads BEFORE the ChatGPT login (``codex_native/adapter.py``
+#: docstring). With one set, Codex would report the key's limits and they
+#: would be stored under this account.
+USAGE_READ_STRIP: tuple[str, ...] = (
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY",
+    "GOOGLE_API_KEY", "XAI_API_KEY", "GROK_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
+)
+
+
 def _env(vendor: str, lease: Any) -> dict[str, str]:
     if vendor == "claude":
         from ..providers.claude_models import child_env
@@ -232,6 +293,9 @@ def _env(vendor: str, lease: Any) -> dict[str, str]:
         from ..core.claude_markers import drop_claude_session_markers
 
         drop_claude_session_markers(env)
+    strip = {n.upper() for n in USAGE_READ_STRIP}
+    for name in [k for k in env if str(k).upper() in strip]:  # case-blind, as Windows is
+        env.pop(name, None)
     return lease.apply(env)
 
 
@@ -419,10 +483,26 @@ def _ask_claude(argv: list[str], env: dict[str, str]) -> dict[str, str]:
     if resp.get("subtype") == "error":
         said = _mask(resp.get("error"))
         raise _Said(f"Claude Code could not say{': ' + said if said else ''}.")
-    headers = claude_headers(resp.get("response"))
+    body = resp.get("response")
+    headers = claude_headers(body)
     if headers is None:
-        raise _Said("Claude Code did not return its usage this time. Try again in a minute.")
+        if _no_plan(body):
+            # A login with no plan: the loop waits the longest at once.
+            raise _Said(NO_PLAN_WORDS, empty=16)
+        raise _Said("Claude Code did not return its usage this time. Try again in a minute.", empty=1)
     return headers
+
+
+def _no_plan(answer: Any) -> bool:
+    """Does Claude Code's ``get_usage`` answer say this login has no plan
+    usage at all (the measured ``rate_limits_available: false``, or a null
+    subscription type with no windows)? Never True for an unknown shape."""
+    if not isinstance(answer, Mapping):
+        return False
+    if answer.get("rate_limits_available") is False:
+        return True
+    return ("subscription_type" in answer and answer.get("subscription_type") is None
+            and answer.get("rate_limits") is None)
 
 
 def _ask_codex(argv: list[str], env: dict[str, str]) -> dict[str, Any]:
@@ -446,12 +526,17 @@ def _ask_codex(argv: list[str], env: dict[str, str]) -> dict[str, Any]:
         raise _Said(f"Codex could not say{': ' + said if said else ''}.")
     body = codex_rate_limits(obj.get("result"))
     if body is None:
-        raise _Said("Codex's answer had no usage numbers.")
+        raise _Said("Codex's answer had no usage numbers.", empty=1)
     return body
 
 
 class _Said(Exception):
-    """A read that ran and failed, in plain words."""
+    """A read that ran and failed, in plain words. ``empty``: how much the
+    answer adds to the in-use loop's back-off (0 = not an empty answer)."""
+
+    def __init__(self, words: str, *, empty: int = 0) -> None:
+        super().__init__(words)
+        self.empty = empty
 
 
 # --------------------------------------------------------------------------- #
@@ -487,6 +572,17 @@ def _row_and_lease(svc: Any, account_id: str) -> tuple[dict[str, Any], Any]:
         # to "" would run the CLI on whatever login this PC has and store
         # THAT usage under this account.
         raise Refused("no_home", NO_HOME_WORDS)
+    # v1.441.0 (review U1/X2): decided BEFORE the CLI starts. An Iron-Proxy
+    # without ``plan-usage`` ignores the windows, and one that does not answer
+    # cannot keep them: either way the CLI's answer would be thrown away.
+    if not proxy_can_keep(svc):
+        raise Refused("proxy_update", PROXY_UPDATE)
+    try:
+        answering = svc.client() is not None
+    except Exception:  # noqa: BLE001
+        answering = False
+    if not answering:
+        raise Refused("proxy_not_answering", PROXY_NOT_ANSWERING)
     spec = A.PROVIDERS[BA.VENDORS[vendor]["provider"]]
     lease = A.make_lease(spec, account_id, str(row.get("name") or account_id), home, [])
     return row, lease
@@ -532,7 +628,7 @@ def read_usage(svc: Any, account_id: str, *, force: bool = False) -> dict[str, A
             got = (_ask_claude if vendor == "claude" else _ask_codex)(_argv(vendor, base), env)
             _tell(svc, account_id, vendor, got)
         except _Said as exc:
-            return {**_remember(account_id, False, str(exc)), "throttled": False}
+            return {**_remember(account_id, False, str(exc), empty=exc.empty), "throttled": False}
         except TimeoutError:
             words = f"{label} did not answer in {int(READ_TIMEOUT_S)} seconds."
             return {**_remember(account_id, False, words), "throttled": False}
@@ -553,11 +649,30 @@ def read_usage(svc: Any, account_id: str, *, force: bool = False) -> dict[str, A
 # --------------------------------------------------------------------------- #
 # accounts IN USE, re-read while they work
 # --------------------------------------------------------------------------- #
+#: v1.441.0 (review U3): which Iron-Proxy provider a Build terminal's CLI
+#: (``agent_state`` names it) runs as.
+_PANE_CLI_PROVIDER = {"claude": "anthropic", "codex": "openai"}
+
+
 def in_use_accounts(platform: Any) -> list[str]:
-    """Accounts a reply is RUNNING on right now: Build › Code live sessions
-    whose turn runs, and Chat › Code turns (the durable turn registry's
-    ``build`` surface) joined to their session's ``setup.account``. BLOCKING
-    (one indexed read per running Chat › Code turn); never raises."""
+    """Accounts a reply is WORKING on right now, among those whose CLI talks
+    to its vendor with no Iron Jarvis relay in between (so Iron-Proxy hears
+    nothing until someone asks): BLOCKING; never raises.
+
+    * Build › Code live sessions whose turn runs and is NOT parked on a card or
+      a question (review U2: a reply waiting on the user spends no usage, and
+      a night of a waiting card read the account every three minutes).
+    * Build TERMINALS (review U3) started on an Iron-Proxy account (the pane's
+      recorded ``accounts`` row) whose activity is ``working``; the pane's CLI
+      picks the row (Claude Code -> anthropic, Codex -> openai), a pane whose
+      CLI is not known counts every account it recorded.
+
+    Chat › Code is NOT read here (v1.441.0, review U3): its claude-cli and
+    Codex adapters already hand Iron-Proxy the vendor's own usage windows
+    after every model step (``anthropic-ratelimit-unified-*`` headers through
+    the relay, Codex's ``rateLimits`` snapshot; ``iron_proxy.accounts.
+    report_success``, pinned in ``tests/test_build_account_usage_v1368.py``) —
+    the same numbers this read gets, and fresher."""
     found: list[str] = []
 
     def add(account: Any) -> None:
@@ -569,26 +684,34 @@ def in_use_accounts(platform: Any) -> list[str]:
         hosted = getattr(platform, "hosted", None)
         for live in list(getattr(hosted, "live", {}).values()) if hosted is not None else []:
             turn = getattr(live, "turn", None)
-            if turn is not None and getattr(turn, "running", False):
-                add(getattr(live, "account", ""))
+            if turn is None or not getattr(turn, "running", False):
+                continue
+            if getattr(live, "asks", None):
+                continue  # parked on the user: nothing is being spent
+            add(getattr(live, "account", ""))
     except Exception:  # noqa: BLE001
         log.debug("could not list Build › Code accounts in use", exc_info=True)
     try:
-        from ..daemon.durable_turns import running_replies
-        from ..harness import sessions as S
-
-        engine = getattr(platform, "engine", None)
-        for row in running_replies(getattr(platform, "turn_logs", None)):
-            if row.get("surface") != "build" or engine is None:
+        manager = getattr(platform, "terminals", None)
+        panes = manager.sessions() if hasattr(manager, "sessions") else []
+        for pane in panes:
+            recorded = getattr(pane, "accounts", None)
+            if not recorded or not getattr(pane, "alive", False):
                 continue
-            tid = str(row.get("thread_id") or "")
-            if tid.startswith("build:"):
-                tid = tid[len("build:"):]
-            rec = S.get_row(engine, tid) if tid else None
-            if rec is not None:
-                add(S._setup(rec).get("account"))
+            try:
+                act = pane.activity()
+            except Exception:  # noqa: BLE001 — a pane we cannot read is not in use
+                continue
+            if str(getattr(getattr(act, "state", None), "value", "")) != "working":
+                continue
+            wanted = _PANE_CLI_PROVIDER.get(str(getattr(act, "cli", "") or "").lower())
+            for provider, rec in recorded.items():
+                if wanted is not None and provider != wanted:
+                    continue
+                if isinstance(rec, Mapping):
+                    add(rec.get("id"))
     except Exception:  # noqa: BLE001
-        log.debug("could not list Chat › Code accounts in use", exc_info=True)
+        log.debug("could not list Build terminal accounts in use", exc_info=True)
     return found
 
 
@@ -606,7 +729,7 @@ def poll_in_use(platform: Any) -> list[str] | None:
     read: list[str] = []
     for account_id in in_use_accounts(platform):
         age = _age_s(account_id)
-        if age is not None and age < IN_USE_EVERY_S:
+        if age is not None and age < _reread_after_s(account_id):
             continue
         try:
             read_usage(svc, account_id)
@@ -641,6 +764,7 @@ async def usage_loop(
 
 
 __all__ = [
+    "EMPTY_BACKOFF_MAX_S",
     "EXIT_GRACE_S",
     "IN_USE_EVERY_S",
     "POLL_S",
@@ -656,6 +780,7 @@ __all__ = [
     "last_ok_at",
     "last_read",
     "poll_in_use",
+    "proxy_can_keep",
     "read_usage",
     "reset",
     "usage_loop",

@@ -92,6 +92,42 @@ export function prependEvents(page: readonly CodeEvent[], shown: readonly CodeEv
   return [...page, ...shown];
 }
 
+/** v1.441.0 (review D1): how many pages the export reads at most (2,000
+ *  events each, the daemon's page bound). */
+export const EXPORT_MAX_PAGES = 200;
+export const EXPORT_PAGE_LIMIT = 2_000;
+
+/** v1.441.0 (review D1): the WHOLE record for "Export as Markdown" — what the
+ *  pane holds, then every page before it (the same route "Load earlier"
+ *  reads). `unread` is true when an earlier page could not be read (a
+ *  refusal, no answer, a page that moved nothing, or the page bound), so the
+ *  file can say so instead of starting part way through. */
+export async function collectAllEvents(
+  held: readonly CodeEvent[],
+  cursor: string | null,
+  readPage: (cursor: string) => Promise<EventsPage>,
+  maxPages: number = EXPORT_MAX_PAGES,
+): Promise<{ events: CodeEvent[]; unread: boolean }> {
+  let events: CodeEvent[] = [...held];
+  let next = cursor;
+  let pages = 0;
+  while (next) {
+    if (pages >= maxPages) return { events, unread: true };
+    pages += 1;
+    let page: EventsPage;
+    try {
+      page = await readPage(next);
+    } catch {
+      return { events, unread: true };
+    }
+    if (!page.events.length && page.older) return { events, unread: true };
+    events = prependEvents(page.events, events);
+    if (page.older === next) return { events, unread: true };
+    next = page.older;
+  }
+  return { events, unread: false };
+}
+
 // ── the queue (C4.8) ────────────────────────────────────────────────────────
 
 export interface QueuedMessage {

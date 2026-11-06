@@ -236,12 +236,15 @@ def test_a_hang_is_bounded_and_its_whole_tree_killed(fake, tmp_path, monkeypatch
     assert not psutil.pid_exists(child) or psutil.Process(child).status() == psutil.STATUS_ZOMBIE
 
 
-def test_an_iron_proxy_without_plan_usage_is_not_told(fake):
+def test_an_iron_proxy_without_plan_usage_is_not_told(fake, tmp_path):
+    # v1.441.0 (review U1/X2, moved on purpose): refused BEFORE the CLI starts
+    # (it used to start the CLI and throw its answer away).
     fake.features = ["executor-v1"]
     acct = fake.add_profile("anthropic", "Work")
-    read = U.read_usage(_Svc(fake), acct["id"])
-    assert read["ok"] is False and read["words"] == U.PROXY_UPDATE
-    assert _signals(fake) == []
+    with pytest.raises(U.Refused) as got:
+        U.read_usage(_Svc(fake), acct["id"])
+    assert got.value.code == "proxy_update" and got.value.words == U.PROXY_UPDATE
+    assert _signals(fake) == [] and _starts(tmp_path) == []
 
 
 def test_a_missing_cli_is_said(fake, monkeypatch):
@@ -387,7 +390,10 @@ def test_a_pass_while_iron_proxy_is_off_drops_the_row_instead_of_saying_ok(monke
     assert ticks == [] and len(offs) >= 2
 
 
-def test_a_chat_code_turn_reads_its_sessions_account(fake, tmp_path):
+def test_a_chat_code_turn_is_left_to_its_adapters(fake, tmp_path):
+    """v1.441.0 (review U3, moved on purpose): Chat › Code's adapters report
+    the vendor's windows to Iron-Proxy after every model step, so the loop no
+    longer reads its accounts (tests/test_usage_refresh_fixes_v14410.py)."""
     from iron_jarvis.core.db import open_db
     from iron_jarvis.harness import sessions as S
 
@@ -406,8 +412,8 @@ def test_a_chat_code_turn_reads_its_sessions_account(fake, tmp_path):
                         open_asks=lambda p: []),
     ])
     platform = SimpleNamespace(iron_proxy=_Svc(fake), hosted=None, turn_logs=logs, engine=engine)
-    assert U.in_use_accounts(platform) == [a["id"]]
-    assert U.poll_in_use(platform) == [a["id"]]
+    assert U.in_use_accounts(platform) == []
+    assert U.poll_in_use(platform) == []
 
 
 def test_the_loop_reports_each_pass(monkeypatch):

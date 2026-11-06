@@ -1851,15 +1851,26 @@ export function cutForRejoin(
 export function enterAllowsCodeAsk(ask: OpenAsk | null | undefined, dangerousMode: boolean): boolean {
   if (!ask || ask.type !== "approval") return true;
   if (dangerousMode) return false;
+  // v1.441.0 (review D3): a plan card whose allow leaves the session in Full
+  // access is a click, never a key — Enter presses the card's main allow, and
+  // "Approve, then full access" is a posture change Full access's own rule
+  // (two presses) keeps off the keyboard.
+  if (ask.thenMode === "full" || ask.setsMode === "full") return false;
   return !(ask.onceOnly && onceReasonOf(ask.onceReason) !== undefined);
 }
 
 export const CODE_CLICK_TO_ALLOW_HINT = "Click Allow once to allow it · Esc to deny";
 
+/** v1.441.0 (review D3): the hint names the button Enter presses (a plan
+ *  card's main allow is "Approve, then …", never "Allow once"). */
 export function codeAskKeyHint(ask: OpenAsk | null | undefined, dangerousMode: boolean): string {
   if (!ask) return "";
   if (ask.type === "question") return "Enter to send · Esc to skip";
-  return enterAllowsCodeAsk(ask, dangerousMode) ? "Enter to allow once · Esc to deny" : CODE_CLICK_TO_ALLOW_HINT;
+  const named = planAllowLabels(ask).once;
+  if (enterAllowsCodeAsk(ask, dangerousMode)) {
+    return named ? `Enter to ${named.charAt(0).toLowerCase()}${named.slice(1)} · Esc to deny` : "Enter to allow once · Esc to deny";
+  }
+  return named ? `Click “${named}” to approve the plan · Esc to deny` : CODE_CLICK_TO_ALLOW_HINT;
 }
 
 /** v1.439.0: the modes a plan card's allow can leave the session in. */
@@ -1921,9 +1932,16 @@ export function toolStepWords(t: ToolEvent): string {
 /** v1.439.0: a session as Markdown, from the events this window already
  *  holds: the user's messages, the replies, and each step by its title —
  *  never a step's input or output, never thinking. */
-export function conversationMarkdown(title: string, events: readonly CodeEvent[], toolName: string): string {
+export function conversationMarkdown(
+  title: string,
+  events: readonly CodeEvent[],
+  toolName: string,
+  /** v1.441.0 (review D1): lines said under the title (what is NOT in the file). */
+  notes: readonly string[] = [],
+): string {
   const { items } = foldConversation(events);
   const out: string[] = [`# ${title.trim() || "Coding session"}`];
+  for (const n of notes) if (n.trim()) out.push(`_${n.trim()}_`);
   let speaker: "user" | "tool" | "" = "";
   const head = (who: "user" | "tool") => {
     if (speaker !== who) out.push(`## ${who === "user" ? "You" : toolName || "Assistant"}`);
@@ -1949,6 +1967,37 @@ export function conversationMarkdown(title: string, events: readonly CodeEvent[]
     }
   }
   return `${out.join("\n\n")}\n`;
+}
+
+/** v1.441.0 (review D1): what the export says under its title about the part
+ *  of the session it does not hold. */
+export function exportGapWords(dropped: number, unread: boolean): string[] {
+  const out: string[] = [];
+  if (dropped > 0) {
+    out.push(
+      dropped === 1
+        ? "1 older step was trimmed from this session's record and is not in this file."
+        : `${dropped.toLocaleString("en-US")} older steps were trimmed from this session's record and are not in this file.`,
+    );
+  }
+  if (unread) out.push("The earlier part of this session could not be read, so it is not in this file.");
+  return out;
+}
+
+/** v1.441.0 (review D2): the export, refused in words. */
+export const EXPORT_NOT_READ = "This session has not been read yet, so there is nothing to export.";
+export const EXPORT_NOTHING = "There is nothing in this session to export yet.";
+
+/** Does a session hold anything the export would write (a message, a reply
+ *  or a step)? */
+export function hasExportableItems(events: readonly CodeEvent[]): boolean {
+  return foldConversation(events).items.some(
+    (it) =>
+      (it.kind === "user" && !it.carry && (it.text.trim() !== "" || it.files.length > 0)) ||
+      (it.kind === "steer" && it.text.trim() !== "") ||
+      (it.kind === "text" && it.text.trim() !== "") ||
+      it.kind === "tool",
+  );
 }
 
 /** v1.439.0: the export's file name — the session's title, made safe for

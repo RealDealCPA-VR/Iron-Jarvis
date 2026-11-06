@@ -9,14 +9,23 @@
  * button, so a screen reader hears the answer (a region mounted WITH its
  * words is often not announced).
  *
+ * v1.441.0 (review U5/U6): the words of a failed read WRAP (a phone cut them
+ * after a few words) and the note's whole text is also its tooltip; "as of"
+ * redraws itself every USAGE_AS_OF_TICK_MS while the window is seen, so an
+ * idle pane never keeps saying "just now".
+ *
  * The caller passes `readAt` (the row's `usage_read_at`: the last read that
  * WORKED — a failed read never moves "as of") and gets the answer
  * through `onRead` (the fresh account row, raw) to redraw its numbers.
  */
 
 import { useEffect, useState } from "react";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { RefreshCw } from "lucide-react";
 import { asOfWords, CHECK_USAGE_NOW, checkUsageLabel, refreshAccountUsage, type UsageRefreshResult } from "@/lib/accountUsage";
+
+/** How often "as of N min ago" redraws itself (only while the window is seen). */
+export const USAGE_AS_OF_TICK_MS = 30_000;
 
 export function UsageRefresh({
   accountId,
@@ -35,6 +44,9 @@ export function UsageRefresh({
   const [reading, setReading] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [at, setAt] = useState<string | null>(readAt);
+  // "as of" is relative to NOW: redraw it on a clock, only while it is shown.
+  const [, setTick] = useState(0);
+  useVisibleInterval(() => setTick((n) => n + 1), USAGE_AS_OF_TICK_MS, Boolean(at) && !reading && problem === null);
   // A newer good read (the list's own time: the in-use loop read it since)
   // replaces the time — and the words of a press that failed before it.
   useEffect(() => {
@@ -60,6 +72,7 @@ export function UsageRefresh({
     }
   };
   const asOf = asOfWords(at);
+  const said = reading ? "Checking…" : problem ?? asOf;
   return (
     <span className={`inline-flex min-w-0 items-center gap-1.5 ${className}`}>
       <button
@@ -78,9 +91,12 @@ export function UsageRefresh({
         role="status"
         aria-live="polite"
         data-testid={`usage-refresh-note-${accountId}`}
-        className={`min-w-0 truncate text-[11px] ${problem ? "text-tone-warn" : "text-zinc-500"}`}
+        title={said || undefined}
+        className={`min-w-0 text-[11px] ${
+          problem ? "whitespace-normal break-words text-tone-warn" : "truncate text-zinc-500"
+        }`}
       >
-        {reading ? "Checking…" : problem ?? asOf}
+        {said}
       </span>
     </span>
   );
