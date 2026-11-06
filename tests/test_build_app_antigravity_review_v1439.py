@@ -173,7 +173,9 @@ def test_the_title_is_kept_only_while_none_is_set_in_one_step(tmp_path):
     "tests/test_build_app_antigravity_v1439.py",
 ])
 def test_no_control_characters_in_the_source(rel):
-    data = (ROOT / rel).read_bytes()
+    # GitHub's Windows runners check files out with CRLF (core.autocrlf=true,
+    # the v1.232.1 trap): a CR that ends a line is the checkout, not the source.
+    data = (ROOT / rel).read_bytes().replace(b"\r\n", b"\n")
     bad = sorted({c for c in data if c < 32 and c not in (9, 10)})
     assert bad == [], f"{rel} carries control characters {bad}"
 
