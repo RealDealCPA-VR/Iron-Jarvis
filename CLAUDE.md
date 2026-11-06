@@ -15119,6 +15119,66 @@ does not need a bump, stop and bump it.
     `tests/test_build_code_plan_card{,_review}_v1439.py`, and
     `dashboard/__tests__/{build-app-antigravity,usage-refresh,build-app-parity,build-code-parity,build-code-parity-review}-v1439.test.tsx`.
 
+- **Wave 6 of the chat-first plan: four features reconnected, dead code gone,
+  and every uncalled route has a written reason** (v1.440.0; two groups, each
+  built then independently reviewed — the reviewers found 2 and 1 more
+  defects, every fix red first and mutation-checked). GROUP D (reconnect):
+  a two-press Delete on each Goal from Chat row (Autonomy; `DELETE
+  /goals/{id}`, the words count `revoked_grants`); a two-press Sign out on a
+  signed-in CLI account's Iron-Proxy row (`POST /iron-proxy/accounts/{id}/
+  signout`; the tooltip says a running terminal or coding session on it may
+  stop answering, and that the adopted login signs this PC's own CLI out
+  too); one quiet `branch-ci-watch` line under a coding session's PR in
+  HarnessBranch (`lib/ciWatch.ts` over `GET /build/sessions/{id}/ci`, read
+  only with a LIVE PR — never merged or removed, the daemon stops tending
+  those — on open, at turn end and on a visible-only 60 s clock;
+  `next_check_at` is naive UTC); a two-press Remove for the saved calendar
+  link on Reflex (`DELETE /triggers/calendar/url`). A REAL BUG on the way:
+  the Reflex card read `/triggers` flat and looked for `active`, while the
+  daemon answers `{triggers: {email, calendar, slack}}` with `enabled` +
+  `credentialed` — every source read off and "URL saved" never showed
+  (`triggersOf`/`sourceActive`). Help: the tray's "Restart Iron Jarvis" is
+  said to appear only once automatic restarts gave up; a "Keyboard
+  shortcuts" card (`components/help/GlobalHotkeys.tsx`,
+  `lib/desktopShell.hotkeysOf`) shows the keys the desktop REALLY holds
+  from `shell.getState()`, never a hard-coded key. GROUP E (D6): deleted
+  `EventStream`, `FirstRunWizard`, `ModelSwitcher`, `AppGrid`, `HealthCard`,
+  `PowerTips`, `tileDrag` (no product importer; tests of live parts moved
+  onto `ConnectDoors` etc.; `lib/appTiles.ts` keeps `recordOpen`,
+  `readUsage`, `recordDoorOpen`); removed 9 routes — the round-table
+  leftovers `GET`/`POST /agents/threads`, `PUT …/participants`, `DELETE
+  /agents/threads/{id}`, `POST …/say`, `…/remember`, `POST
+  /projects/{id}/world/room` (with `world.ensure_room`, `NoTeamError`) and
+  the older copies `GET /providers`, `POST /providers/endpoint-models`
+  (with `EndpointModelsBody`, `discovery.list_endpoint_models`). KEPT: `GET
+  /agents/threads/{id}` (the chat mirror, the mission transcript) and the
+  whole backend room (`agents/threads.py`: chat @-mentions, the phone,
+  remote inbound). Tests that drove the removed routes go through
+  `tests/_fakes/rooms.py`, which calls the real backend (mutation-checked:
+  a no-op `run_round` fails 40). `docs/ROUTES-WITHOUT-A-SCREEN.md` lists
+  every registered route no screen calls, with KEEP and its reason (a
+  documented API, a probe, an agent tool, a door, or "unsure: <why>"), and
+  `tests/test_wave6_dead_code_v14390.py` FAILS when a NEW route has neither
+  a caller in the dashboard / desktop / add-on / CLI sources nor a row
+  there — a new route either gets a caller or a written reason. A route
+  named only in a TEST is not a caller. The seat rules (`world.team_seats`,
+  `seat_role`) are now pinned through the live `PUT /projects/{id}/team`
+  (`tests/test_wave6_dead_code_review_v14390.py`). Pins:
+  `tests/test_wave6_{dead_code,dead_code_review,reconnect_review}_v14390.py`,
+  `dashboard/__tests__/wave6-reconnect{,-review}-v1439.test.tsx` (+
+  fixture `wave6-reconnect-v1439.json`, `IJ_REGEN_WAVE6_RECONNECT=1`).
+  OPEN: `/routing` (GET/enable/disable) has no screen now — Auto is still
+  the default from Settings › Models and chat, but the composer's menu
+  offers no Auto row (the owner's call); `/vault`, `/fleet/code-route` and
+  the other "unsure" rows stay; the settings writer saves any
+  `fleet_code_target` unchecked (only `/fleet/code-route` checks it);
+  `AgentThreads.delete`/`remember` have no product caller left; Delete on a
+  running goal does not stop its run (older); Iron-Proxy's logout swallows
+  a failed CLI logout, so "Signed out" can over-claim; the calendar switch
+  reads on with no link; stale comments still name the removed modules in
+  `identity.tsx`, `BrowserSetupModal.tsx`, `RecipesRow.tsx`, `useModels.ts`;
+  never driven in the packaged app or against real Iron-Proxy or GitHub.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
@@ -15361,8 +15421,9 @@ does not need a bump, stop and bump it.
   hard rule).
 - `dashboard/app/<route>/page.tsx` per page; shared in `dashboard/components/`
   (`ui.tsx` primitives, `AppSidebar.tsx` the persistent sidebar +
-  `Sidebar.tsx` its phone drawer (v1.321.0; Simple/Advanced is retired),
-  `ModelSwitcher.tsx` quality dial — no longer mounted in the title bar) and `dashboard/lib/` (`api.ts` fetch+auth,
+  `Sidebar.tsx` its phone drawer (v1.321.0; Simple/Advanced is retired);
+  the composer's `components/chat/ModelMenu` is the one model selector —
+  `ModelSwitcher.tsx` was deleted in v1.440.0) and `dashboard/lib/` (`api.ts` fetch+auth,
   `useEvents.ts` one socket per window (EventsProvider), `types.ts`). Canvas editors: `components/workflow/`
   (agents.ts lives HERE, not lib/).
 - `desktop/main.js` — supervisor (auto-restart children), tray, global

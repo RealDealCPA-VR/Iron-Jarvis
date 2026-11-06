@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.439.0 (2026-11-06).*
+holds itself to. Current as of v1.440.0 (2026-11-06).*
 
 ---
 
@@ -2019,6 +2019,27 @@ the current level's full description when you rest the pointer on it.
 
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
+
+## Loose ends tied up (v1.440.0)
+
+- **Delete a goal you made in chat** from the Autonomy page: press Delete
+  twice. Its schedule goes too, and so does anything it was allowed to do
+  without asking.
+- **Sign an account out** on the Iron-Proxy card in Settings › Connections:
+  press Sign out twice. The account stays and needs a new sign-in before it
+  is used again. A terminal or coding session running on that account at the
+  time may stop being able to answer.
+- **A coding session's pull request says what Iron Jarvis is doing with its
+  checks:** one quiet line under the pull request, for example "Iron Jarvis
+  is watching its checks. Next look at 3:40 PM." It goes away once the pull
+  request is merged.
+- **Remove a saved calendar link** on the Reflex page (press Remove twice).
+  The Reflex page also now shows correctly which sources are on; before this
+  it showed every source as off.
+- **Help shows your keyboard shortcuts** — the keys the desktop app really
+  holds right now, including when another app took the usual one.
+- **Tidier inside:** unused screens and a few old routes nobody called were
+  removed. Nothing you use changed.
 
 ## Antigravity in the Code view, and usage you can check now (v1.439.0)
 
