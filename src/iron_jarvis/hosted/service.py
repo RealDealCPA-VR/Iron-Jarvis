@@ -393,6 +393,11 @@ def _kept_commands(harness: str, folder: str = "") -> list[dict[str, Any]]:
         own = LAST_COMMANDS.get(commands_key(harness, folder))
         if own:
             return list(own)
+    if LAST_COMMANDS.get(harness):
+        # v1.441.0 (review P3): Claude Code also keeps the part of its list no
+        # folder changes (its own built-ins, ``builtin: true``) under the bare
+        # key — a session in a folder it has not been read for shows those.
+        return list(LAST_COMMANDS[harness])
     prefix = f"{harness}@"
     # (review) a COPY: the harnesses listing reads this on a worker thread
     # while the loop may keep another folder's list (a dict that changes size
@@ -402,6 +407,19 @@ def _kept_commands(harness: str, folder: str = "") -> list[dict[str, Any]]:
         return []
     common = set.intersection(*({str(c.get("name") or "") for c in v} for v in lists))
     return [dict(c) for c in lists[0] if str(c.get("name") or "") in common]
+
+
+def _own_commands(harness: str, live: "LiveSession | None", folder: str) -> list[dict[str, Any]]:
+    """v1.441.0 (review P3): the `/` list the tool said FOR THIS FOLDER — its
+    running process's, else the one kept for the folder ([] when none was
+    read for it; never another folder's, never the lists' common part)."""
+    from .claude import FOLDER_COMMANDS, LAST_COMMANDS, commands_key
+
+    if live and live.driver and live.driver.commands:
+        return list(live.driver.commands)
+    if harness in FOLDER_COMMANDS:
+        return list(LAST_COMMANDS.get(commands_key(harness, folder)) or []) if folder else []
+    return list(LAST_COMMANDS.get(harness) or [])
 
 
 def _codex_efforts(model: Any) -> "tuple[str, ...] | None":
@@ -1085,6 +1103,10 @@ class HostedService:
         #: v1.415.0: the newest Context reading a tool gave per session
         #: (memory only; the Session tab's drop-down).
         self._context_seen: dict[str, dict[str, Any]] = {}
+        #: v1.441.0 (review P4): a name given while the session's tool was NOT
+        #: running — told to the tool once, right after its next start
+        #: (memory only: a restart of Iron Jarvis in between forgets it).
+        self._renames: dict[str, str] = {}
 
     # -- helpers -----------------------------------------------------------------
     def _lock(self) -> asyncio.Lock:
@@ -2011,11 +2033,14 @@ class HostedService:
                     merged[key] = JT.normalise({key: value})[key]
             if merged != before:
                 fields["capabilities_json"] = json.dumps(merged, sort_keys=True)
+                # v1.441.0 (review A5): a tool that takes no Iron Jarvis
+                # tools (Antigravity 1.5.2) is never restarted for a box.
+                needs = JT.takes(row.harness) and JT.wanted(merged) != JT.wanted(before)
                 if live is not None:
                     live.caps = merged
-                    if live.running and JT.wanted(merged) != JT.wanted(before):
+                    if live.running and needs:
                         live.restart = True
-                applied["capabilities"] = "next" if live is not None and live.running                     and JT.wanted(merged) != JT.wanted(before) else "now"
+                applied["capabilities"] = "next" if live is not None and live.running and needs else "now"
         if body.get("load_folder_resources") is not None:
             # v1.431.0: the ONE way a Pi session loads its folder's own
             # extensions, skills and settings — the user's press. Pi reads them
@@ -2042,7 +2067,12 @@ class HostedService:
         if fields:
             row = await asyncio.to_thread(store.update, self.engine, sid, **fields)
         if tell_title and live is not None and live.running and live.driver is not None:
+            self._renames.pop(sid, None)
             self._tell_rename(live.driver, tell_title)
+        elif tell_title:
+            # v1.441.0 (review P4): the tool is not running — it hears the
+            # name once it starts again (``_start_process``), never lost.
+            self._renames[sid] = tell_title
         out: dict[str, Any] = {"session": self._with_live(store.view(row)), "applied": applied}
         if row.harness in LISTED_MODELS:
             out["keeps_last"] = await asyncio.to_thread(pi_keeps_last, row)
@@ -2296,7 +2326,7 @@ class HostedService:
         live.folder = row.folder or ""
         connection = JT.Connection()
         url = str(getattr(getattr(self.platform, "terminals", None), "mcp_url", "") or "")
-        if JT.wanted(live.caps) and url:
+        if JT.wanted(live.caps) and url and JT.takes(row.harness):
             token = self.tokens.mint(row.id, live.caps)
             connection = await asyncio.to_thread(
                 JT.connect, row.harness, url=url, token=token, session_dir=session_dir(self.home, row.id),
@@ -2368,6 +2398,10 @@ class HostedService:
             await self._stop_process(live, end_turn=False)
             said = exc.args[0] if exc.args else type(exc).__name__
             raise Refused(f"{W.label(row.harness)} did not start: {clip(said, 200)}") from None
+        pending = self._renames.pop(row.id, "")
+        if pending:
+            # v1.441.0 (review P4): a rename given while it was stopped.
+            self._tell_rename(driver, pending)
         if isinstance(proc, HL.RemoteProcess):
             proc.snapshot_now()
             if proc.local is not None and not live.no_host_said:
@@ -2407,6 +2441,7 @@ class HostedService:
             # read from it; never the user's ~/.gemini log folder).
             driver.log_path = str(session_dir(self.home, row.id) / A.LOG_NAME)
             driver.on_title = lambda title: self._title_if_untitled(live, title)
+            driver.on_effort_dropped = lambda effort: self._effort_dropped(live, effort)
         driver.steer_read = lambda ref: self._steer_read(live, ref)
         return driver
 
@@ -2423,6 +2458,20 @@ class HostedService:
                     live.title = kept
             except Exception:  # noqa: BLE001 — a title is never worth a failure
                 log.debug("could not keep a Code-view session's title", exc_info=True)
+
+        with contextlib.suppress(RuntimeError):
+            asyncio.ensure_future(save())
+
+    def _effort_dropped(self, live: LiveSession, effort: str) -> None:
+        """v1.441.0 (review A6): the tool's model does not take the session's
+        effort (Antigravity, after its list changed) — the row and the chip
+        go back to the default level (only while the row still says it). Off
+        the loop; never raises."""
+        async def save() -> None:
+            try:
+                await asyncio.to_thread(store.clear_effort_if, self.engine, live.sid, effort)
+            except Exception:  # noqa: BLE001 — a chip's tidy-up is never worth a failure
+                log.debug("could not clear a Code-view session's effort", exc_info=True)
 
         with contextlib.suppress(RuntimeError):
             asyncio.ensure_future(save())
@@ -2761,7 +2810,7 @@ class HostedService:
             # v1.429.0: a note reaches Pi as plain words — one of Pi's own
             # commands goes as a message of its own, after this reply.
             raise Refused(W.PI_COMMAND_NOT_A_NOTE, 400)
-        typed = T.typed_builtin(row.harness, text, self.commands_for(row.harness, live, folder=row.folder or ""))
+        typed = T.typed_builtin(row.harness, text, _own_commands(row.harness, live, row.folder or ""))
         if typed is not None:
             # v1.439.0: Grok's approval commands are never sent (as a note
             # either); a setting or a terminal-only built-in is a message of
@@ -2972,7 +3021,7 @@ class HostedService:
         done here (``hosted/typed``)? ``(name, value)`` for ``/model`` and
         ``/effort`` (resolved against that tool's own lists), a Refused (one
         line) for one Iron Jarvis does not send, None for anything else."""
-        typed = T.typed_builtin(row.harness, text, self.commands_for(row.harness, live, folder=row.folder or ""))
+        typed = T.typed_builtin(row.harness, text, _own_commands(row.harness, live, row.folder or ""))
         if typed is None:
             return None
         name, args = typed
@@ -2986,6 +3035,14 @@ class HostedService:
         if name == "model":
             if not args:
                 raise Refused(T.MODEL_NEEDS_NAME, 400)
+            if row.harness == CLAUDE:
+                # v1.441.0 (review P2): Claude Code's own names too (opus,
+                # sonnet, haiku, the [1m] forms); a name nothing resolves goes
+                # to Claude Code as typed (v1.438.0), never refused here.
+                got = await asyncio.to_thread(T.resolve_claude_model, args, rows)
+                if got is None:
+                    return None
+                return name, got
             got = T.resolve_model(args, rows)
             if got is None:
                 raise Refused(T.NO_SUCH_MODEL.format(label=label, name=clip(args, 80)), 400)
@@ -3236,14 +3293,21 @@ class HostedService:
         self._note_answered(live, ask.id, metric_decision(ask.kind, decision), actor)
         self._emit(live, make("resolved", request_id=ask.id, decision=decision))
         new_mode = ask.data.get("sets_mode") if decision == "allow_session" else None
+        # v1.441.0 (review P1): the mode an approved plan goes back to is
+        # read NOW, before the driver hears the answer — never the one the
+        # card was raised with. A mode picked on the chip while the card
+        # waited is the session's already (and Claude Code's: it leaves Plan
+        # only while still in it), so it is never overwritten.
+        exit_mode = getattr(driver, "plan_exit_mode", None)
+        back = exit_mode(ask, decision) if callable(exit_mode) and not new_mode else ""
         if new_mode:
             self._emit(live, make("notice", text=W.MODE_FROM_SESSION_ALLOW.format(
                 label=W.label(live.harness), mode=MODE_LABELS[new_mode])))
-        elif decision in ("allow", "allow_session") and ask.data.get("leaves_plan_to") in MODE_LABELS:
+        elif back in MODE_LABELS:
             # v1.439.0 (review): an approved plan leaves Plan for the mode the
             # card named ("Approve, then ask first"): the row and the chip
             # follow, so the next process does not start in Plan again.
-            new_mode = ask.data["leaves_plan_to"]
+            new_mode = back
             self._emit(live, make("notice", text=W.MODE_AFTER_PLAN.format(
                 label=W.label(live.harness), mode=MODE_LABELS[new_mode])))
         if payload is not None:
@@ -3641,7 +3705,7 @@ class HostedService:
         among several."""
         harness = pane_harness(pane)
         if harness is None:
-            raise Refused("This terminal is not running Claude Code, Codex, Pi, OpenCode or Grok.")
+            raise Refused(W.NOT_A_CODING_TERMINAL)
         if not pane_exited(pane):
             raise Refused(
                 f"{W.label(harness)} is still running in this terminal — exit it there first "

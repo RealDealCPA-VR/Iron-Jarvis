@@ -529,7 +529,7 @@ async def test_from_terminal_needs_the_harness_to_have_exited(app, work, monkeyp
         assert (await c.post("/build/app/from-terminal/nope")).status_code == 404
         panes["p"] = _Pane(work, "PS C:\\work> ", cli=None)
         r = await c.post("/build/app/from-terminal/p")
-        assert r.status_code == 409 and "not running Claude Code, Codex, Pi, OpenCode or Grok" in r.json()["detail"]
+        assert r.status_code == 409 and "not running Claude Code, Codex, Pi, OpenCode, Grok or Antigravity" in r.json()["detail"]
         panes["p"] = _Pane(work, "────────────────\n> fix it\n? for shortcuts")
         r = await c.post("/build/app/from-terminal/p")
         assert r.status_code == 409 and "/exit" in r.json()["detail"]

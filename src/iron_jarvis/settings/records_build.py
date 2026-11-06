@@ -924,7 +924,7 @@ class BuildFolderShowTool(Tool):
     description = (
         "Show what NEW coding sessions in a folder start with: its defaults for Chat › Code (Iron Jarvis's "
         "own coding sessions: model, reasoning, approval level) and for Build › Code (the user's own Claude "
-        "Code, Codex, Pi, OpenCode or Grok program: tool, model, effort, mode), and its coding team. "
+        "Code, Codex, Pi, OpenCode, Grok or Antigravity program: tool, model, effort, mode), and its coding team. "
         "`folder` is a full location; leave it out for the folder of the project this chat is in."
     )
     input_schema = {"type": "object", "properties": {"folder": {"type": "string"}}}
@@ -977,7 +977,7 @@ def _menu(platform: Any) -> "set[tuple[str, str]] | None":
 
 _VIEW_REFUSAL = (
     "Say which coding view: \"chat_code\" (Iron Jarvis's own coding sessions in Chat › Code) or "
-    "\"build_code\" (the user's own Claude Code, Codex, Pi, OpenCode or Grok in Build › Code). If the user "
+    "\"build_code\" (the user's own Claude Code, Codex, Pi, OpenCode, Grok or Antigravity in Build › Code). If the user "
     "did not say, ask them."
 )
 

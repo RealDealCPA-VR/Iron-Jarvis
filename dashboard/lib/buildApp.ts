@@ -523,6 +523,10 @@ export interface CodeSession {
    *  this session (all off until the user ticks one). Absent from an older
    *  Iron Jarvis and from a conversation found on disk. */
   jarvisTools?: JarvisTools;
+  /** v1.441.0 (review A5): false when this session's tool said it takes no
+   *  Iron Jarvis tools (Antigravity 1.5.2) — the chip is hidden. Absent =
+   *  it takes them (or an older Iron Jarvis, which never says). */
+  jarvisToolsTaken?: false;
 }
 
 /** v1.422.0 (B4): one program a Code-view tool started that serves. */
@@ -689,6 +693,7 @@ export function decodeCodeSession(raw: unknown): CodeSession | null {
     stoppedNote: str(r.stopped_note, 2_000),
     noFolder: r.no_folder === true,
     workRoot: r.no_folder === true ? str(r.work_root, 1_000) : "",
+    ...(r.jarvis_tools === false ? { jarvisToolsTaken: false as const } : {}),
     ...(obj(r.capabilities)
       ? {
           jarvisTools: {

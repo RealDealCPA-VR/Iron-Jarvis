@@ -1147,7 +1147,7 @@
    },
    {
     "type": "error",
-    "title": "Antigravity did not start: Antigravity isn't signed in — open a Build terminal, run agy and sign in there, then send your message again",
+    "title": "Antigravity did not start: Antigravity isn't signed in — open a Build terminal, run agy and sign in there",
     "fix": "Fix that, then send your message again.",
     "technical": "",
     "turn": "turn-1"

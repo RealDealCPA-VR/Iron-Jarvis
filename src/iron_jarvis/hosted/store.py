@@ -128,7 +128,18 @@ def _iso(when: Any) -> str | None:
 
 def view(row: HostedSessionRecord) -> dict[str, Any]:
     """The session as the API shows it — never the account's home folder."""
+    from .jarvis_tools import takes
+
     acc = account_record(row)
+    out = _view(row, acc)
+    if not takes(row.harness):
+        # v1.441.0 (review A5): this tool said it takes no Iron Jarvis tools
+        # (Antigravity 1.5.2): the page hides the chip. Absent otherwise.
+        out["jarvis_tools"] = False
+    return out
+
+
+def _view(row: HostedSessionRecord, acc: Any) -> dict[str, Any]:
     return {
         "id": row.id,
         "harness": row.harness,
@@ -162,6 +173,22 @@ def _capabilities(row: HostedSessionRecord) -> dict[str, bool]:
     from .jarvis_tools import load
 
     return load(getattr(row, "capabilities_json", "") or "")
+
+
+def clear_effort_if(engine: Any, sid: str, effort: str) -> bool:
+    """v1.441.0 (review A6): clear the session's effort when it is STILL
+    ``effort`` (checked and written in one transaction: a level the user
+    picked meanwhile is never cleared). True when cleared."""
+    ensure_table(engine)
+    with session_scope(engine) as db:
+        row = db.get(HostedSessionRecord, str(sid or ""))
+        if row is None or not effort or (row.effort or "") != effort:
+            return False
+        row.effort = ""
+        row.updated_at = utcnow()
+        db.add(row)
+        db.commit()
+        return True
 
 
 def set_folder_if_empty(engine: Any, sid: str, path: str) -> HostedSessionRecord | None:

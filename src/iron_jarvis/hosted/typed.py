@@ -23,7 +23,17 @@ Code's box — the Pi way (``hosted/pi.py`` ``typed_builtin`` /
   the others below are NOT, so Claude Code would hand them to the model as
   plain words. A name the running (or last) list has is always Claude
   Code's own: it is sent, never answered here (a later Claude Code may run
-  it headless).
+  it headless). v1.441.0 (review P3): that list is read for the SESSION'S
+  FOLDER (a project's own commands and skills are in it, so it differs per
+  folder) and nothing is answered here before it has been read for that
+  folder — an empty list sends the words to Claude Code, as v1.438.0 did,
+  so a command or skill of the user's own named ``status`` or ``export`` is
+  never refused.
+* v1.441.0 (review P2): ``/model`` for Claude Code also takes Claude Code's
+  OWN names for a model — ``opus``, ``sonnet``, ``haiku``, the ``[1m]``
+  forms and the value its picker lists (``providers.claude_models``, the
+  cached catalog: never a start). A name nothing resolves is sent to Claude
+  Code as typed (v1.438.0's behaviour), never refused here.
 * Grok: ``/always-approve`` and ``/auto`` (Grok advertises the first over ACP,
   ``tests/fixtures/build_app_v1416/g_read.json``) would change what Grok runs
   without asking, outside Iron Jarvis's cards while the mode chip still said
@@ -69,7 +79,9 @@ CLAUDE_TERMINAL_ONLY: dict[str, str] = {
     "feedback": _SCREEN,
     "release-notes": _SCREEN,
     "upgrade": _SCREEN,
-    "export": _SCREEN,
+    # v1.441.0 (review D5/P5): the Code view exports the conversation itself.
+    "export": ("Export this conversation with Export as Markdown in the session's ⋯ menu, at the top of "
+               "the conversation."),
     "rewind": _MOVES,
     "resume": "Your Claude Code conversations are listed with your sessions — open one there.",
     "exit": "There is nothing to quit here: Iron Jarvis stops Claude Code after the session has been idle a while.",
@@ -127,7 +139,10 @@ def typed_builtin(harness: str, text: Any, commands: list[dict[str, Any]] | None
         return name, rest
     if harness == GROK and name in GROK_APPROVAL:
         return name, rest
-    if harness == CLAUDE and name in CLAUDE_TERMINAL_ONLY and name not in _names(commands):
+    own = _names(commands) if harness == CLAUDE else set()
+    if harness == CLAUDE and name in CLAUDE_TERMINAL_ONLY and own and name not in own:
+        # v1.441.0 (review P3): only once Claude Code has said its own list
+        # for this folder — before that a name could be the user's own.
         return name, rest
     return None
 
@@ -176,3 +191,31 @@ def resolve_model(arg: str, rows: list[dict[str, Any]]) -> str | None:
         str(r["id"]).lower() == low or str(r["id"]).split("/", 1)[-1].lower() == low
         or str(r.get("label") or "").lower() == low)}
     return next(iter(hits)) if len(hits) == 1 else None
+
+
+def resolve_claude_model(arg: str, rows: list[dict[str, Any]]) -> str | None:
+    """v1.441.0 (review P2): ``/model <arg>`` for Claude Code — the rule
+    above, then Claude Code's OWN names for a model (``opus``, ``sonnet``,
+    ``haiku``, a ``[1m]`` form, the value its picker lists), read from the
+    CACHED catalog (``claude_models.resolve_alias``; never a start). The
+    model row it names, or None (then the words go to Claude Code as typed)."""
+    got = resolve_model(arg, rows)
+    if got is not None:
+        return got
+    want = str(arg or "").strip()
+    if not want:
+        return None
+    try:
+        from ..providers import claude_models
+
+        canon = claude_models.resolve_alias(want)
+    except Exception:  # noqa: BLE001 — an unreadable catalog resolves nothing
+        return None
+    if not canon:
+        return None
+    ids = {str(r.get("id") or "").lower(): str(r.get("id") or "") for r in rows if r.get("id")}
+    if want.lower().endswith("[1m]") and (canon + "[1m]").lower() in ids:
+        return ids[(canon + "[1m]").lower()]
+    if canon.lower() in ids:
+        return ids[canon.lower()]
+    return None
