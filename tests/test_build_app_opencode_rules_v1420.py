@@ -170,22 +170,26 @@ def test_plan_still_refuses_an_edit_when_the_user_allows_edits_and_everything(tm
 
 
 # --------------------------------------------------------------------------- #
-# 3. OpenCode's helpers start without a card; their steps still ask
+# 3. (v1.441.0, moved on purpose) outside Full access OpenCode starts no
+#    helpers: a helper's own questions never reach ACP (measured,
+#    test_build_app_opencode_agents_v14410), so a helper whose step asks
+#    would wait for ever. The steps of the session itself still ask.
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("mode", ["ask", "edits"])
-def test_a_helper_starts_without_a_card_and_its_steps_still_ask(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize("mode", ["ask", "edits", "plan"])
+def test_a_helper_is_refused_and_the_steps_still_ask(tmp_path, monkeypatch, mode):
     env = env_for(tmp_path, monkeypatch, mode, {})
     perm = config_permission({}, None, env)
-    assert verdict("build", perm, "task", "general") == "allow"
+    agent = "plan" if mode == "plan" else "build"
+    assert verdict(agent, perm, "task", "general") == "deny"
+    assert verdict(agent, perm, "task", "explore") == "deny"
     assert verdict("build", perm, "bash", "rm -rf build") == "ask"
     assert verdict("build", perm, "webfetch", "https://example.com") == "ask"
 
 
-def test_plan_keeps_opencodes_own_rule_for_helpers(tmp_path, monkeypatch):
-    env = env_for(tmp_path, monkeypatch, "plan", {})
+def test_full_access_still_lets_a_helper_start(tmp_path, monkeypatch):
+    env = env_for(tmp_path, monkeypatch, "full", {})
     perm = config_permission({}, None, env)
-    assert "task" not in env
-    assert RANK[verdict("plan", perm, "task", "general")] >= RANK["ask"]
+    assert verdict("build", perm, "task", "general") == "allow"
 
 
 def test_a_users_own_task_rule_is_kept():

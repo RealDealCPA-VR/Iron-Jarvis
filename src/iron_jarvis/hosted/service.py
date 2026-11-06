@@ -88,6 +88,7 @@ from . import pi_catalog as PC
 from . import pi_trust as PT
 from .pi import PiDriver
 from . import opencode as O
+from . import opencode_catalog as OCC
 from .opencode import HARNESS as OPENCODE
 from .opencode import OpenCodeDriver
 from . import grok as G
@@ -283,6 +284,8 @@ def mode_about(harness: str, mode: str) -> str:
 
 def mode_label(harness: str, mode: str) -> str:
     """A preset's words for this tool ("Pi's own rules" is Pi's alone)."""
+    if harness == OPENCODE and O.agent_of(mode):
+        return O.agent_of(mode)  # v1.441.0: the user's own agent, by its name
     if harness == PI and mode in P.MODE_LABELS:
         return P.MODE_LABELS[mode]
     if harness == ANTIGRAVITY and mode in A.MODE_LABELS:
@@ -312,10 +315,17 @@ def first_message_title(text: str) -> str:
 
 
 def mode_rows(harness: str) -> list[dict[str, Any]]:
-    return [
+    rows = [
         {"id": m, "label": mode_label(harness, m), "dangerous": m == "full", "about": mode_about(harness, m)}
         for m in MODE_ORDER if m in modes_for(harness)
     ]
+    if harness == OPENCODE:
+        # v1.441.0: the user's own OpenCode agents (what an OpenCode process
+        # listed), before Full access.
+        agents = O.agent_mode_rows()
+        at = next((i for i, r in enumerate(rows) if r["id"] == "full"), len(rows))
+        rows[at:at] = agents
+    return rows
 
 
 def hidden_mode_rows(harness: str) -> list[dict[str, str]]:
@@ -328,7 +338,14 @@ def hidden_mode_rows(harness: str) -> list[dict[str, str]]:
 
 
 def check_mode(harness: str, mode: str, confirm: bool) -> str:
-    mode = str(mode or default_mode(harness)).strip().lower()
+    raw = str(mode or default_mode(harness)).strip()
+    if harness == OPENCODE and O.agent_of(raw):
+        # v1.441.0: one of the user's own OpenCode agents (its name keeps its
+        # case) — only one an OpenCode process listed.
+        if any(a["name"] == O.agent_of(raw) for a in O.known_agents()):
+            return raw
+        raise Refused(W.OPENCODE_UNKNOWN_AGENT.format(agent=O.agent_of(raw)), 400)
+    mode = raw.lower()
     if mode not in modes_for(harness):
         hidden = dict((r["id"], r["reason"]) for r in hidden_mode_rows(harness))
         if mode in hidden:
@@ -1080,6 +1097,19 @@ def heard_from(driver: Any, obj: dict[str, Any]) -> bool:
         return True
 
 
+
+def _plan_exit_mode(ask: Any, decision: str, driver: Any = None) -> str:
+    """v1.441.0 (integration): the mode an approved plan leaves the session
+    in for a driver with no rule of its own (Codex's plan card). The card's
+    ``leaves_plan_to`` is used only for an allow, never over a mode the
+    button names itself (``sets_mode``)."""
+    if decision not in ("allow", "allow_session"):
+        return ""
+    if decision == "allow_session" and ask.data.get("sets_mode"):
+        return ""
+    back = ask.data.get("leaves_plan_to") or ""
+    return back if back in MODE_LABELS and back not in ("plan", "full") else ""
+
 class HostedService:
     def __init__(self, platform: Any, *, clock: Any = time.monotonic) -> None:
         self.platform = platform
@@ -1098,6 +1128,11 @@ class HostedService:
         self._pi_catalog = self.home / "hosted" / "pi_models.json"
         #: The model list an OpenCode process last said (v1.413.0).
         self._oc_catalog = self.home / "hosted" / "opencode_models.json"
+        #: v1.441.0: OpenCode's own list, read in the background before any
+        #: session (``opencode models --verbose``, hosted/opencode_catalog).
+        self._oc_read = self.home / "hosted" / "opencode_models_read.json"
+        #: v1.441.0: the user's own OpenCode agents each process listed.
+        self._oc_agents = self.home / "hosted" / "opencode_agents.json"
         #: The model list a Grok process last said (v1.416.0).
         self._grok_catalog = self.home / "hosted" / "grok_models.json"
         #: The model list an Antigravity process last said (v1.439.0).
@@ -1168,6 +1203,7 @@ class HostedService:
         from ..providers.cli_auth import DEFAULT_PROBE, never_probe
 
         snap = BA.snapshot(getattr(self.platform, "iron_proxy", None))
+        O.load_agents(self._oc_agents)  # v1.441.0: the agent modes (a small file, once)
         out = []
         for h in HARNESSES:
             cli = W.CLI[h]
@@ -1282,6 +1318,14 @@ class HostedService:
             listed, default = (O.cached_models(self._oc_catalog) if harness == OPENCODE
                                else G.cached_models(self._grok_catalog) if harness == GROK
                                else A.cached_models(self._agy_catalog))
+            if harness == OPENCODE:
+                # v1.441.0: and, before any OpenCode session ran, what one
+                # short background read of OpenCode listed (no session, no
+                # model call, models.dev not fetched).
+                argv0 = binary_for(OPENCODE)
+                if argv0 is not None:
+                    OCC.refresh_soon(self._oc_read, self.home, argv0)
+                listed = O.grouped(OCC.merged(OCC.cached_rows(self._oc_read), listed))
             rows += listed
             known = next((r for r in listed if r.get("id") == default), None)
             if known is not None and isinstance(known.get("efforts"), list):
@@ -2455,6 +2499,7 @@ class HostedService:
             driver.forget_ask = lambda ask_id: self._forget_ask(live, ask_id)
         if isinstance(driver, OpenCodeDriver):
             driver.catalog_path = self._oc_catalog
+            driver.agents_path = self._oc_agents
             driver.rules_note = rules_note
             driver.mcp_servers = list(acp_servers)
         if isinstance(driver, GrokDriver):
@@ -2745,7 +2790,8 @@ class HostedService:
             ev = ask.event or {}
             # (review) Claude Code's ExitPlanMode card is a PLAN approval: the
             # metrics never count one as avoidable and report it apart.
-            kind = "question" if ask.kind == "question" else "plan" if ask.tool == "ExitPlanMode" else "card"
+            kind = ("question" if ask.kind == "question"
+                    else "plan" if ask.tool in ("ExitPlanMode", "codex_plan") else "card")
             note = InterruptNote(
                 bus, kind=kind, tool=ask.tool or "",
                 surface=NEWS.SURFACE, ask_id=ask.id, thread_id=live.sid, turn_id=turn,
@@ -3349,7 +3395,9 @@ class HostedService:
         # waited is the session's already (and Claude Code's: it leaves Plan
         # only while still in it), so it is never overwritten.
         exit_mode = getattr(driver, "plan_exit_mode", None)
-        back = exit_mode(ask, decision) if callable(exit_mode) and not new_mode else ""
+        if not callable(exit_mode):
+            exit_mode = _plan_exit_mode
+        back = exit_mode(ask, decision) if not new_mode else ""
         if new_mode:
             self._emit(live, make("notice", text=W.MODE_FROM_SESSION_ALLOW.format(
                 label=W.label(live.harness), mode=MODE_LABELS[new_mode])))
@@ -3367,6 +3415,10 @@ class HostedService:
                 raise Refused("The session stopped before your answer reached it.", 409) from None
             driver.answered(ask, decision)
             self._refresh_asks(live)
+        elif prepare is not None and callable(getattr(driver, "answer_here", None)):
+            # v1.441.0: a card the DRIVER answers itself (Codex's plan card: no
+            # request of Codex's waits on it) — after the card closed.
+            await driver.answer_here(ask, decision, message)
         if new_mode:
             await asyncio.to_thread(store.update, self.engine, sid, mode=new_mode)
         return {"ok": True, "request_id": ask.id, "decision": decision}

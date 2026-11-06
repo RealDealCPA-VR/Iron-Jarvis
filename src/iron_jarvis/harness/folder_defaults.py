@@ -122,9 +122,22 @@ def clean_tool(raw: Any) -> dict[str, str] | None:
     mode = str(raw.get("mode") or "").strip()
     if mode == "full":
         raise DefaultsRefused(NO_FULL_ACCESS)
-    if mode and mode not in TOOL_MODES:
+    if mode and mode not in TOOL_MODES and not _opencode_agent(harness, mode):
         raise DefaultsRefused("That mode is not one Iron Jarvis knows.")
     return {k: v for k, v in (("harness", harness), ("model", model), ("effort", effort), ("mode", mode)) if v}
+
+
+def _opencode_agent(harness: str, mode: str) -> bool:
+    """v1.441.0 (review): one of the user's own OpenCode agents
+    (``agent:<name>``). The Code view offers it as a mode and its start box
+    offers to keep the chosen mode as the folder's default — refusing it said
+    "not one Iron Jarvis knows". The composer uses a kept mode only while the
+    tool still lists it, as for every other mode."""
+    if harness != "opencode":
+        return False
+    from ..hosted.opencode import agent_of
+
+    return bool(agent_of(mode))
 
 
 CLEANERS = {VIEW_CODE: clean_code, VIEW_TOOL: clean_tool}

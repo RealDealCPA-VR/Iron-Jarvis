@@ -112,6 +112,41 @@ bundled source: ``Permission.ask`` / ``Permission.reply`` / ``evaluate`` /
   any other tool. ACP has no way to send rules to a running OpenCode, and
   putting them in ``OPENCODE_PERMISSION`` would sit in the user's rules'
   place; answering the request is what OpenCode itself would do.
+
+MEASURED for v1.441.0 (opencode 1.18.18, this PC: a SCRATCH home — USERPROFILE,
+HOME and every XDG_* folder in a scratch folder — a config naming a stand-in
+OpenAI-compatible model server on 127.0.0.1 that scripts the model's tool
+calls; models.dev, autoupdate, default plugins and LSP downloads switched off;
+no vendor reached; plus a read of the program's bundled ACP source):
+
+* THE USER'S OWN AGENTS: ``configOptions.mode`` lists ``build``, ``plan`` and
+  every agent of the user's whose ``mode`` is ``primary`` or ``all`` and that
+  is not ``hidden`` (a ``subagent`` is never listed), each with its
+  ``description``; ``session/set_config_option`` mode=<agent> switches to it.
+  An agent's OWN ``permission`` rules sit AFTER the config's and
+  ``OPENCODE_PERMISSION``: an agent with ``"bash": "allow"`` ran ``echo hi``
+  with NO card under ``{"*": "ask"}``, one with ``"bash": "deny"`` lost bash.
+  So an ``agent:<name>`` mode is Ask first plus that agent, and a rule the
+  agent sets is never changed by Iron Jarvis, either way (:func:`posture_agent`).
+* HELPERS (``task``): a helper's own session is NOT an ACP session, and the
+  ACP side answers a permission question only for a session it opened
+  (``session.tryGet(sessionID)`` -> nothing -> returns with NO answer and NO
+  request to the client). A helper's ``bash`` under ``{"*": "ask"}`` sent
+  nothing for 40 s; the helper and the reply waited until ``session/cancel``
+  ("Task cancelled"). No ``session/update`` of the helper's session arrived
+  either. So outside Full access Iron Jarvis refuses ``task`` (a rule of the
+  user's own for it stays theirs): no card for a helper can ever be drawn.
+* THE ``question`` TOOL: an ACP session does not have it (OpenCode adds it
+  only for its own clients ``app`` / ``cli`` / ``desktop``, or with
+  ``OPENCODE_ENABLE_QUESTION_TOOL``). With that variable set and
+  ``clientCapabilities.elicitation`` advertised, the model's question was
+  NEVER sent (no ``elicitation/create``, no permission request: the ACP side
+  handles only ``session.status``, ``permission.asked`` and message parts) and
+  the reply waited until Stop. So Iron Jarvis does not advertise elicitation
+  to OpenCode and drops that variable from OpenCode's environment
+  (:func:`child_env`).
+* THE MODEL LIST before any session: ``opencode models --verbose`` (see
+  ``hosted/opencode_catalog``).
 """
 
 from __future__ import annotations
@@ -168,13 +203,147 @@ MODES: dict[str, tuple[str, str]] = {
 HIDDEN_MODES: dict[str, str] = {
     "auto": "OpenCode has no mode that decides each step for you — choose Ask first or Auto edits.",
 }
+#: v1.441.0 (review): WHY no helpers outside Full access, in the user's words
+#: (a helper's own questions never reach Iron Jarvis over ACP: measured).
+NO_HELPERS = "It starts no helpers here: a helper's questions could not reach you, so it would wait for ever."
 #: What each preset does for OpenCode, in plain words (the mode menu says it).
 MODE_ABOUT: dict[str, str] = {
-    "ask": "Asks before it changes a file, runs a command or uses the web; reads without asking.",
-    "edits": "Changes files without asking; asks before it runs a command or uses the web.",
-    "plan": "OpenCode's plan agent: it looks and plans, and changes no file.",
+    "ask": "Asks before it changes a file, runs a command or uses the web; reads without asking. " + NO_HELPERS,
+    "edits": "Changes files without asking; asks before it runs a command or uses the web. " + NO_HELPERS,
+    "plan": "OpenCode's plan agent: it looks and plans, and changes no file. " + NO_HELPERS,
     "full": "Runs everything without asking.",
 }
+
+# --------------------------------------------------------------------------- #
+# v1.441.0: the user's OWN OpenCode agents as modes
+# --------------------------------------------------------------------------- #
+#: A mode that runs one of the user's own OpenCode agents: ``agent:<name>``.
+AGENT_PREFIX = "agent:"
+#: OpenCode's own agents the presets already cover (never offered twice).
+BUILT_IN_AGENTS: frozenset[str] = frozenset({"build", "plan"})
+_AGENT_NAME_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,59}$")
+#: The user's own agents each OpenCode process listed (``configOptions.mode``:
+#: OpenCode lists its primary agents there — measured, 1.18.18: ``build``,
+#: ``plan`` and every agent of the user's whose ``mode`` is ``primary`` or
+#: ``all`` and that is not ``hidden``; a ``subagent`` is never listed), keyed
+#: by folder (a project can define its own). Memory, and the service's file.
+LAST_AGENTS: dict[str, list[dict[str, str]]] = {}
+MAX_AGENTS = 30
+#: An agent mode's posture: Ask first. The agent's OWN ``permission`` rules sit
+#: AFTER the config's and this mode's (measured, 1.18.18: an agent with
+#: ``"bash": "allow"`` ran ``echo hi`` with no card under ``"*": "ask"``; one
+#: with ``"bash": "deny"`` lost its bash tool) — so a rule the agent sets is
+#: never changed, either way.
+AGENT_POSTURE = "ask"
+AGENT_ABOUT = ("{description}OpenCode's own agent \u201c{name}\u201d. Asks first, except where the agent's own "
+               "permission rules say otherwise. " + NO_HELPERS)
+
+
+def agent_of(mode: Any) -> str:
+    """The agent an ``agent:<name>`` mode names, or "" (any other mode)."""
+    text = str(mode or "")
+    if not text.startswith(AGENT_PREFIX):
+        return ""
+    name = text[len(AGENT_PREFIX):]
+    return name if _AGENT_NAME_RX.match(name) and name.lower() not in BUILT_IN_AGENTS else ""
+
+
+def posture_agent(mode: Any) -> tuple[str, str]:
+    """``(permission posture, OpenCode agent)`` for a Code-view mode — a
+    preset's own pair, or Ask first with the user's agent."""
+    name = agent_of(mode)
+    if name:
+        return AGENT_POSTURE, name
+    return MODES.get(str(mode or ""), MODES["ask"])
+
+
+def _folder_key(folder: Any) -> str:
+    try:
+        return os.path.normcase(os.path.normpath(str(folder))) if folder else ""
+    except (TypeError, ValueError):
+        return ""
+
+
+def agents_from_options(options: Any) -> list[dict[str, str]]:
+    """The user's own agents in an OpenCode process's ``mode`` option."""
+    out: list[dict[str, str]] = []
+    for v in _config(options, "mode").get("options") or []:
+        if not isinstance(v, dict):
+            continue
+        name = str(v.get("value") or "")
+        if not agent_of(AGENT_PREFIX + name):
+            continue
+        out.append({"name": name, "description": clip(v.get("description") or "", 160)})
+        if len(out) >= MAX_AGENTS:
+            break
+    return out
+
+
+def note_agents(folder: Any, agents: list[dict[str, str]]) -> None:
+    """Keep what an OpenCode process listed for ``folder`` (newest last)."""
+    key = _folder_key(folder)
+    LAST_AGENTS.pop(key, None)
+    LAST_AGENTS[key] = list(agents)
+    while len(LAST_AGENTS) > 50:
+        LAST_AGENTS.pop(next(iter(LAST_AGENTS)))
+
+
+def known_agents(folder: Any = None) -> list[dict[str, str]]:
+    """The user's own agents: one folder's list when ``folder`` is given and
+    known, else every agent any OpenCode process listed (newest first)."""
+    if folder:
+        got = LAST_AGENTS.get(_folder_key(folder))
+        if got is not None:
+            return list(got)
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for rows in reversed(list(LAST_AGENTS.values())):
+        for r in rows:
+            if r["name"] not in seen:
+                seen.add(r["name"])
+                out.append(r)
+    return out[:MAX_AGENTS]
+
+
+def agent_mode_rows() -> list[dict[str, Any]]:
+    """The mode menu's rows for the user's own agents."""
+    rows = []
+    for a in known_agents():
+        desc = str(a.get("description") or "").strip()
+        lead = (desc.rstrip(".") + ". ") if desc else ""
+        rows.append({"id": AGENT_PREFIX + a["name"], "label": a["name"], "dangerous": False,
+                     "about": clip(AGENT_ABOUT.format(description=lead, name=a["name"]), 300)})
+    return rows
+
+
+def save_agents(path: Path) -> None:
+    """BLOCKING: the agents every OpenCode process listed, for the next start."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_bytes(json.dumps({"folders": LAST_AGENTS}, ensure_ascii=False).encode("utf-8"))
+        os.replace(tmp, path)
+    except OSError:
+        log.debug("could not keep OpenCode's agent list", exc_info=True)
+
+
+def load_agents(path: Path | None) -> None:
+    """BLOCKING-light: what was kept (only when memory holds nothing yet)."""
+    if path is None or LAST_AGENTS:
+        return
+    try:
+        if not (path.is_file() and path.stat().st_size < 1_000_000):
+            return
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    folders = data.get("folders") if isinstance(data, dict) else None
+    if not isinstance(folders, dict):
+        return
+    for key, rows in folders.items():
+        kept = [{"name": str(r.get("name")), "description": clip(r.get("description") or "", 160)}
+                for r in rows or [] if isinstance(r, dict) and agent_of(AGENT_PREFIX + str(r.get("name") or ""))]
+        LAST_AGENTS[str(key)] = kept[:MAX_AGENTS]
 
 #: The tools every posture lets run without a card (they only read).
 READ_ONLY_TOOLS: tuple[str, ...] = ("read", "glob", "grep", "list", "lsp", "todoread", "todowrite", "skill")
@@ -609,12 +778,12 @@ def permission_env(mode: str, rules: dict[str, Any] | str) -> tuple[dict[str, st
     as much as a ``"bash": "deny"``), and ``"*"`` is used only when every rule
     of theirs already says exactly what ``"*"`` would. A ``"*"`` of the user's
     own names every tool: then nothing is named (``{}``) but Plan's refusal.
-    ``task`` (a helper of OpenCode's) runs without a card in Ask first and
-    Auto edits, as Iron Jarvis's own helpers do: the helper's own steps still
-    ask. ``None``: the user has ONE rule for everything — it decides alone."""
+    ``task`` (a helper of OpenCode's) is refused outside Full access
+    (v1.441.0: a helper's own questions never reach ACP, so it would wait for
+    ever). ``None``: the user has ONE rule for everything — it decides alone."""
     if isinstance(rules, str):
         return None, ["*"]
-    posture, agent = MODES.get(mode, MODES["ask"])
+    posture, agent = posture_agent(mode)
     star = _POSTURE_STAR[posture]
     out: dict[str, Any] = {}
     # (Plan with an ``edit`` rule of the user's no longer keeps "*" out: the
@@ -631,11 +800,18 @@ def permission_env(mode: str, rules: dict[str, Any] | str) -> tuple[dict[str, st
                 out[name] = dict(READ_RULE) if name == "read" else "allow"
         if posture == "edits" and not _users("edit", rules):
             out["edit"] = "allow"
-        if agent != "plan" and not _users("task", rules):
-            # C1.10: a helper starts without a card. OpenCode gives the helper
-            # only the parent's folder rules and refusals, so each of ITS steps
-            # still meets this mode's rules (and asks).
-            out["task"] = "allow"
+        if not _users("task", rules):
+            # v1.441.0 (MEASURED, 1.18.18, a scratch home + a stand-in model):
+            # a helper's own steps meet this mode's rules, and when one ASKS,
+            # OpenCode never sends that question over ACP — its ACP side
+            # answers only the sessions it opened (``session.tryGet``), and a
+            # helper's session is not one, so the question is dropped with no
+            # answer: the helper, and the reply, wait until Stop. v1.420.0
+            # granted ``task`` here ("its steps still ask") — they did not
+            # reach anyone. So outside Full access OpenCode starts no helpers
+            # (Plan too: its own rule refuses only ``general``). A ``task``
+            # rule of the user's own is kept as they wrote it.
+            out["task"] = "deny"
     if agent == "plan":
         # v1.413.0 review: OpenCode puts the config's rules (and so these)
         # AFTER its plan agent's own ``edit`` deny, so a ``"*": "ask"`` here
@@ -658,6 +834,12 @@ def child_env(env: dict[str, str], mode: str, folder: str) -> tuple[dict[str, st
     rules for OpenCode, and the notice to give when a rule of the user's own
     stays as they wrote it ("" = none)."""
     out = dict(env)
+    # v1.441.0 (MEASURED, 1.18.18): with OPENCODE_ENABLE_QUESTION_TOOL set,
+    # OpenCode offers its ``question`` tool to an ACP session too — and its
+    # question is never sent over ACP (not as ``elicitation/create``, even to a
+    # client that says it takes one): the reply waits until Stop. Without the
+    # variable an ACP session has no question tool (its own default).
+    out.pop("OPENCODE_ENABLE_QUESTION_TOOL", None)
     rules = user_rules(folder, out)
     perm, kept = permission_env(mode, rules)
     if perm is None:
@@ -677,7 +859,7 @@ def child_env(env: dict[str, str], mode: str, folder: str) -> tuple[dict[str, st
         out["OPENCODE_PERMISSION"] = json.dumps(perm, separators=(",", ":"))
     if "*" in kept:
         # A "*" of the user's own decides for every tool (Plan still refuses edits).
-        plan = MODES.get(mode, MODES["ask"])[1] == "plan"
+        plan = posture_agent(mode)[1] == "plan"
         return out, (W.OPENCODE_RULES_DECIDE_PLAN if plan else W.OPENCODE_RULES_DECIDE)
     if kept:
         return out, W.OPENCODE_RULES_KEPT.format(tools=", ".join(kept[:12]))
@@ -802,6 +984,8 @@ class OpenCodeDriver(AcpDriver):
         super().__init__(**kw)
         #: Where the service keeps the model list (set before ``open``).
         self.catalog_path: Path | None = None
+        #: v1.441.0: where the service keeps the user's agents (``agent:`` modes).
+        self.agents_path: Path | None = None
         #: A notice to say once the session is open (a rule of the user's own).
         self.rules_note = ""
 
@@ -848,7 +1032,13 @@ class OpenCodeDriver(AcpDriver):
         # conversation keeps its own unless the user chose another).
         if self.model and self.model != self._current("model"):
             await self._set_option("model", self.model)
-        agent = MODES.get(self.mode, MODES["ask"])[1]
+        agent = posture_agent(self.mode)[1]
+        offered = _values(_config(self.options, "mode"))
+        if agent_of(self.mode) and offered and agent not in offered:
+            # v1.441.0: an agent of the user's that THIS folder's OpenCode does
+            # not list (another project's): said, and OpenCode's build agent.
+            self.emit(make("notice", text=W.OPENCODE_NO_SUCH_AGENT.format(agent=agent)))
+            agent = "build"
         if self._current("mode") and self._current("mode") != agent:
             await self._set_option("mode", agent)
         if self.effort and self.effort != self._current("effort"):
@@ -872,6 +1062,14 @@ class OpenCodeDriver(AcpDriver):
         if not isinstance(options, list):
             return
         self.options = [o for o in options if isinstance(o, dict)]
+        if _config(self.options, "mode"):
+            # v1.441.0: the user's own agents this folder's OpenCode lists.
+            note_agents(self.cwd, agents_from_options(self.options))
+            if self.agents_path is not None:
+                try:
+                    asyncio.get_running_loop().run_in_executor(None, save_agents, self.agents_path)
+                except RuntimeError:
+                    pass
         rows = model_rows(self.options, LAST_MODELS)
         if rows:
             LAST_MODELS[:] = rows
@@ -935,7 +1133,7 @@ class OpenCodeDriver(AcpDriver):
         goes on under the mode it started with, as the notice says (switching
         only the agent live put OpenCode's plan agent on the old process's
         rules, where an edit was a card, not a refusal)."""
-        if MODES.get(mode, MODES["ask"]) != MODES.get(self.mode, MODES["ask"]):
+        if posture_agent(mode) != posture_agent(self.mode):
             self.restart_needed = True
         self.mode = mode
         return "next" if self.restart_needed or self.turn_open else "now"
@@ -1005,6 +1203,19 @@ class OpenCodeDriver(AcpDriver):
     _always_said = False
 
     # -- OpenCode's side (ON THE LOOP) ---------------------------------------------
+    def on_message(self, obj: dict[str, Any]) -> None:
+        """v1.441.0: an update naming ANOTHER OpenCode session (a helper's
+        own) is never drawn as this conversation's step. (Measured, 1.18.18:
+        OpenCode sends none — a helper's steps stay inside it; this keeps it
+        so if it starts to.) A permission REQUEST is still a card: it carries
+        its own id and is answered by it."""
+        if obj.get("method") == "session/update" and "id" not in obj:
+            params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
+            other = str(params.get("sessionId") or "")
+            if other and self.session_id and other != self.session_id:
+                return
+        super().on_message(obj)
+
     def on_usage_update(self, u: dict[str, Any]) -> None:
         from . import seen as _seen  # v1.414.0: how full, as OpenCode says
 

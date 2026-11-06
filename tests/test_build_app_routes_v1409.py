@@ -75,8 +75,9 @@ async def test_harnesses_are_read_from_cached_answers_only(app, monkeypatch):
     assert all(m["about"] for m in by["claude-code"]["modes"])
     assert [m["id"] for m in by["claude-code"]["modes"] if m["dangerous"]] == ["full"]
     codex_modes = [m["id"] for m in by["codex"]["modes"]]
-    assert "plan" not in codex_modes and "ask" in codex_modes and "full" in codex_modes
-    assert {h["id"] for h in by["codex"]["hidden_modes"]} >= {"plan"}
+    # v1.441.0 (moved on purpose): Codex's own Plan is offered; Auto review is not.
+    assert "plan" in codex_modes and "ask" in codex_modes and "full" in codex_modes
+    assert {h["id"] for h in by["codex"]["hidden_modes"]} >= {"auto"}
     assert all(h["reason"] for h in by["codex"]["hidden_modes"])
     assert by["claude-code"]["models"][0] == {"id": "", "label": "Claude Code's default"}
     assert spawned == [], "a status read started a process"
@@ -93,7 +94,8 @@ async def test_create_validates_in_words(app, work, tmp_path):
         r = await c.post("/build/app/sessions",
                          json={"harness": "claude-code", "folder": str(work), "mode": "full", "confirm": True})
         assert r.status_code == 201 and r.json()["mode"] == "full"
-        r = await c.post("/build/app/sessions", json={"harness": "codex", "folder": str(work), "mode": "plan"})
+        # v1.441.0 (moved on purpose): Plan is offered for Codex; Auto is the hidden one.
+        r = await c.post("/build/app/sessions", json={"harness": "codex", "folder": str(work), "mode": "auto"})
         assert r.status_code == 400 and "Codex" in r.json()["detail"]
         r = await c.post("/build/app/sessions", json={"harness": "claude-code", "folder": str(work), "model": "a b"})
         assert r.status_code == 400

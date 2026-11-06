@@ -1,0 +1,746 @@
+{
+ "harness": "codex",
+ "source": "recorded live 2026-11-06, codex-cli 0.157.0, this PC, scratch folder, EPHEMERAL thread (masked) — collaborationMode plan, one tiny turn; the implement turn after the plan card is written by hand",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "id": 1,
+    "result": {
+     "userAgent": "iron-jarvis-rec/0.157.0 (Windows 10.0.26200; x86_64)",
+     "codexHome": "C:\\Users\\me\\.codex",
+     "platformFamily": "windows",
+     "platformOs": "windows"
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "thread/start"
+  },
+  {
+   "out": {
+    "id": 3,
+    "result": {
+     "thread": {
+      "id": "01a1b289-3363-7563-afae-3b8972b0e320",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a1b289-3363-7563-afae-3b8972b0e320",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "legacy",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793996698,
+      "updatedAt": 1793996698,
+      "recencyAt": 1793996698,
+      "status": {
+       "type": "idle"
+      },
+      "path": null,
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "probe",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     },
+     "model": "gpt-5.6-terra",
+     "modelProvider": "openai",
+     "serviceTier": null,
+     "disabledPluginIds": [],
+     "cwd": "C:\\work\\demo",
+     "runtimeWorkspaceRoots": [
+      "C:\\work\\demo"
+     ],
+     "instructionSources": [],
+     "approvalPolicy": "untrusted",
+     "approvalsReviewer": "user",
+     "sandbox": {
+      "type": "dangerFullAccess"
+     },
+     "activePermissionProfile": null,
+     "reasoningEffort": "medium",
+     "multiAgentMode": "explicitRequestOnly"
+    }
+   },
+   "reply_to": "thread/start"
+  },
+  {
+   "await": "request",
+   "method": "turn/start"
+  },
+  {
+   "out": {
+    "id": 4,
+    "result": {
+     "turn": {
+      "id": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+     }
+    }
+   },
+   "reply_to": "turn/start"
+  },
+  {
+   "out": {
+    "method": "thread/started",
+    "params": {
+     "thread": {
+      "id": "01a1b289-3363-7563-afae-3b8972b0e320",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a1b289-3363-7563-afae-3b8972b0e320",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": true,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "legacy",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793996698,
+      "updatedAt": 1793996698,
+      "recencyAt": 1793996698,
+      "status": {
+       "type": "idle"
+      },
+      "path": null,
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "probe",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     }
+    },
+    "emittedAtMs": 1793996698630
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    },
+    "emittedAtMs": 1793996698650
+   }
+  },
+  {
+   "out": {
+    "method": "turn/started",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turn": {
+      "id": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": 1793996698,
+      "completedAt": null,
+      "durationMs": null
+     }
+    },
+    "emittedAtMs": 1793996698650
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a1b289-3f02-7330-9e74-ede20fba281a",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Plan, in two short steps, how to add a line 'two' to a.txt. Do not explore; answer at once.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "startedAtMs": 1793996701442
+    },
+    "emittedAtMs": 1793996701442
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a1b289-3f02-7330-9e74-ede20fba281a",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Plan, in two short steps, how to add a line 'two' to a.txt. Do not explore; answer at once.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "completedAtMs": 1793996701442
+    },
+    "emittedAtMs": 1793996701442
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "plan",
+      "id": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+      "text": ""
+     },
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "startedAtMs": 1793996703214
+    },
+    "emittedAtMs": 1793996703214
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": "1"
+    },
+    "emittedAtMs": 1793996703214
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": "."
+    },
+    "emittedAtMs": 1793996703475
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " Open"
+    },
+    "emittedAtMs": 1793996703475
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " `"
+    },
+    "emittedAtMs": 1793996703475
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": "a"
+    },
+    "emittedAtMs": 1793996703475
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": ".txt"
+    },
+    "emittedAtMs": 1793996703475
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": "`"
+    },
+    "emittedAtMs": 1793996703475
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " and"
+    },
+    "emittedAtMs": 1793996703475
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " append"
+    },
+    "emittedAtMs": 1793996703475
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " a"
+    },
+    "emittedAtMs": 1793996703664
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " new"
+    },
+    "emittedAtMs": 1793996703664
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " line"
+    },
+    "emittedAtMs": 1793996703664
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " containing"
+    },
+    "emittedAtMs": 1793996703664
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " `"
+    },
+    "emittedAtMs": 1793996703664
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": "two"
+    },
+    "emittedAtMs": 1793996703664
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": "`.\n"
+    },
+    "emittedAtMs": 1793996703664
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": "2"
+    },
+    "emittedAtMs": 1793996703664
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": "."
+    },
+    "emittedAtMs": 1793996703810
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " Verify"
+    },
+    "emittedAtMs": 1793996703810
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " the"
+    },
+    "emittedAtMs": 1793996703810
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " file"
+    },
+    "emittedAtMs": 1793996703810
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " now"
+    },
+    "emittedAtMs": 1793996703810
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " includes"
+    },
+    "emittedAtMs": 1793996703810
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " the"
+    },
+    "emittedAtMs": 1793996703810
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " added"
+    },
+    "emittedAtMs": 1793996703949
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": " line"
+    },
+    "emittedAtMs": 1793996703949
+   }
+  },
+  {
+   "out": {
+    "method": "item/plan/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "itemId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+     "delta": ".\n"
+    },
+    "emittedAtMs": 1793996703950
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "plan",
+      "id": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8-plan",
+      "text": "1. Open `a.txt` and append a new line containing `two`.\n2. Verify the file now includes the added line.\n"
+     },
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "completedAtMs": 1793996704028
+    },
+    "emittedAtMs": 1793996704028
+   }
+  },
+  {
+   "out": {
+    "method": "thread/tokenUsage/updated",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+     "tokenUsage": {
+      "total": {
+       "totalTokens": 18578,
+       "inputTokens": 18537,
+       "cachedInputTokens": 0,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 41,
+       "reasoningOutputTokens": 0
+      },
+      "last": {
+       "totalTokens": 18578,
+       "inputTokens": 18537,
+       "cachedInputTokens": 0,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 41,
+       "reasoningOutputTokens": 0
+      },
+      "modelContextWindow": 258400
+     }
+    },
+    "emittedAtMs": 1793996704033
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "status": {
+      "type": "idle"
+     }
+    },
+    "emittedAtMs": 1793996705145
+   }
+  },
+  {
+   "out": {
+    "method": "turn/completed",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turn": {
+      "id": "01a1b289-3407-75b0-8f1b-d218b0ae2fe8",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "completed",
+      "error": null,
+      "startedAt": 1793996698,
+      "completedAt": 1793996705,
+      "durationMs": 6495
+     }
+    },
+    "emittedAtMs": 1793996705145
+   }
+  },
+  {
+   "await": "request",
+   "method": "turn/start"
+  },
+  {
+   "out": {
+    "id": 9,
+    "result": {
+     "turn": {
+      "id": "01a1b289-ffff-7000-8000-000000000001",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null
+     }
+    }
+   },
+   "reply_to": "turn/start"
+  },
+  {
+   "out": {
+    "method": "turn/started",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turn": {
+      "id": "01a1b289-ffff-7000-8000-000000000001",
+      "status": "inProgress"
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg-impl",
+      "text": ""
+     },
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-ffff-7000-8000-000000000001"
+    }
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-ffff-7000-8000-000000000001",
+     "itemId": "msg-impl",
+     "delta": "Added the line."
+    }
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg-impl",
+      "text": "Added the line."
+     },
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turnId": "01a1b289-ffff-7000-8000-000000000001"
+    }
+   }
+  },
+  {
+   "out": {
+    "method": "turn/completed",
+    "params": {
+     "threadId": "01a1b289-3363-7563-afae-3b8972b0e320",
+     "turn": {
+      "id": "01a1b289-ffff-7000-8000-000000000001",
+      "status": "completed",
+      "error": null
+     }
+    }
+   }
+  }
+ ]
+}
