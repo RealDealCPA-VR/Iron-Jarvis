@@ -67,7 +67,8 @@ def test_plan_is_offered_for_codex_with_what_it_does():
     assert "plan" in X.MODES and "plan" not in X.HIDDEN_MODES
     assert X.MODES["plan"] == X.MODES["ask"], "Plan runs on Ask first's posture: every change and command asks"
     about = X.MODE_ABOUT["plan"]
-    assert "changes no file" in about and "approve its plan" in about
+    assert "file change it asks for is refused" in about and "approve its plan" in about
+    assert "a command you allow can still change files" in about, "(review) never more than is held"
 
 
 async def test_a_plan_turn_sends_codexs_plan_mode_with_the_threads_model(app, work, tmp_path, monkeypatch):
@@ -81,7 +82,7 @@ async def test_a_plan_turn_sends_codexs_plan_mode_with_the_threads_model(app, wo
     first = _turn_starts(log)[0]["params"]
     assert first["approvalPolicy"] == "untrusted"
     assert first["collaborationMode"] == {"mode": "plan", "settings": {
-        "model": THREAD_MODEL, "reasoning_effort": None, "developer_instructions": None}}
+        "model": THREAD_MODEL, "reasoning_effort": "medium", "developer_instructions": None}}
 
 
 async def test_the_plan_is_the_reply_and_its_card_waits_before_the_reply_ends(app, work, tmp_path, monkeypatch):

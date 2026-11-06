@@ -252,8 +252,6 @@ OPENCODE_RULES_DECIDE = (
     "Your OpenCode config sets one permission rule for every tool, so that rule decides in this "
     "session, whatever mode is chosen here."
 )
-#: v1.413.0: a note OpenCode took but never reached before Stop: it stays in
-#: OpenCode's conversation (never handed back to be sent twice).
 #: v1.441.0: the user's own OpenCode agents as modes.
 OPENCODE_NO_SUCH_AGENT = (
     "OpenCode has no agent \u201c{agent}\u201d in this folder, so this session uses its build agent."
@@ -261,6 +259,8 @@ OPENCODE_NO_SUCH_AGENT = (
 OPENCODE_UNKNOWN_AGENT = (
     "OpenCode has not listed an agent \u201c{agent}\u201d — choose one from the mode menu."
 )
+#: v1.413.0: a note OpenCode took but never reached before Stop: it stays in
+#: OpenCode's conversation (never handed back to be sent twice).
 OPENCODE_NOTE_KEPT = (
     "OpenCode stopped before it reached your note; the note stays in its conversation and it will "
     "see it with your next message."
@@ -344,11 +344,11 @@ CODEX_MODE_NEXT = (
     "next message."
 )
 MODE_FROM_SESSION_ALLOW = "{label} now runs in {mode} for the rest of this session (you chose Allow for this session)."
-#: v1.439.0 (review): an approved plan leaves Plan for the mode it was in
-#: before (Claude Code's own rule); the row and the chip follow.
 #: v1.441.0: Codex's Plan.
 CODEX_PLAN_KEPT = "Codex stays in Plan. Say what to change, and it plans again."
 CODEX_PLAN_NO_EDIT = "In Plan, Codex wanted to change {file}; nothing was changed. Approve its plan to let it start."
+#: v1.439.0 (review): an approved plan leaves Plan for the mode it was in
+#: before (Claude Code's own rule); the row and the chip follow.
 MODE_AFTER_PLAN = "{label} left Plan for your approved plan and now runs in {mode}."
 NO_CONVERSATION_FILE = (
     "The conversation's file is not in this account's folder, so it cannot move to another "

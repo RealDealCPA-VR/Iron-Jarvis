@@ -89,3 +89,77 @@ All 18 went red. M15 survived the first time: only the second of two guards had 
 **Codex: Plan.** Choose Plan in the mode menu. Codex looks around and writes a plan, and changes no file while it plans. It still asks before it runs a command. When the plan is ready, the card under it asks you: "Approve, then ask first" starts the work at once in Ask first, and Deny keeps Codex planning. Tell it what to change, and it plans again. Codex's Auto review is not offered yet.
 
 **OpenCode: your own agents and models.** OpenCode's model menu shows OpenCode's own model list, even before your first OpenCode session. Your own OpenCode agents (primary agents in your OpenCode config) appear in the mode menu by their names. They ask first, except where the agent's own permission rules say otherwise. Outside Full access, OpenCode does not start helper agents, because a helper's questions cannot reach Iron Jarvis and it would wait for ever.
+
+## Review (independent reviewer)
+
+Pins: `tests/test_build_app_codex_plan_review_v14410.py` (each red on the lane's first cut).
+
+### Defects fixed
+
+1. **A plan card answered after a restart hung the reply for ever** (Codex). The driver
+   matched the waiting card by OBJECT (`self._held is ask`), and an Ask has no JSON form,
+   so the code host's kept driver state came back with no card. `hosted/adopt` re-opens
+   the card as a NEW Ask, so Allow/Deny returned at once doing nothing, `turn_open`
+   stayed True and the reply never ended. Stop sent `turn/interrupt` for a turn Codex had
+   already finished and waited the 60 s request timeout. Now the card is kept by its id
+   (a string, kept in the state). Pins: the three `..._after_a_restart_...` tests
+   (proved red by round-tripping `state()`/`restore()` and `adopt._ask_state/_ask_from`).
+   The notes' OPEN line ("the reply is closed as cut off") was wrong for the code host;
+   corrected below.
+2. **Entering Plan dropped the user's own reasoning effort for the rest of the
+   conversation** (Codex). RE-MEASURED (codex 0.157.0, scratch `CODEX_HOME` whose
+   config.toml says `model_reasoning_effort = "high"`, no sign-in, no model call):
+   `thread/start` answers `reasoningEffort: "high"`; a Plan `turn/start` with
+   `reasoning_effort: null` made `thread/settings/updated` say `effort: null`, and
+   leaving Plan with null kept it null. The collaboration mode now carries
+   `self.effort or` the thread's own `reasoningEffort` (read from `thread/start` /
+   `thread/resume`). Pins: `test_plan_keeps_the_threads_own_effort...`,
+   `test_a_chosen_effort_still_wins...`; the builder's integration pin moved on
+   purpose (`reasoning_effort: "medium"`, the recorded thread's own).
+3. **Codex Plan's menu line said more than is held** ("changes no file"): only Codex's
+   file-change requests are refused; a command the user allows can write. Reworded
+   ("…and a command you allow can still change files"); pinned in the builder's file.
+4. **"It starts no helpers here" did not say why.** `opencode.NO_HELPERS` now ends every
+   mode line that refuses `task` (and the agent line) with the reason in plain words.
+5. **An agent mode could not be kept as a folder's default**: the start box offers the
+   save press for any mode, and `folder_defaults.clean_tool` answered "That mode is not
+   one Iron Jarvis knows". It now keeps `agent:<name>` for OpenCode only (`_opencode_agent`);
+   the composer still uses a kept mode only while the tool lists it.
+6. Two doc comments orphaned in `hosted/words.py` (inserted between a comment and its
+   declaration) were put back above their own constants.
+
+Also pinned (was unpinned): a user's own `task` rule — exact, by wildcard, or per
+subagent — is never overridden in any mode incl. an agent mode.
+
+Also pinned: with the reader ON and OpenCode not installed, listing the tools
+starts no read and still answers (the suite turns the reader off, which hid it).
+
+### Mutations (reviewer; each break, pins, restore from bytes in a finally)
+
+All red: R1 card matched by object again; R2 Stop ignores the kept card; R3/R4 the
+thread's effort not carried / not read; R5/R6 an agent folder default refused / allowed
+for any tool; R7 no reason for "no helpers"; R8 the deny overrides a user's own `task`
+rule; R9 Plan's line overclaims again; the builder's M3 (file change in Plan a card),
+M8 (`task` allowed), M9 (question switch reaches OpenCode), M14 (models.dev fetched);
+B19 (the reader started with OpenCode missing) survived, then red after its pin.
+
+### Re-measured
+
+- The helper hang (opencode 1.18.18, scratch home, the builder's stand-in model server):
+  with `task: allow` + `"*": "ask"` the helper's step sent nothing for 75 s, only
+  `session/cancel` ended it; with the lane's `permission_env` (`task: deny`) the model
+  was not offered `task` and the reply ended in 0.6 s. Refusing is right: the only way a
+  helper's question could be answered is OpenCode's internal HTTP server.
+- Codex effort under a collaboration mode (above).
+
+### Still OPEN (reviewer)
+
+- Codex Plan with no model known (an adopted v1.440.0 session with no model picked)
+  sends no collaboration mode at all, so Codex does not plan; no notice says so.
+- Shift+Tab (`nextMode`) steps into an agent mode; an agent whose own rules allow
+  everything is then Full access in all but name, reached without two presses.
+- The catalog reader's `opencode models` loads the plugins the user's config names, as
+  any OpenCode run does (it may install one); the docstring's "no network of its own"
+  is about models.dev only.
+- An agent's own `permission` is not read for the session's rules notice; only the mode
+  line says the agent's rules win.

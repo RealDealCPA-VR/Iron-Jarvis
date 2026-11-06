@@ -203,13 +203,14 @@ MODES: dict[str, tuple[str, str]] = {
 HIDDEN_MODES: dict[str, str] = {
     "auto": "OpenCode has no mode that decides each step for you — choose Ask first or Auto edits.",
 }
+#: v1.441.0 (review): WHY no helpers outside Full access, in the user's words
+#: (a helper's own questions never reach Iron Jarvis over ACP: measured).
+NO_HELPERS = "It starts no helpers here: a helper's questions could not reach you, so it would wait for ever."
 #: What each preset does for OpenCode, in plain words (the mode menu says it).
 MODE_ABOUT: dict[str, str] = {
-    "ask": "Asks before it changes a file, runs a command or uses the web; reads without asking. "
-           "It starts no helpers here.",
-    "edits": "Changes files without asking; asks before it runs a command or uses the web. "
-             "It starts no helpers here.",
-    "plan": "OpenCode's plan agent: it looks and plans, and changes no file. It starts no helpers here.",
+    "ask": "Asks before it changes a file, runs a command or uses the web; reads without asking. " + NO_HELPERS,
+    "edits": "Changes files without asking; asks before it runs a command or uses the web. " + NO_HELPERS,
+    "plan": "OpenCode's plan agent: it looks and plans, and changes no file. " + NO_HELPERS,
     "full": "Runs everything without asking.",
 }
 
@@ -235,7 +236,7 @@ MAX_AGENTS = 30
 #: never changed, either way.
 AGENT_POSTURE = "ask"
 AGENT_ABOUT = ("{description}OpenCode's own agent \u201c{name}\u201d. Asks first, except where the agent's own "
-               "permission rules say otherwise. It starts no helpers here.")
+               "permission rules say otherwise. " + NO_HELPERS)
 
 
 def agent_of(mode: Any) -> str:

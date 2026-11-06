@@ -218,7 +218,10 @@ HIDDEN_MODES: dict[str, str] = {
 #: v1.412.0: what each preset does, in plain words (the mode menu says it).
 MODE_ABOUT: dict[str, str] = {
     "ask": "Asks before every command and every file change.",
-    "plan": "Codex's own plan mode: it looks and plans, changes no file and asks before every command. "
+    # (review) "changes no file" was more than Iron Jarvis holds: only Codex's
+    # file-change requests are refused; a command the user allows can write.
+    "plan": "Codex's own plan mode: it looks and plans, and every file change it asks for is refused. "
+            "It asks before each command, and a command you allow can still change files. "
             "You approve its plan before it starts.",
     "edits": "Changes files in this folder without asking; asks before it runs a command.",
     "full": "Runs everything without asking.",
@@ -489,12 +492,16 @@ class CodexDriver(Driver):
         #: as Iron Jarvis knows ("" = never set: Codex's default), the model
         #: the thread runs on (a collaboration mode must name one), the mode
         #: THIS turn started in, its plan, the plan card waiting under it, and
-        #: whether the user pressed Stop.
+        #: whether the user pressed Stop. (review) The waiting card is kept by
+        #: its ID, a string: the code host keeps this driver's state across a
+        #: restart and the card comes back as a NEW Ask object (``hosted/
+        #: adopt``) — an identity check dropped its answer and the reply hung.
         self._collab = ""
         self._thread_model = ""
+        self._thread_effort = ""
         self._turn_mode = ""
         self._plan_text = ""
-        self._held: Ask | None = None
+        self._held = ""
         self._stopping = False
 
     def after_restore(self) -> None:
@@ -561,6 +568,13 @@ class CodexDriver(Driver):
         thread = (res or {}).get("thread") if isinstance(res, dict) else None
         self._thread_model = str((res or {}).get("model") or (thread or {}).get("model") or "") if isinstance(
             res, dict) else ""
+        # (review) the thread's own effort (the user's ``model_reasoning_effort``
+        # or the model's): a collaboration mode REPLACES the thread's effort
+        # with its own (measured, 0.157.0, a scratch CODEX_HOME whose config
+        # said "high": Plan with ``reasoning_effort: null`` set the thread's
+        # effort to null, and so did leaving Plan) — so it carries this one.
+        eff = (res or {}).get("reasoningEffort") if isinstance(res, dict) else None
+        self._thread_effort = str(eff) if isinstance(eff, str) and eff else ""
         collab = (res or {}).get("collaborationMode") if isinstance(res, dict) else None
         if isinstance(collab, dict) and collab.get("mode") in ("plan", "default"):
             # v1.441.0: a reopened thread says its effective collaboration mode
@@ -639,7 +653,7 @@ class CodexDriver(Driver):
         self._retry_said = False
         self._usage = {"input": 0, "output": 0, "cache_read": 0}
         self._plan_text = ""
-        self._held = None
+        self._held = ""
         self._stopping = False
         await self._start_codex_turn(items)
 
@@ -651,7 +665,8 @@ class CodexDriver(Driver):
         model = self.model or self._thread_model
         if not want or not model:
             return None
-        return {"mode": want, "settings": {"model": model, "reasoning_effort": self.effort or None,
+        effort = self.effort or self._thread_effort or None
+        return {"mode": want, "settings": {"model": model, "reasoning_effort": effort,
                                            "developer_instructions": None}}
 
     async def _start_codex_turn(self, items: list[dict[str, Any]]) -> None:
@@ -714,9 +729,9 @@ class CodexDriver(Driver):
         it. Allow: Plan is left for the mode the card names (Ask first) and
         Codex's own "Implement the plan." starts at once, in the same reply.
         Deny: the reply ends and Codex stays in Plan."""
-        if self._held is not ask:
+        if not self._held or ask.id != self._held:
             return
-        self._held = None
+        self._held = ""
         if decision == "allow" and not self._stopping:
             self.mode = str(ask.data.get("leaves_plan_to") or "ask")
             self._plan_text = ""
@@ -804,10 +819,10 @@ class CodexDriver(Driver):
     async def interrupt(self) -> None:
         if not (self.session_id and self.turn_id) or not self.turn_open:
             return
-        if self._held is not None:
+        if self._held:
             # The plan card waited (Codex's own turn had ended): nothing runs
             # in Codex to interrupt — the reply ends here.
-            self._held = None
+            self._held = ""
             self._finish("interrupted")
             return
         self._interrupting = True
@@ -1200,5 +1215,5 @@ class CodexDriver(Driver):
                   can_session=False, tool=PLAN_TOOL, plan=clip(self._plan_text, PLAN_CHARS), then_mode="ask")
         ev["once_only"] = True
         ask = Ask(ask_id, "approval", PLAN_TOOL, None, {"plan": True, "leaves_plan_to": "ask"}, ev, ev["at"], False)
-        self._held = ask
+        self._held = ask_id
         self.raise_ask(ask)

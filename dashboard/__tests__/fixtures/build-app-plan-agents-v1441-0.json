@@ -19,25 +19,25 @@
    "id": "ask",
    "label": "Ask first",
    "dangerous": false,
-   "about": "Asks before it changes a file, runs a command or uses the web; reads without asking. It starts no helpers here."
+   "about": "Asks before it changes a file, runs a command or uses the web; reads without asking. It starts no helpers here: a helper's questions could not reach you, so it would wait for ever."
   },
   {
    "id": "edits",
    "label": "Auto edits",
    "dangerous": false,
-   "about": "Changes files without asking; asks before it runs a command or uses the web. It starts no helpers here."
+   "about": "Changes files without asking; asks before it runs a command or uses the web. It starts no helpers here: a helper's questions could not reach you, so it would wait for ever."
   },
   {
    "id": "plan",
    "label": "Plan",
    "dangerous": false,
-   "about": "OpenCode's plan agent: it looks and plans, and changes no file. It starts no helpers here."
+   "about": "OpenCode's plan agent: it looks and plans, and changes no file. It starts no helpers here: a helper's questions could not reach you, so it would wait for ever."
   },
   {
    "id": "agent:docs",
    "label": "docs",
    "dangerous": false,
-   "about": "Writes docs only. OpenCode's own agent “docs”. Asks first, except where the agent's own permission rules say otherwise. It starts no helpers here."
+   "about": "Writes docs only. OpenCode's own agent “docs”. Asks first, except where the agent's own permission rules say otherwise. It starts no helpers here: a helper's questions could not reach you, so it would wait for ever."
   },
   {
    "id": "full",
@@ -57,7 +57,7 @@
    "id": "plan",
    "label": "Plan",
    "dangerous": false,
-   "about": "Codex's own plan mode: it looks and plans, changes no file and asks before every command. You approve its plan before it starts."
+   "about": "Codex's own plan mode: it looks and plans, and every file change it asks for is refused. It asks before each command, and a command you allow can still change files. You approve its plan before it starts."
   },
   {
    "id": "full",
