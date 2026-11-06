@@ -48,7 +48,7 @@ import {
   reasoningRowFor,
 } from "@/components/chat/ModelMenu";
 import { TryOnControl } from "@/components/harness/HarnessTryOn";
-import { TeamControl } from "@/components/harness/HarnessTeam";
+import { TeamControl, type KnownMembers } from "@/components/harness/HarnessTeam";
 import { fetchFolderGit, folderGitLine, type FolderGit } from "@/lib/buildGit";
 import { useModels } from "@/lib/useModels";
 import { useDaemon } from "@/lib/daemon";
@@ -60,7 +60,7 @@ import { reasoningDefaultOf } from "@/lib/reasoningChip";
 import { HARNESS_FIT_ORDER, fitStepOn, useToolbarFit, type FitStep } from "@/lib/toolbarFit";
 import { cliVendorOf, companyMenu } from "@/lib/harnessModelMenu";
 import { fetchAccounts, type AccountsView, type BuildAccount } from "@/lib/buildAccounts";
-import { sameRow, tryOnChoices, type TryOnPick } from "@/lib/buildAttempts";
+import { sameRow, type TryOnPick } from "@/lib/buildAttempts";
 import type { TeamNames } from "@/lib/sessionTeam";
 import { useFolderDefaults } from "@/components/folders/FolderDefaultsPanel";
 import {
@@ -104,6 +104,11 @@ export interface StartRequest {
   /** v1.437.0: the team set in the box (null = work alone). Omitted: the
    *  folder's saved team, which the create applies by itself. */
   team?: TeamNames | null;
+  /** v1.437.0 review: what the box knows about each member it put on the
+   *  team (the model it runs on) — never sent; a refused first message's
+   *  team comes back named by its models, and Local only can take a cloud
+   *  member back. */
+  teamMembers?: KnownMembers;
   local_only?: boolean;
   /** v1.437.0: the models the FIRST MESSAGE is tried on ("Try on…") — it
    *  rides that message (`try_on`), never the create. */
@@ -260,6 +265,8 @@ export function HarnessStartComposer({
   const [plan, setPlan] = useState(seeded?.mode === "plan");
   // v1.437.0: undefined = untouched (the folder's saved team).
   const [team, setTeam] = useState<TeamNames | null | undefined>(seeded?.team);
+  // v1.437.0 review: the model each member the box put on the team runs on.
+  const [teamMembers, setTeamMembers] = useState<KnownMembers>(seeded?.teamMembers ?? {});
   const [tryOn, setTryOn] = useState<TryOnPick[]>(seeded?.tryOn ?? []);
   const [localOnly, setLocalOnly] = useState(!!seeded?.local_only);
   const [localNote, setLocalNote] = useState<string | null>(null);
@@ -335,12 +342,17 @@ export function HarnessStartComposer({
 
   // v1.437.0: the Iron-Proxy accounts (GET /build/accounts — the session's
   // own list), read when the box opens and each time the model menu opens.
-  // An Iron Jarvis with no list (a 404) shows none and is not asked again.
+  // An Iron Jarvis with no list (a 404: `fetchAccounts` answers null) shows
+  // none and is not asked again.
   const readAccounts = useCallback(async () => {
     try {
       setAccounts(await fetchAccounts());
     } catch {
-      setAccounts(null); // unreadable: no account rather than a wrong one
+      // v1.437.0 review: a read that got no answer (Iron Jarvis still
+      // starting — the empty Code view IS this box — or offline) keeps the
+      // list it last read (none before the first answer) and is asked again
+      // when the menu opens; only a 404 means "no list". It used to stop
+      // asking for good.
     }
   }, []);
   useEffect(() => {
@@ -369,7 +381,8 @@ export function HarnessStartComposer({
   // v1.426.0 review (lane B): under Local only an untouched chip never takes a
   // folder model that leaves this PC and your own network — the session's
   // first message would only be refused (this view has no "send once"); the
-  // words say why. The user can still pick it, as before.
+  // words say why. (v1.437.0: the model menu no longer offers it under Local
+  // only either.)
   const defaultRow = defaultPick ? usable.find((m) => `${m.provider}::${m.model}` === defaultPick) : undefined;
   const defaultLeaves = localOnly && !!defaultRow && !staysOnThisNetwork(defaultRow);
   const defaultPickUsable = !!defaultPick && options.some((o) => o.value === defaultPick) && !defaultLeaves;
@@ -450,7 +463,8 @@ export function HarnessStartComposer({
     catalog.models.find((m) => `${m.provider}::${m.model}` === value);
 
   /** Local only: nothing chosen that leaves this PC stays chosen — a model
-   *  the user picked, models picked to try on — and the words say what went. */
+   *  the user picked, models picked to try on, (v1.437.0 review) a team member
+   *  the box put on the team — and the words say what went. */
   function toggleLocalOnly() {
     const next = !localOnly;
     setLocalOnly(next);
@@ -463,11 +477,37 @@ export function HarnessStartComposer({
       setPick("");
       setAccount("");
     }
-    const stay = tryOnChoices(catalog.models, true);
-    const kept = tryOn.filter((p) => stay.some((r) => sameRow(r, p)));
+    // v1.437.0 review: "leaves this PC" is the catalog row's own answer —
+    // never "not offered right now": a local model whose box is down for a
+    // moment (`available: false`) was taken back as leaving this PC. A model
+    // the catalog does not list is left to the daemon, which refuses a cloud
+    // model in a Local only session before anything starts.
+    const leavesThisPc = (p: { provider: string; model: string }) => {
+      const row = catalog.models.find((r) => sameRow(r, p));
+      return !!row && !staysOnThisNetwork(row);
+    };
+    const kept = tryOn.filter((p) => !leavesThisPc(p));
     if (kept.length !== tryOn.length) {
       left.push(...tryOn.filter((p) => !kept.includes(p)).map((p) => p.label || friendlyModelName(p.model)));
       setTryOn(kept);
+    }
+    // v1.437.0 review: a member picked in the box on a model that leaves this
+    // PC goes too (the team list offers only what stays). A member the box
+    // knows nothing about (the folder's saved team, untouched) is the daemon's
+    // to keep local: a piece is never handed to a model that leaves.
+    if (team) {
+      const leaves = (name: string) => {
+        const m = teamMembers[name];
+        return !!m && leavesThisPc(m);
+      };
+      const gone = [...team.workers, ...(team.reviewer ? [team.reviewer] : [])].filter(leaves);
+      if (gone.length) {
+        left.push(...gone.map((n) => teamMembers[n]?.label || friendlyModelName(teamMembers[n]?.model ?? n)));
+        const workers = team.workers.filter((w) => !leaves(w));
+        const reviewer = team.reviewer && !leaves(team.reviewer) ? team.reviewer : "";
+        // No worker left: the session works alone (a reviewer checks workers).
+        setTeam(workers.length ? { workers, reviewer } : null);
+      }
     }
     if (left.length) setLocalNote(localOnlyDroppedWords(left));
   }
@@ -478,7 +518,11 @@ export function HarnessStartComposer({
     const [p, m] = pick ? pick.split("::") : ["", ""];
     const out: CodeDefaults = {
       ...(p ? { provider: p, ...(m ? { model: m } : {}) } : {}),
-      ...(reasoning ? { reasoning } : {}),
+      // v1.437.0 review: a level is a MODEL's — the box applies the folder's
+      // level only while its own model is shown (`folderReasoning`), so a
+      // level saved with no model (the effort chip on the default model)
+      // would be said as the folder's default and never used.
+      ...(p && reasoning ? { reasoning } : {}),
       ...(posture ? { approval_mode: posture } : {}),
     };
     return Object.keys(out).length ? out : null;
@@ -524,6 +568,7 @@ export function HarnessStartComposer({
       ...(posture ? { approval_mode: posture } : {}),
       ...(plan ? { mode: "plan" as const } : {}),
       ...(team !== undefined ? { team } : {}),
+      ...(team && Object.keys(teamMembers).length ? { teamMembers } : {}),
       ...(localOnly ? { local_only: true } : {}),
       ...(trying ? { tryOn } : {}),
       text: words,
@@ -630,7 +675,12 @@ export function HarnessStartComposer({
             localOnly={localOnly}
             disabled={busy}
             onView={() => {}}
-            draft={{ team, onChange: setTeam }}
+            draft={{
+              team,
+              onChange: setTeam,
+              known: teamMembers,
+              onKnown: (name, facts) => setTeamMembers((k) => ({ ...k, [name]: facts })),
+            }}
           />
           <div
             data-testid="harness-new-actions"

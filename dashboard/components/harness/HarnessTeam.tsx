@@ -109,7 +109,7 @@ export function memberWords(m: TeamMemberView, models: readonly CatalogRow[]): s
 
 /** What a pick made known about a member (v1.437.0: the new-session box keeps
  *  only names, so the model a member runs on is remembered from its pick). */
-type KnownMembers = Readonly<Record<string, { provider: string; model: string; label: string }>>;
+export type KnownMembers = Readonly<Record<string, { provider: string; model: string; label: string }>>;
 
 /** The members a view lists — the team's own, or (a view that keeps only the
  *  names) the names with nothing known about them beyond `known`. */
@@ -163,8 +163,17 @@ export function TeamControl({
   /** v1.437.0: a NEW session's team, set before the session exists (the
    *  new-session box): `team` undefined = untouched (the folder's saved
    *  team, which the create applies), null = work alone, names = this team.
-   *  A change calls `onChange` — never a session's PATCH. */
-  draft?: { team: TeamNames | null | undefined; onChange: (next: TeamNames | null) => void };
+   *  A change calls `onChange` — never a session's PATCH.
+   *  v1.437.0 review: `known` / `onKnown` — the box keeps what each pick made
+   *  known about its member (the model it runs on), so Local only can take a
+   *  cloud member back in words and a refused first message's team comes back
+   *  named by its models. Without them the control keeps its own. */
+  draft?: {
+    team: TeamNames | null | undefined;
+    onChange: (next: TeamNames | null) => void;
+    known?: KnownMembers;
+    onKnown?: (name: string, facts: { provider: string; model: string; label: string }) => void;
+  };
 }) {
   /** Does this Iron Jarvis have session teams? Unknown until its folder's
    *  team is read once; a 404 hides the control for good. */
@@ -175,8 +184,10 @@ export function TeamControl({
   const [picking, setPicking] = useState<Part | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  /** v1.437.0: in `draft`, what each pick made known about its member. */
-  const [known, setKnown] = useState<KnownMembers>({});
+  /** v1.437.0: in `draft`, what each pick made known about its member (the
+   *  box's own record when it keeps one — v1.437.0 review). */
+  const [ownKnown, setOwnKnown] = useState<KnownMembers>({});
+  const known = draft?.known ?? ownKnown;
   const chipRef = useRef<HTMLButtonElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const addRef = useRef<{ worker: HTMLButtonElement | null; reviewer: HTMLButtonElement | null }>({
@@ -398,7 +409,9 @@ export function TeamControl({
       }
       const made = await memberFromModel(m.provider, m.model, part);
       if (draft) {
-        setKnown((k) => ({ ...k, [made.name]: { provider: made.provider, model: made.model, label: made.label || label } }));
+        const facts = { provider: made.provider, model: made.model, label: made.label || label };
+        if (draft.onKnown) draft.onKnown(made.name, facts);
+        else setOwnKnown((k) => ({ ...k, [made.name]: facts }));
       }
       const names = current ?? { workers: [], reviewer: "" };
       if (names.workers.includes(made.name)) {
