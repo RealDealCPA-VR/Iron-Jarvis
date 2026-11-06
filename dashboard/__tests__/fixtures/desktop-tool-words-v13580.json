@@ -522,6 +522,42 @@
       "kind": "table",
       "card": "remove an agent",
       "desktop": "remove an agent"
+    },
+    {
+      "tool": "preference_edit",
+      "kind": "table",
+      "card": "change one of your kept preferences",
+      "desktop": "change one of your kept preferences"
+    },
+    {
+      "tool": "preference_forget",
+      "kind": "table",
+      "card": "forget one of your kept preferences",
+      "desktop": "forget one of your kept preferences"
+    },
+    {
+      "tool": "lesson_add",
+      "kind": "table",
+      "card": "add a lesson to your preferences",
+      "desktop": "add a lesson to your preferences"
+    },
+    {
+      "tool": "persona_create",
+      "kind": "table",
+      "card": "make a chat persona",
+      "desktop": "make a chat persona"
+    },
+    {
+      "tool": "persona_update",
+      "kind": "table",
+      "card": "change a chat persona",
+      "desktop": "change a chat persona"
+    },
+    {
+      "tool": "persona_delete",
+      "kind": "table",
+      "card": "remove or reset a chat persona",
+      "desktop": "remove or reset a chat persona"
     }
   ]
 }

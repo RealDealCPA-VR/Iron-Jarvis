@@ -115,6 +115,15 @@ RECORD_TOOL_TIERS: dict[str, str] = {
     # only narrows (allow); turning it OFF asks every time through the tool's
     # own once-only check (settings.records_history.ChatLocalOnlyTool).
     "chat_local_only": "allow",
+    # v1.438.0 (chat-first plan Wave 4 group C, settings/records_self): the
+    # user's own preferences, lessons and personas — each asks on the card
+    # (quoting the words) and has an Undo.
+    "preference_edit": "ask",
+    "preference_forget": "ask",
+    "lesson_add": "ask",
+    "persona_create": "ask",
+    "persona_update": "ask",
+    "persona_delete": "ask",
 }
 #: The create tools that gained an Undo (their own tiers are unchanged).
 RECORD_CREATE_TOOLS = frozenset({"schedule_create", "workflow_create", "webhook_add", "sentinel_add", "goal_add"})
@@ -494,7 +503,9 @@ def record_tools_for(text: str, *, workflow_names: "list[str] | tuple[str, ...]"
         out = [n for n in out if n in _RECORD_READERS]
     # v1.435.0 (Wave 3 group I): Local only for this chat and the change
     # history (settings.records_history) — it keeps its own question guard.
-    return list(dict.fromkeys(out + _hist().history_tools_for(t)))
+    # v1.438.0 (Wave 4 group C): preferences, lessons and personas
+    # (settings.records_self) — its own question guard too.
+    return list(dict.fromkeys(out + _hist().history_tools_for(t) + _self().self_tools_for(t)))
 
 
 def _schedule_named(t: str) -> bool:
@@ -1596,7 +1607,18 @@ _SNAP = {
     # v1.435.0 (Wave 3 group I): goals from chat and Local only for a chat.
     "goal_contract": lambda p, n: _hist().snap_goal_contract(p, n),
     "chat_local_only": lambda p, n: _hist().snap_chat_local_only(p, n),
+    # v1.438.0 (Wave 4 group C): a kept preference or lesson, and a persona.
+    "preference": lambda p, n: _self().snap_preference(p, n),
+    "persona": lambda p, n: _self().snap_persona(p, n),
 }
+
+
+def _self() -> Any:
+    """``settings.records_self`` (v1.438.0) — imported when used: it builds
+    on this module."""
+    from . import records_self
+
+    return records_self
 
 
 def _rp() -> Any:
@@ -1657,6 +1679,8 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
         return _hist().restore_goal_contract(platform, name, prior)
     if record == "chat_local_only":
         return _hist().restore_chat_local_only(platform, name, prior)
+    if record in ("preference", "persona"):
+        return _self().restore_kind(platform, record, name, prior, desc)
     raise RecordError(f"unknown record kind {record!r}")
 
 
@@ -3262,6 +3286,8 @@ def record_tools(platform: Any) -> list[Tool]:
         *_apps_record_tools(platform),
         # v1.435.0 (Wave 3 group I): chat_local_only, changes_list, change_undo.
         *_hist().history_tools(platform),
+        # v1.438.0 (Wave 4 group C): preferences, lessons and personas.
+        *_self().self_tools(platform),
     ]
 
 

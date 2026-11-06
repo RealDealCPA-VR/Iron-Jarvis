@@ -2669,52 +2669,43 @@ def register(app: FastAPI, d) -> None:
     def save_persona(name: str, body: PersonaSaveBody) -> dict[str, Any]:
         """Create or update a persona under ``name`` (a built-in name → an
         override; a new name → a new persona). The saved version wins next time."""
-        from ...personas import merged, slugify
+        from ...personas import PersonaError, save_persona_record
 
-        slug = slugify(name)
-        if not body.prompt.strip():
-            raise HTTPException(status_code=400, detail="a persona prompt is required")
-        _persona_store().upsert(
-            slug,
-            title=(body.title.strip() or slug.capitalize()),
-            description=body.description.strip(),
-            prompt=body.prompt.strip(),
-        )
-        saved = next(
-            (p for p in merged(_persona_store(), d._PERSONAS) if p["name"] == slug), None
-        )
-        return {"saved": slug, "persona": saved}
+        # v1.438.0: the body lives in personas.store (chat's persona_update
+        # takes the same path).
+        try:
+            return save_persona_record(
+                d.platform.engine, d._PERSONAS, name,
+                title=body.title, description=body.description, prompt=body.prompt,
+            )
+        except PersonaError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
     @app.post("/chat/personas")
     def create_persona(body: PersonaCreateBody) -> dict[str, Any]:
         """Create a NEW persona; its id is slugified from ``name`` or ``title``."""
-        from ...personas import merged, slugify
+        from ...personas import PersonaError, create_persona_record
 
-        if not body.prompt.strip():
-            raise HTTPException(status_code=400, detail="a persona prompt is required")
-        slug = slugify(body.name or body.title)
-        _persona_store().upsert(
-            slug,
-            title=(body.title.strip() or slug.capitalize()),
-            description=body.description.strip(),
-            prompt=body.prompt.strip(),
-        )
-        saved = next(
-            (p for p in merged(_persona_store(), d._PERSONAS) if p["name"] == slug), None
-        )
-        return {"created": slug, "persona": saved}
+        # v1.438.0: the body lives in personas.store (chat's persona_create).
+        try:
+            return create_persona_record(
+                d.platform.engine, d._PERSONAS,
+                name=body.name, title=body.title, description=body.description, prompt=body.prompt,
+            )
+        except PersonaError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
     @app.delete("/chat/personas/{name}")
     def delete_persona(name: str) -> dict[str, Any]:
         """Remove a saved persona — reverts a built-in to its default, or deletes
         a custom one. 404 only when the name is neither saved nor a built-in."""
-        from ...personas import slugify
+        from ...personas import delete_persona_record
 
-        slug = slugify(name)
-        removed = _persona_store().delete(slug)
-        if not removed and slug not in d._PERSONAS:
-            raise HTTPException(status_code=404, detail="no such persona")
-        return {"deleted": slug, "reverted_to_builtin": slug in d._PERSONAS}
+        # v1.438.0: the body lives in personas.store (chat's persona_delete).
+        try:
+            return delete_persona_record(d.platform.engine, d._PERSONAS, name)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="no such persona") from None
 
     @app.post("/chat/compact")
     async def chat_compact(body: ChatCompactBody) -> dict[str, Any]:

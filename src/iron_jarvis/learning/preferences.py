@@ -329,6 +329,27 @@ def forget(engine, pref_id: str) -> str:
     return pref_id
 
 
+def add_lesson(engine, text: Any, scope: str = "user") -> LessonRecord:
+    """A lesson the USER wrote ("remember that I prefer…") — THE body of
+    ``POST /lessons`` (v1.438.0: lifted so chat's ``lesson_add`` takes the
+    same path): weighted as an explicit preference, confirmed and "said".
+    Raises :class:`PreferenceInvalid` for an empty text. Blocking."""
+    clean = str(text or "").strip()
+    if not clean:
+        raise PreferenceInvalid("text is required")
+    with session_scope(engine) as db:
+        row = LessonRecord(
+            text=clean[:2000], scope=scope or "user", source="preference", weight=3,
+            # v1.305.0: typed by the user = said + kept.
+            status=STATUS_CONFIRMED, origin="said",
+        )
+        db.add(row)
+        db.commit()
+        out = _detached(db, row)
+    _shared_changed()  # v1.306.0: a shared block re-renders (debounced)
+    return out
+
+
 def _shared_changed() -> None:
     """v1.306.0: a confirmed preference changed — a switched-on "share with
     Build" re-renders its block (debounced, off the loop; never raises)."""
@@ -844,6 +865,7 @@ async def publish_scan(platform: Any, minted: list[Any]) -> None:
 __all__ = [
     "MAX_OPEN",
     "PreferenceConflict",
+    "add_lesson",
     "PreferenceInvalid",
     "SCAN_SOURCES",
     "ask_again",

@@ -462,8 +462,12 @@ def register(app: FastAPI, d) -> None:
         if unknown:
             raise HTTPException(status_code=400, detail=f"unknown setting(s): {', '.join(sorted(unknown))}")
         device_id = str(body.get("device_id") or "")
+        # v1.438.0 (Wave 4 group C): the desktop app writes its tray's two
+        # switches back here, so the ledger says who changed them. Only that
+        # one other word is taken; anything else is the Settings page.
+        actor = "desktop" if body.get("actor") == "desktop" else "settings_page"
         try:
-            change = config_writer(d).apply(values, actor="settings_page", device_id=device_id)
+            change = config_writer(d).apply(values, actor=actor, device_id=device_id)
         except SettingError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         return change.as_dict()

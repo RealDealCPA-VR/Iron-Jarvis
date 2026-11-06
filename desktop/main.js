@@ -548,6 +548,10 @@ function setKeepRunningPref(value) {
   keepRunningPref = !!value;
   writeDesktopSetting("keepRunningInBackground", keepRunningPref);
   refreshMenus(); // reflect the new state in the tray + app-menu checkboxes
+  // v1.438.0 (Wave 4 group C): every caller is the USER's choice (the tray,
+  // the app menu, the close question's "Remember my choice"), so Iron
+  // Jarvis's own setting says it too.
+  noteDesktopSwitchByUser(KEEP_IN_BACKGROUND_KEY, keepRunningPref);
 }
 
 // One-time "where did it go?" hint (v1.197.0). The close prompt explains WHAT
@@ -636,6 +640,238 @@ function setStartAtLogin(enabled) {
 function setStartAtLoginFromMenu(enabled) {
   writeDesktopSetting("startWithWindowsAsked", true);
   setStartAtLogin(enabled);
+  noteDesktopSwitchByUser(START_WITH_WINDOWS_KEY, !!enabled); // v1.438.0
+}
+
+// --- The desktop app's own switches, in Iron Jarvis's settings (v1.438.0) --
+// The chat-first plan's Wave 4 (decision D5): "Start Iron Jarvis with
+// Windows" and "Keep running in the background when I close the window" are
+// rows of the ONE settings schema (`start_with_windows`,
+// `keep_running_in_background` — settings/schema.py and the Config fields,
+// pinned equal), so chat and Settings can change them. The daemon never acts
+// on either; this shell does, by ONE rule — THE TRAY AND THE SETTING ARE THE
+// SAME SWITCH, AND THE NEWER CHOICE WINS:
+//   * it READS them from config.toml (the state home's, then
+//     ~/.ironjarvis/config.toml — the daemon's own layering) at start and
+//     every DESKTOP_SWITCHES_POLL_MS after, and APPLIES a value only when it
+//     differs from the value this shell last saw (`appSwitchesSeen` in
+//     desktop-settings.json). A value it saw before is never applied again,
+//     so a tray press made since is never undone by an older setting.
+//   * a tray / app-menu press, the close question's "Remember my choice" and
+//     the start-with-Windows question's Yes WRITE the new value back through
+//     PUT /settings/values (actor "desktop"). Until the daemon has taken it
+//     (it may not be running yet) it waits in `appSwitchesPending` and is
+//     sent again at the next check; a setting changed elsewhere meanwhile is
+//     the newer choice: it is applied and the waiting one dropped.
+//   * "not set" (the row never chosen) changes nothing: the tray and the
+//     close question decide, as they always did. The first time this shell
+//     sees a row not set while its own switch IS chosen (a login item made
+//     before, a remembered close choice) it writes that choice up once, so
+//     Settings shows what the tray shows.
+// Start with Windows is a login item of the INSTALLED app only (a dev run
+// would point it at electron.exe): elsewhere the value is noted, never applied.
+
+//: The settings keys, pinned equal to settings/schema.py and the Config fields.
+const START_WITH_WINDOWS_KEY = "start_with_windows";
+const KEEP_IN_BACKGROUND_KEY = "keep_running_in_background";
+const DESKTOP_SWITCH_KEYS = [START_WITH_WINDOWS_KEY, KEEP_IN_BACKGROUND_KEY];
+//: How often the setting is read again (chat's words: "within about 15 seconds").
+const DESKTOP_SWITCHES_POLL_MS = 15000;
+
+//: The value a config.toml SETS for `key`: true / false for a top-level
+//: `key = true|false` (tomli_w writes plain values before the first [table],
+//: so the scan stops there), null when it does not set it — or sets it to
+//: anything but a boolean (the Config field's own tolerant reading).
+function desktopSwitchSetting(tomlText, key) {
+  const text = String(tomlText || "").replace(/^﻿/, "");
+  const names = [key, `"${key}"`, `'${key}'`];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("[")) break;
+    const m = /^("[^"\n]{0,80}"|'[^'\n]{0,80}'|[A-Za-z0-9_-]{1,80})\s*=\s*([^#]*?)\s*(?:#.*)?$/.exec(line);
+    if (!m || !names.includes(m[1])) continue;
+    return m[2] === "true" ? true : m[2] === "false" ? false : null;
+  }
+  return null;
+}
+
+//: Both switches as the daemon would read them: the state home's
+//: config.toml, then ~/.ironjarvis/config.toml, per key; null when neither
+//: sets it. Never throws. `globalFile` is for the node pins.
+function readDesktopAppSettings(homeDir, globalFile = globalConfigFile()) {
+  const out = { [START_WITH_WINDOWS_KEY]: null, [KEEP_IN_BACKGROUND_KEY]: null };
+  for (const file of [path.join(homeDir || "", "config.toml"), globalFile]) {
+    if (!file) continue;
+    let text = "";
+    try {
+      text = fs.readFileSync(file, "utf8");
+    } catch {
+      continue; /* no such file: the next layer */
+    }
+    for (const key of DESKTOP_SWITCH_KEYS) {
+      if (out[key] === null) out[key] = desktopSwitchSetting(text, key);
+    }
+  }
+  return out;
+}
+
+//: Pure — what one check does for one switch, from the setting
+//: (true/false/null), the value this shell last saw (`seen`, undefined when
+//: never) and the user's own press still waiting to reach the daemon
+//: (`pending`, undefined when none):
+//:   "apply"   the setting changed since it was seen: apply it here;
+//:   "confirm" the daemon now holds the waiting press: note it as seen;
+//:   "push"    the waiting press has not reached the daemon: send it again;
+//:   "adopt"   never set, never seen: write this shell's own choice up once;
+//:   "keep"    nothing to do.
+function desktopSwitchDecision(setting, seen, pending) {
+  const set = setting === true || setting === false;
+  if (pending === true || pending === false) {
+    if (setting === pending) return "confirm";
+    if (set && setting !== seen) return "apply";
+    return "push";
+  }
+  if (set && setting !== seen) return "apply";
+  if (!set && seen === undefined) return "adopt";
+  return "keep";
+}
+
+function readAppSwitchState() {
+  let raw = null;
+  try {
+    raw = JSON.parse(fs.readFileSync(desktopSettingsFile(), "utf8"));
+  } catch {
+    raw = null;
+  }
+  const pick = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
+  return { seen: { ...pick(raw && raw.appSwitchesSeen) }, pending: { ...pick(raw && raw.appSwitchesPending) } };
+}
+
+//: Merge (or, with `undefined`, drop) one switch in one of the two maps.
+function writeAppSwitch(field, key, value) {
+  const state = readAppSwitchState();
+  const map = field === "appSwitchesSeen" ? state.seen : state.pending;
+  if (value === undefined) delete map[key];
+  else map[key] = value;
+  writeDesktopSetting(field, map);
+}
+
+//: This shell's own choice for a switch, or null when it has none.
+function localDesktopSwitch(key) {
+  if (key === START_WITH_WINDOWS_KEY) {
+    // Only an existing login item is a choice; "off" may just be the default.
+    return IS_PACKAGED && process.platform === "win32" && getStartAtLogin() ? true : null;
+  }
+  return typeof keepRunningPref === "boolean" ? keepRunningPref : null;
+}
+
+//: Apply a value that came from Iron Jarvis's settings — never written back.
+function applyDesktopSwitch(key, value) {
+  if (key === START_WITH_WINDOWS_KEY) {
+    if (IS_PACKAGED && process.platform === "win32") {
+      setStartAtLogin(!!value);
+      writeDesktopSetting("startWithWindowsAsked", true); // chosen: never asked again
+    } else {
+      desktopLog("info", "[settings] start with Windows applies to the installed app only — left alone here");
+    }
+  } else {
+    keepRunningPref = !!value;
+    writeDesktopSetting("keepRunningInBackground", keepRunningPref);
+    refreshMenus();
+  }
+  desktopLog("info", `[settings] ${key} is now ${value ? "on" : "off"} (from Iron Jarvis's settings)`);
+}
+
+//: PUT one switch to the daemon (actor "desktop"). Resolves true when the
+//: daemon took it, false otherwise. Never rejects or throws.
+function putDesktopSwitch(key, value, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => {
+      if (!done) {
+        done = true;
+        resolve(v);
+      }
+    };
+    try {
+      const data = JSON.stringify({ values: { [key]: !!value }, actor: "desktop" });
+      const headers = {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(data),
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      };
+      const req = http.request(
+        { host: "127.0.0.1", port: DAEMON_PORT, path: "/settings/values", method: "PUT", headers },
+        (res) => {
+          res.resume();
+          finish(res.statusCode >= 200 && res.statusCode < 300);
+        }
+      );
+      req.on("error", () => finish(false));
+      req.setTimeout(timeoutMs, () => req.destroy(new Error("settings write timeout")));
+      req.end(data);
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+//: Send a switch and, once the daemon has it, note it as seen (and drop the
+//: waiting press when it is still this one). Never throws.
+function pushDesktopSwitch(key, value) {
+  try {
+    putDesktopSwitch(key, value).then((ok) => {
+      if (!ok) return; // still waiting: the next check sends it again
+      writeAppSwitch("appSwitchesSeen", key, !!value);
+      if (readAppSwitchState().pending[key] === !!value) writeAppSwitch("appSwitchesPending", key, undefined);
+    });
+  } catch {
+    /* the next check sends it again */
+  }
+}
+
+//: The USER changed a switch here (the tray, the app menu, a question's
+//: answer): Iron Jarvis's setting is told. Never throws.
+function noteDesktopSwitchByUser(key, value) {
+  try {
+    writeAppSwitch("appSwitchesPending", key, !!value);
+    pushDesktopSwitch(key, !!value);
+  } catch {
+    /* never block a tray press */
+  }
+}
+
+//: One check of both switches (see the section comment). `push` false at the
+//: very start, before the daemon runs: settings are applied, nothing is sent.
+function syncDesktopSwitches({ push = true } = {}) {
+  try {
+    const settings = readDesktopAppSettings(updateChannelHome());
+    const state = readAppSwitchState();
+    for (const key of DESKTOP_SWITCH_KEYS) {
+      const setting = settings[key];
+      const decision = desktopSwitchDecision(setting, state.seen[key], state.pending[key]);
+      if (decision === "apply") {
+        applyDesktopSwitch(key, setting);
+        writeAppSwitch("appSwitchesSeen", key, setting);
+        if (state.pending[key] !== undefined) writeAppSwitch("appSwitchesPending", key, undefined);
+      } else if (decision === "confirm") {
+        writeAppSwitch("appSwitchesSeen", key, setting);
+        writeAppSwitch("appSwitchesPending", key, undefined);
+      } else if (decision === "push" && push) {
+        pushDesktopSwitch(key, state.pending[key]);
+      } else if (decision === "adopt" && push) {
+        const local = localDesktopSwitch(key);
+        if (local !== null) pushDesktopSwitch(key, local);
+      }
+    }
+  } catch (err) {
+    desktopLog("error", "[settings] could not read the desktop switches:", err && err.message);
+  }
+}
+
+function installDesktopSwitches() {
+  syncDesktopSwitches();
+  setInterval(syncDesktopSwitches, DESKTOP_SWITCHES_POLL_MS);
 }
 
 //: v1.310.0: how long after the FIRST launch before the question may come.
@@ -697,7 +933,10 @@ function maybeOfferStartWithWindows() {
       (owner ? dialog.showMessageBox(owner, opts) : dialog.showMessageBox(opts))
         .then(({ response }) => {
           writeDesktopSetting("startWithWindowsAsked", true); // answered, either way
-          if (response === 0) setStartAtLogin(true);
+          if (response === 0) {
+            setStartAtLogin(true);
+            noteDesktopSwitchByUser(START_WITH_WINDOWS_KEY, true); // v1.438.0
+          }
         })
         .catch(() => {
           /* dialog unavailable — the tray toggle still works, and we ask next launch */
@@ -3226,6 +3465,14 @@ const TOOL_WORDS = {
   agent_update: "change an agent",
   agent_pause: "pause or resume an agent",
   agent_delete: "remove an agent",
+  // v1.438.0 (chat-first plan Wave 4 group C): preferences, lessons and
+  // personas from chat (lib/toolWords.ts says the same; pinned equal).
+  preference_edit: "change one of your kept preferences",
+  preference_forget: "forget one of your kept preferences",
+  lesson_add: "add a lesson to your preferences",
+  persona_create: "make a chat persona",
+  persona_update: "change a chat persona",
+  persona_delete: "remove or reset a chat persona",
 };
 
 //: The batch forms ("rename or move 4 files") for the asks that come in
@@ -3358,6 +3605,7 @@ const TOOL_WORDS_BUILTIN = {
   image_resize: "make a file",
   integration_list: "list your web services",
   integration_test: "test a web service",
+  lesson_add: "add a lesson to your preferences",
   list_agents: "list the agents",
   list_files: "look in a folder",
   list_folder: "look in a folder",
@@ -3390,12 +3638,18 @@ const TOOL_WORDS_BUILTIN = {
   pdf_form_fields: "read a file",
   pdf_form_fill: "change a file",
   pdf_split: "make a file",
+  persona_create: "make a chat persona",
+  persona_delete: "remove or reset a chat persona",
+  persona_update: "change a chat persona",
   pixio_generate: "make an image, video or sound",
   pixio_models: "list the media models",
   pixio_params: "check a media model's options",
   pixio_status: "check on a media generation",
   pixio_upload: "publish a file for a media generation",
   plan_update: "update its plan",
+  preference_edit: "change one of your kept preferences",
+  preference_forget: "forget one of your kept preferences",
+  preference_list: "list your kept preferences",
   process_read: "read a running program's output",
   process_start: "start a program that keeps running",
   process_stop: "stop a running program",
@@ -5305,6 +5559,9 @@ async function startup() {
   // AppUserModelID that matches the installer's appId.
   app.setAppUserModelId("com.realdealcpa.ironjarvis");
   loadDesktopSettings(); // load the close-to-tray preference before menus/tray
+  // v1.438.0: a desktop switch changed in Iron Jarvis's settings while this
+  // app was closed applies now (nothing is sent: the daemon is not up yet).
+  syncDesktopSwitches({ push: false });
   authToken = getOrCreateToken();
   installAuthHeaderInjection();
   installMediaPermissions(); // let the dashboard's voice dictation use the mic
@@ -5545,6 +5802,7 @@ async function startup() {
   // Long-lived tray apps must keep looking for updates, not just at boot.
   setInterval(checkForUpdates, UPDATE_RECHECK_MS);
   installKeepAwake(); // v1.391.0: no sleep while work runs (Settings › System)
+  installDesktopSwitches(); // v1.438.0: Start with Windows / keep running, from settings
 }
 
 // The last lines a child wrote, for the failure classifier (v1.249.0, R-06).

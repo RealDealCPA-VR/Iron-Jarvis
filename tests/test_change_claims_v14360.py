@@ -203,7 +203,10 @@ MUST_NOT_NOTE: list[tuple[str, list[str], list[dict]]] = [
     ("I added a Notion page for the meeting notes.", [], []),
     ("I've connected to your Notion workspace and found three pages.", [], []),
     ("I've connected the memory of the two sessions.", [], []),
-    ("I saved your preference for shorter answers.", [], []),
+    # v1.438.0 (Wave 4 group C): a preference is a record now, so the claim
+    # is judged — moved on purpose: no note when the preference WAS saved
+    # (tests/test_change_claims_self_v14380.py holds the false one).
+    ("I saved your preference for shorter answers.", ["remember_preference"], []),
     ("I removed the duplicate rows from the table.", [], []),
     # The same claims WITH their change this turn.
     ("I've turned on read aloud.", ["config_set"], [S("device.read_aloud")]),

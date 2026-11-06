@@ -152,6 +152,15 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         "agent_update",
         "agent_pause",
         "agent_delete",
+        # v1.438.0 (chat-first plan Wave 4 group C): a kept preference or
+        # lesson reaches every later prompt, and a persona's words every chat
+        # that uses it — flagged content must not change either.
+        "preference_edit",
+        "preference_forget",
+        "lesson_add",
+        "persona_create",
+        "persona_update",
+        "persona_delete",
     }
 )
 

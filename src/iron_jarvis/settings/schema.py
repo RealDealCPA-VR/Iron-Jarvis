@@ -81,6 +81,15 @@ class SettingDef:
     #: Chat's ``config_set`` still changes it — through the writer, which runs
     #: that same side effect.
     put: bool = True
+    #: v1.438.0 (Wave 4 group C): the value may be "not set" (``None``) — a
+    #: row that was never chosen here, such as the desktop app's own switches
+    #: (the tray decides until one is). An Undo back to "not set" removes the
+    #: value again.
+    unset_ok: bool = False
+    #: v1.438.0: when a change takes effect, said after it in chat ("The
+    #: desktop app picks this up within about 15 seconds."), for a row the
+    #: daemon does not act on itself. "" = at once (or ``restart``).
+    applies: str = ""
 
     @property
     def field_name(self) -> str:
@@ -177,6 +186,38 @@ def _brain_profile_shape(value: Any) -> None:
 
     if not isinstance(value, str) or (value and not _re.fullmatch(r"bp_[A-Za-z0-9_-]{1,64}", value)):
         raise ValueError("must be one of the profiles in Settings › Memory & you")
+
+
+def _profile_rules_text(value: Any) -> None:
+    """v1.438.0 (Wave 4 group C): "Formatting rules" reach EVERY prompt (the
+    profile block), and from chat a model writes them — so they are capped in
+    words (the store would cut them silently) and scanned for an instruction
+    planted for the assistant, as a kept preference is
+    (``learning.preferences.clean_text``)."""
+    from ..profile.store import _LIMITS
+
+    text = str(value or "")
+    cap = _LIMITS["formatting_rules"]
+    if len(text) > cap:
+        raise ValueError(f"must be at most {cap} characters (these are {len(text)})")
+    if text.strip():
+        from ..core.promptguard import scan_context
+
+        if scan_context(text, source="formatting rules", cap=None).blocked:
+            raise ValueError(
+                "read like an instruction planted for the assistant, so they were not saved; "
+                "write them in your own words"
+            )
+
+
+def _language_options() -> tuple[tuple[str, str], ...]:
+    """The answer languages the profile knows (``profile.language.LANGUAGES``),
+    with "any" first — the value "" (no constraint, today's behaviour)."""
+    from ..profile.language import LANGUAGES
+
+    return (("", "Any language (the one you write in)"),) + tuple(
+        (code, spec[0]) for code, spec in LANGUAGES.items()
+    )
 
 
 def _account_groups_shape(v: Any) -> None:
@@ -667,6 +708,30 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="allow", store="profile", attr="writing_style", section="Profile"),
     S("profile.formatting", "Formatting", "memory", "string", "Lists, headings, tables…", tier="allow",
       store="profile", attr="formatting", section="Profile"),
+    # v1.438.0 (chat-first plan Wave 4 group C): the profile's language and
+    # formatting rules were on the profile page only, so "answer me in
+    # Spanish from now on" had no setting to reach. Each reaches every prompt
+    # through the profile block (profile.block.render).
+    S("profile.formatting_rules", "Formatting rules", "memory", "string",
+      "Your own rules for how answers look, one per line (for example \"Put the answer first\"). "
+      "They are added to every answer's instructions.",
+      tier="allow", store="profile", attr="formatting_rules", section="Profile",
+      check=_profile_rules_text,
+      aliases=("formatting rules", "my formatting rules", "rules for answers")),
+    S("profile.language", "Answer in this language", "memory", "enum",
+      "Every answer is written in this language, whatever language you write in. "
+      "Any language: the answer follows the language you write in.",
+      options=_language_options(),
+      tier="allow", store="profile", attr="language", section="Profile",
+      aliases=("answer language", "reply language", "response language", "language of your answers",
+               "language of the answers")),
+    S("profile.enforce_language", "Stick to that language", "memory", "bool",
+      "When a language is chosen above, each reply is checked, and a reply that slips into "
+      "another writing system (for example Chinese characters in a Spanish answer) is "
+      "rewritten once. Off: the language is still asked for, but not checked.",
+      tier="allow", store="profile", attr="enforce_language", section="Profile",
+      aliases=("stick to the language", "stick to that language", "enforce language",
+               "keep to that language")),
     S("profile.reading_level", "Reading level", "memory", "string", "How plain the words should be.",
       tier="allow", store="profile", attr="reading_level", section="Profile"),
     S("profile.response_length", "Answer length", "memory", "string", "Short, medium or detailed.",
@@ -799,6 +864,36 @@ SETTINGS: tuple[SettingDef, ...] = (
       "working, the PC sleeps as usual.",
       tier="allow", section="Power",
       aliases=("keep awake", "prevent sleep", "stay awake", "sleep", "power")),
+    # v1.438.0 (chat-first plan Wave 4 group C, decision D5): the desktop
+    # app's own two switches, read from config.toml by the DESKTOP SHELL
+    # (desktop/main.js readDesktopAppSettings) at start and about every 15
+    # seconds after — the daemon never acts on them. Not set = never chosen
+    # here: the tray's checkboxes and the close question decide, as before.
+    # A value is applied only when it changed since the shell last saw it,
+    # and a tray press writes back here (actor "desktop"), so the two never
+    # disagree for long. Starting with Windows widens what runs by itself
+    # after a restart (schedules, messages, tasks), so turning it ON from
+    # chat asks every time; off applies at once.
+    S("start_with_windows", "Start Iron Jarvis with Windows", "system", "bool",
+      "Iron Jarvis starts by itself, quietly in the tray, when you sign in to Windows, so "
+      "schedules, messages and tasks waiting for you keep working after Windows restarts. "
+      "Only the installed desktop app on this PC reads this. The tray's Start at login is "
+      "the same switch.",
+      tier="allow", floor_when=(True,), section="Desktop app", unset_ok=True,
+      applies="The desktop app on this PC picks this up within about 15 seconds (or when it next starts).",
+      aliases=("start with windows", "start at login", "open at login", "start when windows starts",
+               "launch at startup", "start on startup", "start when i log in",
+               "start when i sign in to windows")),
+    S("keep_running_in_background", "Keep running in the background when I close the window",
+      "system", "bool",
+      "On: closing the window keeps Iron Jarvis running in the tray, so schedules, rules and "
+      "webhooks stay active. Off: closing the window quits Iron Jarvis. Not set: it asks when "
+      "you close the window. The tray's Keep running in background is the same switch.",
+      tier="allow", section="Desktop app", unset_ok=True,
+      applies="The desktop app on this PC picks this up within about 15 seconds (or when it next starts).",
+      aliases=("keep running in the background", "keep running when i close", "close to the tray",
+               "minimize to the tray", "stay in the tray", "quit when i close the window",
+               "running in the background when i close the window")),
     S("pi_sessions_dir", "Pi sessions folder", "system", "string", "Where Pi coding sessions are read from.",
       tier="ask", advanced=True),
     S("opencode_data_dir", "OpenCode data folder", "system", "string", "Where OpenCode keeps its data.",

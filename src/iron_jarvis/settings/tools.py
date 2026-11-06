@@ -383,9 +383,12 @@ class _ConfigChangeBase(Tool):
             )
         c = change.changed[0]
         restart = " It takes full effect after Iron Jarvis restarts." if d.restart else ""
+        # v1.438.0: a row the daemon does not act on itself says WHEN it
+        # applies ("The desktop app on this PC picks this up…").
+        applies = f" {d.applies}" if d.applies else ""
         return ToolResult(
             ok=True,
-            output=f"Changed {c['label']}: {_show(c['old'])} → {_show(c['new'])}.{apps}{restart}",
+            output=f"Changed {c['label']}: {_show(c['old'])} → {_show(c['new'])}.{apps}{restart}{applies}",
             data={
                 "config_change": {
                     "key": key,

@@ -29,6 +29,11 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       "change_undo",
       "chat_local_only",
       "secret_set",
+      // v1.438.0 (Wave 4 group C): a chat persona is how chat answers — set
+      // up like a setting, its words reach every chat that uses it.
+      "persona_create",
+      "persona_update",
+      "persona_delete",
     ],
   },
   {
@@ -81,8 +86,22 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
   },
   {
     words: "memory",
-    tools: ["memory_write", "memory_propose", "ltm_append", "notebook", "remember_preference", "brain_save", "brain_change"],
+    tools: [
+      "memory_write",
+      "memory_propose",
+      "ltm_append",
+      "notebook",
+      "remember_preference",
+      "brain_save",
+      "brain_change",
+      // v1.438.0 (chat-first plan Wave 4 group C): a kept preference or
+      // lesson reaches every later answer.
+      "preference_edit",
+      "preference_forget",
+      "lesson_add",
+    ],
   },
+
   // v1.435.0 (chat-first plan Wave 3 group G): projects from chat — a
   // project grounds every later chat filed in it.
   {

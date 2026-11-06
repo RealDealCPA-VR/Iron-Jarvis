@@ -320,6 +320,10 @@
       "ok": "tested a web service",
       "failed": "tried a web service test and it failed"
     },
+    "lesson_add": {
+      "ok": "added a lesson",
+      "failed": "tried a lesson and it failed"
+    },
     "list_agents": {
       "ok": "listed the agents",
       "failed": "tried an agent listing and it failed"
@@ -416,6 +420,18 @@
       "ok": "made 1 file",
       "failed": "tried a file save and it failed"
     },
+    "persona_create": {
+      "ok": "made a chat persona",
+      "failed": "tried a persona creation and it failed"
+    },
+    "persona_delete": {
+      "ok": "removed or reset a chat persona",
+      "failed": "tried a persona removal and it failed"
+    },
+    "persona_update": {
+      "ok": "changed a chat persona",
+      "failed": "tried a persona change and it failed"
+    },
     "pixio_generate": {
       "ok": "made an image, video or sound",
       "failed": "tried a media generation and it failed"
@@ -439,6 +455,18 @@
     "plan_update": {
       "ok": "updated its plan",
       "failed": "tried a plan update and it failed"
+    },
+    "preference_edit": {
+      "ok": "changed a kept preference",
+      "failed": "tried a preference change and it failed"
+    },
+    "preference_forget": {
+      "ok": "forgot a kept preference",
+      "failed": "tried a preference removal and it failed"
+    },
+    "preference_list": {
+      "ok": "listed your kept preferences",
+      "failed": "tried a preference list and it failed"
     },
     "process_read": {
       "ok": "read a running program's output",

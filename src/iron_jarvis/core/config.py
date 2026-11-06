@@ -383,6 +383,17 @@ def default_permissions() -> dict[str, str]:
         "chat_local_only": "allow",
         "changes_list": "allow",
         "change_undo": "ask",
+        # v1.438.0 (chat-first plan Wave 4 group C, settings.records_self):
+        # the user's kept preferences and lessons, and the chat personas.
+        # Reading the kept list is allowed; every change asks on a card that
+        # quotes the words, and has an Undo.
+        "preference_list": "allow",
+        "preference_edit": "ask",
+        "preference_forget": "ask",
+        "lesson_add": "ask",
+        "persona_create": "ask",
+        "persona_update": "ask",
+        "persona_delete": "ask",
         "recall_lessons": "allow",
         # Motivation Layer: recording a standing goal is local + reversible and
         # never acts on its own (acting is gated by the autonomy dial + budget +
@@ -627,6 +638,18 @@ class Config(BaseModel):
     #: config.toml at EVERY update check (desktop/main.js ``updateChannelOf``),
     #: so a change applies at the next check; the daemon never acts on it.
     update_channel: str = "fresh"
+    #: THE DESKTOP APP'S OWN TWO SWITCHES (v1.438.0, chat-first plan Wave 4
+    #: group C, decision D5): "Start Iron Jarvis with Windows" and "Keep
+    #: running in the background when I close the window". None = never
+    #: chosen here (the tray and the close question decide, as before). The
+    #: DESKTOP SHELL reads both from config.toml at start and about every 15
+    #: seconds after (desktop/main.js ``readDesktopAppSettings``) and applies
+    #: a value only when it CHANGED since the shell last saw it, so a tray
+    #: press is never undone by an old value; a tray press writes the new
+    #: value back through ``PUT /settings/values`` (actor "desktop"). The
+    #: daemon itself never acts on either.
+    start_with_windows: bool | None = None
+    keep_running_in_background: bool | None = None
     # Where a chat with NO project keeps the files it was handed and the files
     # it makes (v1.244.0): one dated folder per conversation, so the work lands
     # somewhere the user will look. "" = <Documents>\Iron Jarvis. Read through
@@ -1100,6 +1123,14 @@ class Config(BaseModel):
         # settings writer refuses any other value in words first (the schema
         # row is an enum).
         return "stable" if str(v or "").strip().lower() == "stable" else "fresh"
+
+    @field_validator("start_with_windows", "keep_running_in_background", mode="before")
+    @classmethod
+    def _clean_desktop_switch(cls, v: Any) -> "bool | None":
+        # v1.438.0: TOLERANT like update_channel — a hand edit never stops a
+        # boot. Only a real true/false is a choice; anything else is "not
+        # chosen here", the desktop shell's own reading (desktopSwitchSetting).
+        return v if isinstance(v, bool) else None
 
     @field_validator("browser_access")
     @classmethod
