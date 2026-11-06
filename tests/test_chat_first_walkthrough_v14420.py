@@ -37,11 +37,10 @@ in-memory stand-in, Notion is never called, an MCP app is a local child, and
 another program's config is a fixture under a scratch APPDATA, and a row
 that starts any program but git or this Python (a real CLI) fails.
 
-SCORE (target after Wave 7): 23 done, 1 door, 6 honest.
-On this branch (before Wave 7 groups A and C merge): 16 done, 1 door, 2
-honest pinned and passing; 11 rows wait (``xfail(strict=True)``): 1, 2, 3, 8,
-12, 17, 18, 19, 23, 24, 26 — see each row's ``waits``. A row that starts
-passing goes red until its mark is taken off.
+SCORE (v1.442.0, every row pinned): 23 done, 1 door, 6 honest. At v1.432.0
+the review counted 2 done. Request 18 takes two messages, as in the app: the
+workflow card (a draft ends that turn; its Save posts the workflow) and then
+the rule plus the email destination.
 
 Request 10's pull request is made in a LATER turn with the GitHub app's own
 tools; this row pins the connect (the secure card) only.
@@ -381,6 +380,28 @@ def _l_client_replies(app, ctx, done):
     assert p.secrets.get("channel_mail_token") == "mail-app-password-v14420"
 
 
+async def _before_client_replies(app, ctx):
+    """The first message: the lane's draft exit gives the workflow card (a
+    draft ends that turn), and the card's Save posts it exactly as
+    ``WorkflowDraftCard`` does. The rule and the email destination are the
+    next message's work (the row's plan)."""
+    text = "Create a workflow that drafts a reply to every new email from a client."
+    draft = {"name": "client-reply-drafts", "description": "Draft replies to client emails",
+             "steps": [{"name": "draft", "kind": "agent", "agent": "builder",
+                        "task": "Draft a reply to this client email."},
+                       {"name": "tell", "kind": "notify", "message": "A draft reply is ready."}]}
+    model = _Scripted([Call("workflow_draft", draft)])
+    app.state.platform.router.stream = model
+    frames = await _drive_stream(app, _body(text), _answer_once(app, []))
+    assert model.missing == [], f"the first message's lane did not offer {model.missing}"
+    card = _done_frame(frames).get("workflow_draft")
+    assert card and card.get("name") == "client-reply-drafts", card
+    status, raw = await _asgi_post(app, "/workflows", {
+        "name": card["name"], "steps": card["steps"], "description": card.get("description") or "saved from chat",
+    })
+    assert status in (200, 201), raw
+
+
 def _l_short(app, ctx, done):
     assert any("short answers" in k for k in _kept_preferences(app)), _kept_preferences(app)
 
@@ -496,22 +517,19 @@ ROWS: list[Row] = [
             }}),
         ],
         secrets={"channel.phone": "telegram-bot-v14420-walkthrough"},
-        doors=[_step("google_setup")],
-        setup=_s_gmail_phone, lands=_l_gmail_phone,
-        waits="Wave 7 group A: a destination for 'my phone' (channel_connect) and the Google-setup door"),
+        doors=[_step("gmail_setup")],
+        setup=_s_gmail_phone, lands=_l_gmail_phone),
     Row(2, "Set up Slack so you can message me when a long job finishes.", "done",
         plan=[Call("channel_connect", {"name": "slack", "type": "slack", "channel": "#jarvis"})],
         secrets={"channel.slack": "slack-bot-v14420-walkthrough"},
         doors=[_step("slack_setup")],
-        lands=_l_slack,
-        waits="Wave 7 group A: the Slack-app door (/channels) in the same reply", arming_waits=False),
+        lands=_l_slack),
     Row(3, "Add my local Ollama model and make it my default.", "done",
         plan=[
             Call("model_server_add", lambda c: {"address": c.url, "name": "Ollama"}),
             Call("model_server_default", {"server": "Ollama", "model": "llama3.2"}),
         ],
-        setup=_s_ollama, lands=_l_ollama,
-        waits="Wave 7 group A: model_server_add offered for 'add my local Ollama model'"),
+        setup=_s_ollama, lands=_l_ollama),
     Row(4, "Add a second Claude account and use it when the first hits its limit.", "done",
         plan=[Call("account_add", {"vendor": "claude", "name": "Second"})],
         doors=[{"href": "/terminals?focus=term_v14380", "label": "Sign in Second in its terminal"}],
@@ -534,8 +552,7 @@ ROWS: list[Row] = [
         lands=_l_reviewer),
     Row(8, "Schedule a weekly backup of my settings to my OneDrive folder.", "done",
         plan=[Call("config_change", lambda c: {"key": "backup_mirror_dir", "value": c.folder})],
-        setup=_s_onedrive, lands=_l_backup_folder,
-        waits="Wave 7 group A: the backup copy folder setting offered for a backup to OneDrive"),
+        setup=_s_onedrive, lands=_l_backup_folder),
     Row(9, 'Turn on the night shift and queue "update the README" for tonight.', "done",
         plan=[Call("night_task_add", {"words": "update the README"})],
         setup=_s_night, lands=_l_night),
@@ -562,25 +579,23 @@ ROWS: list[Row] = [
             Call("config_set", {"key": "keep_awake", "value": True}),
         ],
         lands=_l_start_awake),
+    # The settings writers are real neighbours: "Folder watchers (sentinels)"
+    # must be switched on for a watcher to notice anything.
     Row(17, "Watch my Downloads folder and file new PDFs into the right client folder.", "honest",
-        may_arm=frozenset({"sentinel_add", "sentinel_update", "sentinel_delete"}),
-        waits="Wave 7 group A: the line that a watcher only suggests (it never files the PDFs itself)"),
+        honest_id="watcher_suggests",
+        may_arm=frozenset({"sentinel_add", "sentinel_update", "sentinel_delete"}) | SETTINGS),
     Row(18, "Create a workflow that drafts a reply to every new email from a client.", "done",
         plan=[
-            Call("workflow_create", {"name": "client-reply-drafts", "steps": [
-                {"name": "draft", "agent": "builder", "task": "Draft a reply to this client email: {body}"},
-            ]}),
             Call("reflex_create", {"name": "Client emails", "source": "email", "match": "",
                                    "action": "workflow", "target": "client-reply-drafts"}),
             Call("channel_connect", {"name": "mail", "type": "email", "host": "smtp.example.com",
                                      "from_addr": "me@example.com", "to_addr": "me@example.com"}),
         ],
         secrets={"channel.mail": "mail-app-password-v14420"},
-        lands=_l_client_replies,
-        waits="Wave 7 group A: workflow_create, reflex_create and an email destination offered"),
+        lands=_l_client_replies),
     Row(19, "Set a monthly spending limit for my builder agent.", "honest",
-        may_arm=frozenset({"agent_create", "agent_update", "agent_pause", "agent_delete"}),
-        waits="Wave 7 group A: the line that a built-in agent has no monthly limit (a custom one can)"),
+        honest_id="builtin_agent_limit",
+        may_arm=frozenset({"agent_create", "agent_update", "agent_pause", "agent_delete"})),
     Row(20, "Remember that I prefer short answers.", "done",
         plan=[Call("remember_preference", {"text": "I prefer short answers."})],
         lands=_l_short),
@@ -592,22 +607,20 @@ ROWS: list[Row] = [
         secrets={"memory.work_notes": "notion-token-v14420-walkthrough"},
         lands=_l_notion),
     Row(22, "Read my screen and click through this installer.", "honest", honest_id="desktop_control"),
-    Row(23, "Turn on voice so I can talk to you.", "door_or_honest", may_arm=SETTINGS,
-        waits="Wave 7 group A: talking is the composer's microphone (a door or a plain line)"),
+    Row(23, "Turn on voice so I can talk to you.", "door_or_honest", honest_id="voice_press", may_arm=SETTINGS),
     Row(24, "Make Build › Code use Codex on my work account in Full access for this repo.", "done",
         plan=[
             Call("build_defaults_set", {"view": "build_code", "tool": "codex", "mode": "full", "account": "work"},
                  ok=False),
             Call("build_defaults_set", {"view": "build_code", "tool": "codex", "account": "work"}),
         ],
-        setup=_s_codex_folder, lands=_l_codex_folder,
-        waits="Wave 7 group A: the folder tools offered for 'Make Build › Code use Codex … for this repo'"),
+        setup=_s_codex_folder, lands=_l_codex_folder),
     Row(25, "Share my profile with Claude Code in Build.", "done",
         plan=[Call("config_change", {"key": "profile_share_claude_code", "value": True})],
         setup=_s_share, lands=_l_share),
     Row(26, "Set up a webhook so Zapier can start a task.", "honest",
-        may_arm=frozenset({"webhook_add", "webhook_update", "webhook_delete", "reflex_create"}),
-        waits="Wave 7 group A: the line that Zapier on the internet cannot reach this PC"),
+        honest_id="internet_calls_in",
+        may_arm=frozenset({"webhook_add", "webhook_update", "webhook_delete", "reflex_create"})),
     Row(27, "Back up everything to my external drive automatically.", "done",
         plan=[Call("config_change", lambda c: {"key": "backup_mirror_dir", "value": c.folder})],
         setup=_s_drive, lands=_l_backup_folder),
@@ -622,7 +635,7 @@ ROWS: list[Row] = [
         lands=_l_stable),
 ]
 
-BEFORE: dict[int, Callable] = {28: _before_changes}
+BEFORE: dict[int, Callable] = {18: _before_client_replies, 28: _before_changes}
 GROUPS = {"done": "done", "door": "door", "honest": "honest", "door_or_honest": "honest"}
 
 
@@ -948,9 +961,9 @@ def test_the_table_is_the_thirty_requests_with_their_target_verdicts():
             assert r.doors, r.n
     assert counts == {"done": 23, "door": 1, "honest": 6}
     doc = __doc__ or ""
-    assert "SCORE (target after Wave 7): 23 done, 1 door, 6 honest." in doc
+    assert "SCORE (v1.442.0, every row pinned): 23 done, 1 door, 6 honest." in doc
     waiting = sorted(r.n for r in ROWS if r.waits)
-    assert waiting == [1, 2, 3, 8, 17, 18, 19, 23, 24, 26]
+    assert waiting == []
     assert ", ".join(str(n) for n in waiting) in " ".join(doc.split())
 
 
@@ -973,4 +986,4 @@ def test_the_score_table(capsys):
     out = capsys.readouterr().out
     with capsys.disabled():  # shown with `pytest -s`
         print("\n" + out)
-    assert "pinned today: 16 done, 1 door, 2 honest; 11 wait" in out
+    assert "pinned today: 23 done, 1 door, 6 honest; 0 wait" in out
