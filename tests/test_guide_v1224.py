@@ -34,6 +34,7 @@ from iron_jarvis.core.models import AgentType
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.guide import BUNDLED_DOCS, GuideIndex, doc_path, split_markdown
 from iron_jarvis.guide.tools import GUIDE_TOOL_NAMES
+from tests._fakes.rooms import rooms
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASE = "# Iron Jarvis reference (base knowledge)"
@@ -276,11 +277,11 @@ def test_talk_with_the_guide_is_grounded_and_talk_with_builder_is_not(tmp_path):
     _spy(app.state.platform, seen)
     with TestClient(app) as client:
         client.post("/workflows", json={"name": "month-end-close", "steps": [{"name": "s", "agent": "builder", "task": "t"}]})
-        t = client.post("/agents/threads", json={
+        t = rooms(client).post("/agents/threads", json={
             "title": "Talk with guide",
             "participants": [{"source": "builtin", "name": "guide", "role": ""}],
         }).json()
-        r = client.post(f"/agents/threads/{t['id']}/say", json={"message": "where is my month-end-close workflow?"})
+        r = rooms(client).post(f"/agents/threads/{t['id']}/say", json={"message": "where is my month-end-close workflow?"})
         assert r.status_code == 200, r.text
         sys_prompt = seen["calls"][-1]["system"]
         assert "As the Guide" in sys_prompt
@@ -289,11 +290,11 @@ def test_talk_with_the_guide_is_grounded_and_talk_with_builder_is_not(tmp_path):
         assert "month-end-close" in sys_prompt  # the app_search hit rode along
         assert sys_prompt.index("NO TOOLS") < sys_prompt.index(REF)  # after the no-tools rule
         seen["calls"].clear()
-        b = client.post("/agents/threads", json={
+        b = rooms(client).post("/agents/threads", json={
             "title": "Talk with builder",
             "participants": [{"source": "builtin", "name": "builder", "role": ""}],
         }).json()
-        assert client.post(f"/agents/threads/{b['id']}/say", json={"message": "hi"}).status_code == 200
+        assert rooms(client).post(f"/agents/threads/{b['id']}/say", json={"message": "hi"}).status_code == 200
         assert REF not in seen["calls"][-1]["system"]
 
 

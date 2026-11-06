@@ -57,6 +57,7 @@ from iron_jarvis.skills.loader import Skill
 from iron_jarvis.tools.base import ToolContext
 from iron_jarvis.tools.permissions import DENY_FLOOR_TOOLS, PermissionEngine
 from iron_jarvis.core.models import PermissionMode
+from tests._fakes.rooms import rooms
 
 PROMPT = "You are Scout, a focused research helper. Be concise."
 TOOLS = ["read_file", "write_file", "list_files"]
@@ -955,11 +956,11 @@ def test_round_table_seat_of_a_paused_agent_answers_the_pause_sentence_without_a
     calls: list = []
     real_get = p.providers.get
     p.providers.get = lambda *a, **k: (calls.append(a), real_get(*a, **k))[1]
-    tid = client.post(
+    tid = rooms(client).post(
         "/agents/threads",
         json={"participants": [{"source": "dynamic", "name": NAME, "role": "lead"}]},
     ).json()["id"]
-    body = client.post(f"/agents/threads/{tid}/say", json={"message": "hello"}).json()
+    body = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "hello"}).json()
     seat = [e for e in body["entries"] if e["who"] != "user"]
     assert len(seat) == 1
     assert seat[0]["content"] == "scout is paused: day off"
@@ -967,7 +968,7 @@ def test_round_table_seat_of_a_paused_agent_answers_the_pause_sentence_without_a
     assert calls == []  # no model call
     # Resumed, the seat speaks through the model again.
     p.agents_registry.resume(NAME)
-    body = client.post(f"/agents/threads/{tid}/say", json={"message": "hello again"}).json()
+    body = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "hello again"}).json()
     seat = [e for e in body["entries"] if e["who"] != "user"]
     assert seat[0]["content"] != "scout is paused: day off" and calls
 

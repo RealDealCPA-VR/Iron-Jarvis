@@ -289,7 +289,7 @@ def test_a_refused_listing_is_never_retried_at_ollamas_address(gateway):
         ("glm-5.3-flash", "glm-5.3-flash-think", "glm-5.3-flash-fast", "vision")
     )
     with pytest.raises(httpx.HTTPStatusError):
-        discovery.list_endpoint_models(gateway.base + "/v1", "")
+        discovery._fleet_endpoint_models(gateway.base + "/v1", "", "openai")
     assert gateway.ollama_style() == []
 
 
@@ -326,7 +326,7 @@ def test_the_typed_address_ladder_leaves_ollamas_address_out_for_a_known_proxy(m
 
     monkeypatch.setattr(discovery, "_get_json", fake_get)
     with pytest.raises(httpx.HTTPStatusError):
-        discovery.list_endpoint_models("http://gw:4000/v1", KEY, ollama_ok=False)
+        discovery._fleet_endpoint_models("http://gw:4000/v1", KEY, "openai", ollama_ok=False)
     assert asked == ["http://gw:4000/v1/models"]
 
 
@@ -489,9 +489,6 @@ def test_every_gateway_caller_sends_the_saved_key_and_never_asks_ollamas_address
         got = step("fetch models", lambda: client.post(
             "/connections/endpoints/models", json={"base_url": gateway.base + "/v1"}).json())
         assert got["error"] is None and "vision" in got["models"]
-        got = step("endpoint-models", lambda: client.post(
-            "/providers/endpoint-models", json={"base_url": gateway.base + "/v1", "api_key": ""}).json())
-        assert "vision" in got.get("models", [])
         # the capability seed (Measure on the Connections page)
         def _envelope():
             r = client.post("/envelope/custom/vision/probe")
@@ -546,7 +543,7 @@ def test_every_gateway_caller_sends_the_saved_key_and_never_asks_ollamas_address
     # every caller above really asked the gateway (each step asserted it)
     assert set(reached) == {
         "sampler pass", "detect", "litellm pass", "probe form", "probe form (no key name)",
-        "catalog", "fetch models", "endpoint-models", "envelope seed", "chat turn",
+        "catalog", "fetch models", "envelope seed", "chat turn",
         "opencode", "doctor", "voice", "vision turn",
     }
     # THE DONE CONDITION

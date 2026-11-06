@@ -32,7 +32,6 @@ registries they read are mutated by the loop and are not thread-safe to walk.
 from __future__ import annotations
 
 import json
-import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -100,11 +99,6 @@ def _attention_clause():
             func.coalesce(SessionModel.finished_at, SessionModel.created_at) >= since,
         ),
     )
-
-
-#: Serialises "is there a room yet? no → make one" so two first opens of the
-#: same world (two windows, a double click) cannot mint two round tables.
-_ROOM_LOCK = threading.Lock()
 
 
 # --------------------------------------------------------------------------- #
@@ -219,10 +213,6 @@ def team_seats(platform, members: list[str], entries: list | None = None) -> lis
             continue
         seats.append(participant_for(entry.name, seat_role(platform, entry.name)))
     return seats
-
-
-class NoTeamError(ValueError):
-    """There is no room yet and nobody to seat — the route's 409."""
 
 
 def decode_team(raw: Any) -> list[str]:
@@ -594,29 +584,6 @@ def sync_room(platform, project_id: str, members: list[str]) -> str | None:
         return None  # nobody the roster still knows — the room keeps its seats
     threads.update_participants(room.id, clean_participants(seats))
     return room.id
-
-
-def ensure_room(
-    platform, project: Project, participants: list[dict[str, str]] | None
-) -> tuple[Any, bool]:
-    """The project's round table — ``(record, created)``. An existing room
-    is returned untouched; otherwise one is made seating ``participants``
-    (already cleaned by the caller) under :data:`_ROOM_LOCK`, so two first
-    opens cannot mint two rooms. Raises :class:`NoTeamError` (one sentence)
-    when there is no room and nobody to seat."""
-    from ..agents.threads import AgentThreads
-
-    threads = AgentThreads(platform.engine)
-    with _ROOM_LOCK:
-        room = threads.latest_for_project(project.id)
-        if room is not None:
-            return room, False
-        if not participants:
-            raise NoTeamError(
-                "this project has no team yet — build the team first, then open its round table"
-            )
-        rec = threads.create(f"{project.name} — round table", participants, project_id=project.id)
-        return rec, True
 
 
 # --------------------------------------------------------------------------- #
@@ -1324,10 +1291,8 @@ __all__ = [
     "TEAM_MAX",
     "counts_for",
     "decode_team",
-    "ensure_room",
     "gather_world",
     "gather_worlds",
-    "NoTeamError",
     "kind_of",
     "member_kind",
     "participant_for",

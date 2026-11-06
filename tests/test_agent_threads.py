@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from iron_jarvis.agents.threads import clean_participants
 from iron_jarvis.daemon.app import create_app
+from tests._fakes.rooms import rooms
 
 
 @pytest.fixture()
@@ -61,7 +62,7 @@ def test_clean_participants_rejects_bad_panels(raw, msg):
 
 
 def test_thread_crud_round_trip(client):
-    r = client.post(
+    r = rooms(client).post(
         "/agents/threads", json={"title": "Panel", "participants": _panel()}
     )
     assert r.status_code == 200
@@ -71,25 +72,25 @@ def test_thread_crud_round_trip(client):
         "builtin:reviewer",
     ]
 
-    rows = client.get("/agents/threads").json()["threads"]
+    rows = rooms(client).get("/agents/threads").json()["threads"]
     assert rows[0]["id"] == tid
     assert "messages" not in rows[0]  # list rows stay light
     assert rows[0]["message_count"] == 0
 
     # Edit the panel: roles are reassignable after setup.
-    upd = client.put(
+    upd = rooms(client).put(
         f"/agents/threads/{tid}/participants",
         json={"participants": [{"source": "builtin", "name": "planner", "role": "scribe"}]},
     )
     assert upd.status_code == 200
     assert upd.json()["participants"][0]["role"] == "scribe"
 
-    assert client.delete(f"/agents/threads/{tid}").json()["deleted"] == tid
+    assert rooms(client).delete(f"/agents/threads/{tid}").json()["deleted"] == tid
     assert client.get(f"/agents/threads/{tid}").status_code == 404
 
 
 def test_bad_panel_is_a_400_not_a_500(client):
-    r = client.post(
+    r = rooms(client).post(
         "/agents/threads", json={"participants": [{"source": "alien", "name": "x"}]}
     )
     assert r.status_code == 400
@@ -100,10 +101,10 @@ def test_bad_panel_is_a_400_not_a_500(client):
 
 
 def test_say_runs_one_round_in_panel_order(client):
-    tid = client.post(
+    tid = rooms(client).post(
         "/agents/threads", json={"title": "T", "participants": _panel()}
     ).json()["id"]
-    r = client.post(f"/agents/threads/{tid}/say", json={"message": "Ship Friday?"})
+    r = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "Ship Friday?"})
     assert r.status_code == 200
     entries = r.json()["entries"]
     assert [e["who"] for e in entries] == ["user", "builtin:planner", "builtin:reviewer"]
@@ -118,11 +119,11 @@ def test_say_runs_one_round_in_panel_order(client):
 
 
 def test_empty_message_continues_the_panel_without_a_user_turn(client):
-    tid = client.post(
+    tid = rooms(client).post(
         "/agents/threads", json={"participants": _panel()}
     ).json()["id"]
-    client.post(f"/agents/threads/{tid}/say", json={"message": "topic"})
-    r = client.post(f"/agents/threads/{tid}/say", json={"message": ""})
+    rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "topic"})
+    r = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": ""})
     entries = r.json()["entries"]
     assert [e["who"] for e in entries] == ["builtin:planner", "builtin:reviewer"]
 
@@ -140,8 +141,8 @@ def test_each_speaker_sees_the_replies_before_it(client, monkeypatch):
         return f"{p['name']} says hello"
 
     monkeypatch.setattr(threads_mod.AgentThreads, "_speak_local", spy)
-    tid = client.post("/agents/threads", json={"participants": _panel()}).json()["id"]
-    client.post(f"/agents/threads/{tid}/say", json={"message": "hi panel"})
+    tid = rooms(client).post("/agents/threads", json={"participants": _panel()}).json()["id"]
+    rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "hi panel"})
     assert len(seen) == 2
     assert "planner says hello" not in seen[0]
     assert "planner says hello" in seen[1]  # reviewer saw planner's fresh reply
@@ -157,8 +158,8 @@ def test_a_failing_participant_is_an_honest_entry_not_a_sunk_round(client, monke
         return "reviewer still answers"
 
     monkeypatch.setattr(threads_mod.AgentThreads, "_speak_local", flaky)
-    tid = client.post("/agents/threads", json={"participants": _panel()}).json()["id"]
-    r = client.post(f"/agents/threads/{tid}/say", json={"message": "go"})
+    tid = rooms(client).post("/agents/threads", json={"participants": _panel()}).json()["id"]
+    r = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "go"})
     entries = r.json()["entries"]
     planner = next(e for e in entries if e["who"] == "builtin:planner")
     reviewer = next(e for e in entries if e["who"] == "builtin:reviewer")
@@ -184,24 +185,24 @@ def test_dynamic_agent_participates_with_its_own_persona(client, monkeypatch):
         return "ok"
 
     monkeypatch.setattr(threads_mod.AgentThreads, "_speak_local", spy)
-    tid = client.post(
+    tid = rooms(client).post(
         "/agents/threads",
         json={"participants": [{"source": "dynamic", "name": "taxpro", "role": "lead"}]},
     ).json()["id"]
-    client.post(f"/agents/threads/{tid}/say", json={"message": "hello"})
+    rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "hello"})
     assert systems and "sharp tax accountant" in systems[0]
     assert "the lead in a panel" in systems[0]
 
 
 def test_missing_dynamic_agent_fails_honestly(client):
-    tid = client.post(
+    tid = rooms(client).post(
         "/agents/threads",
         json={"participants": [{"source": "dynamic", "name": "ghost", "role": "lead"}]},
     ).json()["id"]
-    r = client.post(f"/agents/threads/{tid}/say", json={"message": "hello"})
+    r = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "hello"})
     entry = r.json()["entries"][-1]
     assert "no longer exists" in entry["error"]
 
 
 def test_say_on_missing_thread_is_404(client):
-    assert client.post("/agents/threads/nope/say", json={"message": "x"}).status_code == 404
+    assert rooms(client).post("/agents/threads/nope/say", json={"message": "x"}).status_code == 404

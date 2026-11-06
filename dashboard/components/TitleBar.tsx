@@ -27,8 +27,8 @@ export function tripletToHex(triplet: string): string | null {
 /**
  * v1.313.0 — every control in the bar is ONE height. A phone gets 36px tap
  * targets (h-9), a pointer 32px (sm:h-8); the bar itself stays h-10. The
- * ModelSwitcher trigger, the MoodOrb and the NotificationBell trigger carry
- * the same pair, so the row reads as one calm line instead of four sizes.
+ * MoodOrb and the NotificationBell trigger carry the same pair, so the row
+ * reads as one calm line instead of several sizes.
  */
 export const BAR_CONTROL_H = "h-9 sm:h-8";
 

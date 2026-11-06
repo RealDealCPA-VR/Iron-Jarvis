@@ -178,7 +178,6 @@ describe("the session page refetches once per frame, and not while hidden", () =
 
 /** The subscribers that take EVERY frame on purpose, with the reason. */
 const UNFILTERED_OK: Record<string, string> = {
-  "components/EventStream.tsx": "the live feed shows every event",
   "components/TimeTravelFeed.tsx": "the time-travel feed shows every event",
   "app/sessions/[id]/page.tsx": "the session's own live feed shows every event of that session",
 };

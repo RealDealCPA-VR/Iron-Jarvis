@@ -29,9 +29,6 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(""),
   usePathname: () => "/",
 }));
-// The Overview's live feed is unfiltered BY DESIGN (it shows everything); it
-// is stubbed so the Overview's Profiler counts the page, not that feed.
-vi.mock("@/components/EventStream", () => ({ EventStream: () => null }));
 
 import { DaemonProvider, useDaemon } from "@/lib/daemon";
 import { useApi, usePolledApi, type ApiState } from "@/lib/useApi";
@@ -577,7 +574,7 @@ describe("useEvents(max, { types }) — a frame nobody reads costs no render", (
     expect(r.n - base).toBe(1);
   });
 
-  it("GUARD (passes today): the no-argument form still receives every frame (EventStream/TimeTravelFeed)", () => {
+  it("GUARD (passes today): the no-argument form still receives every frame (TimeTravelFeed)", () => {
     mount(<Probe max={50} />);
     pushNoise(socket(), 3);
     expect(r.last!.events).toHaveLength(3);

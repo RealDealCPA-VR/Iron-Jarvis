@@ -368,10 +368,6 @@ def test_no_keyed_caller_follows_a_redirect_to_another_server(tmp_path, monkeypa
         discovery._fetch("fleet-a", lambda: KEY, red.base, "anthropic")
         discovery._fetch("fleet-r", lambda: KEY, red.base + "/v1", "openai", True)
         discovery._fetch("custom", lambda: KEY, red.base + "/v1", "openai")
-        try:
-            discovery.list_endpoint_models(red.base + "/v1", KEY, ollama_ok=True)
-        except Exception:  # noqa: BLE001 — a 307 is not a listing
-            pass
         asyncio.run(seed_profile("custom", "vision", red.base + "/v1", headers=bearer))
         asyncio.run(seed_profile("fleet-a", "m", red.base, headers=xkey, ollama=True))
         oc._passthrough_aliases(red.base + "/v1", None, bearer)
@@ -402,7 +398,6 @@ def test_no_keyed_caller_follows_a_redirect_to_another_server(tmp_path, monkeypa
             client.get("/models")
             client.post("/connections/endpoints/models", json={"base_url": red.base + "/v1"})
             client.post("/connections/endpoints/models", json={"base_url": red.base, "protocol": "anthropic"})
-            client.post("/providers/endpoint-models", json={"base_url": red.base + "/v1", "api_key": ""})
             assert client.post("/envelope/custom/vision/probe").status_code == 200
             end = time.monotonic() + 20
             while not seeded and time.monotonic() < end:
@@ -695,7 +690,6 @@ def _drive_every_door(client, d, base: str) -> list[str]:
     keep(client.post("/fleet/probe", json={"base_url": base}))
     keep(client.get("/models"))
     keep(client.post("/connections/endpoints/models", json={"base_url": base + "/v1"}))
-    keep(client.post("/providers/endpoint-models", json={"base_url": base + "/v1", "api_key": ""}))
     keep(client.post("/chat", json={"messages": [{"role": "user", "content": "hi"}],
                                     "provider": "custom", "model": "vision"}))
     out.append(json.dumps(importlib.import_module("iron_jarvis.onboarding.doctor").runtime_checks(d.platform)))

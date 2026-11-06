@@ -2,31 +2,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 /**
- * The first-run wizard's three doors + the /chat finale (v1.197.0).
+ * The connect doors' MECHANICS (v1.197.0; the file kept its name).
+ *
+ * v1.439.0 (Wave 6, D6): the first-run wizard these tests were written
+ * through was removed — it had not been mounted since the calm redesign
+ * (v1.321.0). The doors it used are the shared `ConnectDoors`, which the chat's
+ * empty state still shows while replies are the demo, so the pins on the
+ * doors' own mechanics moved onto it; the wizard-only pins (its show rule, its
+ * latch across a first_run flip, its "Start using Iron Jarvis" finale) left
+ * with the wizard.
  *
  * WHAT THESE TESTS GUARD:
- *  - the wizard shows exactly when onboarding says first_run AND no choice is
- *    stored, and its not-yet-connected step 1 opens with three PLAIN-LANGUAGE
- *    doors instead of leading with "CLIs" and "API keys" — vocabulary the old
- *    copy assumed a first-runner already knew;
- *  - the key door keeps the pre-v1.197.0 mechanics byte-for-byte: submitting a
- *    key POSTs /connections/anthropic/key then /connections/anthropic/test —
- *    the doors are presentation, not a new connection path;
- *  - the Ollama door links OUT to ollama.com/download (new tab); Gemini was a
- *    LINK to /connections while the google ConnectionSpec was OAuth-only, and
- *    since v1.355.0 (G46) takes an AI Studio key in the key form like the
- *    other providers;
- *  - the Ollama door has a real MECHANISM, not a promise: "Connect to Ollama
- *    on this PC" PUTs the default local URL to /settings (rescan cannot
- *    detect Ollama — availability is gated on ollama_base_url being
- *    configured), and the door carries no rescan claim;
- *  - the wizard is LATCHED open: first_run flips false the moment the wizard
- *    succeeds at its own steps, and every success path reloads /onboarding —
- *    the mocked reload flips the fixture exactly as production would, so a
- *    show condition that re-evaluated first_run mid-flow fails here;
- *  - finishing lands on /chat, the product's hero surface: "Start using Iron
- *    Jarvis" stores the choice AND router.push("/chat"), instead of
- *    dead-ending on whatever page happened to sit under the modal.
+ *  - three PLAIN-LANGUAGE doors, nothing pre-picked (no key box, no download
+ *    link) until the user says which person they are;
+ *  - the key door keeps the pre-v1.197.0 mechanics: submitting a key POSTs
+ *    /connections/anthropic/key then /connections/anthropic/test;
+ *  - the Ollama door links OUT to ollama.com/download (new tab) and CONNECTS
+ *    (PUTs the default local URL to /settings) instead of promising a rescan;
+ *    Gemini takes an AI Studio key in the key form (v1.355.0, G46).
  */
 
 const hooks = vi.hoisted(() => ({
@@ -166,7 +159,7 @@ vi.mock("framer-motion", async () => {
   };
 });
 
-import { FirstRunWizard } from "@/components/FirstRunWizard";
+import { ConnectDoors } from "@/components/onboarding/ConnectDoors";
 
 const ONBOARDING = {
   version: "1.197.0",
@@ -228,25 +221,14 @@ afterEach(() => {
 
 /* ------------------------------------------------------------ the doors --- */
 
-describe("step 1 — three plain-language doors", () => {
-  it("shows on a first run with no stored choice, doors first", async () => {
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+describe("three plain-language doors", () => {
+  it("offers the three doors with nothing pre-picked", async () => {
+    render(<ConnectDoors />);
     for (const label of DOOR_LABELS) expect(door(label)).toBeTruthy();
     // Nothing is pre-picked: the mechanics stay hidden until the user says
     // which person they are — no key input, no download link yet.
     expect(screen.queryByPlaceholderText("sk-ant-…")).toBeNull();
     expect(screen.queryByText("Download Ollama")).toBeNull();
-  });
-
-  it("never shows once a choice is stored", async () => {
-    window.localStorage.setItem("ij_first_run_choice", "done");
-    render(<FirstRunWizard />);
-    // The effect that reads storage must run before "nothing" is proven.
-    await waitFor(() =>
-      expect(window.localStorage.getItem("ij_first_run_choice")).toBe("done"),
-    );
-    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
 
@@ -254,7 +236,7 @@ describe("step 1 — three plain-language doors", () => {
 
 describe("the key door — pre-v1.197.0 mechanics, untouched", () => {
   it("saves then tests the key: POST /connections/anthropic/key → /test", async () => {
-    render(<FirstRunWizard />);
+    render(<ConnectDoors />);
     fireEvent.click(door("I have an API key"));
     fireEvent.change(screen.getByPlaceholderText("sk-ant-…"), {
       target: { value: "sk-ant-test-123" },
@@ -268,20 +250,6 @@ describe("the key door — pre-v1.197.0 mechanics, untouched", () => {
       "/connections/anthropic/test",
     ]);
     expect(hooks.posts[0].body).toEqual({ key: "sk-ant-test-123" });
-    // THE LATCH, exercised for real: the connect's refreshAll() reloaded
-    // /onboarding, which — as in production, where a connected provider ends
-    // first_run — flips the fixture. WAITED FOR, not asserted on the next line
-    // (v1.214.1): the note above renders when the handler's last `await`
-    // resolves, and `refreshAll()` lands in a separate commit after it, so
-    // this was a race that a loaded runner loses. Waiting is also the truer
-    // shape of the claim — the guarantee is "the wizard is still standing
-    // AFTER the flip", which cannot be checked before the flip has happened.
-    await waitFor(() =>
-      expect((hooks.api["/onboarding"] as { first_run: boolean }).first_run).toBe(
-        false,
-      ),
-    );
-    expect(screen.getByRole("dialog")).toBeTruthy();
   });
 });
 
@@ -289,7 +257,7 @@ describe("the key door — pre-v1.197.0 mechanics, untouched", () => {
 
 describe("the honest pointers", () => {
   it("the Ollama door links out to ollama.com/download in a new tab", async () => {
-    render(<FirstRunWizard />);
+    render(<ConnectDoors />);
     fireEvent.click(door("Free & private on this PC"));
     const a = (await screen.findByText("Download Ollama")) as HTMLAnchorElement;
     expect(a.getAttribute("href")).toBe("https://ollama.com/download");
@@ -312,7 +280,7 @@ describe("the honest pointers", () => {
     // button that saves the default local URL (the daemon normalizes it and
     // live-reconfigures the manager; the health poll then proves real
     // reachability).
-    render(<FirstRunWizard />);
+    render(<ConnectDoors />);
     fireEvent.click(door("Free & private on this PC"));
     // No rescan claim in THIS door — it would be a lie here.
     expect(screen.queryByRole("button", { name: /Rescan now/ })).toBeNull();
@@ -339,66 +307,9 @@ describe("the honest pointers", () => {
     // Connections page. The spec takes an AI Studio key now, so the key form
     // offers Google Gemini like the other providers — and the old pointer to
     // an account login is gone (model-doors-v13550 pins the post + test).
-    render(<FirstRunWizard />);
+    render(<ConnectDoors />);
     fireEvent.click(door("I have an API key"));
     expect(await screen.findByRole("button", { name: "Google Gemini" })).toBeTruthy();
     expect(screen.queryByText(/connects with account login/)).toBeNull();
-  });
-});
-
-/* ------------------------------------------------------------- the finale --- */
-
-describe("the finale — finishing lands on /chat", () => {
-  it("survives its own success and lands on /chat", async () => {
-    // A completed run is already waiting at the polled endpoint, so reaching
-    // step 3 and starting a task lands directly on the celebration panel.
-    hooks.api["/sessions/s-1"] = {
-      // v1.310.0: the row names who answered — the verdict reads it.
-      session: { status: "completed", summary: "All good", provider: "anthropic" },
-      transcript: { tools: [] },
-    };
-    // v1.310.0: step 3 offers the task box only with a real model ready (with
-    // none it shows the connect doors — wizard-wave2-v1310 pins that gate).
-    hooks.api["health"] = {
-      status: "ok",
-      version: "1.197.0",
-      providers: [{ provider: "anthropic", available: true, class: "api" }],
-    };
-    render(<FirstRunWizard />);
-    fireEvent.click(screen.getByRole("button", { name: /First task/ }));
-    // The step heading is the RECONCILED checklist title, not hardcoded copy.
-    expect(screen.getByText("Give it your first task")).toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Summarize what you can do for me in 5 bullets" }),
-    );
-    const start = await screen.findByRole("button", { name: /Start using Iron Jarvis/ });
-    // THE LATCH IS LOAD-BEARING HERE (v1.197.0 review): completing the run
-    // called refreshAll() → reloadOnboarding(), and — as in production, where
-    // a session row ends first_run — the fixture has ALREADY flipped by the
-    // time the celebration renders. A wizard whose show condition re-read
-    // first_run unmounted right now, making this button unreachable; the old
-    // no-op reload stub could never see that.
-    // SEEN RED TWICE on a loaded runner before this was awaited (v1.214.1):
-    // the celebration renders as soon as the run reports completed, and the
-    // `refreshAll()` that flips the fixture lands in a later commit. Same
-    // correction as its sibling above, and the same reason it is the better
-    // shape: the button has to survive the flip, so the flip has to have
-    // happened before "still reachable" means anything.
-    await waitFor(() =>
-      expect((hooks.api["/onboarding"] as { first_run: boolean }).first_run).toBe(
-        false,
-      ),
-    );
-    expect(screen.getByRole("dialog")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: /Start using Iron Jarvis/ }),
-    ).toBeTruthy();
-    fireEvent.click(start);
-    await waitFor(() => {
-      expect(window.localStorage.getItem("ij_first_run_choice")).toBe("done");
-      expect(hooks.routerPush).toHaveBeenCalledWith("/chat");
-    });
-    // The modal is gone — the user is standing in /chat, not under an overlay.
-    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

@@ -34,26 +34,23 @@ def _fake_openai_listing(monkeypatch, seen: list[str]):
         "http://localhost:1234/v1/chat/completions",
     ],
 )
-def test_list_endpoint_models_normalizes_any_base_form(monkeypatch, base_url):
+def test_endpoint_models_normalizes_any_base_form(monkeypatch, base_url):
+    # v1.439.0: was ``list_endpoint_models``, the body of the removed
+    # ``POST /providers/endpoint-models``; the same rule now lives in the
+    # fleet listing every catalog refresh uses.
     seen: list[str] = []
     _fake_openai_listing(monkeypatch, seen)
-    models = discovery.list_endpoint_models(base_url)
+    models = discovery._fleet_endpoint_models(base_url, "", "openai")
     assert models == ["llama3.2", "qwen2.5-coder"]
     assert seen == ["http://localhost:1234/v1/models"]
 
 
-def test_list_endpoint_models_falls_back_to_ollama_native(monkeypatch):
-    def fake_get_json(url, headers):
-        if url.endswith("/v1/models"):
-            raise RuntimeError("404")  # pre-shim Ollama
-        assert url.endswith("/api/tags")
-        return {"models": [{"name": "llama3:8b"}]}
-
-    monkeypatch.setattr(discovery, "_get_json", fake_get_json)
-    assert discovery.list_endpoint_models("http://localhost:11434") == ["llama3:8b"]
+# The pre-shim Ollama fallback (a 404 on /v1/models -> /api/tags) is pinned
+# on the fleet listing by test_gateway_key_v1382::
+# test_an_old_ollama_that_answers_404_is_still_asked_its_own_address.
 
 
-def test_list_endpoint_models_sends_key_when_given(monkeypatch):
+def test_endpoint_models_sends_key_when_given(monkeypatch):
     headers_seen: dict = {}
 
     def fake_get_json(url, headers):
@@ -61,7 +58,7 @@ def test_list_endpoint_models_sends_key_when_given(monkeypatch):
         return {"data": [{"id": "m"}]}
 
     monkeypatch.setattr(discovery, "_get_json", fake_get_json)
-    discovery.list_endpoint_models("http://gw.local/v1", "sekret")
+    discovery._fleet_endpoint_models("http://gw.local/v1", "sekret", "openai")
     assert headers_seen == {"Authorization": "Bearer sekret"}
 
 
@@ -74,9 +71,11 @@ def test_discover_models_supports_custom_endpoints(monkeypatch):
 
 
 def test_endpoint_models_probe_honest_on_unreachable(tmp_path):
+    # v1.439.0: the older ``/providers/endpoint-models`` was removed; the
+    # Connections form's "Fetch available models" is the one door.
     client = TestClient(create_app(str(tmp_path)))
     r = client.post(
-        "/providers/endpoint-models", json={"base_url": "http://127.0.0.1:9"}
+        "/connections/endpoints/models", json={"base_url": "http://127.0.0.1:9"}
     )
     assert r.status_code == 200  # probe failures are data, not server errors
     data = r.json()
@@ -86,7 +85,7 @@ def test_endpoint_models_probe_honest_on_unreachable(tmp_path):
 
 def test_endpoint_models_probe_rejects_empty_url(tmp_path):
     client = TestClient(create_app(str(tmp_path)))
-    r = client.post("/providers/endpoint-models", json={"base_url": "  "})
+    r = client.post("/connections/endpoints/models", json={"base_url": "  "})
     assert r.status_code == 400
 
 

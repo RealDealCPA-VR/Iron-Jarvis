@@ -179,7 +179,6 @@ import ChatPage from "@/app/chat/page";
 import { ConnectDoors } from "@/components/onboarding/ConnectDoors";
 import { TurnReceipt, routeWarning } from "@/components/chat/TurnReceipt";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
-import { ModelSwitcher } from "@/components/ModelSwitcher";
 
 type Row = Record<string, unknown>;
 
@@ -616,45 +615,14 @@ describe("approval card says the action in words (approval-card-tool-ids)", () =
   });
 });
 
-/* ======================================================= model menu panel */
-
-describe("title-bar model menu is opaque (carry-model-menu-opaque)", () => {
-  it("the open panel has an opaque background (or is portaled so its own blur works); rows and the connect link stay", async () => {
-    H.getResponses["/models"] = CATALOG_WITH_LABEL;
-    render(<ModelSwitcher />);
-    const trigger = await screen.findByRole("button", { name: /switch the active model/i });
-    const root = trigger.parentElement as HTMLElement;
-    fireEvent.click(trigger);
-    const heading = await screen.findByText("Active model");
-    let panel: HTMLElement | null = heading;
-    while (panel && panel.parentElement !== root && panel.parentElement !== document.body) {
-      panel = panel.parentElement;
-    }
-    expect(panel).not.toBeNull();
-    const bg = classes(panel!).filter((c) => /^bg-/.test(c));
-    const portaled = panel!.parentElement === document.body;
-    const opaque = bg.length > 0 && bg.every((c) => !c.includes("/"));
-    if (!portaled) {
-      expect(opaque).toBe(true);
-      expect(classes(panel!).some((c) => c.startsWith("backdrop-blur"))).toBe(false);
-    } else {
-      expect(opaque || classes(panel!).some((c) => c.startsWith("backdrop-blur"))).toBe(true);
-    }
-    // Everything the panel offered is still in it.
-    expect(within(panel!).getByTestId("ij-model-list")).toBeTruthy();
-    expect(within(panel!).getByText("All models")).toBeTruthy();
-    expect(within(panel!).getByText(/Connect another account/)).toBeTruthy();
-  });
-});
-
 /* ======================================================== source anchors */
 
 describe("source anchors", () => {
   const src = (rel: string) => readFileSync(path.join(__dirname, "..", rel), "utf8").replace(/\r\n/g, "\n");
 
-  it("the chat page passes the opt-in row layout to its ConnectDoors (the wizard does not)", () => {
+  // v1.439.0: the first-run wizard (the stacked doors' other mount) was removed.
+  it("the chat page passes the opt-in row layout to its ConnectDoors", () => {
     expect(src("app/chat/page.tsx")).toMatch(/<ConnectDoors[^>]*layout="row"/);
-    expect(src("components/FirstRunWizard.tsx")).not.toMatch(/<ConnectDoors[^>]*layout="row"/);
   });
 
   it("TurnReceipt and the chat page read provider names through providerDisplay", () => {

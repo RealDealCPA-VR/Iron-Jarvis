@@ -1,19 +1,16 @@
 /**
- * PREFLIGHT provider health (useProviderHealth + PreflightNote + ModelSwitcher
- * availability marks).
+ * PREFLIGHT provider health (useProviderHealth + PreflightNote). The title
+ * bar's ModelSwitcher and its availability marks were removed in v1.439.0
+ * (Wave 6, D6: not mounted since the calm redesign); their pins left with it.
  *
  * The incident behind all of this: a user typed a full request while their
  * default provider (fleet-custom) was unreachable; /health knew, but the app
- * only said so AFTER the turn failed. These tests guard the three preflight
- * pieces:
+ * only said so AFTER the turn failed. These tests guard the preflight pieces:
  *  - the hook: maps /health, ONE interval, no overlapping requests, and on a
  *    fetch error keeps the LAST-KNOWN map (stale beats empty — a daemon blip
  *    must not flash every provider "down") while flagging `stale`;
  *  - PreflightNote: silent unless availability is KNOWN false, amber when it
- *    is, softened when the knowledge itself is stale;
- *  - ModelSwitcher: offline providers are MARKED but never trapped (still
- *    selectable), and the trigger's amber dot appears only when the
- *    currently-SELECTED provider is offline.
+ *    is, softened when the knowledge itself is stale.
  */
 
 import { StrictMode } from "react";
@@ -51,17 +48,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { useProviderHealth } from "@/lib/useProviderHealth";
-import { DaemonProvider } from "@/lib/daemon";
 import { PreflightNote } from "@/components/chat/PreflightNote";
-import { ModelSwitcher } from "@/components/ModelSwitcher";
-
-// v1.230.0: the switcher reads /health from the app's ONE shared poll, so it is
-// rendered the way the layout mounts it — inside DaemonProvider.
-const switcher = () => (
-  <DaemonProvider>
-    <ModelSwitcher />
-  </DaemonProvider>
-);
 
 // ---- fixtures ---------------------------------------------------------------
 
@@ -75,31 +62,6 @@ const HEALTH = {
     { provider: "fleet-custom", available: false, class: "custom" },
   ],
 };
-
-const MODELS = {
-  models: [
-    { provider: "anthropic", model: "claude-sonnet-4-6", name: "Anthropic" },
-    { provider: "fleet-custom", model: "fleet-llama-70b", name: "Fleet box" },
-  ],
-};
-
-const ROUTING = {
-  enabled: false,
-  routing_model: "",
-  connected: [],
-  suggested: null,
-  tiers: {},
-};
-
-/** Route the mocked `get` like the daemon (ModelSwitcher hits all three). */
-function mockDaemon(health: typeof HEALTH = HEALTH) {
-  getMock.mockImplementation(async (path: unknown) => {
-    if (path === "/health") return health;
-    if (path === "/models") return MODELS;
-    if (path === "/routing") return ROUTING;
-    return {};
-  });
-}
 
 beforeEach(() => {
   getMock.mockReset();
@@ -307,86 +269,5 @@ describe("PreflightNote", () => {
     // A stale map is not certain knowledge — never promise the turn WILL fail.
     // v1.329.0 (K1): the sentence now starts with a capital, so match either.
     expect(note.textContent).not.toMatch(/this turn will fail/i);
-  });
-});
-
-// ---- ModelSwitcher availability marks ---------------------------------------
-
-describe("ModelSwitcher availability", () => {
-  async function openSwitcher() {
-    render(switcher());
-    const trigger = await screen.findByRole("button", {
-      name: /switch the active model/i,
-    });
-    fireEvent.click(trigger);
-    await screen.findByText("Active model");
-    return trigger;
-  }
-
-  it("marks an offline provider's option (struck label + '(offline)') but does NOT disable it", async () => {
-    mockDaemon();
-    await openSwitcher();
-
-    // Exactly one row carries the offline mark: fleet-custom's.
-    const marks = await screen.findAllByText(/\(offline\)/);
-    expect(marks).toHaveLength(1);
-    const offlineRow = marks[0].closest("button")!;
-    expect(offlineRow.textContent).toContain("fleet-llama-70b");
-    expect(offlineRow).not.toBeDisabled(); // never trap the user
-    const label = within(offlineRow).getByText("fleet-llama-70b");
-    expect(label.className).toContain("line-through");
-
-    // The online provider's row is unmarked. v1.359.0 (lane 9B, changed on
-    // purpose): an unlabelled Claude id reads in words ("Sonnet 4.6"), the
-    // raw id is the row's hover.
-    const onlineRow = screen.getByText("Sonnet 4.6").closest("button")!;
-    expect(onlineRow.textContent).not.toContain("(offline)");
-    expect(within(onlineRow).getByText("Sonnet 4.6").className).not.toContain(
-      "line-through",
-    );
-    expect(within(onlineRow).getByText("Sonnet 4.6")).toHaveAttribute("title", "claude-sonnet-4-6");
-
-    // Selecting the offline provider still goes through to PUT /settings.
-    fireEvent.click(offlineRow);
-    await waitFor(() =>
-      expect(putMock).toHaveBeenCalledWith("/settings", {
-        values: {
-          default_provider: "fleet-custom",
-          default_model: "fleet-llama-70b",
-        },
-      }),
-    );
-  });
-
-  it("shows the amber dot on the trigger when the SELECTED provider is offline", async () => {
-    mockDaemon(); // default_provider = fleet-custom, which /health says is down
-    render(switcher());
-    const dot = await screen.findByTestId("ij-model-offline-dot");
-    expect(dot.className).toContain("bg-amber-400");
-  });
-
-  it("shows NO amber dot when the selected provider is online — even with another provider down", async () => {
-    mockDaemon({
-      ...HEALTH,
-      default_provider: "anthropic",
-      default_model: "claude-sonnet-4-6",
-    });
-    render(switcher());
-    await screen.findByRole("button", { name: /switch the active model/i });
-    expect(screen.queryByTestId("ij-model-offline-dot")).toBeNull();
-  });
-
-  it("shows NO amber dot when the selected provider's availability is UNKNOWN (absent from /health)", async () => {
-    // Strict `=== false` in `selectedOffline`: a provider /health doesn't list
-    // (fresh endpoint, the "auto" sentinel, a race with the poll) is unknown,
-    // not offline — a truthiness check would raise a false alarm here.
-    mockDaemon({
-      ...HEALTH,
-      default_provider: "ollama",
-      default_model: "llama3.1",
-    });
-    render(switcher());
-    await screen.findByRole("button", { name: /switch the active model/i });
-    expect(screen.queryByTestId("ij-model-offline-dot")).toBeNull();
   });
 });

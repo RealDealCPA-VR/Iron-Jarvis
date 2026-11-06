@@ -6,7 +6,7 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import select
@@ -1054,7 +1054,7 @@ def register(app: FastAPI, d) -> None:
     async def get_project_world(project_id: str) -> dict[str, Any]:
         """One project's world: ``{project, members, team (full rows),
         thread_id (its round table — the most recent project-bound room — or
-        null; POST /world/room makes one), counts: {waiting, running,
+        null), counts: {waiting, running,
         queued, done_7d}, waiting: [{kind ask|blocked|held|review, id, key,
         title, agent, since, reason, link, session_id?|assignment_id?,
         waiting_on? (numbers, never arguments)}] oldest first, completed:
@@ -1078,56 +1078,3 @@ def register(app: FastAPI, d) -> None:
 
         data["coding_sessions"] = _coding_public(coding)
         return data
-
-    @app.post("/projects/{project_id}/world/room")
-    async def open_project_room(
-        project_id: str, body: dict | None = Body(default=None)
-    ) -> dict[str, Any]:
-        """The project's round table, made on first open. Body ``{}``.
-        IDEMPOTENT: an existing project room is returned as it is (200,
-        ``created: false``); otherwise one is made SEATING THE TEAM — team
-        order, each member with its roster role (``world.seat_role``) — bound
-        to the project (201, ``created: true``). Answers ``{thread_id,
-        thread: <the /agents/threads/{id} row>, created}``. 404 unknown
-        project; 400 archived project; 409 when there is no team to seat.
-        (``participants`` in the body overrides the team — a test/API door.)"""
-        from ...agents.threads import clean_participants, thread_view
-        from ...core.models import Project
-        from ...projects import world as _world
-
-        body = body if isinstance(body, dict) else {}
-
-        def _load():
-            with session_scope(d.platform.engine) as db:
-                row = db.get(Project, project_id)
-                if row is not None:
-                    db.expunge(row)
-                return row
-
-        project = await _asyncio.to_thread(_load)
-        if project is None:
-            raise HTTPException(status_code=404, detail="no such project")
-        if (project.status or "active") != "active":
-            raise HTTPException(
-                status_code=400,
-                detail=f"{project.name} is archived — unarchive it before opening its round table",
-            )
-        raw = body.get("participants")
-        try:
-            if raw is not None:
-                participants = clean_participants(raw)
-            else:
-                members = _world.decode_team(project.team_json)
-                seats = await _asyncio.to_thread(_world.team_seats, d.platform, members)
-                participants = clean_participants(seats) if seats else []
-            rec, created = await _asyncio.to_thread(
-                _world.ensure_room, d.platform, project, participants
-            )
-        except _world.NoTeamError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        return JSONResponse(
-            status_code=201 if created else 200,
-            content={"thread_id": rec.id, "thread": thread_view(rec), "created": created},
-        )

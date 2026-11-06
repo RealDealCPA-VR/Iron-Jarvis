@@ -41,6 +41,7 @@ from iron_jarvis.agents.threads import AgentThreads
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.memory import commit as _commit
 from iron_jarvis.providers.adapters.base import LLMResponse
+from tests._fakes.rooms import rooms
 
 _PANEL = [
     {"source": "builtin", "name": "planner", "role": "lead"},
@@ -89,7 +90,7 @@ def _client(tmp_path):
 
 
 def _seed_panel(client) -> str:
-    tid = client.post(
+    tid = rooms(client).post(
         "/agents/threads", json={"title": "Extension call", "participants": _PANEL}
     ).json()["id"]
     AgentThreads(client.app.state.platform.engine)._append(tid, _ROUND)
@@ -137,7 +138,7 @@ def test_both_remember_routes_call_the_shared_ladder(tmp_path, monkeypatch):
         == 200
     )
     assert (
-        client.post(
+        rooms(client).post(
             f"/agents/threads/{panel_id}/remember",
             json={"provider": "anthropic", "preview": False},
         ).status_code
@@ -179,7 +180,7 @@ def test_each_surface_passes_its_own_distill_prompt(tmp_path, monkeypatch):
     seen = _spy(monkeypatch)
 
     client.post(f"/chat/threads/{chat_id}/remember", json={"provider": "anthropic"})
-    client.post(
+    rooms(client).post(
         f"/agents/threads/{panel_id}/remember",
         json={"provider": "anthropic", "preview": False},
     )
@@ -216,7 +217,7 @@ def test_offline_both_surfaces_degrade_identically_and_say_so(tmp_path):
     chat = client.post(
         f"/chat/threads/{chat_id}/remember", json={"mode": "distill"}
     ).json()
-    panel = client.post(
+    panel = rooms(client).post(
         f"/agents/threads/{panel_id}/remember",
         json={"mode": "distill", "preview": False},
     ).json()

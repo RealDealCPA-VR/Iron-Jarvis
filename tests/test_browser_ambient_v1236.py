@@ -120,6 +120,7 @@ from iron_jarvis.daemon.chat_turn import (
 from iron_jarvis.daemon.schemas import ChatBody
 from iron_jarvis.tools.autoselect import AUTO_SAFE_TOOLS, select_auto_tools
 from iron_jarvis.tools.base import Reversibility, RiskClass, Tool, ToolResult
+from tests._fakes.rooms import rooms
 
 from ._fakes.browser_peer import BrowserPeer, ScriptedBrowser
 
@@ -951,7 +952,7 @@ def test_an_agent_run_and_the_round_table_are_told_nothing_about_the_browser(bri
     assert not any(BROWSER_HEADING in s for s in bridge.systems), "agent-runtime seam"
 
     bridge.systems.clear()
-    r = bridge.client.post(
+    r = rooms(bridge.client).post(
         "/agents/threads",
         json={
             "title": "panel",
@@ -962,7 +963,7 @@ def test_an_agent_run_and_the_round_table_are_told_nothing_about_the_browser(bri
         },
     )
     assert r.status_code == 200, r.text
-    say = bridge.client.post(
+    say = rooms(bridge.client).post(
         f"/agents/threads/{r.json()['id']}/say", json={"message": "what do you think?"}
     )
     assert say.status_code == 200, say.text
