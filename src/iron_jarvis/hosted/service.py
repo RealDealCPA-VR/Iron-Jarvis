@@ -1952,6 +1952,7 @@ class HostedService:
                     applied["mode"] = await live.driver.set_mode(mode)
                 except ControlRefused as exc:
                     raise Refused(str(exc)) from None
+                self._refresh_asks(live)
                 if getattr(live.driver, "restart_needed", False):
                     # v1.413.0: OpenCode's permission rules are its process's
                     # own environment: a new process takes them, before the
@@ -2326,7 +2327,8 @@ class HostedService:
         live.folder = row.folder or ""
         connection = JT.Connection()
         url = str(getattr(getattr(self.platform, "terminals", None), "mcp_url", "") or "")
-        if JT.wanted(live.caps) and url and JT.takes(row.harness):
+        took_before = JT.takes(row.harness)
+        if JT.wanted(live.caps) and url and took_before:
             token = self.tokens.mint(row.id, live.caps)
             connection = await asyncio.to_thread(
                 JT.connect, row.harness, url=url, token=token, session_dir=session_dir(self.home, row.id),
@@ -2398,6 +2400,12 @@ class HostedService:
             await self._stop_process(live, end_turn=False)
             said = exc.args[0] if exc.args else type(exc).__name__
             raise Refused(f"{W.label(row.harness)} did not start: {clip(said, 200)}") from None
+        if not took_before and JT.takes(row.harness) and JT.wanted(live.caps) and url:
+            # v1.441.0 (review of lane fix1): this start's handshake said the
+            # tool DOES take Iron Jarvis's tools (a newer Antigravity) — too
+            # late for this process, which got none: the next message starts
+            # it again with them, so a ticked box is never shown on for nothing.
+            live.restart = True
         pending = self._renames.pop(row.id, "")
         if pending:
             # v1.441.0 (review P4): a rename given while it was stopped.
@@ -2740,6 +2748,22 @@ class HostedService:
             note.answered(decision, actor)
         except Exception:  # noqa: BLE001
             log.debug("could not note a Build › Code answer for the metrics", exc_info=True)
+
+    def _refresh_asks(self, live: LiveSession) -> None:
+        """v1.441.0 (review of lane fix1): the mode moved while cards wait —
+        a card whose words name a mode (Claude Code's plan card: "Approve,
+        then ask first") is re-sent with the mode it will REALLY leave the
+        session in, so its words, Enter's refusal of Full access and the
+        mode applied are one fact. Never raises."""
+        driver = live.driver
+        for ask in list(live.asks.values()):
+            try:
+                ev = driver.refresh_ask(ask) if driver is not None else None
+            except Exception:  # noqa: BLE001 — a card's words are never worth a failure
+                log.debug("could not refresh a Code-view card", exc_info=True)
+                continue
+            if ev is not None:
+                self._emit(live, ev)
 
     def _ask(self, live: LiveSession, ask: Ask) -> None:
         live.asks[ask.id] = ask
@@ -3316,6 +3340,7 @@ class HostedService:
             except HarnessGone:
                 raise Refused("The session stopped before your answer reached it.", 409) from None
             driver.answered(ask, decision)
+            self._refresh_asks(live)
         if new_mode:
             await asyncio.to_thread(store.update, self.engine, sid, mode=new_mode)
         return {"ok": True, "request_id": ask.id, "decision": decision}

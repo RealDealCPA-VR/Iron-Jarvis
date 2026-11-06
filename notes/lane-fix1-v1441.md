@@ -122,3 +122,46 @@ Not red, by design:
 Real agy 1.5.2 through the real service (scratch home, stand-in model; the review's probes, run once and not committed):
 - A note while a command card is open: 409 with the words; Allow, then completed, with no error.
 - Multi-select: the card showed three choices with `multi: true`; the model saw "A1: Blue, Red".
+
+## Review (independent reviewer)
+
+Every builder claim was checked against the code, and the lane's pins were mutation-run. Re-measured independently:
+- claude 2.1.316 `initialize` in a scratch folder (scratch CLAUDE_CONFIG_DIR, signed out, no model call). A project's own `.claude/commands/status.md` is listed as `status` with no `builtin`; the 48 Claude Code rows all say `builtin: true`; `export` is not in the list, so P5's words do show once the list has been read.
+- Real agy 1.5.2 with a scratch USERPROFILE and the stand-in model (scratch test `scratchpad/fix1r/test_agy_race_review_final.py`, not committed):
+  - a note while a command card is open answers 409 in the new words, with no `code`; Allow then ends completed;
+  - **the race**: the note is WRITTEN before Iron Jarvis has read the card agy already raised (0 s and 1.5 s windows). agy refuses the note's prompt, the backstop says so, Allow ends the reply `completed`, and the note comes back `returned`. The next message completes too.
+  - Mutation: the backstop removed, then this live test goes red.
+- `/model sonnet-9` sent through to the real claude (signed out, stream-json, with a message uuid): `command_lifecycle` `started` arrives, then a `result`, in 0.6 s, so the turn ends and does not hang. Signed IN was not measured: running `/model` on the user's own login could write its settings.
+- The P2 "no alias" mutation was re-run: red in 19 s. The pin is bounded by its own 15 s wait and never hangs.
+
+Defects found and fixed, each pinned red first:
+
+1. **P1: the plan card's words disagreed with the mode Allow applied, and could hide Full access.**
+   - `then_mode` ("Approve, then ask first") was fixed when the card was raised, while the lane read the mode at the answer.
+   - Proved through the real service with the fake Claude Code (`IJ_FAKE_CLAUDE_MODES=1`): Ask first → Plan (the card says "then ask first") → Full access → Plan while the card waits. The card still said "then ask first", and Allow put the session in **Full access**. Lane fix2's Enter refusal (`thenMode == "full"`) did not apply either.
+   - Fix:
+     - `ClaudeDriver._plan_then()` is now the one rule the card is raised with.
+     - `ClaudeDriver.refresh_ask()` recomputes `then_mode` and `leaves_plan_to` from it.
+     - `HostedService._refresh_asks()` re-sends the card (same `request_id`; the page replaces it by id; the view's `pending` reads the new event) after a live mode change and after another card's answer.
+     - `Driver.refresh_ask` defaults to None for the other tools.
+   - Pins: `tests/test_build_app_fix1_review_v14410.py`, four plan-card cases:
+     - full→plan again, which names Full access;
+     - a chip moved off Plan;
+     - Plan→edits→Plan;
+     - Full access picked while the card waits;
+     - plus "no pick".
+   - Mutations: the re-send dropped, red; refresh never changing the card, red.
+   - Also: the builder's `test_approving_a_plan_never_puts_the_session_back_in_full_access` STARTS the process in Plan, so its card names Ask first, never Full access. Its docstring now says what it really tests; the running Full access case is pinned by mine and by the driver test.
+2. **A5: a newer Antigravity that says `mcpCapabilities.http`.**
+   - The decision to mint a connection is made BEFORE the handshake, so a box ticked earlier gave this process no tools. The chip then turned on and read "on" over a process with none, and nothing restarted it.
+   - Now `_start_process` sets `live.restart` when the handshake flipped "takes" from False to True while a box is wanted.
+   - An agy that says nothing (1.5.2, or an older one) is never restarted.
+   - Pin: parametrized test in the same file. Mutations: no restart, red; restart regardless of the flip, red.
+3. **P4: two renames while stopped.** Pinned only the newest name, told once. It was already right; mutation `setdefault` goes red.
+
+Still OPEN (not fixed, by design or out of scope):
+- `/model sonnet[1m]` resolves to the plain id, because catalog ids never carry `[1m]`. A 200K model then loses the `[1m]` without a word; a 1M model is fine.
+- Before a Claude Code session has run in a folder (e.g. after a restart), the start composer's `/` menu shows the terminal-only NOTE row for `status`/`export`… even when the user's own command has that name. A typed one is sent through correctly.
+- An older Claude Code that marks no `builtin` keeps its whole list (one folder's project commands included) under the bare key, so another folder's `/` menu can show them. This is the same as before the lane.
+- A rename made while stopped and then Open in terminal is told at the next Code-view start, and can overwrite a name given in the terminal meanwhile.
+- The Antigravity race backstop is pinned at driver level only (the live race test needs the agy binary and stays in scratch).

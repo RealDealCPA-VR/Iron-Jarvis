@@ -937,6 +937,40 @@ class ClaudeDriver(Driver):
         back = self.pre_plan_mode
         return back if back in MODE_LABELS and back != "plan" else ""
 
+    def _plan_then(self) -> tuple[str, str]:
+        """The plan card's ``(then_mode, leaves_plan_to)`` for the mode the
+        driver is in NOW ("" = not known / none) — the ONE rule the card is
+        raised with and (v1.441.0 review) re-sent with when the mode moves
+        while it waits, so its words and :meth:`plan_exit_mode` agree."""
+        then = self.pre_plan_mode if self.mode == "plan" else self.mode
+        if then not in MODE_LABELS or then == "plan":
+            return "", ""
+        # v1.439.0 (review): Allow once leaves Plan for it, so the driver
+        # and the session row follow (``answered``).
+        return then, (then if self.mode == "plan" else "")
+
+    def refresh_ask(self, ask: Ask) -> "dict[str, Any] | None":
+        """v1.441.0 (review of lane fix1): the mode moved while ``ask``
+        waited — the plan card's new event when its words change (the
+        caller re-sends it; the page replaces the card by its id), else
+        None. Its ``leaves_plan_to`` follows too."""
+        if ask.tool != "ExitPlanMode" or ask.kind != "approval":
+            return None
+        then, leaves = self._plan_then()
+        if leaves:
+            ask.data["leaves_plan_to"] = leaves
+        else:
+            ask.data.pop("leaves_plan_to", None)
+        if (ask.event.get("then_mode") or "") == then:
+            return None
+        ev = dict(ask.event)
+        if then:
+            ev["then_mode"] = then
+        else:
+            ev.pop("then_mode", None)
+        ask.event = ev
+        return ev
+
     def prepare_answer(self, ask: Ask, decision: str, message: str, answers: Any) -> dict[str, Any]:
         """The ``control_response`` for the user's answer — or AskRefused,
         before anything is sent."""
@@ -1178,13 +1212,9 @@ class ClaudeDriver(Driver):
             # v1.439.0: the mode each allow leaves the session in, so the
             # card names it ("Approve, then ask first" / "Approve and edit
             # freely"); a key is absent when it is not known.
-            then = self.pre_plan_mode if self.mode == "plan" else self.mode
-            if then in MODE_LABELS and then != "plan":
+            then, leaves_plan_to = self._plan_then()
+            if then:
                 ev["then_mode"] = then
-                if self.mode == "plan":
-                    # v1.439.0 (review): Allow once leaves Plan for it, so
-                    # the driver and the session row follow (``answered``).
-                    leaves_plan_to = then
             if plan_sets:
                 ev["sets_mode"] = plan_sets
         if not sugg:

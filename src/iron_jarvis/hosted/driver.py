@@ -204,6 +204,12 @@ class Driver:
     async def set_model(self, model: str) -> str:  # pragma: no cover
         raise NotImplementedError
 
+    def refresh_ask(self, ask: Ask) -> "dict[str, Any] | None":
+        """v1.441.0: the mode moved while ``ask`` waited — its card's new
+        event when the card's words change (the service re-sends it), else
+        None. Only Claude Code's plan card names a mode."""
+        return None
+
     async def rename(self, title: str) -> None:
         """v1.439.0: the user renamed this session — tell the tool, so its own
         list (``claude --resume``, ``codex resume``) shows the same name. Best

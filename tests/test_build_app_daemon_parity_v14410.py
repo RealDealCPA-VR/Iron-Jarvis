@@ -107,8 +107,11 @@ async def test_a_mode_picked_while_the_plan_card_waits_wins(app, work, tmp_path,
 
 
 async def test_approving_a_plan_never_puts_the_session_back_in_full_access(app, work, tmp_path, monkeypatch):
-    """Full access -> Plan (the card names Full access as where it goes back)
-    -> the user picks Ask first while the card waits -> Allow: Ask first."""
+    """Created in Full access, moved to Plan before its first message -> the
+    user picks Ask first while the card waits -> Allow: Ask first. (Review:
+    the process STARTS in Plan here, so the card names Ask first, not Full
+    access; the running Full access -> Plan case is pinned through the driver
+    below and in test_build_app_plan_card_label_v14410.)"""
     assert await _plan_card_then(app, work, tmp_path, monkeypatch, start="full", picked="ask") == "ask"
 
 
