@@ -82,7 +82,9 @@ import {
   enterAllowsCodeAsk,
   foldConversation,
   type CodeEvent,
+  type CodingTool,
 } from "@/lib/buildApp";
+import { nextMode } from "@/lib/buildAppHistory";
 
 type Raw = Record<string, unknown>;
 const FIX = join(process.cwd(), "__tests__", "fixtures", "build-code-integration-v1441-0.json");
@@ -215,5 +217,36 @@ describe("I1: a re-sent plan card replaces the old one by its id", () => {
     const answers = H.posts.filter((p) => p.path.endsWith("/answer"));
     expect(answers).toHaveLength(1);
     expect((answers[0].body as { decision?: string }).decision).toBe("allow");
+  });
+});
+
+/* ========================================== I4. Shift+Tab and agent modes */
+
+describe("I4: Shift+Tab never steps into an OpenCode agent mode", () => {
+  const opencode = {
+    id: "opencode",
+    label: "OpenCode",
+    modes: [
+      { id: "ask", label: "Ask first", dangerous: false },
+      { id: "edits", label: "Accept edits", dangerous: false },
+      { id: "plan", label: "Plan", dangerous: false },
+      // lane g3: an agent mode runs as Ask first plus the agent's OWN rules,
+      // which may allow everything — Full access without its two presses.
+      { id: "agent:yolo", label: "yolo (agent)", dangerous: false },
+      { id: "agent:review", label: "review (agent)", dangerous: false },
+      { id: "full", label: "Full access", dangerous: true },
+    ],
+  } as unknown as CodingTool;
+
+  it("from the last ordinary mode it goes back to the first, past every agent", () => {
+    expect(nextMode(opencode, "ask")).toBe("edits");
+    expect(nextMode(opencode, "edits")).toBe("plan");
+    expect(nextMode(opencode, "plan")).toBe("ask");
+  });
+
+  it("from an agent mode (picked in the menu) it steps to an ordinary mode, never another agent", () => {
+    expect(nextMode(opencode, "agent:yolo")).toBe("ask");
+    expect(nextMode(opencode, "agent:review")).toBe("ask");
+    expect(nextMode(opencode, "full")).toBe("ask");
   });
 });

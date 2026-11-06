@@ -230,9 +230,14 @@ export function commandHints(raw: unknown): Record<string, string> {
 // ── Shift+Tab (C4.8) ────────────────────────────────────────────────────────
 
 /** The next ordinary mode after `current` (Full access is never stepped
- *  into; from Full access the first ordinary mode). null = nothing to step. */
+ *  into; from Full access the first ordinary mode). null = nothing to step.
+ *  v1.441.0 (integration I4): an OpenCode agent mode (`agent:<name>`) is
+ *  never stepped into either — it runs as Ask first PLUS that agent's own
+ *  rules, which may allow everything, so it is a menu pick, never a key. */
 export function nextMode(tool: CodingTool | null | undefined, current: string): string | null {
-  const ordinary = (tool?.modes ?? []).filter((m) => !m.dangerous && !isFullAccess(m.id, tool));
+  const ordinary = (tool?.modes ?? []).filter(
+    (m) => !m.dangerous && !isFullAccess(m.id, tool) && !m.id.startsWith("agent:"),
+  );
   if (ordinary.length === 0) return null;
   const i = ordinary.findIndex((m) => m.id === current);
   const next = ordinary[(i + 1) % ordinary.length];
