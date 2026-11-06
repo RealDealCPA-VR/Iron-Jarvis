@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from . import schema
+from . import setup_words as _W
 
 #: Words dropped from a PHRASE (never from the message): a phrase is its
 #: content words, so "Keep this PC awake" matches "keep my PC awake".
@@ -261,6 +262,15 @@ _EXTRA_REFERENCES: tuple[re.Pattern[str], ...] = tuple(
         r"\b(?:from|on)\s+(?:my\s+)?(?:laptop|other\s+pc|another\s+pc|other\s+computer|phone)\b"
         r"[^.?!\n]{0,40}?\b(?:same|my|home|local)\s+network\b",
     )
+) + (
+    # v1.442.0 (chat-first plan Wave 7, group A): Iron Jarvis's OWN backup
+    # ("Schedule a weekly backup of my settings to my OneDrive folder") — its
+    # "Backup copy folder" is the setting that sends it there; and a folder
+    # WATCHED ("Watch my Downloads folder and file new PDFs…") needs "Folder
+    # watchers (sentinels)" turned on. One definition each
+    # (settings.setup_words); both linear.
+    _W.JARVIS_BACKUP,
+    _W.WATCH_FOLDER,
 )
 
 #: Settings-shaped words that have NO row of their own (a per-chat switch, a

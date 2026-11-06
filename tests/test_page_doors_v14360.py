@@ -130,6 +130,14 @@ DOOR_ROWS: list[tuple[str, str]] = [
     ("which model should I download", "local_model"),
     ("I want an offline model I can download", "local_model"),
     ("pull the qwen coder model", "local_model"),
+    # v1.442.0 (chat-first plan Wave 7, group A; tests/test_wave7_gaps_v14420.py
+    # pins each against the code that makes its line true).
+    ("Connect my Gmail and summarize my latest emails every morning at 8.", "gmail_setup"),
+    ("set up gmail for me", "gmail_setup"),
+    ("Set up Slack so you can message me when a long job finishes.", "slack_setup"),
+    ("connect Slack for my notifications", "slack_setup"),
+    ("Create a workflow that drafts a reply to every new email from a client.", "email_rule_inbox"),
+    ("whenever a new email comes in from a client, start an intake session", "email_rule_inbox"),
 ]
 
 #: (sentence, the thing it asks for that Iron Jarvis does not offer)
@@ -150,6 +158,16 @@ LINE_ROWS: list[tuple[str, str]] = [
     ("make full access the default for this folder", "full_access_default"),
     ("set the folder default to Don't ask", "full_access_default"),
     ("always start sessions in this repo with full access", "full_access_default"),
+    # v1.442.0 (Wave 7 group A).
+    ("Make Build \u203a Code use Codex on my work account in Full access for this repo.", "full_access_default"),
+    ("Schedule a weekly backup of my settings to my OneDrive folder.", "jarvis_backup"),
+    ("Back up everything to my external drive automatically.", "jarvis_backup"),
+    ("Watch my Downloads folder and file new PDFs into the right client folder.", "watcher_suggests"),
+    ("Set a monthly spending limit for my builder agent.", "builtin_agent_limit"),
+    ("Turn on voice so I can talk to you.", "voice_press"),
+    ("can I talk to you out loud instead of typing?", "voice_press"),
+    ("Set up a webhook so Zapier can start a task.", "internet_calls_in"),
+    ("let IFTTT trigger a run when I get home", "internet_calls_in"),
 ]
 
 #: Everyday sentences that must name NOTHING (no door, no line).
@@ -206,6 +224,25 @@ NEAR_MISSES: list[str] = [
     "the slack in the schedule",
     "pi day is coming",
     "Claude accounts for most of the cost",
+    # v1.442.0 (Wave 7 group A).
+    "connect my Gmail to Outlook on my phone",
+    "add a Gmail filter for the newsletters",
+    "the Slack channel was noisy today",
+    "message me on Slack when the export is done",
+    "reply to every new email in my inbox now",
+    "we need a backup plan for the meeting",
+    "make a backup of the report to my USB drive",
+    "watch the Downloads movie",
+    "monitor my desktop usage",
+    "the builder agent's spending report",
+    "set a monthly budget for the house builder",
+    "talk to you tomorrow",
+    "the voice of the letter should be warmer",
+    "use my voice memo app",
+    "Zapier pricing",
+    "is Zapier better than IFTTT?",
+    "send my events to Zapier with a webhook",
+    "give Sam full access to this repo",
 ]
 
 

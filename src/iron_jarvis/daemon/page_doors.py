@@ -44,6 +44,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from ..connectors.app_names import ASKS_TO_MESSAGE_ME
+from ..settings import setup_words as W
 from .doors import _APPS_FIX_HREF, _BROWSER_FIX_HREF, MAX_DOORS, collect_doors
 
 #: How much of the user's message is read. A request names its step near
@@ -435,13 +437,65 @@ def _google_setup(t: str) -> bool:
     return any(_GOOGLE.search(s) and _GOOGLE_SETUP.search(s) for s in _sentences(t))
 
 
+#: v1.442.0 (chat-first plan Wave 7, group A): Slack SET UP as the place Jarvis
+#: messages the user ("Set up Slack so you can message me when a long job
+#: finishes") — a notification destination, whose Slack app the user makes on
+#: Slack's site. A setup verb on Slack AND the destination's own words; never
+#: "connect my Slack" alone (the Directory's app, its own Connect door) and
+#: never Slack already set up ("message me on Slack when it's done").
+_SET_UP_SLACK = re.compile(
+    r"\b(?:set\s*up|setup|connect|add|hook\s+up|link|configure|enable|turn\s+on)\s+(?:(?:my|the|a|an|our)\s+)?"
+    r"slack\b",
+    re.IGNORECASE,
+)
+_DESTINATION_WORDS = re.compile(r"\b(?:notifications?|alerts?|destinations?)\b", re.IGNORECASE)
+
+
 def _slack_setup(t: str) -> bool:
-    return any(_SLACK.search(s) and _SLACK_SETUP.search(s) for s in _sentences(t))
+    for s in _sentences(t):
+        if not _SLACK.search(s):
+            continue
+        if _SLACK_SETUP.search(s):
+            return True
+        if _SET_UP_SLACK.search(s) and (ASKS_TO_MESSAGE_ME.search(s) or _DESTINATION_WORDS.search(s)):
+            return True
+    return False
+
+
+#: v1.442.0 (Wave 7): connecting GMAIL ("Connect my Gmail and summarize my
+#: latest emails…") — its card starts only after the one-time Google developer
+#: setup, so the reply names that step and the card. An acting verb on Gmail;
+#: never the user's own mail program ("connect my Gmail to Outlook on my
+#: phone"), never "google it".
+_GMAIL_CONNECT = re.compile(
+    r"\b(?:connect|set\s*up|setup|add|link|hook\s+up|turn\s+on|enable)\s+(?:(?:my|the|a|our|your)\s+)?"
+    r"g-?mail\b(?!\s+(?:filters?|labels?|signatures?|forwarding|rules?|vacation|folders?)\b)"
+    r"(?![^.!?\n]{0,40}?\b(?:to|on|with)\s+(?:my|the|her|his|our|a)\s+(?:(?:new|old|work|home|other)\s+)?"
+    r"(?:phone|iphone|android|ipad|tablet|mac|macbook|laptop|outlook|apple\s+mail|thunderbird)\b)",
+    re.IGNORECASE,
+)
+
+
+def _gmail_setup(t: str) -> bool:
+    return _GMAIL_CONNECT.search(t) is not None
+
+
+#: v1.442.0 (Wave 7): a coding VIEW told to work in Full access FOR a folder
+#: ("Make Build › Code use Codex on my work account in Full access for this
+#: repo") is a folder default by another name.
+_FULL_FOR_A_FOLDER = re.compile(
+    r"\b(?:make|set|have|let|configure)\b" + _GAP + r"\b(?:in|with|on)\s+" + _FULL + r"\b" + _GAP
+    + r"\b(?:for|in)\s+(?:this|the|my|that|our)\s+(?:repo|repository|folder|project|directory)\b",
+    re.IGNORECASE,
+)
+_CODING_WORDS = re.compile(r"\b(?:build|code|coding|sessions?|codex|claude\s+code)\b", re.IGNORECASE)
 
 
 def _full_default(t: str) -> bool:
     for s in _sentences(t):
         if _FOLDERISH.search(s) and not _NOT_A_GRANT.search(s) and any(r.search(s) for r in _FULL_DEFAULT_RULES):
+            return True
+        if _FULL_FOR_A_FOLDER.search(s) and _CODING_WORDS.search(s) and not _NOT_A_GRANT.search(s):
             return True
     return False
 
@@ -548,12 +602,40 @@ STEPS: tuple[PageStep, ...] = (
         f"card in {DIRECTORY_PLACE} links its own steps; say so plainly and point there.",
     ),
     PageStep(
+        # v1.442.0 (chat-first plan Wave 7, group A): CONNECTING Gmail. Its
+        # card (connectors.catalog, connect_via "mcp", `needs` the Google
+        # developer setup) starts only once that setup is done; app_connect
+        # can save it before, and then says "did not start" (pinned).
+        "gmail_setup", _APPS_FIX_HREF, "Open Gmail's card in Settings",
+        f"Gmail is connected from its card in {DIRECTORY_PLACE}, and it starts only after a one-time Google "
+        "developer setup the user makes in their own Google account, in their browser (the card's Docs link "
+        "has the steps); Iron Jarvis cannot make that setup for them. app_connect, when it is offered in this "
+        "reply, can save Gmail before that, but Gmail does not start and its tools are not in the chat until "
+        "the setup is done. If Gmail is already connected, none of this is needed. Say so plainly and point "
+        "there.",
+    ),
+    PageStep(
         "slack_setup", NOTIFICATIONS_HREF, "Set up Slack in Settings",
         "A Slack app (its bot and app tokens, the app manifest, the user's member ID) is made by the user on "
         "Slack's own website, signed in as themselves; Iron Jarvis cannot make it for them. Settings › "
         "Connections › Notifications has the Slack form, a manifest to copy and the steps (for Jarvis to "
         f"message the user there); the Slack card in {DIRECTORY_PLACE}, for reading and posting in their "
         "channels, takes the bot token of such an app too. Say so plainly and point there.",
+    ),
+    PageStep(
+        # v1.442.0 (chat-first plan Wave 7, group A): a rule on EVERY NEW EMAIL.
+        # comm.inbound refuses a sender the destination's allowlist does not
+        # hold before any rule runs (fail-closed), comm.base.supports_inbound
+        # needs the reading server, and channel_toggle refuses two-way with an
+        # empty list — the list itself is set on the Notifications page only.
+        "email_rule_inbox", NOTIFICATIONS_HREF, "Open Notifications in Settings",
+        "A rule on new emails (reflex_create, when it is offered) hears only mail that reaches an email "
+        "destination of Iron Jarvis's with two-way listening on, and only from senders on that destination's "
+        "Allowed senders list (an empty list lets nobody in). So the inbox the clients write to must be that "
+        "destination's, its mail server for reading must be set (channel_connect's imap_host), and each "
+        "client's address must be on its Allowed senders list, which is set on the destination in Settings › "
+        "Connections › Notifications: Iron Jarvis cannot fill that list from chat. Say so plainly and point "
+        "there.",
     ),
     PageStep(
         "browser_addon", _BROWSER_FIX_HREF, "Set up the browser add-on",
@@ -592,7 +674,9 @@ _STEP_RULES: dict[str, Callable[[str], bool]] = {
     ),
     "signin_opencode": _any(_cli_rules(_OPENCODE)),
     "google_setup": _google_setup,
+    "gmail_setup": _gmail_setup,
     "slack_setup": _slack_setup,
+    "email_rule_inbox": W.every_new_email,
     "browser_addon": _any(_BROWSER_RULES),
     "local_model": _any(_LOCAL_MODEL_RULES),
 }
@@ -633,12 +717,74 @@ NOT_OFFERED: tuple[NotOffered, ...] = (
         "coding session, so a new session never starts in them. Any other approval level or mode, Auto "
         "included, can be a folder's default. Say so plainly.",
     ),
+    # v1.442.0 (chat-first plan Wave 7, group A): what the plan's 30 setup
+    # requests asked for in a way Iron Jarvis does not do it. Each line is
+    # pinned to the code that makes it true (tests/test_wave7_gaps_v14420.py).
+    NotOffered(
+        # daemon/app.py's auto-backup loop: IRONJARVIS_AUTO_BACKUP_HOURS
+        # (default 24) and _KEEP (default 7), an environment setting, never
+        # one of Iron Jarvis's settings; settings/schema has the copy folder.
+        "jarvis_backup",
+        "Iron Jarvis backs itself up by itself once a day (every 24 hours) and keeps the newest 7 backups; "
+        "how often is not a setting in Iron Jarvis, and a schedule does not change it (a schedule runs a task, "
+        "it does not make a backup). What can be set, with config_set when it is offered in this reply: "
+        "\"Backup copy folder\", a folder every backup is also copied to (another drive, or a synced folder on "
+        "this PC such as the OneDrive folder), and \"Copy media with backups\". A backup can also be made at "
+        "any time with Back up now in Settings › System › Maintenance. Say so plainly.",
+    ),
+    NotOffered(
+        # sentinels/service._propose → motivation/engine.add_backlog (never
+        # spawns a session); the Sentinels page: "Each suggestion waits in
+        # Autonomy → Proposals for your approval".
+        "watcher_suggests",
+        "A folder watcher (sentinel_add, when it is offered in this reply) only notices new or changed files: "
+        "each time, it leaves one suggestion, carrying the task it was given, in the Proposals list on the "
+        "Autonomy page, and nothing runs until the user approves it there. Watchers are off until the setting "
+        "\"Folder watchers (sentinels)\" is turned on. So Iron Jarvis cannot file new files by itself the "
+        "moment they arrive: the filing runs when the user approves a suggestion, or right now in this chat. "
+        "Say so plainly.",
+    ),
+    NotOffered(
+        # agents/allowance reads DynamicAgentRecord (agents the user made);
+        # agent_update refuses a built-in agent (records_projects.resolve_agent).
+        "builtin_agent_limit",
+        "Iron Jarvis's own agents (the builder, reviewer, researcher, planner and the others it comes with) "
+        "have no monthly limit of their own; only an agent the user made can have one. Offer to make the "
+        "user's own agent that works like it, with a monthly dollar or token limit (agent_create, when it is "
+        "offered in this reply), and to use that agent for the work. Say so plainly.",
+    ),
+    NotOffered(
+        # The chat page's own words: the composer's "Dictate your message"
+        # button and the ⋯ menu's "Voice chat" row.
+        "voice_press",
+        "Talking to Jarvis is a press on the chat page, not a setting, and Iron Jarvis cannot press it for the "
+        "user: the microphone button in the message box dictates one message into the box, and \"Voice chat\" "
+        "in the ⋯ menu at the top of the chat listens hands-free, sends what the user says when they pause and "
+        "reads each reply aloud. Reading replies aloud on its own is the setting \"Read replies aloud\". Say so "
+        "plainly.",
+    ),
+    NotOffered(
+        # daemon/auth: /webhooks/<slug> is not token-exempt; desktop/main.js
+        # binds 127.0.0.1 unless lan_access (private addresses only).
+        "internet_calls_in",
+        "A web service on the internet (Zapier, IFTTT, Make and the like) cannot reach Iron Jarvis: it answers "
+        "only on this PC (and, with \"Let other computers on my network reach this Iron Jarvis\" on, on the "
+        "user's own network), and its incoming webhooks also need this PC's private access token, which must "
+        "never be given to an outside service. So such a service cannot start a task here. The other way "
+        "works: an outgoing webhook (webhook_add with direction outbound) sends Iron Jarvis's events to a web "
+        "address, such as a Zapier hook, when the user asks for that. Say so plainly.",
+    ),
 )
 
 _NOT_OFFERED_RULES: dict[str, Callable[[str], bool]] = {
     "desktop_control": _any(_DESKTOP_RULES),
     "another_computer": _any(_ELSEWHERE_RULES),
     "full_access_default": _full_default,
+    "jarvis_backup": W.jarvis_backup,
+    "watcher_suggests": W.watch_and_act,
+    "builtin_agent_limit": W.builtin_agent_limit,
+    "voice_press": W.asks_for_voice,
+    "internet_calls_in": W.internet_calls_in,
 }
 
 #: Every compiled pattern over the user's words (the linear-time pin reads it).
@@ -646,6 +792,8 @@ ALL_PATTERNS: tuple[re.Pattern[str], ...] = (
     *_ACCOUNT_RULES, *_M365_RULES, _MS_VENDOR, _MS_APPROVAL, _ENTRA, _GOOGLE, _GOOGLE_SETUP, _GOOGLE_LITERAL,
     _SLACK, _SLACK_SETUP, *_BROWSER_RULES, *_LOCAL_MODEL_RULES, *_DESKTOP_RULES, *_ELSEWHERE_RULES,
     *_FULL_DEFAULT_RULES, _FOLDERISH, _NOT_A_GRANT, _SENTENCE,
+    _SET_UP_SLACK, _DESTINATION_WORDS, _GMAIL_CONNECT, _FULL_FOR_A_FOLDER, _CODING_WORDS, ASKS_TO_MESSAGE_ME,
+    *W.ALL_PATTERNS,
     *_cli_rules(_CLAUDE, bare="claude"), *_cli_rules(_CODEX), *_cli_rules(_GROK), *_cli_rules(_OPENCODE),
 )
 

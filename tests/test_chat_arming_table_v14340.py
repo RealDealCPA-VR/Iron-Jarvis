@@ -153,7 +153,9 @@ RECORD_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
     ("add a goal to file the Smith return by April 15", ("goal_add",), (GO,)),
     ("add a sentinel that watches https://irs.gov for changes", ("sentinel_add",), (SE, S)),
     ("add a webhook for new Stripe payments", ("webhook_add",), (WH, AP)),
-    ("when a client email arrives, start an intake session", ("reflex_create",), (RE,)),
+    # v1.442.0 (Wave 7, moved on purpose): a rule on new EMAIL is heard only
+    # through an email destination with two-way on, so its tools come too.
+    ("when a client email arrives, start an intake session", ("reflex_create",), (RE, CH)),
     ("add a remote agent called hermes at http://192.168.1.5:9000", (), ()),
     ("save this as a skill called month-end close", (), ()),
     ("forget that preference about short answers", (), (S,)),
@@ -181,7 +183,7 @@ RECORD_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
     ("turn off the reflex rule for client emails", ("reflex_update",), (RE,)),
     ("unarchive my last chat", (), ()),
     # arm2.py
-    ("whenever a new email comes in from a client, start an intake session", ("reflex_create",), (RE,)),
+    ("whenever a new email comes in from a client, start an intake session", ("reflex_create",), (RE, CH)),
     ("make a rule: when a webhook fires, run the triage workflow", ("reflex_create",), (RE, WH, WF)),
     ("every Monday at 9 send me a summary of last week's sessions", ("schedule_create",), (SC,)),
     ("remind me every morning at 7 to check the bank feeds", ("schedule_create",), (SC,)),
@@ -237,24 +239,30 @@ RECORD_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
     ("add a sentinel that watches irs.gov", ("sentinel_add",), (SE, S)),
     (r"create a watcher for D:\Downloads", ("sentinel_add",), (SE, S)),
     ("add a webhook for when a session finishes", ("webhook_add",), (WH,)),
-    ("every time a client email arrives, start an intake session", ("reflex_create",), (RE,)),
-    ("whenever a new email comes in, start an intake session", ("reflex_create",), (RE,)),
+    ("every time a client email arrives, start an intake session", ("reflex_create",), (RE, CH)),
+    ("whenever a new email comes in, start an intake session", ("reflex_create",), (RE, CH)),
 ]
 
 # ---------------------------------------------------------------------------
 # The measured setup scenarios (ij-review-scenarios/measure.py, variants.py).
 # ---------------------------------------------------------------------------
 SETUP_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
+    # v1.442.0 (Wave 7 group A, moved on purpose; tests/test_wave7_gaps_v14420.py
+    # pins each): "send it to my phone" offers the destination tools; Slack
+    # as where Jarvis messages the user is a destination, never the Slack app;
+    # Iron Jarvis's own backup is its "Backup copy folder" setting, never a
+    # schedule or the OneDrive app; a web service cannot call in, so no webhook
+    # tool is offered as that way in.
     ("Connect my Gmail and summarize my latest emails every morning at 8 and send it to my phone.",
-     ("schedule_create", "app_connect"), (SC, AP, S, CH)),
-    ("Set up Slack so you can message me when a long job finishes.", ("channel_connect",), (CH, S, AP)),
-    ("Add my local Ollama model and make it my default.", SET, (S,)),
+     ("schedule_create", "app_connect", "channel_connect"), (SC, AP, S, CH)),
+    ("Set up Slack so you can message me when a long job finishes.", ("channel_connect",), (CH, S)),
+    ("Add my local Ollama model and make it my default.", SET + ("model_server_add", "model_server_default"), (S,)),
     ("Add a second Claude account and use it when the first hits its limit.", (), (S,)),
     ("Keep this chat on my PC only.", (), (S,)),
     (r"Make a project for the Johnson audit in D:\Clients\Johnson and remember that I want workpapers in Excel.",
      (), ()),
     ("Create an agent named reviewer that only reads files and uses GPT.", (), ()),
-    ("Schedule a weekly backup of my settings to my OneDrive folder.", ("schedule_create",), (SC, S, AP)),
+    ("Schedule a weekly backup of my settings to my OneDrive folder.", SET, (S,)),
     ('Turn on the night shift and queue "update the README" for tonight.', READ, (S,)),
     ("Connect GitHub and open a pull request for my branch.", ("app_connect",), (AP, S)),
     ("Pair my Edge browser so you can fill forms.", (), (S,)),
@@ -263,23 +271,24 @@ SETUP_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
     ("Add the QuickBooks MCP server I use in Claude Desktop.", (), (AP, S)),
     ("Stop asking me before you run tests.", SET, (S,)),
     ("Make the app start with Windows and keep my PC awake while you work.", SET, (S,)),
-    ("Watch my Downloads folder and file new PDFs into the right client folder.", ("sentinel_add",), (SE,)),
-    ("Create a workflow that drafts a reply to every new email from a client.", (), (WF, RE)),
+    ("Watch my Downloads folder and file new PDFs into the right client folder.", ("sentinel_add",) + SET, (SE, S)),
+    ("Create a workflow that drafts a reply to every new email from a client.",
+     ("reflex_create", "channel_connect"), (WF, RE, CH)),
     ("Set a monthly spending limit for my builder agent.", (), (S,)),
     ("Remember that I prefer short answers.", ("remember_preference",), (S,)),
     ("Use Notion as your long-term memory.", (), (S, AP)),
     ("Read my screen and click through this installer.", (), ()),
     ("Turn on voice so I can talk to you.", READ, (S,)),
-    ("Make Build \u203a Code use Codex on my work account in Full access for this repo.", (), (S,)),
+    ("Make Build \u203a Code use Codex on my work account in Full access for this repo.", ("build_defaults_set",), (S,)),
     ("Share my profile with Claude Code in Build.", SET, (S,)),
-    ("Set up a webhook so Zapier can start a task.", ("webhook_add",), (WH, RE)),
+    ("Set up a webhook so Zapier can start a task.", (), ()),
     ("Back up everything to my external drive automatically.", SET, (S,)),
     ("Show me what you changed today and undo the last file edit.", (), (UN,)),
     ("Make my coding sessions use a team: Codex writes, Claude reviews.", (), (S,)),
     ("Switch to the stable update channel.", SET, (S,)),
     ("Add my OpenAI API key.", ("config_secret",), (S,)),
     ("From now on keep answers short.", ("remember_preference",), (S,)),
-    ("When a client email arrives, start an intake session.", ("reflex_create",), (RE,)),
+    ("When a client email arrives, start an intake session.", ("reflex_create",), (RE, CH)),
     ("Turn on the emergency stop.", SET, (S,)),
     ("Make Gemini my default model.", SET, (S,)),
     # variants.py
@@ -298,7 +307,7 @@ SETUP_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
     ("Switch approvals to Accept edits.", SET, (S,)),
     ("Read replies aloud.", SET, (S,)),
     ("Use the stable update channel.", SET, (S,)),
-    ("Set up a webhook and a rule so Zapier can start a task.", ("webhook_add", "reflex_create"), (WH, RE)),
+    ("Set up a webhook and a rule so Zapier can start a task.", ("reflex_create",), (RE,)),
     ("When a webhook from zapier happens, start a session.", ("reflex_create",), (RE, WH)),
     ("Create a watcher on my Downloads folder.", ("sentinel_add",), (SE, S)),
     (r"Create a sentinel for D:\Downloads that files PDFs.", ("sentinel_add",), (SE, S)),

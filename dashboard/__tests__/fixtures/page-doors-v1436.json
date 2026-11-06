@@ -97,10 +97,24 @@
       },
       {
         "door": {
+          "href": "/settings?section=connections-apps",
+          "label": "Open Gmail's card in Settings"
+        },
+        "id": "gmail_setup"
+      },
+      {
+        "door": {
           "href": "/channels",
           "label": "Set up Slack in Settings"
         },
         "id": "slack_setup"
+      },
+      {
+        "door": {
+          "href": "/channels",
+          "label": "Open Notifications in Settings"
+        },
+        "id": "email_rule_inbox"
       },
       {
         "door": {

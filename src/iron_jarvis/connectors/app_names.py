@@ -297,6 +297,89 @@ _NOT_THE_APP: dict[str, str] = {
     "stripe": r"(?<![Aa] )\bstripe\b(?!\s+(?:on|of|across|down|along|pattern|through)\b)",
 }
 
+#: v1.442.0 (chat-first plan Wave 7, group A): two readings of an app's name
+#: that are NOT the app, measured on the plan's 30 setup requests.
+#:
+#: * A drive written as the FOLDER something is backed up, copied or saved to
+#:   ("…a weekly backup of my settings to my OneDrive folder", "save it to my
+#:   Dropbox folder") is the synced folder on this PC — a path the file tools
+#:   and the "Backup copy folder" setting take — never the app: it armed
+#:   ``app_connect`` and put "Connect OneDrive in Settings" under the reply.
+#:   "share the dropbox folder with Ann" (sharing is the app's) is untouched.
+#: * Slack as the place Jarvis MESSAGES THE USER ("set up Slack so you can
+#:   message me…") is a notification destination (Settings › Connections ›
+#:   Notifications), never the Slack app, which reads and posts in the user's
+#:   channels — the Directory's Slack card says so itself. "did anyone message
+#:   me on slack?" and "remind me on slack" (the user's own Slack) still name
+#:   the app, and so does a sentence that also reads or posts there.
+#:
+#: Both LINEAR: one bounded gap each, every repeat bounded.
+_DRIVE_IDS = frozenset({"onedrive", "dropbox", "google_drive"})
+_SYNCED_FOLDER_DEST = re.compile(
+    r"\b(?:back(?:ing)?\s+(?:(?:it|them|this|that|everything|(?:my|the|your|all)\s+[\w-]{1,20})\s+)?up"
+    r"|backups?|cop(?:y|ies|ying)|mirror(?:s|ing)?|sav(?:e|es|ing)|stor(?:e|es|ing)|put)\b"
+    r"[^.!?\n]{0,60}?\b(?:to|into|in|onto)\s+(?:my|the|our|your)\s+"
+    r"(?:onedrive|one\s+drive|dropbox|google\s+drive)\s+(?:folder|directory)\b",
+    re.IGNORECASE,
+)
+#: Jarvis asked to message the user ("so you can message me", "message me on
+#: Slack when…" at a sentence's start) — the destination's words.
+ASKS_TO_MESSAGE_ME = re.compile(
+    r"\b(?:you|jarvis|iron\s+jarvis)\s+(?:can\s+|could\s+|will\s+|would\s+|to\s+|should\s+)?(?:always\s+)?"
+    r"(?:message|notify|ping|alert|dm|text|tell|reach|contact|update)\s+me\b"
+    r"|(?:^|[.!?\n])\s{0,4}(?:please\s+)?(?:message|notify|ping|alert|dm|text)\s+me\s+(?:on|in|via|through|over)\s+slack\b",
+    re.IGNORECASE,
+)
+#: …but a sentence that also READS or POSTS in the user's Slack is the app's.
+_SLACK_CONTENT = re.compile(
+    r"\b(?:read|search|summari[sz]e|catch\s+up|post\s+(?:in|to|on)|reply|respond"
+    r"|my\s+(?:channels?|messages|dms|workspace|threads))\b",
+    re.IGNORECASE,
+)
+
+
+def _sentence_bounds(t: str, start: int, end: int) -> tuple[int, int]:
+    """The sentence around ``t[start:end]`` (linear: two bounded scans)."""
+    lo = max(t.rfind(ch, 0, start) for ch in ".!?\n") + 1
+    his = [i for i in (t.find(ch, end) for ch in ".!?\n") if i >= 0]
+    return lo, (min(his) if his else len(t))
+
+
+def _not_the_app_here(cid: str, start: int, end: int, t: str) -> bool:
+    """Is this place where *t* names app *cid* one of the readings above that
+    is NOT the app? Never raises."""
+    try:
+        if cid in _DRIVE_IDS:
+            return any(m.start() <= start and end <= m.end() for m in _SYNCED_FOLDER_DEST.finditer(t))
+        if cid == "slack":
+            lo, hi = _sentence_bounds(t, start, end)
+            s = t[lo:hi]
+            return ASKS_TO_MESSAGE_ME.search(s) is not None and _SLACK_CONTENT.search(s) is None
+    except Exception:  # noqa: BLE001 — a fault keeps the old reading
+        return False
+    return False
+
+
+def blank_not_the_app(text: str) -> str:
+    """*text* with every place that names an app only in a reading that is not
+    the app (above) blanked out, offsets kept — for the record arming's own
+    literal word list (``settings.records._APP_WORDS``). Never raises."""
+    t = str(text or "")
+    try:
+        chars: "list[str] | None" = None
+        for cid, rx in _compiled():
+            if cid not in _DRIVE_IDS and cid != "slack":
+                continue
+            for m in rx.finditer(t):
+                if _not_the_app_here(cid, m.start(), m.end(), t):
+                    chars = chars if chars is not None else list(t)
+                    for i in range(m.start(), m.end()):
+                        chars[i] = " "
+        return "".join(chars) if chars is not None else t
+    except Exception:  # noqa: BLE001
+        return t
+
+
 #: The subscription CLIs a message may ask about ("is Claude Code signed in?").
 CLI_WORDS: dict[str, str] = {
     "claude-cli": r"\bclaude\s*code\b",
@@ -351,7 +434,10 @@ def apps_named(text: str) -> list[str]:
                 r"\bg-?mail\b", t, re.IGNORECASE
             ):
                 continue
-            if (_mail_hits(rx, t) if cid == "gmail" else rx.search(t)):
+            if cid == "gmail":
+                if _mail_hits(rx, t):
+                    out.append(cid)
+            elif any(not _not_the_app_here(cid, m.start(), m.end(), t) for m in rx.finditer(t)):
                 out.append(cid)
     except Exception:  # noqa: BLE001 — a matcher fault names nothing
         return []
@@ -372,7 +458,10 @@ def app_name_hits(text: str) -> list[tuple[str, int, int]]:
             ):
                 continue
             found = _mail_hits(rx, t) if cid == "gmail" else rx.finditer(t)
-            hits += [(cid, m.start(), m.end()) for m in found]
+            hits += [
+                (cid, m.start(), m.end()) for m in found
+                if not _not_the_app_here(cid, m.start(), m.end(), t)
+            ]
     except Exception:  # noqa: BLE001
         return []
     return hits
