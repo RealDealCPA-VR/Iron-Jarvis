@@ -1,0 +1,626 @@
+{
+ "after": {
+  "branch": {
+   "at": "T",
+   "fork": true,
+   "fork_at": true,
+   "rewind": true
+  },
+  "commands": [
+   {
+    "description": "Set up a CLAUDE.md file",
+    "name": "init"
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "login",
+    "note": "Claude Code signs in on its own screen \u2014 press Sign in beside Claude Code in Settings \u203a Connections, or open this session with Open in terminal and type /login there."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "logout",
+    "note": "Claude Code signs in on its own screen \u2014 press Sign in beside Claude Code in Settings \u203a Connections, or open this session with Open in terminal and type /login there."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "permissions",
+    "note": "Claude Code's permission rules are its own screen \u2014 choose how it asks with the mode chip under the box, or open this session with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "memory",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "status",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "hooks",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "ide",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "terminal-setup",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "vim",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "theme",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "statusline",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "privacy-settings",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "help",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "add-dir",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "bug",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "feedback",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "release-notes",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "upgrade",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "export",
+    "note": "Export this conversation with Export as Markdown in the session's \u22ef menu, at the top of the conversation."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "rewind",
+    "note": "That moves Claude Code to another point of its conversation, which only its own terminal can follow \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "resume",
+    "note": "Your Claude Code conversations are listed with your sessions \u2014 open one there."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "exit",
+    "note": "There is nothing to quit here: Iron Jarvis stops Claude Code after the session has been idle a while."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "quit",
+    "note": "There is nothing to quit here: Iron Jarvis stops Claude Code after the session has been idle a while."
+   }
+  ],
+  "dropped": 0,
+  "events": [
+   {
+    "at": "T",
+    "text": "do it",
+    "turn": "t",
+    "type": "user"
+   },
+   {
+    "at": "T",
+    "text": "Starting Claude Code\u2026",
+    "turn": "t",
+    "type": "notice"
+   },
+   {
+    "at": "T",
+    "cwd": "C:\\work\\demo",
+    "harness": "claude-code",
+    "harness_session_id": "2921582a-6a12-4d94-8ab6-71c0659a252b",
+    "mode": "ask",
+    "model": "claude-opus-5-5",
+    "turn": "t",
+    "type": "session"
+   },
+   {
+    "at": "T",
+    "input": "{\"plan\": \"# Plan\\n\\n1. Read `a.txt`.\\n2. Write `b.txt` with its words reversed.\\n\"}",
+    "item": "toolu_P1",
+    "kind": "other",
+    "name": "ExitPlanMode",
+    "status": "running",
+    "title": "Show the plan",
+    "turn": "t",
+    "type": "tool"
+   },
+   {
+    "at": "T",
+    "can_session": false,
+    "detail": "Exit plan mode?",
+    "kind": "tool",
+    "once_only": true,
+    "plan": "# Plan\n\n1. Read `a.txt`.\n2. Write `b.txt` with its words reversed.\n",
+    "request_id": "RID",
+    "then_mode": "ask",
+    "title": "Start working on this plan",
+    "tool": "ExitPlanMode",
+    "turn": "t",
+    "type": "approval"
+   },
+   {
+    "at": "T",
+    "can_session": false,
+    "detail": "Exit plan mode?",
+    "kind": "tool",
+    "once_only": true,
+    "plan": "# Plan\n\n1. Read `a.txt`.\n2. Write `b.txt` with its words reversed.\n",
+    "request_id": "RID",
+    "then_mode": "full",
+    "title": "Start working on this plan",
+    "tool": "ExitPlanMode",
+    "turn": "t",
+    "type": "approval"
+   },
+   {
+    "at": "T",
+    "text": "Claude Code now runs in Full access. It had already asked about the card above \u2014 answer that one yourself.",
+    "turn": "t",
+    "type": "notice"
+   },
+   {
+    "at": "T",
+    "text": "Claude Code now runs in Plan. It had already asked about the card above \u2014 answer that one yourself.",
+    "turn": "t",
+    "type": "notice"
+   }
+  ],
+  "events_total": 8,
+  "older": null,
+  "pending": [
+   {
+    "at": "T",
+    "can_session": false,
+    "detail": "Exit plan mode?",
+    "kind": "tool",
+    "once_only": true,
+    "plan": "# Plan\n\n1. Read `a.txt`.\n2. Write `b.txt` with its words reversed.\n",
+    "request_id": "RID",
+    "then_mode": "full",
+    "title": "Start working on this plan",
+    "tool": "ExitPlanMode",
+    "turn": "t",
+    "type": "approval"
+   }
+  ],
+  "queue_held": false,
+  "queued": [],
+  "running": "t",
+  "session": {
+   "account": "",
+   "account_name": "",
+   "archived": false,
+   "archived_at": null,
+   "background": 0,
+   "background_helpers": 0,
+   "can_branch": true,
+   "capabilities": {
+    "browser": false,
+    "extensions": false,
+    "files": false,
+    "memory": false,
+    "shell": false
+   },
+   "created_at": "T",
+   "effort": "",
+   "folder": "C:\\Users\\VR\\AppData\\Local\\Temp\\pytest-of-VR\\pytest-34987\\test_the_plan_card_is_resent_w0\\work",
+   "harness": "claude-code",
+   "harness_session_id": "2921582a-6a12-4d94-8ab6-71c0659a252b",
+   "id": "SID",
+   "keep_note": "",
+   "last_error": "",
+   "load_folder_resources": false,
+   "mode": "plan",
+   "model": "",
+   "no_folder": false,
+   "process": true,
+   "programs": [],
+   "running": true,
+   "self_reply": false,
+   "source": "app",
+   "stopped_note": "",
+   "title": "do it",
+   "updated_at": "T",
+   "waiting": true
+  },
+  "turn_id": "t"
+ },
+ "before": {
+  "branch": {
+   "at": "T",
+   "fork": true,
+   "fork_at": true,
+   "rewind": true
+  },
+  "commands": [
+   {
+    "description": "Set up a CLAUDE.md file",
+    "name": "init"
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "login",
+    "note": "Claude Code signs in on its own screen \u2014 press Sign in beside Claude Code in Settings \u203a Connections, or open this session with Open in terminal and type /login there."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "logout",
+    "note": "Claude Code signs in on its own screen \u2014 press Sign in beside Claude Code in Settings \u203a Connections, or open this session with Open in terminal and type /login there."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "permissions",
+    "note": "Claude Code's permission rules are its own screen \u2014 choose how it asks with the mode chip under the box, or open this session with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "memory",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "status",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "hooks",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "ide",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "terminal-setup",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "vim",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "theme",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "statusline",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "privacy-settings",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "help",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "add-dir",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "bug",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "feedback",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "release-notes",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "upgrade",
+    "note": "That is one of Claude Code's own screens, which needs its terminal \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "export",
+    "note": "Export this conversation with Export as Markdown in the session's \u22ef menu, at the top of the conversation."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "rewind",
+    "note": "That moves Claude Code to another point of its conversation, which only its own terminal can follow \u2014 open this session there with Open in terminal."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "resume",
+    "note": "Your Claude Code conversations are listed with your sessions \u2014 open one there."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "exit",
+    "note": "There is nothing to quit here: Iron Jarvis stops Claude Code after the session has been idle a while."
+   },
+   {
+    "description": "Only in Claude Code's own terminal",
+    "name": "quit",
+    "note": "There is nothing to quit here: Iron Jarvis stops Claude Code after the session has been idle a while."
+   }
+  ],
+  "dropped": 0,
+  "events": [
+   {
+    "at": "T",
+    "text": "do it",
+    "turn": "t",
+    "type": "user"
+   },
+   {
+    "at": "T",
+    "text": "Starting Claude Code\u2026",
+    "turn": "t",
+    "type": "notice"
+   },
+   {
+    "at": "T",
+    "cwd": "C:\\work\\demo",
+    "harness": "claude-code",
+    "harness_session_id": "2921582a-6a12-4d94-8ab6-71c0659a252b",
+    "mode": "ask",
+    "model": "claude-opus-5-5",
+    "turn": "t",
+    "type": "session"
+   },
+   {
+    "at": "T",
+    "input": "{\"plan\": \"# Plan\\n\\n1. Read `a.txt`.\\n2. Write `b.txt` with its words reversed.\\n\"}",
+    "item": "toolu_P1",
+    "kind": "other",
+    "name": "ExitPlanMode",
+    "status": "running",
+    "title": "Show the plan",
+    "turn": "t",
+    "type": "tool"
+   },
+   {
+    "at": "T",
+    "can_session": false,
+    "detail": "Exit plan mode?",
+    "kind": "tool",
+    "once_only": true,
+    "plan": "# Plan\n\n1. Read `a.txt`.\n2. Write `b.txt` with its words reversed.\n",
+    "request_id": "RID",
+    "then_mode": "ask",
+    "title": "Start working on this plan",
+    "tool": "ExitPlanMode",
+    "turn": "t",
+    "type": "approval"
+   }
+  ],
+  "events_total": 5,
+  "older": null,
+  "pending": [
+   {
+    "at": "T",
+    "can_session": false,
+    "detail": "Exit plan mode?",
+    "kind": "tool",
+    "once_only": true,
+    "plan": "# Plan\n\n1. Read `a.txt`.\n2. Write `b.txt` with its words reversed.\n",
+    "request_id": "RID",
+    "then_mode": "ask",
+    "title": "Start working on this plan",
+    "tool": "ExitPlanMode",
+    "turn": "t",
+    "type": "approval"
+   }
+  ],
+  "queue_held": false,
+  "queued": [],
+  "running": "t",
+  "session": {
+   "account": "",
+   "account_name": "",
+   "archived": false,
+   "archived_at": null,
+   "background": 0,
+   "background_helpers": 0,
+   "can_branch": true,
+   "capabilities": {
+    "browser": false,
+    "extensions": false,
+    "files": false,
+    "memory": false,
+    "shell": false
+   },
+   "created_at": "T",
+   "effort": "",
+   "folder": "C:\\Users\\VR\\AppData\\Local\\Temp\\pytest-of-VR\\pytest-34987\\test_the_plan_card_is_resent_w0\\work",
+   "harness": "claude-code",
+   "harness_session_id": "2921582a-6a12-4d94-8ab6-71c0659a252b",
+   "id": "SID",
+   "keep_note": "",
+   "last_error": "",
+   "load_folder_resources": false,
+   "mode": "plan",
+   "model": "",
+   "no_folder": false,
+   "process": true,
+   "programs": [],
+   "running": true,
+   "self_reply": false,
+   "source": "app",
+   "stopped_note": "",
+   "title": "do it",
+   "updated_at": "T",
+   "waiting": true
+  },
+  "turn_id": "t"
+ },
+ "stream": [
+  {
+   "at": "T",
+   "text": "do it",
+   "turn": "t",
+   "type": "user"
+  },
+  {
+   "at": "T",
+   "text": "Starting Claude Code\u2026",
+   "turn": "t",
+   "type": "notice"
+  },
+  {
+   "at": "T",
+   "cwd": "C:\\work\\demo",
+   "harness": "claude-code",
+   "harness_session_id": "2921582a-6a12-4d94-8ab6-71c0659a252b",
+   "mode": "ask",
+   "model": "claude-opus-5-5",
+   "turn": "t",
+   "type": "session"
+  },
+  {
+   "at": "T",
+   "input": "{\"plan\": \"# Plan\\n\\n1. Read `a.txt`.\\n2. Write `b.txt` with its words reversed.\\n\"}",
+   "item": "toolu_P1",
+   "kind": "other",
+   "name": "ExitPlanMode",
+   "status": "running",
+   "title": "Show the plan",
+   "turn": "t",
+   "type": "tool"
+  },
+  {
+   "at": "T",
+   "can_session": false,
+   "detail": "Exit plan mode?",
+   "kind": "tool",
+   "once_only": true,
+   "plan": "# Plan\n\n1. Read `a.txt`.\n2. Write `b.txt` with its words reversed.\n",
+   "request_id": "RID",
+   "then_mode": "ask",
+   "title": "Start working on this plan",
+   "tool": "ExitPlanMode",
+   "turn": "t",
+   "type": "approval"
+  },
+  {
+   "at": "T",
+   "can_session": false,
+   "detail": "Exit plan mode?",
+   "kind": "tool",
+   "once_only": true,
+   "plan": "# Plan\n\n1. Read `a.txt`.\n2. Write `b.txt` with its words reversed.\n",
+   "request_id": "RID",
+   "then_mode": "full",
+   "title": "Start working on this plan",
+   "tool": "ExitPlanMode",
+   "turn": "t",
+   "type": "approval"
+  },
+  {
+   "at": "T",
+   "text": "Claude Code now runs in Full access. It had already asked about the card above \u2014 answer that one yourself.",
+   "turn": "t",
+   "type": "notice"
+  },
+  {
+   "at": "T",
+   "text": "Claude Code now runs in Plan. It had already asked about the card above \u2014 answer that one yourself.",
+   "turn": "t",
+   "type": "notice"
+  },
+  {
+   "at": "T",
+   "decision": "deny",
+   "request_id": "RID",
+   "turn": "t",
+   "type": "resolved"
+  },
+  {
+   "at": "T",
+   "input": "{\"plan\": \"# Plan\\n\\n1. Read `a.txt`.\\n2. Write `b.txt` with its words reversed.\\n\"}",
+   "item": "toolu_P1",
+   "kind": "other",
+   "name": "ExitPlanMode",
+   "output": "The user doesn't want to proceed with this tool use.",
+   "status": "failed",
+   "title": "Show the plan",
+   "turn": "t",
+   "type": "tool"
+  },
+  {
+   "at": "T",
+   "item": "msg_plan_end:t0",
+   "text": "Understood, I will plan it differently.",
+   "turn": "t",
+   "type": "text_done"
+  },
+  {
+   "at": "T",
+   "cache_read": 70871,
+   "context": {
+    "used": 39077,
+    "window": 1000000
+   },
+   "cost_usd": 0.331354,
+   "input": 109914,
+   "list_price": true,
+   "output": 243,
+   "turn": "t",
+   "type": "usage"
+  },
+  {
+   "at": "T",
+   "result": "The folder had one file, `a.txt` (7 bytes). I created `hello.txt` containing `hi`.",
+   "stop": "completed",
+   "turn": "t",
+   "type": "done"
+  }
+ ]
+}
