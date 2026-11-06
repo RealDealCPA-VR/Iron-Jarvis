@@ -65,7 +65,8 @@ async def test_harnesses_are_read_from_cached_answers_only(app, monkeypatch):
     # v1.411.0: Pi is the third tool (its own listing: tests/test_build_app_pi_v1411.py);
     # v1.413.0: OpenCode the fourth (tests/test_build_app_opencode_v1413.py) — moved on purpose.
     # v1.416.0: Grok the fifth (tests/test_build_app_grok_v1416.py) — moved on purpose.
-    assert set(by) == {"claude-code", "codex", "pi", "opencode", "grok"}
+    # v1.439.0: Antigravity the sixth (tests/test_build_app_antigravity_v1439.py) — moved on purpose.
+    assert set(by) == {"claude-code", "codex", "pi", "opencode", "grok", "antigravity"}
     assert by["claude-code"]["installed"] is True and by["codex"]["installed"] is False
     assert by["codex"]["signed_in"] is None
     # v1.412.0: Claude Code's own Auto is offered (moved on purpose), and every

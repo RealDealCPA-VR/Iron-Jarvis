@@ -330,6 +330,13 @@ class AcpDriver(Driver):
         except Exception:  # noqa: BLE001 — a gone process: nothing to answer
             pass
 
+    def client_capabilities(self) -> dict[str, Any]:
+        """What Iron Jarvis says it can do in ``initialize``. The tool reads,
+        writes and runs commands with its OWN tools, exactly as in a terminal
+        (fs / terminal off). v1.439.0: a subclass may add what it answers
+        (Antigravity: its question form, ``elicitation``)."""
+        return {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False}
+
     async def initialize(self) -> dict[str, Any]:
         """``initialize`` — Iron Jarvis is not an editor (fs / terminal off).
         Answers the agent's capabilities and keeps what the driver needs."""
@@ -337,9 +344,7 @@ class AcpDriver(Driver):
 
         got = await self.request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
-            # The tool reads, writes and runs commands with its OWN tools,
-            # exactly as in a terminal.
-            "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
+            "clientCapabilities": self.client_capabilities(),
             "clientInfo": {"name": "iron-jarvis", "title": "Iron Jarvis", "version": __version__},
         })
         caps = (got or {}).get("agentCapabilities") if isinstance(got, dict) else {}

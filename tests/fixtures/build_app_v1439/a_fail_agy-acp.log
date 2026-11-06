@@ -1,0 +1,16 @@
+I1106 11:21:55.080336     196 server.go:1826] Sending user message to conversation e168eff8-43c0-49fc-b273-f8473c22bcb0 (items=1, media=0)
+I1106 11:21:55.083847     196 latency_breakdown.go:168] SEND_USER_CASCADE_MESSAGE_LATENCY latency breakdown: map[active_user_state_latency_ms:0 blocking:false cascade_id:e168eff8-43c0-49fc-b273-f8473c22bcb0 cascade_send_latency_ms:1 hydrate_slash_commands_latency_ms:0 load_trajectory_latency_ms:0 media_count:0 media_summaries_latency_ms:0 message_origin:AGENT_MESSAGE_ORIGIN_UNSPECIFIED resolve_agent_config_latency_ms:1 save_media_latency_ms:0 saved_media_count:0 status:OK total_latency_ms:3 trajectory_id:2a0349f3-2d8e-49b5-ad5c-1244fc21bd92]
+E1106 11:21:55.104699      32 projects.go:204] projects store: project_store_get_file_missing: missing project file: open <HOME>/.gemini/config/projects/default-cli-project.json: The system cannot find the file specified.
+E1106 11:21:55.104699      32 errorreport.go:247] missing project file: open <HOME>/.gemini/config/projects/default-cli-project.json: The system cannot find the file specified.
+E1106 11:21:55.109389     200 projects.go:204] projects store: project_store_get_file_missing: missing project file: open <HOME>/.gemini/config/projects/default-cli-project.json: The system cannot find the file specified.
+E1106 11:21:55.109389     200 errorreport.go:247] missing project file: open <HOME>/.gemini/config/projects/default-cli-project.json: The system cannot find the file specified.
+I1106 11:21:55.141372      32 server.go:2366] Advertising 9 slash commands for session e168eff8-43c0-49fc-b273-f8473c22bcb0
+I1106 11:21:55.160686     200 monitor_config_manager_external.go:53] externalMonitorConfigManager: initialized with embedded config (3 monitors)
+I1106 11:21:55.160686     200 monitoring.go:409] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: "")
+I1106 11:21:55.160686     200 monitoring.go:409] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: "")
+E1106 11:21:55.178267     200 errorreport.go:247] agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: []
+I1106 11:21:55.178783     198 server.go:1323] Stream goroutine exited for e168eff8-43c0-49fc-b273-f8473c22bcb0, sending completion signal
+E1106 11:21:55.178783     200 errorreport.go:247] generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: []
+E1106 11:21:55.190196      51 server.go:3911] Language server shutdown timed out
+I1106 11:21:55.190196     508 server.go:3918] Language server shutting down
+I1106 11:21:55.190196     508 server.go:3940] Waiting for migrations to complete to prevent partial migration state...

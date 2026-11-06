@@ -20,7 +20,7 @@ from .events import clip, make
 
 #: harness id -> how a person names it.
 LABELS: dict[str, str] = {"claude-code": "Claude Code", "codex": "Codex", "pi": "Pi", "opencode": "OpenCode",
-                          "grok": "Grok"}
+                          "grok": "Grok", "antigravity": "Antigravity"}
 #: harness id -> the Iron Jarvis provider whose CLI it is.
 #: v1.426.0 (E5): read from THE table (``providers/subscription_clis``).
 PROVIDERS: dict[str, str] = dict(_SUBS.HARNESS_TO_PROVIDER)
@@ -30,8 +30,9 @@ PROVIDERS: dict[str, str] = dict(_SUBS.HARNESS_TO_PROVIDER)
 #: (``GROK_HOME``, Iron-Proxy's ``xai`` provider), as for a Build terminal.
 PROXY: dict[str, str] = dict(_SUBS.HARNESS_TO_PROXY)
 #: harness id -> the Build terminal Launch id (``terminals/ai_clis``).
+#: v1.439.0: Antigravity's program is ``agy`` (its Launch id too).
 CLI: dict[str, str] = {"claude-code": "claude", "codex": "codex", "pi": "pi", "opencode": "opencode",
-                       "grok": "grok"}
+                       "grok": "grok", "antigravity": "agy"}
 
 BUSY = (
     "This session is still working on your last message — wait for it to finish, "
@@ -51,6 +52,7 @@ STEER_HOW: dict[str, str] = {
     "pi": "Pi reads it after its current step.",
     "opencode": "OpenCode reads it at its next step.",
     "grok": "Grok takes it at once and reads it at its next step.",
+    "antigravity": "Antigravity reads it at its next step.",
 }
 STEER_READ = "Read by {label}."
 STEER_RETURNED = "{label} did not read this note before it stopped — it is back in your message box."
@@ -208,7 +210,32 @@ SIGN_IN_HINTS: dict[str, str] = {
            "type /login there. Iron Jarvis's accounts do not apply."),
     "opencode": ("OpenCode signs in by itself, per provider: to change it, run opencode auth login in a "
                  "Build terminal. Iron Jarvis's accounts do not apply."),
+    "antigravity": ("Antigravity signs in by itself, with its own Google sign-in: to change it, run agy in a "
+                    "Build terminal and sign in there. Iron Jarvis's accounts do not apply."),
 }
+#: v1.439.0: Antigravity signs in by itself (its own Google sign-in); it is no
+#: Iron-Proxy vendor, so a session has no account to choose or move to.
+ANTIGRAVITY_OWN_SIGN_IN = (
+    "Antigravity signs in by itself, with its own Google sign-in, so an Antigravity session has no "
+    "account to choose — to change its sign-in, run agy in a Build terminal and sign in there."
+)
+ANTIGRAVITY_CONTINUE = (
+    "Antigravity signs in by itself, so it has no other account to continue on — "
+    "choose another model instead."
+)
+#: v1.439.0: ``session/new`` answered "Authentication required" (measured).
+ANTIGRAVITY_SIGN_IN = (
+    "Antigravity isn't signed in — open a Build terminal, run agy and sign in there, "
+    "then send your message again"
+)
+#: v1.439.0: a Deny ENDS Antigravity's reply (measured: it makes no model
+#: call after a declined command).
+ANTIGRAVITY_DECLINED_ENDS = (
+    "You declined, so Antigravity stopped this reply — tell it what to do differently in your next message."
+)
+ANTIGRAVITY_NO_SUCH_EFFORT = (
+    'This Antigravity model does not take the thinking level "{effort}", so it runs on its own default.'
+)
 #: v1.413.0: the user's own OpenCode permission rules, said once per start.
 OPENCODE_RULES_KEPT = (
     "Your own OpenCode permission rules for {tools} apply in this session as you wrote them. "
