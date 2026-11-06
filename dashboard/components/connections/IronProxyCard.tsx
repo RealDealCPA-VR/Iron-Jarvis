@@ -62,11 +62,13 @@ import {
   stateChip,
   terminalsHref,
   usageLine,
+  windowUsedLine,
   type IronProxyAccount,
   type IronProxySnapshot,
 } from "@/lib/ironProxy";
 import { CLI_ACCOUNT_PROVIDER, openedPaneId } from "@/lib/paneAccounts";
 import { CALM_ACTION, CALM_ICON_ACTION } from "@/components/connections/endpointChip";
+import { UsageRefresh } from "@/components/accounts/UsageRefresh";
 
 /** v1.330.0 (calm M3): ONE look per account row. Every secondary action
  *  (Sign in on a signed-in account, Check again, Open in Build, Unpark, the
@@ -627,6 +629,7 @@ function IronProxyBody({
                             patch(`/iron-proxy/accounts/${enc(a.id)}`, { enabled: !a.enabled }),
                           )
                         }
+                        onUsageRead={reload}
                         onRemove={() =>
                           act(
                             `${a.id}:remove`,
@@ -757,6 +760,7 @@ function AccountRow({
   onMove,
   onEnable,
   onRemove,
+  onUsageRead,
   group = null,
   groupNames = [],
   onGroup,
@@ -772,6 +776,8 @@ function AccountRow({
   onMove: (dir: -1 | 1) => void;
   onEnable: () => void;
   onRemove: () => Promise<void>;
+  /** v1.439.0: a "Check usage now" read ended: read the card again. */
+  onUsageRead?: () => void;
   /** v1.393.0: the account's group ("" = none); null = no Group choice (an
    *  account a coding session never runs on, or an older Iron Jarvis). */
   group?: string | null;
@@ -780,6 +786,7 @@ function AccountRow({
 }) {
   const chip = stateChip(a);
   const usage = usageLine(a.usage);
+  const used = windowUsedLine(a.state?.window);
   const isCli = a.lane === "cli";
   const parked = a.state?.status === "parked";
   // v1.302.0: a CLI account of Claude/Codex/Grok can start its CLI in Build.
@@ -819,6 +826,21 @@ function AccountRow({
             {usage}
           </div>
         )}
+        {/* v1.439.0: the vendor's own percent, and "Check usage now" beside it
+            (read from the account's CLI, no model call). */}
+        {used || a.can_refresh ? (
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 text-[11px] text-zinc-500">
+            {used ? <span data-testid={`iron-proxy-window-${a.id}`}>{used}</span> : null}
+            {a.can_refresh ? (
+              <UsageRefresh
+                accountId={a.id}
+                accountName={a.title}
+                readAt={a.usage_read_at ?? null}
+                onRead={() => onUsageRead?.()}
+              />
+            ) : null}
+          </div>
+        ) : null}
         {group !== null && onGroup ? (
           <GroupChoice title={a.title} id={a.id} group={group} names={groupNames} busy={busy} onPick={onGroup} />
         ) : null}

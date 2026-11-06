@@ -38,6 +38,7 @@ import { ChangesReview } from "@/components/harness/ChangesReview";
 import { ConfirmButton } from "@/components/ui";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { Row, Section } from "@/components/harness/HarnessSessionRail";
+import { UsageRefresh } from "@/components/accounts/UsageRefresh";
 import { ContextBreakdown } from "@/components/harness/ContextBreakdown";
 import { decodeCodeContext, totalReading, type CodeContext } from "@/lib/contextBreakdown";
 import { isThumbImage, localMediaSrc } from "@/lib/mediaLightbox";
@@ -465,7 +466,7 @@ function UsagePane({
   refresh: number;
   running: boolean;
 }) {
-  const { data, error } = usePaneRead<CodeUsage>(session.id, "usage", decodeCodeUsage, refresh, running);
+  const { data, error, again } = usePaneRead<CodeUsage>(session.id, "usage", decodeCodeUsage, refresh, running);
   if (error) {
     return (
       <p role="alert" data-testid="code-usage-error" className="text-[12px] text-tone-danger">
@@ -490,6 +491,16 @@ function UsagePane({
           {acc?.planLabel ? <span className="text-zinc-500"> · {acc.planLabel}</span> : null}
           {!acc && data.seen?.plan ? <span className="text-zinc-500"> · {data.seen.plan}</span> : null}
         </p>
+        {/* v1.439.0: read this account's usage from its own CLI now (no
+            model call); the tab reads the fresh number after. */}
+        {acc && acc.canRefresh ? (
+          <UsageRefresh
+            accountId={acc.id}
+            accountName={acc.name}
+            readAt={acc.usageReadAt || null}
+            onRead={() => again()}
+          />
+        ) : null}
         {acc && acc.windows.length ? (
           <>
             {/* v1.414.0 review: with its age — Iron-Proxy sees a number only

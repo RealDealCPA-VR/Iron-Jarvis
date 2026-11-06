@@ -94,6 +94,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Coding sessions waiting for an account to reset aren't being checked",
     href: CODE_VIEW_HREF,
   },
+  // v1.439.0: the accounts a reply runs on have their usage re-read from
+  // their own CLI every few minutes.
+  account_usage: {
+    label: "Account usage",
+    problem: "The usage left on the accounts in use isn't being checked",
+    href: "/connections",
+  },
   // v1.391.0 (long jobs, Phase 2): the boot's pass that carries on a coding
   // session's reply a restart cut off while it worked.
   build_resume: {
