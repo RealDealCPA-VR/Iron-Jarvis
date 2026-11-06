@@ -158,6 +158,26 @@ def _pi_extension(url: str) -> str:
     )
 
 
+#: v1.441.0 (review A5): per tool, whether its own handshake says it takes
+#: an HTTP MCP server — Iron Jarvis's tools reach it only then. Antigravity
+#: starts False: agy 1.5.2's ``initialize`` names no ``mcpCapabilities``
+#: (measured); an Antigravity that says ``http: true`` turns it on
+#: (:func:`note_takes`, every start). Memory only; a tool not named takes them.
+_TAKES: dict[str, bool] = {"antigravity": False}
+
+
+def takes(harness: str) -> bool:
+    """Does this coding tool take Iron Jarvis's own tools (an HTTP MCP
+    server)? False only for a tool whose own handshake said it does not."""
+    return _TAKES.get(str(harness or ""), True)
+
+
+def note_takes(harness: str, ok: bool) -> None:
+    """What the tool's last handshake said (its ``mcpCapabilities.http``)."""
+    if harness:
+        _TAKES[str(harness)] = bool(ok)
+
+
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")

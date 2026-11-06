@@ -224,9 +224,33 @@ ANTIGRAVITY_CONTINUE = (
     "choose another model instead."
 )
 #: v1.439.0: ``session/new`` answered "Authentication required" (measured).
+#: v1.441.0 (review A4): no "send your message again" here — the error line
+#: it becomes already ends "Fix that, then send your message again."
 ANTIGRAVITY_SIGN_IN = (
-    "Antigravity isn't signed in — open a Build terminal, run agy and sign in there, "
-    "then send your message again"
+    "Antigravity isn't signed in — open a Build terminal, run agy and sign in there"
+)
+#: v1.441.0 (review A1): Antigravity takes no second prompt while its running
+#: one waits on the user (measured on agy 1.5.2: "the running prompt is
+#: waiting for a permission or question answer"), so a note is refused BEFORE
+#: anything is sent — the page puts the words back in the box.
+ANTIGRAVITY_NOTE_WHILE_ASKING = (
+    "Antigravity is waiting for your answer on the card above — answer it first, then send your note."
+)
+#: v1.441.0 (review A1): the backstop — a note Antigravity refused anyway
+#: (a card came in while the note went out). The reply goes on.
+ANTIGRAVITY_NOTE_REFUSED = (
+    "Antigravity did not take your note while it waited for your answer — "
+    "it goes back in the box when this reply ends."
+)
+#: v1.441.0 (review A3): a question form with no question Iron Jarvis can
+#: show (no ``q1``…): declined, and said — never silent.
+ANTIGRAVITY_QUESTION_UNSHOWN = (
+    "Antigravity asked something this view cannot show, so the question was skipped — "
+    "to answer it, open this session with Open in terminal and ask Antigravity again there."
+)
+#: v1.441.0 (review X4): the Build terminals the Code view can take over.
+NOT_A_CODING_TERMINAL = (
+    "This terminal is not running Claude Code, Codex, Pi, OpenCode, Grok or Antigravity."
 )
 #: v1.439.0: a Deny ENDS Antigravity's reply (measured: it makes no model
 #: call after a declined command).

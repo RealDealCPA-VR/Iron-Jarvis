@@ -186,7 +186,9 @@ LAST_COMMANDS: dict[str, list[dict[str, str]]] = {}
 #: v1.439.0: the tools whose `/` list depends on the FOLDER (OpenCode reads a
 #: project's own commands from it): kept per folder, so one project's commands
 #: never show in another project's session.
-FOLDER_COMMANDS: tuple[str, ...] = ("opencode",)
+#: v1.441.0 (review P3): Claude Code too — its ``initialize`` lists the
+#: folder's own ``.claude/commands`` and skills beside its built-ins.
+FOLDER_COMMANDS: tuple[str, ...] = ("opencode", "claude-code")
 
 
 def folder_key(folder: Any) -> str:
@@ -820,13 +822,25 @@ class ClaudeDriver(Driver):
         except Exception:  # noqa: BLE001 — the conversation still works without it
             return
         cmds = res.get("commands") if isinstance(res, dict) else None
+        listed = [c for c in (cmds or []) if isinstance(c, dict) and c.get("name")][:300]
         self.commands = [
             {"name": str(c.get("name") or ""), "description": clip(c.get("description") or "", 200),
              "argument_hint": clip(c.get("argumentHint") or "", 80)}
-            for c in (cmds or []) if isinstance(c, dict) and c.get("name")
-        ][:300]
+            for c in listed
+        ]
         if self.commands:
-            LAST_COMMANDS[HARNESS] = list(self.commands)
+            # v1.441.0 (review P3): kept per FOLDER — the list holds the
+            # folder's own commands and skills beside Claude Code's (MEASURED
+            # on claude 2.1.316, ``initialize`` in a scratch folder with a
+            # ``.claude/commands/projfoo.md``: ``{name: "projfoo", description:
+            # "… (project)"}`` with no ``builtin``, and ``builtin: true`` on
+            # each of Claude Code's own, bundled skills included). The bare key
+            # keeps only the ``builtin`` rows (the same in every folder); an
+            # older Claude Code that marks none keeps its whole list there.
+            LAST_COMMANDS[commands_key(HARNESS, self.cwd)] = list(self.commands)
+            marked = any("builtin" in c for c in listed)
+            LAST_COMMANDS[HARNESS] = [row for row, c in zip(self.commands, listed)
+                                      if c.get("builtin") is True or not marked]
 
     # -- the user's side --------------------------------------------------------
     async def _user_message(self, text: str, files: list[str], ref: str) -> dict[str, Any]:
@@ -897,9 +911,65 @@ class ClaudeDriver(Driver):
         if decision == "allow_session" and ask.data.get("sets_mode"):
             self.mode = ask.data["sets_mode"]
             self.pre_plan_mode = ""
-        elif decision in ("allow", "allow_session") and ask.data.get("leaves_plan_to") and self.mode == "plan":
-            self.mode = ask.data["leaves_plan_to"]
-            self.pre_plan_mode = ""
+        else:
+            back = self.plan_exit_mode(ask, decision)
+            if back:
+                self.mode = back
+                self.pre_plan_mode = ""
+
+    def plan_exit_mode(self, ask: Ask, decision: str) -> str:
+        """v1.441.0 (review P1): the mode an approved plan leaves the session
+        in NOW — "" when it leaves none. READ from claude 2.1.316's own bundle
+        (ExitPlanModeV2Tool): Claude Code goes back to its ``prePlanMode``
+        only while it is STILL in plan mode; a mode the user picked on the
+        chip while the card waited is already Claude Code's and stays. So the
+        mode is read at the answer, never the one the card was raised with
+        (the card's could put the row back in a mode the user had left —
+        Full access included)."""
+        if decision not in ("allow", "allow_session") or not ask.data.get("leaves_plan_to"):
+            return ""
+        if decision == "allow_session" and ask.data.get("sets_mode"):
+            return ""  # the button names its own mode (``sets_mode``)
+        if self.mode != "plan":
+            return ""
+        # "" (it came from Auto, the v1.439.0 trade-off): the chip stays on
+        # Plan, as when the card was raised.
+        back = self.pre_plan_mode
+        return back if back in MODE_LABELS and back != "plan" else ""
+
+    def _plan_then(self) -> tuple[str, str]:
+        """The plan card's ``(then_mode, leaves_plan_to)`` for the mode the
+        driver is in NOW ("" = not known / none) — the ONE rule the card is
+        raised with and (v1.441.0 review) re-sent with when the mode moves
+        while it waits, so its words and :meth:`plan_exit_mode` agree."""
+        then = self.pre_plan_mode if self.mode == "plan" else self.mode
+        if then not in MODE_LABELS or then == "plan":
+            return "", ""
+        # v1.439.0 (review): Allow once leaves Plan for it, so the driver
+        # and the session row follow (``answered``).
+        return then, (then if self.mode == "plan" else "")
+
+    def refresh_ask(self, ask: Ask) -> "dict[str, Any] | None":
+        """v1.441.0 (review of lane fix1): the mode moved while ``ask``
+        waited — the plan card's new event when its words change (the
+        caller re-sends it; the page replaces the card by its id), else
+        None. Its ``leaves_plan_to`` follows too."""
+        if ask.tool != "ExitPlanMode" or ask.kind != "approval":
+            return None
+        then, leaves = self._plan_then()
+        if leaves:
+            ask.data["leaves_plan_to"] = leaves
+        else:
+            ask.data.pop("leaves_plan_to", None)
+        if (ask.event.get("then_mode") or "") == then:
+            return None
+        ev = dict(ask.event)
+        if then:
+            ev["then_mode"] = then
+        else:
+            ev.pop("then_mode", None)
+        ask.event = ev
+        return ev
 
     def prepare_answer(self, ask: Ask, decision: str, message: str, answers: Any) -> dict[str, Any]:
         """The ``control_response`` for the user's answer — or AskRefused,
@@ -1142,13 +1212,9 @@ class ClaudeDriver(Driver):
             # v1.439.0: the mode each allow leaves the session in, so the
             # card names it ("Approve, then ask first" / "Approve and edit
             # freely"); a key is absent when it is not known.
-            then = self.pre_plan_mode if self.mode == "plan" else self.mode
-            if then in MODE_LABELS and then != "plan":
+            then, leaves_plan_to = self._plan_then()
+            if then:
                 ev["then_mode"] = then
-                if self.mode == "plan":
-                    # v1.439.0 (review): Allow once leaves Plan for it, so
-                    # the driver and the session row follow (``answered``).
-                    leaves_plan_to = then
             if plan_sets:
                 ev["sets_mode"] = plan_sets
         if not sugg:

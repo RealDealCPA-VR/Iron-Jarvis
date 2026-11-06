@@ -62,14 +62,24 @@ Google and no sign-in was used; masked recordings in
   {mode: form, requestedSchema {properties {q1: {title, oneOf [{const,
   title}]}, q1_other: {title: "Other"}}}}; answered ``{action: "accept",
   content: {q1: "<const>"}}`` (the model read "A1: Red"), a typed answer as
-  ``q1_other``, Skip as ``{action: "decline"}``. LEFT UNANSWERED (an error)
+  ``q1_other``, Skip as ``{action: "decline"}``. v1.441.0 (review A2): a
+  MULTI-select question (``is_multi_select``) is ``{q1: {type: "array",
+  items: {anyOf [{const, title}]}}}`` — answered with a LIST of consts
+  (MEASURED on agy 1.5.2 with the stand-in model: ``{q1: ["1", "3"],
+  q1_other: "Purple"}`` reached the model as "A1: Blue, Green, Purple"). A
+  form with no ``qN`` field is declined and SAID (review A3). LEFT UNANSWERED (an error)
   Antigravity prints the question as text and ENDS the turn — so it is always
   answered (Stop answers decline).
 * NOTES WHILE IT WORKS (differs from OpenCode): a second ``session/prompt``
   during a run makes the FIRST prompt answer ``{stopReason: end_turn}`` AT
   ONCE (no usage) while the turn goes on; only the LATEST prompt's answer
   ends the turn (with its usage). The note is read when Antigravity echoes it
-  (``user_message_chunk``). ``session/cancel`` (a notification) makes the
+  (``user_message_chunk``). v1.441.0 (review A1): while its running prompt
+  waits on a card or a question, a second ``session/prompt`` is REFUSED
+  (measured: "the running prompt is waiting for a permission or question
+  answer") — so a note is refused in words before it is sent, and a note's
+  prompt Antigravity refuses anyway never fails the reply: the turn goes on
+  under the prompt before it and the note goes back to the box. ``session/cancel`` (a notification) makes the
   running prompt answer ``cancelled`` at once.
 * FAILURES ARE TEXT: a failed model call is an ``agent_message_chunk``
   "\\n⚠ Agent execution terminated due to error.\\n" and then ``end_turn`` —
@@ -433,9 +443,16 @@ def cached_models(path: Path | None) -> tuple[list[dict[str, Any]], str]:
 _Q_KEY = re.compile(r"^q(\d+)$")
 
 
+def _choices(listed: Any) -> list[dict[str, str]]:
+    return [{"label": clip(o.get("title") or o.get("const") or "", 120), "const": str(o.get("const"))}
+            for o in listed or [] if isinstance(o, dict) and o.get("const") is not None][:20]
+
+
 def form_questions(schema: Any) -> list[dict[str, Any]]:
     """Antigravity's question form -> ``[{key, question, options [{label,
-    const}], other}]`` in its own order (``q1``, ``q2``…)."""
+    const}], other, multi}]`` in its own order (``q1``, ``q2``…). A one-answer
+    question lists its choices as ``oneOf``; a MULTI-select one (v1.441.0,
+    review A2) is ``type: "array"`` with ``items.anyOf`` (measured)."""
     props = (schema or {}).get("properties") if isinstance(schema, dict) else None
     if not isinstance(props, dict):
         return []
@@ -443,18 +460,54 @@ def form_questions(schema: Any) -> list[dict[str, Any]]:
     out = []
     for key in keys[:12]:
         prop = props.get(key) if isinstance(props.get(key), dict) else {}
-        options = [{"label": clip(o.get("title") or o.get("const") or "", 120), "const": str(o.get("const"))}
-                   for o in prop.get("oneOf") or [] if isinstance(o, dict) and o.get("const") is not None][:20]
+        multi = prop.get("type") == "array"
+        if multi:
+            items = prop.get("items") if isinstance(prop.get("items"), dict) else {}
+            options = _choices(items.get("anyOf") or items.get("oneOf"))
+        else:
+            options = _choices(prop.get("oneOf"))
         other = f"{key}_other" if isinstance(props.get(f"{key}_other"), dict) else ""
         out.append({"key": key, "question": clip(prop.get("title") or "", 500), "options": options,
-                    "other": other})
+                    "other": other, "multi": multi})
     return out
 
 
-def form_answer(questions: list[dict[str, Any]], answers: Any) -> dict[str, str]:
+def _picked_labels(got: Any, options: list[dict[str, str]]) -> tuple[list[str], str]:
+    """A multi-select answer -> (the chosen consts, what was typed besides).
+    The page joins its picks with ", " (``questionAnswers``): the pieces are
+    read back GREEDILY against the choices' own labels, so a label that holds
+    ", " itself stays one choice; a piece no choice names is typed text."""
+    names = {o["const"]: o["const"] for o in options}
+    names.update({o["label"]: o["const"] for o in options})
+    if isinstance(got, list):
+        parts = [str(x).strip() for x in got if str(x or "").strip()]
+        picked = [names[x] for x in parts if x in names]
+        return list(dict.fromkeys(picked)), ", ".join(x for x in parts if x not in names)
+    pieces = [x.strip() for x in str(got or "").split(", ")]
+    picked: list[str] = []
+    typed: list[str] = []
+    i = 0
+    while i < len(pieces):
+        hit = 0
+        for j in range(len(pieces), i, -1):
+            if ", ".join(pieces[i:j]) in names:
+                hit = j
+                break
+        if hit:
+            picked.append(names[", ".join(pieces[i:hit])])
+            i = hit
+        else:
+            if pieces[i]:
+                typed.append(pieces[i])
+            i += 1
+    return list(dict.fromkeys(picked)), ", ".join(typed)
+
+
+def form_answer(questions: list[dict[str, Any]], answers: Any) -> dict[str, Any]:
     """The card's answers -> the form's ``content`` (a choice's ``const``; a
-    typed answer in ``qN_other``). AskRefused when nothing usable came."""
-    content: dict[str, str] = {}
+    multi-select question's LIST of consts; a typed answer in ``qN_other``).
+    AskRefused when nothing usable came."""
+    content: dict[str, Any] = {}
     for i, q in enumerate(questions):
         text = str(q.get("question") or "")
         if isinstance(answers, list):
@@ -467,6 +520,15 @@ def form_answer(questions: list[dict[str, Any]], answers: Any) -> dict[str, str]
             got = answers
         else:
             got = None
+        if q.get("multi"):
+            picked, typed = _picked_labels(got, q.get("options") or [])
+            if picked:
+                content[q["key"]] = picked
+            if typed:
+                if not q.get("other"):
+                    raise AskRefused("Choose among the answers Antigravity offered.")
+                content[q["other"]] = typed[:2000]
+            continue
         if isinstance(got, list):
             got = got[0] if got else None
         value = str(got or "").strip()
@@ -567,8 +629,18 @@ class AntigravityDriver(AcpDriver):
         self.restart_needed = False
         #: The user declined a card this turn (Antigravity then ends its reply).
         self._declined = False
+        #: v1.441.0 (review A1): the native ids of the cards and questions
+        #: Antigravity asked that the user has not answered yet (it takes no
+        #: note meanwhile), and every prompt of the turn in order.
+        self._asking: set[Any] = set()
+        self._prompts: list[int] = []
+        #: The answer of the newest prompt a later one superseded.
+        self._superseded: dict[str, Any] | None = None
+        #: v1.441.0 (review A6): the service's way to clear an effort the
+        #: session's model does not take (the row and the chip follow).
+        self.on_effort_dropped: Any = None
 
-    STATE_SKIP = AcpDriver.STATE_SKIP | frozenset({"on_title", "_fail_read"})
+    STATE_SKIP = AcpDriver.STATE_SKIP | frozenset({"on_title", "_fail_read", "on_effort_dropped"})
 
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
         # The folder is the process's own working folder; the session is
@@ -588,6 +660,17 @@ class AntigravityDriver(AcpDriver):
         ``elicitation`` declared, Antigravity prints the question as text and
         ends the turn)."""
         return {**super().client_capabilities(), "elicitation": {"form": {}}}
+
+    def acp_servers(self, caps: dict[str, Any]) -> list[dict[str, Any]]:
+        """v1.441.0 (review A5): what THIS Antigravity said about taking an
+        HTTP MCP server is kept (``jarvis_tools.note_takes``) — agy 1.5.2 says
+        no ``mcpCapabilities``, so the Iron Jarvis tools chip is hidden for it
+        and ticking a box never restarts it for nothing."""
+        from . import jarvis_tools as JT
+
+        mcp_caps = caps.get("mcpCapabilities") if isinstance(caps.get("mcpCapabilities"), dict) else {}
+        JT.note_takes(HARNESS, bool(mcp_caps.get("http")))
+        return super().acp_servers(caps)
 
     # -- the session --------------------------------------------------------------
     async def _new_or_resume(self, method: str, params: dict[str, Any]) -> Any:
@@ -635,6 +718,7 @@ class AntigravityDriver(AcpDriver):
                 await self._set_effort(self.effort)
             else:
                 self.emit(make("notice", text=W.ANTIGRAVITY_NO_SUCH_EFFORT.format(effort=self.effort)))
+                self._drop_effort()
         wanted = MODES.get(self.mode, "default")
         if wanted != "default":
             await self.request("session/set_mode", {"sessionId": sid, "modeId": wanted})
@@ -732,6 +816,7 @@ class AntigravityDriver(AcpDriver):
     def _ask(self, rid: Any, p: dict[str, Any]) -> None:
         if isinstance(p.get("toolCall"), dict):
             p = {**p, "toolCall": normalized(p["toolCall"])}
+        self._asking.add(rid)
         super()._ask(rid, p)
 
     def _tool_update(self, u: dict[str, Any], *, first: bool) -> None:
@@ -747,17 +832,21 @@ class AntigravityDriver(AcpDriver):
     def _question(self, rid: Any, p: dict[str, Any]) -> None:
         qs = form_questions(p.get("requestedSchema"))
         if not qs:
+            # v1.441.0 (review A3): never declined in silence.
+            self.emit(make("notice", text=W.ANTIGRAVITY_QUESTION_UNSHOWN))
             asyncio.ensure_future(self._respond(rid, {"action": "decline"}))
             return
         rows = []
         for q in qs:
             row: dict[str, Any] = {"question": q["question"] or clip(p.get("message") or "", 500),
-                                   "options": [{"label": o["label"]} for o in q["options"]], "multi": False}
+                                   "options": [{"label": o["label"]} for o in q["options"]],
+                                   "multi": bool(q.get("multi"))}
             if not q["other"]:
                 row["free_text"] = False
             rows.append(row)
         ask_id = new_ask_id()
         ev = make("question", request_id=ask_id, questions=rows)
+        self._asking.add(rid)
         self.raise_ask(Ask(ask_id, "question", "ask_question", rid, {"questions": qs}, ev, ev["at"], False))
 
     def prepare_answer(self, ask: Ask, decision: str, message: str, answers: Any) -> dict[str, Any]:
@@ -770,11 +859,15 @@ class AntigravityDriver(AcpDriver):
 
     # -- the user's side ----------------------------------------------------------
     def answered(self, ask: Ask, decision: str) -> None:
+        self._asking.discard(ask.native)
         if ask.kind == "approval" and decision == "deny" and not self._interrupting:
             self._declined = True
 
     def turn_started(self) -> None:
         self._declined = False
+        self._asking.clear()
+        self._prompts.clear()
+        self._superseded = None
         self._notes.clear()
         self._failed_said = ""
         self._fail_read = None
@@ -791,6 +884,7 @@ class AntigravityDriver(AcpDriver):
         self._message_words = _words(blocks[0].get("text"))
         self._message_echoed = False
         rid = self._start_prompt(blocks)
+        self._prompts.append(rid)
         # Named the turn's LAST prompt before it is written: an answer that
         # comes back during the write must end the turn.
         self._message_prompt = self._latest = rid
@@ -803,12 +897,19 @@ class AntigravityDriver(AcpDriver):
         ends with the note's answer). Read when Antigravity echoes it."""
         if not (self.turn_open and self._latest is not None):
             raise ControlRefused(W.STEER_TOO_LATE.format(label=self.LABEL))
+        if self._asking:
+            # v1.441.0 (review A1): Antigravity refuses a prompt while a card
+            # or a question waits — said before anything is sent.
+            raise ControlRefused(W.ANTIGRAVITY_NOTE_WHILE_ASKING)
         blocks = await self._prompt_blocks(text, files)
         if not (self.turn_open and self._latest is not None):
             raise ControlRefused(W.STEER_TOO_LATE.format(label=self.LABEL))
+        if self._asking:
+            raise ControlRefused(W.ANTIGRAVITY_NOTE_WHILE_ASKING)
         self.steers[ref] = "sent"
         self._notes.append((ref, _words(blocks[0].get("text"))))
         rid = self._start_prompt(blocks, ref)
+        self._prompts.append(rid)
         self._latest = rid
         await self.write({"jsonrpc": "2.0", "id": rid, "method": "session/prompt",
                           "params": {"sessionId": self.session_id, "prompt": blocks}})
@@ -841,8 +942,18 @@ class AntigravityDriver(AcpDriver):
         self.model = model
         if self.effort and self.effort not in _values(_config(self.options, "effort")):
             self.emit(make("notice", text=W.ANTIGRAVITY_NO_SUCH_EFFORT.format(effort=self.effort)))
-            self.effort = ""
+            self._drop_effort()
         return "next" if self.turn_open else "now"
+
+    def _drop_effort(self) -> None:
+        """v1.441.0 (review A6): an effort the model does not take leaves the
+        chip and the row too (it would be shown, and sent again, for nothing)."""
+        dropped, self.effort = self.effort, ""
+        if dropped and callable(self.on_effort_dropped):
+            try:
+                self.on_effort_dropped(dropped)
+            except Exception:  # noqa: BLE001 — a chip's tidy-up never fails a start
+                log.debug("could not clear an Antigravity effort", exc_info=True)
 
     async def set_effort(self, effort: str) -> str:
         if effort:
@@ -907,7 +1018,7 @@ class AntigravityDriver(AcpDriver):
         return "\n".join(kept)
 
     def _prompt_answered(self, rid: int, fut: asyncio.Future) -> None:
-        self._pending.pop(rid, None)
+        ref = self._pending.pop(rid, None)
         if fut.cancelled():
             return
         exc = fut.exception()
@@ -917,7 +1028,16 @@ class AntigravityDriver(AcpDriver):
             # usage (measured) — the turn goes on.
             if rid == self._message_prompt:
                 self._message_prompt = None
+            if exc is None and isinstance(result, dict):
+                self._superseded = result
             return
+        if ref and isinstance(exc, ControlRefused):
+            # v1.441.0 (review A1): Antigravity refused a NOTE's prompt (a
+            # card came in while it went out). Never the reply's failure: the
+            # turn goes on under the prompt before it; the note goes back.
+            if self._note_refused(rid, ref):
+                return
+            exc, result = None, dict(self._superseded or {"stopReason": "end_turn"})
         self._message_prompt = None
         if exc is not None:
             if isinstance(exc, ControlRefused):
@@ -952,6 +1072,23 @@ class AntigravityDriver(AcpDriver):
             self._fail_then_end(read, stop)
             return
         self._end(stop)
+
+    def _note_refused(self, rid: int, ref: str) -> bool:
+        """A refused note's prompt: the turn is the prompt's before it again.
+        True when that prompt still waits for its answer (it ends the turn);
+        False when every earlier prompt was answered already — then the
+        newest of those answers ends the turn (``_prompt_answered``)."""
+        if rid in self._prompts:
+            self._prompts.remove(rid)
+        self._notes = [(r, t) for r, t in self._notes if r != ref]
+        if self.steers.get(ref) == "sent":
+            self.steers[ref] = "cancelled"  # handed back with the reply's end
+        self.emit(make("notice", text=W.ANTIGRAVITY_NOTE_REFUSED))
+        earlier = next((x for x in reversed(self._prompts) if x in self._pending), None)
+        if earlier is not None:
+            self._latest = earlier
+            return True
+        return False
 
     def _fail_then_end(self, read: asyncio.Future | None, stop: str) -> None:
         reason = ""

@@ -204,11 +204,18 @@ class Driver:
     async def set_model(self, model: str) -> str:  # pragma: no cover
         raise NotImplementedError
 
+    def refresh_ask(self, ask: Ask) -> "dict[str, Any] | None":
+        """v1.441.0: the mode moved while ``ask`` waited — its card's new
+        event when the card's words change (the service re-sends it), else
+        None. Only Claude Code's plan card names a mode."""
+        return None
+
     async def rename(self, title: str) -> None:
         """v1.439.0: the user renamed this session — tell the tool, so its own
         list (``claude --resume``, ``codex resume``) shows the same name. Best
-        effort: the service calls it in the background, only while the
-        process runs, and never waits for it. Most tools have no way."""
+        effort: the service calls it in the background, never waiting for it
+        — at once while the process runs, else (v1.441.0) once right after
+        the process next starts. Most tools have no way."""
         return None
 
     #: v1.415.0: may :meth:`context_breakdown` be asked while a turn runs?

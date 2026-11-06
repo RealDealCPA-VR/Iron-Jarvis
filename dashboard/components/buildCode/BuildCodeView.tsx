@@ -1467,12 +1467,15 @@ function SessionPane({
           </div>
           {/* v1.414.0: Iron Jarvis's own tools for this session (all off
               until ticked) — the same two boxes a Build terminal has. */}
-          <JarvisToolsChip
-            session={session}
-            toolName={toolName}
-            onChanged={adoptSession}
-            onInfo={setInfo}
-          />
+          {/* v1.441.0 (review A5): never for a tool that takes none. */}
+          {session.jarvisToolsTaken === false ? null : (
+            <JarvisToolsChip
+              session={session}
+              toolName={toolName}
+              onChanged={adoptSession}
+              onInfo={setInfo}
+            />
+          )}
           <div className="relative">
             <button
               type="button"

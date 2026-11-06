@@ -537,6 +537,23 @@ def _lookup(model_id: str) -> tuple[str, dict | None]:
     return canon, None
 
 
+def resolve_alias(model_id: str) -> str | None:
+    """v1.441.0: Claude Code's OWN name for a model -> our id: an id, the
+    value its picker lists ("opus", "claude-fable-5-1[1m]"), a ``[1m]`` form,
+    or a short alias of :data:`PINNED_ALIASES`, any case. None when neither
+    the CACHED picker nor the pinned tables name it. Never starts the CLI."""
+    raw = (model_id or "").strip()
+    if not raw or raw.lower() in DEFAULT_IDS:
+        return None
+    canon, row = _lookup(raw)
+    if row is not None:
+        return str(row["id"])
+    base = _strip_1m(raw).lower()
+    if base in PINNED_ALIASES or canon in PINNED:
+        return canon
+    return None
+
+
 def _default_row() -> dict | None:
     """The LIVE picker row the CLI's own default resolves to (``default: True``
     — only a real discovery sets it; the pinned table never guesses one)."""

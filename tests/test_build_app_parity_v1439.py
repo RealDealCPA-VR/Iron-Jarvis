@@ -338,8 +338,12 @@ async def test_model_and_effort_typed_for_claude_code_set_the_chips(app, work, t
         assert "Claude Code now uses Haiku 5.5." in notices
         assert "Claude Code's effort level is now high from your next message." in notices
         # Unknown names and levels are refused in words, before anything.
+        # v1.441.0 (review P2, moved on purpose): a name nothing resolves goes
+        # to Claude Code as typed (v1.438.0), never refused here.
+        users = len([m for m in sent(log) if m.get("type") == "user"])
         r = await _say(c, s["id"], "/model sonnet-9", "t4")
-        assert r.status_code == 400 and "does not list a model called sonnet-9" in r.json()["detail"]
+        assert r.status_code == 200, r.text
+        assert len([m for m in sent(log) if m.get("type") == "user"]) == users + 1
         r = await _say(c, s["id"], "/effort turbo", "t5")
         assert r.status_code == 400 and '"turbo" is not an effort Claude Code takes' in r.json()["detail"]
         r = await _say(c, s["id"], "/model", "t6")
@@ -407,10 +411,16 @@ def test_a_name_in_claude_codes_own_list_is_claude_codes():
     they are never in the table; a later Claude Code that lists a name the
     table holds runs it itself."""
     assert "config" not in T.CLAUDE_TERMINAL_ONLY and "doctor" not in T.CLAUDE_TERMINAL_ONLY
-    assert T.typed_builtin("claude-code", "/status", []) == ("status", "")
+    # v1.441.0 (review P3, moved on purpose): nothing is answered here before
+    # Claude Code has said its own list for the folder — "/status" could be
+    # the user's own command.
+    assert T.typed_builtin("claude-code", "/status", []) is None
+    assert T.typed_builtin("claude-code", "/status", [{"name": "init", "description": "x"}]) == ("status", "")
     assert T.typed_builtin("claude-code", "/status", [{"name": "status", "description": "x"}]) is None
     # A note row (ours) is not Claude Code's own.
-    assert T.typed_builtin("claude-code", "/status", [{"name": "status", "note": "n"}]) == ("status", "")
+    assert T.typed_builtin("claude-code", "/status", [{"name": "init"}, {"name": "status", "note": "n"}]) == (
+        "status", "")
+    assert T.typed_builtin("claude-code", "/status", [{"name": "status", "note": "n"}]) is None
     rows = T.menu_rows("claude-code", [{"name": "status", "description": "Claude Code's own"}])
     assert [r for r in rows if r["name"] == "status"] == [{"name": "status", "description": "Claude Code's own"}]
     # Nothing is said before Claude Code has said its own list.
