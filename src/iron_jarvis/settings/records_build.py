@@ -538,6 +538,53 @@ def _emergency_on(platform: Any) -> bool:
         return False
 
 
+#: v1.438.0 review: a Local only chat's words never leave the network at night.
+LOCAL_ONLY_NIGHT = (
+    "This chat is Local only, so a night task queued from it runs only on a model on this PC or your own "
+    "network, and {model} is not one. Pick a local model for it, or queue it from a chat that is not Local only."
+)
+LOCAL_ONLY_NIGHT_TEAM = (
+    "This chat is Local only, so a night task queued from it cannot hand pieces to your model team (a member "
+    "may run on a cloud model). Queue it without the team, or from a chat that is not Local only."
+)
+
+
+def _local_only_night_problem(platform: Any, args: dict[str, Any]) -> str:
+    """v1.438.0 review: in a Local only chat a night task's words go only to a
+    model that stays on the user's network — its own model, else the app's
+    default (what its session's first turn runs on), and every model it is
+    tried on; never a team. "" when the chat is not Local only or every model
+    stays. BLOCKING-free (no I/O beyond the provider registry)."""
+    from ..providers import egress
+
+    if not egress.current_scope().on:
+        return ""
+    if args.get("team"):
+        return LOCAL_ONLY_NIGHT_TEAM
+    cfg = getattr(platform, "config", None)
+    manager = getattr(platform, "providers", None)
+    pairs: list[tuple[str, str]] = []
+    picks = [p for p in (args.get("try_on") or []) if isinstance(p, dict)]
+    if picks:
+        pairs = [(str(p.get("provider") or "").strip(), str(p.get("model") or "").strip()) for p in picks]
+    else:
+        provider = str(args.get("provider") or "").strip()
+        model = str(args.get("model") or "").strip()
+        if not provider:
+            provider = str(getattr(cfg, "default_provider", "") or "")
+            model = str(getattr(cfg, "default_model", "") or "")
+        pairs = [(provider, model)]
+    for provider, model in pairs:
+        try:
+            stays = egress.stays_on_this_network(provider, manager, cfg, model)
+        except Exception:  # noqa: BLE001 — unknown: it does not stay
+            stays = False
+        if not stays:
+            shown = f"{provider} · {model}" if model else (provider or "the default model")
+            return LOCAL_ONLY_NIGHT.format(model=shown)
+    return ""
+
+
 def _refusal_words(exc: Any) -> str:
     s = " ".join(str(exc or "").split()) or "That could not be done."
     return s if s[-1] in ".!?" else s + "."
@@ -581,8 +628,14 @@ class NightTaskAddTool(_BuildTool):
             if problem or not str(args.get("words") or "").strip():
                 return None  # execute refuses in words
             start, end, open_now = _night_words(self.platform)
-        except Exception:  # noqa: BLE001 — unsure: the ordinary card
-            return None
+        except Exception:  # noqa: BLE001 — unsure: still this card (v1.438.0 review: never the
+            # ordinary card, which the Auto posture's judge may approve for unattended work)
+            return SpendCheck(
+                ask=True,
+                words=f"Queue {_q(args.get('words'))} for the night shift: it runs on its own inside the night window.",
+                dont_ask_skips=True,
+                attended_only=True,
+            )
         when = f"between {start} and {end}" if start and end else "inside the night window"
         now = " The window is open now, so it may start within a minute." if open_now else ""
         words = (
@@ -610,6 +663,9 @@ class NightTaskAddTool(_BuildTool):
         folder, problem = await asyncio.to_thread(resolve_folder, self.platform, ctx, args.get("folder"))
         if problem:
             return ToolResult(ok=False, error=problem)
+        local_problem = _local_only_night_problem(self.platform, args)
+        if local_problem:
+            return ToolResult(ok=False, error=local_problem)
         try:
             picks = [TryOnBody(provider=str(p.get("provider") or ""), model=str(p.get("model") or ""))
                      for p in (args.get("try_on") or []) if isinstance(p, dict)]
@@ -1137,9 +1193,26 @@ class BuildTeamSetTool(_FolderTool):
         seats = [*workers, *([reviewer] if reviewer else [])]
         if len({s.casefold() for s in seats}) != len(seats):
             return ToolResult(ok=False, error="The same seat is named twice; a worker cannot also be the reviewer.")
-        members = {getattr(r, "name", "").casefold(): getattr(r, "name", "") for r in MT.team_members(self.platform)}
+        # v1.438.0 review: the registry read OFF the loop (SQLite).
+        members = {
+            getattr(r, "name", "").casefold(): getattr(r, "name", "")
+            for r in await asyncio.to_thread(MT.team_members, self.platform)
+        }
         pairs = await asyncio.to_thread(_menu, self.platform)
         providers = {p for p, _m in (pairs or set())}
+        # v1.438.0 review: the team's OWN rules (how many workers, a member
+        # named, its role) checked BEFORE a member is made for a model seat —
+        # a team that could never be saved leaves nothing on the model team.
+        pending = frozenset(" ".join(s.split()) for s in seats if s.casefold() not in members and _model_spec(s, providers) is not None)
+        try:
+            await asyncio.to_thread(
+                HT.validate, self.platform,
+                {"workers": [members.get(w.casefold(), w) for w in workers],
+                 "reviewer": members.get(reviewer.casefold(), reviewer) if reviewer else ""},
+                pending=pending,
+            )
+        except HT.TeamRefused as exc:
+            return ToolResult(ok=False, error=_refusal_words(exc))
         from ..providers import egress
 
         local_only = bool(egress.current_scope().on)
@@ -1171,7 +1244,8 @@ class BuildTeamSetTool(_FolderTool):
         try:
             saved = await asyncio.to_thread(HT.set_folder_team, _engine(self.platform), folder, team)
         except HT.TeamRefused as exc:
-            return ToolResult(ok=False, error=_refusal_words(exc))
+            kept = f" (It already {'; '.join(said)}; they stay on your model team.)" if said else ""
+            return ToolResult(ok=False, error=_refusal_words(exc) + kept)
         _note(after=saved, made=made)
         new = _team_words(saved)
         extra = f" It {'; '.join(said)}." if said else ""
@@ -1244,7 +1318,9 @@ def build_record_tools(platform: Any) -> list[Tool]:
 #: the one in ``D:\\``), or a joining word ("queue it for tonight and use
 #: Codex for this repo"). A writes-and-reviews pair is read on the WHOLE
 #: message (:data:`_TEAM_PAIR`).
-_CLAUSES = re.compile(r"[.!?;\n]+|:\s|\b(?:and\s+then|and|then|also|but)\b", re.IGNORECASE)
+#: v1.438.0 review: a dot ends a clause only before a space or the end
+#: ("utils.py" is one word: "queue 'add docstrings to utils.py' for tonight").
+_CLAUSES = re.compile(r"[.!?]+(?=\s|$)|[;\n]+|:\s|\b(?:and\s+then|and|then|also|but)\b", re.IGNORECASE)
 _FILLER = re.compile(
     r"(?:please|kindly|ok(?:ay)?|so|hey|hi|hello|jarvis|now|just|also|then|and|go\s+ahead\s+and|can\s+you"
     r"|could\s+you|would\s+you|will\s+you|i\s+(?:want|need|would\s+like)\s+you\s+to|i['’]d\s+like\s+you\s+to"
@@ -1282,14 +1358,14 @@ _EVERYDAY_TONIGHT = re.compile(
     r"|show|tv|party|date|game|match|flight|ride|uber|lyft|pizza|food|order|delivery|workout|gym|run\s+club"
     r"|bath|nap|bed|plans?|drinks?|concert|tickets?|babysitter|walk|homework|laundry|groceries|errands?"
     r"|event|events|calendar|cook|recipe|weather|news|emails?|messages?|posts?|tweets?|newsletters?|songs?|videos?"
-    r"|playlists?|episodes?)\b",
+    r"|playlists?|episodes?|agenda|itinerary)\b",
     re.IGNORECASE,
 )
 #: Words that make a task a coding one ("the README", "the tests", a path).
 _CODE_THING = re.compile(
     r"\b(?:readme|tests?|test\s+suite|bugs?|code|codebase|repo(?:sitory)?|branch|refactor(?:ing)?|lint(?:ing)?"
     r"|typos?|docs?|documentation|dependenc(?:y|ies)|migrations?|functions?|modules?|build|ci|pull\s+request"
-    r"|pr|changelog|types?|logging|api|endpoints?|scripts?|components?|styles?|files?|folder)\b"
+    r"|pr|changelog|types?|logging|api|endpoints?|scripts?|components?|styles?)\b"
     r"|[a-z]:[\\/]|\b[\w-]{1,60}\.(?:py|ts|tsx|js|jsx|md|json|toml|yaml|yml|css|html|go|rs|java|cs|cpp|rb)\b",
     re.IGNORECASE,
 )
@@ -1308,8 +1384,8 @@ _CODE_VERB = re.compile(
     re.IGNORECASE,
 )
 _CANCEL_VERB = re.compile(
-    r"(?:cancel|remove|drop|delete|unqueue|dequeue|scratch|take|pull|skip)\s+(?:off\s+|out\s+)?"
-    r"(?P<det>the|that|this|my|tonight['’]s)\s+(?P<pre>(?:[\w'’.&/\\-]+\s+){0,6}?)(?:night\s+)?tasks?\b(?P<tail>[^\n]{0,80})",
+    r"(?P<verb>cancel|remove|drop|delete|unqueue|dequeue|scratch|take|pull|skip|stop|kill|abort|halt)\s+(?:off\s+|out\s+)?"
+    r"(?P<det>the|that|this|my|tonight['’]s)\s+(?P<pre>(?:[\w'’.&/\\-]+\s+){0,6}?)(?P<night>night\s+)?tasks?\b(?P<tail>[^\n]{0,80})",
     re.IGNORECASE,
 )
 #: Before "task": a schedule's or another app's task ("the scheduled task",
@@ -1329,6 +1405,15 @@ _MOVE = re.compile(
     r"|higher|lower|ahead)\b",
     re.IGNORECASE,
 )
+#: v1.438.0 review: adding a task ONTO tonight's list ("add a night task to
+#: bump the version") — the list words carry it, never "do the night tasks".
+_ADD_ONTO = re.compile(r"(?:add|put|schedule|set\s+up|create|make)\b", re.IGNORECASE)
+#: "tonight, refactor the auth module": the night word in front of the work.
+_LEAD_NIGHT = re.compile(
+    r"^(?:tonight|overnight|over\s+night|while\s+i(?:['’]m|\s+am)?\s+(?:sleep(?:ing)?|asleep))\s*,?\s*", re.IGNORECASE
+)
+#: "take 'x' off the night shift" (bounded: the words between are capped).
+_TAKE_OFF = re.compile(r"(?:take|pull)\b[^\n]{0,80}?\boff\b", re.IGNORECASE)
 _NIGHT_LIST_ASK = re.compile(
     r"(?:show|list|read|tell\s+me|give\s+me|what(?:['’]s|\s+is|\s+are)|which|anything)\b[^\n]{0,40}?"
     r"(?:queued|lined\s+up|waiting|on\s+(?:the\s+)?(?:night\s+shift|tonight['’]s)|tonight['’]s|night\s+shift|night\s+tasks?)",
@@ -1365,7 +1450,9 @@ def _night_request(c: str) -> bool:
         return True
     if night and _ADD_VERB.match(c) and (listed or _CODE_THING.search(c)) and not (everyday and not listed):
         return True
-    bare = _HAVE_IT.sub("", c, count=1)
+    if listed and _ADD_ONTO.match(c) and not everyday:
+        return True  # v1.438.0 review: "add a night task to bump the version"
+    bare = _LEAD_NIGHT.sub("", _HAVE_IT.sub("", c, count=1), count=1)
     if night and _CODE_VERB.match(bare) and _CODE_THING.search(c) and not everyday:
         return True
     m = _CANCEL_VERB.match(c)
@@ -1374,12 +1461,22 @@ def _night_request(c: str) -> bool:
         and not _NOT_A_NIGHT_TASK.search(m.group("pre") or "")
         and not _OTHER_PLACE_TAIL.match(m.group("tail") or "")
         and (listed or not everyday)
+        # v1.438.0 review: a task is a NIGHT task only by its words — "the
+        # night task", tonight's list, a coding thing ("the README task") or
+        # a queue verb; a bare "cancel the task" is any task of the user's.
+        and (
+            listed or night or bool(m.group("night")) or m.group("verb").lower() in ("unqueue", "dequeue")
+            or _CODE_THING.search(m.group("pre") or "") is not None
+            or _CODE_THING.search(m.group("tail") or "") is not None
+        )
     ):
         return True
     if (listed or night) and re.match(
         r"(?:cancel|remove|drop|delete|unqueue|clear|empty|scratch|take\s+off|pull)\b", c, re.IGNORECASE
     ) and not everyday:
         return True
+    if listed and _TAKE_OFF.match(c) and not everyday:
+        return True  # v1.438.0 review: "take 'upgrade pytest' off the night shift"
     m = _MOVE.match(c)
     return m is not None and (listed or "night" in c.lower())
 
@@ -1450,8 +1547,13 @@ _FOLDER_SHOW = re.compile(
 _PEOPLE_TEAM = re.compile(r"\b(?:at\s+work|the\s+office|meeting|standup|stand-up|colleagues?|coworkers?)\b", re.IGNORECASE)
 
 
+#: v1.438.0 review: a sentence comparing models ("Claude reviews and Codex
+#: writes better than people think") is talk about them, never a team.
+_COMPARE = re.compile(r"\b(?:better|worse|than|faster|slower|prefer|prefers|preferred)\b", re.IGNORECASE)
+
+
 def _folder_request(text: str, clauses: list[str]) -> bool:
-    if _TEAM_PAIR.search(text) is not None and _PEOPLE_TEAM.search(text) is None:
+    if _TEAM_PAIR.search(text) is not None and _PEOPLE_TEAM.search(text) is None and _COMPARE.search(text) is None:
         return True
     for c in clauses:
         if _DEFAULTS_SET.match(c) or _DEFAULTS_CLEAR.match(c) or _TEAM_CLEAR.match(c):

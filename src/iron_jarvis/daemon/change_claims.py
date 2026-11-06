@@ -817,16 +817,48 @@ def _coding_kinds(phrase: list[str], verb_word: str) -> list[str]:
     night = bool(toks & {"tonight", "tonight's", "overnight"}) or (
         "night" in toks and bool(toks & {"shift", "list", "queue", "shift's"})
     )
+    listed = bool(toks & {"queue", "queued", "task", "tasks", "shift", "list"})
+    # v1.438.0 review: "I've queued the print job for tonight", "I queued your
+    # email to send tonight" — another program's queue, never the night shift.
+    other_work = not listed and bool(toks & _NOT_NIGHT_WORK)
     if night and not (_NOT_OUR_SCHEDULE & toks) and not (_OTHER_LISTS & toks) and not (_EXTERNAL & toks) and (
-        verb_word == "queued" or bool(toks & {"queue", "queued", "task", "tasks", "shift", "list"})
-    ):
+        verb_word == "queued" or listed
+    ) and not other_work:
         out.append("night_task")
     folder = bool(toks & _FOLDER_WORDS)
-    if folder and toks & {"default", "defaults"}:
+    if folder and _names_the_setting(phrase, {"default", "defaults"}):
         out.append("coding_defaults")
-    if folder and toks & {"team", "teams"} and not (_EXTERNAL & toks):
+    if folder and _names_the_setting(phrase, {"team", "teams"}) and not (_EXTERNAL & toks):
         out.append("coding_team")
     return out
+
+
+#: v1.438.0 review: work the user queues in ANOTHER program for tonight.
+_NOT_NIGHT_WORK = frozenset(
+    {"job", "jobs", "print", "printer", "email", "emails", "mail", "message", "messages", "text", "texts", "song", "songs", "video",
+     "videos", "post", "posts", "tweet", "tweets", "order", "orders", "delivery", "payment", "payments",
+     "transfer", "transfers", "newsletter", "campaign", "broadcast", "upload", "uploads", "download",
+     "downloads", "backup", "backups", "episode", "episodes", "playlist", "reminder", "reminders"}
+)
+#: v1.438.0 review: after "team" / "defaults", a word that makes it a part of
+#: the user's own content ("the team section of the README", "the team
+#: roster", "the defaults section").
+_NOT_THE_SETTING_AFTER = _NOT_THE_RECORD_AFTER | frozenset(
+    {"roster", "rosters", "member", "members", "photo", "photos", "bio", "bios", "meeting", "meetings",
+     "channel", "chat", "lunch", "building", "heading", "paragraph", "block", "tab", "sheet", "slide"}
+)
+
+
+def _names_the_setting(phrase: list[str], words: "set[str]") -> bool:
+    """A setting word in *phrase* that is the thing itself, never followed by
+    a word that makes it the user's content ("team section", "defaults
+    file")."""
+    for i, t in enumerate(phrase):
+        if t in words:
+            nxt = phrase[i + 1] if i + 1 < len(phrase) else ""
+            if nxt not in _NOT_THE_SETTING_AFTER:
+                return True
+    return False
 
 
 def _records_in(phrase: list[str], verb_word: str, sentence_toks: list[str]) -> list[str]:
