@@ -83,3 +83,51 @@ def test_a_long_run_of_spaces_after_a_request_verb_is_linear():
         "        assert time.perf_counter() - s < 0.5, (verb, filler)\n"
     )
     subprocess.run([sys.executable, "-c", code], check=True, timeout=120)
+
+
+# ------------------------------------------------- the writer's linked rule
+# Two guarantees no pin held on 19e2e474 (each mutation stayed green):
+# clearing the colours must never clear a built-in theme, and a write that
+# names BOTH rows with a value is one theme too many.
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from iron_jarvis.daemon.app import create_app  # noqa: E402
+from iron_jarvis.settings.writer import SettingError  # noqa: E402
+
+DEV = "dev_wave7rev1"
+GREEN = {"accent": "#2f855a", "surface": "tinted", "mode": "dark"}
+
+
+@pytest.fixture
+def writer(tmp_path):
+    a = create_app(str(tmp_path))
+    TestClient(a)
+    return a.state.d.platform.config_writer
+
+
+def test_clearing_the_colours_leaves_a_built_in_theme_alone(writer):
+    writer.apply({"device.theme": "mark2"}, actor="test", device_id=DEV)
+    out = writer.apply({"device.theme_colors": None}, actor="test", device_id=DEV)
+    assert writer.current("device.theme", device_id=DEV) == "mark2"
+    assert out.changed == []
+
+
+def test_both_theme_rows_with_a_value_in_one_write_are_refused(writer):
+    writer.apply({"device.theme": "mark2"}, actor="test", device_id=DEV)
+    with pytest.raises(SettingError) as e:
+        writer.apply(
+            {"device.theme": "mark1", "device.theme_colors": GREEN}, actor="test", device_id=DEV
+        )
+    assert "one" in str(e.value).lower()
+    assert writer.current("device.theme", device_id=DEV) == "mark2"
+    assert writer.current("device.theme_colors", device_id=DEV) is None
+
+
+def test_the_device_route_says_so_in_words(tmp_path):
+    c = TestClient(create_app(str(tmp_path)))
+    r = c.put(
+        "/settings/device",
+        json={"device_id": DEV, "values": {"device.theme": "mark1", "device.theme_colors": GREEN}},
+    )
+    assert r.status_code == 400, r.text

@@ -211,6 +211,13 @@ class ConfigWriter:
                     raise SettingError(f"That is not a valid value for {d.label}.") from None
                 value = getattr(trial, d.field_name)
             clean[key] = value
+        if all(clean.get(k) is not None for k in ("device.theme", "device.theme_colors")):
+            # v1.442.0 review: the two rows name ONE theme (settings/
+            # theme_colors.LINKED); a value for both in one write has no
+            # "set last" and left both stored, contradicting each other.
+            raise SettingError(
+                f"Pick one theme: {_label('device.theme')} or {_label('device.theme_colors')}, not both."
+            )
         if "backup_mirror_dir" in clean and clean["backup_mirror_dir"]:
             from ..maintenance import mirror_dir_problem
 
