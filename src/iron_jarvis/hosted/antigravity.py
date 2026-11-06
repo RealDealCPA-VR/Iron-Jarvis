@@ -147,6 +147,10 @@ MAX_MODELS = 200
 LOG_NAME = "agy-acp.log"
 #: A log is read from its end, at most this many bytes.
 LOG_TAIL_BYTES = 256 * 1024
+#: Before each start, a log past this size keeps only its last
+#: :data:`LOG_TAIL_BYTES` (v1.439.0: it lives in the state home, so it went
+#: into every backup and grew for the session's whole life).
+LOG_MAX_BYTES = 2 * 1024 * 1024
 
 #: When set (non-blank), the ONLY Antigravity folder Iron Jarvis READS for its
 #: own listings (saved sessions) — the test suite points it at an empty
@@ -193,6 +197,27 @@ _GLOG_RX = re.compile(r"^E\d{4} [\d:.]+\s+\d+\s+[^\]]+\]\s*(.*)$")
 #: a missing project file, plugins, experiments — never the reply).
 _REASON_RX = re.compile(r"executor error|generating and executing|Error \d{3}|RESOURCE_EXHAUSTED|"
                         r"PERMISSION_DENIED|UNAUTHENTICATED|API key|quota", re.I)
+
+
+def trim_log(path: str | os.PathLike[str] | None) -> None:
+    """BLOCKING (run off the loop, before a start): keep only the last
+    :data:`LOG_TAIL_BYTES` of a session log larger than :data:`LOG_MAX_BYTES`.
+    Never raises (a log it cannot trim is left as it is)."""
+    if not path:
+        return
+    try:
+        if os.path.getsize(path) <= LOG_MAX_BYTES:
+            return
+        with open(path, "rb") as fh:
+            fh.seek(-LOG_TAIL_BYTES, os.SEEK_END)
+            tail = fh.read()
+        cut = tail.find(b"\n")
+        tmp = f"{path}.trim"
+        with open(tmp, "wb") as fh:
+            fh.write(tail[cut + 1:] if cut >= 0 else tail)
+        os.replace(tmp, path)
+    except OSError:
+        return
 
 
 def log_reason(path: str | os.PathLike[str] | None) -> str:

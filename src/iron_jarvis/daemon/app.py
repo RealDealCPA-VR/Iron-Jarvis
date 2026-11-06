@@ -1828,7 +1828,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
             from ..iron_proxy.usage_read import usage_loop as _usage_loop
 
             bg_tasks["account_usage"] = asyncio.create_task(
-                _usage_loop(platform, lambda ok, exc: _tick("account_usage", ok, exc))
+                _usage_loop(
+                    platform,
+                    lambda ok, exc: _tick("account_usage", ok, exc),
+                    on_off=lambda: loop_health.pop("account_usage", None),
+                )
             )
 
         # v1.391.0 (the long-jobs plan's Phase 2, decision 2): a coding

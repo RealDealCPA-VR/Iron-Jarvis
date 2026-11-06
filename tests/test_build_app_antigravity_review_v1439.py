@@ -181,3 +181,25 @@ def test_no_control_characters_in_the_source(rel):
 def test_the_recordings_parse():
     for path in (ROOT / "tests" / "fixtures" / "build_app_v1439").glob("*.json"):
         json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_a_long_session_log_keeps_only_its_tail_before_a_start(tmp_path):
+    # v1.439.0 integration: the log lives in the state home (backups) and grew
+    # for the session's whole life. Past LOG_MAX_BYTES only the tail is kept,
+    # starting at a whole line, and the newest error line is still readable.
+    from iron_jarvis.hosted import antigravity as A
+
+    log = tmp_path / A.LOG_NAME
+    old = b"I1106 10:50:32.966432 201 server.go:1] filler line\n" * (A.LOG_MAX_BYTES // 40)
+    last = b"E1106 10:50:33.267572 278 errorreport.go:247] agent executor error: generating and executing: Error 400, Message: API key not valid.\n"
+    log.write_bytes(old + last)
+    A.trim_log(str(log))
+    data = log.read_bytes()
+    assert len(data) <= A.LOG_TAIL_BYTES and data.endswith(last)
+    assert data.startswith(b"I1106")  # cut at a whole line
+    assert "API key not valid" in A.log_reason(str(log))
+    small = tmp_path / "small.log"
+    small.write_bytes(b"x\n" * 10)
+    A.trim_log(str(small))
+    assert small.read_bytes() == b"x\n" * 10
+    A.trim_log(str(tmp_path / "missing.log"))  # never raises

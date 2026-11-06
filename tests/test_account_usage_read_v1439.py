@@ -207,7 +207,7 @@ def test_a_codex_read_tells_iron_proxy_the_rate_limits(fake, tmp_path):
 
 @pytest.mark.parametrize("mode,words", [
     ("error", "Claude Code could not say: Not logged in."),
-    ("shape", "Claude Code's answer had no usage numbers."),
+    ("shape", "Claude Code did not return its usage this time. Try again in a minute."),
     ("exit", "Claude Code stopped before it answered."),
 ])
 def test_a_read_that_fails_says_why_and_tells_iron_proxy_nothing(fake, monkeypatch, mode, words):
@@ -364,7 +364,27 @@ def test_iron_proxy_off_or_not_running_reads_nothing(fake, tmp_path):
     svc.running = lambda: False  # type: ignore[method-assign]
     platform = SimpleNamespace(iron_proxy=svc, hosted=SimpleNamespace(live={"s": _live(a["id"], True)}),
                                turn_logs=None, engine=None)
-    assert U.poll_in_use(platform) == [] and _starts(tmp_path) == []
+    assert U.poll_in_use(platform) is None and _starts(tmp_path) == []
+
+
+def test_a_pass_while_iron_proxy_is_off_drops_the_row_instead_of_saying_ok(monkeypatch):
+    import asyncio
+
+    # Off is not failing and not a healthy loop either (the v1.433.0 rule):
+    # the loop calls on_off, never on_tick(True).
+    ticks: list = []
+    offs: list = []
+    monkeypatch.setattr(U, "poll_in_use", lambda platform: None)
+
+    async def run() -> None:
+        task = asyncio.create_task(U.usage_loop("P", lambda ok, exc: ticks.append(ok),
+                                                interval=0.01, on_off=lambda: offs.append(1)))
+        while len(offs) < 2:
+            await asyncio.sleep(0.01)
+        task.cancel()
+
+    asyncio.run(run())
+    assert ticks == [] and len(offs) >= 2
 
 
 def test_a_chat_code_turn_reads_its_sessions_account(fake, tmp_path):

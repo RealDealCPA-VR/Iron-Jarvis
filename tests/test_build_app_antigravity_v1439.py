@@ -185,7 +185,10 @@ def test_every_scenario_ends_once_and_uses_only_contract_types():
 
 
 def test_the_recordings_are_masked():
-    for path in FIX.glob("*"):
+    # Antigravity's own recordings (a_*): this folder also holds other lanes'
+    # fixtures, whose already-masked paths ("C:\Users\me\AppData…") are fine.
+    assert len(list(FIX.glob("a_*"))) >= 18
+    for path in FIX.glob("a_*"):
         text = path.read_text(encoding="utf-8")
         for leak in ("\\Users\\VR", "/Users/VR", "scratchpad", "AppData"):
             assert leak not in text, (path.name, leak)

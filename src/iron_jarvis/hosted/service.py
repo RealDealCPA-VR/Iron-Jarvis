@@ -2320,6 +2320,7 @@ class HostedService:
         if isinstance(driver, AntigravityDriver) and driver.log_path:
             # v1.439.0: the folder its own log goes in (``--log-file``).
             await asyncio.to_thread(os.makedirs, os.path.dirname(driver.log_path), exist_ok=True)
+            await asyncio.to_thread(A.trim_log, driver.log_path)
         argv = argv0 + driver.argv(session_id=sid, resume=resume) + connection.argv
         # v1.416.0 review: only Grok's stop ends what it left outside its Job.
         ends_left_behind = bool(getattr(driver, "notes_started_on_stop", False))

@@ -421,7 +421,7 @@ def _ask_claude(argv: list[str], env: dict[str, str]) -> dict[str, str]:
         raise _Said(f"Claude Code could not say{': ' + said if said else ''}.")
     headers = claude_headers(resp.get("response"))
     if headers is None:
-        raise _Said("Claude Code's answer had no usage numbers.")
+        raise _Said("Claude Code did not return its usage this time. Try again in a minute.")
     return headers
 
 
@@ -592,16 +592,17 @@ def in_use_accounts(platform: Any) -> list[str]:
     return found
 
 
-def poll_in_use(platform: Any) -> list[str]:
+def poll_in_use(platform: Any) -> list[str] | None:
     """One pass of the in-use loop: re-read each account IN USE whose last
     read is older than :data:`IN_USE_EVERY_S`. Nothing in use = no read at
-    all. BLOCKING; never raises. Returns the ids read."""
+    all. BLOCKING; never raises. Returns the ids read, or None while
+    Iron-Proxy is off (the loop then has nothing to do: OFF, not ok)."""
     svc = getattr(platform, "iron_proxy", None)
     try:
         if svc is None or not svc.enabled or not svc.running():
-            return []
+            return None
     except Exception:  # noqa: BLE001
-        return []
+        return None
     read: list[str] = []
     for account_id in in_use_accounts(platform):
         age = _age_s(account_id)
@@ -617,15 +618,21 @@ def poll_in_use(platform: Any) -> list[str]:
     return read
 
 
-async def usage_loop(platform: Any, on_tick: Any, *, interval: float | None = None) -> None:
+async def usage_loop(
+    platform: Any, on_tick: Any, *, interval: float | None = None, on_off: Any = None,
+) -> None:
     """The lifespan loop: every :data:`POLL_S`, :func:`poll_in_use` off the
-    event loop; each pass reports ITS OWN outcome (``loop_health``)."""
+    event loop; each pass reports ITS OWN outcome (``loop_health``). A pass
+    while Iron-Proxy is off calls ``on_off`` instead (the daemon pops the
+    row: off is not failing and not a healthy loop either, the v1.433.0 rule)."""
     import asyncio
 
     while True:
         try:
-            await asyncio.to_thread(poll_in_use, platform)
-            on_tick(True, None)
+            if await asyncio.to_thread(poll_in_use, platform) is None and on_off is not None:
+                on_off()
+            else:
+                on_tick(True, None)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — a failed pass is a row, not a crash
