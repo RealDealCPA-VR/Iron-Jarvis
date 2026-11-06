@@ -15179,6 +15179,109 @@ does not need a bump, stop and bump it.
   `identity.tsx`, `BrowserSetupModal.tsx`, `RecipesRow.tsx`, `useModels.ts`;
   never driven in the packaged app or against real Iron-Proxy or GitHub.
 
+- **Build › Code catches up with each tool's own terminal** (v1.441.0; six
+  lanes, each a builder + an independent mutation-checking reviewer who found
+  31 more defects, each pinned red first; every fact MEASURED on the real CLI
+  from a scratch home with a stand-in model server, recordings in
+  `tests/fixtures/build_app_v14410/`; table in
+  `docs/BUILD-CODE-PARITY-2026-11-06.md` "What v1.441.0 changed").
+  - REVIEW FIXES. Antigravity: open card/question ids in `_asking`; `steer`
+    then refuses with `W.ANTIGRAVITY_NOTE_WHILE_ASKING`, a plain 409, NEVER
+    code `not_working` (the page would send the words as a new message); a
+    note prompt agy refuses anyway goes to `_note_refused` (the reply goes on
+    under the prompt before it; the note is handed back). Multi-select forms
+    (`type: array`, `items.anyOf`) answer a LIST of consts (+ `qN_other`), the
+    page's ", "-joined answer matched greedily; an unshowable form is
+    declined AND said; `jarvis_tools.takes()`/`note_takes` give
+    `jarvis_tools: false` (no chip, token or restart; a handshake flipping to
+    http with a box wanted sets `live.restart`); a dropped effort leaves the
+    row (`store.clear_effort_if`). Claude Code: the plan's way back is read
+    AT THE ANSWER (`plan_exit_mode`, only while still in plan, as 2.1.316's
+    `ExitPlanModeV2Tool`) and the card follows a live mode change
+    (`_plan_then` is the one rule; `refresh_ask` + `_refresh_asks` re-send it
+    under the SAME `request_id`, the fold keeps the newest) — Allow could put
+    the session back in Full access; `/model opus|sonnet|haiku` via
+    `claude_models.resolve_alias` (cached only), an unresolved name is SENT,
+    never refused; `FOLDER_COMMANDS` gains claude-code (the bare key = its
+    `builtin: true` rows) and the terminal-only check waits for the folder's
+    own list, so a user's own `status`/`export` reaches Claude Code; a rename
+    made while stopped (`_renames`) is told after the next `open`; a typed
+    `/export` names the ⋯ menu; all six tools named in every list.
+  - USAGE: `_row_and_lease` refuses (409) an Iron-Proxy without `plan-usage`
+    or not answering BEFORE any CLI starts; `can_refresh(row, svc)`.
+    `in_use_accounts` = Build › Code turns with NO open card, plus Build
+    terminals running Claude Code/Codex on that provider's account, `working`
+    AND printing within `IN_USE_EVERY_S` (`last_output_at`: a frozen screen
+    is not use); Chat › Code is not read (its adapters report each step).
+    `NO_PLAN_WORDS` for `rate_limits_available: false`; empty answers back
+    off per account to `EMPTY_BACKOFF_MAX_S`; `USAGE_READ_STRIP`;
+    `claude_markers` drops a parent's `CLAUDE_CODE_ACCOUNT_UUID`/
+    `_USER_EMAIL`/`_ORGANIZATION_UUID`. Page: Export reads every earlier page
+    (`collectAllEvents`, `exportGapWords`); Enter never approves a plan that
+    lands in Full access (`codeAskKeyHint`); Copy = `replyCopyTexts`.
+  - SESSION CONTROLS (`hosted/session_controls.py`): `Driver.
+    background_work()` (None = no list, no key), `stop_background`,
+    `mcp_actions`/`mcp_action`; routes `…/background/{work_id}/stop`,
+    `…/mcp/{server}`; rows carry only the actions that fit. Claude Code:
+    `apply_flag_settings {effortLevel}` read back via `get_settings`
+    (`effort_live`; the RUNNING reply keeps its effort, so mid-reply it says
+    `EFFORT_NEXT_WORDS`), `stop_task`, `mcp_reconnect`/`mcp_toggle` (off
+    persists in `.claude.json`, Claude Code's own write). Codex:
+    `thread/backgroundTerminals/*` feed `background_tasks` (the v1.418.0
+    keep-alive rule extended), read after a turn and every
+    `TERMINALS_POLL_S`, never mid-turn, our own reads `quiet_frame`
+    (`heard_from`, both `on_message` paths) or `last_heard` never ages;
+    `mcpServer/oauth/login` → `safe_sign_in_url`, opened by the page.
+  - BRANCH/REWIND (`hosted/branching.py`, `POST …/fork {at?}`, `…/rewind
+    {to}`): a message = its `user` event's `at`, the tool's ref in
+    `refs.json` (Claude uuid; Codex turn id; Pi by text against
+    `get_fork_messages`), noted only after `send_user` returns, awaited at
+    the reply's end (`ref_save`). Claude: `--resume H --fork-session
+    --session-id N --resume-session-at <parentUuid>`, pending until its first
+    message (`pending_rewind`: no Open in terminal). Codex `thread/fork`/
+    `revert` and Pi `fork`/`clone` then STOP the process (writer lock /
+    switched process). OpenCode whole fork only; Grok, Antigravity none. A
+    rewind trashes the log BEFORE the tool acts (`NOT_KEPT`), writes
+    `rewound.json` (`without_rewound`); no answer = `NO_ANSWER` 409. Never
+    while a reply or background work runs, archived or in a terminal; files
+    are never touched.
+  - CODEX PLAN (SUPERSEDES v1.420.0's hidden Plan): `_collaboration()` sends
+    `collaborationMode {mode: plan, settings: {model, reasoning_effort: pick
+    or the thread's own}}`, `default` once on leaving, none if never planned;
+    file changes declined (`_decline_in_plan`), commands ask; `_ask_plan`
+    raises the plan card BY ID (survives the code host); Allow starts
+    `IMPLEMENT_TEXT` in the same reply. Auto review, Auto edits hidden.
+  - OPENCODE: `hosted/opencode_catalog.py` (`opencode models --verbose`,
+    background, single-flight, `OPENCODE_DISABLE_MODELS_FETCH=1`, off in
+    conftest); primary agents are modes `agent:<name>` (`LAST_AGENTS`, Ask
+    first + the agent's rules, which win; Shift+Tab's `nextMode` never steps
+    into one, as it never steps into Full access); `task` is DENY outside Full
+    access unless the user has a `task` rule (SUPERSEDES v1.420.0's "task
+    allow": a helper's question never reaches ACP and waited for ever;
+    `NO_HELPERS`); `OPENCODE_ENABLE_QUESTION_TOOL` dropped (never crosses
+    ACP).
+  - GROK, PI, AGY: `history.transcript_source` imports Grok's
+    `chat_history.jsonl` (times from `events.jsonl` turn/tool fields ONLY —
+    it holds MCP URLs with keys) and agy's `transcript.jsonl`; Grok's MCP
+    list reads ONLY name/status/reason (`grok_servers`, `reported_mcp`;
+    SUPERSEDES v1.416.0's "dropped unread"); `CLIS["grok"]` share; Pi
+    `!`/`!!` through RPC `bash` (`_run_shell`, `abort_bash`, `_rearm_shell`,
+    a cut `!` turn never carried on: `WHY_COMMAND`). FOUND: Pi has no MCP
+    list over RPC; agy reports no usage window over ACP.
+  - OPEN: Codex Plan with no model known sends nothing and says nothing; an
+    allowed command in Codex Plan can write; Grok also reads
+    `~/.claude/CLAUDE.md` (profile twice, no guard by decision); agy terminal
+    sign-in may not reach ACP; `/model sonnet[1m]` loses `[1m]`; the bare
+    Claude list is empty after a restart; renames while stopped live in
+    memory; Claude `mcp_authenticate` not wired; a held queue survives a
+    rewind; per-message actions only for messages sent from v1.441.0; not
+    driven in the packaged app.
+  - Pins: every `tests/test_*_v14410.py` and `dashboard/__tests__/
+    *-v1441-0.test.tsx` (the parity doc maps each gap to its file); moved on
+    purpose: `test_build_app_{parity_v1439,routes_v1409,codex_posture_v1420,
+    opencode_v1413,opencode_rules_v1420,grok_v1416,tool_setup_v14260}`,
+    `test_account_usage_read_v1439`, `build-code-parity-v1439`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

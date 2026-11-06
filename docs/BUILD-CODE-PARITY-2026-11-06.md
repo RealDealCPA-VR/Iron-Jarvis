@@ -1,4 +1,4 @@
-# Build › Code against each tool's own terminal (2026-11-06, v1.439.0)
+# Build › Code against each tool's own terminal (2026-11-06, v1.439.0; updated for v1.441.0)
 
 Build › Code drives the user's REAL coding CLI as a long-lived process and draws it.
 This file compares it, feature by feature, with what each tool offers its user in its
@@ -17,7 +17,7 @@ in `tests/fixtures/build_app_v1439/` and in the module docstring of
 Legend: **offered** = Build › Code offers it the tool's way; **different** = offered
 another way; **missing** = not at all; **n/a** = does not apply to a hosted session.
 The table below is the inventory as found BEFORE v1.439.0; the section that follows
-says what v1.439.0 changed.
+says what v1.439.0 changed, and the one after it what v1.441.0 changed.
 
 ## What v1.439.0 changed (each pinned by tests)
 
@@ -35,20 +35,67 @@ says what v1.439.0 changed.
 | All (Claude Code `/export`, Codex `/export`) | No export | "Export as Markdown" in the session ⋯ menu | `dashboard/__tests__/build-code-parity-v1439.test.tsx`, `...-review-v1439.test.tsx` |
 | Claude Code | Plan card buttons did not say which mode approval leaves you in | Buttons named by the mode (Claude Code returns to its pre-Plan mode) | `tests/test_build_code_plan_card_v1439.py`, `..._review_v1439.py` |
 
-## Left for later (worth fixing, not in v1.439.0)
+## What v1.441.0 changed (each pinned by tests)
 
-Each needs a live measurement or a larger change. They are listed so they are not lost.
+Six lanes, each a builder and an independent mutation-checking reviewer. Every
+new fact was measured on the real CLI from a scratch home with a stand-in model
+server (no sign-in, no vendor reached; one tiny real Codex call on an ephemeral
+thread recorded Plan's shape). Recordings: `tests/fixtures/build_app_v14410/`.
+The first rows are the fixes the v1.439.0 review found (its A, P, U, X and D
+items); the rest close rows of the old "Left for later" list.
 
-- Fork / branch a conversation (Claude Code `--fork-session`, Codex `thread/fork`, OpenCode `forkSession`).
-- Rewind (Claude Code `rewind_files`, Codex `thread/revert`); Build › Code has per-file Revert only.
-- Claude Code MCP reconnect / on-off (`mcp_reconnect`, `mcp_toggle`) and Codex MCP sign-in (`mcpServer/oauth/login`) from the Session tab.
-- Claude Code background tasks listed with Stop (`stop_task`); Codex background terminals (`thread/backgroundTerminals/*`).
-- Codex Plan (`collaborationMode`) and Auto review; Auto edits once Windows' sandbox is set up.
-- Claude Code live effort change (`apply_flag_settings`) instead of a restart.
-- OpenCode: its own model list read in the background (`opencode models`), user-defined agents, the `question` tool, child sessions' cards.
-- Grok: transcript import into the Code view's history, its MCP server list, profile share.
-- Pi: `/fork`, `/clone`, `!cmd`, MCP server list.
-- Antigravity: its own transcript into the history, usage windows, an MCP connection (agy reports no `mcpCapabilities`).
+| Tool | Gap (before) | Built or found | Pins |
+|---|---|---|---|
+| Antigravity | A note sent while a card or question waited failed the reply and every later message | Refused in words (a plain 409, the words go back to the box); a note agy refuses anyway (a race) goes on under the earlier prompt and is handed back | `tests/test_build_app_agy_asks_v14410.py` |
+| Antigravity | A multi-select question showed no choices and answered free text | Checkboxes; the answer is a list of the choices (+ anything typed) | `tests/test_build_app_agy_asks_v14410.py` |
+| Antigravity | A form with nothing showable was declined silently; sign-in words said "send again" twice; a dropped effort stayed on the chip | Declined and said; said once; cleared from the row | `tests/test_build_app_agy_asks_v14410.py` |
+| Antigravity | The Iron Jarvis tools chip was offered (agy takes no tools) and ticking it restarted agy | Hidden while agy reports no `mcpCapabilities`; a newer agy that reports http restarts once to get them | `tests/test_build_app_agy_asks_v14410.py`, `..._fix1_review_v14410.py`, `dashboard/__tests__/build-code-jarvis-tools-hidden-v1441-0.test.tsx` |
+| Claude Code | A mode picked while a plan card waited was overwritten on Allow (could land in Full access) | The way back is read at the answer; the card is re-sent with its new words under the same id; Enter never approves a plan that lands in Full access | `tests/test_build_app_daemon_parity_v14410.py`, `..._fix1_review_v14410.py`, `..._integration_v14410.py`, `dashboard/__tests__/build-code-review-fixes-v1441-0.test.tsx`, `build-code-integration-v1441-0.test.tsx` |
+| Claude Code | `/model opus` / `sonnet` / `haiku` refused | Resolved from the cached catalog; an unknown name is sent through | `tests/test_build_app_daemon_parity_v14410.py` |
+| Claude Code | One global `/` list: another project's commands shown, a user's own `status` refused | Kept per folder; the terminal-only check waits for the folder's own list | `tests/test_build_app_daemon_parity_v14410.py` |
+| Claude Code | A rename while stopped never reached the tool; typed `/export` pointed at the terminal | Told after the next start; points at Export as Markdown | `tests/test_build_app_daemon_parity_v14410.py` |
+| All | The closed-window toast and the from-terminal refusal named five tools | All six | `tests/test_build_app_daemon_parity_v14410.py` |
+| Claude Code, Codex | Check usage now started a CLI an old or silent Iron-Proxy could not keep; a no-plan login said "try again" for ever; parked replies were re-read all night; Build terminals were never re-read; an API key or a parent's account could leak into the read | Refused before any start; no-plan words; parked turns skipped; working Build terminals read (only while they print); empty answers back off; keys and the parent's account names dropped | `tests/test_usage_refresh_{fixes,review}_v14410.py`, `dashboard/__tests__/usage-refresh-fixes-v1441-0.test.tsx` |
+| All | Export as Markdown left out earlier pages silently; Copy reply copied one text block | Every earlier page read first, gaps said under the title, one press, no empty file; the whole reply copied, helpers none | `dashboard/__tests__/build-code-review-fixes-v1441-0.test.tsx`, `build-code-export-review-v1441-0.test.tsx` |
+| Claude Code | Effort changed only by a restart | `apply_flag_settings`, read back; the running reply keeps its effort (measured), so the line says "from your next message" mid-reply | `tests/test_session_controls{,_routes,_review}_v14410.py`, `dashboard/__tests__/session-controls-v1441-0.test.tsx` |
+| Claude Code, Codex | Background tasks not listed; no Stop | Session tab Background list with Stop per row (`stop_task`, `thread/backgroundTerminals/terminate`); Codex terminals keep the session alive | `tests/test_session_controls{,_routes,_review}_v14410.py`, `dashboard/__tests__/session-controls-v1441-0.test.tsx` |
+| Claude Code, Codex | No MCP actions | Claude Code Reconnect / Turn off / Turn on (`mcp_reconnect`, `mcp_toggle`); Codex Sign in… (`mcpServer/oauth/login`, the vendor's page in the browser) | same |
+| Claude Code, Codex, Pi, OpenCode | No fork or rewind | Branch from here / Rewind to here through each tool's own way (Claude Code `--fork-session --resume-session-at`, Codex `thread/fork` / `thread/revert`, Pi `fork` / `clone`, OpenCode `session/fork` whole only); files never touched | `tests/test_build_app_branch{,_review}_v14410.py`, `dashboard/__tests__/build-code-branch-v1441-0.test.tsx` |
+| Grok, Antigravity | No fork | FOUND: their ACP offers none, so nothing is offered | `tests/test_build_app_branch_v14410.py` |
+| Codex | No Plan | `collaborationMode` plan; file changes declined, commands ask; the shared plan card, kept by id across the code host; Allow implements in the same reply | `tests/test_build_app_codex_plan{,_review}_v14410.py`, `dashboard/__tests__/build-app-plan-agents-v1441-0.test.tsx` |
+| Codex | Auto review; Auto edits on Windows | Still hidden, with the measured reasons (no review drawn yet; `windowsSandbox/readiness` answers `notConfigured`) | `tests/test_build_app_codex_plan_v14410.py` |
+| OpenCode | Model list only after a session ran | `opencode models --verbose` read in the background (no session, no model call, no models.dev) | `tests/test_build_app_opencode_models_v14410.py` |
+| OpenCode | The user's own agents not offered | Primary agents are modes (Ask first + the agent's own rules), also as a folder default; Shift+Tab never steps into one (an agent that allows everything would be Full access without its two presses) | `tests/test_build_app_opencode_agents_v14410.py`, `dashboard/__tests__/build-app-plan-agents-v1441-0.test.tsx`, `build-code-integration-v1441-0.test.tsx` |
+| OpenCode | A helper whose step asked waited for ever | FOUND: its question never reaches ACP (`session.tryGet`); `task` is denied outside Full access unless the user has a `task` rule | `tests/test_build_app_opencode_agents_v14410.py` |
+| OpenCode | The `question` tool | FOUND: never sent over ACP; kept off (`OPENCODE_ENABLE_QUESTION_TOOL` dropped) | `tests/test_build_app_opencode_agents_v14410.py` |
+| Grok | No transcript in the Code view | `chat_history.jsonl` imported (times from `events.jsonl`, whose MCP URLs are never read) | `tests/test_build_app_tool_transcripts_v14410.py` |
+| Grok | No MCP list | Names and states only from `_x.ai/mcp/*` (never an address, key or detail); sign-in through `/mcps` | `tests/test_build_app_grok_mcp_v14410.py`, `..._g4_review_v14410.py` |
+| Grok | No profile share | `<GROK_HOME or ~/.grok>/AGENTS.md`; FOUND: Grok also reads `~/.claude/CLAUDE.md` | `tests/test_profile_share_grok_v14410.py`, `dashboard/__tests__/grok-share-offer-v1441-0.test.tsx` |
+| Pi | `!cmd` reached the model as text | `!` / `!!` through Pi's RPC `bash` as one step; Stop = `abort_bash`; a cut `!` turn is never carried on; a line under the box | `tests/test_build_app_pi_user_bash_v14410.py`, `..._g4_review_v14410.py`, `dashboard/__tests__/pi-shell-hint-v1441-0.test.tsx` |
+| Pi | MCP server list | FOUND: Pi has none over RPC (only messages); the tab says to type `/mcp` | `tests/test_build_app_tool_setup_v14260.py` (moved on purpose) |
+| Antigravity | No transcript in the Code view | `brain/<id>/.system_generated/logs/transcript.jsonl` imported | `tests/test_build_app_tool_transcripts_v14410.py`, `..._g4_review_v14410.py` |
+| Antigravity | Usage windows | FOUND: agy reports none over ACP; the Usage tab says so | (finding; `dashboard/lib/codePanes.ts` `NO_WINDOWS_TOOLS`) |
+
+## Left for later (still open after v1.441.0)
+
+Each needs a live measurement, a larger change, or the owner's decision.
+
+- Codex Plan with no model known (an older session with none picked) sends no plan mode and says nothing (needs a notice or a refusal in words).
+- Codex Plan: a command the user allows can still change files; only file-change requests are blocked (Codex's instructions are not a lock).
+- Codex Auto review: drawing `item/autoApprovalReview/*` and `thread/approveGuardianDeniedAction` is the work left. Auto edits after `windowsSandbox/setupStart`: not measured (the setup changes Windows and needs administrator rights).
+- Codex MCP Reconnect / Turn off: the app-server has `config/mcpServer/reload` but no per-server switch.
+- Claude Code: signing in to an HTTP MCP server (`mcp_authenticate`) is not wired; the terminal's `/mcp` is still the way.
+- OpenCode: helper cards and the `question` tool could only be answered through OpenCode's internal HTTP server (a known port and its password, a different start).
+- OpenCode: no rewind and no branch from one message (its ACP forks the whole session only).
+- Grok and Antigravity: no branch or rewind (their protocols offer none).
+- Grok reads `~/.claude/CLAUDE.md` too: with both shares on it reads the profile twice, and with only Claude Code's on it still sees it. No guard, by decision; the Grok row could say so (the owner's words).
+- Grok servers turned off in its config are not listed (only `_x.ai/mcp/list` names them, one more request per start).
+- Antigravity: signing in through its own terminal may not be enough for ACP (unproven); no Iron Jarvis tools (agy reports no `mcpCapabilities`); no usage windows (none over ACP).
+- Claude Code: `/model sonnet[1m]` loses the `[1m]`; after a restart the `/` menu shows nothing (or note rows) for Claude until a Claude session opens in that folder.
+- Branch/Rewind: per-message actions exist only for messages sent from v1.441.0; a Claude branch or rewind is made only with its first message; a held queue survives a rewind beside the rewound words; the message's ⋯ menu ignores Escape; branching an idle Codex or Pi session may wait for a pool place.
+- Usage: a Build › Code session working in the background (not in a reply) does not count as in use; a read that times out is retried every 3 minutes.
+- Export: a very long record is folded on the page's thread at the end (seconds for 400,000 events), and is cut past 200 pages.
+- Not driven in the packaged app.
 
 ## The inventory (before v1.439.0)
 

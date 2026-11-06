@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.440.0 (2026-11-06).*
+holds itself to. Current as of v1.441.0 (2026-11-06).*
 
 ---
 
@@ -2020,6 +2020,161 @@ the current level's full description when you rest the pointer on it.
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
 
+## Build › Code catches up with each tool (v1.441.0)
+
+Build › Code runs your own coding tool (Claude Code, Codex, Pi, OpenCode, Grok
+or Antigravity) and shows its work. This release brings much more of what each
+tool offers in its own terminal into the Code view, and fixes what the review
+of v1.439.0 found.
+
+**Branch and rewind a conversation.** Point at one of your own messages and
+press its ⋯.
+
+- **Branch from here** opens a new session with the conversation before that
+  message, on the same tool, model, mode and account. The message waits in the
+  new session's box for you to change and send. The session you branched from
+  stays exactly as it was. "Branch" in a session's own ⋯ menu branches the
+  whole conversation.
+- **Rewind to here** (press it twice) takes that message and everything after
+  it out of the conversation, and puts the message back in the box.
+- Neither one changes your files. To put a file back, use Revert in the
+  Changes tab.
+- Neither runs while a reply runs, while the tool still works in the
+  background, or while the conversation is open in a terminal.
+
+| Tool | What it offers |
+|---|---|
+| Claude Code, Codex, Pi | Branch, Branch from here and Rewind. With Claude Code, a branch or a rewind is made when you send its first message. |
+| OpenCode | Branch, of the whole conversation only: OpenCode has no way to rewind. |
+| Grok, Antigravity | Neither: these tools offer no way to branch. |
+
+Only messages sent from this version on have a ⋯; "Branch" of the whole
+conversation works for any session.
+
+**The Session tab: background work and MCP servers.**
+
+- **Background work.** The tab lists what the tool still runs in the
+  background: Claude Code's helpers and background commands, and Codex's
+  background commands. To stop one, open its ⋯ and choose Stop. Only that one
+  stops; a running reply goes on, and the conversation says what you stopped.
+  A Codex session that still runs a background command is no longer closed
+  for being idle (two silent hours still end it).
+- **MCP servers.** Each of the tool's own MCP servers has a ⋯ holding only
+  what that tool can do. Claude Code: Reconnect, Turn off and Turn on (like
+  its own `/mcp`, it remembers "off" for this folder). Codex: Sign in… on a
+  server that needs it, which opens Codex's own sign-in page in your browser.
+  Iron Jarvis never signs in for you.
+
+**Claude Code.**
+
+- **Effort changes at once**, with no restart. A reply that is already running
+  keeps its effort; the new one applies from your next message, and the line
+  under the box says so.
+- **A plan card follows the mode you pick.** If you change the mode chip while
+  a plan card waits, the card's buttons change with it, and approving the plan
+  keeps the mode you picked. Approving never puts the session back in Full
+  access by surprise, and Enter never approves a plan that would.
+- `/model opus`, `/model sonnet` and `/model haiku` set the model chip. A name
+  Iron Jarvis does not know goes to Claude Code as you typed it.
+- Your own commands named like a Claude Code terminal command (for example
+  your own `/status`) now reach Claude Code, and the `/` menu shows only this
+  project's commands.
+- A session renamed while its tool was stopped is renamed in Claude Code too,
+  when the tool next starts.
+- Typing `/export` points you at Export as Markdown in the session's ⋯ menu.
+
+**Codex: Plan.** Choose Plan in the mode menu. Codex looks around and writes a
+plan, and declines every file change while it plans; it still asks before it
+runs a command, and a command you allow can still change files. When the plan
+is ready, the card under it asks you: "Approve, then ask first" starts the
+work at once in Ask first, and Deny keeps Codex planning so you can say what
+to change. Codex plans only when the session knows which model it uses; if
+Plan does not seem to take, pick a model in the model chip.
+
+**OpenCode.**
+
+- The model menu shows OpenCode's own model list, even before your first
+  OpenCode session. The list is read quietly in the background, with no model
+  call.
+- Your own OpenCode agents (the primary agents in your OpenCode settings)
+  appear in the mode menu by name. They ask first, except where the agent's
+  own permission rules say otherwise, and you can keep one as a folder's
+  default. Shift+Tab never steps into one of your agents: pick it from the
+  menu.
+- Outside Full access, OpenCode does not start helper agents. A helper's
+  questions cannot reach Iron Jarvis, so it would wait for ever. A rule of
+  your own about helpers is kept.
+- OpenCode's question tool stays off for the same reason: its questions never
+  reach the screen.
+
+**Grok.**
+
+- A Grok conversation you started in a terminal now shows what was said
+  before, read from Grok's own saved files (they are never changed).
+- The Session tab lists Grok's own MCP servers by name with their state. If
+  one needs a sign-in: press Open in terminal, type `/mcps`, choose the server
+  and press i. Iron Jarvis never shows or keeps a server's address or key.
+- **Share with Build** on the Memory page has a switch for Grok (off until you
+  turn it on). Good to know: Grok also reads Claude Code's own
+  instructions file (`~/.claude/CLAUDE.md`). With both the Claude Code and the
+  Grok switches on, Grok reads your profile twice, and with only the Claude
+  Code switch on, Grok still sees it. Grok's own setting
+  `[compat.claude] agents = false` turns that off.
+
+**Pi.** Start a message with `!` to run a command yourself: Pi runs it, and its
+model sees the command and its output. Start it with `!!` to keep it out of
+the conversation. A line under the box says so while the words would run.
+Stop stops the command. Pi does not list its MCP servers to Iron Jarvis; type
+`/mcp` in the box and Pi says each one's state.
+
+**Antigravity.**
+
+- A conversation you started in a terminal now shows what was said before.
+- A note typed while a card or a question waits is refused, and your words
+  stay in the box: answer the card first. Before, the reply failed.
+- A question that lets you pick several answers shows checkboxes.
+- The Iron Jarvis tools chip is not shown: Antigravity does not take them.
+- Antigravity does not report its account's usage limits, so the Usage tab
+  cannot show them; its own terminal's `/usage` does.
+- Signing in to Antigravity in its own terminal may not be enough for the
+  Code view: that has not been proven yet. If a reply still says Antigravity
+  is not signed in after you signed in there, this is that known gap.
+
+**Check usage now.**
+
+- The button asks only when Iron-Proxy can keep the number. An older
+  Iron-Proxy, or one that is not answering, says so at once.
+- A login with no Claude plan says it has no plan usage to report, instead of
+  "try again in a minute" for ever.
+- While a coding session or a Build terminal is working on an account, Iron
+  Jarvis checks its usage again by itself every few minutes (less often when
+  the login reports no numbers). A session waiting for your answer is not
+  checked, and nor is a terminal that has printed nothing for minutes.
+
+**Export, Enter and Copy.**
+
+- **Export as Markdown** saves the whole conversation, including the parts not
+  on screen. A line says it is reading while it works. If the session's record
+  trimmed its oldest steps, or a part could not be read, the file says so
+  right under its title.
+- **Copy reply** copies the whole reply, including the words before and after
+  its steps.
+
+**What each tool still cannot do, and why.**
+
+| Tool | Not offered | Why |
+|---|---|---|
+| Claude Code | Signing in to an MCP server from the Session tab | Use Open in terminal, then `/mcp` |
+| Codex | Reconnect or Turn off for an MCP server | Codex has no switch for one server |
+| Codex | Auto review; Auto edits on Windows | Iron Jarvis cannot show you yet what Codex's own reviewer decided; Codex's Windows protection is not set up on this PC |
+| OpenCode | Rewind; branching from one message; helpers outside Full access; its question tool | OpenCode offers no rewind, and its helpers' and questions' messages never reach Iron Jarvis |
+| Grok, Antigravity | Branch and Rewind | Neither tool offers it |
+| Pi | A list of its MCP servers | Pi says them only as a message (type `/mcp`) |
+| Antigravity | Iron Jarvis's tools; usage numbers | It takes no tools from another app and reports no usage |
+
+The full comparison of Build › Code against each tool's own terminal is in
+`docs/BUILD-CODE-PARITY-2026-11-06.md`.
+
 ## Loose ends tied up (v1.440.0)
 
 - **Delete a goal you made in chat** from the Autonomy page: press Delete
@@ -2891,7 +3046,7 @@ Jarvis.
 
 **One writer per conversation.** After you type `/clear` in a Build terminal running Claude Code, Open in Code view picks up the new conversation. A conversation your own Claude app wrote in the same folder is never taken for the terminal's. A terminal still running a conversation holds it, so the Code view never opens a second writer on it. Pressing Open in terminal twice never opens two terminals on one conversation.
 
-**Your coding tool's own setup.** Build › Code's Session tab lists the coding tool's own MCP servers as Claude Code or Codex reported them, each with its state: Connected, Starting…, Did not start (with the tool's own error), Needs you to sign in, or Turned off. A server waiting for a sign-in shows the tool's own way: for Claude Code, press Open in terminal, type `/mcp`, choose the server and pick Authenticate; for Codex, press Open in terminal, leave Codex with `/exit`, then run `codex mcp login <name>`. The tool uses the sign-in from its next start. Pi, OpenCode and Grok do not report their servers here, and the tab says so. Codex's "/" menu lists its own compact and its skills (typed as `$name`, Codex's own way); sending exactly `/compact` makes Codex summarize the conversation, and the Context drop-down offers the same.
+**Your coding tool's own setup.** Build › Code's Session tab lists the coding tool's own MCP servers as Claude Code or Codex reported them, each with its state: Connected, Starting…, Did not start (with the tool's own error), Needs you to sign in, or Turned off. A server waiting for a sign-in shows the tool's own way: for Claude Code, press Open in terminal, type `/mcp`, choose the server and pick Authenticate; for Codex, press Open in terminal, leave Codex with `/exit`, then run `codex mcp login <name>`. The tool uses the sign-in from its next start. Pi, OpenCode and Antigravity do not report their servers here, and the tab says so (since v1.441.0 Grok does, and Pi's line says to type `/mcp`). Codex's "/" menu lists its own compact and its skills (typed as `$name`, Codex's own way); sending exactly `/compact` makes Codex summarize the conversation, and the Context drop-down offers the same.
 
 **Folder defaults.** A folder can keep defaults for new coding sessions started in it: in Chat › Code the model, reasoning level and approval level; in Build › Code the tool, model, effort and mode. Set them with the sliders button on the folder's heading, or "Use for new sessions in this folder" under the start box. A new session in that folder starts with them unless you change a choice yourself. The words under the start box say which defaults are in use, and say so when one cannot be used (a model that cannot answer right now, a tool that cannot start, a model that leaves this PC while Local only is on). "Don't ask" and Full access are never a folder's default: you choose those per session. A Clear or a save in the folder's panel takes effect in the open start box at once, and renaming the folder keeps its defaults.
 
@@ -3051,7 +3206,7 @@ way to carry on. This release closes the ways it could happen.
   session started in the background on purpose keeps running, and a
   question waiting for your answer simply closes.
 
-**Build › Code (Claude Code, Codex, Pi, OpenCode, Grok)**
+**Build › Code (Claude Code, Codex, Pi, OpenCode, Grok, Antigravity)**
 
 - **A restart of Iron Jarvis no longer stops your coding tools.** Your
   coding tool now runs in a small helper process of its own, not inside Iron
@@ -3568,12 +3723,12 @@ instead of "Working".
 **Two views called Code, told apart by the tool.** The chat page's **Chat |
 Code** switch is where Jarvis writes, runs and checks the code itself
 (**Chat › Code**). Build has a **Code | Terminal** switch of its own, where
-your own Claude Code, Codex, Pi, OpenCode or Grok does the work and Iron
+your own Claude Code, Codex, Pi, OpenCode, Grok or Antigravity does the work and Iron
 Jarvis shows it (**Build › Code**). Both stay "Code" — each page names its
 own — and where a list has to tell them apart, a session says which tool
 writes its code: **Running now** lists "Coding session (Jarvis) · 12 min" for
 Chat › Code and "Coding session (Claude Code) · 3 min" (or Codex, Pi,
-OpenCode, Grok) for Build › Code. Build's one-line description names both
+OpenCode, Grok, Antigravity) for Build › Code. Build's one-line description names both
 its terminals and its Code view, and typing "code", "claude code" or "codex"
 in search finds Build.
 
@@ -5715,8 +5870,8 @@ session looked stuck.
 - **It is bounded.** If Claude Code says nothing at all for two hours, the
   session counts as idle again.
 
-Only Claude Code reports its helpers; Codex, OpenCode and Grok sessions do
-not show the line.
+Only Claude Code reports its helpers; the other tools' sessions do not show
+the line (since v1.441.0 the Session tab lists Codex's background commands).
 
 - **A step never spins after its tool stopped (v1.427.2).** If Claude Code
   (or Iron Jarvis) stops while a step is still running, for example when you
