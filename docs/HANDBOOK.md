@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.436.1 (2026-11-05).*
+holds itself to. Current as of v1.437.0 (2026-11-05).*
 
 ---
 
@@ -2019,6 +2019,23 @@ the current level's full description when you rest the pointer on it.
 
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
+
+## Set up a coding session before it starts (v1.437.0)
+
+The box you start a Chat › Code session in now has the same row as an open
+session: how much it asks (with Plan), **Try on…**, **Team**, the effort level
+(only for a model that offers levels) and the model picker with your Claude
+Code and Codex accounts. Set them before you type; **Send** makes the session
+with all of them, and your first message is tried on the models you picked.
+
+- **Try on** needs a folder in a git repository and a session that does not
+  start by planning. Until then its chip says why.
+- **Team**, left alone, is the folder's saved team.
+- **Local only**: the model list, Try on and the team list offer only models on
+  this PC or your network, and a cloud model you had picked is taken back, with
+  a note saying so.
+- If your first message is refused, nothing is lost: the box comes back with
+  your words and every choice you made.
 
 ## A button to the right page, and honest answers (v1.436.0)
 

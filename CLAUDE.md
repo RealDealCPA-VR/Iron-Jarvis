@@ -14879,6 +14879,40 @@ does not need a bump, stop and bump it.
     - The note is not wired into agent run summaries or Build › Code.
     - Not driven with a real model or in the packaged app.
 
+- **Chat › Code's new-session box is the session composer's own row**
+  (v1.437.0, a USER REPORT: Try on, Team, effort and the account existed only
+  once a session did). `HarnessStartComposer` runs
+  `useToolbarFit(HARNESS_FIT_ORDER)` with the session's classes and holds:
+  PermissionChip (Plan → `mode: "plan"`), `TryOnControl` (`unavailable` =
+  `tryOnAvailability`: needs a folder in a git repository that can branch, not
+  Plan; a press shows the reason), `TeamControl draft` (a change goes to the
+  box, never a PATCH; untouched = the folder's saved team, which the create
+  applies; "No team" = `team: null`; a worker pick still makes or reuses a
+  model-team member before Send, as in a session; `StartRequest.teamMembers`
+  keeps what each pick said and is never sent), `ReasoningChip` (only where the
+  model offers levels; a touched level wins over the folder's; a level the next
+  model lacks is dropped; a level is saved as a folder default only together
+  with a model) and `ModelMenu companies` (`companyMenu`, never a second list;
+  the account rides only with a model). ONE create (`startCreateBody` + account,
+  mode, team, reasoning); `try_on` rides the FIRST message
+  (`FirstMessage.tryOn`), never the create. A refused first message reseeds the
+  box with every chip (model + account, effort, Plan, team, Local only) and the
+  next Send repeats the identical create. Under Local only every list offers
+  only models whose catalog row stays on the network (`staysOnThisNetwork`, never
+  the Try on list, which leaves out down boxes), and turning it on takes back a
+  cloud model, cloud picks and cloud team members, in words. A failed accounts
+  read is retried when the model menu opens (only a 404 means no list). Pins:
+  `tests/test_start_box_try_on_v14370.py`,
+  `dashboard/__tests__/ij-harness-start-box{,-review}-v1437.test.tsx`, e2e
+  `dashboard/e2e/start-box-v1437.spec.ts` (scratch ports; its daemon reads the
+  real `~/.claude` for skills, so do not run it casually); moved on purpose:
+  `folder-defaults{,-review}-v1426-0`, `ij-harness-start-composer-v1418` (the
+  model chip is no longer a select). OPEN: turning Plan on drops Try on picks
+  for good; under Local only with no model picked the chip still names a cloud
+  default (the first message then fails in the session); an untouched folder
+  team shows members by name and its cloud members are not taken back (the
+  team router keeps each piece local instead).
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
