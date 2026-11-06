@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.435.0 (2026-11-05).*
+holds itself to. Current as of v1.436.0 (2026-11-05).*
 
 ---
 
@@ -2019,6 +2019,30 @@ the current level's full description when you rest the pointer on it.
 
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
+
+## A button to the right page, and honest answers (v1.436.0)
+
+- **One button when a step needs a page.** Ask chat to sign in to Claude Code,
+  Codex or Grok, add a second account, sign in to Microsoft 365, get your
+  Microsoft 365 admin's approval, set up Google or Slack, install the browser
+  add-on, or pick a local model, and one button appears under the reply that
+  opens the exact place. For Claude Code, Codex and Grok it is the same Sign in
+  button as in Settings. The button appears only when your message is about
+  that step, and it does nothing until you press it.
+- **Help can open at the right section.** A button can open the Help page
+  scrolled to the part that explains the step.
+- **Plain answers for what Iron Jarvis doesn't do.** Chat says clearly that it
+  has no way of its own to use your desktop programs (it works in a browser,
+  with your files and through apps you connect — you can paste a screenshot),
+  that its screens open only on this PC, and that Full access and "Don't ask"
+  can't be a folder's default.
+- **A note when chat claims a change that didn't happen.** If a reply says it
+  turned on read aloud, switched your theme, paused an agent, deleted a
+  schedule, connected an app, or kept the reply local only — and nothing in
+  that reply actually did it — a note under the reply says so, naming the
+  setting the way Settings does. No note appears for questions, offers, your
+  own documents (a depreciation schedule, a model in your spreadsheet), or a
+  change that really went through.
 
 ## Projects, agents, apps and more from chat (v1.435.0)
 

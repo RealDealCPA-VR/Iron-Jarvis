@@ -14810,6 +14810,75 @@ does not need a bump, stop and bump it.
     - Two windows on one chat can overwrite a Local only change.
     - Not tried on a phone or in the packaged app.
 
+- **Wave 5 of the chat-first plan: a door to the exact page, plain "not
+  offered" lines, and a note under a change chat claimed but did not make**
+  (v1.436.0; groups J and K, each built then independently reviewed; the
+  reviewers fixed 7 untrue lines, 17 wrong door matches and 44 false notes).
+  - PAGE DOORS (group J, `daemon/page_doors.py`): the step table in priority
+    order (second account / Iron-Proxy → Microsoft 365 admin approval →
+    Microsoft 365 sign-in → Claude Code/Codex/Grok sign-in → Pi/OpenCode →
+    Google developer setup → Slack app → browser add-on → local model). ONE
+    door, arms nothing, added LAST only when there is room under `MAX_DOORS`,
+    skipped when a door to the same address exists, plain chat surface only
+    (never a coding session, escalation, sidebar, Build terminal chat, phone or
+    run). A sign-in door carries `press: "<provider>"` and the dashboard draws
+    it through the ONE `CliSignInPress` (`variant="door"`); `press` is checked
+    against `lib/cliSignIn.SIGN_IN_CLIS` when decoded and again when drawn (a
+    saved message is data). `/help?guide=&section=` opens a Help guide at a
+    heading (`lib/helpLinks.ts`, Python twin pinned through
+    `fixtures/page-doors-v1436.json`, `IJ_REGEN_PAGE_DOORS=1`). Every href is
+    pinned against routes, aliases, Settings sections and Handbook headings.
+  - NOT OFFERED (group J): `page_steps_block` adds "# What Iron Jarvis can and
+    cannot do for this request" (≤ 4 lines; the door's own step keeps a line,
+    other steps give up their places before a not-offered line) right after
+    `_grounding.query()` in BOTH lanes, before the planner; "" when nothing
+    matches (prompt byte-identical). It reaches every surface. The lines must
+    stay TRUE — each is pinned to the code that makes it true: desktop control
+    ("no way of its own … only an app the user connected could"; the real
+    registry has no desktop tool and a new desktop-looking tool fails the pin),
+    another computer (dashboard binds 127.0.0.1; LAN access = tasks and a
+    remote agent's message-back), phone chat (two-way Telegram, Slack, email —
+    not Discord), folder defaults (only Full access and Don't ask refused; Auto
+    is allowed). Place names come from `failure_words.ACCOUNTS_PLACE` /
+    `app_names.APPS_PLACE`, never a retired Settings name.
+  - CLAIMED CHANGES (group K, `daemon/change_claims.claimed_change_note(reply,
+    tools_used, config_cards, history=, custom_tools=)`), appended right after
+    `_claimed_write_note` in BOTH lanes (real-model branch only; no note on
+    demo turns or workflow-draft exits):
+    - A claim is backed by any successful change of a kind it may name (the
+      record, never the words): settings by card key + families, records by
+      their tools and card prefixes, apps by an `app.*` card / the app and
+      channel tools / an `mcp__` tool, Local only by `chat_local_only`; an undo
+      answers every claim. "This reply was kept Local only" is judged against
+      `egress.current_scope()` (an allowed-once cloud send is not Local only).
+    - Not judged: after a command, code, hand-off, workflow run, custom tool,
+      an `mcp__` or acting browser tool, or `changes_list`; record/app/undo
+      claims after a file edit (coding turns).
+    - A record counts only as the head of the object's first noun phrase; a
+      CPA's or a person's schedule ("depreciation schedule", "Schedule E",
+      "your work schedule"), another product ("a project in Asana"), the user's
+      content, code, a dated report, the user's own change, and an offer never
+      get a note. Brand and qualifier lists are hand-kept (`_EXTERNAL`,
+      `_NOT_OUR_SCHEDULE_BEFORE`).
+    - An earlier ASSISTANT claim excuses the reply only for the same kind,
+      direction and no conflicting value; @-agent and remote lines (the panel
+      label, `comm.threads.agent_line_label`) never excuse; an earlier note that
+      said "not made" is no excuse.
+    - Pure, bounded (24k chars, 400-char sentences), linear.
+  - Pins: `tests/test_page_doors{,_review}_v14360.py`,
+    `tests/test_change_claims{,_review}_v14360.py`,
+    `dashboard/__tests__/page-doors{,-review}-v1436.test.tsx`.
+  - OPEN:
+    - Recall: about one new page-step phrasing in three is still missed.
+    - The sign-in door still shows when the CLI is already signed in (harmless:
+      /login switches account).
+    - A false settings/record claim right after an app (`mcp__`) or browser
+      tool, or in a sentence that mentions the user's content, gets no note;
+      "-" bullet claims are not read; an unlisted product ("a project in
+      Wrike") can still get a false note.
+    - The note is not wired into agent run summaries or Build › Code.
+    - Not driven with a real model or in the packaged app.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
