@@ -227,5 +227,5 @@ async def test_the_failed_record_prune_test_holds_when_write_and_prune_share_a_t
     monkeypatch.setattr(RR, "utcnow", lambda: t)
     work = tmp_path / "w"
     (work / ".ironjarvis" / "harness").mkdir(parents=True)
-    (work / ".ironjarvis" / "harness" / "finish.toml").write_text("enabled = false" + chr(10), encoding="utf-8")
+    (work / ".ironjarvis" / "harness" / "finish.toml").write_text("enabled = false\n", encoding="utf-8")
     await F.test_a_failed_record_expires_like_the_others(str(tmp_path / "home"), work, monkeypatch)
