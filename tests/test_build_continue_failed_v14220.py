@@ -21,6 +21,8 @@ patience's waits (``harness.patience.SLEEP``) return at once.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from sqlmodel import select
 
@@ -209,9 +211,15 @@ async def test_a_failure_before_any_round_offers_no_continue(home, work):
     assert "canContinue" not in _reply(app, sid, "bt-0")
 
 
-async def test_a_failed_record_expires_like_the_others(home, work):
+async def test_a_failed_record_expires_like_the_others(home, work, monkeypatch):
     app = create_app(home)
     sid = new_session(app, work)["id"]
     await _fail_mid_reply(app, sid)
+    # v1.441.0 (integration): prune's cutoff is strict (``updated_at <
+    # now - days``); with days=0 a record written in the SAME 15.6 ms tick as
+    # the prune was kept (red now and then on a loaded run). The prune comes
+    # later than the write, as a real one does: step its clock.
+    later = RR.utcnow() + timedelta(seconds=1)
+    monkeypatch.setattr(RR, "utcnow", lambda: later)
     assert RR.prune(app.state.platform.engine, days=0) >= 1
     assert not RR.has_failed(app.state.platform.engine, "bt-f")

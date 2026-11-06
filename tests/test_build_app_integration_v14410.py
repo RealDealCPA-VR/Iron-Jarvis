@@ -208,3 +208,25 @@ async def test_a_session_that_never_planned_reads_nothing():
     await d.send_user("hello", [])
     assert _sent(got, "thread/read") == []
     assert "collaborationMode" not in _sent(got, "turn/start")[0]["params"]
+
+
+# --------------------------------------------------------------------------- #
+# A failed reply's kept list expiring, with the write and the prune in one tick
+# --------------------------------------------------------------------------- #
+async def test_the_failed_record_prune_test_holds_when_write_and_prune_share_a_tick(tmp_path, monkeypatch):
+    """``test_a_failed_record_expires_like_the_others`` (v1.422.0) went red in
+    this branch's batch: its record was written and pruned (``days=0``, a strict
+    ``<``) in the same tick. With the reply record's clock FROZEN it must still
+    pass — it steps the prune's clock itself."""
+    from datetime import datetime
+
+    from iron_jarvis.harness import reply_record as RR
+    from tests import test_build_continue_failed_v14220 as F
+
+    t = datetime(2026, 11, 6, 12, 0, 0)
+    monkeypatch.setattr(RR, "utcnow", lambda: t)
+    work = tmp_path / "w"
+    (work / ".ironjarvis" / "harness").mkdir(parents=True)
+    (work / ".ironjarvis" / "harness" / "finish.toml").write_text("enabled = false
+", encoding="utf-8")
+    await F.test_a_failed_record_expires_like_the_others(str(tmp_path / "home"), work, monkeypatch)
