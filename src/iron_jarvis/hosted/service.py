@@ -1052,6 +1052,16 @@ def _stoppable(lv: "LiveSession", now: float) -> bool:
 # --------------------------------------------------------------------------- #
 # The service
 # --------------------------------------------------------------------------- #
+def heard_from(driver: Any, obj: dict[str, Any]) -> bool:
+    """v1.441.0 review: does this frame count as hearing from the tool (the
+    two-silent-hours rule)? Not the answer to Iron Jarvis's own background
+    read. Never raises."""
+    try:
+        return not (driver is not None and driver.quiet_frame(obj))
+    except Exception:  # noqa: BLE001 — a driver's check must never drop a frame
+        return True
+
+
 class HostedService:
     def __init__(self, platform: Any, *, clock: Any = time.monotonic) -> None:
         self.platform = platform
@@ -2346,7 +2356,8 @@ class HostedService:
             self._on_exit(live, proc, code)
 
         def on_message(obj: dict[str, Any]) -> None:
-            live.last_heard = self.clock()
+            if heard_from(driver, obj):
+                live.last_heard = self.clock()
             # A frame the parser cannot read must never end the session.
             try:
                 driver.on_message(obj)

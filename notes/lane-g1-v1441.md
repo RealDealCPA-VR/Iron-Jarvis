@@ -114,3 +114,23 @@ Probes and stand-ins live in the scratchpad (`g1/probe_claude.py`, `probe2.py`, 
 - Codex: Sign in… on a server that needs it. Codex opens its sign-in page in your browser; Iron Jarvis never signs in for you.
 
 Changing Claude Code's effort now takes effect at once, even while it works.
+
+## Review (independent, v1.441.0)
+
+Re-measured on Claude Code 2.1.316 (scratch `CLAUDE_CONFIG_DIR` and `USERPROFILE`, the builder's stand-in Anthropic upstream, dummy key, no model call): a background `Bash` stopped with `stop_task`, then a second `stop_task` of the same id 50 ms later — both answered `{}`; `task_updated` (killed), `task_notification` (stopped) and `background_tasks_changed []` came BEFORE the first answer. An effort change (`apply_flag_settings high`) sent while a `can_use_tool` card was open was answered at once and `get_settings` said `high` — but the running reply's next request still carried `output_config.effort: "medium"`; only the user's NEXT message carried `"high"`. A backgrounded `Agent` (2.1.316 backgrounds it by default) carries `is_backgrounded: true` on `task_started`.
+
+Defects found, each pinned red first (`tests/test_session_controls_review_v14410.py`, 9 pins; one dashboard case in `dashboard/__tests__/session-controls-v1441-0.test.tsx`):
+
+1. **"Now works at high effort" was not true mid-reply.** The running reply keeps its effort (measured above). `ClaudeDriver.set_effort` still answers `now` (no restart is needed) but, while a reply runs (`turn_open` or `_alone`), says `EFFORT_NEXT_WORDS` ("… from your next message; the reply running now keeps its effort."). `xhigh` is said "extra" (`EFFORT_SAID`, the chip's own word).
+2. **Iron Jarvis's own Codex terminal reads kept the session alive for ever.** Every answer to `thread/backgroundTerminals/list` passed through the service's `on_message`, which stamps `last_heard`, so the 30 s poll reset the v1.418.0 two-silent-hours rule (`BACKGROUND_SILENT_MAX_S`) on every read: a forgotten dev server held the process for ever. `Driver.quiet_frame(obj)` (base: False), `CodexDriver._quiet_ids` (the read's own request id, taken before any await), and `service.heard_from(driver, obj)` used by BOTH `on_message`s (the service's and the code host's adopt path).
+3. **Two presses of Stop on one Claude Code task** sent two `stop_task`s and said "You stopped …" twice. A task in `_stopping` is refused (`TASK_ALREADY_STOPPING`) and left out of the list.
+4. **Codex's stale-id refusal reached the screen raw** ("Codex did not stop it: invalid background terminal process id"): now `TERMINAL_ALREADY_ENDED`.
+5. **The Stop route waited unbounded on a list read** (only for the row's kind; up to Codex's 60 s request timeout): now `LIST_TIMEOUT_S`, falling back to "task".
+6. **The sign-in fallback link was always shown with words that read as if no page had opened** — `window.open(…, "noopener")` answers null by the HTML spec, and the desktop's window-open handler opens the page and answers null too, so the "blocked window" branch was the only branch. The link stays, worded "If no page opened: Open the sign-in page".
+7. **Two of the builder's Codex claims had no pin** (a mutation of each stayed green): the terminal follow never reads while a turn is open, and the terminals end with the process (`on_exit`). Pinned.
+
+Mutations: 8 of my fixes broken one at a time → each red; 5 of the builder's claims → 3 red, 2 survived (item 7) and are now red.
+
+Checked and fine: both new routes are found by master's dead-code caller scan (`tests/test_wave6_dead_code_v14390.py` at `7abc8d31`, run against this branch; a made-up route reads uncalled); `safe_sign_in_url` and `openableSignIn` refuse `javascript:`, `file:`, `data:` and user:password addresses, the desktop opens a `window.open` through `openExternalIfSafe`, and the URL is never in a notice or the event log; Iron Jarvis writes nothing to `.claude.json` (only Claude Code's own `mcp_toggle` does); a stop is scoped to the session's own driver (Claude's task ids, Codex's `threadId`).
+
+Still OPEN: an effort change sent while Claude Code is stuck can hold the PATCH up to 2 × 30 s before it falls back; the "remembers this for this folder" words are in a hover title (the notice after says it too); Codex terminal output still stamps `last_heard` (it is the tool speaking); `stop_background` and the sign-in are written mid-turn for Codex (a user press; `turn/started` names the turn, so a code-host restart in that window is safe).

@@ -284,6 +284,13 @@ class Driver:
                 continue
         self.after_restore()
 
+    def quiet_frame(self, obj: dict[str, Any]) -> bool:
+        """v1.441.0 review: True for a frame that is only the answer to a
+        background read Iron Jarvis made itself (Codex's terminal list): it
+        never counts as hearing from the tool, or the reaper's two silent
+        hours (``BACKGROUND_SILENT_MAX_S``) would never run out."""
+        return False
+
     def after_restore(self) -> None:
         """Re-make what has no JSON form (a reply this driver waits for, a
         timer): a subclass's hook. The base driver needs none."""

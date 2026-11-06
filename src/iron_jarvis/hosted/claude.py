@@ -146,9 +146,19 @@ TASK_TITLE_CHARS = 200
 #: a ``local_bash`` is a command; anything else is a task).
 TASK_KIND_TITLES = {"helper": "A helper", "command": "A command", "task": "A task"}
 TASK_ALREADY_ENDED = "That task already ended."
+TASK_ALREADY_STOPPING = "That task is already stopping."
 MCP_ACTION_VERBS = {"reconnect": "reconnect", "off": "turn off", "on": "turn on"}
 #: v1.441.0 (g1): an effort Claude Code took live.
 EFFORT_NOW_WORDS = "Claude Code now works at {level} effort."
+#: v1.441.0 review: taken while a reply RUNS — re-measured on 2.1.316 (a
+#: stand-in upstream, the change sent mid-reply): the running reply's later
+#: requests keep its effort; the next message carries the new one. No
+#: restart is needed, but "now" would not be true.
+EFFORT_NEXT_WORDS = ("Claude Code works at {level} effort from your next message; "
+                     "the reply running now keeps its effort.")
+#: The effort words a person reads (Claude Code's own picker calls ``xhigh``
+#: "Extra", as the chip does).
+EFFORT_SAID = {"xhigh": "extra"}
 
 
 def task_kind(task_type: str) -> str:
@@ -1073,7 +1083,9 @@ class ClaudeDriver(Driver):
         got = str(applied.get("effort") or "") if isinstance(applied, dict) else ""
         if (effort and got != effort) or not got:
             return "next"
-        self.emit(make("notice", text=EFFORT_NOW_WORDS.format(level=effort or f"its default ({got})")))
+        level = EFFORT_SAID.get(effort, effort) if effort else f"its default ({EFFORT_SAID.get(got, got)})"
+        words = EFFORT_NEXT_WORDS if (self.turn_open or self._alone) else EFFORT_NOW_WORDS
+        self.emit(make("notice", text=words.format(level=level)))
         return "now"
 
     async def background_work(self) -> list[dict[str, Any]] | None:
@@ -1081,7 +1093,8 @@ class ClaudeDriver(Driver):
         ``task_notification``), each one Claude Code's own ``stop_task``
         stops."""
         rows: list[dict[str, Any]] = []
-        for tid, kind in list(self._tasks.copy().items())[:BACKGROUND_WORK_MAX]:
+        open_tasks = [(t, k) for t, k in self._tasks.copy().items() if t not in self._stopping]
+        for tid, kind in open_tasks[:BACKGROUND_WORK_MAX]:
             rows.append({
                 "id": tid,
                 "title": self._task_title(tid),
@@ -1104,6 +1117,10 @@ class ClaudeDriver(Driver):
         tid = str(work_id or "")
         if tid not in self._tasks:
             raise ControlRefused(TASK_ALREADY_ENDED)
+        if tid in self._stopping:
+            # v1.441.0 review: a second press (or a second window) — one stop,
+            # said once (measured: a second stop_task answers {} again).
+            raise ControlRefused(TASK_ALREADY_STOPPING)
         title = self._task_title(tid)
         self._stopping.add(tid)
         try:

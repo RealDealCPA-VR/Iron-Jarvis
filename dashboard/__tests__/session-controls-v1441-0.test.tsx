@@ -267,3 +267,32 @@ describe("effort while a reply runs", () => {
     expect(older[0].effortLive).toBeUndefined();
   });
 });
+
+// v1.441.0 REVIEW: whether a sign-in page opened is never known here —
+// `window.open(url, "_blank", "noopener")` answers null by the HTML spec, and
+// the desktop app opens it in the browser and answers null too — so the
+// user's own link is always offered, worded for the case it is for.
+describe("review: a sign-in's link", () => {
+  it("is offered, worded for when no page opened, even when the browser answers a window", async () => {
+    const url = "https://auth.example.com/authorize?state=x";
+    setGets({
+      ...OVERVIEW,
+      mcp: { known: true, at: "", servers: [{ name: "authy", state: "needs_sign_in", words: "Needs you to sign in", actions: ["sign_in"] }] },
+    });
+    H.postAnswer[`${BASE}/mcp/authy`] = { words: "Codex waits for you to sign in to authy in your browser.", url };
+    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    render(<CodePanes session={SESSION} tools={TOOLS} events={[]} running={false} />);
+    fireEvent.click(await screen.findByTestId("code-session-mcp-more-authy"));
+    fireEvent.click(screen.getByTestId("code-session-mcp-more-authy-sign_in"));
+    await waitFor(() => expect(open).toHaveBeenCalled());
+    const said = await screen.findByTestId("code-session-mcp-said-authy");
+    expect(said.textContent).toContain("If no page opened:");
+    expect(within(said).getByRole("link", { name: "Open the sign-in page" }).getAttribute("href")).toBe(url);
+  });
+
+  it("a file or script address is never opened", () => {
+    expect(openableSignIn("file:///C:/Users/x/secret.txt")).toBe("");
+    expect(openableSignIn("JavaScript:alert(1)")).toBe("");
+    expect(openableSignIn("data:text/html,hi")).toBe("");
+  });
+});

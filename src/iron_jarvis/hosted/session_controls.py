@@ -141,7 +141,14 @@ async def stop_background(service: Any, sid: str, work_id: str) -> dict[str, Any
     stopper = getattr(driver, "stop_background", None)
     if stopper is None:
         raise Refused(NO_BACKGROUND.format(label=label), 400)
-    before = await driver.background_work() if getattr(driver, "background_work", None) else None
+    before = None
+    if getattr(driver, "background_work", None) is not None:
+        try:
+            # v1.441.0 review: only for the row's kind — never longer than the
+            # list's own bound (a slow tool used to hold the Stop 60 s).
+            before = await asyncio.wait_for(driver.background_work(), timeout=LIST_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 — the kind falls back to "task"
+            before = None
     kind = next((r.get("kind") for r in before or [] if r.get("id") == work_id), "task")
     try:
         title = await asyncio.wait_for(stopper(str(work_id)), timeout=ACTION_TIMEOUT_S)

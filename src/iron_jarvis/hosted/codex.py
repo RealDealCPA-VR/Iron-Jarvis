@@ -483,10 +483,16 @@ class CodexDriver(Driver):
         self._terminal_count = 0
         #: The read that follows them while any runs (not kept: re-armed).
         self._terminal_poll: asyncio.Task | None = None
+        #: v1.441.0 review: the ids of terminal reads in flight — their answers
+        #: are Iron Jarvis's own, never "the tool was heard from".
+        self._quiet_ids: set[int] = set()
 
     # -- v1.441.0 (g1): the Session tab's controls --------------------------------
     #: Codex's own ``mcpServer/oauth/login`` (``hosted/session_controls``).
     mcp_actions: frozenset[str] = frozenset({"sign_in"})
+
+    def quiet_frame(self, obj: dict[str, Any]) -> bool:
+        return "method" not in obj and obj.get("id") in self._quiet_ids
 
     @property
     def background_tasks(self) -> int:
@@ -525,11 +531,15 @@ class CodexDriver(Driver):
         driver asks for the experimental API) as rows. None = not read."""
         if not self.session_id:
             return None
+        rid = self._n + 1  # request() takes exactly this id, before any await
+        self._quiet_ids.add(rid)
         try:
             res = await self.request("thread/backgroundTerminals/list",
                                      {"threadId": self.session_id, "limit": TERMINALS_MAX})
         except Exception:  # noqa: BLE001 — a gone process or an older Codex: not known
             return None
+        finally:
+            self._quiet_ids.discard(rid)
         rows = terminal_rows(res)
         self._terminals = rows
         self._terminal_count = len(rows)
@@ -560,6 +570,9 @@ class CodexDriver(Driver):
             res = await self.request("thread/backgroundTerminals/terminate",
                                      {"threadId": self.session_id, "processId": pid})
         except ControlRefused as exc:
+            if "invalid background terminal" in str(exc).lower():
+                # v1.441.0 review: Codex's own words for a stale id (measured).
+                raise ControlRefused(TERMINAL_ALREADY_ENDED) from None
             raise ControlRefused(f"Codex did not stop it: {exc}") from None
         if not (isinstance(res, dict) and res.get("terminated")):
             raise ControlRefused(TERMINAL_ALREADY_ENDED)

@@ -208,9 +208,12 @@ export function McpRowMenu({
       const words = typeof res?.words === "string" ? res.words : "";
       const url = openableSignIn(res?.url);
       if (action === "sign_in" && url) {
-        const opened = window.open(url, "_blank", "noopener,noreferrer");
-        // A browser that blocked the window: the user's own click opens it.
-        setSaid({ text: words || "Finish signing in in your browser.", tone: "quiet", ...(opened ? {} : { link: url }) });
+        // window.open with "noopener" always answers null (the HTML spec),
+        // and the desktop app opens it in the browser and answers null too —
+        // so whether a page opened is NOT known here (v1.441.0 review). The
+        // user's own link stays, worded for the case it is for.
+        window.open(url, "_blank", "noopener,noreferrer");
+        setSaid({ text: words || "Finish signing in in your browser.", tone: "quiet", link: url });
       } else if (words) {
         setSaid({ text: words, tone: "quiet" });
       }
@@ -242,7 +245,7 @@ export function McpRowMenu({
           {said.text}
           {said.link ? (
             <>
-              {" "}
+              {" If no page opened: "}
               <a href={said.link} target="_blank" rel="noopener noreferrer" className="text-accent underline">
                 Open the sign-in page
               </a>
