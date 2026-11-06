@@ -834,11 +834,42 @@ class CodexDriver(Driver):
         self._stopping = False
         await self._start_codex_turn(items)
 
+    def _collab_wanted(self) -> str:
+        """The collaboration mode this turn must send ("" = none)."""
+        return "plan" if self.mode == "plan" else ("default" if self._collab == "plan" else "")
+
+    async def _know_thread_model(self) -> None:
+        """v1.441.0 (integration I5): a collaboration mode must name a model.
+        ``thread/start`` / ``thread/resume`` answer it (``model`` is required
+        in both, 0.157.0's schema), but a driver the code host KEPT across an
+        update from v1.440.0 has no ``_thread_model`` (the attribute is new),
+        so with no model picked Plan sent nothing and Codex did not plan.
+        Then ask the thread itself — MEASURED on codex 0.157.0 (a scratch
+        CODEX_HOME, no model call): ``thread/read {threadId, includeTurns:
+        false}`` answers ``thread.model`` and ``thread.reasoningEffort``.
+        Written BEFORE ``turn/start``, so a turn's request stays the newest
+        (``after_restore``). Never raises."""
+        if self.model or self._thread_model or not self.session_id:
+            return
+        try:
+            res = await self.request("thread/read", {"threadId": self.session_id, "includeTurns": False})
+        except Exception:  # noqa: BLE001 — an older Codex or a gone thread: not known
+            return
+        thread = (res or {}).get("thread") if isinstance(res, dict) else None
+        if not isinstance(thread, dict):
+            return
+        model = thread.get("model")
+        if isinstance(model, str) and model:
+            self._thread_model = model
+        eff = thread.get("reasoningEffort")
+        if not self._thread_effort and isinstance(eff, str) and eff:
+            self._thread_effort = eff
+
     def _collaboration(self) -> dict[str, Any] | None:
         """v1.441.0: the ``collaborationMode`` this turn sends — Plan's, or
         Default's once to take a thread out of Plan; None (the key is not
         sent at all: a session that never planned is exactly as before)."""
-        want = "plan" if self.mode == "plan" else ("default" if self._collab == "plan" else "")
+        want = self._collab_wanted()
         model = self.model or self._thread_model
         if not want or not model:
             return None
@@ -856,9 +887,15 @@ class CodexDriver(Driver):
             params["model"] = self.model
         if self.effort:
             params["effort"] = self.effort
+        want = self._collab_wanted()
+        if want:
+            await self._know_thread_model()
         collab = self._collaboration()
         if collab is not None:
             params["collaborationMode"] = collab
+        elif want:
+            # No model to name: Codex is not told, and the user is (plainly).
+            self.emit(make("notice", text=W.CODEX_PLAN_NO_MODEL if want == "plan" else W.CODEX_LEAVE_PLAN_NO_MODEL))
         self._turn_mode = self.mode
         res = await self.request("turn/start", params)
         if collab is not None:

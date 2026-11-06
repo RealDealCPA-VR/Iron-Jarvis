@@ -15268,8 +15268,12 @@ does not need a bump, stop and bump it.
     `!`/`!!` through RPC `bash` (`_run_shell`, `abort_bash`, `_rearm_shell`,
     a cut `!` turn never carried on: `WHY_COMMAND`). FOUND: Pi has no MCP
     list over RPC; agy reports no usage window over ACP.
-  - OPEN: Codex Plan with no model known sends nothing and says nothing; an
-    allowed command in Codex Plan can write; Grok also reads
+  - Codex Plan with no model known (a session the code host kept from
+    v1.440.0, none picked) asks `thread/read` for the thread's model first
+    (`_know_thread_model`, written before `turn/start`; measured on 0.157.0);
+    none there = a notice (`W.CODEX_PLAN_NO_MODEL` /
+    `CODEX_LEAVE_PLAN_NO_MODEL`), never silence.
+  - OPEN: an allowed command in Codex Plan can write; Grok also reads
     `~/.claude/CLAUDE.md` (profile twice, no guard by decision); agy terminal
     sign-in may not reach ACP; `/model sonnet[1m]` loses `[1m]`; the bare
     Claude list is empty after a restart; renames while stopped live in

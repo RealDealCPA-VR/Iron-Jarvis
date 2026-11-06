@@ -129,3 +129,82 @@ async def test_the_unreadable_marker_test_holds_when_the_cut_and_the_marker_shar
         await F.test_an_unreadable_marker_never_lets_an_older_cut_carry_on(home, app, work, monkeypatch)
     finally:
         await stop_all(app)
+
+
+# --------------------------------------------------------------------------- #
+# I5: Codex Plan with no model known reads the thread's model first
+# --------------------------------------------------------------------------- #
+def _codex(*, read_answer, mode="plan"):
+    """A Codex driver as a code host keeps it across an update from v1.440.0:
+    its state had no ``_thread_model`` (the attribute is new), so a restored
+    driver knows no model. ``read_answer``: what ``thread/read`` answers (a
+    dict), or an Exception to raise."""
+    from iron_jarvis.hosted import codex as X
+
+    got: list = []
+
+    async def write(obj):
+        got.append({"wrote": obj})
+        method = obj.get("method")
+        if method == "thread/read":
+            if isinstance(read_answer, Exception):
+                d._replies.settle(obj["id"], None, read_answer)
+            else:
+                d._replies.settle(obj["id"], read_answer)
+        elif method == "turn/start":
+            d._replies.settle(obj["id"], {"turn": {"id": "tu2"}})
+
+    d = X.CodexDriver(write=write, emit=lambda e: got.append(e), ask=lambda a: got.append(a),
+                      on_session_id=lambda s: None, mode=mode)
+    d.session_id = "th"
+    return d, got
+
+
+def _sent(got: list, method: str) -> list[dict]:
+    return [g["wrote"] for g in got if isinstance(g, dict) and g.get("wrote", {}).get("method") == method]
+
+
+async def test_codex_plan_with_no_model_known_asks_the_thread_and_plans():
+    """Measured on codex 0.157.0 (scratch CODEX_HOME, no model call):
+    ``thread/read {threadId, includeTurns: false}`` answers ``thread.model``
+    (and ``reasoningEffort``)."""
+    d, got = _codex(read_answer={"thread": {"id": "th", "model": "gpt-6-astra", "reasoningEffort": "high"}})
+    await d.send_user("plan it", [])
+    reads = _sent(got, "thread/read")
+    assert reads and reads[0]["params"] == {"threadId": "th", "includeTurns": False}
+    start = _sent(got, "turn/start")[0]["params"]
+    assert start["collaborationMode"] == {"mode": "plan", "settings": {
+        "model": "gpt-6-astra", "reasoning_effort": "high", "developer_instructions": None}}
+    assert [m for m in got if isinstance(m, dict) and m.get("wrote", {}).get("method")][-1]["wrote"]["method"] \
+        == "turn/start", "the turn's request stays the newest (a restart re-waits on it)"
+    assert not [e for e in got if isinstance(e, dict) and e.get("type") == "notice"]
+
+
+async def test_codex_plan_whose_model_cannot_be_read_says_so():
+    from iron_jarvis.hosted import words as W
+    from iron_jarvis.hosted.driver import ControlRefused
+
+    d, got = _codex(read_answer=ControlRefused("no such method"))
+    await d.send_user("plan it", [])
+    start = _sent(got, "turn/start")[0]["params"]
+    assert "collaborationMode" not in start
+    notes = [e["text"] for e in got if isinstance(e, dict) and e.get("type") == "notice"]
+    assert notes == [W.CODEX_PLAN_NO_MODEL]
+
+
+async def test_leaving_plan_with_no_model_known_says_codex_may_still_plan():
+    from iron_jarvis.hosted import words as W
+
+    d, got = _codex(read_answer={"thread": {"id": "th"}}, mode="ask")
+    d._collab = "plan"
+    await d.send_user("now do it", [])
+    assert "collaborationMode" not in _sent(got, "turn/start")[0]["params"]
+    notes = [e["text"] for e in got if isinstance(e, dict) and e.get("type") == "notice"]
+    assert notes == [W.CODEX_LEAVE_PLAN_NO_MODEL]
+
+
+async def test_a_session_that_never_planned_reads_nothing():
+    d, got = _codex(read_answer={"thread": {"id": "th", "model": "m"}}, mode="ask")
+    await d.send_user("hello", [])
+    assert _sent(got, "thread/read") == []
+    assert "collaborationMode" not in _sent(got, "turn/start")[0]["params"]

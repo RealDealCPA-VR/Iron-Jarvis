@@ -2088,8 +2088,10 @@ plan, and declines every file change while it plans; it still asks before it
 runs a command, and a command you allow can still change files. When the plan
 is ready, the card under it asks you: "Approve, then ask first" starts the
 work at once in Ask first, and Deny keeps Codex planning so you can say what
-to change. Codex plans only when the session knows which model it uses; if
-Plan does not seem to take, pick a model in the model chip.
+to change. Plan has to name a model to Codex: when none is picked, Iron Jarvis
+asks Codex which model the conversation runs on. If Codex cannot say, a line in
+the conversation tells you this message was not put in Plan; pick a model in
+the model chip and send it again.
 
 **OpenCode.**
 

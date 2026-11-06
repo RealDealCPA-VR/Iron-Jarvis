@@ -370,6 +370,17 @@ CODEX_MODE_NEXT = (
 MODE_FROM_SESSION_ALLOW = "{label} now runs in {mode} for the rest of this session (you chose Allow for this session)."
 #: v1.441.0: Codex's Plan.
 CODEX_PLAN_KEPT = "Codex stays in Plan. Say what to change, and it plans again."
+#: v1.441.0 (integration I5): Plan names a model to Codex; one Codex would
+#: not tell (an older session the app kept running through an update, whose
+#: model was never picked, and ``thread/read`` gave none).
+CODEX_PLAN_NO_MODEL = (
+    "Codex did not say which model this conversation runs on, so it was not put in its own Plan for this "
+    "message (file changes are still refused). Pick a model in the model chip, then send it again."
+)
+CODEX_LEAVE_PLAN_NO_MODEL = (
+    "Codex did not say which model this conversation runs on, so it could not be taken out of Plan for this "
+    "message: it may still only plan. Pick a model in the model chip, then send it again."
+)
 CODEX_PLAN_NO_EDIT = "In Plan, Codex wanted to change {file}; nothing was changed. Approve its plan to let it start."
 #: v1.439.0 (review): an approved plan leaves Plan for the mode it was in
 #: before (Claude Code's own rule); the row and the chip follow.

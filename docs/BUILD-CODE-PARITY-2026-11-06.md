@@ -80,7 +80,6 @@ items); the rest close rows of the old "Left for later" list.
 
 Each needs a live measurement, a larger change, or the owner's decision.
 
-- Codex Plan with no model known (an older session with none picked) sends no plan mode and says nothing (needs a notice or a refusal in words).
 - Codex Plan: a command the user allows can still change files; only file-change requests are blocked (Codex's instructions are not a lock).
 - Codex Auto review: drawing `item/autoApprovalReview/*` and `thread/approveGuardianDeniedAction` is the work left. Auto edits after `windowsSandbox/setupStart`: not measured (the setup changes Windows and needs administrator rights).
 - Codex MCP Reconnect / Turn off: the app-server has `config/mcpServer/reload` but no per-server switch.
