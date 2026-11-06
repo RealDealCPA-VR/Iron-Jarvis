@@ -182,6 +182,7 @@ def _account_view(
     profile: dict[str, Any],
     state: dict[str, Any] | None = None,
     usage: dict[str, Any] | None = None,
+    svc: Any = None,
 ) -> dict[str, Any]:
     cli = profile.get("cli") if isinstance(profile.get("cli"), dict) else {}
     out: dict[str, Any] = {
@@ -209,7 +210,7 @@ def _account_view(
     out["usage_read_at"] = _ur.last_ok_at(str(profile.get("id") or ""))
     vendor = _ba.VENDOR_OF_PROXY.get(str(profile.get("provider") or ""))
     row = {"vendor": vendor, **_ba.status_of(profile, state)}
-    out["can_refresh"] = (profile.get("lane") or "cli") == "cli" and _ur.can_refresh(row)
+    out["can_refresh"] = (profile.get("lane") or "cli") == "cli" and _ur.can_refresh(row, svc)
     return out
 
 
@@ -499,7 +500,7 @@ def register(app: FastAPI, d) -> None:
             usage_map = {u.get("profileId"): u for u in usage if isinstance(u, dict)}
         body["accounts"] = _sorted_accounts(
             [
-                _account_view(p, states_map.get(p.get("id")), usage_map.get(p.get("id")))
+                _account_view(p, states_map.get(p.get("id")), usage_map.get(p.get("id")), svc)
                 for p in (profiles if isinstance(profiles, list) else [])
                 if isinstance(p, dict)
             ]

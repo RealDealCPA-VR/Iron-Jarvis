@@ -9,7 +9,9 @@ pool, so the up-to-15-second read never blocks the event loop.
 Answers ``{account: <the build_accounts row + usage_read_at, can_refresh>,
 read: {at, ok, words, throttled}}``. 404 for an account Iron-Proxy does not
 list; 409 (one sentence) when Iron-Proxy is off, the account is turned off,
-needs to sign in, or is not a Claude Code / Codex account. A read that RAN
+needs to sign in, or is not a Claude Code / Codex account — and (v1.441.0)
+when Iron-Proxy is too old to keep the number or is not answering, decided
+BEFORE the CLI starts. A read that RAN
 and failed is a 200 with ``read.ok: false`` and its words (the card says
 them).
 """
@@ -34,4 +36,4 @@ def register(app: FastAPI, d: Any) -> None:
             raise HTTPException(status_code=404 if exc.code == "unknown" else 409,
                                 detail=exc.words) from None
         row = BA.find(svc, account_id)
-        return {"account": U.decorate(dict(row)) if row else None, "read": read}
+        return {"account": U.decorate(dict(row), svc) if row else None, "read": read}

@@ -262,7 +262,9 @@ describe("export as Markdown", () => {
     expect(item.textContent).toBe(EXPORT_MARKDOWN);
     expect(item.getAttribute("role")).toBe("menuitem");
     fireEvent.click(item);
-    expect(created).toHaveBeenCalledTimes(1);
+    // v1.441.0 (review D1, moved on purpose): the export first reads any
+    // page before what is held (none here), so the file lands a tick later.
+    await waitFor(() => expect(created).toHaveBeenCalledTimes(1));
     expect(name).toBe("Session a1.md");
     const text = await new Promise<string>((res) => {
       const r = new FileReader();

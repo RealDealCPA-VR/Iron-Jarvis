@@ -1310,7 +1310,7 @@ def account_usage(platform: Any, row: Any) -> dict[str, Any] | None:
     from ..iron_proxy import usage_read as U
 
     out["usage_read_at"] = U.last_ok_at(account)
-    out["can_refresh"] = U.can_refresh(acc)
+    out["can_refresh"] = U.can_refresh(acc, svc)
     return out
 
 

@@ -20,7 +20,10 @@ Codex mode when ``app-server`` is in argv, else Claude mode. Environment:
   it was let exit BY ITSELF, never killed mid-write.
 * ``FAKE_USAGE_MODE`` — ``ok`` (default) | ``error`` (the CLI refuses) |
   ``shape`` (an answer with no windows) | ``hang`` (never answers; starts a
-  sleeping grandchild first) | ``exit`` (stops before answering).
+  sleeping grandchild first) | ``exit`` (stops before answering) |
+  ``noplan`` (v1.441.0: Claude Code's MEASURED answer for a login with no
+  plan — ``subscription_type: null, rate_limits_available: false,
+  rate_limits: null``; Claude mode only).
 """
 
 from __future__ import annotations
@@ -32,7 +35,10 @@ import sys
 import time
 
 ENV_NAMES = ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
-             "CLAUDECODE", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
+             "CLAUDECODE", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+             # v1.441.0: the keys and the parent session's account a read must drop.
+             "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "GEMINI_API_KEY",
+             "CLAUDE_CODE_ACCOUNT_UUID", "CLAUDE_CODE_USER_EMAIL", "CLAUDE_CODE_ORGANIZATION_UUID")
 
 
 def _out(obj: dict) -> None:
@@ -112,6 +118,13 @@ def main() -> int:
             elif mode == "shape":
                 _out({"type": "control_response",
                       "response": {"subtype": "success", "request_id": rid, "response": {"limits": "?"}}})
+            elif mode == "noplan":
+                _out({"type": "control_response", "response": {
+                    "subtype": "success", "request_id": rid, "response": {
+                        "session": {"total_cost_usd": 0, "model_usage": {}},
+                        "subscription_type": None, "rate_limits_available": False,
+                        "rate_limits": None, "behaviors": None,
+                    }}})
             else:
                 _out({"type": "control_response", "response": {
                     "subtype": "success", "request_id": rid, "response": {

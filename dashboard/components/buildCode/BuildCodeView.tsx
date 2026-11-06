@@ -143,6 +143,11 @@ import {
   signsInItself,
   sessionTitle,
   conversationMarkdown,
+  EXPORT_NOTHING,
+  EXPORT_NOT_READ,
+  EXPORT_READING,
+  exportGapWords,
+  hasExportableItems,
   exportFileName,
   STEER_RETURNED_WORDS,
   toolChoiceWords,
@@ -160,7 +165,9 @@ import {
   LOAD_EARLIER,
   SLASH_ROWS,
   commandHints,
+  collectAllEvents,
   decodeEventsPage,
+  EXPORT_PAGE_LIMIT,
   decodeQueue,
   earlierStepsWords,
   effortWhileRunning,
@@ -271,6 +278,11 @@ export const EXPORT_MARKDOWN = "Export as Markdown";
 export interface ExportSource {
   id: string;
   events: () => readonly CodeEvent[];
+  /** v1.441.0 (review D1): what is older than what the pane holds (the
+   *  export reads every page before it) and how many steps the record
+   *  trimmed (gone; the file says so). */
+  older: () => OlderInfo;
+  dropped: () => number;
 }
 
 /** v1.439.0: hand the browser a text file to save. */
@@ -415,14 +427,26 @@ function SessionPane({
   const allEvents = useMemo(() => (earlierEvents.length ? [...earlierEvents, ...events] : events), [earlierEvents, events]);
   const allEventsRef = useRef(allEvents);
   allEventsRef.current = allEvents;
+  const olderRef = useRef(older);
+  olderRef.current = older;
+  const droppedRef = useRef(dropped);
+  droppedRef.current = dropped;
+  // v1.441.0 (review D2): offered only once THIS session was read (before the
+  // first read, or after a failed one, the pane holds nothing to export).
+  const exportReady = session?.id === sessionId;
   useEffect(() => {
-    if (!exportSource) return;
-    const src: ExportSource = { id: sessionId, events: () => allEventsRef.current };
+    if (!exportSource || !exportReady) return;
+    const src: ExportSource = {
+      id: sessionId,
+      events: () => allEventsRef.current,
+      older: () => olderRef.current,
+      dropped: () => droppedRef.current,
+    };
     exportSource.current = src;
     return () => {
       if (exportSource.current === src) exportSource.current = null;
     };
-  }, [exportSource, sessionId]);
+  }, [exportSource, sessionId, exportReady]);
   const conv = useMemo(() => {
     const c = foldConversation(allEvents, extra);
     const items = reuseItems(prevItemsRef.current, c.items);
@@ -1968,12 +1992,50 @@ export function BuildCodeView({
   const [rowMenu, setRowMenu] = useState<string | null>(null);
   /** v1.439.0: the open session's loaded events (its pane fills it). */
   const exportRef = useRef<ExportSource | null>(null);
-  const exportMarkdown = (s: CodeSession) => {
+  // v1.441.0 review: the export reads up to 200 pages one after another, so
+  // it SAYS it is reading, takes one press at a time, and stops (no more
+  // pages, no file) when the view goes away.
+  const exportingRef = useRef(false);
+  const [exporting, setExporting] = useState(false);
+  const viewAliveRef = useRef(true);
+  useEffect(() => {
+    viewAliveRef.current = true;
+    return () => {
+      viewAliveRef.current = false;
+    };
+  }, []);
+  const exportMarkdown = async (s: CodeSession) => {
     setRowMenu(null);
+    if (exportingRef.current) return;
     const src = exportRef.current;
-    if (!src || src.id !== s.id) return;
-    const title = sessionTitle(s, tools);
-    downloadText(exportFileName(title), conversationMarkdown(title, src.events(), toolLabel(s.tool, tools)));
+    if (!src || src.id !== s.id) {
+      setRowNote(EXPORT_NOT_READ);
+      return;
+    }
+    exportingRef.current = true;
+    setExporting(true);
+    setRowNote(null);
+    try {
+      // v1.441.0 (review D1): the WHOLE conversation — every page before what
+      // the pane holds, read through the same route "Load earlier" reads.
+      const got = await collectAllEvents(src.events(), src.older().cursor, async (cursor) => {
+        if (!viewAliveRef.current) throw new Error("left");
+        return decodeEventsPage(await get<unknown>(eventsPagePath(SESSIONS, s.id, cursor, EXPORT_PAGE_LIMIT)));
+      });
+      if (!viewAliveRef.current) return;
+      if (!hasExportableItems(got.events)) {
+        setRowNote(EXPORT_NOTHING);
+        return;
+      }
+      const title = sessionTitle(s, tools);
+      downloadText(
+        exportFileName(title),
+        conversationMarkdown(title, got.events, toolLabel(s.tool, tools), exportGapWords(src.dropped(), got.unread)),
+      );
+    } finally {
+      exportingRef.current = false;
+      if (viewAliveRef.current) setExporting(false);
+    }
   };
   // v1.426.0 (E5): the folder whose defaults panel is open under its heading.
   const [defaultsFor, setDefaultsFor] = useState<string | null>(null);
@@ -2362,7 +2424,7 @@ export function BuildCodeView({
               type="button"
               role="menuitem"
               data-testid={`code-row-export-${s.id}`}
-              onClick={() => exportMarkdown(s)}
+              onClick={() => void exportMarkdown(s)}
               className="flex w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06]"
             >
               {EXPORT_MARKDOWN}
@@ -2590,6 +2652,11 @@ export function BuildCodeView({
               </section>
             ))
           )}
+          {exporting ? (
+            <p role="status" data-testid="code-export-status" className="px-2 pt-2 text-[12px] text-zinc-500">
+              {EXPORT_READING}
+            </p>
+          ) : null}
           {rowNote ? (
             <p role="alert" data-testid="code-row-note" className="px-2 pt-2 text-[12px] text-tone-danger">
               {rowNote}
