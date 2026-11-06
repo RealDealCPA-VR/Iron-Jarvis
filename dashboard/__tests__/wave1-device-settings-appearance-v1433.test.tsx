@@ -94,7 +94,8 @@ afterEach(() => cleanup());
 async function openAppearance() {
   render(<SettingsHome />);
   const groups = await screen.findByTestId("settings-groups");
-  fireEvent.click(within(groups).getByRole("button", { name: "Appearance" }));
+  // The groups strip is drawn before the schema arrives; wait for the button itself.
+  fireEvent.click(await within(groups).findByRole("button", { name: "Appearance" }, { timeout: 10_000 }));
   // The group's own rows are drawn once the schema has arrived.
   await screen.findByText("Read replies aloud");
 }

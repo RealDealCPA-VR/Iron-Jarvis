@@ -14912,6 +14912,14 @@ does not need a bump, stop and bump it.
   default (the first message then fails in the session); an untouched folder
   team shows members by name and its cloud members are not taken back (the
   team router keeps each piece local instead).
+  v1.437.0 WAS NOT PUBLISHED (its Release gate went red, Tests green;
+  v1.437.1 ships it): `wave1-device-settings-appearance-v1433` clicked the
+  Settings "Appearance" group button with `getByRole` right after
+  `settings-groups` appeared, but that strip is drawn BEFORE the schema
+  arrives and the group buttons come with it. Both such tests (it and
+  `settings-update-channel-v14050`) now `findByRole` the button itself;
+  holding the mocked `/settings/schema` 300 ms reproduced the gate's exact
+  "Unable to find … Appearance" on the old wait.
 
 ## Map (where things live)
 
