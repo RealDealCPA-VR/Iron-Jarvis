@@ -104,6 +104,13 @@ export const DEVICE_PERSONA_KEY = "device.chat_persona";
 export const DEVICE_AUTO_TOOLS_KEY = "device.auto_tools";
 export const DEVICE_READ_ALOUD_KEY = "device.read_aloud";
 
+/** The two rows that name "the theme on this device" (settings/theme_colors
+ *  LINKED): a save of one owns the other too (refreshDeviceSettings). */
+const THEME_PARTNER: Record<string, string> = {
+  [DEVICE_THEME_KEY]: DEVICE_THEME_COLORS_KEY,
+  [DEVICE_THEME_COLORS_KEY]: DEVICE_THEME_KEY,
+};
+
 /** Where the theme shown before chat's own colours is kept (an Undo goes back to it). */
 export const THEME_BEFORE_CHAT_KEY = "ij_theme_before_chat";
 /** The chat theme's name when chat gave none. */
@@ -307,14 +314,22 @@ function applyThemeColors(colors: ThemeColors): boolean {
  *  theme, go back to the theme it showed before (else the default). */
 function leaveChatTheme(): void {
   if (typeof document === "undefined" || document.documentElement.dataset.theme !== CHAT_PALETTE_ID) return;
+  let stored: string | null = null;
   let before: string | null = null;
   try {
+    stored = window.localStorage.getItem(THEME_STORAGE_KEY);
     before = window.localStorage.getItem(THEME_BEFORE_CHAT_KEY);
   } catch {
-    before = null;
+    stored = before = null;
   }
-  const target =
-    before && before !== CHAT_PALETTE_ID && allThemes().some((t) => t.id === before) ? before : DEFAULT_THEME;
+  const usable = (id: string | null): id is string =>
+    !!id && id !== CHAT_PALETTE_ID && allThemes().some((t) => t.id === id);
+  // v1.442.0 review: ANOTHER window of this device that picked a theme of
+  // the user's own (which clears both rows) has already written it to the
+  // shared storage: that newer pick wins over the theme before chat (going
+  // back to that one also overwrote the other window's pick for the next
+  // load). In this window the storage still names the chat theme.
+  const target = usable(stored) ? stored : usable(before) ? before : DEFAULT_THEME;
   applyTheme(target);
 }
 
@@ -444,10 +459,19 @@ export function applyDeviceValues(
     map[key] = v;
     moved = true;
     if (v !== null) applyOne(key, v);
-    else if (key === DEVICE_THEME_COLORS_KEY && before !== null && !isBuiltinThemeId(values[DEVICE_THEME_KEY])) {
-      // v1.442.0: chat's colours were taken away and no built-in theme took
-      // their place (a built-in one is painted by its own row, above).
-      leaveChatTheme();
+    else if (key === DEVICE_THEME_COLORS_KEY && before !== null) {
+      const builtin = values[DEVICE_THEME_KEY];
+      if (!isBuiltinThemeId(builtin)) {
+        // v1.442.0: chat's colours were taken away and no built-in theme took
+        // their place.
+        leaveChatTheme();
+      } else if (typeof document !== "undefined" && document.documentElement.dataset.theme === CHAT_PALETTE_ID) {
+        // v1.442.0 review: a built-in theme took their place and is normally
+        // painted by its own row above — but not when this window already
+        // knew that theme (a read taken while its pick was out), and then
+        // the chat theme stayed on screen under a row naming Daylight.
+        applyTheme(builtin);
+      }
     }
   }
   if (moved) saveKnown();
@@ -478,12 +502,17 @@ export function refreshDeviceSettings(): Promise<void> {
       const values = await readDeviceValues();
       if (values) {
         applyDeviceValues(values, (key) => {
-          if ((state.pending.get(key) ?? 0) > 0) {
+          // v1.442.0 review: the two theme rows are ONE choice (the daemon's
+          // writer clears one when the other is set), so a save of either
+          // owns both — a read that answered before a Daylight pick landed
+          // painted chat's colours over it, and nothing painted it back.
+          const owners = key in THEME_PARTNER ? [key, THEME_PARTNER[key]] : [key];
+          if (owners.some((k) => (state.pending.get(k) ?? 0) > 0)) {
             // A save still out owns this key: read again once it answers.
             state.recheck = true;
             return true;
           }
-          if ((state.seq.get(key) ?? 0) !== (startSeq.get(key) ?? 0)) {
+          if (owners.some((k) => (state.seq.get(k) ?? 0) !== (startSeq.get(k) ?? 0))) {
             // A save landed while this read was out: read again now.
             state.again = true;
             return true;
