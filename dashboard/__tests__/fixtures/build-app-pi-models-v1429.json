@@ -91,6 +91,7 @@
    "xhigh",
    "max"
   ],
+  "effort_live": false,
   "accounts": [],
   "own_sign_in": true,
   "only_when_installed": false,
