@@ -134,6 +134,16 @@ class CredentialStore:
             status = "replaced" if prior else "stored"
             action_id = self._journal(name, vault, backup, bool(prior), status, actor, change_id)
         out: dict[str, Any] = {"secret": name, "label": sdef.label, "status": status, "action_id": action_id}
+        if name.startswith("model_server."):
+            # v1.438.0 (Wave 4 group B): a model server's key just landed —
+            # its model list is read again with it (the catalog cache keyed
+            # on the old, keyless answer otherwise).
+            try:
+                from ..daemon.routes.fleet import _catalog_changed
+
+                _catalog_changed(arg)
+            except Exception:  # noqa: BLE001 — the key is stored either way
+                pass
         if name.startswith("app."):
             # A pack saved by app_connect waits for this token: load it now.
             # v1.351.0 (G15): and SAY what happened — the card reads "GitHub

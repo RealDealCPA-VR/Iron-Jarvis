@@ -1,5 +1,9 @@
 {
   "lines": {
+    "account_add": {
+      "ok": "added an account",
+      "failed": "tried an account addition and it failed"
+    },
     "agent_create": {
       "ok": "made an agent",
       "failed": "tried an agent creation and it failed"
@@ -364,6 +368,10 @@
       "ok": "read an app's resource",
       "failed": "tried a resource read and it failed"
     },
+    "memory_base_add": {
+      "ok": "added a memory base",
+      "failed": "tried a memory base addition and it failed"
+    },
     "memory_propose": {
       "ok": "suggested something to remember",
       "failed": "tried a memory suggestion and it failed"
@@ -375,6 +383,18 @@
     "memory_write": {
       "ok": "saved to its memory",
       "failed": "tried a memory save and it failed"
+    },
+    "model_server_add": {
+      "ok": "added a model server",
+      "failed": "tried a model server addition and it failed"
+    },
+    "model_server_default": {
+      "ok": "set the default model",
+      "failed": "tried a default model change and it failed"
+    },
+    "model_server_remove": {
+      "ok": "removed a model server",
+      "failed": "tried a model server removal and it failed"
     },
     "multi_edit": {
       "ok": "changed 1 file",

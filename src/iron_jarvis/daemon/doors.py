@@ -143,6 +143,22 @@ def door_for(tool_name: str, result: Any) -> dict[str, str] | None:
             return {"href": _BROWSER_FIX_HREF, "label": label} if label else None
         except Exception:  # noqa: BLE001 — no door beats no reply
             return None
+    if tool_name == "account_add":
+        # v1.438.0 (chat-first plan Wave 4 group B): the new account's OWN
+        # sign-in terminal (``settings.records_connections.AccountAddTool``
+        # opened it), else the accounts card. Only those two places — a
+        # tool's data is never trusted as an address.
+        try:
+            data = getattr(result, "data", None)
+            door = data.get("door") if isinstance(data, dict) else None
+            if not isinstance(door, dict):
+                return None
+            href = str(door.get("href") or "")
+            ok = href == "/connections" or re.fullmatch(r"/terminals\?focus=[A-Za-z0-9_-]{1,80}", href)
+            label = _clean_name(door.get("label") or "")
+            return {"href": href, "label": label} if (ok and label) else None
+        except Exception:  # noqa: BLE001 — no door beats no reply
+            return None
     spec = _CATALOG.get(tool_name)
     if spec is None:
         return None

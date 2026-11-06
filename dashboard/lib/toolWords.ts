@@ -80,6 +80,12 @@ const WORDS: Record<string, string> = {
   // a chat (its card shows when turning it OFF).
   change_undo: "undo one of its changes",
   chat_local_only: "change Local only for this chat",
+  // v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections).
+  model_server_add: "add a model server",
+  model_server_default: "set the default model to one of a model server's",
+  model_server_remove: "remove a model server",
+  account_add: "add an account",
+  memory_base_add: "add a memory base",
   // v1.350.0: the daemon's own plan approval (agents/runtime.py
   // PLAN_APPROVAL_TOOL), not a registry tool: its arguments are the plan's
   // steps. No custom tool may take this name (tools/dynamic.py

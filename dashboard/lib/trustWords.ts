@@ -93,6 +93,11 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       "pack_restart",
       "provider_rescan",
       "delegate_remote",
+      // v1.438.0 (Wave 4 group B): a model server, an account.
+      "model_server_add",
+      "model_server_default",
+      "model_server_remove",
+      "account_add",
     ],
   },
   {
@@ -110,6 +115,8 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       "preference_edit",
       "preference_forget",
       "lesson_add",
+      // v1.438.0 (Wave 4 group B).
+      "memory_base_add",
     ],
   },
 

@@ -63,6 +63,9 @@ _MUST_NEVER_BE_ALLOW = DENY_FLOOR_TOOLS | {"tool_create", "tool_delete", "create
     # cancelled or moved, a folder's coding defaults or team changed from chat.
     "night_task_add", "night_task_cancel", "night_task_move",
     "build_defaults_set", "build_defaults_clear", "build_team_set", "build_team_clear",
+    # v1.438.0 (chat-first plan Wave 4 group B): a model server, the default
+    # model, an Iron-Proxy account or a memory base from chat — always a card.
+    "model_server_add", "model_server_default", "model_server_remove", "account_add", "memory_base_add",
 }
 
 

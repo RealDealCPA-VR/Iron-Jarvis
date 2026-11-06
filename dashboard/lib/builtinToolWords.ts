@@ -13,6 +13,7 @@
 
 /** "The assistant wants to …": the card's words for each built-in. */
 export const BUILTIN_CARD_WORDS: Readonly<Record<string, string>> = {
+  "account_add": "add an account",
   "agent_create": "make an agent",
   "agent_delete": "remove an agent",
   "agent_pause": "pause or resume an agent",
@@ -118,11 +119,15 @@ export const BUILTIN_CARD_WORDS: Readonly<Record<string, string>> = {
   "ltm_search": "search your knowledge base",
   "mcp_list_resources": "list an app's resources",
   "mcp_read_resource": "read something from one of your apps",
+  "memory_base_add": "add a memory base",
   "memory_propose": "suggest something to remember",
   "memory_read": "look up a memory",
   "memory_search": "search its memory",
   "memory_write": "save to its memory",
   "message_agent": "message a teammate",
+  "model_server_add": "add a model server",
+  "model_server_default": "set the default model to one of a model server's",
+  "model_server_remove": "remove a model server",
   "multi_edit": "change a file",
   "night_task_add": "queue a coding task for tonight",
   "night_task_cancel": "cancel a task queued for tonight",
@@ -225,6 +230,7 @@ export const BUILTIN_CARD_WORDS: Readonly<Record<string, string>> = {
 /** The work line's words for a built-in it does not word by kind:
  *  [done, running] — "Searched your chats" / "Searching your chats". */
 export const BUILTIN_STEP_WORDS: Readonly<Record<string, readonly [string, string]>> = {
+  "account_add": ["Added an account", "Adding an account"],
   "agent_create": ["Made an agent", "Making an agent"],
   "agent_delete": ["Removed an agent", "Removing an agent"],
   "agent_pause": ["Switched an agent on or off", "Switching an agent on or off"],
@@ -299,11 +305,15 @@ export const BUILTIN_STEP_WORDS: Readonly<Record<string, readonly [string, strin
   "ltm_search": ["Searched your knowledge base", "Searching your knowledge base"],
   "mcp_list_resources": ["Listed an app's resources", "Listing an app's resources"],
   "mcp_read_resource": ["Read an app's resource", "Reading an app's resource"],
+  "memory_base_add": ["Added a memory base", "Adding a memory base"],
   "memory_propose": ["Suggested something to remember", "Suggesting something to remember"],
   "memory_read": ["Looked up a memory", "Looking up a memory"],
   "memory_search": ["Searched its memory", "Searching its memory"],
   "memory_write": ["Saved to its memory", "Saving to its memory"],
   "message_agent": ["Messaged a teammate", "Messaging a teammate"],
+  "model_server_add": ["Added a model server", "Adding a model server"],
+  "model_server_default": ["Set the default model", "Setting the default model"],
+  "model_server_remove": ["Removed a model server", "Removing a model server"],
   "night_task_add": ["Queued a coding task for tonight", "Queuing a coding task for tonight"],
   "night_task_cancel": ["Cancelled a task queued for tonight", "Cancelling a task queued for tonight"],
   "night_task_list": ["Listed tonight's tasks", "Listing tonight's tasks"],

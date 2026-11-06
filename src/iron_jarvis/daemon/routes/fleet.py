@@ -345,6 +345,146 @@ def _derive_id(registry, base_url: str, label: str) -> str:
     return f"{base}-{int(time.time())}"
 
 
+def fleet_auth_kw(fleet: Any, node: Any) -> dict[str, Any]:
+    """``{"headers": …}`` carrying *node*'s saved key for a probe or a
+    detection (the gateway-key fix: ``FleetRegistry.headers_for``), or
+    ``{}`` for a keyless node — the call is then exactly the old one.
+    BLOCKING (a vault read): call it inside the worker thread. v1.438.0:
+    lifted out of :func:`register` so chat's ``model_server_add`` probes the
+    same way (``settings.records_connections``)."""
+    lookup = getattr(fleet, "headers_for", None)
+    if not callable(lookup):
+        return {}
+    try:
+        headers = dict(lookup(node) or {})
+    except Exception:  # noqa: BLE001 — probe without a key
+        return {}
+    return {"headers": headers} if headers else {}
+
+
+async def add_fleet_node(d: Any, body: "FleetNodeBody") -> dict[str, Any]:
+    """Add a node: detect what it is, probe it once, persist it.
+
+    A failed probe still SAVES the node — a box that happens to be asleep
+    is still part of the fleet — and returns its honest snapshot.
+    """
+    from ...fleet.models import FleetNode
+    from ...fleet.probes import detect_kind, probe_node
+
+    base_url = (body.base_url or "").strip()
+    if not base_url:
+        raise HTTPException(status_code=400, detail="base_url is required")
+    protocol = _protocol_or_400(body.protocol or "openai", base_url) or "openai"
+
+    # The gateway-key fix: detection is asked WITH the key the node is
+    # being saved with, so a keyed gateway is read as what it is.
+    unsaved = FleetNode(
+        id="new",
+        base_url=base_url,
+        api_key_name=(body.api_key_name or "").strip(),
+        protocol=protocol,
+    )
+    kind, _reason = await asyncio.to_thread(
+        lambda: detect_kind(base_url, **fleet_auth_kw(d.fleet, unsaved))
+    )
+    node = FleetNode(
+        id=(body.id or "").strip() or _derive_id(d.fleet, base_url, body.label),
+        label=(body.label or "").strip(),
+        base_url=base_url,
+        kind=kind,
+        kind_detected_at=time.time(),
+        source="user",
+        api_key_name=(body.api_key_name or "").strip(),
+        routable=bool(body.routable),
+        default_model=(body.default_model or "").strip(),
+        protocol=protocol,
+    )
+    try:
+        node = d.fleet.add(node) or node
+    except ValueError as exc:  # invalid/duplicate id — surface the reason
+        raise HTTPException(status_code=400, detail=str(exc))
+    # A routable node becomes a provider NOW, not on the next boot —
+    # register_providers is idempotent over the whole routable set.
+    if node.routable:
+        try:
+            d.fleet.register_providers(d.platform.providers)
+        except Exception:  # noqa: BLE001 — registration can't fail the add
+            pass
+    _catalog_changed(node.id)
+
+    snapshot, children = await asyncio.to_thread(
+        lambda: probe_node(node, **fleet_auth_kw(d.fleet, node))
+    )
+    if children:
+        # A LiteLLM proxy names its own backends; adopt them so the fleet
+        # shows the real topology instead of one opaque box.
+        try:
+            d.fleet.absorb_children(node.id, children)
+        except Exception:  # noqa: BLE001 — a bad child can't fail the add
+            pass
+    # v1.329.0: that probe is a REAL reading, so the sampler keeps it and
+    # GET /fleet shows the new node filled in at once (children were
+    # adopted just above, so none are handed over twice). Then make sure
+    # the loop runs: it is only started at boot when a node already
+    # existed, so the first endpoint on a fresh install was never sampled
+    # again. Both best-effort; neither can fail the add.
+    record = getattr(getattr(d, "fleet_sampler", None), "record", None)
+    if callable(record):
+        try:
+            record(node, snapshot, [])
+        except Exception:  # noqa: BLE001 — telemetry never fails the add
+            pass
+    rearm = (getattr(d, "_live_rearm", None) or {}).get("fleet")
+    if callable(rearm):
+        try:
+            rearm()
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        "node": _dump(node),
+        "snapshot": _dump(snapshot),
+        "children": [_dump(c) for c in children],
+    }
+
+
+def delete_fleet_node(d: Any, node_id: str) -> dict[str, Any]:
+    """Remove an endpoint, including the two config-seeded slots (v1.100.0).
+
+    Those two used to be refused with "managed in Settings", which pinned a
+    dead endpoint to the page forever after moving off it (Ollama → vLLM).
+    They're DERIVED from ``ollama_base_url`` / ``custom_base_url``, so
+    clearing those keys is the removal — and the response reports exactly
+    which keys were cleared rather than doing it silently, because it also
+    retires the matching top-level provider.
+    """
+    if d.fleet.get(node_id) is None:
+        raise HTTPException(status_code=404, detail="unknown node")
+    # v1.330.0: what goes with it (a proxy's children), read BEFORE the
+    # removal empties the registry's list.
+    family = getattr(d.fleet, "family", None)
+    gone = family(node_id) if callable(family) else [node_id]
+    from ...fleet.registry import ChildNodeError
+
+    try:
+        cleared = d.fleet.remove(node_id)
+    except ChildNodeError as exc:
+        # A model a proxy reports comes back on the next sampling pass;
+        # never answer ok for a removal that did not happen.
+        raise HTTPException(status_code=409, detail=str(exc))
+    _forget_readings(getattr(d, "fleet_sampler", None), gone)
+    # No ghost providers: drop the factory too (reachable() also answers
+    # False for deleted fleet ids — belt and suspenders).
+    for name in (f"fleet-{node_id}", node_id if cleared else ""):
+        if not name:
+            continue
+        try:
+            d.platform.providers.unregister(name)
+        except Exception:  # noqa: BLE001
+            pass
+    _catalog_changed(node_id)
+    return {"ok": True, "cleared_settings": cleared}
+
+
 def register(app: FastAPI, d) -> None:
     """Attach the /fleet routes to *app*; ``d`` is the create_app deps object."""
 
@@ -486,18 +626,7 @@ def register(app: FastAPI, d) -> None:
         }
 
     def _auth_kw(node) -> dict[str, Any]:
-        """``{"headers": …}`` carrying *node*'s saved key for a probe or a
-        detection (the gateway-key fix: ``FleetRegistry.headers_for``), or
-        ``{}`` for a keyless node — the call is then exactly the old one.
-        BLOCKING (a vault read): call it inside the worker thread."""
-        lookup = getattr(d.fleet, "headers_for", None)
-        if not callable(lookup):
-            return {}
-        try:
-            headers = dict(lookup(node) or {})
-        except Exception:  # noqa: BLE001 — probe without a key
-            return {}
-        return {"headers": headers} if headers else {}
+        return fleet_auth_kw(d.fleet, node)
 
     def _node_for_provider(provider: str):
         """The routable node a provider name refers to (``fleet-<id>``, or the
@@ -591,88 +720,9 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/fleet/nodes")
     async def fleet_add_node(body: FleetNodeBody) -> dict[str, Any]:
-        """Add a node: detect what it is, probe it once, persist it.
-
-        A failed probe still SAVES the node — a box that happens to be asleep
-        is still part of the fleet — and returns its honest snapshot.
-        """
-        from ...fleet.models import FleetNode
-        from ...fleet.probes import detect_kind, probe_node
-
-        base_url = (body.base_url or "").strip()
-        if not base_url:
-            raise HTTPException(status_code=400, detail="base_url is required")
-        protocol = _protocol_or_400(body.protocol or "openai", base_url) or "openai"
-
-        # The gateway-key fix: detection is asked WITH the key the node is
-        # being saved with, so a keyed gateway is read as what it is.
-        unsaved = FleetNode(
-            id="new",
-            base_url=base_url,
-            api_key_name=(body.api_key_name or "").strip(),
-            protocol=protocol,
-        )
-        kind, _reason = await asyncio.to_thread(
-            lambda: detect_kind(base_url, **_auth_kw(unsaved))
-        )
-        node = FleetNode(
-            id=(body.id or "").strip() or _derive_id(d.fleet, base_url, body.label),
-            label=(body.label or "").strip(),
-            base_url=base_url,
-            kind=kind,
-            kind_detected_at=time.time(),
-            source="user",
-            api_key_name=(body.api_key_name or "").strip(),
-            routable=bool(body.routable),
-            default_model=(body.default_model or "").strip(),
-            protocol=protocol,
-        )
-        try:
-            node = d.fleet.add(node) or node
-        except ValueError as exc:  # invalid/duplicate id — surface the reason
-            raise HTTPException(status_code=400, detail=str(exc))
-        # A routable node becomes a provider NOW, not on the next boot —
-        # register_providers is idempotent over the whole routable set.
-        if node.routable:
-            try:
-                d.fleet.register_providers(d.platform.providers)
-            except Exception:  # noqa: BLE001 — registration can't fail the add
-                pass
-        _catalog_changed(node.id)
-
-        snapshot, children = await asyncio.to_thread(
-            lambda: probe_node(node, **_auth_kw(node))
-        )
-        if children:
-            # A LiteLLM proxy names its own backends; adopt them so the fleet
-            # shows the real topology instead of one opaque box.
-            try:
-                d.fleet.absorb_children(node.id, children)
-            except Exception:  # noqa: BLE001 — a bad child can't fail the add
-                pass
-        # v1.329.0: that probe is a REAL reading, so the sampler keeps it and
-        # GET /fleet shows the new node filled in at once (children were
-        # adopted just above, so none are handed over twice). Then make sure
-        # the loop runs: it is only started at boot when a node already
-        # existed, so the first endpoint on a fresh install was never sampled
-        # again. Both best-effort; neither can fail the add.
-        record = getattr(getattr(d, "fleet_sampler", None), "record", None)
-        if callable(record):
-            try:
-                record(node, snapshot, [])
-            except Exception:  # noqa: BLE001 — telemetry never fails the add
-                pass
-        rearm = (getattr(d, "_live_rearm", None) or {}).get("fleet")
-        if callable(rearm):
-            try:
-                rearm()
-            except Exception:  # noqa: BLE001
-                pass
-        return {
-            "node": _dump(node),
-            "snapshot": _dump(snapshot),
-            "children": [_dump(c) for c in children],
-        }
+        """Add a node (:func:`add_fleet_node` — chat's ``model_server_add``
+        calls the same body)."""
+        return await add_fleet_node(d, body)
 
     @app.patch("/fleet/nodes/{node_id}")
     def fleet_patch_node(node_id: str, body: FleetNodePatch) -> dict[str, Any]:
@@ -711,40 +761,9 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/fleet/nodes/{node_id}")
     def fleet_delete_node(node_id: str) -> dict[str, Any]:
-        """Remove an endpoint, including the two config-seeded slots (v1.100.0).
-
-        Those two used to be refused with "managed in Settings", which pinned a
-        dead endpoint to the page forever after moving off it (Ollama → vLLM).
-        They're DERIVED from ``ollama_base_url`` / ``custom_base_url``, so
-        clearing those keys is the removal — and the response reports exactly
-        which keys were cleared rather than doing it silently, because it also
-        retires the matching top-level provider.
-        """
-        _node_or_404(node_id)
-        # v1.330.0: what goes with it (a proxy's children), read BEFORE the
-        # removal empties the registry's list.
-        family = getattr(d.fleet, "family", None)
-        gone = family(node_id) if callable(family) else [node_id]
-        from ...fleet.registry import ChildNodeError
-
-        try:
-            cleared = d.fleet.remove(node_id)
-        except ChildNodeError as exc:
-            # A model a proxy reports comes back on the next sampling pass;
-            # never answer ok for a removal that did not happen.
-            raise HTTPException(status_code=409, detail=str(exc))
-        _forget_readings(getattr(d, "fleet_sampler", None), gone)
-        # No ghost providers: drop the factory too (reachable() also answers
-        # False for deleted fleet ids — belt and suspenders).
-        for name in (f"fleet-{node_id}", node_id if cleared else ""):
-            if not name:
-                continue
-            try:
-                d.platform.providers.unregister(name)
-            except Exception:  # noqa: BLE001
-                pass
-        _catalog_changed(node_id)
-        return {"ok": True, "cleared_settings": cleared}
+        """Remove an endpoint (:func:`delete_fleet_node` — chat's
+        ``model_server_remove`` calls the same body)."""
+        return delete_fleet_node(d, node_id)
 
     @app.post("/fleet/nodes/{node_id}/detect")
     async def fleet_detect_node(node_id: str) -> dict[str, Any]:

@@ -375,6 +375,14 @@ def default_permissions() -> dict[str, str]:
         "agent_update": "ask",
         "agent_pause": "ask",
         "agent_delete": "ask",
+        # v1.438.0 (chat-first plan Wave 4 group B, settings.records_connections):
+        # a model server, its default model, an Iron-Proxy account and a memory
+        # base from chat — each asks on the card and has an Undo.
+        "model_server_add": "ask",
+        "model_server_default": "ask",
+        "model_server_remove": "ask",
+        "account_add": "ask",
+        "memory_base_add": "ask",
         # v1.435.0 (chat-first plan, Wave 3 group I, D3/D4): Local only for
         # THIS chat — turning it on only narrows (allow); turning it OFF asks
         # every time through the tool's own once-only check. The change

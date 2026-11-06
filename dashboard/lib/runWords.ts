@@ -106,6 +106,12 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   channel_connect: { did: "Connected a messaging channel", noun: "channel connection" },
   channel_toggle: { did: "Switched a messaging channel's listening", noun: "channel switch", nouns: "channel switches" },
   chat_local_only: { did: "Changed Local only for this chat", noun: "Local only change" },
+  // v1.438.0 (chat-first plan Wave 4 group B; twin: agents/mission.py).
+  model_server_add: { did: "Added a model server", noun: "model server addition" },
+  model_server_default: { did: "Set the default model", noun: "default model change" },
+  model_server_remove: { did: "Removed a model server", noun: "model server removal" },
+  account_add: { did: "Added an account", noun: "account addition" },
+  memory_base_add: { did: "Added a memory base", noun: "memory base addition" },
   code_load: { did: "Opened a saved script", noun: "script read" },
   code_run: { did: "Ran a saved script", noun: "saved script run" },
   code_search: { did: "Searched its saved scripts", noun: "script search", nouns: "script searches" },

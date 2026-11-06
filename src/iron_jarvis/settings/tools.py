@@ -180,6 +180,14 @@ def _shown_value(platform: Any, key: str, value: Any) -> Any:
         groups = _coerce(schema.get(key), value)
         if not isinstance(groups, dict):
             return value
+        # v1.438.0 review: the card shows what will be SAVED — the user's
+        # other groups kept, the named accounts moved (records_connections.
+        # chat_account_groups, the same function execute uses).
+        from .records_connections import chat_account_groups
+
+        merged, _problem = chat_account_groups(platform, groups)
+        if isinstance(merged, dict):
+            groups = merged
         if not groups:
             return "no groups"
         svc = getattr(platform, "iron_proxy", None)
@@ -335,6 +343,16 @@ class _ConfigChangeBase(Tool):
             d, key, value = self._resolve(args)
         except KeyError:
             return ToolResult(ok=False, output="", error=f"There is no setting {args.get('key')!r}. Call config_list.")
+        if key in ("account_groups", "brain_profile"):
+            # v1.438.0 (Wave 4 group B): chat names accounts and memory
+            # profiles by their NAMES ("put TSI and VR2 in a group called
+            # Work", "use my memory profile Work"); the setting holds ids.
+            # Off the loop: the profile table is read.
+            from .records_connections import named_setting_value
+
+            value, named_problem = await asyncio.to_thread(named_setting_value, self.platform, key, value)
+            if named_problem:
+                return ToolResult(ok=False, output="", error=f"{d.label}: {named_problem}.")
         tier = d.tier_for(value)
         if tier != self.TIER:
             right = TOOL_FOR_TIER[tier]

@@ -356,6 +356,12 @@ ASK_WORDS: dict[str, str] = {
     # for a chat (its card shows when turning it OFF).
     "change_undo": "undo one of its changes",
     "chat_local_only": "change Local only for this chat",
+    # v1.438.0 (chat-first plan Wave 4 group B, settings.records_connections).
+    "model_server_add": "add a model server",
+    "model_server_default": "set the default model to one of a model server's",
+    "model_server_remove": "remove a model server",
+    "account_add": "add an account",
+    "memory_base_add": "add a memory base",
     "approve_plan": "follow this plan",
     # v1.435.0 (chat-first plan Wave 3 group G): projects and the user's own
     # agents from chat (settings.records_projects).
@@ -481,6 +487,12 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "channel_connect": ("connected a messaging channel", "channel connection"),
     "channel_toggle": ("switched a messaging channel's listening", "channel switch"),
     "chat_local_only": ("changed Local only for this chat", "Local only change"),
+    # v1.438.0 (Wave 4 group B; twin lib/runWords.ts AGENT_TOOLS).
+    "model_server_add": ("added a model server", "model server addition"),
+    "model_server_default": ("set the default model", "default model change"),
+    "model_server_remove": ("removed a model server", "model server removal"),
+    "account_add": ("added an account", "account addition"),
+    "memory_base_add": ("added a memory base", "memory base addition"),
     "code_load": ("opened a saved script", "script read"),
     "code_run": ("ran a saved script", "saved script run"),
     "code_search": ("searched its saved scripts", "script search"),

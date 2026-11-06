@@ -600,6 +600,36 @@
       "kind": "table",
       "card": "stop using a coding team in a folder",
       "desktop": "stop using a coding team in a folder"
+    },
+    {
+      "tool": "model_server_add",
+      "kind": "table",
+      "card": "add a model server",
+      "desktop": "add a model server"
+    },
+    {
+      "tool": "model_server_default",
+      "kind": "table",
+      "card": "set the default model to one of a model server's",
+      "desktop": "set the default model to one of a model server's"
+    },
+    {
+      "tool": "model_server_remove",
+      "kind": "table",
+      "card": "remove a model server",
+      "desktop": "remove a model server"
+    },
+    {
+      "tool": "account_add",
+      "kind": "table",
+      "card": "add an account",
+      "desktop": "add an account"
+    },
+    {
+      "tool": "memory_base_add",
+      "kind": "table",
+      "card": "add a memory base",
+      "desktop": "add a memory base"
     }
   ]
 }

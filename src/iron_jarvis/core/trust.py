@@ -92,6 +92,13 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         "build_defaults_clear",
         "build_team_set",
         "build_team_clear",
+        # v1.438.0 (Wave 4 group B): nor a model server, an account or a memory
+        # base (each changes where later chats are answered or saved).
+        "model_server_add",
+        "model_server_default",
+        "model_server_remove",
+        "account_add",
+        "memory_base_add",
         "create_agent",
         "remember_preference",
         "skill_create",

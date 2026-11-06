@@ -3507,6 +3507,11 @@ const TOOL_WORDS = {
   // v1.435.0 (Wave 3 group I): mission.ASK_WORDS == lib/toolWords WORDS.
   change_undo: "undo one of its changes",
   chat_local_only: "change Local only for this chat",
+  model_server_add: "add a model server",
+  model_server_default: "set the default model to one of a model server's",
+  model_server_remove: "remove a model server",
+  account_add: "add an account",
+  memory_base_add: "add a memory base",
   approve_plan: "follow this plan",
   write_document: "create a document",
   excel_edit: "edit a workbook",
@@ -3588,6 +3593,7 @@ const ASK_BROWSER_TOOLS = new Set([
 //: fails when it is stale). Readiness 12A (G24): the card's words for EVERY
 //: registered built-in, so no toast says "use pack restart".
 const TOOL_WORDS_BUILTIN = {
+  account_add: "add an account",
   agent_create: "make an agent",
   agent_delete: "remove an agent",
   agent_pause: "pause or resume an agent",
@@ -3693,11 +3699,15 @@ const TOOL_WORDS_BUILTIN = {
   ltm_search: "search your knowledge base",
   mcp_list_resources: "list an app's resources",
   mcp_read_resource: "read something from one of your apps",
+  memory_base_add: "add a memory base",
   memory_propose: "suggest something to remember",
   memory_read: "look up a memory",
   memory_search: "search its memory",
   memory_write: "save to its memory",
   message_agent: "message a teammate",
+  model_server_add: "add a model server",
+  model_server_default: "set the default model to one of a model server's",
+  model_server_remove: "remove a model server",
   multi_edit: "change a file",
   night_task_add: "queue a coding task for tonight",
   night_task_cancel: "cancel a task queued for tonight",

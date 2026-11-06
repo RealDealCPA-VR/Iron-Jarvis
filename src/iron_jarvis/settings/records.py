@@ -135,6 +135,14 @@ RECORD_TOOL_TIERS: dict[str, str] = {
     "build_defaults_clear": "ask",
     "build_team_set": "ask",
     "build_team_clear": "ask",
+    # v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections):
+    # model servers, Iron-Proxy accounts and memory bases — each asks, each
+    # has an Undo.
+    "model_server_add": "ask",
+    "model_server_default": "ask",
+    "model_server_remove": "ask",
+    "account_add": "ask",
+    "memory_base_add": "ask",
 }
 #: The create tools that gained an Undo (their own tiers are unchanged).
 RECORD_CREATE_TOOLS = frozenset({"schedule_create", "workflow_create", "webhook_add", "sentinel_add", "goal_add"})
@@ -517,9 +525,18 @@ def record_tools_for(text: str, *, workflow_names: "list[str] | tuple[str, ...]"
     # v1.438.0 (Wave 4 groups A and C): the night shift and a folder's coding
     # defaults and team (settings.records_build); preferences, lessons and
     # personas (settings.records_self). Each keeps its own question guard.
-    return list(dict.fromkeys(
+    out = list(dict.fromkeys(
         out + _hist().history_tools_for(t) + _rb().build_tools_for(t) + _self().self_tools_for(t)
     ))
+    # v1.438.0 (Wave 4 group B): model servers, accounts, memory bases
+    # (settings/records_connections) — writers only, so a question drops them.
+    from .records_connections import connections_tools_for, without_addresses
+
+    # The question test reads the words, never an address's dots ("…at
+    # http://10.0.0.5:8000/v1?" cut the last sentence at the IP's dots).
+    if not is_question(without_addresses(t)):
+        out += [n for n in connections_tools_for(t) if n not in out]
+    return out
 
 
 def _schedule_named(t: str) -> bool:
@@ -1669,6 +1686,19 @@ def _rb() -> Any:
 #: coding defaults and its coding team (settings/records_build).
 _BUILD_KINDS = ("night_task", "night_order", "build_defaults", "build_team")
 _SNAP.update({k: (lambda kind: lambda p, n: _rb().SNAP[kind](p, n))(k) for k in _BUILD_KINDS})
+def _conn_snap(kind: str) -> Any:
+    def _snap(platform: Any, name: str) -> Any:
+        from .records_connections import SNAP
+
+        return SNAP[kind](platform, name)
+
+    return _snap
+
+
+#: v1.438.0 (Wave 4 group B): a model server, the default model, a removed
+#: server, an Iron-Proxy account, a memory base (settings/records_connections).
+_CONN_KINDS = ("model_server", "model_default", "model_server_removed", "account", "memory_base")
+_SNAP.update({k: _conn_snap(k) for k in _CONN_KINDS})
 
 
 def restore(platform: Any, desc: dict[str, Any]) -> str:
@@ -1712,6 +1742,10 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
         return _self().restore_kind(platform, record, name, prior, desc)
     if record in _BUILD_KINDS:
         return _rb().restore_kind(platform, record, name, prior, desc)
+    if record in _CONN_KINDS:
+        from .records_connections import restore_kind as _conn_restore
+
+        return _conn_restore(platform, record, name, prior, desc)
     raise RecordError(f"unknown record kind {record!r}")
 
 
@@ -3321,7 +3355,15 @@ def record_tools(platform: Any) -> list[Tool]:
         *_self().self_tools(platform),
         # v1.438.0 (Wave 4 group A): the night shift, a folder's coding settings.
         *_rb().build_record_tools(platform),
+        # v1.438.0 (Wave 4 group B): model servers, accounts, memory bases.
+        *_conn_record_tools(platform),
     ]
+
+
+def _conn_record_tools(platform: Any) -> list[Tool]:
+    from .records_connections import connections_record_tools
+
+    return connections_record_tools(platform)
 
 
 def _apps_record_tools(platform: Any) -> list[Tool]:

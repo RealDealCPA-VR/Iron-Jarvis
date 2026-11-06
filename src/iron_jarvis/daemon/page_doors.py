@@ -486,9 +486,16 @@ def _cli_line(name: str, inside: str) -> str:
 STEPS: tuple[PageStep, ...] = (
     PageStep(
         "accounts", ACCOUNTS_HREF, "Open your accounts in Settings",
-        f"Adding a Claude, Codex or Grok account, or signing one in again, is done on the \"{ACCOUNTS_CARD}\" "
-        f"card in {CONNECTIONS_PLACE} (switched on there first): Add account, then each account signs in "
-        f"with its own Sign in button, in a terminal on this PC. {_NOT_FOR_THEM}.",
+        # v1.438.0 (Wave 4 group B): ADDING one is a chat tool now
+        # (settings/records_connections.AccountAddTool); signing in never is.
+        # Review: this line reaches EVERY surface (the phone, a Build
+        # terminal's chat, the sidebar), and account_add is offered only on
+        # the chat page — so the line says "when it is offered".
+        f"Adding a Claude, Codex or Grok account can be done with account_add when that tool is offered in "
+        f"this reply (it asks first, and \"Several accounts\" must be switched on), or on the \"{ACCOUNTS_CARD}\" "
+        f"card in {CONNECTIONS_PLACE}: "
+        f"Add account. Each account then signs in with its own Sign in button (account_add opens it), in a "
+        f"terminal on this PC, where the user finishes in their own browser. Signing in: {_NOT_FOR_THEM}.",
     ),
     PageStep(
         "vendor_approval", help_href("handbook", M365_ADMIN_SECTION), "Read the Microsoft 365 setup steps",

@@ -1285,6 +1285,61 @@ def rescan_providers(d) -> dict[str, Any]:
     return {"detected": rows}
 
 
+async def fetch_endpoint_models(d: Any, base_url: str, protocol: str = "openai", api_key: str = "") -> dict[str, Any]:
+    """The body of ``POST /connections/endpoints/models`` (v1.438.0: lifted so
+    chat's ``model_server_add`` / ``model_server_default`` read a server's
+    OWN model list the same way — the saved key goes only to its own
+    server). Raises ``HTTPException(400)`` for input the form should not
+    have sent; every server answer is ``{models, error?, reason?}``."""
+    url = (base_url or "").strip()
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        parts, host = None, None
+    if parts is None or parts.scheme.lower() not in ("http", "https") or not host:
+        raise HTTPException(
+            status_code=400,
+            detail="Enter the endpoint address first, starting with http:// or https://.",
+        )
+    protocol = (protocol or "openai").strip().lower()
+    if protocol not in _ENDPOINT_PROTOCOLS:
+        raise HTTPException(
+            status_code=400,
+            detail="Models can be listed for OpenAI-compatible or Anthropic-compatible servers only.",
+        )
+    key = (api_key or "").strip()
+    if len(key) > 8192 or any(not 32 <= ord(c) < 127 for c in key):
+        raise HTTPException(
+            status_code=400,
+            detail="That key has characters a web request cannot carry. Paste it again.",
+        )
+    # The gateway-key fix: an address the user saved, asked with no key
+    # typed, is asked with ITS saved key (the box never shows a saved
+    # key, so "Fetch available models" on a saved keyed gateway used to
+    # 401). A typed key always wins. Off the loop: a vault read.
+    key, ollama_ok = await asyncio.to_thread(_saved_endpoint_auth, d, url, key)
+    if protocol == "anthropic":
+        probe = _probe_anthropic_models
+        kw: dict[str, Any] = {}
+    else:
+        probe = _probe_endpoint_models
+        kw = {"ollama_ok": ollama_ok} if ollama_ok is not None else {}
+    timeout_s = _ENDPOINT_PROBE_TIMEOUT_S
+    try:
+        # The thread's own per-request timeouts already sum under the
+        # bound; this outer one is the backstop, and only ITS expiry earns
+        # the timeout words.
+        async with asyncio.timeout(timeout_s + 1.0) as cm:
+            return await asyncio.to_thread(probe, url, key, timeout_s=timeout_s, **kw)
+    except TimeoutError:
+        if cm.expired():
+            return _probe_fail("timeout")
+        return _probe_fail("failed")
+    except Exception:  # noqa: BLE001 — a probe fault is data, never a 500
+        return _probe_fail("failed")
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/providers")
@@ -1571,50 +1626,4 @@ def register(app: FastAPI, d) -> None:
         bad_address); 400 only for input the form should not have sent. An
         ``anthropic`` answer also carries ``protocol``, ``labels`` (id ->
         display name) and ``partial``."""
-        url = (body.base_url or "").strip()
-        try:
-            parts = urlsplit(url)
-            host = parts.hostname
-        except ValueError:
-            parts, host = None, None
-        if parts is None or parts.scheme.lower() not in ("http", "https") or not host:
-            raise HTTPException(
-                status_code=400,
-                detail="Enter the endpoint address first, starting with http:// or https://.",
-            )
-        protocol = (body.protocol or "openai").strip().lower()
-        if protocol not in _ENDPOINT_PROTOCOLS:
-            raise HTTPException(
-                status_code=400,
-                detail="Models can be listed for OpenAI-compatible or Anthropic-compatible servers only.",
-            )
-        key = (body.api_key or "").strip()
-        if len(key) > 8192 or any(not 32 <= ord(c) < 127 for c in key):
-            raise HTTPException(
-                status_code=400,
-                detail="That key has characters a web request cannot carry. Paste it again.",
-            )
-        # The gateway-key fix: an address the user saved, asked with no key
-        # typed, is asked with ITS saved key (the box never shows a saved
-        # key, so "Fetch available models" on a saved keyed gateway used to
-        # 401). A typed key always wins. Off the loop: a vault read.
-        key, ollama_ok = await asyncio.to_thread(_saved_endpoint_auth, d, url, key)
-        if protocol == "anthropic":
-            probe = _probe_anthropic_models
-            kw: dict[str, Any] = {}
-        else:
-            probe = _probe_endpoint_models
-            kw = {"ollama_ok": ollama_ok} if ollama_ok is not None else {}
-        timeout_s = _ENDPOINT_PROBE_TIMEOUT_S
-        try:
-            # The thread's own per-request timeouts already sum under the
-            # bound; this outer one is the backstop, and only ITS expiry earns
-            # the timeout words.
-            async with asyncio.timeout(timeout_s + 1.0) as cm:
-                return await asyncio.to_thread(probe, url, key, timeout_s=timeout_s, **kw)
-        except TimeoutError:
-            if cm.expired():
-                return _probe_fail("timeout")
-            return _probe_fail("failed")
-        except Exception:  # noqa: BLE001 — a probe fault is data, never a 500
-            return _probe_fail("failed")
+        return await fetch_endpoint_models(d, body.base_url, body.protocol, body.api_key)
