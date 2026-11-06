@@ -546,8 +546,7 @@ ROWS: list[Row] = [
     Row(11, "Pair my Edge browser so you can fill forms.", "door", doors=[_step("browser_addon")]),
     Row(12, "Change the theme to something green and calm.", "done",
         plan=[Call("config_set", {"key": "device.theme_colors", "value": THEME_COLORS})],
-        lands=_l_theme,
-        waits="Wave 7 group C: the device.theme_colors setting", arming_waits=False),
+        lands=_l_theme),
     Row(13, "Let me use Jarvis from my laptop on the same network.", "honest",
         honest_id="another_computer", may_arm=SETTINGS),
     Row(14, "Add the QuickBooks MCP server I use in Claude Desktop.", "done",
@@ -951,7 +950,7 @@ def test_the_table_is_the_thirty_requests_with_their_target_verdicts():
     doc = __doc__ or ""
     assert "SCORE (target after Wave 7): 23 done, 1 door, 6 honest." in doc
     waiting = sorted(r.n for r in ROWS if r.waits)
-    assert waiting == [1, 2, 3, 8, 12, 17, 18, 19, 23, 24, 26]
+    assert waiting == [1, 2, 3, 8, 17, 18, 19, 23, 24, 26]
     assert ", ".join(str(n) for n in waiting) in " ".join(doc.split())
 
 
