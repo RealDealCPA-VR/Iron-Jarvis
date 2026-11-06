@@ -47,6 +47,7 @@ import {
   type PrInfo,
   type SessionGit,
 } from "@/lib/buildGit";
+import { ciTone, ciWatchWords, getCiView, type CiView } from "@/lib/ciWatch";
 
 const ACTION =
   "inline-flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40";
@@ -147,6 +148,33 @@ export function BranchView({
   // A pull request's checks change on GitHub's own time: read slowly, only
   // while the window is on screen.
   useVisibleInterval(() => void readPr(), PR_POLL_MS, !!prUrl && !removed);
+
+  // v1.439.0 (chat-first Wave 6): where Iron Jarvis's pull-request watch
+  // stands (GET /build/sessions/{id}/ci — no GitHub call). Read with the
+  // pull request: when this view opens, after a turn, and on the same slow
+  // visible-only clock. A failed read keeps the last line (it is a hint, not
+  // a verdict) and an older daemon's 404 shows nothing.
+  const [ci, setCi] = useState<CiView | null>(null);
+  const ciSeq = useRef(0);
+  const readCi = useCallback(async () => {
+    const seq = ++ciSeq.current;
+    try {
+      const view = await getCiView(sessionId);
+      if (seq === ciSeq.current) setCi(view);
+    } catch {
+      /* keep what was shown */
+    }
+  }, [sessionId]);
+  // Review (v1.439.0): a MERGED session's watch is over — the daemon's pass
+  // skips any session whose facts carry `merged_at` (`_tend`), so its record
+  // stays frozen at whatever it last said ("watching", "starts a fix…"),
+  // which would read as a promise nobody keeps. No read, no line.
+  const ciLive = !!prUrl && !removed && !git.merged && !merged;
+  useEffect(() => {
+    if (ciLive) void readCi();
+  }, [ciLive, readCi, refreshKey]);
+  useVisibleInterval(() => void readCi(), PR_POLL_MS, ciLive);
+  const ciWords = ci && ciLive ? ciWatchWords(ci) : "";
 
   async function act(name: string, fn: () => Promise<string | null>) {
     setBusy(name);
@@ -465,10 +493,27 @@ export function BranchView({
               {pr.words}
             </span>
           ) : null}
-          <button type="button" data-testid="branch-pr-check" onClick={() => void readPr()} className={ACTION}>
+          <button
+            type="button"
+            data-testid="branch-pr-check"
+            onClick={() => {
+              void readPr();
+              if (ciLive) void readCi();
+            }}
+            className={ACTION}
+          >
             Check again
           </button>
         </div>
+      ) : null}
+      {ciLive && ciWords && ci?.watch ? (
+        <p
+          data-testid="branch-ci-watch"
+          data-state={ci.watch.state}
+          className={`break-words text-[12px] ${ciTone(ci.watch) === "warn" ? "text-tone-warn" : "text-zinc-500"}`}
+        >
+          {ciWords}
+        </p>
       ) : null}
 
       {note ? (

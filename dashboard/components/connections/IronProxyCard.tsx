@@ -627,6 +627,13 @@ function IronProxyBody({
                             patch(`/iron-proxy/accounts/${enc(a.id)}`, { enabled: !a.enabled }),
                           )
                         }
+                        onSignOut={() =>
+                          act(
+                            `${a.id}:signout`,
+                            () => post(`/iron-proxy/accounts/${enc(a.id)}/signout`),
+                            signedOutWords(a.title),
+                          )
+                        }
                         onRemove={() =>
                           act(
                             `${a.id}:remove`,
@@ -756,6 +763,7 @@ function AccountRow({
   onUnpark,
   onMove,
   onEnable,
+  onSignOut,
   onRemove,
   group = null,
   groupNames = [],
@@ -771,6 +779,8 @@ function AccountRow({
   onUnpark: () => void;
   onMove: (dir: -1 | 1) => void;
   onEnable: () => void;
+  /** v1.439.0: the CLI's own logout through Iron-Proxy. The account stays. */
+  onSignOut?: () => Promise<void>;
   onRemove: () => Promise<void>;
   /** v1.393.0: the account's group ("" = none); null = no Group choice (an
    *  account a coding session never runs on, or an older Iron Jarvis). */
@@ -890,6 +900,21 @@ function AccountRow({
         <button type="button" onClick={onEnable} disabled={busy} className={CALM_ACTION}>
           <Power size={13} /> {a.enabled ? "Disable" : "Enable"}
         </button>
+        {/* v1.439.0 (chat-first Wave 6): POST /iron-proxy/accounts/{id}/
+            signout had no door. Sign out is the CLI's own logout: the
+            account stays listed and needs a new sign-in. Only a signed-in
+            subscription account offers it; two presses, calm. */}
+        {isCli && onSignOut && a.state?.status !== "unauthenticated" && (
+          <span data-testid={`iron-proxy-signout-${a.id}`}>
+            <ConfirmButton
+              variant="calm"
+              onConfirm={onSignOut}
+              label="Sign out"
+              confirmLabel="Press again to sign out"
+              title={signOutTitle(a)}
+            />
+          </span>
+        )}
         <ConfirmButton
           variant="calm"
           onConfirm={onRemove}
@@ -900,6 +925,24 @@ function AccountRow({
       </div>
     </div>
   );
+}
+
+/** v1.439.0: what Sign out does, said before the press (the tooltip). The
+ *  existing login (`home_adopted`) is this PC's own sign-in, so it says so. */
+export function signOutTitle(a: Pick<IronProxyAccount, "home_adopted">): string {
+  // Review (v1.439.0): Iron-Proxy's logout runs the CLI's own logout in the
+  // account's folder, which removes the sign-in a terminal or a coding session
+  // already running on that account reads too — say so before the press.
+  const base =
+    "Sign this account out of its CLI (press twice). The account stays here and needs a new sign-in before it is used again. A terminal or coding session running on this account now may stop being able to answer.";
+  return a.home_adopted
+    ? `${base} This is this PC's own login, so the CLI is signed out on this PC too.`
+    : base;
+}
+
+/** v1.439.0: the note after a sign-out the daemon accepted. */
+export function signedOutWords(title: string): string {
+  return `Signed out “${title}”. The account stays; press Sign in to use it again.`;
 }
 
 /** v1.393.0: the value of the Group choice that opens the new group's name. */

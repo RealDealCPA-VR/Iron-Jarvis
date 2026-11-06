@@ -1,0 +1,96 @@
+{
+ "calendar_url_none": {
+  "removed": false,
+  "triggers": {
+   "calendar": {
+    "enabled": true,
+    "has_url": false,
+    "lead_minutes": 15,
+    "tick_seconds": 300
+   },
+   "email": {
+    "channels": [],
+    "credentialed": false,
+    "enabled": false
+   },
+   "slack": {
+    "channels": [],
+    "credentialed": false,
+    "enabled": false
+   }
+  }
+ },
+ "calendar_url_removed": {
+  "removed": true,
+  "triggers": {
+   "calendar": {
+    "enabled": true,
+    "has_url": false,
+    "lead_minutes": 15,
+    "tick_seconds": 300
+   },
+   "email": {
+    "channels": [],
+    "credentialed": false,
+    "enabled": false
+   },
+   "slack": {
+    "channels": [],
+    "credentialed": false,
+    "enabled": false
+   }
+  }
+ },
+ "ci_none": {
+  "on": true,
+  "watch": null
+ },
+ "ci_watching": {
+  "on": true,
+  "watch": {
+   "failed": [
+    "tests"
+   ],
+   "max_rounds": 3,
+   "next_check_at": "2026-11-06T18:16:58.831240",
+   "pr_url": "https://github.com/o/r/pull/7",
+   "reviewer": "",
+   "rounds": 1,
+   "side_branch": "",
+   "state": "watching",
+   "words": ""
+  }
+ },
+ "goal_delete": {
+  "deleted": "GOAL_ID",
+  "revoked_grants": [
+   "GRANT_ID"
+  ]
+ },
+ "goal_delete_missing": {
+  "body": {
+   "detail": "goal not found"
+  },
+  "status": 404
+ },
+ "triggers_saved_link": {
+  "triggers": {
+   "calendar": {
+    "enabled": true,
+    "has_url": true,
+    "lead_minutes": 15,
+    "tick_seconds": 300
+   },
+   "email": {
+    "channels": [],
+    "credentialed": false,
+    "enabled": false
+   },
+   "slack": {
+    "channels": [],
+    "credentialed": false,
+    "enabled": false
+   }
+  }
+ }
+}

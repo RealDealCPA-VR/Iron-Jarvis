@@ -30,6 +30,7 @@ import {
   KeyRound,
   ShieldCheck,
   BookOpen,
+  Keyboard,
   UserRound,
   X,
   type LucideIcon,
@@ -45,6 +46,7 @@ import { headingSlug, readGuideLink, sectionMatches, textOf } from "@/lib/helpLi
 import { Card, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { GlobalHotkeys } from "@/components/help/GlobalHotkeys";
 
 interface Subsystem {
   href: string;
@@ -589,8 +591,9 @@ const TROUBLE: { symptom: string; fix: ReactNode }[] = [
       <>
         The desktop app supervises and restarts its background service automatically, and the
         banner needs two missed polls before it shows — give it a moment. Your chats and files
-        are saved. If it stays: quit from the tray and
-        relaunch (or tray → <Kbd>Restart Iron Jarvis</Kbd>), then{" "}
+        are saved. If it stays: quit from the tray and relaunch. (The tray adds a{" "}
+        <Kbd>Restart Iron Jarvis</Kbd> item only once its own automatic restarts have given
+        up; when you see it, use it instead.) Then{" "}
         <Link href="/settings" className="text-accent-soft hover:text-accent">
           Settings → Maintenance
         </Link>{" "}
@@ -1000,6 +1003,14 @@ export default function HelpPage() {
               you trust — never the open internet. When in doubt, message your bot instead.
             </div>
           </div>
+        </Card>
+      </Reveal>
+
+      {/* v1.439.0 (chat-first Wave 6): the desktop app's global hotkeys, read
+          from what it really registered (never a key the OS refused). */}
+      <Reveal>
+        <Card title="Keyboard shortcuts" icon={<Keyboard size={15} />}>
+          <GlobalHotkeys />
         </Card>
       </Reveal>
 

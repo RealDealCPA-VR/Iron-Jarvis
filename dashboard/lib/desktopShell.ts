@@ -120,6 +120,33 @@ export function daemonStateOf(state: unknown): ShellDaemonState | null {
   };
 }
 
+/** v1.439.0 (chat-first Wave 6): the global hotkeys the desktop app REALLY
+ *  holds, read off `shell.getState()` (desktop/main.js `shellState`:
+ *  `hotkeys.window|spotlight` = the registered key or null when every rung of
+ *  its ladder is taken by another app; `preferred` = the first rung). Null for
+ *  a refused read, an older shell with no `hotkeys`, or anything malformed —
+ *  never a key the OS may have refused. */
+export interface ShellHotkeys {
+  window: string | null;
+  spotlight: string | null;
+  preferred: { window: string | null; spotlight: string | null };
+}
+
+export function hotkeysOf(state: unknown): ShellHotkeys | null {
+  if (!state || typeof state !== "object") return null;
+  const s = state as { hotkeys?: unknown; preferred?: unknown };
+  if (!s.hotkeys || typeof s.hotkeys !== "object") return null;
+  const key = (v: unknown): string | null =>
+    typeof v === "string" && v.trim() && v.length <= 60 ? v.trim() : null;
+  const h = s.hotkeys as Record<string, unknown>;
+  const p = (s.preferred && typeof s.preferred === "object" ? s.preferred : {}) as Record<string, unknown>;
+  return {
+    window: key(h.window),
+    spotlight: key(h.spotlight),
+    preferred: { window: key(p.window), spotlight: key(p.spotlight) },
+  };
+}
+
 /** Which story the offline banner tells. `unknown` = a browser, an older shell
  *  or a refused read: the plain hint, no buttons that might not work.
  *  `stalled` = the watchdog's breaker stopped restarting a hung daemon;
