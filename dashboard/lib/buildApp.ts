@@ -2012,10 +2012,14 @@ export function droppedWords(n: number): string {
     : `${n.toLocaleString("en-US")} older steps were left out here to keep this quick.`;
 }
 
-/** The /health provider id of a coding tool (the Sign in press reads it). */
+/** The /health provider id of a coding tool (the Sign in press reads it).
+ *  v1.439.0: Grok too — its "isn't signed in" error carries fix_kind
+ *  sign_in with provider grok-cli (lib/cliSignIn GROK_SIGN_IN). Pi and
+ *  OpenCode sign in per provider in their own screens: no press. */
 export function signInProvider(tool: string): string {
   if (tool === "claude-code") return "claude-cli";
   if (tool === "codex") return "codex-cli";
+  if (tool === "grok") return "grok-cli";
   return "";
 }
 

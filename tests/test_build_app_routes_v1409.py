@@ -612,7 +612,13 @@ async def test_the_slash_list_is_the_harnesses_own_never_a_start_to_ask(app, wor
         before = {r["id"]: r for r in (await c.get("/build/app/harnesses")).json()["harnesses"]}
         assert before["claude-code"]["commands"] == []
         await c.post(f"/build/app/sessions/{s['id']}/turn", json={"text": "ready?", "turn_id": "t1"})
-        want = [{"name": "init", "description": "Set up a CLAUDE.md file"}]
+        # v1.439.0 (moved on purpose): once Claude Code has said its own list,
+        # each built-in that needs its terminal follows it as a note row.
+        from iron_jarvis.hosted import typed as T
+
+        notes = [{"name": n, "description": "Only in Claude Code's own terminal", "note": why}
+                 for n, why in T.CLAUDE_TERMINAL_ONLY.items()]
+        want = [{"name": "init", "description": "Set up a CLAUDE.md file"}] + notes
         assert (await c.get(f"/build/app/sessions/{s['id']}/commands")).json() == {"commands": want}
         assert (await c.get(f"/build/app/sessions/{s['id']}")).json()["commands"] == want
         after = {r["id"]: r for r in (await c.get("/build/app/harnesses")).json()["harnesses"]}

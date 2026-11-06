@@ -723,6 +723,29 @@ def model_rows(options: Any, known: list[dict[str, Any]] | None = None) -> list[
         out.append(row)
         if len(out) >= MAX_MODELS:
             break
+    return grouped(out)
+
+
+def model_group(model_id: Any) -> str:
+    """v1.439.0: a model's provider, as OpenCode's own picker groups it (the
+    part of ``provider/model`` before the ``/``); "" when it names none."""
+    head, sep, _rest = str(model_id or "").partition("/")
+    return clip(head, 80) if sep and head else ""
+
+
+def grouped(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """v1.439.0: each row with its ``group`` (its provider), sorted by it —
+    stable, so OpenCode's own order stays inside each provider."""
+    out = []
+    for r in rows:
+        row = dict(r)
+        group = model_group(row.get("id"))
+        if group:
+            row["group"] = group
+        else:
+            row.pop("group", None)
+        out.append(row)
+    out.sort(key=lambda r: str(r.get("group") or "").lower())
     return out
 
 
@@ -762,7 +785,7 @@ def cached_models(path: Path | None) -> tuple[list[dict[str, Any]], str]:
                     row["efforts"] = [str(e) for e in r["efforts"] if isinstance(e, str)][:12]
                 out.append(row)
             default = str(data.get("default") or "") if isinstance(data, dict) else ""
-            return out[:MAX_MODELS], clip(default, 120)
+            return grouped(out[:MAX_MODELS]), clip(default, 120)
     except (OSError, ValueError):
         pass
     return [], ""
