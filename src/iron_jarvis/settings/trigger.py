@@ -211,6 +211,23 @@ _NOT_FOR_SOMETHING_ELSE = (
     r"|\s+with\s+(?!" + _THEME_APP + r"|(?:a\s+|an\s+|some\s+|more\s+)?(?:" + _THEME_COLOURS + r"|"
     + _THEME_MOODS + r")\b))"
 )
+#: v1.442.0 review: what may FOLLOW a theme word in a request. A list of
+#: what may not ("…for my slides") let every other tail through: "…at the
+#: baby shower", "…this Christmas", "…when you draw the chart", "…, then
+#: draw a poster", "a theme song", "a theme park". So the request must END
+#: there (or say please / instead / from now on / thanks), or name this app,
+#: or add a colour or feel ("…with teal").
+_THEME_TAIL = (
+    r"(?=\s*(?:[.!?;\n]|$)"
+    r"|\s*,\s*(?:please|thanks|thank\s+you)\b"
+    r"|\s+(?:please|instead|now|again|for\s+me|thanks|thank\s+you|from\s+now\s+on|going\s+forward)\b"
+    r"|\s+(?:for|in|on|inside)\s+" + _THEME_APP
+    + r"|\s+with\s+(?:a\s+|an\s+|some\s+|more\s+)?(?:" + _THEME_COLOURS + r"|" + _THEME_MOODS + r")\b)"
+)
+#: …and where the request may START: a clause of its own ("use…", "Hey
+#: Jarvis, use…", "please use…", "can you use…") — never "the slides should
+#: use a dark blue theme", whose subject is something else.
+_THEME_ASKS_AT = r"(?:" + _ASKS_AT + r"|\b(?:just|also|now|then|so|ok|okay|jarvis|let'?s)\s+)"
 _EXTRA_REFERENCES: tuple[re.Pattern[str], ...] = tuple(
     re.compile(p, re.IGNORECASE)
     for p in (
@@ -256,19 +273,25 @@ _EXTRA_REFERENCES: tuple[re.Pattern[str], ...] = tuple(
         r"\b(?:make|turn|switch|set|change|paint|colou?r)\s+(?:the\s+|my\s+)?(?:app|jarvis|iron\s+jarvis"
         r"|dashboard|interface)\s+(?:look\s+|to\s+|into\s+)?(?:(?:more|a\s+bit|a\s+little|really|very"
         r"|kind\s+of|sort\s+of|something|a|an)\s+)?(?:" + _THEME_MOODS + r"\s+(?:and\s+)?){0,2}"
-        + _THEME_COLOURS + r"\b",
+        + _THEME_COLOURS + r"\b"
+        # Review: never the dashboard of ANOTHER program ("…in Power BI").
+        + r"(?!\s+(?:in|on|of|for|inside|into)\s+(?!" + _THEME_APP + r"))",
         # "use a dark blue theme", "switch to a green theme", "give me a calm
         # green look" — never one FOR something else ("a green theme for my
         # slides", "a dark palette for the website").
-        r"\b(?:use|switch\s+to|change\s+(?:it\s+|the\s+theme\s+)?to|set\s+(?:it\s+|the\s+theme\s+)?to"
+        # Review: ONE optional article followed by its own space — the old
+        # ``\s+(?:a|…)?\s*`` could split a whitespace run two ways and was
+        # quadratic ("use" + 4,000 spaces: about 5 s).
+        _THEME_ASKS_AT
+        + r"(?:use|switch\s+to|change\s+(?:it\s+|the\s+theme\s+)?to|set\s+(?:it\s+|the\s+theme\s+)?to"
         r"|go\s+(?:with|for)|give\s+me|try|pick|choose|make\s+me|create|apply|i\s+(?:want|need)"
-        r"|i'?d\s+like|i\s+would\s+like)\s+(?:a|an|some|the|my)?\s*(?:(?:" + _THEME_COLOURS + r"|"
+        r"|i'?d\s+like|i\s+would\s+like)\s+(?:(?:a|an|some|the|my)\s+)?(?:(?:" + _THEME_COLOURS + r"|"
         + _THEME_MOODS + r"|and|or)(?:ish)?[\s,-]+){1,4}(?:theme|colou?r\s+scheme|palette|look)s?\b"
-        + _NOT_FOR_SOMETHING_ELSE,
+        + _NOT_FOR_SOMETHING_ELSE + _THEME_TAIL,
         # "make my own theme", "set a custom theme", "create a new colour theme".
         r"\b(?:make|create|build|design|set(?:\s+up)?|give\s+me|use|i\s+(?:want|need)|i'?d\s+like)\s+"
         r"(?:me\s+)?(?:my\s+own|my\s+custom|a\s+custom|a\s+new|an?\s+own)\s+(?:colou?r\s+)?theme\b"
-        + _NOT_FOR_SOMETHING_ELSE,
+        + _NOT_FOR_SOMETHING_ELSE + _THEME_TAIL,
         # "turn off web search", "disable the file search tool", "never run
         # the shell tool" — a tool's permission.
         r"\b(?:turn\s+off|turn\s+on|disable|enable|block|unblock|allow|never\s+(?:run|use)"
