@@ -65,7 +65,8 @@ async def test_harnesses_are_read_from_cached_answers_only(app, monkeypatch):
     # v1.411.0: Pi is the third tool (its own listing: tests/test_build_app_pi_v1411.py);
     # v1.413.0: OpenCode the fourth (tests/test_build_app_opencode_v1413.py) — moved on purpose.
     # v1.416.0: Grok the fifth (tests/test_build_app_grok_v1416.py) — moved on purpose.
-    assert set(by) == {"claude-code", "codex", "pi", "opencode", "grok"}
+    # v1.439.0: Antigravity the sixth (tests/test_build_app_antigravity_v1439.py) — moved on purpose.
+    assert set(by) == {"claude-code", "codex", "pi", "opencode", "grok", "antigravity"}
     assert by["claude-code"]["installed"] is True and by["codex"]["installed"] is False
     assert by["codex"]["signed_in"] is None
     # v1.412.0: Claude Code's own Auto is offered (moved on purpose), and every
@@ -612,7 +613,13 @@ async def test_the_slash_list_is_the_harnesses_own_never_a_start_to_ask(app, wor
         before = {r["id"]: r for r in (await c.get("/build/app/harnesses")).json()["harnesses"]}
         assert before["claude-code"]["commands"] == []
         await c.post(f"/build/app/sessions/{s['id']}/turn", json={"text": "ready?", "turn_id": "t1"})
-        want = [{"name": "init", "description": "Set up a CLAUDE.md file"}]
+        # v1.439.0 (moved on purpose): once Claude Code has said its own list,
+        # each built-in that needs its terminal follows it as a note row.
+        from iron_jarvis.hosted import typed as T
+
+        notes = [{"name": n, "description": "Only in Claude Code's own terminal", "note": why}
+                 for n, why in T.CLAUDE_TERMINAL_ONLY.items()]
+        want = [{"name": "init", "description": "Set up a CLAUDE.md file"}] + notes
         assert (await c.get(f"/build/app/sessions/{s['id']}/commands")).json() == {"commands": want}
         assert (await c.get(f"/build/app/sessions/{s['id']}")).json()["commands"] == want
         after = {r["id"]: r for r in (await c.get("/build/app/harnesses")).json()["harnesses"]}

@@ -152,7 +152,10 @@ _SIGN_IN_RX = re.compile(r"not (?:logged|signed) in|log ?in required|sign ?in re
                          r"authentication (?:required|failed|error)|\b401\b|unauthori[sz]ed|"
                          r"invalid (?:api )?key|(?:token|session)\b[^.\n]{0,40}\bexpired", re.I)
 _LIMIT_RX = re.compile(r"usage limit|rate limit|\b429\b|quota|too many requests|credits?", re.I)
-SIGN_IN_FIX = "Open a Build terminal, run grok and sign in there, then send the message again."
+SIGN_IN_FIX = "Press Sign in to open Grok's own sign-in in a Build terminal, then send the message again."
+#: v1.439.0: the provider whose Sign in press fixes it (``lib/cliSignIn``'s
+#: GROK_SIGN_IN) — the Code view draws that one press.
+SIGN_IN_PROVIDER = "grok-cli"
 LIMIT_FIX = "Wait until it resets, or choose another model."
 OTHER_FIX = "Send the message again. If it happens again, choose another model for this session."
 
@@ -165,8 +168,10 @@ def session_meta(mode: str) -> dict[str, bool]:
 
 
 def failure_event(said: str) -> dict[str, Any]:
-    """The ``error`` event for a failure Grok SAID. No press: Grok signs in in
-    its own screen, and a Grok session has no other account to move to.
+    """The ``error`` event for a failure Grok SAID. v1.439.0: a sign-in failure
+    carries ``fix_kind: "sign_in"`` and ``provider: "grok-cli"``, so the Code
+    view draws the one Sign in press (it opens Grok's own sign-in screen in a
+    Build terminal) — a Grok session has no other account to move to.
 
     v1.422.0 (B5): a usage limit is the ACCOUNT-LIMIT card
     (``fix_kind: "account_limit"``) like Claude Code's and Codex's, so the
@@ -175,7 +180,7 @@ def failure_event(said: str) -> dict[str, Any]:
     Grok's own (it never moves to another account)."""
     text = str(said or "")
     if _SIGN_IN_RX.search(text):
-        return W.error("Grok isn't signed in", SIGN_IN_FIX, text)
+        return W.error("Grok isn't signed in", SIGN_IN_FIX, text, fix_kind="sign_in", provider=SIGN_IN_PROVIDER)
     if _LIMIT_RX.search(text):
         return W.error("Grok hit its usage limit", LIMIT_FIX, text, fix_kind="account_limit")
     return W.error("Grok's model answered with an error", OTHER_FIX, text)

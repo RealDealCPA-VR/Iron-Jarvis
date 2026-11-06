@@ -50,7 +50,7 @@ VIEWS: tuple[str, ...] = (VIEW_CODE, VIEW_TOOL)
 #: ask" — never; see the module doc).
 CODE_POSTURES: tuple[str, ...] = ("always_ask", "approve_for_me", "accept_edits", "auto")
 #: The Build › Code tools (``hosted/words.LABELS``).
-TOOLS: tuple[str, ...] = ("claude-code", "codex", "pi", "opencode", "grok")
+TOOLS: tuple[str, ...] = ("claude-code", "codex", "pi", "opencode", "grok", "antigravity")
 #: A Build › Code tool's modes a folder may start a session with (Full access
 #: never; each tool still offers only its own — the composer checks).
 TOOL_MODES: tuple[str, ...] = ("ask", "edits", "plan", "auto", "own")

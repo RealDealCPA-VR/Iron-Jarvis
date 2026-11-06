@@ -56,6 +56,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MutableRefObject,
 } from "react";
 import {
   AlertTriangle,
@@ -141,6 +142,8 @@ import {
   slashMenuRows,
   signsInItself,
   sessionTitle,
+  conversationMarkdown,
+  exportFileName,
   STEER_RETURNED_WORDS,
   toolChoiceWords,
   toolLabel,
@@ -260,6 +263,28 @@ function errorWords(e: unknown, fallback: string): string {
 
 type MenuRow = { kind: "command"; cmd: ToolCommand } | { kind: "file"; entry: ProjectEntry };
 
+/** v1.439.0: the session row's menu item that saves the conversation. */
+export const EXPORT_MARKDOWN = "Export as Markdown";
+
+/** v1.439.0: the open session's events, for the export (a getter: always
+ *  the newest the pane holds). */
+export interface ExportSource {
+  id: string;
+  events: () => readonly CodeEvent[];
+}
+
+/** v1.439.0: hand the browser a text file to save. */
+function downloadText(name: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function SessionPane({
   sessionId,
   tools,
@@ -269,6 +294,7 @@ function SessionPane({
   firstMessage = null,
   firstFiles = null,
   onFirstSent,
+  exportSource,
 }: {
   sessionId: string;
   tools: readonly CodingTool[];
@@ -281,6 +307,9 @@ function SessionPane({
   /** v1.412.0: the start composer's files (pictures already uploaded). */
   firstFiles?: string[] | null;
   onFirstSent?: () => void;
+  /** v1.439.0: where this pane leaves the events it holds, so the session
+   *  row's "Export as Markdown" builds the file from them (no new read). */
+  exportSource?: MutableRefObject<ExportSource | null>;
 }) {
   const [session, setSession] = useState<CodeSession | null>(null);
   const [events, setEvents] = useState<CodeEvent[]>([]);
@@ -384,6 +413,16 @@ function SessionPane({
   // again; the v1.250.0 rule).
   // v1.418.0 (C4.6): the steps loaded earlier come first.
   const allEvents = useMemo(() => (earlierEvents.length ? [...earlierEvents, ...events] : events), [earlierEvents, events]);
+  const allEventsRef = useRef(allEvents);
+  allEventsRef.current = allEvents;
+  useEffect(() => {
+    if (!exportSource) return;
+    const src: ExportSource = { id: sessionId, events: () => allEventsRef.current };
+    exportSource.current = src;
+    return () => {
+      if (exportSource.current === src) exportSource.current = null;
+    };
+  }, [exportSource, sessionId]);
   const conv = useMemo(() => {
     const c = foldConversation(allEvents, extra);
     const items = reuseItems(prevItemsRef.current, c.items);
@@ -1927,6 +1966,15 @@ export function BuildCodeView({
   const [openId, setOpenId] = useState<string | null>(initialSession);
   const [creating, setCreating] = useState(false);
   const [rowMenu, setRowMenu] = useState<string | null>(null);
+  /** v1.439.0: the open session's loaded events (its pane fills it). */
+  const exportRef = useRef<ExportSource | null>(null);
+  const exportMarkdown = (s: CodeSession) => {
+    setRowMenu(null);
+    const src = exportRef.current;
+    if (!src || src.id !== s.id) return;
+    const title = sessionTitle(s, tools);
+    downloadText(exportFileName(title), conversationMarkdown(title, src.events(), toolLabel(s.tool, tools)));
+  };
   // v1.426.0 (E5): the folder whose defaults panel is open under its heading.
   const [defaultsFor, setDefaultsFor] = useState<string | null>(null);
   const [rowNote, setRowNote] = useState<string | null>(null);
@@ -2307,6 +2355,19 @@ export function BuildCodeView({
           >
             {OPEN_IN_TERMINAL}
           </button>
+          {/* v1.439.0: the session open in front (its events are loaded) can be
+              saved as Markdown: messages, replies and step titles. */}
+          {exportRef.current?.id === s.id ? (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid={`code-row-export-${s.id}`}
+              onClick={() => exportMarkdown(s)}
+              className="flex w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06]"
+            >
+              {EXPORT_MARKDOWN}
+            </button>
+          ) : null}
           {/* v1.420.0 (fix plan C4.10): Rename in the row; Delete takes two
               presses. */}
           <button
@@ -2586,6 +2647,7 @@ export function BuildCodeView({
             firstMessage={firstFor && firstFor.id === openId ? firstFor.text : null}
             firstFiles={firstFor && firstFor.id === openId ? firstFor.files : null}
             onFirstSent={clearFirst}
+            exportSource={exportRef}
           />
         )}
       </section>

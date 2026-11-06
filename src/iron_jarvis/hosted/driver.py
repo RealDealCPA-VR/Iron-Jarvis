@@ -204,6 +204,13 @@ class Driver:
     async def set_model(self, model: str) -> str:  # pragma: no cover
         raise NotImplementedError
 
+    async def rename(self, title: str) -> None:
+        """v1.439.0: the user renamed this session — tell the tool, so its own
+        list (``claude --resume``, ``codex resume``) shows the same name. Best
+        effort: the service calls it in the background, only while the
+        process runs, and never waits for it. Most tools have no way."""
+        return None
+
     #: v1.415.0: may :meth:`context_breakdown` be asked while a turn runs?
     #: (Pi answers its stats at once; Claude Code is asked only when idle.)
     context_while_working = False

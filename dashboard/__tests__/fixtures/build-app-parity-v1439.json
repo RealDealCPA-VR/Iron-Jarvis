@@ -1,0 +1,10 @@
+{
+ "grok_sign_in": {
+  "type": "error",
+  "title": "Grok isn't signed in",
+  "fix": "Press Sign in to open Grok's own sign-in in a Build terminal, then send the message again.",
+  "technical": "Not logged in. Run grok login.",
+  "fix_kind": "sign_in",
+  "provider": "grok-cli"
+ }
+}

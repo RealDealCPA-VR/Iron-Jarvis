@@ -162,6 +162,10 @@ export interface CodeUsage {
     windows: UsageWindow[];
     /** When Iron-Proxy saw its OLDEST number shown ("" = not said). */
     at: string;
+    /** v1.439.0: its usage can be read now ("Check usage now"). */
+    canRefresh: boolean;
+    /** v1.439.0: when it was last read now (ISO), "" when never. */
+    usageReadAt: string;
   } | null;
   seen: { windows: UsageWindow[]; at: string; plan: string } | null;
   totals: {
@@ -215,6 +219,8 @@ export function decodeCodeUsage(raw: unknown): CodeUsage | null {
           status: str(a.status, 40),
           windows: windowsOf(a.windows),
           at: str(a.at, 40),
+          canRefresh: a.can_refresh === true,
+          usageReadAt: str(a.usage_read_at, 40),
         }
       : null,
     seen: s && seenWindows.length ? { windows: seenWindows, at: str(s.at, 40), plan: str(s.plan, 40) } : null,
@@ -261,8 +267,8 @@ export function agoWords(iso: string, now: number = Date.now()): string {
 }
 
 /** Tools that never report their account's windows over their machine
- *  protocol (Pi's RPC, OpenCode's and Grok's ACP). */
-export const NO_WINDOWS_TOOLS: readonly string[] = ["pi", "opencode", "grok"];
+ *  protocol (Pi's RPC, OpenCode's, Grok's and Antigravity's ACP). */
+export const NO_WINDOWS_TOOLS: readonly string[] = ["pi", "opencode", "grok", "antigravity"];
 
 /** Why there are no window numbers (never "0%"). */
 export function noWindowsWords(tool: string, toolName: string): string {

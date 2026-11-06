@@ -182,6 +182,22 @@ def set_folder_if_empty(engine: Any, sid: str, path: str) -> HostedSessionRecord
         return row
 
 
+def set_title_if_empty(engine: Any, sid: str, title: str) -> bool:
+    """v1.439.0 (review): keep ``title`` only while the session has none —
+    checked and written in ONE transaction, so a name the user typed a moment
+    before is never replaced by the tool's. True when it was kept."""
+    ensure_table(engine)
+    with session_scope(engine) as db:
+        row = db.get(HostedSessionRecord, str(sid or ""))
+        if row is None or (row.title or "").strip() or not str(title or "").strip():
+            return False
+        row.title = str(title)
+        row.updated_at = utcnow()
+        db.add(row)
+        db.commit()
+        return True
+
+
 def clear_folder_if(engine: Any, sid: str, path: str) -> bool:
     """v1.412.0: forget the session's own folder when it is still ``path``
     (it was taken back). True when it was cleared."""

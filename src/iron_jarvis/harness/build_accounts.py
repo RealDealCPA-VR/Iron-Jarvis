@@ -373,7 +373,9 @@ def _proxy_state(svc: Any) -> dict[str, Any]:
 def accounts_view(svc: Any) -> dict[str, Any]:
     """``GET /build/accounts``: ``{claude: [...], codex: [...], grok: [...],
     iron_proxy: {enabled, running, needs_update, note}}`` from the CACHED
-    snapshot (``grok`` since v1.424.0)."""
+    snapshot (``grok`` since v1.424.0). v1.439.0: every row also carries
+    ``usage_read_at`` (the last "Check usage now" read, or None) and
+    ``can_refresh`` (``iron_proxy.usage_read.decorate``)."""
     state = _proxy_state(svc)
     out: dict[str, Any] = {"claude": [], "codex": [], "grok": [], "iron_proxy": state}
     if not state["enabled"]:
@@ -383,8 +385,12 @@ def accounts_view(svc: Any) -> dict[str, Any]:
         if not state["note"]:
             state["note"] = NOT_READ_NOTE
         return out
+    # v1.439.0: each row says when its usage was last read now ("Check usage
+    # now") and whether it can be (in memory; never a call).
+    from ..iron_proxy.usage_read import decorate
+
     for vendor in VENDORS:
-        out[vendor] = vendor_rows(snap, vendor)
+        out[vendor] = [decorate(r) for r in vendor_rows(snap, vendor)]
     return out
 
 

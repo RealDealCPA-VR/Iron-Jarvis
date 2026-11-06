@@ -192,7 +192,7 @@ def unified_from_hunks(path: str, hunks: list[dict[str, Any]]) -> str:
 def unified_new_file(path: str, content: str) -> str:
     name = str(path or "file").replace("\\", "/")
     body = str(content or "").splitlines()
-    head = [f"--- /dev/null", f"+++ b/{name}", f"@@ -0,0 +1,{len(body)} @@"]
+    head = ["--- /dev/null", f"+++ b/{name}", f"@@ -0,0 +1,{len(body)} @@"]
     return "\n".join(head + ["+" + r for r in body])
 
 

@@ -1601,6 +1601,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Codex warns: Falling back from WebSockets to HTTPS transport. unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses, cf-ray: (masked).",
+    "turn": "turn-1"
+   },
+   {
     "type": "error",
     "title": "Codex isn't signed in",
     "fix": "Press Sign in beside Codex in Settings › Connections.",
@@ -1769,6 +1774,7 @@
     "detail": "Exit plan mode?",
     "can_session": false,
     "plan": "# Plan\n\n1. Read `a.txt`.\n2. Write `b.txt` with its words reversed.\n",
+    "then_mode": "ask",
     "once_only": true,
     "tool": "ExitPlanMode",
     "turn": "turn-1"

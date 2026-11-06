@@ -611,7 +611,7 @@ TERMINAL_ONLY: dict[str, str] = {
     "import": _OTHER_CONVERSATION,
     "new": "Start another session with New session.",
     "resume": "Your Pi conversations are listed with your sessions — open one there.",
-    "copy": "Use the copy button under a reply.",
+    "copy": "Point at a finished reply and press its copy icon (Copy reply) to copy its text.",
     "share": ("It uploads the conversation, so it stays in Pi's own terminal — "
               "open this session there with Open in terminal."),
     "quit": "There is nothing to quit here: Iron Jarvis stops Pi after the session has been idle a while.",

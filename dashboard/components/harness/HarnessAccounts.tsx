@@ -45,6 +45,7 @@ import {
   limitCardWords,
   limitWaitingWords,
   TRY_LIMITED_NOTE,
+  decodeAccount,
   vendorPlanLine,
   type AccountLimit,
   type AccountVendor,
@@ -52,6 +53,7 @@ import {
   type AccountsView,
   type BuildAccount,
 } from "@/lib/buildAccounts";
+import { UsageRefresh } from "@/components/accounts/UsageRefresh";
 
 /** The vendor's mark: Claude's real one, a quiet bot for Codex (OpenAI's mark
  *  was removed from Simple Icons at its request — components/BrandGlyph). */
@@ -74,7 +76,7 @@ function warns(kind: string): boolean {
 
 /** One account card in the list. */
 export function AccountCard({
-  account,
+  account: given,
   current,
   onPick,
   onMakeDefault,
@@ -92,6 +94,11 @@ export function AccountCard({
    *  card's list only: picking it there tries it anyway). */
   tryNote?: string;
 }) {
+  // v1.439.0: "Check usage now" answers the account as every list now sees
+  // it; the card shows that until its caller hands it a newer row.
+  const [fresh, setFresh] = useState<BuildAccount | null>(null);
+  useEffect(() => setFresh(null), [given]);
+  const account = fresh && fresh.id === given.id ? fresh : given;
   const line = accountStatusLine(account);
   // v1.377.0 (Phase 6): the model menu's rule, one function — turned off and
   // removed cannot be picked (the daemon refuses them); signed out can (the
@@ -132,28 +139,43 @@ export function AccountCard({
       <p data-testid="account-vendor-plan" className="mt-0.5 pl-[22px] text-[12px] text-zinc-500">
         {vendorPlanLine(account)}
       </p>
-      {line.text ? (
-        <div className="mt-1 pl-[22px]" data-testid="account-status" data-kind={line.kind}>
-          {line.kind === "usage" && typeof line.percent === "number" ? (
-            <div className="flex items-center gap-2">
-              <div
-                role="meter"
-                aria-label={`${account.name}: ${line.text} used`}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.round(line.percent)}
-                className="h-1.5 w-24 shrink-0 overflow-hidden rounded-full bg-white/[0.08]"
-              >
-                <div
-                  className={`h-full rounded-full ${line.percent >= NEAR_LIMIT_PERCENT ? "bg-tone-warn" : "bg-accent"}`}
-                  style={{ width: `${Math.max(2, Math.min(100, line.percent))}%` }}
-                />
-              </div>
-              <span className="text-[12px] text-zinc-400">{line.text}</span>
+      {line.text || account.canRefresh ? (
+        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 pl-[22px]">
+          {line.text ? (
+            <div data-testid="account-status" data-kind={line.kind}>
+              {line.kind === "usage" && typeof line.percent === "number" ? (
+                <div className="flex items-center gap-2">
+                  <div
+                    role="meter"
+                    aria-label={`${account.name}: ${line.text} used`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(line.percent)}
+                    className="h-1.5 w-24 shrink-0 overflow-hidden rounded-full bg-white/[0.08]"
+                  >
+                    <div
+                      className={`h-full rounded-full ${line.percent >= NEAR_LIMIT_PERCENT ? "bg-tone-warn" : "bg-accent"}`}
+                      style={{ width: `${Math.max(2, Math.min(100, line.percent))}%` }}
+                    />
+                  </div>
+                  <span className="text-[12px] text-zinc-400">{line.text}</span>
+                </div>
+              ) : (
+                <span className={`text-[12px] ${warns(line.kind) ? "text-tone-warn" : "text-zinc-400"}`}>{line.text}</span>
+              )}
             </div>
-          ) : (
-            <span className={`text-[12px] ${warns(line.kind) ? "text-tone-warn" : "text-zinc-400"}`}>{line.text}</span>
-          )}
+          ) : null}
+          {account.canRefresh ? (
+            <UsageRefresh
+              accountId={account.id}
+              accountName={account.name}
+              readAt={account.usageReadAt ?? null}
+              onRead={(res) => {
+                const a = decodeAccount(res.account, account.vendor);
+                if (a && a.id === account.id) setFresh(a);
+              }}
+            />
+          ) : null}
         </div>
       ) : null}
       {tryNote ? (

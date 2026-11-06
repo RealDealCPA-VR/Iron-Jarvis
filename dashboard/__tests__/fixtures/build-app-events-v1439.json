@@ -1,0 +1,1162 @@
+{
+ "_about": "v1.439.0 Build Code view, Antigravity: the normalized events the REAL daemon sends for each scenario, produced by tests/test_build_app_antigravity_v1439.py from recorded agy 1.5.2 output (tests/fixtures/build_app_v1439, `agy acp` driven through the real service, a local stand-in model server, masked). `at` is dropped; request ids are ask-N; item ids are item-N; every turn id is turn-1; a note's id is note-1; the folder is <WORK>. Regenerate with IJ_REGEN_BUILD_APP_AGY=1.",
+ "scenarios": {
+  "antigravity_replies": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "f6ad0f34-a133-47b2-9b34-36c6c6e2fb76",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": "Let me think.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "pong",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "pong",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 120,
+    "output": 7,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_command_allowed_once": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "7cd6165c-63ba-4d49-aafd-f977978396d7",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "command",
+    "title": "Run echo hello-from-agy",
+    "detail": "echo hello-from-agy",
+    "can_session": false,
+    "tool": "run_command",
+    "command": "echo hello-from-agy",
+    "once_only": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "done",
+    "output": "Command exited with code 0.\n\nCommand output:\nhello-from-agy\r\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 240,
+    "output": 14,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_command_denied_ends_the_reply": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "7aeb250e-63f9-4526-a0ec-712dcd560bda",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "command",
+    "title": "Run echo hello-from-agy",
+    "detail": "echo hello-from-agy",
+    "can_session": false,
+    "tool": "run_command",
+    "command": "echo hello-from-agy",
+    "once_only": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "deny",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "failed",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "You declined, so Antigravity stopped this reply — tell it what to do differently in your next message.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 120,
+    "output": 7,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_changes_files_without_a_card": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "61251fea-1953-4436-8555-0a04efb31efd",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "write",
+    "name": "write_file",
+    "title": "Write note.txt",
+    "input": "{\"Content\": \"hi\\n\", \"Path\": \"<WORK>/note.txt\", \"path\": \"<WORK>/note.txt\"}",
+    "status": "running",
+    "path": "<WORK>/note.txt",
+    "diff": "--- /dev/null\n+++ b/<WORK>/note.txt\n@@ -0,0 +1,1 @@\n+hi",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "write",
+    "name": "write_file",
+    "title": "Write note.txt",
+    "input": "{\"Content\": \"hi\\n\", \"Path\": \"<WORK>/note.txt\", \"path\": \"<WORK>/note.txt\"}",
+    "status": "done",
+    "path": "<WORK>/note.txt",
+    "diff": "--- /dev/null\n+++ b/<WORK>/note.txt\n@@ -0,0 +1,1 @@\n+hi",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "edit",
+    "name": "edit_file",
+    "title": "Edit hello.txt",
+    "input": "{\"Path\": \"<WORK>/hello.txt\", \"Replacement\": \"pear\", \"Target\": \"apple\", \"path\": \"<WORK>/hello.txt\"}",
+    "status": "running",
+    "path": "<WORK>/hello.txt",
+    "diff": "--- a/<WORK>/hello.txt\n+++ b/<WORK>/hello.txt\n@@ -1 +1 @@\n-apple\n+pear",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "edit",
+    "name": "edit_file",
+    "title": "Edit hello.txt",
+    "input": "{\"Path\": \"<WORK>/hello.txt\", \"Replacement\": \"pear\", \"Target\": \"apple\", \"path\": \"<WORK>/hello.txt\"}",
+    "status": "done",
+    "path": "<WORK>/hello.txt",
+    "diff": "--- a/<WORK>/hello.txt\n+++ b/<WORK>/hello.txt\n@@ -1 +1 @@\n-apple\n+pear",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-3",
+    "delta": "wrote",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-3",
+    "text": "wrote",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 360,
+    "output": 21,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_auto_edits_still_asks_before_a_command": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "017844b4-a765-4614-8611-f8f2e62159c2",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "edits",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "command",
+    "title": "Run echo hello-from-agy",
+    "detail": "echo hello-from-agy",
+    "can_session": false,
+    "tool": "run_command",
+    "command": "echo hello-from-agy",
+    "once_only": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "done",
+    "output": "Command exited with code 0.\n\nCommand output:\nhello-from-agy\r\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 240,
+    "output": 14,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_question_answered": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "6103521e-e17f-4b1a-9dd1-24af42fb3572",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "other",
+    "name": "ask_question",
+    "title": "Ask you a question",
+    "input": "{\"questions\": [{\"options\": [\"(Recommended) Blue\", \"Red\"], \"question\": \"Which color?\"}]}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "other",
+    "name": "ask_question",
+    "title": "Ask you a question",
+    "input": "{\"questions\": [{\"options\": [\"(Recommended) Blue\", \"Red\"], \"question\": \"Which color?\"}]}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "question",
+    "request_id": "ask-1",
+    "questions": [
+     {
+      "question": "Which color?",
+      "options": [
+       {
+        "label": "(Recommended) Blue"
+       },
+       {
+        "label": "Red"
+       }
+      ],
+      "multi": false
+     }
+    ],
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "other",
+    "name": "ask_question",
+    "title": "Ask you a question",
+    "input": "{\"questions\": [{\"options\": [\"(Recommended) Blue\", \"Red\"], \"question\": \"Which color?\"}]}",
+    "status": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "got answer",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "got answer",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 240,
+    "output": 14,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_question_typed": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "cb3c2200-e06a-472e-8cd8-e68ee3f2834c",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "other",
+    "name": "ask_question",
+    "title": "Ask you a question",
+    "input": "{\"questions\": [{\"options\": [\"(Recommended) Blue\", \"Red\"], \"question\": \"Which color?\"}]}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "other",
+    "name": "ask_question",
+    "title": "Ask you a question",
+    "input": "{\"questions\": [{\"options\": [\"(Recommended) Blue\", \"Red\"], \"question\": \"Which color?\"}]}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "question",
+    "request_id": "ask-1",
+    "questions": [
+     {
+      "question": "Which color?",
+      "options": [
+       {
+        "label": "(Recommended) Blue"
+       },
+       {
+        "label": "Red"
+       }
+      ],
+      "multi": false
+     }
+    ],
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "other",
+    "name": "ask_question",
+    "title": "Ask you a question",
+    "input": "{\"questions\": [{\"options\": [\"(Recommended) Blue\", \"Red\"], \"question\": \"Which color?\"}]}",
+    "status": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "got typed",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "got typed",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 240,
+    "output": 14,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_question_skipped": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "3936a362-75fe-4ed6-a06a-6ba94fbeed54",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "other",
+    "name": "ask_question",
+    "title": "Ask you a question",
+    "input": "{\"questions\": [{\"options\": [\"(Recommended) Blue\", \"Red\"], \"question\": \"Which color?\"}]}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "other",
+    "name": "ask_question",
+    "title": "Ask you a question",
+    "input": "{\"questions\": [{\"options\": [\"(Recommended) Blue\", \"Red\"], \"question\": \"Which color?\"}]}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "question",
+    "request_id": "ask-1",
+    "questions": [
+     {
+      "question": "Which color?",
+      "options": [
+       {
+        "label": "(Recommended) Blue"
+       },
+       {
+        "label": "Red"
+       }
+      ],
+      "multi": false
+     }
+    ],
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "deny",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "other",
+    "name": "ask_question",
+    "title": "Ask you a question",
+    "input": "{\"questions\": [{\"options\": [\"(Recommended) Blue\", \"Red\"], \"question\": \"Which color?\"}]}",
+    "status": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "skipped",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "skipped",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 240,
+    "output": 14,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_note_while_it_works": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "84bff394-43bd-4278-bf43-7df4d58c6b83",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "steer",
+    "id": "note-1",
+    "state": "sent",
+    "text": "also say banana",
+    "how": "Antigravity reads it at its next step.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "steer",
+    "id": "note-1",
+    "state": "read",
+    "text": "also say banana",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "a1",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "a1",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 120,
+    "output": 7,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_stop": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "c3de1140-9836-4d84-b097-022884d109ca",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "full",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "failed",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 120,
+    "output": 7,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "interrupted",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_failed_reply": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "e168eff8-43c0-49fc-b273-f8473c22bcb0",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "error",
+    "title": "Antigravity's model answered with an error",
+    "fix": "Send the message again. If it happens again, choose another model for this session.",
+    "technical": "⚠ Agent execution terminated due to error.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "failed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_retries_the_model": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "bb5e1dd9-e857-4166-97f3-7e1623bab955",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Antigravity is trying the model again (attempt 1): Error 503, Message: The model is overloaded., Status: UNAVAILABLE, Details: []",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "ok after retry",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "ok after retry",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 120,
+    "output": 7,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_model_and_level": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "5fe612b0-9c8a-4de1-b157-cc9880417fdb",
+    "model": "gemini-3.8-flash",
+    "cwd": "<WORK>",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "fast",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "fast",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 120,
+    "output": 7,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_picture": [
+   {
+    "type": "user",
+    "text": "do it",
+    "files": [
+     "<WORK>\\word.png"
+    ],
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "04217466-d319-49b5-b654-5abfedb25dc8",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "a picture",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "a picture",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 120,
+    "output": 7,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_plan": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "1b903ccb-8cca-446d-b2ee-b96577401ac5",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "plan",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "planned",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "planned",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 120,
+    "output": 7,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_full_access": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "antigravity",
+    "harness_session_id": "43a8bcd0-a7cf-4c77-b841-579777899996",
+    "model": "gemini-3.1-pro",
+    "cwd": "<WORK>",
+    "mode": "full",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "ran",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "ran",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_command",
+    "title": "Run echo hello-from-agy",
+    "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
+    "status": "done",
+    "output": "Antigravity did not report this step's result.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 240,
+    "output": 14,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "antigravity_not_signed_in": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Antigravity…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "error",
+    "title": "Antigravity did not start: Antigravity isn't signed in — open a Build terminal, run agy and sign in there, then send your message again",
+    "fix": "Fix that, then send your message again.",
+    "technical": "",
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "failed",
+    "turn": "turn-1"
+   }
+  ]
+ }
+}

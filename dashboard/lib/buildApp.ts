@@ -330,6 +330,7 @@ export function toolLabel(id: string, tools?: readonly CodingTool[] | null): str
   if (id === "pi") return "Pi";
   if (id === "opencode") return "OpenCode";
   if (id === "grok") return "Grok";
+  if (id === "antigravity") return "Antigravity";
   return id || "Coding tool";
 }
 
@@ -343,7 +344,7 @@ const ALWAYS_NAMED: readonly [string, string][] = [
 
 /** v1.416.0: the tools a session can start, in words ("Claude Code, Codex,
  *  Pi, OpenCode or Grok"): the four always, then any other tool the daemon
- *  lists — Grok only when it is installed (lib/buildApp decodeCodingTools). */
+ *  lists — Grok and Antigravity only when installed (decodeCodingTools). */
 export function toolChoiceWords(tools?: readonly CodingTool[] | null): string {
   const known = new Set(ALWAYS_NAMED.map(([id]) => id));
   const names = [
@@ -546,6 +547,7 @@ export function toolVendor(tool: string): string {
   if (tool === "pi") return "the model provider you chose in Pi";
   if (tool === "opencode") return "the model provider you chose in OpenCode";
   if (tool === "grok") return "xAI";
+  if (tool === "antigravity") return "Google";
   return "the coding tool's model provider";
 }
 
@@ -779,7 +781,7 @@ export function accountWords(s: Pick<CodeSession, "account" | "accountName" | "t
  *  Pi by name (a list not read yet). */
 export function signsInItself(tool: string, tools?: readonly CodingTool[] | null): boolean {
   const t = tools?.find((x) => x.id === tool);
-  return t ? t.ownSignIn : tool === "pi" || tool === "opencode";
+  return t ? t.ownSignIn : tool === "pi" || tool === "opencode" || tool === "antigravity";
 }
 
 /** "Pi's own sign-in". */
@@ -797,11 +799,18 @@ export const OPENCODE_SIGN_IN_TITLE =
   "OpenCode signs in by itself, per provider: to change it, run opencode auth login in a Build terminal. " +
   "Iron Jarvis's accounts do not apply.";
 
+/** v1.439.0: Antigravity signs in by itself, with its own Google sign-in. */
+export const ANTIGRAVITY_SIGN_IN_TITLE =
+  "Antigravity signs in by itself, with its own Google sign-in: to change it, run agy in a Build terminal and " +
+  "sign in there. Iron Jarvis's accounts do not apply.";
+
 /** v1.413.0: the own-sign-in title for a tool — the daemon's words when it
- *  sent them, else the tool's own (Pi's for Pi, OpenCode's for OpenCode). */
+ *  sent them, else the tool's own (Pi's for Pi, OpenCode's for OpenCode,
+ *  v1.439.0: Antigravity's for Antigravity). */
 export function ownSignInTitle(tool: string, tools?: readonly CodingTool[] | null): string {
   const hint = tools?.find((x) => x.id === tool)?.signInHint;
   if (hint) return hint;
+  if (tool === "antigravity") return ANTIGRAVITY_SIGN_IN_TITLE;
   return tool === "opencode" ? OPENCODE_SIGN_IN_TITLE : OWN_SIGN_IN_TITLE;
 }
 
@@ -952,6 +961,12 @@ type CodeEventBody =
       /** v1.417.0 (C1.7): WHY a once-only card asks every time
        *  (lib/onceReason); a safety reason keeps Enter from allowing it. */
       onceReason: string;
+      /** v1.439.0: on Claude Code's plan card, the mode Allow once leaves
+       *  the session in (absent = not known). */
+      thenMode?: string;
+      /** v1.439.0: on Claude Code's plan card, the mode the session-wide
+       *  allow switches to (absent = it sets none). */
+      setsMode?: string;
     }
   | { type: "question"; at: string; requestId: string; questions: QuestionItem[] }
   | { type: "resolved"; at: string; requestId: string; decision: string }
@@ -1078,6 +1093,8 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
         canAllCommands: r.can_all_commands === true,
         plan: str(r.plan, 20_000),
         onceReason: str(r.once_reason, 40),
+        ...(PLAN_MODES.includes(r.then_mode as string) ? { thenMode: r.then_mode as string } : {}),
+        ...(PLAN_MODES.includes(r.sets_mode as string) ? { setsMode: r.sets_mode as string } : {}),
       };
     }
     case "question": {
@@ -1845,6 +1862,108 @@ export function codeAskKeyHint(ask: OpenAsk | null | undefined, dangerousMode: b
   return enterAllowsCodeAsk(ask, dangerousMode) ? "Enter to allow once · Esc to deny" : CODE_CLICK_TO_ALLOW_HINT;
 }
 
+/** v1.439.0: the modes a plan card's allow can leave the session in. */
+const PLAN_MODES: readonly string[] = ["ask", "edits", "auto", "full"];
+
+/** v1.439.0: a plan card's allow button, named by the mode it leaves the
+ *  session in ("" = not known: the button keeps its usual words). */
+export function planApproveWords(mode: string | undefined): string {
+  switch (mode) {
+    case "ask":
+      return "Approve, then ask first";
+    case "edits":
+      return "Approve and edit freely";
+    case "auto":
+      return "Approve, then Auto";
+    case "full":
+      return "Approve, then full access";
+    default:
+      return "";
+  }
+}
+
+/** v1.439.0: the two allow buttons of Claude Code's plan card — `once` for
+ *  Allow once, `session` for the session-wide allow ("" = the usual words).
+ *  When both leave the same mode, Allow once says only that it approves. */
+export function planAllowLabels(a: Pick<ApprovalEvent, "thenMode" | "setsMode">): {
+  once: string;
+  session: string;
+} {
+  const session = planApproveWords(a.setsMode);
+  const thenWords = planApproveWords(a.thenMode);
+  const once = thenWords && thenWords === session ? "Approve the plan" : thenWords;
+  return { once, session };
+}
+
+/** A step's words when the tool sent no title (the conversation's rows and
+ *  the Markdown export share them). */
+export function toolStepWords(t: ToolEvent): string {
+  if (t.title) return t.title;
+  const name = t.name || "a tool";
+  switch (t.kind) {
+    case "read":
+      return t.path ? `Read ${t.path}` : "Read a file";
+    case "edit":
+      return t.path ? `Changed ${t.path}` : "Changed a file";
+    case "write":
+      return t.path ? `Wrote ${t.path}` : "Wrote a file";
+    case "command":
+      return "Ran a command";
+    case "search":
+      return "Searched";
+    case "web":
+      return "Looked on the web";
+    default:
+      return `Used ${name}`;
+  }
+}
+
+/** v1.439.0: a session as Markdown, from the events this window already
+ *  holds: the user's messages, the replies, and each step by its title —
+ *  never a step's input or output, never thinking. */
+export function conversationMarkdown(title: string, events: readonly CodeEvent[], toolName: string): string {
+  const { items } = foldConversation(events);
+  const out: string[] = [`# ${title.trim() || "Coding session"}`];
+  let speaker: "user" | "tool" | "" = "";
+  const head = (who: "user" | "tool") => {
+    if (speaker !== who) out.push(`## ${who === "user" ? "You" : toolName || "Assistant"}`);
+    speaker = who;
+  };
+  for (const it of items) {
+    if (it.kind === "user") {
+      if (it.carry) continue;
+      head("user");
+      if (it.text.trim()) out.push(it.text.trim());
+      if (it.files.length) out.push(`Attached: ${it.files.map((f) => f.split(/[\\/]/).pop() || f).join(", ")}`);
+      speaker = "user";
+    } else if (it.kind === "steer") {
+      head("user");
+      if (it.text.trim()) out.push(`> Note: ${it.text.trim()}`);
+    } else if (it.kind === "text") {
+      if (!it.text.trim()) continue;
+      head("tool");
+      out.push(it.text.trim());
+    } else if (it.kind === "tool") {
+      head("tool");
+      out.push(`- ${toolStepWords(it.tool).replace(/\s+/g, " ").trim()}`);
+    }
+  }
+  return `${out.join("\n\n")}\n`;
+}
+
+/** v1.439.0: the export's file name — the session's title, made safe for
+ *  every file system, ending ".md". */
+export function exportFileName(title: string): string {
+  const base = title
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "")
+    .slice(0, 80)
+    .trim();
+  return `${base || "coding-session"}.md`;
+}
+
 /** What an approval is about, in a title line. */
 export function approvalHeading(a: ApprovalEvent, tool: string): string {
   if (a.title) return `${tool} wants to: ${a.title}`;
@@ -2012,10 +2131,14 @@ export function droppedWords(n: number): string {
     : `${n.toLocaleString("en-US")} older steps were left out here to keep this quick.`;
 }
 
-/** The /health provider id of a coding tool (the Sign in press reads it). */
+/** The /health provider id of a coding tool (the Sign in press reads it).
+ *  v1.439.0: Grok too — its "isn't signed in" error carries fix_kind
+ *  sign_in with provider grok-cli (lib/cliSignIn GROK_SIGN_IN). Pi and
+ *  OpenCode sign in per provider in their own screens: no press. */
 export function signInProvider(tool: string): string {
   if (tool === "claude-code") return "claude-cli";
   if (tool === "codex") return "codex-cli";
+  if (tool === "grok") return "grok-cli";
   return "";
 }
 

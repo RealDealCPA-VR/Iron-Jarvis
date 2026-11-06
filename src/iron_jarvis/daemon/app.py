@@ -1820,6 +1820,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
             bg_tasks["build_accounts"] = asyncio.create_task(
                 _build_wait_loop(_app.state.d, lambda ok, exc: _tick("build_accounts", ok, exc))
             )
+            # v1.439.0: an account a reply RUNS on has its usage re-read from
+            # its own CLI (no model call) every few minutes, so the menus and
+            # the router's floors see a number that is not hours old. Nothing
+            # in use = no read at all. Each pass reports ITS OWN outcome on
+            # loop_health["account_usage"].
+            from ..iron_proxy.usage_read import usage_loop as _usage_loop
+
+            bg_tasks["account_usage"] = asyncio.create_task(
+                _usage_loop(
+                    platform,
+                    lambda ok, exc: _tick("account_usage", ok, exc),
+                    on_off=lambda: loop_health.pop("account_usage", None),
+                )
+            )
 
         # v1.391.0 (the long-jobs plan's Phase 2, decision 2): a coding
         # session's reply that a restart or a crash cut off WHILE IT WORKED
@@ -3911,6 +3925,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import iron_proxy as _iron_proxy_routes
 
     _iron_proxy_routes.register(app, d)
+    # v1.439.0: "Check usage now" on an account (Connections, Chat › Code,
+    # Build › Code's Usage tab).
+    from .routes import account_usage as _account_usage_routes
+
+    _account_usage_routes.register(app, d)
     # Worklist (v1.174.0): the durable per-item checkpoints a chunked
     # job reports progress through — without this the store exists and
     # no surface can read it.
