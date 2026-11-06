@@ -86,6 +86,10 @@ WANTED = ""
 for flag in ("--session-id", "--resume"):
     if flag in sys.argv:
         WANTED = sys.argv[sys.argv.index(flag) + 1]
+# v1.441.0: with ``--fork-session`` Claude Code answers under the NEW id
+# (``--session-id``), never the one it resumed from (measured on 2.1.316).
+if "--fork-session" in sys.argv and "--session-id" in sys.argv:
+    WANTED = sys.argv[sys.argv.index("--session-id") + 1]
 RECORDED = next((s["out"].get("session_id", "") for s in steps
                  if isinstance(s.get("out"), dict) and s["out"].get("type") == "system"
                  and s["out"].get("subtype") == "init"), "")

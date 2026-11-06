@@ -97,6 +97,7 @@ from .grok import GrokDriver
 from . import antigravity as A
 from .antigravity import HARNESS as ANTIGRAVITY
 from .antigravity import AntigravityDriver
+from . import branching as BR
 from . import jarvis_tools as JT
 from . import news as NEWS
 from .events import TEXT_CHARS, EventLog, clip, coalesce_into, make, session_dir
@@ -962,6 +963,9 @@ class LiveSession:
         #: v1.414.3: the background save of the tool's own session id; a
         #: reply's end waits for it, so the row read right after names it.
         self.id_save: asyncio.Future | None = None
+        #: v1.441.0: the newest message's reference being written beside the
+        #: log (``hosted/branching``); a reply's end waits for it.
+        self.ref_save: asyncio.Future | None = None
         self.limit_since = ""
         self.last_error = ""
         #: The Iron-Proxy account the session runs on ("" = this PC's login).
@@ -1717,6 +1721,10 @@ class HostedService:
         view["programs"] = [p.row() for p in kept]
         view["keep_note"] = PG.keep_words(W.label(view.get("harness") or ""), kept) if kept else ""
         view["stopped_note"] = live.stopped_note if live and not live.running else ""
+        # v1.441.0: the row's "Branch" (the tool can, and there is a
+        # conversation to branch).
+        view["can_branch"] = bool(view.get("source") == "app" and BR.caps(view.get("harness") or "")["fork"]
+                                  and view.get("harness_session_id") and not view.get("archived_at"))
         return view
 
     def _disk_rows(self, folder: str, used: set[str], account: str = "") -> list[dict[str, Any]]:
@@ -1778,6 +1786,12 @@ class HostedService:
             "pending": [a.event for a in (live.asks.values() if live else [])],
         }
         out["commands"] = self.commands_for(row.harness, live, folder=row.folder or "")
+        # v1.441.0: Branch from here / Rewind to here — what this tool can do,
+        # and the messages it can do it from.
+        try:
+            out["branch"] = await asyncio.to_thread(BR.view_block, self.home, row)
+        except Exception:  # noqa: BLE001 — a view never fails over this
+            log.warning("could not read a Code-view session's branch facts", exc_info=True)
         if row.harness in LISTED_MODELS:
             out["keeps_last"] = await asyncio.to_thread(pi_keeps_last, row)
         if row.harness == PI:
@@ -1832,6 +1846,10 @@ class HostedService:
         imported = await asyncio.to_thread(
             HIST.transcript_events, row.harness, home, row.folder or "", hid, allow_stale=running,
         )
+        if imported:
+            # v1.441.0 review: what a rewind dropped is still in the tool's own
+            # file; nothing from before the rewind is merged in again.
+            imported = await asyncio.to_thread(BR.without_rewound, self.home, row.id, imported)
         return HIST.merge_transcript(events, imported, cut=cut) if imported else events
 
     async def events_page(self, sid: str, before: str, limit: int = 500) -> dict[str, Any]:
@@ -2410,6 +2428,9 @@ class HostedService:
                 await asyncio.to_thread(p.write, obj)
 
         driver = self._new_driver(live, row, write, rules_note=rules_note, acp_servers=connection.acp_servers)
+        # v1.441.0: a Claude Code branch made here (or a rewind not yet sent)
+        # rides its command line until its next message lands.
+        await asyncio.to_thread(BR.prepare_driver, self.home, row, driver)
         if isinstance(driver, AntigravityDriver) and driver.log_path:
             # v1.439.0: the folder its own log goes in (``--log-file``).
             await asyncio.to_thread(os.makedirs, os.path.dirname(driver.log_path), exist_ok=True)
@@ -2704,6 +2725,13 @@ class HostedService:
                 await asyncio.wait_for(asyncio.shield(pending), ID_SAVE_WAIT_S)
             except Exception:  # noqa: BLE001 — the done still goes out
                 log.debug("a Code-view session's id was still being saved", exc_info=True)
+        saving = live.ref_save
+        if saving is not None and not saving.done():
+            # v1.441.0: the message's reference is on disk before its reply ends.
+            try:
+                await asyncio.wait_for(asyncio.shield(saving), ID_SAVE_WAIT_S)
+            except Exception:  # noqa: BLE001 — the done still goes out
+                log.debug("a Code-view message's reference was still being written", exc_info=True)
         error = live.last_error
         try:
             await asyncio.to_thread(store.update, self.engine, live.sid, last_error=error)
@@ -2715,6 +2743,7 @@ class HostedService:
         from . import carry_on as CO
 
         await CO.turn_ended(self, live, turn, str((done or {}).get("stop") or stop))
+        await self._settle_branch(live)
         done = dict(done) if done is not None else make("done", stop=stop)
         done.setdefault("stop", stop)
         done["turn"] = turn.id
@@ -2740,6 +2769,23 @@ class HostedService:
                         self.platform, live.sid, turn.id, live.title, live.harness,
                         str(done.get("stop")), elapsed,
                     )))
+
+    async def _settle_branch(self, live: LiveSession) -> None:
+        """v1.441.0: a Claude Code branch (or rewind) is made once its message
+        is in the conversation's file; its command line goes back to a plain
+        ``--resume`` then. Never fails the reply."""
+        drv = live.driver
+        if live.harness != CLAUDE or drv is None:
+            return
+        mid = str(getattr(drv, "_turn_mid", "") or "")
+        if not mid:
+            return
+        try:
+            row = await asyncio.to_thread(store.get, self.engine, live.sid)
+            if row is not None and await asyncio.to_thread(BR.settle_pending, self.home, row, mid):
+                drv.fork_from, drv.resume_at = "", ""
+        except Exception:  # noqa: BLE001
+            log.debug("could not settle a Code-view branch", exc_info=True)
 
     def _close_open_steps(self, live: LiveSession) -> None:
         """v1.427.2: the tool's process is gone (or going), so every step it
@@ -3276,7 +3322,18 @@ class HostedService:
                 if builtin[0] == "name" and builtin[1]:
                     await asyncio.to_thread(store.update, self.engine, live.sid, title=clip(builtin[1], 120))
             else:
-                await live.driver.send_user(text, files)
+                before = BR.ref_before(live.driver)
+                live.ref_save = saving = asyncio.get_running_loop().create_future()
+                try:
+                    await live.driver.send_user(text, files)
+                except BaseException:
+                    # Review: a message the tool never received is never
+                    # recorded as sent (it was offered for a branch, and for
+                    # Pi it broke the text match of every later one).
+                    if not saving.done():
+                        saving.set_result(None)
+                    raise
+                await self._note_sent(live, row, user, before, text)
             if turn.running:
                 await turn.finished.wait()
         except Refused as r:
@@ -3313,6 +3370,27 @@ class HostedService:
                 # not installed, or Windows could not start it. Once the tool
                 # ran, the conversation belongs to that folder: it stays.
                 await asyncio.shield(asyncio.to_thread(self._take_back_folder, live.sid, made, forget=forget))
+
+    async def _note_sent(self, live: LiveSession, row: Any, user: dict[str, Any], before: str, text: str) -> None:
+        """v1.441.0: the tool's own reference for the message just sent, beside
+        the log (``hosted/branching``). Never fails the message."""
+        drv = live.driver
+        saving = live.ref_save
+        try:
+            if drv is None or user.get("carry"):
+                return
+            ref = BR.ref_after(drv, before)
+            hid = str(getattr(drv, "session_id", "") or row.harness_session_id or "")
+            # v1.441.0: a message is named by its ``user`` event's ``at`` (the view's
+            # Branch from here / Rewind to here send it back).
+            await asyncio.to_thread(BR.note_sent, self.home, live.sid, str(user.get("at") or ""), ref, hid, text)
+        except Exception:  # noqa: BLE001
+            log.debug("could not note a Code-view message's reference", exc_info=True)
+        finally:
+            # The reply's end waits for this (a fast reply could otherwise end
+            # before its message's reference is on disk).
+            if saving is not None and not saving.done():
+                saving.set_result(None)
 
     def _say_start(self, live: LiveSession, row: Any) -> None:
         """v1.417.0 (C4.7): a process (re)starting for this message is SAID —
@@ -3686,6 +3764,13 @@ class HostedService:
             hid = row.harness_session_id
             if not hid:
                 raise Refused(W.NO_SESSION_YET)
+            if row.harness == CLAUDE and await asyncio.to_thread(BR.pending_fork, self.home, sid):
+                # v1.441.0: the branch is made with its first message here.
+                raise Refused(BR.PENDING_TERMINAL.format(label=W.label(row.harness)))
+            if row.harness == CLAUDE and await asyncio.to_thread(BR.pending_rewind, self.home, sid):
+                # v1.441.0 review: a plain ``claude --resume`` would open the
+                # conversation as it was before the rewind (re-measured).
+                raise Refused(BR.PENDING_REWIND_TERMINAL.format(label=W.label(row.harness)))
             if not typable_sid(row.harness, hid):
                 raise Refused("That session's id is not one Iron Jarvis types into a terminal.", 409)
             # v1.426.0 (Wave 6, E3): pressed again after it opened (or the

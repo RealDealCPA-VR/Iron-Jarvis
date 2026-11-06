@@ -3900,6 +3900,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build_app_carry as _build_app_carry_routes
 
     _build_app_carry_routes.register(app, d)
+    # v1.441.0: Build › Code's Branch from here / Rewind to here (hosted/branching).
+    from .routes import build_app_branch as _build_app_branch_routes
+
+    _build_app_branch_routes.register(app, d)
     # Brain Profiles (v1.406.0, brain/): which memory base is the durable
     # brain, app-wide and per project, and the saves that are still waiting.
     from .routes import brain as _brain_routes

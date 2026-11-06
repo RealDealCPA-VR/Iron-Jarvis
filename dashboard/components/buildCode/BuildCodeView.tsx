@@ -85,7 +85,15 @@ import { StartComposer } from "@/components/buildCode/StartComposer";
 import { SessionEditorProvider } from "@/components/harness/OpenInEditor";
 import { scrollToLatest } from "@/lib/transcriptRepin";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
-import { CodeConversation } from "@/components/buildCode/CodeConversation";
+import { CodeConversation, type MessageActions } from "@/components/buildCode/CodeConversation";
+import {
+  BRANCH_ROW,
+  BRANCH_ROW_TITLE,
+  decodeBranch,
+  decodeBranchAnswer,
+  type BranchAnswer,
+  type BranchFacts,
+} from "@/lib/buildAppBranch";
 import { CodePanes } from "@/components/buildCode/CodePanes";
 import { CodeAskCard, type CodeAnswer } from "@/components/buildCode/CodeAskCard";
 import {
@@ -298,6 +306,16 @@ function downloadText(name: string, text: string) {
   URL.revokeObjectURL(url);
 }
 
+/** v1.441.0: the same branch facts keep their object (the user's messages do
+ *  not draw again on every re-read). */
+function keepSameBranch(prev: BranchFacts | null, next: BranchFacts | null): BranchFacts | null {
+  if (!prev || !next) return next;
+  if (prev.fork !== next.fork || prev.forkAt !== next.forkAt || prev.rewind !== next.rewind) return next;
+  if (prev.note !== next.note || prev.at.size !== next.at.size) return next;
+  for (const a of next.at) if (!prev.at.has(a)) return next;
+  return prev;
+}
+
 function SessionPane({
   sessionId,
   tools,
@@ -308,6 +326,8 @@ function SessionPane({
   firstFiles = null,
   onFirstSent,
   exportSource,
+  onBranched,
+  initialDraft = null,
 }: {
   sessionId: string;
   tools: readonly CodingTool[];
@@ -323,6 +343,11 @@ function SessionPane({
   /** v1.439.0: where this pane leaves the events it holds, so the session
    *  row's "Export as Markdown" builds the file from them (no new read). */
   exportSource?: MutableRefObject<ExportSource | null>;
+  /** v1.441.0: a branch was made from this session (the page opens it). */
+  onBranched?: (a: BranchAnswer) => void;
+  /** v1.441.0: a branch just made from another session — its message's words
+   *  go in this box and the daemon's line says what was done. */
+  initialDraft?: { text: string; note: string } | null;
 }) {
   const [session, setSession] = useState<CodeSession | null>(null);
   const [events, setEvents] = useState<CodeEvent[]>([]);
@@ -373,6 +398,10 @@ function SessionPane({
   const [continuingCut, setContinuingCut] = useState(false);
   /** Iron Jarvis stopped answering while a reply ran: looked for again. */
   const [lost, setLost] = useState(false);
+  /** v1.441.0: what this tool can branch or rewind from (null = an older
+   *  Iron Jarvis: nothing offered). */
+  const [branch, setBranch] = useState<BranchFacts | null>(null);
+  const [branching, setBranching] = useState(false);
   /** The reader scrolled up while something new arrived. */
   const [jump, setJump] = useState(false);
   const atBottomRef = useRef(true);
@@ -533,6 +562,7 @@ function SessionPane({
         if (view.commands) setViewCommands(view.commands);
         setKeepsLast(view.keepsLast);
         setPiFolder(view.piFolder);
+        setBranch((prev) => keepSameBranch(prev, decodeBranch(raw)));
         // v1.422.0 (B3, B5): what carries on by itself, and what is offered.
         setCarryFacts(decodeCarry(raw));
         // v1.418.0 (C4.8): argument hints, and the messages waiting behind
@@ -1164,6 +1194,69 @@ function SessionPane({
    *  by the daemon, hidden (POST …/continue) — its words are Iron Jarvis's to
    *  the tool and must never be sent as the user's own message. */
   const continueCutRef = useRef<(() => Promise<void>) | null>(null);
+  // v1.441.0: a branch just made lands with its message in the box.
+  const draftTakenRef = useRef(false);
+  useEffect(() => {
+    if (!initialDraft || draftTakenRef.current) return;
+    draftTakenRef.current = true;
+    if (initialDraft.text) setText((cur) => (cur.trim() ? cur : initialDraft.text));
+    if (initialDraft.note) setInfo(initialDraft.note);
+  }, [initialDraft]);
+
+  /** v1.441.0: Branch from here — a NEW session (the page opens it). */
+  const sessionIdNow = session?.id ?? "";
+  const sessionSource = session?.source ?? "";
+  const branchFrom = useCallback(
+    async (at: string) => {
+      if (!sessionIdNow || branching) return;
+      setBranching(true);
+      setNote(null);
+      try {
+        const raw = await post<unknown>(`${SESSIONS}/${encodeURIComponent(sessionIdNow)}/fork`, { at });
+        const a = decodeBranchAnswer(raw);
+        if (!a) throw new Error("The branch could not be made.");
+        onBranched?.(a);
+      } catch (e) {
+        setNote(errorWords(e, "The branch could not be made."));
+      } finally {
+        setBranching(false);
+      }
+    },
+    [sessionIdNow, branching, onBranched],
+  );
+
+  /** v1.441.0: Rewind to here — the conversation drops that message and
+   *  everything after it; its words come back to the box. */
+  const rewindTo = useCallback(
+    async (at: string) => {
+      if (!sessionIdNow || branching) return;
+      setBranching(true);
+      setNote(null);
+      setInfo(null);
+      try {
+        const raw = await post<unknown>(`${SESSIONS}/${encodeURIComponent(sessionIdNow)}/rewind`, { to: at });
+        const a = decodeBranchAnswer(raw);
+        if (!a) throw new Error("The conversation could not be rewound.");
+        setText((cur) => (cur.trim() ? cur : a.text));
+        setInfo(a.note);
+        await load({ follow: true });
+      } catch (e) {
+        setNote(errorWords(e, "The conversation could not be rewound."));
+      } finally {
+        setBranching(false);
+      }
+    },
+    [sessionIdNow, branching, load],
+  );
+
+  const messageActions = useMemo<MessageActions | null>(
+    () =>
+      branch && sessionIdNow && sessionSource !== "disk"
+        ? { facts: branch, busy: running || branching, onBranch: (at) => void branchFrom(at), onRewind: rewindTo }
+        : null,
+    [branch, sessionIdNow, sessionSource, running, branching, branchFrom, rewindTo],
+  );
+
   const retryFailed = useCallback(() => {
     if (runningRef.current) return;
     for (let i = conv.items.length - 1; i >= 0; i--) {
@@ -1579,6 +1672,7 @@ function SessionPane({
                 model={session.model}
                 account={session.account ? accountName : ""}
                 onExpand={expandStep}
+                messageActions={messageActions}
               />
             )}
             {running && !asking ? (
@@ -2306,6 +2400,36 @@ export function BuildCodeView({
     [openId, open],
   );
 
+  /** v1.441.0: a branch was made (from a message, or the row's "Branch"):
+   *  the list reads it and the page opens it, its message in the box. */
+  const [draftFor, setDraftFor] = useState<{ id: string; text: string; note: string } | null>(null);
+  useEffect(() => {
+    // Words parked for a branch are for opening THAT branch only.
+    setDraftFor((cur) => (cur && cur.id !== openId ? null : cur));
+  }, [openId]);
+  const branched = useCallback(
+    (a: BranchAnswer) => {
+      setDraftFor({ id: a.sessionId, text: a.text, note: a.note });
+      readList();
+      open(a.sessionId);
+    },
+    [readList, open],
+  );
+  const rowBranch = useCallback(
+    async (id: string) => {
+      setRowMenu(null);
+      setRowNote(null);
+      try {
+        const a = decodeBranchAnswer(await post<unknown>(`${SESSIONS}/${encodeURIComponent(id)}/fork`, {}));
+        if (!a) throw new Error("The branch could not be made.");
+        branched(a);
+      } catch (e) {
+        setRowNote(errorWords(e, "The branch could not be made."));
+      }
+    },
+    [branched],
+  );
+
   /** v1.420.0 (C4.10): the search — a title or a folder (its path or its
    *  last part) holding every typed word, case ignored. Blank: everything. */
   const matches = useCallback(
@@ -2428,6 +2552,20 @@ export function BuildCodeView({
           >
             {OPEN_IN_TERMINAL}
           </button>
+          {/* v1.441.0: a new session with this whole conversation (only where
+              the tool can branch one; absent from an older Iron Jarvis). */}
+          {s.canBranch && !archivedRow ? (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid={`code-row-branch-${s.id}`}
+              title={BRANCH_ROW_TITLE}
+              onClick={() => void rowBranch(s.id)}
+              className="flex w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06]"
+            >
+              {BRANCH_ROW}
+            </button>
+          ) : null}
           {/* v1.439.0: the session open in front (its events are loaded) can be
               saved as Markdown: messages, replies and step titles. */}
           {exportRef.current?.id === s.id ? (
@@ -2726,6 +2864,8 @@ export function BuildCodeView({
             firstFiles={firstFor && firstFor.id === openId ? firstFor.files : null}
             onFirstSent={clearFirst}
             exportSource={exportRef}
+            onBranched={branched}
+            initialDraft={draftFor && draftFor.id === openId ? draftFor : null}
           />
         )}
       </section>
