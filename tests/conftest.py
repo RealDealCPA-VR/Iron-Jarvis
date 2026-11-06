@@ -459,6 +459,24 @@ def _no_real_pi_catalog_read():
         _pc.AUTO_PROBE = old
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _no_real_opencode_catalog_read():
+    """v1.441.0: listing the coding tools starts ONE background read of
+    OpenCode's model list (``hosted.opencode_catalog``: ``opencode models
+    --verbose``) when OpenCode is installed and nothing was read yet. On a
+    dev box with OpenCode on PATH that would start the developer's REAL
+    OpenCode (their config, their sign-ins). Off for the whole suite; a test
+    of the reader turns it on with a fake OpenCode."""
+    from iron_jarvis.hosted import opencode_catalog as _occ
+
+    old = _occ.AUTO_PROBE
+    _occ.AUTO_PROBE = False
+    try:
+        yield
+    finally:
+        _occ.AUTO_PROBE = old
+
+
 @pytest.fixture(autouse=True)
 def _fresh_pi_default():
     """v1.429.0: Pi's own default model is kept in process memory

@@ -421,9 +421,11 @@ _ASK_BASE = ('{"*":"ask","read":' + _ASK_READ + ',"glob":"allow","grep":"allow",
              '"lsp":"allow","todoread":"allow","todowrite":"allow","skill":"allow"')
 BUILD_GOLDEN: dict[str, dict[str, dict[str, Any]]] = {
     "none": {
-        "ask": {"perm": _ASK_BASE + ',"task":"allow"}', "note": ""},
-        "edits": {"perm": _ASK_BASE + ',"edit":"allow","task":"allow"}', "note": ""},
-        "plan": {"perm": _ASK_BASE + ',"edit":"deny"}', "note": ""},
+        # (v1.441.0, moved on purpose) ``task`` is refused outside Full access: a helper's
+        # own questions never reach ACP (measured, test_build_app_opencode_agents_v14410).
+        "ask": {"perm": _ASK_BASE + ',"task":"deny"}', "note": ""},
+        "edits": {"perm": _ASK_BASE + ',"edit":"allow","task":"deny"}', "note": ""},
+        "plan": {"perm": _ASK_BASE + ',"task":"deny","edit":"deny"}', "note": ""},
         "full": {"perm": '{"*":"allow"}', "note": ""},
     },
     "permissive": {

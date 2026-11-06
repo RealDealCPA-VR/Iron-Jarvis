@@ -1,0 +1,81 @@
+{
+ "_about": "Written by the REAL daemon: Codex's plan card (a replay of the measured plan turn) and OpenCode's mode rows with one agent of the user's. Regenerate with IJ_REGEN_BUILD_APP_V1441=1.",
+ "codex_plan_card": {
+  "type": "approval",
+  "at": "2026-11-06T00:00:00Z",
+  "request_id": "ask_1",
+  "kind": "tool",
+  "title": "Start working on this plan",
+  "detail": "",
+  "can_session": false,
+  "tool": "codex_plan",
+  "plan": "1. Open `a.txt` and append a new line containing `two`.\n2. Verify the file now includes the added line.\n",
+  "then_mode": "ask",
+  "once_only": true,
+  "turn": "t"
+ },
+ "opencode_modes": [
+  {
+   "id": "ask",
+   "label": "Ask first",
+   "dangerous": false,
+   "about": "Asks before it changes a file, runs a command or uses the web; reads without asking. It starts no helpers here."
+  },
+  {
+   "id": "edits",
+   "label": "Auto edits",
+   "dangerous": false,
+   "about": "Changes files without asking; asks before it runs a command or uses the web. It starts no helpers here."
+  },
+  {
+   "id": "plan",
+   "label": "Plan",
+   "dangerous": false,
+   "about": "OpenCode's plan agent: it looks and plans, and changes no file. It starts no helpers here."
+  },
+  {
+   "id": "agent:docs",
+   "label": "docs",
+   "dangerous": false,
+   "about": "Writes docs only. OpenCode's own agent “docs”. Asks first, except where the agent's own permission rules say otherwise. It starts no helpers here."
+  },
+  {
+   "id": "full",
+   "label": "Full access",
+   "dangerous": true,
+   "about": "Runs everything without asking."
+  }
+ ],
+ "codex_modes": [
+  {
+   "id": "ask",
+   "label": "Ask first",
+   "dangerous": false,
+   "about": "Asks before every command and every file change."
+  },
+  {
+   "id": "plan",
+   "label": "Plan",
+   "dangerous": false,
+   "about": "Codex's own plan mode: it looks and plans, changes no file and asks before every command. You approve its plan before it starts."
+  },
+  {
+   "id": "full",
+   "label": "Full access",
+   "dangerous": true,
+   "about": "Runs everything without asking."
+  }
+ ],
+ "codex_hidden": [
+  {
+   "id": "auto",
+   "label": "Auto",
+   "reason": "Codex's Auto review lets a reviewer model of Codex's own answer each approval instead of you. It is not offered here: Iron Jarvis cannot show you yet what that reviewer decided."
+  },
+  {
+   "id": "edits",
+   "label": "Auto edits",
+   "reason": "On Windows, Codex can run commands only with its own file protection switched off, and then it asks either before every file change and every command, or before none of them. It has no setting where edits run on their own while commands still ask. Codex's own Windows protection for commands is not set up on this PC, and Iron Jarvis does not set it up."
+  }
+ ]
+}

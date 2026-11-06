@@ -1,0 +1,463 @@
+{
+ "harness": "opencode",
+ "source": "recorded 2026-11-06, opencode 1.18.18, this PC, a SCRATCH home and a stand-in model server on 127.0.0.1 (masked) — the user's own primary agent 'docs' (permission bash: allow) chosen, OPENCODE_PERMISSION {\"*\": \"ask\", ...}: its bash ran with no card",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+     "protocolVersion": 1,
+     "agentCapabilities": {
+      "loadSession": true,
+      "mcpCapabilities": {
+       "http": true,
+       "sse": true
+      },
+      "promptCapabilities": {
+       "embeddedContext": true,
+       "image": true
+      },
+      "sessionCapabilities": {
+       "close": {},
+       "fork": {},
+       "list": {},
+       "resume": {}
+      }
+     },
+     "authMethods": [
+      {
+       "description": "Run `opencode auth login` in the terminal",
+       "name": "Login with opencode",
+       "id": "opencode-login"
+      }
+     ],
+     "agentInfo": {
+      "name": "OpenCode",
+      "version": "1.18.18"
+     }
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "session/new"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+     "sessionId": "ses_e4d79c992ffeWKXTCkGIfQyfJZ",
+     "configOptions": [
+      {
+       "id": "model",
+       "name": "Model",
+       "category": "model",
+       "type": "select",
+       "currentValue": "standin/probe-m",
+       "options": [
+        {
+         "value": "opencode/big-pickle",
+         "name": "OpenCode Zen/Big Pickle"
+        },
+        {
+         "value": "opencode/deepseek-v4-flash-free",
+         "name": "OpenCode Zen/DeepSeek V4 Flash Free"
+        },
+        {
+         "value": "opencode/hy3-free",
+         "name": "OpenCode Zen/Hy3 Free"
+        },
+        {
+         "value": "opencode/laguna-s-2.1-free",
+         "name": "OpenCode Zen/Laguna S 2.1 Free"
+        },
+        {
+         "value": "opencode/ling-3.0-tiny-free",
+         "name": "OpenCode Zen/Ling-3.0-tiny Free"
+        },
+        {
+         "value": "opencode/mimo-v2.5-free",
+         "name": "OpenCode Zen/MiMo V2.5 Free"
+        },
+        {
+         "value": "opencode/nemotron-3-ultra-free",
+         "name": "OpenCode Zen/Nemotron 3 Ultra Free"
+        },
+        {
+         "value": "opencode/nemotron-3.5-lightning-free",
+         "name": "OpenCode Zen/Nemotron 3.5 Lightning Free"
+        },
+        {
+         "value": "standin/probe-m",
+         "name": "Stand-in/Probe M"
+        },
+        {
+         "value": "standin/probe-n",
+         "name": "Stand-in/Probe N"
+        }
+       ]
+      },
+      {
+       "id": "mode",
+       "name": "Session Mode",
+       "category": "mode",
+       "type": "select",
+       "currentValue": "build",
+       "options": [
+        {
+         "value": "build",
+         "name": "build",
+         "description": "The default agent. Executes tools based on configured permissions."
+        },
+        {
+         "value": "allx",
+         "name": "allx",
+         "description": "an all-mode agent"
+        },
+        {
+         "value": "docs",
+         "name": "docs",
+         "description": "Writes docs only"
+        },
+        {
+         "value": "plan",
+         "name": "plan",
+         "description": "Plan mode. Disallows all edit tools."
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "reply_to": "session/new"
+  },
+  {
+   "await": "request",
+   "method": "session/set_config_option"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+     "configOptions": [
+      {
+       "id": "model",
+       "name": "Model",
+       "category": "model",
+       "type": "select",
+       "currentValue": "standin/probe-m",
+       "options": [
+        {
+         "value": "opencode/big-pickle",
+         "name": "OpenCode Zen/Big Pickle"
+        },
+        {
+         "value": "opencode/deepseek-v4-flash-free",
+         "name": "OpenCode Zen/DeepSeek V4 Flash Free"
+        },
+        {
+         "value": "opencode/hy3-free",
+         "name": "OpenCode Zen/Hy3 Free"
+        },
+        {
+         "value": "opencode/laguna-s-2.1-free",
+         "name": "OpenCode Zen/Laguna S 2.1 Free"
+        },
+        {
+         "value": "opencode/ling-3.0-tiny-free",
+         "name": "OpenCode Zen/Ling-3.0-tiny Free"
+        },
+        {
+         "value": "opencode/mimo-v2.5-free",
+         "name": "OpenCode Zen/MiMo V2.5 Free"
+        },
+        {
+         "value": "opencode/nemotron-3-ultra-free",
+         "name": "OpenCode Zen/Nemotron 3 Ultra Free"
+        },
+        {
+         "value": "opencode/nemotron-3.5-lightning-free",
+         "name": "OpenCode Zen/Nemotron 3.5 Lightning Free"
+        },
+        {
+         "value": "standin/probe-m",
+         "name": "Stand-in/Probe M"
+        },
+        {
+         "value": "standin/probe-n",
+         "name": "Stand-in/Probe N"
+        }
+       ]
+      },
+      {
+       "id": "mode",
+       "name": "Session Mode",
+       "category": "mode",
+       "type": "select",
+       "currentValue": "docs",
+       "options": [
+        {
+         "value": "build",
+         "name": "build",
+         "description": "The default agent. Executes tools based on configured permissions."
+        },
+        {
+         "value": "allx",
+         "name": "allx",
+         "description": "an all-mode agent"
+        },
+        {
+         "value": "docs",
+         "name": "docs",
+         "description": "Writes docs only"
+        },
+        {
+         "value": "plan",
+         "name": "plan",
+         "description": "Plan mode. Disallows all edit tools."
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "reply_to": "session/set_config_option"
+  },
+  {
+   "await": "request",
+   "method": "session/prompt"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e4d79c992ffeWKXTCkGIfQyfJZ",
+     "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+       {
+        "name": "customize-opencode",
+        "description": "Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself."
+       },
+       {
+        "name": "init",
+        "description": "guided AGENTS.md setup"
+       },
+       {
+        "name": "pixio-skill",
+        "description": "Call, integrate, or audit the Pixio public REST API (/api/v1) with an API key from an agent, backend, script, CLI, desktop app, or generated client. Use for generating images, video, and audio (quote, idempotent generate, poll), choosing models by real per-account price, Maker daily caps and free-plan limits, uploads and assets, workflows, project authoring (Boards, Canvas, Cinema, Cam View, Video Agent, Editor), the streaming /agent, credits and billing reconciliation, and any Pixio API error (402, 422, 429). Also use to decide whether a Pixio feature is available on the public API. Never use app-internal, admin, provider, webhook, or browser-session routes."
+       },
+       {
+        "name": "review",
+        "description": "review changes [commit|branch|pr], defaults to uncommitted"
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e4d79c992ffeWKXTCkGIfQyfJZ",
+     "update": {
+      "sessionUpdate": "tool_call",
+      "toolCallId": "call_0",
+      "title": "bash",
+      "kind": "execute",
+      "status": "pending",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "cwd": "C:\\work\\demo"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e4d79c992ffeWKXTCkGIfQyfJZ",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call_0",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "echo hi",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "echo hi",
+       "description": "say hi",
+       "cwd": "C:\\work\\demo"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e4d79c992ffeWKXTCkGIfQyfJZ",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call_0",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "echo hi",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "echo hi",
+       "description": "say hi",
+       "cwd": "C:\\work\\demo"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e4d79c992ffeWKXTCkGIfQyfJZ",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call_0",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "echo hi",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "echo hi",
+       "description": "say hi",
+       "cwd": "C:\\work\\demo"
+      },
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "hi\n"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e4d79c992ffeWKXTCkGIfQyfJZ",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call_0",
+      "status": "completed",
+      "title": "echo hi",
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "hi\n"
+        }
+       }
+      ],
+      "rawOutput": {
+       "output": "hi\n",
+       "metadata": {
+        "output": "hi\n",
+        "exit": 0,
+        "truncated": false
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e4d79c992ffeWKXTCkGIfQyfJZ",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "messageId": "msg_1b28639ff001HxXm4P8KXVooAO",
+      "content": {
+       "type": "text",
+       "text": "done"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e4d79c992ffeWKXTCkGIfQyfJZ",
+     "update": {
+      "sessionUpdate": "usage_update",
+      "used": 8940,
+      "size": 100000,
+      "cost": {
+       "amount": 0,
+       "currency": "USD"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+     "stopReason": "end_turn",
+     "usage": {
+      "inputTokens": 8940,
+      "outputTokens": 10,
+      "totalTokens": 8950
+     },
+     "_meta": {}
+    }
+   },
+   "reply_to": "session/prompt"
+  }
+ ]
+}

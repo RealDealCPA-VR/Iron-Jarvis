@@ -107,6 +107,49 @@ call:
 
 So the mode table is unchanged; the reasons in :data:`HIDDEN_MODES` say the
 real cause in plain words.
+
+MEASURED for v1.441.0 (codex 0.157.0; ``generate-json-schema --experimental``,
+a scratch ``CODEX_HOME`` with no sign-in for the no-model checks, and ONE tiny
+real turn on the user's own login in a scratch folder on an EPHEMERAL thread —
+nothing saved, nothing changed):
+
+* PLAN IS REAL AND PER TURN: Iron Jarvis already opts into the experimental
+  API (``initialize`` ``capabilities.experimentalApi``).
+  ``collaborationMode/list`` answers the presets ``Plan`` (mode ``plan``) and
+  ``Default``. ``turn/start`` takes ``collaborationMode: {mode: "plan",
+  settings: {model, reasoning_effort, developer_instructions: null}}``
+  (``settings.model`` is required: without ``settings`` it is refused
+  "missing field `settings`"); ``null`` instructions = Codex's own built-in
+  plan instructions ("# Plan Mode (Conversational)": explore with
+  non-mutating actions only, end with a ``<proposed_plan>``). The thread KEEPS
+  it ("for this turn and subsequent turns": ``thread/settings/updated`` shows
+  it, ``thread/resume`` answers the effective ``collaborationMode``), so
+  leaving Plan sends ``{mode: "default"}`` once.
+* Codex's plan mode is INSTRUCTIONS, not a lock (its prompt says "you must not
+  perform mutating actions"). Read-only is Iron Jarvis's: Plan runs on Ask
+  first's posture (``untrusted``: Codex asks before EVERY file change and
+  every command), and in Plan every file-change request is declined by Iron
+  Jarvis at once, never shown as a card (:meth:`CodexDriver._decline_in_plan`);
+  commands still ask the user.
+* The plan arrives as its own item: ``item/started`` {type: "plan", id:
+  "<turn>-plan", text: ""}, ``item/plan/delta`` {itemId, delta} (27 of them
+  in the measured turn), ``item/completed`` {type: "plan", text: "1. …"},
+  then ``turn/completed``. No ``agentMessage`` came with it. Codex's own TUI
+  then asks "Implement this plan?" — "Yes, implement this plan" switches to
+  Default and sends ``Implement the plan.`` (read from the 0.157.0 program).
+  So does Iron Jarvis: the plan is the reply, and the PLAN CARD (the one every
+  tool's plan uses, ``W.PLAN_CARD_TITLE``) waits under it before the reply
+  ends; Allow leaves Plan for Ask first and starts that turn, Deny keeps
+  planning.
+* AUTO REVIEW: ``approvalsReviewer: "auto_review"`` is accepted per turn (a
+  reviewer model of Codex's own answers each approval: ``item/autoApprovalReview
+  /started|completed`` with a risk level, ``thread/approveGuardianDeniedAction``
+  retries a denial). Not offered: those reviews and their denials are not
+  drawn, and how it decides here was not measured.
+* ``windowsSandbox/readiness`` answers ``{status: "notConfigured"}`` on this
+  PC. Setting it up (``windowsSandbox/setupStart``) changes Windows itself and
+  needs administrator rights — Iron Jarvis never does it, and what Auto edits
+  would do after it was not measured, so Auto edits stays hidden on Windows.
 """
 
 from __future__ import annotations
@@ -149,26 +192,34 @@ _WINDOWS = sys.platform == "win32"
 
 #: preset -> (approvalPolicy, sandbox). See the module doc for why.
 MODES: dict[str, tuple[str, str]] = (
-    {"ask": ("untrusted", "danger-full-access"), "full": ("never", "danger-full-access")}
+    {"ask": ("untrusted", "danger-full-access"), "plan": ("untrusted", "danger-full-access"),
+     "full": ("never", "danger-full-access")}
     if _WINDOWS else
     {
         "ask": ("untrusted", "workspace-write"),
         "edits": ("on-request", "workspace-write"),
+        "plan": ("untrusted", "workspace-write"),
         "full": ("never", "danger-full-access"),
     }
 )
 #: Presets not offered for Codex here, and why.
 HIDDEN_MODES: dict[str, str] = {
     # v1.420.0 (C1.9): the real causes, read from Codex's own settings list.
-    "plan": "Codex's own plan mode is marked experimental in this version, so it is not offered here yet.",
+    # v1.441.0: Plan is offered (measured); Auto review is not.
+    "auto": "Codex's Auto review lets a reviewer model of Codex's own answer each approval instead of "
+            "you. It is not offered here: Iron Jarvis cannot show you yet what that reviewer decided.",
     **({"edits": "On Windows, Codex can run commands only with its own file protection switched off, and "
                  "then it asks either before every file change and every command, or before none of them. "
-                 "It has no setting where edits run on their own while commands still ask."}
+                 "It has no setting where edits run on their own while commands still ask. Codex's own "
+                 "Windows protection for commands is not set up on this PC, and Iron Jarvis does not "
+                 "set it up."}
        if _WINDOWS else {}),
 }
 #: v1.412.0: what each preset does, in plain words (the mode menu says it).
 MODE_ABOUT: dict[str, str] = {
     "ask": "Asks before every command and every file change.",
+    "plan": "Codex's own plan mode: it looks and plans, changes no file and asks before every command. "
+            "You approve its plan before it starts.",
     "edits": "Changes files in this folder without asking; asks before it runs a command.",
     "full": "Runs everything without asking.",
 }
@@ -179,6 +230,12 @@ _SANDBOX_POLICY = {
 }
 
 REQUEST_TIMEOUT_S = 60.0
+#: v1.441.0: the plan card's tool name (no request of Codex's waits on it).
+PLAN_TOOL = "codex_plan"
+#: What Codex's own TUI sends when its plan is approved (read from 0.157.0).
+IMPLEMENT_TEXT = "Implement the plan."
+#: The longest plan the card shows.
+PLAN_CHARS = 20_000
 #: v1.426.0 (E4): how long the background ``skills/list`` (Codex's own `/`
 #: menu: its skills, ``$<name>``) may take. It is asked once per process,
 #: never awaited by the session's start: the conversation never waits on it.
@@ -428,6 +485,17 @@ class CodexDriver(Driver):
         #: v1.426.0 (E4): the background reads this driver started (a task
         #: is kept here until it ends, never dropped by the garbage collector).
         self._bg: set[asyncio.Task] = set()
+        #: v1.441.0 (Plan): the collaboration mode Codex's thread holds as far
+        #: as Iron Jarvis knows ("" = never set: Codex's default), the model
+        #: the thread runs on (a collaboration mode must name one), the mode
+        #: THIS turn started in, its plan, the plan card waiting under it, and
+        #: whether the user pressed Stop.
+        self._collab = ""
+        self._thread_model = ""
+        self._turn_mode = ""
+        self._plan_text = ""
+        self._held: Ask | None = None
+        self._stopping = False
 
     def after_restore(self) -> None:
         """v1.422.0 (kept across a restart): ``turn/start``'s answer names
@@ -491,6 +559,13 @@ class CodexDriver(Driver):
         else:
             res = await self.request("thread/start", {**params, "ephemeral": False})
         thread = (res or {}).get("thread") if isinstance(res, dict) else None
+        self._thread_model = str((res or {}).get("model") or (thread or {}).get("model") or "") if isinstance(
+            res, dict) else ""
+        collab = (res or {}).get("collaborationMode") if isinstance(res, dict) else None
+        if isinstance(collab, dict) and collab.get("mode") in ("plan", "default"):
+            # v1.441.0: a reopened thread says its effective collaboration mode
+            # (Codex keeps it across turns): one left in Plan is taken out.
+            self._collab = str(collab["mode"])
         tid = str((thread or {}).get("id") or session_id or "")
         if not tid:
             raise ControlRefused("Codex did not start a thread")
@@ -558,6 +633,28 @@ class CodexDriver(Driver):
             await self.request("thread/compact/start", {"threadId": self.session_id})
             return
         items = user_input(text, files)
+        self.turn_open = True
+        self._errored = False
+        self._interrupting = False
+        self._retry_said = False
+        self._usage = {"input": 0, "output": 0, "cache_read": 0}
+        self._plan_text = ""
+        self._held = None
+        self._stopping = False
+        await self._start_codex_turn(items)
+
+    def _collaboration(self) -> dict[str, Any] | None:
+        """v1.441.0: the ``collaborationMode`` this turn sends — Plan's, or
+        Default's once to take a thread out of Plan; None (the key is not
+        sent at all: a session that never planned is exactly as before)."""
+        want = "plan" if self.mode == "plan" else ("default" if self._collab == "plan" else "")
+        model = self.model or self._thread_model
+        if not want or not model:
+            return None
+        return {"mode": want, "settings": {"model": model, "reasoning_effort": self.effort or None,
+                                           "developer_instructions": None}}
+
+    async def _start_codex_turn(self, items: list[dict[str, Any]]) -> None:
         approval, sandbox = self._policy()
         params: dict[str, Any] = {
             "threadId": self.session_id, "input": items, "approvalPolicy": approval,
@@ -567,12 +664,13 @@ class CodexDriver(Driver):
             params["model"] = self.model
         if self.effort:
             params["effort"] = self.effort
-        self.turn_open = True
-        self._errored = False
-        self._interrupting = False
-        self._retry_said = False
-        self._usage = {"input": 0, "output": 0, "cache_read": 0}
+        collab = self._collaboration()
+        if collab is not None:
+            params["collaborationMode"] = collab
+        self._turn_mode = self.mode
         res = await self.request("turn/start", params)
+        if collab is not None:
+            self._collab = collab["mode"]
         turn = (res or {}).get("turn") if isinstance(res, dict) else None
         self.turn_id = str((turn or {}).get("id") or self.turn_id)
 
@@ -599,9 +697,38 @@ class CodexDriver(Driver):
         return "step"
 
     async def answer(self, ask: Ask, decision: str, message: str, answers: Any) -> str:
+        if ask.data.get("plan"):
+            await self.answer_here(ask, decision, message)
+            return decision
         await self.write(self.prepare_answer(ask, decision, message, answers))
         self.answered(ask, decision)
         return decision
+
+    def stopping(self) -> None:
+        """The user pressed Stop (the service says so before it declines the
+        cards): the plan card's "no" ends the reply as stopped."""
+        self._stopping = True
+
+    async def answer_here(self, ask: Ask, decision: str, message: str) -> None:
+        """v1.441.0: the plan card's answer — no request of Codex's waits on
+        it. Allow: Plan is left for the mode the card names (Ask first) and
+        Codex's own "Implement the plan." starts at once, in the same reply.
+        Deny: the reply ends and Codex stays in Plan."""
+        if self._held is not ask:
+            return
+        self._held = None
+        if decision == "allow" and not self._stopping:
+            self.mode = str(ask.data.get("leaves_plan_to") or "ask")
+            self._plan_text = ""
+            try:
+                await self._start_codex_turn(user_input(IMPLEMENT_TEXT, []))
+            except Exception as exc:  # noqa: BLE001 — said, and the reply ends
+                self._fail(str(exc) or "Codex did not start on the plan", "", None)
+                self._finish("failed")
+            return
+        if not self._stopping:
+            self.emit(make("notice", text=W.CODEX_PLAN_KEPT))
+        self._finish("interrupted" if self._stopping else "completed")
 
     def answered(self, ask: Ask, decision: str) -> None:
         """Nothing to keep: Codex's session allow lives in Codex."""
@@ -609,6 +736,12 @@ class CodexDriver(Driver):
     def prepare_answer(self, ask: Ask, decision: str, message: str, answers: Any) -> dict[str, Any]:
         """The JSON-RPC response for the user's answer — or AskRefused,
         before anything is sent."""
+        if ask.data.get("plan"):
+            # v1.441.0: the plan card is answered here (``answer_here``):
+            # nothing is sent to Codex for it.
+            if decision not in ("allow", "deny"):
+                raise AskRefused("Approve the plan, or say no and keep planning.")
+            return None  # type: ignore[return-value]
         method = ask.data.get("method")
         if decision == "allow_commands":
             # v1.417.0 (C1.1): Codex has no whole-tool rule of its own; the
@@ -669,7 +802,13 @@ class CodexDriver(Driver):
         return out
 
     async def interrupt(self) -> None:
-        if not (self.session_id and self.turn_id):
+        if not (self.session_id and self.turn_id) or not self.turn_open:
+            return
+        if self._held is not None:
+            # The plan card waited (Codex's own turn had ended): nothing runs
+            # in Codex to interrupt — the reply ends here.
+            self._held = None
+            self._finish("interrupted")
             return
         self._interrupting = True
         try:
@@ -732,6 +871,9 @@ class CodexDriver(Driver):
             if not can_session:
                 ev["once_only"] = True
             self.raise_ask(Ask(ask_id, "approval", "shell", rid, {"method": method}, ev, ev["at"], can_session))
+            return
+        if method in ("item/fileChange/requestApproval", "applyPatchApproval") and self._turn_mode == "plan":
+            self._decline_in_plan(method, rid, p)
             return
         if method in ("item/fileChange/requestApproval", "applyPatchApproval"):
             item = self._items.get(str(p.get("itemId") or "")) or {}
@@ -806,6 +948,16 @@ class CodexDriver(Driver):
             return
         asyncio.ensure_future(self._safe(self.respond_error(rid, "Iron Jarvis does not handle this request")))
 
+    def _decline_in_plan(self, method: str, rid: Any, p: dict[str, Any]) -> None:
+        """v1.441.0: in Plan, a file change is declined at once — never a card
+        (Codex's plan mode is instructions only; read-only is Iron Jarvis's)."""
+        item = self._items.get(str(p.get("itemId") or "")) or {}
+        rows = _change_rows(p.get("fileChanges") if method == "applyPatchApproval" else item.get("changes"))
+        name = _base(rows[0][0]) if rows else ""
+        self.emit(make("notice", text=W.CODEX_PLAN_NO_EDIT.format(file=name or "a file")))
+        result = {"decision": _DECISION_LEGACY["deny"] if method == "applyPatchApproval" else _DECISION_V2["deny"]}
+        asyncio.ensure_future(self._safe(self.respond(rid, result)))
+
     async def _safe(self, coro: Any) -> None:
         try:
             await coro
@@ -817,7 +969,8 @@ class CodexDriver(Driver):
             self._item_started(p.get("item") or {})
         elif method == "item/completed":
             self._item_completed(p.get("item") or {})
-        elif method == "item/agentMessage/delta":
+        elif method in ("item/agentMessage/delta", "item/plan/delta"):
+            # v1.441.0: in Plan, the plan itself is the reply's text.
             if p.get("delta"):
                 self.emit(make("text", item=str(p.get("itemId") or ""), delta=clip(p["delta"], TEXT_CHARS)))
         elif method == "item/commandExecution/outputDelta":
@@ -895,9 +1048,11 @@ class CodexDriver(Driver):
     def _item_completed(self, item: dict[str, Any]) -> None:
         iid = str(item.get("id") or "")
         t = item.get("type")
-        if t == "agentMessage":
+        if t in ("agentMessage", "plan"):
             if str(item.get("text") or "").strip():
                 self.emit(make("text_done", item=iid, text=clip(item["text"], TEXT_CHARS)))
+                if t == "plan":
+                    self._plan_text = str(item["text"])
             return
         if t == "contextCompaction":
             self.emit(make("notice", text="Codex compacted the conversation to make room."))
@@ -1019,12 +1174,31 @@ class CodexDriver(Driver):
             err = turn.get("error") or {}
             kind, code = _error_info(err)
             self._fail(str(err.get("message") or "Codex could not finish"), kind, code)
-        from . import seen as _seen
-
-        self.emit(_seen.attach(make("usage", **self._usage, list_price=True), self))
         stop = {"completed": "completed", "interrupted": "interrupted", "failed": "failed"}.get(status, "failed")
         if self._interrupting and stop != "completed":
             stop = "interrupted"
         self._interrupting = False
+        if (stop == "completed" and self._turn_mode == "plan" and self._plan_text.strip()
+                and not self._errored and not self._stopping and self.turn_open):
+            # v1.441.0: the plan card waits under the plan, before the reply ends.
+            self._ask_plan()
+            return
+        self._finish(stop)
+
+    def _finish(self, stop: str) -> None:
+        from . import seen as _seen
+
+        self.emit(_seen.attach(make("usage", **self._usage, list_price=True), self))
         self.turn_open = False
         self.emit(make("done", stop=stop))
+
+    def _ask_plan(self) -> None:
+        """v1.441.0: the plan card every tool's plan uses — the plan, and an
+        Allow that leaves Plan for Ask first. Asked once; no session-wide allow."""
+        ask_id = new_ask_id()
+        ev = make("approval", request_id=ask_id, kind="tool", title=W.PLAN_CARD_TITLE, detail="",
+                  can_session=False, tool=PLAN_TOOL, plan=clip(self._plan_text, PLAN_CHARS), then_mode="ask")
+        ev["once_only"] = True
+        ask = Ask(ask_id, "approval", PLAN_TOOL, None, {"plan": True, "leaves_plan_to": "ask"}, ev, ev["at"], False)
+        self._held = ask
+        self.raise_ask(ask)
