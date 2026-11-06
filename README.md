@@ -1,15 +1,15 @@
 <div align="center">
 
-# ⚡ IRON JARVIS
+# <img src="desktop/assets/icon.png" alt="" width="52" height="52" align="absmiddle"> IRON JARVIS
 
 [![Tests](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml/badge.svg)](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml)
-[![Release](https://img.shields.io/github/v/release/RealDealCPA-VR/Iron-Jarvis?label=release)](https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest)
+[![Download](https://img.shields.io/badge/download-latest%20release-2ea44f)](https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest)
 ![Windows](https://img.shields.io/badge/desktop-Windows-0078D4)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20Commons%20Clause-blue)](LICENSE)
 
 ### The AI operating system you actually own.
 
-**Keep the models and tools you already like. Lose the silos.**
+**Your models. Your tools. Your files. One place, on your own PC.**
 
 Every action logged. Every change reviewable. Every secret encrypted on your disk.
 
@@ -19,9 +19,9 @@ Every action logged. Every change reviewable. Every secret encrypted on your dis
 
 Claude Code can code. Codex can code. Local models run privately on your own GPUs. MCP servers bring tools. Each one lives in its own window, with its own memory, its own permissions, its own login and its own idea of what you're working on.
 
-**Iron Jarvis is the layer that makes them one system.** It gives all of them shared projects, memory, permissions, accounts, browser access, automation and observability, behind one interface, on **your** computer. You don't have to replace any of them. Iron Jarvis is where they start working together.
+**Iron Jarvis is the layer that makes them one system.** It gives all of them shared projects, memory, permissions, accounts, browser access, automation and a full record of what happened, behind one interface, on **your** computer. You don't replace anything. Iron Jarvis is where it all starts working together.
 
-Bring an API key, your existing Claude or ChatGPT subscription login, or your own GPUs. Or run it fully offline with a built-in demo model.
+Bring an API key, the Claude or ChatGPT subscription you already pay for, or your own GPUs. Or try it fully offline with a built-in demo model.
 
 <div align="center">
 
@@ -33,9 +33,11 @@ Bring an API key, your existing Claude or ChatGPT subscription login, or your ow
 
 ## 🔥 Why Iron Jarvis
 
-- **Iron Jarvis is the stable layer. The coding tools are interchangeable workers.** Claude Code, Codex, Pi, OpenCode and Grok run as the real tools underneath, with their own features on. Switch between them or run several at once without losing your projects, history or settings. When a better tool ships next month, it moves into the same home.
-- **It does the work and shows its receipts.** Every reply says which model answered, which tools ran and which files changed. A tool the turn wasn't given is refused and recorded, never quietly run.
-- **It never moves your data behind your back.** If your local model is down, it says so **by name** instead of quietly sending your conversation to a cloud API. Only **Auto**, if you pick it, may switch providers.
+- **Just ask.** "Make a project for the Johnson audit." "Turn off the GitHub app." "Stop sending alerts to Slack." "Keep this chat on my PC." Chat does the setup itself: it shows you a card first, and every change has an **Undo**. When a step truly needs a page, like signing in or a vendor's approval, chat gives you one button to the exact place.
+- **The coding tools are interchangeable workers. Iron Jarvis is the stable layer.** Claude Code, Codex, Pi, OpenCode and Grok run as the real tools underneath, with their own features on. Switch between them or run several at once without losing your projects, history or settings. When a better tool ships next month, it moves into the same home.
+- **It does the work and shows its receipts.** Every reply says which model answered, which tools ran and which files changed. A tool the turn wasn't given is refused and recorded, never quietly run. If a reply claims it changed a setting and nothing actually changed, a note under the reply says so.
+- **It never moves your data, or your money, behind your back.** If your local model is down, it says so **by name** instead of quietly sending your conversation to a cloud API. It never switches you to a pay-per-use model you didn't pick. Only **Auto**, if you choose it, may switch providers.
+- **Built for sensitive work.** Turn on **Local only** and that chat's AI runs on this PC or your own network, and anything that would reach the internet asks you first. Microsoft 365 connects locked down: read and draft only, one account, and only in Local only chats. Keys and passwords go into a secure box, never into the chat.
 - **You approve what matters.** Risky actions ask first. Code changes land on a git branch and **never auto-merge**. File writes, documents, notes and settings have an **Undo**.
 - **Failures are contained, visible and recoverable.** A step that hangs is stopped and named. A tool that breaks says why, where you're looking. Work a restart cut off waits for you with **Continue**.
 
@@ -60,8 +62,8 @@ Iron Jarvis doesn't replace the coding tools you already like. It gives them one
 
 ### 💬 Chat that keeps up with you
 - **One box for everything.** Type **/** for a skill, drop files anywhere, pick a project so every reply grounds in its brief, folder and knowledge. There's no mode picker: a quick question gets a quick answer, and a job that needs files and tools becomes a full agent run on its own, with the reason shown.
+- **Set it all up by asking.** Settings, projects, agents, apps, notification destinations, goals and Local only can all be changed from chat, each with a card first and an **Undo**. Ask "What did you change today?" for the list, or "Undo that". Protected settings always ask first.
 - **Nothing gets lost.** Editing a question or pressing Try again keeps the old answer (**‹ 1 / 2 ›**). Steer a reply mid-answer, queue the next one (**Ctrl+Enter**), and **Continue** a reply that was cut off. Charts and tables come back sortable and copyable.
-- **Change settings by asking.** "Turn on follow-up suggestions" shows a card with what changed and **Undo**. Protected settings always ask first, and keys go into a secure box, never the chat.
 - **Voice, offline.** Speech-to-text is bundled (Vosk), so dictation works with no key and no cloud.
 
 ### 🤖 Agents that do real work
@@ -76,8 +78,8 @@ Iron Jarvis doesn't replace the coding tools you already like. It gives them one
 
 ### 🔌 It plugs into your world
 - 🌐 **Your own browser, as a capability.** The installer ships a small browser **add-on** for Chrome or Edge. Pair it and ask about the page in front of you, or let it click, type and navigate. Anything that looks destructive or transactional stops and asks first. Page text is treated as data, so a page can't give Jarvis orders, and form values are never collected. Whatever harness you pick in **Build** drives the *same* browser through the same gates.
-- 📱 **Chat from your phone.** Text your Telegram bot like a person: the same memory and tools behind a sender allowlist, and the conversation shows up on the desktop.
-- 🧩 **MCP apps.** Paste a server's config from any tool and it becomes tools in chat and in agents. A tool a server adds later that can write is held until you approve it.
+- 📱 **Chat from your phone.** Text Jarvis over Telegram, Slack or email like a person: the same memory and tools behind a sender allowlist, and the conversation shows up on the desktop.
+- 🧩 **Your apps, one sentence away.** Paste an MCP server's config from any tool, or say "add the QuickBooks server I use in Claude Desktop" to bring it over from Claude Desktop, Claude Code, Codex, Cursor or VS Code. Its keys go straight into the encrypted vault. A tool a server adds later that can write is held until you approve it.
 - 🖥️ **Your own GPUs, watched live.** Tokens/sec, queue, VRAM and context windows for every local server. A number it can't read says so rather than showing zero.
 
 ### 🛡️ Trust you can check
@@ -102,7 +104,7 @@ A daily driver has to be light. Measured on our own daily-driver PC:
 
 - **Add-ons start directly.** With four MCP add-ons running, Iron Jarvis went from **19 processes to 8** and from **774 MB to 415 MB** of memory, because each server now starts without its npx/uvx launcher idling beside it. An npx add-on now starts in **0.5–0.7 s instead of 2.3–3.1 s**.
 - **Idle terminals cost nothing.** Eight idle Build terminals used to keep a whole CPU core busy; they now use **0.08%**.
-- **Proof, not promises.** More than 11,000 backend tests and 4,000 dashboard tests run **offline** with no keys. CI runs them on every push and blocks the installer until they pass. The live count is on the [Tests badge](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml).
+- **Proof, not promises.** More than 24,000 backend tests and 9,000 dashboard tests run **offline** with no keys. CI runs them on every push and blocks the installer until they pass. The live count is on the [Tests badge](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml).
 
 ---
 
@@ -117,7 +119,7 @@ A daily driver has to be light. Measured on our own daily-driver PC:
 Iron Jarvis inherits your subscription through the logged-in CLI. It never performs an account login itself and never sees that credential.
 
 **Day to day**
-- **Closing the window doesn't quit.** It goes to the tray so schedules and the night shift keep running. Reopen it with **Ctrl+Shift+J**; **Ctrl+Shift+Space** opens a quick ask from anywhere.
+- **Closing the window doesn't quit.** It goes to the tray so schedules and the night shift keep running. Reopen it from the tray or with **Ctrl+Shift+J**; **Ctrl+Shift+Space** opens a quick ask from anywhere.
 - **Updates install themselves.** New versions download in the background and install when you click **Restart to update**. Want fewer of them? Pick the **Stable** update channel under **Settings → System**.
 - **Your data lives in `%APPDATA%\Iron Jarvis`** and survives updates and reinstalls.
 
