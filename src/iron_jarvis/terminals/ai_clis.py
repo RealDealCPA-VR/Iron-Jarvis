@@ -28,6 +28,7 @@ AI_CLIS: list[dict[str, str]] = [
     {"id": "grok", "label": "Grok CLI", "command": "grok", "provider": "xAI", "url": "https://github.com/superagent-ai/grok-cli"},
     {"id": "opencode", "label": "opencode", "command": "opencode", "provider": "opencode", "url": "https://opencode.ai"},
     {"id": "pi", "label": "Pi", "command": "pi", "provider": "Earendil", "url": "https://github.com/earendil-works/pi"},
+    {"id": "agy", "label": "Antigravity", "command": "agy", "provider": "Google", "url": "https://github.com/google-antigravity/antigravity-cli"},
     {"id": "gemini", "label": "Gemini CLI", "command": "gemini", "provider": "Google", "url": "https://github.com/google-gemini/gemini-cli"},
     {"id": "cursor-agent", "label": "Cursor Agent", "command": "cursor-agent", "provider": "Cursor", "url": "https://cursor.com/cli"},
     {"id": "aider", "label": "Aider", "command": "aider", "provider": "Aider", "url": "https://aider.chat"},
@@ -296,6 +297,10 @@ def _extra_bin_dirs() -> list[Path]:
             # which a GUI-launched daemon whose environment predates the
             # install never sees (same driving case as ~/.grok/bin above).
             dirs.append(Path(local) / "pi-node" / "current")
+            # v1.439.0: Google's Antigravity installer puts agy.exe in
+            # %LOCALAPPDATA%gyin (its install.ps1) and adds it to the USER
+            # PATH, which a daemon started before the install never sees.
+            dirs.append(Path(local) / "agy" / "bin")
     return [d for d in dirs if d.is_dir()]
 
 

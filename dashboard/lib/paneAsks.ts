@@ -32,6 +32,7 @@ export const PANE_CLI_NAMES: Readonly<Record<string, string>> = {
   grok: "Grok CLI",
   opencode: "opencode",
   pi: "Pi",
+  agy: "Antigravity",
   gemini: "Gemini CLI",
   "cursor-agent": "Cursor Agent",
   aider: "Aider",

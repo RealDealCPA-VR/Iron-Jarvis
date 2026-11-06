@@ -93,6 +93,9 @@ from .opencode import OpenCodeDriver
 from . import grok as G
 from .grok import HARNESS as GROK
 from .grok import GrokDriver
+from . import antigravity as A
+from .antigravity import HARNESS as ANTIGRAVITY
+from .antigravity import AntigravityDriver
 from . import jarvis_tools as JT
 from . import news as NEWS
 from .events import TEXT_CHARS, EventLog, clip, coalesce_into, make, session_dir
@@ -105,16 +108,17 @@ from . import open_steps as OS  # v1.427.2: a step runs only while its tool does
 
 log = logging.getLogger(__name__)
 
-HARNESSES: tuple[str, ...] = (CLAUDE, CODEX, PI, OPENCODE, GROK)
+HARNESSES: tuple[str, ...] = (CLAUDE, CODEX, PI, OPENCODE, GROK, ANTIGRAVITY)
 #: The tools that sign in by themselves (no Iron-Proxy account applies).
-OWN_SIGN_IN: tuple[str, ...] = (PI, OPENCODE)
+#: v1.439.0: Antigravity too (its own Google sign-in; no Iron-Proxy vendor).
+OWN_SIGN_IN: tuple[str, ...] = (PI, OPENCODE, ANTIGRAVITY)
 #: v1.416.0: the tools whose model list is what their PROCESS last said (never
 #: a start just to ask), each model with its own effort levels, and which keep
 #: a reopened conversation's last model.
-LISTED_MODELS: tuple[str, ...] = (PI, OPENCODE, GROK)
+LISTED_MODELS: tuple[str, ...] = (PI, OPENCODE, GROK, ANTIGRAVITY)
 #: v1.416.0: the tools listed only when installed (Grok is newer to the view;
 #: the four before it are always listed, with "not installed" said).
-ONLY_WHEN_INSTALLED: tuple[str, ...] = (GROK,)
+ONLY_WHEN_INSTALLED: tuple[str, ...] = (GROK, ANTIGRAVITY)
 #: At most this many harness processes at once.
 MAX_LIVE = 6
 #: v1.425.0 (Wave 5, B7): with every place taken by a session that is working
@@ -190,6 +194,7 @@ EFFORTS: dict[str, tuple[str, ...]] = {
     PI: P.EFFORTS,
     OPENCODE: O.EFFORTS,
     GROK: G.EFFORTS,
+    ANTIGRAVITY: A.EFFORTS,
 }
 _MODEL_RX = re.compile(r"^[A-Za-z0-9._:/\-\[\]]{1,120}$")
 #: A harness session id typed into a terminal: a UUID (Claude) or Codex's
@@ -248,12 +253,15 @@ def modes_for(harness: str) -> dict[str, Any]:
         return O.MODES
     if harness == GROK:
         return G.MODES
+    if harness == ANTIGRAVITY:
+        return A.MODES
     return CLAUDE_MODES if harness == CLAUDE else CODEX_MODES
 
 
-#: Every preset in the menu's order (the shared ones, Claude Code's own Auto
-#: (v1.412.0), Full access, then Pi's own).
-MODE_ORDER: tuple[str, ...] = ("ask", "edits", "plan", "auto", "full", P.OWN)
+#: Every preset in the menu's order: a tool's OWN rules first (v1.439.0:
+#: Antigravity's default; Pi's only mode), then the shared ones, Claude Code's
+#: own Auto (v1.412.0) and Full access.
+MODE_ORDER: tuple[str, ...] = (P.OWN, "ask", "edits", "plan", "auto", "full")
 
 
 def mode_about(harness: str, mode: str) -> str:
@@ -265,6 +273,8 @@ def mode_about(harness: str, mode: str) -> str:
         return O.MODE_ABOUT.get(mode, "")
     if harness == GROK:
         return G.MODE_ABOUT.get(mode, "")
+    if harness == ANTIGRAVITY:
+        return A.MODE_ABOUT.get(mode, "")
     if harness == CODEX:
         return CODEX_ABOUT.get(mode, "")
     return CLAUDE_ABOUT.get(mode, "")
@@ -274,6 +284,8 @@ def mode_label(harness: str, mode: str) -> str:
     """A preset's words for this tool ("Pi's own rules" is Pi's alone)."""
     if harness == PI and mode in P.MODE_LABELS:
         return P.MODE_LABELS[mode]
+    if harness == ANTIGRAVITY and mode in A.MODE_LABELS:
+        return A.MODE_LABELS[mode]
     return MODE_LABELS.get(mode, mode)
 
 
@@ -309,7 +321,8 @@ def hidden_mode_rows(harness: str) -> list[dict[str, str]]:
     if harness == CLAUDE:
         return []
     hidden = (P.HIDDEN_MODES if harness == PI else O.HIDDEN_MODES if harness == OPENCODE
-              else G.HIDDEN_MODES if harness == GROK else CODEX_HIDDEN)
+              else G.HIDDEN_MODES if harness == GROK else A.HIDDEN_MODES if harness == ANTIGRAVITY
+              else CODEX_HIDDEN)
     return [{"id": m, "label": MODE_LABELS.get(m, m), "reason": why} for m, why in hidden.items()]
 
 
@@ -354,7 +367,7 @@ def efforts_for(harness: str, model: Any = "", pi_rows: list[dict[str, Any]] | N
         known_codex = _codex_efforts(model)
         if known_codex is not None:
             return known_codex
-    if harness in LISTED_MODELS and pi_rows and (model or harness in (OPENCODE, GROK, PI)):
+    if harness in LISTED_MODELS and pi_rows and (model or harness in (OPENCODE, GROK, PI, ANTIGRAVITY)):
         # (OpenCode, Grok and — v1.429.0 — Pi: the default row "" carries its
         # default model's levels, when they are known.)
         for r in pi_rows:
@@ -406,6 +419,8 @@ def default_home(harness: str) -> str:
         return str(O.data_dir())
     if harness == GROK:
         return str(G.default_home())
+    if harness == ANTIGRAVITY:
+        return str(A.default_home())
     if harness == CLAUDE:
         return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
     return os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
@@ -458,6 +473,10 @@ def disk_sessions(harness: str, home: str, folder: str, *, since: float | None =
     if harness == GROK:
         # Grok keeps each session's summary.json in its own folder (read-only here).
         return G.disk_sessions(home, folder, since=since, limit=DISK_FILES)
+    if harness == ANTIGRAVITY:
+        # Antigravity keeps its conversations' summaries in its own database
+        # (read-only here).
+        return A.disk_sessions(home, folder, since=since, limit=DISK_FILES)
     out = []
     for path in _conversation_files(harness, home, folder):
         try:
@@ -507,7 +526,8 @@ def pane_harness(pane: Any) -> str | None:
             cli = str(pane.activity().cli or "").lower()
         except Exception:  # noqa: BLE001
             cli = ""
-    return {"claude": CLAUDE, "codex": CODEX, "pi": PI, "opencode": OPENCODE, "grok": GROK}.get(cli)
+    return {"claude": CLAUDE, "codex": CODEX, "pi": PI, "opencode": OPENCODE, "grok": GROK,
+            "agy": ANTIGRAVITY}.get(cli)
 
 
 def pane_exited(pane: Any) -> bool:
@@ -1026,6 +1046,8 @@ class HostedService:
         self._oc_catalog = self.home / "hosted" / "opencode_models.json"
         #: The model list a Grok process last said (v1.416.0).
         self._grok_catalog = self.home / "hosted" / "grok_models.json"
+        #: The model list an Antigravity process last said (v1.439.0).
+        self._agy_catalog = self.home / "hosted" / "antigravity_models.json"
         #: v1.414.0: how long a card waits in the app before the phone gets
         #: it (``harness/stall.PHONE_AFTER_S``; a test sets it short).
         from ..harness.stall import PHONE_AFTER_S
@@ -1191,11 +1213,13 @@ class HostedService:
                 rows[0]["default_name"] = default["label"]
             if isinstance(default.get("efforts"), list):
                 rows[0]["efforts"] = list(default["efforts"])
-        if harness in (OPENCODE, GROK):
-            # What an OpenCode (Grok) process last listed (never a start just to
-            # ask); the default row takes the levels of the model it starts on.
+        if harness in (OPENCODE, GROK, ANTIGRAVITY):
+            # What an OpenCode (Grok, Antigravity) process last listed (never a
+            # start just to ask); the default row takes the levels of the model
+            # it starts on.
             listed, default = (O.cached_models(self._oc_catalog) if harness == OPENCODE
-                               else G.cached_models(self._grok_catalog))
+                               else G.cached_models(self._grok_catalog) if harness == GROK
+                               else A.cached_models(self._agy_catalog))
             rows += listed
             known = next((r for r in listed if r.get("id") == default), None)
             if known is not None and isinstance(known.get("efforts"), list):
@@ -1353,7 +1377,8 @@ class HostedService:
     async def create(self, body: dict[str, Any]) -> dict[str, Any]:
         harness = str(body.get("harness") or "").strip().lower()
         if harness not in HARNESSES:
-            raise Refused('Choose "claude-code", "codex", "pi", "opencode" or "grok".', 400, field="tool")
+            raise Refused('Choose "claude-code", "codex", "pi", "opencode", "grok" or "antigravity".', 400,
+                          field="tool")
         folder = str(body.get("folder") or "").strip()
         resume_id = str(body.get("harness_session_id") or "").strip()
         # v1.412.0: no folder chosen is a session of its own — its first
@@ -1384,7 +1409,9 @@ class HostedService:
         title = clip(body.get("title") or "", 120)
         account = str(body.get("account") or "").strip()
         if account and harness in OWN_SIGN_IN:
-            raise Refused(W.PI_OWN_SIGN_IN if harness == PI else W.OPENCODE_OWN_SIGN_IN, 400, field="account")
+            raise Refused(W.PI_OWN_SIGN_IN if harness == PI
+                          else W.ANTIGRAVITY_OWN_SIGN_IN if harness == ANTIGRAVITY
+                          else W.OPENCODE_OWN_SIGN_IN, 400, field="account")
         try:
             acc = await asyncio.to_thread(self._resolve_account, harness, account)
         except Refused as r:
@@ -1872,7 +1899,7 @@ class HostedService:
                 applied["mode"] = "next"
             if row.harness == CODEX and running_turn and live is not None:
                 self._emit(live, make("notice", text=W.CODEX_MODE_NEXT.format(mode=MODE_LABELS[mode])))
-            elif row.harness in (OPENCODE, GROK) and running_turn and live is not None \
+            elif row.harness in (OPENCODE, GROK, ANTIGRAVITY) and running_turn and live is not None \
                     and applied["mode"] == "next":
                 self._emit(live, make("notice", text=W.MODE_NEXT.format(
                     label=W.label(row.harness), mode=mode_label(row.harness, mode))))
@@ -1903,7 +1930,7 @@ class HostedService:
                     raise Refused(str(exc)) from None
             else:
                 applied["model"] = "next"
-                if live and live.running and row.harness in (CLAUDE, PI, OPENCODE, GROK):
+                if live and live.running and row.harness in (CLAUDE, PI, OPENCODE, GROK, ANTIGRAVITY):
                     live.restart = True  # back to the CLI's default: a restart
             fields["model"] = model
         if body.get("effort") is None and body.get("model") is not None and row.effort \
@@ -2236,6 +2263,9 @@ class HostedService:
                 await asyncio.to_thread(p.write, obj)
 
         driver = self._new_driver(live, row, write, rules_note=rules_note, acp_servers=connection.acp_servers)
+        if isinstance(driver, AntigravityDriver) and driver.log_path:
+            # v1.439.0: the folder its own log goes in (``--log-file``).
+            await asyncio.to_thread(os.makedirs, os.path.dirname(driver.log_path), exist_ok=True)
         argv = argv0 + driver.argv(session_id=sid, resume=resume) + connection.argv
         # v1.416.0 review: only Grok's stop ends what it left outside its Job.
         ends_left_behind = bool(getattr(driver, "notes_started_on_stop", False))
@@ -2277,7 +2307,10 @@ class HostedService:
         try:
             await driver.open(session_id=sid, resume=resume)
         except Exception as exc:  # noqa: BLE001 — said in words below
-            await self._stop_process(live)
+            # v1.439.0: the turn is NOT ended here as "interrupted" — the
+            # refusal below is said as the reply's error and ends it "failed"
+            # (it read "Stopped: the coding tool was closed", its reason lost).
+            await self._stop_process(live, end_turn=False)
             said = exc.args[0] if exc.args else type(exc).__name__
             raise Refused(f"{W.label(row.harness)} did not start: {clip(said, 200)}") from None
         if isinstance(proc, HL.RemoteProcess):
@@ -2292,7 +2325,7 @@ class HostedService:
         :meth:`_start_process`, so a session adopted after a restart gets the
         very same one — ``hosted/adopt.py`` passes its own ``emit`` / ``ask``)."""
         cls = {CLAUDE: ClaudeDriver, CODEX: CodexDriver, PI: PiDriver, OPENCODE: OpenCodeDriver,
-               GROK: GrokDriver}[row.harness]
+               GROK: GrokDriver, ANTIGRAVITY: AntigravityDriver}[row.harness]
         driver = cls(
             write=write,
             emit=emit or (lambda ev: self._emit(live, ev)),
@@ -2312,8 +2345,31 @@ class HostedService:
         if isinstance(driver, GrokDriver):
             driver.catalog_path = self._grok_catalog
             driver.mcp_servers = list(acp_servers)
+        if isinstance(driver, AntigravityDriver):
+            driver.catalog_path = self._agy_catalog
+            driver.mcp_servers = list(acp_servers)
+            # Its own log, beside the session's events (a failure's reason is
+            # read from it; never the user's ~/.gemini log folder).
+            driver.log_path = str(session_dir(self.home, row.id) / A.LOG_NAME)
+            driver.on_title = lambda title: self._title_if_untitled(live, title)
         driver.steer_read = lambda ref: self._steer_read(live, ref)
         return driver
+
+    def _title_if_untitled(self, live: LiveSession, title: str) -> None:
+        """v1.439.0: the tool named its conversation (Antigravity's
+        ``session_info_update``) — kept only for a session with no title yet
+        (the first message names it otherwise). Off the loop; never raises."""
+        async def save() -> None:
+            try:
+                row = await asyncio.to_thread(store.get, self.engine, live.sid)
+                if row is not None and not (row.title or "").strip() and title.strip():
+                    await asyncio.to_thread(store.update, self.engine, live.sid, title=clip(title, 120))
+                    live.title = clip(title, 120)
+            except Exception:  # noqa: BLE001 — a title is never worth a failure
+                log.debug("could not keep a Code-view session's title", exc_info=True)
+
+        with contextlib.suppress(RuntimeError):
+            asyncio.ensure_future(save())
 
     def _on_session_id(self, live: LiveSession, sid: str) -> None:
         async def save() -> None:
@@ -2351,6 +2407,7 @@ class HostedService:
             ev = (P.failure_event(technical) if live.harness == PI
                   else O.failure_event(technical) if live.harness == OPENCODE
                   else G.failure_event(technical) if live.harness == GROK
+                  else A.failure_event(technical) if live.harness == ANTIGRAVITY
                   else W.failure_for(live.harness, technical))
             ev["title"] = W.GONE_DURING_TURN.format(label=W.label(live.harness))
             self._emit(live, ev)
@@ -3370,6 +3427,11 @@ class HostedService:
             command = f"{entry['command']} --resume {hid}"
             return launch_pane(self.platform, TerminalLaunch(cli=cli, cwd=row.folder),
                                accounts=accounts, command=command)
+        if row.harness == ANTIGRAVITY:
+            # Antigravity's own way back into a saved conversation (its docs).
+            command = f"{entry['command']} --conversation {hid}"
+            return launch_pane(self.platform, TerminalLaunch(cli=cli, cwd=row.folder),
+                               accounts=accounts, command=command)
         if row.harness == PI:
             # Pi's own way back into a saved session: `--session <id>`.
             command = f"{entry['command']} --session {hid}"
@@ -3487,7 +3549,8 @@ class HostedService:
         if row.harness not in (CLAUDE, CODEX):
             raise Refused(W.PI_CONTINUE if row.harness == PI
                           else W.OPENCODE_CONTINUE if row.harness == OPENCODE
-                          else W.GROK_CONTINUE if row.harness == GROK else W.CODEX_CONTINUE)
+                          else W.GROK_CONTINUE if row.harness == GROK
+                          else W.ANTIGRAVITY_CONTINUE if row.harness == ANTIGRAVITY else W.CODEX_CONTINUE)
         if not row.harness_session_id:
             row = await self._row_with_saved_id(sid)  # v1.417.0 review
         if not row.harness_session_id:

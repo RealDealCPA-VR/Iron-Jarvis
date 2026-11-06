@@ -477,6 +477,45 @@ def _fresh_pi_default():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _isolate_antigravity_home():
+    """v1.439.0: the Code view reads Antigravity's own saved conversations from
+    its folder (``hosted.antigravity.default_home``). A test must never read the
+    developer's real ``~/.gemini``: the folder is an empty scratch one for the
+    session. Only Iron Jarvis's READS follow it; an Antigravity process is never
+    told."""
+    import tempfile
+
+    from iron_jarvis.hosted import antigravity as _ha
+
+    old = os.environ.get(_ha.HOME_ENV)
+    os.environ[_ha.HOME_ENV] = tempfile.mkdtemp(prefix="ij-test-no-antigravity-home-")
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(_ha.HOME_ENV, None)
+        else:
+            os.environ[_ha.HOME_ENV] = old
+
+
+@pytest.fixture(autouse=True)
+def _fresh_antigravity_models():
+    """v1.439.0: the model list an Antigravity session last said is kept in
+    process memory (``hosted.antigravity.LAST_MODELS``); each test starts with
+    none."""
+    from iron_jarvis.hosted import antigravity as _ha
+
+    saved, default = list(_ha.LAST_MODELS), list(_ha.LAST_DEFAULT)
+    _ha.LAST_MODELS.clear()
+    _ha.LAST_DEFAULT.clear()
+    try:
+        yield
+    finally:
+        _ha.LAST_MODELS[:] = saved
+        _ha.LAST_DEFAULT[:] = default
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_grok_home():
     """v1.416.0: the Code view reads Grok's own saved sessions, model list and
     sign-in file from its home (``hosted.grok.default_home``). A test must

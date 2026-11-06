@@ -170,6 +170,7 @@ def connect(harness: str, *, url: str, token: str, session_dir: Path) -> Connect
     from ..browser.panetokens import MCP_TOKEN_ENV, MCP_URL_ENV
     from .claude import HARNESS as CLAUDE
     from .codex import HARNESS as CODEX
+    from .antigravity import HARNESS as ANTIGRAVITY
     from .grok import HARNESS as GROK
     from .opencode import HARNESS as OPENCODE
     from .pi import HARNESS as PI
@@ -189,8 +190,10 @@ def connect(harness: str, *, url: str, token: str, session_dir: Path) -> Connect
         path = Path(session_dir) / PI_FILE
         _write(path, _pi_extension(url))
         return Connection(argv=["-e", str(path)], env=env)
-    if harness in (OPENCODE, GROK):
-        # (v1.416.0: Grok too — its ACP takes an HTTP server, mcpCapabilities.http.)
+    if harness in (OPENCODE, GROK, ANTIGRAVITY):
+        # (v1.416.0: Grok too — its ACP takes an HTTP server, mcpCapabilities.http.
+        # v1.439.0: Antigravity 1.5.2 says no mcpCapabilities, so the driver
+        # sends none and says so once — the entry is offered the ACP way.)
         # The token rides ACP on the process's own stdin — not its env, where
         # every command OpenCode runs could read it.
         return Connection(env={MCP_URL_ENV: url}, acp_servers=[{

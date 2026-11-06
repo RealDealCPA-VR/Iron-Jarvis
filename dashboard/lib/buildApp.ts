@@ -330,6 +330,7 @@ export function toolLabel(id: string, tools?: readonly CodingTool[] | null): str
   if (id === "pi") return "Pi";
   if (id === "opencode") return "OpenCode";
   if (id === "grok") return "Grok";
+  if (id === "antigravity") return "Antigravity";
   return id || "Coding tool";
 }
 
@@ -343,7 +344,7 @@ const ALWAYS_NAMED: readonly [string, string][] = [
 
 /** v1.416.0: the tools a session can start, in words ("Claude Code, Codex,
  *  Pi, OpenCode or Grok"): the four always, then any other tool the daemon
- *  lists — Grok only when it is installed (lib/buildApp decodeCodingTools). */
+ *  lists — Grok and Antigravity only when installed (decodeCodingTools). */
 export function toolChoiceWords(tools?: readonly CodingTool[] | null): string {
   const known = new Set(ALWAYS_NAMED.map(([id]) => id));
   const names = [
@@ -546,6 +547,7 @@ export function toolVendor(tool: string): string {
   if (tool === "pi") return "the model provider you chose in Pi";
   if (tool === "opencode") return "the model provider you chose in OpenCode";
   if (tool === "grok") return "xAI";
+  if (tool === "antigravity") return "Google";
   return "the coding tool's model provider";
 }
 
@@ -779,7 +781,7 @@ export function accountWords(s: Pick<CodeSession, "account" | "accountName" | "t
  *  Pi by name (a list not read yet). */
 export function signsInItself(tool: string, tools?: readonly CodingTool[] | null): boolean {
   const t = tools?.find((x) => x.id === tool);
-  return t ? t.ownSignIn : tool === "pi" || tool === "opencode";
+  return t ? t.ownSignIn : tool === "pi" || tool === "opencode" || tool === "antigravity";
 }
 
 /** "Pi's own sign-in". */
@@ -797,11 +799,18 @@ export const OPENCODE_SIGN_IN_TITLE =
   "OpenCode signs in by itself, per provider: to change it, run opencode auth login in a Build terminal. " +
   "Iron Jarvis's accounts do not apply.";
 
+/** v1.439.0: Antigravity signs in by itself, with its own Google sign-in. */
+export const ANTIGRAVITY_SIGN_IN_TITLE =
+  "Antigravity signs in by itself, with its own Google sign-in: to change it, run agy in a Build terminal and " +
+  "sign in there. Iron Jarvis's accounts do not apply.";
+
 /** v1.413.0: the own-sign-in title for a tool — the daemon's words when it
- *  sent them, else the tool's own (Pi's for Pi, OpenCode's for OpenCode). */
+ *  sent them, else the tool's own (Pi's for Pi, OpenCode's for OpenCode,
+ *  v1.439.0: Antigravity's for Antigravity). */
 export function ownSignInTitle(tool: string, tools?: readonly CodingTool[] | null): string {
   const hint = tools?.find((x) => x.id === tool)?.signInHint;
   if (hint) return hint;
+  if (tool === "antigravity") return ANTIGRAVITY_SIGN_IN_TITLE;
   return tool === "opencode" ? OPENCODE_SIGN_IN_TITLE : OWN_SIGN_IN_TITLE;
 }
 

@@ -20,7 +20,7 @@
 
 export interface CodeViewOffer {
   paneId: string;
-  /** "Claude Code", "Codex", "Pi", "OpenCode" or "Grok". */
+  /** "Claude Code", "Codex", "Pi", "OpenCode", "Grok" or "Antigravity". */
   toolName: string;
 }
 
@@ -35,6 +35,8 @@ function toolOf(cli: unknown): string | null {
   if (c === "opencode") return "OpenCode";
   // v1.416.0: Grok (exactly "grok").
   if (c === "grok") return "Grok";
+  // v1.439.0: Antigravity (its program is exactly "agy").
+  if (c === "agy") return "Antigravity";
   return null;
 }
 
