@@ -799,7 +799,19 @@ class ClaudeDriver(Driver):
             out += ["--model", self.model]
         if self.effort:
             out += ["--effort", self.effort]
-        out += ["--resume", session_id] if resume else ["--session-id", session_id]
+        # v1.441.0 (hosted/branching): a branch made here, or a rewind not yet
+        # sent. Measured on 2.1.316: ``--resume H --fork-session --session-id
+        # N`` makes the NEW conversation N with its first message, and
+        # ``--resume-session-at <entry>`` keeps H's messages up to that chain
+        # entry only.
+        fork_from = str(getattr(self, "fork_from", "") or "")
+        resume_at = str(getattr(self, "resume_at", "") or "")
+        if fork_from:
+            out += ["--resume", fork_from, "--fork-session", "--session-id", session_id]
+        else:
+            out += ["--resume", session_id] if resume else ["--session-id", session_id]
+        if resume_at and (fork_from or resume):
+            out += ["--resume-session-at", resume_at]
         return out
 
     # -- control requests -------------------------------------------------------

@@ -523,6 +523,9 @@ export interface CodeSession {
    *  this session (all off until the user ticks one). Absent from an older
    *  Iron Jarvis and from a conversation found on disk. */
   jarvisTools?: JarvisTools;
+  /** v1.441.0: the row's "Branch" — the tool can branch a conversation and
+   *  this session has one. Absent from an older Iron Jarvis (no Branch). */
+  canBranch?: boolean;
 }
 
 /** v1.422.0 (B4): one program a Code-view tool started that serves. */
@@ -697,6 +700,7 @@ export function decodeCodeSession(raw: unknown): CodeSession | null {
           },
         }
       : {}),
+    ...(typeof r.can_branch === "boolean" ? { canBranch: r.can_branch } : {}),
   };
 }
 
@@ -1375,7 +1379,8 @@ export type QuestionEvent = Extract<CodeEvent, { type: "question" }>;
 export type OpenAsk = ApprovalEvent | QuestionEvent;
 
 export type ConvItem =
-  | { kind: "user"; key: string; text: string; files: string[]; carry?: CarryMark }
+  /** v1.441.0: `at` names the message (Branch from here / Rewind to here). */
+  | { kind: "user"; key: string; text: string; files: string[]; carry?: CarryMark; at?: string }
   | { kind: "text"; key: string; text: string; done: boolean }
   /** v1.418.0 (C4.3): `live` while the thinking is the newest thing the
    *  running turn said; `seconds` = how long it thought (null = unknown). */
@@ -1570,7 +1575,7 @@ export function foldConversation(
         if (ev.model) model = ev.model;
         break;
       case "user":
-        items.push({ kind: "user", key: key("u"), text: ev.text, files: ev.files, ...(ev.carry ? { carry: ev.carry } : {}) });
+        items.push({ kind: "user", key: key("u"), text: ev.text, files: ev.files, at: ev.at, ...(ev.carry ? { carry: ev.carry } : {}) });
         planAt = null;
         settled = false;
         turnAt = ev.at;

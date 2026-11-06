@@ -21,6 +21,7 @@ import {
   FilePlus,
   Globe,
   ListTodo,
+  MoreHorizontal,
   Plug,
   Search,
   SquareTerminal,
@@ -39,6 +40,16 @@ import { CliSignInPress } from "@/components/connections/CliSignInPress";
 import { HARNESS_REPLY_PROSE, HARNESS_USER_BUBBLE } from "@/components/harness/harnessLook";
 import { SentAttachments } from "@/components/harness/HarnessAttachments";
 import { REPLY_ACTION_BTN } from "@/components/chat/replyActions";
+import { ConfirmButton } from "@/components/ui";
+import {
+  BRANCH_FROM_HERE,
+  BRANCH_FROM_HERE_TITLE,
+  MESSAGE_MENU_LABEL,
+  REWIND_CONFIRM,
+  REWIND_TO_HERE,
+  REWIND_TO_HERE_TITLE,
+  type BranchFacts,
+} from "@/lib/buildAppBranch";
 import {
   CANCEL_WAIT,
   CANCEL_WAIT_TITLE,
@@ -154,6 +165,74 @@ export const codeRowDraws = { items: 0, tools: 0 };
 /** v1.418.0 (C4.4): read one step's whole text back from the session's
  *  record (BuildCodeView supplies it: `GET …/events/{item}`). */
 export type ExpandStep = (item: string) => Promise<ItemText | null>;
+
+/** v1.441.0: what the user's own messages offer (BuildCodeView supplies it
+ *  from the view's `branch`; absent = an older Iron Jarvis, nothing shown). */
+export interface MessageActions {
+  facts: BranchFacts;
+  /** A reply runs (or a press is out): the menu's actions are refused. */
+  busy: boolean;
+  onBranch: (at: string) => void;
+  onRewind: (at: string) => void | Promise<void>;
+}
+
+/** v1.441.0: the ⋯ beside one of the user's own messages — Branch from here,
+ *  Rewind to here (two presses). Only what the tool can do is listed. */
+function MessageMenu({ at, actions }: { at: string; actions: MessageActions }) {
+  const [open, setOpen] = useState(false);
+  const { facts, busy } = actions;
+  if (!facts.forkAt && !facts.rewind) return null;
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        aria-label={MESSAGE_MENU_LABEL}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-testid="code-user-more"
+        onClick={() => setOpen((v) => !v)}
+        className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/user:opacity-100 focus-visible:opacity-100"
+      >
+        <MoreHorizontal size={13} />
+      </button>
+      {open ? (
+        <div role="menu" className="absolute right-0 top-full z-20 w-48 rounded-xl bg-ink-800 p-1 shadow-card">
+          {facts.forkAt ? (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="code-user-branch"
+              disabled={busy}
+              title={busy ? "A reply is running: wait until it ends" : BRANCH_FROM_HERE_TITLE}
+              onClick={() => {
+                setOpen(false);
+                actions.onBranch(at);
+              }}
+              className="flex w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06] disabled:opacity-50"
+            >
+              {BRANCH_FROM_HERE}
+            </button>
+          ) : null}
+          {facts.rewind ? (
+            <div role="menuitem" data-testid="code-user-rewind">
+              <ConfirmButton
+                label={REWIND_TO_HERE}
+                confirmLabel={REWIND_CONFIRM}
+                title={busy ? "A reply is running: wait until it ends" : REWIND_TO_HERE_TITLE}
+                className="w-full justify-start"
+                onConfirm={async () => {
+                  if (busy) return;
+                  setOpen(false);
+                  await actions.onRewind(at);
+                }}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 const ToolStep = memo(function ToolStep({
   tool,
@@ -346,6 +425,7 @@ const Item = memo(function Item({
   toolName,
   facts,
   onExpand,
+  actions,
 }: {
   item: ConvItem;
   folder: string;
@@ -353,6 +433,8 @@ const Item = memo(function Item({
   toolName: string;
   facts?: ReceiptFacts;
   onExpand?: ExpandStep;
+  /** v1.441.0: only on a user message the tool can branch or rewind from. */
+  actions?: MessageActions;
 }) {
   codeRowDraws.items += 1;
   switch (item.kind) {
@@ -372,8 +454,11 @@ const Item = memo(function Item({
       // own SentAttachments); other files by name. A picture alone is a
       // message (no empty bubble).
       return (
-        <div data-testid="code-user" className="flex flex-col items-end gap-1.5">
-          {item.text.trim() ? <div className={HARNESS_USER_BUBBLE}>{item.text}</div> : null}
+        <div data-testid="code-user" className="group/user flex flex-col items-end gap-1.5">
+          <div className="flex max-w-full items-start justify-end gap-1">
+            {actions && item.at ? <MessageMenu at={item.at} actions={actions} /> : null}
+            {item.text.trim() ? <div className={HARNESS_USER_BUBBLE}>{item.text}</div> : null}
+          </div>
           {item.files.length ? <SentAttachments paths={item.files} /> : null}
         </div>
       );
@@ -593,6 +678,7 @@ export const CodeConversation = memo(function CodeConversation({
   model = "",
   account = "",
   onExpand,
+  messageActions,
 }: {
   items: readonly ConvItem[];
   folder: string;
@@ -619,6 +705,8 @@ export const CodeConversation = memo(function CodeConversation({
   account?: string;
   /** v1.418.0 (C4.4): read a step's whole text back (`GET …/events/{item}`); absent = no "Show all" press. */
   onExpand?: ExpandStep;
+  /** v1.441.0: Branch from here / Rewind to here (absent = none offered). */
+  messageActions?: MessageActions | null;
 }) {
   const facts = useMemo(() => ({ model, account }), [model, account]);
   let lastError = -1;
@@ -643,6 +731,11 @@ export const CodeConversation = memo(function CodeConversation({
           toolName={toolLabel(tool)}
           facts={facts}
           onExpand={onExpand}
+          actions={
+            messageActions && item.kind === "user" && !item.carry && item.at && messageActions.facts.at.has(item.at)
+              ? messageActions
+              : undefined
+          }
         />
       ))}
     </div>
