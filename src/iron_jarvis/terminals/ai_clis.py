@@ -298,7 +298,7 @@ def _extra_bin_dirs() -> list[Path]:
             # install never sees (same driving case as ~/.grok/bin above).
             dirs.append(Path(local) / "pi-node" / "current")
             # v1.439.0: Google's Antigravity installer puts agy.exe in
-            # %LOCALAPPDATA%gyin (its install.ps1) and adds it to the USER
+            # %LOCALAPPDATA%\agy\bin (its install.ps1) and adds it to the USER
             # PATH, which a daemon started before the install never sees.
             dirs.append(Path(local) / "agy" / "bin")
     return [d for d in dirs if d.is_dir()]

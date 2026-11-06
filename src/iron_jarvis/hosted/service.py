@@ -2361,10 +2361,11 @@ class HostedService:
         (the first message names it otherwise). Off the loop; never raises."""
         async def save() -> None:
             try:
-                row = await asyncio.to_thread(store.get, self.engine, live.sid)
-                if row is not None and not (row.title or "").strip() and title.strip():
-                    await asyncio.to_thread(store.update, self.engine, live.sid, title=clip(title, 120))
-                    live.title = clip(title, 120)
+                kept = clip(title, 120)
+                # (review) checked and written in one transaction: a title the
+                # user set meanwhile is never replaced.
+                if await asyncio.to_thread(store.set_title_if_empty, self.engine, live.sid, kept):
+                    live.title = kept
             except Exception:  # noqa: BLE001 — a title is never worth a failure
                 log.debug("could not keep a Code-view session's title", exc_info=True)
 

@@ -345,12 +345,21 @@ def model_rows(config: Any, models: Any = None) -> tuple[list[dict[str, Any]], s
     level = str(level_opt.get("currentValue") or "")
     listed = [str(v.get("modelId") or "") for v in ((models or {}).get("availableModels") or [])
               if isinstance(v, dict)] if isinstance(models, dict) else []
+    bases = [str(v.get("value")) for v in model_opt.get("options") or [] if isinstance(v, dict) and v.get("value")]
+    # (review) Each ``<base>-<level>`` id belongs to the LONGEST base it
+    # starts with: "gemini-3.8-flash-lite-high" is flash-lite's, never a
+    # "lite-high" level of "gemini-3.8-flash".
+    owner: dict[str, str] = {}
+    for mid in listed:
+        fits = [b for b in bases if mid.startswith(b + "-")]
+        if fits:
+            owner[mid] = max(fits, key=len)
     rows: list[dict[str, Any]] = []
     for v in model_opt.get("options") or []:
         if not isinstance(v, dict) or not v.get("value"):
             continue
         base = str(v.get("value"))
-        levels = [mid[len(base) + 1:] for mid in listed if mid.startswith(base + "-")]
+        levels = [mid[len(base) + 1:] for mid in listed if owner.get(mid) == base]
         if base == current and level_opt:
             levels = _values(level_opt) or levels
         rows.append({"id": clip(base, 120), "label": clip(v.get("name") or base, 120),
@@ -521,6 +530,11 @@ class AntigravityDriver(AcpDriver):
         self._latest: int | None = None
         #: Notes sent while it works, in order: (ref, text), until echoed.
         self._notes: list[tuple[str, str]] = []
+        #: (review) The message's own words, and whether Antigravity has echoed
+        #: them yet: it echoes EVERY prompt in order (measured), the message's
+        #: first — an echo of the message is never read as a note's.
+        self._message_words = ""
+        self._message_echoed = False
         #: Antigravity said the reply failed (its text); its log is read next.
         self._failed_said = ""
         self._fail_read: asyncio.Future | None = None
@@ -749,6 +763,8 @@ class AntigravityDriver(AcpDriver):
         self._usage = {"input": 0, "output": 0, "cache_read": 0}
         self._pending.clear()
         self.turn_started()
+        self._message_words = _words(blocks[0].get("text"))
+        self._message_echoed = False
         rid = self._start_prompt(blocks)
         # Named the turn's LAST prompt before it is written: an answer that
         # comes back during the write must end the turn.
@@ -824,8 +840,13 @@ class AntigravityDriver(AcpDriver):
             if self._loading or not self.turn_open:
                 return
             said = _words((u.get("content") or {}).get("text") if isinstance(u.get("content"), dict) else "")
+            if said and not self._message_echoed and _echoes(said, self._message_words):
+                # The message's own echo (it comes first): a note that
+                # shares its opening words is not read by it.
+                self._message_echoed = True
+                return
             for i, (ref, sent) in enumerate(self._notes):
-                if said and sent and (said == sent or said.startswith(sent) or sent.startswith(said)):
+                if said and sent and _echoes(said, sent):
                     del self._notes[i]
                     self.note_read(ref)
                     break
@@ -936,3 +957,8 @@ class AntigravityDriver(AcpDriver):
 
 def _words(text: Any) -> str:
     return " ".join(str(text or "").split())
+
+
+def _echoes(said: str, sent: str) -> bool:
+    """Is ``said`` (an echo, maybe one chunk of it) the prompt ``sent``?"""
+    return bool(said and sent) and (said == sent or said.startswith(sent) or sent.startswith(said))
