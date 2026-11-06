@@ -100,6 +100,13 @@ async def test_an_unreadable_marker_never_lets_an_older_cut_carry_on(home, app, 
     row = _row(app, work)
     _log(home, row.id, _graceful())
     S.reconcile_cut_turns(home)
+    # v1.441.0 (integration I2): the restart that rewrites the marker comes
+    # AFTER the cut. On the real clock the two could land in the same 15.6 ms
+    # tick, and the rule (strict ``cut_at < since``) then read the cut as
+    # "at the marker" and carried it on (about 1 run in 3). Step the clock the
+    # marker is written by to a moment after the cut, as a real restart is.
+    cut_at = CO._parse(CO.read_cut(home, row.id)["cut_at"])
+    monkeypatch.setattr(CO, "CLOCK", lambda: cut_at + timedelta(seconds=1))
     CO.since_path(home).parent.mkdir(parents=True, exist_ok=True)
     CO.since_path(home).write_text("{not json", encoding="utf-8")
     svc = S.service_for(app.state.platform)

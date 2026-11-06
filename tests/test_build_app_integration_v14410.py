@@ -101,3 +101,31 @@ async def test_the_plan_card_is_resent_with_the_same_id_and_full_access(tmp_path
         assert _approvals(saved[part]["events"]) == _approvals(got[part]["events"]), part
         assert saved[part]["pending"] == got[part]["pending"], part
     assert _approvals(saved["stream"]) == _approvals(got["stream"])
+
+
+# --------------------------------------------------------------------------- #
+# I2: the unreadable-marker test no longer depends on the clock ticking
+# --------------------------------------------------------------------------- #
+async def test_the_unreadable_marker_test_holds_when_the_cut_and_the_marker_share_a_tick(tmp_path, monkeypatch):
+    """``test_an_unreadable_marker_never_lets_an_older_cut_carry_on`` failed
+    about 1 run in 3: the cut and the rewritten marker landed in the same
+    15.6 ms tick. Here both clocks are FROZEN to one instant (the tick at its
+    worst); the test must still pass — it steps the marker's clock itself."""
+    from datetime import datetime, timezone
+
+    from iron_jarvis.hosted import carry_on as CO
+    from iron_jarvis.hosted import events as E
+    from tests import test_build_app_carry_followups_v14220 as F
+
+    t = datetime(2026, 11, 6, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(E, "now_iso", lambda: t.isoformat())
+    monkeypatch.setattr(CO, "now_utc", lambda: t)
+    monkeypatch.setattr(CO, "CLOCK", lambda: t)
+    app = create_app(str(tmp_path / "fresh"))
+    home = Path(app.state.platform.config.home)
+    work = tmp_path / "w"
+    work.mkdir()
+    try:
+        await F.test_an_unreadable_marker_never_lets_an_older_cut_carry_on(home, app, work, monkeypatch)
+    finally:
+        await stop_all(app)
