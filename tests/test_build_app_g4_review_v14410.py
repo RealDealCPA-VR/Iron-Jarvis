@@ -302,7 +302,7 @@ def test_grok_records_that_carry_mcp_config_never_reach_the_imported_conversatio
         "ts": "2026-11-06T10:00:00Z", "type": "mcp_server_starting", "target": f"https://h/{KEY}"}) + "\n" + json.dumps({
         "ts": "2026-11-06T10:00:01Z", "type": "turn_started", "turn_number": 0}) + "\n", encoding="utf-8")
     H.forget_transcripts()
-    got = H.transcript_events("grok", str(tmp_path), "C:\work", "019a-sess")
+    got = H.transcript_events("grok", str(tmp_path), r"C:\work", "019a-sess")
     assert [e["type"] for e in got] == ["user", "text_done", "tool"]
     assert got[0]["text"] == "list my tables"
     assert KEY not in json.dumps(got)

@@ -17,9 +17,10 @@ stand-in provider on 127.0.0.1, no model call):
 * It reads the same config files and sign-ins an ACP session does (plus
   OpenCode's built-in free models). With ``OPENCODE_DISABLE_MODELS_FETCH=1``
   (set for THIS reading process only) it reads OpenCode's own models cache and
-  never fetches models.dev — the background read reaches no network of its
-  own; a session's own OpenCode still refreshes that cache the way it always
-  does.
+  never fetches models.dev; a session's own OpenCode still refreshes that
+  cache the way it always does. That is the ONLY network turned off: like any
+  OpenCode run, ``opencode models`` loads the plugins the user's OpenCode
+  config names, so it may download and install a plugin the config lists.
 
 WHEN: in the background (never on a request's path), one read at a time
 (single-flight per file), when nothing was read yet, when the last read is
