@@ -14,7 +14,11 @@ lane and pins its verdict (Part B, "What done means"):
   once" through ``POST /chat/approvals/{id}``; a secure card's value is posted
   to ``POST /config/secret`` the way the dashboard does; and the change LANDS
   in the scratch home (a setting saved, a project row, a night task, a
-  schedule, a preference, an agent, a destination…). A vendor's own step that
+  schedule, a preference, an agent, a destination…). The cards shown are
+  exactly the planned calls in ``CARDED`` (written out, never read from the
+  permission table), and a credential the row hands over is in the encrypted
+  vault only: no byte of the scratch home, nothing shown to the model, no
+  frame and no ledger line holds it in the clear. A vendor's own step that
   truly needs its page (signing in through the vendor's login, a Google or
   Slack developer app) may remain as a door in the same reply, and every door's
   href is a real dashboard place today.
@@ -30,7 +34,8 @@ Each row is checked twice: through the arming functions both lanes call
 END TO END through the stream lane on a scratch home (``create_app(tmp)``).
 Nothing here leaves this machine (the ``no_network`` guard), Iron-Proxy is an
 in-memory stand-in, Notion is never called, an MCP app is a local child, and
-another program's config is a fixture under a scratch APPDATA.
+another program's config is a fixture under a scratch APPDATA, and a row
+that starts any program but git or this Python (a real CLI) fails.
 
 SCORE (target after Wave 7): 23 done, 1 door, 6 honest.
 On this branch (before Wave 7 groups A and C merge): 16 done, 1 door, 2
@@ -52,6 +57,8 @@ approval level under which a test run needs no card, ``core/auto_approve``).
 from __future__ import annotations
 
 import json
+import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -98,6 +105,19 @@ WRITERS = frozenset({
 })
 SETTINGS = frozenset({"config_set", "config_change", "config_change_protected", "config_secret"})
 
+#: The planned calls that must stop on an approval card in the default
+#: posture ("Ask first"); every other planned call must run with NO card.
+#: Written out here on purpose, never read from the product's permission table:
+#: a tool that silently became allow-tier (or a lane that stopped carding an
+#: ask-tier tool, the v1.270.1 shape) must turn a row red, not move with it.
+CARDED = frozenset({
+    "config_change", "config_change_protected",
+    "project_create", "agent_create", "app_connect", "app_import",
+    "night_task_add", "build_team_set", "build_defaults_set",
+    "account_add", "memory_base_add", "model_server_add", "model_server_default",
+    "channel_connect", "reflex_create", "schedule_create", "change_undo",
+})
+
 
 # =========================================================================== #
 # The rows
@@ -121,6 +141,9 @@ class Row:
     secrets: dict[str, str] = field(default_factory=dict)
     #: Doors the reply must carry (exact entries).
     doors: list[dict] = field(default_factory=list)
+    #: Credentials besides ``secrets`` that the row hands Iron Jarvis another
+    #: way (an imported config's token): never in the clear anywhere either.
+    never_seen: tuple = ()
     #: honest rows: the not-offered id ("" = any line the request matches).
     honest_id: str = ""
     #: honest rows: writers that are real neighbours and may be armed.
@@ -182,7 +205,6 @@ def _swap_to_local_child(monkeypatch, cid: str):
     """An MCP app's Directory card launched by a REAL local child (no npx, no
     network); only the launch target changes."""
     from tests.test_connect_in_chat_v13510 import FIXTURE, _swap_connector
-    import sys
 
     return _swap_connector(monkeypatch, cid, command=sys.executable, args=[FIXTURE])
 
@@ -398,6 +420,12 @@ def _s_share(app, tmp, monkeypatch) -> dict:
     home = tmp / "claude-home"
     home.mkdir()
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    # The user's own home too (the v1.306.0 rule): nothing this row turns on
+    # may resolve to the real ~/.claude, now or after the test.
+    user = tmp / "user"
+    user.mkdir()
+    for var in ("USERPROFILE", "HOME"):
+        monkeypatch.setenv(var, str(user))
     monkeypatch.setattr(share, "_cli_found", lambda spec: True)
     return {}
 
@@ -524,6 +552,7 @@ ROWS: list[Row] = [
         honest_id="another_computer", may_arm=SETTINGS),
     Row(14, "Add the QuickBooks MCP server I use in Claude Desktop.", "done",
         plan=[Call("app_import", {"name": "quickbooks", "source": "claude-desktop"})],
+        never_seen=("qb-token-v14420-walkthrough",),
         setup=_s_quickbooks, lands=_l_quickbooks),
     Row(15, "Stop asking me before you run tests.", "done",
         plan=[Call("config_change_protected", {"key": "device.approval_mode", "value": "auto"})],
@@ -628,12 +657,15 @@ class _Scripted:
         self.systems: list[str] = []
         self.missing: list[str] = []
         self.called: list[str] = []
+        #: Everything the lane showed the model, serialised (system + messages).
+        self.shown: list[str] = []
 
     async def __call__(self, *, provider=None, model=None, system="", messages=None, tools=None,
                        session_id=None, task_class=None, **kw):
         offered = _names(tools)
         self.offered.append(offered)
         self.systems.append(str(system or ""))
+        self.shown.append(str(system or "") + json.dumps(messages, default=str))
         i = len(self.called)
         if i < len(self.plan) and not self.missing:
             call = self.plan[i]
@@ -701,6 +733,57 @@ def _fresh_pack_records():
         store.clear()
 
 
+#: The only programs a walkthrough row may start: git (the scratch repositories
+#: and Iron Jarvis's own reads of them) and this interpreter (an MCP app's local
+#: child). Anything else is a REAL program on this PC (found live: building the
+#: model menu for ``build_team_set`` ran the owner's own ``grok models``).
+_ALLOWED_PROGRAMS = {"git", Path(sys.executable).stem.lower()}
+
+
+@pytest.fixture(autouse=True)
+def _no_real_programs(monkeypatch):
+    """No real CLI on this PC is ever started by a row: the Grok CLI is not
+    found (the catalog would run ``grok models`` otherwise), and every child
+    process is checked at its start — one that is not git or this Python fails
+    the test, naming it."""
+    import subprocess
+
+    from iron_jarvis.providers import cli_detect
+
+    monkeypatch.setattr(cli_detect, "_grok_binary", lambda: None)
+    started: list[str] = []
+    real_init = subprocess.Popen.__init__
+
+    def init(self, args, *a, **kw):
+        argv = [args] if isinstance(args, (str, bytes, os.PathLike)) else list(args)
+        name = Path(os.fsdecode(argv[0])).stem.lower() if argv else ""
+        if name not in _ALLOWED_PROGRAMS:
+            started.append(os.fsdecode(argv[0]))
+        return real_init(self, args, *a, **kw)
+
+    monkeypatch.setattr(subprocess.Popen, "__init__", init)
+    yield
+    assert started == [], f"a row started a real program on this PC: {started}"
+
+
+@pytest.fixture(autouse=True)
+def _no_lingering_profile_share():
+    """``profile.share`` keeps ONE process-wide service (the newest app's). Row
+    25 turns sharing with Claude Code ON in its scratch home; left current, a
+    later test on this worker that saves a preference without building an app
+    (``notify_changed``) would re-render it AFTER the scratch environment was
+    put back, i.e. into the real ``~/.claude/CLAUDE.md``. Every app this file
+    builds has its share closed and the previous one put back."""
+    from iron_jarvis.profile import share
+
+    before = share._current
+    yield
+    made = share._current
+    if made is not None and made is not before:
+        made.close()
+    share._current = before
+
+
 @pytest.fixture(scope="module")
 def d(tmp_path_factory):
     app = create_app(str(tmp_path_factory.mktemp("walk-arming") / "home"))
@@ -751,6 +834,27 @@ async def _run(row: Row, tmp_path: Path, monkeypatch) -> tuple[Any, SimpleNamesp
     return app, ctx, done, model
 
 
+def _never_in_the_clear(app, model: "_Scripted", done: dict, values) -> None:
+    """A credential the row handed Iron Jarvis (a secure card's value, an
+    imported config's token) is in the encrypted vault ONLY: never in a byte of
+    the scratch home in the clear (the database and its WAL with every ledger
+    and event row, config.toml, any other file), never in what the lane showed
+    the model, never in a frame of the turn, never in the change ledger."""
+    home = Path(app.state.platform.config.home)
+    files = [f for f in home.rglob("*") if f.is_file()]
+    assert any(f.name.startswith("ironjarvis.db") for f in files), "the scan reads the database"
+    ledger = TestClient(app).get("/config/ledger").text
+    shown = " ".join(model.shown)
+    frames = json.dumps(done["_frames"], default=str)
+    for value in values:
+        raw = value.encode("utf-8")
+        for f in files:
+            assert raw not in f.read_bytes(), f"{value!r} is in the clear in {f.relative_to(home)}"
+        assert value not in shown, f"{value!r} was shown to the model"
+        assert value not in frames, f"{value!r} is in the turn's frames"
+        assert value not in ledger, f"{value!r} is in the change ledger"
+
+
 def _doors_are_real(done: dict) -> None:
     for door in done.get("doors") or []:
         assert _resolves(door["href"]), f"a door to a place that does not exist: {door}"
@@ -777,7 +881,14 @@ async def test_a_done_row_finishes_in_chat_and_the_change_lands(row, tmp_path, m
             r = client.post("/config/secret", json={"name": name, "value": value})
             assert r.status_code == 200, r.text
             assert value not in r.text
-            assert value not in json.dumps(done["_frames"], default=str)
+        _never_in_the_clear(app, model, done, [*row.secrets.values(), *row.never_seen])
+        if not row.waits:
+            # Gated on the row being pinned: a strict xfail that also failed
+            # here would stay quietly red after its builder lands; once the mark
+            # is taken off, this check applies.
+            want = [c.tool for c in row.plan if c.tool in CARDED]
+            got = [c.get("tool") for c in done["_cards"]]
+            assert got == want, f"request {row.n}: approval cards {got}, expected {want}"
         _doors_are_real(done)
         for want in row.doors:
             assert want in (done.get("doors") or []), f"request {row.n}: missing door {want}; got {done.get('doors')}"
