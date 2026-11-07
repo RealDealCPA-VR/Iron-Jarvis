@@ -1,4 +1,4 @@
-"""The gate runs as more, smaller jobs at once (v1.445.2).
+"""The gate runs as more, smaller jobs at once (v1.446.1).
 
 A release waited for its slowest job: six Python shards of ~17-23 min and ONE
 vitest job of ~18 min. Now twelve Python shards and three vitest parts run at

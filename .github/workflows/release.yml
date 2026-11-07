@@ -119,7 +119,7 @@ jobs:
   # daemon + dashboard + desktop; the gate is all three or it is theatre. This
   # job is the dashboard + add-on + desktop part; `python` is the daemon's.
   #
-  # v1.445.2: vitest runs as THREE parts at once (`--shard=N/3`, vitest's own
+  # v1.446.1: vitest runs as THREE parts at once (`--shard=N/3`, vitest's own
   # split by file): one job took ~18 min, the slowest of the gate once Python
   # was split twelve ways. Each part builds the add-on (the side-panel runtime
   # test executes it); the type check and desktop checks run in part 1 only.
@@ -127,7 +127,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.publish == 'true'
     runs-on: windows-latest # same runner the product ships for
-    timeout-minutes: 30 # ~6-8 min expected per part (v1.445.2; ~18 in one)
+    timeout-minutes: 30 # ~6-8 min expected per part (v1.446.1; ~18 in one)
     strategy:
       fail-fast: false # one red part must not hide what the others found
       matrix:
@@ -200,7 +200,7 @@ jobs:
             [ -f "$f" ] && node --check "$f"
           done
 
-  # The Python suite, split by test FILE across twelve runners (six until v1.445.2)
+  # The Python suite, split by test FILE across twelve runners (six until v1.446.1)
   # (scripts/ci_shards.py: every file in exactly one shard, balanced by the
   # measured seconds in scripts/ci_test_durations.json). One shard also checks
   # that pytest collects no test file the plan missed, so a test can never
@@ -209,7 +209,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.publish == 'true'
     runs-on: windows-latest # mirrors the packaged product (ConPTY terminals etc.)
-    timeout-minutes: 30 # ~10-12 min expected per shard of 12 (v1.445.2; ~17-23 of 6)
+    timeout-minutes: 30 # ~10-12 min expected per shard of 12 (v1.446.1; ~17-23 of 6)
     strategy:
       fail-fast: false # one red shard must not hide what the others found
       matrix:

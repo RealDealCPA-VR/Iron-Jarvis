@@ -64,7 +64,7 @@ def test_both_workflows_retry_a_failed_python_test_once_and_never_a_hang():
 def test_both_workflows_retry_a_failed_dashboard_test_once_and_list_it():
     for workflow, job in (("release.yml", "suite"), ("tests.yml", "dashboard")):
         run = _step(workflow, job, "pnpm test")
-        # v1.445.2: each vitest part runs its share (`--shard=N/3`).
+        # v1.446.1: each vitest part runs its share (`--shard=N/3`).
         assert run.strip() == (
             "pnpm test --retry=1 --reporter=default --reporter=github-actions --shard=${{ matrix.part }}/3"
         ), workflow

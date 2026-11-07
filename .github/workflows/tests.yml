@@ -29,7 +29,7 @@ permissions:
 # pytest-timeout (`timeout` in pyproject.toml); this is the backstop behind it.
 # tests/test_gate_timeouts_v1286.py fails if a job is added without one.
 jobs:
-  # v1.370.3: the Python suite runs as shards at once (twelve since v1.445.2), split by test FILE
+  # v1.370.3: the Python suite runs as shards at once (twelve since v1.446.1), split by test FILE
   # (scripts/ci_shards.py, the same plan the release gate uses; every file in
   # exactly one shard). One runner took ~60 min; a shard takes ~10-15.
   backend:
@@ -80,7 +80,7 @@ jobs:
   dashboard:
     runs-on: windows-latest
     timeout-minutes: 30
-    # v1.445.2: three vitest parts at once, as in the release gate; the type
+    # v1.446.1: three vitest parts at once, as in the release gate; the type
     # check and the production build run in part 1 only.
     strategy:
       fail-fast: false
