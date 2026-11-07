@@ -149,6 +149,7 @@ import {
   closeToolWords,
   decodeCommands,
   modelGroups,
+  oneMillionLabel,
   slashMenuRows,
   signsInItself,
   sessionTitle,
@@ -1929,7 +1930,7 @@ function SessionPane({
                 )}
                 {session.model && !(tool?.models ?? []).some((m) => m.id === session.model) ? (
                   <option value={session.model}>
-                    {toolName} · {session.model}
+                    {toolName} · {oneMillionLabel(session.model, tool?.models ?? []) || session.model}
                   </option>
                 ) : null}
               </select>

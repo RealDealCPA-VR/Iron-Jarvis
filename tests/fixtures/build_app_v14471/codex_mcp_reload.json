@@ -1,0 +1,23 @@
+{
+ "recorded": "codex-cli 0.157.0 app-server --listen stdio://; scratch CODEX_HOME, signed out, no model call; config.toml changed between reloads (tiny on; then tinyoff enabled=false + tiny2 added; then tiny2 taken out). Thread ids masked as THR.",
+ "reload_request": {"jsonrpc": "2.0", "id": 3, "method": "config/mcpServer/reload", "params": null},
+ "reload_answer": {"id": 3, "result": {}},
+ "after_adding_tiny2_and_tinyoff": [
+  {"method": "mcpServer/startupStatus/updated", "params": {"threadId": "THR", "name": "tiny2", "status": "starting", "error": null, "failureReason": null}},
+  {"method": "mcpServer/startupStatus/updated", "params": {"threadId": "THR", "name": "tiny2", "status": "ready", "error": null, "failureReason": null}},
+  {"method": "mcpServer/startupStatus/updated", "params": {"threadId": "THR", "name": "tiny", "status": "ready", "error": null, "failureReason": null}}
+ ],
+ "status_list_after_adding": {"id": 4, "result": {"data": [
+  {"name": "tiny", "runtimeStatus": "connected", "pluginId": null, "httpOrigin": null, "authStatus": "unsupported", "toolsError": null},
+  {"name": "tiny2", "runtimeStatus": "connected", "pluginId": null, "httpOrigin": null, "authStatus": "unsupported", "toolsError": null},
+  {"name": "tinyoff", "runtimeStatus": "disabled", "pluginId": null, "httpOrigin": null, "authStatus": "unsupported", "toolsError": null}
+ ], "nextCursor": null}},
+ "after_taking_tiny2_out": [
+  {"method": "mcpServer/startupStatus/updated", "params": {"threadId": "THR", "name": "tiny", "status": "ready", "error": null, "failureReason": null}}
+ ],
+ "status_list_after_taking_out": {"id": 6, "result": {"data": [
+  {"name": "tiny", "runtimeStatus": "connected", "pluginId": null, "httpOrigin": null, "authStatus": "unsupported", "toolsError": null}
+ ], "nextCursor": null}},
+ "a_bad_server_after_reload": {"method": "mcpServer/startupStatus/updated", "params": {"threadId": "THR", "name": "dead", "status": "failed", "error": "MCP client for `dead` failed to start: MCP startup failed: program not found", "failureReason": null}},
+ "schema": {"config/mcpServer/reload": {"params": {"type": "null"}, "result": "McpServerRefreshResponse {}"}, "McpServerConnectionStatus": ["notStarted", "starting", "connected", "authenticationRequired", "failed", "cancelled", "disabled"], "McpAuthStatus": ["unknown", "unsupported", "notLoggedIn", "bearerToken", "oAuth"]}
+}

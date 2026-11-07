@@ -159,3 +159,13 @@ def register(app: FastAPI, d: Any) -> None:
             return await SC.mcp_action(svc(), sid, server, body.action)
         except S.Refused as r:
             raise HTTPException(status_code=r.status, detail=r.sentence) from None
+
+    @app.post("/build/app/sessions/{sid}/mcp-reload")
+    async def app_mcp_reload(sid: str) -> dict[str, Any]:
+        """v1.447.1: the tool reads its own MCP settings again (Codex's
+        ``config/mcpServer/reload``) — only a tool that offers it, only while
+        no reply runs."""
+        try:
+            return await SC.mcp_reload(svc(), sid)
+        except S.Refused as r:
+            raise HTTPException(status_code=r.status, detail=r.sentence) from None

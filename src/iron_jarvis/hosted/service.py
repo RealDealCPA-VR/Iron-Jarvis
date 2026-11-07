@@ -1417,6 +1417,14 @@ class HostedService:
         the session's folder (OpenCode's list is kept per folder)."""
         rows = (live.driver.commands if (live and live.driver and live.driver.commands)
                 else _kept_commands(harness, folder))
+        if harness == CLAUDE and folder and not (live and live.driver and live.driver.commands):
+            # v1.447.1: nothing read for this folder yet (after a restart) —
+            # one short background ``initialize`` of Claude Code's
+            # (``hosted.claude_catalog``: no hook, no MCP server, no model
+            # call); the menu shows it from the next look.
+            from . import claude_catalog as CCAT
+
+            CCAT.refresh_soon(self.home, lambda: binary_for(CLAUDE), folder)
         if harness == PI:
             # v1.429.0: Pi's own commands (done here, or said why not), then
             # the extensions, templates and skills Pi listed — a session's own

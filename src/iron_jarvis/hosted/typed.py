@@ -214,8 +214,25 @@ def resolve_claude_model(arg: str, rows: list[dict[str, Any]]) -> str | None:
     if not canon:
         return None
     ids = {str(r.get("id") or "").lower(): str(r.get("id") or "") for r in rows if r.get("id")}
-    if want.lower().endswith("[1m]") and (canon + "[1m]").lower() in ids:
+    wants_1m = want.lower().endswith("[1m]")
+    if wants_1m and (canon + "[1m]").lower() in ids:
         return ids[(canon + "[1m]").lower()]
     if canon.lower() in ids:
+        if wants_1m:
+            # v1.447.1: the ``[1m]`` the user typed is KEPT — Claude Code reads
+            # it as the 1M-context version of that model (its picker lists
+            # values such as "claude-fable-5-1[1m]"); it used to be dropped,
+            # so the session ran on the model's plain window. A model the
+            # catalog says has a smaller window is not given one: the words
+            # go to Claude Code as typed, which answers for itself.
+            try:
+                from ..providers import claude_models
+
+                window = claude_models.context_window(canon)
+            except Exception:  # noqa: BLE001 — not known: the user's own words stand
+                window = None
+            if window is not None and window < claude_models.ONE_M:
+                return None
+            return ids[canon.lower()] + "[1m]"
         return ids[canon.lower()]
     return None

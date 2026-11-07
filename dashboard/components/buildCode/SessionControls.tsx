@@ -22,7 +22,9 @@ import { post } from "@/lib/api";
 import {
   BACKGROUND_KIND_WORDS,
   MCP_ACTION_WORDS,
+  MCP_RELOAD_WORDS,
   mcpActionTitle,
+  mcpReloadTitle,
   type BackgroundWork,
   type CodeMcpServer,
 } from "@/lib/codePanes";
@@ -254,5 +256,62 @@ export function McpRowMenu({
         </span>
       ) : null}
     </>
+  );
+}
+
+/** v1.447.1: the whole MCP list's own reload (Codex's
+ *  `config/mcpServer/reload`): one quiet button under the list, refused in
+ *  the daemon's words while a reply runs. */
+export function McpReloadButton({
+  sessionId,
+  toolName,
+  onChanged,
+}: {
+  sessionId: string;
+  toolName: string;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState<{ text: string; tone: "quiet" | "danger" } | null>(null);
+
+  async function reload() {
+    setBusy(true);
+    setSaid(null);
+    try {
+      const res = (await post(`/build/app/sessions/${encodeURIComponent(sessionId)}/mcp-reload`, {})) as {
+        words?: unknown;
+      } | null;
+      const words = typeof res?.words === "string" ? res.words : "";
+      if (words) setSaid({ text: words, tone: "quiet" });
+      onChanged();
+    } catch (e) {
+      setSaid({ text: errText(e), tone: "danger" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        data-testid="code-session-mcp-reload"
+        disabled={busy}
+        title={mcpReloadTitle(toolName)}
+        onClick={() => void reload()}
+        className="rounded-lg px-2 py-1 text-[12px] text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200 disabled:opacity-50"
+      >
+        {busy ? "Reloading…" : MCP_RELOAD_WORDS}
+      </button>
+      {said ? (
+        <p
+          data-testid="code-session-mcp-reload-said"
+          role={said.tone === "danger" ? "alert" : "status"}
+          className={said.tone === "danger" ? "text-[12px] text-tone-danger" : QUIET}
+        >
+          {said.text}
+        </p>
+      ) : null}
+    </div>
   );
 }

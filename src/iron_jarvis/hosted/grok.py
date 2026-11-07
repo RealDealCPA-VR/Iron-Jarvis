@@ -143,6 +143,8 @@ SESSION_ONLY_OPTIONS: frozenset[str] = frozenset({"allow-edits-session"})
 STOPPED_TOOL = "Stopped when you pressed Stop."
 #: xAI prices in USD ticks: 1 USD = 10^10 ticks (``costUsdTicks``).
 USD_TICKS = 10_000_000_000
+#: v1.447.1: how long the background ``_x.ai/mcp/list`` may take.
+MCP_LIST_WAIT_S = 15.0
 MAX_MODELS = 300
 
 #: When set (non-blank), the ONLY Grok home Iron Jarvis READS for its own
@@ -413,6 +415,10 @@ class GrokDriver(AcpDriver):
         #: v1.441.0: Grok's OWN MCP servers as it reported them (names and
         #: states only, ``hosted.tool_setup``); None = it has not said.
         self.reported_mcp: list[dict[str, str]] | None = None
+        #: v1.447.1: every server name Grok's own ``_x.ai/mcp/list`` named
+        #: (None until it answers); the ones it did not push are off.
+        self._mcp_listed: list[str] | None = None
+        self._mcp_list_task: asyncio.Task | None = None
 
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
         # The folder is the process's own working folder; the session is
@@ -468,6 +474,50 @@ class GrokDriver(AcpDriver):
         self.emit(make("session", harness=HARNESS, harness_session_id=sid,
                        model=clip(self._current("model") or self.model, 120), cwd=clip(self.cwd, 500),
                        mode=self.mode))
+
+    def _read_mcp_list(self) -> None:
+        """v1.447.1: the servers Grok's config turns OFF — ``servers_updated``
+        names only the turned-on ones. Grok's own ``_x.ai/mcp/list
+        {sessionId}``, MEASURED on grok 1.0.70 (a scratch ``GROK_HOME`` +
+        ``USERPROFILE``, signed out, no model call;
+        ``tests/fixtures/build_app_v14471/grok_mcp_list.json``) answers
+        ``{result: {servers: [{name, source, type, url | command, args,
+        session?: {enabled}}]}}`` for EVERY configured server: one with
+        ``enabled = false`` carries ``session.enabled: false``; one in
+        ``disabled_mcp_servers`` carries nothing more, but is missing from
+        ``servers_updated`` — so a name it lists that Grok did not push is off.
+        Only each ``name`` is read (the rest is the user's config: URLs with
+        keys, command lines).
+        Asked once per process, in the background, when Grok first pushes its
+        server list (it answers with or without a session — measured); never
+        raises."""
+        if self._mcp_list_task is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def ask() -> None:
+            from .tool_setup import grok_listed, note_servers
+
+            params = {"sessionId": self.session_id} if self.session_id else {}
+            try:
+                res = await self.request("_x.ai/mcp/list", params, timeout=MCP_LIST_WAIT_S)
+            except BaseException:  # noqa: BLE001 — an older Grok, a stopped one: the pushes stand
+                return
+            self._mcp_listed = grok_listed(res)
+            if self._mcp_listed is not None:
+                note_servers(self, self._with_off(self.reported_mcp), attr="reported_mcp")
+
+        self._mcp_list_task = loop.create_task(ask())
+
+    def _with_off(self, rows: list[dict[str, str]] | None) -> list[dict[str, str]] | None:
+        """``rows`` (what Grok pushed) plus each configured server it did not
+        push, as off — only once ``_x.ai/mcp/list`` has answered."""
+        from .tool_setup import grok_with_off
+
+        return grok_with_off(rows, getattr(self, "_mcp_listed", None))
 
     def _current(self, cid: str) -> str:
         return str(_config(self.options, cid).get("currentValue") or "")
@@ -670,7 +720,11 @@ class GrokDriver(AcpDriver):
             fold = grok_servers if method.endswith("servers_updated") else grok_status
             # NOT ``self.mcp_servers``: on an ACP driver that is the list of
             # servers Iron Jarvis hands Grok (its own tools, ``acp_servers``).
-            note_servers(self, fold(self.reported_mcp, params), attr="reported_mcp")
+            # v1.447.1: plus the servers its config turns off (``_with_off``),
+            # asked of Grok once, when it first pushes its list.
+            note_servers(self, self._with_off(fold(self.reported_mcp, params)), attr="reported_mcp")
+            if method.endswith("servers_updated"):
+                self._read_mcp_list()
         elif method == "_x.ai/session/interjection":
             text = str(params.get("text") or "")
             for i, (ref, sent) in enumerate(self._notes):

@@ -147,7 +147,20 @@ TASK_TITLE_CHARS = 200
 TASK_KIND_TITLES = {"helper": "A helper", "command": "A command", "task": "A task"}
 TASK_ALREADY_ENDED = "That task already ended."
 TASK_ALREADY_STOPPING = "That task is already stopping."
-MCP_ACTION_VERBS = {"reconnect": "reconnect", "off": "turn off", "on": "turn on"}
+MCP_ACTION_VERBS = {"reconnect": "reconnect", "off": "turn off", "on": "turn on", "sign_in": "start signing in to"}
+#: v1.447.1: Claude Code's own ``session_writes_lost`` (2.1.319), in words.
+SESSION_WRITES_LOST_WORDS = ("Claude Code could not save {what} because {why}. "
+                             "Free up space before the next message.")
+SESSION_WRITES_LOST_WHAT = {"transcript": "part of this conversation", "global_config": "its settings",
+                            "": "everything"}
+SESSION_WRITES_LOST_WHY = {"ENOSPC": "the disk is full", "EDQUOT": "your disk quota is used up"}
+#: v1.447.1: after a sign-in page is handed to the browser, the server list is
+#: read again every this many seconds (Claude Code reconnects the server by
+#: itself once the browser comes back, and says nothing — measured), at most
+#: :data:`SIGN_IN_WATCH_READS` times, until the server is no longer waiting.
+SIGN_IN_WATCH_S = 5.0
+SIGN_IN_WATCH_READS = 36
+SIGN_IN_ALREADY = "Claude Code says {name} needs no sign-in now."
 #: v1.441.0 (g1): an effort Claude Code took live.
 EFFORT_NOW_WORDS = "Claude Code now works at {level} effort."
 #: v1.441.0 review: taken while a reply RUNS — re-measured on 2.1.316 (a
@@ -232,6 +245,42 @@ def commands_key(harness: str, folder: Any = "") -> str:
     if harness in FOLDER_COMMANDS:
         return f"{harness}@{folder_key(folder)}"
     return harness
+
+
+def command_rows(cmds: Any) -> list[dict[str, str]]:
+    """``initialize``'s ``commands`` as the `/` menu's rows (≤ 300)."""
+    listed = [c for c in (cmds if isinstance(cmds, list) else []) if isinstance(c, dict) and c.get("name")][:300]
+    return [
+        {"name": str(c.get("name") or ""), "description": clip(c.get("description") or "", 200),
+         "argument_hint": clip(c.get("argumentHint") or "", 80)}
+        for c in listed
+    ]
+
+
+def keep_commands(cwd: Any, cmds: Any, *, only_if_unknown: bool = False) -> list[dict[str, str]]:
+    """Keep one ``initialize`` list in :data:`LAST_COMMANDS` and answer its rows.
+
+    v1.441.0 (review P3): kept per FOLDER — the list holds the folder's own
+    commands and skills beside Claude Code's (MEASURED on claude 2.1.316,
+    ``initialize`` in a scratch folder with a ``.claude/commands/projfoo.md``:
+    ``{name: "projfoo", description: "… (project)"}`` with no ``builtin``, and
+    ``builtin: true`` on each of Claude Code's own, bundled skills included;
+    the same on 2.1.319). The bare key keeps only the ``builtin`` rows (the
+    same in every folder); an older Claude Code that marks none keeps its
+    whole list there. ``only_if_unknown`` (v1.447.1, the background read of
+    ``hosted.claude_catalog``): a session's own list, read meanwhile, wins."""
+    listed = [c for c in (cmds if isinstance(cmds, list) else []) if isinstance(c, dict) and c.get("name")][:300]
+    rows = command_rows(listed)
+    if rows:
+        key = commands_key(HARNESS, cwd)
+        if only_if_unknown and LAST_COMMANDS.get(key):
+            return rows
+        LAST_COMMANDS[key] = list(rows)
+        marked = any("builtin" in c for c in listed)
+        builtin = [row for row, c in zip(rows, listed) if c.get("builtin") is True or not marked]
+        if not (only_if_unknown and LAST_COMMANDS.get(HARNESS)):
+            LAST_COMMANDS[HARNESS] = builtin
+    return rows
 
 #: How long a control request (initialize, set_model …) may take.
 CONTROL_TIMEOUT_S = 30.0
@@ -514,6 +563,16 @@ def system_notice(obj: dict[str, Any]) -> str:
         why = _first_words(obj.get("message") or obj.get("decision_reason") or "", 300)
         tool = clip(obj.get("tool_name") or "an action", 80)
         return W.SYS_REFUSED.format(tool=tool, why=why) if why else ""
+    if sub == "session_writes_lost":
+        # v1.447.1: new in claude 2.1.319 (read from its own bundle): said at
+        # exit when the disk (or quota) was full, ``{error_code: ENOSPC |
+        # EDQUOT, lost: ["transcript" | "global_config"], transcript_session_ids?}``.
+        lost = obj.get("lost") if isinstance(obj.get("lost"), list) else []
+        what = (SESSION_WRITES_LOST_WHAT["transcript"] if "transcript" in lost
+                else SESSION_WRITES_LOST_WHAT["global_config"] if "global_config" in lost
+                else SESSION_WRITES_LOST_WHAT[""])
+        why = SESSION_WRITES_LOST_WHY.get(str(obj.get("error_code") or ""), SESSION_WRITES_LOST_WHY["ENOSPC"])
+        return SESSION_WRITES_LOST_WORDS.format(what=what, why=why)
     if sub == "api_error":
         n, most = obj.get("retryAttempt"), obj.get("maxRetries")
         attempt = f" (attempt {n} of {most})" if n and most else f" (attempt {n})" if n else ""
@@ -870,26 +929,7 @@ class ClaudeDriver(Driver):
             res = await self.control("initialize")
         except Exception:  # noqa: BLE001 — the conversation still works without it
             return
-        cmds = res.get("commands") if isinstance(res, dict) else None
-        listed = [c for c in (cmds or []) if isinstance(c, dict) and c.get("name")][:300]
-        self.commands = [
-            {"name": str(c.get("name") or ""), "description": clip(c.get("description") or "", 200),
-             "argument_hint": clip(c.get("argumentHint") or "", 80)}
-            for c in listed
-        ]
-        if self.commands:
-            # v1.441.0 (review P3): kept per FOLDER — the list holds the
-            # folder's own commands and skills beside Claude Code's (MEASURED
-            # on claude 2.1.316, ``initialize`` in a scratch folder with a
-            # ``.claude/commands/projfoo.md``: ``{name: "projfoo", description:
-            # "… (project)"}`` with no ``builtin``, and ``builtin: true`` on
-            # each of Claude Code's own, bundled skills included). The bare key
-            # keeps only the ``builtin`` rows (the same in every folder); an
-            # older Claude Code that marks none keeps its whole list there.
-            LAST_COMMANDS[commands_key(HARNESS, self.cwd)] = list(self.commands)
-            marked = any("builtin" in c for c in listed)
-            LAST_COMMANDS[HARNESS] = [row for row, c in zip(self.commands, listed)
-                                      if c.get("builtin") is True or not marked]
+        self.commands = keep_commands(self.cwd, res.get("commands") if isinstance(res, dict) else None)
 
     # -- the user's side --------------------------------------------------------
     async def _user_message(self, text: str, files: list[str], ref: str) -> dict[str, Any]:
@@ -1131,8 +1171,9 @@ class ClaudeDriver(Driver):
 
     # -- v1.441.0 (g1): the Session tab's controls --------------------------------
     #: The MCP actions this driver offers (``hosted/session_controls``):
-    #: Claude Code's own ``mcp_reconnect`` and ``mcp_toggle``.
-    mcp_actions: frozenset[str] = frozenset({"reconnect", "off", "on"})
+    #: Claude Code's own ``mcp_reconnect`` and ``mcp_toggle``; v1.447.1 its
+    #: ``mcp_authenticate`` (Sign in…).
+    mcp_actions: frozenset[str] = frozenset({"reconnect", "off", "on", "sign_in"})
     #: v1.441.0 (g1): an effort change reaches the RUNNING process
     #: (:meth:`set_effort`); the harness row says so (``effort_live``).
     effort_live = True
@@ -1228,6 +1269,8 @@ class ClaudeDriver(Driver):
         from .tool_setup import claude_servers, note_servers
 
         name = str(server or "")
+        if action == "sign_in":
+            return await self._mcp_sign_in(name)
         if action == "reconnect":
             subtype, req = "mcp_reconnect", {"serverName": name}
         elif action in ("off", "on"):
@@ -1248,10 +1291,75 @@ class ClaudeDriver(Driver):
             raise ControlRefused(f"Claude Code could not {MCP_ACTION_VERBS[action]} {name}: {failed}")
         return {}
 
+    async def _mcp_sign_in(self, name: str) -> dict[str, Any]:
+        """v1.447.1: Claude Code's own ``mcp_authenticate {serverName}`` —
+        MEASURED on claude 2.1.319 (a scratch ``CLAUDE_CONFIG_DIR``,
+        ``--mcp-config`` naming an HTTP server that answers 401 with OAuth
+        discovery and dynamic registration; no model call;
+        ``tests/fixtures/build_app_v14471/claude_mcp_authenticate.json``): it
+        answers ``{authUrl, requiresUserAction: true, callbackExpected: true,
+        redirectScheme: "localhost", state, callbackPort}`` and waits on a
+        loopback callback of its OWN (``http://localhost:<callbackPort>/callback``);
+        when the browser comes back it fetches the token and reconnects the
+        server by itself, saying nothing — ``mcp_status`` then reads it
+        ``connected`` (measured), so the list is read again a few times
+        (:meth:`_watch_sign_in`). A claude.ai connector answers ``{authUrl,
+        requiresUserAction: true, callbackExpected: false}``; one that needs
+        nothing answers ``requiresUserAction: false``; an unknown server is
+        refused ("Server not found: <name>"). Iron Jarvis only hands the page
+        to the user's browser (``codex.safe_sign_in_url``) — it never signs in."""
+        from .codex import safe_sign_in_url
+
+        try:
+            res = await self.control("mcp_authenticate", serverName=name)
+        except ControlRefused as exc:
+            raise ControlRefused(f"Claude Code could not {MCP_ACTION_VERBS['sign_in']} {name}: {exc}") from None
+        res = res if isinstance(res, dict) else {}
+        if res.get("requiresUserAction") is False:
+            self._watch_sign_in(name)
+            return {"words": SIGN_IN_ALREADY.format(name=clip(name, 120))}
+        url = safe_sign_in_url(res.get("authUrl"))
+        if not url:
+            raise ControlRefused("Claude Code did not give a sign-in page Iron Jarvis can open.")
+        self._watch_sign_in(name)
+        return {"url": url}
+
+    def _watch_sign_in(self, name: str) -> None:
+        """Read Claude Code's server list again every :data:`SIGN_IN_WATCH_S`
+        until ``name`` is no longer waiting for a sign-in (Claude Code says
+        nothing when the browser comes back). One watch at a time; never raises."""
+        from .tool_setup import NEEDS_SIGN_IN, claude_servers, note_servers
+
+        old = getattr(self, "_sign_in_watch", None)
+        if old is not None and not old.done():
+            old.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def watch() -> None:
+            for _ in range(SIGN_IN_WATCH_READS):
+                await asyncio.sleep(SIGN_IN_WATCH_S)
+                try:
+                    res = await self.control("mcp_status")
+                except Exception:  # noqa: BLE001 — a stopped tool: its next start says
+                    return
+                rows = claude_servers(res.get("mcpServers") if isinstance(res, dict) else None)
+                note_servers(self, rows)
+                state = next((r.get("state") for r in rows or [] if r.get("name") == name), None)
+                if state != NEEDS_SIGN_IN:
+                    return
+
+        self._sign_in_watch = loop.create_task(watch())
+
     def on_exit(self) -> None:
         from .process import HarnessGone
 
         self._controls.fail_all(HarnessGone("Claude Code stopped"))
+        watch = getattr(self, "_sign_in_watch", None)
+        if watch is not None and not watch.done():
+            watch.cancel()
         if self._hold_timer is not None:
             self._hold_timer.cancel()
             self._hold_timer = None

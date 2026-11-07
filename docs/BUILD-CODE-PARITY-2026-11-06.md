@@ -76,9 +76,24 @@ items); the rest close rows of the old "Left for later" list.
 | Antigravity | No transcript in the Code view | `brain/<id>/.system_generated/logs/transcript.jsonl` imported | `tests/test_build_app_tool_transcripts_v14410.py`, `..._g4_review_v14410.py` |
 | Antigravity | Usage windows | FOUND: agy reports none over ACP; the Usage tab says so | (finding; `dashboard/lib/codePanes.ts` `NO_WINDOWS_TOOLS`) |
 
+## What v1.447.1 changed (Claude Code 2.1.319, Codex 0.157.0, Grok 1.0.70; each pinned by tests)
+
+Measured on the installed CLIs from scratch homes, no model call (recordings in `tests/fixtures/build_app_v14471/`); pins in `tests/test_build_app_parity_v14471.py` and `dashboard/__tests__/build-code-parity-v1447-1.test.tsx`.
+
+| Tool | Gap (before) | Built or found |
+|---|---|---|
+| Claude Code | 2.1.316 to 2.1.319 | FOUND: `--help` unchanged; one new control request (`set_has_subscribers`, not used here); two new `system` messages: `session_writes_lost` (the disk or quota was full at exit) is now said in words, `start_folder` is internal. Every Claude Code Build › Code pin passes. |
+| Claude Code | No Sign in… for an HTTP MCP server | Its own `mcp_authenticate {serverName}` answers `{authUrl, requiresUserAction, callbackExpected, callbackPort}`; the page goes to the browser (the same safe-address check as Codex); Claude Code takes the callback on its own loopback port and reconnects by itself, saying nothing, so the list is read again every 5 s until the server is no longer waiting. "Needs no sign-in" is said as such. |
+| Claude Code | `/model sonnet[1m]` lost the `[1m]` | Kept (`claude-sonnet-5-5[1m]`, which `--model` and `set_model` take); a model whose window is smaller is not given one; the chip reads "Sonnet 5.5 (1M context)". |
+| Claude Code | After a restart the `/` menu was empty until a session opened in that folder | `hosted/claude_catalog`: one short `claude -p` that answers only `initialize` (stdin closed at once), `--strict-mcp-config` (no MCP server starts) and `--settings {"disableAllHooks": true}` (measured: without it the user's `SessionStart` hook ran on `initialize`), in the background, once per folder per daemon; a session's own list wins. This PC's own login is used. |
+| Codex | No way to act on its MCP list | Reload MCP servers: `config/mcpServer/reload` (params null), then `mcpServerStatus/list` replaces the list (a server taken out goes, one turned off shows as off). Never while a reply runs. Still no per-server switch (none exists). |
+| Codex | A server its config turns off was not listed | `mcpServerStatus/list` once at start adds it as off (names and states only). |
+| Grok | A server its config turns off was not listed | `_x.ai/mcp/list` (answers with or without a session) asked once, when Grok first pushes its list; servers it names that Grok did not push are off. Only names are read. |
+| Branch/Rewind | "The message's ⋯ menu ignores Escape" | FOUND already fixed in v1.441.0's integration (I6, `useMenuClose`), pinned in `build-code-integration-v1441-0.test.tsx`; the line below was stale. |
+
 ## Left for later (still open after v1.441.0)
 
-Each needs a live measurement, a larger change, or the owner's decision.
+Each needs a live measurement, a larger change, or the owner's decision. (v1.447.1 closed the Claude Code sign-in, the `[1m]` and restart `/` menu items, the Codex reload, the Grok turned-off servers and the Escape line; see above.)
 
 - Codex Plan: a command the user allows can still change files; only file-change requests are blocked (Codex's instructions are not a lock).
 - Codex Auto review: drawing `item/autoApprovalReview/*` and `thread/approveGuardianDeniedAction` is the work left. Auto edits after `windowsSandbox/setupStart`: not measured (the setup changes Windows and needs administrator rights).

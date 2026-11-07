@@ -565,6 +565,73 @@ class CodexDriver(Driver):
     # -- v1.441.0 (g1): the Session tab's controls --------------------------------
     #: Codex's own ``mcpServer/oauth/login`` (``hosted/session_controls``).
     mcp_actions: frozenset[str] = frozenset({"sign_in"})
+    #: v1.447.1: the whole list's own ``config/mcpServer/reload`` (Codex has
+    #: no per-server switch — measured on 0.157.0's schema).
+    mcp_reload = True
+
+    async def reload_mcp(self) -> None:
+        """v1.447.1: Codex reads its MCP settings again — ``config/mcpServer/
+        reload`` (params ``null``, answers ``{}``), MEASURED on codex 0.157.0
+        (a scratch ``CODEX_HOME`` whose ``config.toml`` was changed between
+        reloads; ``tests/fixtures/build_app_v14471/codex_mcp_reload.json``): a
+        server added starts (``startupStatus`` starting -> ready), one unchanged
+        is NOT restarted (it only says ready again), one taken out is never
+        named again, a turned-off one is never named. So the list is then read
+        whole (``mcpServerStatus/list``, which names the turned-off one
+        ``disabled`` and drops the one taken out) and REPLACES what was known.
+        Never while a turn runs: the newest request must stay the turn's (a
+        restart relies on it)."""
+        from .tool_setup import codex_listed, note_servers
+
+        if self.turn_open:
+            raise ControlRefused("Wait for Codex's reply to finish, then reload its MCP servers.")
+        try:
+            await self._call("config/mcpServer/reload", None)
+        except ControlRefused as exc:
+            raise ControlRefused(f"Codex could not read its MCP settings again: {exc}") from None
+        try:
+            res = await self.request("mcpServerStatus/list",
+                                     {"threadId": self.session_id or None, "detail": "toolsAndAuthOnly"})
+        except Exception:  # noqa: BLE001 — the start-up statuses that follow still fold in
+            return
+        note_servers(self, codex_listed(self.mcp_servers, res, replace=True))
+
+    async def _call(self, method: str, params: Any) -> Any:
+        """One request whose params may be ``null`` (``request`` sends ``{}``)."""
+        self._n += 1
+        rid = self._n
+        fut = self._replies.make(rid)
+        await self.write({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+        return await asyncio.wait_for(fut, timeout=REQUEST_TIMEOUT_S)
+
+    async def _read_mcp_list(self) -> None:
+        """v1.447.1: the servers the start-up statuses never name — the ones
+        the config turns off — read once from ``mcpServerStatus/list``
+        (WRITTEN here, before any turn's request, like ``skills/list``; the
+        answer is taken in the background and only ADDS servers). Never raises."""
+        from .tool_setup import codex_listed, note_servers
+
+        self._n += 1
+        rid = self._n
+        fut = self._replies.make(rid)
+        try:
+            await self.write({"jsonrpc": "2.0", "id": rid, "method": "mcpServerStatus/list",
+                              "params": {"threadId": self.session_id or None, "detail": "toolsAndAuthOnly"}})
+        except Exception:  # noqa: BLE001 — a gone process: nothing to list
+            self._replies.settle(rid)
+            return
+
+        async def take() -> None:
+            try:
+                res = await asyncio.wait_for(fut, timeout=SKILLS_WAIT_S)
+            except BaseException:  # noqa: BLE001 — no answer: the start-up statuses stand
+                self._replies.settle(rid)
+                return
+            note_servers(self, codex_listed(self.mcp_servers, res, replace=False))
+
+        task = asyncio.get_running_loop().create_task(take())
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
 
     def quiet_frame(self, obj: dict[str, Any]) -> bool:
         return "method" not in obj and obj.get("id") in self._quiet_ids
@@ -768,6 +835,7 @@ class CodexDriver(Driver):
             cwd=clip(self.cwd, 500), mode=self.mode,
         ))
         await self._read_skills()
+        await self._read_mcp_list()
 
     # -- v1.426.0 (E4): Codex's own `/` menu ------------------------------------
     async def _read_skills(self) -> None:

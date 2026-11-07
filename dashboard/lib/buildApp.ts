@@ -274,6 +274,16 @@ export interface ToolModel {
   group?: string;
 }
 
+/** v1.447.1: the chip's words for a Claude Code model picked with `[1m]`
+ *  (typed `/model sonnet[1m]`): the listed model's own name + "(1M context)",
+ *  "" when the base model is not listed (the id is shown as it is). */
+export function oneMillionLabel(model: string, models: readonly ToolModel[]): string {
+  if (!/\[1m\]$/i.test(model)) return "";
+  const base = model.slice(0, -4).toLowerCase();
+  const row = models.find((m) => m.id.toLowerCase() === base);
+  return row ? `${row.label} (1M context)` : "";
+}
+
 /** v1.429.0: the models in their groups, in the daemon's order (Pi's: by
  *  provider). A list with no group at all is one group named "". */
 export function modelGroups(models: readonly ToolModel[]): { group: string; models: ToolModel[] }[] {

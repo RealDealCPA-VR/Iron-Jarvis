@@ -41,7 +41,7 @@ import { Row, Section } from "@/components/harness/HarnessSessionRail";
 import { UsageRefresh } from "@/components/accounts/UsageRefresh";
 import { ContextBreakdown } from "@/components/harness/ContextBreakdown";
 import { decodeCodeContext, totalReading, type CodeContext } from "@/lib/contextBreakdown";
-import { BackgroundWorkList, McpRowMenu } from "@/components/buildCode/SessionControls";
+import { BackgroundWorkList, McpReloadButton, McpRowMenu } from "@/components/buildCode/SessionControls";
 import { isThumbImage, localMediaSrc } from "@/lib/mediaLightbox";
 import { baseName, openablePath } from "@/lib/sessionRail";
 import {
@@ -846,6 +846,7 @@ function ToolMcpSection({
           </p>
         </>
       )}
+      {mcp.reload ? <McpReloadButton sessionId={sessionId} toolName={toolName} onChanged={onChanged} /> : null}
     </Section>
   );
 }
