@@ -113,6 +113,11 @@ export const ENTER_BLOCKED_MS = 2500;
 /** The keys line for a card whose Enter does not allow it (enterAllows). */
 export const CLICK_TO_ALLOW_HINT = "Click Allow once to run it · Esc to decline";
 
+/** v1.448.0 (Wave A, A3): the ONE line under every docked question that says
+ *  where the composer went — it is hidden (`inert`) while a question is up,
+ *  and a user who has not met the dock reads that as the box gone. */
+export const BOX_COMES_BACK_NOTE = "The message box comes back when you answer.";
+
 /** The keys line under the card while a question is in the composer's place.
  *  `item` (v1.381.0 review): the question itself, so a card Enter does not
  *  allow says so instead of promising "Enter to allow". */

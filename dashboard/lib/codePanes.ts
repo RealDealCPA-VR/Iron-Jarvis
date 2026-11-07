@@ -299,6 +299,25 @@ export interface CodeOverview {
    *  open tasks, Codex's background terminals); null = the tool offers no list
    *  (or an older Iron Jarvis): the tab shows what it showed before. */
   backgroundWork: BackgroundWork[] | null;
+  /** v1.448.0 (Wave A, A3): where the tool's model answers — `false` =
+   *  someone else's service ("cloud"), `true` = a model server on this
+   *  network; null = not known (an older Iron Jarvis, a Pi/OpenCode provider
+   *  the daemon cannot place), and the tab draws no row. `words` are the
+   *  daemon's own ("cloud" / "on this network"). */
+  where: { onThisNetwork: boolean | null; words: string };
+}
+
+/** The Session tab's "Runs · cloud" / "Runs · on this network" line, or ""
+ *  when where it runs is not known (the row is then not drawn). */
+export function whereLine(o: Pick<CodeOverview, "where"> | null): string {
+  if (!o || o.where.onThisNetwork === null || !o.where.words) return "";
+  return `Runs · ${o.where.words}`;
+}
+
+function decodeWhere(raw: unknown): CodeOverview["where"] {
+  const w = obj(raw);
+  if (!w || typeof w.on_this_network !== "boolean") return { onThisNetwork: null, words: "" };
+  return { onThisNetwork: w.on_this_network, words: str(w.words, 40) };
 }
 
 /** v1.441.0 (g1): one piece of background work the tool runs. */
@@ -447,6 +466,7 @@ export function decodeCodeOverview(raw: unknown): CodeOverview | null {
     programsMore: r.programs_more === true,
     mcp: decodeCodeMcp(r.mcp),
     backgroundWork: decodeBackgroundWork(r.background_work),
+    where: decodeWhere(r.where),
   };
 }
 

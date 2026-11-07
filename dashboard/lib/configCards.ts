@@ -18,6 +18,12 @@ export interface ConfigChangeCard {
   label: string;
   old: unknown;
   new: unknown;
+  /** v1.448.0 (Wave A, A3): the option's DISPLAY NAME for `old` / `new`
+   *  when the setting's row has one ("Ask before commands", "Daylight",
+   *  "Claude Code"); absent for free text, a number, a switch. The card
+   *  shows the name, never the wire value. */
+  old_label?: string;
+  new_label?: string;
   restart?: boolean;
   change_id: string;
   /** Set on the message once the user pressed Undo. */
@@ -62,6 +68,8 @@ export function decodeConfigCards(raw: unknown): ConfigCard[] {
         label: str(r.label) || str(r.key),
         old: r.old,
         new: r.new,
+        ...(str(r.old_label) ? { old_label: str(r.old_label).slice(0, 120) } : {}),
+        ...(str(r.new_label) ? { new_label: str(r.new_label).slice(0, 120) } : {}),
         restart: r.restart === true,
         change_id: str(r.change_id),
         ...(r.undone === true ? { undone: true } : {}),
@@ -108,13 +116,30 @@ export function undoRefusalWords(err: unknown): string {
   return (/[.!?]$/.test(s) ? s : `${s}.`).slice(0, 300);
 }
 
-/** A setting's value, in words. */
-export function showValue(v: unknown): string {
+/** A setting's value, in words. v1.448.0 (Wave A, A3): `label` — the
+ *  option's display name the daemon sent beside the value — wins when it is
+ *  there ("Ask before commands", never "approve_for_me"); a dict with no
+ *  label reads as its keys, never a JSON dump. */
+export function showValue(v: unknown, label?: string): string {
+  if (label && label.trim()) return label.trim();
   if (v === null || v === undefined || v === "") return "(not set)";
   if (v === true) return "On";
   if (v === false) return "Off";
-  if (typeof v === "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return v.length ? v.map((x) => String(x)).join(", ") : "(not set)";
+  if (typeof v === "object") {
+    const keys = Object.keys(v as Record<string, unknown>);
+    return keys.length ? keys.join(", ") : "(not set)";
+  }
   return String(v);
+}
+
+/** v1.448.0 (Wave A, A3): the Settings link on a change card opens the
+ *  setting's OWN row (`SettingsHome` reads `?focus=<key>`), not the top of
+ *  Settings. A record's card (a schedule, a workflow…) has no row there and
+ *  keeps the plain address. */
+export function settingsHrefFor(card: Pick<ConfigChangeCard, "key" | "title">): string {
+  if (card.title || !card.key) return "/settings";
+  return `/settings?focus=${encodeURIComponent(card.key)}`;
 }
 
 /**

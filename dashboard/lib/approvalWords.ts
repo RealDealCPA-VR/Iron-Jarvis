@@ -186,3 +186,14 @@ export function answeredLine(decision: "approved" | "denied"): string {
 /** How long the bell keeps the "Approved" / "Denied" line before the row
  *  leaves. */
 export const ANSWERED_LINGER_MS = 4000;
+
+/** A "no" that tells the model what to do instead (v1.417.0 C4.1 in Build ›
+ *  Code; v1.448.0 Wave A on the chat's own card). The words are ONE
+ *  definition: Build › Code's CodeAskCard re-exports them from here. */
+export const REDIRECT_WORDS = "No, tell it what to do instead";
+
+/** v1.448.0 (Wave A, A3): the redirect field's name and placeholder on the
+ *  chat's approval card. The words go out as the user's next words to the
+ *  reply the moment the Deny has landed. */
+export const REDIRECT_FIELD_LABEL = "What it should do instead";
+export const REDIRECT_PLACEHOLDER = "Tell it what to do instead…";

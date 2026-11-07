@@ -9772,6 +9772,40 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     setPendingSteers((prev) => [...prev, note]);
   }
 
+  /** v1.448.0 (Wave A, A3): an approval card's "No, tell it what to do
+   *  instead". The card has ALREADY denied the call when this runs (the
+   *  daemon told the model the user declined); the words then reach the
+   *  reply the way the page's own box would send them right now — a STEER
+   *  NOTE to the running turn (read at its next step, right after the
+   *  refusal), or a plain message when nothing runs any more. A note the
+   *  turn could not take (it ended first) goes out as a message; words that
+   *  could not go at all stay in the box, said. */
+  async function redirectAfterDeny(words: string): Promise<void> {
+    const note = words.trim();
+    if (!note) return;
+    const id = turnIdRef.current;
+    if (id && busyRef.current) {
+      try {
+        await post(`/chat/turns/${encodeURIComponent(id)}/steer`, { text: note });
+        setPendingSteers((prev) => [...prev, note]);
+        return;
+      } catch (e) {
+        const status = e instanceof ApiError ? e.status : 0;
+        if (status !== 404) {
+          composer.setText(note);
+          setError(`Couldn't send that: ${e instanceof Error ? e.message : String(e)}`);
+          return;
+        }
+        // The turn ended before the note: send it as the next message.
+      }
+    }
+    if (busyRef.current) {
+      composer.setText(note);
+      return;
+    }
+    send(note);
+  }
+
   /** Re-send the last failed chat turn — same history + attachments, verbatim.
    *  v1.332.0: `onDefault` is "Retry with the default model": the press also
    *  clears the chat's pick, but this closure still holds the old one, so the
@@ -13559,6 +13593,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     onCloudAnswer={answerCloudAsk}
                     onStop={stop}
                     returnFocus={focusComposerAfterAsk}
+                    onRedirect={redirectAfterDeny}
                   />
                   <div
                     data-testid="chat-composer"

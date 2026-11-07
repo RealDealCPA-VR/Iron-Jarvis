@@ -227,6 +227,44 @@ def _show(value: Any) -> str:
     return str(value)
 
 
+def value_label(d: Any, value: Any) -> str | None:
+    """v1.448.0 (Wave A, A3): the DISPLAY NAME of *value* for the schema row
+    *d* — what the Settings page shows for it — or ``None`` when the row has
+    none to give (free text, a number, a switch: the card's own words serve).
+
+    * a row with ``options``: the option's label (``"approve_for_me"`` →
+      "Ask before commands", ``"mark1"`` → "Daylight");
+    * ``default_provider``: the AI service's plain name
+      (``providers.failure_words.plain_name``, the twin of the dashboard's
+      ``providerDisplay`` — "claude-cli" → "Claude Code");
+    * a theme of the user's own colours: its words (``describe_theme_colors``);
+    * any other dict: its keys, joined — never a JSON dump on a card.
+
+    Never raises."""
+    try:
+        if value is None or value == "" or isinstance(value, bool):
+            return None
+        if isinstance(value, dict):
+            if "accent" in value:
+                return describe_theme_colors(value)
+            keys = [str(k) for k in value]
+            return ", ".join(keys) if keys else None
+        key = str(getattr(d, "key", "") or "")
+        options = tuple(getattr(d, "options", ()) or ())
+        wanted = str(value).strip().lower()
+        for v, label in options:
+            if label and wanted == str(v).strip().lower():
+                return str(label)
+        if key == "default_provider":
+            from ..providers.failure_words import plain_name
+
+            name = plain_name(str(value))
+            return name or None
+        return None
+    except Exception:  # noqa: BLE001 — a label never breaks a change
+        return None
+
+
 # --------------------------------------------------------------------- list
 
 
@@ -485,15 +523,25 @@ class _ConfigChangeBase(Tool):
                 " Your profile is switched off (“Use my profile”), so answers do not follow this "
                 "until it is turned on."
             )
+        # v1.448.0 (Wave A, A3): the option's DISPLAY NAME beside the wire
+        # value ("Ask before commands", never "approve_for_me") — the card and
+        # the reply both say the name; a row with none keeps the plain value.
+        old_label = value_label(d, c["old"])
+        new_label = value_label(d, c["new"])
         return ToolResult(
             ok=True,
-            output=f"Changed {c['label']}: {_show(c['old'])} → {_show(c['new'])}.{apps}{restart}{applies}",
+            output=(
+                f"Changed {c['label']}: {old_label or _show(c['old'])} → "
+                f"{new_label or _show(c['new'])}.{apps}{restart}{applies}"
+            ),
             data={
                 "config_change": {
                     "key": key,
                     "label": c["label"],
                     "old": c["old"],
                     "new": c["new"],
+                    **({"old_label": old_label} if old_label else {}),
+                    **({"new_label": new_label} if new_label else {}),
                     "restart": d.restart,
                     "change_id": change_id,
                 }

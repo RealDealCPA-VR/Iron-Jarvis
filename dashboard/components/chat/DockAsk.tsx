@@ -48,6 +48,7 @@ import { ElicitationCard } from "@/components/chat/ElicitationCard";
 import { AskUserCard, type AskAnswer } from "@/components/chat/AskUserCard";
 import { SamplingCard } from "@/components/chat/SamplingCard";
 import {
+  BOX_COMES_BACK_NOTE,
   dockKeyAction,
   ENTER_BLOCKED_MS,
   ENTER_BLOCKED_NOTE,
@@ -153,6 +154,7 @@ export function DockAsk({
   scope,
   onStop,
   returnFocus,
+  onRedirect,
   armDelayMs = DOCK_KEY_ARM_MS,
 }: {
   /** Every open question, in answer order (lib/dockAsk.collectDockAsks). */
@@ -182,6 +184,10 @@ export function DockAsk({
   /** Called when the last question goes away while nothing has focus, so the
    *  composer gets the caret back. */
   returnFocus?: () => void;
+  /** v1.448.0 (Wave A, A3): an approval's "No, tell it what to do instead" —
+   *  the card denies, then the page sends these words (a steer note to the
+   *  running reply, a message once it ended). Absent = the card offers none. */
+  onRedirect?: (words: string) => void | Promise<void>;
   armDelayMs?: number;
 }) {
   const headRef = useRef<string | null>(null);
@@ -379,6 +385,7 @@ export function DockAsk({
           docked
           planText={planText}
           scope={scope}
+          onRedirect={onRedirect}
         />
       ) : head.kind === "elicitation" ? (
         <ElicitationCard
@@ -395,6 +402,11 @@ export function DockAsk({
           docked
         />
       )}
+      {/* v1.448.0 (Wave A, A3): ONE quiet line saying where the composer went
+          — it is hidden under this card while a question is up. */}
+      <p data-testid="dock-ask-box-note" className="-mt-1 px-4 pb-3 text-[11px] text-zinc-500">
+        {BOX_COMES_BACK_NOTE}
+      </p>
       {/* Review: the live region is mounted with the card and the note is
           put INTO it — a status region mounted together with its words is
           often not announced (the v1.352.0 bell lesson). Empty, it takes no

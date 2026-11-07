@@ -98,7 +98,7 @@
 //     Allow once and Deny only. A priced card used to offer "Allow for this
 //     session" while the daemon read it as once.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApprovalPreview } from "@/components/chat/ApprovalPreview";
 import { Markdown } from "@/components/Markdown";
 import { LoaderInline } from "@/components/ui";
@@ -114,6 +114,9 @@ import {
   DENY,
   PLAN_RUN_SENTENCE,
   QUARANTINED_LINE,
+  REDIRECT_FIELD_LABEL,
+  REDIRECT_PLACEHOLDER,
+  REDIRECT_WORDS,
   scopeLabel,
   scopeNoun,
   undoLine,
@@ -179,6 +182,7 @@ export function ApprovalCard({
   docked = false,
   scope,
   planText,
+  onRedirect,
 }: {
   approval: ApprovalAsk;
   /** Called on "Allow for this chat" so the page adds the tool to the
@@ -196,6 +200,12 @@ export function ApprovalCard({
    *  carries no plan: the reply the user read above the card IS the plan,
    *  shown here so the card says what Allow approves. */
   planText?: string;
+  /** v1.448.0 (Wave A, A3): "No, tell it what to do instead" — the card
+   *  DENIES the call and then hands these words to the page, which sends
+   *  them as the user's next words to the reply (a steer note while it
+   *  runs, a message once it ended). Offered only on the COMPACT card (one
+   *  with `why`) and only when a page is there to send them. */
+  onRedirect?: (words: string) => void | Promise<void>;
 }) {
   const where: ApprovalScope = scope ?? (docked || onConversation ? "chat" : "run");
   // Which button is in flight; the card disables itself after one click. The
@@ -232,6 +242,18 @@ export function ApprovalCard({
   const why = typeof approval.why === "string" ? approval.why.trim() : "";
   const compact = why !== "";
   const subject = askerSubject(approval.asker);
+  // v1.448.0 (Wave A, A3): the redirect field — null = closed; a string =
+  // open with its words. Only the compact card offers it, and only with a
+  // page to send the words (`onRedirect`); the card WITHOUT `why` is the
+  // v1.417.0 one byte for byte (its DOM fixture).
+  const redirectable = compact && !!onRedirect;
+  const [redirect, setRedirect] = useState<string | null>(null);
+  const redirectRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (redirect !== null) redirectRef.current?.focus({ preventScroll: true });
+    // The caret goes to the field the moment it opens — not on every letter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [redirect === null]);
 
   async function decide(decision: "once" | "conversation" | "deny" | "tab" | "always") {
     if (sent) return;
@@ -248,6 +270,28 @@ export function ApprovalCard({
       // the user is never stranded mid-pause with a dead card.
       setSent("");
       setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /** v1.448.0 (Wave A, A3): Deny, then hand the words to the page. The words
+   *  go out only once the Deny has LANDED (the daemon has told the model the
+   *  user declined); a Deny that failed keeps the words in the field. */
+  async function sendRedirect() {
+    const text = (redirect ?? "").trim();
+    if (!text || sent || !onRedirect) return;
+    setSent("deny");
+    setError(null);
+    try {
+      await post(`/chat/approvals/${encodeURIComponent(approval.id)}`, { decision: "deny" });
+    } catch (err) {
+      setSent("");
+      setError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    try {
+      await onRedirect(text);
+    } catch {
+      // The page says what became of the words (the box keeps them).
     }
   }
 
@@ -598,7 +642,59 @@ export function ApprovalCard({
         >
           {sent === "deny" ? <LoaderInline label="Declining…" /> : batch ? `Deny all ${count}` : DENY}
         </button>
+        {redirectable && redirect === null && (
+          // v1.448.0 (Wave A, A3): a "no" that says what to do instead —
+          // Build › Code's own answer (CodeAskCard), now on the chat's card.
+          <button
+            type="button"
+            data-testid="approval-redirect"
+            disabled={!!sent}
+            onClick={() => setRedirect("")}
+            className="rounded-md px-2 py-1 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 disabled:opacity-50"
+          >
+            {REDIRECT_WORDS}
+          </button>
+        )}
       </div>
+      {redirectable && redirect !== null && (
+        <div className="flex items-center gap-2">
+          <input
+            ref={redirectRef}
+            type="text"
+            data-testid="approval-redirect-input"
+            aria-label={REDIRECT_FIELD_LABEL}
+            placeholder={REDIRECT_PLACEHOLDER}
+            value={redirect}
+            maxLength={2000}
+            disabled={!!sent}
+            onChange={(e) => setRedirect(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter here SENDS the redirect (Deny + the words); Esc closes
+              // the field. Neither reaches the dock's own Enter / Esc.
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+                void sendRedirect();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                setRedirect(null);
+              }
+            }}
+            className="field h-8 min-w-0 flex-1 text-[13px]"
+          />
+          <button
+            type="button"
+            data-testid="approval-redirect-send"
+            disabled={!!sent || !(redirect ?? "").trim()}
+            onClick={() => void sendRedirect()}
+            className="btn-accent text-xs"
+          >
+            {sent === "deny" ? <LoaderInline label="Declining…" /> : "Send"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
