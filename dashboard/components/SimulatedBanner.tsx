@@ -166,13 +166,16 @@ export function SimulatedBanner() {
       data-testid="simulated-banner"
       className="border-b border-amber-500/25 bg-amber-500/[0.08] backdrop-blur-sm"
     >
+      {/* v1.447.2 (calm sweep): the sentence keeps at least 12rem, so on a
+          phone the buttons wrap under it instead of squeezing it into one
+          word per line. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 sm:px-6 lg:px-10">
         <TriangleAlert size={15} className="shrink-0 text-amber-300" aria-hidden="true" />
         {top ? (
           <>
             {/* v1.445.0: the ONE press that sets the default everywhere (new
                 chats, agents, schedules), never only this one chat. */}
-            <p className="min-w-0 flex-1 text-[13px] leading-snug text-amber-100/90">
+            <p className="min-w-[12rem] flex-1 text-[13px] leading-snug text-amber-100/90">
               <span className="font-semibold text-amber-200">{DEMO_STATE}</span>
               <span className="text-amber-100/70">
                 {" "}
@@ -212,7 +215,7 @@ export function SimulatedBanner() {
           </>
         ) : hasRealProvider ? (
           <>
-            <p className="min-w-0 flex-1 text-[13px] leading-snug text-amber-100/90">
+            <p className="min-w-[12rem] flex-1 text-[13px] leading-snug text-amber-100/90">
               <span className="font-semibold text-amber-200">{DEMO_STATE}</span>
               <span className="text-amber-100/70">
                 {" "}
@@ -229,7 +232,7 @@ export function SimulatedBanner() {
           </>
         ) : (
           <>
-            <p className="min-w-0 flex-1 text-[13px] leading-snug text-amber-100/90">
+            <p className="min-w-[12rem] flex-1 text-[13px] leading-snug text-amber-100/90">
               <span className="font-semibold text-amber-200">{DEMO_STATE}</span>
               <span className="text-amber-100/70">
                 {" "}

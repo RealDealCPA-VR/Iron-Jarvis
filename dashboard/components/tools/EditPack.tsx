@@ -124,7 +124,7 @@ function SetChip({
 }
 
 function Label({ children }: { children: string }) {
-  return <span className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">{children}</span>;
+  return <span className="mb-1 block text-[12px] font-medium text-zinc-400">{children}</span>;
 }
 
 export function EditPack({

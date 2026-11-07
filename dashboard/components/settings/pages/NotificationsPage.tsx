@@ -15,7 +15,9 @@ import {
   Info,
   Pencil,
   Lightbulb,
+  Trash2,
 } from "lucide-react";
+import { IconButton } from "@/components/IconButton";
 import { get, post, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import {
@@ -690,14 +692,14 @@ export default function ChannelsPage() {
               )}
               {editing ? (
                 <div>
-                  <p className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <p className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Type
                   </p>
                   <Badge value={DEST_META[addType]?.label ?? addType} tone="cyan" />
                 </div>
               ) : (
                 <div>
-                  <p className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <p className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Where should alerts go?
                   </p>
                   <ChooserTiles
@@ -726,7 +728,7 @@ export default function ChannelsPage() {
               )}
 
               <div>
-                <label htmlFor={`${fid}-name`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label htmlFor={`${fid}-name`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                   Name
                 </label>
                 <input
@@ -821,7 +823,7 @@ export default function ChannelsPage() {
                   }
                   return (
                   <div key={f.key}>
-                    <label htmlFor={`${fid}-f-${f.key}`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label htmlFor={`${fid}-f-${f.key}`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                       {label}
                     </label>
                     <input
@@ -960,7 +962,7 @@ export default function ChannelsPage() {
                         <div className="space-y-3.5 border-t hairline px-3 py-3">
                           {advanced.map(renderField)}
                           <div>
-                            <p className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                            <p className="mb-1.5 text-[12px] font-medium text-zinc-400">
                               Send this destination
                             </p>
                             <div className="grid gap-1.5 sm:grid-cols-2">
@@ -1252,7 +1254,7 @@ export default function ChannelsPage() {
                         {c.last_poll_error && (
                           <span
                             data-testid={`channel-poll-error-${c.name}`}
-                            className="block text-[11px] text-rose-300"
+                            className="block text-[11px] text-tone-danger"
                           >
                             Not listening — {c.last_poll_error}
                             {c.last_poll_error_at ? ` (${timeAgo(c.last_poll_error_at)})` : ""}
@@ -1262,14 +1264,16 @@ export default function ChannelsPage() {
                     </div>
                     {!(c.builtin ?? BUILTIN.has(c.name)) && (
                       <div className="flex shrink-0 items-center gap-1.5">
-                        <button
-                          type="button"
+                        {/* v1.447.2 (calm sweep): Edit and Delete are the row's
+                            pencil and trash (named in words, a tip on hover or
+                            focus; Delete still two presses). Test stays words. */}
+                        <IconButton
+                          label="Edit"
+                          tip={`Edit ${c.name}`}
+                          testId={`channel-edit-${c.name}`}
+                          icon={<Pencil size={14} aria-hidden />}
                           onClick={() => openEdit(c)}
-                          title={`Edit ${c.name}`}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
-                        >
-                          <Pencil size={13} /> Edit
-                        </button>
+                        />
                         <button
                           type="button"
                           onClick={() => testChannel(c.name)}
@@ -1287,6 +1291,9 @@ export default function ChannelsPage() {
                         </button>
                         <ConfirmButton
                           onConfirm={() => deleteChannel(c.name)}
+                          confirmLabel="Delete?"
+                          icon={<Trash2 size={14} aria-hidden />}
+                          testId={`channel-delete-${c.name}`}
                           title={`Delete destination ${c.name}`}
                         />
                       </div>
@@ -1351,7 +1358,7 @@ export default function ChannelsPage() {
           <Card title="Send test message" icon={<Send size={15} />}>
             <form onSubmit={send} className="space-y-3.5">
               <div>
-                <label htmlFor={`${fid}-message`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label htmlFor={`${fid}-message`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                   Message
                 </label>
                 <textarea
@@ -1364,7 +1371,7 @@ export default function ChannelsPage() {
                 />
               </div>
               <div>
-                <label htmlFor={`${fid}-dest`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label htmlFor={`${fid}-dest`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                   Destination
                 </label>
                 {/* v1.314.0: our concept is a destination (VOCABULARY.md);
@@ -1386,7 +1393,7 @@ export default function ChannelsPage() {
 
             {results && (
               <div className="mt-4 space-y-2">
-                <div className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">Result</div>
+                <div className="text-[12px] font-medium text-zinc-400">Result</div>
                 {results.length === 0 ? (
                   <Empty>No destination answered.</Empty>
                 ) : (

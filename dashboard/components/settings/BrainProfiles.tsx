@@ -15,7 +15,8 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { X } from "lucide-react";
+import { Pencil, Trash2, X } from "lucide-react";
+import { IconButton } from "@/components/IconButton";
 import { ApiError, del, get, patch, post, put } from "@/lib/api";
 import { Card, ConfirmButton, ErrorNote, Field, LoaderInline, SuccessNote } from "@/components/ui";
 import {
@@ -207,7 +208,7 @@ export function BrainProfiles() {
 
         <div>
           <div className="mb-1.5 flex items-center justify-between gap-3">
-            <span className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">Profiles</span>
+            <span className="text-[12px] font-medium text-zinc-400">Profiles</span>
             {editing === null && (
               <button type="button" data-testid="brain-new" onClick={openNew} className="btn-ghost btn-sm">
                 New profile
@@ -234,18 +235,21 @@ export function BrainProfiles() {
                         )}
                       </span>
                     </span>
-                    <button
-                      type="button"
-                      data-testid={`brain-edit-${p.id}`}
+                    {/* v1.447.2 (calm sweep): the row's pencil and trash
+                        (named in words, a tip on hover or focus). */}
+                    <IconButton
+                      label="Edit"
+                      tip={`Edit ${p.name}`}
+                      testId={`brain-edit-${p.id}`}
+                      icon={<Pencil size={14} aria-hidden />}
                       onClick={() => openEdit(p.id)}
-                      className="btn-ghost btn-sm"
-                    >
-                      Edit
-                    </button>
+                    />
                     <ConfirmButton
                       variant="calm"
                       label="Delete"
                       confirmLabel="Delete this profile?"
+                      icon={<Trash2 size={14} aria-hidden />}
+                      title={`Delete ${p.name}`}
                       onConfirm={() => remove(p.id)}
                     />
                     {!noCheck && <ProfileCheck id={p.id} onGone={() => setNoCheck(true)} />}

@@ -22,8 +22,9 @@ import { FolderOpen, Trash2, Workflow, X } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { del, get, ApiError } from "@/lib/api";
 import { Empty, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
+import { IconButton } from "@/components/IconButton";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
-import { CalmSection, WF_DANGER_SM, WF_GHOST_DANGER_SM, WF_GHOST_SM } from "./calm";
+import { CalmSection, WF_DANGER_SM, WF_GHOST_SM } from "./calm";
 
 /** One row of GET /workflows (project_id is omitted by the list route). */
 export interface SavedWorkflowDef {
@@ -236,15 +237,15 @@ export function SavedWorkflows() {
                     <FolderOpen size={13} /> Load
                   </button>
                   {!confirming && (
-                    <button
-                      type="button"
+                    // v1.447.2 (calm sweep): the row's trash can, named
+                    // "Delete <name>"; the press opens the same confirm below.
+                    <IconButton
+                      label={`Delete ${d.name}`}
+                      tip={`Delete “${d.name}”`}
+                      tone="danger"
+                      icon={<Trash2 size={14} aria-hidden />}
                       onClick={() => void askDelete(d.name)}
-                      aria-label={`Delete ${d.name}`}
-                      title={`Delete “${d.name}”`}
-                      className={WF_GHOST_DANGER_SM}
-                    >
-                      <Trash2 size={13} /> Delete
-                    </button>
+                    />
                   )}
                 </div>
                 {confirming && (

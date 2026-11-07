@@ -223,7 +223,7 @@ export function ImportFromAI({ onImported }: { onImported?: () => void }) {
       <Card title="Bring memories from another AI" icon={<Import size={15} />}>
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+            <span className="text-[12px] font-medium text-zinc-400">
               From
             </span>
             {PROVIDERS.map((p) => (

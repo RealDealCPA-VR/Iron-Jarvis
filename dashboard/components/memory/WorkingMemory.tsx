@@ -65,7 +65,7 @@ export function WorkingMemory() {
         >
           <form onSubmit={search} className="flex flex-wrap items-end gap-3">
             <div className="min-w-[240px] flex-1">
-              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                 Query
               </label>
               <div className="relative">
@@ -88,7 +88,7 @@ export function WorkingMemory() {
               </div>
             </div>
             <div className="w-20">
-              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                 Results
               </label>
               <input
@@ -124,7 +124,7 @@ export function WorkingMemory() {
             <div className="-mx-1 overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
-                  <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <tr className="border-b hairline text-[12px] font-medium text-zinc-400">
                     <th className="px-2 py-2.5 font-medium">Score</th>
                     <th className="px-2 py-2.5 font-medium">Layer</th>
                     <th className="px-2 py-2.5 font-medium">Key</th>

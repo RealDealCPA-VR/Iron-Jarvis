@@ -599,7 +599,7 @@ export default function ReflexPage() {
               {/* Signal: source + match */}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label htmlFor={`${fid}-source`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-source`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Signal source
                   </label>
                   <select
@@ -618,7 +618,7 @@ export default function ReflexPage() {
                   </select>
                 </div>
                 <div>
-                  <label htmlFor={`${fid}-match`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-match`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     {SOURCE_META[source].matchLabel}
                   </label>
                   {source === "webhook" ? (
@@ -678,7 +678,7 @@ export default function ReflexPage() {
               {/* Action: action + target */}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label htmlFor={`${fid}-action`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-action`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Action
                   </label>
                   <select
@@ -699,11 +699,11 @@ export default function ReflexPage() {
                         name — with none saved yet it is a plain heading over
                         the "create one first" note. */}
                     {(action === "workflow" ? workflowNames.length > 0 : agentNames.length > 0) ? (
-                      <label htmlFor={`${fid}-target`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <label htmlFor={`${fid}-target`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                         {action === "workflow" ? "Workflow" : "Remote agent"}
                       </label>
                     ) : (
-                      <p className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <p className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                         {action === "workflow" ? "Workflow" : "Remote agent"}
                       </p>
                     )}
@@ -774,7 +774,7 @@ export default function ReflexPage() {
                   on /templates; the wire field stays task_template. */}
               {templateShown && (
                 <div>
-                  <label htmlFor={`${fid}-task`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-task`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Task
                   </label>
                   <textarea
@@ -797,7 +797,7 @@ export default function ReflexPage() {
               {/* Project grounding (context spine) — session/workflow actions */}
               {projectShown && (
                 <div>
-                  <label htmlFor={`${fid}-project`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-project`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Run inside a project (optional)
                   </label>
                   <select
@@ -825,7 +825,7 @@ export default function ReflexPage() {
               {/* Name + enabled */}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label htmlFor={`${fid}-name`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-name`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Name (optional)
                   </label>
                   <input
@@ -1074,7 +1074,7 @@ function TriggersCard() {
           </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
             <div>
-              <label htmlFor={`${fid}-ical`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <label htmlFor={`${fid}-ical`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                 iCal URL
               </label>
               <input
@@ -1091,7 +1091,7 @@ function TriggersCard() {
               />
             </div>
             <div>
-              <label htmlFor={`${fid}-lead`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <label htmlFor={`${fid}-lead`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                 Lead (min)
               </label>
               <input

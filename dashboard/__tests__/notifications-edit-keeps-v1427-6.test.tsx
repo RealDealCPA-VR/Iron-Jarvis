@@ -117,7 +117,7 @@ afterEach(() => {
 
 async function openEdit() {
   render(<ChannelsPage />);
-  fireEvent.click(await screen.findByTitle("Edit hq"));
+  fireEvent.click(await screen.findByTestId("channel-edit-hq")); // v1.447.2: the pencil (was its title)
   await screen.findByText(/a blank box keeps what/i);
 }
 
@@ -187,7 +187,7 @@ describe("Edit keeps what is saved (v1.427.6)", () => {
     api.saveAnswer = { name: "hq", type: "slack", added: true, two_way_note: note };
     render(<ChannelsPage />);
     expect((await screen.findByTestId("channel-two-way-note-hq")).textContent).toBe(note);
-    fireEvent.click(screen.getByTitle("Edit hq"));
+    fireEvent.click(screen.getByTestId("channel-edit-hq"));
     await screen.findByText(/a blank box keeps what/i);
     fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
     await waitFor(() =>
@@ -198,7 +198,7 @@ describe("Edit keeps what is saved (v1.427.6)", () => {
   it("a destination whose two-way can work shows no note", async () => {
     seed();
     render(<ChannelsPage />);
-    await screen.findByTitle("Edit hq");
+    await screen.findByTestId("channel-edit-hq"); // v1.447.2: the pencil
     expect(screen.queryByTestId("channel-two-way-note-hq")).toBeNull();
   });
 });

@@ -131,7 +131,7 @@ function IntegrationCard({
 
       {integ.required_secrets.length > 0 && (
         <div className="mt-3">
-          <div className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+          <div className="text-[12px] font-medium text-zinc-400">
             Required secrets
           </div>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -177,7 +177,7 @@ function IntegrationCard({
 
       {showConfig && (
         <div className="mt-3 space-y-2">
-          <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+          <label className="block text-[12px] font-medium text-zinc-400">
             Config (JSON)
           </label>
           <textarea
@@ -277,7 +277,7 @@ function AddIntegrationForm({
           <div className="space-y-1.5">
             <label
               htmlFor="add-integ-name"
-              className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+              className="block text-[12px] font-medium text-zinc-400"
             >
               Name
             </label>
@@ -295,7 +295,7 @@ function AddIntegrationForm({
           <div className="space-y-1.5">
             <label
               htmlFor="add-integ-url"
-              className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+              className="block text-[12px] font-medium text-zinc-400"
             >
               Base URL
             </label>
@@ -314,7 +314,7 @@ function AddIntegrationForm({
         <div className="space-y-1.5">
           <label
             htmlFor="add-integ-desc"
-            className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+            className="block text-[12px] font-medium text-zinc-400"
           >
             Description <span className="text-zinc-600">(optional)</span>
           </label>
@@ -332,7 +332,7 @@ function AddIntegrationForm({
         <div className="space-y-1.5">
           <label
             htmlFor="add-integ-token"
-            className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+            className="block text-[12px] font-medium text-zinc-400"
           >
             API key <span className="text-zinc-600">(optional)</span>
           </label>

@@ -541,7 +541,7 @@ export function SettingsHome() {
               const rows = shown.filter((d) => (q ? (groups?.find((g) => g.id === d.group)?.label ?? d.group) : d.section) === sec);
               return (
                 <section key={sec || "_"} className="rounded-2xl border border-white/[0.06] bg-white/[0.015]">
-                  {sec && <h3 className="px-3 pt-3 text-[12px] font-semibold uppercase tracking-wide text-zinc-500">{sec}</h3>}
+                  {sec && <h3 className="px-3 pt-3 text-[13px] font-medium text-zinc-400">{sec}</h3>}
                   <div className="divide-y divide-white/[0.04]">
                     {rows.map((d) => (
                       <SettingRow

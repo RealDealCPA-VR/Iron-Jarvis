@@ -645,7 +645,7 @@ export default function SchedulesPage() {
                 <div>
                   {/* v1.316.0: this names the GROUP below (a radiogroup with
                       its own aria-label), so it is not a <label>. */}
-                  <p className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <p className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     What should happen?
                   </p>
                   <ChooserTiles
@@ -677,7 +677,7 @@ export default function SchedulesPage() {
                 {kind === "task" && (
                   <>
                     <div>
-                      <label htmlFor={`${fid}-task`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <label htmlFor={`${fid}-task`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                         The task
                       </label>
                       <textarea
@@ -692,7 +692,7 @@ export default function SchedulesPage() {
                       />
                     </div>
                     <div>
-                      <label htmlFor={`${fid}-agent`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <label htmlFor={`${fid}-agent`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                         Who runs it
                       </label>
                       <div className="flex items-center gap-2">
@@ -737,7 +737,7 @@ export default function SchedulesPage() {
                       )}
                     </div>
                     <div>
-                      <label htmlFor={`${fid}-project`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <label htmlFor={`${fid}-project`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                         Run inside a project
                       </label>
                       <select
@@ -762,7 +762,7 @@ export default function SchedulesPage() {
                         on a daemon whose rows do not carry them. */}
                     {knobs && (
                       <details data-testid="schedule-knobs" className="rounded-lg border border-white/[0.06] px-3 py-2">
-                        <summary className="cursor-pointer text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        <summary className="cursor-pointer text-[12px] font-medium text-zinc-400">
                           More: skills, folder, chain, pre-run script, memory
                         </summary>
                         <div className="mt-3 space-y-3">
@@ -793,11 +793,11 @@ export default function SchedulesPage() {
                   <div>
                     {/* v1.316.0: a <label> only when the picker renders. */}
                     {workflowNames.length > 0 ? (
-                      <label htmlFor={`${fid}-workflow`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <label htmlFor={`${fid}-workflow`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                         Workflow to run
                       </label>
                     ) : (
-                      <p className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <p className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                         Workflow to run
                       </p>
                     )}
@@ -826,7 +826,7 @@ export default function SchedulesPage() {
 
                 {kind === "event" && (
                   <div>
-                    <label htmlFor={`${fid}-event`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label htmlFor={`${fid}-event`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                       Event type
                     </label>
                     <input
@@ -842,7 +842,7 @@ export default function SchedulesPage() {
 
                 {kind !== "event" && (
                   <div>
-                    <label htmlFor={`${fid}-dest`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label htmlFor={`${fid}-dest`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                       Send the result to
                     </label>
                     <select
@@ -868,7 +868,7 @@ export default function SchedulesPage() {
                 )}
 
                 <div>
-                  <label htmlFor={`${fid}-name`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-name`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Name
                   </label>
                   <input
@@ -881,7 +881,7 @@ export default function SchedulesPage() {
                 </div>
 
                 <div>
-                  <label htmlFor={`${fid}-repeat`} className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-repeat`} className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-zinc-400">
                     <Repeat size={12} /> Repeat
                   </label>
                   <select
@@ -906,7 +906,7 @@ export default function SchedulesPage() {
 
                 {isOnce && (
                   <div>
-                    <label htmlFor={`${fid}-runat`} className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label htmlFor={`${fid}-runat`} className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-zinc-400">
                       <Timer size={12} /> Run at
                     </label>
                     <input
@@ -924,7 +924,7 @@ export default function SchedulesPage() {
 
                 {isAdvanced && (
                   <div>
-                    <label htmlFor={`${fid}-cron`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label htmlFor={`${fid}-cron`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                       Cron expression
                     </label>
                     <input
@@ -998,7 +998,7 @@ export default function SchedulesPage() {
                 <div className="-mx-1 overflow-x-auto">
                   <table className="w-full text-left text-sm">
                     <thead>
-                      <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <tr className="border-b hairline text-[12px] font-medium text-zinc-400">
                         <th className="px-2 py-2.5 font-medium">Name</th>
                         <th className="px-2 py-2.5 font-medium">Repeat</th>
                         <th className="px-2 py-2.5 font-medium">Last result</th>

@@ -614,7 +614,7 @@ export default function ProjectsPage() {
               >
               <form onSubmit={submit} className="max-w-xl space-y-3.5">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Name
                   </label>
                   <input
@@ -627,7 +627,7 @@ export default function ProjectsPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Brief <span className="text-zinc-600">(optional)</span>
                   </label>
                   <textarea
@@ -641,7 +641,7 @@ export default function ProjectsPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-zinc-400">
                     <Folder size={12} /> Folder root{" "}
                     <span className="text-zinc-600">(optional)</span>
                   </label>

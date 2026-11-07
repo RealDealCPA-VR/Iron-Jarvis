@@ -284,7 +284,7 @@ function Editor({
   return (
     <div data-testid="theme-maker-editor" className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
       <div>
-        <div className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">Start from</div>
+        <div className="mb-1.5 text-[12px] font-medium text-zinc-400">Start from</div>
         <div className="flex flex-wrap gap-1" data-testid="theme-maker-presets">
           {PRESETS.map((p) => (
             <button
@@ -313,7 +313,7 @@ function Editor({
       </Field>
 
       <div>
-        <div className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">Main colour</div>
+        <div className="mb-1.5 text-[12px] font-medium text-zinc-400">Main colour</div>
         <ColourPick label="Main colour" value={d.accent} onChange={(accent) => set({ accent })} testId="theme-maker-accent" />
       </div>
 
@@ -338,12 +338,12 @@ function Editor({
       </div>
 
       <div>
-        <div className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">Background</div>
+        <div className="mb-1.5 text-[12px] font-medium text-zinc-400">Background</div>
         <Choice label="Background" value={d.surface} options={SURFACES} onChange={(surface) => set({ surface })} testId="theme-maker-surface" />
       </div>
 
       <div>
-        <div className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">Show</div>
+        <div className="mb-1.5 text-[12px] font-medium text-zinc-400">Show</div>
         <Choice label="Show" value={d.mode} options={MODES} onChange={(mode) => set({ mode })} testId="theme-maker-mode" />
         <p className="mt-1 text-[11px] text-zinc-500">
           Both versions are made for you. &ldquo;Match Windows&rdquo; switches between them with your
@@ -352,7 +352,7 @@ function Editor({
       </div>
 
       <div>
-        <div className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">Animated background</div>
+        <div className="mb-1.5 text-[12px] font-medium text-zinc-400">Animated background</div>
         <BackgroundPicker
           value={d.background}
           onChange={(background) => set({ background })}

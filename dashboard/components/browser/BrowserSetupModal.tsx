@@ -116,6 +116,7 @@ import {
 } from "lucide-react";
 import { Modal } from "@/components/Modal";
 import { ErrorNote, LoaderInline, SectionLabel } from "@/components/ui";
+import { IconButton } from "@/components/IconButton";
 import { post, put, ApiError } from "@/lib/api";
 import type { BrowserStatus } from "@/lib/types";
 import { copyPlain } from "@/components/settings/MaintenanceTools";
@@ -314,16 +315,14 @@ function SetupFolder({
         >
           {folder}
         </code>
-        <button
-          type="button"
-          data-testid="browser-setup-folder-copy"
+        {/* v1.447.2 (calm sweep): a clipboard icon right after the path. */}
+        <IconButton
+          label={`Copy ${folder}`}
+          tip="Copy"
+          testId="browser-setup-folder-copy"
+          icon={<ClipboardCopy size={14} aria-hidden />}
           onClick={copy}
-          title={`Copy ${folder}`}
-          aria-label={`Copy ${folder}`}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/30 hover:text-zinc-200"
-        >
-          <ClipboardCopy size={12} /> Copy
-        </button>
+        />
         {said && (
           <span data-testid="browser-setup-folder-copied" className="text-[11px] text-zinc-500">
             {said}

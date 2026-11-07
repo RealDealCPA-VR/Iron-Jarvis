@@ -29,6 +29,7 @@ import { useState, useSyncExternalStore } from "react";
 import { ArrowRightLeft, LogIn, Loader2, RotateCcw, X } from "lucide-react";
 import { ApiError, get, post } from "@/lib/api";
 import { usePolledApi } from "@/lib/useApi";
+import { IconButton } from "@/components/IconButton";
 import { localTime, terminalsHref } from "@/lib/ironProxy";
 import {
   IRON_PROXY_LIGHT,
@@ -208,13 +209,14 @@ function ContinueStrip({
           )}
         </button>
       )}
-      <button
-        type="button"
+      {/* v1.447.2 (calm sweep): the strip's ×, named "Dismiss". */}
+      <IconButton
+        label="Dismiss"
+        tone="warn"
+        size="sm"
+        icon={<X size={13} aria-hidden />}
         onClick={onDismiss}
-        className="shrink-0 rounded-md px-1.5 py-0.5 text-tone-warn/80 transition-colors hover:bg-tone-warn/10"
-      >
-        Dismiss
-      </button>
+      />
       {(next.kind === "next" || next.kind === "unknown") && (
         <span
           data-testid={`pane-continue-privacy-${paneId}`}
@@ -352,16 +354,17 @@ export function ResumeFailedStrip({
         )}
       </button>
       <span className="shrink-0 text-tone-warn/70">or type /clear to start empty</span>
-      <button
-        type="button"
+      {/* v1.447.2 (calm sweep): the strip's ×, named "Dismiss". */}
+      <IconButton
+        label="Dismiss"
+        tone="warn"
+        size="sm"
+        icon={<X size={13} aria-hidden />}
         onClick={() => {
           dismissedFailure.set(paneId, key);
           changed();
         }}
-        className="shrink-0 rounded-md px-1.5 py-0.5 text-tone-warn/80 transition-colors hover:bg-tone-warn/10"
-      >
-        Dismiss
-      </button>
+      />
       <span data-testid={`pane-start-fresh-how-${paneId}`} className="basis-full text-[10px] text-tone-warn/80">
         Iron Jarvis writes a short summary of the conversation so far (your first request, the last few
         messages, the files involved) and starts a new Claude session on {hereShort} with it.
@@ -444,16 +447,17 @@ function SignInNeededStrip({
           "Sign in"
         )}
       </button>
-      <button
-        type="button"
+      {/* v1.447.2 (calm sweep): the strip's ×, named "Dismiss". */}
+      <IconButton
+        label="Dismiss"
+        tone="warn"
+        size="sm"
+        icon={<X size={13} aria-hidden />}
         onClick={() => {
           dismissedFailure.set(paneId, signInNeededKey(need));
           changed();
         }}
-        className="shrink-0 rounded-md px-1.5 py-0.5 text-tone-warn/80 transition-colors hover:bg-tone-warn/10"
-      >
-        Dismiss
-      </button>
+      />
       {error && (
         <span
           role="alert"

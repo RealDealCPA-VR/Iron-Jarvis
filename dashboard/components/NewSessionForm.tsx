@@ -203,7 +203,7 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
     <form onSubmit={submit} className="space-y-3.5">
       <div>
         <div className="mb-1.5 flex items-center justify-between">
-          <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+          <label className="block text-[12px] font-medium text-zinc-400">
             Task
           </label>
           <VoiceInput
@@ -267,7 +267,7 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+          <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
             Agent type
           </label>
           <select
@@ -295,7 +295,7 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
           </select>
         </div>
         <div>
-          <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+          <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-zinc-400">
             <Cpu size={12} /> Model
           </label>
           <select

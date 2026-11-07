@@ -110,7 +110,7 @@ export default function SecretsPage() {
             <Card title="Add secret" icon={<Plus size={15} />}>
               <form onSubmit={submit} className="space-y-3.5">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Name
                   </label>
                   <input
@@ -121,7 +121,7 @@ export default function SecretsPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Value <span className="text-zinc-600">(write-only)</span>
                   </label>
                   <input
@@ -136,7 +136,7 @@ export default function SecretsPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                       Kind
                     </label>
                     <select
@@ -153,7 +153,7 @@ export default function SecretsPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                       Description
                     </label>
                     <input
@@ -200,7 +200,7 @@ export default function SecretsPage() {
                 <div className="-mx-1 overflow-x-auto">
                   <table className="w-full text-left text-sm">
                     <thead>
-                      <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <tr className="border-b hairline text-[12px] font-medium text-zinc-400">
                         <th className="px-2 py-2.5 font-medium">Name</th>
                         <th className="px-2 py-2.5 font-medium">Kind</th>
                         <th className="px-2 py-2.5 font-medium">Description</th>
