@@ -649,6 +649,7 @@ export function ConfirmButton({
   idleClassName = "",
   title,
   variant = "default",
+  testId,
 }: {
   onConfirm: () => void | Promise<void>;
   label?: string;
@@ -658,6 +659,8 @@ export function ConfirmButton({
   idleClassName?: string;
   title?: string;
   variant?: ConfirmVariant;
+  /** v1.443.0: a test id for the button (optional). */
+  testId?: string;
 }) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -686,6 +689,7 @@ export function ConfirmButton({
         onClick={onClick}
         disabled={busy}
         title={title}
+        data-testid={testId}
         data-confirm-variant="calm"
         data-armed={armed ? "true" : "false"}
         className={`${CALM_CONFIRM.base} ${armed ? CALM_CONFIRM.armed : `${CALM_CONFIRM.idle} ${idleClassName}`.trim()} ${className}`.trim()}
@@ -700,6 +704,7 @@ export function ConfirmButton({
       onClick={onClick}
       disabled={busy}
       title={title}
+      data-testid={testId}
       className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
         armed
           ? "border-tone-danger/50 bg-tone-danger/[0.12] text-tone-danger"

@@ -1524,7 +1524,10 @@ interface StudioStore {
   cli?: string;
   skill?: string;
   dir?: string;
-  autopilot?: boolean;
+  /** v1.443.0: the Autopilot box, OFF unless the user ticks it. The older
+   *  `autopilot` key is never read: it was written on every visit with the
+   *  old ON default, so it cannot tell a choice from the default. */
+  autopilotOn?: boolean;
   session?: StudioSession;
 }
 
@@ -1844,7 +1847,7 @@ function StudioView({
   const [initialStore] = useState<StudioStore>(readStudioStore);
   const [cli, setCli] = useState<string>(initialStore.cli ?? "");
   const [skill, setSkill] = useState<string>(initialStore.skill ?? "");
-  const [autopilot, setAutopilot] = useState<boolean>(initialStore.autopilot ?? true);
+  const [autopilot, setAutopilot] = useState<boolean>(initialStore.autopilotOn === true);
   const [pickDir, setPickDir] = useState<string | null>(initialStore.dir ?? null);
 
   // Engines + skills.
@@ -1881,7 +1884,7 @@ function StudioView({
 
   // Remember setup choices so repeat sessions are two clicks.
   useEffect(() => {
-    writeStudioStore({ ...(cli ? { cli } : {}), skill, autopilot });
+    writeStudioStore({ ...(cli ? { cli } : {}), skill, autopilotOn: autopilot });
   }, [cli, skill, autopilot]);
 
   // The chosen engine, its REAL autopilot flag, and the line that will be typed
@@ -2852,7 +2855,9 @@ function StudioView({
                     <p className="text-[13px] text-zinc-400">
                       Ready — describe what to create in{" "}
                       <code className="font-mono text-zinc-300">{folderLabel(session.dest)}</code>.
-                      I’ll run it on autopilot and drop the results right here as they land.
+                      {session.autopilot
+                        ? "I’ll run it on autopilot and drop the results right here as they land."
+                        : "It asks you in the terminal before each step, and the results land right here."}
                     </p>
                   )}
                 </AssistantBubble>

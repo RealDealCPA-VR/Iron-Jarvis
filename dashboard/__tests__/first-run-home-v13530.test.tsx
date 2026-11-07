@@ -400,15 +400,18 @@ describe("G34 / G35 / G33 — the connect doors", () => {
     expect(answerCandidates(h(NOTHING_CONNECTED))).toEqual([]);
   });
 
+  // v1.443.0 (moved on purpose): a key that PASSED its test while replies
+  // are a demo is chosen for answers by the same one press — so the line no
+  // longer says "Choose it above", and the press says what it did.
   it("the key door's success line says the next step while replies are a demo", async () => {
     H.postResponses["/connections/anthropic/test"] = { ok: true, detail: "Key works." };
     render(<ConnectDoors />);
     fireEvent.click(screen.getByRole("button", { name: /I have an API key/ }));
     fireEvent.change(screen.getByPlaceholderText("sk-ant-…"), { target: { value: "sk-ant-test" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "Connected — Key works. Choose it above to use it for answers.",
-    );
+    expect(await screen.findByText("Done — Anthropic answers you now.")).toBeTruthy();
+    expect(screen.getByTestId("key-door-result").textContent).toBe("Connected — Key works.");
+    expect(H.posts.map((x) => x.path)).toContain("/onboarding/use-model");
   });
 
   it("a signed-out Claude Code door says press Sign in — never the terminal sentence", () => {

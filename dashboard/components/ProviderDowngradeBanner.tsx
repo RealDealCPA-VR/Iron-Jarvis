@@ -86,6 +86,13 @@ export function downgradeNotice(e: IJEvent | null | undefined): DowngradeNotice 
       sessionId: runId,
     };
   }
+  // v1.443.0 (ease-of-use review item 2): a CHAT turn the demo model answered
+  // is not a downgrade (the demo IS the default), and it is already said where
+  // the user is standing: the demo strip under the title bar (with its one
+  // press), the reply's own first sentence and the "Demo answer" receipt.
+  // A fourth line here was noise. A RUN the demo answered still says it: it
+  // may be on a page nobody is looking at.
+  if (!runId) return null;
   return {
     kind: "mock",
     title: DEMO_ANSWER,

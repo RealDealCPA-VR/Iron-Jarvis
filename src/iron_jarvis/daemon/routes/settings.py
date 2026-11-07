@@ -44,6 +44,30 @@ class UseModelBody(BaseModel):
 #: openai model ids) keeps working; the router serves it through the CLI.
 _CLI_INHERITS = {"claude-cli": "anthropic", "codex-cli": "openai"}
 
+#: v1.443.0: the model saved when an answer will come THROUGH a sign-in
+#: (Claude Code or Codex). The CLI reads it as "the plan's own default"
+#: (``claude_models.native_model`` maps it to the live default row; Codex's
+#: ``PLACEHOLDER_MODELS`` runs Codex's own default), never a fixed API id.
+PLAN_DEFAULT_MODEL = "subscription"
+
+
+def promote_model(d, provider: str) -> str:
+    """The model to pair with ``provider`` when it becomes the default
+    (v1.443.0). When the API name is served THROUGH a sign-in right now
+    (``ProviderManager.inherited_from``: a keyless ``anthropic``/``openai``
+    served by the logged-in ``claude``/``codex``), it is the plan's own
+    default -- the fixed API ids of ``_PROMOTE_DEFAULT_MODEL`` (``gpt-4o-mini``,
+    ``claude-opus-4-8``) are API models, and Codex refuses a model its plan
+    does not offer, so the first answer after "Use ChatGPT for answers"
+    failed. A real key keeps the table's model exactly as before. Never
+    raises."""
+    try:
+        if d.platform.providers.inherited_from(provider):
+            return PLAN_DEFAULT_MODEL
+    except Exception:  # noqa: BLE001 — a probe fault keeps the old pairing
+        pass
+    return d._PROMOTE_DEFAULT_MODEL.get(provider, d.platform.config.default_model)
+
 
 def _use_model_refusal(d, name: str) -> str | None:
     """One plain sentence saying why *name* can't answer right now, or None
@@ -234,10 +258,15 @@ def _first_local_model(d, name: str) -> str:
         )
     except Exception:  # noqa: BLE001 — discovery degrades to "nothing learned"
         live = []
+    # v1.443.0: the model the user TYPED for their own server (the key door's
+    # Model field) wins while the server lists it (or lists nothing) -- the
+    # door now chooses the server after its Test passed, and the first listed
+    # model is not the one the user asked for.
+    typed = str(getattr(cfg, "custom_model", "") or "").strip() if name == "custom" else ""
+    if typed and (not live or typed in {str(m) for m in live}):
+        return typed
     if live:
         return str(live[0])
-    if name == "custom":
-        return str(getattr(cfg, "custom_model", "") or "")
     return ""
 
 
@@ -931,7 +960,8 @@ def register(app: FastAPI, d) -> None:
             # turned off) the CLI itself answers on its own subscription model
             # (the rescan rows' name).
             if d.platform.providers.inherited_from(target) == name:
-                model = d._PROMOTE_DEFAULT_MODEL[target]
+                # v1.443.0: the plan's own default, never a fixed API id.
+                model = PLAN_DEFAULT_MODEL
             else:
                 target, model = name, "subscription"
         elif name in ("ollama", "custom"):
@@ -948,7 +978,9 @@ def register(app: FastAPI, d) -> None:
                 )
         else:
             target = name
-            model = d._PROMOTE_DEFAULT_MODEL.get(name, d.platform.config.default_model)
+            # v1.443.0: an API name served through a sign-in gets the plan's
+            # default; a pasted key keeps the table's model.
+            model = promote_model(d, name)
 
         cfg = d.platform.config
         with use_model_lock:

@@ -164,7 +164,11 @@ export function buildLaunch(pkg: string, launcher: Launcher): { command: string;
 
 /** The runtime a stdio command needs, in the catalog's words. */
 export function needsFor(command: string | null | undefined): string {
-  const c = (command ?? "").trim().toLowerCase().replace(/\.(cmd|exe)$/, "");
+  // v1.443.0: a command given as a whole path ("C:\…\node_repl.exe")
+  // is named by its program alone: the full path made a chip wider than a
+  // phone screen and pushed the whole Tools page sideways.
+  const whole = (command ?? "").trim().toLowerCase();
+  const c = (whole.split(/[\\/]/).pop() ?? "").replace(/\.(cmd|exe|bat)$/, "");
   if (c === "npx" || c === "node" || c === "npm") return "Node";
   if (c === "uvx" || c === "uv" || c === "python" || c === "pipx" || c === "python3") return "Python (uv)";
   if (c === "docker") return "Docker";

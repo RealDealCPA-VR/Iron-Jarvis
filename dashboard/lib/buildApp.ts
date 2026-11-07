@@ -25,6 +25,7 @@
 
 import { onceReasonOf } from "./onceReason";
 import { type CarryMark, decodeCarryMark } from "./buildCodeCarry";
+import { SUBSCRIPTION_CLI_ROWS } from "./subscriptionClis";
 
 // ── the view and the address ────────────────────────────────────────────────
 
@@ -471,10 +472,76 @@ export function effortsFor(tool: CodingTool | null | undefined, model: string): 
  *  goes to Iron-Proxy's first free account), so the tool stays available. */
 export function toolUnavailable(t: CodingTool): string | null {
   if (!t.installed) return `${t.label} is not installed on this PC.`;
-  if (t.signedIn === false && !t.accounts.some((a) => accountStatusWords(a.status).usable))
-    return `${t.label} is signed out. Open a terminal, run it, and sign in there first.`;
+  if (toolSignedOut(t))
+    // v1.443.0: a tool with the app's one-press Sign in says only that it is
+    // signed out — the Sign in press sits right beside these words
+    // (components/connections/CliSignInPress). A tool with no press keeps
+    // the way to do it by hand.
+    return toolSignInProvider(t.id)
+      ? `${t.label} is signed out.`
+      : `${t.label} is signed out. Open a terminal, run it, and sign in there first.`;
   return null;
 }
+
+/** v1.443.0: the tool is installed but cannot start because it is signed out
+ *  on this PC and no Iron-Proxy account of it is usable (toolUnavailable's
+ *  rule). */
+export function toolSignedOut(t: CodingTool): boolean {
+  return t.installed && t.signedIn === false && !t.accounts.some((a) => accountStatusWords(a.status).usable);
+}
+
+/** v1.443.0: the provider id whose one-press Sign in (lib/cliSignIn) starts
+ *  this coding tool on this PC's own login — "claude-cli" for Claude Code,
+ *  "codex-cli" for Codex, "grok-cli" for Grok — "" for a tool with no press
+ *  (Pi, OpenCode and Antigravity sign in by themselves). Read off the one
+ *  subscription-CLI table (lib/subscriptionClis, generated). */
+export function toolSignInProvider(toolId: string): string {
+  return SUBSCRIPTION_CLI_ROWS.find((c) => c.harness === toolId)?.provider ?? "";
+}
+
+/** v1.443.0: no coding tool in the list can start a session (none installed,
+ *  or every installed one signed out). False while the list is still read. */
+export function noToolCanStart(tools: readonly CodingTool[] | null | undefined): boolean {
+  return !!tools && !tools.some((t) => !toolUnavailable(t));
+}
+
+/** v1.443.0: no coding tool in the list is installed on this PC at all. */
+export function noToolInstalled(tools: readonly CodingTool[] | null | undefined): boolean {
+  return !!tools && !tools.some((t) => t.installed);
+}
+
+/** v1.443.0: Build › Code with nothing installed says so, in one line. */
+export const NO_TOOL_ON_PC = "None of these coding tools is on this PC yet.";
+
+/** v1.443.0: the start box's way to get a tool when none is on this PC: the
+ *  coding tool's id, the Launch catalog's id (`GET /terminals/ai-clis`, whose
+ *  `url` is the daemon's install page) and the link's words. */
+export const GET_TOOL_LINKS: readonly { harness: string; cli: string; label: string }[] = [
+  { harness: "claude-code", cli: "claude", label: "Get Claude Code" },
+  { harness: "codex", cli: "codex", label: "Get Codex" },
+];
+
+/** v1.443.0: the Get links with their pages. The daemon's page (the Launch
+ *  catalog row's `url`) wins; `fallback` (the dashboard's own install page
+ *  for that CLI, lib/onboarding SUBSCRIPTION_CLIS) is used while the catalog
+ *  is not read; a link with no known page is left out. Only http(s). */
+export function getToolLinks(
+  catalog: readonly { id: string; url?: string }[] | null | undefined,
+  fallback: (cli: string) => string | undefined = () => undefined,
+): { harness: string; label: string; url: string }[] {
+  const out: { harness: string; label: string; url: string }[] = [];
+  for (const g of GET_TOOL_LINKS) {
+    const url = (catalog?.find((c) => c.id === g.cli)?.url ?? "").trim() || (fallback(g.cli) ?? "").trim();
+    if (/^https?:\/\//i.test(url)) out.push({ harness: g.harness, label: g.label, url });
+  }
+  return out;
+}
+
+/** v1.443.0: the two "Code" views point at each other, one quiet line each. */
+export const TO_CHAT_CODE_LEAD = "Want Jarvis to write the code itself? Use";
+export const TO_BUILD_CODE_LEAD = "Want your own Claude Code or Codex instead? Open";
+export const BUILD_CODE_PLACE = "Build › Code";
+export const LET_JARVIS_CODE_LEAD = "Or let Jarvis write the code in";
 
 // ── sessions (GET /build/app/sessions) ──────────────────────────────────────
 

@@ -13,6 +13,7 @@
 // a terminal (`?focus=<id>`) stays here. xterm is dynamically imported (no
 // SSR).
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import {
@@ -61,7 +62,7 @@ import {
   type PaneActivity,
   type PaneState,
 } from "@/components/terminal/PaneState";
-import { BUILD_TERMINAL_EVENT, addressMove, codeHrefForOldBuildSearch, sessionOfEvent } from "@/lib/buildLinks";
+import { BUILD_TERMINAL_EVENT, CODE_VIEW_LINK, addressMove, codeHrefForOldBuildSearch, sessionOfEvent } from "@/lib/buildLinks";
 import { CODING_SESSION, CODING_SESSIONS_LIST, CODING_SESSIONS_PLACE } from "@/lib/buildWords";
 // v1.409.0: Build's Code | Terminal switch (the chat page's own switch,
 // shared) and its Code view — the real Claude Code / Codex in a window.
@@ -71,6 +72,7 @@ import {
   BUILD_CODE_VIEW_NAME,
   BUILD_TERMINAL_VIEW_NAME,
   OPEN_IN_CODE_VIEW,
+  TO_CHAT_CODE_LEAD,
   cachedBuildView,
   codeSessionFromSearch,
   decodeCodeSession,
@@ -1163,6 +1165,20 @@ export default function TerminalsPage() {
       // The terminals, exactly as before (no wrapper element: the Terminal
       // view's markup is today's page).
       <>
+
+      {/* v1.443.0 (ease-of-use review, item 11): the subtitle (behind the
+          title, a hover popover that cannot hold a link) names Chat › Code;
+          this is that mention as a real link, one quiet line. */}
+      <p data-testid="build-to-chat-code" className="-mt-2 text-[12px] text-zinc-500">
+        {TO_CHAT_CODE_LEAD}{" "}
+        <Link
+          href={CODE_VIEW_LINK}
+          className="rounded-sm text-zinc-400 underline decoration-white/20 underline-offset-2 transition-colors hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+        >
+          {CODING_SESSIONS_PLACE}
+        </Link>
+        .
+      </p>
 
       {offline && (
         <Reveal>

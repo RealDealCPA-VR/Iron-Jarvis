@@ -62,10 +62,11 @@
  *    running the download, with no command to copy (G73, lib/starterModel).
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { CheckCircle2, Download, KeyRound, Loader2, RefreshCw, TerminalSquare } from "lucide-react";
 import { post, put } from "@/lib/api";
+import { cacheSet, cachedGet } from "@/lib/apiCache";
 import { codeParts, paneHref, signedOutLine, useCliSignIn } from "@/lib/cliSignIn";
 import { EndpointModelPicker } from "@/components/connections/EndpointModelPicker";
 import { LocalServerChips, useFetchModelsSoon } from "@/components/connections/LocalServerChips";
@@ -81,7 +82,9 @@ import {
   friendlyProvider,
   healthRow,
   isDemoDefault,
+  keyShapeProvider,
   type AnswerCandidate,
+  type KeySaveAnswer,
   type SubscriptionCli,
 } from "@/lib/onboarding";
 import type { ConnectionTestResult } from "@/lib/types";
@@ -143,6 +146,46 @@ const KEY_PROVIDERS: {
 ];
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** v1.443.0: the door picked and the Sign in panes opened, kept for THIS
+ *  VISIT (module memory in lib/apiCache: never on disk, gone on a reload).
+ *  Leaving Chat for the Build terminal unmounts the doors; coming back used
+ *  to close the door and forget the pane, so the row offered Sign in again
+ *  and a second terminal opened. A key that is not a GET path, so no reader
+ *  of the cache ever mistakes it for an answer. */
+export const DOORS_VISIT_KEY = "ui:connect-doors/visit";
+
+interface DoorsVisit {
+  door: Door | null;
+  panes: Record<string, string | null>;
+}
+
+function readVisit(): DoorsVisit {
+  const v = cachedGet<DoorsVisit>(DOORS_VISIT_KEY);
+  return v && typeof v === "object"
+    ? { door: v.door ?? null, panes: { ...(v.panes ?? {}) } }
+    : { door: null, panes: {} };
+}
+
+function writeVisit(patch: Partial<DoorsVisit>): void {
+  const now = readVisit();
+  cacheSet(DOORS_VISIT_KEY, { ...now, ...patch, panes: { ...now.panes, ...(patch.panes ?? {}) } });
+}
+
+/** v1.443.0: the check-now press, and what it says when the CLI still reads
+ *  signed out after a fresh look. */
+export const CHECK_NOW_LABEL = "I've signed in — check now";
+export function stillSignedOutLine(name: string): string {
+  return `${name} still says it isn't signed in. Finish the sign-in in the Build terminal, then press “${CHECK_NOW_LABEL}” again.`;
+}
+
+/** The plain name of a key's company, as it reads in "This looks like
+ *  an OpenAI key". */
+const KEY_SHAPE_NAMES: Record<string, string> = {
+  anthropic: "an Anthropic",
+  openai: "an OpenAI",
+  google: "a Google Gemini",
+};
 
 /** What POST /onboarding/use-model can choose: readiness.USE_MODEL_CLIS +
  *  USE_MODEL_LOCAL + providers.manager.API_PROVIDERS. Keep in step with the
@@ -213,6 +256,10 @@ function withCode(text: string) {
   );
 }
 
+function keyPickFor(id: string) {
+  return KEY_PROVIDERS.find((p) => p.id === id);
+}
+
 export function ConnectDoors({
   onChanged,
   onEnabled,
@@ -260,7 +307,11 @@ export function ConnectDoors({
 
   /* Which door is open. Local state ONLY (v1.197.0): remembering it would
      resurrect a stale pick on the next visit, and re-picking costs one click. */
-  const [door, setDoor] = useState<Door | null>(null);
+  const [door, setDoorState] = useState<Door | null>(() => readVisit().door);
+  function setDoor(next: Door | null) {
+    setDoorState(next);
+    writeVisit({ door: next });
+  }
 
   // --- the ONE explicit promotion press (W2-1, components/onboarding/
   //     AnswerPress — the wizard's finale says it the same way) ------------
@@ -268,13 +319,27 @@ export function ConnectDoors({
 
   // --- subscription door ---------------------------------------------------
   const [rescanBusy, setRescanBusy] = useState(false);
+  /** v1.443.0: per CLI, the check-now press's answer when it still reads
+   *  signed out. */
+  const [checkNote, setCheckNote] = useState<Record<string, string>>({});
 
-  async function rescan() {
+  async function rescan(c?: SubscriptionCli) {
     setRescanBusy(true);
+    if (c) setCheckNote((n) => ({ ...n, [c.cli]: "" }));
     try {
-      await post("/providers/rescan");
-    } catch {
-      /* ignore — the refresh surfaces the real state either way */
+      // The rescan RE-PROBES each installed CLI's sign-in (blocking, on the
+      // daemon's threadpool), so the very next /health read says the truth.
+      const res = await post<{ detected?: { provider?: string; signed_in?: boolean | null }[] }>(
+        "/providers/rescan",
+      );
+      if (c) {
+        const row = (res?.detected ?? []).find((r) => r?.provider === c.provider);
+        if (!row || row.signed_in !== true) {
+          setCheckNote((n) => ({ ...n, [c.cli]: stillSignedOutLine(c.name) }));
+        }
+      }
+    } catch (e) {
+      if (c) setCheckNote((n) => ({ ...n, [c.cli]: errText(e) }));
     } finally {
       after();
       setRescanBusy(false);
@@ -287,10 +352,24 @@ export function ConnectDoors({
      user to type /login; the door says so instead of pretending.
      v1.353.0 (G33): the press lives in lib/cliSignIn, shared with Settings ›
      Connections › Accounts. */
-  const { signIn, start: startSignIn } = useCliSignIn((c: SubscriptionCli) => {
+  const { signIn: signInNow, start: startSignIn } = useCliSignIn((c: SubscriptionCli) => {
     onEnabled?.(c.provider);
     after();
   });
+  // v1.443.0: a pane opened earlier in this visit is still "the" sign-in
+  // pane after the doors were gone and came back (no second terminal).
+  const [rememberedPanes] = useState<Record<string, string | null>>(() => readVisit().panes);
+  useEffect(() => {
+    const opened: Record<string, string | null> = {};
+    for (const [cli, st] of Object.entries(signInNow)) {
+      if (st && st.paneId !== undefined) opened[cli] = st.paneId;
+    }
+    if (Object.keys(opened).length) writeVisit({ panes: opened });
+  }, [signInNow]);
+  const signIn: typeof signInNow = { ...signInNow };
+  for (const [cli, paneId] of Object.entries(rememberedPanes)) {
+    if (!signIn[cli]) signIn[cli] = { paneId };
+  }
 
   /* Ollama door (v1.197.0). Rescan does NOT detect Ollama: the provider only
      reports available once `ollama_base_url` is CONFIGURED. Saving the default
@@ -328,6 +407,28 @@ export function ConnectDoors({
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyResult, setKeyResult] = useState<ConnectionTestResult | null>(null);
   const [keyError, setKeyError] = useState<string | null>(null);
+  /** v1.443.0: the tab the key's SHAPE switched away from (an OpenAI key
+   *  pasted into the Anthropic tab, the usual slip), for the line saying so. */
+  const [shapeSwitchedFrom, setShapeSwitchedFrom] = useState<KeyProvider | null>(null);
+  /** v1.443.0: this Connect also chose the key for answers (no "choose it
+   *  above" line under a result the press already acted on). */
+  const [keyChose, setKeyChose] = useState(false);
+  /** v1.443.0: the daemon said the key failed its test and was NOT stored. */
+  const [keyNotSaved, setKeyNotSaved] = useState(false);
+
+  function onKeyInput(value: string) {
+    setKeyValue(value);
+    if (keyProvider === "custom") return;
+    const shaped = keyShapeProvider(value);
+    // Only when the value CHANGES into another tab's shape: a tab the user
+    // then picks by hand stands (the mismatch line offers the switch back).
+    if (shaped && shaped !== keyProvider && shaped !== keyShapeProvider(keyValue)) {
+      setShapeSwitchedFrom(keyProvider);
+      setKeyProvider(shaped);
+      setKeyResult(null);
+      setKeyError(null);
+    }
+  }
 
   /* v1.355.0 (G72): "LM Studio on this PC" / "llama.cpp" fill the address and
      press the model picker's own "Fetch available models" below it. */
@@ -340,14 +441,25 @@ export function ConnectDoors({
     fetchModelsSoon();
   }
 
+  /* v1.443.0: TEST FIRST, CHOOSE ONLY AFTER A PASS. The key used to be
+     saved AND made the default before any test (the route's first-connect
+     promotion); the doors then unmounted (the default was no longer the
+     demo) and a wrong key's error went with them. Now `?check=1` tests the
+     key before it is stored (a failed test stores nothing and changes
+     nothing), and only a passing key is chosen for answers — with the same
+     one press as "Use … for answers", whose "Done — … answers you now" the
+     chat keeps saying after the doors are gone (onChosen). */
   async function connectKey() {
     const isCustom = keyProvider === "custom";
     if (isCustom ? !customBaseUrl.trim() : !keyValue.trim()) return;
     setKeyBusy(true);
     setKeyError(null);
     setKeyResult(null);
+    setKeyChose(false);
+    setKeyNotSaved(false);
     try {
       let result: ConnectionTestResult;
+      let saved = true;
       if (isCustom) {
         // Save the endpoint FIRST so a key-less local server (LM Studio, etc.)
         // still sticks, then optionally attach a key.
@@ -355,16 +467,35 @@ export function ConnectDoors({
           values: { custom_base_url: customBaseUrl.trim(), custom_model: customModel.trim() },
         });
         if (keyValue.trim()) {
-          await post(`/connections/custom/key`, { key: keyValue.trim() });
+          await post(`/connections/custom/key?check=1`, { key: keyValue.trim() });
         }
         result = await post<ConnectionTestResult>(`/connections/custom/test`);
       } else {
-        await post(`/connections/${keyProvider}/key`, { key: keyValue.trim() });
-        result = await post<ConnectionTestResult>(`/connections/${keyProvider}/test`);
+        const answer = await post<KeySaveAnswer>(`/connections/${keyProvider}/key?check=1`, {
+          key: keyValue.trim(),
+        });
+        saved = answer?.saved !== false;
+        // The route's own test when it ran one; an older daemon (no `test`)
+        // stored the key, so the Test route says what it thinks.
+        result =
+          answer?.test && typeof answer.test.ok === "boolean"
+            ? (answer.test as ConnectionTestResult)
+            : await post<ConnectionTestResult>(`/connections/${keyProvider}/test`);
       }
       setKeyResult(result);
-      if (result?.ok) onEnabled?.(keyProvider);
-      setKeyValue("");
+      setKeyNotSaved(!saved);
+      if (saved) setKeyValue("");
+      if (result?.ok && saved) {
+        onEnabled?.(keyProvider);
+        if (demo) {
+          setKeyChose(true);
+          const label = PRESS_LABELS[keyProvider] ?? keyPickFor(keyProvider)?.label ?? keyProvider;
+          await press({ provider: keyProvider, label, where: "" }, (_provider, chosen) =>
+            onChosen?.(chosen),
+          );
+          return; // the press refreshed /health itself
+        }
+      }
       after(); // immediate green — don't wait for the 5s health poll
     } catch (e) {
       setKeyError(errText(e));
@@ -384,7 +515,8 @@ export function ConnectDoors({
      ("checking"). Both turn green by themselves once it does. */
   const anyUnknown = states.some((s) => s.state === "unknown" || s.state === "checking");
   const showPress = demo && candidates.length > 0;
-  const keyPick = KEY_PROVIDERS.find((p) => p.id === keyProvider);
+  const keyPick = keyPickFor(keyProvider);
+  const keyShape = keyProvider === "custom" ? null : keyShapeProvider(keyValue);
   const keyWords = testWords(keyResult as ConnectionTestWords | null);
 
   return (
@@ -561,7 +693,8 @@ export function ConnectDoors({
                             className="mt-1.5 block text-zinc-400"
                           >
                             A Build terminal opened with {c.name} running. {withCode(c.paneHint)} This
-                            turns green by itself once you&apos;re signed in.{" "}
+                            turns green by itself a few seconds after {c.name} says you&apos;re signed
+                            in, or press “{CHECK_NOW_LABEL}”.{" "}
                             <Link
                               href={paneHref(si.paneId)}
                               onClick={() => onOpenPane?.()}
@@ -569,6 +702,21 @@ export function ConnectDoors({
                             >
                               Open the Build terminal
                             </Link>
+                            {/* v1.443.0: a pane remembered from earlier in
+                                this visit may have been closed since. */}
+                            {!signInNow[c.cli] && (
+                              <>
+                                {" · "}
+                                <button
+                                  type="button"
+                                  data-testid={`sign-in-again-${c.cli}`}
+                                  onClick={() => void startSignIn(c)}
+                                  className="text-zinc-400 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-200"
+                                >
+                                  Closed it? Open a new one
+                                </button>
+                              </>
+                            )}
                           </span>
                         ) : (
                           <button
@@ -588,6 +736,32 @@ export function ConnectDoors({
                         {si.error && (
                           <span className="mt-1 block text-tone-danger">{si.error}</span>
                         )}
+                        {/* v1.443.0: the user finished signing in — look
+                            again NOW (the rescan re-probes the sign-in)
+                            instead of waiting for the next automatic check. */}
+                        <button
+                          type="button"
+                          data-testid={`check-now-${c.cli}`}
+                          onClick={() => void rescan(c)}
+                          disabled={rescanBusy}
+                          className="mt-1.5 ml-1.5 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
+                        >
+                          {rescanBusy ? (
+                            <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+                          ) : (
+                            <RefreshCw size={13} aria-hidden="true" />
+                          )}
+                          {CHECK_NOW_LABEL}
+                        </button>
+                        {checkNote[c.cli] && (
+                          <span
+                            role="status"
+                            data-testid={`check-now-note-${c.cli}`}
+                            className="mt-1 block text-zinc-400"
+                          >
+                            {checkNote[c.cli]}
+                          </span>
+                        )}
                       </>
                     )}
                   </li>
@@ -602,7 +776,7 @@ export function ConnectDoors({
             <>
               <button
                 type="button"
-                onClick={rescan}
+                onClick={() => void rescan()}
                 disabled={rescanBusy}
                 className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
               >
@@ -613,9 +787,9 @@ export function ConnectDoors({
                 )}
                 Rescan now
               </button>
-              <p className="mt-2 text-[11px] text-zinc-600">
-                Iron Jarvis also re-checks by itself every few seconds — this step turns green on
-                its own once it finds a signed-in Claude Code or Codex.
+              <p data-testid="recheck-words" className="mt-2 text-[11px] text-zinc-600">
+                Iron Jarvis also checks again by itself about every two minutes. Press Rescan now
+                to check at once.
               </p>
             </>
           )}
@@ -728,6 +902,7 @@ export function ConnectDoors({
                   setKeyProvider(p.id);
                   setKeyResult(null);
                   setKeyError(null);
+                  setShapeSwitchedFrom(null);
                 }}
                 className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
                   keyProvider === p.id
@@ -784,7 +959,7 @@ export function ConnectDoors({
             <input
               type="password"
               value={keyValue}
-              onChange={(e) => setKeyValue(e.target.value)}
+              onChange={(e) => onKeyInput(e.target.value)}
               placeholder={keyPick?.placeholder ?? "key"}
               className="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none"
             />
@@ -798,6 +973,35 @@ export function ConnectDoors({
             </button>
           </form>
 
+          {/* v1.443.0: the key's shape names its company. Pasted into another
+              tab (the usual slip), the right tab was picked and this says
+              so; a tab picked by hand afterwards gets a one-press switch. */}
+          {keyShape && keyShape === keyProvider && shapeSwitchedFrom && (
+            <p data-testid="key-door-shape" className="mt-2 text-[11px] text-zinc-400">
+              This looks like {KEY_SHAPE_NAMES[keyShape]} key, so the {keyPickFor(keyShape)?.label} tab
+              is picked.
+            </p>
+          )}
+          {keyShape && keyShape !== keyProvider && (
+            <p data-testid="key-door-shape" className="mt-2 text-[11px] text-tone-warn">
+              This looks like {KEY_SHAPE_NAMES[keyShape]} key, not{" "}
+              {KEY_SHAPE_NAMES[keyProvider] ?? "this"} one.{" "}
+              <button
+                type="button"
+                data-testid="key-door-shape-switch"
+                onClick={() => {
+                  setKeyProvider(keyShape);
+                  setShapeSwitchedFrom(null);
+                  setKeyResult(null);
+                  setKeyError(null);
+                }}
+                className="font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent"
+              >
+                Switch to {keyPickFor(keyShape)?.label}
+              </button>
+            </p>
+          )}
+
           {keyResult && (
             <div role="status" className={`mt-2 text-xs ${keyResult.ok ? "text-tone-success" : "text-tone-danger"}`}>
               <p data-testid="key-door-result">
@@ -807,7 +1011,11 @@ export function ConnectDoors({
                 {keyWords.text}
                 {/* v1.353.0 (G35): connected is not chosen — while replies are
                     the demo, say the next step instead of stopping at "Connected". */}
-                {keyResult.ok && demo ? " Choose it above to use it for answers." : ""}
+                {keyResult.ok && demo && !keyChose ? " Choose it above to use it for answers." : ""}
+                {/* v1.443.0: a failed key test stored nothing — say so. */}
+                {!keyResult.ok && keyNotSaved
+                  ? " Nothing was saved, and what answers you didn't change."
+                  : ""}
               </p>
               {keyWords.technical && (
                 <details data-testid="key-door-technical" className="mt-1 text-[11px] text-zinc-500">

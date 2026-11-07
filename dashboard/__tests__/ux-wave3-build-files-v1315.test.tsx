@@ -521,7 +521,8 @@ describe("File search: the default is named honestly and your projects are offer
     renderSearch();
     const def = Array.from(rootSelect().options).find((o) => o.value === "");
     expect(def).toBeDefined();
-    expect(def?.textContent ?? "").toMatch(/default folders/i);
+    // v1.443.0 (moved on purpose): the default is the USER's folders, named so.
+    expect(def?.textContent ?? "").toBe("Your folders");
     expect(document.body.textContent ?? "").not.toMatch(/Project \(default\)/);
     expect(document.body.textContent ?? "").not.toMatch(/beyond the project/);
     const params = await runSearch();

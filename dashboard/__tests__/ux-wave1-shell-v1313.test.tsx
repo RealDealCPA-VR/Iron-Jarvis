@@ -243,6 +243,18 @@ const PROVIDERS_UP = [
   { provider: "openai", available: true, class: "api" },
 ];
 
+/** v1.443.0: /health on a fresh install (tests/test_demo_exit_v14430's dump
+ *  of a scratch daemon: 11 provider rows, 5 Browser-vault rows), plus a demo
+ *  row of the kind the daemon itself leaves out. */
+const FRESH_INSTALL_ROWS = [
+  ...["anthropic", "google", "openai", "openrouter", "xai"].map((provider) => ({ provider, available: false, class: "api" })),
+  ...["claude-cli", "codex-cli", "grok-cli"].map((provider) => ({ provider, available: false, class: "cli" })),
+  ...["custom", "ollama", "opencode-cli"].map((provider) => ({ provider, available: false, class: "local" })),
+  { provider: "claude", available: true, class: "browser" },
+  ...["chatgpt", "codex", "grok", "gemini"].map((provider) => ({ provider, available: false, class: "browser" })),
+  { provider: "mock", available: true, class: "mock" },
+];
+
 function health(default_provider: string, default_model = "claude-opus-4-8", providers = PROVIDERS_UP) {
   return { status: "ok", version: "1.313.0", default_provider, default_model, providers };
 }
@@ -474,7 +486,13 @@ describe("SimulatedBanner — a connected model that nobody chose to answer", ()
   });
 
   it("CONTROL: nothing connected keeps the demo strip (v1.357.0: 'Demo replies', was 'Simulated mode') and its Connect a model link", async () => {
-    mockDaemon(health("mock", "claude-opus-4-8", []));
+    // v1.443.0 (moved on purpose, ease-of-use review item 2): what a FRESH
+    // install's /health really sends — every provider row, none available,
+    // the Browser vault's saved web sign-ins (one signed in: not a model
+    // anyone can choose), and a "mock" row a test double could add. `[]` was
+    // a shape the daemon never sends, so it could not catch the demo model
+    // (or a web sign-in) being counted as "a model is connected".
+    mockDaemon(health("mock", "claude-opus-4-8", FRESH_INSTALL_ROWS as never));
     await renderWithDaemon(<SimulatedBanner />);
     const strip = await screen.findByRole("status");
     expect(strip.textContent).toContain("Demo replies");

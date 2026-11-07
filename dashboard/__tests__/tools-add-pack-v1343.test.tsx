@@ -626,6 +626,10 @@ describe("lib/mcpImport helpers", () => {
     expect(helpers.rowStatus({ ...PY, runtime_ready: null })).toEqual({ status: "blocked", needs: "Python (uv)" });
     expect(helpers.needsFor("docker")).toBe("Docker");
     expect(helpers.needsFor("node.exe")).toBe("Node");
+    // v1.443.0: a whole path is named by its program alone (it pushed the
+    // Tools page sideways on a phone), and node at a path is still Node.
+    expect(helpers.needsFor(String.raw`c:\users\vr\appdata\local\openai\bin\node_repl`)).toBe("node_repl");
+    expect(helpers.needsFor("C:/Program Files/nodejs/node.exe")).toBe("Node");
   });
 
   it("httpServerBody: blank headers dropped, no token = no auth, a bad name falls back to the host", () => {

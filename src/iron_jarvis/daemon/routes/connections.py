@@ -1340,6 +1340,48 @@ async def fetch_endpoint_models(d: Any, base_url: str, protocol: str = "openai",
         return _probe_fail("failed")
 
 
+def check_key_first(d: Any, provider: str, key: str) -> dict[str, Any] | None:
+    """Test a pasted key BEFORE it is stored (v1.443.0, the connect door's
+    ``POST /connections/{p}/key?check=1``): the registry's own prober asked
+    with the candidate key, answered in the Test route's words
+    (``probe_test_words``). ``None`` = nothing to check with (unknown provider,
+    no prober wired, an empty key) -- the caller stores the key as before.
+
+    A wrong key used to be saved AND made the default first; the door's Test
+    ran after, and by then the panel had gone with its error. BLOCKING (the
+    probe is one small HTTPS request): the route is a sync def on the
+    threadpool. The key itself never reaches the answer (the probe scrubs
+    it). Never raises."""
+    conns = d.platform.connections
+    try:
+        spec = conns.get_spec(provider)
+    except Exception:  # noqa: BLE001
+        spec = None
+    prober = getattr(conns, "_prober", None)
+    value = (key or "").strip()
+    if spec is None or prober is None or not value:
+        return None
+    try:
+        from ...connections.probe import kind_of
+
+        raw = prober(provider, value)
+        ok, detail = raw
+        facts = raw if getattr(raw, "kind", "") else kind_of(provider, ok, detail)
+        result: dict[str, Any] = {"ok": bool(ok), "detail": str(detail or ""), "kind": facts.kind}
+        if facts.status is not None:
+            result["status"] = facts.status
+    except Exception as exc:  # noqa: BLE001 — a probe fault is a failed check
+        result = {
+            "ok": False,
+            "detail": f"{spec.display_name}: probe failed ({type(exc).__name__})",
+            "kind": "unreachable",
+        }
+    words = probe_test_words(result, provider, getattr(d.platform, "providers", None))
+    if words.get("title"):
+        result = {**result, **words}
+    return result
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/connections")
@@ -1367,25 +1409,66 @@ def register(app: FastAPI, d) -> None:
             )
         cfg = d.platform.config
         # Redesign S2: the one writer (ledger + Undo).
-        from .settings import config_writer
+        from .settings import config_writer, promote_model
 
         config_writer(d).apply(
             {
                 "default_provider": provider,
-                "default_model": d._PROMOTE_DEFAULT_MODEL.get(provider, cfg.default_model),
+                # v1.443.0: a keyless Anthropic/OpenAI served through a
+                # sign-in gets the plan's own default, not a fixed API id.
+                "default_model": promote_model(d, provider),
             },
             actor="connections",
         )
         return {"default_provider": provider, "default_model": cfg.default_model}
 
     @app.post("/connections/{provider}/key")
-    def connect_key(provider: str, body: ConnectionKeyBody) -> dict[str, Any]:
+    def connect_key(provider: str, body: ConnectionKeyBody, check: bool = False) -> dict[str, Any]:
+        """Store an API key. Without ``check`` exactly as before (stored, and
+        the first real provider replaces the untouched demo default).
+
+        v1.443.0, ``?check=1`` (the connect door): the key is TESTED first
+        (``check_key_first``) and stored only when the test passed; nothing
+        is made the default here at all -- the door then chooses it with the
+        one explicit press (``POST /onboarding/use-model``), so a wrong key
+        changes nothing and its reason stays on screen. The answer carries
+        ``saved`` and the ``test`` result in the Test route's words."""
+        tested: dict[str, Any] | None = None
+        if check:
+            tested = check_key_first(d, provider, body.key)
+            if tested is not None and not tested.get("ok"):
+                return {
+                    "provider": provider,
+                    "status": "not_saved",
+                    "saved": False,
+                    "promoted_default": False,
+                    "test": tested,
+                }
         try:
             rec = d.platform.connections.set_api_key(provider, body.key)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         finally:
             invalidate_model_catalog(discovery=True, provider=provider)  # v1.332.0: a new key, new rows
+        if check:
+            if tested is not None:
+                # The Directory's key card says what this check said (the
+                # Test route's rule: one key, one verdict on both pages).
+                try:
+                    from ...connectors.service import note_key_check
+
+                    note_key_check(d.platform, provider, tested)
+                except Exception:  # noqa: BLE001 — a status note never fails a save
+                    pass
+            out: dict[str, Any] = {
+                "provider": rec.provider,
+                "status": rec.status,
+                "saved": True,
+                "promoted_default": False,
+            }
+            if tested is not None:
+                out["test"] = tested
+            return out
         promoted = d._maybe_autopromote_default(rec.provider)
         return {"provider": rec.provider, "status": rec.status, "promoted_default": promoted}
 

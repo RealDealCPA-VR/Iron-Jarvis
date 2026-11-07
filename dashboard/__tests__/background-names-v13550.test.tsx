@@ -412,11 +412,13 @@ describe("the background-refusal banner names its job and what was not affected"
     expect(screen.getByRole("link", { name: "See the task" })).toHaveAttribute("href", "/sessions/s-7");
   });
 
-  it("no job to see without a run: a chat refusal stays silent, a sessionless mock has no link", () => {
+  it("no job to see without a run: a chat refusal stays silent, and so does a sessionless demo answer", () => {
     expect(downgradeNotice(ev("3", { used: "none", reason: "x" }, "chat"))).toBeNull();
+    // v1.443.0 (moved on purpose, ease-of-use review item 2): a demo answer
+    // with no run is a chat turn, already said in the chat — no banner.
     H.events = [ev("4", { used: "mock", reason: "demo" }, null)];
     render(<ProviderDowngradeBanner />);
-    expect(screen.getByTestId("provider-downgrade")).toBeTruthy();
+    expect(screen.queryByTestId("provider-downgrade")).toBeNull();
     expect(screen.queryByRole("link", { name: "See the task" })).toBeNull();
   });
 });

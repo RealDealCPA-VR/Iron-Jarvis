@@ -1317,8 +1317,18 @@ def build_platform(
 
     # File search across configured roots, sharing the SAME embedder built above
     # so filesearch + ltm + layered memory all rank against identical vectors.
-    search_roots = [Path(r) for r in config.search_roots] or [config.project_root]
-    filesearch = FileSearchService(search_roots, embedder=embedder)
+    # v1.443.0: the folders are the USER's, read live (filesearch/defaults.py):
+    # name/content search = the chat files folder + every active project's
+    # folder + the folders added on the File Search page; "By meaning" (which
+    # the memory fabric asks on every turn) = only the added ones. Never the
+    # app's own data folder — the old ``or [config.project_root]`` default IS
+    # that folder in a packaged run.
+    from .filesearch.defaults import FolderPlan
+
+    search_plan = FolderPlan(config, engine)
+    filesearch = FileSearchService(
+        search_plan.search, embedder=embedder, meaning_roots=search_plan.meaning
+    )
     for tool in filesearch_tools(filesearch):
         registry.register(tool)
 

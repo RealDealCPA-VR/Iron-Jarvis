@@ -15392,6 +15392,42 @@ does not need a bump, stop and bump it.
     `last_byte` stamp: the old shape gave the gate's exact error. A test that
     needs a pooled connection waits for the pool, never for the answer.
 
+- **The first ten minutes** (v1.443.0; items 1-6, 11, 14, 18, 58 of
+  docs/EASE-OF-USE-REVIEW-2026-11-07.md, four helpers + the coordinator, each
+  pin red on the old code). (1) A promotion over a sign-in saves the plan's
+  own default: `routes/settings.promote_model(d, provider)` is THE rule
+  (`"subscription"` when the API name is served through the CLI, else the
+  table) for use-model, Connections' Make default and
+  `_maybe_autopromote_default`. (2) `POST /connections/{p}/key?check=1` tests
+  first and stores only a passing key (never promotes; answers `saved:false` +
+  the Test words); the chat's ConnectDoors sends it, then use-model. Without
+  `?check=1` the route is unchanged — Settings › Connections and chat's
+  secure card (`settings/credentials.py`) STILL save before testing (open).
+  Key shape picks the tab (`sk-ant-` / `sk-` / `AIza`,`AQ.`; `sk-or-` left).
+  (3) "I've signed in — check now" (POST /providers/rescan) and
+  `signin_watch.watch_default_login` on a `/terminals/launch` with `account:
+  "default"` (claude/codex; ≤ 6 re-checks, ≥ 10 s apart, 15 min). (4)
+  `lib/demoExit.realModelRows` never counts mock or class "browser" (saved
+  web sign-ins) as a model; the strip's press is use-model when one press can
+  choose; `DemoConnectChoice` under the box while the demo is the default;
+  ModelMenu greyed rows say "Not connected yet" + a "Connect a model…" row
+  (`ij:open-connect`); ProviderDowngradeBanner is quiet for a chat the demo
+  answered; `chat_turn.demo_note` names the press (`surface=` passed by both
+  lanes). (5) Creative Autopilot reads only `autopilotOn` (default off; the
+  old `autopilot` key was written every visit). (6) `filesearch/defaults.py`
+  `FolderPlan`: search = chat files folder + active projects + added
+  `search_roots` (now ADDS, never replaces), never the app home or
+  project_root, read live; "By meaning" (the fabric asks it every turn) only
+  the ADDED folders, built once on its own thread, callers wait ≤
+  `SEMANTIC_WAIT_S`. (11) Build › Code: `NoToolHelp`, `CliSignInPress` beside
+  a signed-out tool, one-line links between the two Code views. (14) the
+  Tools catalog card's Remove is a `ConfirmButton` (new optional `testId`).
+  (18) `lib/settingsOpen` + SettingsHome follow a LATER address change
+  (`SETTINGS_OPEN_EVENT`, popstate, Navigation API `currententrychange`);
+  the palette calls `announceSettingsLink`. (58) `needsFor` names a path by
+  its program; Directory card grids `grid-cols-[minmax(0,1fr)]`. Pins: the
+  `*-v1443` / `*_v14430` files.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
