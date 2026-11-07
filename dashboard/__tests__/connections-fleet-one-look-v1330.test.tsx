@@ -561,8 +561,13 @@ describe("Fleet page: calm Badges and a calm Remove", () => {
     const rename = within(controls).getByRole("button", { name: "Rename this endpoint" });
     expect(tokens(rename)).toEqual(expect.arrayContaining(["h-7", "w-7", "hover:bg-white/[0.06]"]));
 
-    const refresh = screen.getByRole("button", { name: /Refresh/ });
-    expectCalmAction(refresh, "Refresh");
+    // v1.447.2 (calm sweep): Refresh is the header's refresh arrow, a quiet
+    // 28 px icon button named "Refresh" (was a worded calm action).
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    expect(borders(refresh)).toEqual([]);
+    expect(tokens(refresh)).toEqual(
+      expect.arrayContaining(["h-7", "w-7", "hover:bg-white/[0.06]", "focus-visible:ring-1"]),
+    );
   });
 });
 

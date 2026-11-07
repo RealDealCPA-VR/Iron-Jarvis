@@ -1122,7 +1122,7 @@ export default function SessionDetailPage({
                   <div className="-mx-1 overflow-x-auto">
                     <table className="w-full text-left text-sm">
                       <thead>
-                        <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        <tr className="border-b hairline text-[12px] font-medium text-zinc-400">
                           <th className="px-2 py-2.5 font-medium">Run</th>
                           <th className="px-2 py-2.5 font-medium">Agent</th>
                           <th className="px-2 py-2.5 font-medium">State</th>
@@ -1167,7 +1167,7 @@ export default function SessionDetailPage({
                   <div className="-mx-1 overflow-x-auto">
                     <table className="w-full text-left text-sm">
                       <thead>
-                        <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        <tr className="border-b hairline text-[12px] font-medium text-zinc-400">
                           <th className="px-2 py-2.5 font-medium">Tool</th>
                           <th className="px-2 py-2.5 font-medium">Verdict</th>
                           <th className="px-2 py-2.5 font-medium">OK</th>

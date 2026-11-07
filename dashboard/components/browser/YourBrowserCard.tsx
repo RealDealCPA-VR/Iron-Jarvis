@@ -91,6 +91,7 @@ import {
   SectionLabel,
   SuccessNote,
 } from "@/components/ui";
+import { IconButton } from "@/components/IconButton";
 // ONE clipboard path for the whole app (v1.229.0): it prefers the Electron
 // bridge, falls back to navigator.clipboard, and — the part that matters here —
 // REPORTS "unavailable" instead of pretending. A second copy helper in this file
@@ -308,16 +309,14 @@ function FolderLine({
         >
           {folder}
         </code>
-        <button
-          type="button"
-          data-testid={`${testid}-copy`}
+        {/* v1.447.2 (calm sweep): a clipboard icon right after the path. */}
+        <IconButton
+          label={`Copy ${folder}`}
+          tip="Copy"
+          testId={`${testid}-copy`}
+          icon={<ClipboardCopy size={14} aria-hidden />}
           onClick={copy}
-          title={`Copy ${folder}`}
-          aria-label={`Copy ${folder}`}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/30 hover:text-zinc-200"
-        >
-          <ClipboardCopy size={12} /> Copy
-        </button>
+        />
         {said && (
           <span data-testid={`${testid}-copied`} className="text-[11px] text-zinc-500">
             {said}

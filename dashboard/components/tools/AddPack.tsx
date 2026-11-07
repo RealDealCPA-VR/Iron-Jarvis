@@ -945,7 +945,7 @@ function HttpDoor({ onAdded }: { onAdded: () => void }) {
         aria-label="Server URL"
       />
       <label className="mt-2 block">
-        <span className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">Name (optional)</span>
+        <span className="mb-1 block text-[12px] font-medium text-zinc-400">Name (optional)</span>
         <input
           data-testid="add-pack-http-name"
           value={name}
@@ -966,7 +966,7 @@ function HttpDoor({ onAdded }: { onAdded: () => void }) {
             {/* v1.356.0 (G74, review): the same words the editor uses
                 (EditPack "How it connects"); the protocol names ride the
                 title for anyone matching them to a server's docs. */}
-            <span className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">How it connects</span>
+            <span className="mb-1 block text-[12px] font-medium text-zinc-400">How it connects</span>
             <select
               data-testid="add-pack-http-transport"
               value={pick}
@@ -984,7 +984,7 @@ function HttpDoor({ onAdded }: { onAdded: () => void }) {
             </select>
           </label>
           <div>
-            <span className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">Headers (optional)</span>
+            <span className="mb-1 block text-[12px] font-medium text-zinc-400">Headers (optional)</span>
             <div className="space-y-1">
               {headers.map((h) => (
                 <div key={h.id} className="flex items-center gap-2">
@@ -1031,7 +1031,7 @@ function HttpDoor({ onAdded }: { onAdded: () => void }) {
             </button>
           </div>
           <label className="block">
-            <span className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">Access token (optional)</span>
+            <span className="mb-1 block text-[12px] font-medium text-zinc-400">Access token (optional)</span>
             <input
               data-testid="add-pack-http-token"
               type="password"

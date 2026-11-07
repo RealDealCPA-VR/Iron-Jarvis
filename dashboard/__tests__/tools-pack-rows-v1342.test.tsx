@@ -468,7 +468,8 @@ describe("Remove says Removed, not restart", () => {
     await screen.findByTestId("mcp-state-filesystem");
     const del = within(rowOf("filesystem")).getByRole("button", { name: /Remove/ });
     fireEvent.click(del);
-    fireEvent.click(within(rowOf("filesystem")).getByRole("button", { name: /Confirm/ }));
+    // v1.447.2 (calm sweep, moved on purpose): the armed press says "Remove?".
+    fireEvent.click(within(rowOf("filesystem")).getByRole("button", { name: "Remove?" }));
     await waitFor(() => expect(api.dels).toContain("/mcp/servers/filesystem"));
     const note = await screen.findByText(/Removed "filesystem"/);
     expect(note.textContent).not.toMatch(/Restart Iron Jarvis/);

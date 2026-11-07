@@ -40,6 +40,7 @@ import {
   Stat,
 } from "@/components/ui";
 import { CALM_ACTION, CALM_ICON_ACTION } from "@/components/connections/endpointChip";
+import { IconButton } from "@/components/IconButton";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { Sparkline } from "@/components/fleet/Sparkline";
@@ -1207,16 +1208,16 @@ export default function FleetPage() {
                       }`
                 }
               />
-              <button
-                type="button"
+              {/* v1.447.2 (calm sweep): the header's refresh arrow, named
+                  "Refresh" with its tip. */}
+              <IconButton
+                label="Refresh"
+                tip="Force a fresh probe of every node"
+                testId="fleet-refresh"
+                icon={<RefreshCw size={15} aria-hidden className={refreshing ? "animate-spin" : ""} />}
                 onClick={refresh}
                 disabled={refreshing}
-                title="Force a fresh probe of every node"
-                className={CALM_ACTION}
-              >
-                <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />{" "}
-                Refresh
-              </button>
+              />
             </div>
           }
         />

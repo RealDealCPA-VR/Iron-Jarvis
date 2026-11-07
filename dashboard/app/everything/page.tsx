@@ -219,7 +219,7 @@ export default function EverythingPage() {
           <div className="grid grid-cols-[minmax(0,1fr)] gap-6 sm:grid-cols-2 xl:grid-cols-5" data-testid="everything-grid">
             {columns.map((g) => (
               <section key={g.key} aria-labelledby={`everything-${g.key}`} data-testid={`everything-group-${g.key}`}>
-                <h2 id={`everything-${g.key}`} className="text-[12px] font-semibold uppercase tracking-wide text-zinc-400">
+                <h2 id={`everything-${g.key}`} className="text-[13px] font-semibold text-zinc-300">
                   {g.label}
                 </h2>
                 <p className="mb-2 text-[12px] text-zinc-500">{g.hint}</p>

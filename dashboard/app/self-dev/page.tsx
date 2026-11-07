@@ -140,7 +140,7 @@ export default function SelfDevPage() {
               <Card title="Start a Maintainer" icon={<FolderGit2 size={15} />}>
                 <form onSubmit={start} className="space-y-3.5">
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                       Task
                     </label>
                     <textarea

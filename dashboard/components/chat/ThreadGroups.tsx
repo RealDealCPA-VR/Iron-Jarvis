@@ -356,7 +356,7 @@ export default function ThreadGroups<T extends ThreadSummary>({
             {headings ? (
               <h3
                 id={headingId}
-                className={`${gi === 0 ? "mt-1.5" : "mt-3.5"} flex min-w-0 items-center gap-1.5 ${foldable ? "" : "px-2.5"} text-[11px] font-medium uppercase tracking-[0.06em] text-zinc-500`}
+                className={`${gi === 0 ? "mt-1.5" : "mt-3.5"} flex min-w-0 items-center gap-1.5 ${foldable ? "" : "px-2.5"} text-[12px] font-medium text-zinc-500`}
               >
                 {foldable ? (
                   <button
@@ -366,7 +366,7 @@ export default function ThreadGroups<T extends ThreadSummary>({
                     aria-controls={folded ? undefined : listId}
                     onClick={() => setUnfolded((u) => ({ ...u, [g.key]: folded }))}
                     title={folded ? `Show the chats in ${g.name}` : `Fold ${g.name}`}
-                    className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-[8px] px-2.5 text-left uppercase tracking-[0.06em] transition-colors hover:bg-white/[0.06] hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+                    className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-[8px] px-2.5 text-left transition-colors hover:bg-white/[0.06] hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
                   >
                     {icon}
                     <span className="min-w-0 truncate">{g.name}</span>

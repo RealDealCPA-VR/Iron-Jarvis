@@ -13,9 +13,11 @@ import {
   History,
   Pencil,
   Sparkles,
+  Trash2,
   TriangleAlert,
   X,
 } from "lucide-react";
+import { IconButton } from "@/components/IconButton";
 import { get, post, patch, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useModels } from "@/lib/useModels";
@@ -611,17 +613,20 @@ export default function TemplatesPage() {
                           >
                             <Play size={13} /> Use
                           </Link>
-                          <button
-                            type="button"
+                          {/* v1.447.2 (calm sweep): Edit and Delete are the row's
+                              pencil and trash, named in words for a screen reader
+                              and in a tip; Delete still takes two presses. */}
+                          <IconButton
+                            label="Edit"
+                            tip={`Edit template "${t.name}"`}
+                            icon={<Pencil size={14} aria-hidden />}
                             onClick={() => startEdit(t)}
-                            title={`Edit template "${t.name}"`}
-                            className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-xs text-zinc-400 transition-colors hover:text-zinc-200"
-                          >
-                            <Pencil size={12} /> Edit
-                          </button>
+                          />
                           <ConfirmButton
                             onConfirm={() => remove(t.id)}
                             label="Delete"
+                            confirmLabel="Delete?"
+                            icon={<Trash2 size={14} aria-hidden />}
                             title={`Delete template "${t.name}"`}
                           />
                         </div>

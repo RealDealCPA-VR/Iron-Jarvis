@@ -815,7 +815,7 @@ export default function DocumentsPage() {
               />
 
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                   File path
                 </label>
                 {/* v1.313.0: on a phone the path shrank to ~70px beside two
@@ -868,7 +868,7 @@ export default function DocumentsPage() {
                 <div className="space-y-3">
                   <div>
                     <div className="mb-1.5 flex items-center justify-between">
-                      <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <label className="block text-[12px] font-medium text-zinc-400">
                         Extracted text
                       </label>
                       {readDoneType && (
@@ -933,7 +933,7 @@ export default function DocumentsPage() {
           <Card title="Create a document" icon={<FileUp size={15} />}>
             <form onSubmit={create} className="space-y-3.5">
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                   File name
                 </label>
                 <div className="flex items-center gap-2">
@@ -958,7 +958,7 @@ export default function DocumentsPage() {
 
               <div>
                 <div className="mb-1.5 flex items-center justify-between">
-                  <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label className="block text-[12px] font-medium text-zinc-400">
                     Contents
                   </label>
                   <VoiceInput
@@ -1019,7 +1019,7 @@ export default function DocumentsPage() {
                     applying
                   </div>
                   <div>
-                    <div className="mb-1 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <div className="mb-1 text-[12px] font-medium text-zinc-400">
                       Suggested file name
                     </div>
                     <div className="font-mono text-xs text-zinc-200">
@@ -1027,7 +1027,7 @@ export default function DocumentsPage() {
                     </div>
                   </div>
                   <div>
-                    <div className="mb-1 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <div className="mb-1 text-[12px] font-medium text-zinc-400">
                       Suggested contents
                     </div>
                     <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-ink-900/80 px-3 py-2.5 font-mono text-xs leading-relaxed text-zinc-300">
@@ -1354,7 +1354,7 @@ export default function DocumentsPage() {
             <form onSubmit={createLive} className="space-y-3.5">
               <div className="grid gap-3.5 sm:grid-cols-3">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Name
                   </label>
                   <input
@@ -1365,7 +1365,7 @@ export default function DocumentsPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Format
                   </label>
                   <select
@@ -1384,7 +1384,7 @@ export default function DocumentsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-zinc-400">
                     <CalendarClock size={12} /> Refresh
                   </label>
                   <select
@@ -1405,7 +1405,7 @@ export default function DocumentsPage() {
               </div>
 
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                   Prompt
                 </label>
                 <textarea
@@ -1440,7 +1440,7 @@ export default function DocumentsPage() {
             </form>
 
             <div className="space-y-2.5">
-              <div className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <div className="text-[12px] font-medium text-zinc-400">
                 Your living documents
                 {liveDocs.length ? ` · ${liveDocs.length}` : ""}
               </div>

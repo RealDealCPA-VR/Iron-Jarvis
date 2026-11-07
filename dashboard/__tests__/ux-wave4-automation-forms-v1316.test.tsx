@@ -451,7 +451,7 @@ describe("A6 Notifications: the add/edit form and the test send name their field
   it("editing a destination: the read-only Type is not a <label> pointing at nothing", async () => {
     seedChannels();
     render(<ChannelsPage />);
-    fireEvent.click(await screen.findByTitle("Edit tg"));
+    fireEvent.click(await screen.findByTestId("channel-edit-tg")); // v1.447.2: the pencil
     await screen.findByLabelText("Destination name");
     expect(untiedLabels()).toEqual([]);
     // Anti-vacuity: the type is still SHOWN while editing.
@@ -529,12 +529,18 @@ const SAVED = [
   },
 ];
 
-/** A saved row: from its Edit button up to the element holding its description. */
+/** A saved row: from its Edit button up to the element holding its description.
+ *  v1.447.2 (calm sweep, moved on purpose): Edit is a pencil named "Edit" (its
+ *  "Edit template …" words are the tip), so the row is found by its name. */
 function savedRow(name: string, description: string): HTMLElement {
-  let el: HTMLElement | null = screen.getByTitle(`Edit template "${name}"`);
-  while (el && !(el.textContent ?? "").includes(description)) el = el.parentElement;
-  expect(el, `saved row for ${name}`).not.toBeNull();
-  return el as HTMLElement;
+  for (const edit of screen.getAllByRole("button", { name: "Edit" })) {
+    let el: HTMLElement | null = edit;
+    while (el && !(el.textContent ?? "").includes(description)) el = el.parentElement;
+    // One row: it holds its own Edit and no other row's.
+    const one = el && within(el).getAllByRole("button", { name: "Edit" }).length === 1;
+    if (el && one && (el.textContent ?? "").includes(name)) return el;
+  }
+  throw new Error(`saved row for ${name}`);
 }
 
 /** The disclosure holding the starter library. */
@@ -606,8 +612,8 @@ describe("B1 Templates: saved templates come before the starter library", () => 
     // Anti-vacuity: Use / Edit / Delete are all still on the row.
     const use = within(row).getByRole("link", { name: /use/i });
     expect(use.getAttribute("href")).toContain("agent=ledger-checker");
-    expect(within(row).getByTitle('Edit template "Ledger sweep"')).toBeInTheDocument();
-    expect(within(row).getByTitle('Delete template "Ledger sweep"')).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Delete" })).toBeInTheDocument();
   });
 });
 

@@ -192,7 +192,7 @@ function SidebarProjects({ onNavigate }: { onNavigate?: () => void }) {
   if (projects.length === 0) return null;
   return (
     <div data-testid="sidebar-projects">
-      <div className="px-2.5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Projects</div>
+      <div className="px-2.5 pb-1 pt-3 text-[12px] font-medium text-zinc-500">Projects</div>
       {projects.map((p) => {
         const href = `/projects/${p.id}`;
         const on = pathname === href;
@@ -470,7 +470,7 @@ export function SidebarBody({
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2" data-testid="sidebar-lists">
           <div
             data-testid="sidebar-list-heading"
-            className="flex items-center gap-1.5 px-2.5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500"
+            className="flex items-center gap-1.5 px-2.5 pb-1 pt-3 text-[12px] font-medium text-zinc-500"
           >
             {codeList ? (
               <>

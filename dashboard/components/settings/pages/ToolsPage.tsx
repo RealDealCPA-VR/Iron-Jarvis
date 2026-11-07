@@ -29,7 +29,9 @@ import {
   ShieldAlert,
   RefreshCw,
   Pencil,
+  Trash2,
 } from "lucide-react";
+import { IconButton } from "@/components/IconButton";
 import { post, patch, del, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import { useFocusRef } from "@/lib/useFocusRef";
@@ -2150,7 +2152,7 @@ export default function ToolsPage() {
                 </p>
               )}
               <label className="mt-3 block">
-                <span className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <span className="mb-1 block text-[12px] font-medium text-zinc-400">
                   Name (optional)
                 </span>
                 <input
@@ -2162,7 +2164,7 @@ export default function ToolsPage() {
                 />
               </label>
               <label className="mt-2 block">
-                <span className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <span className="mb-1 block text-[12px] font-medium text-zinc-400">
                   Settings it needs (optional)
                 </span>
                 <textarea
@@ -2571,16 +2573,16 @@ export default function ToolsPage() {
                         />
                         {/* v1.343.0: Edit opens the inline editor below the
                             row; it is prefilled from THIS row (names only). */}
-                        <button
-                          type="button"
-                          data-testid={`mcp-edit-${s.name}`}
+                        {/* v1.447.2 (calm sweep): the row's pencil, named
+                            "Edit" with a tip; pressed while its editor is open. */}
+                        <IconButton
+                          label="Edit"
+                          tip={`Edit "${s.name}"`}
+                          testId={`mcp-edit-${s.name}`}
+                          icon={<Pencil size={14} aria-hidden />}
                           onClick={() => setEditing((e) => (e === s.name ? null : s.name))}
                           aria-pressed={editing === s.name}
-                          title={`Edit "${s.name}"`}
-                          className="btn-soft btn-sm"
-                        >
-                          <Pencil size={12} /> Edit
-                        </button>
+                        />
                         <button
                           type="button"
                           onClick={() => void testServer(s.name)}
@@ -2602,6 +2604,8 @@ export default function ToolsPage() {
                         <ConfirmButton
                           onConfirm={() => removeServer(s.name)}
                           label="Remove"
+                          confirmLabel="Remove?"
+                          icon={<Trash2 size={14} aria-hidden />}
                           title={`Remove "${s.name}" and its saved settings (to pause it instead, switch it off)`}
                         />
                       </div>
@@ -2844,6 +2848,8 @@ export default function ToolsPage() {
                     <ConfirmButton
                       onConfirm={() => remove(tool.name)}
                       label="Delete"
+                      confirmLabel="Delete?"
+                      icon={<Trash2 size={14} aria-hidden />}
                       title={`Delete tool "${tool.name}"`}
                     />
                   </div>
@@ -2939,7 +2945,7 @@ export default function ToolsPage() {
 
             <form onSubmit={submit} className="max-w-2xl space-y-3.5">
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                   Name
                 </label>
                 <input
@@ -2954,7 +2960,7 @@ export default function ToolsPage() {
               </div>
 
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                   Description
                 </label>
                 <textarea
@@ -2967,7 +2973,7 @@ export default function ToolsPage() {
               </div>
 
               <div>
-                <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-zinc-400">
                   <Terminal size={12} /> Command
                 </label>
                 <input
@@ -2990,7 +2996,7 @@ export default function ToolsPage() {
 
               <div>
                 <div className="mb-1.5 flex items-center justify-between">
-                  <label className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label className="flex items-center gap-1.5 text-[12px] font-medium text-zinc-400">
                     <Braces size={12} /> Parameters
                     {rows.length ? ` · ${rows.length}` : ""}
                   </label>
@@ -3080,7 +3086,7 @@ export default function ToolsPage() {
               </div>
 
               <div>
-                <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-zinc-400">
                   <Clock size={12} /> Timeout (seconds)
                 </label>
                 <input

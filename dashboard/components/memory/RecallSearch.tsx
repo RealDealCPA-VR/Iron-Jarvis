@@ -213,7 +213,7 @@ export function RecallSearch() {
       >
         <form onSubmit={search} className="flex flex-wrap items-end gap-3">
           <div className="min-w-[240px] flex-1">
-            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+            <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
               Recall anything
             </label>
             <div className="relative">

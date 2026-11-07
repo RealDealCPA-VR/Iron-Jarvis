@@ -1340,7 +1340,7 @@ function MediaLightbox({
                     setConfirmDel(true);
                     setDelErr(null);
                   }}
-                  className="ml-auto inline-flex items-center gap-1.5 rounded-xl border border-rose-500/25 bg-rose-500/[0.06] px-3 py-1.5 text-xs font-medium text-rose-300 transition-colors hover:bg-rose-500/[0.12]"
+                  className="ml-auto inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:bg-tone-danger/10 hover:text-tone-danger"
                 >
                   <Trash2 size={13} /> Delete
                 </button>

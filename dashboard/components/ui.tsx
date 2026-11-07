@@ -14,6 +14,7 @@ import Link from "next/link";
 import { DESKTOP_OFFLINE_HINT, isDesktopShell } from "@/lib/desktopShell";
 import { OFFLINE_SAVED_SENTENCE, OFFLINE_TITLE } from "@/lib/offlineWords";
 import { DEMO_CHIP_TITLE, DEMO_MODEL } from "@/lib/demoWords";
+import { ICON_BUTTON_DANGER_CLASS, useIconTip } from "@/components/IconButton";
 
 /** v1.354.0 (G30): the app's own words for an outage ("Iron Jarvis isn't
  *  responding"), never "the daemon". Defined in lib/offlineWords (lib/api
@@ -110,7 +111,7 @@ export function Stat({
         }`}
       />
       <div className="flex items-center justify-between">
-        <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
+        <div className="text-[12px] font-medium text-zinc-400">
           {label}
         </div>
         {/* Neutral for the same reason as the Card header (v1.99.0) — every
@@ -397,7 +398,7 @@ export function Field({
   const id = own || auto;
   return (
     <div className={className}>
-      <label htmlFor={id} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+      <label htmlFor={id} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
         {label}
       </label>
       {isValidElement(children) && !own ? cloneElement(children, { id }) : children}
@@ -607,7 +608,7 @@ export function WarnNote({ children }: { children: ReactNode }) {
 
 export function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
+    <div className="text-[12px] font-medium text-zinc-400">
       {children}
     </div>
   );
@@ -650,6 +651,7 @@ export function ConfirmButton({
   title,
   variant = "default",
   testId,
+  icon,
 }: {
   onConfirm: () => void | Promise<void>;
   label?: string;
@@ -661,9 +663,15 @@ export function ConfirmButton({
   variant?: ConfirmVariant;
   /** v1.445.0: a test id for the button (optional). */
   testId?: string;
+  /** v1.447.2 (calm sweep): the FIRST press is this icon alone (a trash
+   *  can), named `label` and with `title` (else `label`) as its tip; the
+   *  armed second press still says `confirmLabel` in words. Two presses,
+   *  exactly as before. The calm variant only. */
+  icon?: ReactNode;
 }) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const tip = useIconTip(title || label, testId);
   useEffect(() => {
     if (!armed) return;
     const t = setTimeout(() => setArmed(false), 3000);
@@ -682,6 +690,41 @@ export function ConfirmButton({
       setArmed(false);
     }
   };
+  if (icon && variant !== "bordered") {
+    const resting = !armed && !busy;
+    return (
+      <>
+        <button
+          ref={(el) => {
+            tip.ref.current = el;
+          }}
+          type="button"
+          onClick={() => {
+            tip.handlers.onPointerDown();
+            void onClick();
+          }}
+          disabled={busy}
+          aria-label={resting ? label : undefined}
+          data-testid={testId}
+          data-confirm-variant="calm"
+          data-icon-button=""
+          data-armed={armed ? "true" : "false"}
+          onPointerEnter={resting ? tip.handlers.onPointerEnter : undefined}
+          onPointerLeave={tip.handlers.onPointerLeave}
+          onFocus={resting ? tip.handlers.onFocus : undefined}
+          onBlur={tip.handlers.onBlur}
+          className={`${
+            resting
+              ? `${ICON_BUTTON_DANGER_CLASS} ${idleClassName}`.trim()
+              : `${CALM_CONFIRM.base} ${CALM_CONFIRM.armed}`
+          } ${className}`.trim()}
+        >
+          {busy ? <LoaderInline label={confirmLabel} /> : armed ? confirmLabel : icon}
+        </button>
+        {resting ? tip.tip : null}
+      </>
+    );
+  }
   if (variant !== "bordered") {
     return (
       <button

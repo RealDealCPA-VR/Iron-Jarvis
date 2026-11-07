@@ -578,7 +578,7 @@ export function LongTerm() {
         >
           <form onSubmit={search} className="flex flex-wrap items-end gap-3">
             <div className="min-w-[240px] flex-1">
-              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                 Query
               </label>
               {/* v1.313.0: `isolate` + `z-[1]` keep the icon above the .field blur. */}
@@ -602,7 +602,7 @@ export function LongTerm() {
               </div>
             </div>
             <div className="w-40">
-              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                 Base
               </label>
               <select aria-label="Base" value={source} onChange={(e) => setSource(e.target.value)} className="field">
@@ -615,7 +615,7 @@ export function LongTerm() {
               </select>
             </div>
             <div className="w-20">
-              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                 Results
               </label>
               <input
@@ -779,7 +779,7 @@ export function LongTerm() {
             <Card title="Append note" icon={<NotebookPen size={15} />}>
               <form onSubmit={append} className="space-y-3.5">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Title
                   </label>
                   <input
@@ -791,7 +791,7 @@ export function LongTerm() {
                 </div>
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
-                    <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label className="block text-[12px] font-medium text-zinc-400">
                       Content
                     </label>
                     <VoiceInput
@@ -808,7 +808,7 @@ export function LongTerm() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     Base
                   </label>
                   {/* v1.316.0: its own name — two selects both called "Base"
@@ -910,7 +910,7 @@ export function LongTerm() {
               <Card title="Add a memory base" icon={<FolderPlus size={15} />}>
                 <form onSubmit={addSource} className="space-y-3.5">
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                       Name
                     </label>
                     <input
@@ -927,7 +927,7 @@ export function LongTerm() {
                       "markdown". Each tile says what you have, what lands in
                       memory, and exactly what it will ask for. */}
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                       Where do the notes live?
                     </label>
                     <div
@@ -984,7 +984,7 @@ export function LongTerm() {
                   {srcKind === "mcp" && (
                     <div>
                       {/* v1.356.0 (G74): it said "MCP config". */}
-                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                         Its setup block or address
                       </label>
                       <textarea
@@ -1026,7 +1026,7 @@ export function LongTerm() {
                   )}
                   {srcKind === "markdown" ? (
                     <div>
-                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                         Folder path
                       </label>
                       <div className="flex items-stretch gap-2">
@@ -1059,7 +1059,7 @@ export function LongTerm() {
                     <>
                       <div className="grid grid-cols-3 gap-2">
                         <div className="col-span-2">
-                          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                          <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                             Host
                           </label>
                           <input
@@ -1070,7 +1070,7 @@ export function LongTerm() {
                           />
                         </div>
                         <div>
-                          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                          <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                             Port
                           </label>
                           <input
@@ -1082,7 +1082,7 @@ export function LongTerm() {
                         </div>
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                           Username
                         </label>
                         <input
@@ -1093,7 +1093,7 @@ export function LongTerm() {
                         />
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                           Remote folder path
                         </label>
                         <input
@@ -1104,7 +1104,7 @@ export function LongTerm() {
                         />
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                           Password
                         </label>
                         <input
@@ -1124,7 +1124,7 @@ export function LongTerm() {
                   ) : srcKind === "notion" ? (
                     <>
                       <div>
-                        <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                           Database id
                         </label>
                         <input
@@ -1135,7 +1135,7 @@ export function LongTerm() {
                         />
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                           Integration token
                         </label>
                         <input
@@ -1162,7 +1162,7 @@ export function LongTerm() {
                         </button>
                         {notionAdvanced && (
                           <div className="border-t hairline px-3 py-3">
-                            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                            <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                               Vault secret name
                               <span className="ml-1.5 normal-case tracking-normal text-zinc-600">(optional)</span>
                             </label>
@@ -1183,7 +1183,7 @@ export function LongTerm() {
                   ) : DRIVE_KINDS.includes(srcKind) ? (
                     <>
                       <div>
-                        <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                           Folder to index
                         </label>
                         <input
@@ -1208,7 +1208,7 @@ export function LongTerm() {
                   ) : (
                     <>
                       <div>
-                        <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                           Endpoint URL
                         </label>
                         <div className="relative isolate">
@@ -1228,7 +1228,7 @@ export function LongTerm() {
                         </div>
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                           Bearer token
                           <span className="ml-1.5 normal-case tracking-normal text-zinc-600">(optional)</span>
                         </label>
@@ -1255,7 +1255,7 @@ export function LongTerm() {
                           <div className="space-y-3 border-t hairline px-3 py-3">
                             <div className="grid grid-cols-2 gap-2">
                               <div>
-                                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                                   Query field
                                 </label>
                                 <input
@@ -1266,7 +1266,7 @@ export function LongTerm() {
                                 />
                               </div>
                               <div>
-                                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                                   Top-k field
                                 </label>
                                 <input
@@ -1278,7 +1278,7 @@ export function LongTerm() {
                               </div>
                             </div>
                             <div>
-                              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                              <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                                 Results path
                               </label>
                               <input
@@ -1294,7 +1294,7 @@ export function LongTerm() {
                             </div>
                             <div className="grid grid-cols-3 gap-2">
                               <div>
-                                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                                   Title field
                                 </label>
                                 <input
@@ -1305,7 +1305,7 @@ export function LongTerm() {
                                 />
                               </div>
                               <div>
-                                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                                   Text field
                                 </label>
                                 <input
@@ -1316,7 +1316,7 @@ export function LongTerm() {
                                 />
                               </div>
                               <div>
-                                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                                   Ref field
                                 </label>
                                 <input
@@ -1329,7 +1329,7 @@ export function LongTerm() {
                             </div>
                             <div className="grid grid-cols-2 gap-2">
                               <div>
-                                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                                   Auth scheme
                                 </label>
                                 <select
@@ -1345,7 +1345,7 @@ export function LongTerm() {
                                 </select>
                               </div>
                               <div>
-                                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                                   Auth header
                                 </label>
                                 <input

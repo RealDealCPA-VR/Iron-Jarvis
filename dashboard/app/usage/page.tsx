@@ -20,6 +20,7 @@ import {
   SkeletonRows,
   ErrorNote,
 } from "@/components/ui";
+import { IconButton } from "@/components/IconButton";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { LIST_PRICE_TITLE } from "@/lib/types";
@@ -474,19 +475,15 @@ export default function UsagePage() {
           subtitle="Token spend and run volume across your providers."
           actions={
             <div className="flex items-center gap-2">
-              <button
-                type="button"
+              {/* v1.447.2 (calm sweep): the header's refresh arrow. */}
+              <IconButton
+                label="Refresh"
+                tip="Reload usage data"
+                testId="usage-page-refresh"
+                icon={<RefreshCw size={15} aria-hidden className={refreshing ? "animate-spin" : ""} />}
                 onClick={refresh}
                 disabled={refreshing}
-                title="Reload usage data"
-                className="btn-ghost py-1.5 text-xs disabled:opacity-50"
-              >
-                <RefreshCw
-                  size={14}
-                  className={refreshing ? "animate-spin" : ""}
-                />{" "}
-                Refresh
-              </button>
+              />
               <div className="flex items-center gap-1 rounded-xl border border-white/[0.08] bg-ink-900/80 p-1">
                 {DAY_OPTIONS.map((d) => (
                   <button
