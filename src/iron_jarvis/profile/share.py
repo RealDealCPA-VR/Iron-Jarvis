@@ -162,6 +162,13 @@ def _opencode_create_guard(path: Path) -> str:
         return OPENCODE_FALLBACK_ERROR
 
 
+def _antigravity_home() -> Path:
+    """v1.447.0: Antigravity's own customization folder, ``~/.gemini/config``
+    (agy has no variable for it; ``--gemini-dir`` is a flag Iron Jarvis never
+    passes)."""
+    return Path(os.path.expanduser("~")) / ".gemini" / "config"
+
+
 CLIS: dict[str, CliSpec] = {
     "claude-code": CliSpec(
         "claude-code", "Claude Code", "Anthropic", "claude", "CLAUDE_CONFIG_DIR", ".claude",
@@ -190,6 +197,18 @@ CLIS: dict[str, CliSpec] = {
     # goes into ``AGENTS.md``; an Iron-Proxy xAI account is its own GROK_HOME.
     "grok": CliSpec(
         "grok", "Grok", "xAI", "grok", "GROK_HOME", ".grok", ("AGENTS.md",), "xai", "profile_share_grok",
+    ),
+    # v1.447.0. Antigravity (agy 1.5.3) reads EVERY one of ~/.gemini/GEMINI.md,
+    # ~/.gemini/AGENTS.md, ~/.gemini/config/GEMINI.md and
+    # ~/.gemini/config/AGENTS.md — measured: a different sentence planted in
+    # each of a scratch USERPROFILE reached the local stand-in model; its
+    # antigravity-cli/ folder and ~/.agents/ were not read. Our block goes into
+    # ~/.gemini/config/AGENTS.md: the files directly in ~/.gemini are also
+    # Google's Gemini CLI's, and this folder is Antigravity's own. Antigravity
+    # signs in by itself (no Iron-Proxy accounts: proxy "").
+    "antigravity": CliSpec(
+        "antigravity", "Antigravity", "Google", "agy", "", "", ("AGENTS.md",), "", "profile_share_antigravity",
+        home_fn=_antigravity_home,
     ),
 }
 

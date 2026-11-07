@@ -72,7 +72,9 @@ afterEach(() => cleanup());
 describe("Grok's share offer", () => {
   it("Grok is a tool the profile can be shared with", () => {
     expect(shareCliOf("grok")).toBe("grok");
-    expect(shareCliOf("antigravity")).toBe("");
+    // v1.447.0 (moved on purpose): Antigravity can share the profile too.
+    expect(shareCliOf("antigravity")).toBe("antigravity");
+    expect(shareCliOf("not-a-tool")).toBe("");
   });
 
   it("offers, turns Grok's share on and says it", async () => {

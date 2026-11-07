@@ -320,10 +320,16 @@ def takes_reset():
 
 
 def test_antigravity_takes_no_jarvis_tools_until_it_says_it_does(takes_reset):
-    assert JT.takes("antigravity") is False
+    # v1.447.0 (moved on purpose): agy 1.5.3 says mcpCapabilities.http when
+    # started with --process-per-session (measured), which the driver adds
+    # whenever it is handed the tools — so Antigravity no longer starts as
+    # "takes none", and only a start WITH the flag (servers handed) may say so.
+    assert JT.takes("antigravity") is True
     assert JT.takes("opencode") is True and JT.takes("claude-code") is True
     wire = Wire()
     d, events, _asks = _driver(wire)
+    assert d.acp_servers({}) == []
+    assert JT.takes("antigravity") is True, "a plain start's silence says nothing"
     d.mcp_servers = [{"type": "http", "name": JT.SERVER_NAME, "url": "http://x", "headers": []}]
     assert d.acp_servers({}) == []
     assert JT.takes("antigravity") is False
@@ -332,6 +338,9 @@ def test_antigravity_takes_no_jarvis_tools_until_it_says_it_does(takes_reset):
 
 
 async def test_the_view_hides_the_chip_and_a_box_never_restarts_antigravity(tmp_path, work, takes_reset):
+    # v1.447.0 (moved on purpose): an Antigravity whose per-session start SAID
+    # it takes none (an older agy) — the chip hides and a box restarts nothing.
+    JT.note_takes("antigravity", False)
     app = create_app(str(tmp_path / "home"))
     svc = S.service_for(app.state.platform)
     async with client(app) as c:

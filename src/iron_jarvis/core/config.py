@@ -1049,6 +1049,9 @@ class Config(BaseModel):
     #: v1.441.0: Grok (``<GROK_HOME or ~/.grok>/AGENTS.md``, measured with
     #: ``grok inspect --json``).
     profile_share_grok: bool = False
+    #: v1.447.0: Antigravity (``~/.gemini/config/AGENTS.md``, measured: agy
+    #: 1.5.3 reads it with the other three ~/.gemini rule files).
+    profile_share_antigravity: bool = False
 
     @field_validator("autonomy_level")
     @classmethod

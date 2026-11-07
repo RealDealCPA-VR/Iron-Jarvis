@@ -670,11 +670,10 @@ export function piShellHint(tool: string, text: string): string {
 }
 
 /** v1.414.0: the "Share my profile with" switch (profile/share.CLIS) of a
- *  coding tool. */
+ *  coding tool. v1.447.0: Antigravity too. */
+export const SHARE_CLIS: readonly string[] = ["claude-code", "codex", "pi", "opencode", "grok", "antigravity"];
 export function shareCliOf(tool: string): string {
-  return tool === "claude-code" || tool === "codex" || tool === "pi" || tool === "opencode" || tool === "grok"
-    ? tool
-    : "";
+  return SHARE_CLIS.includes(tool) ? tool : "";
 }
 
 /** localStorage: the share offer was dismissed for good, per tool. */

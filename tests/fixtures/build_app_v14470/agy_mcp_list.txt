@@ -1,0 +1,4 @@
+NAME  TYPE   STATUS    COMMAND/URL
+api   http   enabled   https://example.com/mcp?key=<SECRET>
+fs    stdio  enabled   python -c print(1) --token <SECRET>
+gone  stdio  disabled  C:/no/such/program.exe

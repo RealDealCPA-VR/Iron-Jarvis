@@ -552,6 +552,24 @@ def _fresh_antigravity_models():
         _ha.LAST_DEFAULT[:] = default
 
 
+@pytest.fixture(autouse=True)
+def _fresh_antigravity_agents():
+    """v1.447.0: the user's own Antigravity agents ``agy agents`` listed are
+    kept in process memory (``hosted.antigravity_agents.LAST_AGENTS``); each
+    test starts with none — and its background reads (``agy agents``, ``agy
+    mcp list``) are off: a test that drives them turns them on."""
+    from iron_jarvis.hosted import antigravity_agents as _aga
+
+    saved, probe = list(_aga.LAST_AGENTS), _aga.AUTO_PROBE
+    _aga.LAST_AGENTS.clear()
+    _aga.AUTO_PROBE = False
+    try:
+        yield
+    finally:
+        _aga.LAST_AGENTS[:] = saved
+        _aga.AUTO_PROBE = probe
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _isolate_grok_home():
     """v1.416.0: the Code view reads Grok's own saved sessions, model list and

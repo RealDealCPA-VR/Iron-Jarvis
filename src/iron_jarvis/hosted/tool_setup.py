@@ -61,6 +61,12 @@ the text of its own notices — the start-up "MCP servers need attention"
 warning, and ``/mcp`` typed in the box (an extension command; Pi answers it
 with a status notice, measured). OpenCode's ACP reports none. The Session
 tab says so in words.
+
+v1.447.0, Antigravity 1.5.3: its ACP reports no MCP server, but ``agy mcp
+list`` prints the servers of its own settings with ``enabled`` / ``disabled``
+— read once per process start, NAME and STATUS only
+(``hosted.antigravity_agents.parse_mcp_list``), shown as :data:`ON` /
+:data:`OFF`: turned on is not the same as connected, and the words say so.
 """
 
 from __future__ import annotations
@@ -76,7 +82,10 @@ STARTING = "starting"
 FAILED = "failed"
 NEEDS_SIGN_IN = "needs_sign_in"
 OFF = "off"
-STATES: tuple[str, ...] = (CONNECTED, STARTING, FAILED, NEEDS_SIGN_IN, OFF)
+#: v1.447.0: turned on in the tool's own settings, with no word on whether it
+#: connected (Antigravity's ``agy mcp list``: its ACP reports no connection).
+ON = "on"
+STATES: tuple[str, ...] = (CONNECTED, STARTING, FAILED, NEEDS_SIGN_IN, OFF, ON)
 
 #: Claude Code's own status words (its bundle's enum) -> ours.
 CLAUDE_STATUS: dict[str, str] = {
@@ -127,7 +136,7 @@ NAME_CHARS = 120
 ERROR_CHARS = 300
 
 #: The tools that report their MCP servers here (the others: :data:`NOT_REPORTED`).
-REPORTS_MCP: frozenset[str] = frozenset({"claude-code", "codex", "grok"})
+REPORTS_MCP: frozenset[str] = frozenset({"claude-code", "codex", "grok", "antigravity"})
 NOT_REPORTED = "{tool} does not report its own MCP servers here."
 #: v1.441.0: where a tool that does not report them says their state itself.
 NOT_REPORTED_HOW: dict[str, str] = {
@@ -165,6 +174,7 @@ STATE_WORDS: dict[str, str] = {
     FAILED: "Did not start",
     NEEDS_SIGN_IN: "Needs you to sign in",
     OFF: "Turned off",
+    ON: "Turned on (whether it connected is not reported)",
 }
 
 

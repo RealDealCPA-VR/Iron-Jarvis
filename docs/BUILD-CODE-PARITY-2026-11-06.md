@@ -76,6 +76,22 @@ items); the rest close rows of the old "Left for later" list.
 | Antigravity | No transcript in the Code view | `brain/<id>/.system_generated/logs/transcript.jsonl` imported | `tests/test_build_app_tool_transcripts_v14410.py`, `..._g4_review_v14410.py` |
 | Antigravity | Usage windows | FOUND: agy reports none over ACP; the Usage tab says so | (finding; `dashboard/lib/codePanes.ts` `NO_WINDOWS_TOOLS`) |
 
+## What v1.447.0 changed for Antigravity (measured on agy 1.5.3)
+
+Every fact measured on Google's agy 1.5.3 from a scratch `USERPROFILE`, every
+model call to a local stand-in Gemini API, an MCP stand-in on 127.0.0.1 for
+Iron Jarvis's own tools. Recordings: `tests/fixtures/build_app_v14470/`. The
+v1.439.0 pins and its opt-in live test pass against 1.5.3 unchanged.
+
+| Gap (before) | Built or found | Pins |
+|---|---|---|
+| Signing in through `agy` in a terminal might not be enough for ACP | FOUND, proven: with no saved ACP sign-in method, `agy acp` signs in silently from Windows' Credential Store ("authenticated via keyring" — the token `agy` keeps), the same as its own screen. `agy acp --login` is Google's paste-a-code sign-in for editors with no browser, so the Sign in press keeps opening `agy` | (finding; `hosted/antigravity.py` docstring) |
+| No Iron Jarvis tools (agy said no `mcpCapabilities`) | agy says `mcpCapabilities.http` when started with `--process-per-session`; a session with a served box ticked starts so, and agy called the server with the bearer token, listed and ran its tools. The chip is offered again; only a start with the flag may say "takes none" | `tests/test_build_app_antigravity_v14470.py`, `..._live_v14470.py` (opt-in, real agy) |
+| The user's own agents not offered | `agy agents` read in the background (no model call, signed out too); each is an `agent:<name>` mode started with `--agent`; FOUND: a conversation keeps the agent it was opened with, so a change after that is refused in words | same |
+| No MCP list | `agy mcp list` read at each start, names and on/off only (never its COMMAND/URL column); shown as "Turned on (whether it connected is not reported)" | same, `dashboard/__tests__/build-app-antigravity-v1447-0.test.ts` |
+| No profile share | `~/.gemini/config/AGENTS.md`; FOUND: agy reads `~/.gemini/GEMINI.md`, `~/.gemini/AGENTS.md` and both `config/` files — the `~/.gemini` ones are also Google's Gemini CLI's, so the block goes in `config/` | same |
+| `--sandbox`, `--add-dir` | Not offered (Build › Code has no sandbox or extra-folder choice for any tool) | — |
+
 ## Left for later (still open after v1.441.0)
 
 Each needs a live measurement, a larger change, or the owner's decision.
@@ -89,7 +105,7 @@ Each needs a live measurement, a larger change, or the owner's decision.
 - Grok and Antigravity: no branch or rewind (their protocols offer none).
 - Grok reads `~/.claude/CLAUDE.md` too: with both shares on it reads the profile twice, and with only Claude Code's on it still sees it. No guard, by decision; the Grok row could say so (the owner's words).
 - Grok servers turned off in its config are not listed (only `_x.ai/mcp/list` names them, one more request per start).
-- Antigravity: signing in through its own terminal may not be enough for ACP (unproven); no Iron Jarvis tools (agy reports no `mcpCapabilities`); no usage windows (none over ACP).
+- Antigravity: no usage windows (none over ACP); a folder's own agents (`.agents/agents/`) are not listed (the list is read from an empty folder, and agy lists them only in a trusted one); MCP servers show turned on/off, not whether they connected. (v1.447.0 closed the sign-in question and Iron Jarvis tools.)
 - Claude Code: `/model sonnet[1m]` loses the `[1m]`; after a restart the `/` menu shows nothing (or note rows) for Claude until a Claude session opens in that folder.
 - Branch/Rewind: per-message actions exist only for messages sent from v1.441.0; a Claude branch or rewind is made only with its first message; a held queue survives a rewind beside the rewound words; the message's ⋯ menu ignores Escape; branching an idle Codex or Pi session may wait for a pool place.
 - Usage: a Build › Code session working in the background (not in a reply) does not count as in use; a read that times out is retried every 3 minutes.

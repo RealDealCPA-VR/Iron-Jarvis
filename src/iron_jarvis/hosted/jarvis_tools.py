@@ -163,7 +163,11 @@ def _pi_extension(url: str) -> str:
 #: starts False: agy 1.5.2's ``initialize`` names no ``mcpCapabilities``
 #: (measured); an Antigravity that says ``http: true`` turns it on
 #: (:func:`note_takes`, every start). Memory only; a tool not named takes them.
-_TAKES: dict[str, bool] = {"antigravity": False}
+#: v1.447.0: Antigravity no longer starts False — agy 1.5.3 says
+#: ``mcpCapabilities.http`` when started with ``--process-per-session``
+#: (measured), which the driver adds whenever it is handed these tools; only
+#: such a start may note "takes none" (``AntigravityDriver.acp_servers``).
+_TAKES: dict[str, bool] = {}
 
 
 def takes(harness: str) -> bool:
@@ -213,7 +217,10 @@ def connect(harness: str, *, url: str, token: str, session_dir: Path) -> Connect
     if harness in (OPENCODE, GROK, ANTIGRAVITY):
         # (v1.416.0: Grok too — its ACP takes an HTTP server, mcpCapabilities.http.
         # v1.439.0: Antigravity 1.5.2 says no mcpCapabilities, so the driver
-        # sends none and says so once — the entry is offered the ACP way.)
+        # sends none and says so once — the entry is offered the ACP way.
+        # v1.447.0: an Antigravity handed these entries starts with
+        # --process-per-session, under which agy 1.5.3 says http: true and
+        # used the server, measured.)
         # The token rides ACP on the process's own stdin — not its env, where
         # every command OpenCode runs could read it.
         return Connection(env={MCP_URL_ENV: url}, acp_servers=[{

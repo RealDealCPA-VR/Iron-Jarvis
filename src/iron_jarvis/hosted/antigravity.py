@@ -96,6 +96,40 @@ Google and no sign-in was used; masked recordings in
   ``session/resume`` reopens one WITHOUT replay (``session/load`` replays it
   as updates first, hidden here). A terminal reopens one with
   ``agy --conversation <id>``.
+
+v1.447.0, RE-MEASURED on agy 1.5.3 (2026-11-07, the same scratch way —
+scratch ``USERPROFILE``/``HOME``, a saved ``gemini-api-key`` method and a fake
+key, every model call to the local stand-in; recordings in
+``tests/fixtures/build_app_v14470``). Everything above still holds (the
+v1.439.0 pins and the opt-in live test pass against 1.5.3). New:
+
+* SIGN-IN THROUGH ``agy`` IS ENOUGH FOR ACP: with NO saved ACP method
+  (``cache/acp-auth-state.json`` absent — the user's own install has none)
+  the ACP server's silent sign-in logged "ChainedAuth: authenticated via
+  keyring" — the token Windows' Credential Store holds for the account that
+  signed in with ``agy`` (the CLI's own log says the same line) — and
+  ``session/new`` answered. A saved method wins (with ``gemini-api-key``
+  saved it logged "authenticated via gemini_api_key"). ``agy acp --login``
+  is Google's paste-a-code sign-in for editors with no browser (its 1.5.0
+  changelog: "for editors connected over SSH or without a browser"), so the
+  Sign in press keeps opening ``agy`` (the browser sign-in) in a terminal.
+* IRON JARVIS'S TOOLS: ``initialize`` names ``mcpCapabilities: {http: true}``
+  ONLY when started with ``--process-per-session`` (each session served by
+  its own worker). Started so, with Iron Jarvis's HTTP server in
+  ``session/new``'s ``mcpServers``, it called the server with the bearer
+  header (``server/discover`` — refused "Method not found" and it went on —,
+  ``initialize``, ``notifications/initialized``, ``tools/list``, ``DELETE`` at
+  the end), declared ``mcp_iron-jarvis-code_<tool>`` to the model, ran a
+  ``tools/call`` (the model must send its ``toolSummary`` argument) and the
+  result reached the model. So a session with a served box ticked starts with
+  the flag (:data:`PER_SESSION_FLAG`), and only such a start may say "takes
+  none" (``jarvis_tools.note_takes``). A plain 1.5.3 start ALSO took the
+  server although it did not say so — never relied on.
+* The user's own agents: ``agy agents`` and ``--agent`` (see
+  :mod:`hosted.antigravity_agents`): ``agent:<name>`` modes, the agent fixed
+  when the conversation is opened.
+* ``--sandbox`` ("terminal restrictions") is not offered: Build › Code has no
+  sandbox choice for any tool. ``--add-dir`` likewise.
 """
 
 from __future__ import annotations
@@ -148,6 +182,10 @@ HIDDEN_MODES: dict[str, str] = {
 }
 #: Full access: started with this flag (a new process before the next message).
 FULL_FLAG = "--dangerously-skip-permissions"
+#: v1.447.0: the flag under which agy 1.5.3 SAYS it takes an HTTP MCP server
+#: (``mcpCapabilities.http``, measured) — given only when Iron Jarvis hands it
+#: its own tools.
+PER_SESSION_FLAG = "--process-per-session"
 
 #: Thinking levels, low to high (Antigravity names them per model).
 EFFORTS: tuple[str, ...] = ("minimal", "low", "medium", "high", "xhigh", "max")
@@ -353,6 +391,25 @@ def disk_sessions(home: str | os.PathLike[str], folder: str, *, since: float | N
         if len(out) >= limit:
             break
     return out
+
+
+def conversation_agent(home: str | os.PathLike[str], conversation_id: str) -> str | None:
+    """BLOCKING: the agent Antigravity recorded for a saved conversation
+    (``conversation_summaries.agent_name``; "" = its default agent), None when
+    not known (no database, no such row, an older table)."""
+    if not _UUID_RX.match(str(conversation_id or "")):
+        return None
+    con = _connect_ro(Path(home) / "conversation_summaries.db")
+    if con is None:
+        return None
+    try:
+        row = con.execute("SELECT agent_name FROM conversation_summaries WHERE conversation_id = ?",
+                          (str(conversation_id),)).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+    return None if row is None else str(row[0] or "")
 
 
 # --------------------------------------------------------------------------- #
@@ -639,17 +696,40 @@ class AntigravityDriver(AcpDriver):
         #: v1.441.0 (review A6): the service's way to clear an effort the
         #: session's model does not take (the row and the chip follow).
         self.on_effort_dropped: Any = None
+        #: v1.447.0: the service's BLOCKING reader of ``agy mcp list`` (run
+        #: off the loop once the session is open), and what it said
+        #: (``tool_setup`` rows; None = not said).
+        self.read_mcp: Any = None
+        self.reported_mcp: list[dict[str, str]] | None = None
+        self._mcp_read: asyncio.Future | None = None
 
-    STATE_SKIP = AcpDriver.STATE_SKIP | frozenset({"on_title", "_fail_read", "on_effort_dropped"})
+    STATE_SKIP = AcpDriver.STATE_SKIP | frozenset({"on_title", "_fail_read", "on_effort_dropped", "read_mcp",
+                                                    "_mcp_read"})
+
+    def per_session(self) -> bool:
+        """v1.447.0: started with :data:`PER_SESSION_FLAG` — only when Iron
+        Jarvis hands this process its own tools (agy says it takes an HTTP
+        MCP server only then)."""
+        return bool(self.mcp_servers)
 
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
         # The folder is the process's own working folder; the session is
         # opened (or reopened) over the protocol, never by an argument.
+        from .antigravity_agents import AGENT_FLAG, agent_of
+
         out = ["acp", "--disable-telemetry"]
         if self.log_path:
             out += ["--log-file", self.log_path]
         if self.mode == "full":
             out.append(FULL_FLAG)
+        agent = agent_of(self.mode)
+        if agent:
+            # v1.447.0: one of the user's own agents. It counts only for a
+            # conversation opened by this process (measured: one already
+            # opened keeps its own) — the service refuses a change after that.
+            out += [AGENT_FLAG, agent]
+        if self.per_session():
+            out.append(PER_SESSION_FLAG)
         return out
 
     def failure_event(self, said: str) -> dict[str, Any]:
@@ -663,14 +743,37 @@ class AntigravityDriver(AcpDriver):
 
     def acp_servers(self, caps: dict[str, Any]) -> list[dict[str, Any]]:
         """v1.441.0 (review A5): what THIS Antigravity said about taking an
-        HTTP MCP server is kept (``jarvis_tools.note_takes``) — agy 1.5.2 says
-        no ``mcpCapabilities``, so the Iron Jarvis tools chip is hidden for it
-        and ticking a box never restarts it for nothing."""
+        HTTP MCP server is kept (``jarvis_tools.note_takes``). v1.447.0: agy
+        1.5.3 says ``mcpCapabilities.http`` only when started with
+        :data:`PER_SESSION_FLAG` (measured), so a plain start's silence says
+        nothing — "takes none" is noted only from a start WITH the flag; a
+        "yes" counts from any start."""
         from . import jarvis_tools as JT
 
         mcp_caps = caps.get("mcpCapabilities") if isinstance(caps.get("mcpCapabilities"), dict) else {}
-        JT.note_takes(HARNESS, bool(mcp_caps.get("http")))
+        if mcp_caps.get("http"):
+            JT.note_takes(HARNESS, True)
+        elif self.per_session():
+            JT.note_takes(HARNESS, False)
         return super().acp_servers(caps)
+
+    def _read_own_mcp(self) -> None:
+        """v1.447.0: Antigravity's own MCP servers for the Session tab — one
+        ``agy mcp list`` off the loop (names and on/off only)."""
+        if not callable(self.read_mcp) or self._mcp_read is not None:
+            return
+        from .tool_setup import note_servers
+
+        def done(fut: asyncio.Future) -> None:
+            if fut.cancelled() or fut.exception() is not None:
+                return
+            note_servers(self, fut.result(), attr="reported_mcp")
+
+        try:
+            self._mcp_read = asyncio.ensure_future(asyncio.to_thread(self.read_mcp))
+        except RuntimeError:
+            return
+        self._mcp_read.add_done_callback(done)
 
     # -- the session --------------------------------------------------------------
     async def _new_or_resume(self, method: str, params: dict[str, Any]) -> Any:
@@ -725,6 +828,7 @@ class AntigravityDriver(AcpDriver):
         self.emit(make("session", harness=HARNESS, harness_session_id=sid,
                        model=clip(self._current("model") or self.model, 120), cwd=clip(self.cwd, 500),
                        mode=self.mode))
+        self._read_own_mcp()
 
     def _current(self, cid: str) -> str:
         return str(_config(self.options, cid).get("currentValue") or "")
@@ -924,6 +1028,14 @@ class AntigravityDriver(AcpDriver):
         """Own rules / Auto edits / Plan change live (``session/set_mode``,
         from the next prompt — measured); Full access is a flag, so going to
         or from it is a NEW process before the next message."""
+        from .antigravity_agents import agent_of
+
+        if agent_of(mode) != agent_of(self.mode):
+            # v1.447.0: an agent is a flag too (``--agent``) — a new process
+            # (the service refuses this once the conversation exists).
+            self.restart_needed = True
+            self.mode = mode
+            return "next"
         if (mode == "full") != (self.mode == "full"):
             self.restart_needed = True
             self.mode = mode

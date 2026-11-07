@@ -363,7 +363,9 @@ export function decodeBackgroundWork(raw: unknown): BackgroundWork[] | null {
  *  (`hosted/tool_setup.view`). */
 export interface CodeMcpServer {
   name: string;
-  /** connected | starting | failed | needs_sign_in | off */
+  /** connected | starting | failed | needs_sign_in | off | on (v1.447.0:
+   *  turned on in the tool's own settings, connection not reported —
+   *  Antigravity's `agy mcp list`) */
   state: string;
   words: string;
   error: string;
@@ -382,7 +384,7 @@ export interface CodeMcp {
   note: string;
 }
 
-export const MCP_STATES: readonly string[] = ["connected", "starting", "failed", "needs_sign_in", "off"];
+export const MCP_STATES: readonly string[] = ["connected", "starting", "failed", "needs_sign_in", "off", "on"];
 
 export function decodeCodeMcp(raw: unknown): CodeMcp | null {
   const r = obj(raw);

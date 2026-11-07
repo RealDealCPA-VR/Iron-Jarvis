@@ -1,0 +1,16 @@
+{
+  "agy": "1.5.3",
+  "how": "a different sentence planted in each file of a scratch USERPROFILE; one prompt to the local stand-in",
+  "read": [
+    "~/.gemini/GEMINI.md",
+    "~/.gemini/AGENTS.md",
+    "~/.gemini/config/GEMINI.md",
+    "~/.gemini/config/AGENTS.md"
+  ],
+  "not_read": [
+    "~/.gemini/config/rules/myrule.md (no rules.json)",
+    "~/.gemini/antigravity-cli/GEMINI.md",
+    "~/.gemini/antigravity-cli/AGENTS.md",
+    "~/.agents/AGENTS.md"
+  ]
+}

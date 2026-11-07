@@ -152,6 +152,10 @@ async def test_a_box_ticked_before_antigravity_said_it_takes_tools_restarts_it_o
     from tests.test_build_app_antigravity_v1439 import use_fake as use_agy
 
     saved = dict(JT._TAKES)
+    # v1.447.0 (moved on purpose): Antigravity no longer starts as "takes
+    # none" by default; this test keeps its point (one an earlier start said
+    # takes none, which a newer agy then contradicts) by saying so first.
+    JT._TAKES["antigravity"] = False
     orig = A.AntigravityDriver.acp_servers
 
     def acp_servers(self, caps):

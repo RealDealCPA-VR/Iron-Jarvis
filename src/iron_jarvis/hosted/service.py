@@ -98,6 +98,7 @@ from . import antigravity as A
 from .antigravity import HARNESS as ANTIGRAVITY
 from .antigravity import AntigravityDriver
 from . import antigravity_catalog as ACC
+from . import antigravity_agents as AGA
 from . import branching as BR
 from . import jarvis_tools as JT
 from . import news as NEWS
@@ -288,6 +289,8 @@ def mode_label(harness: str, mode: str) -> str:
     """A preset's words for this tool ("Pi's own rules" is Pi's alone)."""
     if harness == OPENCODE and O.agent_of(mode):
         return O.agent_of(mode)  # v1.441.0: the user's own agent, by its name
+    if harness == ANTIGRAVITY and AGA.agent_of(mode):
+        return AGA.agent_of(mode)  # v1.447.0: the user's own Antigravity agent
     if harness == PI and mode in P.MODE_LABELS:
         return P.MODE_LABELS[mode]
     if harness == ANTIGRAVITY and mode in A.MODE_LABELS:
@@ -327,6 +330,11 @@ def mode_rows(harness: str) -> list[dict[str, Any]]:
         agents = O.agent_mode_rows()
         at = next((i for i, r in enumerate(rows) if r["id"] == "full"), len(rows))
         rows[at:at] = agents
+    if harness == ANTIGRAVITY:
+        # v1.447.0: the user's own Antigravity agents (``agy agents``), before
+        # Full access.
+        at = next((i for i, r in enumerate(rows) if r["id"] == "full"), len(rows))
+        rows[at:at] = AGA.agent_mode_rows()
     return rows
 
 
@@ -347,6 +355,13 @@ def check_mode(harness: str, mode: str, confirm: bool) -> str:
         if any(a["name"] == O.agent_of(raw) for a in O.known_agents()):
             return raw
         raise Refused(W.OPENCODE_UNKNOWN_AGENT.format(agent=O.agent_of(raw)), 400)
+    if harness == ANTIGRAVITY and raw.startswith(AGA.AGENT_PREFIX):
+        # v1.447.0: one of the user's own Antigravity agents — only one
+        # ``agy agents`` listed (an unknown name would run the default agent
+        # with no word over ACP: measured).
+        if AGA.agent_of(raw) and AGA.agent_of(raw) in AGA.known_agents():
+            return raw
+        raise Refused(AGA.UNKNOWN_AGENT.format(agent=clip(raw[len(AGA.AGENT_PREFIX):], 80)), 400)
     mode = raw.lower()
     if mode not in modes_for(harness):
         hidden = dict((r["id"], r["reason"]) for r in hidden_mode_rows(harness))
@@ -1145,6 +1160,9 @@ class HostedService:
         # v1.443.0: what one short background ``agy models`` read listed (and
         # whether it said Antigravity is signed in), before any session ran.
         self._agy_read = self.home / "hosted" / "antigravity_read.json"
+        #: v1.447.0: the user's own Antigravity agents (``agy agents``, read
+        #: in the background; hosted/antigravity_agents).
+        self._agy_agents = self.home / "hosted" / "antigravity_agents.json"
         #: v1.414.0: how long a card waits in the app before the phone gets
         #: it (``harness/stall.PHONE_AFTER_S``; a test sets it short).
         from ..harness.stall import PHONE_AFTER_S
@@ -1219,6 +1237,11 @@ class HostedService:
 
         snap = BA.snapshot(getattr(self.platform, "iron_proxy", None))
         O.load_agents(self._oc_agents)  # v1.441.0: the agent modes (a small file, once)
+        AGA.load(self._agy_agents)  # v1.447.0: Antigravity's own agents (a small file, once)
+        argv_agy_agents = binary_for(ANTIGRAVITY)
+        if argv_agy_agents is not None:
+            # v1.447.0: ``agy agents`` in the background (never on this path).
+            AGA.refresh_soon(self._agy_agents, self.home, argv_agy_agents, A.default_home().parent)
         out = []
         for h in HARNESSES:
             cli = W.CLI[h]
@@ -1558,11 +1581,21 @@ class HostedService:
             problem = await asyncio.to_thread(root_problem, folder)
             if problem:
                 raise Refused(problem, 400, field="folder")
+        if harness == ANTIGRAVITY:
+            await asyncio.to_thread(AGA.load, self._agy_agents)
         try:
             mode = check_mode(harness, body.get("mode") or default_mode(harness), bool(body.get("confirm")))
         except Refused as r:
             r.field = r.field or "mode"
             raise
+        if harness == ANTIGRAVITY and resume_id and AGA.agent_of(mode):
+            # v1.447.0: a saved conversation keeps the agent it was opened
+            # with (Antigravity's own record; measured) — another is refused.
+            kept = await asyncio.to_thread(A.conversation_agent, A.default_home(), resume_id)
+            if kept is not None and kept != AGA.agent_of(mode):
+                raise Refused(AGA.AGENT_KEPT.format(
+                    current=f"“{kept}”" if kept else AGA.DEFAULT_AGENT_WORDS,
+                    wanted=AGA.agent_words(mode)), 400, field="mode")
         try:
             model = check_model(body.get("model"))
         except Refused as r:
@@ -2071,7 +2104,15 @@ class HostedService:
                 # tool refused) renames nothing, the tool included.
                 tell_title = fields["title"].strip()
         if body.get("mode") is not None:
+            if row.harness == ANTIGRAVITY:
+                await asyncio.to_thread(AGA.load, self._agy_agents)
             mode = check_mode(row.harness, body["mode"], bool(body.get("confirm")))
+            if row.harness == ANTIGRAVITY:
+                # v1.447.0: a conversation keeps the agent it was opened with
+                # (measured) — a change after that is refused in words.
+                problem = AGA.agent_change_problem(row.mode, mode, row.harness_session_id)
+                if problem:
+                    raise Refused(problem)
             if live and live.running and live.driver:
                 try:
                     applied["mode"] = await live.driver.set_mode(mode)
@@ -2485,6 +2526,12 @@ class HostedService:
         # v1.441.0: a Claude Code branch made here (or a rewind not yet sent)
         # rides its command line until its next message lands.
         await asyncio.to_thread(BR.prepare_driver, self.home, row, driver)
+        if isinstance(driver, AntigravityDriver):
+            # v1.447.0: its own MCP servers for the Session tab — one
+            # ``agy mcp list`` in the session's folder, off the loop, once the
+            # session is open (names and on/off only).
+            mcp_env, mcp_cwd, mcp_argv0 = dict(env), row.folder or "", list(argv0)
+            driver.read_mcp = lambda: AGA.read_mcp_list(mcp_argv0, mcp_env, mcp_cwd)
         if isinstance(driver, AntigravityDriver) and driver.log_path:
             # v1.439.0: the folder its own log goes in (``--log-file``).
             await asyncio.to_thread(os.makedirs, os.path.dirname(driver.log_path), exist_ok=True)

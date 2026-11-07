@@ -1,0 +1,149 @@
+{
+  "agy": "1.5.3",
+  "how": "agy acp --disable-telemetry --log-file F [--process-per-session], scratch USERPROFILE/HOME, a saved gemini-api-key method and a fake key, every model call to a local stand-in Gemini API; an HTTP MCP stand-in on 127.0.0.1 handed in session/new",
+  "initialize_plain": {
+    "agentCapabilities": {
+      "loadSession": true,
+      "load_session": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": false,
+        "embeddedContext": true
+      },
+      "sessionCapabilities": {
+        "resume": {},
+        "close": {},
+        "load": {},
+        "list": {},
+        "additionalDirectories": {}
+      },
+      "session_capabilities": {
+        "resume": {},
+        "close": {},
+        "load": {},
+        "list": {},
+        "additionalDirectories": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "agentInfo": {
+      "name": "Antigravity ACP Server",
+      "version": "1.5.3"
+    }
+  },
+  "initialize_process_per_session": {
+    "agentCapabilities": {
+      "loadSession": true,
+      "load_session": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": false,
+        "embeddedContext": true
+      },
+      "sessionCapabilities": {
+        "resume": {},
+        "close": {},
+        "load": {},
+        "list": {},
+        "additionalDirectories": {}
+      },
+      "session_capabilities": {
+        "resume": {},
+        "close": {},
+        "load": {},
+        "list": {},
+        "additionalDirectories": {}
+      },
+      "mcpCapabilities": {
+        "http": true
+      },
+      "mcp_capabilities": {
+        "http": true
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "agentInfo": {
+      "name": "Antigravity ACP Server",
+      "version": "1.5.3"
+    }
+  },
+  "mcp_server_saw_process_per_session": [
+    {
+      "method_http": "POST",
+      "path": "/mcp",
+      "bearer": true,
+      "jsonrpc_method": "server/discover"
+    },
+    {
+      "method_http": "POST",
+      "path": "/mcp",
+      "bearer": true,
+      "jsonrpc_method": "initialize"
+    },
+    {
+      "method_http": "POST",
+      "path": "/mcp",
+      "bearer": true,
+      "jsonrpc_method": "notifications/initialized"
+    },
+    {
+      "method_http": "GET",
+      "path": "/.well-known/oauth-protected-resource/mcp",
+      "bearer": false,
+      "jsonrpc_method": ""
+    },
+    {
+      "method_http": "GET",
+      "path": "/.well-known/oauth-protected-resource",
+      "bearer": false,
+      "jsonrpc_method": ""
+    },
+    {
+      "method_http": "POST",
+      "path": "/mcp",
+      "bearer": true,
+      "jsonrpc_method": "tools/list"
+    },
+    {
+      "method_http": "POST",
+      "path": "/mcp",
+      "bearer": true,
+      "jsonrpc_method": "notifications/roots/list_changed"
+    },
+    {
+      "method_http": "POST",
+      "path": "/mcp",
+      "bearer": true,
+      "jsonrpc_method": "tools/call"
+    },
+    {
+      "method_http": "DELETE",
+      "path": "/mcp",
+      "bearer": true,
+      "jsonrpc_method": ""
+    }
+  ],
+  "model_request_declares_tool": true,
+  "tool_result_reached_model": true,
+  "plain_start_also_took_the_server": true
+}

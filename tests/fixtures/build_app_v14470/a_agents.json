@@ -1,0 +1,21 @@
+{
+  "agy": "1.5.3",
+  "command": "agy --log-file F agents (scratch USERPROFILE, not signed in, no model call)",
+  "planted": {
+    "~/.gemini/config/agents/tax-reviewer.md": "mainAgent: true",
+    "~/.gemini/config/agents/plain-one.md": "no mainAgent",
+    "~/.gemini/config/agents/hidden-one.md": "hidden: true",
+    "~/.gemini/config/agents/sub-only.md": "mainAgent: false",
+    "<folder>/.agents/agents/proj-helper.md": "mainAgent: true (folder not trusted)"
+  },
+  "stdout": "hidden-one\nplain-one\ntax-reviewer\n",
+  "acp_agent_flag": {
+    "new conversation with --agent tax-reviewer: its system prompt reached the model": true,
+    "new conversation without --agent: it did not": true,
+    "conversation started WITH the agent, resumed WITHOUT --agent: still the agent": true,
+    "conversation started without, resumed WITH --agent: still no agent": true,
+    "EMPTY conversation (session/new, no prompt) resumed WITH --agent: still no agent": true,
+    "--agent no-such-agent: the default agent, no warning over ACP": true,
+    "conversation_summaries.db agent_name column": "tax-reviewer for the agent's conversations, '' otherwise"
+  }
+}
