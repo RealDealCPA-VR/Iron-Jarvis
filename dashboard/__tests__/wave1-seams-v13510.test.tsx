@@ -231,7 +231,8 @@ describe("integrator source pins", () => {
 
   it("the config card's Settings footer is a client-side link", () => {
     const src = read("components/chat/ConfigCards.tsx");
-    expect(src).toContain('<Link href="/settings" className="text-[12px] text-zinc-500 hover:text-zinc-300">');
+    // v1.448.0 (A3): the link opens the changed row itself (`/settings?focus=<key>`).
+    expect(src).toContain("href={settingsHrefFor(card)}");
     expect(src).not.toContain('<a href="/settings"');
   });
 

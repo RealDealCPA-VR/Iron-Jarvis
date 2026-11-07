@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.447.0 (2026-11-07).*
+holds itself to. Current as of v1.448.0 (2026-11-07).*
 
 ---
 
@@ -2043,6 +2043,63 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Chat configures the rest: models, tool servers, web services (v1.448.0)
+
+Three more things you can set up by asking, and four small honesty fixes.
+
+**Models in plain words.** "Use Claude for this chat instead of the default",
+"I have a ChatGPT Plus plan, can you use that?", "Set up Gemini", "Use
+OpenRouter for the big questions" now reach the default-model settings (a
+card asks first; a key still goes only on the secure card) and offer "Open
+Connections to set up a model". The card says plainly that changing the
+default changes EVERY chat; one chat picks its model from the menu above the
+box. "Ollama is running on this PC, use it" and "LM Studio is running on port
+1234, connect to it" offer to add that model server and make it the default.
+"Which local models can run on this laptop?" gets a line about model servers.
+
+**Everyday nouns for last week's tools.** "Point your long-term memory at my
+Obsidian vault in D:\Notes" (a memory base), "For the ClosePilot folder,
+always use Codex in Auto mode" (that folder's coding defaults), "Have my
+coding sessions run with a reviewer that checks every change" (the session
+team), "Every night at 11 run the tests in C:\Projects\ClosePilot" (a night
+task beside the schedule) now reach their tools without the exact words.
+"Click the Submit button in the QuickBooks desktop app" gets the plain line
+that Iron Jarvis has no way of its own into other programs on your PC, and
+no longer arms a browser click. "How do depreciation schedules work?" arms no
+schedule tool. "Can you work with QuickBooks Online?" asks the Guide.
+
+**A tool server from chat.** Paste a server's config block, command line or
+address ("add the filesystem server from the Claude docs", "add this server:
+npx -y @modelcontextprotocol/server-filesystem C:\Clients", "connect this
+tool server at https://mcp.example.com/sse"). One card shows the command it
+will start. A key or token is never taken from your message: a secret with a
+value in the pasted text is refused in words, a blank or placeholder secret
+is asked for on the secure card, and the server is added only once every
+secret is saved. Undo removes a server chat added, and refuses if you edited
+it on the Tools page since. Microsoft 365's locked program, a name in use,
+the same server under another name and a missing Node.js or uv are refused
+before anything starts.
+
+**A web service from chat.** "Hook up our firm's pricing API at
+https://api.example.com/v1 so you can look up fees" adds it to Your web
+services; its key goes on the secure card; an address on this PC or your own
+network is allowed and said so. Undo removes it. "Let the Jarvis on my office
+PC take overnight jobs from this one" gets the plain line about tasks from
+another computer.
+
+**Honesty fixes.** A "Setting changed" card names the option ("Ask before
+commands → Auto", "Mark 1 → Daylight"), never an internal value, and its link
+opens that very row in Settings. The chat approval card can answer "No, tell
+it what to do instead": type what you want, Send declines the action and
+hands your words to the running reply (or sends them as the next message if
+the reply has ended), and the dock says that the message box comes back when
+you answer. A chat waiting for your OK says "Needs you" beside its name in the
+chat list, not only by colour. Build › Code's Session tab says "Runs · cloud"
+or "Runs · on this network" for the tool's model when that is known.
+
+Not driven with a real model or in the packaged app yet; the matchers were
+checked with 94 fresh sentences on a scratch app.
 
 ## The approvals menu shows names only (v1.430.0)
 

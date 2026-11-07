@@ -15558,6 +15558,85 @@ does not need a bump, stop and bump it.
   never Build); the rail/sidebar/Archived have "Show older chats"; Ctrl K has
   a title lane. Pins: the `*-v1446` / `*_v1446` files.
 
+- **Wave A of the readiness plan: chat configures everything** (v1.448.0;
+  the re-audit at v1.447.0 scored 82/100 — `docs/PRODUCT-READINESS-RESULTS.md`
+  section 0h, per-item marks in `docs/PRODUCT-READINESS-LANES-v1447.md`; its
+  plan's items 1-8 built here, item 9 (a hand-picked "+ Tools" writer runs
+  with no card) waits on the owner; three builders + three independent
+  reviewers, who found 15 more defects, each red first). MATCHERS (A1):
+  `settings/setup_words.py` holds ONE definition of a cloud vendor or plan
+  asked to answer (`USE_VENDOR`, `USE_PLAN`, `SET_UP_VENDOR`,
+  `names_a_model_provider`; local brands excluded — they have
+  `model_server_add`), read by `trigger._EXTRA_REFERENCES` (arms the
+  default-provider/model writers; the schema help and the door's words say
+  config_set changes EVERY chat and one chat picks from the menu) and by the
+  `page_doors` step `model_provider` → Connections; `NOT_OUR_SCHEDULE_BEFORE`
+  lives there too (`change_claims` and `records._schedule_noun_hit` import
+  it, so "how depreciation schedules work" arms no writer).
+  `records_connections._clause_tools`: a local brand + running / installed /
+  on this PC / on port N + a use/connect cue → `model_server_add` (+
+  `_default`); `_MEMORY_RULES` reads "point your long-term memory at <vault>".
+  `records_build`: `_NAMED_FOLDER_REF` + always/by default → `build_defaults_set`;
+  reviewer forms → `build_team_set`; `_NIGHT_TIME` + a path or code noun →
+  `night_task_add` beside the schedule. `records.is_question`: "have <det> …"
+  with no "?" and no perfect tense is an ORDER (it read every "Have my … do X"
+  as a question). `page_doors._DESKTOP_RULES` reads "click … in the <program>
+  (desktop) app"; `autoselect.select_ask_tools` (the stream lane's ONE ask
+  path) drops `browser_*` when `asks_desktop_control` wins; `_FEATURE_QUESTION`
+  takes "can you work with <Product>?"; three `local_model` rules; the old
+  night-shift trigger shape needs a request verb. TOOL DOORS (A2,
+  `settings/records_tools.py`, the record-tool pattern): `mcp_server_add`
+  takes a pasted block / command line / address / catalog name through
+  `routes/agents._apply_specs` → the ONE `pack_door.add_pack`, a once-only
+  card showing the masked command; a secret WITH a value anywhere (env,
+  header, auth, `--token X`, a secret-named query param, a token-shaped value
+  under an innocent key — `_looks_like_a_secret`) is refused before any card;
+  a blank or `${input:x}` secret is a slot on the secure card
+  (`tool_server.<pack>__<slot>` → `mcp.<pack>.<KEY>`, resolved by
+  `credentials._resolve_tool_server`) and the server is added ONLY when every
+  slot is saved (`on_secret_saved`, called from `CredentialStore.store`; a
+  plan waits in memory — a card saved after a restart keeps no orphan row and
+  says so; a second add under a waiting name is refused); Undo removes the
+  pack this call made and refuses one edited since (`comparable(row)`);
+  `pack_grants_auto` is False for it. `web_service_add` → lifted
+  `integrations/hookups.add_hookup` / `remove_hookup` (the route calls them);
+  key on the card only (`web_service.<id>` → `integration_<id>_token`); a
+  private address gets `allow_internal` and the card says so; `\\host`,
+  `//host`, `\\?\`, `ftp:` refused by text. `page_doors` `another_computer`
+  reads "the Jarvis on my office PC". Dashboard `lib/appConnect.ts` decodes a
+  `tool_server.*` save ("Tool server “x” added · N tools"; the page turns the
+  pack on for the chat). HONESTY (A3): `settings/tools.value_label(row, value,
+  manager)` is the ONE display name for a setting value (an enum option's
+  label; `default_provider` through `failure_words.plain_name`, a fleet node
+  by its label; a dict by its keys; an unknown stored value → raw);
+  `old_label`/`new_label` ride `config_change` and
+  `chat_turn.config_card_from_result` (both lanes), `lib/configCards.showValue`
+  prefers them and the card links `/settings?focus=<key>`. The compact chat
+  `ApprovalCard` (with `why`) takes `onRedirect`: a field whose Send POSTs
+  `deny` and ONLY then hands the words to the page's `redirectAfterDeny`
+  (steer the running turn; 404 → `send` through `sendRef` — the handler is
+  captured at the card's last render, so a plain closure read a stale `busy`
+  and LOST the words; a refused deny sends nothing); DockAsk says the box
+  comes back; `REDIRECT_WORDS` lives in `lib/approvalWords` (CodeAskCard
+  re-exports); PaneAsk, the mission card and Chat › Code's dock pass no
+  `onRedirect` (no half-wired button); the no-`why` card's v1417 DOM fixture
+  is unmoved. `ThreadGroups` draws "Needs you" (`thread-needs-you-<id>`) on a
+  waiting row. `hosted/panes.where_view` → `session_view(..., platform)`
+  `where {on_this_network, words}`: `CLOUD_TOOLS` (claude-code, codex, grok,
+  antigravity) cloud; Pi/OpenCode by provider prefix through
+  `egress.stays_on_this_network`; no address, LM Studio, llama.cpp → NOT
+  KNOWN (nothing drawn — the first cut read them "cloud"). Pins:
+  `tests/test_{records_tools,records_tools_review,config_card_labels,
+  build_code_where,a3_review}_v14480.py`, rows in the arming, matcher and
+  page-door tables (fixture regenerated), `dashboard/__tests__/{approval-redirect,
+  approval-redirect-page-review,tool-server-card}-v1448.test.tsx`. OPEN: the
+  `model_provider` door is text-only (shows beside the settings tools, even
+  when that vendor is connected); "LM Studio … connect to it" still also
+  arms `app_connect`; "every night at 10 the hospital's shift changes and the
+  reports run" arms the recurring-time schedule shape (Wave 2); a pending
+  tool-server plan lives in memory; not driven with a real model or in the
+  packaged app.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
