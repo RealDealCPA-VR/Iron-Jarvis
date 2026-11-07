@@ -1314,14 +1314,14 @@ export default function ToolsPage() {
           {connected ? (
             /* v1.356.0 (G74): one word for taking an extension away, the
                same on this card, its row below and the Directory: Remove. */
-            <PrimaryAction
-              tone="quiet"
+            /* v1.445.0: two presses, like the row below and the Directory —
+               one press used to delete the extension and every saved key. */
+            <ConfirmButton
               label="Remove"
-              icon={<X size={13} />}
+              confirmLabel="Remove — press again"
               title={`Remove "${entry.name}" and its saved settings`}
               testId={`pack-remove-${entry.id}`}
-              disabled={mcpBusy === `del:${entry.id}`}
-              onClick={() => void removeServer(entry.id)}
+              onConfirm={() => removeServer(entry.id)}
             />
           ) : (
             <PrimaryAction

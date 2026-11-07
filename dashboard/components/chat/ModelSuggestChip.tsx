@@ -19,7 +19,12 @@
 import { useState } from "react";
 import { Sparkles } from "lucide-react";
 import { useDaemon } from "@/lib/daemon";
-import { answerCandidates, chooseForAnswers, isDemoDefault } from "@/lib/onboarding";
+import { chooseForAnswers, isDemoDefault } from "@/lib/onboarding";
+// v1.445.0 (ease-of-use review item 2): only what the one press can choose.
+// `answerCandidates` alone also lists a saved web sign-in (a Browser vault
+// row such as "claude"), which the press answers 409 for ("Use claude for
+// answers" was a dead button on a fresh install with a saved web login).
+import { pressableCandidates } from "@/lib/demoExit";
 
 export function ModelSuggestChip({ onOther }: { onOther?: () => void }) {
   const { health, refresh } = useDaemon();
@@ -34,7 +39,7 @@ export function ModelSuggestChip({ onOther }: { onOther?: () => void }) {
     );
   }
   if (!isDemoDefault(health)) return null;
-  const candidates = answerCandidates(health);
+  const candidates = pressableCandidates(health);
   if (candidates.length === 0) return null;
   const top = candidates[0];
 

@@ -7303,7 +7303,7 @@ async def chat_stream(
                 # v1.351.0 (G10): the OFFLINE DEMO answered — one note that
                 # names the real fix, in place of the two file notes. MIRROR
                 # NOTE (lock-step): chat_turn.run_chat_turn.
-                reply += _chat_turn.demo_note(tools_used, reply)
+                reply += _chat_turn.demo_note(tools_used, reply, surface=_surface_for(body))
             else:
                 # v1.351.0 fix round: the custom tools that ran, from the live
                 # registry. Finish-check review: and a Build turn's finish check

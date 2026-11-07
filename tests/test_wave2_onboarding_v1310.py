@@ -81,9 +81,15 @@ def _default(client) -> tuple[str, str]:
 
 def _promote_model(client, provider: str) -> str:
     """The model the existing "Make default" path pairs with *provider* -- the
-    one table use-model must agree with (read live, never hard-coded)."""
-    d = client.app.state.d
-    return d._PROMOTE_DEFAULT_MODEL.get(provider, d.platform.config.default_model)
+    one rule use-model must agree with (read live, never hard-coded).
+
+    v1.445.0 (moved on purpose): the rule is ``routes.settings.promote_model``
+    — an API name served THROUGH a sign-in pairs with the plan's own default
+    ("subscription"), never the API table's fixed id (Codex refused
+    gpt-4o-mini, so "Use ChatGPT for answers" failed its first question)."""
+    from iron_jarvis.daemon.routes.settings import promote_model
+
+    return promote_model(client.app.state.d, provider)
 
 
 def _use(client, provider: str):

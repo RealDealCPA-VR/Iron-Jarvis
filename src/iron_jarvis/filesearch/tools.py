@@ -21,10 +21,12 @@ class FileSearchTool(Tool):
     name = "file_search"
     returns_untrusted_content = True  # matched file text can carry planted instructions
     description = (
-        "Search across configured roots (broader than the workspace grep): "
-        "mode 'name' (glob/substring on paths), 'content' (regex, default), or "
-        "'semantic' (similarity, if enabled). Respects ignore patterns; stays "
-        "within roots. Pass an optional 'root' (e.g. a drive like 'C:\\\\' from "
+        "Search the user's files (broader than the workspace grep). With no "
+        "'root' it looks in the Iron Jarvis chat files folder, every active "
+        "project's folder and the folders the user added on the File Search "
+        "page: mode 'name' (glob/substring on paths), 'content' (regex, "
+        "default), or 'semantic' (by meaning; only the folders the user added). "
+        "Respects ignore patterns; stays within roots. Pass an optional 'root' (e.g. a drive like 'C:\\\\' from "
         "list_drives) to target an arbitrary local root with a bounded walk."
     )
     permission_key = "file_search"
@@ -120,6 +122,10 @@ class FileSearchTool(Tool):
                 # v1.232.0 (audit T7): files over the size cap, counted the
                 # way undecodable ones are instead of dropped silently.
                 "skipped_oversize": notes.oversize,
+                # v1.445.0: why a "By meaning" answer is empty or word-based.
+                "no_meaning_folders": notes.no_meaning_folders,
+                "still_indexing": notes.indexing,
+                "words_only": notes.words_only,
             },
         )
 

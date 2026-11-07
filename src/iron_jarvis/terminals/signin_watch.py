@@ -31,14 +31,36 @@ voids the sighting). "Authentication successful" is the browser page and MCP
 server auth — never the account login. Only Anthropic accounts are watched
 (the other CLIs' words were not measured); every account still has the card's
 "Check again".
+
+v1.445.0: THIS PC'S OWN LOGIN too (the connect door's and Settings' "Sign in
+to Claude Code / Codex" press, ``POST /terminals/launch {account:
+"default"}``). Before, the door said "not signed in" for up to two minutes
+after the login landed (``cli_auth.UNSIGNED_RECHECK_S``) and offered Sign in
+again. :func:`watch_default_login` watches such a pane on a small daemon
+thread; when the CLI's own success shape is on screen it re-checks the shared
+sign-in verdict (``cli_auth.DEFAULT_PROBE.refresh``), so /health — and the
+door — turn green within seconds. Codex's shapes were read from the codex
+0.157.x binary's own strings: the sign-in screen's ``✓ Signed in with your
+ChatGPT account`` and ``codex login``'s ``Successfully logged in`` (never
+``Successfully logged in to MCP server …`` nor the MCP flow's
+``Successfully logged in.``). The probe runs ONLY on that positive evidence,
+at most :data:`MAX_CHECKS` times a pane and :data:`RECHECK_GAP_S` apart.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Any
+import threading
+import time
+from typing import Any, Callable
 
-__all__ = ["login_succeeded", "watch_signin"]
+__all__ = [
+    "default_login_step",
+    "default_login_succeeded",
+    "login_succeeded",
+    "watch_default_login",
+    "watch_signin",
+]
 
 #: The newest rendered lines searched for the success shape.
 SCAN_LINES = 40
@@ -130,3 +152,113 @@ def watch_signin(session: Any, svc: Any) -> None:
             svc.refresh_accounts()
     except Exception:  # noqa: BLE001 — a watch never breaks the activity poll
         return
+
+
+# --- v1.445.0: this PC's own login ---------------------------------------
+
+#: How often the watch thread looks at a default-login sign-in pane.
+WATCH_TICK_S = 2.0
+#: How long it watches before giving up (the 2-minute re-check carries on).
+WATCH_FOR_S = 900.0
+#: The least time between two sign-in re-checks of one pane.
+RECHECK_GAP_S = 10.0
+
+_CODEX_ECHO = re.compile(r"\becho\b.*(successfully logged in|signed in with)", re.I)
+_CODEX_SIGNED_IN = "Signed in with your ChatGPT account"
+
+
+def _codex_success(lines: list[str]) -> bool:
+    if any(_CODEX_ECHO.search(ln) for ln in lines):
+        return False
+    for ln in lines:
+        body = _body(ln)
+        if body == "Successfully logged in":
+            return True  # `codex login`
+        # The sign-in screen's tick line ("✓ Signed in with your ChatGPT
+        # account"); a ⎿ / > / ❯ mark keeps the body from ever equalling it.
+        if body.lstrip("✓✔ ").strip() == _CODEX_SIGNED_IN and body[:1] in "✓✔":
+            return True
+    return False
+
+
+#: Per CLI binary (``cli_auth.CLI_BINARIES``): its own success shape.
+_DEFAULT_SUCCESS = {"claude": _claude_success, "codex": _codex_success}
+
+
+def default_login_succeeded(tail: str, binary: str) -> bool:
+    """Does ``tail`` show ``binary`` (``claude`` / ``codex``) saying its login
+    succeeded, in its last :data:`SCAN_LINES` lines? Pure."""
+    check = _DEFAULT_SUCCESS.get(str(binary or ""))
+    if check is None:
+        return False
+    lines = [ln.rstrip() for ln in str(tail or "").splitlines() if ln.strip()][-SCAN_LINES:]
+    return check(lines)
+
+
+def default_login_step(session: Any, binary: str, state: dict, *, probe: Any, now: float) -> bool:
+    """One look at a default-login sign-in pane. Returns True when the watch
+    is over (signed in, the pane gone, or the re-checks used up). BLOCKING
+    only for a re-check (the CLI's own status command, bounded by the probe).
+    Never raises."""
+    try:
+        st = probe.status(binary)
+        if st is not None and st.signed_in is True:
+            return True
+        if not getattr(session, "alive", False):
+            return True
+        checks = int(state.get("checks", 0))
+        if checks >= MAX_CHECKS:
+            return True
+        last = state.get("last_at")
+        if last is not None and now - float(last) < RECHECK_GAP_S:
+            return False
+        seq = getattr(session, "output_seq", None)
+        if seq is not None and seq == state.get("seq") and last is None:
+            return False  # nothing new on screen since a look that found nothing
+        if not default_login_succeeded(session.output_tail(), binary):
+            state["seq"] = seq
+            return False
+        state["checks"] = checks + 1
+        state["last_at"] = now
+        fresh = probe.refresh(binary)
+        return bool(getattr(fresh, "signed_in", None) is True)
+    except Exception:  # noqa: BLE001 — a watch never breaks a pane
+        return True
+
+
+def watch_default_login(
+    session: Any,
+    binary: str,
+    *,
+    probe: Any = None,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    start: bool = True,
+) -> threading.Thread | None:
+    """Watch a pane started to sign in to THIS PC's own ``claude``/``codex``
+    (v1.445.0) on a daemon thread, for at most :data:`WATCH_FOR_S`. Returns
+    the thread (not started when ``start`` is False — tests drive
+    :func:`default_login_step`), or None for a CLI with no known shape.
+    Never raises."""
+    if binary not in _DEFAULT_SUCCESS:
+        return None
+    if probe is None:
+        from ..providers.cli_auth import DEFAULT_PROBE
+
+        probe = DEFAULT_PROBE
+    state: dict = {}
+
+    def _loop() -> None:
+        until = clock() + WATCH_FOR_S
+        while clock() < until:
+            if default_login_step(session, binary, state, probe=probe, now=clock()):
+                return
+            sleep(WATCH_TICK_S)
+
+    t = threading.Thread(target=_loop, name=f"signin-watch-{binary}", daemon=True)
+    if start:
+        try:
+            t.start()
+        except RuntimeError:
+            return None
+    return t

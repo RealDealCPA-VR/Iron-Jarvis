@@ -79,7 +79,8 @@ def test_the_chat_demo_note_says_the_demo_models_name_and_sentence(tools):
     note = demo_note(tools)
     assert DEMO_MODEL in note and DEMO_REPLIES in note, note
     assert not OTHER_DEMO_NAMES.search(note), note
-    assert "Choose a model above to get real answers." in note
+    # v1.445.0 (moved on purpose): the note names the real press now.
+    assert "connect a model with the button just below the message box." in note
 
 
 @pytest.mark.parametrize("lane", ["post", "stream"])

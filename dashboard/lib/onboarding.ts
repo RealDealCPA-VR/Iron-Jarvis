@@ -750,3 +750,32 @@ export function cliDoorState(row: HealthRow | undefined): CliDoorState {
 export function healthRow(health: Health | null | undefined, provider: string): HealthRow | undefined {
   return ((health?.providers ?? []) as HealthRow[]).find((p) => p.provider === provider);
 }
+
+/* -------------------------------------------- v1.445.0: the key door --- */
+
+/** A pasted key's provider, read off its shape (v1.445.0): `sk-ant-` is
+ *  Anthropic, any other `sk-` OpenAI (`sk-proj-` included; OpenRouter's
+ *  `sk-or-` is no key-door tab, so it reads as unknown), `AIza` / `AQ.` a
+ *  Google AI Studio key. `null` when the shape says nothing — the tab the user
+ *  picked stands. Pure. */
+export type KeyShapeProvider = "anthropic" | "openai" | "google";
+
+export function keyShapeProvider(key: string): KeyShapeProvider | null {
+  const k = (key || "").trim();
+  if (k.startsWith("sk-ant-")) return "anthropic";
+  if (k.startsWith("sk-or-")) return null;
+  if (k.startsWith("sk-")) return "openai";
+  if (k.startsWith("AIza") || k.startsWith("AQ.")) return "google";
+  return null;
+}
+
+/** What `POST /connections/{p}/key?check=1` answers (v1.445.0): the key is
+ *  TESTED before it is stored. `saved: false` = the test failed and nothing
+ *  changed; `test` is the Test route's own result (its plain words included).
+ *  An older daemon ignores `check` and answers without `saved`. */
+export interface KeySaveAnswer {
+  provider?: string;
+  status?: string;
+  saved?: boolean;
+  test?: { ok: boolean; detail?: string; kind?: string; title?: string; fix?: string; technical?: string };
+}

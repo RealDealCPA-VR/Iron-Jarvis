@@ -37,6 +37,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { ArrowUp, House, Loader2 } from "lucide-react";
 import { FolderChip } from "@/components/folders/FolderChip";
 import { PermissionChip } from "@/components/chat/PermissionChip";
@@ -73,6 +74,7 @@ import {
   type CodeDefaults,
 } from "@/lib/folderDefaults";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
+import { BUILD_CODE_PLACE, TO_BUILD_CODE_LEAD, buildCodeHref } from "@/lib/buildApp";
 import { PANE_COMPOSER_CARD, paneSendClass } from "@/components/terminal/paneChatLook";
 import {
   AttachButton,
@@ -825,6 +827,19 @@ export function HarnessStartComposer({
           </span>
         ) : null}
       </div>
+      {/* v1.445.0 (ease-of-use review, item 11): the two Code views point at
+          each other — here Jarvis writes the code; Build › Code runs the
+          user's own Claude Code or Codex. */}
+      <p data-testid="harness-to-build-code" className="mt-2 px-2 text-[11px] text-zinc-500">
+        {TO_BUILD_CODE_LEAD}{" "}
+        <Link
+          href={buildCodeHref()}
+          className="rounded-sm text-zinc-400 underline decoration-white/20 underline-offset-2 transition-colors hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+        >
+          {BUILD_CODE_PLACE}
+        </Link>
+        .
+      </p>
     </div>
   );
 }
