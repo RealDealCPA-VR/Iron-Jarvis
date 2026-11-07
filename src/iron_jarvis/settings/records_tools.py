@@ -130,6 +130,14 @@ NOT_WAITING = (
     "That server is no longer waiting to be added (Iron Jarvis restarted, or the card expired): ask "
     "for it again in chat."
 )
+#: A2 review: the value a card saved for a server nothing waits for any more
+#: is NOT kept — an orphan vault row the user cannot see is worse than a
+#: second paste.
+NOT_WAITING_DROPPED = NOT_WAITING + " The value you pasted was not kept."
+WAITING_ALREADY = (
+    "A tool server called {name!r} is already waiting for its key on a secure card: paste it there, or "
+    "press Undo on that card first."
+)
 WITHDRAWN = "undo: withdrew the card for the tool server '{name}'; nothing had been added"
 NEVER_ADDED = "The tool server {name!r} was never added (or was removed since), so there is nothing to undo."
 CHANGED_SINCE = (
@@ -138,6 +146,10 @@ CHANGED_SINCE = (
 )
 NOT_CARRIED = "a web service's key is never passed in the chat: set `needs_key` true and the user pastes it on the secure card"
 SERVICE_NAME_IN_USE = "A web service called {name!r} is already saved. Choose another name."
+SERVICE_WORDS_LOOK_SECRET = (
+    "The web service's name or description looks like a key or token: never pass one in the chat — the "
+    "user pastes it on the secure card."
+)
 SERVICE_SAME_ADDRESS = "A web service at that address is already saved as {other!r}."
 SERVICE_NETWORK = (
     "That is a network share or device path, not a web address. Give the service's address starting "
@@ -264,7 +276,6 @@ def _catalog_specs() -> dict[str, Any]:
     return out
 
 
-_JSON_RX = re.compile(r"\{.*\}", re.DOTALL)
 _URL_RX = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 _LAUNCH_RX = re.compile(
     r"\b(?:npx|uvx|pipx|bunx|docker|node|python3?|uv|deno)\b[^\n]*", re.IGNORECASE
@@ -283,9 +294,12 @@ def parse_server_config(text: Any) -> list[Any]:
         return []
     specs = parse_any(raw)
     if not specs:
-        m = _JSON_RX.search(raw)
-        if m is not None:
-            specs = parse_any(m.group(0))
+        # A2 review: the first "{" to the last "}" by find/rfind — the old
+        # ``\{.*\}`` search re-scanned the text from every brace with no
+        # closing one (60,000 braces: 1.2 s, on the loop in redact_args).
+        i, j = raw.find("{"), raw.rfind("}")
+        if i != -1 and j > i:
+            specs = parse_any(raw[i:j + 1])
     if not specs:
         m = _URL_RX.search(raw)
         if m is not None:
@@ -347,7 +361,7 @@ class Plan:
 
     def __init__(self, platform: Any, args: dict[str, Any]) -> None:
         from ..mcp.import_config import NAME_RX, safe_name
-        from ..mcp.secrets import is_secret_key, split_args, split_url
+        from ..mcp.secrets import _secret_flag, is_secret_key, split_args, split_url
 
         self.problem = ""
         self.spec: Any = None
@@ -398,6 +412,11 @@ class Plan:
                     return
                 spec.env[key] = ""
                 self.slots.append(_slot("env", key))
+            elif value and _looks_like_a_secret(value):
+                # A2 review: a token under an innocent key (``FOLDER:
+                # ghp_…``) would be stored PLAIN — the door vaults by name.
+                self.problem = KEY_NOT_IN_CHAT
+                return
         for key, value in list(spec.headers.items()):
             if is_secret_key(key):
                 if value and not _placeholder_like(value):
@@ -405,6 +424,9 @@ class Plan:
                     return
                 spec.headers[key] = ""
                 self.slots.append(_slot("header", key))
+            elif value and _looks_like_a_secret(value):
+                self.problem = KEY_NOT_IN_CHAT
+                return
         if spec.auth is not None:
             if spec.auth.get("value") and not _placeholder_like(spec.auth.get("value")):
                 self.problem = KEY_NOT_IN_CHAT
@@ -413,12 +435,16 @@ class Plan:
             self.slots.append(_slot("auth"))
         if spec.transport == "stdio":
             _shown, arg_values = split_args(list(spec.args))
-            if arg_values:
+            # A2 review: a PLACEHOLDER after a secret flag (``--token
+            # ${input:token}``) is asked on the card, not refused as a value.
+            if any(not _placeholder_like(spec.args[i]) for i in arg_values):
                 self.problem = KEY_NOT_IN_CHAT
                 return
         else:
             _shown_url, url_value = split_url(spec.url)
-            if url_value:
+            # A2 review: ``?key=…`` — a secret-named query parameter is a
+            # credential ``mask`` does not know; the door would store it plain.
+            if url_value or _secret_query_names(spec.url):
                 self.problem = KEY_NOT_IN_CHAT
                 return
         # ---- placeholders: a secret-shaped name is a card slot, the rest `values`.
@@ -433,7 +459,10 @@ class Plan:
                     continue  # already a slot (the env key itself)
                 if where == "header" and is_secret_key(str(key)):
                     continue
-                if is_secret_key(ask):
+                after_flag = (
+                    where == "arg" and isinstance(key, int) and key > 0 and _secret_flag(spec.args[key - 1])
+                )
+                if is_secret_key(ask) or after_flag:
                     slot = _slot("arg", key) if where == "arg" else _slot(where, key)
                     if slot not in self.slots:
                         self.slots.append(slot)
@@ -472,6 +501,11 @@ class Plan:
             return
         if R.snap_app(platform, name) is not None:
             self.problem = NAME_IN_USE.format(name=name)
+            return
+        if pending_for(name) is not None:
+            # A2 review: a second plan under a WAITING name would be the one
+            # the first card's save adds — refused until that card is answered.
+            self.problem = WAITING_ALREADY.format(name=name)
             return
         other = same_server_as(platform, spec)
         if other:
@@ -536,6 +570,12 @@ class Plan:
                 where, _, key = slot.partition("__")
                 if where == "arg" and isinstance(key, str) and key.isdigit() and int(key) < len(spec.args):
                     spec.args[int(key)] = f"${{input:{ask}}}"
+        # A2 review: the placeholders are FILLED now — ``routes/agents.
+        # _body_from_spec`` re-runs ``fill_placeholders`` for a spec whose
+        # ``asks`` is non-empty, which dropped a card-saved env value and
+        # refused an argument ("type a value for folder first": the catalog's
+        # filesystem was never added).
+        spec.fills = []
         return spec
 
     def expected(self) -> dict[str, Any]:
@@ -570,7 +610,7 @@ def masked_config(text: Any) -> str:
     secret-named env / header / auth VALUE replaced whole), else the text
     through ``mask``. Never raises; never a value."""
     from ..detections.redact import MASK, mask
-    from ..mcp.secrets import is_secret_key, split_args, split_url
+    from ..mcp.secrets import is_secret_key, split_args
 
     raw = str(text or "")
     try:
@@ -578,33 +618,91 @@ def masked_config(text: Any) -> str:
     except Exception:  # noqa: BLE001
         specs = []
     if not specs:
-        return mask(raw)
+        return _mask_text(raw)
     lines: list[str] = []
     for spec in specs:
         if spec.transport == "stdio":
             shown, _ = split_args(list(spec.args))
             line = " ".join([spec.command, *shown]).strip()
         else:
-            line, _ = split_url(spec.url)
+            line = _mask_url(spec.url)
         extras: list[str] = []
         for k, v in spec.env.items():
-            extras.append(f"{k}={MASK if (is_secret_key(k) and v) else mask(v)}")
+            extras.append(f"{k}={MASK if v and (is_secret_key(k) or _looks_like_a_secret(v)) else mask(v)}")
         for k, v in spec.headers.items():
-            extras.append(f"{k}: {MASK if (is_secret_key(k) and v) else mask(v)}")
+            extras.append(f"{k}: {MASK if v and (is_secret_key(k) or _looks_like_a_secret(v)) else mask(v)}")
         if spec.auth and spec.auth.get("value"):
             extras.append(f"auth: {MASK}")
         lines.append(f"{spec.name}: {line}" + (f" ({'; '.join(extras)})" if extras else ""))
-    return mask(" | ".join(lines))
+    return _mask_text(" | ".join(lines))
+
+
+def _mask_text(text: str) -> str:
+    """``mask`` plus the shapes it does not read: a secret-named query
+    parameter in any address, a bare ``Bearer <token>``."""
+    from ..detections.redact import MASK, mask
+
+    out = _URL_RX.sub(lambda m: _mask_url(m.group(0)), mask(str(text or "")))
+    return re.sub(r"(?i)\b(bearer)\s+" + _TOKEN_PART, lambda m: f"{m.group(1)} {MASK}", out)
+
+
+#: A2 review: a header VALUE that is itself a credential whatever the
+#: header is called ("X-Trace: Bearer <token>") — ``mask`` reads the
+#: Bearer shape only behind an ``Authorization`` header.
+#: The token part is at least 12 characters holding a digit or a mark —
+#: "Basic accounting" and "Token Ring Project" are words, never a credential.
+_TOKEN_PART = r"(?!\*{3})(?=\S*[\d=_\-.+/])\S{12,}"
+_CREDENTIAL_VALUE_RX = re.compile(r"^\s*(?:bearer|basic|token)\s+" + _TOKEN_PART + r"\s*$", re.IGNORECASE)
 
 
 def _looks_like_a_secret(value: str) -> bool:
-    """A VALUE shaped like a credential (``detections.redact.mask`` changes it)."""
+    """A VALUE shaped like a credential (``detections.redact.mask`` changes
+    it, or it is a bare ``Bearer <token>``)."""
+    v = str(value)
+    if _CREDENTIAL_VALUE_RX.match(v):
+        return True
     try:
         from ..detections.redact import mask
 
-        return mask(str(value)) != str(value)
+        return mask(v) != v
     except Exception:  # noqa: BLE001
         return False
+
+
+def _secret_query_names(url: Any) -> list[str]:
+    """The query parameters of ``url`` whose NAME says key, token, …
+    (``?key=…``, ``?api_key=…``, ``?token=…``): a credential in an address
+    the pack door would store plain, since ``mask`` reads only a few names."""
+    from ..mcp.secrets import is_secret_key
+
+    try:
+        query = urlsplit(str(url or "")).query
+    except ValueError:
+        return []
+    out: list[str] = []
+    for part in query.split("&"):
+        name = part.split("=", 1)[0]
+        if name and (is_secret_key(name) or _SECRET_ARG_NAME.search(name)):
+            out.append(name)
+    return out
+
+
+def _mask_url(url: str) -> str:
+    """``mask`` plus every secret-named query parameter's value."""
+    from ..detections.redact import MASK, mask
+
+    shown = mask(str(url or ""))
+    names = set(_secret_query_names(shown))
+    if not names:
+        return shown
+    head, sep, query = shown.partition("?")
+    if not sep:
+        return shown
+    parts = []
+    for part in query.split("&"):
+        name, eq, _value = part.partition("=")
+        parts.append(f"{name}={MASK}" if eq and name in names else part)
+    return head + "?" + "&".join(parts)
 
 
 def comparable(row: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -719,9 +817,24 @@ def on_secret_saved(platform: Any, arg: str) -> dict[str, Any]:
         return {}
     with _PENDING_LOCK:
         _sweep()
+        waiting = pack in _PENDING
+    if not waiting:
+        if R.snap_app(platform, pack) is not None:
+            # A2 review: an EXISTING pack's key (``config_secret``'s bare
+            # name) — stored where the pack reads it; the plain "saved" words.
+            return {}
+        # A2 review: nothing waits and no pack of that name holds the row
+        # (Iron Jarvis restarted, the card expired or was withdrawn): the
+        # value just saved would be an orphan nobody can see — it goes.
+        try:
+            platform.secrets.delete(_vault)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"app": pack, "app_name": pack, "tools_loaded": 0, "load_reason": NOT_WAITING_DROPPED}
+    with _PENDING_LOCK:
         plan = _PENDING.get(pack)
         if plan is None:
-            return {"app": pack, "app_name": pack, "tools_loaded": 0, "load_reason": NOT_WAITING}
+            return {"app": pack, "app_name": pack, "tools_loaded": 0, "load_reason": NOT_WAITING_DROPPED}
         saved = set(plan.setdefault("saved", []))
         saved.add(slot)
         plan["saved"] = sorted(saved)
@@ -852,12 +965,19 @@ class McpServerAddTool(R._RecordTool):
             out["config"] = masked_config(out["config"])
         if isinstance(out.get("values"), dict):
             # A value the model put under a secret-shaped name is refused;
-            # it is never written anywhere either.
+            # it is never written anywhere either. A2 review: nor is a
+            # secret-SHAPED value under an innocent name ("folder": "Bearer
+            # …") — the call is refused, and the ledger row shows the mask.
+            from ..detections.redact import MASK
             from ..mcp.secrets import is_secret_key
 
             out["values"] = {
-                k: v for k, v in out["values"].items() if not (is_secret_key(str(k)) or _SECRET_ARG_NAME.search(str(k)))
+                k: (MASK if _looks_like_a_secret(str(v)) else v)
+                for k, v in out["values"].items()
+                if not (is_secret_key(str(k)) or _SECRET_ARG_NAME.search(str(k)))
             }
+        if isinstance(out.get("cwd"), str):
+            out["cwd"] = _mask_text(out["cwd"])
         return R.masked_args(out)
 
     def _target(self, args: dict[str, Any]) -> str:
@@ -1031,6 +1151,11 @@ class WebServiceAddTool(R._RecordTool):
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
         drop = set(_secret_args(args, self._DECLARED)) | set(_KEY_ARGS)
         out = {k: v for k, v in (args or {}).items() if k not in drop}
+        # A2 review: an address with ``?key=…`` is refused — and its ledger
+        # row masks the key (``mask`` knows ``api_key=``, not ``key=``).
+        for k in ("address", "description", "name"):
+            if isinstance(out.get(k), str):
+                out[k] = _mask_text(out[k])
         return R.masked_args(out)
 
     def _target(self, args: dict[str, Any]) -> str:
@@ -1043,6 +1168,11 @@ class WebServiceAddTool(R._RecordTool):
         if _secret_args(args, self._DECLARED):
             return "", "", "", NOT_CARRIED
         shown = " ".join(str((args or {}).get("name") or "").split())[:60]
+        # A2 review: a credential in the NAME or the description would land
+        # in config.toml and on the card as words.
+        about = str((args or {}).get("description") or "")
+        if _mask_text(shown) != shown or _mask_text(about) != about:
+            return "", "", "", SERVICE_WORDS_LOOK_SECRET
         raw = str((args or {}).get("address") or "")
         if _network_spelling(raw):
             return "", shown, "", SERVICE_NETWORK

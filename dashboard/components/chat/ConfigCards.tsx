@@ -35,6 +35,7 @@ import {
   connectedFromSave,
   connectedOf,
   connectedWords,
+  notLoadedDoor,
   waitingWords,
   type AppConnected,
 } from "@/lib/appConnect";
@@ -307,12 +308,15 @@ function AppOutcome({
   // The words name Settings › Connections › Directory (where
   // the app's row shows why it did not start, with Test and Retry), so the
   // link goes there: `/marketplace` is that page's address. `/tools` is
-  // "Tools & permissions", a different page (v1.351.0 review).
+  // "Tools & permissions", a different page (v1.351.0 review) — and the
+  // right one for a TOOL SERVER the chat added (A2 review, v1.448.0): its
+  // row there holds the load record and Retry (lib/appConnect.notLoadedDoor).
+  const door = notLoadedDoor(connected);
   return (
     <span data-testid="credential-card-not-loaded" className="text-zinc-300" title={connected.reason || undefined}>
       Saved, but its tools did not load —{" "}
-      <Link href="/marketplace" className="text-accent-soft underline-offset-2 hover:underline">
-        open the Directory
+      <Link href={door.href} className="text-accent-soft underline-offset-2 hover:underline">
+        {door.words}
       </Link>
     </span>
   );

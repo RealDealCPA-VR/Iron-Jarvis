@@ -262,7 +262,12 @@ describe("connect from chat, then carry on (G15)", () => {
     const cards = readFileSync(join(__dirname, "..", "components", "chat", "ConfigCards.tsx"), "utf8").replace(/\r\n/g, "\n");
     expect(cards).toMatch(/^import Link from "next\/link";$/m);
     const notLoaded = cards.slice(cards.indexOf('data-testid="credential-card-not-loaded"'));
-    expect(notLoaded.slice(0, notLoaded.indexOf("</span>"))).toMatch(/<Link href="\/marketplace"[^>]*>\s*open the Directory\s*<\/Link>/);
+    // A2 review (v1.448.0): the door is chosen by the card's KIND
+    // (lib/appConnect.notLoadedDoor) — an app's is still the Directory, a
+    // tool server's is Settings › Tools — so the Link reads the door.
+    expect(notLoaded.slice(0, notLoaded.indexOf("</span>"))).toMatch(/<Link href=\{door\.href\}[^>]*>\s*\{door\.words\}\s*<\/Link>/);
+    const doors = readFileSync(join(__dirname, "..", "lib", "appConnect.ts"), "utf8").replace(/\r\n/g, "\n");
+    expect(doors).toMatch(/return \{ href: "\/marketplace", words: "open the Directory" \};/);
     expect(within(saved).getByTestId("credential-card-not-loaded").getAttribute("title")).toBe("the package was not found");
     expect(screen.queryByTestId("credential-card-continue")).toBeNull();
   });

@@ -26,6 +26,11 @@ import type { ConfigCard, SecretRequestCard } from "./configCards";
 export interface AppConnected {
   /** The connector id — the chat's connector toggle ("github"). */
   app: string;
+  /** A2 review (v1.448.0): what the card was for — an app (absent: every
+   *  card saved before this), or a TOOL SERVER the chat is adding
+   *  (`tool_server.<pack>__<slot>`): the words and the not-loaded door
+   *  differ. A web service's save answers nothing to draw. */
+  kind?: "app" | "tool_server";
   /** Its name ("GitHub"). */
   name: string;
   /** Tools the app loaded right after the save (0 = it did not load). */
@@ -51,6 +56,25 @@ export function appIdOf(cardName: string): string {
   return /^[A-Za-z0-9_-]{1,64}$/.test(id) ? id : "";
 }
 
+/** A2 review (v1.448.0): `tool_server.<pack>__env__API_KEY` → "<pack>"; ""
+ *  otherwise. A pack's own name may hold "__", so the slot is read off the
+ *  END (`__env__X`, `__header__X`, `__auth`, `__arg__N`, `__url`). */
+export function toolServerOf(cardName: string): string {
+  const name = str(cardName);
+  if (!name.startsWith("tool_server.")) return "";
+  const rest = name.slice("tool_server.".length);
+  const m = /^(.+?)__(?:env__.+|header__.+|auth|arg__\d+|url)$/.exec(rest);
+  const id = m ? m[1] : rest;
+  return /^[A-Za-z][A-Za-z0-9_-]{0,39}$/.test(id) ? id : "";
+}
+
+/** The chat connector toggle a saved card turns on: an app's id or a tool
+ *  server's pack name (an MCP pack's tools reach the next message only when
+ *  its toggle is on); "" for any other card (a web service's key, a setting). */
+export function connectorIdOf(cardName: string): string {
+  return appIdOf(cardName) || toolServerOf(cardName);
+}
+
 /** Whitelist an `AppConnected` (a saved thread hands back whatever the disk
  *  held). `undefined` for anything that is not one. */
 export function decodeAppConnected(raw: unknown): AppConnected | undefined {
@@ -67,6 +91,7 @@ export function decodeAppConnected(raw: unknown): AppConnected | undefined {
     app,
     name: (str(r.name) || app).slice(0, 60),
     tools,
+    ...(r.kind === "tool_server" ? { kind: "tool_server" as const } : {}),
     ...(reason ? { reason } : {}),
     ...(waiting.length ? { waiting } : {}),
     ...(r.continued === true ? { continued: true } : {}),
@@ -77,7 +102,8 @@ export function decodeAppConnected(raw: unknown): AppConnected | undefined {
  *  card is not an app's or the daemon said nothing about the load (an older
  *  daemon: the card keeps its old words). */
 export function connectedFromSave(cardName: string, res: unknown): AppConnected | undefined {
-  const app = appIdOf(cardName);
+  const pack = toolServerOf(cardName);
+  const app = appIdOf(cardName) || pack;
   if (!app || !res || typeof res !== "object") return undefined;
   const r = res as Record<string, unknown>;
   if (typeof r.tools_loaded !== "number" && !Array.isArray(r.waiting_for)) return undefined;
@@ -85,6 +111,7 @@ export function connectedFromSave(cardName: string, res: unknown): AppConnected 
     app: str(r.app) || app,
     name: str(r.app_name) || app,
     tools: typeof r.tools_loaded === "number" ? r.tools_loaded : 0,
+    ...(pack ? { kind: "tool_server" } : {}),
     reason: str(r.load_reason),
     waiting: r.waiting_for,
   });
@@ -114,18 +141,31 @@ export function connectedOf(card: ConfigCard | undefined): AppConnected | undefi
   return decodeAppConnected((card as AppSecretCard).connected);
 }
 
-/** "GitHub connected · 26 tools" (only when tools loaded). */
+/** "GitHub connected · 26 tools" (only when tools loaded); a tool server
+ *  reads "Tool server “fetch” added · 3 tools". */
 export function connectedWords(c: AppConnected): string {
-  return `${c.name} connected · ${c.tools} ${c.tools === 1 ? "tool" : "tools"}`;
+  const count = `${c.tools} ${c.tools === 1 ? "tool" : "tools"}`;
+  if (c.kind === "tool_server") return `Tool server “${c.name}” added · ${count}`;
+  return `${c.name} connected · ${count}`;
 }
 
-/** "Box still needs its Client secret" — an app waiting for another key. */
+/** "Box still needs its Client secret" — an app waiting for another key;
+ *  a tool server: "The tool server “x” still needs its API_KEY". */
 export function waitingWords(c: AppConnected): string {
   // "Box client secret" under "Box still needs its …" reads "client secret".
   const own = `${c.name.toLowerCase()} `;
   const list = (c.waiting ?? []).map((w) => (w.toLowerCase().startsWith(own) ? w.slice(own.length) : w));
   const named = list.length <= 1 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list.at(-1)}`;
+  if (c.kind === "tool_server") return `The tool server “${c.name}” still needs its ${named}`;
   return `${c.name} still needs its ${named}`;
+}
+
+/** Where a saved key whose tools did not load is looked at: an app's row on
+ *  the Directory, a tool server's row in Settings › Tools (its load record
+ *  says why, with Retry). */
+export function notLoadedDoor(c: AppConnected): { href: string; words: string } {
+  if (c.kind === "tool_server") return { href: "/tools", words: "open Settings › Tools" };
+  return { href: "/marketplace", words: "open the Directory" };
 }
 
 /** The words a Continue press sends: the app is connected, carry on with the
