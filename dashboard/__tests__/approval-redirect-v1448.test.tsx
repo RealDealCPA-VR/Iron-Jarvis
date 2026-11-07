@@ -210,8 +210,12 @@ describe("the chat page sends the words", () => {
     // The running turn gets a steer note (read right after the refusal)…
     expect(body).toContain("/chat/turns/${encodeURIComponent(id)}/steer");
     expect(body).toContain("setPendingSteers(");
-    // …a turn that ended first gets the words as the next message…
-    expect(body).toMatch(/status !== 404[\s\S]*send\(note\)/);
+    // …a turn that ended first gets the words as the next message — through
+    // the page's LATEST send (A3 review: the card's handler is a closure made
+    // while the turn ran; its own `send` read `busy` as true and dropped the
+    // words. approval-redirect-page-review-v1448 drives it on the page).
+    expect(body).toMatch(/status !== 404[\s\S]*sendRef\.current\(note\)/);
+    expect(body).not.toMatch(/[^.]send\(note\)/);
     // …and words that could not go stay in the box, never lost.
     expect(body).toContain("composer.setText(note)");
   });

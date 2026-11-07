@@ -227,7 +227,7 @@ def _show(value: Any) -> str:
     return str(value)
 
 
-def value_label(d: Any, value: Any) -> str | None:
+def value_label(d: Any, value: Any, manager: Any = None) -> str | None:
     """v1.448.0 (Wave A, A3): the DISPLAY NAME of *value* for the schema row
     *d* — what the Settings page shows for it — or ``None`` when the row has
     none to give (free text, a number, a switch: the card's own words serve).
@@ -236,7 +236,9 @@ def value_label(d: Any, value: Any) -> str | None:
       "Ask before commands", ``"mark1"`` → "Daylight");
     * ``default_provider``: the AI service's plain name
       (``providers.failure_words.plain_name``, the twin of the dashboard's
-      ``providerDisplay`` — "claude-cli" → "Claude Code");
+      ``providerDisplay`` — "claude-cli" → "Claude Code"; a fleet node reads
+      as the label the user gave it when *manager* — the platform's
+      ``providers`` — is handed over, else as its id);
     * a theme of the user's own colours: its words (``describe_theme_colors``);
     * any other dict: its keys, joined — never a JSON dump on a card.
 
@@ -258,7 +260,7 @@ def value_label(d: Any, value: Any) -> str | None:
         if key == "default_provider":
             from ..providers.failure_words import plain_name
 
-            name = plain_name(str(value))
+            name = plain_name(str(value), manager)
             return name or None
         return None
     except Exception:  # noqa: BLE001 — a label never breaks a change
@@ -526,8 +528,9 @@ class _ConfigChangeBase(Tool):
         # v1.448.0 (Wave A, A3): the option's DISPLAY NAME beside the wire
         # value ("Ask before commands", never "approve_for_me") — the card and
         # the reply both say the name; a row with none keeps the plain value.
-        old_label = value_label(d, c["old"])
-        new_label = value_label(d, c["new"])
+        _manager = getattr(self.platform, "providers", None)
+        old_label = value_label(d, c["old"], _manager)
+        new_label = value_label(d, c["new"], _manager)
         return ToolResult(
             ok=True,
             output=(

@@ -56,10 +56,13 @@ def test_a_model_server_of_the_users_is_judged_by_iron_jarviss_own_address():
     assert PN.where_view(_row("pi", "ollama/llama3"), here) == {"on_this_network": True, "words": "on this network"}
     assert PN.where_view(_row("opencode", "ollama/qwen3"), here)["on_this_network"] is True
     # An Ollama whose address is NOT on this network reads cloud (the chat
-    # receipt's own rule); no address at all reads cloud too (egress fails
-    # closed), as the receipt does.
+    # receipt's own rule). A3 review: NO address at all is NOT KNOWN — Iron
+    # Jarvis's silence says nothing about where Pi's Ollama answers (moved on
+    # purpose: it read "cloud" for a fresh install with Pi on a local Ollama).
     away = types.SimpleNamespace(providers=None, config=types.SimpleNamespace(ollama_base_url="https://ollama.example.com"))
     assert PN.where_view(_row("pi", "ollama/llama3"), away) == {"on_this_network": False, "words": "cloud"}
+    none = types.SimpleNamespace(providers=None, config=types.SimpleNamespace(ollama_base_url=""))
+    assert PN.where_view(_row("pi", "ollama/llama3"), none) == {"on_this_network": None, "words": ""}
 
 
 def test_where_view_never_raises():

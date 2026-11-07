@@ -7652,6 +7652,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // in the same pinned-only, instant-while-streaming shape.
   const busyRef = useRef(busy);
   busyRef.current = busy;
+  // A3 review (v1.448.0): the LATEST `send`. A handler a card captured at
+  // its last render (an approval card is drawn only while a turn runs)
+  // closes over that render's `busy` — true — so calling its `send` once the
+  // turn has ended returned silently and the words were LOST. Anything that
+  // may run after the render that made it sends through this ref.
+  const sendRef = useRef<(text: string) => void>(() => {});
+  sendRef.current = send;
   const scrollLiveIntoView = useCallback(() => {
     if (!pinnedRef.current) return;
     scrollToLatest(bottomRef.current, busyRef.current ? "auto" : "smooth");
@@ -9803,7 +9810,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       composer.setText(note);
       return;
     }
-    send(note);
+    // Through the ref: this closure was made while the turn ran, and its
+    // own `send` would still read `busy` as true and drop the words.
+    sendRef.current(note);
   }
 
   /** Re-send the last failed chat turn — same history + attachments, verbatim.
