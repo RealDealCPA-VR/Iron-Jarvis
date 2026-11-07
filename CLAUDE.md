@@ -15392,7 +15392,7 @@ does not need a bump, stop and bump it.
     `last_byte` stamp: the old shape gave the gate's exact error. A test that
     needs a pooled connection waits for the pool, never for the answer.
 
-- **The first ten minutes** (v1.443.0; items 1-6, 11, 14, 18, 58 of
+- **The first ten minutes** (v1.443.0; items 1-4, 6, 11, 14, 18, 58 of
   docs/EASE-OF-USE-REVIEW-2026-11-07.md, four helpers + the coordinator, each
   pin red on the old code). (1) A promotion over a sign-in saves the plan's
   own default: `routes/settings.promote_model(d, provider)` is THE rule
@@ -15413,8 +15413,9 @@ does not need a bump, stop and bump it.
   ModelMenu greyed rows say "Not connected yet" + a "Connect a model…" row
   (`ij:open-connect`); ProviderDowngradeBanner is quiet for a chat the demo
   answered; `chat_turn.demo_note` names the press (`surface=` passed by both
-  lanes). (5) Creative Autopilot reads only `autopilotOn` (default off; the
-  old `autopilot` key was written every visit). (6) `filesearch/defaults.py`
+  lanes). (5) NOT shipped: Creative Autopilot stays ON by default (the
+  owner's decision 2026-11-07, keeping v1.175.0's: the Studio is hands-off);
+  only the "Ready" line now follows the box. (6) `filesearch/defaults.py`
   `FolderPlan`: search = chat files folder + active projects + added
   `search_roots` (now ADDS, never replaces), never the app home or
   project_root, read live; "By meaning" (the fabric asks it every turn) only

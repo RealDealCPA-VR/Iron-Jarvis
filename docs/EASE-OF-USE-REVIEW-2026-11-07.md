@@ -119,7 +119,7 @@ it works.**
 - *Where:* `providers/cli_auth.py:264`, `ConnectDoors.tsx:554-620`,
   `terminals/manager.py:465`
 
-### 5. Creative Studio's "Autopilot" starts switched ON **(checked)**
+### 5. Creative Studio's "Autopilot" starts switched ON **(checked)** — DECIDED 2026-11-07: keep it on (v1.175.0's reason: the Studio is built to run hands-off)
 - **Before:** Starting a Creative session launches Claude Code or Codex with
   every safety prompt turned off: no approvals, no sandbox. Iron Jarvis even
   clicks through Claude's own warning screen. The text beside the box says

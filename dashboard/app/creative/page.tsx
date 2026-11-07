@@ -1524,10 +1524,7 @@ interface StudioStore {
   cli?: string;
   skill?: string;
   dir?: string;
-  /** v1.443.0: the Autopilot box, OFF unless the user ticks it. The older
-   *  `autopilot` key is never read: it was written on every visit with the
-   *  old ON default, so it cannot tell a choice from the default. */
-  autopilotOn?: boolean;
+  autopilot?: boolean;
   session?: StudioSession;
 }
 
@@ -1847,7 +1844,7 @@ function StudioView({
   const [initialStore] = useState<StudioStore>(readStudioStore);
   const [cli, setCli] = useState<string>(initialStore.cli ?? "");
   const [skill, setSkill] = useState<string>(initialStore.skill ?? "");
-  const [autopilot, setAutopilot] = useState<boolean>(initialStore.autopilotOn === true);
+  const [autopilot, setAutopilot] = useState<boolean>(initialStore.autopilot ?? true);
   const [pickDir, setPickDir] = useState<string | null>(initialStore.dir ?? null);
 
   // Engines + skills.
@@ -1884,7 +1881,7 @@ function StudioView({
 
   // Remember setup choices so repeat sessions are two clicks.
   useEffect(() => {
-    writeStudioStore({ ...(cli ? { cli } : {}), skill, autopilotOn: autopilot });
+    writeStudioStore({ ...(cli ? { cli } : {}), skill, autopilot });
   }, [cli, skill, autopilot]);
 
   // The chosen engine, its REAL autopilot flag, and the line that will be typed

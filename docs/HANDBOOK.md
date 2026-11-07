@@ -2035,8 +2035,8 @@ check)" typed in chat still finds Auto.
 ## Your first ten minutes, smoother (v1.443.0)
 
 An ease-of-use review (docs/EASE-OF-USE-REVIEW-2026-11-07.md) walked the app
-as a brand-new user. This release fixes the ten things that most decided the
-first session.
+as a brand-new user. This release fixes nine of the ten things that most
+decided the first session.
 
 - **"Use Claude for answers" / "Use ChatGPT for answers"** now use your plan's
   own default model. Before, they saved a fixed model that a ChatGPT plan
@@ -2056,9 +2056,9 @@ first session.
   connected says "Not connected yet", and the menu ends with "Connect a
   model…". A demo reply says it is the demo once, not four times. A saved web
   sign-in in the browser vault never counts as a connected model.
-- **Creative Studio's Autopilot starts off.** Autopilot runs Claude Code or
-  Codex with no approval prompts and no sandbox, so you tick it yourself when
-  you want it.
+- **Creative Studio's "Ready" line tells the truth:** with Autopilot off it
+  says the engine asks you in the terminal before each step. Autopilot itself
+  still starts on: the Studio is built to run hands-off (your decision).
 - **File Search looks in your own folders:** the Iron Jarvis chat files folder
   (Documents\Iron Jarvis), each active project's folder, and any folder you
   add. It never looks in Iron Jarvis's own data folder. The "Folders to
