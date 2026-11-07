@@ -477,6 +477,25 @@ def _no_real_opencode_catalog_read():
         _occ.AUTO_PROBE = old
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _no_real_antigravity_catalog_read():
+    """v1.443.0: listing the coding tools starts ONE background read of
+    Antigravity's model list (``hosted.antigravity_catalog``: ``agy models``)
+    once Antigravity's own sign-in finished. On a dev box with agy installed
+    and signed in that would start the developer's REAL agy (its sign-in lives
+    in Windows' credential store, so even a scratch home reads the real
+    account). Off for the whole suite; a test of the reader turns it on with a
+    fake agy."""
+    from iron_jarvis.hosted import antigravity_catalog as _acc
+
+    old = _acc.AUTO_PROBE
+    _acc.AUTO_PROBE = False
+    try:
+        yield
+    finally:
+        _acc.AUTO_PROBE = old
+
+
 @pytest.fixture(autouse=True)
 def _fresh_pi_default():
     """v1.429.0: Pi's own default model is kept in process memory

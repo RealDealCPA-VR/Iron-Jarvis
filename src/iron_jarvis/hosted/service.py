@@ -97,6 +97,7 @@ from .grok import GrokDriver
 from . import antigravity as A
 from .antigravity import HARNESS as ANTIGRAVITY
 from .antigravity import AntigravityDriver
+from . import antigravity_catalog as ACC
 from . import branching as BR
 from . import jarvis_tools as JT
 from . import news as NEWS
@@ -1141,6 +1142,9 @@ class HostedService:
         self._grok_catalog = self.home / "hosted" / "grok_models.json"
         #: The model list an Antigravity process last said (v1.439.0).
         self._agy_catalog = self.home / "hosted" / "antigravity_models.json"
+        # v1.443.0: what one short background ``agy models`` read listed (and
+        # whether it said Antigravity is signed in), before any session ran.
+        self._agy_read = self.home / "hosted" / "antigravity_read.json"
         #: v1.414.0: how long a card waits in the app before the phone gets
         #: it (``harness/stall.PHONE_AFTER_S``; a test sets it short).
         from ..harness.stall import PHONE_AFTER_S
@@ -1200,9 +1204,16 @@ class HostedService:
         live.claim = what
 
     # -- the harnesses -----------------------------------------------------------
-    def harnesses(self) -> list[dict[str, Any]]:
+    def harnesses(self, *, recheck: str = "") -> list[dict[str, Any]]:
         """What can be started, from CACHED reads only (never a probe).
-        BLOCKING (a PATH lookup): the route is a sync ``def``."""
+        BLOCKING (a PATH lookup): the route is a sync ``def``. v1.443.0:
+        ``recheck="antigravity"`` (Connections' "Check again") starts a fresh
+        background read of Antigravity's models and sign-in whatever the age
+        of the kept one (never before Antigravity's own sign-in finished)."""
+        if recheck == ANTIGRAVITY:
+            argv_agy = binary_for(ANTIGRAVITY)
+            if argv_agy is not None:
+                ACC.refresh_soon(self._agy_read, self.home, argv_agy, A.default_home(), force=True)
         from ..harness import build_accounts as BA
         from ..providers.cli_auth import DEFAULT_PROBE, never_probe
 
@@ -1221,6 +1232,15 @@ class HostedService:
                 # process); the token is never kept.
                 try:
                     signed = G.signed_in() if installed else None
+                except Exception:  # noqa: BLE001
+                    signed = None
+            elif h == ANTIGRAVITY:
+                # v1.443.0: Antigravity keeps its sign-in in Windows'
+                # credential store; its own onboarding file says whether a
+                # sign-in finished, and the background model read says whether
+                # it still works (hosted/antigravity_catalog).
+                try:
+                    signed = ACC.sign_in_state(self._agy_read, A.default_home()) if installed else None
                 except Exception:  # noqa: BLE001
                     signed = None
             elif h not in OWN_SIGN_IN:
@@ -1257,6 +1277,11 @@ class HostedService:
                 "sign_in_hint": W.SIGN_IN_HINTS.get(h, ""),
                 "commands": self.commands_for(h, disk=True),
                 **(self._pi_list_state() if h == PI and installed else {}),
+                **(self._agy_list_state(signed) if h == ANTIGRAVITY and installed else {}),
+                # v1.443.0: Antigravity's own onboarding file — did a sign-in
+                # through agy finish? (a hint for Connections; the Code view
+                # reads ``signed_in``, which this never sets to False).
+                **({"signin_finished": ACC.onboarded(A.default_home())} if h == ANTIGRAVITY and installed else {}),
             })
         return out
 
@@ -1269,6 +1294,21 @@ class HostedService:
             out["models_reading"] = True
         elif not P.cached_models(self._pi_catalog) and P._read_doc(self._pi_catalog).get("fetched_at"):
             out["models_note"] = W.PI_NO_MODELS
+        return out
+
+    def _agy_list_state(self, signed: bool | None) -> dict[str, Any]:
+        """v1.443.0: whether Antigravity's model list is being read right now
+        (``models_reading``: the page looks again shortly), and — when it
+        listed no model — the one line saying why (``models_note``)."""
+        out: dict[str, Any] = {}
+        if ACC.reading(self._agy_read):
+            out["models_reading"] = True
+        elif signed is False or ACC.onboarded(A.default_home()) is False:
+            out["models_note"] = W.ANTIGRAVITY_NOT_SIGNED_IN
+        elif not ACC.cached_rows(self._agy_read) and not A.cached_models(self._agy_catalog)[0]:
+            said = str(ACC.read_doc(self._agy_read).get("said") or "")
+            if said:
+                out["models_note"] = W.antigravity_models_unread(said)
         return out
 
     def _models_with_efforts(self, harness: str) -> list[dict[str, Any]]:
@@ -1322,6 +1362,15 @@ class HostedService:
             listed, default = (O.cached_models(self._oc_catalog) if harness == OPENCODE
                                else G.cached_models(self._grok_catalog) if harness == GROK
                                else A.cached_models(self._agy_catalog))
+            if harness == ANTIGRAVITY:
+                # v1.443.0: and, before any Antigravity session ran, what one
+                # short background ``agy models`` read listed (no session, no
+                # model call; only once Antigravity's own sign-in finished).
+                argv_agy = binary_for(ANTIGRAVITY)
+                if argv_agy is not None:
+                    ACC.refresh_soon(self._agy_read, self.home, argv_agy, A.default_home())
+                listed = ACC.merged(ACC.cached_rows(self._agy_read), listed)
+                default = default or ACC.cached_default(self._agy_read)
             if harness == OPENCODE:
                 # v1.441.0: and, before any OpenCode session ran, what one
                 # short background read of OpenCode listed (no session, no
@@ -2395,6 +2444,11 @@ class HostedService:
         env = await asyncio.to_thread(build_env, accounts) if accounts else build_env(accounts)
         if row.harness == PI:
             env = P.child_env(env)  # a parent Pi session's markers never cross
+        if row.harness == ANTIGRAVITY:
+            # v1.443.0: Antigravity's own updater never starts inside the
+            # session's kill-on-close Job (a stop would end an update half
+            # way); the user's own ``agy`` runs still update it.
+            env.update(ACC.NO_UPDATE_ENV)
         rules_note = ""
         if row.harness == OPENCODE:
             # v1.413.0: the mode's permission rules, for THIS process only (the

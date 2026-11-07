@@ -219,6 +219,19 @@ ANTIGRAVITY_OWN_SIGN_IN = (
     "Antigravity signs in by itself, with its own Google sign-in, so an Antigravity session has no "
     "account to choose — to change its sign-in, run agy in a Build terminal and sign in there."
 )
+#: v1.443.0: Antigravity's own sign-in has not finished (its onboarding
+#: file), so its model list is not read yet.
+ANTIGRAVITY_NOT_SIGNED_IN = (
+    "Antigravity isn't signed in yet. Open a Build terminal, run agy and sign in there; "
+    "its models then show here."
+)
+
+
+def antigravity_models_unread(said: str) -> str:
+    """v1.443.0: Antigravity was asked for its models and listed none."""
+    return f"Antigravity did not list its models: {said}"
+
+
 ANTIGRAVITY_CONTINUE = (
     "Antigravity signs in by itself, so it has no other account to continue on — "
     "choose another model instead."

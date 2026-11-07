@@ -42,6 +42,7 @@ import {
   type EndpointProtocol,
 } from "@/components/connections/EndpointModelPicker";
 import { LocalServerChips, useFetchModelsSoon } from "@/components/connections/LocalServerChips";
+import { AntigravityRow } from "@/components/connections/AntigravityRow";
 import { LocalServerRows } from "@/components/connections/LocalServerRows";
 import type { LocalServerPreset } from "@/lib/localServerPresets";
 import { useApi } from "@/lib/useApi";
@@ -2187,6 +2188,8 @@ export default function ConnectionsPage() {
   // CLIs) on demand, so a CLI installed mid-session shows up without a
   // daemon restart.
   const [rescanBusy, setRescanBusy] = useState(false);
+  // v1.443.0: "Look again" also asks Antigravity again (its own row).
+  const [agyLookAgain, setAgyLookAgain] = useState(0);
   // Readiness 12A (G33): `signIn` — subscription CLIs found but not signed
   // in (a Sign in press each); `short` — other rows found but not usable.
   const [rescanNote, setRescanNote] = useState<{
@@ -2199,6 +2202,7 @@ export default function ConnectionsPage() {
   async function rescanClis() {
     setRescanBusy(true);
     setRescanNote(null);
+    setAgyLookAgain((n) => n + 1);
     try {
       const r = await post<{ detected: RescannedModel[] }>("/providers/rescan");
       const detected = r.detected ?? [];
@@ -2516,6 +2520,9 @@ export default function ConnectionsPage() {
             {/* v1.358.0 (lane 8D): LM Studio / llama.cpp running on this PC,
                 under Local Ollama and offered the same one press. */}
             <LocalServerRows />
+            {/* v1.443.0: Antigravity signs in by itself (its own Google
+                sign-in); a Build › Code tool, said so on its row. */}
+            <AntigravityRow lookAgain={agyLookAgain} />
           </div>
           <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
             These use plans you already pay for, so no API keys are needed. Pick them in any model picker.

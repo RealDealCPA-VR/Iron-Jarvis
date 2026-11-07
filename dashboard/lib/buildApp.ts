@@ -316,6 +316,11 @@ export interface CodingTool {
   modelsReading?: boolean;
   /** v1.429.0 (Pi): why the tool lists no model (one line, the daemon's). */
   modelsNote?: string;
+  /** v1.443.0 (Antigravity): did its own sign-in through `agy` finish (its
+   *  onboarding file)? A HINT for Connections only — the Code view reads
+   *  `signedIn`, which the daemon never sets to false from this. Absent =
+   *  not said. */
+  signinFinished?: boolean;
   accounts: ToolAccount[];
   /** The tool's own `/` commands, when the daemon lists them. */
   commands: ToolCommand[];
@@ -445,6 +450,9 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       ...(defaultName ? { defaultName } : {}),
       ...(r.models_reading === true ? { modelsReading: true } : {}),
       ...(modelsNote ? { modelsNote } : {}),
+      ...(r.signin_finished === true || r.signin_finished === false
+        ? { signinFinished: r.signin_finished === true }
+        : {}),
       accounts,
       commands,
       ...(r.effort_live === true ? { effortLive: true } : {}),

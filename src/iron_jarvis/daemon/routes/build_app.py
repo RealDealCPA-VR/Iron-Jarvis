@@ -111,11 +111,13 @@ def register(app: FastAPI, d: Any) -> None:
         return S.service_for(d.platform)
 
     @app.get("/build/app/harnesses")
-    def app_harnesses() -> dict[str, Any]:
+    def app_harnesses(recheck: str = "") -> dict[str, Any]:
         """What the Code view can start: installed, signed in (CACHED verdicts
         only — never a probe), modes, models, efforts, accounts (the cached
         Iron-Proxy snapshot). Sync: a few cached reads, on the threadpool."""
-        return {"harnesses": svc().harnesses()}
+        # v1.443.0: ``?recheck=antigravity`` (Connections' "Check again")
+        # starts a fresh background read of Antigravity's models and sign-in.
+        return {"harnesses": svc().harnesses(recheck=recheck if recheck == "antigravity" else "")}
 
     @app.post("/build/app/sessions", status_code=201)
     async def app_create(body: AppSessionCreate) -> Any:
