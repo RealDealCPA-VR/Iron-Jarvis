@@ -846,6 +846,13 @@ class WorkfolderBody(BaseModel):
     into: str = ""
 
 
+class FolderCheckBody(BaseModel):
+    """``POST /documents/folder-check`` (v1.443.0) — may the chat work in the
+    folder the user just picked? ``path`` is that folder, as picked."""
+
+    path: str = Field(default="", max_length=4096)
+
+
 class BatchFolderBody(BaseModel):
     """``POST /documents/batch/preview`` and ``/documents/batch`` (v1.251.0,
     C-04) — "a folder of documents becomes one summary sheet".
