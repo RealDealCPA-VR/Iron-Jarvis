@@ -95,7 +95,8 @@ does not need a bump, stop and bump it.
    runs publish the same version). CI (`.github/workflows/release.yml`) detects the
    bump, RUNS THE OFFLINE SUITE AS A GATE and builds the installer AT THE SAME
    TIME (v1.370.3; it was ~78 min in series, ~15 now): `plan` decides once;
-   `suite` (dashboard + add-on + desktop checks), `python` (six shards split by
+   `suite` (dashboard + add-on + desktop checks; three vitest parts since
+   v1.445.2), `python` (twelve shards since v1.445.2, six before; split by
    test FILE by `scripts/ci_shards.py`, balanced on
    `scripts/ci_test_durations.json`; shard 1 checks pytest collects no file the
    plan missed) and `windows-installer` (frozen daemon, `/health` smoke,

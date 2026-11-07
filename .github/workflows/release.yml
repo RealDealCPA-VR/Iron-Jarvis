@@ -20,8 +20,8 @@ name: Release
 # (~68 min), and only then a second one built the installer (~9.5 min) —
 # ~78 minutes per release. Now:
 #
-#   plan ──┬── suite              (dashboard + add-on + desktop checks)  ─┐
-#          ├── python ×6          (the Python suite, split by test file)  ├── publish
+#   plan ──┬── suite ×3           (dashboard + add-on + desktop checks)  ─┐
+#          ├── python ×12         (the Python suite, split by test file)  ├── publish
 #          └── windows-installer  (frozen daemon + installer; NOT published) ┘
 #
 # The test jobs and the installer build run AT THE SAME TIME, and the only job
@@ -118,11 +118,20 @@ jobs:
   # bundles that same dashboard) would have shipped regardless. The product is
   # daemon + dashboard + desktop; the gate is all three or it is theatre. This
   # job is the dashboard + add-on + desktop part; `python` is the daemon's.
+  #
+  # v1.445.2: vitest runs as THREE parts at once (`--shard=N/3`, vitest's own
+  # split by file): one job took ~18 min, the slowest of the gate once Python
+  # was split twelve ways. Each part builds the add-on (the side-panel runtime
+  # test executes it); the type check and desktop checks run in part 1 only.
   suite:
     needs: plan
     if: needs.plan.outputs.publish == 'true'
     runs-on: windows-latest # same runner the product ships for
-    timeout-minutes: 30 # ~11 min measured (vitest ~9.5)
+    timeout-minutes: 30 # ~6-8 min expected per part (v1.445.2; ~18 in one)
+    strategy:
+      fail-fast: false # one red part must not hide what the others found
+      matrix:
+        part: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
 
@@ -173,23 +182,25 @@ jobs:
         # --retry=1 (v1.445.1): a failed test runs once more before the job is
         # red. The github-actions reporter writes every test that passed only
         # on retry ("flaky") to the run page, so it gets fixed.
-        run: pnpm test --retry=1 --reporter=default --reporter=github-actions
+        run: pnpm test --retry=1 --reporter=default --reporter=github-actions --shard=${{ matrix.part }}/3
 
       # v1.444.1: Tests no longer runs on a master push, so this gate checks
       # everything it did. vitest never type-checks (v1.401.1); the installer's
       # `pnpm build` does, but only after the build job is minutes in.
       - name: Typecheck the dashboard
+        if: matrix.part == 1
         working-directory: dashboard
         run: npx tsc --noEmit
 
       - name: Syntax-check the desktop entry points
+        if: matrix.part == 1
         shell: bash
         run: |
-          for f in desktop/main.js desktop/preload.js desktop/spotlight-preload.js                    desktop/windowState.js desktop/afterPack.js desktop/sign.js; do
+          for f in desktop/main.js desktop/preload.js desktop/spotlight-preload.js desktop/windowState.js desktop/afterPack.js desktop/sign.js; do
             [ -f "$f" ] && node --check "$f"
           done
 
-  # The Python suite, split by test FILE across six runners
+  # The Python suite, split by test FILE across twelve runners (six until v1.445.2)
   # (scripts/ci_shards.py: every file in exactly one shard, balanced by the
   # measured seconds in scripts/ci_test_durations.json). One shard also checks
   # that pytest collects no test file the plan missed, so a test can never
@@ -198,11 +209,11 @@ jobs:
     needs: plan
     if: needs.plan.outputs.publish == 'true'
     runs-on: windows-latest # mirrors the packaged product (ConPTY terminals etc.)
-    timeout-minutes: 45 # ~10-15 min measured per shard
+    timeout-minutes: 30 # ~10-12 min expected per shard of 12 (v1.445.2; ~17-23 of 6)
     strategy:
       fail-fast: false # one red shard must not hide what the others found
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - uses: actions/checkout@v4
 
@@ -255,7 +266,7 @@ jobs:
         shell: bash
         run: |
           uv run pytest --collect-only -q -p no:cacheprovider > collected.txt
-          uv run python scripts/ci_shards.py --shards 6 --check-collected collected.txt
+          uv run python scripts/ci_shards.py --shards 12 --check-collected collected.txt
 
       - name: Run this shard of the offline suite (a red suite must not ship an installer)
         shell: bash
@@ -266,7 +277,7 @@ jobs:
           # summary, then fail with pytest's own status. PIPESTATUS[0] is pytest's,
           # never tee's: piping pytest into tee/tail is the documented way to
           # report a red run as green.
-          files="$(uv run python scripts/ci_shards.py --shards 6 --index ${{ matrix.shard }})"
+          files="$(uv run python scripts/ci_shards.py --shards 12 --index ${{ matrix.shard }})"
           echo "shard ${{ matrix.shard }}: $(wc -w <<< "$files") test files"
           set +e
           # -n auto: one worker per core of this runner.

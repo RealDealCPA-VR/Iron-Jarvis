@@ -69,7 +69,8 @@ def test_release_checks_everything_tests_checked():
     tests, release = _yaml("tests.yml"), _yaml("release.yml")
     t, r = _runs(tests), _runs(release)
     # The same shard plan for the Python suite, and its collection check.
-    assert "scripts/ci_shards.py --shards 6 --index" in t and "scripts/ci_shards.py --shards 6 --index" in r
+    n = len(release["jobs"]["python"]["strategy"]["matrix"]["shard"])  # 12 since v1.445.2
+    assert f"scripts/ci_shards.py --shards {n} --index" in t and f"scripts/ci_shards.py --shards {n} --index" in r
     assert "--check-collected" in t and "--check-collected" in r
     assert tests["jobs"]["backend"]["strategy"]["matrix"]["shard"] == release["jobs"]["python"]["strategy"]["matrix"]["shard"]
     # Dashboard: vitest, the type check, and the production build (the installer's).

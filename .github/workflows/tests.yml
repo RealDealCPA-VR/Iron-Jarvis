@@ -5,7 +5,7 @@ name: Tests
 #
 # IT NO LONGER RUNS ON A PUSH TO MASTER (v1.444.1). Every push to master is a
 # version bump, and a bump starts Release, whose gate runs this same suite (the
-# same six shards from scripts/ci_shards.py, the same dashboard, add-on and
+# same twelve shards from scripts/ci_shards.py, the same dashboard, add-on and
 # desktop checks, plus the installer build that runs `pnpm build`) and publishes
 # nothing unless it is green. Running Tests too ran the whole suite TWICE on the
 # same commit: ~3 hours of runner time per release for no coverage, and a
@@ -29,7 +29,7 @@ permissions:
 # pytest-timeout (`timeout` in pyproject.toml); this is the backstop behind it.
 # tests/test_gate_timeouts_v1286.py fails if a job is added without one.
 jobs:
-  # v1.370.3: the Python suite runs as six shards at once, split by test FILE
+  # v1.370.3: the Python suite runs as shards at once (twelve since v1.445.2), split by test FILE
   # (scripts/ci_shards.py, the same plan the release gate uses; every file in
   # exactly one shard). One runner took ~60 min; a shard takes ~10-15.
   backend:
@@ -38,7 +38,7 @@ jobs:
     strategy:
       fail-fast: false # one red shard must not hide what the others found
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - uses: actions/checkout@v4
 
@@ -58,12 +58,12 @@ jobs:
         shell: bash
         run: |
           uv run pytest --collect-only -q -p no:cacheprovider > collected.txt
-          uv run python scripts/ci_shards.py --shards 6 --check-collected collected.txt
+          uv run python scripts/ci_shards.py --shards 12 --check-collected collected.txt
 
       - name: Run this shard of the offline suite
         shell: bash
         run: |
-          files="$(uv run python scripts/ci_shards.py --shards 6 --index ${{ matrix.shard }})"
+          files="$(uv run python scripts/ci_shards.py --shards 12 --index ${{ matrix.shard }})"
           echo "shard ${{ matrix.shard }}: $(wc -w <<< "$files") test files"
           # -n auto: one worker per core of this runner.
           # --reruns 1 (v1.445.1): a failed test runs ONCE more before the shard
@@ -80,6 +80,12 @@ jobs:
   dashboard:
     runs-on: windows-latest
     timeout-minutes: 30
+    # v1.445.2: three vitest parts at once, as in the release gate; the type
+    # check and the production build run in part 1 only.
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
 
@@ -122,13 +128,15 @@ jobs:
         # --retry=1 (v1.445.1): a failed test runs once more before the job is
         # red. The github-actions reporter writes every test that passed only
         # on retry ("flaky") to the run page, so it gets fixed.
-        run: pnpm test --retry=1 --reporter=default --reporter=github-actions
+        run: pnpm test --retry=1 --reporter=default --reporter=github-actions --shard=${{ matrix.part }}/3
 
       - name: Typecheck
+        if: matrix.part == 1
         working-directory: dashboard
         run: npx tsc --noEmit
 
       - name: Production build
+        if: matrix.part == 1
         working-directory: dashboard
         run: pnpm build
 
