@@ -276,6 +276,7 @@ ASK_WORDS: dict[str, str] = {
     "write_file": "save a file",
     "edit_file": "change a file",
     "rename_file": "rename or move a file",
+    "download_manage": "rename, move or copy a file your browser downloaded",
     "shell": "run a command",
     "repl": "run some code",
     "run_code": "run some code",
@@ -436,6 +437,9 @@ _QUIET_TOOLS = frozenset(
 #: lib/runWords.ts AGENT_TOOLS: (one call that worked, one call as a noun).
 _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "history_search": ("searched your chats", "chat search"),
+    # v1.443.0: the browser's downloads (tools/download_tools.py).
+    "downloads_list": ("listed your browser's downloads", "downloads list"),
+    "download_manage": ("changed where a downloaded file is", "download change"),
     "memory_read": ("looked up a memory", "memory lookup"),
     "memory_search": ("searched its memory", "memory search"),
     "memory_write": ("saved to its memory", "memory save"),

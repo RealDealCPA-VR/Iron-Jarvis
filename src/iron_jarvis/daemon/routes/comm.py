@@ -114,6 +114,64 @@ def two_way_note(ctype: str, config: dict) -> str | None:
     return None
 
 
+#: v1.443.0: the words for a two-way Slack destination that is connected and
+#: has heard nothing yet. Slack only sends what the app subscribes to, and an
+#: app made from the older manifest got direct messages only.
+NOTHING_HEARD_WORDS = (
+    "Connected to Slack, but Slack hasn't sent Jarvis any message yet. If you "
+    "wrote to Jarvis and got no answer, your Slack app needs the newer setup: "
+    "open it at api.slack.com/apps → App Manifest, paste the manifest from "
+    "Add a destination → Slack, Save, then reinstall the app when Slack asks."
+)
+#: ...and once it has heard: where Jarvis answers.
+LISTENING_WORDS = (
+    "Listening. Jarvis answers your direct messages, your messages in {channel} "
+    "(in a thread; anyone in that channel can read it), and an @mention "
+    "anywhere else privately, in your direct messages."
+)
+LISTENING_DM_ONLY_WORDS = (
+    "Listening. Jarvis answers your direct messages (Apps → Iron Jarvis in Slack)."
+)
+
+
+def listening_status(name: str, ctype: str, config: dict) -> dict[str, Any] | None:
+    """v1.443.0: what a two-way Slack destination's pump has HEARD, for the
+    Notifications row. ``None`` for anything else or when two-way is off; the
+    times are what the pump recorded in this daemon (in memory, so a restart
+    starts fresh). ``tone`` is ``warn`` when Jarvis cannot hear the user in
+    the channel or Slack has sent nothing since it connected."""
+    if ctype != "slack" or not config.get("inbound_enabled"):
+        return None
+    try:
+        from ...comm.slack_socket import LISTENING
+    except Exception:  # noqa: BLE001 — a row never fails over its status line
+        return None
+    st = dict(LISTENING.get(name) or {})
+    connected = st.get("connected_at")
+    note = str(st.get("channel_note") or "")
+    channel = str(config.get("channel") or "").strip()
+    if channel and not channel.startswith("#") and not channel[:1].isupper():
+        channel = f"#{channel}"
+    if not connected:
+        words, tone = "", "quiet"
+    elif note:
+        words, tone = note, "warn"
+    elif not st.get("last_event_at"):
+        words, tone = NOTHING_HEARD_WORDS, "warn"
+    elif st.get("own_channel") and channel:
+        words, tone = LISTENING_WORDS.format(channel=channel), "quiet"
+    else:
+        words, tone = LISTENING_DM_ONLY_WORDS, "quiet"
+    return {
+        "connected_at": connected,
+        "last_event_at": st.get("last_event_at"),
+        "last_message_at": st.get("last_message_at"),
+        "channel_found": bool(st.get("own_channel")) if connected else None,
+        "words": words,
+        "tone": tone,
+    }
+
+
 #: Plain fields whose stored VALUE the edit form is never handed back: a
 #: webhook URL is itself a credential, and the allowlist's ids stay in the
 #: daemon (only their count leaves it, as since v1.136.0). The form still
@@ -287,6 +345,8 @@ def register(app: FastAPI, d) -> None:
                     "saved_fields": saved,
                     "values": values,
                     "two_way_note": two_way_note(stype, spec) if spec else None,
+                    # v1.443.0: what a two-way Slack pump has heard (None else).
+                    "listening": listening_status(name, stype, spec) if spec else None,
                 }
             )
         return {"channels": out}
@@ -308,9 +368,13 @@ def register(app: FastAPI, d) -> None:
                         "with the connections:write scope (Basic Information → "
                         "App-Level Tokens, xapp-…), turn on two-way, and add your "
                         "Slack member ID to the allowlist — no public address "
-                        "needed. An app made from an older manifest also needs "
-                        "App Home → Messages Tab → \"Allow users to send Slash "
-                        "commands and messages from the messages tab\"."
+                        "needed. Jarvis then answers your direct messages, your "
+                        "messages in the alerts channel (in a thread), and an "
+                        "@mention anywhere else privately. An app made from an "
+                        "older manifest only sends direct messages: open it → App "
+                        "Manifest, paste this JSON, Save, and reinstall it when "
+                        "Slack asks (that also turns on App Home → Messages Tab, "
+                        "so you can write to Jarvis directly)."
                         if t == "slack"
                         else None
                     ),

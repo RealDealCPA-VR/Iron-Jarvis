@@ -66,6 +66,16 @@ interface ChannelInfo {
   values?: Record<string, string>;
   /** v1.427.6: why two-way cannot hear the user yet; empty/absent = it can. */
   two_way_note?: string | null;
+  /** v1.443.0: what a two-way Slack destination has heard since it connected
+   *  (null for every other destination, or with two-way off). */
+  listening?: {
+    connected_at?: string | null;
+    last_event_at?: string | null;
+    last_message_at?: string | null;
+    channel_found?: boolean | null;
+    words?: string;
+    tone?: "warn" | "quiet";
+  } | null;
 }
 
 /** v1.427.6: a saved field the form is never handed back (the daemon's
@@ -1149,6 +1159,23 @@ export default function ChannelsPage() {
                             className="block text-[11px] text-tone-warn"
                           >
                             {c.two_way_note}
+                          </span>
+                        )}
+                        {/* v1.443.0: what Slack has sent since the socket
+                            connected, and where Jarvis answers. A connected
+                            socket that has heard nothing used to look exactly
+                            like one that works. */}
+                        {!c.two_way_note && c.listening?.words && (
+                          <span
+                            data-testid={`channel-listening-${c.name}`}
+                            className={`block text-[11px] ${
+                              c.listening.tone === "warn" ? "text-tone-warn" : "text-zinc-400"
+                            }`}
+                          >
+                            {c.listening.words}
+                            {c.listening.last_message_at
+                              ? ` Last message from you: ${timeAgo(c.listening.last_message_at)}.`
+                              : ""}
                           </span>
                         )}
                         {c.last_poll_error && (

@@ -101,6 +101,7 @@ import { copyPlain } from "@/components/settings/MaintenanceTools";
 // time-boxed window on open and gives it back on close — and this card is
 // already six states long.
 import { BrowserSetupModal } from "@/components/browser/BrowserSetupModal";
+import { RecentDownloads } from "@/components/browser/RecentDownloads";
 import { BROWSERS, pickBrowser, type BrowserWords } from "@/components/browser/browserWords";
 
 /* -------------------------------------------------------------------------- */
@@ -1051,6 +1052,9 @@ export function YourBrowserCard() {
                 (it used to sit above it), so "Turn on … pick Read only or
                 Interactive below" lands on the selector, not on a help box. */}
             <SidebarNote appVersion={appVersion} browser={browser} />
+
+            {/* v1.443.0: the browser's downloads Iron Jarvis noticed. */}
+            <RecentDownloads />
 
             {state !== "connected" && state !== "off" && (
               <p className="flex items-center gap-1.5 text-[11px] text-zinc-600">

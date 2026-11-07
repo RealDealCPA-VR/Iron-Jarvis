@@ -40,6 +40,9 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         # Calm UI redesign S3/S4: a run started by an inbound message never
         # changes a setting or asks for a credential.
         "config_set",
+        # v1.443.0: nor a rename / move / copy of a downloaded file — a page the
+        # browser read can say anything.
+        "download_manage",
         # v1.406.0: nor a write to the user's durable brain.
         "brain_save",
         "brain_change",

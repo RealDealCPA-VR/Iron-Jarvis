@@ -855,7 +855,11 @@ class InboundPoller:
         # PRIVATE-CHAT ONLY: in a group the originating chat.id != the sender's id,
         # and replying there would broadcast the session output to non-allowlisted
         # members. Refuse anything that isn't the sender's own 1:1 chat.
-        if msg.reply_to is not None and str(msg.reply_to) != str(msg.sender_id):
+        if (
+            msg.reply_to is not None
+            and str(msg.reply_to) != str(msg.sender_id)
+            and not msg.own_channel
+        ):
             log.warning("inbound: refusing non-private chat on channel %r", name)
             return {"channel": name, "status": "non_private", "sender": msg.sender_id}
 

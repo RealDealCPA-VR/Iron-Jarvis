@@ -1226,6 +1226,19 @@ def build_platform(
     )
     for tool in browser_tools(browser):
         registry.register(tool)
+    # v1.443.0: the browser's downloads, REMEMBERED (on disk, bounded) from the
+    # verified ``browser.download_completed`` events, so a later turn can list
+    # them and download_manage can rename / move / copy one; only a file this
+    # list names (browser/downloads.py, tools/download_tools.py).
+    from .browser.downloads import DownloadLedger, handler_for
+    from .tools.download_tools import download_tools
+
+    download_ledger = DownloadLedger(config.home)
+    # GET /browser/downloads reads it through the runtime it belongs beside.
+    browser.downloads = download_ledger
+    event_bus.add_handler(handler_for(download_ledger))
+    for tool in download_tools(download_ledger):
+        registry.register(tool)
 
     # Terminals: multiple live shell sessions the dashboard can attach to. The
     # snapshot file lets them survive a daemon restart / app update — on boot the

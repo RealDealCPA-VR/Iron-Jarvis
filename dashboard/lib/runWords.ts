@@ -49,6 +49,9 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   // search/tools.py: every past conversation (chats, messaging threads, the
   // agent rooms, finished sessions).
   history_search: { did: "Searched your chats", noun: "chat search", nouns: "chat searches" },
+  // v1.443.0: the browser's downloads (tools/download_tools.py).
+  downloads_list: { did: "Listed your browser's downloads", noun: "downloads list", nouns: "downloads lists" },
+  download_manage: { did: "Changed where a downloaded file is", noun: "download change", nouns: "download changes" },
   // memory/tools.py: layered memory, one entry by layer + key / by meaning.
   memory_read: { did: "Looked up a memory", noun: "memory lookup" },
   memory_search: { did: "Searched its memory", noun: "memory search", nouns: "memory searches" },

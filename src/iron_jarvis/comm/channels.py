@@ -56,7 +56,15 @@ class SlackChannel(Channel):
             channel = reply_target or kw.get("channel") or self.config.get("channel")
             if not channel:
                 return self._fail("slack: chat.postMessage requires a `channel`")
-            payload = {"channel": channel, "text": message}
+            thread_ts = None
+            if isinstance(channel, str) and "|" in channel:
+                # v1.443.0: "<channel id>|<thread ts>" is the Socket Mode pump's
+                # reply address for a message written in the destination's own
+                # channel — the answer goes in a thread under that message.
+                channel, _, thread_ts = channel.partition("|")
+            payload: dict[str, Any] = {"channel": channel, "text": message}
+            if thread_ts:
+                payload["thread_ts"] = thread_ts
             # The token rides the Authorization header (never the JSON body),
             # and `interpret_response` reads Slack's {"ok": false, "error": …}
             # envelope so a 200-with-error is reported as the failure it is.

@@ -46,6 +46,11 @@ def default_permissions() -> dict[str, str]:
         # and TX-01 undoable — strictly less destructive than the overwrite
         # `write_file` has always been allowed to do.
         "rename_file": "allow",
+        # v1.443.0: the browser's downloads. Listing them only reads the kept
+        # list; download_manage renames / moves / copies a file OUTSIDE the
+        # work folder (only one the browser downloaded), so it asks every time.
+        "downloads_list": "allow",
+        "download_manage": "ask",
         "list_files": "allow",
         "grep": "allow",
         # IJ HARNESS (v1.364.0, Phase 1). The editors sit at edit_file's tier:

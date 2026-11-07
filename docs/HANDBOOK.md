@@ -765,6 +765,24 @@ with the request typed in.
   manifest turns on the app's **Messages tab**; an app made from an older
   manifest needs it switched on once in Slack: App Home → Messages Tab → tick
   **Allow users to send Slash commands and messages from the messages tab**.
+- **Writing to Jarvis in Slack gets an answer, wherever you write it**
+  (v1.443.0). Before, Jarvis answered only a **direct message** to the Iron
+  Jarvis app, and the Slack app was set up to send it direct messages only, so
+  anything you wrote in the alerts channel (#iron-jarvis) never reached Jarvis
+  at all. Now, for someone on the allowlist: a direct message is answered in
+  the direct message; a message in the destination's **own channel** (the one
+  the alerts go to) is answered **in a thread** under it (anyone in that
+  channel can read the answer, so use a direct message for private things);
+  and an **@Iron Jarvis** mention in any other channel is answered
+  **privately, in your direct messages**. The answers come from Chat with your
+  default model, and the conversation shows in Chat on the PC. Jarvis finds
+  the channel by its name and joins it by itself when it can (in a private
+  channel, type `/invite @Iron Jarvis`). **A Slack app made before v1.443.0
+  needs one update:** at api.slack.com/apps, open the app → **App Manifest**,
+  paste the manifest from Settings › Notifications → Add a destination → Slack,
+  **Save**, and reinstall the app when Slack asks. The destination's row says
+  what Jarvis has heard: "Connected to Slack, but Slack hasn't sent Jarvis any
+  message yet" means the app still needs that update.
 - **A dead phone token is visible, and a dropped message says so**
   (v1.231.0): if your Telegram bot token is revoked or rotated (or your
   mailbox refuses the IMAP login), the Channels row turns red with **Not
@@ -928,6 +946,23 @@ nothing. It is not built yet, and nothing in the app pretends otherwise.
 Below those sits the **agent browser** (the older computer-use machinery), which drives a headless
 Chromium of its own behind a domain allowlist. It is unchanged, and it shares no
 cookies or sessions with your browser.
+
+**What your browser downloads, Jarvis knows about (v1.443.0).** When a file
+finishes downloading in your browser, the add-on tells Iron Jarvis where it
+landed, and Jarvis keeps a list of the recent ones (the last 200: name, where it
+is now, the site it came from, size, when; never the file's contents, and never
+the part of the link after "?", where download links carry passwords). Ask in
+chat ("what did I download today?", "rename the statement I just downloaded to
+October 2026.pdf", "move my downloads into the Clients folder", "copy the
+invoice I downloaded into this project"). Jarvis can **rename**, **move** or
+**copy** a downloaded file, and it **asks you first every time**. It only works
+on files your browser downloaded, never any other file on the PC; it never
+overwrites (a name that is taken gets " (2)"); it won't use a network share or
+a protected folder; and every change has **Undo** (an undone copy goes to Iron
+Jarvis's trash, never deleted). To **change** a downloaded file's contents,
+Jarvis copies it into the chat's work folder and edits the copy there, so the
+download stays as it came. The Browser card lists the most recent downloads,
+with **Show in folder**.
 
 **Setting it up (v1.240.0, five steps since v1.242.0).** The Browser card has a
 **Set up my browser** button that opens a guided window and walks the steps in

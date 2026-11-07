@@ -269,9 +269,13 @@ def test_socket_channel_mention_fires_reflex():
     sm, poller = _socket(ch, reflex_router=rec)
     env = _envelope(type="app_mention", text="deploy pls", user="U1", channel="C7")
     res = asyncio.run(sm.process_envelope("team", env))
-    assert res == {"channel": "team", "status": "reflex", "sender": "U1"}
     assert rec.calls == [{"text": "deploy pls", "channel": "C7", "sender": "U1"}]
-    assert poller.handled == []  # no full session/reply into a shared channel
+    # v1.443.0 (moved on purpose): the mention is ALSO answered — privately, in
+    # the sender's DM (reply_to is the user id, never the shared channel C7).
+    assert res == {"channel": "team", "status": "handled"}
+    assert len(poller.handled) == 1
+    msg = poller.handled[0][1]
+    assert msg.reply_to == "U1" and not msg.own_channel
 
 
 def test_socket_channel_unauthorized_ignored():

@@ -1737,7 +1737,8 @@ class BrowserClickTool(_TargetedTool):
             # a file needs the path in the reply to the call it made.
             line += (
                 f" It downloaded a file to {download['local_path']} - you can "
-                "read that path with read_document or extract_pdf."
+                "read that path with read_document or extract_pdf, and rename, "
+                "move or copy it with download_manage."
             )
         return ToolResult(ok=True, output=line, data=data)
 

@@ -252,6 +252,14 @@
       "ok": "handed work to another computer",
       "failed": "tried a hand-off to another computer and it failed"
     },
+    "download_manage": {
+      "ok": "changed where a downloaded file is",
+      "failed": "tried a download change and it failed"
+    },
+    "downloads_list": {
+      "ok": "listed your browser's downloads",
+      "failed": "tried a downloads list and it failed"
+    },
     "excel_accounts_diff": {
       "ok": "compared a workbook's accounts",
       "failed": "tried an account compare and it failed"

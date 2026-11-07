@@ -20,6 +20,12 @@
       "desktop": "rename or move a file"
     },
     {
+      "tool": "download_manage",
+      "kind": "table",
+      "card": "rename, move or copy a file your browser downloaded",
+      "desktop": "rename, move or copy a file your browser downloaded"
+    },
+    {
       "tool": "shell",
       "kind": "table",
       "card": "run a command",

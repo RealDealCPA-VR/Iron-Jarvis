@@ -53,6 +53,13 @@ class InboundMessage:
     reply_to: Any = None
     is_bot: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
+    #: v1.443.0: the reply goes to a place OTHER people may read — the Slack
+    #: destination's own channel (a thread under the user's message). Only the
+    #: Slack Socket Mode pump sets it, and only after checking that the message
+    #: came from an allowlisted person in the channel the destination posts to.
+    #: The poller's private-chat guard lets such a message through; every other
+    #: message keeps the old rule (reply_to must be the sender's own chat).
+    own_channel: bool = False
 
 
 def split_message(text: str, limit: int) -> list[str]:

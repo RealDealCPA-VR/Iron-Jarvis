@@ -1186,6 +1186,24 @@ def register(app: FastAPI, d) -> None:
 
     # ------------------------------------------------------------------ HTTP
 
+    @app.get("/browser/downloads")
+    def browser_downloads(limit: int = 10) -> dict[str, Any]:
+        """v1.443.0: the browser's recent downloads Iron Jarvis noticed (the
+        kept list, ``browser/downloads.py``), newest first, for the Your
+        browser card. Names, places, sites, sizes, times; never a file's
+        contents. Sync on purpose (a small JSON file; FastAPI's threadpool)."""
+        runtime = _runtime(d)
+        ledger = getattr(runtime, "downloads", None) if runtime is not None else None
+        if ledger is None:
+            return {"downloads": [], "total": 0}
+        rows = ledger.entries()
+        keep = ("id", "name", "path", "site", "bytes", "at", "exists")
+        n = max(1, min(50, int(limit or 10)))
+        return {
+            "downloads": [{k: r.get(k) for k in keep} for r in rows[:n]],
+            "total": len(rows),
+        }
+
     @app.get("/browser/status")
     async def browser_status() -> dict[str, Any]:
         """Everything the Your browser card renders. NEVER fails, and never waits.

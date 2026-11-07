@@ -69,6 +69,8 @@
     "delegate",
     "delegate_remote",
     "docx_edit",
+    "download_manage",
+    "downloads_list",
     "edit_file",
     "excel_accounts_diff",
     "excel_apply_spec",
@@ -282,6 +284,8 @@
     "delegate": "hand part of the work to a helper agent",
     "delegate_remote": "hand work to another computer",
     "docx_edit": "change a file",
+    "download_manage": "rename, move or copy a file your browser downloaded",
+    "downloads_list": "list your browser's downloads",
     "edit_file": "change a file",
     "excel_accounts_diff": "compare a workbook's accounts",
     "excel_apply_spec": "change a file",
@@ -630,6 +634,14 @@
     "delegate_remote": [
       "Handed work to another computer",
       "Handing work to another computer"
+    ],
+    "download_manage": [
+      "Changed where a downloaded file is",
+      "Changing where a downloaded file is"
+    ],
+    "downloads_list": [
+      "Listed your browser's downloads",
+      "Listing your browser's downloads"
     ],
     "excel_accounts_diff": [
       "Compared a workbook's accounts",
@@ -1121,6 +1133,8 @@
     "delegate": "",
     "delegate_remote": "",
     "docx_edit": "change",
+    "download_manage": "",
+    "downloads_list": "",
     "edit_file": "change",
     "excel_accounts_diff": "",
     "excel_apply_spec": "change",
