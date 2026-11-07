@@ -269,9 +269,16 @@ class ConfigListTool(Tool):
             # else any word in the help text.
             ranked = [d for d in pool if all(word in _hay(d) for word in words)]
             if not ranked:
-                ranked = [d for d in pool if any(word in _hay(d) for word in words)]
-            if not ranked:
-                ranked = [d for d in pool if any(word in d.help.lower() for word in words)]
+                # v1.442.0 (Wave 7 live run): ranked by how many of the words
+                # are in the name (worth more) and in the help, so "test runs"
+                # finds the approvals level whose help names test runs, not
+                # only rows whose name says "runs".
+                def _score(d: schema.SettingDef) -> int:
+                    hay, help_text = _hay(d), d.help.lower()
+                    return sum(3 * (word in hay) + (word in help_text) for word in words)
+
+                scored = sorted(((_score(d), i, d) for i, d in enumerate(pool)), key=lambda t: (-t[0], t[1]))
+                ranked = [d for s, _i, d in scored if s > 0]
             pool = ranked
         for d in pool:
             current: Any = None
@@ -301,6 +308,7 @@ class ConfigListTool(Tool):
         ]
         lines = [
             f"{r['label']} ({r['key']}) = {_show(r['value'])} → {r['tool']}"
+            + _what_it_does(r["key"])
             + (ACCOUNT_GROUPS_HOW if r["key"] == "account_groups" else "")
             + (THEME_COLORS_HOW if r["key"] == "device.theme_colors" else "")
             for r in rows
@@ -311,6 +319,30 @@ class ConfigListTool(Tool):
             output="\n".join(lines) if lines else "No setting matches those words.",
             data={"settings": rows, "secrets": secrets},
         )
+
+
+#: v1.442.0 (Wave 7 live run): a row's help and its choices' NAMES, so the
+#: model knows what a setting does — with key and value alone, Claude read
+#: ``config_list`` twice for "stop asking me before you run tests" and never
+#: saw that Auto runs test commands without asking. Bounded per row.
+_HELP_CHARS = 400
+
+
+def _what_it_does(key: str) -> str:
+    try:
+        d = schema.get(key)
+    except Exception:  # noqa: BLE001 — a row we cannot describe is shown bare
+        return ""
+    if d is None:
+        return ""
+    out = ""
+    help_text = " ".join(str(d.help or "").split())
+    if help_text:
+        out += " — " + (help_text if len(help_text) <= _HELP_CHARS else help_text[: _HELP_CHARS - 1] + "…")
+    names = [f"{v} = {label}" for v, label in d.options if label and label != v]
+    if names:
+        out += " Choices: " + "; ".join(names) + "."
+    return out
 
 
 # ---------------------------------------------------------------------- set

@@ -948,7 +948,15 @@ SETTINGS: tuple[SettingDef, ...] = (
     # "Don't ask" typed in chat finds `yolo` (the settings tools match a
     # label as well as a value). Pinned equal: tests/test_approval_words_v13520.py.
     S("device.approval_mode", "Approvals in chat", "permissions", "enum",
-      "How chat asks before acting, on this device.",
+      # v1.442.0 (Wave 7 live run): Claude could not find what makes test
+      # runs stop asking, so the help says which level does
+      # (core/auto_approve: only Auto passes `test_command`; Accept edits
+      # passes file edits only). Pinned by test_wave7_approvals_help_v14420.
+      "How chat asks before acting, on this device. Ask before commands asks before every "
+      "command, a test run included. Accept edits lets file edits in the folder through "
+      "without asking, and still asks before commands. Auto also runs the project's own "
+      "test commands and other low-risk steps without asking, after its own safety check, "
+      "and still asks before anything risky.",
       # v1.420.0 (fix plan C1.8, decision D3): named by what each does, the
       # same words as the chat chip (dashboard/lib/permissionLevels.ts; a pin
       # holds the two equal). Older words: settings/tools._RETIRED_OPTION_WORDS.

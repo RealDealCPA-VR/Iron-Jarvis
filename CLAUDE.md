@@ -15286,6 +15286,101 @@ does not need a bump, stop and bump it.
     opencode_v1413,opencode_rules_v1420,grok_v1416,tool_setup_v14260}`,
     `test_account_usage_read_v1439`, `build-code-parity-v1439`.
 
+- **Wave 7 of the chat-first plan: the 30 setup requests are a TEST, each
+  driven through the real stream lane; every gap they showed is closed or
+  said in true words** (v1.442.0; three builders + three reviewers, who
+  found 3, 5 and 7+ more defects; every fix red first and mutation-checked).
+  - THE WALKTHROUGH (`tests/test_chat_first_walkthrough_v14420.py`): one
+    `Row` per request of the original review (`docs/CHAT-FIRST-PLAN-2026-11-04.md`),
+    verdict done | door | honest. Checked twice: through the arming both
+    lanes call (`_resolve_armed_tools` + `select_ask_tools` +
+    `settings_ask_tools`) and END TO END on a scratch `create_app`: a
+    scripted model (`_Scripted`) may call ONLY a tool the lane passed it,
+    every card is answered "once" through `POST /chat/approvals/{id}`, a
+    secure card's value goes to `POST /config/secret`, the cards shown must
+    equal the planned calls in the written-out `CARDED` set, the change must
+    land in the scratch home, every door must resolve, and a credential must
+    never be in the clear in ANY byte of the home, what the model was shown,
+    the frames or the change ledger. Honest rows need their exact
+    `page_doors.not_offered` id and no writer outside `may_arm`. Autouse
+    guards: `_no_real_programs` (any child but git or this Python fails the
+    test, naming it — row 29 had run the owner's real `grok models`) and
+    `_no_lingering_profile_share` (row 25 had left the process-wide share ON
+    for the real `~/.claude`). Score: 23 done, 1 door (#11 the browser
+    add-on), 6 honest (#13 another computer, #17 a watcher suggests, #19 a
+    built-in agent's limit, #22 the desktop, #23 talking = the mic, #26 an
+    internet service calling in); v1.432.0 was 2 done. Request 18 is two
+    messages, as in the app: the `workflow_draft` exit ends a turn (its card's
+    Save posts `/workflows`), then the rule + email destination.
+  - GAPS CLOSED (`settings/setup_words.py` is the ONE place for the new
+    request shapes, read by `records`, `trigger` and `page_doors`):
+    "…send it to my phone" arms `channel_connect`/`channel_toggle`; Slack
+    as the place Jarvis messages the user is a destination, never the Slack
+    app (`app_names`, `_SLACK_PLACE`), with the `slack_setup` door; Gmail's
+    `gmail_setup` step + `app_connect` data `not_started`/`needs_setup` →
+    one fix door; "add my local Ollama model" arms `model_server_add` (its
+    description names Ollama's and LM Studio's default addresses); an Iron
+    Jarvis backup sentence arms the settings writers and "my OneDrive /
+    Dropbox / Google Drive folder" as a destination is the synced folder,
+    never the app; "every new <thing>" said as a standing request arms
+    `reflex_create`; `channel_connect` takes `imap_host`/`imap_port` (server
+    NAMES only — a `user:pass@host` is refused with no card and masked;
+    `channel_toggle` refuses two-way email with no IMAP host, the page's own
+    rule); `agent_update`'s built-in refusal names a custom agent with a
+    limit; `_DEFAULTS_SET` matches "make Build › Code use <model> … for this
+    repo"; an internet service calling IN drops the webhook tools
+    (`_EDITS_A_WEBHOOK` keeps edits/deletes). New true lines, each pinned to
+    the code that makes it true: `jarvis_backup` (daily, keep 7, not a
+    setting), `watcher_suggests`, `builtin_agent_limit`, `voice_press`,
+    `internet_calls_in`, `email_rule_inbox` (Allowed senders only on the
+    Notifications page), `full_access_default` widened. REVIEW:
+    `app_names.blank_not_the_app` rescanned the text per hit — 7.6 s on
+    128k chars, GIL-bound, the daemon stalled (now `_NotTheApp`, bisect,
+    0.03 s); a new pathological pin is 128k characters, never a 4,000-char
+    cut.
+  - THEME COLOURS (`settings/theme_colors.py`, schema row
+    `device.theme_colors`, dict {accent, second?, surface, mode, name?}):
+    validated and normalised through a new `SettingDef.normalize` (runs in
+    `_validate`, so every write path); setting either theme row clears the
+    other in the same write (`ConfigWriter.linked_keys`, Undo snapshots both;
+    a write giving BOTH a value is refused); `lib/deviceSettings.ts` builds
+    the palette with ThemeMaker's own `makePalette` → `generatePalette`
+    (readability fitting), keeps ONE `custom-chat` palette outside the
+    user's 12, paints it, and a save of either theme row sets the other row
+    aside (`THEME_PARTNER`). The trigger's theme shapes need a clause start
+    and a theme-word tail (`_THEME_ASKS_AT`, `_THEME_TAIL`) — "a pink theme
+    at the baby shower" arms nothing.
+  - THE LIVE RUN (Claude Sonnet through claude-cli, a scratch daemon on port
+    8797 with its own root, `IRON_PROXY_DATA_DIR` and
+    `IRONJARVIS_OPENCODE_CONFIG_DIR`; cards that would start or reach
+    something outside the scratch home — app_import, app_connect,
+    model_server_add, memory_base_add, account_add, profile sharing — were
+    DECLINED): 22 done, 2 door (#4: "Several accounts" was off in the scratch
+    home — Iron-Proxy's switch is not a setting chat can change; #11), 6
+    honest, every honest reply true. It found one real gap:
+    `config_list` gave key and value only, so for "stop asking me before you
+    run tests" the model never saw that Auto runs test commands without
+    asking. Each line now carries the row's help (≤ `_HELP_CHARS`) and its
+    choices' names (`_what_it_does`); a search with no all-words name match is
+    ranked by words in the name (×3) and the help; `device.approval_mode`'s
+    help says which level runs tests (pinned to `core/auto_approve`:
+    `test_command` passes under Auto, `edits_only` under Accept edits). Live
+    after the fix: Auto through the protected card. A SCRATCH DAEMON SHARES
+    THIS PC: a backup copy folder set there (#8 picked the real OneDrive
+    folder) would copy the scratch home into it at its next backup, and
+    profile sharing would write the real `~/.claude/CLAUDE.md` — clear such
+    settings from the scratch config before restarting it.
+  - OPEN: near-misses from older matchers still arm writers ("the Slack
+    channel was noisy today", "set up Ollama on my laptop", "turn on Gmail's
+    spam filter"); the `gmail_setup` door shows when Gmail is connected; the
+    new lines are English only; "make it green" with no app named arms
+    nothing; the `custom-chat` palette stays listed after an Undo; Iron-Proxy
+    ("Several accounts") cannot be switched on from chat; one real model only.
+  - Pins: `tests/test_chat_first_walkthrough_v14420.py`,
+    `tests/test_wave7_{gaps,review,theme_colors,theme_colors_review,approvals_help}_v14420.py`,
+    `dashboard/__tests__/wave7-theme-colors{,-review}-v1442.test.tsx`; moved
+    on purpose: arming-table and page-door rows (+ the page-doors fixture).
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

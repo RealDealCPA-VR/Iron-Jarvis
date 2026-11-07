@@ -180,7 +180,7 @@ def test_config_list_shows_the_row_and_tells_the_model_its_shape(app, tmp_path):
     res = asyncio.run(reg.get("config_list").execute({"query": "theme"}, _ctx(app, tmp_path)))
     keys = [r["key"] for r in res.data["settings"]]
     assert "device.theme" in keys and KEY in keys
-    line = next(ln for ln in res.output.splitlines() if f"({KEY})" in ln)
+    line = next(ln for ln in res.output.splitlines() if f"({KEY}) =" in ln)  # v1.442.0: its own row, not a neighbour whose help names it
     assert "config_set" in line and '"accent"' in line and "surface" in line and "mode" in line
     assert "readable" in line
 

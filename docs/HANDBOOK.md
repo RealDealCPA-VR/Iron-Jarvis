@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.441.0 (2026-11-06).*
+holds itself to. Current as of v1.442.0 (2026-11-06).*
 
 ---
 
@@ -2031,6 +2031,61 @@ the current level's full description when you rest the pointer on it.
 
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
+
+## Setup from chat, proven on 30 requests (v1.442.0)
+
+The chat-first plan set itself one test: 30 everyday setup requests, asked in
+plain words. At v1.432.0 chat could finish 2 of them. Now 23 finish in chat
+(for example "add my local Ollama model and make it my default", "make a
+project for the Johnson audit in D:\Clients\Johnson", "keep this chat on my PC
+only", "queue 'update the README' for tonight", "make my coding sessions use a
+team: Codex writes, Claude reviews"). Pairing the browser add-on gives you a
+button to its page. The other 6 are things the app does not offer, and chat
+now says so plainly instead of pretending:
+
+- **Using Jarvis from your laptop:** its screens open only on this PC.
+- **Reading your screen and clicking through an installer:** Iron Jarvis does
+  not control the Windows desktop.
+- **A monthly spending limit for the built-in builder agent:** built-in agents
+  have none; a custom agent you make (it can work like the builder) can have
+  one.
+- **Talking to Jarvis:** press the microphone in the chat box ("Dictate your
+  message"), or use Voice chat in the ⋯ menu; "Read replies aloud" is the
+  setting chat can switch.
+- **Zapier starting a task:** a service on the internet cannot reach this PC.
+  Jarvis can still send its events to Zapier.
+- **A watcher filing your PDFs:** a folder watcher notices new files and
+  suggests the work; you approve it in Autonomy › Proposals before anything
+  runs.
+
+New in this release:
+
+- **Your own theme colours from chat.** "Change the theme to something green
+  and calm" makes and shows a theme of your own colours at once, with Undo
+  on the card. Picking a built-in theme afterwards replaces it.
+- **Mail and messages.** "…and send it to my phone" offers to add a
+  notification destination. Setting up Slack as the place Jarvis messages you
+  gives a button to Settings › Notifications, where the Slack app's steps
+  are, and no longer offers to connect the Slack app itself. Connecting
+  Gmail says that Google needs a one-time setup and opens Gmail's card.
+- **Backups.** "Back up my settings to my OneDrive folder" sets the backup
+  copy folder (your synced folder on this PC, not the OneDrive app).
+  Backups run once a day and keep the newest 7; how often is not a setting.
+- **Rules for new email.** "Whenever a new email from a client comes in…"
+  offers a rule and an email destination that listens. A workflow is made
+  with the chat's workflow card (press Save), then the rule in the next
+  message. Who may trigger it (Allowed senders) is set on the Notifications
+  page.
+- **Build › Code defaults** are offered for "make Build › Code use Codex for
+  this repo". Full access is never a folder default, and an account is not
+  kept with a folder.
+- **Chat knows what each setting does.** When Jarvis looks a setting up, it
+  now sees what the setting does and what each choice means. For example,
+  "stop asking me before you run tests" now finds the right answer: the Auto
+  approvals level runs your project's own tests without asking (after its
+  safety check), and you confirm the change on a card.
+- **Adding a second account** still needs "Several accounts" switched on in
+  Settings › Connections first; chat says so and opens the page.
 
 ## Build › Code catches up with each tool (v1.441.0)
 
