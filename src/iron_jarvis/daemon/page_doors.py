@@ -710,7 +710,9 @@ STEPS: tuple[PageStep, ...] = (
         "in there with its own Sign in button, in a terminal on this PC, in the user's own browser; an API key "
         "(OpenAI, Anthropic, Google Gemini, OpenRouter, xAI, Mistral, DeepSeek) is pasted there, or on the "
         "secure card that config_secret offers when it is in this reply (the key never reaches the chat's "
-        "model); the default model is then chosen there, or with config_set when it is offered. Iron Jarvis "
+        "model); the default model is then chosen there, or with config_set when it is offered — that changes "
+        "it for EVERY chat; for one chat only, the model menu above the message box picks the model without "
+        "changing the default, so a request about 'this chat' is answered with that menu first. Iron Jarvis "
         "cannot sign in to a plan or get a key for the user; say so plainly and point there.",
     ),
     PageStep(

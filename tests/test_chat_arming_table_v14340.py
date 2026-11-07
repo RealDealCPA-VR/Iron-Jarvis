@@ -489,6 +489,31 @@ WAVE_A_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
     (r"Every night at 11 run the tests in C:\Projects\ClosePilot and fix what breaks.",
      ("night_task_add", "schedule_create"), (SC,)),
     ("every night at 10pm fix the failing tests in this repo", ("night_task_add", "schedule_create"), (SC,)),
+    # --- the A1 REVIEW's own sentences (a first-time CPA-firm user).
+    ("Can you use my Claude Max plan for everything from now on?", SET, (S,)),
+    ("Please switch to ChatGPT for this conversation.", SET, (S,)),
+    ("I'd like you to answer with Gemini by default.", SET, (S,)),
+    # A vendor's own key named after it ("Anthropic API key"); "connect my
+    # …" also reads as an app's connect (older).
+    ("Connect my Anthropic API key so you can use Claude.", SET, (S, AP)),
+    ("Use OpenRouter from now on.", SET, (S,)),
+    ("Set up Grok so I can try xAI's model.", SET, (S,)),
+    ("I have Ollama installed on this laptop with mistral, talk to it.", MS, ()),
+    ("LM Studio's running on this PC on port 1234, make it my default.", MS, ()),
+    (r"Keep your memory in my Obsidian vault at E:\Vault from now on.", ("memory_base_add",), (S,)),
+    ("In the Acme repo, always start with Claude Code in Auto mode.", ("build_defaults_set",), ()),
+    ("For my ClosePilot checkout, by default go with Codex.", ("build_defaults_set",), ()),
+    ("Have every coding session include a reviewer.", ("build_team_set",), ()),
+    ("Give my code sessions a dedicated reviewer, please.", ("build_team_set",), ()),
+    (r"Every weeknight at 11pm run the test suite in D:\Firm\Portal and fix what fails.",
+     ("night_task_add",), (SC,)),
+    ("Nightly at midnight, update the dependencies in this repo.", ("night_task_add",), (SC,)),
+    ("Set the night shift to start at 10pm.", SET, (S,)),
+    # records.is_question (review): "Have <thing> …" with no "?" is an ORDER —
+    # it was read as the question "have my …?" and every record writer was
+    # dropped (only the build tools had their own guard).
+    ("Have my Slack destination send me the alerts too", ("channel_toggle",), (CH, AP)),
+    ("Have the nightly schedule skip weekends", ("schedule_update",), (SC,)),
 ]
 WAVE_A_NEGATIVES: list[str] = [
     # The vendor's name in another sense, or with no request.
@@ -523,6 +548,41 @@ WAVE_A_NEGATIVES: list[str] = [
     # A program said to be running, with no use asked.
     "Ollama is running slow on my PC",
     "I'm running Ollama on my laptop for fun",
+    # --- the A1 REVIEW's own near-misses (tax and office vocabulary).
+    "Claude Monet's water lilies would make a good office print, tell me about the series.",
+    "The Gemini twins in my family both file jointly, how does that work?",
+    "My ChatGPT history is full of tax questions; summarize what I usually ask.",
+    "The Ollama office downtown is hiring a bookkeeper.",
+    "Any port in a storm, as my first boss used to say.",
+    "The reviewer at the Times called the firm's newsletter dull.",
+    "Pull the depreciation schedule for the Acme truck from the workpapers.",
+    "The night shift at the hospital starts at 7, so the client files late.",
+    "Let's run the numbers tonight before the client call.",
+    "Save the PDF on my desktop.",
+    "Click Submit in QuickBooks Online to file the 941.",
+    "Open Excel and sum column D for me.",
+    "My memory of the vault combination is gone, where did we write it down?",
+    "Use Claude Code to refactor the ClosePilot repo tonight.",
+    "I used Gemini last year and hated it.",
+    "What's the difference between the Claude plans?",
+    "The Google model of management is what our partner follows.",
+    "Our payment schedule with the IRS is twelve installments.",
+    "Every night I run the tests in my head before bed.",
+    "The reviewer flagged the sessions at the conference as too long.",
+    "Add Gemini to the comparison sheet of AI vendors.",
+    "Type the formula in Excel: =SUM(D2:D40).",
+    "The Acme return is in the folder on my desktop, read it.",
+    "Port the depreciation macro to Python.",
+    "I'm running late, Ollama can wait.",
+    "Point me to the vault folder with the Johnson files.",
+    "Claude, summarize this engagement letter.",
+    "The ChatGPT article in the Times was interesting, summarize the key points.",
+    # The vendor shapes' edges: a task "for answers to …", a vendor's account
+    # put into the user's content, a real question with "have".
+    "use GPT for answers to client emails",
+    "add my OpenAI account to the vendor list",
+    "Have my files been backed up",
+    "Have we got the engagement letter yet",
 ]
 
 
@@ -636,6 +696,42 @@ def test_a_click_in_a_desktop_program_ask_arms_no_browser_tool(d):
         assert not [t for t in select_ask_tools(text) if t.startswith("browser_")], text
     assert "browser_click" in select_ask_tools("click the Buy button on the checkout page")
     assert "browser_click" in select_ask_tools('click "Submit" on the form in Chrome')
+    # Review: a click that names the web keeps its browser tool, and a web
+    # app's button is no desktop program.
+    assert "browser_click" in select_ask_tools("click Submit on the IRS website in my browser")
+    from iron_jarvis.daemon.page_doors import asks_desktop_control
+
+    assert not asks_desktop_control("click Submit on the IRS website in my browser")
+    assert not asks_desktop_control("Click Submit in QuickBooks Online to file the 941.")
+
+
+def test_have_orders_are_not_questions():
+    """v1.448.0 (A1 review): ``records.is_question`` read every "Have <thing>
+    …" as the question "have my …?", so "Have my Slack destination send me
+    the alerts too" and "Have the nightly schedule skip weekends" lost their
+    writers (the build tools had their own guard). An order has no "?" and
+    no perfect-tense word; a real question keeps one or the other. MUTATION
+    (red): drop the ``_HAVE_ORDER_HEAD`` branch."""
+    from iron_jarvis.settings.records import is_question
+
+    for order in (
+        "Have my coding sessions run with a reviewer that checks every change.",
+        "Have my Slack destination send me the alerts too",
+        "Have the nightly schedule skip weekends",
+        "have the Johnson project archived",
+        "Have the new persona write formally",
+    ):
+        assert not is_question(order), order
+    for question in (
+        "Have my files been backed up",
+        "Have we got the engagement letter yet",
+        "Have the night tasks run yet",
+        "Have the tests passed",
+        "Have my recent chats been saved?",
+        "Have my coding sessions run with a reviewer?",
+        "have you seen the Johnson file?",
+    ):
+        assert is_question(question), question
 
 
 def test_no_ordinary_sentence_arms_a_settings_or_record_writer(d):

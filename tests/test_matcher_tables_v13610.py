@@ -1040,6 +1040,11 @@ GUIDE_ROWS = [
     ('Can you work with Sarah on the audit next week?', False),
     ('could you use a softer tone?', False),
     ('do you support the new overtime rules in payroll?', False),
+    # The A1 review's own.
+    ('Can you connect to Lacerte?', True),
+    ('Does Iron Jarvis integrate with Xero Practice Manager?', True),
+    ('Can you work with me on the Johnson return this afternoon?', False),
+    ('Could you use the QuickBooks export in this sheet?', False),
 ]
 
 #: v1.420.0 (C6.1): ``(text, web armed)`` — the user's own mail never arms

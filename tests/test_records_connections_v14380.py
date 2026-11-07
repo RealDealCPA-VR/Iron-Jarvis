@@ -865,6 +865,10 @@ REQUESTS: list[tuple[str, str]] = [
     ("Point your long-term memory at my Obsidian vault in D:\\Notes", "memory_base_add"),
     ("keep your memory in Notion", "memory_base_add"),
     ("move your brain to the Notes folder", "memory_base_add"),
+    # The A1 review's own.
+    ("I have Ollama installed on this laptop with mistral, talk to it", "model_server_add"),
+    ("LM Studio's running on this PC on port 1234, make it my default", "model_server_default"),
+    ("Keep your memory in my Obsidian vault at E:\\Vault from now on", "memory_base_add"),
 ]
 NEAR_MISSES: list[str] = [
     # v1.448.0 (Wave A, A1): a program running with no use asked, the
@@ -877,6 +881,11 @@ NEAR_MISSES: list[str] = [
     "my memory of the vault is hazy",
     "put the memory card in the folder",
     "use your memory to find the folder",
+    "The Ollama office downtown is hiring a bookkeeper",
+    "I'm running late, Ollama can wait",
+    "My memory of the vault combination is gone, where did we write it down?",
+    "Point me to the vault folder with the Johnson files",
+    "Any port in a storm, as my first boss used to say",
     "my LM Studio keeps crashing",
     "add a server to my Discord",
     "my second account at the bank",

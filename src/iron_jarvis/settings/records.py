@@ -508,12 +508,36 @@ _POLITE_REQUEST = re.compile(
 _RECORD_READERS = frozenset({"goal_list"})
 
 
+#: v1.448.0 (Wave A, A1 review): "Have my coding sessions run with a
+#: reviewer", "Have the nightly schedule skip weekends", "have the Johnson
+#: project archived" — an ORDER whose head is "have <thing>", which
+#: :data:`_QUESTION_HEAD` reads as the question "have my … ?". With no "?"
+#: and no perfect-tense word after the head ("have my files BEEN backed up",
+#: "have we GOT the letter YET", "have the tests RUN"), it is the order.
+#: "have you …" never matched the head and is unchanged.
+_HAVE_ORDER_HEAD = re.compile(
+    r"\A\s*have\s+(?:my|the|all|every|each|new|our|this|that|these|those)\b", re.IGNORECASE
+)
+_HAVE_QUESTION_WORDS = re.compile(
+    r"\b(?:been|ever|already|yet|got|gotten|seen|heard|done|finished|completed|arrived|landed|happened|changed"
+    r"|failed|stopped|ended|started|worked|passed|read|sent|saved|backed|updated|checked|answered|replied"
+    r"|loaded|synced|cleared|moved)\b",
+    re.IGNORECASE,
+)
+
+
 def is_question(text: str) -> bool:
     """Is this message asking rather than telling? See :data:`_QUESTION_HEAD`."""
     t = (text or "").strip()
     if not t:
         return False
     if _QUESTION_HEAD.search(t):
+        if (
+            _HAVE_ORDER_HEAD.search(t)
+            and not t.endswith("?")
+            and _HAVE_QUESTION_WORDS.search(t) is None
+        ):
+            return False
         return True
     if t.endswith("?"):
         last = re.split(r"[.!?\n]", t[:-1])[-1]

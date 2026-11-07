@@ -311,7 +311,7 @@ _REQUEST_AT = (
 #: repo" (work handed to Claude Code) and never "for this" alone.
 ANSWERS_TAIL = (
     r"(?:\s+(?:instead(?:\s+of\s+[^.?!\n]{1,40})?|from\s+now\s+on|by\s+default|going\s+forward|for\s+now"
-    r"|for\s+everything|for\s+all\s+(?:(?:my|our|the)\s+)?(?:chats|conversations|questions|answers|replies)"
+    r"|for\s+everything|for\s+(?:answers?|replies|questions|conversations?)(?=\s*(?:[.!?,;]|$))|for\s+all\s+(?:(?:my|our|the)\s+)?(?:chats|conversations|questions|answers|replies)"
     r"|for\s+(?:this|the|my|our|these|those)\s+(?:[\w-]+\s+){0,2}?(?:chat|chats|conversation|conversations"
     r"|questions?|answers?|replies|reply|thread|session|talk)"
     r"|to\s+(?:answer|reply|respond|chat|talk)(?:\s+(?:me|us|my\s+questions|these|this|here))?"
@@ -348,6 +348,13 @@ SET_UP_VENDOR = re.compile(
     _REQUEST_AT
     + r"(?:please\s+)?(?:set\s*up|setup|connect|add|enable|turn\s+on|hook\s+up|configure|install|link)\s+"
     r"(?:(?:my|the|a|an|your|our)\s+)?(?:(?:api\s+)?keys?\s+for\s+|access\s+to\s+)?" + VENDOR + r"\b"
+    # Review (A1): the vendor's OWN key, plan or account named right after it
+    # — "connect my Anthropic API key so you can use Claude" (it reached no
+    # door: the lookahead below refuses "Anthropic API", the product, and a
+    # key is that product's). The lookaheads still read what follows.
+    # Possessive (never given back): "add my OpenAI account to the vendor
+    # list" must be judged on what follows "account", not on "account" itself.
+    r"(?:\s+(?:api\s+)?keys?|\s+(?:plan|subscription|account))?+"
     r"(?!\s+(?:support|integration|plugins?|sdk|client|library|package|extension|example|tutorial|section"
     r"|chapter|paragraph|instructions|docs?|bindings?|comparison|column|row|logo|pricing|prices?|news|story"
     r"|stock|shares?|article|results?|answers?|output|response|style|voice|api)\b)"

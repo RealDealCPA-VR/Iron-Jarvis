@@ -1,4 +1,4 @@
-# Iron Jarvis Product-Readiness Audit: Final Report (v1.350.2, HEAD 94043cfb) and Re-audits (v1.357.0, v1.359.0, latest v1.388.0)
+# Iron Jarvis Product-Readiness Audit: Final Report (v1.350.2, HEAD 94043cfb) and Re-audits (v1.357.0, v1.359.0, v1.388.0, latest v1.447.0)
 
 **What this report is built on.** Seven audit lanes covered sections A to O. Each lane's PARTIAL and FAIL findings were then re-checked against the code by a hostile verifier, and against the running app using read-only requests. Where the auditors and verifiers disagreed, the verifier's version is used. Claims the verifiers disproved are left out, for example the bell's "Computer-use run failed — awaiting_approval" row, which is dead code because nothing publishes that event.
 
@@ -11,6 +11,154 @@ This synthesis re-confirmed six anchors directly in the tree:
 - Both chat lanes tell every model "You run locally on the user's machine" (`chat_turn.py:5640`, `routes/chat.py:2954`).
 
 The checklist has **213 items: 41 PASS, 169 PARTIAL, 3 FAIL.**
+
+---
+
+## 0h. Re-audit at v1.447.0 (2026-11-07): what is fixed, what remains to 100
+
+**What was re-checked, and how.** Sixty releases shipped between the last re-audit (0g, v1.388.0) and this one: the harness and Build audit waves (v1.421.0 to v1.426.0), Build › Code with six coding tools (v1.409.0 to v1.447.0), the whole chat-first plan (seven waves, v1.433.0 to v1.442.0), and the ease-of-use fixes (v1.445.0 "The first ten minutes", v1.446.0 "Nothing silent"). Seven read-only lanes re-marked all 213 checklist items against master at v1.447.0 (commit `9cf4a637`), in the same groups as before: A-B, C-D-O, E-J, F-K, G-N, H-I-M and L. Each lane read the code behind every item (never the project notes alone), listed the ease-of-use review's items that fall in its sections and checked each in the code, and hunted for anything 0g marked PASS that no longer holds. Lane F-K also ran 38 fresh first-time-user sentences through the real matchers on a scratch app (no model, nothing sent to the running app). No test suite was run; nothing in the repo was changed by the lanes.
+
+**This time the per-item marks are kept.** `docs/PRODUCT-READINESS-LANES-v1447.md` holds all seven lane reports: every item's mark, its file:line evidence, the current user experience, what is missing, the smallest fix and its size. The next re-audit can mark moves item by item.
+
+### 0h.1 Overall score: **82 / 100** (55 → 70 → 74 → 77 → 82)
+
+The twelve categories average 83.0. I score 82, one point lower, for the same reason as before: several of the larger pieces have never run against the real thing (0h.8), and nothing in the last sixty releases has been driven in the packaged app on a clean profile.
+
+**No regression was found by any lane.** Every fix 0g credited still holds in the code, and every hold 0g named is closed:
+
+- Chat › Code replies are in Running now, the status orb and the home line; the coding session's receipt shows the approvals given and the refit; its failure line has Retry, Continue, Sign in and Details; "IJ harness" is gone from every screen.
+- "Summarize my latest emails" is the mail kind, feature questions ("what can you work with?", "what is Build for?") reach the Guide, and chat offers the Code view for a coding request.
+- A failed @-agent says why; a remote's "accepted" has an end state ("Will report back", then done); the mission receipt says local or cloud.
+- The Sign in press, the tested key, the plan's own default on promotion, the demo exit on every surface, "I've signed in — check now", and the one-notice rule extended to failed rules, part-failed workflows and the night summary.
+
+**Counts: 140 PASS / 73 PARTIAL / 0 FAIL** (0g: 155 / 58 / 0). The PASS count went DOWN while the score went UP, and that is deliberate: the lanes marked more strictly than 0g did. Section C's Claude, Codex and Local models moved to PARTIAL for the install path (a developer web page with a PowerShell command) and the unguarded removal of the default's server, both older than 0g; section M (eight "what does this mean?" items) went to 0 PASS on a reading that counts every remaining label a newcomer could stumble on; section N lost three items to gaps the ease-of-use review found live (no Stop in Run history, a blank chat list on a failed read, the Sessions page's load error). None of these is a fix that came undone.
+
+### 0h.2 Category scores
+
+| Category | v1.388.0 | Now | Why |
+|---|---|---|---|
+| Action clarity | 85 | **89** | Every 0g hold closed. Left: the chat approval card has no "No, tell it what to do instead" and the hidden message box is unexplained; Build › Code's receipt has its own shape and clock words; the website risk door from chat or an agent run is still a dead end ("Pending approval id=…", G54); the mission receipt has no duration or action count. (A-B 90, L 89) |
+| Execution visibility | 82 | **88** | B passes 21 of 24. Left: Running now omits workflow-only runs, media jobs and night tasks; the Spotlight quick task says "Task done" whatever the outcome; the Activity page shows raw event names for 67 of 87 event types. (A-B 89, L 88) |
+| Connections | 72 | **76** | One Sign in press, tested keys, Microsoft 365 locked and signable, destination edits keep their keys. Left: Google Drive / OneDrive / Dropbox sign-in makes the user type exact secret names; a Claude Pro or ChatGPT Plus user without the CLI gets a vendor page with a PowerShell command; "Needs Node.js" has a hover-only link; the Microsoft 365 card names the Handbook but does not link it; removing the default's server leaves chat on nothing; Gmail and Slack still need the user's own developer app (the owner's call). |
+| Import/discovery | 80 | **83** | Every found server is explained, placeholders are asked for, secrets stay on the card. Left: OpenCode, Grok, Antigravity and Pi MCP configs are not import sources although the app knows their paths. |
+| First-run experience | 76 | **82** | A user with a signed-in CLI or a key reaches a real answer in one or two presses. Left: the subscriber without the CLI (the largest audience), the Ollama door's four presses, "This PC: 5 of 6 helpers ready" on a normal PC, no "where do I get a key" on the Anthropic and OpenAI tabs, nothing says what to try next after the first answer, the splash says "a few seconds" for up to 90 s. |
+| Error/recovery UX | 80 | **87** | Plain words at every door, Retry/Continue/Sign in/Details on coding sessions and Build › Code, patience shown live, carry-on with reasons. Left: no Grok Sign in press on failure lines, Local only refusals in Chat › Code have no way-out presses, three desktop dialogs with raw text, small chat errors share the turn-error line, a blank chat list on a failed read. |
+| Consistency | 70 | **78** | One status table, one approval vocabulary, one failure rule, calm buttons. Left: "Finished" / "Working on it" / "Waiting on you" outside the status table in five files, eleven pages printing raw error text, four native confirm() boxes beside the in-page Undo question, the mission screen's own approval card, Build › Code's own duration words. |
+| Discoverability | 66 | **76** | Chat configures settings, destinations, apps, projects, agents, night shift, model servers, accounts, memory bases, folder defaults, teams, preferences, personas, language and the desktop's start switches, with page doors and true "not offered" lines. Left (the fresh-sentence probe, 21 right / 5 partly / 12 miss of 38): a first-time user's words about MODELS reach nothing ("use Claude for this chat", "I have a ChatGPT Plus plan", "set up Gemini", "Ollama is running on this PC, use it", "LM Studio on port 1234"); a generic MCP server, a custom API and a second Jarvis have no chat door; the Wave-4 tools need their own nouns ("as your memory", "for this repo", "team", "tonight"); two misfires (a click in a desktop app → the browser; "depreciation schedules" → the schedule writers). Night shift, Try on and Local only are invisible outside their composers. (E-J 74, F-K 78) |
+| Beginner friendliness | 71 | **76** | The 0g leaks are gone (IJ harness, worktree, "Attaching to sessions", "Rescan local CLIs", raw Test text, SMTP/IMAP). Left: Settings shows all 50 advanced rows and four JSON boxes to everyone; "providers / endpoints / Iron-Proxy" on the Settings home card, the first Models row and the Connections summary; "Its own MCP servers" on Build › Code's Session tab; the nav's Sentinels, Reflexes, Artifacts, Local fleet (the owner's call); one concept under several names (model server, watcher/sentinel, rule/reflex). |
+| Trust | 79 | **86** | The approval card says WHY and WHO asks, Emergency stop is on every page under one name, Undo reaches every record change honestly, Build › Code shows the tool's folder, branch, programs and MCP servers. Left: a writer hand-picked in "+ Tools" runs with no card (the owner's open decision); Build › Code never says local vs cloud; setting cards show wire values ("approve_for_me → auto"); the chat list's waiting vs new dots differ by colour only; agent runs' once-only safety cards still reach the phone. |
+| Stability | 94 | **92** | The backend is dependable and pinned (the real-daemon update rehearsal, the code host surviving a kill, patience, Stop kills the step, restore give-up, the before-restore backup). Three screens under-communicate it: no Stop for workflow runs in Run history, the chat list blank on a failed read, the Sessions page's React error about one load in four. |
+| Marketplace/capability readiness | 80 | **83** | Health and repair now pass. Left: models, channels, agents, web services and fleet nodes keep their own row shapes; intent matching is by name, in the chat stream lane only, silent in Build › Code and on the phone. |
+
+### 0h.3 PASS / PARTIAL / FAIL by section (v1.388.0 → now)
+
+| Section | Items | PASS | PARTIAL | FAIL |
+|---|---|---|---|---|
+| A. Actions self-evident | 33 | 22 → **24** | 11 → **9** | 0 |
+| B. Execution receipt | 24 | 24 → **21** | 0 → **3** | 0 |
+| C. Connections | 21 | 13 → **7** | 8 → **14** | 0 |
+| D. Import | 16 | 15 → **15** | 1 → **1** | 0 |
+| E. First run | 11 | 6 → **6** | 5 → **5** | 0 |
+| F. Natural-language discovery | 6 | 3 → **4** | 3 → **2** | 0 |
+| G. Error & recovery | 10 | 7 → **8** | 3 → **2** | 0 |
+| H. Consistency | 15 | 9 → **5** | 6 → **10** | 0 |
+| I. Engine room | 14 | 11 → **10** | 3 → **4** | 0 |
+| J. Discoverability | 5 | 2 → **2** | 3 → **3** | 0 |
+| K. Trust | 11 | 8 → **9** | 3 → **2** | 0 |
+| L. "Did it work?" | 14 | 11 → **10** | 3 → **4** | 0 |
+| M. "What does this mean?" | 8 | 2 → **0** | 6 → **8** | 0 |
+| N. Stability | 14 | 14 → **11** | 0 → **3** | 0 |
+| O. Marketplace readiness | 11 | 8 → **8** | 3 → **3** | 0 |
+| **Total** | **213** | **155 → 140** | **58 → 73** | **0** |
+
+The per-item marks are in `docs/PRODUCT-READINESS-LANES-v1447.md`. The sections that lost PASS marks (B, C, H, I, L, M, N) lost them to stricter reading and to surfaces 0g never saw (Build › Code), as 0h.1 says; the lanes found no fix undone.
+
+### 0h.4 The ease-of-use review (2026-11-07), item by item
+
+Of its 74 items: **21 done** in the code (1, 2, 3 in part, 4, 6, 7, 10, 11, 13, 14, 18, 20, 21, 22, 23, 24, 35, 51, 52, 58, and 33 and 59 in part), **1 decided against** (5, Creative Autopilot stays on), **1 in progress by the owner** (8, code signing), and **51 open**: 9, 12, 15, 16, 17, 19, 26-32, 34, 36-50, 53-57, 60-74. The 3 that is "in part": the chat's connect door tests a key before saving it (`?check=1`), but Settings › Connections and the chat's secure card still save first. The open items are all in the plan below, by wave.
+
+### 0h.5 What remains, as a plan (to 100)
+
+Every remaining item is small or medium. Sizes are the lanes' (S = hours, M = a day or two). Four items need the owner's decision and are marked so; everything else can be built as recommended.
+
+**Wave A — Chat configures everything (the owner's priority).**
+1. Model and provider words reach a tool or a door: "use Claude for this chat", "I have a ChatGPT Plus plan", "set up Gemini", "use OpenRouter", "Ollama is running on this PC, use it", "LM Studio on port 1234, connect to it" — a provider shape in the settings trigger, a brand + "running / on port N / on this PC" shape for `model_server_add`, and a page door to Settings › Connections when nothing else armed. S.
+2. The Wave-4 tools take everyday nouns: "point your long-term memory at my Obsidian vault", "for the ClosePilot folder, always use Codex in Auto mode", "coding sessions with a reviewer that checks every change", "every night at 11 run the tests in <path>". S each.
+3. Two misfires: a click "in the QuickBooks desktop app" arms `browser_click` instead of the desktop-control line; "how depreciation schedules work" arms the schedule writers. S.
+4. A chat door for a generic MCP server (`mcp_server_add`, the secret on the card), a custom web service (`web_service_add`) and "the Jarvis on my other PC" (a page-door line). M.
+5. "Setting changed" cards show the option's display name ("Ask before commands → Auto"), never the wire value, and link to the row (`/settings?focus=<key>`). S.
+6. The chat approval card gets "No, tell it what to do instead" and one line saying the message box comes back when you answer (Build › Code's card already has both). M.
+7. The chat list says "Needs you" beside a waiting row, not only a colour. S.
+8. Build › Code's Session tab says local or cloud from the tool's model and vendor. S.
+9. **Owner's decision:** a writer hand-picked in the chat's "+ Tools" menu runs with no card today (`app_disconnect`, `channel_remove`, `agent_delete`, `project_archive`, `model_server_remove` …). Recommended: keep the ask tier when picked, as `app_import` already does, and say in the menu that a ticked tool runs without asking. S/M.
+
+**Wave B — "Did it work?", everywhere.**
+10. Build › Code's receipt uses the app's duration words ("2 min 14 s") and leads with a ✓ or ⚠ on a collapsed line; usage folded. S.
+11. The Spotlight quick task reads the outcome ("Needs you", "Part failed", "Stopped") and offers "Open folder". S.
+12. Running now lists workflow runs, media jobs and night tasks; every live Run history row has Stop. S.
+13. The mission receipt gets duration and action count; the mission screen mounts the chat's approval card and tone table. S.
+14. The Activity page words every event type (67 of 87 are raw). M.
+15. The website risk door from a chat turn or an agent run becomes a card that resumes on Allow (G54; today "Pending approval id=…" with nothing to approve). M.
+16. The chat list that fails to load says so with Try again; upload and remember failures get their own dismissible notice; a screen reader hears "Reply ready". S each.
+17. Status words outside the one table ("Finished", "Working on it", "Waiting on you" in five files) read the table; eleven pages printing raw error text read the one load-failed line. S.
+18. Agent history lists a resumed Claude Code session once; the Sessions page's new-session form no longer throws on load. S each.
+19. A remote agent's Test is worded through the failure rule. S.
+
+**Wave C — First run and connections.**
+20. A Claude Pro or ChatGPT Plus subscriber without the CLI gets "Install Claude Code / Codex for me" (a Build terminal job like the starter model's), then the Sign in press. M.
+21. The Ollama door: step 2 greyed until Ollama exists, one press for "use it", a plain line for "running but no model yet", Gemini's free key named as the quick alternative. S.
+22. Google Drive / OneDrive / Dropbox sign-in: "App ID" and "App secret" boxes on the card, saved under the right names, Copy on the redirect address. S/M.
+23. "Needs Node.js" gets a real "Get Node.js (free)" link on the Directory, Tools and the Microsoft 365 install; the Microsoft 365 card links "How your admin sets this up" to the Handbook and labels the GitHub link. S.
+24. Removing the default model's server, or disconnecting the default, names the default and picks a working replacement before anything goes. S/M.
+25. The Anthropic and OpenAI key tabs say where to get a key and that it is billed per use; the Model-servers tab says "Nothing was saved" when a check fails; Settings › Connections and the secure card test a key before saving, like the chat door. S.
+26. The chat home counts only REQUIRED helpers ("5 of 6 helpers ready" on a PC without Word is gone), folds optional ones, and says what to try next after the first real answer while the checklist is open. S.
+27. The splash changes its line after ~15 s; on a phone, New chat is one tap in the chat's top bar. S.
+28. A memory base added on the Memory page is read back ("added and answering", or why not), as the chat tool does; the Obsidian / Notion settings rows say they need a restart or give way to "Add a memory base". S.
+29. Slack / Telegram / email destination switches lose "(true/false)" and "Set to true"; four settings with two controls (`browser_access`, `backup_mirror_dir`, `custom_base_url`, `ollama_base_url`) keep one. S.
+30. Import reads OpenCode, Grok, Antigravity and Pi MCP configs too. S/M.
+31. The browser add-on's consent page says what access really allows, browser-neutral; the card compares the add-on's version with the app's and says "older copy — press Reload". S/M (the store listing is the owner's call).
+
+**Wave D — Settings, words and the automations pages.**
+32. Settings folds the 50 `advanced` rows and the JSON boxes under a closed "More options" per group; search and direct links still open them; "Account groups" hides (the accounts card has a Group picker). M.
+33. Engine-room words on primary paths: the Settings home's Connections card ("providers … endpoints … Iron-Proxy"), the first Models row "Default provider", the Connections page's "All providers connected" / "See subscription & local providers" / "Add an endpoint" / "Endpoint base URL", "Its own MCP servers" and "Reload MCP servers" in Build › Code, "Iron-Proxy" in six coding and chat lines, "Your model fleet" on a first-run door, "(cron)" on the goal card, "isn't on your PATH". One line each; the vocabulary scanner learns HTML entities and a row for "Iron-Proxy" on coding surfaces. S.
+34. Rules and watchers can be edited; the Rules form opens on "a message arrives → an agent does a task"; a message rule says when its source is off. M.
+35. Schedules: "Every minute" last with a warning, the name filled from the task, a visible "Give it a name"; the schedule editor keeps every choice without cron. S.
+36. Night shift takes a folder with the shared folder picker and offers "Make this folder a repository". S.
+37. Four native confirm() boxes become the page's own question; the browser sidebar's card says "Allow once"; a Build pane's ask explains a blocked Enter; Autonomy uses the shared buttons. S.
+38. Disabled buttons explain themselves in a visible note; a long pasted message folds after ~15 lines; Escape closes every composer menu; Copy on code blocks shows on touch; Enter during a reply is explained. S each.
+39. Desktop dialogs: "reinstall the previous version from Releases", "(oom) … Nothing was lost", the raw startup error and Spotlight's ECONNREFUSED become plain sentences with the raw text in the log. S.
+40. Build's stuck states: "Detecting…" forever, an error beside "No terminals yet", "Reading X's model list…" past its re-reads — each says "couldn't check — Try again". S.
+41. Help, the Handbook and the Guide describe today's app (five places, no Overview tips card, no Simple mode); release notes move out of the Handbook to a changelog shown on the Updates card; the Guide stops reading the developer manual; Recommended Settings is rewritten in Settings' labels; the 20 one-line wordings of ease item 73. M.
+42. The workflow step editor shows a JSON parse error and refuses an unknown tool at Save. S.
+43. **Owner's decision:** Chat › Code's "Work on a new branch" is on by default, so a folder-first user's work lands in a hidden copy folder; recommended: plain words on the switch, one "Keep these changes" press, and the default off for a folder the user did not call a repository. M.
+44. **Owner's decision:** rename the nav's Sentinels → Watchers, Reflexes → Rules, Artifacts → What agents made, Local fleet → Model servers (the canon's rename procedure supports it). S.
+45. **Owner's decision:** Gmail and Slack need the user's own Google OAuth client or Slack app; only Iron Jarvis's own verified apps would remove that step. L.
+
+**Open, by decision or out of reach:** G83/G85 (control of other desktop apps), G86 (a bundled model for a user with no key and no CLI), a two-PC run of the remote node, the browser add-on in the stores, code signing (in progress).
+
+### 0h.6 Engine-room words still reaching users
+
+On primary paths, from lane H-I-M (each with its replacement in the lanes file): the Settings home's Connections card ("Model providers, sign-ins, API keys, endpoints and Iron-Proxy accounts"); the first Models row "Default provider"; Build › Code's "Its own MCP servers" and "Reload MCP servers"; "Iron-Proxy" on the limit card, the model menu's account row, the chat and pane account words and the Model team page (the canon's row 29, broken by two later releases); the "Setting changed" card's wire values; "Your model fleet" on a first-run door; "Local fleet" / "Fleet" in the nav; the Connections page's "See subscription & local providers" (escaped the scanner as `&amp;`), "All providers connected", "Add an endpoint", "Endpoint base URL", "Saved endpoints"; `<provider>_oauth_client_id` on the Gmail / Drive / OneDrive setup; "Schedule (cron)" on the goal card; raw event names on the Activity page; "isn't on your PATH"; "provider hiccup" / "Switched provider"; "(true/false)" on the Slack form; "OCR is turned off (settings: ocr_enabled = false)" naming a row that does not exist; "Pending approval id=…" from the website risk door; "{name} is not an MCP memory base"; "stopped responding (oom)".
+
+Gone since 0g: "IJ harness", "worktree" on the coding surfaces, "Attaching to sessions…", "a session is in flight", "Rescan local CLIs", "Open Channels", "Sessions use this provider by default", the always-shown "Server type", raw helper failures, raw key Test text, "run `grok login`", SMTP / IMAP, "no safe inverse" on the receipt.
+
+### 0h.7 Not built, by the owner's decision
+
+Unchanged: G83, G85 (control of other desktop apps), G86 (a bundled model), Creative Autopilot on by default (2026-11-07). Waiting on the owner: items 9, 43, 44 and 45 of 0h.5, and whether an agent run's once-only safety cards should stay off the phone as a coding session's do.
+
+### 0h.8 Never proven live
+
+- Nothing from v1.389.0 to v1.447.0 in the PACKAGED app on a clean profile: the installer's SmartScreen step, the splash and gate, the first chat, the doors, Running now with a Build › Code helper working, the tray's notices as Windows toasts, the Emergency stop strip, the Spotlight toast, the code host adopted after a restart (only its launcher was checked by hand in v1.422.2).
+- Microsoft 365 sign-in; GitHub's hosted server; Gmail, Google Drive, OneDrive and Dropbox OAuth; Slack, Notion and Stripe with real accounts; a Gemini key; Antigravity's real Google sign-in.
+- Ollama, LM Studio and llama.cpp detection and the one press (none installed here); the sign-in watch on a really signed-out CLI; `?check=1` against real keys.
+- The task door and LAN setting on two physical PCs, incl. the Windows Firewall prompt; a real remote answering 202 and reporting back.
+- Patience against a real overloaded provider; a real account limit waited out and a real group move; Codex moving between two ChatGPT accounts.
+- Adding any pack, model server, account or memory base FROM CHAT against a live service (the one live run, v1.442.0 on Sonnet, declined those cards on purpose); none of lane F-K's 38 probe sentences was driven with a model.
+- The website risk door on a real site; the git guard against real GitHub pushes.
+
+### 0h.9 Verdict
+
+Iron Jarvis is at 82. Every hold the last re-audit named is closed in the code, nothing that worked was undone, and the chat can now configure almost everything the app offers. What keeps it from 90 is a long tail of small things, each one a sentence or a button: the words a beginner types about models reach nothing; a subscriber without a terminal tool still gets a developer page; Settings shows every expert row; the Activity page speaks in event ids; and a handful of screens say "providers", "endpoints", "MCP" and "Iron-Proxy" where the canon says accounts, model servers, apps and your accounts. The plan in 0h.5 is 45 items, 41 of them small or medium and buildable as recommended, four waiting on the owner. The fastest points are Wave A (chat configures everything, the owner's own priority) and Wave C (the first ten minutes for the three kinds of user).
 
 ---
 

@@ -151,6 +151,13 @@ DOOR_ROWS: list[tuple[str, str]] = [
     ("Which local models can run on this laptop?", "local_model"),
     ("what offline model fits my PC", "local_model"),
     ("can my laptop run a local model", "local_model"),
+    # The A1 review's own: a vendor's key named after it, a plan for
+    # everything, a conversation; the local-model question in two more shapes.
+    ("Connect my Anthropic API key so you can use Claude.", "model_provider"),
+    ("Can you use my Claude Max plan for everything from now on?", "model_provider"),
+    ("Please switch to ChatGPT for this conversation.", "model_provider"),
+    ("Which small open-source models would run on my PC?", "local_model"),
+    ("Could my desktop run a local LLM?", "local_model"),
 ]
 
 #: (sentence, the thing it asks for that Iron Jarvis does not offer)
@@ -186,6 +193,8 @@ LINE_ROWS: list[tuple[str, str]] = [
     ("type the totals in the Excel app and press Save", "desktop_control"),
     ("press Save in Lacerte for me", "desktop_control"),
     ("double-click the icon on my desktop", "desktop_control"),
+    ("Click Save in the QuickBooks desktop app for me.", "desktop_control"),
+    ("Press the Submit button inside Lacerte.", "desktop_control"),
 ]
 
 #: Everyday sentences that must name NOTHING (no door, no line).
@@ -279,6 +288,23 @@ NEAR_MISSES: list[str] = [
     "click Submit in the web app",
     "select the cells in the Excel sheet",
     "open the QuickBooks file on my desktop",
+    # The A1 review's own: a vendor addressed or in passing, a web app's
+    # button, a program opened (no acting verb inside it), the PC's desktop
+    # folder, the vendor shapes' edges.
+    "Claude, summarize this engagement letter.",
+    "The ChatGPT article in the Times was interesting, summarize the key points.",
+    "The Gemini twins in my family both file jointly, how does that work?",
+    "What's the difference between the Claude plans?",
+    "Click Submit in QuickBooks Online to file the 941.",
+    "click Submit on the IRS website in my browser",
+    "Open Excel and sum column D for me.",
+    "Save the PDF on my desktop.",
+    "The Acme return is in the folder on my desktop, read it.",
+    "use GPT for answers to client emails",
+    # ("add my OpenAI account to the vendor list" and "set up my Claude
+    # account for my brother" reach no model_provider door, but the OLDER
+    # "accounts" step (v1.436.0) still answers them — pinned as arming
+    # near-misses in test_chat_arming_table_v14340.py, open here.)
 ]
 
 
