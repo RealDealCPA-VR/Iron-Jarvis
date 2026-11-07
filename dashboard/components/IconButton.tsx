@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * v1.447.2 (calm sweep): ONE small icon button for the few actions a
+ * v1.447.0 (calm sweep): ONE small icon button for the few actions a
  * first-time reader knows by their picture alone (edit, delete, copy,
  * refresh, dismiss). Its accessible name is the words it replaced
  * (`label`, as `aria-label`), and a tip with those words shows after a short

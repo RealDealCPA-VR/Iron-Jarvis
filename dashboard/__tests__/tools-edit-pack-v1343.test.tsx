@@ -164,7 +164,7 @@ describe("Edit on a pack row", () => {
     const group = edit.parentElement as HTMLElement;
     expect(within(group).getByText("Test")).toBeTruthy();
     // v1.356.0 (G74, changed on purpose): the removal button says Remove.
-    // v1.447.2 (calm sweep, moved on purpose): Remove is a trash can named "Remove".
+    // v1.447.0 (calm sweep, moved on purpose): Remove is a trash can named "Remove".
     expect(within(group).getByRole("button", { name: "Remove" })).toBeTruthy();
     expect(edit.getAttribute("aria-pressed")).toBe("true");
     // prefilled

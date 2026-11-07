@@ -103,7 +103,7 @@ async def test_claude_mcp_actions_offered_by_state_and_done_through_its_own_requ
         assert {"subtype": "mcp_toggle", "serverName": "echo", "enabled": False} in reqs
         assert {"subtype": "mcp_status"} in reqs
         assert any("Turned off echo." in n for n in _notices((await c.get(f"/build/app/sessions/{sid}")).json()))
-        # Does not fit the state (v1.447.1: Claude Code offers Sign in… now —
+        # Does not fit the state (v1.447.0: Claude Code offers Sign in… now —
         # moved on purpose, 400 -> 409: only a server waiting for one) / no such server.
         assert (await c.post(f"/build/app/sessions/{sid}/mcp/echo", json={"action": "sign_in"})).status_code == 409
         assert (await c.post(f"/build/app/sessions/{sid}/mcp/broken", json={"action": "on"})).status_code == 409

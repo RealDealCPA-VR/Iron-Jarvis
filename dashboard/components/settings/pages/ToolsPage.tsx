@@ -2573,7 +2573,7 @@ export default function ToolsPage() {
                         />
                         {/* v1.343.0: Edit opens the inline editor below the
                             row; it is prefilled from THIS row (names only). */}
-                        {/* v1.447.2 (calm sweep): the row's pencil, named
+                        {/* v1.447.0 (calm sweep): the row's pencil, named
                             "Edit" with a tip; pressed while its editor is open. */}
                         <IconButton
                           label="Edit"

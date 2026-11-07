@@ -1,5 +1,5 @@
 /**
- * v1.447.1: Build › Code's Session tab, the dashboard half.
+ * v1.447.0: Build › Code's Session tab, the dashboard half.
  *
  *   - Codex's whole-list "Reload MCP servers" (the overview's `mcp.reload`,
  *     tests/test_build_app_parity_v14471.py pins the daemon side): one quiet

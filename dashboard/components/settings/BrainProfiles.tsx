@@ -235,7 +235,7 @@ export function BrainProfiles() {
                         )}
                       </span>
                     </span>
-                    {/* v1.447.2 (calm sweep): the row's pencil and trash
+                    {/* v1.447.0 (calm sweep): the row's pencil and trash
                         (named in words, a tip on hover or focus). */}
                     <IconButton
                       label="Edit"

@@ -148,13 +148,13 @@ TASK_KIND_TITLES = {"helper": "A helper", "command": "A command", "task": "A tas
 TASK_ALREADY_ENDED = "That task already ended."
 TASK_ALREADY_STOPPING = "That task is already stopping."
 MCP_ACTION_VERBS = {"reconnect": "reconnect", "off": "turn off", "on": "turn on", "sign_in": "start signing in to"}
-#: v1.447.1: Claude Code's own ``session_writes_lost`` (2.1.319), in words.
+#: v1.447.0: Claude Code's own ``session_writes_lost`` (2.1.319), in words.
 SESSION_WRITES_LOST_WORDS = ("Claude Code could not save {what} because {why}. "
                              "Free up space before the next message.")
 SESSION_WRITES_LOST_WHAT = {"transcript": "part of this conversation", "global_config": "its settings",
                             "": "everything"}
 SESSION_WRITES_LOST_WHY = {"ENOSPC": "the disk is full", "EDQUOT": "your disk quota is used up"}
-#: v1.447.1: after a sign-in page is handed to the browser, the server list is
+#: v1.447.0: after a sign-in page is handed to the browser, the server list is
 #: read again every this many seconds (Claude Code reconnects the server by
 #: itself once the browser comes back, and says nothing — measured), at most
 #: :data:`SIGN_IN_WATCH_READS` times, until the server is no longer waiting.
@@ -267,7 +267,7 @@ def keep_commands(cwd: Any, cmds: Any, *, only_if_unknown: bool = False) -> list
     ``builtin: true`` on each of Claude Code's own, bundled skills included;
     the same on 2.1.319). The bare key keeps only the ``builtin`` rows (the
     same in every folder); an older Claude Code that marks none keeps its
-    whole list there. ``only_if_unknown`` (v1.447.1, the background read of
+    whole list there. ``only_if_unknown`` (v1.447.0, the background read of
     ``hosted.claude_catalog``): a session's own list, read meanwhile, wins."""
     listed = [c for c in (cmds if isinstance(cmds, list) else []) if isinstance(c, dict) and c.get("name")][:300]
     rows = command_rows(listed)
@@ -564,7 +564,7 @@ def system_notice(obj: dict[str, Any]) -> str:
         tool = clip(obj.get("tool_name") or "an action", 80)
         return W.SYS_REFUSED.format(tool=tool, why=why) if why else ""
     if sub == "session_writes_lost":
-        # v1.447.1: new in claude 2.1.319 (read from its own bundle): said at
+        # v1.447.0: new in claude 2.1.319 (read from its own bundle): said at
         # exit when the disk (or quota) was full, ``{error_code: ENOSPC |
         # EDQUOT, lost: ["transcript" | "global_config"], transcript_session_ids?}``.
         lost = obj.get("lost") if isinstance(obj.get("lost"), list) else []
@@ -1171,7 +1171,7 @@ class ClaudeDriver(Driver):
 
     # -- v1.441.0 (g1): the Session tab's controls --------------------------------
     #: The MCP actions this driver offers (``hosted/session_controls``):
-    #: Claude Code's own ``mcp_reconnect`` and ``mcp_toggle``; v1.447.1 its
+    #: Claude Code's own ``mcp_reconnect`` and ``mcp_toggle``; v1.447.0 its
     #: ``mcp_authenticate`` (Sign in…).
     mcp_actions: frozenset[str] = frozenset({"reconnect", "off", "on", "sign_in"})
     #: v1.441.0 (g1): an effort change reaches the RUNNING process
@@ -1292,7 +1292,7 @@ class ClaudeDriver(Driver):
         return {}
 
     async def _mcp_sign_in(self, name: str) -> dict[str, Any]:
-        """v1.447.1: Claude Code's own ``mcp_authenticate {serverName}`` —
+        """v1.447.0: Claude Code's own ``mcp_authenticate {serverName}`` —
         MEASURED on claude 2.1.319 (a scratch ``CLAUDE_CONFIG_DIR``,
         ``--mcp-config`` naming an HTTP server that answers 401 with OAuth
         discovery and dynamic registration; no model call;

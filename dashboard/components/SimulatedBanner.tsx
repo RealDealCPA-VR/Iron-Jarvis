@@ -166,7 +166,7 @@ export function SimulatedBanner() {
       data-testid="simulated-banner"
       className="border-b border-amber-500/25 bg-amber-500/[0.08] backdrop-blur-sm"
     >
-      {/* v1.447.2 (calm sweep): the sentence keeps at least 12rem, so on a
+      {/* v1.447.0 (calm sweep): the sentence keeps at least 12rem, so on a
           phone the buttons wrap under it instead of squeezing it into one
           word per line. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 sm:px-6 lg:px-10">

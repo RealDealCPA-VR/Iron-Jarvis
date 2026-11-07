@@ -143,7 +143,7 @@ SESSION_ONLY_OPTIONS: frozenset[str] = frozenset({"allow-edits-session"})
 STOPPED_TOOL = "Stopped when you pressed Stop."
 #: xAI prices in USD ticks: 1 USD = 10^10 ticks (``costUsdTicks``).
 USD_TICKS = 10_000_000_000
-#: v1.447.1: how long the background ``_x.ai/mcp/list`` may take.
+#: v1.447.0: how long the background ``_x.ai/mcp/list`` may take.
 MCP_LIST_WAIT_S = 15.0
 MAX_MODELS = 300
 
@@ -415,7 +415,7 @@ class GrokDriver(AcpDriver):
         #: v1.441.0: Grok's OWN MCP servers as it reported them (names and
         #: states only, ``hosted.tool_setup``); None = it has not said.
         self.reported_mcp: list[dict[str, str]] | None = None
-        #: v1.447.1: every server name Grok's own ``_x.ai/mcp/list`` named
+        #: v1.447.0: every server name Grok's own ``_x.ai/mcp/list`` named
         #: (None until it answers); the ones it did not push are off.
         self._mcp_listed: list[str] | None = None
         self._mcp_list_task: asyncio.Task | None = None
@@ -476,7 +476,7 @@ class GrokDriver(AcpDriver):
                        mode=self.mode))
 
     def _read_mcp_list(self) -> None:
-        """v1.447.1: the servers Grok's config turns OFF — ``servers_updated``
+        """v1.447.0: the servers Grok's config turns OFF — ``servers_updated``
         names only the turned-on ones. Grok's own ``_x.ai/mcp/list
         {sessionId}``, MEASURED on grok 1.0.70 (a scratch ``GROK_HOME`` +
         ``USERPROFILE``, signed out, no model call;
@@ -720,7 +720,7 @@ class GrokDriver(AcpDriver):
             fold = grok_servers if method.endswith("servers_updated") else grok_status
             # NOT ``self.mcp_servers``: on an ACP driver that is the list of
             # servers Iron Jarvis hands Grok (its own tools, ``acp_servers``).
-            # v1.447.1: plus the servers its config turns off (``_with_off``),
+            # v1.447.0: plus the servers its config turns off (``_with_off``),
             # asked of Grok once, when it first pushes its list.
             note_servers(self, self._with_off(fold(self.reported_mcp, params)), attr="reported_mcp")
             if method.endswith("servers_updated"):

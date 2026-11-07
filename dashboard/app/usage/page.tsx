@@ -475,7 +475,7 @@ export default function UsagePage() {
           subtitle="Token spend and run volume across your providers."
           actions={
             <div className="flex items-center gap-2">
-              {/* v1.447.2 (calm sweep): the header's refresh arrow. */}
+              {/* v1.447.0 (calm sweep): the header's refresh arrow. */}
               <IconButton
                 label="Refresh"
                 tip="Reload usage data"

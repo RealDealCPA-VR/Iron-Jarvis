@@ -219,7 +219,7 @@ def resolve_claude_model(arg: str, rows: list[dict[str, Any]]) -> str | None:
         return ids[(canon + "[1m]").lower()]
     if canon.lower() in ids:
         if wants_1m:
-            # v1.447.1: the ``[1m]`` the user typed is KEPT — Claude Code reads
+            # v1.447.0: the ``[1m]`` the user typed is KEPT — Claude Code reads
             # it as the 1M-context version of that model (its picker lists
             # values such as "claude-fable-5-1[1m]"); it used to be dropped,
             # so the session ran on the model's plain window. A model the

@@ -1,4 +1,4 @@
-"""v1.447.1: Build › Code catches up again — each fact MEASURED on the real
+"""v1.447.0: Build › Code catches up again — each fact MEASURED on the real
 CLI (scratch homes, no model call; recordings in
 ``tests/fixtures/build_app_v14471/``), each pin driving the REAL driver,
 service and routes with scripted peers or the fake harness process — never a

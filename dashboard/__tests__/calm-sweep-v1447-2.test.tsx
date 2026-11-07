@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Pencil, Trash2 } from "lucide-react";
 
 /**
- * v1.447.2 (the owner: "run a sweep across the UI for a clean calm look …
+ * v1.447.0 (the owner: "run a sweep across the UI for a clean calm look …
  * things that are better suited to be icons than words, but only … if it
  * would not confuse a first time user").
  *

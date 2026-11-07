@@ -274,7 +274,7 @@ export interface ToolModel {
   group?: string;
 }
 
-/** v1.447.1: the chip's words for a Claude Code model picked with `[1m]`
+/** v1.447.0: the chip's words for a Claude Code model picked with `[1m]`
  *  (typed `/model sonnet[1m]`): the listed model's own name + "(1M context)",
  *  "" when the base model is not listed (the id is shown as it is). */
 export function oneMillionLabel(model: string, models: readonly ToolModel[]): string {

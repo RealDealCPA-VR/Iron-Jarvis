@@ -243,7 +243,7 @@ def codex_update(current: list[dict[str, str]] | None, params: Any) -> list[dict
     return rows
 
 
-#: v1.447.1: Codex's ``mcpServerStatus/list`` ``runtimeStatus`` (its schema's
+#: v1.447.0: Codex's ``mcpServerStatus/list`` ``runtimeStatus`` (its schema's
 #: ``McpServerConnectionStatus``) -> ours.
 CODEX_RUNTIME: dict[str, str] = {
     "notStarted": STARTING,
@@ -258,7 +258,7 @@ CODEX_RUNTIME: dict[str, str] = {
 
 def codex_listed(current: list[dict[str, str]] | None, result: Any, *,
                  replace: bool) -> list[dict[str, str]] | None:
-    """v1.447.1: Codex's ``mcpServerStatus/list {threadId, detail:
+    """v1.447.0: Codex's ``mcpServerStatus/list {threadId, detail:
     toolsAndAuthOnly}`` answer folded in — ONLY each server's ``name``,
     ``runtimeStatus`` and ``authStatus`` are read (never ``httpOrigin``, its
     tools or anything else). MEASURED on codex 0.157.0 (a scratch
@@ -353,7 +353,7 @@ def grok_status(current: list[dict[str, str]] | None, params: Any) -> list[dict[
 
 
 def grok_listed(result: Any) -> list[str] | None:
-    """v1.447.1: the NAMES in Grok's ``_x.ai/mcp/list`` answer (``{result:
+    """v1.447.0: the NAMES in Grok's ``_x.ai/mcp/list`` answer (``{result:
     {servers: [...]}}``, measured on 1.0.70) — every server its config names,
     turned on or off. Only ``name`` is read. None for an answer that is not
     that shape (not known)."""
@@ -370,7 +370,7 @@ def grok_listed(result: Any) -> list[str] | None:
 
 
 def grok_with_off(rows: list[dict[str, str]] | None, listed: list[str] | None) -> list[dict[str, str]] | None:
-    """v1.447.1: Grok's pushed list plus each server ``_x.ai/mcp/list`` names
+    """v1.447.0: Grok's pushed list plus each server ``_x.ai/mcp/list`` names
     that Grok did not push, as off (``servers_updated`` names only the
     turned-on ones — measured). Unchanged while either is not known."""
     if rows is None or not listed:

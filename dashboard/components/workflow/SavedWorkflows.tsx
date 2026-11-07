@@ -237,7 +237,7 @@ export function SavedWorkflows() {
                     <FolderOpen size={13} /> Load
                   </button>
                   {!confirming && (
-                    // v1.447.2 (calm sweep): the row's trash can, named
+                    // v1.447.0 (calm sweep): the row's trash can, named
                     // "Delete <name>"; the press opens the same confirm below.
                     <IconButton
                       label={`Delete ${d.name}`}

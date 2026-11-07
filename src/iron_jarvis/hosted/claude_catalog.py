@@ -1,4 +1,4 @@
-"""v1.447.1: Claude Code's ``/`` list for a folder, read BEFORE any Claude Code
+"""v1.447.0: Claude Code's ``/`` list for a folder, read BEFORE any Claude Code
 session has run there — so after a restart the Code view's ``/`` menu shows
 Claude Code's commands and the folder's own, not nothing.
 

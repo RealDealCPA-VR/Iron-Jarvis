@@ -676,6 +676,6 @@ describe("copy guards for the new files", () => {
     const src = readSrc("components/settings/pages/ToolsPage.tsx");
     expect(src).toContain("<AddPack onAdded=");
     expect(src).toContain("<EditPack");
-    expect(src).toContain("testId={`mcp-edit-${s.name}`}"); // v1.447.2: the pencil IconButton
+    expect(src).toContain("testId={`mcp-edit-${s.name}`}"); // v1.447.0: the pencil IconButton
   });
 });

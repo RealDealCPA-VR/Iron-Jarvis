@@ -130,7 +130,7 @@ afterEach(() => {
 
 async function openEdit(name = "inbox") {
   render(<ChannelsPage />);
-  fireEvent.click(await screen.findByTestId(`channel-edit-${name}`)); // v1.447.2: the pencil (was its title)
+  fireEvent.click(await screen.findByTestId(`channel-edit-${name}`)); // v1.447.0: the pencil (was its title)
   await screen.findByText(/a blank box keeps what/i);
 }
 

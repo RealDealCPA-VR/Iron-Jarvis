@@ -613,7 +613,7 @@ export default function TemplatesPage() {
                           >
                             <Play size={13} /> Use
                           </Link>
-                          {/* v1.447.2 (calm sweep): Edit and Delete are the row's
+                          {/* v1.447.0 (calm sweep): Edit and Delete are the row's
                               pencil and trash, named in words for a screen reader
                               and in a tip; Delete still takes two presses. */}
                           <IconButton

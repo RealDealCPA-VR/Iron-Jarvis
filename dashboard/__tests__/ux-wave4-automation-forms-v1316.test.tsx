@@ -451,7 +451,7 @@ describe("A6 Notifications: the add/edit form and the test send name their field
   it("editing a destination: the read-only Type is not a <label> pointing at nothing", async () => {
     seedChannels();
     render(<ChannelsPage />);
-    fireEvent.click(await screen.findByTestId("channel-edit-tg")); // v1.447.2: the pencil
+    fireEvent.click(await screen.findByTestId("channel-edit-tg")); // v1.447.0: the pencil
     await screen.findByLabelText("Destination name");
     expect(untiedLabels()).toEqual([]);
     // Anti-vacuity: the type is still SHOWN while editing.
@@ -530,7 +530,7 @@ const SAVED = [
 ];
 
 /** A saved row: from its Edit button up to the element holding its description.
- *  v1.447.2 (calm sweep, moved on purpose): Edit is a pencil named "Edit" (its
+ *  v1.447.0 (calm sweep, moved on purpose): Edit is a pencil named "Edit" (its
  *  "Edit template …" words are the tip), so the row is found by its name. */
 function savedRow(name: string, description: string): HTMLElement {
   for (const edit of screen.getAllByRole("button", { name: "Edit" })) {

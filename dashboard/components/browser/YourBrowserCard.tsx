@@ -309,7 +309,7 @@ function FolderLine({
         >
           {folder}
         </code>
-        {/* v1.447.2 (calm sweep): a clipboard icon right after the path. */}
+        {/* v1.447.0 (calm sweep): a clipboard icon right after the path. */}
         <IconButton
           label={`Copy ${folder}`}
           tip="Copy"

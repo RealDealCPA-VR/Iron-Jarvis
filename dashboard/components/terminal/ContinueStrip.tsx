@@ -209,7 +209,7 @@ function ContinueStrip({
           )}
         </button>
       )}
-      {/* v1.447.2 (calm sweep): the strip's ×, named "Dismiss". */}
+      {/* v1.447.0 (calm sweep): the strip's ×, named "Dismiss". */}
       <IconButton
         label="Dismiss"
         tone="warn"
@@ -354,7 +354,7 @@ export function ResumeFailedStrip({
         )}
       </button>
       <span className="shrink-0 text-tone-warn/70">or type /clear to start empty</span>
-      {/* v1.447.2 (calm sweep): the strip's ×, named "Dismiss". */}
+      {/* v1.447.0 (calm sweep): the strip's ×, named "Dismiss". */}
       <IconButton
         label="Dismiss"
         tone="warn"
@@ -447,7 +447,7 @@ function SignInNeededStrip({
           "Sign in"
         )}
       </button>
-      {/* v1.447.2 (calm sweep): the strip's ×, named "Dismiss". */}
+      {/* v1.447.0 (calm sweep): the strip's ×, named "Dismiss". */}
       <IconButton
         label="Dismiss"
         tone="warn"

@@ -565,12 +565,12 @@ class CodexDriver(Driver):
     # -- v1.441.0 (g1): the Session tab's controls --------------------------------
     #: Codex's own ``mcpServer/oauth/login`` (``hosted/session_controls``).
     mcp_actions: frozenset[str] = frozenset({"sign_in"})
-    #: v1.447.1: the whole list's own ``config/mcpServer/reload`` (Codex has
+    #: v1.447.0: the whole list's own ``config/mcpServer/reload`` (Codex has
     #: no per-server switch — measured on 0.157.0's schema).
     mcp_reload = True
 
     async def reload_mcp(self) -> None:
-        """v1.447.1: Codex reads its MCP settings again — ``config/mcpServer/
+        """v1.447.0: Codex reads its MCP settings again — ``config/mcpServer/
         reload`` (params ``null``, answers ``{}``), MEASURED on codex 0.157.0
         (a scratch ``CODEX_HOME`` whose ``config.toml`` was changed between
         reloads; ``tests/fixtures/build_app_v14471/codex_mcp_reload.json``): a
@@ -605,7 +605,7 @@ class CodexDriver(Driver):
         return await asyncio.wait_for(fut, timeout=REQUEST_TIMEOUT_S)
 
     async def _read_mcp_list(self) -> None:
-        """v1.447.1: the servers the start-up statuses never name — the ones
+        """v1.447.0: the servers the start-up statuses never name — the ones
         the config turns off — read once from ``mcpServerStatus/list``
         (WRITTEN here, before any turn's request, like ``skills/list``; the
         answer is taken in the background and only ADDS servers). Never raises."""

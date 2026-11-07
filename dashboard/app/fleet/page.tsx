@@ -1208,7 +1208,7 @@ export default function FleetPage() {
                       }`
                 }
               />
-              {/* v1.447.2 (calm sweep): the header's refresh arrow, named
+              {/* v1.447.0 (calm sweep): the header's refresh arrow, named
                   "Refresh" with its tip. */}
               <IconButton
                 label="Refresh"

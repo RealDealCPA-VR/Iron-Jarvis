@@ -1264,7 +1264,7 @@ export default function ChannelsPage() {
                     </div>
                     {!(c.builtin ?? BUILTIN.has(c.name)) && (
                       <div className="flex shrink-0 items-center gap-1.5">
-                        {/* v1.447.2 (calm sweep): Edit and Delete are the row's
+                        {/* v1.447.0 (calm sweep): Edit and Delete are the row's
                             pencil and trash (named in words, a tip on hover or
                             focus; Delete still two presses). Test stays words. */}
                         <IconButton

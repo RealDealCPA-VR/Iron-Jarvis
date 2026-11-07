@@ -165,7 +165,7 @@ function sameSet(a: string[], b: string[]): boolean {
 
 function Chip({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    // v1.447.2 (calm sweep): a quiet "label value" pair, not a boxed,
+    // v1.447.0 (calm sweep): a quiet "label value" pair, not a boxed,
     // capitalised pill (it sat inside a card already).
     <div className="flex items-center gap-1.5 py-1">
       <span className="text-[12px] text-zinc-500">{label}</span>

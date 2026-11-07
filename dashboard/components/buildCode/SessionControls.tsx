@@ -259,7 +259,7 @@ export function McpRowMenu({
   );
 }
 
-/** v1.447.1: the whole MCP list's own reload (Codex's
+/** v1.447.0: the whole MCP list's own reload (Codex's
  *  `config/mcpServer/reload`): one quiet button under the list, refused in
  *  the daemon's words while a reply runs. */
 export function McpReloadButton({

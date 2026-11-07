@@ -382,12 +382,12 @@ export interface CodeMcp {
   servers: CodeMcpServer[];
   at: string;
   note: string;
-  /** v1.447.1: the running tool can read its MCP settings again (Codex's
+  /** v1.447.0: the running tool can read its MCP settings again (Codex's
    *  `config/mcpServer/reload`); absent = no such press. */
   reload?: boolean;
 }
 
-/** v1.447.1: the whole list's own reload (Codex). */
+/** v1.447.0: the whole list's own reload (Codex). */
 export const MCP_RELOAD_WORDS = "Reload MCP servers";
 export function mcpReloadTitle(toolName: string): string {
   return `${toolName} reads its MCP settings again: servers you added or changed start, ones you took out go. Nothing else restarts.`;

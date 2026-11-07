@@ -663,7 +663,7 @@ export function ConfirmButton({
   variant?: ConfirmVariant;
   /** v1.445.0: a test id for the button (optional). */
   testId?: string;
-  /** v1.447.2 (calm sweep): the FIRST press is this icon alone (a trash
+  /** v1.447.0 (calm sweep): the FIRST press is this icon alone (a trash
    *  can), named `label` and with `title` (else `label`) as its tip; the
    *  armed second press still says `confirmLabel` in words. Two presses,
    *  exactly as before. The calm variant only. */
