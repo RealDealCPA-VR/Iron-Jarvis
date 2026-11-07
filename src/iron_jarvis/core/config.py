@@ -46,7 +46,7 @@ def default_permissions() -> dict[str, str]:
         # and TX-01 undoable — strictly less destructive than the overwrite
         # `write_file` has always been allowed to do.
         "rename_file": "allow",
-        # v1.443.0: the browser's downloads. Listing them only reads the kept
+        # v1.444.0: the browser's downloads. Listing them only reads the kept
         # list; download_manage renames / moves / copies a file OUTSIDE the
         # work folder (only one the browser downloaded), so it asks every time.
         "downloads_list": "allow",

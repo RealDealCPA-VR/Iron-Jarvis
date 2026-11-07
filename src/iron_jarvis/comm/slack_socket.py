@@ -10,7 +10,7 @@ Safety mirrors the inbound poller exactly (it REUSES ``InboundPoller._handle``):
 bot-loop protection, FAIL-CLOSED sender allowlist, bounded replies. Transports
 are injectable so the test suite runs fully offline.
 
-WHERE JARVIS ANSWERS (v1.443.0, a user report: "me sending IJ a message from
+WHERE JARVIS ANSWERS (v1.444.0, a user report: "me sending IJ a message from
 Slack goes into the void"). The pump used to answer DIRECT MESSAGES only, and
 the manifest subscribed to ``message.im`` alone, so a message written in the
 destination's own channel (#iron-jarvis, where the alerts land) never even
@@ -159,7 +159,7 @@ class SlackSocketMode:
         self.comm_config = comm_config
         self._open_ws = open_ws or _default_open_ws
         self._ws_connect = ws_connect
-        #: v1.443.0: Web API calls for finding/joining the destination's own
+        #: v1.444.0: Web API calls for finding/joining the destination's own
         #: channel and the bot's own user id (test seam; never a model call).
         self._slack_api = slack_api or _default_slack_api
         #: destination name -> Slack id of its own channel (None = unknown).

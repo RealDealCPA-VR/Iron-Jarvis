@@ -270,7 +270,7 @@ def test_socket_channel_mention_fires_reflex():
     env = _envelope(type="app_mention", text="deploy pls", user="U1", channel="C7")
     res = asyncio.run(sm.process_envelope("team", env))
     assert rec.calls == [{"text": "deploy pls", "channel": "C7", "sender": "U1"}]
-    # v1.443.0 (moved on purpose): the mention is ALSO answered — privately, in
+    # v1.444.0 (moved on purpose): the mention is ALSO answered — privately, in
     # the sender's DM (reply_to is the user id, never the shared channel C7).
     assert res == {"channel": "team", "status": "handled"}
     assert len(poller.handled) == 1

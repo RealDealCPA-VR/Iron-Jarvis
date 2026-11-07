@@ -3584,7 +3584,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # at api.slack.com/apps and every required scope/setting lands in one step.
     # (Socket Mode is on, so Iron Jarvis dials OUT to Slack — two-way DMs with no
     # public URL; create an App-Level Token with connections:write after install.)
-    # v1.443.0: message.channels / message.groups / app_mention + the read and
+    # v1.444.0: message.channels / message.groups / app_mention + the read and
     # join scopes, so what the user writes in the destination's own channel (and
     # an @mention elsewhere) reaches Jarvis too. With message.im alone a message
     # in #iron-jarvis never left Slack (comm/slack_socket.py says where each one

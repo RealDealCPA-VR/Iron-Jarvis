@@ -114,7 +114,7 @@ def two_way_note(ctype: str, config: dict) -> str | None:
     return None
 
 
-#: v1.443.0: the words for a two-way Slack destination that is connected and
+#: v1.444.0: the words for a two-way Slack destination that is connected and
 #: has heard nothing yet. Slack only sends what the app subscribes to, and an
 #: app made from the older manifest got direct messages only.
 NOTHING_HEARD_WORDS = (
@@ -135,7 +135,7 @@ LISTENING_DM_ONLY_WORDS = (
 
 
 def listening_status(name: str, ctype: str, config: dict) -> dict[str, Any] | None:
-    """v1.443.0: what a two-way Slack destination's pump has HEARD, for the
+    """v1.444.0: what a two-way Slack destination's pump has HEARD, for the
     Notifications row. ``None`` for anything else or when two-way is off; the
     times are what the pump recorded in this daemon (in memory, so a restart
     starts fresh). ``tone`` is ``warn`` when Jarvis cannot hear the user in
@@ -345,7 +345,7 @@ def register(app: FastAPI, d) -> None:
                     "saved_fields": saved,
                     "values": values,
                     "two_way_note": two_way_note(stype, spec) if spec else None,
-                    # v1.443.0: what a two-way Slack pump has heard (None else).
+                    # v1.444.0: what a two-way Slack pump has heard (None else).
                     "listening": listening_status(name, stype, spec) if spec else None,
                 }
             )

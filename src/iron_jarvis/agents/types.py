@@ -356,7 +356,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         tools=(
             _FILE_TOOLS + _SELF_SERVICE_TOOLS + _DOCUMENT_TOOLS + _LEARNING_TOOLS
             + ["notify", "integration_list", "integration_test"]
-            # v1.443.0: the Automation agent drives the browser; what the
+            # v1.444.0: the Automation agent drives the browser; what the
             # browser downloads it can list and rename / move / copy (asks).
             + ["downloads_list", "download_manage"]
             # v1.434.0 (chat-first plan, Wave 2 group E, B1.3): a watcher

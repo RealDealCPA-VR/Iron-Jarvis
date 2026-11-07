@@ -53,7 +53,7 @@ class InboundMessage:
     reply_to: Any = None
     is_bot: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
-    #: v1.443.0: the reply goes to a place OTHER people may read — the Slack
+    #: v1.444.0: the reply goes to a place OTHER people may read — the Slack
     #: destination's own channel (a thread under the user's message). Only the
     #: Slack Socket Mode pump sets it, and only after checking that the message
     #: came from an allowlisted person in the channel the destination posts to.

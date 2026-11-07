@@ -167,7 +167,7 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
     words: "pages in its own browser",
     tools: ["page_open", "page_click", "page_type", "page_read"],
   },
-  // v1.443.0: a file the browser downloaded — flagged content must not
+  // v1.444.0: a file the browser downloaded — flagged content must not
   // rename, move or copy the user's downloads.
   {
     words: "downloaded files",

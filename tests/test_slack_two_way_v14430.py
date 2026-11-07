@@ -1,4 +1,4 @@
-"""v1.443.0: Slack two-way answers where the user writes (a user report).
+"""v1.444.0: Slack two-way answers where the user writes (a user report).
 
 The user's words: "I can send it messages, but it doesn't send a message back
 ... me sending IJ a message from Slack goes into the void." Read off the live

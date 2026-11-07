@@ -66,7 +66,7 @@ interface ChannelInfo {
   values?: Record<string, string>;
   /** v1.427.6: why two-way cannot hear the user yet; empty/absent = it can. */
   two_way_note?: string | null;
-  /** v1.443.0: what a two-way Slack destination has heard since it connected
+  /** v1.444.0: what a two-way Slack destination has heard since it connected
    *  (null for every other destination, or with two-way off). */
   listening?: {
     connected_at?: string | null;
@@ -1161,7 +1161,7 @@ export default function ChannelsPage() {
                             {c.two_way_note}
                           </span>
                         )}
-                        {/* v1.443.0: what Slack has sent since the socket
+                        {/* v1.444.0: what Slack has sent since the socket
                             connected, and where Jarvis answers. A connected
                             socket that has heard nothing used to look exactly
                             like one that works. */}

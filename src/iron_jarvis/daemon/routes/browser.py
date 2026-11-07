@@ -1188,7 +1188,7 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/browser/downloads")
     def browser_downloads(limit: int = 10) -> dict[str, Any]:
-        """v1.443.0: the browser's recent downloads Iron Jarvis noticed (the
+        """v1.444.0: the browser's recent downloads Iron Jarvis noticed (the
         kept list, ``browser/downloads.py``), newest first, for the Your
         browser card. Names, places, sites, sizes, times; never a file's
         contents. Sync on purpose (a small JSON file; FastAPI's threadpool)."""

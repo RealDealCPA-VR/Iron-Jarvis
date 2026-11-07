@@ -58,7 +58,7 @@ class SlackChannel(Channel):
                 return self._fail("slack: chat.postMessage requires a `channel`")
             thread_ts = None
             if isinstance(channel, str) and "|" in channel:
-                # v1.443.0: "<channel id>|<thread ts>" is the Socket Mode pump's
+                # v1.444.0: "<channel id>|<thread ts>" is the Socket Mode pump's
                 # reply address for a message written in the destination's own
                 # channel — the answer goes in a thread under that message.
                 channel, _, thread_ts = channel.partition("|")

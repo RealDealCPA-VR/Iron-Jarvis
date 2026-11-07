@@ -1226,7 +1226,7 @@ def build_platform(
     )
     for tool in browser_tools(browser):
         registry.register(tool)
-    # v1.443.0: the browser's downloads, REMEMBERED (on disk, bounded) from the
+    # v1.444.0: the browser's downloads, REMEMBERED (on disk, bounded) from the
     # verified ``browser.download_completed`` events, so a later turn can list
     # them and download_manage can rename / move / copy one; only a file this
     # list names (browser/downloads.py, tools/download_tools.py).

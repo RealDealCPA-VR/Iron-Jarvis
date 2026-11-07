@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.443.1 (2026-11-07).*
+holds itself to. Current as of v1.444.0 (2026-11-07).*
 
 ---
 
@@ -766,7 +766,7 @@ with the request typed in.
   manifest needs it switched on once in Slack: App Home → Messages Tab → tick
   **Allow users to send Slash commands and messages from the messages tab**.
 - **Writing to Jarvis in Slack gets an answer, wherever you write it**
-  (v1.443.0). Before, Jarvis answered only a **direct message** to the Iron
+  (v1.444.0). Before, Jarvis answered only a **direct message** to the Iron
   Jarvis app, and the Slack app was set up to send it direct messages only, so
   anything you wrote in the alerts channel (#iron-jarvis) never reached Jarvis
   at all. Now, for someone on the allowlist: a direct message is answered in
@@ -777,7 +777,7 @@ with the request typed in.
   **privately, in your direct messages**. The answers come from Chat with your
   default model, and the conversation shows in Chat on the PC. Jarvis finds
   the channel by its name and joins it by itself when it can (in a private
-  channel, type `/invite @Iron Jarvis`). **A Slack app made before v1.443.0
+  channel, type `/invite @Iron Jarvis`). **A Slack app made before v1.444.0
   needs one update:** at api.slack.com/apps, open the app → **App Manifest**,
   paste the manifest from Settings › Notifications → Add a destination → Slack,
   **Save**, and reinstall the app when Slack asks. The destination's row says
@@ -947,7 +947,7 @@ Below those sits the **agent browser** (the older computer-use machinery), which
 Chromium of its own behind a domain allowlist. It is unchanged, and it shares no
 cookies or sessions with your browser.
 
-**What your browser downloads, Jarvis knows about (v1.443.0).** When a file
+**What your browser downloads, Jarvis knows about (v1.444.0).** When a file
 finishes downloading in your browser, the add-on tells Iron Jarvis where it
 landed, and Jarvis keeps a list of the recent ones (the last 200: name, where it
 is now, the site it came from, size, when; never the file's contents, and never

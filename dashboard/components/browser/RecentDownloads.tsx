@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * v1.443.0: what your browser downloaded, as Iron Jarvis noticed it.
+ * v1.444.0: what your browser downloaded, as Iron Jarvis noticed it.
  *
  * The add-on reports each finished download with its real path; the daemon
  * keeps a bounded list (GET /browser/downloads, `browser/downloads.py`). In

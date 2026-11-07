@@ -437,7 +437,7 @@ _QUIET_TOOLS = frozenset(
 #: lib/runWords.ts AGENT_TOOLS: (one call that worked, one call as a noun).
 _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "history_search": ("searched your chats", "chat search"),
-    # v1.443.0: the browser's downloads (tools/download_tools.py).
+    # v1.444.0: the browser's downloads (tools/download_tools.py).
     "downloads_list": ("listed your browser's downloads", "downloads list"),
     "download_manage": ("changed where a downloaded file is", "download change"),
     "memory_read": ("looked up a memory", "memory lookup"),

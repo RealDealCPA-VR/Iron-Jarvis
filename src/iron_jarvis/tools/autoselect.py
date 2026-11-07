@@ -38,7 +38,7 @@ import itertools
 import re
 
 #: Every tool this module may ever arm. Curated — see the module docstring.
-#: v1.443.0: a file the user downloaded, or their Downloads folder - never the
+#: v1.444.0: a file the user downloaded, or their Downloads folder - never the
 #: software sense ("download Python", "a download link", "the download page").
 #: Every branch is bounded (no nested unbounded repeats): it runs on the loop.
 _DOWNLOADED_THING = (
@@ -79,7 +79,7 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         "browser_get_status",
         "browser_list_tabs",
         "browser_get_active_tab",
-        # v1.443.0: what the browser downloaded (the kept list; READONLY).
+        # v1.444.0: what the browser downloaded (the kept list; READONLY).
         "downloads_list",
         # YOUR BROWSER, page-reading tier (v1.236.0). The disclosure decision
         # Ship 1's note above deferred, taken: these three read the CONTENT of a
@@ -1535,7 +1535,7 @@ def _web_signal_is_an_app(msg: str, apps_on: "frozenset[str] | set[str] | tuple[
 # Signal rules: (regex, {tool: weight}). Scores accumulate across rules; the
 # highest-scoring tools fill the free slots. Weights are relative only.
 _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
-    # --- what the browser downloaded (v1.443.0) -----------------------------
+    # --- what the browser downloaded (v1.444.0) -----------------------------
     # "the file I just downloaded", "my downloads", "the PDF I downloaded from
     # the IRS site", "what did I download". The software sense ("download
     # Python", "a download link") does not count: the rule wants a file the
@@ -3326,7 +3326,7 @@ ASK_TIER_TOOLS: frozenset[str] = frozenset(
         # ungranted; its own `spend_check` lets a free quote (a Maker
         # allowance) run without the card and prices the card otherwise.
         "generate_media",
-        # v1.443.0: rename / move / copy ONE file the browser downloaded -
+        # v1.444.0: rename / move / copy ONE file the browser downloaded -
         # outside the work folder, so a card every time (tools/download_tools).
         "download_manage",
     }
@@ -3339,7 +3339,7 @@ ASK_TIER_TOOLS: frozenset[str] = frozenset(
 #: Bare "run"/"start" are everyday office words ("run through the numbers"),
 #: so each rule needs a second word that names the HOST, not the errand.
 _ASK_RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
-    # v1.443.0: rename / move / copy / organize a file the browser downloaded.
+    # v1.444.0: rename / move / copy / organize a file the browser downloaded.
     (_DOWNLOAD_ACT_RX, {"download_manage": 9}),
     (
         re.compile(

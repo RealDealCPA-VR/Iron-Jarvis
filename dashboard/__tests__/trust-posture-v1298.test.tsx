@@ -270,7 +270,7 @@ describe("sessions/[id] — the low-trust banner", () => {
     // v1.376.0: the agent's own browser joined it ("pages in its own
     // browser") - moved on purpose.
     // v1.435.0: projects from chat joined it ("projects") - moved on purpose.
-    // v1.443.0: downloaded files joined it - moved on purpose.
+    // v1.444.0: downloaded files joined it - moved on purpose.
     expect(banner).toHaveTextContent(
       `This run is in low trust — ${REASON}. This run can't change settings, schedules, rules, connections, memory, projects, agents or skills, can't type into your terminals, can't start programs that keep running, can't call your web services, can't take screenshots of pages, can't use pages in its own browser, can't rename, move or copy downloaded files and can't spend credits. It can still read, search and answer.`,
     );

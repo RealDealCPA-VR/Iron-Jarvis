@@ -1053,7 +1053,7 @@ export function YourBrowserCard() {
                 Interactive below" lands on the selector, not on a help box. */}
             <SidebarNote appVersion={appVersion} browser={browser} />
 
-            {/* v1.443.0: the browser's downloads Iron Jarvis noticed. */}
+            {/* v1.444.0: the browser's downloads Iron Jarvis noticed. */}
             <RecentDownloads />
 
             {state !== "connected" && state !== "off" && (

@@ -25,7 +25,7 @@ const WORDS: Record<string, string> = {
   // that is a path puts it in another folder) — the consent lead must stay
   // true for a move too (v1.314.0 review).
   rename_file: "rename or move a file",
-  // v1.443.0: a file the browser downloaded (tools/download_tools.py).
+  // v1.444.0: a file the browser downloaded (tools/download_tools.py).
   download_manage: "rename, move or copy a file your browser downloaded",
   // Built-ins ONLY. An agent-authored custom tool (tools/dynamic.py — e.g. a
   // `rename_real_file` CommandTool) runs whatever argv template its author

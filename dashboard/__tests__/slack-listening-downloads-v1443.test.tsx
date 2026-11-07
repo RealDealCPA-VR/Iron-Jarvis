@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 /**
- * v1.443.0 — two lines the user can read.
+ * v1.444.0 — two lines the user can read.
  *
  * (1) The Slack row says what Iron Jarvis has HEARD. The user's report: Slack
  *     was "connected" and their messages went "into the void"; a connected
@@ -99,7 +99,7 @@ afterEach(() => {
   api.posts = [];
 });
 
-describe("the Slack row says what it has heard (v1.443.0)", () => {
+describe("the Slack row says what it has heard (v1.444.0)", () => {
   it("warns when connected and Slack has sent nothing", async () => {
     seedChannels({
       listening: { connected_at: "2026-11-07T12:00:00Z", words: "Connected to Slack, but Slack hasn't sent Jarvis any message yet.", tone: "warn" },
@@ -136,7 +136,7 @@ describe("the Slack row says what it has heard (v1.443.0)", () => {
   });
 });
 
-describe("recent downloads on the browser card (v1.443.0)", () => {
+describe("recent downloads on the browser card (v1.444.0)", () => {
   it("lists them and opens the FOLDER, never the file", async () => {
     api.responses["/browser/downloads?limit=5"] = {
       total: 7,
