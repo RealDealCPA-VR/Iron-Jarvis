@@ -1405,7 +1405,9 @@ def programs_under(pid: int | None) -> list[dict[str, Any]]:
     return program_listing(pid)["programs"]
 
 
-def session_view(row: Any, events: list[dict[str, Any]], pid: int | None, running: bool) -> dict[str, Any]:
+def session_view(
+    row: Any, events: list[dict[str, Any]], pid: int | None, running: bool, platform: Any = None
+) -> dict[str, Any]:
     """``GET /build/app/sessions/{id}/overview``. BLOCKING."""
     folder = str(getattr(row, "folder", "") or "")
     present = bool(folder) and not _network(folder) and os.path.isdir(folder)
@@ -1423,7 +1425,105 @@ def session_view(row: Any, events: list[dict[str, Any]], pid: int | None, runnin
         "programs_more": listing["more"],
         # v1.426.0 (E4): the tool's OWN MCP servers, as it reported them.
         "mcp": _tool_setup_view(row, events, running),
+        # v1.448.0 (Wave A, A3): where the tool's model answers — the cloud,
+        # or this network — so the Session tab says it like a chat receipt.
+        "where": where_view(row, platform),
     }
+
+
+#: v1.448.0: the tools whose model is ALWAYS someone else's service — their
+#: inference runs on the vendor's cloud whatever model is picked.
+CLOUD_TOOLS: frozenset[str] = frozenset({"claude-code", "codex", "grok", "antigravity"})
+
+#: The tools that take a ``provider/model`` pick of their own (Pi, OpenCode):
+#: whether the answer leaves this network depends on that provider.
+PICKS_PROVIDER_TOOLS: frozenset[str] = frozenset({"pi", "opencode"})
+
+#: A Pi / OpenCode provider prefix that names a cloud service (the tool's own
+#: spelling). Anything not listed here or in :data:`_LOCAL_PREFIXES` is "not
+#: known" — never a guess.
+_CLOUD_PREFIXES: frozenset[str] = frozenset(
+    {
+        "anthropic", "openai", "openai-codex", "google", "google-vertex", "gemini", "xai", "grok",
+        "openrouter", "groq", "mistral", "deepseek", "together", "togetherai", "fireworks",
+        "fireworks-ai", "cerebras", "cohere", "perplexity", "amazon-bedrock", "bedrock", "azure",
+        "vertex", "github-copilot", "opencode", "huggingface", "moonshotai", "zai", "zhipuai",
+        "minimax", "alibaba", "baseten", "deepinfra", "sambanova", "vercel", "v0", "morph",
+        # A3 review: Pi 1.3.0's and OpenCode 1.18's other built-in cloud
+        # providers (pi-ai's provider ids; OpenCode's models.dev ids).
+        "google-antigravity", "google-gemini-cli", "anthropic-vertex", "azure-openai-responses",
+        "azure-openai", "vercel-ai-gateway", "kimi-coding", "opencode-go", "minimax-cn",
+        "zai-coding-plan", "zhipuai-coding-plan", "moonshot", "kimi", "upstage", "nebius",
+        "cortecs", "requesty", "venice", "inception", "nvidia", "scaleway", "chutes", "llama",
+    }
+)
+
+#: A Pi / OpenCode provider prefix that names a model server of the user's
+#: own, mapped onto Iron Jarvis's provider id of the same server — read
+#: through ``egress.stays_on_this_network`` (the chat receipt's own rule), so
+#: the answer is the address Iron Jarvis knows for it, never a guess. A3
+#: review: ONLY a server Iron Jarvis can hold an address for. LM Studio and
+#: llama.cpp are detected (providers/local_servers_seen), never configured as
+#: a provider, so ``egress`` knows no address for them and would read them
+#: as CLOUD — a false label on a program that only ever runs on the user's
+#: own machine or network. They are "not known" instead (:data:`_OWN_SERVER_
+#: PREFIXES`), like any prefix the daemon cannot place.
+_LOCAL_PREFIXES: dict[str, str] = {
+    "ollama": "ollama",
+}
+
+#: A Pi / OpenCode prefix naming a model server of the user's own that Iron
+#: Jarvis holds NO address for: never cloud, never a guess — not known.
+_OWN_SERVER_PREFIXES: frozenset[str] = frozenset(
+    {"lmstudio", "lm-studio", "llamacpp", "llama.cpp", "llama-cpp", "local", "localhost"}
+)
+
+WHERE_CLOUD = "cloud"
+WHERE_NETWORK = "on this network"
+
+
+def where_view(row: Any, platform: Any = None) -> dict[str, Any]:
+    """v1.448.0 (Wave A, A3): ``{on_this_network: bool | None, words}`` for a
+    session's tool and model. Claude Code, Codex, Grok and Antigravity run
+    their models on the vendor's service: ``cloud`` whatever the pick. Pi and
+    OpenCode name a ``provider/model`` of their own: a cloud provider's prefix
+    is ``cloud``; a model server of the user's that Iron Jarvis holds an
+    address for (Ollama) is judged by THAT address through
+    ``providers.egress.stays_on_this_network``; anything else — a prefix not
+    known, LM Studio / llama.cpp (no address of ours), an Ollama Iron Jarvis
+    has no address for, no model, no platform to ask — is ``None`` ("not
+    known") and the tab draws nothing. Never raises."""
+    try:
+        harness = str(getattr(row, "harness", "") or "").strip().lower()
+        if harness in CLOUD_TOOLS:
+            return {"on_this_network": False, "words": WHERE_CLOUD}
+        if harness not in PICKS_PROVIDER_TOOLS:
+            return {"on_this_network": None, "words": ""}
+        model = str(getattr(row, "model", "") or "").strip()
+        if "/" not in model:
+            return {"on_this_network": None, "words": ""}
+        prefix = model.split("/", 1)[0].strip().lower()
+        if prefix in _CLOUD_PREFIXES:
+            return {"on_this_network": False, "words": WHERE_CLOUD}
+        if prefix in _OWN_SERVER_PREFIXES:
+            return {"on_this_network": None, "words": ""}
+        ours = _LOCAL_PREFIXES.get(prefix)
+        if ours is None or platform is None:
+            return {"on_this_network": None, "words": ""}
+        from ..providers import egress
+
+        manager = getattr(platform, "providers", None)
+        config = getattr(platform, "config", None)
+        # A3 review: Iron Jarvis holding NO address for that server says
+        # nothing about where Pi's or OpenCode's copy of it answers (a fresh
+        # install with Pi on a local Ollama read "cloud"): not known. Only an
+        # address Iron Jarvis knows is judged, by the receipt's own rule.
+        if not egress.endpoint_url(ours, manager, config):
+            return {"on_this_network": None, "words": ""}
+        local = bool(egress.stays_on_this_network(ours, manager, config))
+        return {"on_this_network": local, "words": WHERE_NETWORK if local else WHERE_CLOUD}
+    except Exception:  # noqa: BLE001 — a reading never breaks the tab
+        return {"on_this_network": None, "words": ""}
 
 
 def _tool_setup_view(row: Any, events: list[dict[str, Any]], running: bool) -> dict[str, Any]:

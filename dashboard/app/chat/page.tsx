@@ -7652,6 +7652,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // in the same pinned-only, instant-while-streaming shape.
   const busyRef = useRef(busy);
   busyRef.current = busy;
+  // A3 review (v1.448.0): the LATEST `send`. A handler a card captured at
+  // its last render (an approval card is drawn only while a turn runs)
+  // closes over that render's `busy` — true — so calling its `send` once the
+  // turn has ended returned silently and the words were LOST. Anything that
+  // may run after the render that made it sends through this ref.
+  const sendRef = useRef<(text: string) => void>(() => {});
+  sendRef.current = send;
   const scrollLiveIntoView = useCallback(() => {
     if (!pinnedRef.current) return;
     scrollToLatest(bottomRef.current, busyRef.current ? "auto" : "smooth");
@@ -9770,6 +9777,42 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     }
     composer.reset();
     setPendingSteers((prev) => [...prev, note]);
+  }
+
+  /** v1.448.0 (Wave A, A3): an approval card's "No, tell it what to do
+   *  instead". The card has ALREADY denied the call when this runs (the
+   *  daemon told the model the user declined); the words then reach the
+   *  reply the way the page's own box would send them right now — a STEER
+   *  NOTE to the running turn (read at its next step, right after the
+   *  refusal), or a plain message when nothing runs any more. A note the
+   *  turn could not take (it ended first) goes out as a message; words that
+   *  could not go at all stay in the box, said. */
+  async function redirectAfterDeny(words: string): Promise<void> {
+    const note = words.trim();
+    if (!note) return;
+    const id = turnIdRef.current;
+    if (id && busyRef.current) {
+      try {
+        await post(`/chat/turns/${encodeURIComponent(id)}/steer`, { text: note });
+        setPendingSteers((prev) => [...prev, note]);
+        return;
+      } catch (e) {
+        const status = e instanceof ApiError ? e.status : 0;
+        if (status !== 404) {
+          composer.setText(note);
+          setError(`Couldn't send that: ${e instanceof Error ? e.message : String(e)}`);
+          return;
+        }
+        // The turn ended before the note: send it as the next message.
+      }
+    }
+    if (busyRef.current) {
+      composer.setText(note);
+      return;
+    }
+    // Through the ref: this closure was made while the turn ran, and its
+    // own `send` would still read `busy` as true and drop the words.
+    sendRef.current(note);
   }
 
   /** Re-send the last failed chat turn — same history + attachments, verbatim.
@@ -13559,6 +13602,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     onCloudAnswer={answerCloudAsk}
                     onStop={stop}
                     returnFocus={focusComposerAfterAsk}
+                    onRedirect={redirectAfterDeny}
                   />
                   <div
                     data-testid="chat-composer"

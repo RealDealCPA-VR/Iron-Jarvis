@@ -60,8 +60,10 @@ export const ALLOW_ALL_COMMANDS = "Allow all commands this session";
 /** v1.417.0 (C1.1): the tool's own session-wide allow when the one above
  *  is offered too (it covers commands LIKE this one). */
 export const ALLOW_SIMILAR = "Allow similar commands";
-/** v1.417.0 (C4.1): a "no" that tells the tool what to do instead. */
-export const REDIRECT_WORDS = "No, tell it what to do instead";
+/** v1.417.0 (C4.1): a "no" that tells the tool what to do instead. v1.448.0:
+ *  ONE definition, shared with the chat's card (lib/approvalWords). */
+export { REDIRECT_WORDS } from "@/lib/approvalWords";
+import { REDIRECT_WORDS } from "@/lib/approvalWords";
 
 const EDGE_WARN =
   "shadow-[0_0_0_0.5px_rgb(var(--tone-warn)/0.55),0_6px_24px_rgb(0_0_0/0.35)] [[data-scheme=light]_&]:shadow-[0_0_0_0.5px_rgb(var(--tone-warn)/0.6),0_4px_18px_rgb(var(--white)/0.08)]";

@@ -189,6 +189,62 @@ describe("settings cards in chat (redesign S3/S4)", () => {
     });
   });
 
+  it("v1.448.0: a change card names the option, never the wire value, and its link opens the setting's row", async () => {
+    const named: ConfigCard = {
+      kind: "change",
+      key: "device.approval_mode",
+      label: "Approvals in chat",
+      old: "approve_for_me",
+      new: "auto",
+      old_label: "Ask before commands",
+      new_label: "Auto",
+      restart: false,
+      change_id: "cfg_2",
+    };
+    H.api.getResponses["/config/changes/cfg_2"] = { action_id: "tool_2", undone: false };
+    render(<ChatPage />);
+    await send("stop asking me before you run tests", "Done.", { configCards: [named] });
+    const card = await screen.findByTestId("config-card-change");
+    expect(card.textContent).toContain("Ask before commands → Auto");
+    expect(card.textContent).not.toContain("approve_for_me");
+    expect(card.textContent).not.toMatch(/\bauto\b/);
+    expect(screen.getByTestId("config-card-settings-link").getAttribute("href")).toBe(
+      "/settings?focus=device.approval_mode",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await screen.findByText(/Undone — Approvals in chat is Ask before commands again/);
+  });
+
+  it("v1.448.0: a dict value reads as its keys, never a JSON dump; a record's card keeps the plain Settings link", async () => {
+    const groups: ConfigCard = {
+      kind: "change",
+      key: "account_groups",
+      label: "Account groups",
+      old: {},
+      new: { Work: ["p1", "p2"], Home: ["p3"] },
+      restart: false,
+      change_id: "cfg_3",
+    };
+    const record: ConfigCard = {
+      kind: "change",
+      title: "Schedule changed",
+      key: "schedule:nightly-brief",
+      label: "nightly-brief",
+      old: null,
+      new: "every day at 7",
+      restart: false,
+      change_id: "rec_1",
+    };
+    render(<ChatPage />);
+    await send("put my work accounts in one group", "Done.", { configCards: [groups, record] });
+    const cards = await screen.findAllByTestId("config-card-change");
+    expect(cards[0].textContent).toContain("(not set) → Work, Home");
+    expect(cards[0].textContent).not.toContain("{");
+    const links = screen.getAllByTestId("config-card-settings-link");
+    expect(links[0].getAttribute("href")).toBe("/settings?focus=account_groups");
+    expect(links[1].getAttribute("href")).toBe("/settings");
+  });
+
   it("a credential card posts the value straight to the vault — never to the chat, the saved thread or the page", async () => {
     H.api.postResponses["/config/secret"] = { status: "stored", action_id: "tool_9" };
     render(<ChatPage />);

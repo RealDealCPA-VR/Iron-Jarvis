@@ -5584,7 +5584,13 @@ def config_card_from_result(name: str, result: Any) -> dict[str, Any] | None:
         if name in ("config_set", "config_change", "config_change_protected"):
             c = data.get("config_change")
             if isinstance(c, dict) and c.get("key"):
-                return {"kind": "change", **{k: c.get(k) for k in ("key", "label", "old", "new", "restart", "change_id")}}
+                card = {"kind": "change", **{k: c.get(k) for k in ("key", "label", "old", "new", "restart", "change_id")}}
+                # v1.448.0 (Wave A, A3): the option's display name, when the
+                # row has one (settings/tools.value_label); absent otherwise.
+                for k in ("old_label", "new_label"):
+                    if isinstance(c.get(k), str) and c[k]:
+                        card[k] = c[k]
+                return card
         if name == "config_secret":
             r = data.get("secret_request")
             if isinstance(r, dict) and r.get("name"):

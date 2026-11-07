@@ -27,6 +27,7 @@ import {
   GitBranch,
   Loader2,
   Monitor,
+  Network,
   Paperclip,
   RefreshCw,
   SquareMenu,
@@ -70,6 +71,7 @@ import {
   revertConfirmWords,
   SCOPE_WORDS,
   changesQuery,
+  whereLine,
   windowLine,
   type ChangesScope,
   type CodeChange,
@@ -626,6 +628,15 @@ function SessionPaneTab({
           <p data-testid="code-session-rules" className={QUIET}>
             Instruction files here: {o.rules.join(", ")}
           </p>
+        ) : null}
+        {/* v1.448.0 (Wave A, A3): where the model answers, like a chat
+            receipt's "· cloud" / "· local". Drawn only when the daemon knows. */}
+        {whereLine(o) ? (
+          <Row icon={<Network size={14} aria-hidden />}>
+            <span data-testid="code-session-where" data-on-this-network={String(o?.where.onThisNetwork)}>
+              {whereLine(o)}
+            </span>
+          </Row>
         ) : null}
       </Section>
 

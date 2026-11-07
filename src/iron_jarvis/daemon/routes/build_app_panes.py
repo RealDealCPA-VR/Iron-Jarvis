@@ -136,7 +136,7 @@ def register(app: FastAPI, d: Any) -> None:
         row, events, live = await _session(sid)
         running = bool(live is not None and live.running)
         pid = live.proc.pid if running and live.proc is not None else None
-        view = await asyncio.to_thread(PN.session_view, row, events, pid, running)
+        view = await asyncio.to_thread(PN.session_view, row, events, pid, running, d.platform)
         return await SC.decorate_overview(view, live)
 
     @app.post("/build/app/sessions/{sid}/background/{work_id}/stop")

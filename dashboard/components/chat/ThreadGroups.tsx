@@ -461,6 +461,19 @@ export default function ThreadGroups<T extends ThreadSummary>({
                         ) : null}
                         <span className="min-w-0 flex-1 truncate">{title}</span>
                         {badge}
+                        {status === "waiting" ? (
+                          // v1.448.0 (Wave A, A3; ease item 39): a chat parked
+                          // on the user says so in a WORD beside the amber dot
+                          // — a colour alone is not a second cue (the
+                          // v1.341.0 rule). "unread" keeps its dot alone.
+                          <span
+                            data-testid={`thread-needs-you-${t.id}`}
+                            title={words}
+                            className="shrink-0 rounded-full bg-tone-warn/15 px-1.5 text-[10px] font-medium leading-4 text-tone-warn"
+                          >
+                            Needs you
+                          </span>
+                        ) : null}
                         {words ? <span className="sr-only">{`, ${words}`}</span> : null}
                         {twin ? (
                           // v1.329.0 (W6 H1): a same-titled row's time or

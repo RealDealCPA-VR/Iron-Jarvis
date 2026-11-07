@@ -255,6 +255,19 @@ describe("ThreadGroups", () => {
     expect(screen.getByTestId("thread-row-c1").textContent).toContain("Working on it");
   });
 
+  it("v1.448.0: a waiting chat says Needs you in a word beside its dot; unread keeps the dot alone", () => {
+    renderGroups();
+    const word = screen.getByTestId("thread-needs-you-c2");
+    expect(word.textContent).toBe("Needs you");
+    expect(word.getAttribute("title")).toBe("Waiting on you");
+    expect(word.className).toContain("text-tone-warn");
+    // The word is visible (never sr-only): a colour alone is not a cue.
+    expect(word.className).not.toContain("sr-only");
+    // Running, unread and idle rows get no such word.
+    for (const id of ["c1", "c3", "c4", "n1"]) expect(screen.queryByTestId(`thread-needs-you-${id}`)).toBeNull();
+    expect(screen.getByTestId("thread-row-c3").textContent).not.toContain("Needs you");
+  });
+
   it("shows the title and a short age, and marks the open chat", () => {
     renderGroups();
     const c2 = screen.getByTestId("thread-row-c2");

@@ -24,6 +24,7 @@ import { ArrowRight, Check, Eye, EyeOff, KeyRound, RotateCcw, Settings2 } from "
 import { get, post } from "@/lib/api";
 import { Button } from "@/components/ui";
 import {
+  settingsHrefFor,
   showValue,
   undoAnswerNote,
   undoRefusalWords,
@@ -62,6 +63,9 @@ function ChangeCard({ card, onSettle }: { card: ConfigChangeCard; onSettle: (nex
     }
   }
 
+  // v1.448.0 (Wave A, A3): the option's display name, never the wire value.
+  const oldShown = showValue(card.old, card.old_label);
+  const newShown = showValue(card.new, card.new_label);
   if (card.undone) {
     return (
       <div data-testid="config-card-undone" className="text-[12px] text-zinc-500">
@@ -70,7 +74,7 @@ function ChangeCard({ card, onSettle }: { card: ConfigChangeCard; onSettle: (nex
           ? `Undone — ${card.undone_note}`
           : card.title
           ? `Undone — ${card.label} is back to how it was.`
-          : `Undone — ${card.label} is ${showValue(card.old)} again.`}
+          : `Undone — ${card.label} is ${oldShown} again.`}
       </div>
     );
   }
@@ -87,18 +91,23 @@ function ChangeCard({ card, onSettle }: { card: ConfigChangeCard; onSettle: (nex
       </span>
       <span className="text-zinc-400">
         {card.title && (card.old === null || card.old === undefined) ? (
-          <span className="text-zinc-100">{showValue(card.new)}</span>
+          <span className="text-zinc-100">{newShown}</span>
         ) : card.title && (card.new === null || card.new === undefined) ? (
-          <>was {showValue(card.old)}</>
+          <>was {oldShown}</>
         ) : (
           <>
-            {showValue(card.old)} → <span className="text-zinc-100">{showValue(card.new)}</span>
+            {oldShown} → <span className="text-zinc-100">{newShown}</span>
           </>
         )}
       </span>
       {card.restart && <span className="text-[12px] text-tone-warn">Takes full effect after a restart.</span>}
       <span className="ml-auto inline-flex items-center gap-2">
-        <Link href="/settings" className="text-[12px] text-zinc-500 hover:text-zinc-300">
+        {/* v1.448.0 (Wave A, A3): opens the setting's own row in Settings. */}
+        <Link
+          href={settingsHrefFor(card)}
+          data-testid="config-card-settings-link"
+          className="text-[12px] text-zinc-500 hover:text-zinc-300"
+        >
           <Settings2 size={11} className="mr-1 inline align-[-1px]" aria-hidden />
           Settings
         </Link>

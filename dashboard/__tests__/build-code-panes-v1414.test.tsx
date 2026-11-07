@@ -315,6 +315,35 @@ describe("Usage", () => {
 });
 
 describe("Session", () => {
+  it("v1.448.0: says where the model runs — cloud, on this network — and nothing when not known", async () => {
+    setGets({ "/build/app/sessions/app_1/overview": { ...OVERVIEW, where: { on_this_network: false, words: "cloud" } } });
+    const first = panes();
+    fireEvent.click(screen.getByRole("tab", { name: "Session" }));
+    const row = await screen.findByTestId("code-session-where");
+    expect(row.textContent).toBe("Runs · cloud");
+    expect(row.getAttribute("data-on-this-network")).toBe("false");
+    first.unmount();
+
+    setGets({ "/build/app/sessions/app_1/overview": { ...OVERVIEW, where: { on_this_network: true, words: "on this network" } } });
+    const second = panes();
+    fireEvent.click(screen.getByRole("tab", { name: "Session" }));
+    expect((await screen.findByTestId("code-session-where")).textContent).toBe("Runs · on this network");
+    second.unmount();
+
+    // Not known (a Pi provider the daemon cannot place), or an older Iron
+    // Jarvis that sends nothing: no row at all — never a guess.
+    setGets({ "/build/app/sessions/app_1/overview": { ...OVERVIEW, where: { on_this_network: null, words: "" } } });
+    const third = panes();
+    fireEvent.click(screen.getByRole("tab", { name: "Session" }));
+    await screen.findByTestId("code-session-branch");
+    expect(screen.queryByTestId("code-session-where")).toBeNull();
+    third.unmount();
+    panes();
+    fireEvent.click(screen.getByRole("tab", { name: "Session" }));
+    await screen.findByTestId("code-session-branch");
+    expect(screen.queryByTestId("code-session-where")).toBeNull();
+  });
+
   it("says where it works, what answers, how full, the last attachment and the changes", async () => {
     panes();
     fireEvent.click(screen.getByRole("tab", { name: "Session" }));
