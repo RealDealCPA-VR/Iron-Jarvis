@@ -187,6 +187,28 @@ _NOT_OUR_SCHEDULE = (
 _SCHEDULE_NOUN = re.compile(
     r"\b(?:schedules?" + _NOT_OUR_SCHEDULE + r"|scheduled|cron)\b", re.IGNORECASE
 )
+#: The word right before a match (read on a short slice: linear).
+_WORD_BEFORE = re.compile(r"([\w'’-]+)\W*$")
+
+
+def _schedule_noun_hit(t: str) -> bool:
+    """A schedule NOUN that is Iron Jarvis's (v1.448.0, Wave A, A1). A
+    "schedule" whose word before names someone else's — a CPA's ("depreciation
+    schedules", "the payment schedule"), a person's ("my work schedule") — is
+    not one (``setup_words.NOT_OUR_SCHEDULE_BEFORE``, the words
+    ``daemon.change_claims`` reads for the same judgement); "scheduled" and
+    "cron" count as before. "Remind me how depreciation schedules work for a
+    vehicle" armed the schedule writers at v1.447.0."""
+    for m in _SCHEDULE_NOUN.finditer(t):
+        word = m.group(0).lower()
+        if word.startswith("schedule") and not word.startswith("scheduled"):
+            before = _WORD_BEFORE.search(t[max(0, m.start() - 40):m.start()])
+            if before is not None and before.group(1).lower() in _SETUP_WORDS.NOT_OUR_SCHEDULE_BEFORE:
+                continue
+        return True
+    return False
+
+
 _RECURRING_WORDS = re.compile(r"\b(?:" + _RECURRING + r")\b", re.IGNORECASE)
 _WORKFLOW_WORDS = re.compile(r"\bworkflows?\b", re.IGNORECASE)
 #: A notification channel — never the UPDATE channel ("switch updates to the
@@ -546,7 +568,7 @@ def _schedule_named(t: str) -> bool:
     """A schedule by its noun, or a RECURRING time in a request ("every
     weekday at 8am send me a digest") — never a sentence about oneself ("I
     go to the gym every morning")."""
-    if _SCHEDULE_NOUN.search(t):
+    if _schedule_noun_hit(t):
         return True
     if not _RECURRING_WORDS.search(t):
         return False
@@ -575,7 +597,7 @@ def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]"
         if (
             _CREATE_SCHEDULE.search(t)
             or _SCHEDULE_VERB.search(t)
-            or (_EVERY_WORDS.search(t) and not _SCHEDULE_NOUN.search(t) and not _EDIT_LEAD.search(t))
+            or (_EVERY_WORDS.search(t) and not _schedule_noun_hit(t) and not _EDIT_LEAD.search(t))
         ):
             out.append("schedule_create")
     if _WORKFLOW_WORDS.search(t):

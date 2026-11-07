@@ -450,11 +450,86 @@ REVIEW_NEGATIVES: list[str] = [
     "add a goal line to the chart",
 ]
 
+# ---------------------------------------------------------------------------
+# v1.448.0 (Wave A "chat configures everything", A1): MODEL AND PROVIDER WORDS
+# reach a tool, and the Wave-4 record tools take everyday nouns. The 38-sentence
+# re-audit probe (docs/PRODUCT-READINESS-LANES-v1447.md, lane F-K) found each
+# request below arming nothing, or only the settings reader.
+# ---------------------------------------------------------------------------
+MS = ("model_server_add", "model_server_default")
+WAVE_A_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
+    # A cloud vendor or plan asked to answer: the default-provider / default-
+    # model rows (settings.setup_words.USE_VENDOR / USE_PLAN / SET_UP_VENDOR).
+    ("Use Claude for this chat instead of the default.", SET, (S,)),
+    ("I have a ChatGPT Plus plan, can you use that to answer?", SET, (S,)),
+    ("Set up Gemini so I can try Google's model.", SET, (S,)),
+    ("Use OpenRouter for the big questions.", SET, (S,)),
+    ("switch to Gemini from now on", SET, (S,)),
+    ("answer with GPT-5 for all my chats", SET, (S,)),
+    ("try Google's model for my questions", SET, (S,)),
+    ("enable Grok for this chat", SET, (S,)),
+    ("we pay for Claude Max, use it to answer", SET, (S,)),
+    ("Use Claude Sonnet 4.5 for this conversation.", SET, (S,)),
+    # A local program said to be RUNNING here (records_connections): the
+    # model server tools; "connect to it" also reads as an app's connect.
+    ("I'm running Ollama with llama3 on this PC, use it.", MS, (S,)),
+    ("LM Studio is running on port 1234, connect to it.", MS, (S, AP)),
+    ("I installed vLLM on this machine, point Jarvis at it", MS, (S,)),
+    # The Wave-4 tools by their everyday nouns.
+    (r"Point your long-term memory at my Obsidian vault in D:\Notes.", ("memory_base_add",), ()),
+    ("keep your memory in Notion", ("memory_base_add",), (AP,)),
+    ("For the ClosePilot folder, always use Codex in Auto mode.", ("build_defaults_set",), ()),
+    # "by default" + the Claude Code option also reads as the default-model
+    # setting (the trigger's older two-word-option rule) — a real neighbour.
+    ("in the Johnson project, by default use Claude Code", ("build_defaults_set",), (S,)),
+    ("Have my coding sessions run with a reviewer that checks every change.", ("build_team_set",), ()),
+    ("add a code reviewer to my coding sessions", ("build_team_set",), ()),
+    ("have Claude review every change in my coding sessions", ("build_team_set",), ()),
+    # A night TIME before coding work: the night task beside the schedule.
+    (r"Every night at 11 run the tests in C:\Projects\ClosePilot and fix what breaks.",
+     ("night_task_add", "schedule_create"), (SC,)),
+    ("every night at 10pm fix the failing tests in this repo", ("night_task_add", "schedule_create"), (SC,)),
+]
+WAVE_A_NEGATIVES: list[str] = [
+    # The vendor's name in another sense, or with no request.
+    "Claude Monet painted water lilies, tell me about them.",
+    "my ChatGPT history is long",
+    "Gemini is my star sign",
+    "the Ollama logo is a llama",
+    "a port of the game to Windows",
+    "the Google model of management",
+    "use the Google model of management for the memo",
+    "use Claude Code to refactor my repo",
+    "use Claude for this",
+    "try Gemini on this spreadsheet",
+    "Anthropic published a new paper, summarize it",
+    "OpenAI's stock is not public",
+    # The Wave-4 nouns in their everyday senses.
+    "my memory of the vault is hazy",
+    "put the memory card in the folder",
+    "the night shift at the hospital starts at 7",
+    "every night I run the tests before bed",
+    # ("Every night at 11 run the dishwasher" is a recurring time, so the
+    # older schedule shape still offers a schedule for it — it is a night-TASK
+    # near-miss only, pinned in tests/_records_build_table_v14380.py.)
+    "the reviewer at the Times panned my book",
+    "have the reviewer check the sessions at the conference",
+    "for the Johnson folder, use the 2024 template",
+    # A CPA's schedule is nobody's automation.
+    "Remind me how depreciation schedules work for a vehicle.",
+    "my payment schedule shows twelve installments",
+    "the client's depreciation schedule is in the workpapers",
+    "what does the amortization schedule show for year 3",
+    # A program said to be running, with no use asked.
+    "Ollama is running slow on my PC",
+    "I'm running Ollama on my laptop for fun",
+]
+
 
 def _all_rows():
     return (
-        SETTINGS_ROWS + RECORD_ROWS + SETUP_ROWS + REVIEW_ROWS
-        + [(t, (), ()) for t in NEGATIVE_ROWS + REVIEW_NEGATIVES]
+        SETTINGS_ROWS + RECORD_ROWS + SETUP_ROWS + REVIEW_ROWS + WAVE_A_ROWS
+        + [(t, (), ()) for t in NEGATIVE_ROWS + REVIEW_NEGATIVES + WAVE_A_NEGATIVES]
     )
 
 
@@ -522,9 +597,50 @@ def test_the_reviews_requests_arm_the_right_tool(d):
     assert _failures(d, REVIEW_ROWS) == []
 
 
+def test_wave_a_model_words_and_everyday_nouns_arm_the_right_tool(d):
+    """v1.448.0 (Wave A, A1). MUTATION (each red): drop USE_VENDOR / USE_PLAN
+    / SET_UP_VENDOR from trigger._EXTRA_REFERENCES -> the vendor rows lose
+    SET; drop records_connections' running-brand branch -> the Ollama / LM
+    Studio rows lose model_server_add; drop the new _MEMORY_RULES row, the
+    named-folder _DEFAULTS_SET alternative, the reviewer _TEAM_SET
+    alternatives or _NIGHT_TIME -> their rows lose the tool."""
+    assert _failures(d, WAVE_A_ROWS) == []
+    assert len(WAVE_A_ROWS) >= 20 and len(WAVE_A_NEGATIVES) >= 20
+    # …and the near-misses arm none of the Wave-4 record writers either (they
+    # are outside FAMILIES, so the general negative test cannot see them).
+    wave4 = {
+        "model_server_add", "model_server_default", "model_server_remove", "account_add", "memory_base_add",
+        "night_task_add", "night_task_cancel", "night_task_move",
+        "build_defaults_set", "build_defaults_clear", "build_team_set", "build_team_clear",
+    }
+    bad = []
+    for text in WAVE_A_NEGATIVES:
+        armed, ask = lanes(d, text)
+        stray = sorted((set(armed) | set(ask)) & (WRITERS | wave4))
+        if stray:
+            bad.append((text, stray))
+    assert bad == []
+
+
+def test_a_click_in_a_desktop_program_ask_arms_no_browser_tool(d):
+    """v1.448.0 (Wave A, A1): the desktop reading wins — the stream lane's ask
+    tier offers no browser click for a desktop program (the model would try
+    the page tools on a program that is no page); a page click keeps it."""
+    for text in (
+        "Click the Submit button in the QuickBooks desktop app for me.",
+        "type the totals in the Excel app and press Save",
+        "double-click the icon on my desktop",
+    ):
+        armed, ask = lanes(d, text)
+        assert not [t for t in armed + ask if t.startswith("browser_")], (text, armed, ask)
+        assert not [t for t in select_ask_tools(text) if t.startswith("browser_")], text
+    assert "browser_click" in select_ask_tools("click the Buy button on the checkout page")
+    assert "browser_click" in select_ask_tools('click "Submit" on the form in Chrome')
+
+
 def test_no_ordinary_sentence_arms_a_settings_or_record_writer(d):
     bad = []
-    for text in NEGATIVE_ROWS + REVIEW_NEGATIVES:
+    for text in NEGATIVE_ROWS + REVIEW_NEGATIVES + WAVE_A_NEGATIVES:
         armed, ask = lanes(d, text)
         stray = sorted((set(armed) | set(ask)) & WRITERS)
         if stray:

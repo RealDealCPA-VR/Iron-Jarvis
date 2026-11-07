@@ -1653,6 +1653,36 @@ _WRITING_TASK = re.compile(
     re.IGNORECASE,
 )
 _USE_AT = re.compile(r"\buse\b[^.?!\n]{0,60}?\b(?:at|on)\s+" + _ADDRESS, re.IGNORECASE)
+#: v1.448.0 (Wave A "chat configures everything", A1): the program said to be
+#: RUNNING or INSTALLED here — "I'm running Ollama with llama3 on this PC, use
+#: it", "LM Studio is running on port 1234, connect to it" — with no add verb
+#: and no address (armed only the settings reader before). The brand's own
+#: presence (running / installed / on this PC / on port N / at an address)…
+_BRAND_PRESENT = re.compile(
+    r"\b(?:running|installed|have|got|using|started|launched|hosting|serving)\s+"
+    r"(?:(?:my|an?|the|a\s+local|my\s+local|local|the\s+local)\s+)?" + _BRAND + r"\b"
+    + r"|\b" + _BRAND + r"\b(?:\s+server)?\s+(?:is|['’]s|are)\s+(?:(?:now|already|currently|up\s+and)\s+)?"
+    r"(?:running|installed|up|listening|serving|live|on|available|open|ready)\b"
+    + r"|\b" + _BRAND + r"\b[^.?!\n]{0,40}?\b(?:on\s+(?:this|my)\s+(?:pc|computer|laptop|machine|desktop|box"
+    r"|workstation)|(?:on\s+)?port\s+\d{2,5}|at\s+" + _ADDRESS + r")",
+    re.IGNORECASE,
+)
+#: …and a USE or CONNECT cue in the same clause ("use it", "connect to it",
+#: "point Jarvis at it", "make it my default", "switch to Ollama").
+_USE_IT = re.compile(
+    r"\b(?:use|try|talk\s+to|connect\s+(?:you\s+|jarvis\s+|iron\s+jarvis\s+)?to|point\s+(?:you|jarvis|iron\s+jarvis)\s+(?:at|to)"
+    r"|hook\s+(?:it|that)\s+up|switch\s+(?:over\s+)?to|run\s+on|answer\s+(?:with|from|through)|go\s+with)\s+"
+    r"(?:it|that|this|them|those|(?:the|my|that)\s+(?:server|box|model|models|one)|" + _BRAND + r")\b"
+    r"|\bmake\s+(?:it|that|this)\s+(?:my\s+|the\s+)?default\b"
+    r"|\b(?:use|connect\s+to|talk\s+to)\s+(?:it|that)\s+(?:for|from\s+now|by\s+default|instead|please)\b",
+    re.IGNORECASE,
+)
+#: "…but I don't want you to use it" is the opposite request.
+_NOT_USE = re.compile(
+    r"\b(?:don['’]?t|do\s+not|never|not|stop|without|instead\s+of|no\s+need\s+to|shouldn['’]?t|won['’]?t)\s+"
+    r"(?:[\w'’]+\s+){0,3}?(?:use|using|connect|connecting|talk|switch|point|try)\b",
+    re.IGNORECASE,
+)
 _DEFAULT_CUE = re.compile(
     r"\b(?:make|set|use|switch\s+to|choose|pick)\b[^.?!\n]{0,80}?\b(?:(?:my|the|your|as)\s+)?default\b"
     r"|\bby\s+default\b"
@@ -1719,6 +1749,21 @@ _MEMORY_RULES = (
         # Review: "save everything ABOUT the Smith audit in Notion" is content.
         r"(?!\s+(?:about|on|regarding|concerning|from|related|relating|of)\b)[^.?!\n]{0,30}?"
         r"\b(?:in|to|into)\s+(?:my\s+)?(?:notion|obsidian)\b",
+        re.IGNORECASE,
+    ),
+    # v1.448.0 (Wave A "chat configures everything", A1): the memory as the
+    # thing POINTED, KEPT or MOVED somewhere, no "as" needed — "Point your
+    # long-term memory at my Obsidian vault in D:\Notes", "keep your memory
+    # in Notion". YOUR / Jarvis's memory only (never "my memory of the
+    # vault", never "put the memory card in the folder").
+    re.compile(
+        r"\b(?:point|aim|keep|store|put|move|switch|connect|hook\s+up|base|anchor|host)\b[^.?!\n]{0,20}?"
+        r"\b(?:(?:your|jarvis['’]?s?|its)\s+(?:long[\s-]term\s+|durable\s+|permanent\s+|main\s+)?"
+        r"|the\s+(?:long[\s-]term\s+|durable\s+|permanent\s+))"
+        r"(?:memory|memories|brain|memory\s+base|knowledge\s+base)\b"
+        r"\s+(?:at|to|on|in|into|toward|towards|inside)\s+"
+        r"(?:(?:my|the|our|your|this|that|an?)\s+)?(?:[\w'’.-]+\s+){0,3}?"
+        r"(?:obsidian|notion|vault|folder|wiki|[a-z]:\\)",
         re.IGNORECASE,
     ),
 )
@@ -1804,6 +1849,20 @@ def _clause_tools(c: str, names: tuple[str, ...]) -> list[str]:
     ):
         out += ["model_server_add", "model_server_default"]
     elif not into_content and _USE_AT.search(c) and (brand or server_thing):
+        out += ["model_server_add", "model_server_default"]
+    elif (
+        # v1.448.0 (Wave A, A1): the program said to be running or installed
+        # here, with a use/connect cue in the same clause — "I'm running
+        # Ollama with llama3 on this PC, use it", "LM Studio is running on
+        # port 1234, connect to it". Never "Ollama is running slow, can you
+        # help?" (no cue), never "…but I don't want you to use it".
+        not into_content
+        and (brand or server_thing)
+        and _BRAND_PRESENT.search(c)
+        and _USE_IT.search(c)
+        and not _NOT_USE.search(c)
+        and not _TO_A_DEVICE.search(c)
+    ):
         out += ["model_server_add", "model_server_default"]
     if _DEFAULT_CUE.search(c) and (ctx or address):
         out.append("model_server_default")

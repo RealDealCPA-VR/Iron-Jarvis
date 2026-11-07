@@ -81,6 +81,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from ..settings import setup_words as _SETUP_WORDS
+
 #: How much of a reply is read: its head and tail halves when it is longer.
 MAX_SCAN = 24_000
 #: One sentence (a longer run with no stop is read in pieces of this size).
@@ -425,20 +427,10 @@ _NP_END = _BOUNDARY | frozenset(
 #: Before "schedule": someone else's schedule — a CPA's (depreciation,
 #: amortization, payment, lead…), a person's (work, workout, class…), never
 #: one of Iron Jarvis's. "Schedule C" never reaches here: its head is "c".
-_NOT_OUR_SCHEDULE_BEFORE = frozenset(
-    {
-        "depreciation", "amortization", "amortisation", "payment", "payments", "repayment",
-        "loan", "payroll", "tax", "fee", "fees", "rate", "rates", "price", "pricing", "work",
-        "workout", "training", "class", "exam", "shift", "school", "bus", "train", "flight",
-        "delivery", "shipping", "production", "filing", "billing", "invoice", "invoicing",
-        "vesting", "medication", "feeding", "cleaning", "study", "reading", "posting",
-        "content", "editorial", "release", "publishing", "project", "engagement", "audit",
-        "closing", "close", "asset", "assets", "lease", "debt", "interest", "cash", "inventory",
-        "supporting", "lead", "fixed", "accrual", "accruals", "prepaid", "rent", "rental",
-        "mortgage", "dividend", "distribution", "contribution", "commission", "sleep", "meal",
-        "travel", "itinerary", "game", "tour", "court", "hearing",
-    }
-)
+#: v1.448.0 (Wave A, A1): ONE definition, in ``settings.setup_words`` — the
+#: chat's schedule arming (``settings.records``) reads the same words, so
+#: "remind me how depreciation schedules work" arms no schedule writer.
+_NOT_OUR_SCHEDULE_BEFORE = _SETUP_WORDS.NOT_OUR_SCHEDULE_BEFORE
 #: Another company's product: a record named with it is THAT product's ("a
 #: GitHub Actions workflow", "the alerts in Datadog", "a project in Asana") —
 #: and a claim after one of these words, behind a preposition, is work done

@@ -6,6 +6,11 @@ from __future__ import annotations
 
 #: Each must arm the WHOLE night family (queue, cancel, move, list).
 NIGHT_REQUESTS = [
+    # v1.448.0 (Wave A "chat configures everything", A1): a night TIME in
+    # front of coding work.
+    "Every night at 11 run the tests in C:\\Projects\\ClosePilot and fix what breaks",
+    "every night at 10pm fix the failing tests in this repo",
+    "nightly, run the lint in D:\\code\\shop",
     "Queue 'update the README' for tonight",
     "queue up a task for tonight: fix the failing tests in D:\\code\\shop",
     "please queue 'write tests for cart.py' for the night shift",
@@ -79,6 +84,16 @@ FOLDER_REQUESTS = [
     "go solo in this repo",
     "please set the default tool for this folder to Codex",
     "I want to use Codex for this repo",
+    # v1.448.0 (Wave A "chat configures everything", A1): the folder NAMED and
+    # "always" in front of the model; a REVIEWER asked for the coding sessions
+    # without the word "team".
+    "For the ClosePilot folder, always use Codex in Auto mode",
+    "in the Johnson project, by default use Claude Code",
+    "for my shop repo, always start with Sonnet",
+    "Have my coding sessions run with a reviewer that checks every change",
+    "add a code reviewer to my coding sessions",
+    "have Claude review every change in my coding sessions",
+    "give my build sessions a second pair of eyes",
 ]
 
 #: Questions: only the readers (``night_task_list`` / ``build_folder_show``).
@@ -162,4 +177,14 @@ NEAR_MISSES = [
     "use the default for now",
     "At work, Codex writes the code and Claude reviews it",
     "my coworkers say Claude reviews better than Codex writes",
+    # v1.448.0 (Wave A, A1): a person's night, a person's reviewer, another
+    # kind of folder request.
+    "the night shift at the hospital starts at 7",
+    "every night I run the tests before bed",
+    "Every night at 11 run the dishwasher",
+    "every night at 10 the tests run in CI",
+    "the reviewer at the Times panned my book",
+    "have the reviewer check the sessions at the conference",
+    "for the Johnson folder, use the 2024 template",
+    "my coding sessions are getting long",
 ]

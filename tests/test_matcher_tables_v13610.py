@@ -1027,6 +1027,19 @@ GUIDE_ROWS = [
     ('What can Jarvis connect to?', True),
     ('what apps does Jarvis work with?', True),
     ('which services can Iron Jarvis connect to?', True),
+    # --- v1.448.0 (Wave A "chat configures everything", A1): a capability
+    # asked about a NAMED product, the sentence ending there; the everyday
+    # senses (a person, a task that goes on) stay out.
+    ('Can you work with QuickBooks Online?', True),
+    ('do you connect to Xero?', True),
+    ('could you use Excel?', True),
+    ('Does Jarvis support Lacerte?', True),
+    ('can you read from Google Sheets?', True),
+    ('can you work with me on this?', False),
+    ('can you use the QuickBooks data in this sheet?', False),
+    ('Can you work with Sarah on the audit next week?', False),
+    ('could you use a softer tone?', False),
+    ('do you support the new overtime rules in payroll?', False),
 ]
 
 #: v1.420.0 (C6.1): ``(text, web armed)`` — the user's own mail never arms

@@ -273,8 +273,128 @@ def asks_outbound(text: str) -> bool:
     return _OUTBOUND.search(str(text or "")) is not None
 
 
+# --------------------------------------------------------------------------- #
+# A model VENDOR or PLAN asked to answer (v1.448.0, Wave A "chat configures
+# everything", A1: "Use Claude for this chat instead of the default", "I have
+# a ChatGPT Plus plan, can you use that to answer?", "Set up Gemini so I can
+# try Google's model", "Use OpenRouter for the big questions" — each armed
+# NOTHING at v1.447.0). ONE definition, read by ``settings.trigger`` (the
+# default-provider / default-model rows are what change; a key still goes
+# only on the secure card) and ``daemon.page_doors`` (the door to Settings ›
+# Connections, where a plan signs in and a key is pasted).
+# --------------------------------------------------------------------------- #
+#: The cloud vendors and plans no chat tool can connect by itself. Never the
+#: local programs (Ollama, LM Studio…): those have ``model_server_add``.
+VENDOR = (
+    r"(?:claude(?:[\s-]*(?:code|cli))?|anthropic|chatgpt|openai|gpt(?:-?\d[\w.-]*)?|gemini|google['’]s\s+(?:ai\s+)?models?"
+    r"|openrouter|open\s+router|grok|xai|codex|mistral|deepseek|perplexity)"
+)
+_PLAN_WORD = r"(?:plus|pro|max|team|free|paid|enterprise|business)"
+#: "my ChatGPT Plus plan", "the Claude Max subscription", "my OpenAI key" —
+#: and a plan named by its tier alone ("Claude Max", "ChatGPT Plus").
+PLAN = (
+    r"(?:(?:my|the|our|your|a|an)\s+)?" + VENDOR + r"\s+(?:" + _PLAN_WORD
+    + r"(?:\s+(?:plan|subscription|account|membership))?|plan|subscription|account|api\s+key|key|credits"
+    r"|membership)"
+)
+#: Where a request may START (the trigger's own ``_ASKS_AT``, repeated here so
+#: this module stays import-free): a clause of its own, never "I use Claude"
+#: (a sentence about the user) and never "the slides use Claude".
+_REQUEST_AT = (
+    r"(?:^|(?<=[.!?;:,\n])\s*|\b(?:please|just|now|also|and|then|so|ok|okay|jarvis|let['’]?s)\s+"
+    r"|\b(?:can|could|would|will)\s+you\s+(?:please\s+)?|\bi\s+(?:want|need|would\s+like)\s+(?:you\s+)?to\s+"
+    r"|\bi['’]d\s+like\s+(?:you\s+)?to\s+)"
+)
+#: What makes the vendor the one who ANSWERS: "for this chat", "for the big
+#: questions", "to answer", "instead (of the default)", "from now on", "by
+#: default", "here", or the request ending right there. Never "to refactor my
+#: repo" (work handed to Claude Code) and never "for this" alone.
+ANSWERS_TAIL = (
+    r"(?:\s+(?:instead(?:\s+of\s+[^.?!\n]{1,40})?|from\s+now\s+on|by\s+default|going\s+forward|for\s+now"
+    r"|for\s+everything|for\s+all\s+(?:(?:my|our|the)\s+)?(?:chats|conversations|questions|answers|replies)"
+    r"|for\s+(?:this|the|my|our|these|those)\s+(?:[\w-]+\s+){0,2}?(?:chat|chats|conversation|conversations"
+    r"|questions?|answers?|replies|reply|thread|session|talk)"
+    r"|to\s+(?:answer|reply|respond|chat|talk)(?:\s+(?:me|us|my\s+questions|these|this|here))?"
+    r"|as\s+(?:my|the|your)\s+(?:model|assistant|default|ai|provider|brain)|here|in\s+(?:this\s+)?chat|for\s+chat"
+    r"|for\s+me|please|instead)\b"
+    r"|\s*(?:[.!?]|$))"
+)
+#: "use Claude for this chat", "switch to Gemini from now on", "try Google's
+#: model", "answer with GPT-5 by default", "use OpenRouter for the big
+#: questions".
+USE_VENDOR = re.compile(
+    _REQUEST_AT
+    + r"(?:please\s+)?(?:just\s+)?(?:use|switch\s+(?:me\s+|over\s+)?to|try|answer\s+(?:me\s+)?(?:with|using|through)"
+    r"|go\s+with|pick|choose|run\s+on|default\s+to|move\s+(?:me\s+)?(?:over\s+)?to)\s+"
+    # A model's own name may follow the vendor ("Claude Sonnet 4.5"); a
+    # function word never does ("use Claude for this" is not "…for this chat").
+    r"(?:(?:my|the|your|our)\s+)?(?:" + PLAN + r"|" + VENDOR
+    + r"(?:\s+(?!(?:for|to|in|on|with|as|by|from|instead|here|and|or|but|so|please|now|at|about|into|of|if"
+    r"|when|the|a|an|my|this|that|it)\b)[\w.-]{1,20}){0,2}?)" + ANSWERS_TAIL,
+    re.IGNORECASE,
+)
+#: "I have a ChatGPT Plus plan, can you use that to answer?", "we pay for
+#: Claude Max, use it".
+USE_PLAN = re.compile(
+    r"\b(?:i|we)\s+(?:have|['’]ve\s+got|got|pay\s+for|am\s+on|['’]m\s+on|are\s+on|['’]re\s+on|subscribe\s+to)\s+"
+    + PLAN + r"\b[^.?!\n]{0,60}?\b(?:use|switch\s+to|try|answer\s+(?:with|through|using)|run\s+on|go\s+with)\s+"
+    r"(?:that|it|this|those|them|(?:my|the|that)\s+(?:plan|subscription|account|key))\b",
+    re.IGNORECASE,
+)
+#: "set up Gemini so I can try Google's model", "connect my OpenAI account",
+#: "add Claude" — never one put INTO the user's content ("add Gemini to the
+#: comparison sheet"), never for someone else, never on another device.
+SET_UP_VENDOR = re.compile(
+    _REQUEST_AT
+    + r"(?:please\s+)?(?:set\s*up|setup|connect|add|enable|turn\s+on|hook\s+up|configure|install|link)\s+"
+    r"(?:(?:my|the|a|an|your|our)\s+)?(?:(?:api\s+)?keys?\s+for\s+|access\s+to\s+)?" + VENDOR + r"\b"
+    r"(?!\s+(?:support|integration|plugins?|sdk|client|library|package|extension|example|tutorial|section"
+    r"|chapter|paragraph|instructions|docs?|bindings?|comparison|column|row|logo|pricing|prices?|news|story"
+    r"|stock|shares?|article|results?|answers?|output|response|style|voice|api)\b)"
+    r"(?!\s+(?:to|into|in|on|with|inside)\s+(?!(?:jarvis|iron\s+jarvis|you|me|this\s+(?:pc|app|computer|chat)"
+    r"|the\s+app|here|my\s+(?:chats?|default|pc|computer))\b)[\w-]+)"
+    r"(?![^.!?\n]{0,30}?\bfor\s+(?:my|her|his|their|our|a|an)\s+(?:(?:new|little|older|younger)\s+)?"
+    r"(?:brother|sister|mom|mother|dad|father|wife|husband|son|daughter|kids?|friends?|clients?|colleagues?"
+    r"|coworkers?|co-workers?|boss|team|parents?|family|students?|class)\b)",
+    re.IGNORECASE,
+)
+
+
+def names_a_model_provider(text: str) -> bool:
+    """A cloud model vendor or plan asked to answer, or to be set up."""
+    t = str(text or "")
+    return any(p.search(t) is not None for p in (USE_VENDOR, USE_PLAN, SET_UP_VENDOR))
+
+
+# --------------------------------------------------------------------------- #
+# Someone else's SCHEDULE (v1.448.0, Wave A, A1 — lifted out of
+# ``daemon.change_claims``, which reads it from here now)
+# --------------------------------------------------------------------------- #
+#: Before "schedule": someone else's schedule — a CPA's (depreciation,
+#: amortization, payment, lead…), a person's (work, workout, class…), never
+#: one of Iron Jarvis's. "Schedule C" never reaches here: its head is "c".
+#: ``settings.records`` reads it so "remind me how depreciation schedules
+#: work" arms no schedule writer; ``daemon.change_claims`` so a reply about
+#: one is never a claimed change.
+NOT_OUR_SCHEDULE_BEFORE = frozenset(
+    {
+        "depreciation", "amortization", "amortisation", "payment", "payments", "repayment",
+        "loan", "payroll", "tax", "fee", "fees", "rate", "rates", "price", "pricing", "work",
+        "workout", "training", "class", "exam", "shift", "school", "bus", "train", "flight",
+        "delivery", "shipping", "production", "filing", "billing", "invoice", "invoicing",
+        "vesting", "medication", "feeding", "cleaning", "study", "reading", "posting",
+        "content", "editorial", "release", "publishing", "project", "engagement", "audit",
+        "closing", "close", "asset", "assets", "lease", "debt", "interest", "cash", "inventory",
+        "supporting", "lead", "fixed", "accrual", "accruals", "prepaid", "rent", "rental",
+        "mortgage", "dividend", "distribution", "contribution", "commission", "sleep", "meal",
+        "travel", "itinerary", "game", "tour", "court", "hearing",
+    }
+)
+
+
 #: Every compiled pattern over the user's words (the linear-time pin reads it).
 ALL_PATTERNS: tuple[re.Pattern[str], ...] = (
     JARVIS_BACKUP, _SENTENCE, TO_MY_PHONE, SET_UP_TO_MESSAGE_ME, _EDITS_A_WEBHOOK, _EVERY_NEW, _STANDING, _MAIL, _MAIL_ARRIVES, WATCH_FOLDER,
     _ACTS_ON_ARRIVALS, _BUILTIN_AGENT, _LIMIT, _LIMIT_VERB, VOICE, INTERNET_CALLS_IN, _OUTBOUND,
+    USE_VENDOR, USE_PLAN, SET_UP_VENDOR,
 )

@@ -332,6 +332,21 @@ _LOCAL_MODEL_RULES = tuple(
         r"\b(?:which|what)\s+(?:local\s+|ollama\s+|offline\s+)?(?:ai\s+)?models?\s+(?:should|can|could|do)\s+"
         r"(?:i|we)\s+(?:download|pull|install)\b",
         r"\b(?:local|offline|ollama)\s+(?:ai\s+)?models?\b" + _GAP + r"\b(?:download|pull|install)\w*",
+        # v1.448.0 (Wave A "chat configures everything", A1): which local
+        # model THIS PC can run — "Which local models can run on this
+        # laptop?", "what offline model fits my PC", "can my laptop run a
+        # local model" (the guide "Local Models by RAM Tier" answers it).
+        # Never "which financial models can run on this laptop".
+        r"\b(?:which|what)\s+(?:(?:local|offline|ollama|open[\s-]?source|open[\s-]?weights?|small|free)\s+){1,2}"
+        r"(?:ai\s+|llm\s+|language\s+)?(?:models?|llms?)\s+(?:can|could|would|will|should|might)\s+"
+        r"(?:i\s+|we\s+)?(?:run|fit|work|use|load)\b[^.!?\n]{0,30}?\b(?:this|my|the|our)\s+"
+        r"(?:laptop|pc|computer|machine|desktop|gpu|hardware|rig|macbook|box)\b",
+        r"\b(?:which|what)\s+(?:(?:local|offline|ollama|open[\s-]?source|open[\s-]?weights?|small|free)\s+){1,2}"
+        r"(?:ai\s+|llm\s+|language\s+)?(?:models?|llms?)\s+(?:fits?|runs?|works?)\s+(?:on\s+)?(?:this|my|the|our)\s+"
+        r"(?:laptop|pc|computer|machine|desktop|gpu|hardware|rig|macbook|box)\b",
+        r"\b(?:can|could|will|would)\s+(?:this|my|the|our)\s+(?:laptop|pc|computer|machine|desktop|gpu|macbook)\s+"
+        r"run\s+(?:(?:a|an|any|some|which|what)\s+)?(?:local|offline|ollama|open[\s-]?source)\s+"
+        r"(?:ai\s+|llm\s+|language\s+)?(?:models?|llms?)\b",
     )
 )
 
@@ -366,8 +381,39 @@ _DESKTOP_RULES = tuple(
         + r"\b(?:and|then)\s+(?:click|type|enter|press|fill|select|navigate|scroll)\b",
         r"\b(?:desktop|windows|pc|computer|gui)\s+(?:automation|control)\b(?!\s+panel)",
         r"\bcomputer\s+use\b(?=" + _GAP + r"\b(?:desktop|windows|outside|programs?)\b)",
+        # v1.448.0 (Wave A "chat configures everything", A1): acting INSIDE a
+        # desktop program named as such — "Click the Submit button in the
+        # QuickBooks desktop app for me", "type the totals in the Excel app",
+        # "press Save in Lacerte" — or on the desktop itself ("click the icon
+        # on my desktop"). A web, mobile or phone app is not the desktop, and
+        # "use the desktop app" asks for nothing (no acting verb). The lane
+        # reads this reading first and arms no browser click for it
+        # (tools.autoselect.select_ask_tools).
+        r"\b(?:click|press|tap|double[\s-]?click|right[\s-]?click|type|enter|fill|select|choose|tick|check"
+        r"|uncheck|toggle|drag)\w*\b" + _GAP
+        + r"\b(?:in|on|inside|within|into)\s+(?:the|my|our|that|this)\s+"
+        r"(?:(?!(?:web|browser|mobile|phone|ios|android|online)\b)[\w.&'’-]+\s+){0,3}?"
+        r"(?:desktop\s+(?:app|application|program|version|client|software)|windows\s+(?:app|application|program)"
+        r"|(?:excel|word|outlook|quickbooks|powerpoint|teams|notepad|lacerte|ultratax|drake|proseries|photoshop"
+        r"|acrobat)\s+(?:app|application|window|program))\b",
+        r"\b(?:click|press|tap|double[\s-]?click|right[\s-]?click|type|enter|fill|select|choose|drag)\w*\b"
+        + _GAP + r"\b(?:in|inside|within)\s+(?:quickbooks\s+desktop|lacerte|ultratax|drake\s+(?:tax|software)"
+        r"|proseries|file\s+explorer|notepad|the\s+calculator)\b",
+        r"\b(?:click|press|tap|double[\s-]?click|right[\s-]?click|drag)\w*\b" + _GAP
+        + r"\b(?:on|from)\s+(?:my|the|this)\s+desktop\b" + _DESKTOP_NOUN_GUARD,
     )
 )
+
+
+def asks_desktop_control(text: Any) -> bool:
+    """Does the message ask Iron Jarvis to act on the Windows desktop (a thing
+    it does not offer)? Read by ``tools.autoselect.select_ask_tools`` so a
+    click asked for IN A DESKTOP PROGRAM never ask-arms a browser click (the
+    model would try the page tools on a program that is no page). Pure."""
+    try:
+        return any(r.search(_scan(text)) for r in _DESKTOP_RULES)
+    except Exception:  # noqa: BLE001 — a broken rule is no match
+        return False
 
 #: Opening Iron Jarvis's screens from another computer (not offered).
 _JARVIS_OBJ = (
@@ -650,6 +696,24 @@ STEPS: tuple[PageStep, ...] = (
         f"{_NOT_FOR_THEM}.",
     ),
     PageStep(
+        # v1.448.0 (Wave A "chat configures everything", A1): a CLOUD model
+        # vendor or plan asked to answer or to be set up ("Use Claude for this
+        # chat", "I have a ChatGPT Plus plan, can you use that?", "Set up
+        # Gemini", "Use OpenRouter for the big questions") — the one area a
+        # beginner most needs a door, and no chat tool connects these by
+        # itself: a plan signs in on its page, a key goes on the secure card.
+        # The local programs (Ollama, LM Studio) have model_server_add and are
+        # not read here (settings.setup_words.VENDOR). The default-model
+        # settings tools ride beside the door when the words ask for a change.
+        "model_provider", ACCOUNTS_HREF, "Open Connections to set up a model",
+        f"Connecting a model provider is done in {CONNECTIONS_PLACE}: a plan (Claude Code, Codex, Grok) signs "
+        "in there with its own Sign in button, in a terminal on this PC, in the user's own browser; an API key "
+        "(OpenAI, Anthropic, Google Gemini, OpenRouter, xAI, Mistral, DeepSeek) is pasted there, or on the "
+        "secure card that config_secret offers when it is in this reply (the key never reaches the chat's "
+        "model); the default model is then chosen there, or with config_set when it is offered. Iron Jarvis "
+        "cannot sign in to a plan or get a key for the user; say so plainly and point there.",
+    ),
+    PageStep(
         "local_model", help_href("local-models"), "Which local model to download",
         # Review: the first-run wizard is gone (an orphan module); the starter
         # model is offered by a NEW chat's connect doors while no model is set
@@ -684,6 +748,7 @@ _STEP_RULES: dict[str, Callable[[str], bool]] = {
     "slack_setup": _slack_setup,
     "email_rule_inbox": W.every_new_email,
     "browser_addon": _any(_BROWSER_RULES),
+    "model_provider": W.names_a_model_provider,
     "local_model": _any(_LOCAL_MODEL_RULES),
 }
 

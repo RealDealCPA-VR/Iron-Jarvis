@@ -856,8 +856,27 @@ REQUESTS: list[tuple[str, str]] = [
     ("remember things in Notion from now on", "memory_base_add"),
     ("set up a memory base in my notes folder", "memory_base_add"),
     ("save what you learn to my Obsidian vault", "memory_base_add"),
+    # v1.448.0 (Wave A "chat configures everything", A1): a program said to be
+    # RUNNING here with a use/connect cue; the memory pointed somewhere.
+    ("I'm running Ollama with llama3 on this PC, use it", "model_server_add"),
+    ("LM Studio is running on port 1234, connect to it", "model_server_add"),
+    ("I installed vLLM on this machine, point Jarvis at it", "model_server_add"),
+    ("Ollama is up on this PC, make it my default", "model_server_default"),
+    ("Point your long-term memory at my Obsidian vault in D:\\Notes", "memory_base_add"),
+    ("keep your memory in Notion", "memory_base_add"),
+    ("move your brain to the Notes folder", "memory_base_add"),
 ]
 NEAR_MISSES: list[str] = [
+    # v1.448.0 (Wave A, A1): a program running with no use asked, the
+    # opposite request, the memory words in their everyday senses.
+    "the Ollama logo is a llama",
+    "Ollama is running slow on my PC",
+    "I'm running Ollama on my laptop for fun",
+    "LM Studio is running on port 1234 but I don't want you to use it",
+    "use Ollama to summarize this file",
+    "my memory of the vault is hazy",
+    "put the memory card in the folder",
+    "use your memory to find the folder",
     "my LM Studio keeps crashing",
     "add a server to my Discord",
     "my second account at the bank",
@@ -964,6 +983,12 @@ bad = [
     "make " + "x " * 9000 + "default",
     "remember " + "things " * 2800 + "in notion",
     "1." * 9000 + "1:80",
+    "ollama " * 2800 + "is running, use it",
+    "i'm running ollama " + "x " * 9000 + " use it",
+    "running " * 2800 + "ollama on this pc, use it",
+    "point your memory " + "x " * 9000 + " at my vault",
+    "point your your your " * 2800 + "memory at my vault",
+    "keep your memory in " + "the x " * 4000 + " folder",
 ]
 t0 = time.perf_counter()
 for text in bad:

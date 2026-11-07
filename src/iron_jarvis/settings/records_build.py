@@ -1378,6 +1378,11 @@ _ADD_VERB = re.compile(
 #: "have it …" / "have Jarvis …" in front of the work ("have it update the
 #: README overnight") — a request, never the question "have it …?".
 _HAVE_IT = re.compile(r"^have\s+(?:it|jarvis|you|iron\s+jarvis)\s+", re.IGNORECASE)
+#: v1.448.0 (Wave A, A1): "have my coding sessions run with a reviewer…" —
+#: the sessions ordered about, at the head of the message.
+_HAVE_SESSIONS = re.compile(
+    r"^have\s+(?:(?:my|the|all|every|each|new)\s+){0,3}(?:coding|code|build)\s+sessions?\s+", re.IGNORECASE
+)
 _CODE_VERB = re.compile(
     r"(?:fix|update|refactor|write|clean\s+up|tidy|implement|migrate|upgrade|rewrite|document|test|lint|format"
     r"|rename|remove\s+dead|add\s+tests|add\s+types|bump|port)\b",
@@ -1419,6 +1424,18 @@ _NIGHT_LIST_ASK = re.compile(
     r"(?:queued|lined\s+up|waiting|on\s+(?:the\s+)?(?:night\s+shift|tonight['’]s)|tonight['’]s|night\s+shift|night\s+tasks?)",
     re.IGNORECASE,
 )
+#: v1.448.0 (Wave A "chat configures everything", A1): a NIGHT TIME in front
+#: of coding work — "Every night at 11 run the tests in C:\Projects\ClosePilot
+#: and fix what breaks" — is a night task beside the schedule the recurring
+#: time also offers (``settings.records``). Anchored at the clause's start,
+#: the time bounded; "the night shift at the hospital starts at 7" and "every
+#: night I run the tests" (the user's own evening) never read as one.
+_NIGHT_TIME = re.compile(
+    r"(?:(?:every|each)\s+(?:week)?night|nightly|every\s+evening|at\s+night|after\s+(?:hours|midnight"
+    r"|i\s+(?:go\s+to\s+)?(?:bed|sleep)))"
+    r"(?:\s*,?\s+(?:at|around|by|from)\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m\.?)?|midnight))?\s*,?\s*",
+    re.IGNORECASE,
+)
 
 
 def _clauses(text: str) -> list[str]:
@@ -1455,6 +1472,13 @@ def _night_request(c: str) -> bool:
     bare = _LEAD_NIGHT.sub("", _HAVE_IT.sub("", c, count=1), count=1)
     if night and _CODE_VERB.match(bare) and _CODE_THING.search(c) and not everyday:
         return True
+    # v1.448.0 (Wave A, A1): "every night at 11 run the tests in <path> …" —
+    # a night time, then the work (run / fix / update …) on a coding thing.
+    m_time = _NIGHT_TIME.match(c)
+    if m_time is not None and m_time.end() > 0 and not everyday:
+        timed = c[m_time.end():]
+        if (_ADD_VERB.match(timed) or _CODE_VERB.match(timed)) and _CODE_THING.search(timed):
+            return True
     m = _CANCEL_VERB.match(c)
     if (
         m is not None
@@ -1487,6 +1511,13 @@ _FOLDER_REF = (
     r"(?:(?:this|the|my|that|our)\s+(?:repo(?:sitory)?|folder|codebase|project\s+folder|checkout|workspace)"
     r"|[a-z]:[\\/][^\s,;]{0,240})"
 )
+#: v1.448.0 (Wave A, A1): the folder NAMED — "the ClosePilot folder", "my
+#: shop repo", "the Johnson project" (one or two words between the determiner
+#: and the noun; "project" counts only here, named).
+_NAMED_FOLDER_REF = (
+    r"(?:(?:this|the|my|that|our)\s+(?:[A-Za-z0-9_.'’-]+\s+){1,2}?"
+    r"(?:repo(?:sitory)?|folder|codebase|project|checkout|workspace))"
+)
 #: A model or coding tool by the name a person uses for it.
 _MODEL = (
     r"(?:codex|claude(?:\s+code)?|sonnet|opus|haiku|gpt[\w.-]{0,20}|chatgpt|gemini[\w.-]{0,20}|grok|opencode"
@@ -1511,7 +1542,13 @@ _DEFAULTS_SET = re.compile(
     # refuses Full access, each in its own words).
     + r"|(?:make|set|have|let|configure)\s+(?:build\s*(?:›|>|-)?\s*code|chat\s*(?:›|>)\s*code|the\s+code\s+view"
     r"|(?:my\s+|the\s+)?(?:new\s+)?(?:coding\s+)?sessions?)\s+(?:always\s+)?(?:use|start\s+with|default\s+to"
-    r"|run(?:\s+on)?|open\s+(?:with|in))\s+" + _MODEL + r"\b[^\n]{0,120}?\b(?:for|in|on)\s+" + _FOLDER_REF,
+    r"|run(?:\s+on)?|open\s+(?:with|in))\s+" + _MODEL + r"\b[^\n]{0,120}?\b(?:for|in|on)\s+" + _FOLDER_REF
+    # v1.448.0 (Wave A "chat configures everything", A1): the folder NAMED
+    # between its determiner and its noun, and "always" / "by default" in
+    # front of the model — "For the ClosePilot folder, always use Codex in
+    # Auto mode", "in the Johnson project, by default use Claude Code".
+    + r"|(?:in|for)\s+(?:" + _FOLDER_REF + r"|" + _NAMED_FOLDER_REF + r")\s*,?\s+(?:always\s+|by\s+default\s+)?"
+    r"(?:use|start\s+with|default\s+to|run(?:\s+on)?|go\s+with|open\s+(?:with|in))\s+" + _MODEL + r"\b",
     re.IGNORECASE,
 )
 _DEFAULTS_CLEAR = re.compile(
@@ -1533,7 +1570,22 @@ _TEAM_SET = re.compile(
     r"(?:use|set\s*up|make|give|add|start|form|create)\s+(?:a\s+|the\s+|my\s+)?(?:coding\s+|model\s+)?team\b"
     r"[^\n]{0,120}?\b(?:for|in|on)\s+" + _FOLDER_REF
     + r"|(?:make|set)\s+" + _MODEL + r"\s+(?:the\s+)?(?:reviewer|worker|writer)\b[^\n]{0,80}?\b(?:for|in|on)\s+" + _FOLDER_REF
-    + r"|(?:in|for)\s+" + _FOLDER_REF + r"\s*,?\s+(?:use\s+(?:a|the)\s+team|" + _MODEL + r"\s+" + _WRITES + r")\b",
+    + r"|(?:in|for)\s+" + _FOLDER_REF + r"\s*,?\s+(?:use\s+(?:a|the)\s+team|" + _MODEL + r"\s+" + _WRITES + r")\b"
+    # v1.448.0 (Wave A "chat configures everything", A1): a REVIEWER asked
+    # for the coding sessions without the word "team" — "Have my coding
+    # sessions run with a reviewer that checks every change", "add a code
+    # reviewer to my coding sessions", "have Claude review every change in
+    # my coding sessions". The sessions must be the CODING ones (never "the
+    # reviewer at the Times", never "have the reviewer check the sessions at
+    # the conference"; _PEOPLE_TEAM still guards).
+    + r"|(?:have|make|let|give|set\s+up|run|start)\s+(?:(?:my|the|all|every|each|new)\s+){0,3}(?:coding|code|build)\s+sessions?\b"
+    r"[^\n]{0,40}?(?:\b(?:with|use|using|get|have|include|add|run\s+with)\s+)?(?:(?:a|an|the|its|their|my)\s+)?"
+    r"(?:(?:code|second|separate|dedicated|automatic)\s+)?(?:reviewer|review\s+step|second\s+pair\s+of\s+eyes"
+    r"|" + _MODEL + r"\s+(?:as\s+)?(?:the\s+)?(?:reviewer|reviewing))\b"
+    + r"|(?:add|give|put|assign|attach)\s+(?:(?:a|an|the)\s+)?(?:code\s+)?reviewer\s+(?:to|on|for|into)\s+"
+    r"(?:(?:my|the|all|every|each|new)\s+){0,3}(?:coding|code|build)\s+sessions?\b"
+    + r"|(?:have|let|make)\s+" + _MODEL + r"\s+(?:review|check|look\s+over|vet)\s+(?:every|each|all|the|any)\s+"
+    r"(?:changes?|edits?|diffs?|commits?|code)\b[^\n]{0,60}?\b(?:(?:coding|code|build)\s+sessions?|" + _FOLDER_REF + r")",
     re.IGNORECASE,
 )
 _TEAM_CLEAR = re.compile(
@@ -1588,7 +1640,12 @@ def build_tools_for(text: str) -> list[str]:
         )
         if not (nightish or folderish):
             return out
-        question = R.is_question(t) and not (_HAVE_IT.match(t.strip()) and not t.rstrip().endswith("?"))
+        # "Have it…" / "Have my coding sessions…" (v1.448.0) at the head of a
+        # message with no "?" is an order, never the question "have my
+        # sessions…?" that records.is_question reads it as.
+        question = R.is_question(t) and not (
+            (_HAVE_IT.match(t.strip()) or _HAVE_SESSIONS.match(t.strip())) and not t.rstrip().endswith("?")
+        )
         clauses = _clauses(t)
         if nightish:
             asks_list = any(_NIGHT_LIST_ASK.match(c) for c in clauses) or (

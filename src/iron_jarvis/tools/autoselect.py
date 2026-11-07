@@ -1118,6 +1118,16 @@ _FEATURE_QUESTION = (
     # "what does the Code view do", "what is Chat › Code", "what is Build › Code for"
     + r"|what(?:\s+(?:is|does|are)|['’]s)\s+(?:the\s+)?(?:code\s+view|(?:chat|build)\s*›\s*code)"
     r"(?:\s+(?:for|do|used\s+for))?" + _FEATURE_HERE + _FEATURE_END
+    # v1.448.0 (Wave A "chat configures everything", A1): "Can you work with
+    # QuickBooks Online?", "do you connect to Xero?", "could you use Excel?"
+    # — a capability asked about a NAMED product (capitalised, up to four
+    # words), the sentence ending there. Never "can you work with me on
+    # this" (no product name) nor "can you use the QuickBooks data in this
+    # sheet" (a task, the sentence goes on).
+    + r"|(?:can|could|do|does|will|would)\s+(?:you|(?:iron\s*)?jarvis)\s+(?:(?:work|integrate|sync)\s+with"
+    r"|connect\s+(?:to|with)|talk\s+to|hook\s+(?:up\s+)?(?:to|with)|read\s+from|pull\s+from|post\s+to|support"
+    r"|use|access|read|handle|open)\s+(?:(?:my|our|the)\s+)?(?-i:[A-Z][\w.&'’-]*(?:\s+[A-Z0-9][\w.&'’-]*){0,3})"
+    r"(?:\s+(?:files?|data|accounts?|workspaces?|too|as\s+well|directly))?" + _FEATURE_HERE + _FEATURE_END
 )
 
 #: THE GUIDE RULE (v1.224.0; v1.353.0 G38; v1.360.0 lane 10B) — its pattern
@@ -3569,6 +3579,23 @@ def select_ask_tools(text: str, *, cap: int = 2) -> list[str]:
         if _rule_fires(rx, gates, msg, cutbox):
             for name, w in weights.items():
                 scores[name] = scores.get(name, 0) + w
+    # v1.448.0 (Wave A "chat configures everything", A1): a click, a press or
+    # typing asked for IN A DESKTOP PROGRAM ("click the Submit button in the
+    # QuickBooks desktop app for me") is no page action — the desktop reading
+    # (``daemon.page_doors.asks_desktop_control``, the one that gives the
+    # model its plain "not offered" line) wins, and no browser tool is
+    # ask-armed for it: an armed browser_click would send the model at a
+    # page that is not there. Imported here, not at the top: page_doors
+    # reaches connectors.app_names, which imports this module.
+    if any(n.startswith("browser_") for n in scores):
+        try:
+            from ..daemon.page_doors import asks_desktop_control
+
+            if asks_desktop_control(msg):
+                for name in [n for n in scores if n.startswith("browser_")]:
+                    del scores[name]
+        except Exception:  # noqa: BLE001 — a fault keeps the older arming
+            pass
     ranked = sorted(
         ((n, s) for n, s in scores.items() if n in ASK_TIER_TOOLS),
         key=lambda kv: (-kv[1], kv[0]),
