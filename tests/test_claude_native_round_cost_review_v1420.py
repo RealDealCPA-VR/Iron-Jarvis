@@ -151,12 +151,34 @@ def _one_call(url: str, timeout: float) -> Admission:
     return adm
 
 
+def _kept_call(url: str, timeout: float) -> Admission:
+    """The first call of a test that needs the connection KEPT: the relay
+    decides to keep it only after the CLI has read the whole answer, and a
+    close before that (a loaded runner, v1.442.0's Release gate) cancels the
+    keep, so the next call opens a new connection and the test proves
+    nothing. Wait for the pool to hold it before the call ends."""
+    import time
+
+    adm = Admission(url, timeout)
+    try:
+        _post(adm.url)
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            with adm_mod.POOL.lock:
+                if any(adm_mod.POOL.idle.values()):
+                    break
+            time.sleep(0.02)
+    finally:
+        adm.close()
+    return adm
+
+
 # --------------------------------------------------------------------------- #
 # 1. a request that may have reached the server is never sent again
 # --------------------------------------------------------------------------- #
 def test_a_kept_connection_that_times_out_after_the_request_is_not_sent_again(upstream):
     up = upstream(second="stall")
-    first = _one_call(up.url, 10.0)
+    first = _kept_call(up.url, 10.0)
     assert first.status == 200 and up.connections == 1
     second = _one_call(up.url, 0.5)  # the kept connection: the server reads it and stalls
     up.release.set()
@@ -169,8 +191,9 @@ def test_a_kept_connection_that_times_out_after_the_request_is_not_sent_again(up
 
 def test_a_garbled_answer_on_a_kept_connection_is_not_sent_again(upstream):
     up = upstream(second="garble")
-    assert _one_call(up.url, 10.0).status == 200
+    assert _kept_call(up.url, 10.0).status == 200
     second = _one_call(up.url, 5.0)
+    assert up.connections == 1, "the second call must ride the kept connection, or nothing is tested"
     assert len(up.hits) == 2, (
         "the server read the request and answered (badly): it must not be re-sent "
         f"({len(up.hits)} upstream requests)"
@@ -181,7 +204,7 @@ def test_a_garbled_answer_on_a_kept_connection_is_not_sent_again(upstream):
 def test_a_kept_connection_that_was_closed_is_still_replaced_once(monkeypatch, upstream):
     """The control: the keep-alive race (closed under the request) keeps its one retry."""
     up = upstream()
-    assert _one_call(up.url, 10.0).status == 200
+    assert _kept_call(up.url, 10.0).status == 200
     with adm_mod.POOL.lock:
         kept = [conn for v in adm_mod.POOL.idle.values() for conn, _ in v]
     assert len(kept) == 1

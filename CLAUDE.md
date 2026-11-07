@@ -15380,6 +15380,17 @@ does not need a bump, stop and bump it.
     `tests/test_wave7_{gaps,review,theme_colors,theme_colors_review,approvals_help}_v14420.py`,
     `dashboard/__tests__/wave7-theme-colors{,-review}-v1442.test.tsx`; moved
     on purpose: arming-table and page-door rows (+ the page-doors fixture).
+  - v1.442.0 WAS NOT PUBLISHED (its Release gate went red on one shard,
+    Tests green; v1.442.1 ships it): `test_claude_native_round_cost_review_
+    v1420`'s garbled-answer test read `failure` None. The relay decides to
+    KEEP a connection only after the CLI has read the whole answer, and the
+    test closed the first call at once: on the loaded runner the close's
+    abort landed first, nothing was kept, the second call opened a NEW
+    connection the fake answered normally. `_kept_call` waits for the pool
+    to hold it (and the garble test asserts one connection), for all three
+    keep-dependent tests. Reproduced by holding the relay 0.4 s at its
+    `last_byte` stamp: the old shape gave the gate's exact error. A test that
+    needs a pooled connection waits for the pool, never for the answer.
 
 ## Map (where things live)
 
