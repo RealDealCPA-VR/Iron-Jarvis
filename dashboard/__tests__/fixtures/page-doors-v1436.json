@@ -125,6 +125,13 @@
       },
       {
         "door": {
+          "href": "/connections",
+          "label": "Open Connections to set up a model"
+        },
+        "id": "model_provider"
+      },
+      {
+        "door": {
           "href": "/help?guide=local-models",
           "label": "Which local model to download"
         },

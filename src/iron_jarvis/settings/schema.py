@@ -266,10 +266,12 @@ S = SettingDef
 SETTINGS: tuple[SettingDef, ...] = (
     # ---------------------------------------------------------------- models
     S("default_provider", "Default provider", "models", "string",
-      "The AI service used when a chat doesn't pick one. Manage accounts and keys under Connections.",
+      "The AI service used when a chat doesn't pick one. Manage accounts and keys under Connections. "
+      "One chat can pick its own model from the model menu above the message box without changing this.",
       tier="ask", aliases=("ai provider", "which ai", "default ai"), placeholder="anthropic"),
     S("default_model", "Default model", "models", "string",
-      "The model that answers by default.", tier="allow",
+      "The model that answers by default. One chat can pick its own model from the model menu above "
+      "the message box without changing this.", tier="allow",
       aliases=("model", "default model", "which model", "use model"), placeholder="claude-opus-4-8"),
     # v1.358.0 (lane 8E, readiness M): the label in plain words; the help
     # names the word the chat's own menu uses ("Persona"). Key unchanged.

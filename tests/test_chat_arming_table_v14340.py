@@ -450,11 +450,146 @@ REVIEW_NEGATIVES: list[str] = [
     "add a goal line to the chart",
 ]
 
+# ---------------------------------------------------------------------------
+# v1.448.0 (Wave A "chat configures everything", A1): MODEL AND PROVIDER WORDS
+# reach a tool, and the Wave-4 record tools take everyday nouns. The 38-sentence
+# re-audit probe (docs/PRODUCT-READINESS-LANES-v1447.md, lane F-K) found each
+# request below arming nothing, or only the settings reader.
+# ---------------------------------------------------------------------------
+MS = ("model_server_add", "model_server_default")
+WAVE_A_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
+    # A cloud vendor or plan asked to answer: the default-provider / default-
+    # model rows (settings.setup_words.USE_VENDOR / USE_PLAN / SET_UP_VENDOR).
+    ("Use Claude for this chat instead of the default.", SET, (S,)),
+    ("I have a ChatGPT Plus plan, can you use that to answer?", SET, (S,)),
+    ("Set up Gemini so I can try Google's model.", SET, (S,)),
+    ("Use OpenRouter for the big questions.", SET, (S,)),
+    ("switch to Gemini from now on", SET, (S,)),
+    ("answer with GPT-5 for all my chats", SET, (S,)),
+    ("try Google's model for my questions", SET, (S,)),
+    ("enable Grok for this chat", SET, (S,)),
+    ("we pay for Claude Max, use it to answer", SET, (S,)),
+    ("Use Claude Sonnet 4.5 for this conversation.", SET, (S,)),
+    # A local program said to be RUNNING here (records_connections): the
+    # model server tools; "connect to it" also reads as an app's connect.
+    ("I'm running Ollama with llama3 on this PC, use it.", MS, (S,)),
+    ("LM Studio is running on port 1234, connect to it.", MS, (S, AP)),
+    ("I installed vLLM on this machine, point Jarvis at it", MS, (S,)),
+    # The Wave-4 tools by their everyday nouns.
+    (r"Point your long-term memory at my Obsidian vault in D:\Notes.", ("memory_base_add",), ()),
+    ("keep your memory in Notion", ("memory_base_add",), (AP,)),
+    ("For the ClosePilot folder, always use Codex in Auto mode.", ("build_defaults_set",), ()),
+    # "by default" + the Claude Code option also reads as the default-model
+    # setting (the trigger's older two-word-option rule) — a real neighbour.
+    ("in the Johnson project, by default use Claude Code", ("build_defaults_set",), (S,)),
+    ("Have my coding sessions run with a reviewer that checks every change.", ("build_team_set",), ()),
+    ("add a code reviewer to my coding sessions", ("build_team_set",), ()),
+    ("have Claude review every change in my coding sessions", ("build_team_set",), ()),
+    # A night TIME before coding work: the night task beside the schedule.
+    (r"Every night at 11 run the tests in C:\Projects\ClosePilot and fix what breaks.",
+     ("night_task_add", "schedule_create"), (SC,)),
+    ("every night at 10pm fix the failing tests in this repo", ("night_task_add", "schedule_create"), (SC,)),
+    # --- the A1 REVIEW's own sentences (a first-time CPA-firm user).
+    ("Can you use my Claude Max plan for everything from now on?", SET, (S,)),
+    ("Please switch to ChatGPT for this conversation.", SET, (S,)),
+    ("I'd like you to answer with Gemini by default.", SET, (S,)),
+    # A vendor's own key named after it ("Anthropic API key"); "connect my
+    # …" also reads as an app's connect (older).
+    ("Connect my Anthropic API key so you can use Claude.", SET, (S, AP)),
+    ("Use OpenRouter from now on.", SET, (S,)),
+    ("Set up Grok so I can try xAI's model.", SET, (S,)),
+    ("I have Ollama installed on this laptop with mistral, talk to it.", MS, ()),
+    ("LM Studio's running on this PC on port 1234, make it my default.", MS, ()),
+    (r"Keep your memory in my Obsidian vault at E:\Vault from now on.", ("memory_base_add",), (S,)),
+    ("In the Acme repo, always start with Claude Code in Auto mode.", ("build_defaults_set",), ()),
+    ("For my ClosePilot checkout, by default go with Codex.", ("build_defaults_set",), ()),
+    ("Have every coding session include a reviewer.", ("build_team_set",), ()),
+    ("Give my code sessions a dedicated reviewer, please.", ("build_team_set",), ()),
+    (r"Every weeknight at 11pm run the test suite in D:\Firm\Portal and fix what fails.",
+     ("night_task_add",), (SC,)),
+    ("Nightly at midnight, update the dependencies in this repo.", ("night_task_add",), (SC,)),
+    ("Set the night shift to start at 10pm.", SET, (S,)),
+    # records.is_question (review): "Have <thing> …" with no "?" is an ORDER —
+    # it was read as the question "have my …?" and every record writer was
+    # dropped (only the build tools had their own guard).
+    ("Have my Slack destination send me the alerts too", ("channel_toggle",), (CH, AP)),
+    ("Have the nightly schedule skip weekends", ("schedule_update",), (SC,)),
+]
+WAVE_A_NEGATIVES: list[str] = [
+    # The vendor's name in another sense, or with no request.
+    "Claude Monet painted water lilies, tell me about them.",
+    "my ChatGPT history is long",
+    "Gemini is my star sign",
+    "the Ollama logo is a llama",
+    "a port of the game to Windows",
+    "the Google model of management",
+    "use the Google model of management for the memo",
+    "use Claude Code to refactor my repo",
+    "use Claude for this",
+    "try Gemini on this spreadsheet",
+    "Anthropic published a new paper, summarize it",
+    "OpenAI's stock is not public",
+    # The Wave-4 nouns in their everyday senses.
+    "my memory of the vault is hazy",
+    "put the memory card in the folder",
+    "the night shift at the hospital starts at 7",
+    "every night I run the tests before bed",
+    # ("Every night at 11 run the dishwasher" is a recurring time, so the
+    # older schedule shape still offers a schedule for it — it is a night-TASK
+    # near-miss only, pinned in tests/_records_build_table_v14380.py.)
+    "the reviewer at the Times panned my book",
+    "have the reviewer check the sessions at the conference",
+    "for the Johnson folder, use the 2024 template",
+    # A CPA's schedule is nobody's automation.
+    "Remind me how depreciation schedules work for a vehicle.",
+    "my payment schedule shows twelve installments",
+    "the client's depreciation schedule is in the workpapers",
+    "what does the amortization schedule show for year 3",
+    # A program said to be running, with no use asked.
+    "Ollama is running slow on my PC",
+    "I'm running Ollama on my laptop for fun",
+    # --- the A1 REVIEW's own near-misses (tax and office vocabulary).
+    "Claude Monet's water lilies would make a good office print, tell me about the series.",
+    "The Gemini twins in my family both file jointly, how does that work?",
+    "My ChatGPT history is full of tax questions; summarize what I usually ask.",
+    "The Ollama office downtown is hiring a bookkeeper.",
+    "Any port in a storm, as my first boss used to say.",
+    "The reviewer at the Times called the firm's newsletter dull.",
+    "Pull the depreciation schedule for the Acme truck from the workpapers.",
+    "The night shift at the hospital starts at 7, so the client files late.",
+    "Let's run the numbers tonight before the client call.",
+    "Save the PDF on my desktop.",
+    "Click Submit in QuickBooks Online to file the 941.",
+    "Open Excel and sum column D for me.",
+    "My memory of the vault combination is gone, where did we write it down?",
+    "Use Claude Code to refactor the ClosePilot repo tonight.",
+    "I used Gemini last year and hated it.",
+    "What's the difference between the Claude plans?",
+    "The Google model of management is what our partner follows.",
+    "Our payment schedule with the IRS is twelve installments.",
+    "Every night I run the tests in my head before bed.",
+    "The reviewer flagged the sessions at the conference as too long.",
+    "Add Gemini to the comparison sheet of AI vendors.",
+    "Type the formula in Excel: =SUM(D2:D40).",
+    "The Acme return is in the folder on my desktop, read it.",
+    "Port the depreciation macro to Python.",
+    "I'm running late, Ollama can wait.",
+    "Point me to the vault folder with the Johnson files.",
+    "Claude, summarize this engagement letter.",
+    "The ChatGPT article in the Times was interesting, summarize the key points.",
+    # The vendor shapes' edges: a task "for answers to …", a vendor's account
+    # put into the user's content, a real question with "have".
+    "use GPT for answers to client emails",
+    "add my OpenAI account to the vendor list",
+    "Have my files been backed up",
+    "Have we got the engagement letter yet",
+]
+
 
 def _all_rows():
     return (
-        SETTINGS_ROWS + RECORD_ROWS + SETUP_ROWS + REVIEW_ROWS
-        + [(t, (), ()) for t in NEGATIVE_ROWS + REVIEW_NEGATIVES]
+        SETTINGS_ROWS + RECORD_ROWS + SETUP_ROWS + REVIEW_ROWS + WAVE_A_ROWS
+        + [(t, (), ()) for t in NEGATIVE_ROWS + REVIEW_NEGATIVES + WAVE_A_NEGATIVES]
     )
 
 
@@ -522,9 +657,86 @@ def test_the_reviews_requests_arm_the_right_tool(d):
     assert _failures(d, REVIEW_ROWS) == []
 
 
+def test_wave_a_model_words_and_everyday_nouns_arm_the_right_tool(d):
+    """v1.448.0 (Wave A, A1). MUTATION (each red): drop USE_VENDOR / USE_PLAN
+    / SET_UP_VENDOR from trigger._EXTRA_REFERENCES -> the vendor rows lose
+    SET; drop records_connections' running-brand branch -> the Ollama / LM
+    Studio rows lose model_server_add; drop the new _MEMORY_RULES row, the
+    named-folder _DEFAULTS_SET alternative, the reviewer _TEAM_SET
+    alternatives or _NIGHT_TIME -> their rows lose the tool."""
+    assert _failures(d, WAVE_A_ROWS) == []
+    assert len(WAVE_A_ROWS) >= 20 and len(WAVE_A_NEGATIVES) >= 20
+    # …and the near-misses arm none of the Wave-4 record writers either (they
+    # are outside FAMILIES, so the general negative test cannot see them).
+    wave4 = {
+        "model_server_add", "model_server_default", "model_server_remove", "account_add", "memory_base_add",
+        "night_task_add", "night_task_cancel", "night_task_move",
+        "build_defaults_set", "build_defaults_clear", "build_team_set", "build_team_clear",
+    }
+    bad = []
+    for text in WAVE_A_NEGATIVES:
+        armed, ask = lanes(d, text)
+        stray = sorted((set(armed) | set(ask)) & (WRITERS | wave4))
+        if stray:
+            bad.append((text, stray))
+    assert bad == []
+
+
+def test_a_click_in_a_desktop_program_ask_arms_no_browser_tool(d):
+    """v1.448.0 (Wave A, A1): the desktop reading wins — the stream lane's ask
+    tier offers no browser click for a desktop program (the model would try
+    the page tools on a program that is no page); a page click keeps it."""
+    for text in (
+        "Click the Submit button in the QuickBooks desktop app for me.",
+        "type the totals in the Excel app and press Save",
+        "double-click the icon on my desktop",
+    ):
+        armed, ask = lanes(d, text)
+        assert not [t for t in armed + ask if t.startswith("browser_")], (text, armed, ask)
+        assert not [t for t in select_ask_tools(text) if t.startswith("browser_")], text
+    assert "browser_click" in select_ask_tools("click the Buy button on the checkout page")
+    assert "browser_click" in select_ask_tools('click "Submit" on the form in Chrome')
+    # Review: a click that names the web keeps its browser tool, and a web
+    # app's button is no desktop program.
+    assert "browser_click" in select_ask_tools("click Submit on the IRS website in my browser")
+    from iron_jarvis.daemon.page_doors import asks_desktop_control
+
+    assert not asks_desktop_control("click Submit on the IRS website in my browser")
+    assert not asks_desktop_control("Click Submit in QuickBooks Online to file the 941.")
+
+
+def test_have_orders_are_not_questions():
+    """v1.448.0 (A1 review): ``records.is_question`` read every "Have <thing>
+    …" as the question "have my …?", so "Have my Slack destination send me
+    the alerts too" and "Have the nightly schedule skip weekends" lost their
+    writers (the build tools had their own guard). An order has no "?" and
+    no perfect-tense word; a real question keeps one or the other. MUTATION
+    (red): drop the ``_HAVE_ORDER_HEAD`` branch."""
+    from iron_jarvis.settings.records import is_question
+
+    for order in (
+        "Have my coding sessions run with a reviewer that checks every change.",
+        "Have my Slack destination send me the alerts too",
+        "Have the nightly schedule skip weekends",
+        "have the Johnson project archived",
+        "Have the new persona write formally",
+    ):
+        assert not is_question(order), order
+    for question in (
+        "Have my files been backed up",
+        "Have we got the engagement letter yet",
+        "Have the night tasks run yet",
+        "Have the tests passed",
+        "Have my recent chats been saved?",
+        "Have my coding sessions run with a reviewer?",
+        "have you seen the Johnson file?",
+    ):
+        assert is_question(question), question
+
+
 def test_no_ordinary_sentence_arms_a_settings_or_record_writer(d):
     bad = []
-    for text in NEGATIVE_ROWS + REVIEW_NEGATIVES:
+    for text in NEGATIVE_ROWS + REVIEW_NEGATIVES + WAVE_A_NEGATIVES:
         armed, ask = lanes(d, text)
         stray = sorted((set(armed) | set(ask)) & WRITERS)
         if stray:

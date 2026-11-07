@@ -58,6 +58,7 @@ def test_the_record_and_settings_matchers_are_linear_on_pathological_text():
         import time
         from iron_jarvis.settings import records as R, trigger as T
         from iron_jarvis.connectors import app_names as A
+        from iron_jarvis.tools import autoselect as AS
         N = 200_000
         R.record_tools_for("warm up")
         cases = [
@@ -69,6 +70,14 @@ def test_the_record_and_settings_matchers_are_linear_on_pathological_text():
             ("names", lambda: R.record_tools_for("run the " * (N // 8),
                 workflow_names=[f"flow number {i}" for i in range(500)])),
             ("settings", lambda: T._cue_positions("use " * (N // 4), [])),
+            # v1.448.0 (Wave A, A1): the before-word read of a schedule noun,
+            # the vendor shapes, the "can you work with X" feature question
+            # and the desktop reading in the ask tier.
+            ("schedules", lambda: R.record_tools_for("depreciation schedules " * (N // 23))),
+            ("vendor", lambda: T.settings_ask("use claude " + "x " * (N // 2))),
+            ("vendor2", lambda: T.settings_ask("use " * (N // 4) + "claude for this chat")),
+            ("guide", lambda: AS._guide_fires("can you work with " + "X " * (N // 2))),
+            ("desktop", lambda: AS.select_ask_tools("click " + "x " * (N // 2) + "in the quickbooks desktop app")),
         ]
         for name, fn in cases:
             t0 = time.perf_counter(); fn()
@@ -79,7 +88,7 @@ def test_the_record_and_settings_matchers_are_linear_on_pathological_text():
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
     )
     assert out.returncode == 0, out.stderr[-2000:]
-    assert out.stdout.count("\n") == 7, out.stdout
+    assert out.stdout.count("\n") == 12, out.stdout
 
 
 def test_the_cue_finder_reads_the_message_once():

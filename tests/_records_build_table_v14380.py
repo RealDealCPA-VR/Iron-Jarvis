@@ -6,6 +6,13 @@ from __future__ import annotations
 
 #: Each must arm the WHOLE night family (queue, cancel, move, list).
 NIGHT_REQUESTS = [
+    # v1.448.0 (Wave A "chat configures everything", A1): a night TIME in
+    # front of coding work.
+    "Every night at 11 run the tests in C:\\Projects\\ClosePilot and fix what breaks",
+    "every night at 10pm fix the failing tests in this repo",
+    "nightly, run the lint in D:\\code\\shop",
+    "Every weeknight at 11pm run the test suite in D:\\Firm\\Portal and fix what fails",
+    "Nightly at midnight, update the dependencies in this repo",
     "Queue 'update the README' for tonight",
     "queue up a task for tonight: fix the failing tests in D:\\code\\shop",
     "please queue 'write tests for cart.py' for the night shift",
@@ -79,6 +86,21 @@ FOLDER_REQUESTS = [
     "go solo in this repo",
     "please set the default tool for this folder to Codex",
     "I want to use Codex for this repo",
+    # v1.448.0 (Wave A "chat configures everything", A1): the folder NAMED and
+    # "always" in front of the model; a REVIEWER asked for the coding sessions
+    # without the word "team".
+    "For the ClosePilot folder, always use Codex in Auto mode",
+    "in the Johnson project, by default use Claude Code",
+    "for my shop repo, always start with Sonnet",
+    "Have my coding sessions run with a reviewer that checks every change",
+    "add a code reviewer to my coding sessions",
+    "have Claude review every change in my coding sessions",
+    "give my build sessions a second pair of eyes",
+    # The A1 review's own.
+    "In the Acme repo, always start with Claude Code in Auto mode",
+    "For my ClosePilot checkout, by default go with Codex",
+    "Have every coding session include a reviewer",
+    "Give my code sessions a dedicated reviewer, please",
 ]
 
 #: Questions: only the readers (``night_task_list`` / ``build_folder_show``).
@@ -162,4 +184,21 @@ NEAR_MISSES = [
     "use the default for now",
     "At work, Codex writes the code and Claude reviews it",
     "my coworkers say Claude reviews better than Codex writes",
+    # v1.448.0 (Wave A, A1): a person's night, a person's reviewer, another
+    # kind of folder request.
+    "the night shift at the hospital starts at 7",
+    "every night I run the tests before bed",
+    "Every night at 11 run the dishwasher",
+    "every night at 10 the tests run in CI",
+    "the reviewer at the Times panned my book",
+    "have the reviewer check the sessions at the conference",
+    "for the Johnson folder, use the 2024 template",
+    "my coding sessions are getting long",
+    # The A1 review's own.
+    "The reviewer at the Times called the firm's newsletter dull",
+    "The night shift at the hospital starts at 7, so the client files late",
+    "Let's run the numbers tonight before the client call",
+    "Every night I run the tests in my head before bed",
+    "The reviewer flagged the sessions at the conference as too long",
+    "Use Claude Code to refactor the ClosePilot repo tonight",
 ]

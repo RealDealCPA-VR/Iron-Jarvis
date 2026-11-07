@@ -325,8 +325,15 @@ _EXTRA_REFERENCES: tuple[re.Pattern[str], ...] = tuple(
         # "enable reading files in my Documents folder only", "only let
         # Jarvis read my Documents folder".
         r"\bread(?:ing)?\s+(?:files\s+)?(?:in|from)\s+(?:my\s+)?[\w\s]{0,20}?folders?\s+only\b",
-        # "start night tasks at 22:00", "night shift at 10pm".
-        r"\bnight\s+(?:tasks?|shift)\b[^.?!\n]{0,30}?\b(?:at|from|until|till)\s+\d",
+        # "start night tasks at 22:00", "night shift at 10pm", "set the night
+        # shift to start at 10pm". v1.448.0 (Wave A, A1): a request VERB or
+        # the night words as the SUBJECT of starting — "the night shift at
+        # the hospital starts at 7" is a person's shift, never a setting.
+        r"\b(?:start|run|begin|schedule|set|move|shift|make|have|let|change|switch|put|kick\s+off)\b"
+        r"[^.?!\n]{0,24}?\bnight\s+(?:tasks?|shift)\b[^.?!\n]{0,30}?\b(?:at|from|until|till|to)\s+\d",
+        r"\bnight\s+(?:tasks?|shift)\b\s+(?:should\s+|to\s+|can\s+|could\s+|may\s+)?(?:start|begin|run|end|stop|kick\s+off)s?\b"
+        r"[^.?!\n]{0,20}?\b(?:at|from|until|till)\s+\d",
+        r"(?:^|[.!?;:,\n])\s*(?:please\s+)?night\s+(?:tasks?|shift)\s+(?:at|from)\s+\d",
         # "use Docker for running commands", "run commands in Docker".
         r"\b(?:use|run\b[^.?!\n]{0,20}?\bin|inside)\s+docker\b",
         # "back up to my D drive too", "copy my backups to E:\Backups".
@@ -345,6 +352,19 @@ _EXTRA_REFERENCES: tuple[re.Pattern[str], ...] = tuple(
     # (settings.setup_words); both linear.
     _W.JARVIS_BACKUP,
     _W.WATCH_FOLDER,
+    # v1.448.0 (Wave A "chat configures everything", A1): a model VENDOR or
+    # PLAN asked to answer — "Use Claude for this chat instead of the
+    # default", "I have a ChatGPT Plus plan, can you use that to answer?",
+    # "Set up Gemini so I can try Google's model", "Use OpenRouter for the
+    # big questions" (each armed nothing before). The default-provider /
+    # default-model rows are what change; a key still goes only on the secure
+    # card. Never "use Claude Code to refactor my repo" (work handed over),
+    # "Claude Monet painted…", "my ChatGPT history is long", "Gemini is my
+    # star sign", "the Google model of management" (no request, or not the
+    # vendor). One definition each (settings.setup_words); all linear.
+    _W.USE_VENDOR,
+    _W.USE_PLAN,
+    _W.SET_UP_VENDOR,
 )
 
 #: Settings-shaped words that have NO row of their own (a per-chat switch, a

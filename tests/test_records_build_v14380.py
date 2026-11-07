@@ -187,6 +187,14 @@ def test_the_matchers_are_linear_on_pathological_text():
             "have it " * 5000 + "fix the tests overnight",
             "please " * N + "queue it for tonight",
             "i want to " * 5000 + "queue it",
+            # v1.448.0 (Wave A, A1): the night time, the named folder, the reviewer.
+            "every night " * 4000 + "run the tests",
+            "every night at 11 " + "x " * N + " run the tests",
+            "for the " + "x " * N + " folder, always use codex",
+            "for the x " * 5000 + "folder, always use codex",
+            "have my coding sessions " + "x " * N + " with a reviewer",
+            "have my my my " * 5000 + "coding sessions run with a reviewer",
+            "have claude review every change " + "x " * N + " in my coding sessions",
         ]
         t0 = time.perf_counter()
         for c in cases:

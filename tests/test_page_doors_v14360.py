@@ -138,6 +138,26 @@ DOOR_ROWS: list[tuple[str, str]] = [
     ("connect Slack for my notifications", "slack_setup"),
     ("Create a workflow that drafts a reply to every new email from a client.", "email_rule_inbox"),
     ("whenever a new email comes in from a client, start an intake session", "email_rule_inbox"),
+    # v1.448.0 (Wave A "chat configures everything", A1): a cloud model
+    # vendor or plan asked to answer or to be set up — the door to Settings ›
+    # Connections (settings.setup_words.names_a_model_provider); and which
+    # local model THIS PC can run.
+    ("Use Claude for this chat instead of the default.", "model_provider"),
+    ("I have a ChatGPT Plus plan, can you use that to answer?", "model_provider"),
+    ("Set up Gemini so I can try Google's model.", "model_provider"),
+    ("Use OpenRouter for the big questions.", "model_provider"),
+    ("switch to Grok from now on", "model_provider"),
+    ("connect my OpenAI key", "model_provider"),
+    ("Which local models can run on this laptop?", "local_model"),
+    ("what offline model fits my PC", "local_model"),
+    ("can my laptop run a local model", "local_model"),
+    # The A1 review's own: a vendor's key named after it, a plan for
+    # everything, a conversation; the local-model question in two more shapes.
+    ("Connect my Anthropic API key so you can use Claude.", "model_provider"),
+    ("Can you use my Claude Max plan for everything from now on?", "model_provider"),
+    ("Please switch to ChatGPT for this conversation.", "model_provider"),
+    ("Which small open-source models would run on my PC?", "local_model"),
+    ("Could my desktop run a local LLM?", "local_model"),
 ]
 
 #: (sentence, the thing it asks for that Iron Jarvis does not offer)
@@ -168,6 +188,13 @@ LINE_ROWS: list[tuple[str, str]] = [
     ("can I talk to you out loud instead of typing?", "voice_press"),
     ("Set up a webhook so Zapier can start a task.", "internet_calls_in"),
     ("let IFTTT trigger a run when I get home", "internet_calls_in"),
+    # v1.448.0 (Wave A, A1): acting INSIDE a desktop program named as such.
+    ("Click the Submit button in the QuickBooks desktop app for me.", "desktop_control"),
+    ("type the totals in the Excel app and press Save", "desktop_control"),
+    ("press Save in Lacerte for me", "desktop_control"),
+    ("double-click the icon on my desktop", "desktop_control"),
+    ("Click Save in the QuickBooks desktop app for me.", "desktop_control"),
+    ("Press the Submit button inside Lacerte.", "desktop_control"),
 ]
 
 #: Everyday sentences that must name NOTHING (no door, no line).
@@ -243,6 +270,41 @@ NEAR_MISSES: list[str] = [
     "is Zapier better than IFTTT?",
     "send my events to Zapier with a webhook",
     "give Sam full access to this repo",
+    # v1.448.0 (Wave A, A1): a vendor's name in another sense, a local program
+    # (its own chat tool), the desktop words with no acting verb, a web app.
+    "Claude Monet painted water lilies",
+    "my ChatGPT history is long",
+    "Gemini is my star sign",
+    "the Google model of management",
+    "use Claude Code to refactor my repo",
+    "use Claude for this",
+    "try Gemini on this spreadsheet",
+    "Anthropic published a new paper, summarize it",
+    "I'm running Ollama with llama3 on this PC, use it.",
+    "add my DGX Spark at http://192.168.1.50:8000 as a model server",
+    "which financial models can run on this laptop",
+    "download the financial model to my laptop",
+    "type the formula in Excel",
+    "click Submit in the web app",
+    "select the cells in the Excel sheet",
+    "open the QuickBooks file on my desktop",
+    # The A1 review's own: a vendor addressed or in passing, a web app's
+    # button, a program opened (no acting verb inside it), the PC's desktop
+    # folder, the vendor shapes' edges.
+    "Claude, summarize this engagement letter.",
+    "The ChatGPT article in the Times was interesting, summarize the key points.",
+    "The Gemini twins in my family both file jointly, how does that work?",
+    "What's the difference between the Claude plans?",
+    "Click Submit in QuickBooks Online to file the 941.",
+    "click Submit on the IRS website in my browser",
+    "Open Excel and sum column D for me.",
+    "Save the PDF on my desktop.",
+    "The Acme return is in the folder on my desktop, read it.",
+    "use GPT for answers to client emails",
+    # ("add my OpenAI account to the vendor list" and "set up my Claude
+    # account for my brother" reach no model_provider door, but the OLDER
+    # "accounts" step (v1.436.0) still answers them — pinned as arming
+    # near-misses in test_chat_arming_table_v14340.py, open here.)
 ]
 
 
