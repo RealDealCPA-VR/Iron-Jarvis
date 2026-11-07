@@ -28,7 +28,11 @@ from iron_jarvis.daemon.app import create_app
 
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch):
-    monkeypatch.setattr(settings_routes, "_RESTORE_RETRY_S", 0.0)
+    # v1.443.0 (test-only): the retry pause keeps its REAL value. With 0.0 the
+    # real restore after the fake refusals had no patience at all, and a
+    # background task holding the WAL for a few milliseconds on a loaded CI
+    # runner failed every attempt in one instant (Tests gate, 2026-11-07:
+    # "the database is still held open"). The product waits ~2 s; so does this.
     monkeypatch.setattr(app_mod, "_graceful_stop", lambda: None)
 
 
