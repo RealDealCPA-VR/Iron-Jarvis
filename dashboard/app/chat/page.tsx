@@ -252,6 +252,15 @@ import { HomeLine } from "@/components/chat/HomeLine";
 import { ChatMoreMenu } from "@/components/chat/ChatMoreMenu";
 import { ChatUsageLine } from "@/components/chat/ChatUsageLine";
 import { ProjectDrawer } from "@/components/chat/ProjectDrawer";
+import { ChatFolderChip } from "@/components/chat/ChatFolderChip";
+import { FolderChip, useFolderPicker } from "@/components/folders/FolderChip";
+import {
+  CHAT_NO_FOLDER_TITLE,
+  CLEAR_CHAT_FOLDER_TITLE,
+  chatFolderTitle,
+  checkChatFolder,
+  pickLeavesProject,
+} from "@/lib/chatFolder";
 import {
   PANEL_GHOST,
   PANEL_SELECT,
@@ -3859,7 +3868,20 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       /* keep the default */
     }
   }, []);
-  const [pickingFolder, setPickingFolder] = useState(false); // "change folder"
+  // v1.443.0: what the daemon said about the folder picked last (its path, so
+  // the words never outlive the folder they are about), and the pick's turn
+  // (a later pick, a clear or leaving the conversation drops an older answer).
+  const [folderProblem, setFolderProblem] = useState<{ path: string; problem: string } | null>(null);
+  const folderCheckSeqRef = useRef(0);
+  // v1.443.0: Build › Code's own folder picker (Windows' picker in the desktop
+  // app, the app's folder tree in a browser), ONE for the whole page: the
+  // folder chips, "+ Choose a working folder" and the drawer's Change all
+  // open it, and every pick lands in pickChatFolder.
+  const chatFolderPicker = useFolderPicker({
+    folder: workspaceDir,
+    onPick: (path) => pickChatFolder(path),
+    testId: "chat-folder",
+  });
   // v1.329.0 (calm chat W4 F6): the drawer's Terminal button. A new Build
   // terminal in the folder, then Build focused on it.
   const folderTerminal = useOpenTerminal(workspaceDir);
@@ -5329,10 +5351,71 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   /** Pick the workspace folder (from the tree) — persists + returns to Files. */
   function chooseWorkspace(path: string) {
     setWorkspaceDir(path);
-    setPickingFolder(false);
     markSetupChanged();
     try {
       window.localStorage.setItem(WORKSPACE_KEY, path);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * THE CHAT'S FOLDER, PICKED (v1.443.0). The user: "what if i dont want it to
+   * be a specific project - rather just work in a specific folder and that
+   * selection process should be exactly as the folder is selected in build >
+   * code." Every way in (the new chat's folder chip, the toolbar chip, "+
+   * Choose a working folder", the drawer's Change) opens Build › Code's own
+   * picker (`chatFolderPicker` below) and lands here:
+   *
+   * - a folder OUTSIDE the active project takes the chat out of it (a folder
+   *   inside it, the v1.329.0 case, keeps the project);
+   * - the file essentials are armed over an empty tool set, as a project and a
+   *   conversation's own folder (placeInWorkfolder) do;
+   * - a conversation's own folder made for an earlier attachment is let go,
+   *   so later attachments go to the picked folder;
+   * - the daemon is asked whether the chat can work there, and a refusal is
+   *   said under the chip. The pick stands either way.
+   */
+  function pickChatFolder(path: string) {
+    const p = path.trim();
+    if (!p) return;
+    const proj = projectIdRef.current ? projects.find((x) => x.id === projectIdRef.current) : undefined;
+    // Read before clearProject releases what it auto-armed.
+    const armed = selectedToolsRef.current;
+    const onlyAuto = autoArmedRef.current && armed.every((t) => PROJECT_FILE_TOOLS.includes(t));
+    if (proj && pickLeavesProject(p, proj.root ?? "")) clearProject({ keepFolder: true });
+    convFolderRef.current = null;
+    setWorkfolder(null);
+    setWorkfolderNote("");
+    if (armed.length === 0 || onlyAuto) {
+      setSelectedTools(PROJECT_FILE_TOOLS);
+      autoArmedRef.current = true;
+    }
+    chooseWorkspace(p);
+    const seq = ++folderCheckSeqRef.current;
+    setFolderProblem(null);
+    void checkChatFolder(p, post).then((problem) => {
+      if (seq === folderCheckSeqRef.current) setFolderProblem(problem ? { path: p, problem } : null);
+    });
+  }
+
+  /** Back to "No folder" for this chat (v1.443.0): the folder goes, the file
+   *  tools it armed go with it, and the sticky default is forgotten, so the
+   *  next new chat starts with no folder too. */
+  function clearChatFolder() {
+    folderCheckSeqRef.current++;
+    setFolderProblem(null);
+    convFolderRef.current = null;
+    setWorkfolder(null);
+    setWorkfolderNote("");
+    if (autoArmedRef.current) {
+      autoArmedRef.current = false;
+      setSelectedTools((prev) => (prev.every((t) => PROJECT_FILE_TOOLS.includes(t)) ? [] : prev));
+    }
+    setWorkspaceDir(null);
+    markSetupChanged();
+    try {
+      window.localStorage.removeItem(WORKSPACE_KEY);
     } catch {
       /* ignore */
     }
@@ -6284,6 +6367,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     convFolderRef.current = null;
     setWorkfolder(null);
     setWorkfolderNote("");
+    folderCheckSeqRef.current++; // v1.443.0: an answer still on its way is about the chat being left
+    setFolderProblem(null);
     resetThreadSetup(); // until this thread's setup (if any) restores its own
     setPreviewPath(null); // the preview belongs to the previous conversation
     // Clear the chip AND orphan any in-flight compaction fetch: a bare state
@@ -7222,6 +7307,16 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     atFilesRoot && workspaceDir && workfolder === null && !sameFolderPath(workspaceDir, atFilesRoot)
       ? workspaceDir
       : null;
+  // v1.443.0: the folder chip. Its × goes to "No folder" only outside a
+  // project (inside one the project's folder is the folder; the working-folder
+  // chip's × goes back to it). The daemon's words are shown only while they
+  // are about the folder on screen.
+  const folderClearable = Boolean(workspaceDir) && !activeProject;
+  const shownFolderProblem =
+    folderProblem && workspaceDir && sameFolderPath(folderProblem.path, workspaceDir)
+      ? folderProblem.problem
+      : null;
+  const folderChipTitle = chatFolderTitle(workspaceDir, activeProject?.name ?? null);
   // v1.329.0: which project a saved chat belongs to, for the "@" row's quiet
   // second part: what the daemon said on the row, else what the chat list
   // here knows; the name from the project list. Unknown = null (the row then
@@ -10542,6 +10637,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     convFolderRef.current = null;
     setWorkfolder(null);
     setWorkfolderNote("");
+    folderCheckSeqRef.current++; // v1.443.0: an answer still on its way is about the chat being left
+    setFolderProblem(null);
     // A selected project keeps its file essentials armed on a fresh
     // conversation (its folder stays live); otherwise nothing is armed.
     const proj = projectIdRef.current
@@ -12772,8 +12869,24 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                   {/* Calm chat W1-3: on a new chat the project chip sits just above
                       the card (in a conversation it is in the card's toolbar). */}
                   {emptyHero && (
-                    <div data-testid="chat-hero-project" className="mb-1.5 flex min-w-0 px-2">
+                    <div
+                      data-testid="chat-hero-project"
+                      className="mb-1.5 flex min-w-0 flex-wrap items-start gap-x-1 gap-y-0.5 px-2"
+                    >
                       {projectSwitch("above")}
+                      {/* v1.443.0: Build › Code's folder chip, beside the project:
+                          a chat can work in a folder without being a project. */}
+                      <FolderChip
+                        folder={workspaceDir}
+                        onPick={pickChatFolder}
+                        onClear={folderClearable ? clearChatFolder : undefined}
+                        problem={shownFolderProblem}
+                        picker={chatFolderPicker}
+                        testId="chat-hero-folder"
+                        noFolderTitle={CHAT_NO_FOLDER_TITLE}
+                        clearTitle={CLEAR_CHAT_FOLDER_TITLE}
+                        chooseTitle={folderChipTitle}
+                      />
                     </div>
                   )}
                   {/* THE NOTICES TRAY: what is about the next message (a failed save,
@@ -13387,6 +13500,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       pageCtx !== null ||
                       workfolder !== null ||
                       projectSubfolder !== null ||
+                      (shownFolderProblem !== null && !emptyHero) ||
                       activeSkill !== "" ||
                       selectedConnectors.length > 0) && (
                       <div className="flex flex-wrap items-center gap-1.5 px-3 pt-3">
@@ -13443,6 +13557,18 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                             >
                               Open
                             </button>
+                          </span>
+                        )}
+                        {/* v1.443.0: the picked folder the chat cannot work in, said
+                            where the next message is written (on a new chat the
+                            folder chip above the card says it). */}
+                        {shownFolderProblem !== null && !emptyHero && (
+                          <span
+                            role="alert"
+                            data-testid="chat-folder-problem"
+                            className="max-w-full text-[12px] text-tone-danger"
+                          >
+                            {shownFolderProblem}
                           </span>
                         )}
                         {workfolderNote && (
@@ -13744,10 +13870,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                                 type="button"
                                 onClick={() => {
                                   setToolsOpen(false);
-                                  setPreviewPath(null);
-                                  setRailTab("files");
-                                  setPickingFolder(Boolean(workspaceDir));
-                                  showProjectPanel("user", plusBtnRef.current);
+                                  // v1.443.0: Build › Code's own picker, never the drawer's tree.
+                                  void chatFolderPicker.choose();
                                 }}
                                 // v1.356.0 (G75): what the folder is FOR, in plain words.
                                 title={workingFolderTitle(workspaceDir)}
@@ -13756,6 +13880,23 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                                 <FolderOpen size={14} className="shrink-0 text-zinc-400" />
                                 {workspaceDir ? "Change the working folder" : "Choose a working folder"}
                               </button>
+                              {/* v1.443.0: the way to "No folder" that the toolbar's ×
+                                  gives up on a phone and in a tight toolbar. */}
+                              {folderClearable && (
+                                <button
+                                  type="button"
+                                  data-testid="chat-folder-clear-menu"
+                                  onClick={() => {
+                                    setToolsOpen(false);
+                                    clearChatFolder();
+                                  }}
+                                  title={CLEAR_CHAT_FOLDER_TITLE}
+                                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                                >
+                                  <X size={14} className="shrink-0 text-zinc-400" />
+                                  No folder for this chat
+                                </button>
+                              )}
                               {/* Skills sit OUTSIDE the chat-only group (v1.104.0):
                                   Agent mode can invoke one now, so hiding the menu
                                   route would leave "/" as the only way in — findable
@@ -13912,6 +14053,16 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                             (calm chat W1-3, `projectSwitch("above")`); once the conversation
                             has a message it lives here, in the toolbar. One chip at a time. */}
                         {!emptyHero && projectSwitch("toolbar")}
+                        {/* v1.443.0: the chat's folder, beside its project. */}
+                        {!emptyHero && (
+                          <ChatFolderChip
+                            folder={workspaceDir}
+                            picker={chatFolderPicker}
+                            title={folderChipTitle}
+                            problem={shownFolderProblem}
+                            onClear={folderClearable ? clearChatFolder : undefined}
+                          />
+                        )}
                         {/* APPROVAL POSTURE (v1.188.0): how the mid-turn ask behaves for this
                             conversation. v1.327.0: ONE permission chip (a shield, the level's
                             plain name, a chevron) whose small menu lists the levels with a line
@@ -14658,7 +14809,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                   </div>
                 )}
                 <div className="flex min-h-0 flex-1 flex-col">
-                {workspaceDir && !pickingFolder ? (
+                {workspaceDir ? (
                   <>
                     {/* The folder, as a plain section. Its actions are ghost
                         buttons; the drawer's own Close replaces the old
@@ -14688,7 +14839,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                           )}
                           <button
                             type="button"
-                            onClick={() => setPickingFolder(true)}
+                            // v1.443.0: Build › Code's own picker, like the chat's folder chip.
+                            onClick={() => void chatFolderPicker.choose()}
                             title="Change folder"
                             aria-label="Change workspace folder"
                             className={PANEL_GHOST}
@@ -14742,18 +14894,15 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                   // without that action, which never did anything from chat.
                   // Once a folder is picked the Folder section above offers
                   // the working Terminal button. With no folder yet, the
-                  // drawer's own Close is the way out; while CHANGING a
-                  // folder, "Back to files" cancels.
+                  // drawer's own Close is the way out. v1.443.0: CHANGING a
+                  // folder opens Build › Code's own picker (Change above), and
+                  // a pick here goes through the same pickChatFolder.
                   <div className="min-h-0 flex-1">
                     <DirectoryTree
                       variant="calm"
                       selectedPath={workspaceDir}
-                      onSelect={chooseWorkspace}
+                      onSelect={pickChatFolder}
                       hideAction
-                      collapseLabel="Back to files"
-                      onCollapse={
-                        pickingFolder && workspaceDir ? () => setPickingFolder(false) : undefined
-                      }
                     />
                   </div>
                 )}
@@ -14767,6 +14916,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         </div>
       </Reveal>
 
+      {/* v1.443.0: the folder picker's in-app tree (a browser, or Windows'
+          picker could not open); null while closed. */}
+      {chatFolderPicker.dialog}
       {shareOpen && threadId && (
         <ShareChatDialog
           threadId={threadId}

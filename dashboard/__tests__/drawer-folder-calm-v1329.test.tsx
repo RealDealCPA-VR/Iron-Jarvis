@@ -389,7 +389,9 @@ describe("the chat's project drawer uses the calm picker and the calm file list"
     expect(within(drawer).getByRole("button", { name: /Close/ })).toBeTruthy();
   });
 
-  it("with a folder: the calm file list; Change opens the calm picker and Back to files returns", async () => {
+  // v1.443.0 (moved on purpose): Change opens Build › Code's own folder picker
+  // (in a browser its calm tree in a dialog), never a second tree in the drawer.
+  it("with a folder: the calm file list; Change opens the shared calm picker and Cancel returns", async () => {
     window.localStorage.setItem(WORKSPACE_KEY, FOLDER);
     render(<ChatPage />);
     const drawer = await openDrawer();
@@ -397,12 +399,13 @@ describe("the chat's project drawer uses the calm picker and the calm file list"
     expect(classes(name)).not.toContain("font-mono");
     expect(drawer.querySelector('[data-testid="files-panel"]')?.getAttribute("data-variant")).toBe("calm");
     fireEvent.click(within(drawer).getByRole("button", { name: "Change workspace folder" }));
-    const back = await within(drawer).findByRole("button", { name: "Back to files" });
-    const picker = drawer.querySelector('[data-testid="directory-tree"]') as HTMLElement;
+    const dialog = await screen.findByTestId("chat-folder-tree");
+    const picker = dialog.querySelector('[data-testid="directory-tree"]') as HTMLElement;
     expect(picker.getAttribute("data-variant")).toBe("calm");
-    expect(picker.textContent).toContain(FOLDER); // "Picked: C:\Work\Harbor"
-    fireEvent.click(back);
-    await waitFor(() => expect(drawer.querySelector('[data-testid="directory-tree"]')).toBeNull());
+    expect(dialog.textContent).toContain(FOLDER); // the folder in hand
+    expect(drawer.querySelector('[data-testid="directory-tree"]')).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByTestId("chat-folder-tree")).toBeNull());
     expect(await within(drawer).findByText("menu.md")).toBeTruthy();
   });
 });

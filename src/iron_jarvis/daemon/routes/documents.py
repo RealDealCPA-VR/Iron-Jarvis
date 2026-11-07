@@ -19,6 +19,7 @@ from ..schemas import (
     DocEnhanceBody,
     DocumentOpenBody,
     DocWriteBody,
+    FolderCheckBody,
     LiveDocCreate,
     RedactApplyBody,
     RedactScanBody,
@@ -126,6 +127,12 @@ def _batch_egress_check(platform: Any) -> None:
                     or getattr(cfg, "default_model", "") or "")
         if not _egress.stays_on_this_network(prov, mgr, cfg, model):
             raise _egress.LocalOnlyRefused(prov, model, manager=mgr)
+
+
+def _sentence(text: str) -> str:
+    """``root_problem``'s words as a sentence for the chip (a capital first)."""
+    t = (text or "").strip()
+    return t[:1].upper() + t[1:] if t else t
 
 
 def register(app: FastAPI, d) -> None:
@@ -241,6 +248,37 @@ def register(app: FastAPI, d) -> None:
             else ""
         )
         return made
+
+    @app.post("/documents/folder-check")
+    async def documents_folder_check(body: FolderCheckBody) -> dict[str, Any]:
+        """May the chat work in the folder the user just picked? (v1.443.0)
+
+        The chat's folder chip asks right after a pick, so a folder the chat
+        cannot use is SAID under the chip instead of failing later: the answer
+        is ``fs_policy.root_problem`` — the ONE definition the chat lanes'
+        ``usable_workspace_root`` and every other "work in the user's own
+        folder" door use — in a sentence, or ``None``. The pick stands either
+        way (the turn grounds itself honestly); this only tells the user.
+
+        A network spelling (``\\\\host\\share``, ``//host/share``, a device
+        path) is NOT looked at: judged on its TEXT first, because a stat of a
+        share is a network connection and can stall for as long as the
+        network takes (the v1.379.0 lesson). ``checked`` is then false and
+        nothing is said; a message still runs the lane's own check. Every
+        other check is BLOCKING (a writability probe creates a file), so it
+        runs through ``asyncio.to_thread``, never on the event loop.
+        """
+        from ...core.fs_policy import root_problem
+
+        raw = (body.path or "").strip()
+        spelled = raw.replace("/", "\\")
+        if spelled.startswith("\\\\"):
+            return {"problem": None, "checked": False}
+        try:
+            problem = await asyncio.to_thread(root_problem, raw)
+        except Exception as exc:  # noqa: BLE001 — an unreadable pick is not usable
+            problem = f"that folder could not be read: {type(exc).__name__}"
+        return {"problem": _sentence(problem) if problem else None, "checked": True}
 
     # ------------------------------------------------------------------ #
     # A FOLDER OF DOCUMENTS BECOMES ONE SUMMARY SHEET (v1.251.0, C-04).
