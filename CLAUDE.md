@@ -15392,6 +15392,57 @@ does not need a bump, stop and bump it.
     `last_byte` stamp: the old shape gave the gate's exact error. A test that
     needs a pooled connection waits for the pool, never for the answer.
 
+- **Antigravity's model list and sign-in are READ by `agy models` in the
+  background, only once its own sign-in finished; a chat picks a FOLDER with
+  Build › Code's own picker** (v1.443.0; the user: "it doesn't have the
+  ability to select the specific models. The login is not being recognized
+  in the connections" and "what if i dont want it to be a specific project -
+  rather just work in a specific folder"). MEASURED on agy 1.5.3 (scratch
+  home): `agy --log-file F models` prints `<id>	<name>` (no session, no
+  model call, ~2 s); an ACP session's `configOptions.model` groups ids that
+  share a base and end in a level (`gemini-3.8-flash-{high,medium,low}` -> one
+  model, levels low/medium/high) and leaves a lone suffixed id whole
+  (`gpt-oss-120b-medium`) — `hosted/antigravity_catalog.parse_models` follows
+  that rule. ITS SIGN-IN IS IN WINDOWS' CREDENTIAL STORE ("keyringAuth: loaded
+  token"): a scratch USERPROFILE still reads the real account, so never run
+  the real `agy` in a test (conftest turns `AUTO_PROBE` off; the reader's pins
+  use `tests/fixtures/fake_agy_models_v14430.py`). What it does SIGNED OUT is
+  not measured (a sign-in prompt is possible), so the read runs only when
+  `<agy home>/cache/onboarding.json` says onboarding finished (`onboarded`).
+  EVERY agy run starts its updater; `AGY_CLI_DISABLE_AUTO_UPDATE=true` (NOT
+  `1`) turns it off for the read and for Code-view sessions (`NO_UPDATE_ENV`,
+  set in `_start_process`), because the kill-on-close Job would cut an update
+  off. Kept in `<home>/hosted/antigravity_read.json` (TTL 600 s, watch =
+  onboarding/auth-state/program stats, a failure waits 120 s, `force` for
+  `GET /build/app/harnesses?recheck=antigravity`), merged under a live
+  session's own list (`merged`: the session wins). The tool row: `signed_in`
+  True from a read that listed models, False only from a read whose words say
+  sign-in, NEVER False from the onboarding file (False greys the tool out in
+  the Code view); `signin_finished` (that file) is a hint for Connections;
+  `models_reading`/`models_note` as for Pi. CONNECTIONS:
+  `components/connections/AntigravityRow.tsx` in the plans card (signed in /
+  not signed in + Sign in = `launchAppSignIn("agy")` / Not detected + Google's
+  page / not checked yet + Check again; Look again rechecks it); renders
+  nothing unless the answer holds a `harnesses` list. CHAT FOLDER:
+  `FolderChip`'s picking half is `useFolderPicker` (Windows' picker via
+  `folderPickerBridge`, else the tree in a dialog, the tree a `next/dynamic`
+  import so it stays off /chat); the chat page holds ONE picker for the hero
+  chip (beside "No project"), the toolbar's `ChatFolderChip` (name and × on
+  the project's fit step), "+ Choose a working folder" and the drawer's
+  Change. A pick outside the active project leaves it
+  (`lib/chatFolder.pickLeavesProject`; inside keeps it), arms
+  `PROJECT_FILE_TOOLS` over an empty set, drops the conversation's own folder,
+  then `POST /documents/folder-check` (`root_problem` off the loop; a network
+  spelling never looked at) — a refusal shown only while about the folder on
+  screen. OPEN: Antigravity's signed-out answer; the chat chip not tried in
+  the packaged app or at 390 px in a browser; a reopened chat's saved folder
+  is not checked; a pick still writes the sticky default. Pins:
+  `tests/test_build_app_antigravity_models_v14430.py` (9 mutations red),
+  `dashboard/__tests__/antigravity-connections-v1443.test.tsx` (5 red),
+  `dashboard/__tests__/chat-folder-chip-v1443.test.tsx` and
+  `tests/test_chat_folder_check_v1443.py` (18 red); moved on purpose:
+  `drawer-folder-calm-v1329` (Change opens the shared picker).
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

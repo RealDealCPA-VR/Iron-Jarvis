@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.442.1 (2026-11-06).*
+holds itself to. Current as of v1.443.0 (2026-11-07).*
 
 ---
 
@@ -2031,6 +2031,55 @@ the current level's full description when you rest the pointer on it.
 
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
+
+## Antigravity's models and sign-in, and a chat that works in a folder (v1.443.0)
+
+**Antigravity's models show up before you start a session.** Once you have
+signed in to Antigravity (run `agy` in a terminal and sign in with Google),
+Build › Code's model menu lists Antigravity's own models, each with the
+thinking levels it takes, before any session has run. Iron Jarvis reads the
+list in the background by running `agy models`. That makes no model call and
+starts no conversation. It is read again every ten minutes, or sooner when
+Antigravity's own files change. If Antigravity could not list its models,
+the menu says why in one line.
+
+**Antigravity on the Connections page.** The "Your plans and your own model
+servers" card now has an Antigravity row:
+
+- **Signed in · Build › Code** when Antigravity listed its models.
+- **Installed · not signed in**, with a **Sign in** button that opens a
+  Build terminal running `agy`. Sign in with Google there, then press
+  **Check again**.
+- **Not detected**, with a link to get it, when it is not on this PC.
+
+Antigravity keeps its sign-in in Windows' own credential store, so Iron
+Jarvis learns it only by asking `agy` itself. It asks only after
+Antigravity's own sign-in has finished, so it never sets off a sign-in
+prompt. Antigravity is used in Build › Code only: chat's model menu does not
+use it. It is also separate from the **Google (Gemini)** card, which is
+Google's pay-per-use API with its own key.
+
+**Antigravity no longer updates itself while Iron Jarvis runs it.** Every
+`agy` run starts Antigravity's own updater. Iron Jarvis turns that updater
+off for the runs it starts, the model-list check and Code view sessions, so
+stopping a session can never cut an update off half way. When you run `agy`
+yourself, it still updates as usual.
+
+**Work in a folder without a project.** On a new chat, the folder chip sits
+beside "No project" and reads **No folder · Choose…**. Choose… opens
+Windows' own folder picker, the same one Build › Code uses; in a browser you
+get the app's folder list instead. Jarvis then works on the files in that
+folder, saves what it makes there, and remembers the folder with the chat.
+
+- **In a conversation**, the folder chip sits in the composer's bottom row
+  next to the project. **+ › Choose a working folder** and the side panel's
+  **Change** open the same picker.
+- **Projects:** choosing a folder outside the chat's project takes the chat
+  out of the project; a folder inside the project keeps it.
+- **A folder Jarvis can't use:** if Jarvis can't work there (it can't save
+  files there, for example), it says so under the chip.
+- **Clearing:** **×**, or **+ › No folder for this chat**, goes back to no
+  folder.
 
 ## Setup from chat, proven on 30 requests (v1.442.0)
 
