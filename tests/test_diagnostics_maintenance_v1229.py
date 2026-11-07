@@ -288,7 +288,8 @@ def test_restore_refuses_bad_names_and_in_flight_work(tmp_path, monkeypatch):
         )
         r = c.post("/maintenance/restore", json={"name": name})
         assert r.status_code == 409
-        assert "2 session(s) running" in r.json()["detail"]
+        # v1.446.0 (ease-of-use item 7): moved on purpose — plain words now.
+        assert r.json()["detail"].startswith("2 background tasks are still running.")
     assert stops == [], "a refused restore must not stop the daemon"
 
 

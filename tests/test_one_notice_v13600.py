@@ -561,6 +561,8 @@ def test_the_watcher_reads_the_bells_events_and_the_notice_opens_the_run():
         'const RUN_OUTCOME_AUDIT_TYPES =\n'
         '  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary,'
         # v1.420.0 (moved on purpose, C6.10): and a long chat reply's end.
-        'build.ci_done,chat.turn_finished";'
+        # v1.446.0 (moved on purpose, review item 20): and a rule that could
+        # not start its action.
+        'build.ci_done,chat.turn_finished,reflex.failed";'
         in src
     )

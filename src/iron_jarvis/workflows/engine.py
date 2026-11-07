@@ -46,7 +46,7 @@ from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.models import AgentType, Project, SessionStatus
 from .models import WorkflowRunRecord
-from .step_outcome import ended_by_session
+from .step_outcome import ended_by_session, step_failures
 
 #: Context-chaining bounds: each earlier-step summary is clipped, and the whole
 #: injected block is capped so a long-running workflow can't blow up the prompt.
@@ -77,6 +77,21 @@ _ORIGIN_BAD_RX = re.compile(r"[^A-Za-z0-9:_\-. ]")
 
 #: ``WorkflowRunRecord.started_by`` for a run a PERSON started (v1.352.0).
 STARTED_BY_PERSON = "person"
+
+
+#: v1.446.0 (ease-of-use review item 22): a run that FINISHED, but a step set
+#: to "skip if it fails" failed on the way. It used to finish "completed", so
+#: Run history said Done and the bell stayed quiet; the dashboard's
+#: lib/statusWords reads it "Part failed" (amber), the bell rings it, and every
+#: reader of a run's status treats it as a finished (terminal) run.
+PART_FAILED_STATUS = "completed_with_failures"
+#: Every status a run ENDS in (a reader that asks "is this run over?").
+TERMINAL_RUN_STATUSES: tuple[str, ...] = (
+    "completed",
+    PART_FAILED_STATUS,
+    "failed",
+    "cancelled",
+)
 
 
 def _workflow_origin(name: str) -> str:
@@ -666,6 +681,11 @@ class WorkflowEngine:
         latest = self._get_record(run_id)
         if latest is not None and latest.status == "cancelling":
             final_status = "cancelled"
+        # v1.446.0 (review item 22): it finished, but a step it was told to
+        # skip past failed — say so, never "completed".
+        _halted, skipped_failures = step_failures((s.name for s in steps), outputs)
+        if final_status == "completed" and skipped_failures:
+            final_status = PART_FAILED_STATUS
         final = await self._persist(
             run_id,
             status=final_status,
@@ -687,10 +707,23 @@ class WorkflowEngine:
                 # not fail). Only that step's notice stands in for this one:
                 # an earlier attempt that failed and was retried, or a step
                 # the run went on past, is another outcome (step_outcome).
+                # v1.446.0 (review item 22): for a run that finished with a
+                # skipped failure, the run of the FIRST such step ("" for a
+                # tool step: no bell row of its own, so the workflow's row is
+                # its one notice).
                 "failed_session": (
                     ended_by_session((s.name for s in steps), outputs)
                     if final_status == "failed"
+                    else str(skipped_failures[0][1].get("session_id") or "")
+                    if final_status == PART_FAILED_STATUS
                     else ""
+                ),
+                # v1.446.0 (review item 22): the steps it went on past, by
+                # NAME (at most five) — the bell's row says which.
+                **(
+                    {"failed_steps": [name for name, _ in skipped_failures[:5]]}
+                    if final_status == PART_FAILED_STATUS
+                    else {}
                 ),
             },
         )

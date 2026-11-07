@@ -24,3 +24,22 @@ export const CRON_TO_LABEL = new Map(REPEAT_PRESETS.map((p) => [p.cron, p.label]
 export function cronLabel(cron: string): string | null {
   return CRON_TO_LABEL.get(cron) ?? null;
 }
+
+/* ---- v1.446.0 (ease-of-use review items 23-24): pause words -------------- */
+
+/** A paused schedule's row (the switch and the Next run cell). */
+export const PAUSED_WORDS = "Paused";
+
+/** The Next run cell while Emergency stop is on (the time stays in the title). */
+export const PAUSED_BY_STOP_WORDS = "Paused by Emergency stop";
+
+/** Above the list while Emergency stop is on. */
+export const EMERGENCY_STOP_SCHEDULES_WORDS =
+  "Emergency stop is on — schedules are skipped until you turn it off.";
+
+/** The note after a Pause or Resume press. */
+export function pauseDoneWords(name: string, enabled: boolean): string {
+  return enabled
+    ? `Schedule "${name}" resumed — it runs on its own again.`
+    : `Schedule "${name}" paused — it won't run until you resume it.`;
+}

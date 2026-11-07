@@ -145,9 +145,22 @@ class ReflexRouter:
         return await self.execute(rule, {"text": task, "body": task, "slug": ""})
 
     # -- execution ---------------------------------------------------------
-    async def execute(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:
+    async def execute(
+        self, rule: ReflexRule, context: dict[str, str], *, attended: bool = False
+    ) -> dict[str, Any]:
         """Launch the rule's bound action; return a small result dict. Never
-        raises — a bad rule reports an error and the others still fire."""
+        raises — a bad rule reports an error and the others still fire.
+
+        ``attended`` (v1.446.0): a person is watching this fire (the Reflex
+        page's Test press) and reads its answer, so a failure is not ANNOUNCED
+        (``reflex.failed``) — the answer says it. The phone's ``/run`` (a
+        ``manual:`` rule) is attended the same way."""
+        # v1.446.0 (review item 20): what the row said BEFORE this fire, so a
+        # rule failing again for the same reason is one notice, not one per
+        # signal (an email rule under Emergency stop would buzz the phone for
+        # every message).
+        previous_error = str(getattr(rule, "last_error", "") or "")
+        reason = ""
         # EMERGENCY STOP (v1.351.0 re-review, G13): asked FIRST, for every
         # action. Only the ``session`` action ends in ``create_session``; a
         # ``workflow`` action's non-agent steps and a ``remote_agent`` hand-off
@@ -159,6 +172,7 @@ class ReflexRouter:
         why = stop(f"reflex:{rule.name}") if callable(stop) else ""
         if why:
             result: dict[str, Any] = {"ok": False, "error": why}
+            reason = why
         else:
             try:
                 if rule.action == "workflow":
@@ -172,6 +186,7 @@ class ReflexRouter:
             except Exception as exc:  # noqa: BLE001 — one bad rule never breaks the rest
                 log.exception("reflex rule %r failed", rule.name)
                 result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                reason = _exception_words(exc)
 
         # v1.231.0 (audit AE6): the row carries the outcome either way — a
         # failed start is written as ``last_error`` where the user looks,
@@ -182,6 +197,14 @@ class ReflexRouter:
             detail=str(result.get("error") or _result_detail(result)),
         )
         await self._publish(rule, result)
+        if not result.get("ok"):
+            await self._announce_failure(
+                rule,
+                reason or _reason_words(rule, str(result.get("error") or "")),
+                error=str(result.get("error") or "failed"),
+                previous_error=previous_error,
+                attended=attended,
+            )
         return {"rule": rule.name, "rule_id": rule.id, **result}
 
     def _run_workflow(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:
@@ -234,10 +257,45 @@ class ReflexRouter:
         if record is None:
             return {"ok": False, "error": f"no remote agent '{rule.target}'"}
         task = _render(rule.task_template, context) or _default_task(rule, context)
+        previous_error = str(getattr(rule, "last_error", "") or "")
         self._launch(
-            reg.run(record, task, self.p.secrets.get), f"reflex-remote-{rule.id}"
+            self._remote_then_tell(
+                rule, reg.run(record, task, self.p.secrets.get), previous_error
+            ),
+            f"reflex-remote-{rule.id}",
         )
         return {"ok": True, "kind": "remote_agent", "agent": rule.target}
+
+    async def _remote_then_tell(
+        self, rule: ReflexRule, run: Any, previous_error: str
+    ) -> Any:
+        """v1.446.0 (review item 20): the hand-off runs in the background, so
+        a remote agent that is down (no answer, a refusal) used to fail where
+        nobody looked: the row said it fired and nothing else. Its failure now
+        lands on the rule's row and is announced like a failed start. A
+        ``manual:`` rule (the phone's ``/run``) is never announced."""
+        import inspect
+
+        out = (await run) if inspect.isawaitable(run) else run
+        try:
+            if isinstance(out, dict) and out.get("ok"):
+                return out
+            detail = str(out.get("detail") or "") if isinstance(out, dict) else ""
+            error = f"remote agent '{rule.target}' failed: {detail or 'no answer'}"
+            self.store.mark_result(rule.id, ok=False, detail=error)
+            await self._announce_failure(
+                rule,
+                _remote_words(rule.target, detail),
+                error=error,
+                previous_error=previous_error,
+                attended=False,
+                late=True,
+            )
+        except Exception:  # noqa: BLE001 — telling never breaks the hand-off
+            log.warning(
+                "reflex rule %r: could not record a remote failure", rule.name, exc_info=True
+            )
+        return out
 
     async def _run_session(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:
         task = _render(rule.task_template, context) or _default_task(rule, context)
@@ -286,6 +344,102 @@ class ReflexRouter:
             )
         except Exception:  # noqa: BLE001 — the bus must never block a reflex
             pass
+
+
+    async def _announce_failure(
+        self,
+        rule: ReflexRule,
+        reason: str,
+        *,
+        error: str,
+        previous_error: str,
+        attended: bool,
+        late: bool = False,
+    ) -> None:
+        """Publish ``reflex.failed``: the bell's attention row, the tray's
+        notice and a default phone alert ("Your rule X couldn't start: why").
+
+        Said ONCE per failure episode: a rule whose row already carried this
+        very error before the fire says nothing new (the row still records
+        it). Never for a fire a person is watching (``attended``, a
+        ``manual:`` rule) and never for a ``comm`` rule: the message that
+        fired it gets the reply "Rule X could not start: …" from the inbound
+        poller (comm/inbound), so the phone hears it ONCE. Never raises."""
+        if attended or str(rule.name or "").startswith("manual:"):
+            return
+        if rule.source == "comm" and not late:
+            # ``late``: a remote hand-off that failed AFTER the reply said
+            # it started — nobody has heard that one.
+            return
+        if previous_error and previous_error[:500] == (error or "failed")[:500]:
+            return
+        bus = getattr(self.p, "event_bus", None)
+        if bus is None:
+            return
+        try:
+            await bus.publish(
+                EventType.REFLEX_FAILED,
+                {
+                    "rule": rule.name,
+                    "rule_id": rule.id,
+                    "source": rule.source,
+                    "action": rule.action,
+                    "target": rule.target,
+                    "reason": (reason or CANNOT_START_WORDS)[:300],
+                },
+            )
+        except Exception:  # noqa: BLE001 — the bus must never block a reflex
+            pass
+
+
+#: v1.446.0: the reason when nothing better is known.
+CANNOT_START_WORDS = "it could not start its action"
+
+
+def _reason_words(rule: ReflexRule, error: str) -> str:
+    """Plain words for a failed start the router wrote itself (bell, tray,
+    phone). The rule's row keeps the router's own short error."""
+    target = (rule.target or "").strip()
+    if error.startswith("no saved workflow"):
+        return f"the workflow “{target}” it starts is no longer saved"
+    if error.startswith("no remote agent"):
+        return f"the remote agent “{target}” it hands work to is no longer set up"
+    if error.startswith("unknown action"):
+        return f"it names an action Iron Jarvis doesn't know (“{rule.action}”)"
+    return _masked(error) or CANNOT_START_WORDS
+
+
+def _remote_words(agent: str, detail: str) -> str:
+    """Plain words for a remote agent's failed hand-off."""
+    name = (agent or "").strip() or "the remote agent"
+    text = (detail or "").strip()
+    if not text or text.startswith("request failed"):
+        return f"the remote agent “{name}” could not be reached"
+    if "did not answer" in text:
+        return f"the remote agent “{name}” did not answer in time"
+    return f"the remote agent “{name}” said: {_masked(text)}"
+
+
+def _exception_words(exc: BaseException) -> str:
+    """A raised start error, in the failure-words rule's plain sentence."""
+    try:
+        from ..providers.failure_words import run_failure_words
+
+        reason, _technical = run_failure_words(exc, started=False)
+        return reason
+    except Exception:  # noqa: BLE001
+        return CANNOT_START_WORDS
+
+
+def _masked(text: str) -> str:
+    try:
+        from ..providers.failure_words import mask_failure_text
+
+        out = mask_failure_text(text)
+    except Exception:  # noqa: BLE001
+        out = ""
+    out = " ".join(str(out or "").split())
+    return out if len(out) <= 240 else out[:239] + "…"
 
 
 def _result_detail(result: dict[str, Any]) -> str:

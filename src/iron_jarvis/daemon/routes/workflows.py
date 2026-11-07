@@ -238,7 +238,7 @@ def register(app: FastAPI, d) -> None:
             rec = db.get(WorkflowRunRecord, run_id)
             if rec is None:
                 raise HTTPException(status_code=404, detail="no such run")
-            if rec.status in ("completed", "failed", "cancelled", "interrupted"):
+            if rec.status in ("completed", "completed_with_failures", "failed", "cancelled", "interrupted"):
                 raise HTTPException(status_code=409, detail=f"run already {rec.status}")
             if rec.status == "waiting":
                 rec.status = "cancelled"

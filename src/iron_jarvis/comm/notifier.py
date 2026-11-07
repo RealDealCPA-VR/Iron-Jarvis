@@ -75,6 +75,11 @@ DEFAULT_ALERT_EVENTS: frozenset[str] = frozenset(
         # every other step (``build.ci_step``) is a quiet bell row. On this PC
         # the bell / the tray say it, so "This PC" stays quiet for it.
         EventType.BUILD_CI_DONE,
+        # v1.446.0 (ease-of-use review item 20): a rule that could NOT start
+        # its action (its workflow deleted, its remote agent gone, Emergency
+        # stop on) — once per failure episode, never a successful fire. On
+        # this PC the bell / the tray say it, so "This PC" stays quiet.
+        EventType.REFLEX_FAILED,
     }
 )
 
@@ -138,6 +143,8 @@ EVENT_WORDS: dict[str, str] = {
     # v1.433.0 (A10): the answers to a review (they now publish an event).
     "review.approved": "Review approved and merged",
     "review.rejected": "Review declined",
+    # v1.446.0 (ease-of-use review item 20): a rule that could not start.
+    "reflex.failed": "A rule couldn't start",
 }
 
 #: The line for a subscribed type nothing here has words for.
@@ -252,11 +259,49 @@ def _workflow_line(payload: dict) -> str:
     status = _text(payload.get("status"))
     if status == "failed":
         return f"{subject} could not finish — the Workflows page shows which step stopped."
+    if status == WORKFLOW_PART_FAILED:
+        # v1.446.0 (review item 22): a step set to "skip if it fails" failed
+        # and the run went on — it finished, but part of it failed.
+        return f"{subject} finished, but part of it failed — {workflow_part_failed_body(payload)}"
     if status == "completed":
         return f"{subject} finished"
     if status == "cancelled":
         return f"{subject} was stopped"
     return f"{subject} ended"
+
+
+#: v1.446.0 (review item 22): a workflow run that FINISHED with a failed step
+#: it was told to skip — workflows/engine.py writes this status (the dashboard's
+#: lib/statusWords reads it "Part failed").
+WORKFLOW_PART_FAILED = "completed_with_failures"
+#: The bell row's body for it when no step is named (NotificationBell,
+#: desktop/main.js: one fixture).
+WORKFLOW_PART_FAILED_BODY = "The Workflows page shows which step failed."
+
+
+def workflow_part_failed_body(payload: dict) -> str:
+    """Which steps a part-failed run went on past (``failed_steps``, names),
+    in the bell's words — the twin of NotificationBell's and main.js's."""
+    raw = payload.get("failed_steps")
+    names = [_text(n) for n in raw if _text(n)] if isinstance(raw, list) else []
+    if not names:
+        return WORKFLOW_PART_FAILED_BODY
+    quoted = ", ".join(f"“{n}”" for n in names[:5])
+    which = f"Its step {quoted} failed" if len(names) == 1 else f"Its steps {quoted} failed"
+    return f"{which}. The Workflows page shows why."
+
+
+def reflex_failed_title(payload: dict) -> str:
+    """The bell's, the tray's and the phone's headline for ``reflex.failed``
+    (v1.446.0, review item 20) — one fixture holds the three equal."""
+    name = _text(payload.get("rule"))
+    return f"Your rule {name} couldn't start" if name else "A rule couldn't start"
+
+
+def _reflex_failed_line(payload: dict) -> str:
+    reason = _clip(_text(payload.get("reason")))
+    title = reflex_failed_title(payload)
+    return f"{title}: {reason}" if reason else title
 
 
 def build_took_words(seconds: Any) -> str:
@@ -489,6 +534,8 @@ def format_event(event: Any) -> str:
         return _session_line(payload)
     if etype == EventType.WORKFLOW_COMPLETED:
         return _workflow_line(payload)
+    if etype == EventType.REFLEX_FAILED:
+        return _reflex_failed_line(payload)
     if etype == EventType.PROVIDER_FAILED:
         return _provider_failed_line(payload)
     if etype == EventType.PROVIDER_FAILOVER:
@@ -580,7 +627,11 @@ def bell_pings(event: Any) -> bool:
       cleanly done and was not stopped by the user — the bell's "could not
       finish" / "needs you" / "finished, but part of it failed" rows;
     * ``session.completed`` of a mission's root run, unless stopped;
-    * ``workflow.completed`` that FAILED;
+    * ``workflow.completed`` that FAILED, or (v1.446.0, review item 22)
+      that finished with a failed step it was told to skip
+      (``completed_with_failures``);
+    * ``reflex.failed`` (v1.446.0, review item 20): a rule that could not
+      start its action — counted, said from the tray, one phone line;
     * ``build.turn_finished`` (v1.374.0): a Build turn that ran longer than a
       minute and ended — the bell's "Your coding session finished" row (it
       rings unless the user is LOOKING at that session in a window, a rule
@@ -620,7 +671,9 @@ def bell_pings(event: Any) -> bool:
             # (``build.ci_step``) never do.
             return bool(_text(payload.get("thread_id")) or _text(_event_field(event, "session_id")))
         if etype == EventType.WORKFLOW_COMPLETED:
-            return _text(payload.get("status")) == "failed"
+            return _text(payload.get("status")) in ("failed", WORKFLOW_PART_FAILED)
+        if etype == EventType.REFLEX_FAILED:
+            return True
         if etype in (EventType.BUILD_ACCOUNT_LIMIT, EventType.BUILD_RESUMED):
             return True
         if etype in (EventType.BUILD_TURN_FINISHED, EventType.BUILD_TURN_STALLED):
@@ -882,7 +935,8 @@ class Notifier:
             # The phone and every other destination keep their one line.
             targets = self.without_desktop(targets)
         elif etype in (EventType.BUILD_TURN_FINISHED, EventType.BUILD_TURN_STALLED,
-                       EventType.BUILD_NIGHT_SUMMARY, EventType.BUILD_CI_DONE):
+                       EventType.BUILD_NIGHT_SUMMARY, EventType.BUILD_CI_DONE,
+                       EventType.REFLEX_FAILED):
             # v1.374.0: a long Build turn that ended is said on this PC by the
             # bell (a window is open) or the desktop app's tray watcher (none
             # is) — never a second toast from "This PC". A destination that

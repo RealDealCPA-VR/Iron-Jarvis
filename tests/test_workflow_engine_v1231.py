@@ -179,7 +179,7 @@ async def test_agent_step_whose_session_raises_honors_on_failure_skip(tmp_path):
     # but the run continues.
     assert outs["Draft"].get("handled") == "skipped", outs["Draft"]
     assert any("after-draft" in m for m in mock.sent), mock.sent
-    assert rec.status == "completed"
+    assert rec.status == "completed_with_failures"  # v1.446.0 (moved on purpose): part failed
     # And the step's terminal event fires like every other failed step's.
     ev = _step_events(platform, "Draft")
     assert ev and ev[-1].payload["status"] == "failed", ev
@@ -267,7 +267,7 @@ async def test_tool_reported_failure_and_tool_crash_are_worded_distinctly(tmp_pa
     assert outs["Report"]["summary"] == "disk quota exceeded while writing report.xlsx"
     assert outs["Crash"]["status"] == "failed"
     assert outs["Crash"]["summary"] == "KeyError: 'query'"
-    assert rec.status == "completed"  # both skipped, run continued
+    assert rec.status == "completed_with_failures"  # both skipped, run continued (v1.446.0, moved on purpose)
 
 
 async def test_agent_session_that_fails_records_the_session_summary(tmp_path):
@@ -335,7 +335,7 @@ async def test_handoff_from_a_failed_skipped_step_says_the_step_failed(tmp_path)
     )
     outs = json.loads(rec.outputs_json)
     assert outs["Scan"]["status"] == "failed" and outs["Scan"].get("handled") == "skipped"
-    assert rec.status == "completed"
+    assert rec.status == "completed_with_failures"  # v1.446.0 (moved on purpose): part failed
     assert capture.calls, "downstream tool never ran"
     args = capture.calls[0]
     # The bare ref names the failure instead of masquerading as Scan's output.

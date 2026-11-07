@@ -18,6 +18,7 @@ import { NotificationBell } from "@/components/NotificationBell";
 import { ModelMenuBridge } from "@/components/ModelMenuBridge";
 import { AppSidebar } from "@/components/AppSidebar";
 import { SimulatedBanner } from "@/components/SimulatedBanner";
+import { EmergencyStopStrip } from "@/components/EmergencyStopStrip";
 import { MainContent } from "@/components/MainContent";
 import { DaemonProvider } from "@/lib/daemon";
 import { BackgroundLayer } from "@/components/BackgroundLayer";
@@ -129,6 +130,11 @@ export default function RootLayout({
                     area while no real provider is connected. Deliberately
                     non-dismissable. */}
                 <SimulatedBanner />
+                {/* v1.446.0 (ease-of-use review item 23): while Emergency
+                    stop is on, one quiet strip says nothing starts on its own
+                    and offers Turn off — on every page but Autonomy. It keeps
+                    --ij-strip-h equal to both strips' height. */}
+                <EmergencyStopStrip />
                 {/* Redesign S8: the mock-downgrade warning is the shell's,
                     on every page (it was the Overview's alone). */}
                 <div className="px-3 pt-3 empty:hidden lg:px-4">

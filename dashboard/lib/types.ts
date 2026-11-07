@@ -280,6 +280,8 @@ export interface WorkflowStep {
  * terminal; keep polling through both. */
 export const WORKFLOW_RUN_TERMINAL = new Set<string>([
   "completed",
+  // v1.446.0 (review item 22): finished, but a step it went on past failed.
+  "completed_with_failures",
   "failed",
   "cancelled",
   "interrupted",

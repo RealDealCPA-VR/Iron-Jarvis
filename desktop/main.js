@@ -4073,8 +4073,11 @@ function planPaneNotifications(seen, panes, windowOpen) {
 // started from chat, and a chat reply that ran longer than a minute
 // (`chat.turn_finished`, comm/notifier.CHAT_FINISHED_TITLE). The daemon's twin
 // is comm/notifier.tray_says (the fixture's `tray` key).
+// v1.446.0 (ease-of-use review items 20, 22): and a rule that could not start
+// its action (`reflex.failed`), and a workflow that finished with a failed
+// step it was told to skip (`workflow.completed` `completed_with_failures`).
 const RUN_OUTCOME_AUDIT_TYPES =
-  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary,build.ci_done,chat.turn_finished";
+  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary,build.ci_done,chat.turn_finished,reflex.failed";
 //: Entries one read asks for (the bell's own replay reads 50).
 const RUN_OUTCOME_LIMIT = 50;
 //: How many seen ids the watcher remembers (newest kept).
@@ -4149,6 +4152,18 @@ function runOutcomeBuildTook(seconds) {
   const min = Math.floor(whole / 60);
   const rest = whole % 60;
   return rest ? `took ${min} min ${rest} s` : `took ${min} min`;
+}
+
+// v1.446.0 (review item 22): which steps a part-failed workflow went on past
+// (`failed_steps`, names) — the bell's words (NotificationBell partFailedBody,
+// comm/notifier.workflow_part_failed_body; one fixture).
+function runOutcomePartFailedBody(raw) {
+  const names = Array.isArray(raw)
+    ? raw.filter((n) => typeof n === "string" && n.trim() !== "").map((n) => n.trim())
+    : [];
+  if (!names.length) return "The Workflows page shows which step failed.";
+  const quoted = names.slice(0, 5).map((n) => `“${n}”`).join(", ");
+  return `${names.length === 1 ? "Its step" : "Its steps"} ${quoted} failed. The Workflows page shows why.`;
 }
 
 // One audit entry ({id, type, session_id, payload}) as the bell's ATTENTION
@@ -4239,8 +4254,23 @@ function runOutcomeNotice(entry) {
         : `/chat?view=code&session=${encodeURIComponent(thread)}`,
     };
   }
+  if (entry.type === "reflex.failed") {
+    // v1.446.0 (review item 20): the bell's row, word for word
+    // (NotificationBell `toActivity`, comm/notifier.reflex_failed_title).
+    const name = typeof p.rule === "string" ? p.rule.trim() : "";
+    return {
+      id,
+      ts: runOutcomeTsMs(entry.ts),
+      title: name ? `Your rule ${name} couldn't start` : "A rule couldn't start",
+      body: runOutcomeClip(p.reason) || RUN_OUTCOME_NO_DETAIL,
+      href: "/reflex",
+    };
+  }
   if (entry.type === "workflow.completed") {
-    if (p.status !== "failed") return null;
+    // v1.446.0 (review item 22): a run that finished with a failed step it
+    // was told to skip rings like a failure, in the bell's words.
+    const partFailed = p.status === "completed_with_failures";
+    if (p.status !== "failed" && !partFailed) return null;
     const name = typeof p.workflow === "string" ? p.workflow.trim() : "";
     const covers = Array.isArray(p.sessions)
       ? p.sessions.filter((s) => typeof s === "string" && s !== "")
@@ -4248,8 +4278,10 @@ function runOutcomeNotice(entry) {
     return {
       id,
       ts: runOutcomeTsMs(entry.ts),
-      title: `${name ? `Your workflow ${name}` : "A workflow"} could not finish`,
-      body: "The Workflows page shows which step stopped.",
+      title: `${name ? `Your workflow ${name}` : "A workflow"} ${
+        partFailed ? "finished, but part of it failed" : "could not finish"
+      }`,
+      body: partFailed ? runOutcomePartFailedBody(p.failed_steps) : "The Workflows page shows which step stopped.",
       href: "/workflows",
       covers,
       // v1.361.0 (lane 11A): the run of the step that ENDED it ("" = a step

@@ -51,6 +51,9 @@ const STOPPED = w("Stopped", "slate");
 const NEEDS_YOU = w("Needs you", "amber");
 // Paused on an ask right now (a review to approve, a question to answer).
 const WAITING_FOR_YOU = w("Waiting for you", "amber");
+// Finished, but part of the work failed (a run's ledger verdict, a
+// workflow run with a failed step it was told to skip, a schedule fire).
+const PART_FAILED = w("Part failed", "amber");
 
 /** Every work status the daemon writes, by its raw value (lower case). */
 const STATUS: Readonly<Record<string, StatusWords>> = {
@@ -78,6 +81,10 @@ const STATUS: Readonly<Record<string, StatusWords>> = {
   waiting: WAITING_FOR_YOU,
   interrupted: w("Interrupted", "amber"),
   error: FAILED,
+  // v1.446.0 (ease-of-use review item 22): a workflow run that finished,
+  // but a step set to "skip if it fails" failed (workflows/engine.py
+  // PART_FAILED_STATUS) — amber, never "Done".
+  completed_with_failures: PART_FAILED,
   skipped: w("Skipped", "slate"),
   pending: w("Pending", "amber"),
   // The Session board's review lane: a review to approve, or a paused ask.
@@ -97,7 +104,6 @@ const STATUS: Readonly<Record<string, StatusWords>> = {
  *  "Done" over work that still needs them (or that partly failed) was the
  *  re-audit's regression on the Schedules row. The same object a blocked
  *  assignment and a waiting teammate say, so the user is next in one word. */
-const PART_FAILED = w("Part failed", "amber");
 const OUTCOME: Readonly<Record<string, StatusWords>> = {
   // An ask expired unanswered: the user is the headline.
   needs_you: NEEDS_YOU,

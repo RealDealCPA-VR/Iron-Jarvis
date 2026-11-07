@@ -8,8 +8,10 @@
  *  - the flash names what will not start and the daemon's count;
  *  - with nothing running it does not invent a count;
  *  - the engaged banner says chat and the user's own work keep going;
- *  - the button keeps its name, its look and its one press (pinned by the
- *    v1.316.0 file; only the words changed).
+ *  - the button keeps its look and its one press (pinned by the v1.316.0
+ *    file). v1.446.0 (review item 23) moved its words ON PURPOSE: it is
+ *    "Emergency stop" / "Turn off Emergency stop" now, the name every refusal,
+ *    Settings and the app-wide strip use (it was "Kill switch").
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -108,7 +110,7 @@ afterEach(() => {
 });
 
 async function pressKill() {
-  const btn = await screen.findByRole("button", { name: /^\s*Kill switch\s*$/ });
+  const btn = await screen.findByRole("button", { name: /^\s*Emergency stop\s*$/ });
   await waitFor(() => expect(btn).toBeEnabled());
   fireEvent.click(btn);
 }
@@ -121,7 +123,7 @@ describe("Emergency stop says what it stopped", () => {
     await pressKill();
     expect(
       await screen.findByText(
-        "Kill switch engaged — schedules, goals, rules, phone tasks and autonomy will not start. Stopped 2 running tasks.",
+        "Emergency stop is on — schedules, goals, rules, phone tasks and autonomy will not start. Stopped 2 running tasks.",
       ),
     ).toBeInTheDocument();
     expect(api.posts).toContainEqual({ path: "/autonomy/kill", body: { enabled: true } });
@@ -135,7 +137,7 @@ describe("Emergency stop says what it stopped", () => {
     await pressKill();
     expect(
       await screen.findByText(
-        "Kill switch engaged — schedules, goals, rules, phone tasks and autonomy will not start.",
+        "Emergency stop is on — schedules, goals, rules, phone tasks and autonomy will not start.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Stopped \d/)).toBeNull();
@@ -148,7 +150,7 @@ describe("Emergency stop says what it stopped", () => {
     await pressKill();
     expect(
       await screen.findByText(
-        "Kill switch engaged — schedules, goals, rules, phone tasks and autonomy will not start.",
+        "Emergency stop is on — schedules, goals, rules, phone tasks and autonomy will not start.",
       ),
     ).toBeInTheDocument();
   });
@@ -156,7 +158,7 @@ describe("Emergency stop says what it stopped", () => {
   it("the engaged banner says chat and the user's own work keep going", async () => {
     prime(true);
     render(<AutonomyPage />);
-    expect(await screen.findByRole("button", { name: /Release kill switch/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Turn off Emergency stop/ })).toBeInTheDocument();
     const scope = screen.getByTestId("kill-switch-scope");
     expect(scope.textContent).toMatch(/Schedules, goals, rules, phone tasks and autonomy will not start/);
     expect(scope.textContent).toMatch(/Chat and work you start still\s+run/);

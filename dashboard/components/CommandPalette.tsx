@@ -491,6 +491,9 @@ const HISTORY_FETCH = 20;
 /** Below three characters the index returns noise, and every keystroke would
  *  cost a round trip for it. */
 const HISTORY_MIN_CHARS = 3;
+/** v1.446.0: the chat-title lane asks from 2 characters, 8 at most. */
+const TITLE_MIN_CHARS = 2;
+const TITLE_FETCH = 8;
 /** Long enough that a typed word costs one request, not six; short enough that
  *  the lane lands while you are still reading the rows above it. */
 const HISTORY_DEBOUNCE_MS = 180;
@@ -799,6 +802,11 @@ export function CommandPalette() {
   // The "In your conversations" lane. Unlike the three catalogues above, this
   // one is fetched PER QUERY (see the effect below), never once.
   const [historyItems, setHistoryItems] = useState<PaletteRow[]>([]);
+  // v1.446.0: chats found BY TITLE across every chat (GET /chat/threads/search),
+  // not only the newest 100 the "threads" lane reads.
+  const [titleItems, setTitleItems] = useState<PaletteRow[]>([]);
+  const titleGenRef = useRef(0);
+  const titleOffRef = useRef(false);
   /** Bumped by every query change. A response whose generation is stale is
    *  DROPPED, not merged: two requests in flight can settle out of order, and
    *  the older one landing last would paint the previous query's results under
@@ -1030,6 +1038,52 @@ export function CommandPalette() {
     };
   }, [open, query]);
 
+  /** v1.446.0: the chat-title lane. Same three guards as the lane above
+   *  (debounce, abort, generation); a daemon without /chat/threads/search
+   *  (404/405) turns it off for the session. Only TITLE matches are taken:
+   *  words said inside a chat are the conversation lane's job above. */
+  useEffect(() => {
+    const gen = ++titleGenRef.current;
+    const needle = open ? query.trim() : "";
+    if (!needle || needle.length < TITLE_MIN_CHARS || titleOffRef.current) {
+      setTitleItems((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    let ctrl: AbortController | null = null;
+    const timer = setTimeout(() => {
+      ctrl = new AbortController();
+      getAbortable<{ threads?: (ThreadRow & { match?: string })[] }>(
+        `/chat/threads/search?q=${encodeURIComponent(needle)}&limit=${TITLE_FETCH}`,
+        { signal: ctrl.signal },
+      )
+        .then((d) => {
+          if (gen !== titleGenRef.current) return;
+          setTitleItems(
+            (d?.threads ?? [])
+              .filter((t) => t && t.id && t.match !== "text")
+              .map((t) => ({
+                id: `thread:${t.id}`,
+                kind: "thread" as const,
+                label: t.title || "(untitled)",
+                blurb: clip(threadWhen(t.updated_at)),
+                href: `/chat?thread=${encodeURIComponent(t.id)}`,
+                icon: MessageSquare,
+              })),
+          );
+        })
+        .catch((err: unknown) => {
+          const status = (err as { status?: number } | null)?.status;
+          if (status === 404 || status === 405) titleOffRef.current = true;
+          if (gen !== titleGenRef.current) return;
+          setTitleItems((prev) => (prev.length ? [] : prev));
+        });
+    }, HISTORY_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      ctrl?.abort();
+    };
+  }, [open, query]);
+
   /** The files & memory lane. Same three guards as the lane above; a daemon
    *  without /search/all (404/405) turns it off for the session. */
   useEffect(() => {
@@ -1126,7 +1180,16 @@ export function CommandPalette() {
     // user named outright is a more certain answer than a phrase buried in a
     // months-old message. Above, because the ask row is the end of the road.
     // A conversation already offered above by title is not offered twice.
-    const above = new Set(matched.map((r) => r.href).filter(Boolean));
+    // v1.446.0: chats matched by title anywhere (past the newest 100) join the
+    // name matches, each offered once.
+    const seen = new Set(matched.map((r) => r.href).filter(Boolean));
+    for (const r of titleItems) {
+      if (r.href && !seen.has(r.href)) {
+        matched.push(r);
+        seen.add(r.href);
+      }
+    }
+    const above = seen;
     const lane = historyItems.filter((r) => !above.has(r.href));
     // Files & memory sit below the conversations: a thing you can open beats a
     // phrase in a months-old message only when you named it outright, which the
@@ -1140,7 +1203,7 @@ export function CommandPalette() {
     // away, and the one thing this app can always do with a sentence is answer
     // it. Always last so it never steals the top slot from a real destination.
     return { rows: [...matched, ...lane, ...found, askRow(q)], headers: h };
-  }, [q, allItems, byId, threadItems, historyItems, foundItems]);
+  }, [q, allItems, byId, threadItems, historyItems, foundItems, titleItems]);
 
   // Clamp rather than trust: live results can arrive after the user has already
   // arrowed down, and an out-of-range index would silently Enter into nothing.

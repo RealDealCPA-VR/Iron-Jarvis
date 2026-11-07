@@ -266,6 +266,7 @@ class WorkflowStore:
 #: a 404.
 FINISHED_RUN_STATUSES: tuple[str, ...] = (
     "completed",
+    "completed_with_failures",  # v1.446.0 (review item 22)
     "failed",
     "cancelled",
     "interrupted",
@@ -279,6 +280,7 @@ FINISHED_RUN_STATUSES: tuple[str, ...] = (
 #: realistically abandoned rather than merely past a busy backlog's window.
 PRUNABLE_RUN_STATUSES: tuple[str, ...] = (
     "completed",
+    "completed_with_failures",  # v1.446.0 (review item 22)
     "failed",
     "cancelled",
 )

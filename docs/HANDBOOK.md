@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.445.1 (2026-11-07).*
+holds itself to. Current as of v1.446.0 (2026-11-07).*
 
 ---
 
@@ -2115,6 +2115,44 @@ folder, saves what it makes there, and remembers the folder with the chat.
   files there, for example), it says so under the chip.
 - **Clearing:** **×**, or **+ › No folder for this chat**, goes back to no
   folder.
+## Nothing goes quiet on you (v1.446.0)
+
+The second group from the ease-of-use review: things that failed, waited or
+paused without telling you.
+
+- **A rule that can't start tells you.** When a rule matches but can't start
+  its action (its workflow was deleted, its remote agent didn't answer,
+  Emergency stop is on), the bell, the tray and your phone say "Your rule X
+  couldn't start" and why — once, not for every signal that fails the same
+  way. Pressing Test on the Rules page shows the answer right there instead.
+- **A folder watcher's suggestion shows in the bell** as a quiet line, "Your
+  watcher X noticed changes · Review". It never pings or messages your phone.
+- **A workflow with a failed step says so.** A step set to "skip if it fails"
+  that fails no longer hides behind Done: the run finishes "Part failed"
+  (amber), and the bell, tray and phone say which step failed.
+- **Emergency stop can't be forgotten.** While it is on, a red strip at the
+  top of every page says "Emergency stop is on — nothing starts on its own",
+  with Turn off. It has one name everywhere (the Autonomy page's button no
+  longer says "Kill switch"). The Schedules page says schedules are skipped,
+  and each next run reads "Paused by Emergency stop".
+- **Schedules can be paused.** Each schedule has an On/Paused switch; pausing
+  keeps everything about it. Editing a schedule uses the same Repeat list as
+  adding one, so you don't need to write cron.
+- **Restoring a backup can be undone.** Before anything is replaced, Iron
+  Jarvis saves your current state as a backup marked "saved before a
+  restore". If that can't be saved (a full disk), nothing is restored. It also
+  won't restore while anything is running, and names what is.
+- **Editing a notification destination changes only what you changed.** Its
+  alert list stays as you set it, and settings the form doesn't show are kept.
+  An email destination can listen for incoming mail from the Notifications
+  page (under Advanced: reading mail server, port, "Listen for incoming
+  mail", allowed senders). Adding a destination with a name you already use is
+  refused instead of replacing it.
+- **Every chat can be found.** "Show older chats" at the end of the list loads
+  the next 100. "Search chats" looks through the names and the words said
+  inside all your chats, with the matching words shown under each one. Ctrl K
+  finds a chat by its name past the newest 100 too.
+
 ## Your first ten minutes, smoother (v1.445.0)
 
 An ease-of-use review (docs/EASE-OF-USE-REVIEW-2026-11-07.md) walked the app

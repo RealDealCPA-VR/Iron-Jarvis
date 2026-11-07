@@ -197,8 +197,16 @@ const EXPECTED: Record<string, string[][]> = {
   // The bell rings the failed step's own run (its reason is the run's
   // summary); This PC is quiet for it.
   skipped_agent_step: [["bell", STEP_FAILED, INBOX]],
-  // A tool step has no run, so no bell row: This PC says the schedule's line.
-  skipped_tool_step: [["this-pc", "Iron Jarvis", FIX.skipped_tool_step.phone[0]]],
+  // v1.446.0 (moved on purpose, review item 22): a tool step has no run of
+  // its own, but the WORKFLOW's own row now rings ("finished, but part of it
+  // failed", naming the step) — the bell is the one notice, This PC quiet.
+  skipped_tool_step: [
+    [
+      "bell",
+      "Your workflow Nightly finished, but part of it failed",
+      "Its step “Check” failed. The Workflows page shows why.",
+    ],
+  ],
   // The step that ENDED the run rang; the workflow's row stands in for it.
   halted_by_agent_step: [["bell", STEP_FAILED, INBOX]],
   // Two outcomes: the attempt that failed (the bell) and the run that
@@ -231,7 +239,9 @@ describe("(a) one notice per outcome across the bell and This PC, in every windo
     // The bell's words come from the run (title names the workflow, body is
     // the run's own reason); This PC's from the schedule (names the step).
     expect(FIX.skipped_agent_step.phone[0]).toContain("“Fetch”");
-    expect(FIX.skipped_tool_step.desktop.map((d) => d.message)).toEqual(FIX.skipped_tool_step.phone);
+    // v1.446.0 (moved on purpose): the bell's row says the tool step now, so
+    // This PC (the schedule's line) stays quiet for it.
+    expect(FIX.skipped_tool_step.desktop).toEqual([]);
     expect(FIX.skipped_tool_step.phone[0]).toContain("“Check”");
     expect(FIX.halted_by_agent_step.phone[0]).toMatch(/stopped at its step “Fetch”: The inbox could not be reached\./);
   });

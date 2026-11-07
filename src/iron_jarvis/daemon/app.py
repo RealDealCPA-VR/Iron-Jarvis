@@ -3587,6 +3587,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
             {"key": "password", "label": "Password / app password", "secret": True},
             {"key": "from_addr", "label": "From address", "secret": False},
             {"key": "to_addr", "label": "Send to", "secret": False},
+            # v1.446.0 (ease-of-use review item 13): the two-way keys chat's
+            # channel_connect / channel_toggle already write, so the page can
+            # show them and an edit no longer drops them. EmailChannel.poll
+            # reads imap_host (else host) and imap_port (else 993).
+            {"key": "imap_host", "label": "IMAP host", "secret": False,
+             "help": "e.g. imap.gmail.com — needed only to listen for incoming mail."},
+            {"key": "imap_port", "label": "IMAP port", "secret": False, "help": "usually 993"},
+            {"key": "inbound_enabled", "label": "Enable two-way (true/false)", "secret": False,
+             "help": "Set to true so Iron Jarvis reads the inbox and acts on mail from "
+                     "the allowed senders. Off by default."},
+            {"key": "allowed_senders", "label": "Allowlist (email addresses)", "secret": False,
+             "help": "Comma-separated From addresses allowed to message Iron Jarvis. "
+                     "FAIL-CLOSED: an empty allowlist means nobody may."},
         ],
     }
 

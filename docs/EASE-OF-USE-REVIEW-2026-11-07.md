@@ -320,6 +320,9 @@ it works.**
 
 ## Part 2 — Automations: things run, but you can't see, pause or edit them
 
+*Shipped so far: items 1-4, 6, 11, 14, 18, 58 in v1.445.0; items 7, 10, 13,
+20-24 (and part of 25) in v1.446.0.*
+
 ### 20. A rule ("reflex") that fails to start tells nobody
 - **Before:** If a rule's workflow was deleted, the remote agent is down, or
   Emergency stop is on, the failure is written only on the rule's own row.

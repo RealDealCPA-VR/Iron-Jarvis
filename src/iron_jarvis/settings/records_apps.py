@@ -491,10 +491,12 @@ ALERT_WORDS: dict[str, str] = {
     "goal.iteration_refused": "A goal run was held back (budget or state)",
     "build.night_summary": "The night shift's summary (one message a night)",
     "build.ci_done": "Your pull request's checks: fixed, or Iron Jarvis gave up",
+    # v1.446.0: a rule that matched but could not start its action.
+    "reflex.failed": "A rule couldn't start",
 }
 #: The alerts that are only ever bad news — what "only send me failures"
 #: can choose. A finished task or workflow is sent whether it worked or not.
-PROBLEM_ALERTS = ("provider.failed", "goal.tripped", "goal.iteration_refused")
+PROBLEM_ALERTS = ("provider.failed", "goal.tripped", "goal.iteration_refused", "reflex.failed")
 #: What a destination still cannot do — said whenever a finished task or
 #: workflow is left out, so the model never promises "only the failed ones".
 ONLY_FAILED_NOT_YET = (

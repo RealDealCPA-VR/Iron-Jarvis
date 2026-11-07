@@ -411,7 +411,7 @@ async def test_expect_failure_routes_through_on_failure_skip(tmp_path):
         ],
     )
     rec = await WorkflowEngine(platform).run(wf)
-    assert rec.status == "completed"
+    assert rec.status == "completed_with_failures"  # v1.446.0 (moved on purpose): part failed
     outs = json.loads(rec.outputs_json)
     assert outs["Make"]["status"] == "failed"
     assert outs["Make"]["handled"] == "skipped"
@@ -728,7 +728,7 @@ async def test_ask_expect_failure_with_skip_continues_visibly(tmp_path):
     engine = WorkflowEngine(platform)
     rec = await engine.run(_ask_gate_def("gate-skip", on_failure="skip"))
     resumed = await engine.resume_after_answer(rec, "no way")
-    assert resumed.status == "completed"
+    assert resumed.status == "completed_with_failures"  # v1.446.0 (moved on purpose)
     outs = json.loads(resumed.outputs_json)
     assert outs["Approve"]["status"] == "failed"
     assert outs["Approve"]["handled"] == "skipped"

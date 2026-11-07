@@ -194,14 +194,15 @@ describe("Restore from backup (CL7)", () => {
   it("shows the daemon's 409 verbatim and does not restart", async () => {
     routeGet();
     api.post.mockRejectedValue(
-      new ApiError("cannot restore while work is in flight (1 session(s) running) — wait for them to finish or cancel them, then retry", 409),
+      // v1.446.0 (ease-of-use item 7): moved on purpose to the daemon's plain words.
+      new ApiError("1 chat reply is still running. Wait for it to finish, or stop it, then restore.", 409),
     );
     const notes: string[] = [];
     render(<MaintenanceTools onRestartRequested={(n) => void notes.push(n)} />);
     await screen.findByLabelText("Backup to restore");
     fireEvent.click(screen.getByRole("button", { name: /Restore from backup…/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Restore and restart" }));
-    await screen.findByText(/cannot restore while work is in flight \(1 session\(s\) running\)/);
+    await screen.findByText(/1 chat reply is still running\. Wait for it to finish, or stop it, then restore\./);
     expect(notes).toHaveLength(0);
   });
 

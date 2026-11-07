@@ -275,7 +275,7 @@ export const NAV: NavSectionDef[] = [
         href: "/autonomy",
         label: "Autonomy",
         icon: Gauge,
-        aliases: ["trust", "on its own", "suggestions", "proposals", "kill switch"],
+        aliases: ["trust", "on its own", "suggestions", "proposals", "emergency stop", "kill switch", "stop everything"],
         blurb: "What Iron Jarvis wants to do on its own — and the switch that stops it.",
       },
       {

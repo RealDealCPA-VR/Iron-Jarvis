@@ -47,6 +47,9 @@ import { Markdown } from "@/components/Markdown";
 import { PageGrid } from "@/components/PageGrid";
 // v1.355.0 (G65): the five-minute sentence every unattended-work form shows.
 import { UnattendedAskNote } from "@/components/UnattendedAskNote";
+// v1.446.0 (review item 23): the app-wide Emergency stop store — this page
+// feeds it from its own read and its button's answer.
+import { noteEmergencyStop } from "@/components/EmergencyStopStrip";
 import {
   useLiveGoals,
   spentVsBudget,
@@ -169,9 +172,12 @@ function count(v: number | null | undefined): string {
  *  starts, and how many runs it stopped (the daemon's count). Pure. */
 function killEngagedWords(stopped: number | null | undefined): string {
   const n = typeof stopped === "number" && Number.isFinite(stopped) && stopped > 0 ? Math.floor(stopped) : 0;
-  const base = "Kill switch engaged — schedules, goals, rules, phone tasks and autonomy will not start.";
+  const base = "Emergency stop is on — schedules, goals, rules, phone tasks and autonomy will not start.";
   return n > 0 ? `${base} Stopped ${n} running ${n === 1 ? "task" : "tasks"}.` : base;
 }
+
+/** The flash after Emergency stop is turned off (v1.446.0). */
+const EMERGENCY_STOP_OFF_WORDS = "Emergency stop is off — schedules, goals and rules start on their own again.";
 
 function errText(err: unknown): string {
   return err instanceof ApiError ? err.message : String(err);
@@ -324,7 +330,9 @@ export default function AutonomyPage() {
       const r = await post<{ kill_switch?: boolean; stopped?: number }>("/autonomy/kill", { enabled });
       // v1.351.0 (readiness audit G13): the switch really stops self-started
       // work now — say what it stopped, in the daemon's own count.
-      flash(enabled ? killEngagedWords(r?.stopped) : "Kill switch released.");
+      flash(enabled ? killEngagedWords(r?.stopped) : EMERGENCY_STOP_OFF_WORDS);
+      // v1.446.0 (review item 23): the app-wide strip follows the press at once.
+      noteEmergencyStop(typeof r?.kill_switch === "boolean" ? r.kill_switch : enabled);
       status.reload();
     } catch (err) {
       flash(null, errText(err));
@@ -372,6 +380,12 @@ export default function AutonomyPage() {
   }
 
   const killed = !!s?.kill_switch;
+  // v1.446.0 (review item 23): the page's own 10 s read also keeps the
+  // app-wide strip's store true (no second poll).
+  const knownKill = typeof s?.kill_switch === "boolean" ? s.kill_switch : null;
+  useEffect(() => {
+    if (knownKill !== null) noteEmergencyStop(knownKill);
+  }, [knownKill]);
   /** v1.316.0: the Kill switch rests neutral only when autonomy is off AND
    *  nothing is pending — the moment either changes it is red again. */
   const killQuiet = !s?.enabled && !(s?.pending_proposals ?? 0);
@@ -444,19 +458,21 @@ export default function AutonomyPage() {
                 }`}
                 title={
                   killed
-                    ? "Release the global kill switch"
+                    ? "Turn Emergency stop off: schedules, goals and rules start on their own again"
                     : "Stop everything that starts on its own: schedules, goals, rules, phone tasks and autonomy"
                 }
               >
+                {/* v1.446.0 (review item 23): ONE name, "Emergency stop" —
+                    the words every refusal, Settings and the strip use. */}
                 {killBusy ? (
-                  <LoaderInline label={killed ? "Releasing…" : "Halting…"} />
+                  <LoaderInline label={killed ? "Turning off…" : "Stopping…"} />
                 ) : killed ? (
                   <>
-                    <ShieldCheck size={15} /> Release kill switch
+                    <ShieldCheck size={15} /> Turn off Emergency stop
                   </>
                 ) : (
                   <>
-                    <ShieldAlert size={15} /> Kill switch
+                    <ShieldAlert size={15} /> Emergency stop
                   </>
                 )}
               </button>
@@ -483,12 +499,12 @@ export default function AutonomyPage() {
             <ShieldAlert size={18} className="mt-0.5 shrink-0 text-rose-300" />
             <div className="text-sm text-rose-100/90">
               <div className="font-semibold text-rose-200">
-                Kill switch engaged — autonomy is halted.
+                Emergency stop is on — nothing starts on its own.
               </div>
               <div className="mt-1 text-rose-100/60" data-testid="kill-switch-scope">
                 Schedules, goals, rules, phone tasks and autonomy will not start, and
                 what they had running was stopped. Chat and work you start still
-                run. Release it above to resume.
+                run. Turn it off above to resume.
               </div>
             </div>
           </div>

@@ -19,26 +19,48 @@
 //
 // Data: lib/chatList (one store per window; the rail and the phone drawer
 // share it). Theme tokens only, ghosts that fill on hover (ThreadGroups').
+//
+// v1.446.0 (review item 10): the box first narrows the chats already listed
+// (at once, as before), then — from two characters, a quarter second after
+// the last key — asks the daemon to search EVERY chat's name and the words
+// said in it, and shows that answer (with the matched words) in the list's
+// place. When that search cannot be reached the title filter stays and one
+// quiet line says so. A list of 100 chats ends in "Show older chats".
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
 
-import ThreadGroups, { GROUP_LIMIT } from "@/components/chat/ThreadGroups";
-import { readPinnedChats, useChatList, type ChatListThread } from "@/lib/chatList";
+import ThreadGroups, { GROUP_LIMIT, ShowOlderChats, ThreadSnippet } from "@/components/chat/ThreadGroups";
+import {
+  CHAT_SEARCH_FALLBACK_WORDS,
+  filterTitles,
+  readPinnedChats,
+  useChatList,
+  useChatSearch,
+  type ChatSearchRow,
+} from "@/lib/chatList";
+import { readLastViewed, threadStatuses } from "@/lib/threadStatus";
 
 export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }) {
   const router = useRouter();
-  const { threads, projects, statuses } = useChatList();
+  const { threads, projects, statuses, mayShowOlder, olderFailed, loadOlder } = useChatList();
+  const [olderBusy, setOlderBusy] = useState(false);
   const [pinned, setPinned] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   useEffect(() => {
     setPinned(readPinnedChats());
   }, [threads]);
   const q = query.trim().toLowerCase();
-  const shown = useMemo(
-    () => (q && threads ? threads.filter((t) => (t.title || "").toLowerCase().includes(q)) : threads),
-    [threads, q],
+  const search = useChatSearch(query);
+  const shown = useMemo<ChatSearchRow[] | null>(
+    () => (search.results ? search.results : threads && q ? filterTitles(threads, q) : threads),
+    [threads, q, search.results],
+  );
+  // A result the list does not hold (an older chat) still gets its dot.
+  const shownStatuses = useMemo(
+    () => (search.results ? { ...threadStatuses(search.results, readLastViewed(), null), ...statuses } : statuses),
+    [search.results, statuses],
   );
 
   if (threads === null) return null;
@@ -76,15 +98,20 @@ export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }
           className="field w-full py-1.5 pl-8 text-[12px]"
         />
       </div>
+      {search.failed ? (
+        <p role="status" data-testid="sidebar-chat-search-fallback" className="px-2.5 pb-1 text-[12px] leading-relaxed text-zinc-500">
+          {CHAT_SEARCH_FALLBACK_WORDS}
+        </p>
+      ) : null}
       {shown && shown.length === 0 ? (
         <p className="px-2.5 py-2 text-[12px] leading-relaxed text-zinc-500">
           No chats match “{query.trim()}”.
         </p>
       ) : (
-        <ThreadGroups<ChatListThread>
+        <ThreadGroups<ChatSearchRow>
           threads={shown ?? []}
           projects={projects ?? []}
-          statuses={statuses}
+          statuses={shownStatuses}
           pinnedIds={pinned}
           limit={q ? Infinity : GROUP_LIMIT}
           onOpen={(id) => {
@@ -99,8 +126,20 @@ export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }
               </span>
             ) : null
           }
+          rowDetail={(t) => (search.results && t.snippet ? <ThreadSnippet snippet={t.snippet} /> : null)}
         />
       )}
+      {!q && mayShowOlder ? (
+        <ShowOlderChats
+          testId="sidebar-show-older"
+          busy={olderBusy}
+          failed={olderFailed}
+          onPress={() => {
+            setOlderBusy(true);
+            void loadOlder().finally(() => setOlderBusy(false));
+          }}
+        />
+      ) : null}
     </div>
   );
 }

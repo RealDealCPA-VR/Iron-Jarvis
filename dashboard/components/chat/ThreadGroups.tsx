@@ -43,6 +43,7 @@
 import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ChevronRight, Folder, Pin } from "lucide-react";
 
+import { SHOW_OLDER_FAILED_WORDS, SHOW_OLDER_WORDS, snippetParts } from "@/lib/chatList";
 import { sameTitleLabels, sameTitleTooltip } from "@/lib/sameTitleRows";
 import {
   formatAge,
@@ -51,6 +52,57 @@ import {
   type ThreadStatus,
   type ThreadSummary,
 } from "@/lib/threadStatus";
+
+/** v1.446.0: a search result's matched words, the match itself in the
+ *  regular text colour (the daemon marks it `[like this]` and has already
+ *  masked anything secret-shaped). Plain text: never HTML. */
+export function ThreadSnippet({ snippet }: { snippet: string }) {
+  return (
+    <>
+      {snippetParts(snippet).map((p, i) =>
+        p.marked ? (
+          <mark key={i} className="bg-transparent font-medium text-zinc-300">
+            {p.text}
+          </mark>
+        ) : (
+          <span key={i}>{p.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+/** The quiet button at the end of a list that may hold older chats. */
+export function ShowOlderChats({
+  onPress,
+  busy = false,
+  failed = false,
+  testId = "thread-show-older",
+}: {
+  onPress: () => void;
+  busy?: boolean;
+  failed?: boolean;
+  testId?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <button
+        type="button"
+        data-testid={testId}
+        onClick={onPress}
+        disabled={busy}
+        className="mt-2 flex h-7 w-full items-center rounded-[10px] pl-[22px] pr-2.5 text-left text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-60"
+      >
+        {busy ? "Loading older chats…" : SHOW_OLDER_WORDS}
+      </button>
+      {failed ? (
+        <p role="status" className="px-2.5 pt-1 text-[12px] leading-relaxed text-zinc-500">
+          {SHOW_OLDER_FAILED_WORDS}
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 /** Rows shown per group before "Show more". */
 export const GROUP_LIMIT = 5;
@@ -94,6 +146,9 @@ export interface ThreadGroupsProps<T extends ThreadSummary = ThreadSummary> {
   rowEditor?: (t: T) => ReactNode;
   /** A short word after the title (a messaging chat's channel). */
   rowBadge?: (t: T) => ReactNode;
+  /** v1.446.0: a second line under the title (a search result's matched
+   *  words). A row with one grows to two lines; every other row is as before. */
+  rowDetail?: (t: T) => ReactNode;
   /** The project the page is working in: its group comes first and open,
    *  named `name` even before the project list has answered. */
   lead?: LeadProject | null;
@@ -221,6 +276,7 @@ export default function ThreadGroups<T extends ThreadSummary>({
   rowAction,
   rowEditor,
   rowBadge,
+  rowDetail,
   lead = null,
   foldOthers = false,
   forceOpen = false,
@@ -356,6 +412,7 @@ export default function ThreadGroups<T extends ThreadSummary>({
                 const editor = rowEditor ? rowEditor(t) : null;
                 const action = rowAction && editor == null ? rowAction(t) : null;
                 const badge = rowBadge ? rowBadge(t) : null;
+                const detail = rowDetail ? rowDetail(t) : null;
                 const twin = twins.get(t.id) ?? "";
                 // While a row has an action, a hover-capable screen hides the
                 // row's time until hover/focus, where the ⋯ takes its place.
@@ -376,7 +433,9 @@ export default function ThreadGroups<T extends ThreadSummary>({
                         onClick={() => onOpen(t.id)}
                         title={title}
                         className={[
-                          "flex h-8 w-full min-w-0 items-center gap-2 rounded-[10px] pl-[22px] text-left text-[13px] transition-colors",
+                          detail != null
+                            ? "flex min-h-8 w-full min-w-0 flex-wrap items-center gap-x-2 rounded-[10px] py-1 pl-[22px] text-left text-[13px] transition-colors"
+                            : "flex h-8 w-full min-w-0 items-center gap-2 rounded-[10px] pl-[22px] text-left text-[13px] transition-colors",
                           // Room for the ⋯: always on touch; on a mouse only
                           // while it shows (it takes the age's place).
                           action != null ? "pr-9 [@media(hover:hover)]:pr-2.5" : "pr-2.5",
@@ -423,6 +482,16 @@ export default function ThreadGroups<T extends ThreadSummary>({
                           >
                             {age}
                           </time>
+                        ) : null}
+                        {detail != null ? (
+                          // Under the title: the dot (6 px) + the gap (8 px)
+                          // is the 14 px the line starts in by.
+                          <span
+                            data-testid={`thread-detail-${t.id}`}
+                            className="ml-3.5 block min-w-0 basis-full truncate text-[12px] leading-snug text-zinc-500"
+                          >
+                            {detail}
+                          </span>
                         ) : null}
                       </button>
                     )}

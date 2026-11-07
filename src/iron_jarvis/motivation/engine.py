@@ -209,6 +209,7 @@ class IntentEngine:
         rationale: str = "",
         goal_id: str | None = None,
         dedupe: bool = True,
+        producer: str = "",
     ) -> ProposalRecord | None:
         """Public, thin minting helper for EXTERNAL suggest-only producers.
 
@@ -222,6 +223,13 @@ class IntentEngine:
         ``title`` + ``source`` is reused (returns it) so a repeating signal can't
         pile up an unbounded backlog. Never raises — returns None on failure so a
         bad signal can't break the producer's loop.
+
+        v1.446.0 (ease-of-use review item 21): a NEW proposal publishes ONE
+        ``autonomy.proposed`` (``source`` + ``producer``, e.g. the watcher's
+        name, beside the pulse's own keys) so the bell can say "Your watcher X
+        noticed changes · Review" — a suggestion that only sat in the backlog
+        told nobody. A signal folded into a proposal already waiting
+        publishes nothing (the user has not answered the first one yet).
         """
         title = (title or "").strip()
         if not title:
@@ -246,7 +254,7 @@ class IntentEngine:
                             db.commit()
                             db.refresh(existing)
                         return existing
-            return self._create_proposal(
+            rec = self._create_proposal(
                 goal_id=goal_id,
                 title=title,
                 rationale=rationale,
@@ -258,6 +266,61 @@ class IntentEngine:
         except Exception:  # noqa: BLE001 — a mint failure must not break the caller
             log.exception("add_backlog mint failed for %r", title)
             return None
+        self._announce_backlog(rec, producer=producer)
+        return rec
+
+    #: The publishes a backlog announcement started on a running loop (kept
+    #: so the task is never collected before it runs).
+    _ANNOUNCING: "set[Any]" = set()
+
+    def _announce_backlog(self, rec: ProposalRecord, *, producer: str = "") -> None:
+        """Publish ``autonomy.proposed`` for a NEW backlog proposal, from
+        wherever ``add_backlog`` was called (v1.446.0, review item 21).
+
+        The sentinel sweep runs on a worker thread (``asyncio.to_thread``, the
+        sync ``/sentinels/poll`` route), where no loop runs: the publish then
+        runs under ``asyncio.run`` on that thread — the scheduler thread's
+        pattern; ``EventBus.publish`` wakes each subscriber on its own loop. On
+        a running loop it is a task. Never raises: the proposal is stored
+        whatever happens to its notice."""
+        bus = getattr(self.p, "event_bus", None)
+        if bus is None or rec is None:
+            return
+        payload = {
+            "proposal_id": rec.id,
+            "goal_id": rec.goal_id,
+            "title": rec.title,
+            "risk": rec.risk,
+            "source": rec.source,
+            "rationale": (rec.rationale or "")[:300],
+        }
+        if producer:
+            # The bell names the watcher by this key ("Your watcher X …").
+            payload["sentinel" if rec.source == "sentinel" else "producer"] = producer[:200]
+        try:
+            coro = bus.publish(EventType.AUTONOMY_PROPOSED, payload)
+        except Exception:  # noqa: BLE001
+            log.debug("autonomy.proposed publish failed", exc_info=True)
+            return
+        if not inspect.isawaitable(coro):
+            return
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        try:
+            if running is not None:
+                task = running.create_task(coro)  # type: ignore[arg-type]
+                self._ANNOUNCING.add(task)
+                task.add_done_callback(self._ANNOUNCING.discard)
+            else:
+                asyncio.run(coro)  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001 — a notice never breaks the producer
+            log.debug("autonomy.proposed publish failed", exc_info=True)
+            try:
+                coro.close()  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001
+                pass
 
     # -- budget + governance ----------------------------------------------
 

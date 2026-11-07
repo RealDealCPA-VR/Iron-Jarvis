@@ -54,6 +54,16 @@ import { runNowNote, scheduleDetail } from "@/lib/scheduleOutcome";
 import { scheduleRunWords, toneTextClass } from "@/lib/statusWords";
 // v1.355.0 (G65): the five-minute sentence every unattended-work form shows.
 import { UnattendedAskNote } from "@/components/UnattendedAskNote";
+// v1.446.0 (review item 23): is Emergency stop on — the app-wide store the
+// strip in the layout keeps (no poll of its own here).
+import { useEmergencyStop } from "@/components/EmergencyStopStrip";
+// v1.446.0 (review items 24-25): pause words and the edit window's presets.
+import {
+  EMERGENCY_STOP_SCHEDULES_WORDS,
+  PAUSED_BY_STOP_WORDS,
+  PAUSED_WORDS,
+  pauseDoneWords,
+} from "@/lib/schedules";
 
 /** Fallback only — the real list comes live from GET /agents (builtin +
  * dynamic), the same source NewSessionForm's picker uses. */
@@ -145,6 +155,16 @@ function fullWhen(value: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleString(undefined, { dateStyle: "full", timeStyle: "long" });
+}
+
+/** A "once" schedule whose time has passed: it ran (or was missed) and is
+ *  finished — resuming it would only re-arm a moment in the past. */
+function onceIsOver(s: Schedule): boolean {
+  const tt = (s.trigger_type ?? "").toLowerCase();
+  const once = tt === "date" || (!s.cron && !!s.run_at);
+  if (!once || !s.run_at) return false;
+  const t = new Date(s.run_at).getTime();
+  return !Number.isNaN(t) && t <= Date.now();
 }
 
 /** A human-readable description of a stored schedule's trigger. */
@@ -409,6 +429,8 @@ export default function SchedulesPage() {
   // the job, or did not run at all, is neither "Ran ✓" nor an error.
   const [warn, setWarn] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
+  // v1.446.0 (review item 23): while Emergency stop is on nothing here runs.
+  const emergencyStop = useEmergencyStop().on;
 
   // ?focus=add (the global search's deep link) rings the add card.
   const addFocusRef = useFocusRef<HTMLDivElement>("add");
@@ -560,6 +582,25 @@ export default function SchedulesPage() {
       if (note.tone === "danger") setFormError(note.text);
       else if (note.tone === "warn") setWarn(note.text);
       else setOk(note.text);
+      reload();
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setActing(null);
+    }
+  }
+
+  /** v1.446.0 (review item 24): pause or resume one schedule — the daemon's
+   *  PATCH /schedules/{name} {enabled}, which disarms (or re-arms) its job
+   *  at once — then read the list again. */
+  async function setEnabled(s: Schedule, enabled: boolean) {
+    setActing(`pause:${s.name}`);
+    setOk(null);
+    setWarn(null);
+    setFormError(null);
+    try {
+      await patch(`/schedules/${encodeURIComponent(s.name)}`, { enabled });
+      setOk(pauseDoneWords(s.name, enabled));
       reload();
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : String(err));
@@ -928,6 +969,11 @@ export default function SchedulesPage() {
               title={`Schedules${schedules.length ? ` · ${schedules.length}` : ""}`}
               icon={<CalendarClock size={15} />}
             >
+              {emergencyStop && (
+                <div className="mb-3" data-testid="schedules-emergency-stop">
+                  <WarnNote>{EMERGENCY_STOP_SCHEDULES_WORDS}</WarnNote>
+                </div>
+              )}
               {loading && !data ? (
                 <SkeletonRows rows={5} />
               ) : schedules.length === 0 ? (
@@ -1049,17 +1095,65 @@ export default function SchedulesPage() {
                               </Link>
                             ) : null}
                           </td>
-                          <td className="px-2 py-2.5 text-zinc-500">
-                            <span
-                              className="inline-flex items-center gap-1.5"
-                              title={s.next_run ? fullWhen(s.next_run) : undefined}
-                            >
-                              <Clock size={12} className="text-zinc-600" />
-                              {s.next_run ? shortWhen(s.next_run) : "—"}
-                            </span>
+                          <td className="px-2 py-2.5 text-zinc-500" data-testid={`schedule-next-${s.name}`}>
+                            {/* v1.446.0 (review items 23-24): a paused row
+                                promises no time; under Emergency stop the
+                                time it WOULD run stays in the title only. */}
+                            {!s.enabled && !onceIsOver(s) ? (
+                              <span className="inline-flex items-center gap-1.5 text-zinc-400">
+                                {PAUSED_WORDS}
+                              </span>
+                            ) : s.next_run && emergencyStop ? (
+                              <span
+                                className="inline-flex items-center gap-1.5 text-tone-warn"
+                                title={`Would run ${fullWhen(s.next_run)} — skipped while Emergency stop is on`}
+                              >
+                                <Clock size={12} className="text-zinc-600" />
+                                {PAUSED_BY_STOP_WORDS}
+                              </span>
+                            ) : (
+                              <span
+                                className="inline-flex items-center gap-1.5"
+                                title={s.next_run ? fullWhen(s.next_run) : undefined}
+                              >
+                                <Clock size={12} className="text-zinc-600" />
+                                {s.next_run ? shortWhen(s.next_run) : "—"}
+                              </span>
+                            )}
                           </td>
                           <td className="px-2 py-2.5 text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              {/* v1.446.0 (review item 24): pause and resume
+                                  in one press — nothing deleted, nothing to
+                                  re-enter. A finished one-time schedule has
+                                  nothing to resume. */}
+                              {!onceIsOver(s) && (
+                                <button
+                                  type="button"
+                                  role="switch"
+                                  aria-checked={!!s.enabled}
+                                  aria-label={`Run ${s.name} on schedule`}
+                                  onClick={() => setEnabled(s, !s.enabled)}
+                                  disabled={acting === `pause:${s.name}`}
+                                  title={s.enabled ? `Pause "${s.name}"` : `Resume "${s.name}"`}
+                                  data-testid={`schedule-pause-${s.name}`}
+                                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-40 ${
+                                    s.enabled
+                                      ? "border-white/10 text-zinc-300 hover:border-accent/40 hover:text-accent-soft"
+                                      : "border-white/15 bg-white/[0.04] text-zinc-400 hover:border-accent/40 hover:text-accent-soft"
+                                  }`}
+                                >
+                                  <span
+                                    aria-hidden="true"
+                                    className={`relative inline-block h-3 w-5 rounded-full transition-colors ${s.enabled ? "bg-accent/70" : "bg-white/15"}`}
+                                  >
+                                    <span
+                                      className={`absolute top-0.5 h-2 w-2 rounded-full bg-white transition-all ${s.enabled ? "left-2.5" : "left-0.5"}`}
+                                    />
+                                  </span>
+                                  {s.enabled ? "On" : PAUSED_WORDS}
+                                </button>
+                              )}
                               {knobs && (
                                 <button
                                   type="button"
@@ -1337,6 +1431,11 @@ function ScheduleEditor({
   const isInterval = tt === "interval" || (!schedule.cron && !!schedule.interval_seconds);
   const name = schedule.name;
   const [cron, setCron] = useState(schedule.cron ?? "");
+  // v1.446.0 (review item 25): the add form's friendly Repeat presets; the
+  // cron box shows only for a custom pattern (or a stored one no preset names).
+  const [editRepeat, setEditRepeat] = useState<string>(
+    CRON_TO_LABEL.has((schedule.cron ?? "").trim()) ? (schedule.cron ?? "").trim() : ADVANCED,
+  );
   const [runAt, setRunAt] = useState("");
   const [intervalSeconds, setIntervalSeconds] = useState(
     schedule.interval_seconds ? String(schedule.interval_seconds) : "",
@@ -1452,20 +1551,48 @@ function ScheduleEditor({
             />
           </div>
         ) : (
-          <div>
-            <label htmlFor={`${fid}-cron`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
-              Cron expression
-            </label>
-            <input
-              id={`${fid}-cron`}
-              value={cron}
-              onChange={(e) => setCron(e.target.value)}
-              aria-label="Cron expression"
-              className="field font-mono text-sm"
-            />
-            <div className="mt-1 font-mono text-[11px] text-zinc-600">
-              min hour day month weekday{CRON_TO_LABEL.get(cron.trim()) ? ` · ${CRON_TO_LABEL.get(cron.trim())}` : ""}
+          <div className="space-y-2">
+            <div>
+              <label htmlFor={`${fid}-repeat`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+                Repeat
+              </label>
+              <select
+                id={`${fid}-repeat`}
+                aria-label="Repeat"
+                value={editRepeat}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setEditRepeat(v);
+                  if (v !== ADVANCED) setCron(v);
+                }}
+                data-testid="schedule-editor-repeat"
+                className="field text-sm"
+              >
+                {REPEAT_PRESETS.map((p) => (
+                  <option key={p.cron} value={p.cron}>
+                    {p.label}
+                  </option>
+                ))}
+                <option value={ADVANCED}>Custom (cron)…</option>
+              </select>
             </div>
+            {editRepeat === ADVANCED && (
+              <div>
+                <label htmlFor={`${fid}-cron`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+                  Cron expression
+                </label>
+                <input
+                  id={`${fid}-cron`}
+                  value={cron}
+                  onChange={(e) => setCron(e.target.value)}
+                  aria-label="Cron expression"
+                  className="field font-mono text-sm"
+                />
+                <div className="mt-1 font-mono text-[11px] text-zinc-600">
+                  min hour day month weekday{CRON_TO_LABEL.get(cron.trim()) ? ` · ${CRON_TO_LABEL.get(cron.trim())}` : ""}
+                </div>
+              </div>
+            )}
           </div>
         )}
         {schedule.kind === "task" && (

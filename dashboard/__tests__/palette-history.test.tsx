@@ -791,3 +791,32 @@ describe("an older or unhappy daemon is silent, not broken", () => {
     expect(screen.queryByText("In your conversations")).not.toBeInTheDocument();
   });
 });
+
+// ── v1.446.0: chats found by TITLE past the newest 100 ───────────────────────
+
+describe("v1.446.0: Ctrl K finds a chat by its title anywhere, not only the newest 100", () => {
+  const titleCalls = () => apiState.calls.filter((p) => p.startsWith("/chat/threads/search"));
+
+  it("an old chat's title is offered once, from 2 characters, after the typing stops", async () => {
+    apiState.history.hits = [];
+    apiState.data["/chat/threads/search?q=kap&limit=8"] = {
+      threads: [
+        { id: "old-1", title: "Kaplan K-1 review", updated_at: "2025-01-02T10:00:00", match: "title" },
+        { id: "old-2", title: "Something else", updated_at: "2025-01-02T10:00:00", match: "text" },
+      ],
+    };
+    render(<CommandPalette />);
+    await open();
+    await type("k");
+    await settle();
+    expect(titleCalls()).toEqual([]); // one character asks nothing
+    for (const v of ["ka", "kap"]) await type(v);
+    await settle();
+    expect(titleCalls()).toEqual(["/chat/threads/search?q=kap&limit=8"]);
+    expect(labels().filter((l) => l.includes("Kaplan K-1 review"))).toHaveLength(1);
+    // A match inside a chat's words is the conversation lane's, not this one.
+    expect(labels().some((l) => l.includes("Something else"))).toBe(false);
+    await press("Enter");
+    expect(routerMock.push).toHaveBeenCalledWith("/chat?thread=old-1");
+  });
+});

@@ -563,6 +563,24 @@ function BackupMirror({ disabled, refreshKey }: { disabled: boolean; refreshKey?
   );
 }
 
+/** v1.446.0: the word the daemon puts in the name of a backup it wrote just
+ *  before a restore (``maintenance.SAFETY_TAG``). */
+export const SAFETY_TAG = "before-restore";
+export const SAFETY_LABEL = "saved before a restore";
+
+export function isSafetyBackup(name: string): boolean {
+  return name.includes(`-${SAFETY_TAG}`);
+}
+
+/** The note shown while Iron Jarvis restarts after a restore. Names the backup
+ *  of the replaced state when the daemon wrote one (an older daemon did not). */
+export function restoredNote(r: { restored_from: string; files: number; saved_as?: string }): string {
+  const undo = r.saved_as
+    ? ` Your previous state was saved as ${r.saved_as}. Restore it to undo this.`
+    : "";
+  return `Restored ${r.files} file(s) from ${r.restored_from}.${undo} Iron Jarvis is restarting on that snapshot.`;
+}
+
 export function MaintenanceTools({
   disabled = false,
   onRestartRequested,
@@ -645,7 +663,13 @@ export function MaintenanceTools({
     setRestoreBusy(true);
     setRestoreErr(null);
     try {
-      const r = await post<{ ok: boolean; restored_from: string; files: number }>(
+      const r = await post<{
+        ok: boolean;
+        restored_from: string;
+        files: number;
+        /** v1.446.0: the backup of the state this restore replaced. */
+        saved_as?: string;
+      }>(
         "/maintenance/restore",
         { name: pickedRow.name },
       );
@@ -655,9 +679,7 @@ export function MaintenanceTools({
       // restart it should expect, or its supervisor counts it as a crash. A
       // browser tab has no bridge: nothing to tell.
       await requestTidyRestart({ stopping: true });
-      await onRestartRequested(
-        `Restored ${r.files} file(s) from ${r.restored_from} — Iron Jarvis is restarting on that snapshot.`,
-      );
+      await onRestartRequested(restoredNote(r));
     } catch (err) {
       setRestoreErr(errorText(err));
     } finally {
@@ -729,8 +751,9 @@ export function MaintenanceTools({
       <div className="border-t hairline pt-4" data-testid="restore-backup">
         <SectionLabel>Restore from backup</SectionLabel>
         <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
-          Replace the database and settings with an earlier snapshot. Iron Jarvis restarts right
-          after; anything running is refused first.
+          Replace the database and settings with an earlier snapshot. Your current state is saved
+          as a backup first, so you can undo it. Iron Jarvis restarts right after, and won’t
+          restore while something is still running.
         </p>
         {backupsErr && <p className="mt-2 text-[11px] text-amber-300/80">Couldn’t list backups: {backupsErr}</p>}
         {backups && backups.length === 0 && !backupsErr && (
@@ -751,7 +774,9 @@ export function MaintenanceTools({
             >
               {backups.map((b) => (
                 <option key={b.name} value={b.name}>
-                  {fmtWhen(b.modified_at)} · {fmtBytes(b.bytes)} · {b.name}
+                  {fmtWhen(b.modified_at)} · {fmtBytes(b.bytes)} ·{" "}
+                  {isSafetyBackup(b.name) ? `${SAFETY_LABEL} · ` : ""}
+                  {b.name}
                 </option>
               ))}
             </select>
@@ -777,7 +802,8 @@ export function MaintenanceTools({
                   Restore <span className="font-mono text-amber-200">{pickedRow?.name}</span> (from{" "}
                   {pickedRow ? fmtWhen(pickedRow.modified_at) : ""})? Your current database and
                   settings will be replaced by that snapshot, and{" "}
-                  <strong>Iron Jarvis restarts</strong> right after.
+                  <strong>Iron Jarvis restarts</strong> right after. Your current state is saved as
+                  a new backup first, so you can restore it to undo this.
                 </p>
                 <div className="mt-2 flex gap-2">
                   <button

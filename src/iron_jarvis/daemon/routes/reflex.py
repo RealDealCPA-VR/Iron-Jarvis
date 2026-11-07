@@ -80,4 +80,6 @@ def register(app: FastAPI, d) -> None:
         if rule is None:
             raise HTTPException(status_code=404, detail="no such reflex rule")
         context = {"text": "(manual test)", "body": "(manual test)", "slug": rule.match}
-        return await app.state.reflex_router.execute(rule, context)
+        # v1.446.0 (review item 20): the person pressing Test reads the
+        # answer, so a failure is not ALSO announced (bell, phone, tray).
+        return await app.state.reflex_router.execute(rule, context, attended=True)

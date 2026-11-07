@@ -215,8 +215,27 @@ const PRIMARY_KEYS: Record<string, string[] | null> = {
   slack: ["webhook_url"],
   discord: ["webhook_url"],
   telegram: ["token", "chat_id", "chat_enabled", "allowed_senders"],
-  email: null,
+  // v1.446.0: the sending details are the easy path; listening for mail (the
+  // reading server, its port, the switch, the allowed senders) is Advanced.
+  email: ["host", "port", "username", "password", "from_addr", "to_addr"],
 };
+
+/** v1.446.0 (ease-of-use review item 13): what Add tells the daemon so a
+ * name already in use is refused instead of replacing that destination
+ * (routes/comm.py ``NEW_FLAG``). Edit never sends it. */
+const NEW_FLAG = "new_destination";
+
+/** The daemon's name rule (routes/comm.py), said beside the name box. */
+const NAME_RX = /^[a-zA-Z][a-zA-Z0-9_-]{0,39}$/;
+const NAME_RULE = "Use letters, numbers, - and _, starting with a letter.";
+
+/** The alert choice a destination already holds, as the boxes to tick:
+ * a saved list keeps only the alerts this page offers; none saved = all. */
+function savedAlertChoice(events?: string[]): string[] {
+  const all = EVENT_LABELS.map((e) => e.key);
+  if (!events || events.length === 0) return all;
+  return all.filter((k) => events.includes(k));
+}
 
 /** Friendly names for the per-destination event routing checkboxes (N5). */
 const EVENT_LABELS: Array<{ key: string; label: string }> = [
@@ -243,6 +262,9 @@ const EVENT_LABELS: Array<{ key: string; label: string }> = [
   // v1.406.0 part 3: a coding session's pull request — Iron Jarvis stopped
   // fixing its failing checks, or they pass after the reviewed fix it pushed.
   { key: "build.ci_done", label: "Your pull request's checks: fixed, or Iron Jarvis gave up" },
+  // v1.446.0 (ease-of-use review item 20): a rule that could not start its
+  // action (comm/notifier.DEFAULT_ALERT_EVENTS gained it in the same release).
+  { key: "reflex.failed", label: "A rule couldn't start" },
 ];
 
 /** v1.420.0 (C6.6): what the user READS on the email fields. The server's
@@ -251,6 +273,24 @@ const EVENT_LABELS: Array<{ key: string; label: string }> = [
 const EMAIL_FIELD_COPY: Record<string, { label?: string; help?: string }> = {
   host: { label: "Mail server for sending", help: "e.g. smtp.gmail.com" },
   port: { label: "Sending port", help: "usually 587" },
+  // v1.446.0: two-way email, worded like Telegram's. The keys are the ones
+  // EmailChannel.poll reads (comm/channels.py) and chat's channel_connect
+  // and channel_toggle write.
+  imap_host: {
+    label: "Reading mail server",
+    help: "e.g. imap.gmail.com. Iron Jarvis reads your inbox from here. Needed only to listen for incoming mail.",
+  },
+  imap_port: { label: "Reading port", help: "usually 993" },
+  inbound_enabled: {
+    label: "Listen for incoming mail",
+    help:
+      "Let Iron Jarvis read new mail in this inbox and act on mail from the allowed senders below. Needs the reading mail server and the password above.",
+  },
+  allowed_senders: {
+    label: "Allowed senders",
+    help:
+      "Email addresses allowed to message Iron Jarvis, separated by commas. The list fails closed: empty allows nobody.",
+  },
 };
 
 /** What the user READS on the telegram two-way fields (v1.136.0). The server's
@@ -468,9 +508,19 @@ export default function ChannelsPage() {
         const clear = Array.from(new Set([...clearKeys, ...erased]));
         if (clear.length) config["clear"] = clear;
       }
-      // Full set = everything = omit (the server treats absent as all).
-      if (addEvents.length && addEvents.length < EVENT_LABELS.length)
-        config["events"] = addEvents;
+      if (editing) {
+        // v1.446.0: an edit always says its alert choice — every box ticked
+        // is an empty list (= everything). Omitting it keeps what is saved
+        // (the daemon's rule), which is what an edit with no box ticked does.
+        if (addEvents.length >= EVENT_LABELS.length) config["events"] = [];
+        else if (addEvents.length) config["events"] = addEvents;
+      } else {
+        // Full set = everything = omit (the server treats absent as all).
+        if (addEvents.length && addEvents.length < EVENT_LABELS.length)
+          config["events"] = addEvents;
+        // A name already in use is refused, never quietly replaced.
+        config[NEW_FLAG] = "true";
+      }
       const saved = await post<{ two_way_note?: string }>("/comm/channels", {
         name,
         type: addType,
@@ -544,10 +594,18 @@ export default function ChannelsPage() {
     setEditSaved(c.saved_fields ?? []);
     setEditSendersCount(c.allowed_senders_count ?? 0);
     setClearKeys([]);
-    // What is saved under Advanced (Slack's bot and app tokens) is shown, so
-    // the user sees it is kept instead of hunting for it.
+    // v1.446.0: the saved alert choice, so an edit no longer resets it to
+    // everything (approval asks the user had turned off included).
+    const alerts = savedAlertChoice(c.events);
+    setAddEvents(alerts);
+    // What is saved under Advanced (Slack's bot and app tokens, email's
+    // reading server) is shown, so the user sees it is kept instead of
+    // hunting for it — and so is a narrowed alert choice.
     const primary = PRIMARY_KEYS[c.type];
-    setAdvOpen(!!primary && (c.saved_fields ?? []).some((k) => !primary.includes(k)));
+    setAdvOpen(
+      (!!primary && (c.saved_fields ?? []).some((k) => !primary.includes(k))) ||
+        alerts.length < EVENT_LABELS.length,
+    );
     setShowAdd(true);
     setAddError(null);
     setAddSuccess(null);
@@ -585,6 +643,8 @@ export default function ChannelsPage() {
                   setAddType("");
                   setAddName("");
                   setAddValues({});
+                  setAddEvents(EVENT_LABELS.map((e) => e.key));
+                  setAdvOpen(false);
                   setShowAdd(true);
                 } else {
                   setShowAdd((v) => !v);
@@ -681,8 +741,17 @@ export default function ChannelsPage() {
                   className="field font-mono text-sm disabled:opacity-60"
                 />
                 <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
-                  A short name you&apos;ll use to send to it, e.g. team-alerts.
+                  A short name you&apos;ll use to send to it, e.g. team-alerts.{" "}
+                  {NAME_RULE}
                 </p>
+                {!editing && addName.trim() !== "" && !NAME_RX.test(addName.trim()) && (
+                  <p
+                    data-testid="channel-name-rule"
+                    className="mt-1 text-[12px] leading-relaxed text-tone-warn"
+                  >
+                    That name won&apos;t work. {NAME_RULE}
+                  </p>
+                )}
               </div>
 
               {(() => {
@@ -1006,6 +1075,8 @@ export default function ChannelsPage() {
                     setShowAdd(false);
                     setEditing(null);
                     setAddError(null);
+                    // An edit's alert choice must not ride into the next Add.
+                    setAddEvents(EVENT_LABELS.map((e) => e.key));
                   }}
                   className="btn-ghost"
                 >

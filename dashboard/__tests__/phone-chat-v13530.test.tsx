@@ -326,7 +326,12 @@ describe("Notifications: Telegram chat on one screen, no Advanced, no typed id",
       return p!;
     });
     const cfg = (add.body as { config: Record<string, string> }).config;
-    expect(Object.keys(cfg).sort()).toEqual(TELEGRAM_TYPE.fields.map((f) => f.key).sort());
+    // v1.446.0: Add also says it is a NEW destination (a name in use is then
+    // refused, never replaced); the daemon drops that flag before storing.
+    expect(cfg.new_destination).toBe("true");
+    expect(Object.keys(cfg).filter((k) => k !== "new_destination").sort()).toEqual(
+      TELEGRAM_TYPE.fields.map((f) => f.key).sort(),
+    );
     expect(cfg.allowed_senders).toBe("6161");
   });
 

@@ -169,9 +169,14 @@ def test_a_skipped_agent_step_is_one_notice_that_names_the_step_and_its_reason(t
 def test_a_skipped_tool_step_has_no_bell_row_so_this_pc_says_it_once(tmp_path, monkeypatch):
     out, desktop = _fire_and_record("skipped_tool_step", tmp_path, monkeypatch)
     assert out.body["last_status"] == ro.STATUS_PARTIAL, out.body
-    assert _failed_runs(out) == [], out.events  # nothing for the bell to ring
+    assert _failed_runs(out) == [], out.events  # no step run of its own
     assert len(out.phone) == 1 and "“Check”" in out.phone[0], out.phone
-    assert [d["message"] for d in desktop] == out.phone, (desktop, out.phone)
+    # v1.446.0 (moved on purpose, review item 22): the WORKFLOW's own row
+    # rings now ("finished, but part of it failed"), so the bell (or the
+    # tray) is the one desktop notice and "This PC" stays quiet.
+    [wf] = [e for e in out.events if e["type"] == EventType.WORKFLOW_COMPLETED]
+    assert wf["payload"]["status"] == "completed_with_failures"
+    assert desktop == [], desktop
 
 
 def test_a_halted_run_is_one_notice_and_the_phone_names_the_step_that_stopped_it(tmp_path, monkeypatch):

@@ -487,7 +487,20 @@ import { takePageContext, type PageContext } from "@/lib/pageContext";
 import { useRunStream, type UseRunStream } from "@/lib/useRunStream";
 import dynamic from "next/dynamic";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
-import ThreadGroups, { GROUP_LIMIT } from "@/components/chat/ThreadGroups";
+import ThreadGroups, { GROUP_LIMIT, ShowOlderChats, ThreadSnippet } from "@/components/chat/ThreadGroups";
+import {
+  CHAT_SEARCH_FALLBACK_WORDS,
+  fetchOlderThreads,
+  filterTitles,
+  mayShowOlder,
+  noOlderPages,
+  olderCursor,
+  useChatSearch,
+  withFreshFirstPage,
+  withOlderPage,
+  type ChatSearchRow,
+  type OlderPages,
+} from "@/lib/chatList";
 import ThreadRailFilter from "@/components/chat/ThreadRailFilter";
 import { formatAge, markViewed, readLastViewed, threadStatuses } from "@/lib/threadStatus";
 import { AT_MENU_ROOMY_PX, squeezedLeadRows, useAtMenuFit } from "@/lib/chatRefsMenuFit";
@@ -4272,6 +4285,19 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   const surfaceHiddenRef = useRef(surfaceHidden);
   surfaceHiddenRef.current = surfaceHidden;
   const [threadQuery, setThreadQuery] = useState(""); // sidebar title filter
+  // v1.446.0 (review item 10): the rail's OLDER pages ("Show older chats"),
+  // for the chat list and the Archived view. The refs hold what the list
+  // has read (a fresh page 1 keeps them: lib/chatList.withFreshFirstPage);
+  // the state is what the button draws.
+  const olderPagesRef = useRef<OlderPages<ThreadSummary>>(noOlderPages());
+  const archivedPagesRef = useRef<OlderPages<ThreadSummary>>(noOlderPages());
+  const [olderUi, setOlderUi] = useState({ may: false, busy: false, failed: false });
+  const [archivedOlderUi, setArchivedOlderUi] = useState({ may: false, busy: false, failed: false });
+  // v1.446.0: "Search chats" asks the daemon (titles AND the words said in
+  // every chat, archived ones in the Archived view). Until it answers, and
+  // when it cannot be reached, the box filters the titles already listed.
+  const chatSearch = useChatSearch(threadQuery, archivedView);
+  const searchRows = chatSearch.results as (ThreadSummary & ChatSearchRow)[] | null;
   // Pinned threads (per-device view preference) + inline rename state.
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -4337,9 +4363,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // title filter narrows client-side on top. v1.327.0: pinned chats are drawn
   // first by ThreadGroups (its "Pinned" group), so no sort here.
   const visibleThreads = useMemo(() => {
-    const q = threadQuery.trim().toLowerCase();
-    return q ? threads.filter((t) => (t.title || "").toLowerCase().includes(q)) : threads;
-  }, [threads, threadQuery]);
+    // v1.446.0: the daemon's search answer, once it has one (this project's
+    // rows when the rail is in a project); the loaded titles until then.
+    if (searchRows && !archivedView) {
+      return railScope ? searchRows.filter((t) => t.project_id === railScope) : searchRows;
+    }
+    return filterTitles(threads, threadQuery);
+  }, [threads, threadQuery, searchRows, archivedView, railScope]);
   // v1.329.0 (G3): the chats OUTSIDE the rail's project (other projects and
   // No project), from the unscoped read. A row of the rail's own project is
   // the scoped list's to show (it may be newer), so it is left out here.
@@ -4349,21 +4379,26 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     return otherThreads.filter((t) => t.project_id !== railScope && !own.has(t.id));
   }, [otherThreads, threads, railScope]);
   // Every row the rail can show, for the row ⋯ menu and the actions behind it.
-  const listedThreads = useMemo(
-    () => (railOthers.length ? [...threads, ...railOthers] : threads),
-    [threads, railOthers],
-  );
+  // v1.446.0: a search result the loaded list does not hold (an older chat)
+  // is listed too, so its ⋯ menu, its dot and its rename work.
+  const listedThreads = useMemo(() => {
+    const base = railOthers.length ? [...threads, ...railOthers] : threads;
+    if (!searchRows || archivedView) return base;
+    const have = new Set(base.map((t) => t.id));
+    const extra = searchRows.filter((t) => !have.has(t.id));
+    return extra.length ? [...base, ...extra] : base;
+  }, [threads, railOthers, searchRows, archivedView]);
   const visibleOthers = useMemo(() => {
-    const q = threadQuery.trim().toLowerCase();
-    return q ? railOthers.filter((t) => (t.title || "").toLowerCase().includes(q)) : railOthers;
-  }, [railOthers, threadQuery]);
+    if (searchRows && !archivedView) {
+      return railScope ? searchRows.filter((t) => t.project_id !== railScope) : [];
+    }
+    return filterTitles(railOthers, threadQuery);
+  }, [railOthers, threadQuery, searchRows, archivedView, railScope]);
   // v1.328.0: the same title filter over the archived list.
   const visibleArchived = useMemo(() => {
-    const q = threadQuery.trim().toLowerCase();
-    return q
-      ? archivedThreads.filter((t) => (t.title || "").toLowerCase().includes(q))
-      : archivedThreads;
-  }, [archivedThreads, threadQuery]);
+    if (searchRows && archivedView) return searchRows;
+    return filterTitles(archivedThreads, threadQuery);
+  }, [archivedThreads, threadQuery, searchRows, archivedView]);
 
   // Hydrate pins once (per-device preference, like the workspace defaults).
   useEffect(() => {
@@ -5587,9 +5622,15 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     if (!force && listScopeRef.current === scope) return;
     const path = threadsPath(scope);
     if (listScopeRef.current !== scope) {
+      // v1.446.0: another scope's older pages are not this one's.
+      olderPagesRef.current = noOlderPages();
+      setOlderUi({ may: false, busy: false, failed: false });
       const cached = cachedGet<{ threads?: ThreadSummary[] }>(path);
       if (cached) {
-        setThreads(cached.threads ?? []);
+        const first = cached.threads ?? [];
+        olderPagesRef.current = noOlderPages(first.length);
+        setOlderUi({ may: mayShowOlder(olderPagesRef.current), busy: false, failed: false });
+        setThreads(first);
         setThreadsLoading(false);
       }
     }
@@ -5603,7 +5644,16 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     try {
       const d = await own;
       cacheSet(path, d);
-      if (mountedRef.current && listScopeRef.current === scope) setThreads(d.threads ?? []);
+      if (mountedRef.current && listScopeRef.current === scope) {
+        // v1.446.0: page 1 only; the older pages already read are kept.
+        const fresh = d.threads ?? [];
+        setThreads((shown) => {
+          const merged = withFreshFirstPage(fresh, shown, olderPagesRef.current);
+          olderPagesRef.current = merged.pages;
+          return merged.threads;
+        });
+        setOlderUi((u) => ({ ...u, may: mayShowOlder(olderPagesRef.current) }));
+      }
     } catch {
       /* quiet — the sidebar keeps what it shows */
     } finally {
@@ -6645,10 +6695,59 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     try {
       const d = await get<{ threads?: ThreadSummary[] }>(ARCHIVED_THREADS_PATH);
       if (mountedRef.current) {
-        setArchivedThreads(Array.isArray(d?.threads) ? d.threads : []);
+        const fresh = Array.isArray(d?.threads) ? d.threads : [];
+        // v1.446.0: page 1 only; the older archived pages read are kept.
+        setArchivedThreads((shown) => {
+          const merged = withFreshFirstPage(fresh, shown, archivedPagesRef.current);
+          archivedPagesRef.current = merged.pages;
+          return merged.threads;
+        });
+        setArchivedOlderUi((u) => ({ ...u, may: mayShowOlder(archivedPagesRef.current) }));
       }
     } catch {
       /* quiet */
+    }
+  }
+
+  /** v1.446.0 (review item 10): "Show older chats" at the end of the rail's
+   *  list: the next page of the scope it shows, appended. Dropped when the
+   *  rail has moved to another scope before it answers; a failure says so
+   *  under the button (pressing again retries). */
+  async function loadOlderThreads(): Promise<void> {
+    const scope = listScopeRef.current === undefined ? null : listScopeRef.current;
+    const cursor = olderCursor(threads, olderPagesRef.current);
+    if (!cursor) return;
+    setOlderUi((u) => ({ ...u, busy: true, failed: false }));
+    try {
+      const page = await fetchOlderThreads<ThreadSummary>(threadsPath(scope), cursor);
+      if (!mountedRef.current || (listScopeRef.current ?? null) !== scope) return;
+      setThreads((shown) => {
+        const merged = withOlderPage(shown, olderPagesRef.current, page);
+        olderPagesRef.current = merged.pages;
+        return merged.threads;
+      });
+      setOlderUi({ may: page.next !== null, busy: false, failed: false });
+    } catch {
+      if (mountedRef.current) setOlderUi((u) => ({ ...u, busy: false, failed: true }));
+    }
+  }
+
+  /** v1.446.0: the same for the Archived view. */
+  async function loadOlderArchived(): Promise<void> {
+    const cursor = olderCursor(archivedThreads, archivedPagesRef.current);
+    if (!cursor) return;
+    setArchivedOlderUi((u) => ({ ...u, busy: true, failed: false }));
+    try {
+      const page = await fetchOlderThreads<ThreadSummary>(ARCHIVED_THREADS_PATH, cursor);
+      if (!mountedRef.current) return;
+      setArchivedThreads((shown) => {
+        const merged = withOlderPage(shown, archivedPagesRef.current, page);
+        archivedPagesRef.current = merged.pages;
+        return merged.threads;
+      });
+      setArchivedOlderUi({ may: page.next !== null, busy: false, failed: false });
+    } catch {
+      if (mountedRef.current) setArchivedOlderUi((u) => ({ ...u, busy: false, failed: true }));
     }
   }
 
@@ -11584,6 +11683,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
 
   // The ⋯ beside every row, in the chat list AND (v1.328.0) the Archived
   // view; its menu knows which list it was opened from.
+  // v1.446.0: a search result's matched words, under its title.
+  const threadRowDetail = (t: ThreadSummary) => {
+    const snippet = searchRows ? (t as ChatSearchRow).snippet : "";
+    return snippet ? <ThreadSnippet snippet={snippet} /> : null;
+  };
   const threadRowAction = (t: ThreadSummary) => (
     /* v1.315.0: visible by default — a touch screen has no
        hover, so the old opacity-0 left an invisible target.
@@ -11700,6 +11804,17 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     />
                   </div>
                 )}
+                {/* v1.446.0: the search inside chats could not be reached;
+                    the box is filtering the names it already has. */}
+                {chatSearch.failed ? (
+                  <p
+                    role="status"
+                    data-testid="thread-search-fallback"
+                    className="px-1 pt-1.5 text-[12px] leading-relaxed text-zinc-500"
+                  >
+                    {CHAT_SEARCH_FALLBACK_WORDS}
+                  </p>
+                ) : null}
                 {/* v1.315.0 (thread-rail-scope-silent): the list says which
                     chats it shows, and the other chats are one press away;
                     the switch changes the LIST only. */}
@@ -11760,7 +11875,16 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                           headings={false}
                           limit={Infinity}
                           rowAction={threadRowAction}
+                          rowDetail={threadRowDetail}
                         />
+                        {!threadQuery.trim() && archivedOlderUi.may ? (
+                          <ShowOlderChats
+                            testId="thread-archived-show-older"
+                            busy={archivedOlderUi.busy}
+                            failed={archivedOlderUi.failed}
+                            onPress={() => void loadOlderArchived()}
+                          />
+                        ) : null}
                       </>
                     )}
                   </div>
@@ -11849,7 +11973,15 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       ) : null
                     }
                     rowAction={threadRowAction}
+                    rowDetail={threadRowDetail}
                   />
+                  {!threadQuery.trim() && olderUi.may ? (
+                    <ShowOlderChats
+                      busy={olderUi.busy}
+                      failed={olderUi.failed}
+                      onPress={() => void loadOlderThreads()}
+                    />
+                  ) : null}
                   </>
                 )}
                 {/* v1.328.0: work an archive could not stop from here is
@@ -12094,9 +12226,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                   (() => {
                     // v1.328.0: a menu opened in the Archived view is about
                     // an archived chat: Unarchive and Delete only.
-                    const mt = (archivedView ? archivedThreads : listedThreads).find(
-                      (x) => x.id === threadMenu.id,
-                    );
+                    // v1.446.0: an archived search result the Archived list
+                    // has not read yet is found too.
+                    const mt = (archivedView
+                      ? [...archivedThreads, ...(searchRows ?? [])]
+                      : listedThreads
+                    ).find((x) => x.id === threadMenu.id);
                     if (!mt) return null;
                     const pinned = pinnedIds.includes(mt.id);
                     const item =

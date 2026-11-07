@@ -15494,6 +15494,36 @@ does not need a bump, stop and bump it.
   its program; Directory card grids `grid-cols-[minmax(0,1fr)]`. Pins: the
   `*-v1443` / `*_v14430` files.
 
+- **Nothing silent** (v1.446.0; items 7, 10, 13, 20-25 of
+  docs/EASE-OF-USE-REVIEW-2026-11-07.md, five helpers + the coordinator).
+  (20) `reflex.failed` {rule, rule_id, source, action, target, reason}: a
+  rule that could not START rings the bell, the tray and the phone (a default
+  alert), once per failure episode; never for a successful, attended (the
+  Test press: `execute(..., attended=True)`), `manual:` or `comm` fire; a
+  remote agent that is down is caught after the hand-off. (21)
+  `motivation.add_backlog` publishes ONE `autonomy.proposed` for a NEW
+  proposal (`sentinel` = the watcher); the bell's row is QUIET, never a phone
+  alert. (22) the engine finishes a run with a skipped failure
+  `completed_with_failures` (`PART_FAILED_STATUS`) and `workflow.completed`
+  carries `failed_session` + `failed_steps`; every reader knows it (store
+  FINISHED/PRUNABLE, cancel guards, `WORKFLOW_RUN_TERMINAL`, run_outcome,
+  platform's schedule fire, comm). A NEW reader of workflow run status must
+  list it. (23) `components/EmergencyStopStrip.tsx` (reads GET /autonomy once,
+  on reconnect and on `config.changed` naming `autonomy_kill_switch`; keeps
+  `--ij-strip-h` = demo strip + its own height via a MutationObserver);
+  "Emergency stop" is the one name. (24) schedule rows' On/Paused switch =
+  PATCH `{enabled}`; edit window has the Repeat presets. (7) a restore writes
+  a `-before-restore` backup first (`maintenance.write_safety_backup`; refuses
+  if it can't), uses `/system/activity`'s busy reading plus night tasks, plain
+  words. (13) an EDIT of a destination keeps stored keys the form doesn't
+  send (unless `clear`) and its `events` when the body omits them; Add sends
+  `config.new_destination` and a name in use is a 409; email gets
+  imap_host/imap_port/inbound_enabled/allowed_senders. (10) GET /chat/threads
+  pages on `limit`/`before` (no params = byte-identical), `GET
+  /chat/threads/search` (titles + the history index, ≤ 50, masked snippets,
+  never Build); the rail/sidebar/Archived have "Show older chats"; Ctrl K has
+  a title lane. Pins: the `*-v1446` / `*_v1446` files.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

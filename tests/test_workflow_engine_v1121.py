@@ -163,7 +163,7 @@ async def test_on_failure_skip_continues_the_run(tmp_path):
         ],
     )
     rec = await WorkflowEngine(platform).run(wf)
-    assert rec.status == "completed"  # the run survived the failure
+    assert rec.status == "completed_with_failures"  # survived; v1.446.0 (moved on purpose): part failed
     outs = json.loads(rec.outputs_json)
     assert outs["Flaky"]["status"] == "failed"  # the failure stays VISIBLE
     assert outs["Flaky"]["handled"] == "skipped"

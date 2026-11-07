@@ -146,6 +146,11 @@ def workflow_answered(run_status: object, ref: object) -> tuple[str, str] | None
     status = str(run_status or "").strip().lower()
     if status == "completed":
         return STATUS_OK, f"Your workflow “{name}” finished after your answer."
+    if status == "completed_with_failures":  # v1.446.0 (review item 22)
+        return STATUS_PARTIAL, (
+            f"Your workflow “{name}” finished after your answer, but part of it failed — "
+            "its run history on the Workflows page says which step."
+        )
     if status == "failed":
         return STATUS_ERROR, failure_detail(
             f"your workflow “{name}” failed after your answer — its run history on the "

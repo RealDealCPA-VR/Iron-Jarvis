@@ -282,6 +282,10 @@ class SentinelService:
                 source="sentinel",
                 agent_type=rec.agent_type,
                 rationale=rationale,
+                # v1.446.0 (ease-of-use review item 21): the watcher's name
+                # rides the ``autonomy.proposed`` a NEW suggestion publishes,
+                # so the bell says "Your watcher X noticed changes · Review".
+                producer=rec.name,
             )
         except Exception:  # noqa: BLE001 — a mint failure must not break the tick
             log.exception("sentinel %s could not mint a proposal", rec.name)

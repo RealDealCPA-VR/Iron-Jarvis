@@ -1491,6 +1491,220 @@ def _unwatch_session_ask(turn: Any, approval_id: str) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# v1.446.0 (ease-of-use review item 10): the chat list PAGES, and "Search
+# chats" asks the daemon. Before, GET /chat/threads answered the newest 100
+# chats and nothing else, and the rail filtered those 100 titles: an older
+# chat vanished from the rail, the drawer and the Archived view, and words
+# said inside a chat were never found.
+#
+# PAGING is opt-in so every existing caller (and pin) of the bare list keeps
+# its exact answer: only a request that names ``limit`` or ``before`` is
+# paged, ordered by (updated_at DESC, id DESC) — ties are routine on Windows
+# (utcnow ticks every 15.6 ms), so the id breaks them and a page boundary
+# can never drop or repeat a row — and answered with ``next``. A cursor is
+# ``<updated_at>|<id>`` (strictly after that row in the paged order), or a
+# bare ``<updated_at>``: every row at or before that instant. The bare form
+# is for the FIRST older page after the unpaged list, whose tie order is not
+# a contract (v1.311.0), so the rows tied at its last instant come again and
+# the page drops the ones it already holds.
+CHAT_LIST_DEFAULT = 100
+CHAT_LIST_MAX = 200
+#: The rail's search asks the daemon only from this many characters on.
+CHAT_SEARCH_MIN_CHARS = 2
+#: At most this many chats come back from one search.
+CHAT_SEARCH_MAX = 50
+#: How much of the query is read (a pasted page is not a search).
+CHAT_SEARCH_QUERY_CHARS = 200
+#: The matched words shown under a result, masked BEFORE this cut.
+CHAT_SEARCH_SNIPPET_CHARS = 160
+#: History-index hits read to find up to CHAT_SEARCH_MAX chats (one long chat
+#: can hold many hits).
+_CHAT_SEARCH_HITS = 200
+#: The index kinds that are chat-list rows (a phone thread is ``comm``).
+_CHAT_SEARCH_KINDS = ("chat", "comm")
+
+
+def _list_cursor(before: str) -> "tuple[Any, str | None]":
+    """``before`` → (naive UTC datetime, id or None). 400 in words when it
+    is not a cursor this route wrote."""
+    from datetime import datetime, timezone
+
+    raw = (before or "").strip()
+    stamp, _, tid = raw.partition("|")
+    try:
+        when = datetime.fromisoformat(stamp.strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="before must be a cursor from this list (<updated_at>|<id>)",
+        ) from None
+    if when.tzinfo is not None:
+        # The column is stored naive UTC (SQLite drops tzinfo).
+        when = when.astimezone(timezone.utc).replace(tzinfo=None)
+    tid = tid.strip()
+    return when, (tid or None)
+
+
+def _chat_list_row(values: tuple, live: dict) -> dict[str, Any]:
+    """One list row, exactly as GET /chat/threads has always drawn it."""
+    (tid, title, persona, proj, owner, comm_channel, comm_display,
+     updated_at, count, has_setup, archived_at) = values
+    state = live.get(tid) or {}
+    return {
+        "id": tid, "title": title or "(untitled)",
+        "persona": persona, "messages": int(count or 0),
+        "project_id": proj,
+        "has_setup": bool(has_setup),
+        # v1.136.0 additive comm-thread fields; pre-existing NULL
+        # rows read as the "user" default.
+        "owner": owner or "user",
+        "comm_channel": comm_channel or "",
+        "comm_display": comm_display or "",
+        "updated_at": updated_at.isoformat(),
+        "running": bool(state.get("running")),
+        "waiting": bool(state.get("waiting")),
+        # v1.328.0: hidden from the default list once archived.
+        "archived": archived_at is not None,
+    }
+
+
+def _chat_list_columns():
+    """The list's projected columns + the two guarded expressions."""
+    from sqlalchemy import and_, case, func
+
+    from ...core.models import ChatThreadRecord as T
+
+    msgs_col = T.messages_json
+    count_expr = case(
+        (func.json_valid(msgs_col) == 1, func.json_array_length(msgs_col)),
+        else_=0,
+    )
+    setup_expr = case(
+        (and_(T.setup_json.is_not(None), T.setup_json != ""), 1), else_=0
+    )
+    return (
+        T.id, T.title, T.persona, T.project_id, T.owner,
+        T.comm_channel, T.comm_display, T.updated_at,
+        count_expr, setup_expr, T.archived_at,
+    )
+
+
+def _archived_filter(stmt, which: str):
+    from ...core.models import ChatThreadRecord as T
+
+    if which == "":
+        return stmt.where(T.archived_at.is_(None))  # type: ignore[union-attr]
+    if which == "only":
+        return stmt.where(T.archived_at.is_not(None))  # type: ignore[union-attr]
+    return stmt
+
+
+def _search_snippet(text: str) -> str:
+    """The index's ``[marked]`` snippet as one masked line, cut short. The
+    mask runs BEFORE the cut (a cut key must never read as plain text)."""
+    from ...detections.redact import mask
+
+    line = " ".join(str(text or "").split())
+    try:
+        line = mask(line)
+    except Exception:  # noqa: BLE001 — never show unmasked text on a fault
+        return ""
+    if len(line) > CHAT_SEARCH_SNIPPET_CHARS:
+        line = line[: CHAT_SEARCH_SNIPPET_CHARS - 1].rstrip() + "…"
+    return line
+
+
+def search_chat_threads(
+    engine: Any, index: Any, q: str, *, limit: int = CHAT_SEARCH_MAX,
+    archived: str = "",
+) -> dict[str, Any]:
+    """Every chat whose TITLE or MESSAGES hold ``q``: the rail's search.
+
+    BLOCKING (a sync route runs it in FastAPI's thread pool). Titles are a
+    case-insensitive SQL ``contains`` (wildcards literal) over every chat;
+    message text comes from the history index (FTS5, else its own bounded
+    LIKE fallback), which never raises. Only chat-list rows: never a Build
+    session (``chat_surface_only``), never an agent room or a run; archived
+    chats follow ``archived`` as the list does. Local only chats ARE found:
+    this is the user's own screen and nothing here reaches a model.
+
+    Answer: ``{threads, text, query}``. ``threads`` are list rows (the list's
+    own keys) plus ``match`` ("title" | "text") and ``snippet`` (the matched
+    words, masked, "" for a title match with no text hit), title matches
+    first (newest first), then text matches in the index's rank, at most
+    ``limit`` (≤ :data:`CHAT_SEARCH_MAX`). ``text`` says whether message
+    text was searched (False: no index here)."""
+    from sqlalchemy import func
+
+    from ...core.models import ChatThreadRecord as T
+    from ...core.models import chat_surface_only
+
+    needle = " ".join(str(q or "").split())[:CHAT_SEARCH_QUERY_CHARS]
+    try:
+        limit = max(1, min(CHAT_SEARCH_MAX, int(limit)))
+    except (TypeError, ValueError):
+        limit = CHAT_SEARCH_MAX
+    if len(needle) < CHAT_SEARCH_MIN_CHARS:
+        return {"threads": [], "text": index is not None, "query": needle}
+
+    cols = _chat_list_columns()
+    with session_scope(engine) as db:
+        title_stmt = select(*cols).where(chat_surface_only(T.surface)).where(
+            func.lower(T.title).contains(needle.lower(), autoescape=True)
+        )
+        title_stmt = _archived_filter(title_stmt, archived)
+        title_stmt = title_stmt.order_by(
+            T.updated_at.desc(), T.id.desc()  # type: ignore[attr-defined]
+        ).limit(limit)
+        title_rows = list(db.exec(title_stmt))
+
+    # Text: the best hit per chat, in the index's rank.
+    snippets: dict[str, str] = {}
+    ranked: list[str] = []
+    if index is not None:
+        try:
+            hits = index.search(needle, kinds=list(_CHAT_SEARCH_KINDS),
+                                limit=_CHAT_SEARCH_HITS)
+        except Exception:  # noqa: BLE001 — search() never raises; belt and braces
+            hits = []
+        for h in hits:
+            tid = str(getattr(h, "thread_id", "") or "")
+            if not tid or tid in snippets:
+                continue
+            snippets[tid] = _search_snippet(getattr(h, "snippet", "") or "")
+            ranked.append(tid)
+
+    seen = {row[0] for row in title_rows}
+    # Every ranked chat is looked up (≤ _CHAT_SEARCH_HITS ids) and the cut is
+    # taken AFTER the archive / Build filter, so a filtered-out chat never
+    # costs a place.
+    text_ids = [tid for tid in ranked if tid not in seen]
+    text_rows: list = []
+    if text_ids:
+        with session_scope(engine) as db:
+            stmt = select(*cols).where(chat_surface_only(T.surface)).where(
+                T.id.in_(text_ids)  # type: ignore[union-attr]
+            )
+            stmt = _archived_filter(stmt, archived)
+            by_id = {row[0]: row for row in db.exec(stmt)}
+        text_rows = [by_id[tid] for tid in text_ids if tid in by_id]
+
+    live = TURNS.thread_states()
+    out: list[dict[str, Any]] = []
+    for values in title_rows:
+        row = _chat_list_row(tuple(values), live)
+        row["match"] = "title"
+        row["snippet"] = snippets.get(row["id"], "")
+        out.append(row)
+    for values in text_rows:
+        row = _chat_list_row(tuple(values), live)
+        row["match"] = "text"
+        row["snippet"] = snippets.get(row["id"], "")
+        out.append(row)
+    return {"threads": out[:limit], "text": index is not None, "query": needle}
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
@@ -1746,16 +1960,26 @@ def register(app: FastAPI, d) -> None:
         return {"approvals": listed + chat_rows}
 
     @app.get("/chat/threads")
-    def chat_threads(project_id: str = "", archived: str = "") -> dict[str, Any]:
+    def chat_threads(
+        project_id: str = "", archived: str = "", before: str = "",
+        limit: int | None = None,
+    ) -> dict[str, Any]:
         """List saved threads (newest first). ``project_id`` (optional) scopes
         the list to ONE project's conversations — the in-project workspace fetches
         only its own threads; empty returns every thread (unchanged behavior).
 
         ``archived`` (v1.328.0): "" (default) leaves archived chats OUT,
         ``only`` lists just the archived ones, ``all`` lists both. Every row
-        carries ``archived``."""
-        from sqlalchemy import and_, case, func
+        carries ``archived``.
 
+        v1.446.0: PAGING, opt-in. With neither ``limit`` nor ``before`` the
+        answer is exactly what it always was (the newest 100, ``{threads}``).
+        Naming either pages the list: ``limit`` (default 100, clamped to
+        1..200), ordered (updated_at DESC, id DESC), and the answer gains
+        ``next`` — the cursor for the following page, or null when none is
+        left. ``before`` is that cursor (``<updated_at>|<id>``), or a bare
+        ``<updated_at>`` for every row at or before that instant (see
+        ``_list_cursor``)."""
         from ...core.models import ChatThreadRecord as T
         from ...core.models import chat_surface_only
 
@@ -1764,6 +1988,11 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(
                 status_code=400, detail="archived must be 'only' or 'all'"
             )
+        paged = limit is not None or bool((before or "").strip())
+        cursor = _list_cursor(before) if (before or "").strip() else None
+        page = CHAT_LIST_DEFAULT
+        if limit is not None:
+            page = max(1, min(CHAT_LIST_MAX, int(limit)))
 
         # v1.311.0 (W3-3): the sidebar re-lists after EVERY autosave, so this
         # read used to cost every transcript in the database per reply — it
@@ -1776,22 +2005,12 @@ def register(app: FastAPI, d) -> None:
         # used to count 0 — so a malformed row still counts 0. ``has_setup``
         # keeps ``bool(setup_json)``. ORDER BY updated_at alone: a secondary
         # rowid key brings the temp B-tree back (tie order is not a contract).
-        # Response shape unchanged.
+        # Response shape unchanged. (v1.446.0: a PAGED read adds the id as
+        # the second key — the tie break a cursor needs — and accepts the
+        # small sort of the tied rows only.)
         pid = (project_id or "").strip()
-        msgs_col = T.messages_json
-        count_expr = case(
-            (func.json_valid(msgs_col) == 1, func.json_array_length(msgs_col)),
-            else_=0,
-        )
-        setup_expr = case(
-            (and_(T.setup_json.is_not(None), T.setup_json != ""), 1), else_=0
-        )
         with session_scope(d.platform.engine) as db:
-            stmt = select(
-                T.id, T.title, T.persona, T.project_id, T.owner,
-                T.comm_channel, T.comm_display, T.updated_at,
-                count_expr, setup_expr, T.archived_at,
-            )
+            stmt = select(*_chat_list_columns())
             # v1.367.0 (IJ harness Phase 4): an IJ harness session lives in
             # Build and NEVER in this list (NULL = a thread from before the
             # field = chat). Applied before the LIMIT, so the list still holds
@@ -1799,38 +2018,63 @@ def register(app: FastAPI, d) -> None:
             stmt = stmt.where(chat_surface_only(T.surface))
             if pid:
                 stmt = stmt.where(T.project_id == pid)
-            if which == "":
-                stmt = stmt.where(T.archived_at.is_(None))  # type: ignore[union-attr]
-            elif which == "only":
-                stmt = stmt.where(T.archived_at.is_not(None))  # type: ignore[union-attr]
-            stmt = stmt.order_by(T.updated_at.desc()).limit(100)  # type: ignore[attr-defined]
+            stmt = _archived_filter(stmt, which)
+            if not paged:
+                stmt = stmt.order_by(T.updated_at.desc()).limit(CHAT_LIST_DEFAULT)  # type: ignore[attr-defined]
+            else:
+                if cursor is not None:
+                    when, tid = cursor
+                    if tid is None:
+                        stmt = stmt.where(T.updated_at <= when)
+                    else:
+                        from sqlalchemy import and_, or_
+
+                        stmt = stmt.where(or_(
+                            T.updated_at < when,
+                            and_(T.updated_at == when, T.id < tid),
+                        ))
+                stmt = stmt.order_by(
+                    T.updated_at.desc(), T.id.desc()  # type: ignore[attr-defined]
+                ).limit(page + 1)
             rows = list(db.exec(stmt))
+        more = paged and len(rows) > page
+        if paged:
+            rows = rows[:page]
         # v1.327.0: is a turn in flight for the chat, and is it parked on the
         # user (an approval card, an app's question)? ONE snapshot of the
         # live turn registry for the whole list — no database read per row.
         # A turn sent with no ``thread_id`` counts for nothing.
         live = TURNS.thread_states()
-        out = []
-        for (tid, title, persona, proj, owner, comm_channel, comm_display,
-             updated_at, count, has_setup, archived_at) in rows:
-            state = live.get(tid) or {}
-            out.append(
-                {"id": tid, "title": title or "(untitled)",
-                 "persona": persona, "messages": int(count or 0),
-                 "project_id": proj,
-                 "has_setup": bool(has_setup),
-                 # v1.136.0 additive comm-thread fields; pre-existing NULL
-                 # rows read as the "user" default.
-                 "owner": owner or "user",
-                 "comm_channel": comm_channel or "",
-                 "comm_display": comm_display or "",
-                 "updated_at": updated_at.isoformat(),
-                 "running": bool(state.get("running")),
-                 "waiting": bool(state.get("waiting")),
-                 # v1.328.0: hidden from the default list once archived.
-                 "archived": archived_at is not None}
+        out = [_chat_list_row(tuple(values), live) for values in rows]
+        if not paged:
+            return {"threads": out}
+        nxt = None
+        if more and out:
+            last = rows[-1]
+            nxt = f"{last[7].isoformat()}|{last[0]}"
+        return {"threads": out, "next": nxt}
+
+    # v1.446.0 (review item 10): "Search chats" across EVERY chat — titles
+    # and the words said in it. Registered BEFORE `/chat/threads/{thread_id}`,
+    # which would otherwise answer this path as a thread named "search".
+    @app.get("/chat/threads/search")
+    def chat_threads_search(
+        q: str = "", limit: int = CHAT_SEARCH_MAX, archived: str = "",
+    ) -> dict[str, Any]:
+        """The rail's search: see ``search_chat_threads``. A sync route, so
+        the read runs in FastAPI's thread pool, off the loop. Fewer than
+        :data:`CHAT_SEARCH_MIN_CHARS` characters answer an empty list."""
+        which = (archived or "").strip().lower()
+        if which not in ("", "only", "all"):
+            raise HTTPException(
+                status_code=400, detail="archived must be 'only' or 'all'"
             )
-        return {"threads": out}
+        index = getattr(d, "search_index", None)
+        if index is None:
+            index = getattr(d.platform, "search_index", None)
+        return search_chat_threads(
+            d.platform.engine, index, q, limit=limit, archived=which,
+        )
 
     # Registered BEFORE `/chat/threads/{thread_id}`, which would otherwise
     # answer this path as a thread named "search-refs".

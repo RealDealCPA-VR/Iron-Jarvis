@@ -959,7 +959,7 @@ class InboundPoller:
                     APPROVAL_GONE_REPLY
                     if gone_status == "approval_gone"
                     else ALREADY_ANSWERED_REPLY
-                    if gone_status in ("resuming", "running", "completed")
+                    if gone_status in ("resuming", "running", "completed", "completed_with_failures")
                     else NOTHING_WAITING_REPLY
                 )
                 return await self._answer_reply(

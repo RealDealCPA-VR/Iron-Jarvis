@@ -2484,7 +2484,9 @@ def build_platform(
             # v1.360.0 (lane 10A): a run record that failed published its
             # ``workflow.completed`` (the bell's failed row); one parked on the
             # user is the bell's waiting row.
-            fired["run"] = status in ("failed", "waiting")
+            # v1.446.0 (review item 22): a run that finished with a failed
+            # step it went on past rings too (the bell's part-failed row).
+            fired["run"] = status in ("failed", "waiting", "completed_with_failures")
             # v1.361.0 (lane 11A): inside this fire the schedule's line is the
             # ONE line every destination gets (the notifier sends no generic
             # run alert), so it carries what the steps' own alerts used to: the
@@ -2525,7 +2527,7 @@ def build_platform(
                 fired["outcome"] = _run_outcome.STATUS_CANCELLED
                 return _run_outcome.workflow_cancelled_detail(ref)
             detail = f"workflow “{ref}” ran"
-            if status == "completed" and skipped:
+            if status in ("completed", "completed_with_failures") and skipped:
                 # v1.361.0 (lane 11A): it finished, but part of it failed —
                 # the row reads "Part failed" and every destination hears
                 # which step and why (it read "ok … ran" before).

@@ -546,7 +546,13 @@ def boot_backup_delay_s(home: Path, interval_s: float, *, now: "float | None" = 
     boot copies of the same day and pushed the older days out."""
     backups_dir = Path(home) / BACKUP_DIRNAME
     try:
-        newest = max((p.stat().st_mtime for p in backups_dir.glob(_BACKUP_GLOB)), default=None)
+        # v1.446.0: a backup written just before a restore holds the state the
+        # restore REPLACED, so it never makes the scheduled snapshot of the
+        # state now running look done.
+        newest = max(
+            (p.stat().st_mtime for p in backups_dir.glob(_BACKUP_GLOB) if not is_safety_backup(p.name)),
+            default=None,
+        )
     except OSError:
         return 0.0
     if newest is None:
@@ -606,6 +612,104 @@ def restore_backup_live(home: Path, archive: Path) -> int:
         return moved
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+
+
+# --- v1.446.0 (ease-of-use review, item 7): a restore can be undone ----------
+#
+# "Restore and restart" replaced the database and settings without keeping the
+# state it replaced, so restoring the wrong archive lost everything since. The
+# restore route now writes ONE ordinary backup of the current state first —
+# same folder, same name pattern (so it lists under Restore from backup, is
+# copied/pruned by the same rules and can itself be restored) — and refuses the
+# restore when that backup cannot be written.
+
+#: The word a backup written just before a restore carries in its name.
+SAFETY_TAG = "before-restore"
+
+
+def is_safety_backup(name: str) -> bool:
+    """True for an archive :func:`write_safety_backup` wrote."""
+    return f"-{SAFETY_TAG}" in str(name or "")
+
+
+def write_safety_backup(home: Path, *, engine=None) -> Path:
+    """Back up the CURRENT state of ``home`` before a restore replaces it:
+    ``<home>/backups/ironjarvis-backup-<stamp>-before-restore.tar.gz`` (a
+    ``-2``, ``-3`` … suffix when that name is taken, so an earlier one is never
+    overwritten). Uses :func:`create_backup` exactly as the automatic backup
+    does — a consistent ``VACUUM INTO`` copy of the database, the keys
+    INCLUDED (a copy without them could not read the saved logins back), and
+    the same exclusions (``daemon.lock`` / the owner note, backups,
+    workspaces, media). It does NOT prune: pruning here could delete the very
+    archive about to be restored; the next scheduled backup prunes as always.
+    Raises (an ``OSError`` such as a full disk) when the archive cannot be
+    written — the caller then changes nothing."""
+    home = Path(home)
+    backups_dir = home / BACKUP_DIRNAME
+    stamp = utcnow().strftime("%Y%m%d-%H%M%S")
+    base = f"ironjarvis-backup-{stamp}-{SAFETY_TAG}"
+    out = backups_dir / f"{base}.tar.gz"
+    n = 2
+    while out.exists():
+        out = backups_dir / f"{base}-{n}.tar.gz"
+        n += 1
+    create_backup(home, out, engine=engine, include_keys=True)
+    return out
+
+
+def _counted(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+def restore_busy_words(counts: dict) -> str:
+    """The plain sentence a restore answers while work is running, from the
+    counts the route reads (``GET /system/activity``'s parts). ``""`` when
+    nothing is counted. Keys (all optional, ints): ``chat_replies``,
+    ``coding_sessions`` (Chat › Code replies), ``code_replies`` (Build › Code
+    replies), ``code_serving`` (Build › Code sessions running a program they
+    started), ``terminals`` (Build terminals working), ``night_tasks``,
+    ``background_tasks`` (agent runs), ``workflow_runs``. Pure."""
+
+    def n(key: str) -> int:
+        try:
+            return max(0, int(counts.get(key) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    parts: list[str] = []
+    total = 0
+    for key, one, many in (
+        ("chat_replies", "chat reply", "chat replies"),
+        ("coding_sessions", "coding session", "coding sessions"),
+        ("code_replies", "coding session in Build › Code", "coding sessions in Build › Code"),
+        ("terminals", "Build terminal", "Build terminals"),
+        ("night_tasks", "night task", "night tasks"),
+        ("background_tasks", "background task", "background tasks"),
+        ("workflow_runs", "workflow run", "workflow runs"),
+    ):
+        c = n(key)
+        if c:
+            parts.append(_counted(c, one, many))
+            total += c
+    serving = n("code_serving")
+    if not parts and not serving:
+        return ""
+
+    def cap(text: str) -> str:
+        return text[:1].upper() + text[1:]
+
+    sentences: list[str] = []
+    if parts:
+        listed = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+        sentences.append(f"{cap(listed)} {'is' if total == 1 else 'are'} still running.")
+    if serving:
+        sentences.append(
+            cap(_counted(serving, "coding session in Build › Code", "coding sessions in Build › Code"))
+            + (" is running a program it started." if serving == 1 else " are running programs they started.")
+        )
+    it = "it" if total + serving == 1 else "them"
+    sentences.append(f"Wait for {it} to finish, or stop {it}, then restore.")
+    return " ".join(sentences)
 
 
 # --------------------------------------------------------------------------- #

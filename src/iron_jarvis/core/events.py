@@ -185,6 +185,15 @@ class EventType:
     # Reflex Loop (the ambient operator): an inbound signal (webhook / comm)
     # matched a rule and fired a bound action (workflow / remote agent / session).
     REFLEX_FIRED = "reflex.fired"
+    #: v1.446.0 (ease-of-use review item 20): a matched rule could NOT start
+    #: its action (its workflow was deleted, its remote agent is gone or did
+    #: not answer, Emergency stop is on, the action raised). Published once
+    #: per failure EPISODE (a rule failing again for the same reason says
+    #: nothing new) and never for a fire a person is watching (the Reflex
+    #: page's Test, the phone's /run). {rule, rule_id, source, action,
+    #: target, reason} — ``reason`` is plain words. The bell's attention row,
+    #: the tray's notice and a default phone alert (comm/notifier).
+    REFLEX_FAILED = "reflex.failed"
     SCHEDULE_FIRED = "schedule.fired"
     COMPUTERUSE_RUN_FINISHED = "computeruse.run_finished"
     # Motivation Layer (the pulse): a deliberation tick produced a candidate

@@ -139,7 +139,7 @@ class CommandInterpreter:
                 rec = db.get(WorkflowRunRecord, run_id)
                 if rec is None:
                     return f"No run '{run_id}'.", None
-                if rec.status in ("completed", "failed", "cancelled", "interrupted"):
+                if rec.status in ("completed", "completed_with_failures", "failed", "cancelled", "interrupted"):
                     return f"Run '{run_id}' already {rec.status}.", None
                 rec.status = "cancelling"
                 db.add(rec)

@@ -18,6 +18,7 @@ import {
   ArrowRight,
   MessageSquare,
   CalendarClock,
+  Eye,
   OctagonAlert,
   PauseCircle,
   RotateCcw,
@@ -261,6 +262,13 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // its failing checks (quiet), and its news (stopped fixing / passing now).
   "build.ci_step",
   "build.ci_done",
+  // v1.446.0 (ease-of-use review item 20): a rule that could not start its
+  // action rings (once per failure episode; a successful fire stays quiet).
+  "reflex.failed",
+  // v1.446.0 (review item 21): a folder watcher made a NEW suggestion — a
+  // quiet row (a suggestion is not a failure). Deliberation's own proposals
+  // (no watcher) stay off the bell, as before.
+  "autonomy.proposed",
 ];
 
 /** Every /events type the bell reads (v1.311.0, wave 3,
@@ -283,6 +291,25 @@ export const BELL_EVENT_TYPES: readonly string[] = [
   // the busy-runs ask (v1.333.0)
   "runs.busy",
 ];
+
+/** v1.446.0 (ease-of-use review item 22): the status a workflow run ends in
+ *  when a step set to "skip if it fails" failed (workflows/engine.py
+ *  PART_FAILED_STATUS), and its row's body (comm/notifier, desktop/main.js:
+ *  one fixture). */
+const WORKFLOW_PART_FAILED = "completed_with_failures";
+const WORKFLOW_PART_FAILED_BODY = "The Workflows page shows which step failed.";
+
+/** Which steps a part-failed run went on past (`failed_steps`, names), in
+ *  plain words — the twin of comm/notifier.workflow_part_failed_body and
+ *  desktop/main.js (one fixture). */
+function partFailedBody(raw: unknown): string {
+  const names = Array.isArray(raw)
+    ? raw.filter((n): n is string => typeof n === "string" && n.trim() !== "").map((n) => n.trim())
+    : [];
+  if (!names.length) return WORKFLOW_PART_FAILED_BODY;
+  const quoted = names.slice(0, 5).map((n) => `“${n}”`).join(", ");
+  return `${names.length === 1 ? "Its step" : "Its steps"} ${quoted} failed. The Workflows page shows why.`;
+}
 
 /** v1.346.0: the media kinds `generate_media` makes; anything else reads as
  *  plain "media" so a newer daemon's kind never puts a wrong word in a row. */
@@ -576,6 +603,27 @@ export function toActivity(e: IJEvent): ActivityItem | null {
         ...(typeof p.failed_session === "string" ? { endedBy: p.failed_session } : {}),
       };
     }
+    if (status === WORKFLOW_PART_FAILED) {
+      // v1.446.0 (ease-of-use review item 22): a step set to "skip if it
+      // fails" failed and the run went on. It finished "completed" before, so
+      // the bell said nothing; it rings like a failure now, and stands in for
+      // the row of the FIRST step it went on past (`failed_session`), exactly
+      // as a failed run's row stands in for the step that ended it.
+      const covers = Array.isArray(p.sessions)
+        ? p.sessions.filter((s): s is string => typeof s === "string" && s !== "")
+        : [];
+      return {
+        id: e.id,
+        ts: e.ts,
+        href: "/workflows",
+        icon: AlertTriangle,
+        title: `${subject} finished, but part of it failed`,
+        body: partFailedBody(p.failed_steps),
+        attention: true,
+        ...(covers.length ? { covers } : {}),
+        ...(typeof p.failed_session === "string" ? { endedBy: p.failed_session } : {}),
+      };
+    }
     if (status === "completed") {
       return {
         id: e.id,
@@ -588,6 +636,43 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       };
     }
     return null;
+  }
+  if (e.type === "reflex.failed") {
+    // v1.446.0 (ease-of-use review item 20): a rule matched a signal but
+    // could not start its action (its workflow deleted, its remote agent
+    // gone, Emergency stop on). Before, only the rule's own row said so.
+    // Payload: {rule, rule_id, source, action, target, reason} — `reason` is
+    // the daemon's plain words. The daemon's twin is
+    // comm/notifier.reflex_failed_title (one fixture: one-notice-v13600).
+    const name = typeof p.rule === "string" ? p.rule.trim() : "";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: "/reflex",
+      icon: AlertTriangle,
+      title: name ? `Your rule ${name} couldn't start` : "A rule couldn't start",
+      body: clip(p.reason),
+      attention: true,
+    };
+  }
+  if (e.type === "autonomy.proposed") {
+    // v1.446.0 (ease-of-use review item 21): a folder watcher noticed
+    // changes and left a NEW suggestion in Autonomy › Proposals (a change it
+    // folded into a suggestion already waiting publishes nothing). QUIET: a
+    // suggestion is not a failure — no badge, no desktop ping, no phone.
+    // Only a watcher's: the pulse's own proposals keep their old behaviour.
+    if (p.source !== "sentinel") return null;
+    const name = typeof p.sentinel === "string" ? p.sentinel.trim() : "";
+    const why = typeof p.rationale === "string" ? p.rationale.trim() : "";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: "/autonomy",
+      icon: Eye,
+      title: `${name ? `Your watcher ${name}` : "A folder watcher"} noticed changes · Review`,
+      body: why.length > 140 ? `${why.slice(0, 139)}…` : why,
+      quiet: true,
+    };
   }
   if (e.type === "preference.suggested") {
     // v1.305.0: a preference the user's OWN press minted ("Look through my

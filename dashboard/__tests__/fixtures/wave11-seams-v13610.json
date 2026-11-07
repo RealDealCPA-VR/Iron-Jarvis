@@ -29,13 +29,16 @@
         "summary": "workflow.completed",
         "payload": {
           "workflow": "Nightly",
-          "status": "completed",
+          "status": "completed_with_failures",
           "run_id": "wfrun_02",
           "sessions": [
             "session_03",
             "session_04"
           ],
-          "failed_session": ""
+          "failed_session": "session_03",
+          "failed_steps": [
+            "Fetch"
+          ]
         }
       },
       {
@@ -98,12 +101,7 @@
     "phone": [
       "Schedule “nightly”: finished, but part of it failed — workflow “Nightly” ran, but its step “Check” could not finish: no such file: no-such-report.txt."
     ],
-    "desktop": [
-      {
-        "title": "Iron Jarvis",
-        "message": "Schedule “nightly”: finished, but part of it failed — workflow “Nightly” ran, but its step “Check” could not finish: no such file: no-such-report.txt."
-      }
-    ],
+    "desktop": [],
     "audit": [
       {
         "id": "evt_01",
@@ -124,12 +122,15 @@
         "summary": "workflow.completed",
         "payload": {
           "workflow": "Nightly",
-          "status": "completed",
+          "status": "completed_with_failures",
           "run_id": "wfrun_02",
           "sessions": [
             "session_03"
           ],
-          "failed_session": ""
+          "failed_session": "",
+          "failed_steps": [
+            "Check"
+          ]
         }
       },
       {

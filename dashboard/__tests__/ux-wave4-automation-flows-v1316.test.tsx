@@ -19,6 +19,8 @@
  * the words must never imply the form fills the top card; "Goals are born in
  * Chat" stays and the top card gets no create button (goals-surfaces-v1208).
  * The Kill switch stays enabled, labelled "Kill switch", with a rose hover.
+ * (v1.446.0, review item 23: its words moved ON PURPOSE to "Emergency stop"
+ * / "Turn off Emergency stop"; the look and the one press are unchanged.)
  * The quick composer calls INTO the existing builder chat — never a second
  * generator path. An empty name never saves silently under a fallback.
  *
@@ -279,7 +281,7 @@ describe("T3-A1 Autonomy: the on/off state leads, then what waits on you, then g
     await screen.findByTestId("goal-card-g_active");
     await screen.findByText(SIMPLE_GOAL.text);
     await screen.findByText(PROPOSAL.title);
-    for (const name of [/Autonomy on|Enable autonomy/, /Check now/, /^\s*Kill switch\s*$/, /Send briefing/, /Approve/, /Add goal/]) {
+    for (const name of [/Autonomy on|Enable autonomy/, /Check now/, /^\s*Emergency stop\s*$/, /Send briefing/, /Approve/, /Add goal/]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
     expect(screen.getByRole("button", { name: /Reject/ })).toBeInTheDocument();
@@ -362,7 +364,7 @@ describe("T3-A3 Autonomy: the Kill switch rests quietly while autonomy is off", 
     primeAutonomy({ enabled: false, pending: 0 });
     render(<AutonomyPage />);
     await screen.findByText("Disabled");
-    const btn = await screen.findByRole("button", { name: /^\s*Kill switch\s*$/ });
+    const btn = await screen.findByRole("button", { name: /^\s*Emergency stop\s*$/ });
     await waitFor(() => expect(btn).toBeEnabled());
     expect(btn.className).not.toMatch(REST_RED);
     expect(btn.className).toMatch(HOVER_RED);
@@ -379,7 +381,7 @@ describe("T3-A3 Autonomy: the Kill switch rests quietly while autonomy is off", 
     primeAutonomy({ enabled: false, pending: 2 });
     render(<AutonomyPage />);
     await screen.findByText("Disabled");
-    const btn = await screen.findByRole("button", { name: /^\s*Kill switch\s*$/ });
+    const btn = await screen.findByRole("button", { name: /^\s*Emergency stop\s*$/ });
     expect(btn.className).toMatch(REST_RED);
   });
 
@@ -387,15 +389,15 @@ describe("T3-A3 Autonomy: the Kill switch rests quietly while autonomy is off", 
     primeAutonomy({ enabled: true });
     render(<AutonomyPage />);
     await screen.findByText("Enabled");
-    const btn = screen.getByRole("button", { name: /^\s*Kill switch\s*$/ });
+    const btn = screen.getByRole("button", { name: /^\s*Emergency stop\s*$/ });
     expect(btn.className).toMatch(REST_RED);
   });
 
   it("engaged: Release kill switch is offered and the banner says autonomy is halted (unchanged)", async () => {
     primeAutonomy({ enabled: false, kill: true });
     render(<AutonomyPage />);
-    expect(await screen.findByRole("button", { name: /Release kill switch/ })).toBeInTheDocument();
-    expect(screen.getByText(/Kill switch engaged/)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Turn off Emergency stop/ })).toBeInTheDocument();
+    expect(screen.getByText(/Emergency stop is on — nothing starts on its own/)).toBeInTheDocument();
   });
 });
 

@@ -173,9 +173,14 @@ def test_a_skipped_tool_step_has_no_bell_row_so_this_pc_keeps_the_schedules_line
     out = _fire(tmp_path, monkeypatch, [dict(CHECK_TOOL, on_failure="skip"), WRITE])
     assert out.body["last_status"] == ro.STATUS_PARTIAL, out.body
     assert len(out.phone) == 1 and "“Check”" in out.phone[0], out.phone
-    # No step run rang the bell: "This PC" says the schedule's line, once.
-    assert len(desktop_sink) == 1 and "“Check”" in desktop_sink[0], desktop_sink
-    assert desktop_sink[0].startswith("Schedule “nightly”: finished, but part of it failed — ")
+    assert out.phone[0].startswith("Schedule “nightly”: finished, but part of it failed — ")
+    # v1.446.0 (moved on purpose, review item 22): the WORKFLOW's own row now
+    # rings ("finished, but part of it failed"), so the bell (or the tray) is
+    # this outcome's one desktop notice and "This PC" stays quiet — the tool
+    # step having no bell row of its own no longer matters.
+    assert desktop_sink == [], desktop_sink
+    [wf] = [e for e in out.events if e["type"] == EventType.WORKFLOW_COMPLETED]
+    assert wf["payload"]["status"] == "completed_with_failures" and wf["payload"]["failed_session"] == "", wf
 
 
 def test_a_halted_scheduled_workflow_names_the_step_that_stopped_it(tmp_path, monkeypatch, desktop_sink):
@@ -228,7 +233,12 @@ def test_a_skipped_tool_step_beside_a_retried_attempt_keeps_the_line_on_this_pc(
     out = _fire(tmp_path, monkeypatch, [FETCH_FLAKY, dict(CHECK_TOOL, on_failure="skip"), WRITE])
     assert out.body["last_status"] == ro.STATUS_PARTIAL, out.body
     assert len(out.phone) == 1 and "“Check”" in out.phone[0], out.phone
-    assert len(desktop_sink) == 1 and "“Check”" in desktop_sink[0], desktop_sink
+    # v1.446.0 (moved on purpose, review item 22): the workflow's part-failed
+    # row rings and names no step run (the tool step has none), so the bell
+    # says it and "This PC" stays quiet.
+    assert desktop_sink == [], desktop_sink
+    [wf] = [e for e in out.events if e["type"] == EventType.WORKFLOW_COMPLETED]
+    assert wf["payload"]["failed_session"] == "", wf
 
 
 def test_the_schedule_words_for_a_workflow_step():
@@ -342,9 +352,20 @@ def test_a_workflow_ended_by_an_agent_step_names_that_steps_run(tmp_path, monkey
 
 
 def test_a_workflow_that_did_not_fail_names_no_session(tmp_path, monkeypatch):
-    out = _fire(tmp_path, monkeypatch, [FETCH_SKIP, WRITE])
+    out = _fire(tmp_path, monkeypatch, [dict(FETCH_SKIP, task="Fetch the inbox"), WRITE])
     [wf] = [e for e in out.events if e["type"] == EventType.WORKFLOW_COMPLETED]
     assert wf["payload"]["status"] == "completed" and wf["payload"]["failed_session"] == "", wf
+
+
+def test_a_part_failed_workflow_names_its_first_skipped_steps_run(tmp_path, monkeypatch):
+    """v1.446.0 (moved on purpose, review item 22): a skipped failure used to
+    finish "completed" naming no session; it finishes part failed now and
+    names the run of the first step it went on past, so only THAT step's row
+    stands in for the workflow's (the bell, the tray)."""
+    out = _fire(tmp_path, monkeypatch, [FETCH_SKIP, WRITE])
+    [wf] = [e for e in out.events if e["type"] == EventType.WORKFLOW_COMPLETED]
+    assert wf["payload"]["status"] == "completed_with_failures", wf
+    assert wf["payload"]["failed_session"] and wf["payload"]["failed_session"] in wf["payload"]["sessions"], wf
 
 
 def test_an_ask_step_that_ends_a_run_after_the_answer_names_no_session(tmp_path, monkeypatch):

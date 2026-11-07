@@ -7,6 +7,7 @@ reached through ``d`` (see the deps object built in create_app).
 from __future__ import annotations
 
 import json
+import re
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -86,7 +87,17 @@ def two_way_note(ctype: str, config: dict) -> str | None:
     user's own report: a Slack destination that sent alerts fine and never
     heard a reply — its allowlist was empty, so the Socket Mode pump never
     even dialled (``SlackSocketMode.candidates``)."""
-    if not config.get("inbound_enabled") or ctype not in ("slack", "telegram"):
+    if not config.get("inbound_enabled") or ctype not in ("slack", "telegram", "email"):
+        return None
+    if ctype == "email":
+        # v1.446.0: the page now has the email two-way boxes; an empty list
+        # lets nobody in (EmailChannel.is_authorized fails closed).
+        if not config.get("allowed_senders"):
+            return (
+                "Listening for incoming mail is on, but no one is on the allowed senders "
+                "list, so Jarvis won't act on any mail. Add the email addresses that may "
+                "write to Jarvis."
+            )
         return None
     if not config.get("allowed_senders"):
         if ctype == "slack":
@@ -170,6 +181,35 @@ def listening_status(name: str, ctype: str, config: dict) -> dict[str, Any] | No
         "words": words,
         "tone": tone,
     }
+
+
+#: v1.446.0 (ease-of-use review item 13): the flag the Notifications page's
+#: Add puts in ``config`` so a name already in use is refused, not replaced.
+#: Edit and older callers send no flag and keep the replace-on-same-name rule.
+NEW_FLAG = "new_destination"
+NAME_RULE_REFUSAL = (
+    "That name won't work. Use letters, numbers, - and _, starting with a letter "
+    "(up to 40 characters), for example team-alerts."
+)
+NAME_IN_USE = "You already have “{name}”. Pick another name, or press Edit on it."
+NAME_BUILT_IN = "“{name}” is the name of a built-in destination. Pick another name."
+#: Stored keys an edit never carries over by itself: the type is the body's,
+#: events have their own keep rule, and the last test result belonged to the
+#: settings before the edit.
+_NOT_CARRIED = frozenset({"type", "events", "last_test_ok", "last_test_at"})
+#: The same server-name rule chat's channel_connect uses (settings/records.py).
+_MAIL_SERVER_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}")
+IMAP_HOST_RULE = (
+    "The reading mail server must be a server name such as imap.gmail.com: letters, "
+    "digits, dots and dashes only, with the port in its own box. A password never goes in it."
+)
+IMAP_PORT_RULE = "The reading port must be a number, such as 993."
+
+
+def _is_true(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 #: Plain fields whose stored VALUE the edit form is never handed back: a
@@ -416,7 +456,14 @@ def register(app: FastAPI, d) -> None:
 
         name = (body.name or "").strip()
         if not _re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{0,39}$", name):
-            raise HTTPException(status_code=400, detail="invalid channel name")
+            raise HTTPException(status_code=400, detail=NAME_RULE_REFUSAL)
+        body_cfg: dict[str, Any] = dict(body.config or {})
+        # v1.446.0 (ease-of-use review item 13): the page's Add says it is
+        # making a NEW destination, so a name already in use is refused in
+        # words instead of quietly replacing that destination. Edit (and any
+        # older caller with no flag) re-submits through here as before. The
+        # flag is never stored.
+        is_new = _is_true(body_cfg.pop(NEW_FLAG, None))
 
         # BLANK KEEPS (v1.427.6, the user's report: "when i go back in to
         # edit, i need to re-enter the tokens because they are cleared"). Edit
@@ -427,10 +474,15 @@ def register(app: FastAPI, d) -> None:
         # ``clear`` is removed; a typed value replaces. (The v1.164.0
         # remote-agent rule: replace / keep / clear are three intents.)
         configured_now = (d.platform.config.comm or {}).get("channels") or {}
+        if is_new:
+            if name in configured_now:
+                raise HTTPException(status_code=409, detail=NAME_IN_USE.format(name=name))
+            if name in set(d.platform.notifier.channels()):
+                raise HTTPException(status_code=409, detail=NAME_BUILT_IN.format(name=name))
         prior = configured_now.get(name)
-        if not isinstance(prior, dict) or prior.get("type") != ctype:
+        if is_new or not isinstance(prior, dict) or prior.get("type") != ctype:
             prior = None  # a new destination, or another type: nothing carries
-        raw_clear = (body.config or {}).get("clear")
+        raw_clear = body_cfg.get("clear")
         clear = {str(k) for k in raw_clear} if isinstance(raw_clear, list) else set()
         # Secrets are written only once the whole save is valid: a refused
         # edit must never swap the token a working destination is using.
@@ -440,7 +492,7 @@ def register(app: FastAPI, d) -> None:
         config: dict[str, Any] = {"type": ctype}
         for field in d._CHANNEL_TYPE_FIELDS[ctype]:
             key = field["key"]
-            value = (body.config or {}).get(key)
+            value = body_cfg.get(key)
             if value in (None, ""):
                 if prior is None:
                     continue
@@ -471,6 +523,44 @@ def register(app: FastAPI, d) -> None:
             else:
                 config[key] = value
 
+        # AN EDIT ONLY CHANGES WHAT YOU CHANGED (v1.446.0, ease-of-use review
+        # item 13): a destination chat made two-way keeps settings the form
+        # has no box for (an email destination's reading server and port,
+        # its mailbox, a chat switch). Every stored key the form did not send
+        # is carried over, unless the user cleared it. The last test result
+        # is not carried: the settings changed, so the old verdict is not
+        # this destination's any more (the page tests it right after).
+        if prior is not None:
+            field_keys = {f["key"] for f in d._CHANNEL_TYPE_FIELDS[ctype]}
+            owned = field_keys | {
+                f"{f['key']}_secret" for f in d._CHANNEL_TYPE_FIELDS[ctype] if f.get("secret")
+            }
+            for key, val in prior.items():
+                if key in config or key in owned or key in clear or key in _NOT_CARRIED:
+                    continue
+                config[key] = val
+            # Listening turned off by the user's own box ends a chat switch
+            # the form has no box for (chat implies listening, below, would
+            # otherwise turn listening straight back on).
+            if (
+                "chat_enabled" not in field_keys
+                and str(body_cfg.get("inbound_enabled") or "").strip().lower()
+                in ("0", "false", "no", "off")
+            ):
+                config["chat_enabled"] = False
+
+        # A reading mail server is a server NAME, never a "user:password@"
+        # (it is stored in plain settings). Refused without echoing it.
+        imap = str(config.get("imap_host") or "").strip()
+        if ctype == "email" and imap and not _MAIL_SERVER_RX.fullmatch(imap):
+            raise HTTPException(status_code=400, detail=IMAP_HOST_RULE)
+        iport = config.get("imap_port")
+        if ctype == "email" and iport not in (None, ""):
+            try:
+                int(str(iport).strip())
+            except ValueError:
+                raise HTTPException(status_code=400, detail=IMAP_PORT_RULE) from None
+
         # CHAT IMPLIES LISTENING: normalize at save time so stored config and
         # the effective verdict can never disagree. Without this, chat=true +
         # two-way=false would be stored as-is, GET /comm/channels (which reads
@@ -492,7 +582,14 @@ def register(app: FastAPI, d) -> None:
         # types this destination receives; absent/empty = everything (the old
         # behaviour). Validated against the alert set so a typo can't silently
         # subscribe a destination to nothing.
-        raw_events = (body.config or {}).get("events")
+        # v1.446.0: an EDIT that sends no `events` keeps the saved choice (it
+        # used to reset a narrowed list to everything, approval asks the
+        # user had turned off included). An explicit empty list still means
+        # everything; a new destination with none gets everything.
+        if "events" not in body_cfg:
+            if prior is not None and isinstance(prior.get("events"), list) and prior["events"]:
+                config["events"] = list(prior["events"])
+        raw_events = body_cfg.get("events")
         if raw_events:
             from ...comm.notifier import DEFAULT_ALERT_EVENTS
 

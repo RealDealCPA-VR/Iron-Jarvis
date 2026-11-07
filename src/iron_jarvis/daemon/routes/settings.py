@@ -708,14 +708,28 @@ def register(app: FastAPI, d) -> None:
         """Restore one archive from ``GET /maintenance/backups`` over the live
         home and schedule a daemon stop (v1.229.0, audit CL7); the desktop
         app relaunches it within ~2 s and the process boots on the restored
-        state. Refuses (409) while sessions or workflow runs are in flight —
-        the same gate as ``db_vacuum`` — and while the database is held open
-        (the replace fails BEFORE any other file moved). ``name`` is a file
-        name from the listing, never a path."""
+        state. ``name`` is a file name from the listing, never a path.
+
+        v1.446.0 (ease-of-use review, item 7):
+        - BUSY is the update warning's reading (``activity_snapshot``'s
+          ``busy``: chat and Chat › Code replies, Build › Code replies and the
+          programs they started, working Build terminals, agent runs, workflow
+          runs) plus running night tasks and the orchestrator's own live runs,
+          refused (409) in plain words naming what runs.
+        - A restore can be UNDONE: before anything moves, the current state is
+          written as an ordinary backup (``write_safety_backup``) and named in
+          the answer (``saved_as``). When that backup cannot be written the
+          restore is refused and nothing changes.
+        - A database held open is still retried, then refused (v1.341.1)."""
         import threading as _threading
 
-        from .system import activity_snapshot
-        from ...maintenance import BACKUP_DIRNAME, restore_backup_live
+        from .system import _replies_running, activity_snapshot
+        from ...maintenance import (
+            BACKUP_DIRNAME,
+            restore_backup_live,
+            restore_busy_words,
+            write_safety_backup,
+        )
 
         name = (body.name or "").strip()
         home = d.platform.config.home
@@ -731,21 +745,59 @@ def register(app: FastAPI, d) -> None:
         if archive.parent != backups_dir or not archive.is_file():
             raise HTTPException(status_code=404, detail=f"no backup named {name!r}")
         act = activity_snapshot(d)
-        running = len(d.orchestrator._running)
-        if act["active_sessions"] or act["writing_workflow_runs"] or running:
-            what = []
-            if act["active_sessions"] or running:
-                what.append(f"{max(act['active_sessions'], running)} session(s) running")
-            if act["writing_workflow_runs"]:
-                what.append(f"{act['writing_workflow_runs']} workflow run(s) running")
+
+        def _int(value: Any) -> int:
+            try:
+                return max(0, int(value or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        try:
+            running = len(d.orchestrator._running)
+        except Exception:  # noqa: BLE001 — an unreadable registry counts as none
+            running = 0
+        try:
+            from ...harness.night import RUNNING as _NIGHT_RUNNING, rows_in
+
+            night = len(rows_in(d.platform.engine, _NIGHT_RUNNING))
+        except Exception:  # noqa: BLE001 — no night table yet is none running
+            night = 0
+        # CHAT_INFLIGHT (``chat_replies``) counts chat AND Chat › Code replies;
+        # the durable registry tells them apart. A night task's turn is a
+        # Chat › Code reply, named once as the night task.
+        build = _int(_replies_running(d).get("build"))
+        counts = {
+            "chat_replies": max(0, _int(act.get("chat_replies")) - build),
+            "coding_sessions": max(0, build - night),
+            "code_replies": _int(act.get("code_replies")),
+            "code_serving": _int(act.get("code_serving")),
+            "terminals": _int(act.get("busy_panes")),
+            "night_tasks": night,
+            "background_tasks": max(_int(act.get("active_sessions")), running),
+            "workflow_runs": _int(act.get("running_workflow_runs")),
+        }
+        words = restore_busy_words(counts)
+        if act.get("busy") or words:
+            raise HTTPException(
+                status_code=409,
+                detail=words or "Something is still running. Wait for it to finish, or stop it, then restore.",
+            )
+        # Before anything moves: keep the state about to be replaced, so the
+        # restore can be undone by restoring this archive.
+        try:
+            safety = write_safety_backup(home, engine=d.platform.engine)
+        except Exception as exc:  # noqa: BLE001 — any failure means no undo: refuse
+            log.warning("restore refused: could not back up the current state first: %s", exc)
+            full = isinstance(exc, OSError) and getattr(exc, "errno", None) == 28  # ENOSPC
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"cannot restore while work is in flight ({', '.join(what)}) — "
-                    "it would replace the database out from under them; wait for "
-                    "them to finish or cancel them, then retry"
-                ),
-            )
+                    "Nothing was restored. Iron Jarvis couldn't save a backup of your "
+                    "current state first, so the restore could not be undone. "
+                    + ("The disk is full: free some space, then try again. " if full else "Try again in a moment. ")
+                    + f"({type(exc).__name__}: {exc})"
+                )[:600],
+            ) from exc
         import time as _time
 
         held: PermissionError | None = None
@@ -769,11 +821,26 @@ def register(app: FastAPI, d) -> None:
         else:
             raise HTTPException(
                 status_code=409,
-                detail=f"restore aborted, nothing changed: the database is still held open ({held})",
+                detail=(
+                    "Nothing was restored: the database is still held open by Iron Jarvis. "
+                    "Wait a moment and try again. "
+                    f"(Your current state was saved as {safety.name} anyway.) ({held})"
+                ),
             ) from held
-        log.warning("restored %d file(s) from backup %s; restarting", moved, name)
+        log.warning(
+            "restored %d file(s) from backup %s (the state before it is %s); restarting",
+            moved, name, safety.name,
+        )
         _threading.Timer(0.5, _app._graceful_stop).start()
-        return {"ok": True, "restored_from": name, "files": moved, "restart": "scheduled"}
+        return {
+            "ok": True,
+            "restored_from": name,
+            "files": moved,
+            "restart": "scheduled",
+            # v1.446.0: the backup of the state this restore replaced.
+            "saved_as": safety.name,
+            "undo": f"Your previous state was saved as {safety.name}. Restore it to undo this.",
+        }
 
     @app.post("/diagnostics/repair")
     def diagnostics_repair(body: RepairBody) -> dict[str, Any]:

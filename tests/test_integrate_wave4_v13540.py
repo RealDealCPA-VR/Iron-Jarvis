@@ -258,6 +258,12 @@ ALERT_PAYLOADS: dict[str, dict] = {
         "body": "Fix the parser · The checks pass now with the reviewed fix Iron Jarvis pushed.", "round": 0,
         "session_title": "Fix the parser",
     },
+    # v1.446.0 (moved on purpose, ease-of-use review item 20): a rule that
+    # could not start its action.
+    EventType.REFLEX_FAILED: {
+        "rule": "invoice-run", "rule_id": "reflex_1", "source": "email", "action": "workflow",
+        "target": "invoice-flow", "reason": "the workflow “invoice-flow” it starts is no longer saved",
+    },
 }
 
 #: What the line must say for each (the bell's words for the same event).
@@ -275,6 +281,7 @@ ALERT_WORDS: dict[str, str] = {
     "goal.iteration_refused": "Goal run refused: Inbox zero — paused",
     EventType.BUILD_NIGHT_SUMMARY: "Last night: 1 failed, 1 done\n• Failed: Fix the parser",
     EventType.BUILD_CI_DONE: "Your pull request's checks pass now — Fix the parser · The checks pass now",
+    EventType.REFLEX_FAILED: "Your rule invoice-run couldn't start: the workflow “invoice-flow” it starts is no longer saved",
 }
 
 
