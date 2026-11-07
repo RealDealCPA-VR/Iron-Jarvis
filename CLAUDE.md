@@ -39,7 +39,11 @@ gh run list --workflow tests.yml --branch <branch> --limit 1   # then read its r
 # The release gate on master runs the whole suite and publishes nothing
 # unless it is green. It is the ONLY run on master: Tests has no push trigger
 # since v1.444.1 (it ran the same suite twice per release), so Stable reads
-# Release's suite jobs as the verdict. A failure GitHub shows is reproduced LOCALLY by running
+# Release's suite jobs as the verdict. A failed test runs ONCE more in CI
+# before the gate is red (v1.445.1: pytest `--reruns 1`, never for a hang;
+# vitest `--retry=1`); local runs never retry. A test that passed only on
+# retry is named on the run page ("Passed only on retry" warnings): fix it
+# like a red one — the retry hides it, it does not make it fine. A failure GitHub shows is reproduced LOCALLY by running
 # THAT one file (with PYTHONDONTWRITEBYTECODE unset when it smells of stale
 # bytecode — CI writes .pyc files, this PC does not).
 # Dashboard build (must show "Generating static pages (44/44)")

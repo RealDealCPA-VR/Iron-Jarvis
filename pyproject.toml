@@ -1,6 +1,6 @@
 [project]
 name = "iron-jarvis"
-version = "1.445.0"
+version = "1.445.1"
 description = "Iron Jarvis - a local-first AI operating system: a multi-agent orchestrator with tools, memory, workflows, a sandbox, git-native review, and a Next.js control center."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -76,6 +76,14 @@ dev = [
     # rest of the suite finishes. faulthandler_timeout was tried: its stack for
     # an async test shows only pytest_asyncio frames, and the run never ends.
     "pytest-timeout>=2.3",
+    # A FAILED TEST IS RUN ONCE MORE IN CI BEFORE THE GATE GOES RED (v1.445.1,
+    # the user's decision). Of 9 red release gates in 40 runs, ~7 were old
+    # timing tests on a busy runner, each costing a version and ~25-50 min.
+    # CI only (`--reruns 1` in the workflows, never in pyproject's addopts): a
+    # local run still fails on the first try. Every retried test is listed on
+    # the run's page so it gets fixed; a real race that passes on retry can
+    # reach the Fresh channel, and Stable still waits a day before taking it.
+    "pytest-rerunfailures>=15",
     "pyinstaller>=6.21",
 ]
 # Bundled OFFLINE speech-to-text. Kept OPTIONAL (not a base dep) so a plain

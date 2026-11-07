@@ -66,8 +66,16 @@ jobs:
           files="$(uv run python scripts/ci_shards.py --shards 6 --index ${{ matrix.shard }})"
           echo "shard ${{ matrix.shard }}: $(wc -w <<< "$files") test files"
           # -n auto: one worker per core of this runner.
-          uv run pytest -q --no-header -n auto -p no:cacheprovider $files | tee pytest-out.txt
+          # --reruns 1 (v1.445.1): a failed test runs ONCE more before the shard
+          # is red; a hang (pytest-timeout) is never retried. Every test that
+          # passed only on retry is named on the run page (ci_flaky_report.py).
+          set +e
+          uv run pytest -q --no-header -n auto -p no:cacheprovider --reruns 1 --rerun-except "pytest-timeout" -rR $files | tee pytest-out.txt
+          code=${PIPESTATUS[0]}
+          set -e
           echo "shard ${{ matrix.shard }}: $(tail -1 pytest-out.txt)" >> "$GITHUB_STEP_SUMMARY"
+          uv run python scripts/ci_flaky_report.py pytest-out.txt "shard ${{ matrix.shard }}" || true
+          exit "$code"
 
   dashboard:
     runs-on: windows-latest
@@ -111,7 +119,10 @@ jobs:
 
       - name: Unit tests (vitest)
         working-directory: dashboard
-        run: pnpm test
+        # --retry=1 (v1.445.1): a failed test runs once more before the job is
+        # red. The github-actions reporter writes every test that passed only
+        # on retry ("flaky") to the run page, so it gets fixed.
+        run: pnpm test --retry=1 --reporter=default --reporter=github-actions
 
       - name: Typecheck
         working-directory: dashboard

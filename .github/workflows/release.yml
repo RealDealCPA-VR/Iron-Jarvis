@@ -170,7 +170,10 @@ jobs:
 
       - name: Dashboard unit tests (vitest)
         working-directory: dashboard
-        run: pnpm test
+        # --retry=1 (v1.445.1): a failed test runs once more before the job is
+        # red. The github-actions reporter writes every test that passed only
+        # on retry ("flaky") to the run page, so it gets fixed.
+        run: pnpm test --retry=1 --reporter=default --reporter=github-actions
 
       # v1.444.1: Tests no longer runs on a master push, so this gate checks
       # everything it did. vitest never type-checks (v1.401.1); the installer's
@@ -267,10 +270,14 @@ jobs:
           echo "shard ${{ matrix.shard }}: $(wc -w <<< "$files") test files"
           set +e
           # -n auto: one worker per core of this runner.
-          uv run pytest -q --no-header -n auto -p no:cacheprovider $files | tee pytest-out.txt
+          # --reruns 1 (v1.445.1): a failed test runs ONCE more before the shard
+          # is red; a hang (pytest-timeout) is never retried. Every test that
+          # passed only on retry is named on the run page (ci_flaky_report.py).
+          uv run pytest -q --no-header -n auto -p no:cacheprovider --reruns 1 --rerun-except "pytest-timeout" -rR $files | tee pytest-out.txt
           code=${PIPESTATUS[0]}
           set -e
           echo "shard ${{ matrix.shard }}: $(tail -1 pytest-out.txt)" >> "$GITHUB_STEP_SUMMARY"
+          uv run python scripts/ci_flaky_report.py pytest-out.txt "shard ${{ matrix.shard }}" || true
           exit "$code"
 
   # Builds the installer WHILE the tests run, and publishes NOTHING: its
