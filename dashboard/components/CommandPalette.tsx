@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { EVERYTHING_TAB_EVENT, SURFACES } from "@/lib/surfaces";
 import { announceChatViewLink } from "@/lib/chatSurface";
+import { announceSettingsLink } from "@/lib/settingsOpen";
 import { scorePalette, type PaletteItem } from "@/lib/palette";
 import { get } from "@/lib/api";
 import { normalizeIso } from "@/lib/format";
@@ -1184,6 +1185,9 @@ export function CommandPalette() {
       // v1.406.0 (part 1): the same trap for the chat page's Code view
       // (`/chat?view=code` changes only the query when Chat is open).
       announceChatViewLink(row.href);
+      // v1.444.0: the same trap for Settings: a "Default model" press while
+      // Settings is open changed only the query, and nothing moved.
+      announceSettingsLink(row.href);
     }
   }
 

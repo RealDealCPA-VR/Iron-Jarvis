@@ -207,7 +207,17 @@ describe("G46: the first-run key door takes a Google Gemini key", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     // Wait for the line the press ends on (the test's answer), not the POST.
     expect(await screen.findByText(/Connected — google reachable/)).toBeTruthy();
-    expect(hooks.posts.map((p) => p.path)).toEqual(["/connections/google/key", "/connections/google/test"]);
+    // v1.444.0 (moved on purpose): the key is TESTED before it is stored
+    // (`?check=1`); this mock answers like an older daemon (no `test`), so
+    // the door asks the Test route, then — the key passed, replies are a
+    // demo — chooses it with the one press.
+    await waitFor(() =>
+      expect(hooks.posts.map((p) => p.path)).toEqual([
+        "/connections/google/key?check=1",
+        "/connections/google/test",
+        "/onboarding/use-model",
+      ]),
+    );
     expect(hooks.posts[0].body).toEqual({ key: NEW_KEY });
   });
 

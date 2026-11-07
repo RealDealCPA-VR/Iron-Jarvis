@@ -794,7 +794,11 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("chat_files_root", "Chat files folder", "memory", "string",
       "Where files you hand to chat are kept. Empty = Documents\\Iron Jarvis.", tier="ask", advanced=True),
     S("search_roots", "Extra folders for file search", "memory", "list",
-      "More folders File search looks in.", tier="ask", advanced=True),
+      "More folders File Search looks in, besides the Iron Jarvis chat files folder and your "
+      "projects' folders (it never looks in the app's own data folder). Searching by meaning "
+      "looks only in these, and chat may recall short passages from them. You can also add "
+      "and remove them on the File Search page; a change applies to the next search.",
+      tier="ask", advanced=True),
     S("obsidian_vault", "Obsidian vault", "memory", "string", "A vault used as long-term memory.",
       tier="ask", advanced=True),
     S("notion_database_id", "Notion database", "memory", "string",

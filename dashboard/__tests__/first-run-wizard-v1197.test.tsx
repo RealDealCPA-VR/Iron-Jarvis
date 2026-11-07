@@ -235,20 +235,25 @@ describe("three plain-language doors", () => {
 /* --------------------------------------------------- the key door's wiring --- */
 
 describe("the key door — pre-v1.197.0 mechanics, untouched", () => {
-  it("saves then tests the key: POST /connections/anthropic/key → /test", async () => {
+  // v1.444.0, moved on purpose: the key is TESTED before it is saved
+  // (`?check=1`), and only a key that passed is chosen (/onboarding/use-model).
+  // This fake daemon answers like an older one, so the door also asks /test.
+  it("tests the key before it is saved, then chooses it: key?check=1 → /test → use-model", async () => {
     render(<ConnectDoors />);
     fireEvent.click(door("I have an API key"));
     fireEvent.change(screen.getByPlaceholderText("sk-ant-…"), {
       target: { value: "sk-ant-test-123" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    // The success note is set AFTER both awaited posts — waiting on it waits
-    // on the real end of the handler, not the first observable side effect.
-    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Connected"));
-    expect(hooks.posts.map((p) => p.path)).toEqual([
-      "/connections/anthropic/key",
-      "/connections/anthropic/test",
-    ]);
+    // Wait on the END of the handler (its result line), not the first post.
+    await waitFor(() => expect(screen.getByTestId("key-door-result").textContent).toContain("Connected"));
+    await waitFor(() =>
+      expect(hooks.posts.map((p) => p.path)).toEqual([
+        "/connections/anthropic/key?check=1",
+        "/connections/anthropic/test",
+        "/onboarding/use-model",
+      ]),
+    );
     expect(hooks.posts[0].body).toEqual({ key: "sk-ant-test-123" });
   });
 });

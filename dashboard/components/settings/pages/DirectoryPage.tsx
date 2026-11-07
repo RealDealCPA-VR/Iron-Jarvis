@@ -1551,7 +1551,7 @@ export default function MarketplacePage() {
       {/* Body */}
       {loading && !data ? (
         <Reveal>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => (
               <CardSkeleton key={i} />
             ))}
@@ -1597,7 +1597,7 @@ export default function MarketplacePage() {
                   className="h-px flex-1 bg-gradient-to-r from-white/[0.08] to-transparent"
                 />
               </div>
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              <div className="grid grid-cols-[minmax(0,1fr)] gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {group.items.map((c) => (
                   <ConnectorCard key={c.id} c={c} onChanged={reload} />
                 ))}
@@ -1625,7 +1625,7 @@ export default function MarketplacePage() {
               Iron Jarvis already does these with nothing to connect. Add one only if you want a
               separate version for an advanced setup.
             </p>
-            <div className="mt-3.5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="mt-3.5 grid grid-cols-[minmax(0,1fr)] gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {extrasVisible.map((c) => (
                 <ConnectorCard key={c.id} c={c} onChanged={reload} />
               ))}

@@ -268,7 +268,11 @@ import {
   PanelTabs,
   useOpenTerminal,
 } from "@/components/chat/ProjectPanelParts";
-import { ModelSuggestChip } from "@/components/chat/ModelSuggestChip";
+// v1.443.0 (ease-of-use review item 2): the way out of the demo after the
+// first message (ModelSuggestChip rides inside it), and the new chat's doors
+// answering the strip's / model menu's "Connect a model".
+import { DemoConnectChoice, HeroConnectAnchor } from "@/components/chat/DemoConnectChoice";
+import { openConnect } from "@/lib/demoExit";
 import {
   AppsLine,
   ChosenLine,
@@ -14492,6 +14496,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                           onMakeDefault={() => void makeDefault()}
                           defaultNote={defaultNote}
                           chatAccounts={chatAccounts}
+                          onConnect={openConnect}
                         />
                         {/* Mic — dictate into the composer (daemon-transcribed in the
                             desktop app, Web Speech in a browser). */}
@@ -14605,9 +14610,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     {/* Redesign S9 (Q7): a detected model, one tap — never picked
                         silently. Silent once a real model answers, and absent
                         while the empty state's connect doors make the same offer
-                        (one offer on screen at a time). */}
+                        (one offer on screen at a time). v1.443.0: with "Connect
+                        a model" beside it for as long as the demo model is the
+                        default, opening the same doors here (the demo reply's
+                        note points at it). Reads /health only, never the box. */}
                     {messages.length > 0 && (
-                      <ModelSuggestChip
+                      <DemoConnectChoice
                         onOther={() => {
                           setModelMenuOpen(true);
                         }}
@@ -14631,12 +14639,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       {showConnectDoors && (
                         // v1.314.0: the doors side by side from sm. No box of its
                         // own any more: the composer is the one card on screen.
-                        <div className="w-full max-w-2xl">
+                        // v1.443.0: the strip's and the model menu's "Connect a
+                        // model" bring these into view (HeroConnectAnchor).
+                        <HeroConnectAnchor>
                           <p className="mb-2 text-center text-[13px] text-zinc-400">
                             Connect a model for real answers
                           </p>
                           <ConnectDoors layout="row" onChosen={setChosenLabel} />
-                        </div>
+                        </HeroConnectAnchor>
                       )}
                       {/* v1.353.0 (G35): the press's own words, kept on the
                           home after the doors are gone. One quiet line. */}

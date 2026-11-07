@@ -7663,7 +7663,38 @@ def is_demo_route(provider: str, reason: str) -> bool:
     return (provider or "") == "mock" and (reason or "") == "mock"
 
 
-def demo_note(tools_used: list[str], reply: str = "") -> str:
+#: v1.444.0 (ease-of-use review item 2): what the demo note tells the user to
+#: do, where they read it. On the chat page the way out is the button just
+#: below the message box ("Connect a model", or "Use <it> for answers" beside
+#: it -- dashboard components/chat/DemoConnectChoice); the old "Choose a model
+#: above" sent people to a menu whose real rows were all greyed. The browser
+#: sidebar reads the chat's words (it strips this note and says its own,
+#: browser/panel.without_lane_demo_note). Everywhere else (a Build terminal's
+#: chat, Chat > Code, the phone) there is no such button, so the note names
+#: the place.
+DEMO_NOTE_FIX_CHAT = "To get real answers, connect a model with the button just below the message box."
+DEMO_NOTE_FIX_ELSEWHERE = (
+    "To get real answers, connect a model in Iron Jarvis under Settings › Connections."
+)
+
+
+def demo_note_fix(surface: "str | None" = None) -> str:
+    """The demo note's one instruction for *surface* (``surface_for(body)``;
+    None reads ``failure_words.current_surface``). Never raises."""
+    try:
+        from ..providers.failure_words import (
+            SURFACE_CHAT,
+            SURFACE_SIDEBAR,
+            current_surface,
+        )
+
+        where = surface or current_surface()
+        return DEMO_NOTE_FIX_CHAT if where in (SURFACE_CHAT, SURFACE_SIDEBAR) else DEMO_NOTE_FIX_ELSEWHERE
+    except Exception:  # noqa: BLE001 -- the place-naming words are never wrong
+        return DEMO_NOTE_FIX_ELSEWHERE
+
+
+def demo_note(tools_used: list[str], reply: str = "", *, surface: "str | None" = None) -> str:
     """The ONE note an offline-demo reply carries (v1.351.0, G10).
 
     BEFORE: a brand-new user who pressed "What can you do?" before choosing a
@@ -7691,13 +7722,16 @@ def demo_note(tools_used: list[str], reply: str = "") -> str:
         from ..providers.adapters.mock import DEMO_OPENING
     except Exception:  # noqa: BLE001 — the full note is never wrong
         DEMO_OPENING = ""
+    # v1.444.0: the instruction names the real press where the note is read
+    # (``demo_note_fix``); MIRROR NOTE (lock-step): both lanes pass
+    # ``surface=surface_for(body)``.
+    fix = demo_note_fix(surface)
     if DEMO_OPENING and str(reply or "").lstrip().startswith(DEMO_OPENING):
-        return "\n\n_Note: Choose a model above to get real answers._"
+        return f"\n\n_Note: {fix}_"
     wrote = bool(set(tools_used or []) & _FILE_CHANGING_TOOLS)
     return (
         "\n\n_Note: this reply came from the demo model: a scripted demo, not"
-        " real answers" + ("" if wrote else "; nothing was written") + ". Choose"
-        " a model above to get real answers._"
+        " real answers" + ("" if wrote else "; nothing was written") + f". {fix}_"
     )
 
 
@@ -11437,7 +11471,7 @@ async def run_chat_turn(
             # so and names the real fix (choose a model), in place of the two
             # file notes below, whose "arm a document tool" is the wrong fix
             # for a scripted reply. MIRROR NOTE (lock-step): routes/chat.py.
-            reply += demo_note(tools_used, reply)
+            reply += demo_note(tools_used, reply, surface=surface_for(body))
         else:
             # v1.351.0 fix round: the custom tools that ran are named from
             # the live registry — a user-made tool can change a file it never

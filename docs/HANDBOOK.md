@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.443.1 (2026-11-07).*
+holds itself to. Current as of v1.444.0 (2026-11-07).*
 
 ---
 
@@ -2080,6 +2080,58 @@ folder, saves what it makes there, and remembers the folder with the chat.
   files there, for example), it says so under the chip.
 - **Clearing:** **×**, or **+ › No folder for this chat**, goes back to no
   folder.
+## Your first ten minutes, smoother (v1.444.0)
+
+An ease-of-use review (docs/EASE-OF-USE-REVIEW-2026-11-07.md) walked the app
+as a brand-new user. This release fixes nine of the ten things that most
+decided the first session.
+
+- **"Use Claude for answers" / "Use ChatGPT for answers"** now use your plan's
+  own default model. Before, they saved a fixed model that a ChatGPT plan
+  refuses, so the first answer could fail.
+- **An API key is tested before it is saved.** A wrong key changes nothing
+  and the reason stays on screen. A good key becomes what answers you, and
+  the panel says "Done — Anthropic answers you now". Paste an OpenAI key into
+  the Anthropic tab and Iron Jarvis spots it and switches tabs.
+- **After you sign in to Claude Code or Codex** in the terminal that Sign in
+  opens, the panel turns green within seconds. If it doesn't, press "I've
+  signed in — check now".
+- **While the demo model answers,** a "Connect a model" button stays just
+  below the message box in every chat, before and after your first message.
+  If Iron Jarvis already sees a model you can use, the strip at the top
+  offers "Use Claude Code for answers": one press makes it the default for
+  every chat, agent and schedule. In the model menu, a model that isn't
+  connected says "Not connected yet", and the menu ends with "Connect a
+  model…". A demo reply says it is the demo once, not four times. A saved web
+  sign-in in the browser vault never counts as a connected model.
+- **Creative Studio's "Ready" line tells the truth:** with Autopilot off it
+  says the engine asks you in the terminal before each step. Autopilot itself
+  still starts on: the Studio is built to run hands-off (your decision).
+- **File Search looks in your own folders:** the Iron Jarvis chat files folder
+  (Documents\Iron Jarvis), each active project's folder, and any folder you
+  add. It never looks in Iron Jarvis's own data folder. The "Folders to
+  search" card on the File Search page lists them, with "Add a folder…",
+  "Also search Documents" and × to remove one; a change applies to your next
+  search. "By meaning" looks only in folders you added, because chat may
+  recall short passages from them. It needs a local embedding model (Ollama
+  with `nomic-embed-text`). Documents is not searched by default: a contents
+  search opens every file it looks at, which is slow in a large Documents
+  folder.
+- **The two Code views point at each other.** Chat › Code is where Jarvis
+  writes the code; Build › Code runs your own Claude Code or Codex. Each start
+  box has a one-line link to the other. With no coding tool on the PC, Build ›
+  Code says so and offers "Get Claude Code", "Get Codex", or "let Jarvis write
+  the code in Chat › Code". A signed-out Claude Code, Codex or Grok shows a
+  Sign in button right beside it.
+- **Removing an extension from its Tools card takes two presses**, like
+  everywhere else. One press used to delete it and its saved keys.
+- **Ctrl K and links move an open Settings page.** Choosing "Default model"
+  from Ctrl K while Settings was already open used to change only the address.
+- **On a phone,** the Tools page and the Microsoft 365 card no longer push
+  the page sideways.
+
+Not changed yet: Settings › Connections and chat's secure key card still save
+a key before testing it; the review's other items are listed in that file.
 
 ## Setup from chat, proven on 30 requests (v1.442.0)
 

@@ -2870,7 +2870,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
         except Exception:  # noqa: BLE001 — be conservative, don't promote
             return False
         cfg.default_provider = provider
-        cfg.default_model = _PROMOTE_DEFAULT_MODEL.get(provider, cfg.default_model)
+        # v1.444.0: an API name served THROUGH a sign-in (no key of its own)
+        # gets the plan's own default, never a fixed API id the plan may not
+        # run (Codex refuses gpt-4o-mini). A stored key keeps the table.
+        try:
+            through_sign_in = bool(platform.providers.inherited_from(provider))
+        except Exception:  # noqa: BLE001 — keep the old pairing on a fault
+            through_sign_in = False
+        cfg.default_model = (
+            "subscription"
+            if through_sign_in
+            else _PROMOTE_DEFAULT_MODEL.get(provider, cfg.default_model)
+        )
         _persist_config(["default_provider", "default_model"])
         return True
 

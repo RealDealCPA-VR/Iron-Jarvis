@@ -42,6 +42,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import { Brain, Check, ChevronDown, ChevronRight, CircleAlert } from "lucide-react";
 import { FitPanel } from "@/components/chat/FitPanel";
 // v1.376.0: the IJ harness's company groups and accounts — TYPES only, so
@@ -51,6 +52,8 @@ import { ModelRowChips, modelText, modelTitle } from "@/components/ModelRowBits"
 import { composerChipClass, iconOnlyTitle } from "@/lib/composerChips";
 import { friendlyModelName } from "@/lib/friendlyModelName";
 import { foldPlanRows, modelGroupName, providerDisplay } from "@/lib/onboarding";
+// v1.444.0 (ease-of-use review item 2): the menu's way out of the demo.
+import { CONNECT_A_MODEL_ROW, CONNECTIONS_HREF, NOT_CONNECTED_YET } from "@/lib/demoExit";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
 import {
   levelWords,
@@ -469,6 +472,27 @@ export const ANY_ACCOUNT_WORDS = "Any free account";
 export const ANY_ACCOUNT_STATE = "Iron-Proxy picks the first free one";
 
 /** Why a harness filter / Recent row cannot be picked ("" = it can). */
+/** v1.444.0 (ease-of-use review item 2): a provider row's name, and on a
+ *  greyed row the reason in words on the screen (it used to be a hover
+ *  tooltip only, which a touch screen never shows). */
+function RowName({ label, available }: { label: string; available: boolean }) {
+  return (
+    <>
+      <span className="min-w-0 truncate">{label}</span>
+      {available ? null : (
+        <span data-testid="model-row-reason" className="shrink-0 text-[11px] text-zinc-500">
+          {NOT_CONNECTED_YET}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** The same reason after a filter or Recent row's provider name. */
+function NotConnectedTail() {
+  return <span data-testid="model-row-reason">{` · ${NOT_CONNECTED_YET.toLowerCase()}`}</span>;
+}
+
 function matchBlocked(m: MenuMatch): string {
   if (m.row.available === false) return `${m.group} isn't connected`;
   if (m.account && !m.account.pickable) return `${m.account.name}: ${m.account.state.text}. ${m.account.reason}`;
@@ -490,6 +514,7 @@ export function ModelMenu({
   defaultNote = "",
   companies,
   chatAccounts,
+  onConnect,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -521,6 +546,12 @@ export function ModelMenu({
    *  account names it (`onPick(value, account)`). Absent, or a CLI with none
    *  (Iron-Proxy off): the row exactly as before. */
   chatAccounts?: ChatAccounts;
+  /** v1.444.0 (ease-of-use review item 2): the menu ends with a "Connect a
+   *  model…" row. It closes the menu and calls this, which shows the connect
+   *  choices where the user is and answers true (lib/demoExit.openConnect);
+   *  false lets the row's link go to Settings › Connections. Absent: no row
+   *  (the IJ harness's menu, exactly as before). */
+  onConnect?: () => boolean;
 }) {
   const popRef = useRef<HTMLDivElement>(null);
   const [sub, setSub] = useState<string | null>(null);
@@ -828,7 +859,7 @@ export function ModelMenu({
           splitChoice(chosen).provider === p.id ? "text-accent-soft" : "text-zinc-300"
         }`}
       >
-        <span className="min-w-0 truncate">{p.label}</span>
+        <RowName label={p.label} available={p.available} />
         {/* Where it runs — the whole point of the reorder: a list
             you can act on without knowing which of your
             providers costs money. */}
@@ -885,7 +916,7 @@ export function ModelMenu({
           splitChoice(chosen).provider === w.provider ? "text-accent-soft" : "text-zinc-300"
         }`}
       >
-        <span className="min-w-0 truncate">{w.label}</span>
+        <RowName label={w.label} available={w.available} />
         {kindBadge(w.kind, w.available)}
         <ChevronRight size={12} className="ml-auto shrink-0 text-zinc-500" />
       </button>
@@ -1111,7 +1142,10 @@ export function ModelMenu({
                           {modelText(m, models)}
                         </span>
                         <ModelRowChips m={m} />
-                        <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">{modelGroupName(m)}</span>
+                        <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
+                          {modelGroupName(m)}
+                          {m.available === false ? <NotConnectedTail /> : null}
+                        </span>
                       </button>
                     );
                   })
@@ -1179,7 +1213,10 @@ export function ModelMenu({
                               {modelText(row, models)}
                             </span>
                             <ModelRowChips m={row} />
-                            <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">{modelGroupName(row)}</span>
+                            <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
+                              {modelGroupName(row)}
+                              {row.available === false ? <NotConnectedTail /> : null}
+                            </span>
                           </button>
                         );
                       })}
@@ -1231,6 +1268,25 @@ export function ModelMenu({
                     {defaultNote}
                   </p>
                 )}
+              </div>
+            )}
+            {/* v1.444.0 (ease-of-use review item 2): the way to connect a
+                model, from the menu where the greyed rows are. A link, so a
+                screen with no connect choices of its own goes to Connections. */}
+            {onConnect && (
+              <div className="mt-1 border-t border-white/[0.06] pt-1">
+                <Link
+                  href={CONNECTIONS_HREF}
+                  data-testid="model-menu-connect"
+                  onClick={(e) => {
+                    onOpenChange(false);
+                    setSub(null);
+                    if (onConnect()) e.preventDefault();
+                  }}
+                  className="block w-full rounded-lg px-2.5 py-1.5 text-left text-[12px] text-zinc-300 hover:bg-white/[0.06] focus-visible:bg-white/[0.06] focus-visible:outline-none"
+                >
+                  {CONNECT_A_MODEL_ROW}
+                </Link>
               </div>
             )}
           </div>,

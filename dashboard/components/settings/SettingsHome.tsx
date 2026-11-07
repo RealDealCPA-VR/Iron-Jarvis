@@ -41,6 +41,7 @@ import { SettingRow, type SchemaSetting } from "@/components/settings/SettingRow
 import { LedgerPanel } from "@/components/settings/LedgerPanel";
 import { AccessSummary } from "@/components/settings/AccessSummary";
 import { settingsRowLabel } from "@/lib/settingsRows";
+import { SETTINGS_OPEN_EVENT, type SettingsTarget } from "@/lib/settingsOpen";
 
 const LegacySettingsForm = dynamic(() => import("@/components/settings/pages/LegacySettingsForm"), { ssr: false });
 
@@ -243,6 +244,9 @@ export function SettingsHome() {
   const [active, setActive] = useState("models");
   const [openSub, setOpenSub] = useState<string>("");
   const [focusKey, setFocusKey] = useState("");
+  // v1.444.0: bumped on every request to focus a setting, so asking for the
+  // SAME setting twice (Ctrl K twice) still brings it back into view.
+  const [focusN, setFocusN] = useState(0);
   const [query, setQuery] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<{ action_id: string; count: number } | null>(null);
@@ -284,6 +288,49 @@ export function SettingsHome() {
     }
   }, [load]);
 
+  // v1.444.0: a LATER address change while Settings is open (Ctrl K, a link
+  // from one section to another, Back/Forward) opens its section too. The
+  // address used to be read only on mount, so those presses did nothing.
+  useEffect(() => {
+    let last = `${window.location.search}${window.location.hash}`;
+    const open = (t: SettingsTarget | null) => {
+      if (!t) return;
+      if (t.focus) {
+        setFocusKey(t.focus);
+        setFocusN((n) => n + 1);
+      }
+      setPhoneList(false);
+      if (t.section) {
+        setQuery("");
+        setActive(t.section.split("-")[0]);
+        if (t.section.includes("-")) {
+          setOpenSub(t.section);
+          window.setTimeout(() => {
+            document.getElementById(t.section)?.scrollIntoView?.({ block: "start" });
+          }, 50);
+        }
+      }
+    };
+    const fromAddress = () => {
+      const now = `${window.location.search}${window.location.hash}`;
+      if (now === last) return;
+      last = now;
+      if (!window.location.pathname.startsWith("/settings")) return;
+      const { section, focus } = readSection();
+      open(section || focus ? { section, focus } : null);
+    };
+    const fromEvent = (e: Event) => open((e as CustomEvent<SettingsTarget>).detail ?? null);
+    window.addEventListener(SETTINGS_OPEN_EVENT, fromEvent);
+    window.addEventListener("popstate", fromAddress);
+    const nav = (window as unknown as { navigation?: EventTarget }).navigation;
+    nav?.addEventListener?.("currententrychange", fromAddress);
+    return () => {
+      window.removeEventListener(SETTINGS_OPEN_EVENT, fromEvent);
+      window.removeEventListener("popstate", fromAddress);
+      nav?.removeEventListener?.("currententrychange", fromAddress);
+    };
+  }, []);
+
   // ?focus=<key>: open that setting's group and bring the row into view.
   useEffect(() => {
     if (!focusKey || defs.length === 0) return;
@@ -299,7 +346,7 @@ export function SettingsHome() {
       document.getElementById(`setting-${def.key}`)?.scrollIntoView?.({ block: "center" });
     }, 50);
     return () => window.clearTimeout(t);
-  }, [focusKey, defs]);
+  }, [focusKey, focusN, defs]);
 
   const changedKeys = useMemo(
     () => Object.keys(form).filter((k) => !same(form[k], original[k])),

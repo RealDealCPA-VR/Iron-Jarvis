@@ -261,6 +261,10 @@ VERDICT_TTL_S = 900.0
 #: promise "this turns green by itself once you're signed in" while the user
 #: finishes a `/login` in a Build pane, and nothing else re-asks then (the
 #: router never asks about a CLI the user has not picked). The old 120 s.
+#: v1.444.0: the slow path only — the Sign in pane itself re-checks the
+#: moment the CLI says it is signed in (``terminals.signin_watch.
+#: watch_default_login``), and the door's "I've signed in — check now"
+#: re-probes through ``POST /providers/rescan``.
 UNSIGNED_RECHECK_S = 120.0
 
 #: Set while a STATUS view (``ProviderManager.health()``: /health,
