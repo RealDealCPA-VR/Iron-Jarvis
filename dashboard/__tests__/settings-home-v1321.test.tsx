@@ -264,3 +264,37 @@ describe("390 px: the groups are a drill-down list (AUDIT §8, redesign S11)", (
     expect(screen.queryByTestId("settings-groups-phone")).toBeNull();
   });
 });
+
+
+describe("v1.445.0: Settings follows a LATER address change while it is open", () => {
+  it("a Ctrl K press for a setting moves an already-open Settings page", async () => {
+    const { announceSettingsLink } = await import("@/lib/settingsOpen");
+    render(<SettingsHome />);
+    await screen.findByTestId("settings-groups");
+    expect(screen.getByTestId("settings-group").getAttribute("data-group")).toBe("models");
+    act(() => announceSettingsLink("/settings?focus=max_agent_steps"));
+    const row = await screen.findByTestId("setting-max_agent_steps");
+    await waitFor(() => expect(row.className).toContain("ring-2"));
+    expect(screen.getByTestId("settings-group").getAttribute("data-group")).toBe("automation");
+  });
+
+  it("Back/Forward (or any address change) to another section opens it", async () => {
+    render(<SettingsHome />);
+    await screen.findByTestId("settings-groups");
+    act(() => {
+      window.history.pushState({}, "", "/settings?section=automation");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-group").getAttribute("data-group")).toBe("automation"),
+    );
+  });
+
+  it("only a /settings address names a place to go", async () => {
+    const { settingsTarget } = await import("@/lib/settingsOpen");
+    expect(settingsTarget("/settings?focus=default_model")).toEqual({ section: "", focus: "default_model" });
+    expect(settingsTarget("/settings#appearance")).toEqual({ section: "appearance", focus: "" });
+    expect(settingsTarget("/settings")).toBeNull();
+    expect(settingsTarget("/chat?focus=x")).toBeNull();
+  });
+});

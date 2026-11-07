@@ -890,7 +890,8 @@ def test_what_can_you_do_on_the_demo_says_it_is_the_demo_once(tmp_path, lane):
     assert out["route"]["provider"] == "mock" and out["route"]["reason"] == "mock"
     reply = out["reply"]
     assert reply.count("demo model") == 1, reply
-    assert "Choose a model above to get real answers." in reply
+    # v1.445.0 (moved on purpose): the note names the real press now.
+    assert "connect a model with the button just below the message box." in reply
     assert "arm a document tool" not in reply and "Arm write_document" not in reply, reply
     assert "nothing was written to disk this turn" not in reply
     assert reply.count("_Note:") == 1, reply
@@ -910,7 +911,8 @@ def test_the_demo_note_never_says_nothing_was_written_when_it_wrote():
     note then says only what the reply is."""
     assert "nothing was written" in demo_note([])
     assert "nothing was written" not in demo_note(["write_file"])
-    assert "Choose a model above" in demo_note(["write_file"])
+    # v1.445.0 (moved on purpose): the press below the box, not "above".
+    assert "connect a model with the button just below the message box" in demo_note(["write_file"])
 
 
 def test_only_the_routed_demo_is_the_demo():

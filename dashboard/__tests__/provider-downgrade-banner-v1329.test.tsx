@@ -55,12 +55,17 @@ const REFUSED_RUN = ev(
   { requested: "fleet-fa2-anth", used: "none", reason: "not connected", label: "Office Spark" },
   "sess_42",
 );
-const MOCK = ev("1", {
+// v1.445.0 (moved on purpose, ease-of-use review item 2): the demo answering
+// a CHAT turn is not a downgrade (the demo IS the default) and is said in the
+// chat, so the banner speaks only for a RUN the demo answered.
+const MOCK_PAYLOAD = {
   requested: "mock (default)",
   used: "mock",
   reason:
     "your default provider is 'mock' but a real provider is connected. Make it your default on the Connections page.",
-});
+};
+const MOCK = ev("1", MOCK_PAYLOAD, "sess_7");
+const MOCK_CHAT = ev("5", MOCK_PAYLOAD);
 
 beforeEach(() => {
   H.events = [];
@@ -93,6 +98,11 @@ describe("downgradeNotice — what each event says", () => {
     expect(n.detail).toMatch(/^Your default is still the demo model/);
     expect(n.detail).not.toMatch(/mock/i); // v1.357.0: the daemon's own reason names the id; the banner never echoes it
     expect(n.detail).not.toContain(DASH);
+  });
+
+  it("v1.445.0: a demo answer in a CHAT turn says nothing here (the strip, the reply and its receipt say it)", () => {
+    expect(downgradeNotice(MOCK_CHAT)).toBeNull();
+    expect(downgradeNotice({ ...MOCK_CHAT, session_id: "chat" })).toBeNull();
   });
 
   it("ignores any other event type", () => {

@@ -306,6 +306,14 @@ def launch_pane(
     # screen in the pane's tail so the attach replays it (the sign-in pane's
     # pattern), and answer ConPTY's start-up query meanwhile.
     session.start_autodrain()
+    # v1.445.0: a pane started on THIS PC's own login for Claude Code or
+    # Codex (the connect door's and Settings' Sign in press) is watched for
+    # the CLI's own "signed in" words, which re-check the shared sign-in
+    # verdict at once — the door turns green in seconds, not two minutes.
+    if account == "default" and cli_id in ("claude", "codex"):
+        from ...terminals.signin_watch import watch_default_login
+
+        watch_default_login(session, cli_id)
     if command is not None:
         session.write(command + "\r")
         return session

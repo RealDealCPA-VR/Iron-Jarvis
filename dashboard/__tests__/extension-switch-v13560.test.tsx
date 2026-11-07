@@ -319,6 +319,28 @@ describe("a Tools row switches its extension off and on without losing it", () =
     expect(within(cardEl).getByTestId("pack-remove-slack").textContent).toContain("Remove");
   });
 
+  it("v1.445.0: the catalog card's Remove takes two presses, like the row below", async () => {
+    api.servers = [SLACK_OFF];
+    api.catalog = [
+      { id: "slack", name: "Slack", description: "Read and post messages.", command: "npx", args: [], category: "integration" },
+    ];
+    render(<ToolsPage />);
+    await screen.findByTestId("packs-enabled");
+    const cardEl = document.querySelector('[data-pack="slack"]') as HTMLElement;
+    const remove = within(cardEl).getByTestId("pack-remove-slack");
+    await act(async () => {
+      fireEvent.click(remove);
+    });
+    // One press only arms it: nothing is deleted yet.
+    expect(api.dels).toEqual([]);
+    expect(remove.textContent).toContain("press again");
+    await act(async () => {
+      fireEvent.click(remove);
+    });
+    await waitFor(() => expect(api.dels).toEqual(["/mcp/servers/slack"]));
+  });
+
+
   it("a row the daemon reads as off (no tools) offers no Retry and no 'No tools loaded' (review)", async () => {
     api.servers = [SLACK_OFF];
     render(<ToolsPage />);

@@ -45,8 +45,14 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from "react";
+import Link from "next/link";
 import { ArrowUp, Check, ChevronDown, Code2, Loader2, UserRound } from "lucide-react";
-import { ApiError, post } from "@/lib/api";
+import { ApiError, get, post } from "@/lib/api";
+import { CliSignInPress } from "@/components/connections/CliSignInPress";
+import { subscriptionCliFor } from "@/lib/cliSignIn";
+import { CODE_VIEW_LINK } from "@/lib/buildLinks";
+import { announceChatViewLink } from "@/lib/chatSurface";
+import { CODING_SESSIONS_PLACE } from "@/lib/buildWords";
 import { FolderChip } from "@/components/folders/FolderChip";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { ModeChip } from "@/components/buildCode/ModeChip";
@@ -77,9 +83,124 @@ import {
   toolChoiceWords,
   toolLabel,
   toolUnavailable,
+  toolSignedOut,
+  toolSignInProvider,
+  noToolCanStart,
+  noToolInstalled,
+  getToolLinks,
+  NO_TOOL_ON_PC,
+  LET_JARVIS_CODE_LEAD,
+  TO_CHAT_CODE_LEAD,
   type CodeSession,
   type CodingTool,
 } from "@/lib/buildApp";
+
+/** v1.445.0: a quiet in-line link, as the start box's other quiet words. */
+const QUIET_LINK =
+  "text-zinc-400 underline decoration-white/20 underline-offset-2 transition-colors hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 rounded-sm";
+
+/** v1.445.0: a link to Chat › Code (Jarvis writes the code itself). Pressed
+ *  on the chat page it is announced (the page switches views); from Build it
+ *  is a plain navigation. */
+export function ChatCodeLink() {
+  return (
+    <Link
+      href={CODE_VIEW_LINK}
+      onClick={() => {
+        announceChatViewLink(CODE_VIEW_LINK);
+      }}
+      className={QUIET_LINK}
+    >
+      {CODING_SESSIONS_PLACE}
+    </Link>
+  );
+}
+
+/** v1.445.0 (ease-of-use review, item 11): the two "Code" views point at each
+ *  other. One quiet line under Build › Code's start box (and on Build's
+ *  Terminal view): "Want Jarvis to write the code itself? Use Chat › Code." */
+export function ToChatCodeLine({ testId = "code-to-chat-code", className = "px-2" }: { testId?: string; className?: string }) {
+  return (
+    <p data-testid={testId} className={`${className} text-[12px] text-zinc-500`}>
+      {TO_CHAT_CODE_LEAD} <ChatCodeLink />.
+    </p>
+  );
+}
+
+/** One row of the Launch catalog (`GET /terminals/ai-clis`): its install page. */
+type CatalogRow = { id: string; url?: string };
+
+/** v1.445.0: when no coding tool can start, the start box says why and the
+ *  way forward — the one-press Sign in beside a signed-out tool, Get links
+ *  when none is on this PC, and Chat › Code (Jarvis writes the code). */
+function NoToolHelp({ tools }: { tools: readonly CodingTool[] }) {
+  const none = noToolInstalled(tools);
+  const [catalog, setCatalog] = useState<CatalogRow[] | null>(null);
+  useEffect(() => {
+    if (!none) return;
+    let cancelled = false;
+    // The daemon's own install pages (the Launch catalog). Read only here:
+    // the catalog looks for every CLI on this PC, which takes a moment.
+    Promise.resolve()
+      .then(() => get<{ clis?: CatalogRow[] }>("/terminals/ai-clis"))
+      .then((r) => {
+        if (!cancelled && Array.isArray(r?.clis)) setCatalog(r.clis);
+      })
+      .catch(() => {
+        /* the dashboard's own install pages stand in */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [none]);
+  const links = none
+    ? getToolLinks(catalog, (cli) => subscriptionCliFor(`${cli}-cli`)?.installUrl)
+    : [];
+  const signedOut = none ? [] : tools.filter(toolSignedOut);
+  return (
+    <div data-testid="code-start-no-tool" className="space-y-1 px-2 text-[12px] text-zinc-500">
+      {none ? (
+        <p data-testid="code-start-no-tool-line">
+          {NO_TOOL_ON_PC}
+          {links.map((l) => (
+            <span key={l.harness}>
+              {" "}
+              <a
+                href={l.url}
+                target="_blank"
+                rel="noreferrer"
+                data-testid={`code-start-get-${l.harness}`}
+                className={QUIET_LINK}
+              >
+                {l.label}
+              </a>
+            </span>
+          ))}
+        </p>
+      ) : signedOut.length ? (
+        signedOut.map((t) => {
+          const provider = toolSignInProvider(t.id);
+          return (
+            <p key={t.id} data-testid={`code-start-signed-out-${t.id}`}>
+              {toolUnavailable(t)}
+              {provider ? (
+                <>
+                  {" "}
+                  <CliSignInPress provider={provider} variant="inline" testIdPrefix="code-start" />
+                </>
+              ) : null}
+            </p>
+          );
+        })
+      ) : (
+        <p data-testid="code-start-no-tool-line">No coding tool here can start a session right now.</p>
+      )}
+      <p data-testid="code-start-let-jarvis">
+        {LET_JARVIS_CODE_LEAD} <ChatCodeLink />.
+      </p>
+    </div>
+  );
+}
 
 /** Remembered on this PC: the tool last started, and per tool its account. */
 export const LAST_TOOL_KEY = "ij.code.lastTool";
@@ -320,6 +441,14 @@ export function StartComposer({
   // chosen (the daemon would pick one the user did not choose).
   const accountMissing = showAccount && !account;
   const unavailable = tool ? toolUnavailable(tool) : null;
+  // v1.445.0: nothing in the list can start a session (none installed, or
+  // every installed tool signed out) — the box says why and the way forward.
+  const stuck = noToolCanStart(tools);
+  const stuckWords = stuck
+    ? noToolInstalled(tools)
+      ? NO_TOOL_ON_PC
+      : "No coding tool here can start a session right now: sign in first."
+    : null;
   const ready = !!tool && !unavailable && !accountMissing && (!!text.trim() || att.files.length > 0) && !busy;
 
   function chooseTool(id: string) {
@@ -437,7 +566,9 @@ export function StartComposer({
       : "Looking for coding tools…"
     : tool
       ? tool.label
-      : "No coding tool found";
+      : noToolInstalled(tools)
+        ? "No coding tool on this PC"
+        : "No coding tool ready";
   const accountName = noAccount
     ? "No account can start it"
     : (choices.find((a) => a.id === account)?.name ?? "Choose an account");
@@ -495,7 +626,7 @@ export function StartComposer({
               disabled={!ready}
               onClick={() => void start()}
               aria-label="Start the session and send"
-              title={unavailable ?? noAccount ?? (accountMissing ? "Choose an account first" : "Send (Enter)")}
+              title={unavailable ?? stuckWords ?? noAccount ?? (accountMissing ? "Choose an account first" : "Send (Enter)")}
               className="grid h-8 w-8 place-items-center rounded-full bg-accent text-ink-950 transition-opacity disabled:opacity-40"
             >
               {busy ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={15} aria-hidden="true" />}
@@ -560,28 +691,38 @@ export function StartComposer({
               >
                 {tools.map((t) => {
                   const why = toolUnavailable(t);
+                  // v1.445.0: a signed-out tool with the app's one-press Sign
+                  // in offers it right under its row (outside the row's own
+                  // button: a button never holds another).
+                  const press = why && toolSignedOut(t) ? toolSignInProvider(t.id) : "";
                   return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={t.id === toolId}
-                      data-testid={`code-start-tool-${t.id}`}
-                      data-available={why ? "false" : "true"}
-                      disabled={!!why}
-                      onClick={() => chooseTool(t.id)}
-                      className={`${MENU_ROW} ${t.id === toolId ? "text-zinc-100" : "text-zinc-300"}`}
-                    >
-                      <span className="mt-0.5 w-3.5 shrink-0">{t.id === toolId ? <Check size={13} aria-hidden="true" /> : null}</span>
-                      <span className="min-w-0">
-                        <span className="block">{t.label}</span>
-                        {why ? (
-                          <span data-testid={`code-start-tool-why-${t.id}`} className="block text-[12px] text-zinc-500">
-                            {why}
-                          </span>
-                        ) : null}
-                      </span>
-                    </button>
+                    <div key={t.id} role="none">
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={t.id === toolId}
+                        data-testid={`code-start-tool-${t.id}`}
+                        data-available={why ? "false" : "true"}
+                        disabled={!!why}
+                        onClick={() => chooseTool(t.id)}
+                        className={`${MENU_ROW} ${t.id === toolId ? "text-zinc-100" : "text-zinc-300"}`}
+                      >
+                        <span className="mt-0.5 w-3.5 shrink-0">{t.id === toolId ? <Check size={13} aria-hidden="true" /> : null}</span>
+                        <span className="min-w-0">
+                          <span className="block">{t.label}</span>
+                          {why ? (
+                            <span data-testid={`code-start-tool-why-${t.id}`} className="block text-[12px] text-zinc-500">
+                              {why}
+                            </span>
+                          ) : null}
+                        </span>
+                      </button>
+                      {press ? (
+                        <div data-testid={`code-start-tool-signin-${t.id}`} className="pb-1.5 pl-8 pr-2 text-[12px] text-zinc-500">
+                          <CliSignInPress provider={press} variant="inline" testIdPrefix="code-start-menu" />
+                        </div>
+                      ) : null}
+                    </div>
                   );
                 })}
               </div>
@@ -780,6 +921,8 @@ export function StartComposer({
           <p role="alert" data-testid="code-start-tools-error" className="px-2 text-[12px] text-tone-danger">
             {toolsError}
           </p>
+        ) : stuck && tools ? (
+          <NoToolHelp tools={tools} />
         ) : unavailable ? (
           <p data-testid="code-start-unavailable" className="px-2 text-[12px] text-zinc-500">
             {unavailable}
@@ -794,6 +937,9 @@ export function StartComposer({
             {error}
           </p>
         ) : null}
+        {/* v1.445.0: the two Code views point at each other (said once: the
+            no-tool help above already offers Chat › Code). */}
+        {stuck ? null : <ToChatCodeLine />}
       </div>
     </div>
   );

@@ -2852,7 +2852,9 @@ function StudioView({
                     <p className="text-[13px] text-zinc-400">
                       Ready — describe what to create in{" "}
                       <code className="font-mono text-zinc-300">{folderLabel(session.dest)}</code>.
-                      I’ll run it on autopilot and drop the results right here as they land.
+                      {session.autopilot
+                        ? "I’ll run it on autopilot and drop the results right here as they land."
+                        : "It asks you in the terminal before each step, and the results land right here."}
                     </p>
                   )}
                 </AssistantBubble>

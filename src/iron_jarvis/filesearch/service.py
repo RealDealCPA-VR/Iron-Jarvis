@@ -6,7 +6,15 @@ of query:
 * ``search_name``    — glob / substring match on file paths.
 * ``search_content`` — regex match on file contents, reported as path + line.
 * ``search_semantic``— cosine similarity over embedded file chunks (only when an
-  embedder is injected; otherwise disabled and returns an empty list).
+  embedder is injected; otherwise disabled and returns an empty list). Since
+  v1.445.0 it indexes its OWN set of roots (``meaning_roots``; the platform
+  passes only the folders the user added) and builds that index on a
+  background thread, waiting at most :data:`SEMANTIC_WAIT_S` for it — a
+  caller that is not answered in time gets ``[]`` with ``notes.indexing``
+  set, never a frozen chat turn (see ``filesearch/defaults.py``).
+
+Roots may be a list (fixed) or a zero-argument callable (read on every search,
+so a saved setting applies to the next search without a restart).
 
 Hard guarantees:
 
@@ -29,6 +37,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +65,34 @@ DEFAULT_MAX_WALK = 20_000
 #: and a (file, line) reference, reads snippets back only for the top hits,
 #: and stops here, which the search's notes say out loud.
 MAX_SEMANTIC_CHUNKS = 50_000
+
+#: Seconds a "By meaning" search waits for the meaning index to be built
+#: (v1.445.0). A small folder is built well inside it, so the answer is the
+#: same as before; a big one keeps building in the background and the caller
+#: is told "still reading your folders" instead of waiting minutes (the memory
+#: fabric asks this on every chat turn and agent run).
+SEMANTIC_WAIT_S = 5.0
+
+#: Words a caller may show when "By meaning" has no local embedding model
+#: (the embedder fell back to the offline word-hash one).
+WORD_ONLY_NOTE = (
+    "[No local embedding model is connected, so this matched words, not meaning. "
+    "To search by meaning: install Ollama, run `ollama pull nomic-embed-text`, connect "
+    "Ollama in Settings › Connections, then restart Iron Jarvis.]"
+)
+
+#: Words for a "By meaning" search with no folder to look in.
+NO_MEANING_FOLDERS_NOTE = (
+    "[By meaning searches only the folders the user added on the File Search page "
+    "(none are added yet), so nothing was searched by meaning. Search by name or "
+    "content to look in the chat files folder and the projects' folders.]"
+)
+
+#: Words for a "By meaning" search answered while its index is still being built.
+INDEXING_NOTE = (
+    "[Still reading the folders for meaning search; try again in a minute. Search by "
+    "name or content meanwhile.]"
+)
 
 
 class BadSearchPattern(ValueError):
@@ -115,6 +152,12 @@ class SearchNotes:
     #: Text files the semantic index could not hold (v1.333.0): past
     #: :data:`MAX_SEMANTIC_CHUNKS`, or past the walk cap when it was built.
     not_indexed: int = 0
+    #: v1.445.0: "By meaning" had no folder to look in.
+    no_meaning_folders: bool = False
+    #: v1.445.0: the meaning index was still being built when the answer was due.
+    indexing: bool = False
+    #: v1.445.0: the embedder is the offline word-hash one (no local model).
+    words_only: bool = False
 
     def note(self) -> str:
         """The line(s) to append to a tool's output, or ``""`` when clean."""
@@ -135,6 +178,12 @@ class SearchNotes:
                 f"[The meaning index is full, so {self.not_indexed} file(s) or more "
                 f"were not searched by meaning. Search by name or content to reach them.]"
             )
+        if self.no_meaning_folders:
+            parts.append(NO_MEANING_FOLDERS_NOTE)
+        if self.indexing:
+            parts.append(INDEXING_NOTE)
+        if self.words_only:
+            parts.append(WORD_ONLY_NOTE)
         return "\n".join(parts)
 
 
@@ -167,7 +216,7 @@ def list_drives() -> list[dict]:
     On Windows: every existing drive letter ``C:\\`` .. ``Z:\\`` (discovered via
     ``psutil.disk_partitions`` when available, then probed directly as a
     fallback) plus the user's home directory. On POSIX: the filesystem root and
-    home. Returns ``[{"path", "label"}, ...]`` and only ever includes roots that
+    home. Both then add the Documents folder (label ``"Documents"``, v1.445.0). Returns ``[{"path", "label"}, ...]`` and only ever includes roots that
     actually exist, so the current drive is always present.
     """
     drives: list[dict] = []
@@ -203,6 +252,15 @@ def list_drives() -> list[dict]:
     else:
         _add("/", "/")
         _add(str(Path.home()), "Home")
+    # v1.445.0: the user's Documents folder (the Known Folder, so OneDrive's
+    # moved one), so the File Search page can offer "Also search Documents"
+    # by its real path. Never raises; skipped when it is the home folder.
+    try:
+        from ..core.userdirs import documents_dir
+
+        _add(str(documents_dir()), "Documents")
+    except Exception:  # noqa: BLE001
+        pass
     return drives
 
 
@@ -215,6 +273,8 @@ class _SemanticIndex:
     refs: list[tuple[int, int]]
     matrix: "np.ndarray"
     not_indexed: int = 0
+    #: v1.445.0: the meaning roots this index was built over.
+    roots: tuple[Path, ...] = ()
 
 
 class FileSearchService:
@@ -222,24 +282,78 @@ class FileSearchService:
 
     def __init__(
         self,
-        roots: list[Path],
+        roots: "list[Path] | Callable[[], list[Path]]",
         embedder=None,
         ignore: set[str] | None = None,
+        *,
+        meaning_roots: "list[Path] | Callable[[], list[Path]] | None" = None,
     ) -> None:
-        # Resolve + de-duplicate roots; keep only the existing ones.
-        seen: list[Path] = []
-        for r in roots:
-            rp = Path(r).resolve()
-            if rp not in seen:
-                seen.append(rp)
-        self.roots: list[Path] = seen
+        # ``roots`` (name/content search) and ``meaning_roots`` ("By meaning")
+        # may each be a fixed list or a callable read on every search
+        # (v1.445.0). ``meaning_roots=None`` = the same as ``roots`` (every
+        # caller before v1.445.0).
+        self._roots_src = roots if callable(roots) else self._normalise(roots)
+        self._meaning_src = (
+            None
+            if meaning_roots is None
+            else meaning_roots if callable(meaning_roots) else self._normalise(meaning_roots)
+        )
         self.embedder = embedder
         self.ignore: set[str] = set(ignore) if ignore is not None else set(DEFAULT_IGNORE)
         self._indexed: list[Path] = []  # cached text-file paths after index()
+        #: The roots ``_indexed`` was walked over (v1.445.0).
+        self._indexed_for: tuple[Path, ...] = ()
+        self._indexed_pair: tuple[tuple[Path, ...], list[Path]] = ((), [])
         #: True when index() stopped at DEFAULT_MAX_WALK files (v1.333.0).
         self._index_capped = False
         #: The semantic index (v1.333.0): None until first needed.
         self._chunk_cache: _SemanticIndex | None = None
+        #: v1.445.0: ONE build at a time, on its own thread.
+        self._build_lock = threading.Lock()
+        self._build_thread: threading.Thread | None = None
+        self._build_error: BaseException | None = None
+
+    @staticmethod
+    def _normalise(roots) -> list[Path]:
+        """Resolve + de-duplicate, order kept."""
+        seen: list[Path] = []
+        for r in roots or []:
+            try:
+                rp = Path(r).resolve()
+            except (OSError, RuntimeError, TypeError, ValueError):
+                continue
+            if rp not in seen:
+                seen.append(rp)
+        return seen
+
+    @property
+    def roots(self) -> list[Path]:
+        """The roots name and content search look in, read now."""
+        src = self._roots_src
+        if callable(src):
+            try:
+                return self._normalise(src())
+            except Exception:  # noqa: BLE001 — a broken provider searches nothing
+                return []
+        return list(src)
+
+    @property
+    def meaning_roots(self) -> list[Path]:
+        """The roots "By meaning" indexes, read now (v1.445.0)."""
+        src = self._meaning_src
+        if src is None:
+            return self.roots
+        if callable(src):
+            try:
+                return self._normalise(src())
+            except Exception:  # noqa: BLE001
+                return []
+        return list(src)
+
+    @property
+    def words_only(self) -> bool:
+        """True when the embedder is the offline word-hash one (no local model)."""
+        return self.embedder is not None and getattr(self.embedder, "model", "") == "mock"
 
     # -- root resolution ----------------------------------------------------
 
@@ -307,10 +421,17 @@ class FileSearchService:
         roots: list[Path] | None = None,
         max_walk: int | None = None,
     ):
-        """Files to scan: the cached index (only for configured roots) else a walk."""
-        if roots is None and self._indexed:
-            indexed = list(self._indexed)
-            return indexed if max_walk is None else indexed[:max_walk]
+        """Files to scan: the cached index (only when it was walked over exactly
+        the roots this search covers) else a walk."""
+        if roots is None:
+            roots = self.roots
+            # One read of (roots, paths): the meaning index is built on its
+            # own thread, and two separate reads could pair one walk's roots
+            # with another walk's files.
+            indexed_for, indexed_paths = self._indexed_pair
+            if indexed_paths and indexed_for == tuple(roots):
+                indexed = list(indexed_paths)
+                return indexed if max_walk is None else indexed[:max_walk]
         return self._iter_files(roots, max_walk)
 
     # -- reading ------------------------------------------------------------
@@ -515,18 +636,22 @@ class FileSearchService:
     # -- index --------------------------------------------------------------
 
     def index(self) -> int:
-        """Walk roots and cache the set of readable text files. Returns the count.
+        """Walk the MEANING roots and cache the set of readable text files.
+        Returns the count.
 
         Bounded by :data:`DEFAULT_MAX_WALK` like every other walk here (v1.333.0;
         it was the one unbounded walk); a capped walk is remembered so a
-        semantic search can say what it did not cover."""
+        semantic search can say what it did not cover. BLOCKING."""
+        roots = self.meaning_roots
         paths: list[Path] = []
         walked = 0
-        for path in self._iter_files(max_walk=DEFAULT_MAX_WALK):
+        for path in self._iter_files(roots, max_walk=DEFAULT_MAX_WALK):
             walked += 1
-            if self._read_text(path) is not None:
+            if self._read_text(path, roots) is not None:
                 paths.append(path)
         self._indexed = paths
+        self._indexed_for = tuple(roots)
+        self._indexed_pair = (self._indexed_for, paths)
         self._index_capped = walked >= DEFAULT_MAX_WALK
         self._chunk_cache = None  # invalidate semantic cache
         return len(paths)
@@ -542,8 +667,10 @@ class FileSearchService:
                 yield i + 1, joined
 
     def _build_chunk_cache(self) -> None:
-        if not self._indexed:
+        roots = tuple(self.meaning_roots)
+        if not self._indexed or self._indexed_for != roots:
             self.index()
+            roots = self._indexed_for
         paths: list[Path] = []
         refs: list[tuple[int, int]] = []
         rows: list[np.ndarray] = []
@@ -552,7 +679,7 @@ class FileSearchService:
             if len(refs) >= MAX_SEMANTIC_CHUNKS:
                 not_indexed = len(self._indexed) - n
                 break
-            text = self._read_text(path)
+            text = self._read_text(path, list(roots))
             if not text:
                 continue
             slot = -1
@@ -567,11 +694,54 @@ class FileSearchService:
                 rows.append(vec / norm if norm > 0.0 else vec)  # a zero row scores 0
                 refs.append((slot, start))
         matrix = np.vstack(rows) if rows else np.zeros((0, 0), dtype=np.float32)
-        self._chunk_cache = _SemanticIndex(paths, refs, matrix, not_indexed)
+        self._chunk_cache = _SemanticIndex(paths, refs, matrix, not_indexed, roots)
 
-    def _chunk_text(self, path: Path, start: int) -> str:
+    def _build_in_background(self) -> None:
+        try:
+            self._build_chunk_cache()
+            self._build_error = None
+        except BaseException as exc:  # noqa: BLE001 — handed to the waiting caller
+            self._build_error = exc
+
+    def _ready_index(self, notes: SearchNotes | None) -> "_SemanticIndex | None":
+        """The meaning index for the current meaning roots, building it on its
+        own thread (one at a time) and waiting at most :data:`SEMANTIC_WAIT_S`.
+        None = still building (``notes.indexing`` is set)."""
+        want = tuple(self.meaning_roots)
+        cache = self._chunk_cache
+        if cache is not None and cache.roots == want:
+            return cache
+        with self._build_lock:
+            thread = self._build_thread
+            if thread is None or not thread.is_alive():
+                cache = self._chunk_cache
+                if cache is not None and cache.roots == want:
+                    return cache
+                self._build_error = None
+                thread = threading.Thread(
+                    target=self._build_in_background, name="filesearch-meaning-index", daemon=True
+                )
+                self._build_thread = thread
+                thread.start()
+        thread.join(SEMANTIC_WAIT_S)
+        if thread.is_alive():
+            if notes is not None:
+                notes.indexing = True
+            return None
+        if self._build_error is not None:
+            err, self._build_error = self._build_error, None
+            raise err
+        cache = self._chunk_cache
+        if cache is None or cache.roots != tuple(self.meaning_roots):
+            # The folders changed while it was built: the next search rebuilds.
+            if notes is not None:
+                notes.indexing = True
+            return None
+        return cache
+
+    def _chunk_text(self, path: Path, start: int, roots: list[Path] | None = None) -> str:
         """Re-read one chunk's text for a hit (only the top hits pay this)."""
-        text = self._read_text(path) or ""
+        text = self._read_text(path, roots) or ""
         lines = text.splitlines()[start - 1 : start - 1 + _CHUNK_LINES]
         return "\n".join(lines).strip()
 
@@ -581,13 +751,23 @@ class FileSearchService:
         """Cosine-similarity search over embedded file chunks (needs an embedder).
 
         One matrix product over normalised float32 rows (v1.333.0); ties keep
-        file order, as the old per-chunk loop's stable sort did."""
+        file order, as the old per-chunk loop's stable sort did.
+
+        v1.445.0: over :attr:`meaning_roots` only; ``[]`` with
+        ``notes.no_meaning_folders`` when there are none, ``[]`` with
+        ``notes.indexing`` while a big index is still being built, and
+        ``notes.words_only`` when there is no local embedding model."""
         if self.embedder is None:
             return []
-        if self._chunk_cache is None:
-            self._build_chunk_cache()
-        index = self._chunk_cache
-        assert index is not None
+        if notes is not None and self.words_only:
+            notes.words_only = True
+        if not self.meaning_roots:
+            if notes is not None:
+                notes.no_meaning_folders = True
+            return []
+        index = self._ready_index(notes)
+        if index is None:
+            return []
         if notes is not None:
             notes.not_indexed += index.not_indexed + (1 if self._index_capped else 0)
         if not index.refs:
@@ -604,7 +784,7 @@ class FileSearchService:
                 {
                     "path": str(path),
                     "line": start,
-                    "text": self._chunk_text(path, start)[:200],
+                    "text": self._chunk_text(path, start, list(index.roots))[:200],
                     "score": float(scores[i]),
                 }
             )

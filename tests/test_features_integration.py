@@ -43,8 +43,15 @@ async def test_webhooks_inbound_dispatch(tmp_path):
 
 
 async def test_filesearch_finds_seeded_file(tmp_path):
-    (tmp_path / "note.md").write_text("arc reactor cyan accent", encoding="utf-8")
-    p = build_platform(str(tmp_path))
+    # v1.445.0 (moved on purpose): the default is the USER's folders — the chat
+    # files folder and the projects' — never the install's project_root (the
+    # app's own data folder in a packaged run). The chat files folder points at
+    # a scratch folder here, so the test never reads the real Documents.
+    chat_files = tmp_path / "chat-files"
+    chat_files.mkdir()
+    (chat_files / "note.md").write_text("arc reactor cyan accent", encoding="utf-8")
+    p = build_platform(str(tmp_path / "root"))
+    p.config.chat_files_root = str(chat_files)
     hits = p.filesearch.search("arc reactor", mode="content")
     assert any("note.md" in h["path"] for h in hits)
 

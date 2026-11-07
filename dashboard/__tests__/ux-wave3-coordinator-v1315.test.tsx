@@ -16,7 +16,10 @@ const read = (rel: string) =>
 describe("wave 3 coordinator pins", () => {
   it("File search says what 'By meaning' really searches", () => {
     const s = read("app/filesearch/page.tsx");
-    expect(s).toContain('{mode === "semantic" ? "the folders Iron Jarvis has indexed" : rootLabel}');
+    // v1.445.0 (moved on purpose): "By meaning" indexes only the ADDED folders,
+    // and the line names them (filesearch-folders-v1443 drives it).
+    expect(s).toContain("? `your added folders (${meaningWords})`");
+    expect(s).not.toContain("the folders Iron Jarvis has indexed");
   });
 
   it("Recent runs reads the task through plainText", () => {

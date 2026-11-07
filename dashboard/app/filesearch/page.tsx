@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { FileSearch, Search, FileText, HardDrive, FolderOpen } from "lucide-react";
-import { get, ApiError } from "@/lib/api";
+import { FileSearch, Search, FileText, HardDrive, FolderOpen, FolderPlus, X } from "lucide-react";
+import { get, put, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import type { FileSearchResult, Drive, Project } from "@/lib/types";
 import {
@@ -17,6 +17,15 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import { FilePickerModal } from "@/components/FilePickerModal";
+import {
+  DEFAULT_LABEL,
+  MEANING_NEEDS_WORDS,
+  MEANING_ONLY_ADDED_WORDS,
+  NO_MEANING_FOLDERS_WORDS,
+  SAVED_WORDS,
+  samePath,
+  searchPlaces,
+} from "@/lib/fileSearchFolders";
 
 type Mode = "content" | "name" | "semantic";
 const MODES: Mode[] = ["content", "name", "semantic"];
@@ -31,12 +40,13 @@ const MODE_WORDS: Record<Mode, { label: string; hint: string }> = {
   },
 };
 
-// Empty root === the daemon's default: `config.search_roots`, else the install's
-// project_root (platform.py) — an Iron Jarvis setting, NOT one of the user's
-// Projects. v1.315.0: it used to read "Project (default)", which a user with
-// real Projects took to mean one of theirs; it now says what it is.
+// Empty root === the daemon's default (v1.445.0, filesearch/defaults.py): the
+// Iron Jarvis chat files folder, every active project's folder, and the
+// folders added below (`search_roots`). It used to be the install's
+// project_root — the app's OWN data folder in a packaged run — so a first
+// search found nothing of the user's. "By meaning" looks only in the ADDED
+// folders (the memory fabric asks it on every chat turn).
 const DEFAULT_ROOT = "";
-const DEFAULT_LABEL = "Iron Jarvis default folders";
 
 export default function FileSearchPage() {
   const { data: drivesData } = useApi<{ drives: Drive[] }>("/filesearch/drives");
@@ -48,16 +58,44 @@ export default function FileSearchPage() {
   const projects = (projectsData?.projects ?? []).filter(
     (p) => p.root && p.root_exists !== false,
   );
+  // v1.445.0: the folders the default search covers are shown and edited here.
+  const { data: valuesData } = useApi<{ values?: Record<string, unknown> }>("/settings/values");
+  const values = valuesData?.values ?? null;
+  const savedAdded = Array.isArray(values?.search_roots)
+    ? (values.search_roots as unknown[]).filter(
+        (v): v is string => typeof v === "string" && v.trim() !== "",
+      )
+    : [];
+  // What this page saved last (the hook keeps the read it made at load).
+  const [addedOverride, setAddedOverride] = useState<string[] | null>(null);
+  const added = addedOverride ?? savedAdded;
+  const chatFilesRoot = typeof values?.chat_files_root === "string" ? values.chat_files_root : "";
+  const documents = drives.find((d) => d.label === "Documents")?.path ?? null;
+  const places = searchPlaces({
+    chatFilesRoot,
+    documents,
+    projects: projects
+      .filter((p) => p.status !== "archived")
+      .map((p) => ({ name: p.name, root: p.root as string })),
+    added,
+  });
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [folderNote, setFolderNote] = useState<string | null>(null);
+  const [folderError, setFolderError] = useState<string | null>(null);
+  // Which question the folder picker answers: a place to search now, or a
+  // folder to add to the default search.
+  const [pickFor, setPickFor] = useState<"search" | "add">("search");
 
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<Mode>("content");
-  // The drive/root chosen from the <select>; "" means the project default.
+  // The drive/root chosen from the <select>; "" means the default folders.
   const [rootSel, setRootSel] = useState(DEFAULT_ROOT);
   // Optional free-text path to drill into a sub-folder; overrides the select.
   const [customPath, setCustomPath] = useState("");
   const [browseOpen, setBrowseOpen] = useState(false);
   const [results, setResults] = useState<FileSearchResult[] | null>(null);
   const [searchedRoot, setSearchedRoot] = useState<string | null>(null);
+  const [searchedMode, setSearchedMode] = useState<Mode | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
@@ -65,13 +103,50 @@ export default function FileSearchPage() {
   // The path actually sent as `root` (custom path wins over the dropdown).
   const effectiveRoot = customPath.trim() || rootSel;
   // What "Searching:" reads: a typed path as typed, a project by its name, a
-  // drive by its label, else the honest default. The raw path rides in `title`.
+  // drive by its label, else the default folders by name. The raw path rides
+  // in `title`.
   const rootLabel =
     customPath.trim() ||
     projects.find((p) => p.root === rootSel)?.name ||
     drives.find((d) => d.path === rootSel)?.label ||
     rootSel ||
     DEFAULT_LABEL;
+  // The default search, said by name: "Iron Jarvis chat files, Client Books…"
+  const placesWords = places.map((p) => p.label).join(", ");
+  const meaningPlaces = places.filter((p) => p.kind === "added");
+  const meaningWords = meaningPlaces.length
+    ? meaningPlaces.map((p) => p.label).join(", ")
+    : "none yet, add a folder below";
+  const documentsAdded = documents ? added.some((a) => samePath(a, documents)) : true;
+
+  async function saveAdded(next: string[]) {
+    setFolderBusy(true);
+    setFolderError(null);
+    setFolderNote(null);
+    try {
+      await put("/settings/values", { values: { search_roots: next } });
+      setAddedOverride(next);
+      setFolderNote(SAVED_WORDS);
+    } catch (err) {
+      setFolderError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setFolderBusy(false);
+    }
+  }
+
+  function addFolder(path: string) {
+    const p = path.trim();
+    if (!p) return;
+    if (added.some((a) => samePath(a, p))) {
+      setFolderNote("That folder is already in the list.");
+      return;
+    }
+    void saveAdded([...added, p]);
+  }
+
+  function removeFolder(path: string) {
+    void saveAdded(added.filter((a) => !samePath(a, path)));
+  }
 
   async function search(e: React.FormEvent) {
     e.preventDefault();
@@ -91,6 +166,7 @@ export default function FileSearchPage() {
       );
       setResults(data.results);
       setSearchedRoot(effectiveRoot || DEFAULT_LABEL);
+      setSearchedMode(mode);
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) setOffline(true);
       else setError(err instanceof ApiError ? err.message : String(err));
@@ -105,7 +181,7 @@ export default function FileSearchPage() {
       <Reveal>
         <PageHeader
           title="File Search"
-          subtitle="Search your projects or any local drive by file name, file contents, or meaning. Use the mic to dictate your query."
+          subtitle="Search your own files (the Iron Jarvis chat files folder, your projects, and any folder you add) by file name, contents, or meaning. Use the mic to dictate your query."
         />
       </Reveal>
       {offline && (
@@ -148,7 +224,7 @@ export default function FileSearchPage() {
 
             {/* Drive / root selector --------------------------------------- */}
             <div className="flex flex-wrap items-end gap-3">
-              {/* v1.315.0: wide enough for "Iron Jarvis default folders" and a project name. */}
+              {/* v1.315.0: wide enough for the default and a project name. */}
               <div className="w-full sm:w-64">
                 <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   <HardDrive size={12} /> Search in
@@ -196,7 +272,10 @@ export default function FileSearchPage() {
                   />
                   <button
                     type="button"
-                    onClick={() => setBrowseOpen(true)}
+                    onClick={() => {
+                      setPickFor("search");
+                      setBrowseOpen(true);
+                    }}
                     title="Browse for a folder to search in"
                     className="btn-ghost shrink-0"
                   >
@@ -225,24 +304,115 @@ export default function FileSearchPage() {
                   </button>
                 ))}
               </div>
-              <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-                <HardDrive size={12} className="text-accent-soft/70" />
+              <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-zinc-500">
+                <HardDrive size={12} className="shrink-0 text-accent-soft/70" />
                 Searching:{" "}
                 {/* v1.315.0: "By meaning" searches the daemon's embedded index
                     (filesearch/service.search_semantic ignores the folder),
-                    so the line must not claim a scope it does not apply. */}
+                    so the line must not claim a scope it does not apply.
+                    v1.445.0: that index holds only the folders added below,
+                    and the default search is named folder by folder. */}
                 <span
+                  data-testid="filesearch-searching"
                   className="truncate text-accent-soft"
-                  title={mode === "semantic" ? undefined : effectiveRoot || DEFAULT_LABEL}
+                  title={
+                    mode === "semantic"
+                      ? meaningPlaces.map((p) => p.path).join("\n") || undefined
+                      : effectiveRoot || places.map((p) => p.path).join("\n")
+                  }
                 >
-                  {mode === "semantic" ? "the folders Iron Jarvis has indexed" : rootLabel}
+                  {mode === "semantic"
+                    ? `your added folders (${meaningWords})`
+                    : effectiveRoot
+                      ? rootLabel
+                      : placesWords}
                 </span>
               </div>
             </div>
           </form>
+          {mode === "semantic" && (
+            <p data-testid="filesearch-meaning-note" className="mt-3 text-xs text-zinc-400">
+              {MEANING_ONLY_ADDED_WORDS} {MEANING_NEEDS_WORDS}
+            </p>
+          )}
           {error && (
             <div className="mt-3">
               <ErrorNote>{error}</ErrorNote>
+            </div>
+          )}
+        </Card>
+      </Reveal>
+
+      <Reveal>
+        <Card title="Folders to search" icon={<FolderOpen size={15} />}>
+          <p className="mb-3 text-xs text-zinc-400">
+            A search with &quot;{DEFAULT_LABEL}&quot; picked looks in all of these. Iron
+            Jarvis&apos;s own data folder is never searched. {MEANING_ONLY_ADDED_WORDS}
+          </p>
+          <ul data-testid="filesearch-folders" className="space-y-1.5">
+            {places.map((p) => (
+              <li
+                key={`${p.kind}:${p.path}`}
+                data-kind={p.kind}
+                className="flex min-w-0 items-center gap-2 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2"
+              >
+                <FolderOpen size={13} className="shrink-0 text-zinc-500" aria-hidden="true" />
+                <span className="shrink-0 text-[13px] text-zinc-200" title={p.path}>
+                  {p.label}
+                </span>
+                <span className="min-w-0 truncate font-mono text-[11px] text-zinc-500" title={p.path}>
+                  {p.path}
+                </span>
+                <span className="ml-auto shrink-0 text-[11px] text-zinc-500">
+                  {p.kind === "chat_files" ? "always" : p.kind === "project" ? "a project" : "added"}
+                </span>
+                {p.kind === "added" && (
+                  <button
+                    type="button"
+                    disabled={folderBusy}
+                    onClick={() => removeFolder(p.path)}
+                    aria-label={`Stop searching ${p.label}`}
+                    title={`Stop searching ${p.path}`}
+                    className="btn-ghost shrink-0 px-1.5 py-1"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={folderBusy}
+              onClick={() => {
+                setPickFor("add");
+                setBrowseOpen(true);
+              }}
+              className="btn-ghost"
+            >
+              <FolderPlus size={14} /> Add a folder…
+            </button>
+            {documents && !documentsAdded && (
+              <button
+                type="button"
+                disabled={folderBusy}
+                onClick={() => addFolder(documents)}
+                title={`Also search ${documents}. A contents search reads every file it looks at, so a big Documents folder makes searches slower.`}
+                className="btn-ghost"
+              >
+                <FolderPlus size={14} /> Also search Documents
+              </button>
+            )}
+            {folderNote && (
+              <span role="status" className="text-xs text-zinc-400">
+                {folderNote}
+              </span>
+            )}
+          </div>
+          {folderError && (
+            <div className="mt-3">
+              <ErrorNote>{folderError}</ErrorNote>
             </div>
           )}
         </Card>
@@ -266,7 +436,11 @@ export default function FileSearchPage() {
               Run a search to see matching files. Pick one of your projects or a drive, or type a folder path, to search somewhere else.
             </Empty>
           ) : results.length === 0 ? (
-            <Empty>No matches.</Empty>
+            <Empty>
+              {searchedMode === "semantic" && meaningPlaces.length === 0
+                ? NO_MEANING_FOLDERS_WORDS
+                : "No matches."}
+            </Empty>
           ) : (
             <ul className="space-y-1.5">
               {results.map((r, i) => (
@@ -297,9 +471,9 @@ export default function FileSearchPage() {
       <FilePickerModal
         open={browseOpen}
         onClose={() => setBrowseOpen(false)}
-        onPick={(path) => setCustomPath(path)}
+        onPick={(path) => (pickFor === "add" ? addFolder(path) : setCustomPath(path))}
         pickFolders
-        title="Pick a folder to search in"
+        title={pickFor === "add" ? "Pick a folder to add to File Search" : "Pick a folder to search in"}
       />
     </PageShell>
   );
