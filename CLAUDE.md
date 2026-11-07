@@ -15495,6 +15495,39 @@ does not need a bump, stop and bump it.
   its program; Directory card grids `grid-cols-[minmax(0,1fr)]`. Pins: the
   `*-v1443` / `*_v14430` files.
 
+- **Build › Code, every tool again; a calm sweep** (v1.447.0; three lanes,
+  measured on agy 1.5.3, Claude Code 2.1.319, codex 0.157.0, grok 1.0.70;
+  table in `docs/BUILD-CODE-PARITY-2026-11-06.md` "What v1.447.0 changed").
+  ANTIGRAVITY: `hosted/antigravity_agents.py` reads `agy agents` (names only,
+  no model call) in the background → modes `agent:<name>` started with
+  `--agent`; a conversation keeps its agent (a change after it exists is a
+  409, a saved one opened under another agent refused by its own
+  `agent_name`); `--process-per-session` ONLY when the Iron Jarvis tools are
+  handed over (that start says `mcpCapabilities.http`; only such a start may
+  record "takes none"); `agy mcp list` at each start, NAME + STATUS columns
+  only (its COMMAND/URL holds keys) → tool_setup states `on`/`off`; profile
+  share `antigravity` → `~/.gemini/config/AGENTS.md` (setting
+  `profile_share_antigravity`). Sign-in: `agy acp` signs in silently from the
+  keyring `agy` writes, so the press keeps opening `agy`. OTHERS:
+  `mcp_authenticate` = "Sign in…" on a Claude Code server that needs it (list
+  re-read every 5 s, ≤ 36); `/model sonnet[1m]` keeps `[1m]`;
+  `hosted/claude_catalog.py` reads a folder's `/` list with one short
+  `claude -p` answering `initialize` (`--strict-mcp-config`, settings file
+  `{"disableAllHooks": true}` — without it a SessionStart hook RAN; off in the
+  suite, conftest); `session_writes_lost` said; Codex `config/mcpServer/reload`
+  then `mcpServerStatus/list` (`POST …/mcp-reload`, refused mid-reply); Codex
+  and Grok (`_x.ai/mcp/list`) list turned-off servers. CALM: new
+  `components/IconButton.tsx` (aria-label = the old words, tip after 400 ms or
+  on keyboard focus, portaled only while shown), `ConfirmButton icon` (trash
+  first press, worded second); row Edit/Delete/Refresh/Copy-beside-a-path/
+  strip Dismiss became icons; 134 uppercase form labels and `Field`/
+  `SectionLabel`/`Stat` are sentence case. Icons only for universal actions;
+  approval cards, PermissionChip, decisions and primary actions keep words.
+  `service.py` must not contain the word "ACP" (`test_build_app_v1409`).
+  Pins: `tests/test_build_app_antigravity{,_live}_v14470.py`,
+  `tests/test_build_app_parity_v14471.py`,
+  `dashboard/__tests__/{build-app-antigravity-v1447-0,build-code-parity-v1447-1,calm-sweep-v1447-2}.test.ts(x)`.
+
 - **Nothing silent** (v1.446.0; items 7, 10, 13, 20-25 of
   docs/EASE-OF-USE-REVIEW-2026-11-07.md, five helpers + the coordinator).
   (20) `reflex.failed` {rule, rule_id, source, action, target, reason}: a

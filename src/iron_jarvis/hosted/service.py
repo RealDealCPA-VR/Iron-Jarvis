@@ -358,7 +358,7 @@ def check_mode(harness: str, mode: str, confirm: bool) -> str:
     if harness == ANTIGRAVITY and raw.startswith(AGA.AGENT_PREFIX):
         # v1.447.0: one of the user's own Antigravity agents — only one
         # ``agy agents`` listed (an unknown name would run the default agent
-        # with no word over ACP: measured).
+        # with no word over its protocol: measured).
         if AGA.agent_of(raw) and AGA.agent_of(raw) in AGA.known_agents():
             return raw
         raise Refused(AGA.UNKNOWN_AGENT.format(agent=clip(raw[len(AGA.AGENT_PREFIX):], 80)), 400)

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.446.1 (2026-11-07).*
+holds itself to. Current as of v1.447.0 (2026-11-07).*
 
 ---
 
@@ -2066,6 +2066,56 @@ the current level's full description when you rest the pointer on it.
 
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
+
+## Build › Code: more of each tool, and a calmer look (v1.447.0)
+
+**Antigravity.**
+
+- **Your own Antigravity agents.** The agents `agy agents` lists appear in
+  the mode menu after Antigravity's own modes. A conversation keeps the agent
+  it was started with, so choosing another one later is refused in words.
+- **Iron Jarvis's own tools.** Tick Memory or Browser in the Iron Jarvis tools
+  chip and Antigravity can use them. Iron Jarvis then starts Antigravity with
+  one process per session, which is the only way Antigravity takes them.
+- **Its MCP servers.** The Session tab lists your Antigravity MCP servers by
+  name, turned on or off. Antigravity does not say whether a server
+  connected, so "turned on" means only that.
+- **Share your profile.** Settings › Memory's "Share with Build" now has an
+  Antigravity switch. It writes Iron Jarvis's block into
+  `~/.gemini/config/AGENTS.md` (not `~/.gemini/GEMINI.md`, which Google's
+  Gemini CLI reads too).
+- **Signing in.** Signing in by running `agy` in a terminal is enough for the
+  Code view: Antigravity keeps one sign-in for both.
+
+**Claude Code.**
+
+- **Sign in to an MCP server.** A server that needs you to sign in has
+  "Sign in…" in its menu on the Session tab. It opens the server's page in
+  your browser, and the list changes on its own when you are signed in.
+- **`/model sonnet[1m]`** keeps the 1M context window.
+- **The `/` menu after a restart.** Your commands are listed again soon after
+  Iron Jarvis starts, without waiting for a session to run in that folder.
+  To read them, Iron Jarvis starts Claude Code for a moment in that folder:
+  no message to a model, none of your MCP servers, none of your hooks.
+- A full disk when Claude Code closes is now said in words.
+
+**Codex.** The Session tab's MCP list has **Reload MCP servers**, and a
+server your Codex settings turn off is listed as off.
+
+**Grok.** A server your Grok settings turn off is listed as off.
+
+**A calmer look across the app.**
+
+- Form labels are in ordinary sentence case instead of small capitals.
+- In lists of saved things (templates, destinations, extensions, memory
+  profiles, saved workflows), Edit is a pencil and Delete is a trash can.
+  Rest the pointer on one, or move to it with the keyboard, and its words
+  show. Delete still takes two presses, and the second says "Delete?" in
+  words.
+- Refresh at the top of the Fleet and Usage pages is a refresh arrow. Copy
+  beside the add-on's folder is a copy icon. Dismiss on Build's terminal
+  notices is a ×.
+- On a phone, the demo notice no longer squeezes down to one word per line.
 
 ## Antigravity's models and sign-in, and a chat that works in a folder (v1.443.0)
 
