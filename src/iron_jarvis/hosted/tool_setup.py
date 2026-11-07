@@ -243,6 +243,67 @@ def codex_update(current: list[dict[str, str]] | None, params: Any) -> list[dict
     return rows
 
 
+#: v1.447.1: Codex's ``mcpServerStatus/list`` ``runtimeStatus`` (its schema's
+#: ``McpServerConnectionStatus``) -> ours.
+CODEX_RUNTIME: dict[str, str] = {
+    "notStarted": STARTING,
+    "starting": STARTING,
+    "connected": CONNECTED,
+    "authenticationRequired": NEEDS_SIGN_IN,
+    "failed": FAILED,
+    "cancelled": OFF,
+    "disabled": OFF,
+}
+
+
+def codex_listed(current: list[dict[str, str]] | None, result: Any, *,
+                 replace: bool) -> list[dict[str, str]] | None:
+    """v1.447.1: Codex's ``mcpServerStatus/list {threadId, detail:
+    toolsAndAuthOnly}`` answer folded in — ONLY each server's ``name``,
+    ``runtimeStatus`` and ``authStatus`` are read (never ``httpOrigin``, its
+    tools or anything else). MEASURED on codex 0.157.0 (a scratch
+    ``CODEX_HOME``, ``tests/fixtures/build_app_v14471/codex_mcp_reload.json``):
+    a server the config turns off (``enabled = false``) is listed
+    ``disabled`` — the start-up statuses never name it — and after
+    ``config/mcpServer/reload`` a server taken out of the config is gone.
+
+    ``replace`` False (the read at start): only servers the list did not
+    have are added (a turned-off one as off); known ones keep their state.
+    ``replace`` True (after a reload): the answer IS the list, in its order,
+    each known server keeping its error while it is still failing. None (or
+    ``current``) for an answer that is not a list."""
+    data = result.get("data") if isinstance(result, dict) else None
+    if not isinstance(data, list):
+        return current
+    known = {r.get("name"): r for r in current or []}
+    listed: list[dict[str, str]] = []
+    for item in data[:MAX_SERVERS]:
+        if not isinstance(item, dict):
+            continue
+        name = _name(item.get("name"))
+        if not name or any(r["name"] == name for r in listed):
+            continue
+        state = CODEX_RUNTIME.get(str(item.get("runtimeStatus") or ""), "")
+        if state == FAILED and str(item.get("authStatus") or "") == "notLoggedIn":
+            state = NEEDS_SIGN_IN
+        if not state:
+            # No reading for it (no thread, a newer word): what is known, else starting.
+            row = dict(known.get(name) or _row(name, STARTING))
+        else:
+            old = known.get(name) or {}
+            err = str(old.get("error") or "") if state == old.get("state") else ""
+            row = _row(name, state, err)
+        listed.append(row)
+    if replace:
+        return listed
+    rows = [dict(r) for r in (current or [])]
+    have = {r.get("name") for r in rows}
+    for r in listed:
+        if r["name"] not in have and len(rows) < MAX_SERVERS:
+            rows.append(r)
+    return rows
+
+
 def grok_servers(current: list[dict[str, str]] | None, params: Any) -> list[dict[str, str]] | None:
     """v1.441.0: Grok's ``_x.ai/mcp/servers_updated`` folded into the list:
     ONLY each server's ``name`` is read (the rest is the user's config — a URL
@@ -289,6 +350,37 @@ def grok_status(current: list[dict[str, str]] | None, params: Any) -> list[dict[
         return rows
     rows.append(row)
     return rows
+
+
+def grok_listed(result: Any) -> list[str] | None:
+    """v1.447.1: the NAMES in Grok's ``_x.ai/mcp/list`` answer (``{result:
+    {servers: [...]}}``, measured on 1.0.70) — every server its config names,
+    turned on or off. Only ``name`` is read. None for an answer that is not
+    that shape (not known)."""
+    inner = result.get("result") if isinstance(result, dict) else None
+    servers = inner.get("servers") if isinstance(inner, dict) else None
+    if not isinstance(servers, list):
+        return None
+    names: list[str] = []
+    for item in servers[:MAX_SERVERS]:
+        name = _name(item.get("name")) if isinstance(item, dict) else ""
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def grok_with_off(rows: list[dict[str, str]] | None, listed: list[str] | None) -> list[dict[str, str]] | None:
+    """v1.447.1: Grok's pushed list plus each server ``_x.ai/mcp/list`` names
+    that Grok did not push, as off (``servers_updated`` names only the
+    turned-on ones — measured). Unchanged while either is not known."""
+    if rows is None or not listed:
+        return rows
+    out = [dict(r) for r in rows]
+    have = {r.get("name") for r in out}
+    for name in listed:
+        if name not in have and len(out) < MAX_SERVERS:
+            out.append(_row(name, OFF))
+    return out
 
 
 def setup_event(servers: list[dict[str, str]]) -> dict[str, Any]:

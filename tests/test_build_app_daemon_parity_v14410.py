@@ -146,7 +146,8 @@ def _rows(cat) -> list[dict]:
 
 @pytest.mark.parametrize("typed, want", [
     ("opus", "claude-opus-5-5"), ("Sonnet", "claude-sonnet-5-5"), ("haiku", "claude-haiku-4-5-20251001"),
-    ("sonnet[1m]", "claude-sonnet-5-5"), ("Opus 5.5", "claude-opus-5-5"), ("claude-sonnet-5-5", "claude-sonnet-5-5"),
+    ("sonnet[1m]", "claude-sonnet-5-5[1m]"),  # v1.447.1: the [1m] is kept (moved on purpose)
+    ("Opus 5.5", "claude-opus-5-5"), ("claude-sonnet-5-5", "claude-sonnet-5-5"),
     ("default", ""), ("sonnet-9", None),
 ])
 def test_claude_codes_own_model_names_resolve(live_catalog, typed, want):

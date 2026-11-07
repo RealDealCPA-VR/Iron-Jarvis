@@ -1,0 +1,15 @@
+{
+ "recorded": "grok 1.0.70 agent --no-leader stdio; scratch GROK_HOME + USERPROFILE, signed out, no model call. config.toml: disabled_mcp_servers = [\"listoff\"]; tinyon (stdio); tinyoff (enabled = false); listoff (stdio, a made-up --secret argument); webby (http, a made-up key in its URL). Paths masked.",
+ "request": {"jsonrpc": "2.0", "id": 2, "method": "_x.ai/mcp/list", "params": {"sessionId": "SID"}},
+ "answer": {"jsonrpc": "2.0", "id": 2, "result": {"result": {"servers": [
+  {"name": "tinyon", "source": "local", "type": "stdio", "command": "C:/py/python.exe", "args": ["C:/scratch/tinymcp.py"]},
+  {"name": "listoff", "source": "local", "type": "stdio", "command": "C:/py/python.exe", "args": ["C:/scratch/tinymcp.py", "--secret", "ARG-SECRET-1"]},
+  {"name": "webby", "source": "local", "type": "http", "url": "http://127.0.0.1:9/mcp?api_key=FAKE-KEY-9"},
+  {"name": "tinyoff", "source": "local", "type": "stdio", "command": "", "session": {"enabled": false}}
+ ]}}},
+ "servers_updated_same_start": {"jsonrpc": "2.0", "method": "_x.ai/mcp/servers_updated", "params": {"mcpServers": [
+  {"name": "tinyon", "source": "local", "type": "stdio", "command": "C:/py/python.exe", "args": ["C:/scratch/tinymcp.py"]},
+  {"name": "webby", "source": "local", "type": "http", "url": "http://127.0.0.1:9/mcp?api_key=FAKE-KEY-9"}
+ ]}},
+ "answered_without_a_session": true
+}

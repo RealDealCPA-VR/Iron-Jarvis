@@ -22,6 +22,9 @@ Who offers what (each MEASURED; the driver's docstring says how):
 * Codex 0.157.0: its background terminals (``thread/backgroundTerminals/list``
   / ``terminate``, experimental); ``mcpServer/oauth/login`` (a sign-in page the
   user's browser opens; Iron Jarvis never signs in).
+* v1.447.1: Claude Code 2.1.319's ``mcp_authenticate`` (Sign in…, the same
+  hand-over to the browser); Codex's ``config/mcpServer/reload`` for the
+  whole list (``Driver.mcp_reload`` + ``reload_mcp()``, :func:`mcp_reload`).
 
 Stopping a background task never stops the reply: the tool's own stop takes
 only that task (measured: no model request follows it). What was stopped is
@@ -66,7 +69,12 @@ MCP_DONE_WORDS = {
     "on": "Turned on {name}.",
     "sign_in": "{label} waits for you to sign in to {name} in your browser.",
 }
-SIGN_IN_FROM_MENU = "Choose Sign in… in this row's menu: {label} opens its sign-in page in your browser. Or:"
+#: v1.447.1: the whole list's own reload (Codex).
+NO_RELOAD = "{label} offers no way to read its MCP settings again here."
+RELOAD_AFTER_REPLY = "Wait for {label}'s reply to finish, then reload its MCP servers."
+RELOADED_WORDS = ("{label} read its MCP settings again: servers you added or changed start, "
+                  "ones you took out are gone.")
+SIGN_IN_FROM_MENU ="Choose Sign in… in this row's menu: {label} opens its sign-in page in your browser. Or:"
 #: Claude Code keeps a server it turned off off for this folder (measured).
 OFF_REMEMBERED = {"claude-code": " Claude Code remembers this for this folder."}
 
@@ -93,6 +101,9 @@ async def decorate_overview(view: dict[str, Any], live: Any) -> dict[str, Any]:
         return view
     offered = getattr(driver, "mcp_actions", None)
     mcp = view.get("mcp")
+    if isinstance(mcp, dict) and getattr(driver, "mcp_reload", False) is True:
+        # v1.447.1: the list's own "Reload MCP servers" (Codex).
+        mcp["reload"] = True
     if offered and isinstance(mcp, dict) and mcp.get("known"):
         for row in mcp.get("servers") or []:
             if isinstance(row, dict):
@@ -191,6 +202,10 @@ async def mcp_action(service: Any, sid: str, server: str, action: str) -> dict[s
     except ControlRefused as exc:
         raise Refused(str(exc), 409) from None
     text = MCP_DONE_WORDS[action].format(name=name, label=label)
+    if isinstance(out, dict) and isinstance(out.get("words"), str) and out["words"].strip():
+        # v1.447.1: the tool said something else (Claude Code: no sign-in is
+        # needed after all) — its words, never a "waits for you" untruth.
+        text = clip(out["words"].strip(), 300)
     if action == "off":
         text += OFF_REMEMBERED.get(row.harness, "")
     service._emit(live, make("notice", text=text))
@@ -198,3 +213,30 @@ async def mcp_action(service: Any, sid: str, server: str, action: str) -> dict[s
     if isinstance(out, dict) and out.get("url"):
         result["url"] = str(out["url"])
     return result
+
+
+async def mcp_reload(service: Any, sid: str) -> dict[str, Any]:
+    """v1.447.1: ``POST /build/app/sessions/{id}/mcp-reload`` — the tool reads
+    its OWN MCP settings again (Codex 0.157.0's ``config/mcpServer/reload``:
+    servers added or changed start, ones taken out go, ones turned off show
+    as off). Only a driver that offers it (``mcp_reload`` True), only while
+    no reply runs; said in the conversation."""
+    from .service import Refused
+
+    row = await service._row(sid)
+    label = _label(row.harness)
+    live, driver = _running_driver(service, row)
+    doer = getattr(driver, "reload_mcp", None)
+    if doer is None or not getattr(driver, "mcp_reload", False):
+        raise Refused(NO_RELOAD.format(label=label), 400)
+    if getattr(driver, "turn_open", False):
+        raise Refused(RELOAD_AFTER_REPLY.format(label=label), 409)
+    try:
+        await asyncio.wait_for(doer(), timeout=ACTION_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        raise Refused(NO_ANSWER.format(label=label), 409) from None
+    except ControlRefused as exc:
+        raise Refused(str(exc), 409) from None
+    text = RELOADED_WORDS.format(label=label)
+    service._emit(live, make("notice", text=text))
+    return {"reloaded": True, "words": text}

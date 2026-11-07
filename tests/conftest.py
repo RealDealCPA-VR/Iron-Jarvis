@@ -496,6 +496,24 @@ def _no_real_antigravity_catalog_read():
         _acc.AUTO_PROBE = old
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _no_real_claude_catalog_read():
+    """v1.447.1: a Claude Code session's ``/`` list read for its folder
+    starts ONE background read (``hosted.claude_catalog``: a short ``claude
+    -p`` that answers ``initialize``) when nothing is known for the folder.
+    On a dev box that would start the developer's REAL Claude Code (their
+    plugins, their login). Off for the whole suite; a test of the reader
+    turns it on with a fake Claude Code."""
+    from iron_jarvis.hosted import claude_catalog as _ccc
+
+    old = _ccc.AUTO_PROBE
+    _ccc.AUTO_PROBE = False
+    try:
+        yield
+    finally:
+        _ccc.AUTO_PROBE = old
+
+
 @pytest.fixture(autouse=True)
 def _fresh_pi_default():
     """v1.429.0: Pi's own default model is kept in process memory
