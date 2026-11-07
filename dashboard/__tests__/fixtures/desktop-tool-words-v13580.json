@@ -636,6 +636,18 @@
       "kind": "table",
       "card": "add a memory base",
       "desktop": "add a memory base"
+    },
+    {
+      "tool": "mcp_server_add",
+      "kind": "table",
+      "card": "add a tool server",
+      "desktop": "add a tool server"
+    },
+    {
+      "tool": "web_service_add",
+      "kind": "table",
+      "card": "save a web service",
+      "desktop": "save a web service"
     }
   ]
 }

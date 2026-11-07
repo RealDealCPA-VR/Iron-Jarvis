@@ -108,6 +108,7 @@
     "ltm_search",
     "mcp_list_resources",
     "mcp_read_resource",
+    "mcp_server_add",
     "memory_base_add",
     "memory_propose",
     "memory_read",
@@ -199,6 +200,7 @@
     "web_fetch",
     "web_look",
     "web_search",
+    "web_service_add",
     "webhook_add",
     "webhook_delete",
     "webhook_update",
@@ -323,6 +325,7 @@
     "ltm_search": "search your knowledge base",
     "mcp_list_resources": "list an app's resources",
     "mcp_read_resource": "read something from one of your apps",
+    "mcp_server_add": "add a tool server",
     "memory_base_add": "add a memory base",
     "memory_propose": "suggest something to remember",
     "memory_read": "look up a memory",
@@ -414,6 +417,7 @@
     "web_fetch": "read a web page",
     "web_look": "look at a web page",
     "web_search": "search the web",
+    "web_service_add": "save a web service",
     "webhook_add": "add a webhook",
     "webhook_delete": "remove a webhook",
     "webhook_update": "change a webhook",
@@ -739,6 +743,10 @@
       "Read an app's resource",
       "Reading an app's resource"
     ],
+    "mcp_server_add": [
+      "Added a tool server",
+      "Adding a tool server"
+    ],
     "memory_base_add": [
       "Added a memory base",
       "Adding a memory base"
@@ -1011,6 +1019,10 @@
       "Looked at a web page",
       "Looking at a web page"
     ],
+    "web_service_add": [
+      "Saved a web service",
+      "Saving a web service"
+    ],
     "webhook_add": [
       "Added a webhook",
       "Adding a webhook"
@@ -1172,6 +1184,7 @@
     "ltm_search": "",
     "mcp_list_resources": "",
     "mcp_read_resource": "",
+    "mcp_server_add": "",
     "memory_base_add": "",
     "memory_propose": "",
     "memory_read": "",
@@ -1263,6 +1276,7 @@
     "web_fetch": "page",
     "web_look": "",
     "web_search": "web",
+    "web_service_add": "",
     "webhook_add": "",
     "webhook_delete": "",
     "webhook_update": "",

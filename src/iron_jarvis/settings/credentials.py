@@ -44,6 +44,8 @@ def resolve_secret(name: str) -> tuple[schema.SecretDef, str, str]:
     name ``channel_telegram_token``). Refuses anything not in the schema."""
     if name.startswith("app."):
         return _resolve_app(name)
+    if name.startswith("tool_server."):
+        return _resolve_tool_server(name)
     for s in schema.SECRETS:
         if s.pattern:
             prefix = s.name.split("{", 1)[0]
@@ -87,6 +89,27 @@ def _resolve_app(name: str) -> tuple[schema.SecretDef, str, str]:
     if chosen is None:
         raise CredentialError(f"{conn.name} has no credential called {field!r}.")
     return sdef, cid, _secret_name(cid, chosen.name)
+
+
+def _resolve_tool_server(name: str) -> tuple[schema.SecretDef, str, str]:
+    """``tool_server.<pack>__<slot>`` (v1.448.0, ``settings/records_tools``):
+    a value the chat's ``mcp_server_add`` left for the card — an env key, a
+    header, the auth value, a command-line argument or the address's key —
+    stored under the vault name the pack door launches with
+    (``mcp.<pack>.<KEY>`` and its kin), so the server starts with exactly
+    what the card saved. The pack itself is added only once every asked
+    value is saved (``records_tools.on_secret_saved``)."""
+    from .records_tools import resolve_tool_server_secret
+
+    sdef = next(s for s in schema.SECRETS if s.name == "tool_server.{name}")
+    arg = name[len("tool_server."):]
+    if not _ARG.match(arg):
+        raise CredentialError(f"There is no credential called {name!r}.")
+    try:
+        _pack, _slot, vault = resolve_tool_server_secret(arg)
+    except ValueError:
+        raise CredentialError(f"There is no credential called {name!r}.") from None
+    return sdef, arg, vault
 
 
 class CredentialStore:
@@ -144,6 +167,17 @@ class CredentialStore:
                 _catalog_changed(arg)
             except Exception:  # noqa: BLE001 — the key is stored either way
                 pass
+        if name.startswith("tool_server."):
+            # v1.448.0 (settings/records_tools): a tool server the chat left
+            # waiting for this value is ADDED now — through the one pack door,
+            # with the value read back from the vault — once every asked
+            # value is saved; the card reads the same keys an app's does.
+            try:
+                from .records_tools import on_secret_saved
+
+                out.update(on_secret_saved(self.platform, arg))
+            except Exception:  # noqa: BLE001 — the value is stored either way
+                log.warning("tool server %s: could not be added after its key was saved", arg, exc_info=True)
         if name.startswith("app."):
             # A pack saved by app_connect waits for this token: load it now.
             # v1.351.0 (G15): and SAY what happened — the card reads "GitHub

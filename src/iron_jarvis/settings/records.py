@@ -144,6 +144,11 @@ RECORD_TOOL_TIERS: dict[str, str] = {
     "model_server_remove": "ask",
     "account_add": "ask",
     "memory_base_add": "ask",
+    # v1.448.0 (Wave A item 4, settings/records_tools): a tool server (an MCP
+    # server) and a web service (a REST hookup) from chat — each asks on the
+    # card (the server's card once-only, showing what starts) and has an Undo.
+    "mcp_server_add": "ask",
+    "web_service_add": "ask",
 }
 #: The create tools that gained an Undo (their own tiers are unchanged).
 RECORD_CREATE_TOOLS = frozenset({"schedule_create", "workflow_create", "webhook_add", "sentinel_add", "goal_add"})
@@ -539,6 +544,11 @@ def record_tools_for(text: str, *, workflow_names: "list[str] | tuple[str, ...]"
     # http://10.0.0.5:8000/v1?" cut the last sentence at the IP's dots).
     if not is_question(without_addresses(t)):
         out += [n for n in connections_tools_for(t) if n not in out]
+    # v1.448.0 (Wave A item 4): a tool server, a web service
+    # (settings/records_tools) — writers only; it keeps its own question guard.
+    from .records_tools import tools_tools_for
+
+    out += [n for n in tools_tools_for(t) if n not in out]
     return out
 
 
@@ -1743,6 +1753,21 @@ _CONN_KINDS = ("model_server", "model_default", "model_server_removed", "account
 _SNAP.update({k: _conn_snap(k) for k in _CONN_KINDS})
 
 
+def _tools_snap(kind: str) -> Any:
+    def _snap(platform: Any, name: str) -> Any:
+        from .records_tools import SNAP
+
+        return SNAP[kind](platform, name)
+
+    return _snap
+
+
+#: v1.448.0 (Wave A item 4): a tool server and a web service
+#: (settings/records_tools) — both creates (nothing to snapshot before).
+_TOOLS_KINDS = ("tool_server", "web_service")
+_SNAP.update({k: _tools_snap(k) for k in _TOOLS_KINDS})
+
+
 def restore(platform: Any, desc: dict[str, Any]) -> str:
     """``POST /undo/{id}`` for a ``record_restore`` row. Blocking."""
     record = str(desc.get("record") or "")
@@ -1788,6 +1813,10 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
         from .records_connections import restore_kind as _conn_restore
 
         return _conn_restore(platform, record, name, prior, desc)
+    if record in _TOOLS_KINDS:
+        from .records_tools import restore_kind as _tools_restore
+
+        return _tools_restore(platform, record, name, prior, desc)
     raise RecordError(f"unknown record kind {record!r}")
 
 
@@ -3474,6 +3503,8 @@ def record_tools(platform: Any) -> list[Tool]:
         *_rb().build_record_tools(platform),
         # v1.438.0 (Wave 4 group B): model servers, accounts, memory bases.
         *_conn_record_tools(platform),
+        # v1.448.0 (Wave A item 4): a tool server and a web service.
+        *_tools_record_tools(platform),
     ]
 
 
@@ -3481,6 +3512,12 @@ def _conn_record_tools(platform: Any) -> list[Tool]:
     from .records_connections import connections_record_tools
 
     return connections_record_tools(platform)
+
+
+def _tools_record_tools(platform: Any) -> list[Tool]:
+    from .records_tools import tools_record_tools
+
+    return tools_record_tools(platform)
 
 
 def _apps_record_tools(platform: Any) -> list[Tool]:

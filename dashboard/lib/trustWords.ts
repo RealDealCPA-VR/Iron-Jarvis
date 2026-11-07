@@ -98,6 +98,9 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       "model_server_default",
       "model_server_remove",
       "account_add",
+      // v1.448.0 (Wave A item 4): a tool server, a web service.
+      "mcp_server_add",
+      "web_service_add",
     ],
   },
   {

@@ -238,6 +238,10 @@ _OFF_ROSTER_BY_DESIGN = {
     # base from chat — a card + Undo where the user is present; pinned by
     # tests/test_records_connections_v14380.py.
     "model_server_add", "model_server_default", "model_server_remove", "account_add", "memory_base_add",
+    # v1.448.0 (Wave A item 4, settings/records_tools): a tool server (an MCP
+    # server) and a web service (a REST hookup) from chat — a card + Undo where
+    # the user is present; pinned by tests/test_records_tools_v14480.py.
+    "mcp_server_add", "web_service_add",
     # SELF-CARE (v1.344.0): chat arms the readers via autoselect.AUTO_SAFE_TOOLS
     # and the repairers via ASK_TIER_TOOLS; pinned by
     # tests/test_autoselect_failure_vocab_v1344.py

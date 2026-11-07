@@ -88,6 +88,9 @@ const WORDS: Record<string, string> = {
   model_server_remove: "remove a model server",
   account_add: "add an account",
   memory_base_add: "add a memory base",
+  // v1.448.0 (Wave A item 4, settings/records_tools).
+  mcp_server_add: "add a tool server",
+  web_service_add: "save a web service",
   // v1.350.0: the daemon's own plan approval (agents/runtime.py
   // PLAN_APPROVAL_TOOL), not a registry tool: its arguments are the plan's
   // steps. No custom tool may take this name (tools/dynamic.py

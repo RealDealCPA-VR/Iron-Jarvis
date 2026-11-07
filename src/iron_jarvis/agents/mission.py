@@ -363,6 +363,9 @@ ASK_WORDS: dict[str, str] = {
     "model_server_remove": "remove a model server",
     "account_add": "add an account",
     "memory_base_add": "add a memory base",
+    # v1.448.0 (Wave A item 4, settings/records_tools).
+    "mcp_server_add": "add a tool server",
+    "web_service_add": "save a web service",
     "approve_plan": "follow this plan",
     # v1.435.0 (chat-first plan Wave 3 group G): projects and the user's own
     # agents from chat (settings.records_projects).
@@ -497,6 +500,9 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "model_server_remove": ("removed a model server", "model server removal"),
     "account_add": ("added an account", "account addition"),
     "memory_base_add": ("added a memory base", "memory base addition"),
+    # v1.448.0 (Wave A item 4; twin lib/runWords.ts AGENT_TOOLS).
+    "mcp_server_add": ("added a tool server", "tool server addition"),
+    "web_service_add": ("saved a web service", "web service addition"),
     "code_load": ("opened a saved script", "script read"),
     "code_run": ("ran a saved script", "saved script run"),
     "code_search": ("searched its saved scripts", "script search"),
