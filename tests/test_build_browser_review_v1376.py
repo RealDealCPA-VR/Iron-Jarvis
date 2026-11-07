@@ -273,8 +273,15 @@ async def test_real_edge_local_only_reaches_no_public_address_at_all():
         # Outside Local only the page's requests go out (the decision's
         # other half — and the proof the page really makes them).
         await b.open(key, site.base, preview=site.base)
-        await asyncio.sleep(1.0)
-        assert {"/cdn.js", "/api?typed=secret-ish", "/beacon"} <= {p for _, p in _public_hits(site)}
+        # v1.443.1: wait for the requests themselves, never a fixed second —
+        # on the loaded Release runner /cdn.js and /api had not landed after
+        # 1 s (the v1.443.0 gate's only red test).
+        want = {"/cdn.js", "/api?typed=secret-ish", "/beacon"}
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 20.0
+        while not want <= {p for _, p in _public_hits(site)} and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        assert want <= {p for _, p in _public_hits(site)}, site.hits
         await b.close(key, "test")
         site.hits.clear()
         with egress.local_only_scope(True):

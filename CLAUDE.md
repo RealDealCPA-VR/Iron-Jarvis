@@ -15442,6 +15442,12 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/chat-folder-chip-v1443.test.tsx` and
   `tests/test_chat_folder_check_v1443.py` (18 red); moved on purpose:
   `drawer-folder-calm-v1329` (Change opens the shared picker).
+  v1.443.0 WAS NOT PUBLISHED (its Release gate went red on one shard, Tests
+  green; v1.443.1 ships it): the real-Edge
+  `test_build_browser_review_v1376::test_real_edge_local_only_reaches_no_public_address_at_all`
+  slept a FIXED 1 s before checking that the page's requests reached the
+  public stand-in, and on the loaded runner /cdn.js and /api had not landed.
+  It now waits (≤ 20 s) for those requests themselves.
 
 ## Map (where things live)
 
