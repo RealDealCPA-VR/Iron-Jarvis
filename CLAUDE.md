@@ -36,8 +36,10 @@ git push origin <branch>
 gh workflow run tests.yml --ref <branch>      # the whole suite, ~15 min, no installer
 gh run list --workflow tests.yml --branch <branch> --limit 1   # then read its result
 # (a workflow change: `gh workflow run release.yml --ref <branch> -f dry_run=true`)
-# The release gate on master runs the whole suite again and publishes nothing
-# unless it is green. A failure GitHub shows is reproduced LOCALLY by running
+# The release gate on master runs the whole suite and publishes nothing
+# unless it is green. It is the ONLY run on master: Tests has no push trigger
+# since v1.444.1 (it ran the same suite twice per release), so Stable reads
+# Release's suite jobs as the verdict. A failure GitHub shows is reproduced LOCALLY by running
 # THAT one file (with PYTHONDONTWRITEBYTECODE unset when it smells of stale
 # bytecode — CI writes .pyc files, this PC does not).
 # Dashboard build (must show "Generating static pages (44/44)")
@@ -5761,8 +5763,11 @@ does not need a bump, stop and bump it.
   `latest.yml` + installer + blockmap (state `uploaded`), NOT REPLACED
   (`replaced_by`: a newer published release of the same MAJOR.MINOR — a patch
   is how fixes ship; logged "replaced by vX — waiting for that one"; a newer
-  MINOR does not count), whose tag's commit's NEWEST COMPLETED Tests run that
-  is not `cancelled`/`skipped` concluded `success` (`tests_verdict`), and
+  MINOR does not count), whose tag's commit's NEWEST COMPLETED suite run that
+  is not `cancelled`/`skipped` concluded `success` (`tests_verdict` over Tests
+  runs AND Release runs judged by their `suite` + `python` jobs,
+  `release_suite_run`: a skipped suite is no verdict, a green suite with a
+  failed publish is green; v1.444.1), and
   newer than what Stable names — never backwards. A newest candidate whose
   verdict was not READ stops the run (`Decision.unread`, exit 5): nothing
   older is promoted, or a Stable PC downloads twice an hour apart. `promote`

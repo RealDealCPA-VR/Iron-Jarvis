@@ -1,13 +1,18 @@
 name: Tests
 
-# The offline suite + dashboard build on every push/PR. This is the single
-# source of truth for "how many tests are there and do they pass" — the README
-# carries the badge instead of a hand-edited count (which drifted three times:
-# 254 → 687 → 971 all claimed at once in different files).
+# The offline suite + dashboard build, run BY HAND on a branch (`gh workflow
+# run tests.yml --ref <branch>`) or for a pull request.
+#
+# IT NO LONGER RUNS ON A PUSH TO MASTER (v1.444.1). Every push to master is a
+# version bump, and a bump starts Release, whose gate runs this same suite (the
+# same six shards from scripts/ci_shards.py, the same dashboard, add-on and
+# desktop checks, plus the installer build that runs `pnpm build`) and publishes
+# nothing unless it is green. Running Tests too ran the whole suite TWICE on the
+# same commit: ~3 hours of runner time per release for no coverage, and a
+# second chance for a timing test to go red on a busy runner. The Stable
+# channel (scripts/promote_stable.py) reads Release's suite jobs as the verdict.
 
 on:
-  push:
-    branches: [master]
   pull_request:
   workflow_dispatch:
 

@@ -172,10 +172,17 @@ jobs:
         working-directory: dashboard
         run: pnpm test
 
+      # v1.444.1: Tests no longer runs on a master push, so this gate checks
+      # everything it did. vitest never type-checks (v1.401.1); the installer's
+      # `pnpm build` does, but only after the build job is minutes in.
+      - name: Typecheck the dashboard
+        working-directory: dashboard
+        run: npx tsc --noEmit
+
       - name: Syntax-check the desktop entry points
         shell: bash
         run: |
-          for f in desktop/main.js desktop/preload.js desktop/spotlight-preload.js; do
+          for f in desktop/main.js desktop/preload.js desktop/spotlight-preload.js                    desktop/windowState.js desktop/afterPack.js desktop/sign.js; do
             [ -f "$f" ] && node --check "$f"
           done
 

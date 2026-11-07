@@ -541,7 +541,10 @@ def test_neither_existing_workflow_triggers_on_the_stable_branch():
     for name in ("release.yml", "tests.yml"):
         on = _on(_yaml(name))
         push = on.get("push") or {}
-        assert push.get("branches") == ["master"], (name, push)
+        if name == "tests.yml":  # v1.444.1: no push trigger at all
+            assert "push" not in on, on
+        else:
+            assert push.get("branches") == ["master"], (name, push)
         assert set(push.get("tags") or []) <= {"v*"}, (name, push)
         assert "updates-stable" not in json.dumps(on), name
         # pull_request fires for a PR, never for a branch push.

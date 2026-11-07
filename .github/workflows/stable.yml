@@ -46,10 +46,11 @@ on:
         default: ""
 
 # contents: write — the ONLY write: pushing updates-stable (and reading the
-# releases). actions: read — reading the Tests workflow's verdict on a
-# release's commit (GET .../actions/workflows/tests.yml/runs): a token's
-# unlisted scopes are none, and a Tests verdict that cannot be read must never
-# count as green, so without it Stable would never move.
+# releases). actions: read — reading the test suite's verdict on a release's
+# commit (GET .../actions/workflows/{tests,release}.yml/runs and a Release
+# run's jobs; since v1.444.1 Release's gate is the suite run on master): a
+# token's unlisted scopes are none, and a verdict that cannot be read must
+# never count as green, so without it Stable would never move.
 permissions:
   contents: write
   actions: read

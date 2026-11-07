@@ -352,9 +352,12 @@ def test_the_release_job_publishes_the_manifest_after_the_release_is_public_and_
     # v1.261.0: two releases in flight must never leave the branch naming the
     # older one — the step compares versions and leaves a newer manifest alone.
     assert "sort -V" in body and "newer than $ver" in body, "no guard against writing an older manifest"
-    for path in (_RELEASE, _TESTS_WF):
-        on = re.search(r"^on:\n(?:  .*\n)+", _src(path), re.M).group(0)
-        assert re.search(r"branches: \[master\]", on), f"{path.name} must run on master only, or the updates push loops"
+    on = re.search(r"^on:\n(?:  .*\n)+", _src(_RELEASE), re.M).group(0)
+    assert re.search(r"branches: \[master\]", on), "release.yml must run on master only, or the updates push loops"
+    # v1.444.1: Tests has no push trigger at all (Release's gate is the suite
+    # on master), so no push can start it, the updates push included.
+    tests_on = re.search(r"^on:\n(?:  .*\n)+", _src(_TESTS_WF), re.M).group(0)
+    assert "push:" not in tests_on, tests_on
 
 
 # ==========================================================================

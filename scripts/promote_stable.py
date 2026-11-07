@@ -26,10 +26,16 @@ THE RULE (:func:`choose_stable`, pure, tested offline): the NEWEST release that
   line exists (a patch release is how this repo ships a fix — 1.388.0 out for
   a day while its fix 1.388.1 is 19 h old is skipped, and the fix soaks; a
   newer MINOR release does not disqualify it),
-* whose commit's **Tests** workflow ended ``success`` (Release publishes only
-  after its own gate, but Tests is a separate workflow that has gone red AFTER
-  a green Release: v1.398.0, v1.326.0, v1.394.0 …; a cancelled or skipped run
-  is not a verdict), and
+* whose commit's test suite ended ``success``: the newest completed run of the
+  **Tests** workflow OR of **Release**'s suite jobs (``suite`` + the
+  ``python`` shards), whichever is newer. Since v1.444.1 Tests no longer runs
+  on a master push (Release's gate runs the same suite on the same commit), so
+  for a new release the verdict is Release's suite; older releases keep their
+  Tests runs, and a later Tests run started by hand still overrules. A Release
+  run is judged by its SUITE jobs, never by the run's own conclusion: a run
+  whose suite was skipped (a version already public) is no verdict, and a run
+  whose suite passed but whose publishing failed is green. A cancelled or
+  skipped run is not a verdict, and
 * is NEWER than the version Stable names now — Stable never moves backwards
   (installed apps would not downgrade to it anyway).
 
@@ -75,8 +81,13 @@ from publish_update_manifest import _URL_LINE, _VERSION_LINE, rewrite  # noqa: E
 SOAK_HOURS = 24
 #: The branch this script's output is committed to (stable.yml pushes it).
 BRANCH = "updates-stable"
-#: The workflow whose verdict on a release's commit decides.
+#: The workflows whose runs on a release's commit give the suite's verdict.
 TESTS_WORKFLOW = "tests.yml"
+RELEASE_WORKFLOW = "release.yml"
+#: Release's jobs that ARE the suite (the matrix shards are "python (1)" …).
+RELEASE_SUITE_JOBS = ("suite", "python")
+#: A job conclusion that means the suite did not pass.
+_RED_JOB = frozenset({"failure", "timed_out", "startup_failure", "action_required"})
 #: How many promotions ``promoted.json`` keeps.
 HISTORY_MAX = 500
 #: Exit codes. 2: a bad input, nothing written. 3–5: the hold edits are still
@@ -219,6 +230,38 @@ def tests_verdict(runs: Iterable[Mapping[str, Any]]) -> str:
     if len(done) < len(runs):
         return "running"
     return str(_newest(done).get("conclusion") or "unknown")
+
+
+def _suite_job(name: str) -> str:
+    """Which suite job a Release job is ("" = not part of the suite)."""
+    base = str(name or "").split(" (", 1)[0].strip()
+    return base if base in RELEASE_SUITE_JOBS else ""
+
+
+def release_suite_run(run: Mapping[str, Any], jobs: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """One Release run as a test-suite verdict: a copy of ``run`` whose
+    ``conclusion`` is its SUITE jobs' verdict (``GET …/runs/{id}/jobs``, the
+    latest attempt). Every suite job passed → ``success``; any red →
+    ``failure``; any cancelled → ``cancelled``; the suite skipped, or not
+    there at all (``suite`` and at least one ``python`` shard are both needed)
+    → ``skipped``, which is no verdict. A run still going is left as it is."""
+    out = dict(run)
+    if str(run.get("status") or "") != "completed":
+        return out
+    mine = [j for j in jobs if isinstance(j, Mapping) and _suite_job(str(j.get("name") or ""))]
+    names = {_suite_job(str(j.get("name") or "")) for j in mine}
+    ends = [str(j.get("conclusion") or "") for j in mine]
+    if set(RELEASE_SUITE_JOBS) - names or all(e == "skipped" for e in ends):
+        out["conclusion"] = "skipped"
+    elif any(e in _RED_JOB for e in ends):
+        out["conclusion"] = "failure"
+    elif any(e == "cancelled" for e in ends):
+        out["conclusion"] = "cancelled"
+    elif all(e == "success" for e in ends):
+        out["conclusion"] = "success"
+    else:  # a shard skipped beside others that ran, or an unknown word: never green
+        out["conclusion"] = next(e for e in ends if e != "success") or "unknown"
+    return out
 
 
 def _tests_words(verdict: Any) -> str:
@@ -533,12 +576,26 @@ class GitHub:
     def tag_commit(self, tag: str) -> str:
         return self._gh("api", f"repos/{self.repo}/commits/{tag}", "--jq", ".sha").strip()
 
-    def tests_runs(self, sha: str) -> list[dict[str, Any]]:
+    def _runs(self, workflow: str, sha: str) -> list[dict[str, Any]]:
         out = json.loads(self._gh(
-            "api", f"repos/{self.repo}/actions/workflows/{TESTS_WORKFLOW}/runs?head_sha={sha}&per_page=50",
+            "api", f"repos/{self.repo}/actions/workflows/{workflow}/runs?head_sha={sha}&per_page=50",
         ))
         runs = out.get("workflow_runs") if isinstance(out, dict) else None
-        return runs if isinstance(runs, list) else []
+        return [r for r in runs if isinstance(r, dict)] if isinstance(runs, list) else []
+
+    def _jobs(self, run_id: Any) -> list[dict[str, Any]]:
+        out = json.loads(self._gh("api", f"repos/{self.repo}/actions/runs/{int(run_id)}/jobs?per_page=100"))
+        jobs = out.get("jobs") if isinstance(out, dict) else None
+        return [j for j in jobs if isinstance(j, dict)] if isinstance(jobs, list) else []
+
+    def tests_runs(self, sha: str) -> list[dict[str, Any]]:
+        """Every run that judged this commit's suite: Tests runs as they are,
+        Release runs judged by their suite jobs (``release_suite_run``)."""
+        runs = self._runs(TESTS_WORKFLOW, sha)
+        for r in self._runs(RELEASE_WORKFLOW, sha):
+            done = str(r.get("status") or "") == "completed"
+            runs.append(release_suite_run(r, self._jobs(r.get("id")) if done else ()))
+        return runs
 
     def manifest(self, tag: str) -> str:
         with tempfile.TemporaryDirectory() as tmp:

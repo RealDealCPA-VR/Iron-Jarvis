@@ -2,7 +2,7 @@
 
 # <img src="desktop/assets/icon.png" alt="" width="52" height="52" align="absmiddle"> IRON JARVIS
 
-[![Tests](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml/badge.svg)](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml)
+[![Tests](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/release.yml/badge.svg)](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/release.yml)
 [![Download](https://img.shields.io/badge/download-latest%20release-2ea44f)](https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest)
 ![Windows](https://img.shields.io/badge/desktop-Windows-0078D4)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20Commons%20Clause-blue)](LICENSE)
@@ -104,7 +104,7 @@ A daily driver has to be light. Measured on our own daily-driver PC:
 
 - **Add-ons start directly.** With four MCP add-ons running, Iron Jarvis went from **19 processes to 8** and from **774 MB to 415 MB** of memory, because each server now starts without its npx/uvx launcher idling beside it. An npx add-on now starts in **0.5–0.7 s instead of 2.3–3.1 s**.
 - **Idle terminals cost nothing.** Eight idle Build terminals used to keep a whole CPU core busy; they now use **0.08%**.
-- **Proof, not promises.** More than 24,000 backend tests and 9,000 dashboard tests run **offline** with no keys. CI runs them on every push and blocks the installer until they pass. The live count is on the [Tests badge](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml).
+- **Proof, not promises.** More than 24,000 backend tests and 9,000 dashboard tests run **offline** with no keys. CI runs them once for every release and blocks the installer until they pass. The live result is on the [Tests badge](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/release.yml).
 
 ---
 
