@@ -167,6 +167,12 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
     words: "pages in its own browser",
     tools: ["page_open", "page_click", "page_type", "page_read"],
   },
+  // v1.443.0: a file the browser downloaded — flagged content must not
+  // rename, move or copy the user's downloads.
+  {
+    words: "downloaded files",
+    tools: ["download_manage"],
+  },
   {
     words: "spending",
     tools: ["generate_media"],
@@ -177,7 +183,8 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
 export const LOW_TRUST_CANNOT =
   "This run can't change settings, schedules, rules, connections, memory, projects, agents or skills, " +
   "can't type into your terminals, can't start programs that keep running, " +
-  "can't call your web services, can't take screenshots of pages, can't use pages in its own browser " +
+  "can't call your web services, can't take screenshots of pages, can't use pages in its own browser, " +
+  "can't rename, move or copy downloaded files " +
   "and can't spend credits. " +
   "It can still read, search and answer.";
 
