@@ -237,7 +237,9 @@ describe("integrator source pins", () => {
 
   it("an Undo of a saved app token never turns the app back on", () => {
     const src = read("app/chat/page.tsx");
-    expect(src).toContain('next.kind === "secret" && next.saved && !next.undone ? appIdOf(next.name) : ""');
+    // A2 review (v1.448.0): the id read is connectorIdOf (an app's id or a
+    // tool server's pack); the `!next.undone` guard is what this pins.
+    expect(src).toContain('next.kind === "secret" && next.saved && !next.undone ? connectorIdOf(next.name) : ""');
   });
 
   it("Continue waits while a file uploads or a turn is starting (the task is never dropped)", () => {

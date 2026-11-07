@@ -388,6 +388,11 @@ def default_permissions() -> dict[str, str]:
         "model_server_remove": "ask",
         "account_add": "ask",
         "memory_base_add": "ask",
+        # v1.448.0 (Wave A item 4, settings/records_tools): a tool server (an
+        # MCP server) and a web service (a REST hookup) from chat — each asks
+        # on the card and has an Undo.
+        "mcp_server_add": "ask",
+        "web_service_add": "ask",
         # v1.435.0 (chat-first plan, Wave 3 group I, D3/D4): Local only for
         # THIS chat — turning it on only narrows (allow); turning it OFF asks
         # every time through the tool's own once-only check. The change

@@ -102,6 +102,10 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         "model_server_remove",
         "account_add",
         "memory_base_add",
+        # v1.448.0 (Wave A item 4): nor a tool server (its program runs on
+        # this PC with the user's keys) or a web service Jarvis may then call.
+        "mcp_server_add",
+        "web_service_add",
         "create_agent",
         "remember_preference",
         "skill_create",

@@ -158,3 +158,104 @@ def named_hookup_ask_tools(
         return [REST_CALL_TOOL] if named else []
     except Exception:  # noqa: BLE001 — arming stays as it was
         return []
+
+
+# --------------------------------------------------------------------------- #
+# THE add and remove of a hookup (v1.448.0, Wave A item 4). ``POST
+# /integrations`` (the page's "Add a service") and the chat's
+# ``web_service_add`` (settings/records_tools) both come through here, so the
+# id rule, the spec, the stored config and what survives a restart cannot
+# drift. Nothing here logs, returns or raises a VALUE — names only.
+# --------------------------------------------------------------------------- #
+def hookup_id(name: Any) -> str:
+    """The id a hookup's display name gets (the page's own rule)."""
+    return _slug(str(name or ""))
+
+
+def add_hookup(
+    platform: Any,
+    *,
+    name: str,
+    base_url: str,
+    description: str = "",
+    auth_secret: str = "",
+    allow_internal: bool = False,
+    persist: Any = None,
+) -> str:
+    """Register a REST hookup live, store its config and keep it in
+    ``config.custom_integrations`` so it survives a restart; returns its id.
+    ``auth_secret`` is the VAULT NAME of its bearer token (the caller writes
+    the value — the page's route from its body, the chat's card later; an
+    empty name = no token). ``allow_internal`` lets its address be on the
+    user's own network (the chat door sets it for a private address; the
+    page's route never did). Raises ``ValueError`` in plain words for a
+    missing name or address or a name in use. BLOCKING."""
+    from .base import IntegrationSpec
+    from .builtin import REST_SPEC, RestApiIntegration
+
+    shown = str(name or "").strip()
+    iid = hookup_id(shown)
+    if not iid:
+        raise ValueError("integration name is required")
+    if not str(base_url or "").strip():
+        raise ValueError("base URL is required")
+    registry = platform.integrations
+    if registry.get_spec(iid) is not None:
+        raise ValueError(f"'{iid}' already exists")
+    registry.register(
+        IntegrationSpec(
+            id=iid,
+            kind=HOOKUP_KIND,
+            display_name=shown,
+            description=str(description or "").strip(),
+            required_secrets=[],
+            config_schema=REST_SPEC.config_schema,
+        ),
+        lambda cfg, resolver: RestApiIntegration(cfg, resolver),
+    )
+    config: dict[str, Any] = {"base_url": str(base_url).strip()}
+    if auth_secret:
+        config["auth_secret"] = str(auth_secret)
+    if allow_internal:
+        config["allow_internal"] = True
+    registry.configure(iid, config)
+    registry.enable(iid, True)
+    customs = [c for c in (platform.config.custom_integrations or []) if c.get("id") != iid]
+    customs.append({"id": iid, "name": shown, "description": str(description or "").strip()})
+    platform.config.custom_integrations = customs
+    _persist(platform, persist)
+    return iid
+
+
+def remove_hookup(platform: Any, iid: str, *, persist: Any = None) -> dict[str, Any]:
+    """Remove a hookup the user added: its spec (live), its stored row, its
+    ``custom_integrations`` entry and — when its config named the hookup's
+    OWN token row (``integration_<id>_token``) — that vault row. The built-in
+    example is never removed. Returns what went; raises ``KeyError`` for an
+    unknown id. BLOCKING."""
+    registry = platform.integrations
+    if iid in EXAMPLE_IDS or registry.get_spec(iid) is None:
+        raise KeyError(iid)
+    cfg = dict(registry.stored_config(iid) or {})
+    key_name = str(cfg.get("auth_secret") or "")
+    key_removed = False
+    if key_name == f"integration_{iid}_token":
+        try:
+            key_removed = bool(platform.secrets.delete(key_name))
+        except Exception:  # noqa: BLE001 — a leftover row is not a failed removal
+            key_removed = False
+    registry.unregister(iid)
+    customs = [c for c in (platform.config.custom_integrations or []) if c.get("id") != iid]
+    platform.config.custom_integrations = customs
+    _persist(platform, persist)
+    return {"removed": iid, "key_removed": key_removed}
+
+
+def _persist(platform: Any, persist: Any) -> None:
+    if callable(persist):
+        persist(["custom_integrations"])
+        return
+    from ..core import config as _config
+
+    cfg = platform.config
+    _config.persist_config_values(cfg.home, {"custom_integrations": cfg.custom_integrations})

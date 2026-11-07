@@ -430,6 +430,16 @@ _OTHER_COMPUTER = (
     r"(?:computer|pc|laptop|machine|desktop|mac|macbook|ipad|tablet)"
     r"|from\s+my\s+(?:laptop|macbook|mac|ipad|tablet)|on\s+my\s+(?:ipad|tablet|mac|macbook))\b"
 )
+#: v1.448.0 (Wave A item 4): a SECOND Iron Jarvis on another of the user's
+#: computers ("the Jarvis on my office PC", "my other Iron Jarvis"), and
+#: handing jobs to that computer — the same line answers (a copy there runs
+#: on its own; LAN access lets it hand this one tasks, never the reverse
+#: from here, and never opens these screens there).
+_OTHER_PC_WORD = r"(?:pc|computer|machine|laptop|desktop|mac|macbook|workstation|box)"
+_OTHER_PC = (
+    r"(?:my|the|our)\s+(?:other|office|work|home|second|spare|main|downstairs|upstairs|desk)\s+" + _OTHER_PC_WORD
+    + r"|my\s+(?:laptop|macbook|mac|ipad|tablet)"
+)
 _ELSEWHERE_RULES = tuple(
     re.compile(r, re.IGNORECASE)
     for r in (
@@ -438,6 +448,14 @@ _ELSEWHERE_RULES = tuple(
         r"\bremote\s+access\s+(?:to\s+)?(?:iron\s+jarvis|jarvis|the\s+dashboard|this\s+app)\b",
         r"\b" + _OPEN_VERB + r"\s+" + _JARVIS_OBJ + r"\b" + _GAP
         + r"\b(?:over|across|from|through)\s+(?:my|the|our)\s+(?:network|lan|wi-?fi|internet|tailscale|vpn)\b",
+        # "THE Jarvis on my office PC" — a copy that exists there; "run Iron
+        # Jarvis on my laptop too" (installing one) stays an everyday sentence.
+        r"\bthe\s+(?:iron\s+)?jarvis\s+(?:on|at|running\s+on|installed\s+on)\s+(?:" + _OTHER_PC + r")\b",
+        r"\bmy\s+other\s+(?:iron\s+)?jarvis\b|\b(?:the\s+other|another|a\s+second|the\s+second|two|both)\s+"
+        r"(?:copies\s+of\s+|copy\s+of\s+|instances?\s+of\s+)?(?:iron\s+)?jarvis(?:es)?\b",
+        r"\b(?:hand|send|pass|push|give|offload|farm\s+out|delegate|route|move|assign)\b" + _GAP
+        + r"\b(?:jobs?|tasks?|work|runs?|workloads?)\b" + _GAP
+        + r"\b(?:to|onto|over\s+to)\s+(?:" + _OTHER_PC + r")\b",
     )
 )
 

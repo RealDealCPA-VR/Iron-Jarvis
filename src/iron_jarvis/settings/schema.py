@@ -1023,6 +1023,16 @@ SECRETS: tuple[SecretDef, ...] = (
     SecretDef("memory.{name}", "A memory base's token", "memory",
               "The Notion integration token of a memory base you added.",
               vault_key="ltm_{name}_notion", pattern=True),
+    # v1.448.0 (Wave A item 4, settings/records_tools): a tool server's key
+    # (``tool_server.<pack>__<slot>`` → the vault name the pack door launches
+    # with, resolved by ``credentials._resolve_tool_server``) and a web
+    # service's bearer token, under the name the Connections page gives it.
+    SecretDef("tool_server.{name}", "A tool server's key", "connections",
+              "A key, token or password a tool server you are adding needs.",
+              vault_key="mcp.{name}", pattern=True),
+    SecretDef("web_service.{name}", "A web service's key", "connections",
+              "The bearer token of a web service you saved.",
+              vault_key="integration_{name}_token", pattern=True),
 )
 
 BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTINGS}

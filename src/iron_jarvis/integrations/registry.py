@@ -41,6 +41,22 @@ class IntegrationRegistry:
         self._specs[spec.id] = spec
         self._factories[spec.id] = factory
 
+    def unregister(self, integration_id: str) -> bool:
+        """Forget a spec and its factory AND delete its stored row (v1.448.0:
+        the chat's ``web_service_add`` Undo removes the hookup it made). True
+        when a spec was registered."""
+        had = integration_id in self._specs
+        self._specs.pop(integration_id, None)
+        self._factories.pop(integration_id, None)
+        with session_scope(self.engine) as db:
+            record = db.exec(
+                select(IntegrationRecord).where(IntegrationRecord.integration_id == integration_id)
+            ).first()
+            if record is not None:
+                db.delete(record)
+                db.commit()
+        return had
+
     def specs(self) -> list[IntegrationSpec]:
         """All registered specs, ordered by id."""
         return [self._specs[k] for k in sorted(self._specs)]

@@ -150,6 +150,11 @@ _RECORD_TOOLS: dict[str, frozenset[str]] = {
     "model_server": frozenset({"model_server_add", "model_server_remove"}),
     "account": frozenset({"account_add"}),
     "memory_base": frozenset({"memory_base_add"}),
+    # v1.448.0 (Wave A item 4, settings/records_tools): a tool server (an MCP
+    # server — ``app_import`` and ``app_connect`` add one too) and a web
+    # service (a REST hookup).
+    "tool_server": frozenset({"mcp_server_add", "app_import", "app_connect", "app_disconnect"}),
+    "web_service": frozenset({"web_service_add"}),
 }
 #: A record card's key starts with these (``records._card``).
 _RECORD_CARD_PREFIX: dict[str, tuple[str, ...]] = {
@@ -171,6 +176,8 @@ _RECORD_CARD_PREFIX: dict[str, tuple[str, ...]] = {
     "model_server": ("model_server.", "model_default."),
     "account": ("account.",),
     "memory_base": ("memory_base.", "memory_profile."),
+    "tool_server": ("tool_server.", "app."),
+    "web_service": ("web_service.",),
 }
 #: v1.438.0 (Wave 4 group B): a record card that ALSO changed a setting (a
 #: model server made the default, a memory base made the memory profile's) —
@@ -217,6 +224,8 @@ _RECORD_NOUN = {
     "model_server": "model server",
     "account": "account",
     "memory_base": "memory base",
+    "tool_server": "tool server",
+    "web_service": "web service",
 }
 
 ON, OFF, CHANGE, CREATE, REMOVE, PAUSE, CONNECT, DISCONNECT, UNDO = (
@@ -945,11 +954,25 @@ _MODEL_SERVER_MODS = frozenset(
 )
 _ACCOUNT_VENDORS = frozenset({"claude", "codex", "chatgpt", "openai", "grok", "xai"})
 _MEMORY_PLACES = frozenset({"notion", "obsidian", "vault", "folder"})
+#: v1.448.0 (Wave A item 4): a TOOL server ("the GitHub MCP server", "a tool
+#: server") and a WEB service ("the pricing web service", "a REST hookup").
+#: A bare "service" or "api" is someone's work, never a saved hookup.
+_TOOL_SERVER_MODS = frozenset({"mcp", "tool", "tools"})
+_WEB_SERVICE_MODS = frozenset({"web", "rest", "http", "https"})
 
 
 def _connection_kind(head: str, prv: str, mods: list[str], np: list[str]) -> "str | None":
     """The connection record a noun phrase names (``model_server``,
-    ``account``, ``memory_base``), or None to let the other rules read it."""
+    ``account``, ``memory_base``, ``tool_server``, ``web_service``), or None
+    to let the other rules read it."""
+    if head in ("server", "servers") and _TOOL_SERVER_MODS.intersection(mods):
+        return "tool_server"
+    if head == "mcp":
+        return "tool_server"
+    if head in ("service", "services") and _WEB_SERVICE_MODS.intersection(mods):
+        return "web_service"
+    if head in ("hookup", "hookups") and prv in ("rest", "web", "api"):
+        return "web_service"
     if head in ("server", "servers", "endpoint", "gateway"):
         return "model_server" if _MODEL_SERVER_MODS.intersection(mods) else None
     if head == "box":

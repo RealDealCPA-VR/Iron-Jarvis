@@ -274,43 +274,35 @@ def register(app: FastAPI, d) -> None:
 
         Registers it live (so it appears + tests immediately), stores the token
         in the vault, and persists the spec to config so it survives restart.
+
+        v1.448.0 (Wave A item 4): the body is ``integrations/hookups.add_hookup``
+        — the ONE add the chat's ``web_service_add`` goes through too; the
+        answers and the stored shape are unchanged byte for byte.
         """
-        import re as _re
+        from ...integrations.hookups import add_hookup, hookup_id
 
-        from ...integrations.base import IntegrationSpec
-        from ...integrations.builtin import REST_SPEC, RestApiIntegration
-
-        iid = _re.sub(r"[^a-z0-9_]+", "_", (body.name or "").strip().lower()).strip("_")
+        iid = hookup_id(body.name)
         if not iid:
             raise HTTPException(status_code=400, detail="integration name is required")
         if not (body.base_url or "").strip():
             raise HTTPException(status_code=400, detail="base URL is required")
         if d.platform.integrations.get_spec(iid) is not None:
             raise HTTPException(status_code=400, detail=f"'{iid}' already exists")
-
-        d.platform.integrations.register(
-            IntegrationSpec(
-                id=iid,
-                kind="rest",
-                display_name=body.name.strip(),
-                description=(body.description or "").strip(),
-                required_secrets=[],
-                config_schema=REST_SPEC.config_schema,
-            ),
-            lambda cfg, resolver: RestApiIntegration(cfg, resolver),
-        )
-        config = {"base_url": body.base_url.strip()}
+        sname = ""
         if (body.auth_token or "").strip():
             sname = f"integration_{iid}_token"
             d.platform.secrets.set(sname, body.auth_token.strip(), kind="token")
-            config["auth_secret"] = sname
-        d.platform.integrations.configure(iid, config)
-        d.platform.integrations.enable(iid, True)
-
-        customs = [c for c in (d.platform.config.custom_integrations or []) if c.get("id") != iid]
-        customs.append({"id": iid, "name": body.name.strip(), "description": (body.description or "").strip()})
-        d.platform.config.custom_integrations = customs
-        d._persist_config(["custom_integrations"])
+        try:
+            add_hookup(
+                d.platform,
+                name=body.name,
+                base_url=body.base_url,
+                description=body.description or "",
+                auth_secret=sname,
+                persist=d._persist_config,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         return {"id": iid, "added": True}
 
     @app.post("/integrations/{iid}/enable")

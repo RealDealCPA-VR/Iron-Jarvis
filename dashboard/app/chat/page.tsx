@@ -215,8 +215,8 @@ import {
 } from "@/lib/configCards";
 import {
   appConnectIds,
-  appIdOf,
   connectedOf,
+  connectorIdOf,
   continueText,
   taskBefore,
   withAppConnected,
@@ -11540,7 +11540,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // v1.351.0 (G15): an app's token saved here turns that app ON for this
       // chat, so the next message has its tools without the "+" menu. An
       // Undo settles the same card again: that never turns the app back on.
-      const app = next.kind === "secret" && next.saved && !next.undone ? appIdOf(next.name) : "";
+      // A2 review (v1.448.0): a tool server the chat added is a pack like an
+      // app's — its toggle goes on the same way (lib/appConnect.connectorIdOf).
+      const app = next.kind === "secret" && next.saved && !next.undone ? connectorIdOf(next.name) : "";
       if (app) turnOnConnectors([app]);
       // v1.435.0 (D3): an Undo of a "Local only changed" card puts this
       // chat's switch back (the daemon already did), so later saves agree.

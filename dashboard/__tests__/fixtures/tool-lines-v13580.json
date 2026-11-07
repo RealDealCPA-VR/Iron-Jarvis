@@ -376,6 +376,10 @@
       "ok": "read an app's resource",
       "failed": "tried a resource read and it failed"
     },
+    "mcp_server_add": {
+      "ok": "added a tool server",
+      "failed": "tried a tool server addition and it failed"
+    },
     "memory_base_add": {
       "ok": "added a memory base",
       "failed": "tried a memory base addition and it failed"
@@ -679,6 +683,10 @@
     "web_look": {
       "ok": "looked at a web page",
       "failed": "tried a web page look and it failed"
+    },
+    "web_service_add": {
+      "ok": "saved a web service",
+      "failed": "tried a web service addition and it failed"
     },
     "webhook_add": {
       "ok": "added a webhook",

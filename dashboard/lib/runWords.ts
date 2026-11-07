@@ -115,6 +115,9 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   model_server_remove: { did: "Removed a model server", noun: "model server removal" },
   account_add: { did: "Added an account", noun: "account addition" },
   memory_base_add: { did: "Added a memory base", noun: "memory base addition" },
+  // v1.448.0 (Wave A item 4; twin: agents/mission.py).
+  mcp_server_add: { did: "Added a tool server", noun: "tool server addition" },
+  web_service_add: { did: "Saved a web service", noun: "web service addition" },
   code_load: { did: "Opened a saved script", noun: "script read" },
   code_run: { did: "Ran a saved script", noun: "saved script run" },
   code_search: { did: "Searched its saved scripts", noun: "script search", nouns: "script searches" },
