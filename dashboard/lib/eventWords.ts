@@ -26,7 +26,10 @@
  * `safeDetailValue`.
  */
 
+import { friendlyModelName } from "@/lib/friendlyModelName";
 import { providerDisplay } from "@/lib/onboarding";
+import { outcomeWords, statusWords } from "@/lib/statusWords";
+import { maskDetailText } from "@/lib/stepDetail";
 import { toolWords } from "@/lib/toolWords";
 
 /** Plain words for the event types the ledger projects straight into a row's
@@ -198,12 +201,26 @@ export const DETAIL_VALUE_MAX = 80;
 /** A value that is a path (a drive, a slash, a backslash), an id or a key
  *  (a long run of token characters with a digit, or a known key prefix), a
  *  URL, or JSON is NEVER shown on the headline — the payload itself stays
- *  under the row for anyone who wants it. */
+ *  under the row for anyone who wants it.
+ *
+ *  Review (v1.449.0): a run's `task` and a preference's `text` are the
+ *  USER'S OWN WORDS, and this is a CPA firm's PC — "Email bob@firm.com the
+ *  K-1, ssn 123-45-6789" used to reach the Activity headline whole. So a
+ *  value is also DROPPED (never masked and shown half) when the dashboard's
+ *  own mask (lib/stepDetail, the twin of detections.redact) would change it,
+ *  when it carries an "@" (an e-mail, a user:pass@host), nine or more digits
+ *  in a row with separators (an SSN, a card, an EIN, a phone, an account
+ *  number), a JWT, a PEM block, or a credential word with a value after it
+ *  ("password hunter2"). The headline alone is still words. */
 const PATH_RE = /^[A-Za-z]:[\\/]|[\\/]/;
 const TOKEN_RE = /^[A-Za-z0-9_-]{20,}$/;
-const KEY_RE = /\b(?:sk|xai|gsk|hf|ghp|xox[a-z])[-_][A-Za-z0-9]/i;
+const KEY_RE = /\b(?:sk|xai|gsk|hf|ghp|xox[a-z])[-_][A-Za-z0-9]|\b(?:AIza|AQ\.)[A-Za-z0-9_-]{10,}|\b(?:AKIA|ASIA)[0-9A-Z]{12,}|\beyJ[A-Za-z0-9_-]{8,}\.|-----BEGIN /i;
 const ID_RE = /^(?:[a-z]+_)?[0-9a-f]{8,}(?:-[0-9a-f]{4,}){0,4}$/i;
 const URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+/** Nine or more digits, each pair split by at most one space or dash. */
+const NUMBER_RUN_RE = /\d(?:[ -]?\d){8,}/;
+/** A credential word followed by something that could be its value. */
+const CREDENTIAL_WORD_RE = /\b(?:password|passwd|passphrase|secret|token|api[ -]?key|bearer|basic)\b\s*[:=]?\s*\S/i;
 
 export function safeDetailValue(v: unknown): string {
   if (typeof v !== "string") return "";
@@ -212,7 +229,37 @@ export function safeDetailValue(v: unknown): string {
   if (PATH_RE.test(s) || URL_RE.test(s) || KEY_RE.test(s)) return "";
   if (TOKEN_RE.test(s) || ID_RE.test(s)) return "";
   if (s.startsWith("{") || s.startsWith("[")) return "";
+  if (s.includes("@") || NUMBER_RUN_RE.test(s) || CREDENTIAL_WORD_RE.test(s)) return "";
+  if (maskDetailText(s) !== s) return "";
   return s.length > DETAIL_VALUE_MAX ? `${s.slice(0, DETAIL_VALUE_MAX - 1).trimEnd()}…` : s;
+}
+
+/** A provider named for the headline: its plain name, "your model server"
+ *  for the user's own endpoint or a fleet node (the ids `providerDisplay`
+ *  does not know are those — "fleet-custom" is an id, never a word), else
+ *  nothing (review of v1.449.0). */
+export function providerDetail(provider: unknown): string {
+  const p = typeof provider === "string" ? provider.trim() : "";
+  if (!p) return "";
+  const shown = providerDisplay(p);
+  if (shown !== p) return safeDetailValue(shown);
+  if (/^fleet-/.test(p) || p === "custom" || p === "ollama") return "your model server";
+  return "";
+}
+
+/** A model id as the menu says it ("claude-sonnet-4-5-20250929" → "Sonnet
+ *  4.5"); an id the names table does not know is shown only when it passes
+ *  the safe-value check (a long dated id reads as a token and is left out). */
+function modelDetail(model: unknown): string {
+  return typeof model === "string" ? safeDetailValue(friendlyModelName(model)) : "";
+}
+
+/** A work status or ledger verdict in the ONE status vocabulary
+ *  (lib/statusWords: "Part failed", never "completed with failures" — the
+ *  v1.351.0 rule that every surface reads the table). */
+function statusDetail(v: unknown): string {
+  if (typeof v !== "string" || !v.trim()) return "";
+  return safeDetailValue(outcomeWords(v)?.word ?? statusWords(v).word);
 }
 
 /** A webhook refusal's reason, said plainly (daemon/routes/comm.py's
@@ -323,7 +370,7 @@ export function eventDetail(type: string, payload: Record<string, unknown> | nul
     case "workflow.waiting":
       add(pick(p, "workflow"));
       add(pick(p, "step"));
-      if (type === "workflow.completed" || type === "workflow.step_completed") add(words(p.status));
+      if (type === "workflow.completed" || type === "workflow.step_completed") add(statusDetail(p.status));
       break;
     case "reflex.fired":
     case "reflex.failed":
@@ -337,8 +384,8 @@ export function eventDetail(type: string, payload: Record<string, unknown> | nul
     case "provider.failover":
     case "provider.downgraded":
     case "provider.routed":
-      if (typeof p.provider === "string" && p.provider.trim()) add(safeDetailValue(providerDisplay(p.provider)));
-      if (type === "provider.routed") add(pick(p, "model"));
+      add(providerDetail(p.provider));
+      if (type === "provider.routed") add(modelDetail(p.model));
       if (type === "provider.failover") add(words(p.why));
       break;
     case "mcp.pack_failed":
@@ -371,7 +418,7 @@ export function eventDetail(type: string, payload: Record<string, unknown> | nul
     case "chat.turn_finished":
       add(pick(p, "title"));
       if (type === "build.account_limit") add(pick(p, "account_name"));
-      if (type === "build.turn_finished" || type === "chat.turn_finished") add(words(p.outcome));
+      if (type === "build.turn_finished" || type === "chat.turn_finished") add(statusDetail(p.outcome));
       break;
     case "build.rewound":
       add(count(p.turns, "message", "messages"));
@@ -406,10 +453,10 @@ export function eventDetail(type: string, payload: Record<string, unknown> | nul
       add(pick(p, "folder_name"));
       break;
     case "batch.file_done":
-      add(words(p.status));
+      add(statusDetail(p.status));
       break;
     case "computeruse.run_finished":
-      add(words(p.status));
+      add(statusDetail(p.status));
       break;
     case "preference.suggested":
     case "preference.kept":
@@ -422,7 +469,7 @@ export function eventDetail(type: string, payload: Record<string, unknown> | nul
     case "envelope.adapted":
     case "envelope.probe_started":
     case "envelope.probe_completed":
-      add(pick(p, "model"));
+      add(modelDetail(p.model));
       break;
     default:
       break;

@@ -252,6 +252,23 @@ def remote_test_words(name: str, probe: dict[str, Any]) -> dict[str, str]:
         return {}
 
 
+#: What a remote's echoed bearer token reads as in its error text.
+TOKEN_HIDDEN = "[token hidden]"
+
+
+def _without_token(text: str, token: str) -> str:
+    """*text* with the bearer token THIS request carried taken out (review of
+    v1.449.0). A remote that answers 401 with "invalid token <the token>" put
+    the user's own credential into ``detail`` — shown raw on the card before,
+    folded under Details now — and ``failure_words.mask_failure_text`` knows
+    key shapes, not the word the user typed on the card. A token shorter than
+    six characters is left (replacing every "t" would wreck the words; the
+    mask's Bearer rule still covers the header form)."""
+    if not text or not token or len(token) < 6:
+        return text
+    return text.replace(token, TOKEN_HIDDEN)
+
+
 def _door_refusal(record: Any, status: int, body: str) -> str:
     """Plain words for another Iron Jarvis's task door turning a task away
     (v1.357.0, G61), or "" when the remote is not such a door (its old
@@ -633,7 +650,10 @@ class RemoteAgentRegistry:
             snippet = ""
             body_text = ""
             try:
-                body_text = (resp.text or "")[:2000]
+                # Review of v1.449.0: a body that echoes the token we sent is
+                # never carried into ``detail`` (the card, the chat room, the
+                # phone and the log all read it).
+                body_text = _without_token((resp.text or "")[:2000], token)
                 snippet = body_text[:200]
             except Exception:  # noqa: BLE001
                 snippet = ""
