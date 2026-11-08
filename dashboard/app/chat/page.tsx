@@ -12311,7 +12311,16 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   const [homeReadiness, setHomeReadiness] = useState<HomeReadiness | null>(null);
   const homeReadinessAskedRef = useRef(false);
   useEffect(() => {
-    if (!emptyHero || homeReadinessAskedRef.current) return;
+    // v1.455.0 (Wave F, item 12): asked once per EMPTY CHAT, not once per
+    // visit. The "Next:" line keys off a real model having answered, which
+    // happens in the chat this read was made for; a read kept from before the
+    // first answer never showed it. Leaving the empty chat (the first message
+    // went) lets the next new empty chat ask again. Still never polled.
+    if (!emptyHero) {
+      homeReadinessAskedRef.current = false;
+      return;
+    }
+    if (homeReadinessAskedRef.current) return;
     homeReadinessAskedRef.current = true;
     get<unknown>("/onboarding")
       .then((raw) => setHomeReadiness(decodeHomeReadiness(raw)))
