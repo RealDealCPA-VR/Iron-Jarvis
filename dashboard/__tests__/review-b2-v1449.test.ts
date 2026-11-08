@@ -44,6 +44,9 @@ describe("the headline never carries personal data or a credential", () => {
     ["an AWS key in a sentence", "the key AKIAIOSFODNN7EXAMPLE works"],
     ["a Slack token in a sentence", "use xoxb-123-abc for it"],
     ["an Anthropic key in a sentence", "use sk-ant-api03-" + "x".repeat(40) + " for it"],
+    // Caught by the dashboard's own mask alone (no @, no credential word).
+    ["a curl -u user:pass", "run curl -u bob:hunter2 for the sync"],
+    ["a --user user:pass", "sync with --user bob:hunter2 nightly"],
   ])("%s is dropped", (_what, value) => {
     expect(safeDetailValue(value)).toBe("");
   });
