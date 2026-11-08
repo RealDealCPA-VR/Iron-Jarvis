@@ -243,6 +243,31 @@ def saved_fields(fields: list[dict], spec: dict) -> tuple[list[str], dict[str, s
     return saved, values
 
 
+#: v1.455.0 review: a web service's Username / Header box holding its key.
+PLAIN_BOX_HOLDS_KEY = (
+    "That looks like the key itself, and the username or header name is saved in plain text. "
+    "Paste the key only in the Key box, and give the username or the header's name (for example "
+    "X-API-Key) in the other one."
+)
+
+
+def _plain_box_holds_a_key(value: str, key: str) -> bool:
+    """True when a box saved in plain text holds the key (or a piece of it at
+    least 6 characters long) or anything shaped like a credential."""
+    v = str(value or "").strip()
+    k = str(key or "").strip()
+    if not v:
+        return False
+    if k and len(k) >= 6 and (k in v or (len(v) >= 6 and v in k)):
+        return True
+    try:
+        from ...settings.records_tools import _looks_like_a_secret
+
+        return bool(_looks_like_a_secret(v))
+    except Exception:  # noqa: BLE001 — unsure: refuse rather than store a key in the clear
+        return True
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/vault")
@@ -279,15 +304,35 @@ def register(app: FastAPI, d) -> None:
         — the ONE add the chat's ``web_service_add`` goes through too; the
         answers and the stored shape are unchanged byte for byte.
         """
-        from ...integrations.hookups import add_hookup, hookup_id
+        from ...integrations.builtin import auth_problem
+        from ...integrations.hookups import (
+            ADDRESS_REQUIRED,
+            NAME_IN_USE,
+            NAME_REQUIRED,
+            add_hookup,
+            hookup_id,
+        )
 
         iid = hookup_id(body.name)
         if not iid:
-            raise HTTPException(status_code=400, detail="integration name is required")
+            raise HTTPException(status_code=400, detail=NAME_REQUIRED)
         if not (body.base_url or "").strip():
-            raise HTTPException(status_code=400, detail="base URL is required")
+            raise HTTPException(status_code=400, detail=ADDRESS_REQUIRED)
+        # v1.455.0 (Wave H item 31): a key's way of travelling is checked
+        # BEFORE the key is written, so a refused add leaves no vault row.
+        problem = auth_problem(body.auth_kind, body.auth_header, body.auth_user)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+        # v1.455.0 review: the Username and Header boxes are saved in plain
+        # text with the service (they are not the secret). A key pasted into
+        # one of them — the key itself, or anything shaped like a credential —
+        # is refused BEFORE anything is written, in words that never repeat it.
+        kind = str(body.auth_kind or "bearer").strip().lower()
+        plain = (body.auth_user if kind == "basic" else body.auth_header if kind == "header" else "") or ""
+        if plain.strip() and _plain_box_holds_a_key(plain, body.auth_token or ""):
+            raise HTTPException(status_code=400, detail=PLAIN_BOX_HOLDS_KEY)
         if d.platform.integrations.get_spec(iid) is not None:
-            raise HTTPException(status_code=400, detail=f"'{iid}' already exists")
+            raise HTTPException(status_code=400, detail=NAME_IN_USE.format(name=body.name.strip() or iid))
         sname = ""
         if (body.auth_token or "").strip():
             sname = f"integration_{iid}_token"
@@ -300,6 +345,9 @@ def register(app: FastAPI, d) -> None:
                 description=body.description or "",
                 auth_secret=sname,
                 persist=d._persist_config,
+                auth_kind=body.auth_kind,
+                auth_header=body.auth_header,
+                auth_user=body.auth_user,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))

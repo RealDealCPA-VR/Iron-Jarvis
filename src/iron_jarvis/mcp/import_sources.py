@@ -15,7 +15,10 @@ Windsurf's ``~/.codeium/windsurf/mcp_config.json``, Gemini CLI's
 ``~/.gemini/settings.json`` and the servers of the Claude Code PLUGINS the
 user installed (``<Claude config>/plugins/installed_plugins.json`` → each
 plugin's ``.mcp.json`` and its manifest's ``mcpServers``). A project-only
-source is listed only while a project is active. A server an app has
+source is listed only while a project is active — since v1.455.0 (readiness
+Wave H item 29), with no project active, for the LAST WORKING FOLDER (the
+newest coding session's folder, :func:`last_working_folder`; a folder-first
+user has no project), labelled by that folder's name. A server an app has
 switched off arrives with ``disabled`` set (see ``PackSpec.disabled``).
 
 Wave C (item 30): the four coding tools Build › Code drives too, each file
@@ -43,6 +46,7 @@ turn into preview rows; :func:`read_source` is the apply door's half.
 
 from __future__ import annotations
 
+import contextvars
 import os
 import sys
 from dataclasses import dataclass, field
@@ -145,6 +149,94 @@ def active_project_root(platform: Any) -> str:
         return ""
 
 
+# (v1.455.0 review: the share check :func:`last_working_folder` calls is the
+# module's ONE ``_network_spelling`` further down — a second copy here was
+# shadowed by it and never ran.)
+
+
+def last_working_folder(platform: Any, *, for_model: bool = False) -> str:
+    """v1.455.0 (readiness Wave H item 29): the folder the user last WORKED in,
+    as far as the daemon knows — the folder of the newest coding session
+    (Chat › Code or Build › Code, not archived; ``projects.coding_sessions``,
+    the rows each view's own list reads). The dashboard's own "last folder"
+    (Build's ``ij.build.folder``, the chat's sticky workspace) lives in the
+    browser and never reaches the daemon, so the coding sessions are the one
+    record the daemon has of where a folder-first user works. A session with
+    no folder of its own (a Chat › Code session started with none) is
+    skipped; a network or device spelling answers ``""`` by its text. Never
+    raises; ``""`` when there is none.
+
+    v1.455.0 review: ``for_model`` — the reading goes to a MODEL (the chat's
+    ``app_import`` / its list of other apps' servers). A Local only coding
+    session, or a Build › Code session on a tool that may answer on this
+    network (Pi, OpenCode), is then withheld unless the turn itself stays on
+    this network (``egress.may_recall_local_only_chats`` — the recent-activity
+    rule): its folder's name and servers are a client's, and the model may be
+    a cloud one. A withheld newest session answers ``""`` (never an older
+    folder in its place). The dashboard's own screen (nothing leaves this PC)
+    passes nothing and reads every session."""
+    try:
+        engine = getattr(platform, "engine", None)
+        if engine is None:
+            return ""
+        from ..projects.coding_sessions import read_rows
+
+        _projects, rows = read_rows(engine, scan=5)
+        newest = None
+        for row in rows:
+            folder = str(row.get("folder") or "").strip()
+            if not folder:
+                continue
+            stamp = row.get("updated")
+            if newest is None or (stamp is not None and (newest[0] is None or stamp > newest[0])):
+                newest = (stamp, folder, row)
+        if newest is None or _network_spelling(newest[1]):
+            return ""
+        if for_model and (newest[2].get("local_only") or newest[2].get("_may_stay_local")):
+            from ..providers.egress import may_recall_local_only_chats
+
+            if not may_recall_local_only_chats():
+                return ""
+        return newest[1]
+    except Exception:  # noqa: BLE001 — a scan never raises
+        return ""
+
+
+def working_root(platform: Any, *, for_model: bool = False) -> tuple[str, str]:
+    """``(folder, kind)`` for the "this project" sources: the active project's
+    folder (kind ``"project"``, unchanged since v1.354.0), else the last
+    working folder (kind ``"folder"``, :func:`last_working_folder`), else
+    ``("", "")``. Never raises. Inside one :func:`scan` the answer is read
+    ONCE (``_SCAN_ROOT``) — every project source asks."""
+    held = _SCAN_ROOT.get()
+    if held is not None:
+        return held
+    root = active_project_root(platform)
+    if root:
+        return root, "project"
+    folder = last_working_folder(platform, for_model=for_model)
+    return (folder, "folder") if folder else ("", "")
+
+
+#: One scan's working root, read once (set by :func:`scan` / :func:`read_source`).
+_SCAN_ROOT: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar(
+    "import_scan_root", default=None
+)
+
+
+#: The label suffix of a project source read from the last working folder
+#: instead of an active project ("Cursor (this project)" → "Cursor (folder
+#: ClosePilot)"), so the row names the folder it read.
+PROJECT_SUFFIX = " (this project)"
+
+
+def _folder_label(label: str, folder: str) -> str:
+    name = Path(folder).name or folder
+    if label.endswith(PROJECT_SUFFIX):
+        return f"{label[: -len(PROJECT_SUFFIX)]} (folder {name})"
+    return f"{label} (folder {name})"
+
+
 # --------------------------------------------------------------------------- #
 # The sources
 # --------------------------------------------------------------------------- #
@@ -174,10 +266,11 @@ def _p(path: Path | None, *parts: str) -> Path | None:
 
 
 def _in_project(*parts: str) -> Callable[[Any], Path | None]:
-    """A resolver for a file inside the active project's folder."""
+    """A resolver for a file inside the active project's folder — else, with
+    no project active, the last working folder (v1.455.0, :func:`working_root`)."""
 
     def _resolve(platform: Any) -> Path | None:
-        root = active_project_root(platform)
+        root, _kind = working_root(platform)
         return Path(root).joinpath(*parts) if root else None
 
     return _resolve
@@ -277,7 +370,7 @@ def _opencode_project_files(root: Path) -> list[Path]:
 
 
 def _opencode_project(platform: Any) -> Path | None:
-    root = active_project_root(platform)
+    root, _kind = working_root(platform)
     return _first_existing(_opencode_project_files(Path(root))) if root else None
 
 
@@ -675,12 +768,22 @@ def _resolve(defn: SourceDef, platform: Any) -> str:
         return ""
 
 
+def _label(defn: SourceDef, platform: Any) -> str:
+    """The row's words: a project source read from the last working folder
+    (no project active) names that folder, never "this project"."""
+    if not defn.project:
+        return defn.label
+    folder, kind = working_root(platform)
+    return _folder_label(defn.label, folder) if kind == "folder" else defn.label
+
+
 def _scan_one(defn: SourceDef, platform: Any) -> SourceScan:
     origin = _resolve(defn, platform)
+    label = _label(defn, platform)
     if not origin:
         # No such place on this machine (no APPDATA, no home): an unreadable
         # row with nothing to say, like a missing file.
-        return SourceScan(source=defn.source, label=defn.label, origin="")
+        return SourceScan(source=defn.source, label=label, origin="")
     try:
         if defn.read is not None:
             specs, readable, note = defn.read(Path(origin))
@@ -692,7 +795,7 @@ def _scan_one(defn: SourceDef, platform: Any) -> SourceScan:
     # ONLY listed us reads as readable and empty, which is the truth.
     return SourceScan(
         source=defn.source,
-        label=defn.label,
+        label=label,
         origin=origin,
         readable=bool(readable),
         note=str(note or "").splitlines()[0] if note else "",
@@ -700,11 +803,20 @@ def _scan_one(defn: SourceDef, platform: Any) -> SourceScan:
     )
 
 
-def scan(platform: Any) -> list[SourceScan]:
+def scan(platform: Any, *, for_model: bool = False) -> list[SourceScan]:
     """Read every known source READ-ONLY. One :class:`SourceScan` per
     :data:`KNOWN_SOURCES` entry, in that order; a project row is left out
     when no project is active (there is no file to name). Never raises."""
     out: list[SourceScan] = []
+    # ``for_model`` (v1.455.0 review): see :func:`last_working_folder`.
+    token = _SCAN_ROOT.set(working_root(platform, for_model=for_model))
+    try:
+        return _scan_all(platform, out)
+    finally:
+        _SCAN_ROOT.reset(token)
+
+
+def _scan_all(platform: Any, out: list[SourceScan]) -> list[SourceScan]:
     for defn in KNOWN_SOURCES:
         try:
             item = _scan_one(defn, platform)
@@ -716,7 +828,7 @@ def scan(platform: Any) -> list[SourceScan]:
     return out
 
 
-def read_source(platform: Any, source: str) -> SourceScan | None:
+def read_source(platform: Any, source: str, *, for_model: bool = False) -> SourceScan | None:
     """The apply door's half: re-read ONE known source by its ``source`` key
     (the key a scan row carried). An unknown key answers ``None`` — a
     request can only name a file this module already knows how to find,
@@ -726,8 +838,13 @@ def read_source(platform: Any, source: str) -> SourceScan | None:
         return None
     for defn in KNOWN_SOURCES:
         if defn.source == key:
+            # One working root for the resolver AND the label (v1.455.0
+            # review), withheld from a model as :func:`scan` does.
+            token = _SCAN_ROOT.set(working_root(platform, for_model=for_model))
             try:
                 return _scan_one(defn, platform)
             except Exception:  # noqa: BLE001
                 return SourceScan(source=defn.source, label=defn.label, origin="")
+            finally:
+                _SCAN_ROOT.reset(token)
     return None

@@ -89,6 +89,20 @@ def _lan_access_label() -> str:
     return schema.get(LAN_ACCESS_KEY).label
 
 
+#: v1.455.0 (readiness Wave H item 31): the step Windows itself adds once
+#: the setting is on — its firewall asks the first time Iron Jarvis listens
+#: on the network, and a dismissed prompt blocks other computers silently
+#: (the Host guard says "allowed" and nothing arrives). Said in every note a
+#: door gives while it is not reachable yet; the dashboard's twin is
+#: ``lib/anotherJarvis.FIREWALL_PLACE``.
+FIREWALL_PLACE = "Windows Security › Firewall & network protection › Allow an app through firewall"
+FIREWALL_NOTE = (
+    "The first time Iron Jarvis starts with the setting on, Windows may ask whether it may use your "
+    "network: choose Allow. If that question was dismissed, allow Iron Jarvis in "
+    f"{FIREWALL_PLACE}."
+)
+
+
 def reachability(url: str, *, who: str, instead: str, lan_access: bool = False) -> dict[str, Any]:
     """Whether THIS Iron Jarvis would even accept a request addressed to
     ``url``'s host, and what it takes if not — ``{host_allowed, note}``.
@@ -136,14 +150,14 @@ def reachability(url: str, *, who: str, instead: str, lan_access: bool = False) 
                 # the plain quit-and-reopen.
                 f"takes effect when Iron Jarvis restarts: press “Restart Iron Jarvis” in "
                 f"Settings › System › Maintenance, or quit Iron Jarvis and open it again. "
-                f"If it still cannot be reached after that, this computer has "
+                f"{FIREWALL_NOTE} If it still cannot be reached after that, this computer has "
                 f"no address on your network that the setting can use. {tunnel}"
             )
         else:
             note = (
                 f"Iron Jarvis on this computer accepts requests from this computer only, "
                 f"so {who} cannot reach it yet. To allow it, turn on {setting} and restart "
-                f"Iron Jarvis. Every request still needs its token. {tunnel}"
+                f"Iron Jarvis. {FIREWALL_NOTE} Every request still needs its token. {tunnel}"
             )
     return {"host_allowed": allowed, "note": note}
 

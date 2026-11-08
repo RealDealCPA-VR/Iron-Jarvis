@@ -103,7 +103,10 @@ def test_the_node_link_is_the_daemons_own_address():
 
 def test_the_microsoft_365_card_links_its_admin_steps_and_names_its_github_link():
     directory = _src(DASH / "components" / "settings" / "pages" / "DirectoryPage.tsx")
-    assert "ADMIN_GUIDES[c.id]" in directory
+    # v1.455.0 (Wave H item 27, moved on purpose): one table holds the admin
+    # steps AND the four own-app guides; ADMIN_GUIDES is spread into it.
+    assert "SETUP_GUIDES[c.id]" in directory
+    assert "...ADMIN_GUIDES," in _src(DASH / "lib" / "directoryLinks.ts")
     assert "docsLinkLabel(c.docs_url)" in directory
     ts = _src(DASH / "lib" / "directoryLinks.ts")
     assert "microsoft_365:" in ts and '"How your admin sets this up"' in ts

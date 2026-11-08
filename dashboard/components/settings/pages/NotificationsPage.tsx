@@ -33,6 +33,7 @@ import {
   ConfirmButton,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
+import { AllConnectionsLink } from "@/components/connections/AllConnectionsLink";
 import { timeAgo } from "@/lib/format";
 import { PageShell, Reveal } from "@/components/motion";
 import { ChooserTiles } from "@/components/ChooserTiles";
@@ -661,6 +662,8 @@ export default function ChannelsPage() {
             </button>
           }
         />
+        {/* v1.455.0 (Wave H item 35): the one connections front door. */}
+        <AllConnectionsLink testId="notifications-all-connections" />
       </Reveal>
       {offline && (
         <Reveal>

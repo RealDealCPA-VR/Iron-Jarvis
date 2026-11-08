@@ -50,11 +50,12 @@ import {
   packSwitchTitle,
   savedWhileOff,
   switchedNote,
+  chatHintWords,
   type SwitchAnswer,
 } from "@/lib/extensionWords";
 import { attentionWords, cardHealth, healthCounts, keySaveNote } from "@/lib/directoryHealth";
 import { OAuthAppForm } from "@/components/connections/OAuthAppForm";
-import { ADMIN_GUIDES, docsLinkLabel, runtimeDownload, runtimeLinkInError } from "@/lib/directoryLinks";
+import { SETUP_GUIDES, docsLinkLabel, runtimeDownload, runtimeLinkInError } from "@/lib/directoryLinks";
 import { fillInFirst } from "@/lib/whyDisabled";
 import { DisabledNote } from "@/components/DisabledNote";
 
@@ -834,7 +835,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               (it was only a tooltip on the page's Back to chat door). */}
           {c.connect_via === "mcp" && healthy && (
             <p data-testid={`connector-chat-hint-${c.id}`} className="text-[11px] text-zinc-500">
-              Turn it on in a chat with Tools › Connections
+              {chatHintWords(c.id)}
             </p>
           )}
           {/* v1.356.0 (G60): an app that signs in on this PC (Microsoft 365):
@@ -886,13 +887,13 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
       {/* v1.449.0 (readiness Wave C, item 23): the admin's steps are one
           press from the card (the Handbook section the chat's page steps
           open too), BEFORE the program's own page. */}
-      {ADMIN_GUIDES[c.id] && (
+      {SETUP_GUIDES[c.id] && (
         <Link
-          href={ADMIN_GUIDES[c.id].href}
+          href={SETUP_GUIDES[c.id].href}
           data-testid={`connector-admin-guide-${c.id}`}
           className="inline-flex w-fit items-center gap-1 text-[11px] text-accent-soft underline-offset-2 hover:underline"
         >
-          {ADMIN_GUIDES[c.id].label} <ArrowRight size={11} aria-hidden="true" />
+          {SETUP_GUIDES[c.id].label} <ArrowRight size={11} aria-hidden="true" />
         </Link>
       )}
 
@@ -1354,6 +1355,12 @@ function isBuiltInExtra(c: Pick<Connector, "built_in">): boolean {
 
 /** v1.353.0 (G42): the other doors, so this page is the one place to start. */
 const MORE_WAYS: readonly { label: string; href: string; title: string }[] = [
+  {
+    // v1.455.0 (Wave H item 35): the one connections front door.
+    label: "All your connections",
+    href: "/connections?tab=discover",
+    title: "Discover, see what is connected, and import from your other programs",
+  },
   {
     label: "An agent on another computer",
     href: "/agents?view=team",

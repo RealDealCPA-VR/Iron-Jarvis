@@ -40,6 +40,7 @@ import { ThemeMaker } from "@/components/ThemeMaker";
 import { SettingRow, type SchemaSetting } from "@/components/settings/SettingRow";
 import { LedgerPanel } from "@/components/settings/LedgerPanel";
 import { AccessSummary } from "@/components/settings/AccessSummary";
+import { ConnectionsHome } from "@/components/settings/ConnectionsHome";
 import { settingsRowLabel } from "@/lib/settingsRows";
 import { SETTINGS_HASH, SETTINGS_OPEN_EVENT, type SettingsTarget } from "@/lib/settingsOpen";
 
@@ -278,6 +279,12 @@ function readSection(): { section: string; focus: string } {
     const p = new URLSearchParams(window.location.search);
     let section = p.get("section") || "";
     if (!section && window.location.hash === "#appearance") section = "appearance";
+    // v1.455.0 (Wave H item 35): `/connections?tab=<tab>` (the landing's
+    // address, lib/connectionsHome) opens the Connections GROUP — the
+    // landing at its top — never the accounts section the alias names.
+    if (section.startsWith("connections") && /^(discover|connected|import)$/.test(p.get("tab") || "")) {
+      section = "connections";
+    }
     let focus = p.get("focus") || "";
     // Wave D item 32: `#settings-<key>` names a row too (lib/settingsOpen
     // reads the same form).
@@ -641,6 +648,10 @@ export function SettingsHome() {
           {!q && active === "permissions" && groups !== null && (
             <AccessSummary values={original} defs={defs} onGo={goTo} />
           )}
+          {/* v1.455.0 (readiness Wave H, the owner's decision on item 35): the
+              ONE front door for connections — Discover / Connected / Import —
+              above the group's own sections, which it opens in place. */}
+          {!q && active === "connections" && <ConnectionsHome onGo={goTo} />}
           {q && shown.length === 0 && subsShown.length === 0 && !themeCard && (
             <p className="text-[13px] text-zinc-400">Nothing matches “{q}”. Ctrl K also searches pages and chats.</p>
           )}

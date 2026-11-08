@@ -135,7 +135,10 @@ def test_the_gmail_line_is_what_its_card_and_app_connect_really_do():
     gmail = get_connector("gmail")
     assert gmail.connect_via == "mcp" and "Google developer setup" in gmail.needs and gmail.docs_url
     line = _line("gmail_setup")
-    assert P.DIRECTORY_PLACE in line and "program's own page on GitHub" in line and "one-time Google developer setup" in line
+    # v1.455.0 (Wave H item 27, moved on purpose): the card links Help's own
+    # steps ("Step-by-step setup"), never a "Docs" link the card no longer has.
+    assert P.DIRECTORY_PLACE in line and "Step-by-step setup" in line and "one-time Google developer setup" in line
+    assert "Docs link" not in line
     # app_connect says it did not start while the setup is missing (its own
     # words, settings.records), so the line may say the tools are not there.
     src = _read("src/iron_jarvis/settings/records.py")

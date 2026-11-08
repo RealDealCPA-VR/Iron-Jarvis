@@ -151,7 +151,7 @@ class GuideReadTool(Tool):
     description = (
         "Read the full text of one reference section — pass the exact label "
         "guide_search returned (e.g. 'The Handbook › Automation') — or a whole "
-        "doc by slug (handbook, changelog, recommended-settings, local-models, "
+        "doc by slug (handbook, changelog, recommended-settings, local-models, own-apps, "
         "reflex, computer-use, readme, vocabulary). Quote from "
         "it rather than paraphrasing a setting or a hotkey from memory."
     )

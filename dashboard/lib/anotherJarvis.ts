@@ -74,8 +74,14 @@ export const LAN_SETTING_LINK = "Open the setting";
  *  daemon's Host-guard verdict). It cannot see Windows Firewall, so it never
  *  claims more than that, and says where to look if one still cannot get
  *  through (v1.358.0 review). */
+/** v1.455.0 (readiness Wave H item 31): where Windows keeps the switch its
+ *  firewall prompt sets — the daemon's `routes/agents.FIREWALL_PLACE`, pinned
+ *  equal by tests/test_wave_h_connections_v1455.py. */
+export const FIREWALL_PLACE = "Windows Security › Firewall & network protection › Allow an app through firewall";
+
 export const REACHABLE_LINE =
-  "Iron Jarvis accepts requests at this address from your network. If another computer still cannot reach it, allow Iron Jarvis in Windows Firewall.";
+  "Iron Jarvis accepts requests at this address from your network. If another computer still cannot reach it, " +
+  `Windows Firewall is blocking it: allow Iron Jarvis in ${FIREWALL_PLACE}.`;
 
 /** The card's title — the Agents › Your team tile. */
 export const CARD_TITLE = "Another computer running Jarvis";

@@ -42,7 +42,20 @@ async function readSources(): Promise<ImportSource[]> {
   }
 }
 
-export function ImportToolsOffer() {
+/**
+ * v1.455.0 (readiness Wave H item 29): the chat home's apps line carries the
+ * same offer (`testPrefix="home-apps-import"`, `centered`), so a user who
+ * set up tools elsewhere is told on the first screen, not only in the
+ * checklist. The scan now also reads the LAST WORKING FOLDER's own files
+ * (`.mcp.json`, `.cursor/`, `.vscode/`…) when no project is active.
+ */
+export function ImportToolsOffer({
+  testPrefix = "first-run-import",
+  centered = false,
+}: {
+  testPrefix?: string;
+  centered?: boolean;
+} = {}) {
   const [sources, setSources] = useState<ImportSource[] | null>(null);
   const [open, setOpen] = useState(false);
 
@@ -59,17 +72,17 @@ export function ImportToolsOffer() {
   const found = useMemo(() => discover(sources), [sources]);
   if (!sources || found.fresh === 0) return null;
   return (
-    <div data-testid="first-run-import" className="mt-2 space-y-2">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+    <div data-testid={testPrefix} className="mt-2 space-y-2">
+      <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-xs${centered ? " justify-center" : ""}`}>
         <FolderInput size={13} className="shrink-0 text-accent-soft" aria-hidden="true" />
-        <span data-testid="first-run-import-line" className="text-zinc-300">
+        <span data-testid={`${testPrefix}-line`} className="text-zinc-300">
           {discoveryLine(found)}
         </span>
         <button
           type="button"
-          data-testid="first-run-import-open"
+          data-testid={`${testPrefix}-open`}
           aria-expanded={open}
-          aria-controls={open ? "first-run-import-door" : undefined}
+          aria-controls={open ? `${testPrefix}-door` : undefined}
           onClick={() => setOpen((v) => !v)}
           className="rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
         >
@@ -77,7 +90,7 @@ export function ImportToolsOffer() {
         </button>
       </div>
       {open && (
-        <div id="first-run-import-door">
+        <div id={`${testPrefix}-door`} className={centered ? "text-left" : undefined}>
           <SourcesDoor sources={sources} onAdded={() => void readSources().then(setSources)} />
         </div>
       )}

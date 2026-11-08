@@ -227,6 +227,15 @@ function IntegrationCard({
 /*  Add a custom REST integration                                              */
 /* -------------------------------------------------------------------------- */
 
+/** v1.455.0 (Wave H item 31): the daemon's `integrations/builtin.AUTH_KINDS`
+ *  (pinned equal by tests/test_wave_h_connections_v1455.py). */
+export type KeyIn = "bearer" | "header" | "basic";
+export const KEY_IN_CHOICES: ReadonlyArray<{ value: KeyIn; label: string }> = [
+  { value: "bearer", label: "As a bearer token" },
+  { value: "header", label: "In a header the service names" },
+  { value: "basic", label: "As a username and password" },
+];
+
 function AddIntegrationForm({
   onCancel,
   onAdded,
@@ -238,6 +247,12 @@ function AddIntegrationForm({
   const [baseUrl, setBaseUrl] = useState("");
   const [description, setDescription] = useState("");
   const [token, setToken] = useState("");
+  // v1.455.0 (readiness Wave H item 31): how calls carry the key — a bearer
+  // token (the default, and every service saved before), a header the
+  // service names, or a username and password sign-in.
+  const [keyIn, setKeyIn] = useState<KeyIn>("bearer");
+  const [header, setHeader] = useState("");
+  const [user, setUser] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -261,9 +276,23 @@ function AddIntegrationForm({
         base_url: string;
         description?: string;
         auth_token?: string;
+        auth_kind?: KeyIn;
+        auth_header?: string;
+        auth_user?: string;
       } = { name: name.trim(), base_url: baseUrl.trim() };
       if (description.trim()) body.description = description.trim();
-      if (token.trim()) body.auth_token = token.trim();
+      if (token.trim()) {
+        body.auth_token = token.trim();
+        // The way only rides with a key (no key = nothing travels); bearer is
+        // the daemon's default, so an unchanged form sends what it always did.
+        if (keyIn === "header") {
+          body.auth_kind = "header";
+          body.auth_header = header.trim();
+        } else if (keyIn === "basic") {
+          body.auth_kind = "basic";
+          body.auth_user = user.trim();
+        }
+      }
       await post("/integrations", body);
       // Success: hand the name up so the page can note it, reload and close.
       onAdded(name.trim());
@@ -355,9 +384,65 @@ function AddIntegrationForm({
             className="field font-mono text-sm"
           />
           <p className="text-[11px] leading-relaxed text-zinc-500">
-            Sent as a Bearer token and stored encrypted in the vault; leave blank for public APIs.
+            Kept encrypted on this PC and never shown again; leave blank for public APIs.
           </p>
         </div>
+
+        {token.trim() !== "" && (
+          <div data-testid="add-integ-key-in" className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <label htmlFor="add-integ-key-in" className="block text-[12px] font-medium text-zinc-400">
+                How the key is sent
+              </label>
+              <select
+                id="add-integ-key-in"
+                value={keyIn}
+                onChange={(e) => setKeyIn(e.target.value as KeyIn)}
+                className="field text-sm"
+              >
+                {KEY_IN_CHOICES.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {keyIn === "header" && (
+              <div className="space-y-1.5">
+                <label htmlFor="add-integ-header" className="block text-[12px] font-medium text-zinc-400">
+                  Header name
+                </label>
+                <input
+                  id="add-integ-header"
+                  type="text"
+                  value={header}
+                  onChange={(e) => setHeader(e.target.value)}
+                  placeholder="X-API-Key"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="field font-mono text-sm"
+                />
+              </div>
+            )}
+            {keyIn === "basic" && (
+              <div className="space-y-1.5">
+                <label htmlFor="add-integ-user" className="block text-[12px] font-medium text-zinc-400">
+                  Username
+                </label>
+                <input
+                  id="add-integ-user"
+                  type="text"
+                  value={user}
+                  onChange={(e) => setUser(e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="field text-sm"
+                />
+                <p className="text-[11px] leading-relaxed text-zinc-500">The key above is the password.</p>
+              </div>
+            )}
+          </div>
+        )}
 
         {error && <ErrorNote>{error}</ErrorNote>}
 

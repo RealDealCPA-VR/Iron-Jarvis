@@ -20,7 +20,8 @@
  */
 
 import { useState } from "react";
-import { Check, Copy, ExternalLink } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, Check, Copy, ExternalLink } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { copyPlain } from "@/components/settings/MaintenanceTools";
 // The calm secondary action (review: no hand-rolled bordered button on Connections).
@@ -32,6 +33,7 @@ import {
   oauthRedirectAddress,
   vendorConsoleSentence,
 } from "@/lib/oauthApp";
+import { OWN_APP_GUIDE_LABEL, ownAppGuideHref } from "@/lib/directoryLinks";
 
 export const OAUTH_APP_SAVED = "Saved. Press Connect to sign in.";
 export const OAUTH_APP_NEEDS_ID = "Paste the app’s ID first. The secret alone can’t sign in.";
@@ -109,7 +111,9 @@ export function OAuthAppForm({
     >
       <p data-testid={`${testId}-step`}>{vendorConsoleSentence(provider, appName)}</p>
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[11px] text-zinc-500">Redirect address to allow:</span>
+        <span className="text-[11px] text-zinc-500">
+          {console_ && !console_.redirectBox ? "Redirect address (nothing to paste for Google):" : "Redirect address to allow:"}
+        </span>
         <code
           data-testid={`${testId}-redirect`}
           className="break-all rounded bg-ink-900/80 px-1.5 py-0.5 font-mono text-[11px] text-zinc-200"
@@ -163,6 +167,17 @@ export function OAuthAppForm({
         >
           {busy ? "Saving…" : "Save app details"}
         </button>
+        {/* v1.455.0 (Wave H item 27): the whole walk-through — consent
+            screen, test users, the API switch — one press from the boxes. */}
+        {ownAppGuideHref(provider) && (
+          <Link
+            href={ownAppGuideHref(provider)}
+            data-testid={`${testId}-guide`}
+            className="inline-flex items-center gap-1 text-[11px] text-accent-soft underline-offset-2 hover:underline"
+          >
+            {OWN_APP_GUIDE_LABEL} <ArrowRight size={11} aria-hidden="true" />
+          </Link>
+        )}
         {console_ && (
           <a
             href={console_.url}

@@ -314,7 +314,9 @@ describe("G42: the Directory is one Connections home", () => {
       .getAllByRole("link")
       .map((a) => a.getAttribute("href"));
     // v1.354.0 integrate (on purpose): straight to the Tools page's add area.
-    expect(hrefs).toEqual(["/agents?view=team", "/fleet", "/tools?focus=add"]);
+    // v1.455.0 (Wave H item 35, moved on purpose): the one connections front
+    // door leads, through the old /connections alias (never /settings?section=).
+    expect(hrefs).toEqual(["/connections?tab=discover", "/agents?view=team", "/fleet", "/tools?focus=add"]);
     expect(within(more).getByRole("link", { name: /Add a tool by config \(advanced\)/ })).toBeTruthy();
   });
 

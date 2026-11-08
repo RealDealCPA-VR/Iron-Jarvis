@@ -319,27 +319,20 @@ describe("the mission receipt after a failover", () => {
 
 /* ------------------------------------------------------------------ 4 */
 
+// v1.455.0 (readiness Wave H item 31, moved on purpose): the Model servers
+// page's own add form is retired for the ONE form on Settings › Connections;
+// that form now carries the review's rule — the key is on the server BEFORE
+// it is detected again (pinned in tests/test_wave_h_connections_v1455.py and
+// wave-h-connections-rows-v1455.test.tsx). Here: the page links there.
 describe("the Fleet key", () => {
-  it("saves the key under the Connections form's name, wires it, then re-detects with it", async () => {
+  it("lives on the one form now: the Model servers page links to it", async () => {
     H.gets["/fleet"] = { nodes: [] };
     H.gets["/fleet/usage"] = {};
-    H.answers["/fleet/probe"] = { kind: "unknown", snapshot: null, children: [], error: "asked for a key" };
-    H.answers["/fleet/nodes"] = { node: { id: "gw" } };
     window.history.replaceState({}, "", "/fleet");
     render(<FleetPage />);
-    const url = await screen.findByPlaceholderText(/http/);
-    fireEvent.change(url, { target: { value: "http://gw.lan:4000" } });
-    fireEvent.change(screen.getByTestId("fleet-add-key"), { target: { value: "sk-master-0123456789" } });
-    fireEvent.submit(url.closest("form") as HTMLFormElement);
-    await waitFor(() => expect(H.posts.some((p) => p.path === "/fleet/nodes/gw/detect")).toBe(true));
-    const secret = H.posts.find((p) => p.path === "/secrets");
-    expect(secret?.body.name).toBe("endpoint_gw_key");
-    expect(H.patches.find((p) => p.path === "/fleet/nodes/gw")?.body).toEqual({ api_key_name: "endpoint_gw_key" });
-    // order: the key is on the node BEFORE detection asks with it
-    const detectAt = H.posts.findIndex((p) => p.path === "/fleet/nodes/gw/detect");
-    expect(detectAt).toBeGreaterThan(H.posts.findIndex((p) => p.path === "/secrets"));
-    // the key never rides the node itself
-    expect(JSON.stringify(H.posts.find((p) => p.path === "/fleet/nodes")?.body)).not.toContain("sk-master");
+    const link = await screen.findByTestId("fleet-add-link");
+    expect(link.querySelector("a")?.getAttribute("href")).toBe("/connections?focus=endpoints");
+    expect(screen.queryByTestId("fleet-add-key")).toBeNull();
   });
 });
 

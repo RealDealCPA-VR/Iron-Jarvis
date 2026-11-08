@@ -15,6 +15,8 @@ and serve as offline test fixtures:
 
 from __future__ import annotations
 
+import base64
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -109,16 +111,14 @@ class RestApiIntegration(Integration):
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "detail": f"refused unsafe base_url: {exc}"}
 
-        headers: dict[str, str] = {}
         auth_secret = self.config.get("auth_secret")
         token = self.secret(auth_secret) if auth_secret else None
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        headers, hidden = auth_headers(self.config, token)
 
         try:
             result = self._http_get()(base_url, headers=headers)
         except Exception as exc:
-            return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
+            return {"ok": False, "detail": scrub_values(f"{type(exc).__name__}: {exc}", hidden)}
 
         ok = bool(result.get("ok"))
         status = result.get("status_code")
@@ -178,14 +178,11 @@ class RestApiIntegration(Integration):
 
         auth_secret = self.config.get("auth_secret")
         token = self.secret(auth_secret) if auth_secret else None
-        headers: dict[str, str] = {"Accept": "application/json, text/plain;q=0.9, */*;q=0.5"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        auth, hidden = auth_headers(self.config, token)
+        headers: dict[str, str] = {"Accept": "application/json, text/plain;q=0.9, */*;q=0.5", **auth}
 
         def scrub(text: str) -> str:
-            # A key is never shorter than this; a one-letter "key" replaced
-            # everywhere would scramble the answer instead of hiding anything.
-            return text.replace(token, "[hidden]") if token and len(token) >= 6 else text
+            return scrub_values(text, hidden)
 
         import time
 
@@ -237,6 +234,84 @@ class RestApiIntegration(Integration):
     def capabilities(self) -> list[str]:
         # v1.357.0 (G84): ``rest.call`` — :meth:`call`, the rest_call tool.
         return ["rest.get", "rest.call"]
+
+
+# --- how a hookup's key is sent (v1.455.0, readiness Wave H item 31) --------
+
+#: How a saved web service's key travels. ``bearer`` (the default, and every
+#: hookup saved before v1.455.0): ``Authorization: Bearer <key>``. ``header``:
+#: the key as the value of a header the service names (``X-API-Key: <key>``).
+#: ``basic``: HTTP basic sign-in, ``Authorization: Basic base64(user:key)`` —
+#: the username is stored in the hookup's config (it is not the secret), the
+#: KEY (the password) only in the vault. A key never rides a tool argument,
+#: the ledger or config.toml (the record tools' rule).
+AUTH_KINDS: tuple[str, ...] = ("bearer", "header", "basic")
+
+#: A header name a key may be sent in: a plain token, never one that changes
+#: how the request itself is read (a key in the address header or the length
+#: header would break or redirect the call).
+_HEADER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
+_RESERVED_HEADERS = frozenset({
+    "host", "content-length", "content-type", "transfer-encoding", "connection",
+    "accept", "accept-encoding", "cookie", "te", "upgrade", "expect", "proxy-authorization",
+})
+
+
+def auth_problem(kind: str, header: str = "", user: str = "") -> str:
+    """One plain sentence when a key's way of travelling cannot be used, else
+    ``""`` (the add door and the chat card both ask)."""
+    k = str(kind or "bearer").strip().lower()
+    if k not in AUTH_KINDS:
+        return "Choose how the key is sent: as a bearer token, in a header, or as a username and password."
+    if k == "header":
+        name = str(header or "").strip()
+        if not name:
+            return "Name the header the service reads its key from (for example X-API-Key)."
+        if not _HEADER_NAME.match(name) or name.lower() in _RESERVED_HEADERS:
+            return (
+                f"“{name[:40]}” can’t carry a key: use the header name the service’s own page gives "
+                "(letters, digits and dashes, for example X-API-Key)."
+            )
+    if k == "basic":
+        name = str(user or "")
+        if not name.strip():
+            return "Give the username the service signs in with (the password is pasted on its own)."
+        if ":" in name or any(ord(ch) < 32 for ch in name) or len(name) > 200:
+            return "That username can’t be used for a sign-in: it may not hold a colon or a line break."
+    return ""
+
+
+def auth_headers(config: dict[str, Any], token: str | None) -> tuple[dict[str, str], list[str]]:
+    """``(headers, values to hide)`` for one request. No key = no header. The
+    values to hide are every form of the key that could come back in an
+    answer or an error (the key itself and a basic sign-in's encoded form)."""
+    if not token:
+        return {}, []
+    kind = str((config or {}).get("auth_kind") or "bearer").strip().lower()
+    hidden = [token]
+    if kind == "header":
+        name = str((config or {}).get("auth_header") or "").strip()
+        if auth_problem("header", name):
+            return {}, hidden  # a config the add door refused: no key sent
+        return {name: token}, hidden
+    if kind == "basic":
+        user = str((config or {}).get("auth_user") or "")
+        if auth_problem("basic", user=user):
+            return {}, hidden
+        encoded = base64.b64encode(f"{user}:{token}".encode("utf-8")).decode("ascii")
+        return {"Authorization": f"Basic {encoded}"}, hidden + [encoded]
+    return {"Authorization": f"Bearer {token}"}, hidden
+
+
+def scrub_values(text: str, hidden: list[str]) -> str:
+    """``text`` with every hidden value replaced. A key is never shorter than
+    six characters; a one-letter "key" replaced everywhere would scramble the
+    answer instead of hiding anything."""
+    out = str(text or "")
+    for value in hidden:
+        if value and len(value) >= 6:
+            out = out.replace(value, "[hidden]")
+    return out
 
 
 # --- one call to a hookup (v1.357.0, G84) ------------------------------------

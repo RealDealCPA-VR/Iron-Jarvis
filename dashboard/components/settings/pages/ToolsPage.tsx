@@ -52,6 +52,7 @@ import {
 } from "@/components/ui";
 import { addedButNotStarted, editedButNotStarted, packDidNotStart } from "@/lib/packStartWords";
 import { PageHeader } from "@/components/PageHeader";
+import { AllConnectionsLink } from "@/components/connections/AllConnectionsLink";
 import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo } from "@/lib/format";
 import { ProposalsCard } from "@/components/capability/ProposalsCard";
@@ -1657,6 +1658,8 @@ export default function ToolsPage() {
           title="Tools"
           subtitle="Tools are what agents can DO — read files, search the web, generate media. These are yours to extend."
         />
+        {/* v1.455.0 (Wave H item 35): the one connections front door. */}
+        <AllConnectionsLink testId="tools-all-connections" />
       </Reveal>
       {offline && (
         <Reveal>

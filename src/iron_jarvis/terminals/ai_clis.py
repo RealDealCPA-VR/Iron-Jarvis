@@ -355,6 +355,18 @@ def _extra_bin_dirs() -> list[Path]:
             # %LOCALAPPDATA%\agy\bin (its install.ps1) and adds it to the USER
             # PATH, which a daemon started before the install never sees.
             dirs.append(Path(local) / "agy" / "bin")
+            # v1.455.0: OpenAI's native Codex installer (install.ps1 at
+            # releases.openai.com/codex, read 2026-11-08) puts codex.exe in
+            # %LOCALAPPDATA%\Programs\OpenAI\Codex\bin (a junction to its
+            # current release) and adds THAT folder to the USER PATH — which a
+            # daemon started before "Install Codex for me" never sees.
+            dirs.append(Path(local) / "Programs" / "OpenAI" / "Codex" / "bin")
+        # The same script lets $env:CODEX_INSTALL_DIR replace that folder.
+        codex_dir = (os.environ.get("CODEX_INSTALL_DIR") or "").strip()
+        # A network spelling is never looked at (``is_dir`` on it would be an
+        # SMB connection — the v1.379.0 rule).
+        if codex_dir and not codex_dir.startswith(("\\\\", "//")):
+            dirs.append(Path(codex_dir))
     return [d for d in dirs if d.is_dir()]
 
 

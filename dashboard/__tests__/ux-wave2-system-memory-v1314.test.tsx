@@ -1019,14 +1019,19 @@ describe("Fleet — words and the empty state", () => {
     const hrefs = screen.getAllByRole("link").map((a) => a.getAttribute("href") || "");
     expect(hrefs.some((h) => /^\/connections(\?focus=endpoints|#conn-card-custom)$/.test(h))).toBe(true);
     expect(hrefs).toContain("/settings");
-    // The page's own add-by-URL form is still right there.
-    expect(screen.getByLabelText("Server address")).toBeInTheDocument();
+    // v1.455.0 (Wave H item 31, moved on purpose): ONE add form, on
+    // Connections; this page links it instead of holding a second one.
+    expect(screen.queryByLabelText("Server address")).toBeNull();
+    expect(screen.getByTestId("fleet-add-link")).toBeInTheDocument();
   });
 
   it("the example address is not a real-looking private tailnet IP", () => {
     S.responses["/fleet"] = { nodes: [] };
-    render(<FleetPage />);
-    expect((screen.getByLabelText("Server address") as HTMLInputElement).placeholder).not.toMatch(/^https?:\/\/100\./);
+    const { container } = render(<FleetPage />);
+    // v1.455.0 (moved on purpose): no address box here any more; nothing on
+    // the page shows a real-looking tailnet address.
+    const placeholders = Array.from(container.querySelectorAll("input")).map((i) => i.placeholder);
+    expect(placeholders.filter((p) => /^https?:\/\/100\./.test(p))).toEqual([]);
   });
 
   it("the savings line names the baseline in words, with the raw id in a title", () => {

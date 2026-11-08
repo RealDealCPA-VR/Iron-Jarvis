@@ -32,6 +32,7 @@
  */
 
 import Link from "next/link";
+import { ImportToolsOffer } from "@/components/onboarding/ImportToolsOffer";
 
 /** The developer-toolchain rows the end-user surfaces never count
  *  (OnboardingWelcome's belt to readiness.DEV_TOOLCHAIN_CHECKS' brace). */
@@ -193,13 +194,19 @@ export function NextStepLine({ h }: { h: HomeReadiness | null }) {
   );
 }
 
-export function AppsLine({ names }: { names: string[] }) {
+/** v1.455.0 (readiness Wave H item 29): with `importOffer`, the line also
+ *  offers the tools the user's OTHER apps already use (the checklist's own
+ *  `ImportToolsOffer`, read once, silent when nothing new is found). */
+export function AppsLine({ names, importOffer = false }: { names: string[]; importOffer?: boolean }) {
   return (
-    <p data-testid="home-apps" className="text-center text-[12px] text-zinc-500">
-      <Link href="/marketplace" className={QUIET_LINK}>
-        Connect the apps you use
-      </Link>{" "}
-      — {appNames(names)}
-    </p>
+    <>
+      <p data-testid="home-apps" className="text-center text-[12px] text-zinc-500">
+        <Link href="/marketplace" className={QUIET_LINK}>
+          Connect the apps you use
+        </Link>{" "}
+        — {appNames(names)}
+      </p>
+      {importOffer && <ImportToolsOffer testPrefix="home-apps-import" centered />}
+    </>
   );
 }

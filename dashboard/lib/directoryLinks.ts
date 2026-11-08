@@ -79,6 +79,40 @@ export const ADMIN_GUIDES: Record<string, { label: string; href: string }> = {
   },
 };
 
+/** v1.455.0 (readiness Wave H item 27): the Help guide that walks the
+ *  one-time sign-in app a Drive / Gmail / OneDrive / Dropbox card needs, one
+ *  section per vendor (`docs/OWN-APPS.md`, guide slug `own-apps` — the
+ *  daemon's `routes/helpdocs._DOCS` and `page_doors.HELP_GUIDES`; each
+ *  section is pinned against the doc's own headings by
+ *  `tests/test_wave_h_connections_v1455.py`). */
+export const OWN_APPS_GUIDE = "own-apps";
+
+/** The guide's section for each card id (the heading's slug). */
+export const OWN_APP_SECTIONS: Record<string, string> = {
+  google_drive: "google-drive",
+  gmail: "gmail",
+  onedrive: "onedrive",
+  dropbox: "dropbox",
+};
+
+/** The words of the link to a vendor's steps. */
+export const OWN_APP_GUIDE_LABEL = "Step-by-step setup";
+
+/** The Help address of a card's own-app steps, or "" for a card with none. */
+export function ownAppGuideHref(id: string): string {
+  const section = OWN_APP_SECTIONS[id];
+  return section ? `/help?guide=${OWN_APPS_GUIDE}&section=${section}` : "";
+}
+
+/** Every card's setup door — the Microsoft 365 admin's steps and the four
+ *  own-app guides — one table for the Directory card. */
+export const SETUP_GUIDES: Record<string, { label: string; href: string }> = {
+  ...ADMIN_GUIDES,
+  ...Object.fromEntries(
+    Object.keys(OWN_APP_SECTIONS).map((id) => [id, { label: OWN_APP_GUIDE_LABEL, href: ownAppGuideHref(id) }]),
+  ),
+};
+
 /** What a card's documentation link IS, from its address: a GitHub page is
  *  the program's own page, anything else is its documentation. */
 export function docsLinkLabel(url: string | null | undefined): string {

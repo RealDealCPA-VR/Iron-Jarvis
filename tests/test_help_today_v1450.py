@@ -55,6 +55,8 @@ USER_DOCS = {
     "docs/CHANGELOG.md",
     "docs/RECOMMENDED-SETTINGS.md",
     "docs/LOCAL-MODELS.md",
+    # v1.455.0 (Wave H item 27, moved on purpose): the vendor sign-in app steps.
+    "docs/OWN-APPS.md",
     "docs/REFLEX.md",
     "docs/COMPUTER-USE.md",
     "docs/BROWSER.md",

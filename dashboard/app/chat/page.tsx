@@ -15201,7 +15201,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                           try next (the step the checklist names). */}
                       {healthKnown && !showConnectDoors && <NextStepLine h={homeReadiness} />}
                       {healthKnown && !showConnectDoors && homeReadiness?.appsOpen && homeReadiness.settingUp && (
-                        <AppsLine names={marketplaceTeasers.map((c) => c.name)} />
+                        <AppsLine names={marketplaceTeasers.map((c) => c.name)} importOffer />
                       )}
                     </div>
                   )}

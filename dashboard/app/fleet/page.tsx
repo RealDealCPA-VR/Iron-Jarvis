@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Server,
@@ -46,6 +47,7 @@ import { DefaultImpactLine, defaultReplacedWords, fetchDefaultImpact, type Defau
 import { useDaemon } from "@/lib/daemon";
 import { IconButton } from "@/components/IconButton";
 import { PageHeader } from "@/components/PageHeader";
+import { AllConnectionsLink } from "@/components/connections/AllConnectionsLink";
 import { PageShell, Reveal } from "@/components/motion";
 import { Sparkline } from "@/components/fleet/Sparkline";
 import {
@@ -957,214 +959,36 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Add node                                                                   */
+/*  Add a model server: ONE form, on Settings › Connections                   */
 /* -------------------------------------------------------------------------- */
 
+/** v1.455.0 (readiness Wave H item 31): the address the one add form lives at
+ *  (Connections' model-server card, `useFocusRef("endpoints")`). */
+export const ADD_MODEL_SERVER_HREF = "/connections?focus=endpoints";
+
 /**
- * Add a node by URL. We probe as the user types (debounced ~700ms, the same
- * shape as the connections page's endpoint detect) so what is actually AT that
- * URL is on screen before anything is saved. Nothing here persists — the probe
- * route saves nothing, and an unreachable endpoint is still addable, because a
- * box that happens to be asleep is still part of the fleet.
+ * v1.455.0 (readiness Wave H item 31): a model server is added in ONE place.
+ * This page had its own add form beside the Connections one — two forms, two
+ * ways of saving a key, two sets of words — so a person did not know which
+ * to use. The form now lives only on Settings › Connections (it reads the
+ * server's models, takes its key and checks it answers; what it saves lists
+ * here on its own), and this page links to it.
  */
-function AddNodeForm({ onAdded }: { onAdded: () => void }) {
-  const [url, setUrl] = useState("");
-  const [label, setLabel] = useState("");
-  // v1.420.0 (C6.12): the server's key, when it asks for one (a LiteLLM
-  // gateway with a master key). Saved the Connections endpoint form's way.
-  const [key, setKey] = useState("");
-  const [probe, setProbe] = useState<FleetProbe | null>(null);
-  const [probing, setProbing] = useState(false);
-  const [probeError, setProbeError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const u = url.trim();
-    if (!/^https?:\/\/.+/i.test(u)) {
-      setProbe(null);
-      setProbeError(null);
-      return;
-    }
-    let cancelled = false;
-    setProbing(true);
-    setProbeError(null);
-    const timer = setTimeout(async () => {
-      try {
-        const res = await post<FleetProbe>("/fleet/probe", { base_url: u });
-        if (cancelled) return;
-        setProbe(res);
-        setProbeError(res.error || null);
-      } catch (err) {
-        if (cancelled) return;
-        setProbe(null);
-        setProbeError(err instanceof ApiError ? err.message : String(err));
-      } finally {
-        if (!cancelled) setProbing(false);
-      }
-    }, 700);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-      setProbing(false);
-    };
-  }, [url]);
-
-  const snap = probe?.snapshot ?? null;
-  const kind = probe?.kind ?? null;
-  const found = snap?.models ?? [];
-  const kids = probe?.children ?? [];
-
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    const u = url.trim();
-    if (!u) return;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const created = await post<{ node?: { id?: string } }>("/fleet/nodes", {
-        base_url: u,
-        label: label.trim(),
-      });
-      const nodeId = created?.node?.id ?? "";
-      if (key.trim() && nodeId) {
-        // v1.420.0 (C6.12): the Connections endpoint form's pattern, byte
-        // for byte — the key is vaulted under a per-node name (never stored
-        // in config, never shown again), then wired to the node so every
-        // request to THIS server carries it (fleet/endpoint_auth).
-        const secretName = `endpoint_${nodeId}_key`;
-        await post("/secrets", {
-          name: secretName,
-          value: key.trim(),
-          kind: "api_key",
-          description: `API key for model server ${label.trim() || u}`,
-        });
-        await patch(`/fleet/nodes/${encodeURIComponent(nodeId)}`, { api_key_name: secretName });
-        // The review: the node was ADDED (and its kind detected) before the
-        // key existed, so a keyed gateway was read keyless and kept the kind
-        // a 401 gives. Detect again now that the key is on the node.
-        // Best-effort: the node is saved either way.
-        await post(`/fleet/nodes/${encodeURIComponent(nodeId)}/detect`, {}).catch(() => {});
-      }
-      setUrl("");
-      setLabel("");
-      setKey("");
-      setProbe(null);
-      onAdded();
-    } catch (err) {
-      setSaveError(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
+function AddModelServerLink() {
   return (
     <Card title="Add a model server" icon={<Plus size={15} />}>
-      <form onSubmit={save} className="space-y-3">
-        <div className="grid gap-3 sm:grid-cols-[2fr_1fr]">
-          <input
-            className="field font-mono text-xs"
-            // v1.314.0: an obviously-example LAN address — the old one was a
-            // real-looking private tailnet IP.
-            placeholder="http://192.168.1.50:8000"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            spellCheck={false}
-            aria-label="Server address"
-          />
-          <input
-            className="field text-xs"
-            placeholder="label (optional)"
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            aria-label="Label"
-          />
-        </div>
-        {/* v1.420.0 (C6.12): a server that asks for a key could not be added
-            here at all — the Connections endpoint form had the field, this
-            one did not. Optional; stored encrypted, sent only to this server. */}
-        <input
-          type="password"
-          className="field text-xs"
-          placeholder="API key (optional)"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          autoComplete="off"
-          aria-label="API key (optional)"
-          data-testid="fleet-add-key"
-        />
-        <p className="text-[11px] text-zinc-500">
-          Only if the server asks for one. It is stored encrypted and sent only to this server.
+      <div data-testid="fleet-add-link" className="space-y-2 text-xs leading-relaxed text-zinc-400">
+        <p>
+          Model servers are added in one place: Settings › Connections, where Iron Jarvis reads the server&apos;s
+          models, takes its key if it asks for one, and checks it answers. It shows up here on its own.
         </p>
-
-        {/* What we found, before saving anything. */}
-        {probing && <div className="text-xs text-zinc-500">probing {url.trim()}…</div>}
-        {!probing && probeError && (
-          <div className="text-xs text-tone-warn">
-            Could not read that model server: {probeError}. You can still add it. It
-            shows as offline until it answers.
-          </div>
-        )}
-        {!probing && !probeError && probe && (
-          <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-3 py-2.5 text-xs text-zinc-400">
-            <span className="flex flex-wrap items-center gap-2">
-              <span className="text-zinc-300">Detected</span>
-              <Badge variant="calm" value={kindLabel(kind)} tone={kindTone(kind)} keepCase />
-              {snap && <StatusPill snap={snap} />}
-              {fmtLatency(snap?.latency_ms) && (
-                <span className="text-zinc-600">{fmtLatency(snap?.latency_ms)}</span>
-              )}
-            </span>
-            {kind === "unknown" && probe.reason && (
-              <div className="mt-1.5 text-tone-warn">{probe.reason}</div>
-            )}
-            {found.length > 0 ? (
-              <div className="mt-1.5 space-y-0.5 font-mono text-[11px] text-zinc-500">
-                {found.slice(0, 6).map((mo) => (
-                  <div key={mo.id} className="truncate">
-                    {mo.id}
-                    {fmtCtx(mo.context_length ?? mo.max_model_len) && (
-                      <span className="text-zinc-600">
-                        {" "}
-                        · {fmtCtx(mo.context_length ?? mo.max_model_len)} ctx
-                      </span>
-                    )}
-                  </div>
-                ))}
-                {found.length > 6 && (
-                  <div className="text-zinc-600">+{found.length - 6} more</div>
-                )}
-              </div>
-            ) : (
-              <div className="mt-1 text-zinc-600">no models reported</div>
-            )}
-            {kids.length > 0 && (
-              <div className="mt-1.5 text-[11px] text-zinc-500">
-                fronts {kids.length} upstream{kids.length === 1 ? "" : "s"}:{" "}
-                <span className="font-mono text-zinc-400">
-                  {kids
-                    .map((c) => c.alias || c.label || c.id)
-                    .filter(Boolean)
-                    .join(", ")}
-                </span>
-              </div>
-            )}
-            {snap && snap.metrics_supported === false && snap.metrics_reason && (
-              <div className="mt-1 text-zinc-600">{snap.metrics_reason}</div>
-            )}
-          </div>
-        )}
-
-        {saveError && <ErrorNote>{saveError}</ErrorNote>}
-
-        <button
-          type="submit"
-          disabled={saving || !url.trim()}
-          className="btn-accent py-1.5 text-xs"
-        >
-          <Plus size={14} /> {saving ? "Adding…" : "Add model server"}
-        </button>
-      </form>
+        <Link href={ADD_MODEL_SERVER_HREF} className="btn-soft inline-flex w-fit items-center gap-1.5 py-1.5 text-xs">
+          <Plus size={13} aria-hidden /> Add a model server
+        </Link>
+        <div>
+          <AllConnectionsLink testId="fleet-all-connections" />
+        </div>
+      </div>
     </Card>
   );
 }
@@ -1316,11 +1140,11 @@ export default function FleetPage() {
             <Empty
               icon={<Server size={26} />}
               title="No machines yet"
-              action={{ label: "Add a model server", href: "/connections?focus=endpoints" }}
+              action={{ label: "Add a model server", href: ADD_MODEL_SERVER_HREF }}
               secondary={{ label: "Open Settings", href: "/settings" }}
             >
               Add a model server on Connections, or set the Ollama or custom URL in Settings.
-              They show up here on their own. You can also add one below by its address.
+              They show up here on their own.
             </Empty>
           </Card>
         </Reveal>
@@ -1333,7 +1157,7 @@ export default function FleetPage() {
       )}
 
       <Reveal>
-        <AddNodeForm onAdded={refresh} />
+        <AddModelServerLink />
       </Reveal>
     </PageShell>
   );

@@ -29,6 +29,8 @@ EXPECTED = {
     "handbook": ("The Handbook", "# Iron Jarvis — The Handbook"),
     "recommended-settings": ("Recommended Settings", "# Recommended Settings"),
     "local-models": ("Local Models by RAM Tier", "# Local Models by RAM Tier"),
+    # v1.455.0 (Wave H item 27, moved on purpose): the vendor sign-in apps.
+    "own-apps": ("Your own sign-in apps", "# Your own sign-in apps"),
     # v1.450.0 (moved on purpose): the release notes, generated from the
     # Handbook's version sections, are the fourth guide.
     "changelog": ("What changed", "# What changed in Iron Jarvis"),
@@ -60,6 +62,7 @@ def test_list_returns_the_docs_in_fixed_order(client):
         "handbook",
         "recommended-settings",
         "local-models",
+        "own-apps",
         "changelog",
     ]
     for d in docs:
