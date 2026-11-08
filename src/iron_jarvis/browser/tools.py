@@ -1333,9 +1333,21 @@ class _ActingTool(_BrowserTool):
         # reads — "approve it in Iron Jarvis, then make the identical call
         # again" was a dead end from the chat page and from every agent run.
         resolver = _risk_door.resolver_for(ctx, getattr(self.browser, "approval_resolver", None))
-        granted, tail = await _risk_door.consult(
-            resolver, req, ctx, name=self.name, args=self.redact_args(dict(args or {}))
-        )
+        try:
+            granted, tail = await _risk_door.consult(
+                resolver, req, ctx, name=self.name, args=self.redact_args(dict(args or {}))
+            )
+        except BaseException:
+            # v1.449.0 review: a CANCEL thrown into the resolver's wait (Stop on
+            # an unnamed turn, a dropped connection, a daemon shutdown) must not
+            # leave the row PENDING — the approvals page could later approve
+            # it, and the next identical call would spend it through
+            # ``approved_unconsumed`` above with no card (every chat turn shares
+            # the run id "ad-hoc"). Denied from a task of its own: every later
+            # await of THIS task is re-cancelled (the v1.228.0 rule).
+            if resolver is not None:
+                _deny_detached(queue, req.id)
+            raise
         if not granted:
             if resolver is not None:
                 await asyncio.to_thread(queue.deny, req.id)
@@ -1363,6 +1375,25 @@ class _ActingTool(_BrowserTool):
         # first in-process resolver Ship 4 wires up.
         await asyncio.to_thread(queue.consume, req.id)
         return None
+
+
+_DETACHED_DENIALS: set = set()
+
+
+def _deny_detached(queue: Any, request_id: str) -> None:
+    """Deny a queue row from a task the cancelled caller does not own
+    (v1.449.0 review) — off the loop, kept until it lands."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            queue.deny(request_id)
+        except Exception:  # noqa: BLE001 — nothing left to do without a loop
+            logger.debug("denying a risk row after a cancel failed", exc_info=True)
+        return
+    task = loop.create_task(asyncio.to_thread(queue.deny, request_id))
+    _DETACHED_DENIALS.add(task)
+    task.add_done_callback(_DETACHED_DENIALS.discard)
 
 
 async def _consult_resolver(resolver: Any, req: Any, ctx: Any, *, name: str, args: dict[str, Any]) -> bool:

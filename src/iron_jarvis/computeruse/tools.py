@@ -269,9 +269,18 @@ class WebActionTool(_GatedTool):
                 # none = a refusal in plain words with no queue id (the
                 # "Pending approval id" words were a dead end from chat).
                 resolver = _risk_door.resolver_for(ctx, self.cu.approval_resolver)
-                granted, tail = await _risk_door.consult(
-                    resolver, req, ctx, name=self.name, args=dict(args or {})
-                )
+                try:
+                    granted, tail = await _risk_door.consult(
+                        resolver, req, ctx, name=self.name, args=dict(args or {})
+                    )
+                except BaseException:
+                    # v1.449.0 review: a cancel while the card waits must not
+                    # leave the row PENDING for a later approval the next
+                    # identical call would spend with no card (the queue is
+                    # synchronous here, as every call of it in this branch).
+                    if resolver is not None:
+                        self.cu.approvals.deny(req.id)
+                    raise
                 if not granted:
                     if resolver is not None:
                         self.cu.approvals.deny(req.id)
@@ -284,6 +293,15 @@ class WebActionTool(_GatedTool):
                         },
                     )
                 self.cu.approvals.approve(req.id)
+                # v1.449.0 review: AND SPEND IT, in the same breath (the browser
+                # door's rule, ``browser/tools._ActingTool._require_approval``).
+                # Approving without consuming left an approved-unconsumed row
+                # that the NEXT identical call found through
+                # ``approved_unconsumed`` above and ran with NO card — one
+                # human Allow authorising two clicks on "Delete account". No
+                # production resolver ever reached this line before the chat
+                # lane's and the runtime's (v1.449.0), so it had no victim.
+                self.cu.approvals.consume(req.id)
 
         if kind == "screenshot_click" and not action.fallback:
             return ToolResult(

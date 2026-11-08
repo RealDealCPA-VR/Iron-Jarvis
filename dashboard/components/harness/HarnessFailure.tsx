@@ -209,7 +209,10 @@ export function HarnessFailureLine({
           {CHOOSE_LOCAL_WORDS}
         </button>
       ) : null}
-      {live && action?.kind === "local_only" && onSendOnce && localOnlyHeld.length === 0 ? (
+      {/* (review) …and only with a provider to send to: a line the daemon
+          stamped with no `errorProvider` has nothing for the press to allow,
+          and `sendOnceReply` would drop an empty one on the floor. */}
+      {live && action?.kind === "local_only" && action.provider && onSendOnce && localOnlyHeld.length === 0 ? (
         <button
           type="button"
           data-testid="harness-local-send-once"
