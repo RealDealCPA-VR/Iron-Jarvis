@@ -84,7 +84,11 @@ The Gmail program's own page has the same steps:
 ## OneDrive
 
 You make the app in the Microsoft Entra admin center, at
-<https://entra.microsoft.com>. A personal Microsoft account can do this too.
+<https://entra.microsoft.com>. Microsoft registers apps inside a directory:
+a work or school account has one already. With only a personal Microsoft
+account (Outlook.com, Hotmail), make a free Azure account first
+(<https://azure.microsoft.com/free>); it comes with a **Default Directory**,
+and you register the app there. A personal account on its own is refused.
 
 1. **Register the app.** Open **Entra ID › App registrations** and press
    **New registration**. Give it a name. Under **Supported account types**
@@ -126,7 +130,7 @@ You make the app in the Dropbox App Console, at
    into **App ID** and the App secret into **App secret**, press **Save app
    details**, then Connect.
 
-Dropbox's own page: [the OAuth guide](https://developers.dropbox.com/oauth-guide).
+Dropbox's own page: [the OAuth guide](https://docs.dropboxapi.com/dropbox-api/docs/oauth).
 
 ## If the sign-in fails
 

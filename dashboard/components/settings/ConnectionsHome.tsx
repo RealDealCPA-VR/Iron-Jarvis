@@ -33,6 +33,7 @@ import { ArrowRight } from "lucide-react";
 import { get } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
 import { providerDisplay } from "@/lib/onboarding";
+import { realModelRows } from "@/lib/demoExit";
 import { cardHealth, type CardHealth } from "@/lib/directoryHealth";
 import { discover, discoveryLine } from "@/lib/importDiscovery";
 import type { ImportSource } from "@/lib/mcpImport";
@@ -129,6 +130,20 @@ interface ChannelRow {
   name: string;
   type?: string | null;
   builtin?: boolean | null;
+  /** The row's honesty surface (GET /comm/channels): its LAST real test. */
+  last_test_ok?: boolean | null;
+  /** The last failed poll of a two-way destination (a refused token). */
+  last_poll_error?: string | null;
+}
+
+/** v1.455.0 review: a destination's word on the Connected tab comes from
+ *  what the daemon KNOWS about it, never from its type alone — a phone whose
+ *  token was revoked must not read as connected. */
+export function destinationState(ch: ChannelRow): { state: string; warn: boolean } {
+  if (ch.last_poll_error) return { state: "Needs attention", warn: true };
+  if (ch.last_test_ok === false) return { state: "Last test failed", warn: true };
+  if (ch.last_test_ok === true) return { state: "Working", warn: false };
+  return { state: "Not tested yet", warn: false };
 }
 
 /** One line of the Connected tab. */
@@ -146,12 +161,16 @@ const DOOR = (id: string) => DISCOVER_DOORS.find((d) => d.id === id)!;
 /** The Connected tab's rows from the three readings (pure; the tests feed it). */
 export function connectedRows(
   connectors: readonly ConnectorRow[],
-  providers: ReadonlyArray<{ provider: string; available?: boolean | null }>,
+  providers: ReadonlyArray<{ provider: string; available?: boolean | null; class?: string | null; inherited_from?: string | null }>,
   channels: readonly ChannelRow[],
 ): ConnectedRow[] {
   const out: ConnectedRow[] = [];
-  for (const p of providers) {
-    if (!p?.provider || p.provider === "mock" || p.provider === "auto" || p.available !== true) continue;
+  // v1.455.0 review: THE rule for "a model that is really there"
+  // (lib/demoExit.realModelRows: never the demo, never a saved web sign-in of
+  // class "browser"), and an API name answering only through a plan's CLI
+  // (`inherited_from`) is that plan's row, listed once.
+  for (const p of realModelRows({ providers } as never)) {
+    if (!p?.provider || p.provider === "auto" || (p as { inherited_from?: string | null }).inherited_from) continue;
     out.push({
       key: `model:${p.provider}`,
       name: providerDisplay(p.provider),
@@ -175,12 +194,13 @@ export function connectedRows(
   }
   for (const ch of channels) {
     if (!ch?.name || ch.builtin) continue;
+    const { state, warn } = destinationState(ch);
     out.push({
       key: `dest:${ch.name}`,
       name: ch.name,
       kind: "Destination",
-      state: ch.type ? String(ch.type) : "Set up",
-      warn: false,
+      state,
+      warn,
       door: DOOR("destinations"),
     });
   }

@@ -194,7 +194,11 @@ describe("31 — a web service's key can travel in a header or as a basic sign-i
 describe("33 — naming a connected app in a message is enough (and said so)", () => {
   it("every app but Microsoft 365", () => {
     expect(chatHintWords("notion")).toBe(CHAT_HINT_NAMED);
-    expect(CHAT_HINT_NAMED).toMatch(/off in chats until you turn it on in Tools › Connections, or name it/);
+    expect(CHAT_HINT_NAMED).toMatch(/off in chats until you turn it on in Tools › Connections/);
+    // v1.455.0 review: true on the Chat page only (the phone's lane never arms
+    // an app by name) and never in a Local only chat — the words say both.
+    expect(CHAT_HINT_NAMED).toMatch(/on the Chat page you can also name it in your message/);
+    expect(CHAT_HINT_NAMED).toMatch(/not in a Local only chat/);
     expect(chatHintWords("microsoft_365")).toBe(CHAT_HINT_SWITCH_ONLY);
   });
 });

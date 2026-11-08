@@ -243,6 +243,31 @@ def saved_fields(fields: list[dict], spec: dict) -> tuple[list[str], dict[str, s
     return saved, values
 
 
+#: v1.455.0 review: a web service's Username / Header box holding its key.
+PLAIN_BOX_HOLDS_KEY = (
+    "That looks like the key itself, and the username or header name is saved in plain text. "
+    "Paste the key only in the Key box, and give the username or the header's name (for example "
+    "X-API-Key) in the other one."
+)
+
+
+def _plain_box_holds_a_key(value: str, key: str) -> bool:
+    """True when a box saved in plain text holds the key (or a piece of it at
+    least 6 characters long) or anything shaped like a credential."""
+    v = str(value or "").strip()
+    k = str(key or "").strip()
+    if not v:
+        return False
+    if k and len(k) >= 6 and (k in v or (len(v) >= 6 and v in k)):
+        return True
+    try:
+        from ...settings.records_tools import _looks_like_a_secret
+
+        return bool(_looks_like_a_secret(v))
+    except Exception:  # noqa: BLE001 — unsure: refuse rather than store a key in the clear
+        return True
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/vault")
@@ -298,6 +323,14 @@ def register(app: FastAPI, d) -> None:
         problem = auth_problem(body.auth_kind, body.auth_header, body.auth_user)
         if problem:
             raise HTTPException(status_code=400, detail=problem)
+        # v1.455.0 review: the Username and Header boxes are saved in plain
+        # text with the service (they are not the secret). A key pasted into
+        # one of them — the key itself, or anything shaped like a credential —
+        # is refused BEFORE anything is written, in words that never repeat it.
+        kind = str(body.auth_kind or "bearer").strip().lower()
+        plain = (body.auth_user if kind == "basic" else body.auth_header if kind == "header" else "") or ""
+        if plain.strip() and _plain_box_holds_a_key(plain, body.auth_token or ""):
+            raise HTTPException(status_code=400, detail=PLAIN_BOX_HOLDS_KEY)
         if d.platform.integrations.get_spec(iid) is not None:
             raise HTTPException(status_code=400, detail=NAME_IN_USE.format(name=body.name.strip() or iid))
         sname = ""

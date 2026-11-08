@@ -205,9 +205,12 @@ export function humanFieldLabel(raw: string): string {
  *  (`daemon/chat_turn.named_app_ask_tools`, v1.354.0): visible to the model,
  *  every use carded. Not in a Local only or low-trust chat, where the switch
  *  is the one door — and so never for Microsoft 365, whose tools answer only
- *  in a Local only chat (`connectors/ms365`): its card keeps the switch line. */
+ *  in a Local only chat (`connectors/ms365`): its card keeps the switch line.
+ *  v1.455.0 review: ONLY the chat page's lane does this (the POST lane — the
+ *  phone, the API — and the coding tools never arm an app by its name), so
+ *  the words say "on the Chat page" and name the Local only exception. */
 export const CHAT_HINT_NAMED =
-  "It's off in chats until you turn it on in Tools › Connections, or name it in your message (Jarvis asks before each use).";
+  "It's off in chats until you turn it on in Tools › Connections. In a chat on the Chat page you can also name it in your message (not in a Local only chat); Jarvis asks before each use.";
 export const CHAT_HINT_SWITCH_ONLY = "Turn it on in a chat with Tools › Connections";
 /** The apps whose tools naming never arms (see above). */
 export const NAMING_DOES_NOT_ARM: ReadonlySet<string> = new Set(["microsoft_365"]);

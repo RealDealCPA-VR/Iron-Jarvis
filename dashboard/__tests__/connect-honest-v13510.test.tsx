@@ -218,7 +218,7 @@ describe("Directory: green only when the pack works", () => {
     // v1.455.0 (Wave H, the owner's decision on item 33; moved on purpose):
     // the card also says that naming the app in a message is enough.
     expect(hint.textContent).toBe(
-      "It's off in chats until you turn it on in Tools › Connections, or name it in your message (Jarvis asks before each use).",
+      "It's off in chats until you turn it on in Tools › Connections. In a chat on the Chat page you can also name it in your message (not in a Local only chat); Jarvis asks before each use.",
     );
     expect(hint.className).toContain("text-zinc-500");
     const c = card("slack");

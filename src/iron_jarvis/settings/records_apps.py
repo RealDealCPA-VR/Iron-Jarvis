@@ -807,14 +807,14 @@ def _find_server(platform: Any, name: str, source: str) -> tuple[Any, Any, str]:
     fold = _fold(name)
     places = ", ".join(f"{d.label} ({d.source})" for d in KNOWN_SOURCES)
     if source:
-        item = read_source(platform, source)
+        item = read_source(platform, source, for_model=True)
         if item is None:
             return None, None, f"There is no app called {source!r} that Iron Jarvis reads. It reads: {places}."
         if not item.readable:
             return None, None, item.note or f"{item.label}'s settings were not found on this PC."
         scans = [item]
     else:
-        scans = [s for s in scan(platform) if s.readable]
+        scans = [s for s in scan(platform, for_model=True) if s.readable]
     found = [(s, spec) for s in scans for spec in s.specs if spec.name and _fold(spec.name) == fold]
     if not found:
         listed = "; ".join(f"{s.label}: {', '.join(sp.name for sp in s.specs if sp.name)}" for s in scans if s.specs)
@@ -834,7 +834,8 @@ def list_other_apps(platform: Any) -> str:
 
     have = {_fold(s.get("name")) for s in _servers(platform)}
     lines: list[str] = []
-    for item in scan(platform):
+    # ``for_model``: this list goes to the chat's model (v1.455.0 review).
+    for item in scan(platform, for_model=True):
         if not item.readable or not item.specs:
             continue
         names = [

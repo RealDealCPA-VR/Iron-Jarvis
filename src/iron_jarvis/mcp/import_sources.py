@@ -149,15 +149,12 @@ def active_project_root(platform: Any) -> str:
         return ""
 
 
-def _network_spelling(path: str) -> bool:
-    """A share or device spelling (``\\\\host\\…``, ``//host/…``, ``\\\\?\\…``):
-    read by its TEXT, never looked at — a stat of a share is an SMB connection
-    that can send a sign-in hash to that host (the v1.379.0 lesson)."""
-    text = str(path or "").strip()
-    return text.startswith(("\\\\", "//"))
+# (v1.455.0 review: the share check :func:`last_working_folder` calls is the
+# module's ONE ``_network_spelling`` further down — a second copy here was
+# shadowed by it and never ran.)
 
 
-def last_working_folder(platform: Any) -> str:
+def last_working_folder(platform: Any, *, for_model: bool = False) -> str:
     """v1.455.0 (readiness Wave H item 29): the folder the user last WORKED in,
     as far as the daemon knows — the folder of the newest coding session
     (Chat › Code or Build › Code, not archived; ``projects.coding_sessions``,
@@ -167,7 +164,17 @@ def last_working_folder(platform: Any) -> str:
     record the daemon has of where a folder-first user works. A session with
     no folder of its own (a Chat › Code session started with none) is
     skipped; a network or device spelling answers ``""`` by its text. Never
-    raises; ``""`` when there is none."""
+    raises; ``""`` when there is none.
+
+    v1.455.0 review: ``for_model`` — the reading goes to a MODEL (the chat's
+    ``app_import`` / its list of other apps' servers). A Local only coding
+    session, or a Build › Code session on a tool that may answer on this
+    network (Pi, OpenCode), is then withheld unless the turn itself stays on
+    this network (``egress.may_recall_local_only_chats`` — the recent-activity
+    rule): its folder's name and servers are a client's, and the model may be
+    a cloud one. A withheld newest session answers ``""`` (never an older
+    folder in its place). The dashboard's own screen (nothing leaves this PC)
+    passes nothing and reads every session."""
     try:
         engine = getattr(platform, "engine", None)
         if engine is None:
@@ -182,15 +189,20 @@ def last_working_folder(platform: Any) -> str:
                 continue
             stamp = row.get("updated")
             if newest is None or (stamp is not None and (newest[0] is None or stamp > newest[0])):
-                newest = (stamp, folder)
+                newest = (stamp, folder, row)
         if newest is None or _network_spelling(newest[1]):
             return ""
+        if for_model and (newest[2].get("local_only") or newest[2].get("_may_stay_local")):
+            from ..providers.egress import may_recall_local_only_chats
+
+            if not may_recall_local_only_chats():
+                return ""
         return newest[1]
     except Exception:  # noqa: BLE001 — a scan never raises
         return ""
 
 
-def working_root(platform: Any) -> tuple[str, str]:
+def working_root(platform: Any, *, for_model: bool = False) -> tuple[str, str]:
     """``(folder, kind)`` for the "this project" sources: the active project's
     folder (kind ``"project"``, unchanged since v1.354.0), else the last
     working folder (kind ``"folder"``, :func:`last_working_folder`), else
@@ -202,7 +214,7 @@ def working_root(platform: Any) -> tuple[str, str]:
     root = active_project_root(platform)
     if root:
         return root, "project"
-    folder = last_working_folder(platform)
+    folder = last_working_folder(platform, for_model=for_model)
     return (folder, "folder") if folder else ("", "")
 
 
@@ -791,12 +803,13 @@ def _scan_one(defn: SourceDef, platform: Any) -> SourceScan:
     )
 
 
-def scan(platform: Any) -> list[SourceScan]:
+def scan(platform: Any, *, for_model: bool = False) -> list[SourceScan]:
     """Read every known source READ-ONLY. One :class:`SourceScan` per
     :data:`KNOWN_SOURCES` entry, in that order; a project row is left out
     when no project is active (there is no file to name). Never raises."""
     out: list[SourceScan] = []
-    token = _SCAN_ROOT.set(working_root(platform))
+    # ``for_model`` (v1.455.0 review): see :func:`last_working_folder`.
+    token = _SCAN_ROOT.set(working_root(platform, for_model=for_model))
     try:
         return _scan_all(platform, out)
     finally:
@@ -815,7 +828,7 @@ def _scan_all(platform: Any, out: list[SourceScan]) -> list[SourceScan]:
     return out
 
 
-def read_source(platform: Any, source: str) -> SourceScan | None:
+def read_source(platform: Any, source: str, *, for_model: bool = False) -> SourceScan | None:
     """The apply door's half: re-read ONE known source by its ``source`` key
     (the key a scan row carried). An unknown key answers ``None`` — a
     request can only name a file this module already knows how to find,
@@ -825,8 +838,13 @@ def read_source(platform: Any, source: str) -> SourceScan | None:
         return None
     for defn in KNOWN_SOURCES:
         if defn.source == key:
+            # One working root for the resolver AND the label (v1.455.0
+            # review), withheld from a model as :func:`scan` does.
+            token = _SCAN_ROOT.set(working_root(platform, for_model=for_model))
             try:
                 return _scan_one(defn, platform)
             except Exception:  # noqa: BLE001
                 return SourceScan(source=defn.source, label=defn.label, origin="")
+            finally:
+                _SCAN_ROOT.reset(token)
     return None
