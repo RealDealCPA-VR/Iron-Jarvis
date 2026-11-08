@@ -16179,6 +16179,86 @@ does not need a bump, stop and bump it.
   "files that differ" counts the user's own edits too (said in the text);
   a Build session whose log was trimmed shows only what the log kept.
 
+- **Waves E–H of the v1.452.0 re-audit plan (0j.5): one word for each thing,
+  "did it work?" to the end, chat finds the right thing, one Connections
+  home** (v1.455.0; five builders + five independent reviewers, who found
+  42 more defects, each red first; the owner took the recommended answers to
+  decisions 33–35). WORDS (E): "model server" for endpoint/node, "extension"
+  for tool server/MCP server, "your accounts" (never Iron-Proxy) on chat and
+  coding surfaces (incl. `iron_proxy/choice.py`, `usage_read.py`,
+  `accounts.py`'s pinned refusals: "This work runs on…"), "rule" in the
+  bell/tray/notifier twins (pinned together), the Sessions page is **Agent
+  runs** (alias "sessions"); ~12 schema labels renamed with the OLD label as
+  an alias — a new alias widens `settings/trigger.py` (the "dry run" alias
+  was dropped for that reason); `default_model` "subscription" reads "Your
+  plan's own default model", "default" reads "Its own default model". New
+  scanner rows: dashboard `onScreen` "tool server" / "reflex" / "Build
+  session", a scoped endpoint/node row on model-server pages, and
+  `tests/test_one_word_wave_e_v14550.py`'s daemon scans. A PAGE MODULE
+  EXPORTS ONLY THE PAGE: Next's build refuses any other export from
+  `app/**/page.tsx` (an `export const` broke the integration's tsc). PRESSES
+  (F1): `lib/pressFailure.ts` rewords a 500 envelope / wordless 500 on a
+  press to "Iron Jarvis hit a problem doing that. Try again." (Details keeps
+  the text; `ErrorNote` re-reads when its words change); the "Part of this
+  page didn't load" banner is GET/HEAD only; 4xx words are kept. `/health`
+  gains `background {workflows, media}` (`daemon/background_counts.py`,
+  memory only) and the orb counts it; a new empty chat re-reads
+  `/onboarding`; the redirect field is on Chat › Code's dock and agent-run
+  cards (`lib/askWhy.ts`); the next-step box offers "Keep these changes"
+  (kind "keep") only when HarnessBranch's own read has work to bring back;
+  failed workflow rows have Run again, a failed media line Try again
+  (`lib/mediaRetry.ts`). The receipt's account-switch line was DROPPED: no
+  daemon path sends `route.account.from` (an unpinned turn rotates inside
+  its adapter). DAEMON (F2): `AgentThreadRecord.home_chat_id` (never
+  `chat_thread_id`, which `for_chat` keys the @-room on; `for_chat` refuses
+  a room with `home_chat_id`) homes a remote's report into the chat that
+  started the run, and `addresseeOf` ignores a `remote:` line with no
+  `panelThreadId`; `remote.message` rings the bell (quiet for progress,
+  skipped while that chat is shown here). Agent-run asks carry `why` (masked
+  by `_why_sentence`, ≤ 400, the EVENT too) and `asker` on every surface.
+  `reflex/router.result_words` + `last_href`; failed runs and Build › Code
+  replies name the files they kept (`outcome.kept_files_note`,
+  `hosted/kept_files.py`); `stop_predicate` never stops a turn parked on a
+  card and writes why it stopped one; `web_service_add` runs the service's
+  own Test (bounded, skipped for an internet address under Local only;
+  `AUTO_CHECK` off in conftest); a computer-use row nothing can answer is
+  denied; Windows' Spotlight toast click opens the folder. CHAT (G):
+  `setup_words` ANSWERS_TAIL ("with Jarvis"), `FILES_ARRIVE_IN_FOLDER` →
+  `sentinel_add` never `reflex_create` (habits and destinations refused),
+  `records._persons_schedule` + `_APP_VERB_BEFORE` (a verb that acts on a
+  schedule wins), `trigger` readable-folders shapes minus `_JUST_THIS_TASK`,
+  `MAIL_FROM_RULE` needs "email", page steps `install_claude_code` /
+  `install_codex` (the program itself only; dropped with its line when
+  installed, read from the memo `known_cli_presence`) drawn by
+  `InstallDoorPress`, `_page_door_checks` answers "not known" while presence
+  is unread (never scans PATH on the loop), the `model_provider` door only
+  for an unconnected vendor, "memory" in `SAFETY_REASONS`,
+  `autoselect.mission_offer` (≥ 200 chars, ≥ 3 parts; never a question,
+  pasted payload, story or code task) → `/agents?from=chat` via
+  `lib/missionStart`, `LocalOnlyOffer` once per browser profile. Every new
+  regex is linear at 128k (child-process pins). CONNECTIONS (H): Help guide
+  `docs/OWN-APPS.md` ("own-apps"; Microsoft needs an Azure account and a
+  directory), `InstallPresses.tsx` on Settings › Connections,
+  `import_sources.last_working_folder` (newest coding session's folder;
+  withheld from a model for a Local only / Pi / OpenCode session; share
+  spellings refused by text), Codex's install folder
+  (`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`, `CODEX_INSTALL_DIR`), web
+  services take bearer/header/basic (`integrations/builtin.AUTH_KINDS`; a key
+  pasted into Username/Header is refused), the Model servers page's add form
+  is retired for Connections', `guide/corpus.mark_release_history` weights
+  release chapters older than the newest 12 at 0.35 (by the H2 title from
+  the heading path), `ConnectionsHome.tsx` Discover / Connected / Import at
+  `/connections?tab=discover` (Connected reads `realModelRows` and each
+  destination's last poll/test). NEVER `git stash` in a worktree: the stash
+  list is shared across worktrees (a reviewer popped another lane's). Pins:
+  every `*_v14550.py`, `*-v1455.test.tsx`, `*_wavef.py` / `*-wavef.test.tsx`
+  and `tests/test_wavef_review.py`. OPEN: E's three label near-misses ("only
+  suggest, never act is my motto"); daemon sentences still saying "Build
+  session" (vision refusals, git guard, helpers, library, page_browser,
+  `routes/chat.py`); an unsaved chat's job report stays in its room; the
+  web-service JSON editor drops `auth_kind`; a POST-read 500 raises no
+  banner; never driven in the packaged app.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

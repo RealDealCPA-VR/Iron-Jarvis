@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.455.0
+
+**One word for each thing, and "did it work?" answered to the end.** **One word for each thing.** A server for models you run is a **model server** everywhere (it was "endpoint" or "node").
+
 ## v1.454.0
 
 **Skills, how Jarvis works on pages, and a pointer you can watch in the browser sidebar.** **Skills in the browser sidebar.** Type **/** in the sidebar's box and the same skills the chat's "/" menu offers are listed; type more to narrow them, use the arrows, and press **Enter** (or **Tab**) to pick one.
@@ -77,7 +81,3 @@
 ## v1.435.0
 
 **Projects, agents, apps and more from chat.** Each of these shows a card before anything changes, and each change has an Undo.
-
-## v1.434.0
-
-**Chat finds the right tool.** **Chat knows every setting by its name.** Ask "turn on follow-up suggestions", "use Ollama by default", "stop asking before every command" or "make the app dark", and chat offers the right setting.

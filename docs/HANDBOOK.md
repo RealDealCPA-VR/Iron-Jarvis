@@ -2042,6 +2042,56 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## One word for each thing, and "did it work?" answered to the end (v1.455.0)
+
+- **One word for each thing.** A server for models you run is a **model
+  server** everywhere (it was "endpoint" or "node"). An MCP server is an
+  **extension** everywhere (it was also "tool server"). The coding screens
+  talk about **your accounts**; only the account manager's own card on
+  Connections uses its program name, Iron-Proxy. After the rename to Rules,
+  the bell, the tray and your phone say "rule" as well. The Sessions page is
+  now **Agent runs**, and searching for "sessions" still finds it. About a
+  dozen Settings rows have plain names, and their old names still search.
+- **A failed button press says so plainly.** When Iron Jarvis hits a problem
+  doing something you pressed, you see "Iron Jarvis hit a problem doing
+  that. Try again."; the error itself is under Details. The "Part of this
+  page didn't load" banner now only shows when a page really failed to load.
+- **Work you started is counted while it runs.** The orb and the home line
+  count a running workflow or a picture being made, not only agent runs.
+- **A remote agent's report comes back to your chat.** When an agent run you
+  started from chat hands work to another machine, that machine's report
+  lands in the chat, and the bell rings for it.
+- **Asks say why.** An agent run's approval card says why it is asking, and
+  every approval dock, Chat › Code's included, has "No, tell it what to do
+  instead".
+- **When something fails, it says what was kept.** A failed run or coding
+  reply names the files it wrote, which are kept. A failed workflow shows its
+  first failed step, with Run again; a failed picture has Try again. A chat
+  turn waiting on your approval card is never stopped for being unwatched,
+  and a turn that is stopped for that says why.
+- **Chat finds the right thing more often.** "Use my Claude Pro subscription
+  with Jarvis", "Only let Jarvis look at C:\Clients", "Whenever a new PDF
+  shows up in my Downloads folder…", "Install Codex for me" and "Fix the
+  failing test in my repo" each reach the right setting, door or offer. "My
+  schedule is packed" no longer offers to make a schedule. A long request in
+  several parts can be given to the team as an objective. Attaching a
+  document while a model on your own computer is connected offers, once, to
+  keep that chat on this PC.
+- **Connections has one home.** Settings › Connections opens with
+  **Discover**, **Connected** and **Import** tabs, and the other places that
+  hold connections link to it. Model servers are added in one place, on
+  Connections. Settings › Connections offers "Install for me" for Claude Code
+  and Codex, and the starter model when Ollama is running with no model.
+- **Your own sign-in apps, step by step.** Help has a new guide, "Your own
+  sign-in apps", for setting up Google Drive, Gmail, OneDrive and Dropbox.
+  Each card links to its section.
+- **More you can connect.** A web service can take its key as a header or a
+  username and password, as well as a bearer key. The tool configs a repo
+  keeps for itself are offered for import from the folder you last coded in.
+  A connected app is still off in each chat until you turn it on; on the
+  Chat page, naming it in your message is enough (Jarvis asks before each
+  use).
+
 ## Skills, how Jarvis works on pages, and a pointer you can watch in the browser sidebar (v1.454.0)
 
 - **Skills in the browser sidebar.** Type **/** in the sidebar's box and the

@@ -14,6 +14,24 @@ The checklist has **213 items: 41 PASS, 169 PARTIAL, 3 FAIL.**
 
 ---
 
+## 0k. After Waves E–H (v1.455.0, 2026-11-08)
+
+The 0j.5 plan's 35 items were built in five lanes (E words; F1 and F2 "did it work?"; G chat; H connections), each re-checked by an independent reviewer, who found and fixed 42 more defects between them. The owner took the recommended answer to decisions 33, 34 and 35: a connected app stays off per chat, with the card saying naming it on the Chat page is enough; the Sessions page is now "Agent runs"; and Settings › Connections opens with Discover / Connected / Import tabs. The 0j.4 open items 26, 33, 44, 48 and 73 were built too.
+
+**Built in part:**
+- **Item 17.** The receipt's account-switch line was dropped, because no daemon path reports a mid-turn account move.
+- **Item 30.** Only the code part was built (Codex's install folder). The clean-profile run is the owner's.
+- **Item 28.** Settings › Connections reuses the first-run door's hooks and words; ConnectDoors keeps its own markup.
+
+**Still open, found while building:**
+- Three new Settings labels arm the settings tools on near-miss sentences.
+- Some daemon sentences still say "Build session".
+- An unsaved chat's job report stays in its room.
+- The web-service JSON editor drops the auth fields.
+- A 500 on a page read made through POST raises no banner.
+
+No new score: it needs a re-audit, and the cap in 0j.8 (nothing driven live in the packaged app) is unchanged.
+
 ## 0j. Re-audit at v1.452.0 (2026-11-08): what is fixed, what remains to 100
 
 **What was re-checked, and how.** Five releases shipped since the last re-audit (0h, v1.447.0): the four waves of the 0h.5 plan (v1.448.0 to v1.451.1, items 1 to 42 except 9) and v1.452.0 (the owner's answers to items 9, 43, 44 and 45). Seven read-only lanes re-marked all 213 checklist items against master at v1.452.0 (commit `80ec5e89`), in the same groups as before: A-B, C-D-O, E-J, F-K, G-N, H-I-M and L. Each lane started from its own v1.447.0 report, re-marked every item from the current code (never the notes), said for each move whether the code changed or the reading got stricter, checked the ease-of-use review's items in its sections, and hunted for anything v1.447.0 marked PASS that no longer holds. Lane F-K re-ran the 38 probe sentences of 0h through the real matchers and added 30 new ones, in-process with no model and nothing sent anywhere. Lane E-J redid the first-run walkthrough for three kinds of user. Lane G-N read the last 15 Release and Tests runs. No test suite was run, and nothing in the repo was changed by the lanes.
