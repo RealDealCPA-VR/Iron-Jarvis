@@ -3513,7 +3513,14 @@ class AgentRuntime:
             requested["count"] = count
             requested["examples"] = examples
         # Readiness 0j.5 item 13 (additive keys: an older page ignores them).
-        requested["why"] = _why
+        # Wave F review: masked and cut here too — this event is persisted and
+        # fans out (the bell, the phone, the audit), like the listings that
+        # re-mask it (``core/approvals._why_sentence``, the one rule).
+        from ..core.approvals import _why_sentence as _why_line
+
+        _why_shown = _why_line(_why)
+        if _why_shown:
+            requested["why"] = _why_shown
         requested["asker"] = _auto_why.ASKER_MODEL
         # v1.402.0 (the autonomy metrics): this pause, for COUNTING ONLY —
         # `interrupt.asked` beside `approval.requested`, `interrupt.answered`

@@ -57,7 +57,7 @@ import {
 import { CODING_SESSION } from "@/lib/buildWords";
 import { announceChatViewLink } from "@/lib/chatSurface";
 import { lookingAt, noteWatched, wasWatched } from "@/lib/buildWatching";
-import { CHAT_ASKS_CHANGED_EVENT, chatHereVersion, shownHere, subscribeChatHere } from "@/lib/chatAway";
+import { CHAT_ASKS_CHANGED_EVENT, chatHereVersion, shownHere, subscribeChatHere, threadShownHere } from "@/lib/chatAway";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
 import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
@@ -174,6 +174,10 @@ export interface ActivityItem {
    *  thread id). Its ping is skipped, and its badge count dropped, while the
    *  user is LOOKING at that session (lib/buildWatching) — they saw it end. */
   build?: string;
+  /** Wave F review: the chat a `remote.message` line came home to. Its ping
+   *  is skipped, and its badge count dropped, while that chat is in front of
+   *  the user in THIS window (lib/chatAway.threadShownHere): they saw it land. */
+  chat?: string;
   /** v1.351.0 (G03): unattended work that FAILED or FELL SHORT. Counted on
    *  the bell's badge (and the tab title) until the dropdown is opened —
    *  nobody was watching when it happened, so the badge is how they learn.
@@ -690,6 +694,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: kind === "done" ? CheckCircle2 : MessageSquare,
       title,
       body: files ? `It sent ${files} file${files === 1 ? "" : "s"}.` : "",
+      ...(chat ? { chat } : {}),
       ...(kind === "progress" ? { quiet: true } : { attention: true }),
     };
   }
@@ -2619,6 +2624,20 @@ export function NotificationBell() {
     if (latest.build && lookingAt(latest.build)) {
       setSeenAttention((prev) => (prev.has(latest.id) ? prev : new Set(prev).add(latest.id)));
       noteWatched(latest.id); // ...and stays seen after a reload (review)
+      return;
+    }
+    // Wave F review: a remote's line that came home to the chat in front of
+    // the user here (shown, the window visible and focused) is seen as it
+    // lands — never a desktop ping over the line they are reading.
+    if (
+      latest.chat &&
+      threadShownHere(latest.chat) &&
+      typeof document !== "undefined" &&
+      document.visibilityState === "visible" &&
+      document.hasFocus()
+    ) {
+      setSeenAttention((prev) => (prev.has(latest.id) ? prev : new Set(prev).add(latest.id)));
+      noteWatched(latest.id);
       return;
     }
     if (quietHere()) return;

@@ -752,10 +752,14 @@ class AgentThreads:
                 # transcript is grounded in the project, and an id offered
                 # here (a stale or crafted panel_thread_id) must not pull
                 # it into a chat that is not that project's.
+                # Wave F review: nor is a handed-over JOB's room (its
+                # ``home_chat_id`` is the chat its report comes home to) — it
+                # must never stand in for a chat's @-panel room.
                 if (
                     orphan is not None
                     and not (orphan.chat_thread_id or "").strip()
                     and not project_of(orphan)
+                    and not str(getattr(orphan, "home_chat_id", "") or "").strip()
                 ):
                     if chat_thread_id:
                         orphan.chat_thread_id = chat_thread_id

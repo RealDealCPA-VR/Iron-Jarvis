@@ -171,6 +171,13 @@ AUTO_CHECK = True
 SERVICE_ANSWERING = "Added and answering: “{name}” replied to a test request."
 SERVICE_NOT_ANSWERING = "Added, but it is not answering: {why}."
 SERVICE_CHECK_LATER = "It is checked once its key is saved."
+#: Wave F review: under Local only the check is a request to an address off
+#: this network that no card asked about (web_service_add is not a "reaches
+#: outside" tool), so it is not sent.
+SERVICE_NOT_TESTED_LOCAL_ONLY = (
+    "It was not tested: this chat is kept on this network. Press Test beside it "
+    "in Settings › Connections to try it."
+)
 
 
 def _check_reason(detail: str) -> str:
@@ -227,6 +234,30 @@ async def check_service_bounded(platform: Any, iid: str) -> tuple[bool, str]:
         )
     except asyncio.TimeoutError:
         return False, SERVICE_NOT_ANSWERING.format(why="it did not answer in time")
+
+
+def check_service_within(platform: Any, iid: str) -> tuple[bool, str]:
+    """:func:`check_service` on a daemon thread, waited for at most
+    :data:`SERVICE_CHECK_TIMEOUT_S` (Wave F review). BLOCKING, for a caller
+    that is already off the loop (the secure card's save): a service that
+    trickles its answer must not hold the card's Save for as long as it likes
+    (the Test's GET has per-phase timeouts, not a whole-answer bound)."""
+    import threading
+
+    box: list[tuple[bool, str]] = []
+
+    def _run() -> None:
+        try:
+            box.append(check_service(platform, iid))
+        except Exception:  # noqa: BLE001 — check_service never raises; belt and braces
+            box.append((False, SERVICE_NOT_ANSWERING.format(why="it could not be tested")))
+
+    t = threading.Thread(target=_run, name="web-service-check", daemon=True)
+    t.start()
+    t.join(SERVICE_CHECK_TIMEOUT_S)
+    if box:
+        return box[0]
+    return False, SERVICE_NOT_ANSWERING.format(why="it did not answer in time")
 SERVICE_KEY_WORDS = (
     " It needs a key: the user pastes it on the secure card below (never in the chat); calls carry it "
     "as a bearer token once it is saved"
@@ -1277,6 +1308,7 @@ class WebServiceAddTool(R._RecordTool):
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from ..integrations.hookups import add_hookup
         from ..mcp.pack_door import persist_for
+        from ..providers.egress import current_scope as egress_scope
         from ..providers.egress import private_host
 
         iid, shown, address, problem = await asyncio.to_thread(self._check, args)
@@ -1325,6 +1357,10 @@ class WebServiceAddTool(R._RecordTool):
             # Its Test needs the key; it runs when the card saves it
             # (``settings.credentials`` → :func:`on_web_service_key_saved`).
             output += " " + SERVICE_CHECK_LATER
+        elif AUTO_CHECK and egress_scope().on and not private:
+            # Wave F review: under Local only an internet address is not sent
+            # a request no card asked about.
+            output += " " + SERVICE_NOT_TESTED_LOCAL_ONLY
         elif AUTO_CHECK:
             # Readiness 0j.5 item 18: never "added" alone — the service's own
             # Test says whether it answers.
@@ -1345,7 +1381,7 @@ def on_web_service_key_saved(platform: Any, arg: str) -> dict[str, Any]:
         reg = getattr(platform, "integrations", None)
         if not iid or reg is None or reg.get_spec(iid) is None:
             return {}
-        answering, words = check_service(platform, iid)
+        answering, words = check_service_within(platform, iid)
         return {"check": {"answering": answering, "words": words}}
     except Exception:  # noqa: BLE001
         return {}

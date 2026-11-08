@@ -515,7 +515,7 @@ class InboundPoller:
                 provider=str(getattr(session, "provider", "") or ""),
             )
         # Readiness 0j.5 item 18: the reply NAMES the files the run wrote (or,
-        # for a run that did not finish, the ones it kept) â€” names only,
+        # for a run that did not finish, the ones it kept) — names only,
         # never where on this PC they are. Off the loop; never fails it.
         summary += await self._files_line(session.id, finished=ran, summary=summary)
         async with self._identity_lock(name, msg.sender_id):
@@ -533,7 +533,7 @@ class InboundPoller:
 
     async def _files_line(self, session_id: str, *, finished: bool, summary: str) -> str:
         """" Files it wrote: a.md, b.xlsx." (a finished run) or " The files it
-        wrote are kept: â€¦" (one that did not finish) â€” read off the run's
+        wrote are kept: …" (one that did not finish) — read off the run's
         ledger card (``agents/outcome``), ``""`` when it wrote nothing, the
         card cannot be read, or the summary already says it. Never raises."""
         try:
@@ -547,7 +547,7 @@ class InboundPoller:
             if not line or line.strip() in summary:
                 return ""
             return "\n\n" + line.strip()
-        except Exception:  # noqa: BLE001 â€” wording never fails a delivery
+        except Exception:  # noqa: BLE001 — wording never fails a delivery
             return ""
 
     # -- restart mid-run (v1.291.0, io-03) ---------------------------------

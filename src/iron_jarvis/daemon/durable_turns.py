@@ -133,7 +133,6 @@ ORPHAN_STOP_S = 3600.0
 MAX_STORED_CHARS = 8_000_000
 #: Finished records older than this are removed at boot.
 KEEP_RECORDS_DAYS = 7
-#: The error a turn cut off by a restart ends with.
 #: Readiness 0j.5 item 17: WHY the orphan guard stopped a chat turn, in the
 #: turn's own error frame (and so on its record). The title / fix split the
 #: page's failure line reads (``chat_turn.error_payload``'s keys).
@@ -149,6 +148,7 @@ ORPHAN_STOP_DETAIL = f"{ORPHAN_STOP_TITLE}. {ORPHAN_STOP_FIX}"
 _CARD_OPEN_EVENTS = frozenset({"mcp_elicitation", "mcp_sampling", "ask_user"})
 _CARD_CLOSE_EVENT = "mcp_resolved"
 
+#: The error a turn cut off by a restart ends with.
 INTERRUPTED_DETAIL = (
     "Iron Jarvis stopped while answering (a restart or a crash). What it had"
     " written so far is kept; press Retry to ask again."

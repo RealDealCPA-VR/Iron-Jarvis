@@ -1017,6 +1017,11 @@ function addresseeOf(msgs: ChatMessage[]): string[] {
   for (; i >= 0 && msgs[i].role === "assistant"; i--) {
     const who = msgs[i].panelWho;
     if (!who) break;
+    // Wave F review: a REMOTE's line with no room of this chat's is a job's
+    // report that came home (readiness 0j.5 item 10) — an agent run handed
+    // it the task, the user never addressed it here. The chat stays with
+    // Jarvis: a plain next message must not go to the other machine.
+    if (who.startsWith("remote:") && !msgs[i].panelThreadId) break;
     if (!keys.includes(who)) keys.unshift(who);
   }
   return keys;
