@@ -191,7 +191,7 @@ async function card() {
 }
 
 async function saveEndpoint(c: HTMLElement, url: string) {
-  fireEvent.click(within(c).getByRole("button", { name: /Add (an|another) endpoint/ }));
+  fireEvent.click(within(c).getByRole("button", { name: /Add (a|another) model server/ }));
   fireEvent.change(within(c).getByPlaceholderText("http://localhost:1234/v1"), { target: { value: url } });
   fireEvent.click(within(c).getByRole("button", { name: /Save endpoint/ }));
 }
@@ -230,7 +230,7 @@ describe("G47: the model-server card matches what answers", () => {
     expect(within(c).queryByTestId("conn-card-auth")).toBeNull();
     // The connection IS the endpoint list: it stays, with its add door.
     expect(await within(c).findByTestId("endpoint-row")).toBeInTheDocument();
-    expect(within(c).getByRole("button", { name: /Add another endpoint/ })).toBeInTheDocument();
+    expect(within(c).getByRole("button", { name: /Add another model server/ })).toBeInTheDocument();
     // No key to test or disconnect, and no second "default" control.
     expect(within(c).queryByRole("button", { name: /^Test$/ })).toBeNull();
     expect(within(c).queryByText("Disconnect")).toBeNull();

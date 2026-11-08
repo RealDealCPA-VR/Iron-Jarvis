@@ -194,10 +194,10 @@ describe("the card — pre-filled review, one decision", () => {
     ).toContain(`The ask, in your words: "${RECURRING_ASK}"`);
     expect(screen.getByLabelText("Goal schedule")).toHaveValue("0 9 * * *");
     // The placeholder must say what actually happens (the engine produces
-    // the scheduler row): empty = manual, a cron fires on schedule.
+    // the scheduler row; v1.451.0 says it without "cron").
     expect(screen.getByLabelText("Goal schedule")).toHaveAttribute(
       "placeholder",
-      "empty = manual — you run it; a cron fires on schedule",
+      "empty = you run it yourself; else it runs on a schedule, like daily or every night",
     );
   });
 

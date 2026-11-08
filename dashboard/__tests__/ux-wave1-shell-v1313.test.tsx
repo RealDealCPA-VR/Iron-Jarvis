@@ -367,7 +367,7 @@ describe("phone title bar — nothing overlaps at 390 px", () => {
     expect(hiddenBelowSmOnly(word, header)).toBe(true);
     // CSS `hidden` drops the words from the accessible name, so the link
     // names itself (RED today: no aria-label).
-    expect(link.getAttribute("aria-label") ?? "").toMatch(/Iron Jarvis.*Overview/);
+    expect(link.getAttribute("aria-label") ?? "").toMatch(/Iron Jarvis.*Home/);
     expect((link.style as unknown as Record<string, string>).WebkitAppRegion).toBe("no-drag");
   });
 

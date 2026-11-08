@@ -14,6 +14,45 @@ The checklist has **213 items: 41 PASS, 169 PARTIAL, 3 FAIL.**
 
 ---
 
+## 0i. After the four waves of the plan (v1.448.1 → v1.451.0, 2026-11-08)
+
+The plan in 0h.5 was built in four waves. Every item was built by one lane,
+checked by an independent reviewer who mutation-tested it, and passed the
+full suite on GitHub before release. The score below is NOT re-audited: it
+stays 82 until a fresh audit marks the items.
+
+| Wave | Release | Plan items | State |
+|---|---|---|---|
+| A: chat configures everything | v1.448.1 | 1-8 | Shipped |
+| B: "did it work?" everywhere | v1.449.1 | 10-19 (and G54) | Shipped |
+| C: the first run and connections | v1.450.1 | 20-31 | Shipped |
+| D: Settings, words, automations, Help | v1.451.0 | 32-42 | Built; see the release |
+
+The reviewers found 62 more defects across the four waves, among them four
+secret leaks (a run's task on the Activity headline, a remote's echoed
+token, an imported `--api-key` in the import preview, a `?key=` address in
+`config.toml`), and a default model that could be left pointing at a removed server.
+Each was fixed and pinned before release.
+
+**What remains to 100:**
+
+- **Owner's decisions (not built):** item 9 (a writer hand-picked from the
+  chat's "+ Tools" menu runs with no card), item 43 (Chat › Code's "Work on
+  a new branch" default for a folder-first user), item 44 (rename Sentinels,
+  Reflexes, Artifacts and Local fleet in the nav), item 45 (Gmail and Slack
+  need the user's own developer app).
+- **Out of reach or decided against:** G83/G85 (controlling other desktop
+  apps), G86 (a bundled model), a two-PC run of the remote node, the browser
+  add-on in the stores, code signing (in progress), ease item 5 (Creative
+  Autopilot stays on).
+- **Left open by the lanes, small:** about 25 press failures on Fleet,
+  Skills, Artifacts, Updates, Browser and Creative still print a server
+  error's raw text; daemon sentences on coding screens still name
+  Iron-Proxy; the install lines were never run on a PC without the CLIs;
+  the first-commit limits for "Make this folder a repository" are guesses.
+- **Never proven live:** none of the four waves was driven in the packaged
+  app, a real browser, a screen reader or a real phone.
+
 ## 0h. Re-audit at v1.447.0 (2026-11-07): what is fixed, what remains to 100
 
 **What was re-checked, and how.** Sixty releases shipped between the last re-audit (0g, v1.388.0) and this one: the harness and Build audit waves (v1.421.0 to v1.426.0), Build › Code with six coding tools (v1.409.0 to v1.447.0), the whole chat-first plan (seven waves, v1.433.0 to v1.442.0), and the ease-of-use fixes (v1.445.0 "The first ten minutes", v1.446.0 "Nothing silent"). Seven read-only lanes re-marked all 213 checklist items against master at v1.447.0 (commit `9cf4a637`), in the same groups as before: A-B, C-D-O, E-J, F-K, G-N, H-I-M and L. Each lane read the code behind every item (never the project notes alone), listed the ease-of-use review's items that fall in its sections and checked each in the code, and hunted for anything 0g marked PASS that no longer holds. Lane F-K also ran 38 fresh first-time-user sentences through the real matchers on a scratch app (no model, nothing sent to the running app). No test suite was run; nothing in the repo was changed by the lanes.
