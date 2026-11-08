@@ -15767,6 +15767,143 @@ does not need a bump, stop and bump it.
     step both show in Running now; none of it driven in the packaged app, a
     real browser, a screen reader or a real phone.
 
+- **Wave C of the readiness plan: the first run and the connections**
+  (v1.450.0; ease-of-use items 20-31 of docs/PRODUCT-READINESS-RESULTS.md
+  0h.5; three builders + three independent reviewers, who found 17 more
+  defects — among them two more secret leaks and a default model that could
+  be left pointing at nothing — each red first and mutation-checked).
+  - FIRST-RUN DOORS (C1): `terminals/ai_clis.SETUP_LAUNCHES` gains
+    `claude-code-install` / `codex-install` (`INSTALL_JOBS`; `agent_cli: ""`):
+    the vendors' NATIVE installers, verified against their pages on
+    2026-11-08 and recorded in the module docstring — PowerShell `irm
+    https://claude.ai/install.ps1 | iex` / `irm https://chatgpt.com/codex/
+    install.ps1 | iex`, with a `command_cmd` form `launch_line` types in a cmd
+    pane. The ConnectDoors not-installed row is "Install Claude Code for me"
+    (a Build terminal the user watches; remembered per visit) then "I've
+    installed it — check now" (POST /providers/rescan; the 60 s
+    `CLI_ABSENT_TTL_S` finds it by itself). `providers/ollama_seen.OllamaState
+    (installed, running, has_model)` / `state()`; `/health`'s ollama row
+    carries `installed` + `running`; the Ollama door greys step 2 until
+    Ollama is on this PC, says "running but no model yet", folds step 3 into
+    ONE "Use Ollama for answers" press (= use-model) and names Gemini's free
+    tier (`lib/freeTiers`) as the no-download way. KEYS: the Anthropic and
+    OpenAI key tabs link where a key comes from and say it is billed per
+    use; the Model-servers tab says "Nothing was saved" on a refused check;
+    Settings › Connections posts `/connections/{p}/key?check=1` (a refused
+    key stays in the box, nothing stored; a pass promotes through
+    `/onboarding/use-model` only while the demo is the default); the chat's
+    secure card (`settings/credentials.CredentialStore.store`) runs
+    `routes.connections.check_key_first` for `connection.*` names BEFORE any
+    write and answers 200 `{status: "not_saved", saved: false, test, words}`
+    — REVIEW: its words are CARD words (`CARD_FIX_WORDS` / `card_fix`: "save
+    it again", never "press Test again" or another page; a new `_TEST_FIX`
+    sentence naming "Test" fails a pin until worded). THE SUITE NEVER DIALS
+    OUT through the card: four tests that store a `connection.*` key got a
+    stand-in prober; 27 files ran green under `IJ_TEST_NO_NETWORK=1` (the
+    one error, `test_integrate_wave5_v13550`'s `mcp.example.test` lookup, is
+    older and unrelated). `HomeReadiness` counts REQUIRED helpers only and
+    folds optional misses; `NextStepLine` once a real model answered; the
+    frozen build's .xls fix says reinstall, never `uv sync`.
+    `desktop/loading.html` fades a second line in at 15 s (CSS only, the CSP
+    untouched); a phone's chat top bar has `+ New chat` (`chat-new-chat-phone`).
+  - CONNECTION CARDS (C2): `components/connections/OAuthAppForm.tsx` on the
+    Google Drive / OneDrive / Dropbox cards (Directory fold + Connections
+    one-time-setup fold): the vendor-console step in words, the redirect
+    address `http://localhost:8787/oauth/<provider>/callback` with Copy
+    (`CALM_ACTION`, a "select and copy" fallback), App ID + App secret →
+    `POST /secrets` under `<provider>_oauth_client_id` /
+    `<provider>_oauth_client_secret` (what `platform._oauth_app` reads;
+    `lib/oauthApp.ts` pinned equal by a Python test; driven through the real
+    `start_oauth`); a secret alone is refused in words; the secret is in no
+    answer. `lib/directoryLinks.runtimeDownload` → "Get Node.js (free)"
+    (https-only, the daemon's `runtime_url` wins) on the Directory badge, the
+    Tools card while `runtime_ready !== true` and a connect error naming
+    nodejs.org; the Microsoft 365 card links "How your admin sets this up" to
+    the Handbook section (`page_doors.M365_ADMIN_SECTION`, pinned to exist)
+    and names its GitHub link. THE DEFAULT NEVER POINTS AT NOTHING:
+    `daemon/default_replacement.py` — `delete_fleet_node` (a node or the
+    `custom`/`ollama` slot) and `DELETE /connections/{provider}` call
+    `apply()` BEFORE the removal; a leaving default moves through the ONE
+    settings writer (ledger row + Undo) to the first connected provider in
+    `PREFERRED_ORDER`, else the demo with a plain warning; every read under
+    `cli_auth.never_probe`; the answers gain `default_replaced {…}` only when
+    something moved; `GET /fleet/default-after-removal?leaving=` previews;
+    `DefaultImpact.tsx` says it on the Connections card, the endpoint row and
+    the Fleet row before the press; `removeLegacy` goes through `DELETE
+    /fleet/nodes/{id}`; chat's `model_server_remove` relays the route's
+    words. REVIEW (eight defects): `_model_for` pairs honestly and `apply()`
+    ALWAYS writes `default_model` (it kept the REMOVED server's model beside
+    the new provider); a node with no model is skipped (it would have asked
+    for the literal model "default"); a REFUSED key (`connectors.service.
+    key_check`) never counts as connected; dropping the OpenAI/Anthropic key
+    with the CLI signed in KEEPS the name and re-pairs the model to the
+    plan's default (`keep_through_cli`, `default_replaced {kept: true}`; it
+    left `gpt-4o-mini`, which Codex refuses); the settings writer REFUSES a
+    `default_provider` the daemon does not have (registered factory or Auto;
+    a value equal to the current one is not re-checked) and `restore()` skips
+    `default_model` with a skipped `default_provider` (`_PAIRED_RESTORE`) —
+    an Undo used to put the default straight back on the removed server;
+    `affected()` never reads the demo or Auto as leaving; the ollama slot's
+    Delete no longer sends `DELETE /connections/ollama` (a 500). The
+    add-on's `setup.html` says what site access allows, browser-neutral
+    (`setup.ts` fills `[data-browser]` from the navigator synchronously, the
+    permission request still first in the click); `browserWords.
+    staleAddonLine` compares `extension_version` (already on `/browser/
+    status`) with `/health.version` as release numbers only — "older copy —
+    press Reload" for an OLDER add-on, nothing for equal/newer/suffixed.
+  - MEMORY, SETTINGS, IMPORT (C3): `routes/knowledge._base_health` is the ONE
+    per-base health read (the listing and the new `read_back(d, name)`);
+    `add_ltm_source_record` answers `{name, kind, answering, words}`
+    (`added_words()`: "Added and answering." / "Added, but it is not
+    answering: …" / "Added. It is not checked until you search it."); chat's
+    `memory_base_add` and the Memory page (`ltm-added-not-answering`) say
+    those words; `obsidian_vault` / `notion_database_id` are `restart=True`
+    rows in "Memory bases" whose help points at "Add a memory base". The
+    destination switches read "Listen for incoming messages" / "Listen for
+    incoming mail" / "Chat with Iron Jarvis", each `"type": "bool"`;
+    `SettingsHome.CONTROLLED_IN_SECTION` gains `browser_access`,
+    `backup_mirror_dir`, `backup_mirror_media` — NOT the two endpoint
+    addresses: REVIEW found nothing on the Connections page lets the user
+    TYPE one (Remove only clears, the Ollama press writes one fixed address),
+    so the plain rows stay. Import reads OpenCode (`opencode.json(c)` +
+    the global folder's `config.json` — REVIEW: never a project's unrelated
+    `config.json`), Grok (`config.toml` `[mcp_servers.*]` +
+    `disabled_mcp_servers`), Antigravity (`~/.gemini/config/mcp_config.json`)
+    and Pi (`<agent dir>/mcp.json`; `PI_CODING_AGENT_DIR` → the import-only
+    `IRONJARVIS_PI_AGENT_DIR` → `~/.pi/agent`; conftest points it at
+    scratch) — read-only, names only, `{env:X}` / `{file:PATH}` placeholders
+    as fills (the file never read). REVIEW: `PackSpec.preview_row` goes
+    through `split_args` (an imported `--api-key VALUE` reached the preview);
+    `mcp/secrets.split_url` masks a credential-NAMED query parameter (`key`,
+    `token`, `sig`, …) so `?key=` never sits in `config.toml` (the vault
+    keeps the whole address).
+  - Pins: `tests/test_{cli_install_jobs,ollama_door_state,
+    key_checked_before_saving,home_helpers_fix_words,default_replacement,
+    default_replacement_review,oauth_app_boxes_review,wave_c_twins}_v14490.py`,
+    `tests/test_wave_c_{import_more_tools,import_review,memory_base_readback,
+    destination_words}.py`, `dashboard/__tests__/{first-run-wave-c-doors,
+    chat-home-wave-c,connections-key-check,credential-card-not-saved,
+    wave-c-connections,browser-addon-stale,wave-c-review,wave-c-review-page}
+    -v1449.test.*`, `dashboard/__tests__/wave-c-{one-control,import-tools-door,
+    memory-base-readback,destination-words}.test.tsx`; moved on purpose:
+    `test_splash_lighthouse_v1383`, `test_mcp_import_sources_v1343`,
+    `test_memory_integration`, `test_records_connections_v14380` (the Undo's
+    words), four daemon tests storing a `connection.*` key (stand-in
+    prober), `first-run-home-v13530`, `model-doors-v13550`,
+    `wizard-wave2-v1310`, `first-run-wizard-v1197`, `connections-home-v13530`,
+    `ux-wave4-connections-v1316`, the destination fixtures of
+    `destination-edits-v1446`, `notifications-edit-keeps-v1427-6`,
+    `phone-chat-v13530`, and the source scan of `wave-c-one-control` (Remove
+    goes through the fleet route).
+  - OPEN: the install lines were not run on a PC without the CLIs (a vendor
+    move shows as a download error in the visible terminal); the writer's
+    `default_provider` check fails open with no readable factories;
+    `keep_through_cli` re-pairs a deliberately pinned API id too (Undo-able);
+    an existing stored pack url with a plain `?key=` is not migrated; a local
+    folder base's `health()` has no timeout (older); `_source_for_path`'s
+    codex/grok ambiguity has no product caller; none of it driven in the
+    packaged app, against a real vendor console or a real add-on.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

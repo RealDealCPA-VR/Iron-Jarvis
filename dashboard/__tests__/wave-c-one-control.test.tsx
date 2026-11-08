@@ -133,13 +133,14 @@ describe("ONE control per setting (Wave C, item 29)", () => {
 
   it("the endpoint ADDRESS rows are not hidden: nothing else lets the user type one", async () => {
     for (const key of KEEP_ROWS) expect(CONTROLLED_IN_SECTION[key], key).toBeUndefined();
-    // The Connections page writes custom_base_url only to CLEAR it (Remove)
-    // and ollama_base_url only to one fixed address: no address box there.
+    // The Connections page never TYPES an address: a seeded slot's Remove goes
+    // through DELETE /fleet/nodes/{id} (Wave C, C2 — the daemon clears the slot
+    // and re-points the default), so the page writes custom_base_url not at
+    // all, and ollama_base_url only to one fixed address. No address box there.
     // (If an address editor is ever added there, this pin is what moves.)
     const conn = readSrc("components/settings/pages/ConnectionsPage.tsx");
     const customWrites = [...conn.matchAll(/custom_base_url:\s*([^,}\n]+)/g)].map((m) => m[1].trim());
     const ollamaWrites = [...conn.matchAll(/ollama_base_url:\s*([^,}\n]+)/g)].map((m) => m[1].trim());
-    expect(customWrites.length).toBeGreaterThan(0);
     expect(customWrites.every((w) => w === '""')).toBe(true);
     expect(ollamaWrites.length).toBeGreaterThan(0);
     expect(ollamaWrites.every((w) => w === "OLLAMA_LOCAL_URL")).toBe(true);

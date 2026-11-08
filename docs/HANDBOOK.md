@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.449.1 (2026-11-07).*
+holds itself to. Current as of v1.450.0 (2026-11-07).*
 
 ---
 
@@ -2050,6 +2050,47 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The first run, and every connection, in plain words (v1.450.0)
+
+- **No Claude Code or Codex yet?** The connect door offers "Install Claude
+  Code for me" / "Install Codex for me": a Build terminal opens and runs the
+  vendor's own installer where you can watch it. Nothing is installed
+  quietly. When it finishes, press "I've installed it — check now" (or wait
+  a minute) and the Sign in press appears.
+- **Ollama**: the door's steps light up as you go — "Download a starter
+  model" waits until Ollama is on this PC, "running but has no model yet" is
+  said plainly, and ONE press, "Use Ollama for answers", makes it answer your
+  chats. Prefer no download? A Google Gemini key has a free tier.
+- **Keys**: the Anthropic and OpenAI tabs say where a key comes from and that
+  the account is billed per use. A key is TESTED before it is saved — on
+  Settings › Connections, on the Model servers tab and on the secure card in
+  chat; a refused key stays in the box and nothing changes.
+- **The chat home** counts only the helpers you need ("This PC is ready · 2
+  optional extras not set up") and, once a real model answers, says what to
+  try next.
+- **Google Drive, OneDrive, Dropbox**: the sign-in setup lives on the card —
+  the vendor-console step in words, the redirect address with Copy, and the
+  App ID and App secret boxes. Save, then Connect.
+- **"Needs Node.js"** comes with a "Get Node.js (free)" link; the Microsoft
+  365 card links "How your admin sets this up" to its Handbook section.
+- **Removing the model that answers your chats** (a model server, an
+  endpoint, a disconnected key) tells you first what Jarvis will use instead,
+  and the default is moved to a working model before anything goes — never
+  left pointing at nothing. Disconnecting a key while its plan's CLI is
+  signed in keeps the same answers. The move is a ledger row with Undo.
+- **The browser add-on's consent page** says what site access really allows,
+  for your browser by name; the Your browser card says when the add-on is an
+  older copy than the app and tells you to press Reload.
+- **Memory bases** added on the Memory page are read back: "Added and
+  answering." or why not, the same words the chat tool says. The Obsidian and
+  Notion settings rows say they need a restart and point at "Add a memory
+  base", which works at once.
+- **Destination switches** read "Listen for incoming messages", "Chat with
+  Iron Jarvis" — never "true/false".
+- **Import your tools** now reads OpenCode, Grok, Antigravity and Pi configs
+  too (names only; a key in an address or argument is masked and kept in the
+  vault).
 
 ## Did it work? The app tells you, everywhere (v1.449.0)
 
