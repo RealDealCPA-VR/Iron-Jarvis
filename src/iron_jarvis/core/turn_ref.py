@@ -31,6 +31,11 @@ class TurnRef:
     turn_id: str
     thread_id: Callable[[], str]
     looked_at: Callable[[], bool]
+    #: Is the turn still running? (v1.455.0 review.) A task the turn made can
+    #: outlive it — a Build library reflection armed at the turn's end fires
+    #: ten minutes later from the turn's context — and its failure is not
+    #: this turn's: an ended turn lends its reference to nothing.
+    running: Callable[[], bool] = lambda: True
 
 
 CURRENT: ContextVar["TurnRef | None"] = ContextVar("iron_jarvis_chat_turn", default=None)
@@ -50,6 +55,11 @@ def event_keys() -> dict[str, Any]:
     A read that fails says what it can (never a raise from a publish)."""
     ref = CURRENT.get()
     if ref is None or not ref.turn_id:
+        return {}
+    try:
+        if not ref.running():
+            return {}
+    except Exception:  # noqa: BLE001 — an unknown turn lends nothing
         return {}
     out: dict[str, Any] = {"turn_id": ref.turn_id}
     try:

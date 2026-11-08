@@ -227,7 +227,7 @@ import {
   type AppSecretCard,
 } from "@/lib/appConnect";
 // Readiness 12B (G05): a chat page that leaves the screen says so.
-import { leaveTurn, newViewerId, noteNotShowing, noteShowing } from "@/lib/chatAway";
+import { leaveTurn, newViewerId, noteNotShowing, noteShowing, windowShown } from "@/lib/chatAway";
 // Readiness 12B (G15): an app connected SOMEWHERE ELSE lets the work go on.
 import { connectOffer, nowConnected, type ConnectedNow } from "@/lib/connectedElsewhere";
 import { ConnectedElsewhere } from "@/components/chat/ConnectedElsewhere";
@@ -4019,6 +4019,23 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     },
     [],
   );
+  // v1.455.0 review: a hidden window (minimised, covered, the screen locked)
+  // is nobody looking — the daemon must not keep a failed turn's phone line
+  // back "because the chat shows it". Said again when the window shows it.
+  useEffect(() => {
+    const onVisibility = () => {
+      const live = turnIdRef.current;
+      if (!live) return;
+      void windowShown(
+        live,
+        viewerRef.current,
+        document.visibilityState === "hidden",
+        (p, b) => post(p, b),
+      );
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
   const [pendingSteers, setPendingSteers] = useState<string[]>([]);
   // v1.287.0: set when the turn finished before reading a steer note — the
   // note is back in the box and this line says why. Cleared by the next turn.

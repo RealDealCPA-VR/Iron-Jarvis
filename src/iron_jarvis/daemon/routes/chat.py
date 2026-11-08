@@ -3266,11 +3266,17 @@ def register(app: FastAPI, d) -> None:
         listed by ``GET /chat/approvals/pending`` (the bell, where the user
         is). ``{"viewer": "<the id the page named itself with>"}``. 404 for a
         turn that is not running here; ``away: false`` when that viewer is not
-        following it. Names only — nothing else is read or stored."""
+        following it. Names only — nothing else is read or stored.
+
+        v1.455.0 review: also sent while the page's WINDOW is hidden
+        (minimised, covered, the screen locked), and again with
+        ``"back": true`` when it shows the page again — a failed turn's phone
+        line is held back only while someone can see the chat."""
         viewer = str((body or {}).get("viewer") or "").strip()[:80]
         if not viewer:
             raise HTTPException(status_code=400, detail="viewer is required")
-        found = _turn_logs(d).mark_away(turn_id, viewer)
+        back = (body or {}).get("back") is True
+        found = _turn_logs(d).mark_away(turn_id, viewer, back=back)
         if found is None:
             raise HTTPException(status_code=404, detail=f"no such running turn: {turn_id}")
         return {"away": bool(found)}

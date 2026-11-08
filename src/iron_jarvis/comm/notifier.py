@@ -8,13 +8,17 @@ message whenever a *subscribed* event type fires (e.g. ``review.requested``,
 
 from __future__ import annotations
 
+import logging
 import re
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Callable, Iterator
 
 from ..core.events import EventType
 from .base import Channel
+
+log = logging.getLogger(__name__)
 
 #: event types that, by default, raise an outbound alert.
 #:
@@ -554,7 +558,7 @@ def _labelled(provider: str, label: str) -> Any:
     """A stand-in for the provider manager that answers the event's OWN
     ``label`` for a ``fleet-*`` provider (v1.455.0: the router stamps the
     label it knows; this module has no manager to ask), else ``None``."""
-    if not label or not provider.startswith("fleet-"):
+    if not label or not (provider == "custom" or provider.startswith("fleet-")):
         return None
     from types import SimpleNamespace
 
@@ -574,6 +578,23 @@ def _chat_title_words(title: Any) -> str:
     return t
 
 
+def _retry_is_the_fix(fix: str) -> bool:
+    """Is *fix* (``failure_words``' way out) "press Retry" and nothing more
+    useful — the generic words, the dropped connection's — so the phone line
+    may say "Open the chat and press Retry" instead? Never raises."""
+    try:
+        from ..providers.failure_words import GENERIC_FIX, GENERIC_FIX_BUILD
+
+        f = str(fix or "")
+        return (
+            f in (GENERIC_FIX, GENERIC_FIX_BUILD)
+            or f.startswith("Press Retry")
+            or f.startswith("The reply above is incomplete")
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _provider_failed_line(payload: dict) -> str:
     """The SAME sentence the chat's failure line shows for this failure
     (``failure_words`` title + fix), read from the event's error text — the
@@ -591,9 +612,22 @@ def _provider_failed_line(payload: dict) -> str:
     message = error[head.end():] if head else error
     in_turn = bool(_text(payload.get("turn_id")))
     try:
-        from ..providers.failure_words import GENERIC_FIX, classify, heading, plain_name
+        from ..providers.failure_words import (
+            GENERIC_FIX,
+            GENERIC_FIX_BUILD,
+            SURFACE_BUILD,
+            SURFACE_CHAT,
+            classify,
+            heading,
+            plain_name,
+        )
 
+        build = in_turn and payload.get("chat_surface") == "build"
         manager = _labelled(provider, label)
+        if provider == "custom" and manager is not None:
+            # v1.455.0 review: the slot's own name rides its fleet twin
+            # ("custom" alone always reads "your model server").
+            provider = "fleet-custom"
         exc = RuntimeError(message)
         if in_turn and payload.get("partial") is True and head is not None:
             cls = head.group(0).rstrip(": ").rsplit(".", 1)[-1]
@@ -601,16 +635,23 @@ def _provider_failed_line(payload: dict) -> str:
                 # The chat's own words for it (the router's refusal kind).
                 exc.kind = "interrupted"  # type: ignore[attr-defined]
                 exc.partial = True  # type: ignore[attr-defined]
-        words = classify(exc, provider=provider, manager=manager)
+        # v1.455.0 review: a coding session's failure is worded for one
+        # ("this session"), never "this chat".
+        surface = (SURFACE_BUILD if build else SURFACE_CHAT) if in_turn else None
+        words = classify(exc, provider=provider, manager=manager, surface=surface)
         if words is None:
             name = heading(plain_name(provider, manager)) or "The AI service"
-            words = (f"{name} couldn't answer", GENERIC_FIX)
+            words = (f"{name} couldn't answer", GENERIC_FIX_BUILD if build else GENERIC_FIX)
         if in_turn:
-            build = payload.get("chat_surface") == "build"
             what = CODING_SESSION if build else "chat"
             title = _chat_title_words(payload.get("chat_title"))
             named = f"Your {what} “{title}”" if title else f"Your {what}"
-            fix = CODE_TURN_FAILED_FIX if build else CHAT_TURN_FAILED_FIX
+            fix = words[1]
+            # v1.455.0 review: "Open the chat and press Retry" only where a
+            # Retry is the way out — a refused key, a sign-in, an account's
+            # usage limit, a server to bring back up keep their own words.
+            if _retry_is_the_fix(fix):
+                fix = CODE_TURN_FAILED_FIX if build else CHAT_TURN_FAILED_FIX
             return f"{named} didn't finish: {words[0]}. {fix}"
         return f"{words[0]}. {words[1]}"
     except Exception:  # noqa: BLE001 — wording only
@@ -1033,6 +1074,10 @@ class Notifier:
             set(event_types) if event_types is not None else set(DEFAULT_ALERT_EVENTS)
         )
         self._formatter = formatter or format_event
+        #: v1.455.0 review: turn id -> the newest provider failure inside that
+        #: chat turn, held until the turn ends (:meth:`_said_at_turn_end`).
+        self._turn_failures: dict[str, tuple[Any, dict]] = {}
+        self._turn_lock = threading.Lock()
 
     # -- channel management ---------------------------------------------
     def add_channel(self, name: str, channel: Channel) -> None:
@@ -1119,7 +1164,52 @@ class Notifier:
             if isinstance(payload, dict) and _text(payload.get("turn_id")):
                 if _turn_being_looked_at(payload):
                     return {}
+                # v1.455.0 review: "didn't finish" is said only once the turn
+                # has really ended in an error — a failover, a patience retry
+                # or a one-shot inside the turn can fail and the turn still
+                # finish. A turn this process holds is waited for.
+                if self._said_at_turn_end(etype, event, payload):
+                    return {}
                 event = _with_chat(event, payload)
+        return self._fan_out(etype, event)
+
+    def _said_at_turn_end(self, etype: str, event: Any, payload: dict) -> bool:
+        """Hold a provider failure inside a chat turn until that turn ends,
+        then send the chat's line ONCE — the newest failure's — only when the
+        turn ended in an error and no window was showing it. False when this
+        process holds no such turn (the caller sends the line now)."""
+        turn_id = _text(payload.get("turn_id"))
+        with self._turn_lock:
+            waiting = turn_id in self._turn_failures
+            self._turn_failures[turn_id] = (event, payload)
+        if waiting:
+            return True  # the hook already registered sends the newest one
+
+        def _ended(status: str, looked: bool) -> None:
+            with self._turn_lock:
+                ev, pl = self._turn_failures.pop(turn_id, (event, payload))
+            if status != "error" or looked or pl.get("looked_at") is True:
+                return
+            try:
+                self._fan_out(etype, _with_chat(ev, pl))
+            except Exception:  # noqa: BLE001 — an alert never raises
+                log.warning("sending a chat turn's failure failed", exc_info=True)
+
+        try:
+            from ..daemon.durable_turns import after_turn
+
+            held = after_turn(turn_id, _ended)
+        except Exception:  # noqa: BLE001
+            held = False
+        if not held:
+            with self._turn_lock:
+                self._turn_failures.pop(turn_id, None)
+        return held
+
+    def _fan_out(self, etype: str, event: Any) -> dict[str, dict[str, Any]]:
+        """Send *event* to every destination its type reaches (the rest of
+        :meth:`on_event`, lifted so a held chat-turn failure goes the same
+        way)."""
         # v1.118.0: fan out to EVERY channel whose per-registration config
         # allows this event type — not just the default. A channel config may
         # carry ``events: [...]`` to narrow what it receives (the Notifications

@@ -104,6 +104,7 @@ CHAT_FINISH_NOTICE_AFTER_S = 60.0
 #: bound once when the app is built (``routes/system.register``), read by
 #: :class:`TurnLogs` (made on first use, with only the engine). Weak keys: a
 #: closed test platform's engine never keeps its bus alive.
+import threading as _threading  # noqa: E402
 import weakref as _weakref  # noqa: E402
 
 _BUSES: "_weakref.WeakKeyDictionary[Any, Any]" = _weakref.WeakKeyDictionary()
@@ -138,6 +139,45 @@ def turn_looked_at(turn_id: str) -> "bool | None":
         return bool(lg.looked_at())
     except Exception:  # noqa: BLE001
         return None
+
+
+def after_turn(turn_id: str, hook: Any) -> bool:
+    """Call *hook* ``(status, looked_at)`` once the turn *turn_id* this
+    process holds has ended (``status`` "done" | "error" | "stopped" |
+    "interrupted"; ``looked_at``: was a window showing it as it ended) — at
+    once when it already has. False when this process holds no such turn (the
+    hook is never called). Called from any thread; the hook runs on a worker
+    thread, never the loop (v1.455.0 review: a failed chat turn's phone line
+    waits for the turn's end, so a failure the turn got past — a failover, a
+    retry, a one-shot inside it — is never said as "didn't finish"). Never
+    raises."""
+    try:
+        lg = _LIVE.get(str(turn_id or ""))
+        if lg is None:
+            return False
+        lg.on_end(hook)
+        return True
+    except Exception:  # noqa: BLE001
+        log.debug("could not wait for turn %s's end", turn_id, exc_info=True)
+        return False
+
+
+def _run_end_hooks(hooks: list[Any], status: str, looked: bool) -> None:
+    """Each hook on a worker thread (they may send a message). Never raises."""
+    if not hooks:
+        return
+
+    def _call() -> None:
+        for hook in hooks:
+            try:
+                hook(status, looked)
+            except Exception:  # noqa: BLE001 — a hook's fault is its own
+                log.debug("a turn's end hook failed", exc_info=True)
+
+    try:
+        asyncio.get_running_loop().run_in_executor(None, _call)
+    except Exception:  # noqa: BLE001 — no loop or a closed executor: run here
+        _call()
 
 
 def turn_chat(turn_id: str, thread_id: str = "") -> "tuple[str, str, str]":
@@ -355,6 +395,13 @@ class TurnLog:
         #: v1.455.0: the database this turn's chat lives in (set by
         #: :meth:`TurnLogs.start`; read by :func:`turn_chat`).
         self.engine: Any = None
+        #: v1.455.0 review: what to call when the turn ends (:func:`after_turn`)
+        #: — ``(status, looked_at)`` — and, once it has, that pair. A worker
+        #: thread registers while the loop ends the turn, so both sides go
+        #: through ``_end_lock``.
+        self._end_hooks: list[Any] = []
+        self._end_lock = _threading.Lock()
+        self.ended: "tuple[str, bool] | None" = None
 
     # -- the stored frames ---------------------------------------------------
     @property
@@ -583,14 +630,21 @@ class TurnLog:
         away = set(self._away)
         return any(not viewers.get(q) or viewers[q] not in away for q in list(self._followers))
 
-    def mark_away(self, viewer: str) -> bool:
+    def mark_away(self, viewer: str, back: bool = False) -> bool:
         """The chat page *viewer* is no longer on screen (the user went to
         another page of the same window); True when it is following this
-        turn. Kept until that follower ends (a new page is a new viewer)."""
+        turn. Kept until that follower ends (a new page is a new viewer).
+
+        v1.455.0 review: also while its WINDOW is hidden (minimised, covered,
+        the screen locked) — nobody is looking, so a failed turn's phone line
+        is not held back for it. ``back``: that window shows the page again."""
         v = str(viewer or "").strip()[:80]
         if not v or v not in self._viewers.values():
             return False
-        self._away.add(v)
+        if back:
+            self._away.discard(v)
+        else:
+            self._away.add(v)
         return True
 
     def unwatched_for(self) -> float:
@@ -657,6 +711,31 @@ class TurnLog:
             if gone and gone not in self._viewers.values():
                 self._away.discard(gone)
             self._last_seen = time.monotonic()
+
+    def end(self, status: str, looked_at: bool) -> list[Any]:
+        """The turn is over (v1.455.0 review): record *status* and whether a
+        window was showing it at its end, and hand back the hooks
+        :func:`after_turn` registered (each to be called with that pair)."""
+        with self._end_lock:
+            self.status = status
+            self.ended = (status, bool(looked_at))
+            hooks, self._end_hooks = self._end_hooks, []
+        return hooks
+
+    def on_end(self, hook: Any) -> bool:
+        """Call *hook* ``(status, looked_at)`` when this turn ends — at once,
+        on this thread, when it already has. Returns whether it was called
+        now. Never raises."""
+        with self._end_lock:
+            ended = self.ended
+            if ended is None:
+                self._end_hooks.append(hook)
+                return False
+        try:
+            hook(*ended)
+        except Exception:  # noqa: BLE001 — a hook's fault is its own
+            log.debug("a turn's end hook failed", exc_info=True)
+        return True
 
     def _end_followers(self) -> None:
         for q in list(self._followers):
@@ -776,14 +855,15 @@ class TurnLogs:
             return lg.thread_id
         return self._links.get(turn_id, "")
 
-    def mark_away(self, turn_id: str, viewer: str) -> "bool | None":
+    def mark_away(self, turn_id: str, viewer: str, back: bool = False) -> "bool | None":
         """Readiness 12B (G05): the chat page *viewer* left the screen while
-        following ``turn_id``. None when no such turn is RUNNING here; else
-        whether that viewer was following it (:meth:`TurnLog.mark_away`)."""
+        following ``turn_id`` (``back``: v1.455.0 review, its window shows it
+        again). None when no such turn is RUNNING here; else whether that
+        viewer was following it (:meth:`TurnLog.mark_away`)."""
         lg = self._logs.get(turn_id)
         if lg is None or lg.status != "running":
             return None
-        return lg.mark_away(viewer)
+        return lg.mark_away(viewer, back=back)
 
     def running(self) -> list[TurnLog]:
         # SNAPSHOT first (v1.367.0 review): Build's sync routes read this from
@@ -821,7 +901,10 @@ class TurnLogs:
         # makes) knows which turn it is in — the router's provider.failed
         # carries it, so the phone alert names the chat and stays quiet while
         # a window shows the turn.
-        ref = TurnRef(lg.turn_id, lambda: lg.thread_id, lg.looked_at)
+        ref = TurnRef(
+            lg.turn_id, lambda: lg.thread_id, lg.looked_at,
+            lambda: lg.status == "running",
+        )
         try:
             with _turn_scope(ref):
                 async with contextlib.aclosing(frames):  # type: ignore[arg-type]
@@ -853,9 +936,16 @@ class TurnLogs:
             status = "error"
         finally:
             CHAT_INFLIGHT.exit()
-            lg.status = status
+            # v1.455.0 review: whether a window shows the turn as it ends is
+            # read BEFORE the followers are told (they leave right after).
+            try:
+                looked = bool(lg.looked_at())
+            except Exception:  # noqa: BLE001
+                looked = False
+            hooks = lg.end(status, looked)
             lg.finished_at = time.monotonic()
             lg._end_followers()
+            _run_end_hooks(hooks, status, looked)
             try:
                 await asyncio.shield(lg.persist_now(self.engine))
             except BaseException:  # noqa: BLE001 — shutdown: the boot reconcile covers it

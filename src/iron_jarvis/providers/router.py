@@ -1360,10 +1360,12 @@ class ModelRouter:
         w = str(wanted or "")
         if w != "custom" and not w.startswith("fleet-"):
             return wanted
-        if w == "custom":
-            return _failure_words.MODEL_SERVER_WORDS
+        # v1.455.0 review: the ``custom`` slot is named on its fleet twin
+        # (``fleet-custom``, the node the receipt and the model menu read):
+        # a slot the user named keeps that name.
+        lookup = "fleet-custom" if w == "custom" else wanted
         try:
-            adapter = self.manager.get(wanted)
+            adapter = self.manager.get(lookup)
             node = getattr(self._innermost(adapter), "node", None)
             label = " ".join(str(getattr(node, "label", "") or "").split())
         except Exception:  # noqa: BLE001 — wording only, never a new failure

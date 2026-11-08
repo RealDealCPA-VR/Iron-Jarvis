@@ -348,9 +348,10 @@ class OpenAIAdapter(LLMAdapter):
         whose test doubles take no ``timeout`` keyword)."""
         if self._reply_budget is None:
             return {}
-        from ..reply_budget import local_stream_timeout
-
-        return {"timeout": local_stream_timeout(60.0)}
+        # v1.455.0 review: a cloud model behind the user's model server (or a
+        # cloud API added as one) keeps the 60 seconds.
+        timeout = self._reply_budget.stream_timeout(self.model, 60.0)
+        return {} if timeout is None else {"timeout": timeout}
 
     def _client(self) -> Any:
         if self._http is None:

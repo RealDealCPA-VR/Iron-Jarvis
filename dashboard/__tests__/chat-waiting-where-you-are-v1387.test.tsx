@@ -244,6 +244,43 @@ describe("the chat page says when it leaves the screen", () => {
   });
 });
 
+describe("v1.455.0 review: a hidden window is nobody looking", () => {
+  function setHidden(hidden: boolean) {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => (hidden ? "hidden" : "visible"),
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }
+
+  it("says away while the window is hidden mid-turn, and back when it shows again", async () => {
+    const { turnId, viewer, unmount } = await askAndPark();
+    try {
+      setHidden(true);
+      await waitFor(() => expect(awayPosts().length).toBe(1));
+      expect(awayPosts()[0].path).toBe(awayPath(turnId));
+      expect(awayPosts()[0].body).toEqual({ viewer });
+      setHidden(false);
+      await waitFor(() => expect(awayPosts().length).toBe(2));
+      expect(awayPosts()[1].body).toEqual({ viewer, back: true });
+    } finally {
+      setHidden(false);
+      unmount();
+    }
+  });
+
+  it("a hidden window with no turn running says nothing", async () => {
+    const { unmount } = render(<ChatPage />);
+    await screen.findByPlaceholderText(/Message Iron Jarvis/);
+    setHidden(true);
+    await new Promise((r) => setTimeout(r, 50));
+    setHidden(false);
+    unmount();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(awayPosts()).toEqual([]);
+  });
+});
+
 describe("the real stream reader names the viewer", () => {
   function sse(): Response {
     const body = new ReadableStream<Uint8Array>({

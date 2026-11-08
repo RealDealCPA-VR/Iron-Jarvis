@@ -656,7 +656,10 @@ class AnthropicFleetAdapter(LLMAdapter):
         # v1.455.0: a streamed reply waits out the silence of a buffered tool
         # call (vLLM sends a call's arguments only when it is complete) —
         # the read-idle bound, never connect/write/pool.
-        from ..providers.reply_budget import local_stream_timeout
+        # v1.455.0 review: only when the model stays on the user's network
+        # (a cloud API added as an Anthropic-compatible node keeps 60 s).
+        _read = self._reply_budget.stream_timeout(self.model, _TIMEOUT_S)
+        _stream_kw = {} if _read is None else {"timeout": _read}
 
         key = await asyncio.to_thread(self._key)
         self._preflight(key)
@@ -666,7 +669,7 @@ class AnthropicFleetAdapter(LLMAdapter):
         async with contextlib.AsyncExitStack() as _stack:
             resp = await _stack.enter_async_context(self._client().stream(
                 "POST", f"{self._base}/messages", headers=headers, json=body,
-                timeout=local_stream_timeout(_TIMEOUT_S),
+                **_stream_kw,
             ))
             status = int(getattr(resp, "status_code", 200) or 200)
             if status >= 300:
@@ -681,7 +684,7 @@ class AnthropicFleetAdapter(LLMAdapter):
                 body = smaller
                 resp = await _stack.enter_async_context(self._client().stream(
                     "POST", f"{self._base}/messages", headers=headers, json=body,
-                    timeout=local_stream_timeout(_TIMEOUT_S),
+                    **_stream_kw,
                 ))
                 status = int(getattr(resp, "status_code", 200) or 200)
                 if status >= 300:

@@ -261,6 +261,11 @@ def test_nobody_looking_names_the_chat(tmp_path):
     try:
         n, ch = _notifier()
         n.on_event(_failed(turn_id="t-away", thread_id="chat_1", looked_at=False))
+        # v1.455.0 review (moved on purpose): the line waits for the turn's
+        # end, and goes out only when it ended in an error.
+        assert ch.sent == []
+        for hook in lg.end("error", False):
+            hook("error", False)
     finally:
         durable_turns._LIVE.pop("t-away", None)
     assert len(ch.sent) == 1

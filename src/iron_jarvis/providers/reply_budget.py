@@ -423,6 +423,20 @@ class ReplyBudget:
             return said
         return win
 
+    def stream_timeout(self, model: str, base_s: float = 60.0) -> Any:
+        """The ``httpx.Timeout`` a STREAMED request for *model* carries
+        (:func:`local_stream_timeout`), or ``None`` when the request leaves
+        the user's network (``facts["cloud"]``: a cloud API added as a model
+        server, or a name the user's proxy sends on to one) — v1.455.0
+        review: the owner's rule is that only their OWN model servers wait
+        10 minutes; cloud keeps the client's 60 seconds. Never raises."""
+        try:
+            if self.facts(model).get("cloud"):
+                return None
+            return local_stream_timeout(base_s)
+        except Exception:  # noqa: BLE001 — the old request, never a crash
+            return None
+
     # -- the ask ------------------------------------------------------------
     def raw_prompt_tokens(self, model: str, system: str, wire: Any, tools: Any,
                           facts: "dict[str, Any] | None" = None) -> int:
