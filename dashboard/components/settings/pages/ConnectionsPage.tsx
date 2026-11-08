@@ -1290,7 +1290,7 @@ function ConnectionCard({
       {needsSecrets && (
         <div className="rounded-xl border border-tone-warn/25 bg-tone-warn/[0.07] px-3 py-2.5 text-[11px] leading-relaxed text-zinc-300">
           No {appOwner(conn.display_name)} app ID yet. {appOwner(conn.display_name)} needs one
-          to know which app is asking you to sign in — paste it below, then connect.
+          to know which app is asking you to sign in. Paste it below, then connect.
           {/* v1.449.0 (item 22): the boxes, not a trip to Secrets. */}
           <div className="mt-2">
             <OAuthAppForm

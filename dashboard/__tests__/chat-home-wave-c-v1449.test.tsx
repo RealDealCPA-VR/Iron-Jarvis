@@ -356,7 +356,9 @@ describe("item 27 — on a phone, New chat is one tap in the top bar", () => {
     render(<ChatPage />);
     await screen.findByText("The thank-you draft.");
     const door = screen.getByTestId("chat-new-chat-phone");
-    expect(door.getAttribute("aria-label")).toBe("New chat");
+    // Not a second "New chat" door (one door, v1.215.0): it says "New" and is
+    // named for what it does.
+    expect(door.getAttribute("aria-label")).toBe("Start a new chat");
     expect((door.getAttribute("class") ?? "").split(/\s+/)).toContain("md:hidden");
     expect(door.closest('[data-testid="chat-topbar"]')).not.toBeNull();
     // It does what the rail's New chat does: the conversation is left.

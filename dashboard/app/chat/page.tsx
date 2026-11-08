@@ -11050,12 +11050,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           type="button"
           data-testid="chat-new-chat-phone"
           onClick={newChat}
-          aria-label="New chat"
-          title="Start a new conversation"
+          aria-label="Start a new chat"
+          title="Start a new chat"
           className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-1.5 text-[13px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 md:hidden"
         >
           <Plus size={14} aria-hidden />
-          New chat
+          New
         </button>
       )}
       {titleRename && titleRename.id === threadId ? (

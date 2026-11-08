@@ -34,7 +34,7 @@ import {
 } from "@/lib/oauthApp";
 
 export const OAUTH_APP_SAVED = "Saved. Press Connect to sign in.";
-export const OAUTH_APP_NEEDS_ID = "Paste the app’s ID first — the secret alone can’t sign in.";
+export const OAUTH_APP_NEEDS_ID = "Paste the app’s ID first. The secret alone can’t sign in.";
 
 export function OAuthAppForm({
   provider,
