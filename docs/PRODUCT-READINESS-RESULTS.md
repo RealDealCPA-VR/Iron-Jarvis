@@ -1,4 +1,4 @@
-# Iron Jarvis Product-Readiness Audit: Final Report (v1.350.2, HEAD 94043cfb) and Re-audits (v1.357.0, v1.359.0, v1.388.0, latest v1.447.0)
+# Iron Jarvis Product-Readiness Audit: Final Report (v1.350.2, HEAD 94043cfb) and Re-audits (v1.357.0, v1.359.0, v1.388.0, v1.447.0, latest v1.452.0)
 
 **What this report is built on.** Seven audit lanes covered sections A to O. Each lane's PARTIAL and FAIL findings were then re-checked against the code by a hostile verifier, and against the running app using read-only requests. Where the auditors and verifiers disagreed, the verifier's version is used. Claims the verifiers disproved are left out, for example the bell's "Computer-use run failed — awaiting_approval" row, which is dead code because nothing publishes that event.
 
@@ -11,6 +11,139 @@ This synthesis re-confirmed six anchors directly in the tree:
 - Both chat lanes tell every model "You run locally on the user's machine" (`chat_turn.py:5640`, `routes/chat.py:2954`).
 
 The checklist has **213 items: 41 PASS, 169 PARTIAL, 3 FAIL.**
+
+---
+
+## 0j. Re-audit at v1.452.0 (2026-11-08): what is fixed, what remains to 100
+
+**What was re-checked, and how.** Five releases shipped since the last re-audit (0h, v1.447.0): the four waves of the 0h.5 plan (v1.448.0 to v1.451.1, items 1 to 42 except 9) and v1.452.0 (the owner's answers to items 9, 43, 44 and 45). Seven read-only lanes re-marked all 213 checklist items against master at v1.452.0 (commit `80ec5e89`), in the same groups as before: A-B, C-D-O, E-J, F-K, G-N, H-I-M and L. Each lane started from its own v1.447.0 report, re-marked every item from the current code (never the notes), said for each move whether the code changed or the reading got stricter, checked the ease-of-use review's items in its sections, and hunted for anything v1.447.0 marked PASS that no longer holds. Lane F-K re-ran the 38 probe sentences of 0h through the real matchers and added 30 new ones, in-process with no model and nothing sent anywhere. Lane E-J redid the first-run walkthrough for three kinds of user. Lane G-N read the last 15 Release and Tests runs. No test suite was run, and nothing in the repo was changed by the lanes.
+
+The per-item marks, with file:line evidence, the current user experience, what is missing and the smallest fix, are in `docs/PRODUCT-READINESS-LANES-v1452.md`.
+
+### 0j.1 Overall score: **87 / 100** (55 → 70 → 74 → 77 → 82 → 87)
+
+The twelve categories average 88.4. I score 87, one point lower, for the same reason as before: nothing from v1.389.0 on has been driven in the packaged app on a clean profile, and several of the larger pieces have never run against the real service (0j.8).
+
+**No regression was found by any lane.** Every move in this re-audit is a code change; one mark moved down on a stricter reading (L's remote-machine task, below). Every Wave A–D item the lanes looked for is in the code.
+
+**Counts: 177 PASS / 36 PARTIAL / 0 FAIL** (0h: 140 / 73 / 0).
+
+### 0j.2 Category scores
+
+| Category | v1.447.0 | Now | Why |
+|---|---|---|---|
+| Action clarity | 89 | **94** | Coding work lands in the user's own folder; the website risk door is a card that resumes on Allow; Build › Code's receipt leads with ✓/⚠ and says "2 min 14 s"; Spotlight says the real outcome; setting cards show names. Left: Chat › Code's approval dock has no "No, tell it what to do instead"; agent-run asks carry no "why"; the next-step box offers Commit / PR instead of Keep these changes. (A-B 95, L 94) |
+| Execution visibility | 88 | **93** | B passes 24 of 24. Running now lists workflow runs, media jobs and night tasks; every live Run history row has Stop; all 105 event types have words; "Reply ready" is announced. Left: the orb and home line say "Idle" during a tool-only workflow or a media job; a remote's report-back from an agent run never reaches the chat; a rule's Test says "Fired session · session <id>". (A-B 94, L 93) |
+| Connections | 76 | **84** | Install-for-me, the honest Ollama door, keys tested before saving everywhere, the default's replacement named first, real Node.js links, the drive cards' App ID boxes. Left: the vendor-console steps for Drive / OneDrive / Dropbox / Gmail; Settings › Connections lags the first-run door; a connected app is off in every chat until toggled; five homes for connections; Gmail and Slack need the user's own app (the owner's decision). |
+| Import/discovery | 83 | **88** | D passes 16 of 16: OpenCode, Grok, Antigravity and Pi configs are import sources, the preview hides secrets, chat takes a pasted config. Left: a folder's own `.mcp.json` is read only for an active project, which a folder-first user never has; the import offer is not on the chat home. |
+| First-run experience | 82 | **88** | Every kind of user has an in-app path to a real answer: a signed-in CLI in one press, a key in three, nothing at all via Gemini's free key or Ollama, a subscriber without the CLI via "Install Claude Code for me" (about five). Left: the "Next:" line never shows during the first visit (a bug inside a shipped fix); install-for-me never run on a PC without the CLIs; developer words on the subscriber's path. |
+| Error/recovery UX | 87 | **91** | Grok's Sign in press, Local only ways out in Chat › Code, plain desktop dialogs. Left: a server error on a button press prints the raw 500 message and raises a "Part of this page didn't load" banner that is untrue for a press; an unwatched chat turn is stopped after an hour without saying why; a failed run never says its files so far are kept; the page-error screen shows raw text. |
+| Consistency | 78 | **85** | H passes 10 of 15. Left: "endpoint" / "node" beside "model server"; two names for an MCP server ("extension" on Tools, "tool server" in chat's new door); "reflex" left in the bell, tray and phone words after the rename; raw server text on Autonomy, Model team and Standing grants. |
+| Discoverability | 76 | **82** | The 0h probes: 34 right / 4 partly / 0 miss of 38 (were 21 / 5 / 12); the new 30: 20 / 7 / 3. Plain page names, folded Settings, Help names the five places, the changelog on Updates. Left: "use my Claude Pro subscription with Jarvis" reaches nothing; a file-arrival rule points at Rules, which cannot watch folders; "only let Jarvis look at C:\Clients" misses the readable-folders setting; Night shift, Try on and Local only are invisible outside their composers; chat never suggests an objective for a long multi-part request. (E-J 79, F-K 85) |
+| Beginner friendliness | 76 | **83** | 16 of the 26 engine-room leaks 0h listed are gone (0j.6). Left: 22 leaks on primary paths, the largest "your own endpoint" on the model menu and the Model servers page's "Add a node". |
+| Trust | 86 | **92** | K passes 11 of 11: the owner's item-9 decision is said in the Tools menu (and is true; under "Ask before every action" a file-writing tool there still asks, so the words understate); Build › Code says where it works; another computer has a true "not offered" line. Left: agent-run asks carry no "why"; a `brain_change` ask is not a safety reason; the person's own schedule ("my schedule is packed") arms the schedule writers (a surprise card, nothing runs). |
+| Stability | 92 | **95** | N passes 14 of 14. The last 15 Release runs all passed (2 cancelled duplicates); the 5 red Tests runs were each a wave's first branch run, fixed before master (three real defects, one real test race). Left: none of waves A–D or v1.452.0 driven in the packaged app. |
+| Marketplace/capability readiness | 83 | **86** | Every card's setup need ends in a real action; one install door from every surface, chat included. Left: models, destinations, agents, web services and model servers keep their own row shapes; a request matches a tool by name and kind only. |
+
+### 0j.3 PASS / PARTIAL / FAIL by section (v1.447.0 → now)
+
+| Section | Items | PASS | PARTIAL | FAIL |
+|---|---|---|---|---|
+| A. Actions self-evident | 33 | 24 → **30** | 9 → **3** | 0 |
+| B. Execution receipt | 24 | 21 → **24** | 3 → **0** | 0 |
+| C. Connections | 21 | 7 → **11** | 14 → **10** | 0 |
+| D. Import | 16 | 15 → **16** | 1 → **0** | 0 |
+| E. First run | 11 | 6 → **9** | 5 → **2** | 0 |
+| F. Natural-language discovery | 6 | 4 → **6** | 2 → **0** | 0 |
+| G. Error & recovery | 10 | 8 → **8** | 2 → **2** | 0 |
+| H. Consistency | 15 | 5 → **10** | 10 → **5** | 0 |
+| I. Engine room | 14 | 10 → **12** | 4 → **2** | 0 |
+| J. Discoverability | 5 | 2 → **3** | 3 → **2** | 0 |
+| K. Trust | 11 | 9 → **11** | 2 → **0** | 0 |
+| L. "Did it work?" | 14 | 10 → **13** | 4 → **1** | 0 |
+| M. "What does this mean?" | 8 | 0 → **1** | 8 → **7** | 0 |
+| N. Stability | 14 | 11 → **14** | 3 → **0** | 0 |
+| O. Marketplace readiness | 11 | 8 → **9** | 3 → **2** | 0 |
+| **Total** | **213** | **140 → 177** | **73 → 36** | **0** |
+
+L's one PARTIAL moved down on a stricter reading, not a code change: when a chat-started agent run hands work to a remote machine, the hand-off room has no chat thread, so the remote's report never reaches the chat and `remote.message` is in no bell list. The reply says "will report back" and nothing arrives where the user is looking (`agents/remote.py:830-870`, `routes/agents.py:3238`). Objectives and @-mention rounds still deliver.
+
+C's Gmail (C3) and Slack (C6) stay PARTIAL by the owner's decision on item 45.
+
+### 0j.4 The ease-of-use review, item by item
+
+The lanes checked every item in their sections against v1.452.0. Of the review's 74 items, the 0h.5 plan built every one it scheduled. Still **open or partly**: 26 (Schedules' Add greys out with no visible reason), 33 (Try on explains itself in git words, with no press), 44 (a few greyed buttons still explain only on hover), 48 (the OCR sentence names a setting row that does not exist), 73 (4 of its 17 wordings: "Notifications page" not a link on Schedules, "set as a secret" on the calendar row, "Redact PII" / "Scan for PII", "No Jarvis capabilities" on the Launch menu); and, by decision, 5 (Creative Autopilot stays on) and 8 (code signing, in progress).
+
+### 0j.5 What remains, as a plan (to 100)
+
+Every item is small or medium (S = hours, M = a day or two). Three need the owner's decision and are marked so; everything else can be built as recommended.
+
+**Wave E — One word for each thing (the engine room's last 22 leaks).**
+1. "Endpoint" and "node" become "model server": the model menu, receipts and the preflight line (`providerDisplay("custom")`), Connections' "Save endpoint" / "your endpoint", the nav and palette blurbs, and the Model servers page's "Add a node" / "Nodes" / "Rename this endpoint". About 20 strings. S.
+2. The daemon's account notes on the coding screens say "your accounts", never "Iron-Proxy" (`harness/build_accounts.py`, `terminals/pane_accounts.py`, `terminals/continue_on.py`, `hosted/words.py`); the daemon-answer scan gets the scoped Iron-Proxy row. S.
+3. One name for an MCP server, "extension" as the canon says: chat's add door (`records_tools.py`, `lib/appConnect.ts`), the tool word tables and Build › Code's "Its own tool servers" (whose note still says "MCP servers"). S.
+4. "Reflex" after the rename: "Your reflex X" / "A reflex rule" in the bell, the tray and the phone (three twins, changed together), Webhooks' "add a reflex" and "(a reflex decides…)", Saved workflows. S.
+5. "Provider" words: the Usage blurb, "provider hiccups", "Switched provider", and the step label "Provider claude-cli failed". S.
+6. Ten Settings labels a person scans ("Autonomy ceiling", "Dry-run mode", "Steps per Build session reply", "Folder watchers (sentinels)", the folded fleet rows), the capabilities card under Models, and "session" used for three things ("Steps per coding reply", "Learn from coding sessions"). S.
+7. The one-liners: the OCR sentence (item 48), "Redact PII" / "Scan for PII", "set as a secret", the Launch menu's "No Jarvis capabilities" / "Launch an AI CLI", the Rules form's "Start a session", the project tabs reading the status table, the orb's two amber states, the `default_model` card showing "subscription", Help's Browser card ("Pair your own Chrome… see your open tabs"), "OAuth / write-only vault", "Chain several sessions", "Token spend … providers", the subscriber path's "the command-line tool" / "A Build terminal opened", the splash's "after an update" on a first install, two `uv sync` fix texts, the Gmail step's "the card's Docs link". S each.
+
+**Wave F — "Did it work?", the last mile.**
+8. A server error on a press is said plainly, once, in `api()`: the 500 envelope becomes "Iron Jarvis hit a problem doing that. Try again." with the code under Details, and the "Part of this page didn't load" banner is raised only for page reads. This one change covers the ~80 press handlers on Fleet, Skills, Artifacts, Updates, Browser, Creative and Workflows. S.
+9. Raw server text on read failures: Autonomy ×6, Model team, Standing grants and `DataError` (AgentHistory, Safety checks, Browser) use the one load-failed line. S.
+10. A remote's report-back from an agent run reaches the chat: the hand-off room carries the run's chat thread, so the inbound route's existing homing appends the report; the bell rings for `remote.message`. S.
+11. The orb and home line count tool-only workflow runs and media jobs (Running now already lists them). S.
+12. The "Next:" line shows after the first real answer: the home re-reads `GET /onboarding` when a new empty chat opens. S.
+13. Chat › Code's dock gets "No, tell it what to do instead" (chat and Build › Code have it); agent-run asks carry `why` and `asker`, so the run page, listing rows and the objective screen draw the short card with the redirect. S / M.
+14. The next-step box offers "Keep these changes" when the separate copy is on (Commit / PR stay in the pane). S.
+15. A rule's Test and its last fire say what started and link to it, never "Fired session · session <id>". S.
+16. A failed workflow row shows its first failed step's words on the collapsed row and has "Run again"; a failed media line has Try again. S.
+17. A failed agent run or Build › Code reply says which files it wrote are kept; the unwatched-turn guard writes why it stopped a chat turn and never stops one parked on a card; the page-error screen folds its raw text under Details and says "Go home"; "Nothing was lost" after an out-of-memory reload is only said when the draft was saved; an account switch in chat is said. S each.
+18. `web_service_add` runs the service's own Test and says "added and answering" or why not; a phone run's result names its files; a computer-use queue row nothing can answer is denied, not left pending; the Browser settings queue card words its run and target; Build › Code's receipt verdict gets a screen-reader word and names where it ran; the live stopwatch uses the app's duration words; Spotlight's "Open folder" works on Windows. S each.
+
+**Wave G — Chat finds the right thing.**
+19. "I want to use my Claude Pro / ChatGPT subscription with Jarvis" reaches the settings tools and the Connections door (`USE_VENDOR` / `USE_PLAN` take "with Jarvis / with you / in this app"). S.
+20. "Whenever a new PDF shows up in my Downloads folder, rename it" offers a watcher (the true line), never `reflex_create`, which cannot watch folders. S.
+21. The person's own schedule ("My schedule is packed", "Schedule time to review the Smith return") arms no schedule writer. S.
+22. "Only let Jarvis look at C:\Clients" reaches the readable-folders setting. S.
+23. "When I get an email from the IRS, forward it to my phone" offers the rule; "Install Codex for me" gets the one-press install job; "fix the failing test in my ClosePilot repo" gets the coding door; the Guide answers feature questions about Rules, Watchers, Model servers and What agents made; the `model_provider` door shows only when that vendor is not connected; LM Studio and a destination named Slack no longer also arm `app_connect`. S each.
+24. `brain_change` ("memory") joins the safety reasons, so it never reaches the phone. S.
+25. Local only is offered once when a chat attaches a document and a local model is connected (a CPA firm's first question); Night shift, Try on and Local only get Help, Everything and Ctrl K rows. M (the offer) / S (the rows).
+26. Chat suggests "Give this to the team as an objective" for a long multi-part request. M.
+
+**Wave H — Connections, the rest.**
+27. A Handbook guide per vendor for the Drive / OneDrive / Dropbox / Gmail own-app setup (consent screen, test users, turning on the API, which client type), linked from each card the way the Microsoft 365 admin guide is. S.
+28. Settings › Connections catches up with the first-run door: Install for me on a not-installed Claude Code / Codex row, and "Ollama is running but has no model yet" with the starter press. S.
+29. A folder's own `.mcp.json` (and the Cursor / VS Code / OpenCode / Grok / Pi project files) is read for the last-used working folder, not only an active project; the import offer joins the chat home's apps line. S.
+30. Install-for-me run once on a clean Windows profile; Codex's real install folder added to the search list; the `/login` hint checked against Claude Code's first-run screens. S.
+31. Web services take header-key and basic auth, and their refusals are plain words; one model-server add form (the other page links to it); the remote machine's reachability note names the Windows Firewall prompt. M / S.
+32. The Handbook's old release sections move out of the Guide's main reading (the changelog generator already exists), and Settings folds the night-shift windows, curator numbers and retention under "More options". M / S.
+33. **Owner's decision:** a connected app (Notion, GitHub) is off in every chat until toggled in Tools › Connections. Recommended: keep it off (a client's data stays out of a chat unless asked), and say on the card that naming the app in a message is enough. S.
+34. **Owner's decision:** "Sessions" means three things (agent runs, coding sessions, terminal sessions). Recommended: rename the Sessions page "Agent runs", keeping "sessions" as a search word. S.
+35. **Owner's decision:** connections live in five places with the catalog's own categories. Recommended: one Connections landing with Discover / Connected / Import tabs. M.
+
+**Open, by decision or out of reach:** G83/G85 (control of other desktop apps), G86 (a bundled model), the browser add-on in the stores, a two-PC run of the remote node, Gmail and Slack verified apps (item 45, skipped), code signing (in progress), Creative Autopilot stays on.
+
+### 0j.6 Engine-room words still reaching users
+
+On primary paths, **22** (0h: 26). Gone since 0h: the Settings home card's "providers … endpoints … Iron-Proxy", "Default provider", Build › Code's "MCP" headings, the dashboard's Iron-Proxy lines on coding surfaces, the setting card's wire values, "Your model fleet", "Local fleet", the `&amp;` link, the OAuth secret names, "(cron)", raw event names on Activity, colour-only chat dots, "isn't on your PATH", Slack's "(true/false)", "Pending approval id=…", "(oom)". Still there (each with its file and replacement in the lanes file): "your own endpoint" / "endpoint" / "node" (the largest), the daemon's Iron-Proxy account notes, "tool server" beside "extension", "MCP servers" under Build › Code's tool servers heading, "reflex" in the run notices, "provider" in four places, about ten Settings labels, "settings: ocr_enabled = false", "Redact PII", "No Jarvis capabilities".
+
+### 0j.7 Not built, by the owner's decision
+
+Unchanged: G83, G85, G86, Creative Autopilot on by default. Decided 2026-11-08: item 9 (a tool turned on for a chat runs without asking, and the menu says so), item 43 (the separate copy off by default, one Keep press), item 44 (four plain page names), item 45 (skipped). New, waiting on the owner: 0j.5 items 33, 34 and 35.
+
+### 0j.8 Never proven live
+
+- Nothing from v1.389.0 to v1.452.0 in the PACKAGED app on a clean profile: the installer's SmartScreen step, the splash and gate, the first chat, the doors, install-for-me, Running now, the tray's notices as Windows toasts, the Emergency stop strip, the Spotlight toast, "Keep these changes".
+- Install-for-me on a PC without Claude Code or Codex (the vendors' install lines were read from their pages on 2026-11-08, never run here).
+- Microsoft 365 sign-in; GitHub's hosted server; Gmail, Google Drive, OneDrive and Dropbox OAuth; Slack, Notion and Stripe with real accounts; a Gemini key; Antigravity's real Google sign-in.
+- Ollama, LM Studio and llama.cpp detection and the one press; the sign-in watch on a really signed-out CLI; keys checked against real vendors.
+- The task door and LAN setting on two physical PCs, incl. the Windows Firewall prompt; a real remote answering 202 and reporting back.
+- Adding any extension, model server, account, memory base or web service FROM CHAT against a live service; none of lane F-K's 68 probe sentences was driven with a model.
+- The website risk card on a real site; the git guard against real GitHub pushes; a real account limit waited out.
+
+### 0j.9 Verdict
+
+Iron Jarvis is at 87. The plan in 0h.5 is built, nothing that worked was undone, and five sections now pass in full (B, D, F, K and N). What keeps it from 95 is no longer missing features but the last of the words and the last mile of "did it work?": a model server is still an "endpoint" in the menu, a server error on a button prints its raw message, a remote's report from an agent run never comes home, and three everyday sentences ("use my Claude Pro subscription", "only let Jarvis look at C:\Clients", a new PDF in Downloads) reach the wrong thing or nothing. The plan in 0j.5 is 35 items, all small or medium, 32 buildable as recommended and three waiting on the owner. The fastest points are Wave E (one word for each thing) and Wave F item 8 (one change in `api()` covers about 80 buttons). After that, the score is capped mostly by what has never been driven live (0j.8): a clean-profile run of the packaged app is the single most valuable check left.
 
 ---
 
