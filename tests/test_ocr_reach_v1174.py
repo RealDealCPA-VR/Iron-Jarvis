@@ -201,7 +201,7 @@ async def test_ocr_disabled_spends_nothing_and_says_so(tmp_path):
     )
     assert text == ""
     assert router.calls == 0  # a disabled feature costs zero provider calls
-    assert "ocr_enabled" in note and "NOT recovered" in note
+    assert "reading scanned pages is turned off" in note and "NOT recovered" in note
 
 
 # ----------------------------------------------------------------- detection --

@@ -93,7 +93,7 @@ import { NotificationBell } from "@/components/NotificationBell";
 import { MissionOutput } from "@/components/agents/mission/MissionOutput";
 import { ProjectApprovals } from "@/components/project/ProjectSurfaces";
 import { collectDockAsks } from "@/lib/dockAsk";
-import { APPROVAL_LABELS, undoLine } from "@/lib/approvalWords";
+import { APPROVAL_LABELS, REDIRECT_WORDS, undoLine } from "@/lib/approvalWords";
 import { decodeSSE, useChatStream } from "@/lib/useChatStream";
 import { scheduleRunWords, statusWords } from "@/lib/statusWords";
 import { scheduleStatusWords } from "@/lib/scheduleOutcome";
@@ -346,7 +346,10 @@ describe("(b) one ask, the same words on every surface that answers it", () => {
     const store: MissionLiveStore = { get: () => empty, subscribe: () => () => {} };
     render(<MissionOutput view={view} liveStore={store} objective="" onChanged={() => {}} onOpen={() => {}} />);
     const card = screen.getByTestId("mission-approval");
-    expect(buttonNames(card)).toEqual(SCOPE_RUN);
+    // v1.455.0 (Wave F, item 13, moved on purpose): the daemon's row now says
+    // why it asks, so the objective screen draws the short card, with its
+    // "No, tell it what to do instead" after the three answers.
+    expect(buttonNames(card)).toEqual([...SCOPE_RUN, REDIRECT_WORDS]);
     expect(within(card).getByTestId("approval-undo").textContent).toBe(UNDO);
   });
 

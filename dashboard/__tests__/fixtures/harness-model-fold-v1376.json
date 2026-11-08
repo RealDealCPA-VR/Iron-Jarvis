@@ -494,7 +494,7 @@
       "enabled": false,
       "running": false,
       "needs_update": false,
-      "note": "Iron-Proxy is off; turn it on in Connections to run Build sessions on your accounts."
+      "note": "Several accounts is off; turn it on in Settings › Connections to run coding sessions on your accounts."
     }
   },
   "session_on_work": {

@@ -100,8 +100,13 @@ async def test_sensitive_action_approval_carries_screenshot(tmp_path):
         {"kind": "type", "name": "password", "value": "hunter2"}, _Ctx()
     )
     assert not res.ok and "approval required" in (res.error or "")
-    pending = cu.approvals.pending()
-    assert pending and pending[0].screenshot_b64  # the human SEES the page
+    # v1.455.0 (readiness 0j.5 item 18, moved on purpose): with nothing here
+    # that can ask, the row is DENIED rather than left pending, but it still
+    # carries the screenshot the person would have seen.
+    row = cu.approvals.get(res.data["approval_id"])
+    assert row is not None and row.status == "denied"
+    assert row.screenshot_b64  # the human SEES the page
+    assert cu.approvals.pending() == []
 
 
 def test_factory_includes_web_look(tmp_path):
