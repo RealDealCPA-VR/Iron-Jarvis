@@ -207,9 +207,11 @@ export function paneAccountTooltip(
   const cli = PROVIDER_CLI_LABEL[provider] ?? providerLabel(provider);
   const lines: string[] = [];
   lines.push(
+    // Wave D item 33 (canon row 29): "your accounts" on a Build terminal,
+    // never the account manager's program name.
     isDefault(a)
-      ? `This terminal runs ${cli} on this PC's own login (outside Iron-Proxy).`
-      : `This terminal runs ${cli} as the Iron-Proxy account “${a.title}”.`,
+      ? `This terminal runs ${cli} on this PC's own login (not one of your accounts).`
+      : `This terminal runs ${cli} as your account “${a.title}”.`,
   );
   const s = a.state ?? "";
   if (s === "parked") {
@@ -222,10 +224,10 @@ export function paneAccountTooltip(
     lines.push("That account needs signing in again — use Sign in on the Connections page.");
   } else if (s === "missing" && a.reason === "disabled") {
     lines.push(
-      "That account is switched off in Iron-Proxy — turn it back on from the Connections page, or start a new terminal on another account.",
+      "That account is switched off — turn it back on from the Connections page, or start a new terminal on another account.",
     );
   } else if (s === "missing") {
-    lines.push("That account is no longer in Iron-Proxy — start a new terminal to choose another.");
+    lines.push("That account is no longer listed among your accounts — start a new terminal to choose another.");
   }
   lines.push(
     "The account is fixed for this terminal's life: a running CLI cannot change accounts. " +
@@ -463,7 +465,7 @@ export function continueNote(a: ContinueAnswer): string {
     : "Started fresh — there was no conversation to carry over.";
   return a.parked
     ? head
-    : `${head} Iron-Proxy did not mark ${from} as out of usage, so it may be tried again.`;
+    : `${head} The account manager did not mark ${from} as out of usage, so it may be tried again.`;
 }
 
 /* ---- v1.303.2: when the next account cannot pick the conversation up ------- */

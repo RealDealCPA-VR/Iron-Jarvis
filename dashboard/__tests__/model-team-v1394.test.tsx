@@ -227,7 +227,7 @@ describe("usage words never say 0% for an unknown", () => {
     expect(usageWords({ ...base, provider: "", cost: "" })).toBe("Uses the model of whoever hands it work");
     const m = decodeTeam(TEAM).members[2];
     expect(usageWords(m)).toBe("42% of the 5-hour window used (Work Max)");
-    expect(usageWords({ ...m, account: "" })).toBe("42% of the 5-hour window used (Work Max, Iron-Proxy's pick)");
+    expect(usageWords({ ...m, account: "" })).toBe("42% of the 5-hour window used (Work Max, picked by the account manager)");
     expect(usageWords({ ...m, usage: { ...m.usage!, status: "limit", percent: null } })).toBe(
       "At its usage limit (Work Max)",
     );

@@ -469,7 +469,9 @@ export interface ChatAccounts {
 
 /** v1.424.0 (D6): the chat's "no account of its own" entry under a CLI. */
 export const ANY_ACCOUNT_WORDS = "Any free account";
-export const ANY_ACCOUNT_STATE = "Iron-Proxy picks the first free one";
+// Wave D item 33 (canon row 29): on the chat and coding surfaces the account
+// manager is "your accounts"; its program name stays on its Connections card.
+export const ANY_ACCOUNT_STATE = "the first free account is used";
 
 /** Why a harness filter / Recent row cannot be picked ("" = it can). */
 /** v1.445.0 (ease-of-use review item 2): a provider row's name, and on a

@@ -2350,7 +2350,9 @@ export interface TryChoice {
   why: string;
 }
 
-export const TRY_ACCOUNTS_LEAD = "Iron-Proxy has these marked as at their limit. If you know one still has usage:";
+// Wave D item 33 (canon row 29): "your accounts", never the account manager's
+// program name, on a coding screen.
+export const TRY_ACCOUNTS_LEAD = "These accounts are marked as at their limit. If you know one still has usage:";
 
 export function tryAccountWords(title: string): string {
   return `Try ${title} anyway`;

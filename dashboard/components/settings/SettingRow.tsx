@@ -36,6 +36,8 @@ export interface SchemaSetting {
   store?: "config" | "device" | "profile";
   placeholder?: string;
   pattern?: boolean;
+  /** Wave D review: a fresh install's value (config rows only; absent = not known). */
+  default?: unknown;
 }
 
 /** A list is edited as one item per line; a dict as JSON. */

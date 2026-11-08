@@ -455,7 +455,7 @@ export function usageWords(m: Pick<TeamMember, "cost" | "usage" | "account" | "p
   if (m.cost === "pay") return "Billed per use";
   const u = m.usage;
   if (!u) return "Not known yet";
-  const who = u.accountName ? (m.account ? ` (${u.accountName})` : ` (${u.accountName}, Iron-Proxy's pick)`) : "";
+  const who = u.accountName ? (m.account ? ` (${u.accountName})` : ` (${u.accountName}, picked by the account manager)`) : "";
   if (u.status === "limit") return `At its usage limit${who}`;
   if (u.status === "needs_sign_in") return `Needs sign-in${who}`;
   if (u.percent !== null) {

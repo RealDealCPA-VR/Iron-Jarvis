@@ -587,7 +587,7 @@ describe("the account chip", () => {
     expect(chip()!.textContent).toBe("Claude · Work Max");
     expect(chip()!.getAttribute("data-tone")).toBe("plain");
     const tip = chip()!.getAttribute("title")!;
-    expect(tip).toMatch(/Claude Code as the Iron-Proxy account “Work Max”/);
+    expect(tip).toMatch(/Claude Code as your account “Work Max”/);
     expect(tip).toMatch(/fixed for this terminal's life/);
     expect(tip).toMatch(/Launch \(the rocket\) → Claude Code → “as …”/);
   });
@@ -639,7 +639,7 @@ describe("the account chip", () => {
     });
     const off = one({ id: "a", title: "Work Max", source: "iron-proxy", state: "missing", reason: "disabled" });
     expect(off).toMatchObject({ label: "Claude · Work Max · switched off", tone: "red" });
-    expect(off!.tooltip).toMatch(/switched off in Iron-Proxy/);
+    expect(off!.tooltip).toMatch(/That account is switched off — turn it back on/);
     // Iron-Proxy off / not read yet: the label alone, no alarm.
     expect(one({ id: "a", title: "Work Max", source: "iron-proxy", state: "unknown" })).toMatchObject({
       label: "Claude · Work Max",

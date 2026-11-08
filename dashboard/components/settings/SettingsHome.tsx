@@ -41,7 +41,7 @@ import { SettingRow, type SchemaSetting } from "@/components/settings/SettingRow
 import { LedgerPanel } from "@/components/settings/LedgerPanel";
 import { AccessSummary } from "@/components/settings/AccessSummary";
 import { settingsRowLabel } from "@/lib/settingsRows";
-import { SETTINGS_OPEN_EVENT, type SettingsTarget } from "@/lib/settingsOpen";
+import { SETTINGS_HASH, SETTINGS_OPEN_EVENT, type SettingsTarget } from "@/lib/settingsOpen";
 
 const LegacySettingsForm = dynamic(() => import("@/components/settings/pages/LegacySettingsForm"), { ssr: false });
 
@@ -93,7 +93,9 @@ const SUB_DEFS: Record<string, SubDef[]> = {
     {
       id: "connections-accounts",
       formerly: "Accounts & keys",
-      blurb: "Model providers, sign-ins, API keys, endpoints and Iron-Proxy accounts.",
+      // Wave D item 33: plain words, never the engine room's ("providers",
+      // "endpoints", the account manager's program name).
+      blurb: "Your model plans and sign-ins, API keys, your own model servers, and several accounts.",
       Comp: page(() => import("@/components/settings/pages/ConnectionsPage")),
     },
     {
@@ -224,14 +226,67 @@ export const CONTROLLED_IN_SECTION: Record<string, string> = {
   browser_access: "connections-browser",
   backup_mirror_dir: "system-maintenance",
   backup_mirror_media: "system-maintenance",
+  // Wave D item 32: the Several accounts card on Connections has a Group
+  // picker per account (components/connections/IronProxyCard); the raw JSON
+  // of account ids beside it was a second control nobody could read.
+  account_groups: "connections-accounts",
 };
+
+/**
+ * Wave D item 32 (ease review 15, lanes I12/J5): a row the schema marks
+ * `advanced`, or one edited as a JSON box, is FOLDED under a closed "More
+ * options (N)" at the end of its group. Search and a direct link
+ * (`?focus=<key>`, `#settings-<key>`, lib/settingsOpen) still reach it: the
+ * link opens the fold, a search shows the row flat.
+ */
+export function foldedRow(def: Pick<SchemaSetting, "advanced" | "type">): boolean {
+  return !!def.advanced || def.type === "dict";
+}
+
+/** The words on the fold: how many rows it hides, and (review) how many of
+ *  them hold a value other than a fresh install's or an unsaved edit — a
+ *  closed fold must never hide that an expert setting was changed. */
+export function moreOptionsLabel(count: number, changed = 0): string {
+  return changed > 0 ? `More options (${count}, ${changed} changed)` : `More options (${count})`;
+}
+
+/** A stable reading of a value for comparison with the schema's default:
+ *  object keys sorted, and "", null and undefined all read as "not set". */
+function stableValue(v: unknown): string {
+  if (v === undefined || v === null || v === "") return "null";
+  const norm = (x: unknown): unknown => {
+    if (Array.isArray(x)) return x.map(norm);
+    if (x && typeof x === "object") {
+      return Object.fromEntries(Object.keys(x as Record<string, unknown>).sort().map((k) => [k, norm((x as Record<string, unknown>)[k])]));
+    }
+    return x;
+  };
+  return JSON.stringify(norm(v));
+}
+
+/** Review: a folded row whose SAVED value is not the default the schema
+ *  states (`default` absent = not known: never reported). */
+export function changedFromDefault(def: Pick<SchemaSetting, "default">, saved: unknown): boolean {
+  if (!def || !("default" in def)) return false;
+  return stableValue(saved) !== stableValue(def.default);
+}
 
 function readSection(): { section: string; focus: string } {
   try {
     const p = new URLSearchParams(window.location.search);
     let section = p.get("section") || "";
     if (!section && window.location.hash === "#appearance") section = "appearance";
-    return { section, focus: p.get("focus") || "" };
+    let focus = p.get("focus") || "";
+    // Wave D item 32: `#settings-<key>` names a row too (lib/settingsOpen
+    // reads the same form).
+    if (!focus && window.location.hash.startsWith(SETTINGS_HASH)) {
+      try {
+        focus = decodeURIComponent(window.location.hash.slice(SETTINGS_HASH.length));
+      } catch {
+        focus = window.location.hash.slice(SETTINGS_HASH.length);
+      }
+    }
+    return { section, focus };
   } catch {
     return { section: "", focus: "" };
   }
@@ -270,6 +325,9 @@ export function SettingsHome() {
   // AUDIT §8 (390 px): on a phone the groups are a drill-down list — the list
   // first, a group's page after a press, "All settings" back.
   const [phoneList, setPhoneList] = useState(true);
+  // Wave D item 32: which groups have their "More options" fold open. Closed
+  // by default; a direct link to a folded row opens its group's fold.
+  const [moreOpen, setMoreOpen] = useState<Record<string, boolean>>({});
   const deviceId = useRef("");
 
   const load = useCallback(async () => {
@@ -311,6 +369,8 @@ export function SettingsHome() {
     const open = (t: SettingsTarget | null) => {
       if (!t) return;
       if (t.focus) {
+        // Review: a search left in the box would hide the row the link names.
+        setQuery("");
         setFocusKey(t.focus);
         setFocusN((n) => n + 1);
       }
@@ -357,6 +417,8 @@ export function SettingsHome() {
       return;
     }
     setActive(def.group);
+    // Wave D item 32: a folded row's link opens its group's fold first.
+    if (foldedRow(def)) setMoreOpen((m) => (m[def.group] ? m : { ...m, [def.group]: true }));
     const t = window.setTimeout(() => {
       document.getElementById(`setting-${def.key}`)?.scrollIntoView?.({ block: "center" });
     }, 50);
@@ -425,7 +487,17 @@ export function SettingsHome() {
   // v1.405.0 review: a setting with its own control in a section is not drawn
   // twice; a search that finds it opens that section.
   const rowDefs = defs.filter((d) => !(d.key in CONTROLLED_IN_SECTION));
-  const shown = q ? rowDefs.filter((d) => matches(d, q)) : rowDefs.filter((d) => d.group === active);
+  // Wave D item 32: a group shows its everyday rows; the advanced and JSON
+  // rows wait under "More options (N)". A search shows every match flat.
+  const groupRows = rowDefs.filter((d) => d.group === active);
+  const shown = q ? rowDefs.filter((d) => matches(d, q)) : groupRows.filter((d) => !foldedRow(d));
+  const folded = q ? [] : groupRows.filter(foldedRow);
+  const foldOpen = !!moreOpen[active];
+  const foldedSections = Array.from(new Set(folded.map((d) => d.section)));
+  // Review: what the closed fold holds that is not a fresh install's value,
+  // or an edit not saved yet — said on the fold, so it is never out of sight.
+  const foldChanged = folded.filter((d) => changedFromDefault(d, original[d.key]) || !same(form[d.key], original[d.key]));
+  const foldUnsaved = folded.filter((d) => !same(form[d.key], original[d.key]));
   const viaControlled = q
     ? defs.filter((d) => d.key in CONTROLLED_IN_SECTION && matches(d, q)).map((d) => CONTROLLED_IN_SECTION[d.key])
     : [];
@@ -445,6 +517,27 @@ export function SettingsHome() {
   ).filter(declared);
   const sections = Array.from(new Set(shown.map((d) => (q ? groups?.find((g) => g.id === d.group)?.label ?? d.group : d.section))));
   const group = groups?.find((g) => g.id === active);
+
+  // One row, wherever it is drawn (a group's list or its fold).
+  const row = (d: SchemaSetting) => (
+    <SettingRow
+      key={d.key}
+      def={d}
+      value={form[d.key]}
+      changed={!same(form[d.key], original[d.key])}
+      highlight={d.key === focusKey}
+      providerOptions={d.key === "default_provider" ? providerOptions : undefined}
+      // v1.353.0 (G57): the default-model list follows the
+      // provider chosen in THIS form, saved or not — never the
+      // old provider's models paired with the new provider.
+      modelProvider={d.key === "default_model" ? String(form.default_provider ?? "") || undefined : undefined}
+      // v1.356.0 (G77): "after a restart" is a press that opens
+      // Settings › System › Maintenance in place (never a
+      // /settings?section= link — the v1.353.0 rule).
+      onOpenMaintenance={() => goTo("system", "system-maintenance")}
+      onChange={(v) => setForm((f) => ({ ...f, [d.key]: v }))}
+    />
+  );
 
   return (
     <PageShell>
@@ -557,34 +650,51 @@ export function SettingsHome() {
               return (
                 <section key={sec || "_"} className="rounded-2xl border border-white/[0.06] bg-white/[0.015]">
                   {sec && <h3 className="px-3 pt-3 text-[13px] font-medium text-zinc-400">{sec}</h3>}
-                  <div className="divide-y divide-white/[0.04]">
-                    {rows.map((d) => (
-                      <SettingRow
-                        key={d.key}
-                        def={d}
-                        value={form[d.key]}
-                        changed={!same(form[d.key], original[d.key])}
-                        highlight={d.key === focusKey}
-                        providerOptions={d.key === "default_provider" ? providerOptions : undefined}
-                        // v1.353.0 (G57): the default-model list follows the
-                        // provider chosen in THIS form, saved or not — never the
-                        // old provider's models paired with the new provider.
-                        modelProvider={
-                          d.key === "default_model"
-                            ? String(form.default_provider ?? "") || undefined
-                            : undefined
-                        }
-                        // v1.356.0 (G77): "after a restart" is a press that opens
-                        // Settings › System › Maintenance in place (never a
-                        // /settings?section= link — the v1.353.0 rule).
-                        onOpenMaintenance={() => goTo("system", "system-maintenance")}
-                        onChange={(v) => setForm((f) => ({ ...f, [d.key]: v }))}
-                      />
-                    ))}
-                  </div>
+                  <div className="divide-y divide-white/[0.04]">{rows.map(row)}</div>
                 </section>
               );
             })
+          )}
+
+          {/* Wave D item 32: the group's advanced and JSON rows, folded. The
+              rows exist only while the fold is open (a direct link opens it);
+              the button says how many wait inside. */}
+          {folded.length > 0 && (
+            <section
+              data-testid="settings-more-options"
+              data-open={foldOpen ? "true" : "false"}
+              className="rounded-2xl border border-white/[0.06] bg-white/[0.015]"
+            >
+              <button
+                type="button"
+                aria-expanded={foldOpen}
+                aria-controls={`settings-more-${active}`}
+                onClick={() => setMoreOpen((m) => ({ ...m, [active]: !foldOpen }))}
+                className="flex w-full items-center gap-3 px-3 py-3 text-left"
+              >
+                {foldOpen ? <ChevronDown size={15} className="text-zinc-400" aria-hidden /> : <ChevronRight size={15} className="text-zinc-400" aria-hidden />}
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[13px] font-medium text-zinc-300">{moreOptionsLabel(folded.length, foldChanged.length)}</span>
+                  <span className="block text-[12px] text-zinc-500">Expert settings and raw values. Most people never need these.</span>
+                  {foldChanged.length > 0 && (
+                    <span data-testid="settings-more-changed" className="block text-[12px] text-tone-warn">
+                      Changed: {foldChanged.map((d) => d.label).join(", ")}
+                      {foldUnsaved.length > 0 ? ` (${foldUnsaved.length} not saved yet)` : ""}.
+                    </span>
+                  )}
+                </span>
+              </button>
+              {foldOpen && (
+                <div id={`settings-more-${active}`} className="border-t border-white/[0.06]">
+                  {foldedSections.map((sec) => (
+                    <div key={sec || "_"}>
+                      {sec && <h3 className="px-3 pt-3 text-[13px] font-medium text-zinc-400">{sec}</h3>}
+                      <div className="divide-y divide-white/[0.04]">{folded.filter((d) => d.section === sec).map(row)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
           )}
 
           {themeCard && (

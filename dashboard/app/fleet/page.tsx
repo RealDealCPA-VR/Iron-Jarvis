@@ -1316,7 +1316,7 @@ export default function FleetPage() {
             <Empty
               icon={<Server size={26} />}
               title="No machines yet"
-              action={{ label: "Add an endpoint", href: "/connections?focus=endpoints" }}
+              action={{ label: "Add a model server", href: "/connections?focus=endpoints" }}
               secondary={{ label: "Open Settings", href: "/settings" }}
             >
               Add a model server on Connections, or set the Ollama or custom URL in Settings.

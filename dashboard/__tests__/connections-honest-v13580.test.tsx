@@ -416,7 +416,7 @@ describe("(6) model servers on this PC", () => {
     };
     render(<LocalServerRows />);
     const row = await screen.findByTestId("local-server-row-lmstudio", {}, { timeout: 10_000 });
-    expect(within(row).getByTestId("local-server-taken-lmstudio").textContent).toMatch(/Add an endpoint/);
+    expect(within(row).getByTestId("local-server-taken-lmstudio").textContent).toMatch(/Add a model server/);
     expect(within(row).queryByRole("button")).toBeNull();
   });
 

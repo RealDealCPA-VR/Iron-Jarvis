@@ -40,8 +40,10 @@ import ts from "typescript";
 
 import { DASHBOARD_ROOT, readSrc } from "./dashGuard";
 
-/** A retired word: what it matches, and the canon word that replaces it. */
-export type Retired = { word: string; re: RegExp; use: string };
+/** A retired word: what it matches, and the canon word that replaces it.
+ *  `scope` (Wave D item 33) limits a row to the files it applies to — a word
+ *  that is retired on SOME surfaces and the thing's own name on others. */
+export type Retired = { word: string; re: RegExp; use: string; scope?: (file: string) => boolean };
 
 /** VOCABULARY.md's retired words (case-insensitive, whole words). */
 export const RETIRED: readonly Retired[] = [
@@ -102,6 +104,92 @@ export const RETIRED_ON_SCREEN: readonly Retired[] = [
   onScreen("No OAuth client configured", /no oauth client configured/i, "the sign-in set-up sentence"),
   onScreen("Open Channels", /\bopen channels\b/i, "Open Notifications"),
 ];
+
+/** A retired word read on SOME dashboard surfaces only (see RETIRED_ON_SURFACES). */
+function onSurfaces(word: string, re: RegExp, use: string, scope: (file: string) => boolean): Retired {
+  return { word, re, use, scope };
+}
+
+/** Wave D item 33: the chat and coding surfaces — components/chat,
+ *  components/harness, components/buildCode, lib/buildApp*, lib/buildWords,
+ *  and the two account-word modules those screens read (lib/chatAccount,
+ *  lib/paneAccounts). Dashboard-relative paths with forward slashes. */
+export function isChatOrCodingSurface(file: string): boolean {
+  return (
+    file.startsWith("components/chat/") ||
+    file.startsWith("components/harness/") ||
+    file.startsWith("components/buildCode/") ||
+    /^lib\/buildApp[^/]*\.tsx?$/.test(file) ||
+    /^lib\/buildWords\.tsx?$/.test(file) ||
+    /^lib\/chatAccount\.tsx?$/.test(file) ||
+    /^lib\/paneAccounts\.tsx?$/.test(file)
+  );
+}
+
+/**
+ * Wave D item 33 (VOCABULARY.md row 29): words retired on the chat and
+ * coding surfaces ONLY. "Iron-Proxy" is the account manager's own name — it
+ * stays on its Connections card (components/connections/IronProxyCard.tsx,
+ * "Several accounts (Iron-Proxy)") and in its own errors, and those files are
+ * OUTSIDE this row's scope by construction, so the card needs no ALLOW entry.
+ * On a chat or coding screen a person reads "your accounts" (the Several
+ * accounts card) or, when the program itself is meant, "the account
+ * manager". Written as `onSurfaces(…)` calls ON PURPOSE: the two Python
+ * scans parse only the plain `{ word: …, re: …, use: … }` rows, and the
+ * daemon's own Iron-Proxy sentences (its card, its account refusals) are
+ * the program's name where the canon keeps it.
+ */
+export const RETIRED_ON_SURFACES: readonly Retired[] = [
+  onSurfaces(
+    "Iron-Proxy",
+    /\biron[- ]?proxy\b/i,
+    "your accounts (the Several accounts card), or the account manager when the program itself is meant",
+    isChatOrCodingSurface,
+  ),
+];
+
+/** Every retired row, in one list (a scoped row applies only to its files). */
+export const ALL_RETIRED: readonly Retired[] = [...RETIRED, ...RETIRED_ON_SCREEN, ...RETIRED_ON_SURFACES];
+
+/** Wave D item 33: the HTML entities JSX text may spell a character with
+ *  (`&amp;`, `&rsquo;`, `&#39;`, `&#x27;`). The scanner reads JSX text as
+ *  written, so "See subscription &amp; local providers" never matched the
+ *  retired "subscription & local providers". Decoded before any row is tried. */
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  lsquo: "‘",
+  rsquo: "’",
+  ldquo: "“",
+  rdquo: "”",
+  hellip: "…",
+  mdash: "—",
+  ndash: "–",
+  middot: "·",
+  times: "×",
+  rarr: "→",
+  larr: "←",
+  bull: "•",
+  copy: "©",
+  reg: "®",
+  trade: "™",
+};
+
+export function decodeEntities(text: string): string {
+  if (!text.includes("&")) return text;
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body: string) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+    }
+    const named = NAMED_ENTITIES[body.toLowerCase()];
+    return named ?? whole;
+  });
+}
 
 /** The folders whose files a user reads. */
 export const SCANNED_DIRS = ["app", "components", "lib"] as const;
@@ -394,7 +482,11 @@ export function readableCopy(rel: string, src = readSrc(rel)): Array<{ line: num
   const out: Array<{ line: number; text: string }> = [];
   const visit = (node: ts.Node) => {
     if (isTextNode(node) && !skipReason(node, sf)) {
-      const text = ts.isJsxText(node) ? node.getText(sf) : (node as ts.LiteralLikeNode).text;
+      // JSX text and a JSX attribute's plain string value are read with their
+      // HTML entities decoded, as the browser shows them (Wave D item 33).
+      const jsxSpelled = ts.isJsxText(node) || (ts.isStringLiteral(node) && !!node.parent && ts.isJsxAttribute(node.parent));
+      const raw = ts.isJsxText(node) ? node.getText(sf) : (node as ts.LiteralLikeNode).text;
+      const text = jsxSpelled ? decodeEntities(raw) : raw;
       if (text.trim()) out.push({ line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1, text });
     }
     ts.forEachChild(node, visit);
@@ -407,7 +499,8 @@ export function readableCopy(rel: string, src = readSrc(rel)): Array<{ line: num
 export function retiredHits(rel: string, src?: string): Hit[] {
   const out: Hit[] = [];
   for (const piece of readableCopy(rel, src)) {
-    for (const r of [...RETIRED, ...RETIRED_ON_SCREEN]) {
+    for (const r of ALL_RETIRED) {
+      if (r.scope && !r.scope(rel)) continue;
       if (r.re.test(piece.text)) {
         out.push({ file: rel, line: piece.line, word: r.word, text: piece.text.replace(/\s+/g, " ").trim() });
       }

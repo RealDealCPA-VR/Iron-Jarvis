@@ -126,7 +126,39 @@ class SettingDef:
             "placeholder": self.placeholder,
             "secret": False,
             "pattern": self.pattern,
+            # Wave D review: the value a fresh install holds, so the Settings
+            # page can say a folded expert row was CHANGED from it (absent =
+            # not known: a device or profile row, a pattern row).
+            **({"default": dflt} if (dflt := config_default(self)) is not _NO_DEFAULT else {}),
         }
+
+
+_NO_DEFAULT = object()
+
+
+def config_default(d: "SettingDef") -> Any:
+    """The Config field's own default for a config-store row, else
+    ``_NO_DEFAULT``. JSON-native values only; never raises."""
+    if d.store != "config" or d.pattern:
+        return _NO_DEFAULT
+    try:
+        import json
+
+        from ..core.config import Config
+
+        outer, _, inner = d.field_name.partition(".")
+        field = Config.model_fields.get(outer)
+        if field is None or field.is_required():
+            return _NO_DEFAULT
+        value = field.get_default(call_default_factory=True)
+        if inner:
+            if not isinstance(value, dict) or inner not in value:
+                return _NO_DEFAULT
+            value = value[inner]
+        json.dumps(value)
+        return value
+    except Exception:
+        return _NO_DEFAULT
 
 
 @dataclass(frozen=True)
@@ -265,10 +297,13 @@ S = SettingDef
 
 SETTINGS: tuple[SettingDef, ...] = (
     # ---------------------------------------------------------------- models
-    S("default_provider", "Default provider", "models", "string",
+    # Wave D item 33: the first row of Models read "Default provider" — the
+    # engine room's word. The old words stay searchable as aliases (and keep
+    # the chat trigger's phrases: "default ai" was one already).
+    S("default_provider", "Default AI", "models", "string",
       "The AI service used when a chat doesn't pick one. Manage accounts and keys under Connections. "
       "One chat can pick its own model from the model menu above the message box without changing this.",
-      tier="ask", aliases=("ai provider", "which ai", "default ai"), placeholder="anthropic"),
+      tier="ask", aliases=("ai provider", "which ai", "default ai", "default provider"), placeholder="anthropic"),
     S("default_model", "Default model", "models", "string",
       "The model that answers by default. One chat can pick its own model from the model menu above "
       "the message box without changing this.", tier="allow",

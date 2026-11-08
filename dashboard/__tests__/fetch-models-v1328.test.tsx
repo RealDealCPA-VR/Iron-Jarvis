@@ -368,7 +368,7 @@ describe("on the Connections page", () => {
     seed();
     render(<ConnectionsPage />);
     const card = (await screen.findByText("Model servers on your network")).closest("#conn-card-custom") as HTMLElement;
-    fireEvent.click(within(card).getByRole("button", { name: /Add an endpoint/ }));
+    fireEvent.click(within(card).getByRole("button", { name: /Add a model server/ }));
 
     vi.useFakeTimers();
     // v1.329.0 (H3): the placeholder lost its em-dash aside; it is the bare example address now.
