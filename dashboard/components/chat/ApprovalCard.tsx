@@ -183,6 +183,8 @@ export function ApprovalCard({
   scope,
   planText,
   onRedirect,
+  who,
+  onAnswered,
 }: {
   approval: ApprovalAsk;
   /** Called on "Allow for this chat" so the page adds the tool to the
@@ -206,6 +208,18 @@ export function ApprovalCard({
    *  runs, a message once it ended). Offered only on the COMPACT card (one
    *  with `why`) and only when a page is there to send them. */
   onRedirect?: (words: string) => void | Promise<void>;
+  /** v1.449.0 (plan 0h.5 item 17): WHO wants it, by name, when the surface
+   *  knows — the mission screen names its coordinator ("Jarvis") or the
+   *  teammate parked on the ask. Unset = the daemon's `asker` ("Iron Jarvis"
+   *  for its own check, else "The assistant"). */
+  who?: string;
+  /** v1.449.0: called once an answer has LANDED (the daemon took it), with
+   *  the decision — the mission screen re-reads its view at once instead of
+   *  waiting for its poll. Also called on a 404 (the ask was already
+   *  answered elsewhere and the daemon let it go): the surface re-reads and
+   *  the card leaves. A REFUSED answer (anything else) calls nothing (the
+   *  card says why and keeps its buttons). */
+  onAnswered?: (decision: "once" | "conversation" | "deny" | "tab" | "always") => void;
 }) {
   const where: ApprovalScope = scope ?? (docked || onConversation ? "chat" : "run");
   // Which button is in flight; the card disables itself after one click. The
@@ -241,7 +255,7 @@ export function ApprovalCard({
   // v1.417.0 (C1.7): the daemon said why it asks — the compact card.
   const why = typeof approval.why === "string" ? approval.why.trim() : "";
   const compact = why !== "";
-  const subject = askerSubject(approval.asker);
+  const subject = (who ?? "").trim() || askerSubject(approval.asker);
   // v1.448.0 (Wave A, A3): the redirect field — null = closed; a string =
   // open with its words. Only the compact card offers it, and only with a
   // page to send the words (`onRedirect`); the card WITHOUT `why` is the
@@ -264,12 +278,21 @@ export function ApprovalCard({
         decision,
       });
       if (decision === "conversation") onConversation?.(approval.tool);
+      onAnswered?.(decision);
     } catch (err) {
       // A 404 means the wait already ended (timeout, or the turn moved on) —
       // the card is about to unmount; anything else re-enables the buttons so
       // the user is never stranded mid-pause with a dead card.
       setSent("");
       setError(err instanceof Error ? err.message : String(err));
+      // v1.449.0 review: a surface that re-reads on an answer (the mission
+      // screen) must re-read on a 404 too — the ask was answered elsewhere
+      // (the bell, another window, the phone) and the daemon has let it go,
+      // so the card leaves at once instead of sitting on a dead ask until
+      // the next poll, as the mission's old card did.
+      // (Read off the error's shape, not `ApiError`: ~70 tests mock lib/api
+      // with their own error class.)
+      if (err && typeof err === "object" && (err as { status?: unknown }).status === 404) onAnswered?.(decision);
     }
   }
 
@@ -288,6 +311,7 @@ export function ApprovalCard({
       setError(err instanceof Error ? err.message : String(err));
       return;
     }
+    onAnswered?.("deny");
     try {
       await onRedirect(text);
     } catch {

@@ -357,8 +357,10 @@ describe("a failure has a press, and a reply has a receipt (C4.9)", () => {
     const done = foldConversation(evs).items.at(-1);
     expect(done?.kind).toBe("done");
     if (done?.kind !== "done" || !done.receipt) throw new Error("no receipt");
-    expect(receiptLine(done.receipt, "Work")).toBe("answered by gpt-6 on Work · 2 m 14 s · 4 actions · 2 files changed");
-    expect(receiptLine({ model: "", seconds: 9, actions: 1, files: 0, usage: null })).toBe("9 s · 1 action");
+    // v1.449.0 (plan 0h.5 item 10) moved on purpose: the app's duration words
+    // ("2 min 14 s", never "2 m 14 s") and the failed steps said apart.
+    expect(receiptLine(done.receipt, "Work")).toBe("answered by gpt-6 on Work · 2 min 14 s · 4 actions · 2 failed · 2 files changed");
+    expect(receiptLine({ model: "", seconds: 9, actions: 1, failed: 0, files: 0, usage: null })).toBe("9.0 s · 1 action");
   });
 
   it("a turn Iron Jarvis's restart cut off is timed to its last step, never to the next start (review)", () => {

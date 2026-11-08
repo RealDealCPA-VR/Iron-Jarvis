@@ -72,6 +72,7 @@ vi.mock("@/components/terminal/FilesPanel", () => ({
 import { HarnessSession } from "@/components/harness/HarnessSession";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { applyHelperFrame, decodeSavedHelpers, helperName } from "@/lib/buildHelpers";
+import { statusWords } from "@/lib/statusWords";
 import { decodeMessage } from "@/lib/buildSessions";
 
 /* ------------------------------------------------------------- fixtures */
@@ -240,7 +241,8 @@ describe("a helper is ONE row while the turn runs, fed by the turn's own stream"
     const ask = await screen.findByTestId("helper-ask");
     expect(within(ask).getByTestId("chat-approval-card")).toHaveTextContent("run a command");
     expect(ask).toHaveTextContent("echo hi");
-    expect(helperRow("h2")).toHaveTextContent("Waiting for your OK");
+    // v1.449.0 review: the ONE status table's word ("Waiting for you").
+    expect(helperRow("h2")).toHaveTextContent(statusWords("waiting").word);
     // An agent run's wider answer is named for the run, never the chat.
     expect(within(ask).queryByText(/for this chat/i)).toBeNull();
     // v1.404.1 (one approval per coding session): a helper's wider answer is

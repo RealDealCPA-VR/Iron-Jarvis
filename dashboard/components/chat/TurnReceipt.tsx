@@ -81,6 +81,7 @@ import { cleanTarget } from "@/lib/workTarget";
 import type { StepDetail } from "@/lib/stepDetail";
 import { SENT_WITH_OK } from "@/lib/localOnly";
 import { DEMO_ANSWER } from "@/lib/demoWords";
+import { secondsText } from "@/lib/durationWords";
 import {
   folderRulesLine,
   refWarningCount,
@@ -333,18 +334,10 @@ export interface ReceiptTiming {
   ms?: number;
 }
 
-/** A duration in words: "0.3 s", "12 s", "2 min 5 s". Null for a value that
- *  is not a finite, non-negative number. */
-export function secondsText(ms: number | null | undefined): string | null {
-  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return null;
-  const s = ms / 1000;
-  if (s < 10) return `${s.toFixed(1)} s`;
-  if (s < 60) return `${Math.round(s)} s`;
-  const whole = Math.round(s);
-  const min = Math.floor(whole / 60);
-  const rest = whole % 60;
-  return rest ? `${min} min ${rest} s` : `${min} min`;
-}
+/** A duration in words: "0.3 s", "12 s", "2 min 5 s". v1.449.0: the ONE
+ *  clock vocabulary lives in lib/durationWords (so a lib file can say it);
+ *  re-exported here for every surface that reads it off the receipt. */
+export { secondsText };
 
 /**
  * The expanded receipt's speed line (v1.323.0): "First word after 1.2 s ·

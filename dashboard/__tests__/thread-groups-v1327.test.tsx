@@ -251,15 +251,15 @@ describe("ThreadGroups", () => {
     // A chat the statuses do not mention has no dot colour either.
     expect(screen.getByTestId("thread-dot-n1").getAttribute("data-status")).toBe("idle");
     // The status is spoken, not only coloured.
-    expect(screen.getByTestId("thread-row-c2").textContent).toContain("Waiting on you");
-    expect(screen.getByTestId("thread-row-c1").textContent).toContain("Working on it");
+    expect(screen.getByTestId("thread-row-c2").textContent).toContain("Waiting for you");
+    expect(screen.getByTestId("thread-row-c1").textContent).toContain("Working");
   });
 
   it("v1.448.0: a waiting chat says Needs you in a word beside its dot; unread keeps the dot alone", () => {
     renderGroups();
     const word = screen.getByTestId("thread-needs-you-c2");
     expect(word.textContent).toBe("Needs you");
-    expect(word.getAttribute("title")).toBe("Waiting on you");
+    expect(word.getAttribute("title")).toBe("Waiting for you");
     expect(word.className).toContain("text-tone-warn");
     // The word is visible (never sr-only): a colour alone is not a cue.
     expect(word.className).not.toContain("sr-only");

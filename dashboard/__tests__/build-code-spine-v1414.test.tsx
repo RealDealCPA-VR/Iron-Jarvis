@@ -87,7 +87,7 @@ describe("running work is seen everywhere", () => {
     // Waiting first (the user is the next step).
     expect(items[0].href).toBe("/terminals?view=code&code=app_2");
     // v1.420.0 (fix plan C5.1, moved on purpose): the tool in brackets.
-    expect(items[0].line).toBe("Coding session (Claude Code) · 10 min · Waiting on you");
+    expect(items[0].line).toBe("Coding session (Claude Code) · 10 min · Waiting for you");
     expect(items[0].waiting).toBe(true);
     expect(items[1].line).toBe("Coding session (Codex) · 2 min");
     expect(items[1].detail).toBe("Fix it");

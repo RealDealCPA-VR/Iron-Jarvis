@@ -278,7 +278,7 @@ describe("the rail is grouped and shows each chat's status", () => {
     expect(within(rail).getByRole("heading", { name: PROJECT.name })).toBeTruthy();
     expect(within(rail).getAllByRole("button", { name: /^Options for / })).toHaveLength(4);
     // The words, not only the colour.
-    expect(screen.getByTestId("thread-row-tw").textContent).toContain("Waiting on you");
+    expect(screen.getByTestId("thread-row-tw").textContent).toContain("Waiting for you");
   });
 
   it("opening a chat stamps it seen: the open chat is never unread, nor is it after you leave", async () => {

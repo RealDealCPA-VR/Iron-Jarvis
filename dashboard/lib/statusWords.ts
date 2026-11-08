@@ -78,6 +78,9 @@ const STATUS: Readonly<Record<string, StatusWords>> = {
   // failed | cancelled | error; a step: completed | failed | cancelled |
   // skipped, or no output yet (the page says "pending").
   resuming: w("Resuming", "cyan"),
+  // v1.449.0 (plan 0h.5 item 12): a run the user asked to stop, which the
+  // engine ends before its next step — the Stop press's own state.
+  cancelling: w("Stopping", "slate"),
   waiting: WAITING_FOR_YOU,
   interrupted: w("Interrupted", "amber"),
   error: FAILED,
@@ -190,6 +193,22 @@ export function toneTextClass(tone: Tone): string {
   if (tone === "amber") return "!text-tone-warn";
   if (tone === "red") return "!text-tone-danger";
   return "";
+}
+
+/**
+ * The WORD's own ink where a word is drawn as plain text, not in a Badge
+ * (v1.449.0, plan 0h.5 item 13): the mission cards' status words, a project's
+ * coding-session rows. Theme tokens only (`text-tone-*`, the accent, the
+ * zinc greys), never a literal hue, so every Mark and palette re-inks it.
+ * Cyan (working) is the accent, like the chat's live rows; slate (queued,
+ * stopped) is the quiet grey.
+ */
+export function toneInkClass(tone: Tone): string {
+  if (tone === "green") return "text-tone-success";
+  if (tone === "red") return "text-tone-danger";
+  if (tone === "amber") return "text-tone-warn";
+  if (tone === "cyan" || tone === "violet") return "text-accent";
+  return "text-zinc-400";
 }
 
 /** lib/scheduleOutcome's tone names, for a reader that speaks them. */

@@ -14,6 +14,7 @@
 
 import { buildCodeHref } from "./buildApp";
 import { buildSessionHref } from "./buildLinks";
+import { statusWords, type StatusWords } from "./statusWords";
 
 export type CodingView = "chat_code" | "build_code";
 export type CodingState = "working" | "waiting" | "finished" | "idle";
@@ -65,18 +66,22 @@ export function codingSessionHref(c: Pick<ProjectCodingSession, "view" | "id">):
   return c.view === "build_code" ? buildCodeHref(c.id) : buildSessionHref(c.id);
 }
 
-/** The state in a few words. */
-export function codingStateWords(c: Pick<ProjectCodingSession, "state" | "outcome">): string {
+/** The state in a few words, with its tone — the ONE status table's
+ *  (lib/statusWords; v1.449.0, plan 0h.5 item 18): a working session says
+ *  what a working run says, a finished one "Done", a failed one "Failed", a
+ *  stopped one "Stopped". A session with no reply yet has no row there and
+ *  keeps its own quiet words. */
+export function codingStateWords(c: Pick<ProjectCodingSession, "state" | "outcome">): StatusWords {
   switch (c.state) {
     case "working":
-      return "Working";
+      return statusWords("working");
     case "waiting":
-      return "Waiting for you";
+      return statusWords("waiting");
     case "finished":
-      if (c.outcome === "failed") return "Failed";
-      if (c.outcome === "cancelled") return "Stopped";
-      return "Finished";
+      if (c.outcome === "failed") return statusWords("failed");
+      if (c.outcome === "cancelled") return statusWords("cancelled");
+      return statusWords("completed");
     default:
-      return "No reply yet";
+      return { word: "No reply yet", tone: "slate" };
   }
 }

@@ -167,7 +167,7 @@ describe("lib/runningNow: a coding session's reply is a row", () => {
     ]);
     expect(items[0].key).toBe("b:bt_2");
     expect(items[0].waiting).toBe(true);
-    expect(items[0].line).toMatch(/^Coding session \(Jarvis\) · .* · Waiting on you$/);
+    expect(items[0].line).toMatch(/^Coding session \(Jarvis\) · .* · Waiting for you$/);
   });
 });
 

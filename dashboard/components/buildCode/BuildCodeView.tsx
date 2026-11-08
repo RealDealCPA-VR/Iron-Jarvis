@@ -76,6 +76,7 @@ import {
   X,
 } from "lucide-react";
 import { ApiError, del, get, patch, post } from "@/lib/api";
+import { statusWords } from "@/lib/statusWords";
 import { ConfirmButton } from "@/components/ui";
 import { streamSSE } from "@/lib/useChatStream";
 import { mintTurnId } from "@/lib/turnRejoin";
@@ -2508,9 +2509,9 @@ export function BuildCodeView({
       >
         <span className="flex min-w-0 items-center gap-1.5 text-[13px] text-zinc-200">
           {s.running ? (
-            <Loader2 size={11} className="shrink-0 animate-spin text-zinc-400 motion-reduce:animate-none" aria-label="Working" />
+            <Loader2 size={11} className="shrink-0 animate-spin text-zinc-400 motion-reduce:animate-none" aria-label={statusWords("working").word} />
           ) : null}
-          {s.waiting ? <ShieldAlert size={11} className="shrink-0 text-tone-warn" aria-label="Waiting for your OK" /> : null}
+          {s.waiting ? <ShieldAlert size={11} className="shrink-0 text-tone-warn" aria-label={statusWords("waiting").word} /> : null}
           {s.lastError ? <AlertTriangle size={11} className="shrink-0 text-tone-warn" aria-label="Last reply failed" /> : null}
           {/* v1.422.0 (B4): kept open because its tool runs a program it
               started (a dev server); the session's own line says how to stop it. */}

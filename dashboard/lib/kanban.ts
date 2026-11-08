@@ -31,9 +31,11 @@ export const LANES: LaneDef[] = [
   // A review to approve, or a run paused on an ask: either way the user is
   // the next step — "Waiting for you", the paused card's own chip words.
   lane("review", "review", "Awaiting approval", "Nothing is waiting for you"),
-  // v1.315.0: "Finished", not git's "Merged & done" — most finished runs
-  // never merged anything (a summary, a memo, a reply).
-  lane("completed", "completed", "Finished", "Nothing has finished yet"),
+  // v1.315.0: not git's "Merged & done" — most finished runs never merged
+  // anything (a summary, a memo, a reply). v1.449.0 (plan 0h.5 item 18): the
+  // lane's TITLE is the ONE status table's word ("Done"); the hint under it
+  // describes, it never spells a second status word.
+  lane("completed", "completed", "Ran to the end", "Nothing has finished yet"),
   lane("failed", "failed", "Errored or rejected", "Nothing failed"),
   // v1.420.0 (fix plan C5.2): a stopped run had sat in the red Failed lane
   // ("Errored, stopped or rejected") beside real failures since v1.352.0; it

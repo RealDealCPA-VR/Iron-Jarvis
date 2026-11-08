@@ -32,6 +32,7 @@ import { DEMO_ANSWER, DEMO_RUNNING } from "@/lib/demoWords";
 import { askPhrase } from "@/lib/approvalWords";
 import { ranOnWords, tookMs, type RanOnRow } from "@/lib/ranOnWords";
 import { useModels } from "@/lib/useModels";
+import { statusWords, toneInkClass } from "@/lib/statusWords";
 import { secondsText } from "@/components/chat/TurnReceipt";
 import AgentFace, { type FaceMood } from "@/components/agents/AgentFace";
 import {
@@ -52,16 +53,13 @@ function moodFor(s: MemberStatus): FaceMood {
 
 // v1.329.0 (calm chat wave 6): theme tokens only, never a literal hue, so a
 // card reads the same way on every theme (Daylight included) as the chat's
-// receipt does.
-const STATUS_TONE: Record<MemberStatus, string> = {
-  queued: "text-zinc-400",
-  working: "text-accent",
-  waiting_you: "text-tone-warn",
-  waiting_remote: "text-accent/80",
-  done: "text-tone-success",
-  failed: "text-tone-danger",
-  cancelled: "text-zinc-400",
-};
+// receipt does. v1.449.0 (plan 0h.5 item 18): the tone is the ONE status
+// table's (lib/statusWords), inked by `toneInkClass` — a second tone table
+// here drifted from it (a waiting teammate amber, a finished one green:
+// the table says the same, once).
+function statusInk(s: MemberStatus): string {
+  return toneInkClass(statusWords(s).tone);
+}
 
 export function ProgressBar({
   progress,
@@ -212,7 +210,7 @@ function AgentCard({
             <div className="flex items-center justify-between gap-2">
               <span className="truncate text-[13px] font-semibold text-zinc-100">{m.name}</span>
               <span className="flex shrink-0 items-baseline gap-1 text-[11px]">
-                <span className={STATUS_TONE[m.status]}>{statusWord(m.status)}</span>
+                <span className={statusInk(m.status)}>{statusWord(m.status)}</span>
                 {/* v1.352.0 (G23): how long a finished teammate took, quiet,
                     in the chat receipt's clock words. */}
                 {took && (

@@ -137,15 +137,16 @@ describe("the mission card says what a priced ask costs, before Allow", () => {
     renderOutput(view({ members: [member({ approval_id: "ask-7", tool: "generate_media", cost_note: PRICED })] }));
     const card = await screen.findByTestId("mission-approval");
     expect(card.textContent).toContain("designer wants to");
-    const cost = within(card).getByTestId("mission-approval-cost");
+    const cost = within(card).getByTestId("approval-cost");
     expect(cost.textContent).toBe(PRICED);
     // It sits BEFORE the answers (read before Allow), in the card's own flow.
     const allow = within(card).getByRole("button", { name: "Allow once" });
     expect(cost.compareDocumentPosition(allow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // The quiet line: the undo line's own look — theme tokens, whole pixels,
     // no border, no box.
-    expect(cost.className).toBe("mt-0.5 text-[12px] text-zinc-400");
-    expect(cost.className).not.toMatch(/border|shadow|rounded|bg-/);
+    // v1.449.0 (plan 0h.5 item 17, moved on purpose): the mission screen mounts
+    // THE chat card, so the line is the chat card's own quiet cost line.
+    expect(cost.className).toBe("text-[11px] leading-relaxed text-zinc-400 [overflow-wrap:anywhere]");
     // Allow still answers exactly that ask, once.
     fireEvent.click(allow);
     await waitFor(() => expect(H.posts).toEqual([{ path: "/chat/approvals/ask-7", body: { decision: "once" } }]));
@@ -163,20 +164,20 @@ describe("the mission card says what a priced ask costs, before Allow", () => {
       }),
     );
     const card = await screen.findByTestId("mission-approval");
-    expect(within(card).getByTestId("mission-approval-cost").textContent).toBe(PRICED);
+    expect(within(card).getByTestId("approval-cost").textContent).toBe(PRICED);
   });
 
   it("CONTROL: an ask with no price has no cost line (the card is exactly as before)", async () => {
     renderOutput(view({ members: [member({ approval_id: "ask-9", tool: "write_file" })] }));
     const card = await screen.findByTestId("mission-approval");
     expect(card.textContent).toContain("designer wants to save a file");
-    expect(within(card).queryByTestId("mission-approval-cost")).toBeNull();
+    expect(within(card).queryByTestId("approval-cost")).toBeNull();
   });
 
   it("CONTROL: a plan ask never shows a cost line, whatever rides it", async () => {
     renderOutput(view({ members: [member({ approval_id: "ask-10", tool: "approve_plan", cost_note: PRICED })] }));
     const card = await screen.findByTestId("mission-approval");
-    expect(within(card).queryByTestId("mission-approval-cost")).toBeNull();
+    expect(within(card).queryByTestId("approval-cost")).toBeNull();
   });
 
   it("only a non-empty string is words (an older daemon sends no key)", () => {
@@ -188,12 +189,12 @@ describe("the mission card says what a priced ask costs, before Allow", () => {
 });
 
 describe("the source keeps the calm card rules", () => {
-  it("MissionOutput's cost line is drawn from theme tokens only", () => {
+  it("the card's cost line (the chat card's, mounted by MissionOutput) is drawn from theme tokens only", () => {
     const src = readFileSync(
-      path.join(__dirname, "..", "components", "agents", "mission", "MissionOutput.tsx"),
+      path.join(__dirname, "..", "components", "chat", "ApprovalCard.tsx"),
       "utf8",
     ).replace(/\r\n/g, "\n");
-    const at = src.indexOf('data-testid="mission-approval-cost"');
+    const at = src.indexOf('data-testid="approval-cost"');
     expect(at).toBeGreaterThan(-1);
     const line = src.slice(at, at + 200);
     expect(line).not.toMatch(/#[0-9a-f]{3,6}\b|rgb\(|(?:emerald|rose|amber|sky|violet)-\d/);

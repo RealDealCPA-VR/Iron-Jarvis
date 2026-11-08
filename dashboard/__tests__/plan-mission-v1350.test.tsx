@@ -166,13 +166,15 @@ describe("the mission screen's card for a plan ask", () => {
     H.getResponses["/sessions/s1/plan"] = AWAITING;
     renderOutput(view({ coordinator: { name: "Jarvis", status: "waiting_you", waiting_on: { approval_id: "ask-1", tool: "approve_plan" }, steps: 0 } }));
     const card = await screen.findByTestId("mission-approval");
-    expect(card.textContent).toContain("Jarvis wants you to approve its plan");
+    expect(card.textContent).toContain("Jarvis wants to follow this plan");
     expect(card.textContent).not.toContain("approve plan."); // never the tool id as words
     expect(card.textContent).not.toContain("wants to use");
     // The plan itself, numbered, read from the daemon's copy of THIS session.
-    const list = await within(card).findByTestId("mission-approval-plan");
+    const list = await within(card).findByTestId("approval-plan");
     expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual(GOALS);
-    expect(list.tagName).toBe("OL");
+    // v1.449.0 (plan 0h.5 item 17, moved on purpose): the chat card draws the
+    // plan (ApprovalPreview PlanSteps), a numbered list inside its own block.
+    expect(list.querySelector("ol")).not.toBeNull();
     expect(H.gets).toEqual(["/sessions/s1/plan"]);
     // Approved once or declined: nothing run-wide.
     expect(buttonNames(card)).toEqual(["Allow once", "Deny"]);
@@ -184,8 +186,8 @@ describe("the mission screen's card for a plan ask", () => {
     H.getResponses["/sessions/c2/plan"] = AWAITING;
     renderOutput(view({ members: [member({ waiting_on: { approval_id: "ask-2", tool: "approve_plan" } })] }));
     const card = await screen.findByTestId("mission-approval");
-    expect(card.textContent).toContain("writer wants you to approve its plan");
-    const list = await within(card).findByTestId("mission-approval-plan");
+    expect(card.textContent).toContain("writer wants to follow this plan");
+    const list = await within(card).findByTestId("approval-plan");
     expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual(GOALS);
     expect(H.gets).toEqual(["/sessions/c2/plan"]);
     expect(buttonNames(card)).toEqual(["Allow once", "Deny"]);
@@ -197,8 +199,8 @@ describe("the mission screen's card for a plan ask", () => {
     renderOutput(view({ coordinator: { name: "Jarvis", status: "waiting_you", waiting_on: { approval_id: "ask-1", tool: "approve_plan" }, steps: 0 } }));
     const card = await screen.findByTestId("mission-approval");
     await waitFor(() => expect(H.gets).toEqual(["/sessions/s1/plan"]));
-    expect(card.textContent).toContain("Jarvis wants you to approve its plan");
-    expect(within(card).queryByTestId("mission-approval-plan")).toBeNull();
+    expect(card.textContent).toContain("Jarvis wants to follow this plan");
+    expect(within(card).queryByTestId("approval-plan")).toBeNull();
     expect(buttonNames(card)).toEqual(["Allow once", "Deny"]);
   });
 
@@ -210,7 +212,7 @@ describe("the mission screen's card for a plan ask", () => {
     fireEvent.click(within(card).getByText("Allow for this run"));
     await waitFor(() => expect(H.posts).toEqual([{ path: "/chat/approvals/ask-3", body: { decision: "conversation" } }]));
     expect(H.gets).toEqual([]);
-    expect(within(card).queryByTestId("mission-approval-plan")).toBeNull();
+    expect(within(card).queryByTestId("approval-plan")).toBeNull();
   });
 });
 

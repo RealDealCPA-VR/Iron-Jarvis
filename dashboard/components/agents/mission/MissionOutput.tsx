@@ -41,7 +41,7 @@
 //   once, Allow for this run, Deny — never "Decline" or "for this task".
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FileText, RotateCcw, Square } from "lucide-react";
 import { ApiError, post } from "@/lib/api";
 import { Markdown, MemoMarkdown, CopyIconButton } from "@/components/Markdown";
@@ -51,8 +51,9 @@ import { DocPreview } from "@/components/chat/DocPreview";
 import { readSessionPlan } from "@/components/chat/PlanChecklist";
 import { stepGoalText, type PlanView } from "@/lib/planChecklist";
 import { PLAN_TOOL } from "@/lib/toolWords";
-import { ALLOW_ONCE, DENY, askPhrase, scopeLabel, undoLine } from "@/lib/approvalWords";
+import { ApprovalCard, type ApprovalAsk } from "@/components/chat/ApprovalCard";
 import { ranOnWords, type RanOnRow } from "@/lib/ranOnWords";
+
 // v1.420.0 (C6.7): local or cloud, by the chat receipt's own rule.
 import { onThisNetworkOf, type WhereRow } from "@/lib/runWhere";
 import { replyWhere, type TurnRoute } from "@/components/chat/TurnReceipt";
@@ -62,6 +63,8 @@ import {
   baseName,
   missionHeadline,
   missionHeadlineWarn,
+  missionActions,
+  missionTook,
   missionPath,
   type MissionView,
   type WaitingOn,
@@ -111,7 +114,35 @@ export function askCostLine(waiting: MissionAsk): string {
   return typeof note === "string" ? note.trim() : "";
 }
 
-function ApprovalCard({
+/** v1.449.0 (plan 0h.5 item 17): the ask the mission view carries, in the
+ *  shape the chat's card takes (lib/useChatStream PendingApproval). A plan
+ *  ask carries the daemon's copy of that session's plan as its `steps`, so
+ *  the card draws the plan the chat card draws; its cost line is never shown
+ *  (a plan is not a priced action). */
+export function missionAskApproval(waiting: MissionAsk, plan: PlanView | null): ApprovalAsk {
+  const planAsk = waiting.tool === PLAN_TOOL;
+  const goals = planAsk && plan ? plan.steps.map((s) => stepGoalText(s)) : null;
+  const cost = planAsk ? "" : askCostLine(waiting);
+  return {
+    id: waiting.approval_id,
+    callId: "",
+    tool: waiting.tool,
+    args: goals && goals.length > 0 ? { steps: goals } : undefined,
+    reversible: waiting.reversible,
+    ...(cost ? { costNote: cost } : {}),
+  };
+}
+
+/** The mission screen's card for an ask: THE chat card (components/chat/
+ *  ApprovalCard — its words, its preview, its undo and cost lines, its
+ *  buttons; v1.449.0, plan 0h.5 item 17), named for the coordinator or the
+ *  teammate parked on it, with "Allow for this run" as the wider answer.
+ *  The mission screen used to draw a card of its own, a second copy of
+ *  those words that drifted from the chat's (v1.350.0's plan rule never
+ *  reached it). v1.309.0: also drawn for each TEAMMATE parked on an ask —
+ *  the daemon files a teammate's ask under the teammate's own session, and
+ *  the answer route takes the approval id alone. */
+function MissionApproval({
   waiting,
   who,
   session,
@@ -120,25 +151,12 @@ function ApprovalCard({
   waiting: MissionAsk;
   who: string;
   /** The session parked on the ask (the coordinator's or the teammate's):
-   *  whose plan a plan ask reads. */
+   *  whose plan a plan ask reads (the daemon's copy, every step waiting
+   *  while the ask is out; a 404 leaves the words and the two answers). */
   session: string | null;
   onAnswered: () => void;
 }) {
-  // v1.309.0: also drawn for each TEAMMATE parked on an ask — the daemon files
-  // a teammate's ask under the teammate's own session, and the answer route
-  // takes the approval id alone, so the same three answers work for it.
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-  // v1.350.0 re-review: the PLAN ask (`approve_plan`, the optional "Ask me to
-  // approve an agent's plan") is approved once or declined, nothing wider, as
-  // on every other surface: this card is the mission screen's own, so the
-  // chat card's rule never reached it. It says so in words and shows the
-  // plan (the daemon's copy of that session's plan, every step waiting while
-  // the ask is out): approving a plan you cannot read is not a decision. A
-  // 404 (no copy) leaves the words and the two answers.
   const planAsk = waiting.tool === PLAN_TOOL;
-  const undo = undoLine(waiting.reversible);
-  const cost = planAsk ? "" : askCostLine(waiting);
   const [plan, setPlan] = useState<PlanView | null>(null);
   useEffect(() => {
     if (!planAsk || !session) return;
@@ -150,94 +168,14 @@ function ApprovalCard({
       alive = false;
     };
   }, [planAsk, session]);
-  const more = plan && plan.total !== null && plan.total > plan.steps.length ? plan.total - plan.steps.length : 0;
-  const answer = async (decision: "once" | "conversation" | "deny") => {
-    setBusy(true);
-    setNote(null);
-    try {
-      await post(`/chat/approvals/${encodeURIComponent(waiting.approval_id)}`, { decision });
-      onAnswered();
-    } catch (e) {
-      // 404 = already answered elsewhere (the bell, another window).
-      setNote(e instanceof ApiError && e.status === 404 ? "Already answered." : "Could not send the answer.");
-      onAnswered();
-    } finally {
-      setBusy(false);
-    }
-  };
+  const approval = useMemo(() => missionAskApproval(waiting, plan), [waiting, plan]);
   return (
-    <div
-      data-testid="mission-approval"
-      className="mt-3 rounded-xl border border-tone-warn/30 bg-tone-warn/10 px-3 py-2.5 text-[13px] text-zinc-100"
-    >
-      {planAsk ? (
-        <div>
-          <strong>{who}</strong> wants you to approve its plan. No step runs until you answer; Deny ends its run
-          before any step runs.
-        </div>
-      ) : (
-        <div data-testid="mission-approval-ask">
-          {/* v1.352.0 (G23): the approval card's words for the tool; the
-              exact id it will run stays in the title. */}
-          <strong>{who}</strong> wants to <strong title={`The exact tool: ${waiting.tool}`}>{askPhrase(waiting.tool)}</strong>.
-          Nothing runs until you answer.
-        </div>
-      )}
-      {/* v1.356.0 (G79): what a priced call would spend, before Allow — the
-          chat card's cost line, in this card's quiet style. */}
-      {cost && (
-        <div data-testid="mission-approval-cost" className="mt-0.5 text-[12px] text-zinc-400">
-          {cost}
-        </div>
-      )}
-      {/* v1.352.0 (G25): can it be undone, when the daemon said so. */}
-      {!planAsk && undo && (
-        <div data-testid="mission-approval-undo" className="mt-0.5 text-[12px] text-zinc-400">
-          {undo}
-        </div>
-      )}
-      {planAsk && plan ? (
-        <>
-          <ol
-            data-testid="mission-approval-plan"
-            aria-label={plan.steps.length === 1 ? "The plan, 1 step" : `The plan, ${plan.steps.length} steps`}
-            className="mt-1.5 list-decimal space-y-0.5 pl-5 text-[12px] leading-relaxed text-zinc-300 marker:text-zinc-500"
-          >
-            {plan.steps.map((s) => (
-              <li key={s.index} className="whitespace-pre-wrap break-words pl-1">
-                {stepGoalText(s)}
-              </li>
-            ))}
-          </ol>
-          {more > 0 ? (
-            <div className="pl-5 text-[12px] text-zinc-500">
-              …and {more === 1 ? "1 more step" : `${more} more steps`}
-            </div>
-          ) : null}
-        </>
-      ) : null}
-      <div className="mt-2 flex flex-wrap gap-2">
-        <button type="button" disabled={busy} className="btn-accent px-3 py-1 text-xs" onClick={() => void answer("once")}>
-          {ALLOW_ONCE}
-        </button>
-        {!planAsk && (
-          <button
-            type="button"
-            disabled={busy}
-            className="btn-ghost px-3 py-1 text-xs"
-            onClick={() => void answer("conversation")}
-          >
-            {scopeLabel("run")}
-          </button>
-        )}
-        <button type="button" disabled={busy} className="btn-ghost px-3 py-1 text-xs" onClick={() => void answer("deny")}>
-          {DENY}
-        </button>
-      </div>
-      {note && <div className="mt-1 text-[12px] text-tone-warn">{note}</div>}
+    <div data-testid="mission-approval" className="mt-3">
+      <ApprovalCard approval={approval} scope="run" who={who} onAnswered={() => onAnswered()} />
     </div>
   );
 }
+
 
 /** The streaming caret: an `::after` on the wrapper's last block, so it sits
  *  inline with the running text. Kept as one string so the lock-step pin can
@@ -418,6 +356,12 @@ function MissionReceipt({
   const onNet = mock || note ? null : onThisNetworkOf(provider, model, catalog);
   const where =
     onNet === null ? null : replyWhere({ provider, model, on_this_network: onNet } as TurnRoute);
+  // v1.449.0 (plan 0h.5 item 17): how long and how much, like every other
+  // receipt — the coordinator's start to its end (only once it ENDED; a
+  // mission still at work has no length yet) in the app's duration words,
+  // and the actions taken: the coordinator's steps plus every teammate's.
+  const took = missionTook(view);
+  const actions = missionActions(view);
   return (
     <div
       data-testid="mission-receipt"
@@ -439,6 +383,15 @@ function MissionReceipt({
             <span data-testid="mission-receipt-where" title={where.title}>
               {" "}
               · {where.tail}
+            </span>
+          )}
+          {took && (
+            <span data-testid="mission-receipt-took"> · {took}</span>
+          )}
+          {actions > 0 && (
+            <span data-testid="mission-receipt-actions">
+              {" "}
+              · {actions} action{actions === 1 ? "" : "s"}
             </span>
           )}
         </span>
@@ -662,7 +615,7 @@ export function MissionOutput({
           </div>
         )}
         {waiting && (
-          <ApprovalCard
+          <MissionApproval
             key={waiting.approval_id}
             waiting={waiting}
             who={view?.coordinator.name ?? "Jarvis"}
@@ -671,7 +624,7 @@ export function MissionOutput({
           />
         )}
         {memberAsks.map((m) => (
-          <ApprovalCard
+          <MissionApproval
             key={m.waiting_on!.approval_id}
             waiting={m.waiting_on!}
             who={m.name}

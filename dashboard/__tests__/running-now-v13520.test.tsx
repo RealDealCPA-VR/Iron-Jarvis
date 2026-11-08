@@ -214,9 +214,9 @@ describe("lib/runningNow: the rows, in words", () => {
       ],
     );
     expect(items.map((i) => i.key)).toEqual(["s:w", "c:t-wait", "s:new", "s:old", "c:t-run", "s:q"]);
-    expect(items[0].line).toBe("Schedule · inbox · 5 min · Waiting on you");
-    expect(items[1]).toMatchObject({ line: "Chat · Waiting on you", detail: "Untitled chat", href: "/chat?thread=t-wait" });
-    expect(items[4]).toMatchObject({ line: "Chat · Working on it", detail: "Draft the memo", href: "/chat?thread=t-run" });
+    expect(items[0].line).toBe("Schedule · inbox · 5 min · Waiting for you");
+    expect(items[1]).toMatchObject({ line: "Chat · Waiting for you", detail: "Untitled chat", href: "/chat?thread=t-wait" });
+    expect(items[4]).toMatchObject({ line: "Chat · Working", detail: "Draft the memo", href: "/chat?thread=t-run" });
     expect(items[5].line).toBe("Schedule · later · Queued");
   });
 });

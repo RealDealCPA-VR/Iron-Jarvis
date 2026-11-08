@@ -68,7 +68,7 @@ describe("the two Code views are told apart by the tool (C5.1, D6)", () => {
       NOW,
     );
     expect(item.who).toBe(`Coding session (${tool})`);
-    expect(item.line).toBe(`Coding session (${tool}) · 2 min · Waiting on you`);
+    expect(item.line).toBe(`Coding session (${tool}) · 2 min · Waiting for you`);
     expect(codingSessionWith(tool)).toBe(`Coding session (${tool})`);
   });
 

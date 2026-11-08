@@ -347,7 +347,7 @@ describe("(b) one ask, the same words on every surface that answers it", () => {
     render(<MissionOutput view={view} liveStore={store} objective="" onChanged={() => {}} onOpen={() => {}} />);
     const card = screen.getByTestId("mission-approval");
     expect(buttonNames(card)).toEqual(SCOPE_RUN);
-    expect(within(card).getByTestId("mission-approval-undo").textContent).toBe(UNDO);
+    expect(within(card).getByTestId("approval-undo").textContent).toBe(UNDO);
   });
 
   it("a project's paused task (the runtime's approval.requested event)", async () => {

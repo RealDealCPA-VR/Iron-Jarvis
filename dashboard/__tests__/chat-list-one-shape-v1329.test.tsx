@@ -243,7 +243,7 @@ describe("inside a project chat the rail is the grouped list", () => {
     const toggle = screen.getByTestId("thread-group-toggle-none");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     // Words as well as colour, and how many chats the group holds.
-    expect(toggle.textContent).toContain("Working on it");
+    expect(toggle.textContent).toContain("Working");
     expect(toggle.textContent).toContain("2");
   });
 
