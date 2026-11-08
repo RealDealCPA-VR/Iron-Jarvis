@@ -358,7 +358,12 @@ _SLACK_PLACE = re.compile(
     r"slack\b(?=[^.!?\n]{0,60}?\b(?:(?:you|jarvis|iron\s+jarvis)\s+(?:can\s+|could\s+|will\s+|would\s+|to\s+"
     r"|should\s+)?(?:always\s+)?(?:message|notify|ping|alert|dm|text|tell|reach|contact|update)\s+me\b"
     r"|(?:for|as)\s+(?:my\s+|the\s+)?(?:alerts?|notifications?)\b))"
-    r"|\b(?:alerts?|notifications?)\s+(?:to|on|in|via|through|over)\s+(?:my\s+)?slack\b",
+    r"|\b(?:alerts?|notifications?)\s+(?:to|on|in|via|through|over)\s+(?:my\s+)?slack\b"
+    # v1.455.0 (readiness Wave G, item 23): "Send me a Slack message every
+    # morning", "DM me on Slack", "ping me a Slack note" — a message TO THE
+    # USER is a notification destination, never the Slack app.
+    r"|\b(?:send|give|drop|shoot|ping|text|post)\s+me\s+(?:a\s+|an\s+)?(?:quick\s+|short\s+|daily\s+|weekly\s+)?"
+    r"slack\s+(?:messages?|dms?|notes?|pings?|notifications?|alerts?|updates?|summary|summaries|digests?)\b",
     re.IGNORECASE | re.MULTILINE,
 )
 #: ...but a sentence that also READS or POSTS in the user's Slack, or is about

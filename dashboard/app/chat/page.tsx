@@ -202,6 +202,8 @@ import { fetchFollowups } from "@/lib/followups";
 import { useLiveThinking } from "@/lib/liveThinking";
 import { DoorsStrip, decodeDoors, type Door } from "@/components/chat/DoorsStrip";
 import { startCodingFromDoor } from "@/lib/codingStart";
+import { startMissionFromDoor } from "@/lib/missionStart";
+import { LocalOnlyOffer } from "@/components/chat/LocalOnlyOffer";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
 import { ReplyRating, type ReplyRatingValue } from "@/components/chat/ReplyRating";
 import { ConfigCards } from "@/components/chat/ConfigCards";
@@ -11831,7 +11833,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // v1.426.0 review: a Local only chat's request starts its coding session
     // Local only too (the door must not carry the words out of that promise).
     openDoor: (index, door) =>
-      startCodingFromDoor(messagesRef.current, index, door.href, atFilesRoot, localOnlyRef.current),
+      startCodingFromDoor(messagesRef.current, index, door.href, atFilesRoot, localOnlyRef.current) ||
+      // v1.455.0 (Wave G item 26): the team door carries the request into the
+      // objective composer (lib/missionStart); its link then opens the page.
+      startMissionFromDoor(messagesRef.current, index, door.href, localOnlyRef.current),
     promote: (content) => promoteNoteToKnowledge(content),
     openDocument: (path) => openDocPreview(path),
     undoFor: (path) => undoForPath(path),
@@ -14206,6 +14211,18 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         </MediaGroup>
                       </div>
                     )}
+                    {/* v1.455.0 (readiness Wave G, item 25): a file attached to a
+                        chat that is not Local only, with a model on this PC or the
+                        user's network connected — ONE quiet offer, once
+                        (lib/localOnlyOffer). Its press is the chip's own toggle. */}
+                    <LocalOnlyOffer
+                      attachedCount={attachments.length}
+                      localOnly={localOnly}
+                      models={models}
+                      onKeep={() => {
+                        if (!localOnlyRef.current) toggleLocalOnly();
+                      }}
+                    />
                     {/* Voice status strip — live mic/speech feedback for both the
                         composer mic and hands-free Voice Chat. */}
                     {(voiceMode ||

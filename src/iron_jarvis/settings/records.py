@@ -187,13 +187,51 @@ _RECURRING = (
 #: 5 s at 12,000 characters, on the event loop.
 _NOT_OUR_SCHEDULE = (
     r"(?!\s+(?:(?:a|an|the|my|our|your|some)\s+)?(?:call|meeting|appointment|zoom|interview|visit"
-    r"|demo|lunch|dinner|coffee|chat\s+with|session\s+with|review\s+with)\b)"
+    r"|demo|lunch|dinner|coffee|chat\s+with|session\s+with|review\s+with"
+    # v1.455.0 (readiness Wave G, item 21): "Schedule time to review the
+    # Smith return", "schedule an hour for the audit" — time on the person's
+    # own calendar, never one of Iron Jarvis's schedules.
+    r"|time|slots?|blocks?|hours?|half\s+an\s+hour|minutes|focus\s+time|\d{1,3}\s*(?:mins?|minutes?|hours?|hrs?))\b)"
 )
 _SCHEDULE_NOUN = re.compile(
     r"\b(?:schedules?" + _NOT_OUR_SCHEDULE + r"|scheduled|cron)\b", re.IGNORECASE
 )
 #: The word right before a match (read on a short slice: linear).
 _WORD_BEFORE = re.compile(r"([\w'’-]+)\W*$")
+#: v1.455.0 (readiness Wave G, item 21): the PERSON'S own schedule — "my
+#: schedule is packed this week", "our schedule looks tight", "my schedule
+#: for tomorrow", "fit it into my schedule". Read on short slices around the
+#: word (linear). "Pause my schedule" / "delete my nightly schedule" stay
+#: the app's: a verb acts on it, and nothing here reads a verb before it.
+_PERSONS_ADJ = r"(?:(?:busy|packed|hectic|crazy|full|tight|own|whole|personal)\s+)?"
+_PERSONS_BEFORE = re.compile(
+    r"\b(?:my|our|his|her|their|your)\s+" + _PERSONS_ADJ + r"$",
+    re.IGNORECASE,
+)
+_PERSONS_PREP_BEFORE = re.compile(
+    r"\b(?:on|around|into|in|with|from|about|fit\w*|clear|check|look\s+at|see)\s+"
+    r"(?:my|our|his|her|their|your)\s+" + _PERSONS_ADJ + r"$",
+    re.IGNORECASE,
+)
+_PERSONS_AFTER = re.compile(
+    r"^(?:['’]s\b|\s+(?:is|was|looks|seems|feels|gets|got|has\s+been|this\s+week|next\s+week|today|tomorrow"
+    r"|tonight|for\s+(?:today|tomorrow|tonight|the\s+week|this|next|monday|tuesday|wednesday|thursday"
+    r"|friday|saturday|sunday)))\b",
+    re.IGNORECASE,
+)
+_BUSY_BEFORE = frozenset({"busy", "packed", "hectic", "crazy", "full", "tight", "overloaded", "jammed"})
+
+
+def _persons_schedule(t: str, start: int, end: int) -> bool:
+    """Is the "schedule" at ``t[start:end]`` the person's own calendar?"""
+    before = t[max(0, start - 48):start]
+    after = t[end:end + 40]
+    word = _WORD_BEFORE.search(t[max(0, start - 40):start])
+    if word is not None and word.group(1).lower() in _BUSY_BEFORE:
+        return True
+    if _PERSONS_BEFORE.search(before) and _PERSONS_AFTER.search(after):
+        return True
+    return _PERSONS_PREP_BEFORE.search(before) is not None
 
 
 def _schedule_noun_hit(t: str) -> bool:
@@ -209,6 +247,8 @@ def _schedule_noun_hit(t: str) -> bool:
         if word.startswith("schedule") and not word.startswith("scheduled"):
             before = _WORD_BEFORE.search(t[max(0, m.start() - 40):m.start()])
             if before is not None and before.group(1).lower() in _SETUP_WORDS.NOT_OUR_SCHEDULE_BEFORE:
+                continue
+            if _persons_schedule(t, m.start(), m.end()):
                 continue
         return True
     return False
@@ -590,6 +630,11 @@ def record_tools_for(text: str, *, workflow_names: "list[str] | tuple[str, ...]"
     # http://10.0.0.5:8000/v1?" cut the last sentence at the IP's dots).
     if not is_question(without_addresses(t)):
         out += [n for n in connections_tools_for(t) if n not in out]
+    # v1.455.0 (readiness Wave G, item 23): "LM Studio is running on port
+    # 1234, connect to it" is a MODEL SERVER — the bare "connect to" that
+    # armed app_connect beside it names no app.
+    if "model_server_add" in out and "app_connect" in out and not _names_a_real_app(t):
+        out = [n for n in out if n != "app_connect"]
     # v1.448.0 (Wave A item 4): a tool server, a web service
     # (settings/records_tools) — writers only; it keeps its own question guard.
     from .records_tools import tools_tools_for
@@ -668,7 +713,12 @@ def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]"
         out += ["webhook_update", "webhook_delete"]
         if _CREATE_WEBHOOK.search(t):
             out.append("webhook_add")
-    sentinel_new = bool(_CREATE_SENTINEL.search(t))
+    # v1.455.0 (readiness Wave G, item 20): files arriving in a FOLDER
+    # ("Whenever a new PDF shows up in my Downloads folder, rename it") is a
+    # folder watcher's job — and never a rule's: a rule hears webhooks,
+    # email, messages, the calendar and Slack, and has no folder source.
+    folder_arrival = W.files_arrive_in_folder(t)
+    sentinel_new = bool(_CREATE_SENTINEL.search(t)) or folder_arrival
     if _SENTINEL_WORDS.search(t) or sentinel_new:
         out += ["sentinel_update", "sentinel_delete"]
         if sentinel_new:
@@ -682,7 +732,11 @@ def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]"
     # v1.442.0 (Wave 7): "a workflow that drafts a reply to EVERY NEW EMAIL
     # from a client" — a standing request about every new arrival is a rule's
     # trigger (a workflow alone never starts by itself).
-    if _REFLEX_WORDS.search(t) or W.every_new_arrival(t):
+    # The rule words are read with the folder arrivals blanked (item 20), and
+    # a rule on mail FROM someone with an order after it ("When I get an email
+    # from the IRS, forward it to my phone", item 23) is a rule too.
+    t_rules = W.without_folder_arrivals(t) if folder_arrival else t
+    if _REFLEX_WORDS.search(t_rules) or W.every_new_arrival(t_rules) or W.mail_from_rule(t):
         out += ["reflex_create", "reflex_update", "reflex_delete"]
     if _GRANT_WORDS.search(t):
         out += ["grant_revoke"]
@@ -700,6 +754,18 @@ def _blank_not_the_app(t: str) -> str:
         return blank_not_the_app(t)
     except Exception:  # noqa: BLE001 - a matcher fault keeps the words
         return t
+
+
+#: ``_APP_WORDS`` without its bare connect verb: an app NAMED.
+_APP_NAME_WORDS = re.compile(
+    r"\b(?:notion|github|sentry|stripe|brave search|google maps|google drive|onedrive|dropbox|connectors?)\b",
+    re.IGNORECASE,
+)
+
+
+def _names_a_real_app(t: str) -> bool:
+    """Does *t* name an app (not only "connect to it")? Never raises."""
+    return bool(_APP_NAME_WORDS.search(_blank_not_the_app(t))) or _names_an_app(t)
 
 
 def _names_an_app(t: str) -> bool:

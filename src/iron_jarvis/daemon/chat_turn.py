@@ -3699,9 +3699,67 @@ def with_coding_offer(
         return base
 
 
-def with_page_door(
+def with_mission_offer(
     entries: Any, body: Any, *, harness: Any = None, escalate: bool = False,
     sidebar: bool = False,
+) -> list[Any]:
+    """The turn's door entries with the TEAM OFFER (v1.455.0, readiness Wave
+    G, item 26): a long request of several separate pieces of work
+    (``tools.autoselect.mission_offer``) gets one door — "Give this to the
+    team as an objective" — to the Agents page's objective composer, where the
+    dashboard puts the request in the box (``dashboard/lib/missionStart``);
+    nothing starts until the user presses Start there. ONLY A LINK. The same
+    surfaces as :func:`with_coding_offer` (a plain chat turn only), and never a
+    Local only chat (an objective runs on the default model). Added after the
+    coding offer and before the Connect door. MIRROR NOTE (lock-step): both
+    lanes. Never raises (the entries come back unchanged)."""
+    base = list(entries or [])
+    try:
+        if harness is not None or escalate or sidebar or surface_for(body):
+            return base
+        if bool(getattr(body, "local_only", False)):
+            return base
+        from ..providers.failure_words import SURFACE_CHAT, current_surface
+
+        if current_surface() != SURFACE_CHAT:
+            return base
+        try:
+            from ..providers.egress import current_scope
+
+            if getattr(current_scope(), "on", False):
+                return base
+        except Exception:  # noqa: BLE001 — no scope reading: the body decides
+            pass
+        from ..tools.autoselect import mission_offer
+
+        door = mission_offer(_last_user_text(getattr(body, "messages", None)))
+        if not door or any(isinstance(e, dict) and e.get("href") == door.get("href") for e in base):
+            return base
+        return base + [door]
+    except Exception:  # noqa: BLE001 — no door beats no reply
+        return base
+
+
+def _page_door_checks(platform: Any) -> tuple[Any, Any]:
+    """v1.455.0 (readiness Wave G, item 23): what the page door asks this PC,
+    from CACHED answers only (never a sign-in probe, never a PATH scan): is a
+    provider ready (``agents.model_team.provider_ready``), is a program
+    installed (``providers.manager.known_cli_presence``). ``(None, None)``
+    with no platform — every door then stays, as before."""
+    if platform is None:
+        return None, None
+    try:
+        from ..agents.model_team import provider_ready
+        from ..providers.manager import known_cli_presence
+
+        return (lambda p: provider_ready(platform, p)), known_cli_presence
+    except Exception:  # noqa: BLE001 — not known: every door stays
+        return None, None
+
+
+def with_page_door(
+    entries: Any, body: Any, *, harness: Any = None, escalate: bool = False,
+    sidebar: bool = False, platform: Any = None,
 ) -> list[Any]:
     """The turn's door entries with the PAGE DOOR (v1.436.0, chat-first plan
     Wave 5, B3): when the user's last message asks for a step only a page or
@@ -3724,7 +3782,10 @@ def with_page_door(
             return base
         from .page_doors import with_page_door as _with_page_door
 
-        return _with_page_door(base, _last_user_text(getattr(body, "messages", None)))
+        ready, installed = _page_door_checks(platform)
+        return _with_page_door(
+            base, _last_user_text(getattr(body, "messages", None)), ready=ready, installed=installed,
+        )
     except Exception:  # noqa: BLE001 — no door beats no reply
         return base
 
@@ -11613,11 +11674,18 @@ async def run_chat_turn(
     # its box by the dashboard; a link only). MIRROR NOTE (lock-step):
     # routes/chat.py.
     door_entries = with_coding_offer(door_entries, body, harness=harness, escalate=escalate)
+    # TEAM OFFER (v1.455.0, readiness Wave G, item 26): a long multi-part
+    # request gets a door to the objective composer (a link only). MIRROR NOTE
+    # (lock-step): routes/chat.py.
+    door_entries = with_mission_offer(door_entries, body, harness=harness, escalate=escalate)
     door_entries = with_connect_door(door_entries, _grounding.apps_offer, connect_offered)
     # PAGE DOOR (v1.436.0, Wave 5 B3): a step only a page can do gets ONE
     # door to the exact place — last, only with room. MIRROR NOTE
-    # (lock-step): routes/chat.py.
-    door_entries = with_page_door(door_entries, body, harness=harness, escalate=escalate)
+    # (lock-step): routes/chat.py. v1.455.0: with the platform (a door this PC
+    # no longer needs is left out).
+    door_entries = with_page_door(
+        door_entries, body, harness=harness, escalate=escalate, platform=platform,
+    )
     out: dict[str, Any] = {
         "reply": reply,
         "provider": route.provider,

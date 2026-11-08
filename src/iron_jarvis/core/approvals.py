@@ -92,8 +92,11 @@ DECISIONS = ("once", "conversation", "deny", "tab", "always")
 #: it is answered (``comm/prompts`` and ``comm/notifier`` skip an
 #: ``approval.requested`` carrying one; ``harness/stall.phone_may_ask`` is
 #: the coding session's own rule). Lived in ``harness/stall`` until
-#: v1.449.0, which still re-exports it.
-SAFETY_REASONS = frozenset({"command", "git", "page", "guarded", "privacy", "undo"})
+#: v1.449.0, which still re-exports it. v1.455.0 (readiness Wave G, item
+#: 24): "memory" — archiving, deleting, renaming or moving a note in the
+#: memory base (``brain/tools`` ``brain_change``) — joins them: an agent run's
+#: ask for it reached the phone.
+SAFETY_REASONS = frozenset({"command", "git", "page", "guarded", "privacy", "undo", "memory"})
 
 #: How long a turn will hold for an answer before denying honestly. Long
 #: enough to read what the tool wants and decide; short enough that a stream

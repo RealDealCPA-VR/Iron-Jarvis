@@ -54,6 +54,22 @@
       {
         "door": {
           "href": "/connections",
+          "install": "claude",
+          "label": "Install Claude Code for me"
+        },
+        "id": "install_claude_code"
+      },
+      {
+        "door": {
+          "href": "/connections",
+          "install": "codex",
+          "label": "Install Codex for me"
+        },
+        "id": "install_codex"
+      },
+      {
+        "door": {
+          "href": "/connections",
           "label": "Sign in to Claude Code",
           "press": "claude-cli"
         },

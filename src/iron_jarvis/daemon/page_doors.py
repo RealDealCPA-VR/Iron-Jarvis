@@ -74,6 +74,14 @@ HELP_PATH = "/help"
 #: fixture the dashboard test reads).
 SIGN_IN_PRESSES: tuple[str, ...] = ("claude-cli", "codex-cli", "grok-cli")
 
+#: v1.455.0 (readiness Wave G, item 23): the install presses a door may
+#: carry — the Launch catalog ids ``terminals/ai_clis.INSTALL_JOBS`` knows and
+#: ``dashboard/lib/cliInstall.INSTALL_JOBS`` holds (pinned equal).
+INSTALL_PRESSES: tuple[str, ...] = ("claude", "codex")
+#: Each install press's own program, looked for on this PC (a door is not
+#: offered for a program that is already installed).
+INSTALL_BINARIES: dict[str, str] = {"claude": "claude", "codex": "codex"}
+
 #: The guides the Help page serves (``routes/helpdocs._DOCS``; pinned equal).
 HELP_GUIDES: tuple[str, ...] = ("handbook", "recommended-settings", "local-models", "changelog")
 
@@ -107,11 +115,17 @@ class PageStep:
     line: str
     #: A sign-in press the dashboard draws through its one press ("" = a link).
     press: str = ""
+    #: v1.455.0 (readiness Wave G, item 23): an INSTALL press the dashboard
+    #: draws through its one install press (``lib/cliInstall`` — "claude" or
+    #: "codex", the Launch catalog's id; "" = none).
+    install: str = ""
 
     def door(self) -> dict[str, str]:
         out = {"href": self.href, "label": self.label}
         if self.press:
             out["press"] = self.press
+        if self.install:
+            out["install"] = self.install
         return out
 
 
@@ -185,6 +199,26 @@ _OPENCODE = r"open[\s-]?code"
 _PI = r"(?<!raspberry\s)pi(?![\s-]*(?:hole|zero|\d|chart|day|pi\b))"
 
 _ACCOUNT_VENDOR = r"(?:claude|codex|chatgpt|openai|grok|anthropic)(?:[\s-]*code)?"
+
+
+def _install_rules(name: str) -> tuple[re.Pattern[str], ...]:
+    """"Install Codex for me", "can you install Claude Code?", "set up Codex
+    on this PC", "download Claude Code" — the program installed HERE. Never a
+    package of the user's code ("install the codex npm package"), never on
+    another device ("install Codex on my Mac")."""
+    tail = (
+        r"(?!\s+(?:npm|pip|python|node|js|sdk|package|module|library|extension|plugin|vs\s*code|cli\s+package)\b)"
+        r"(?![^.!?\n]{0,30}?\b(?:on|for)\s+(?:my|the|her|his|our|a|another)\s+(?:(?:new|old|work|other|second)\s+)?"
+        r"(?:phone|iphone|android|ipad|tablet|mac|macbook|laptop|linux|server|vm|box|brother|sister|mom|dad"
+        r"|wife|husband|son|daughter|kids?|friends?|clients?|team)\b)"
+    )
+    return tuple(
+        re.compile(r, re.IGNORECASE)
+        for r in (
+            r"\b(?:install|re-?install|download|get)\s+(?:me\s+)?(?:the\s+)?" + name
+            + r"(?:\s+(?:cli|app|program|tool))?\b" + tail,
+        )
+    )
 _ORDINAL = r"(?:second|another|other|2nd|third|3rd|extra|new|different|work|personal|business|separate)"
 _ACCOUNT_RULES = tuple(
     re.compile(r, re.IGNORECASE)
@@ -602,6 +636,20 @@ def _cli_line(name: str, inside: str) -> str:
     )
 
 
+def _install_line(name: str, vendor: str) -> str:
+    # The press opens POST /terminals/launch {cli: "<name>-install"}: a Build
+    # terminal running the vendor's own documented installer, every step on
+    # screen (terminals/ai_clis.SETUP_LAUNCHES).
+    return (
+        f"Iron Jarvis can install {name} on this PC: the \"Install {name} for me\" press under this reply opens "
+        f"a terminal in Build that runs {vendor}'s own installer, and every step shows there (the same press is "
+        f"beside {name} in {CONNECTIONS_PLACE}). Iron Jarvis does not install anything until the user presses "
+        f"it. After it "
+        f"finishes, {name} still has to be signed in, with its Sign in button there. Say so plainly and point "
+        "there."
+    )
+
+
 #: The steps, in PRIORITY order: the first that matches is the message's
 #: door (an account of the user's before this PC's own Claude Code login;
 #: the admin's approval before the Microsoft sign-in).
@@ -632,6 +680,19 @@ STEPS: tuple[PageStep, ...] = (
         "Connect, its Sign in to Microsoft button opens a terminal with a web address and a code, and the "
         "user signs in there with their main account, in a private browser window. "
         f"{_NOT_FOR_THEM}.",
+    ),
+    PageStep(
+        # v1.455.0 (readiness Wave G, item 23): "Install Codex for me" — the
+        # one-press install job (terminals/ai_clis.INSTALL_JOBS, v1.450.0),
+        # the same press as Settings › Connections and a new chat's doors.
+        "install_claude_code", ACCOUNTS_HREF, "Install Claude Code for me",
+        _install_line("Claude Code", "Anthropic"),
+        install="claude",
+    ),
+    PageStep(
+        "install_codex", ACCOUNTS_HREF, "Install Codex for me",
+        _install_line("Codex", "OpenAI"),
+        install="codex",
     ),
     PageStep(
         "signin_claude_code", ACCOUNTS_HREF, "Sign in to Claude Code",
@@ -750,6 +811,8 @@ _STEP_RULES: dict[str, Callable[[str], bool]] = {
     "accounts": _any(_ACCOUNT_RULES),
     "vendor_approval": _vendor_approval,
     "signin_microsoft": _any(_M365_RULES),
+    "install_claude_code": _any(_install_rules(_CLAUDE)),
+    "install_codex": _any(_install_rules(_CODEX)),
     "signin_claude_code": _any(_cli_rules(_CLAUDE, bare="claude")),
     "signin_codex": _any(_cli_rules(_CODEX)),
     "signin_grok": _any(_cli_rules(_GROK)),
@@ -886,6 +949,7 @@ ALL_PATTERNS: tuple[re.Pattern[str], ...] = (
     _SET_UP_SLACK, _DESTINATION_WORDS, _GMAIL_CONNECT, _FULL_FOR_A_FOLDER, _CODING_WORDS, ASKS_TO_MESSAGE_ME,
     *W.ALL_PATTERNS,
     *_cli_rules(_CLAUDE, bare="claude"), *_cli_rules(_CODEX), *_cli_rules(_GROK), *_cli_rules(_OPENCODE),
+    *_install_rules(_CLAUDE), *_install_rules(_CODEX),
 )
 
 #: The heading the model reads the lines under.
@@ -954,14 +1018,40 @@ def prompt_block(text: Any) -> str:
         return ""
 
 
-def with_page_door(entries: Any, text: Any) -> list[Any]:
+def step_not_needed(step: PageStep, text: Any, *, ready: "Callable[[str], bool | None] | None" = None,
+                    installed: "Callable[[str], bool | None] | None" = None) -> bool:
+    """v1.455.0 (readiness Wave G, item 23): is *step*'s door one this PC no
+    longer needs? The Connections door for a model vendor that ALREADY answers
+    (``ready(provider)`` True for one of the providers each named vendor means
+    — every named vendor), and an install press for a program that is already
+    installed (``installed(binary)`` True). ``None`` from a callback is "not
+    known": the door stays. Never raises."""
+    try:
+        if step.id == "model_provider" and ready is not None:
+            groups = W.model_providers_named(_scan(text))
+            return bool(groups) and all(any(ready(p) is True for p in ids) for ids in groups)
+        if step.install and installed is not None:
+            binary = INSTALL_BINARIES.get(step.install, "")
+            return bool(binary) and installed(binary) is True
+    except Exception:  # noqa: BLE001 — not known: the door stays
+        return False
+    return False
+
+
+def with_page_door(entries: Any, text: Any, *, ready: "Callable[[str], bool | None] | None" = None,
+                   installed: "Callable[[str], bool | None] | None" = None) -> list[Any]:
     """The turn's door entries with the message's page door — appended LAST,
     only while there is room under :data:`doors.MAX_DOORS` and only when no
     door already leads to the same place, so it never pushes out a door the
-    turn earned. Never raises (the entries come back unchanged)."""
+    turn earned. v1.455.0: a step this PC no longer needs
+    (:func:`step_not_needed`) gives its place to the next step the message is
+    about. Never raises (the entries come back unchanged)."""
     base = list(entries or [])
     try:
-        step = page_step(text)
+        step = next(
+            (s for s in page_steps(text) if not step_not_needed(s, text, ready=ready, installed=installed)),
+            None,
+        )
         if step is None:
             return base
         door = step.door()

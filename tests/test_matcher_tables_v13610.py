@@ -1045,6 +1045,25 @@ GUIDE_ROWS = [
     ('Does Iron Jarvis integrate with Xero Practice Manager?', True),
     ('Can you work with me on the Johnson return this afternoon?', False),
     ('Could you use the QuickBooks export in this sheet?', False),
+    # --- v1.455.0 (readiness Wave G, item 23): the pages renamed in v1.452.0
+    # by their page names, and "how do I make a rule?" — never the everyday
+    # rules, a rule for the kids, or a night shift at the hospital.
+    ('What are Watchers for?', True),
+    ('What is the Rules page?', True),
+    ('How do I make a rule?', True),
+    ('How do I add a watcher?', True),
+    ('What is the Model servers page?', True),
+    ('What does the Model servers page do?', True),
+    ('What is the What agents made page?', True),
+    ('What is Night shift?', True),
+    ('What is Local only?', True),
+    ('how can I set up a model server?', True),
+    ('What are the rules?', False),
+    ('What are the rules of the game?', False),
+    ('How do I make a rule for my kids about screen time?', False),
+    ('what are watchers in the Wheel of Time books?', False),
+    ('What is the night shift at the hospital like?', False),
+    ('how do I make a rule in Outlook to sort my mail?', False),
 ]
 
 #: v1.420.0 (C6.1): ``(text, web armed)`` — the user's own mail never arms
@@ -1161,6 +1180,15 @@ CODING = [
     ('make me an app that minimizes to the tray', True),
     ('make my app minimize faster', True),
     ('build me an app that hides in the tray', True),
+    # --- v1.455.0 (readiness Wave G, item 23): a repo with its NAME before
+    # the word; never "a repository of knowledge" or a question about one.
+    ('Fix the failing test in my ClosePilot repo.', True),
+    ('Fix the failing test in the iron-jarvis repo.', True),
+    ('Add a README to our tax-tools repository.', True),
+    ('refactor the parser in my old codebase', True),
+    ('What is a repository of knowledge?', False),
+    ('my ClosePilot repo is private', False),
+    ('fix the dinner plans for the family', False),
 ]
 
 

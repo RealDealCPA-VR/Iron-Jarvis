@@ -1,4 +1,5 @@
-import { Code2, LayoutGrid, Store } from "lucide-react";
+import { Code2, House, Layers, LayoutGrid, Moon, Store } from "lucide-react";
+import { FEATURE_ROWS, type FeatureRow } from "@/lib/featureRows";
 import { NAV_ENTRIES, NON_RAIL_ENTRIES, type NavEntry } from "@/lib/nav";
 import { CODE_VIEW_HREF } from "@/lib/chatSurface";
 import { CODE_BLURB, CODING_VIEW_NAME } from "@/lib/buildWords";
@@ -70,6 +71,14 @@ export const EVERYTHING_GROUPS: { key: Exclude<SurfaceGroup, "primary">; label: 
   { key: "setup", label: "Setup", hint: "Accounts, apps and access" },
 ];
 
+/** v1.455.0: where each composer feature row sits on Everything. */
+const FEATURE_GROUP: Readonly<Record<FeatureRow["id"], SurfaceGroup>> = {
+  "night-shift": "automations",
+  "try-on": "work",
+  "local-only": "setup",
+};
+const FEATURE_ICON = { "night-shift": Moon, "try-on": Layers, "local-only": House } as const;
+
 /** Where each page lives. Every route the dashboard serves is here. */
 const GROUP_OF: Readonly<Record<string, SurfaceGroup>> = {
   "/": "primary",
@@ -109,6 +118,11 @@ const GROUP_OF: Readonly<Record<string, SurfaceGroup>> = {
   "/channels": "setup",
   "/computeruse": "setup",
   "/tools": "setup",
+  // v1.455.0 (readiness Wave G, item 25): the ways of working that live in a
+  // composer (lib/featureRows) — each leads to its Handbook section.
+  ...Object.fromEntries(
+    FEATURE_ROWS.map((f) => [f.href, FEATURE_GROUP[f.id]] as const),
+  ),
 };
 
 /** Pages that were never on the rail and so are not in lib/nav.ts. */
@@ -148,6 +162,15 @@ const EXTRA_ENTRIES: NavEntry[] = [
     aliases: ["marketplace", "connectors", "connect an app", "notion", "github", "app store", "integrations"],
     blurb: "Apps and extensions you can connect — Notion, GitHub, Slack and more.",
   },
+  // v1.455.0 (readiness Wave G, item 25): Night shift, Try on several models
+  // and Local only — found in Help, on Everything and in Ctrl K.
+  ...FEATURE_ROWS.map((f) => ({
+    href: f.href,
+    label: f.title,
+    icon: FEATURE_ICON[f.id],
+    aliases: f.aliases,
+    blurb: f.desc,
+  })),
 ];
 
 /** v1.353.0 (G66): the developer pages. Everything listed thirty surfaces as

@@ -158,6 +158,15 @@ DOOR_ROWS: list[tuple[str, str]] = [
     ("Please switch to ChatGPT for this conversation.", "model_provider"),
     ("Which small open-source models would run on my PC?", "local_model"),
     ("Could my desktop run a local LLM?", "local_model"),
+    # v1.455.0 (readiness Wave G, item 23): installing the program HERE gets
+    # the one-press install job (its door carries `install`), before the
+    # Connections door the vendor's name also reaches.
+    ("Install Codex for me.", "install_codex"),
+    ("Download Codex.", "install_codex"),
+    ("can you install the Codex CLI on this PC", "install_codex"),
+    ("Can you install Claude Code for me?", "install_claude_code"),
+    ("get me Claude Code", "install_claude_code"),
+    ("reinstall Claude Code please", "install_claude_code"),
 ]
 
 #: (sentence, the thing it asks for that Iron Jarvis does not offer)
@@ -315,6 +324,12 @@ NEAR_MISSES: list[str] = [
     "Save the PDF on my desktop.",
     "The Acme return is in the folder on my desktop, read it.",
     "use GPT for answers to client emails",
+    # v1.455.0 (Wave G item 23): installing on another device, a past install,
+    # a package of the user's own code.
+    "Install Codex on my Mac.",
+    "I installed Codex yesterday.",
+    "install claude code on my laptop for my brother",
+    "the medieval codex was installed in the museum",
     # ("add my OpenAI account to the vendor list" and "set up my Claude
     # account for my brother" reach no model_provider door, but the OLDER
     # "accounts" step (v1.436.0) still answers them — pinned as arming
