@@ -194,7 +194,9 @@ async def test_injected_resolver_true_still_executes(approvals, engine, tmp_path
     assert res.ok is True
     assert len(cu.browser.typed) == 1
     rows = _all_approvals(engine)
-    assert len(rows) == 1 and rows[0].status == "approved"
+    # v1.449.0 (B4): the Allow a resolver gives is SPENT by the click it
+    # allowed, so a second identical click asks again (one Allow, one action).
+    assert len(rows) == 1 and rows[0].status == "consumed"
 
 
 async def test_injected_resolver_false_blocks_and_denies(approvals, engine, tmp_path):

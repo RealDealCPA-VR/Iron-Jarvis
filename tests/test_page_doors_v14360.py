@@ -472,8 +472,10 @@ def test_the_doors_reuse_the_places_other_doors_already_use():
 def test_a_press_is_one_the_dashboard_has_and_the_guides_are_the_help_pages():
     presses = {s.press for s in P.STEPS if s.press}
     assert presses == set(P.SIGN_IN_PRESSES)
+    # v1.449.0 (B4): the sign-in list lives in lib/signInClis.ts (React-free;
+    # lib/cliSignIn re-exports it), so the press names are read there.
     src = (DASH / "lib" / "onboarding.ts").read_text(encoding="utf-8") + (
-        DASH / "lib" / "cliSignIn.ts"
+        DASH / "lib" / "signInClis.ts"
     ).read_text(encoding="utf-8")
     for p in P.SIGN_IN_PRESSES:
         assert f'provider: "{p}"' in src, p

@@ -189,7 +189,8 @@ describe("the project page lists its coding sessions", () => {
     expect(a.textContent).toContain("Working");
     const b = within(list).getByTestId("project-coding-session-app_2");
     expect(b.getAttribute("href")).toBe("/terminals?view=code&code=app_2");
-    expect(b.textContent).toContain("Claude Code · Finished");
+    // v1.449.0 (B1): one status table — a finished session reads "Done".
+    expect(b.textContent).toContain("Claude Code · Done");
     // The board is still there beneath it.
     expect(await screen.findByText(/No sessions in this project yet/, {}, W)).toBeInTheDocument();
   });
