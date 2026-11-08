@@ -18,7 +18,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from typing import Any
 
-from ..schemas import GoalBody, GoalPatch, KillBody, SentinelAdd
+from ..schemas import GoalBody, GoalPatch, KillBody, SentinelAdd, SentinelPatch
 
 
 def register(app: FastAPI, d) -> None:
@@ -182,6 +182,21 @@ def register(app: FastAPI, d) -> None:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        return d._sentinel_view(rec)
+
+    @app.patch("/sentinels/{name}")
+    def edit_sentinel(name: str, body: SentinelPatch) -> dict[str, Any]:
+        """PARTIAL edit (v1.449.0, Wave D item 34): the fields given replace
+        the stored ones, the rest are kept; a changed watch spec passes the
+        add-time rules first (400 in words) and starts a new baseline. 404
+        for an unknown watcher."""
+        fields = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None or k == "glob"}
+        try:
+            rec = d.platform.sentinels.update(name, **fields)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if rec is None:
+            raise HTTPException(status_code=404, detail="sentinel not found")
         return d._sentinel_view(rec)
 
     @app.delete("/sentinels/{name}")

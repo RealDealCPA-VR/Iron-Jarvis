@@ -68,6 +68,7 @@ import {
 import { StepNode } from "./StepNode";
 import { TriggerNode } from "./TriggerNode";
 import { NodeInspector } from "./NodeInspector";
+import { stepProblemOf } from "@/lib/workflowStepProblems";
 import { TriggerInspector } from "./TriggerInspector";
 import { useCanvasColors } from "./useCanvasColorMode";
 import {
@@ -806,6 +807,9 @@ function Canvas() {
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // v1.449.0 (Wave D item 42): a save the daemon refused for ONE step — the
+  // node it is about and the daemon's words, shown in that step's panel.
+  const [stepProblem, setStepProblem] = useState<{ nodeId: string; words: string } | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   /* v1.170.0 — which SAVED def is on the canvas (rename + pin preservation).
@@ -1154,6 +1158,7 @@ function Canvas() {
       setError(null);
       setSuccess(null);
       setResult(null);
+      setStepProblem(null);
       const steps = stepsFromGraph(nodes, edges);
       const wfName = name.trim();
       if (!wfName) {
@@ -1223,7 +1228,17 @@ function Canvas() {
       } catch (err) {
         if (err instanceof ApiError && err.status === 0)
           setResult({ offline: true });
-        else setError(err instanceof ApiError ? err.message : String(err));
+        else {
+          const words = err instanceof ApiError ? err.message : String(err);
+          setError(words);
+          // The refusal names one step: open it and say it there too.
+          const about = stepProblemOf(words);
+          const node = about ? orderedSteps(nodes, edges)[about.index] : undefined;
+          if (about && node) {
+            setStepProblem({ nodeId: node.id, words: about.words });
+            setSelectedId(node.id);
+          }
+        }
       } finally {
         setSaving(false);
       }
@@ -1620,6 +1635,7 @@ function Canvas() {
           <NodeInspector
             data={selData}
             onChange={(patch) => updateData(selected!.id, patch)}
+            problem={stepProblem && stepProblem.nodeId === selected!.id ? stepProblem.words : null}
             onDelete={() => deleteNode(selected!.id)}
             onClose={() => setSelectedId(null)}
           />

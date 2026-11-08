@@ -326,6 +326,10 @@ describe("A3 Reflexes: the add form and the calendar trigger name their fields",
     render(<ReflexPage />);
     fireEvent.click((await screen.findAllByRole("button", { name: /add reflex/i }))[0]);
     await screen.findByLabelText("Signal source");
+    // v1.449.0 (Wave D item 34, moved on purpose): the form opens on the
+    // everyday rule; the webhook shape is behind "Another kind of rule".
+    fireEvent.click(screen.getByTestId("reflex-shape-other"));
+    fireEvent.change(screen.getByLabelText("Signal source"), { target: { value: "webhook" } });
     expect(controlOfLabel("Webhook slug")).toHaveAttribute("placeholder", "github-push");
     expect(controlOfLabel(/^Name \(optional\)/).tagName).toBe("INPUT");
     // The calendar trigger (visible in fresh__reflex.png).
@@ -341,6 +345,7 @@ describe("A3 Reflexes: the add form and the calendar trigger name their fields",
     seedReflex();
     render(<ReflexPage />);
     fireEvent.click((await screen.findAllByRole("button", { name: /add reflex/i }))[0]);
+    fireEvent.click(await screen.findByTestId("reflex-shape-other")); // v1.449.0: moved on purpose
     fireEvent.change(await screen.findByLabelText("Action"), { target: { value: "session" } });
     const task = await screen.findByPlaceholderText("Triage this: {body}");
     expect(document.querySelector(`label[for="${task.id}"]`), "the task box has a label").not.toBeNull();
@@ -424,7 +429,10 @@ describe("A5 Schedules: add form (every kind), the folded knobs and the editor",
     const editor = await screen.findByTestId("schedule-editor");
     expect(untiedLabels(editor)).toEqual([]);
     expect(within(editor).getByLabelText("Schedule name")).toHaveAttribute("readonly");
-    expect(within(editor).getByLabelText("Cron expression")).toHaveAttribute("aria-label", "Cron expression");
+    // v1.449.0 (Wave D item 35, moved on purpose): "0 2 * * *" reads back as
+    // Daily at a time — no cron box; the time box is named.
+    expect(within(editor).getByLabelText("Time")).toHaveAttribute("aria-label", "Time");
+    expect(within(editor).queryByLabelText("Cron expression")).toBeNull();
   });
 });
 
@@ -731,6 +739,10 @@ describe("D1 Reflexes: a reflex's task text is a task, not a 'template'", () => 
     seedReflex();
     render(<ReflexPage />);
     fireEvent.click((await screen.findAllByRole("button", { name: /add reflex/i }))[0]);
+    // v1.449.0 (Wave D item 34, moved on purpose): the webhook shape is
+    // behind "Another kind of rule".
+    fireEvent.click(await screen.findByTestId("reflex-shape-other"));
+    fireEvent.change(screen.getByLabelText("Signal source"), { target: { value: "webhook" } });
     fireEvent.change(await screen.findByLabelText("Action"), { target: { value: "session" } });
     fireEvent.change(screen.getByPlaceholderText("github-push"), { target: { value: "gh" } });
     const task = (await screen.findByPlaceholderText("Triage this: {body}")) as HTMLTextAreaElement;

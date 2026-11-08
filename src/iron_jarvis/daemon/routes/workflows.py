@@ -26,6 +26,10 @@ from ...core.db import session_scope
 
 log = logging.getLogger("iron_jarvis.workflows")
 
+#: The way out a "no tool named X" refusal names (v1.449.0, Wave D item 42).
+#: The editor's tool box lists this install's tools; Settings › Tools adds one.
+NO_TOOL_FIX = "pick one of this install's tools in the step, or add the tool in Settings › Tools first"
+
 
 def _workflow_references(d, name: str) -> list[dict[str, Any]]:
     """Every automation that will FIRE the saved workflow ``name`` by name —
@@ -383,6 +387,17 @@ def register(app: FastAPI, d) -> None:
             "workflows": [w.model_dump() for w in WorkflowStore(d.platform.engine).list()]
         }
 
+    def _tool_missing(tool_name: str) -> bool:
+        """True when the live registry has NO tool of that name. An unreadable
+        registry answers False (nothing is refused on a guess)."""
+        if not tool_name:
+            return False
+        try:
+            names = set(d.platform.registry.names())
+        except Exception:  # noqa: BLE001 — the fire would fail by itself; the save is not the place to guess
+            return False
+        return bool(names) and tool_name not in names
+
     def _validate_step_shapes(steps: list[dict]) -> None:
         """SAVE-time strictness (v1.170.0): a step whose ``kind``/``on_failure``
         the loader would SILENTLY rewrite to the default is a 422 naming the
@@ -461,6 +476,20 @@ def register(app: FastAPI, d) -> None:
                     status_code=422,
                     detail=f"steps[{i}] ({label}): a tool step needs a tool name",
                 )
+            # v1.449.0 (Wave D item 42): a tool step naming a tool this install
+            # does not have fails at its turn, mid-run — refused at SAVE time
+            # by name, so the editor can say it beside the step. The live
+            # registry is the one list (``GET /templates`` shows the same
+            # ``live_tools``); a registry that cannot be read refuses nothing.
+            if kind == "tool":
+                tool_name = str(raw.get("tool") or "").strip()
+                missing = _tool_missing(tool_name)
+                if missing:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"steps[{i}] ({label}): no tool named {tool_name!r} — "
+                        + NO_TOOL_FIX,
+                    )
             if kind in ("ask", "notify") and not has_msg and not has_task:
                 raise HTTPException(
                     status_code=422,

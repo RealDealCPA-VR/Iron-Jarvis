@@ -69,6 +69,49 @@ export async function fetchFolderGit(path: string): Promise<FolderGit | null> {
   }
 }
 
+/** v1.449.0 (Wave D item 36): POST /build/git/init — what making a folder a
+ *  repository did. */
+export interface RepoMade {
+  /** A repository was made now (false: the folder already was one). */
+  made: boolean;
+  /** A night task can branch from it now. */
+  canBranch: boolean;
+  /** Files the first commit left out (secret-named, too big, …), by path. */
+  leftOut: { path: string; why: string }[];
+  note: string;
+}
+
+export function decodeRepoMade(raw: unknown): RepoMade {
+  const r = rec(raw);
+  const left = Array.isArray(r?.left_out) ? (r?.left_out as unknown[]) : [];
+  return {
+    made: r?.made === true,
+    canBranch: r?.can_branch === true,
+    leftOut: left
+      .map((x) => rec(x))
+      .filter((x): x is Record<string, unknown> => !!x && typeof x.path === "string")
+      .map((x) => ({ path: str(x.path, 1000), why: str(x.why, 300) }))
+      .slice(0, 50),
+    note: str(r?.note, 400),
+  };
+}
+
+/** Make `path` a git repository with one first commit (the daemon decides;
+ *  a refusal comes back as the thrown ApiError's message). */
+export async function initRepo(path: string): Promise<RepoMade> {
+  return decodeRepoMade(await post<unknown>("/build/git/init", { path }));
+}
+
+/** The note after "Make this folder a repository". */
+export function repoMadeWords(r: RepoMade): string {
+  if (!r.made) return r.note || "This folder is already a git repository.";
+  const head = "Done: this folder is a git repository now, with a first commit of its files.";
+  if (r.leftOut.length === 0) return head;
+  const names = r.leftOut.slice(0, 3).map((x) => x.path).join(", ");
+  const more = r.leftOut.length > 3 ? ` and ${r.leftOut.length - 3} more` : "";
+  return `${head} Left out of it: ${names}${more}.`;
+}
+
 /** The line New session shows for a folder (null = nothing to say: a folder
  *  outside a repository, or no answer). */
 export function folderGitLine(info: FolderGit | null): string | null {

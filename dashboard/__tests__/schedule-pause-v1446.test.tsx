@@ -186,20 +186,22 @@ describe("the edit window uses the friendly Repeat presets", () => {
     mount([row()]);
     fireEvent.click(await screen.findByTestId("schedule-edit-morning-briefing"));
     const editor = await screen.findByTestId("schedule-editor");
+    // v1.449.0 (Wave D item 35, moved on purpose): the stored cron is read
+    // back into choices (Weekly, its days, its time), never a preset id.
     const repeat = within(editor).getByLabelText("Repeat") as HTMLSelectElement;
-    expect(repeat.value).toBe("0 8 * * 1-5");
+    expect(repeat.value).toBe("weekly");
     expect(within(editor).queryByLabelText("Cron expression")).toBeNull();
-    fireEvent.change(repeat, { target: { value: "0 9 * * 1-5" } });
+    fireEvent.change(within(editor).getByLabelText("Time"), { target: { value: "09:00" } });
     fireEvent.click(within(editor).getByTestId("schedule-editor-save"));
     await waitFor(() => expect(api.patches).toHaveLength(1));
     expect(api.patches[0].body).toEqual({ cron: "0 9 * * 1-5" });
   });
 
-  it("Custom shows the cron box; a stored pattern no preset names opens on Custom", async () => {
-    mount([row({ name: "odd", cron: "5 4 * * *" })]);
+  it("a stored pattern the editor cannot read opens on Custom, the cron in a fold", async () => {
+    mount([row({ name: "odd", cron: "5 4,16 * * *" })]);
     fireEvent.click(await screen.findByTestId("schedule-edit-odd"));
     const editor = await screen.findByTestId("schedule-editor");
-    expect((within(editor).getByLabelText("Repeat") as HTMLSelectElement).value).toBe("__advanced__");
-    expect(within(editor).getByLabelText("Cron expression")).toHaveValue("5 4 * * *");
+    expect((within(editor).getByLabelText("Repeat") as HTMLSelectElement).value).toBe("custom");
+    expect(within(editor).getByLabelText("Cron expression")).toHaveValue("5 4,16 * * *");
   });
 });

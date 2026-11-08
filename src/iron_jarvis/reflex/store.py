@@ -8,6 +8,7 @@ it is cheap to build (just an engine) and safe to expose on the platform.
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from sqlalchemy import Engine
 from sqlmodel import select
@@ -82,6 +83,39 @@ class ReflexStore:
             if row is None:
                 return None
             row.project_id = (project_id or "").strip() or None
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+        return row
+
+    #: The fields :meth:`update` may change (v1.449.0, Wave D item 34). The
+    #: id, the counters and the last fire's record are never a caller's.
+    EDITABLE = ("name", "source", "match", "action", "target", "task_template", "project_id")
+
+    def update(self, rule_id: str, **fields: Any) -> ReflexRule | None:
+        """PARTIAL edit (v1.449.0, Wave D item 34): only the keys given change;
+        an omitted field keeps its stored value (the PATCH /schedules rule).
+        ``name`` / ``match`` / ``target`` are stripped; ``project_id`` ""
+        clears the grounding. The CALLER validates the merged record (the
+        route runs the add-time rules over it). None when the rule is gone;
+        a key outside :data:`EDITABLE` is a ``ValueError`` — a counter or the
+        last fire's record must never be written by an edit."""
+        bad = [k for k in fields if k not in self.EDITABLE]
+        if bad:
+            raise ValueError(f"not an editable field: {', '.join(sorted(bad))}")
+        with session_scope(self.engine) as db:
+            row = db.get(ReflexRule, rule_id)
+            if row is None:
+                return None
+            for key, value in fields.items():
+                if key == "project_id":
+                    row.project_id = (value or "").strip() or None
+                elif key in ("name", "match", "target"):
+                    setattr(row, key, str(value or "").strip())
+                else:
+                    setattr(row, key, str(value or ""))
+            if not row.name:
+                row.name = row.match or "reflex"
             db.add(row)
             db.commit()
             db.refresh(row)

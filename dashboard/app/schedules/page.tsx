@@ -17,10 +17,31 @@ import {
   X,
 } from "lucide-react";
 import { post, del, get, patch, ApiError } from "@/lib/api";
-import { CRON_TO_LABEL, REPEAT_PRESETS } from "@/lib/schedules";
+import {
+  CRON_TO_LABEL,
+  EVERY_MINUTE_CRON,
+  EVERY_MINUTE_WARNING,
+  REPEAT_PRESETS,
+  nameFromTask,
+  nameHintWords,
+} from "@/lib/schedules";
+import {
+  CUSTOM_SCHEDULE_WORDS,
+  DAY_ORDER,
+  DAY_WORDS,
+  REPEAT_KINDS,
+  buildCron,
+  parseCron,
+  planWords,
+  readTime,
+  timeValue,
+  type CronPlan,
+  type RepeatKind,
+} from "@/lib/scheduleCron";
 import { usePolledApi, useApi } from "@/lib/useApi";
 import type { Schedule, ScheduleScript } from "@/lib/types";
 import { Modal } from "@/components/Modal";
+import { CHOOSE_FOLDER_WORDS, useFolderPicker } from "@/components/folders/FolderChip";
 import {
   Card,
   Badge,
@@ -314,6 +335,8 @@ function editBody(
     scriptTimeout: string;
     scriptCwd: string;
     skipMemory: boolean;
+    /** v1.449.0 (Wave D item 35): who runs it ("builder" = the default). */
+    agent?: string;
   },
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {};
@@ -334,6 +357,14 @@ function editBody(
   const unset: string[] = [];
   const task = after.task.trim();
   if (before.kind === "task" && task && task !== was.task) set.task = task;
+  if (before.kind === "task" && after.agent !== undefined) {
+    const now = after.agent.trim() || "builder";
+    if (now !== scheduleAgent(before)) {
+      // "builder" is the fire's own default: stored as no agent_type at all.
+      if (now === "builder") unset.push("agent_type");
+      else set.agent_type = now;
+    }
+  }
   if (after.skills.length > 0) {
     if (JSON.stringify(after.skills) !== JSON.stringify(was.skills)) set.skills = after.skills;
   } else if (was.skills.length > 0) unset.push("skills");
@@ -471,6 +502,10 @@ export default function SchedulesPage() {
   // workflow, else it would fire and run nothing.
   const payloadReady =
     kind === "task" ? !!taskText.trim() : kind === "workflow" ? !!workflowName : true;
+  // v1.449.0 (Wave D item 35): a task schedule the user did not name is named
+  // from its task's first words (said under the Name box before Add).
+  const suggestedName = kind === "task" ? nameFromTask(taskText) : "";
+  const finalName = name.trim() || suggestedName;
 
   function applyTemplate(t: (typeof TEMPLATES)[number]) {
     setKind("task");
@@ -484,7 +519,7 @@ export default function SchedulesPage() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !triggerReady || !payloadReady) return;
+    if (!finalName || !triggerReady || !payloadReady) return;
     setBusy(true);
     setFormError(null);
     setOk(null);
@@ -519,7 +554,7 @@ export default function SchedulesPage() {
     } else if (eventType.trim()) {
       payload = { type: eventType.trim() };
     }
-    const body: Record<string, unknown> = { name: name.trim(), kind, payload };
+    const body: Record<string, unknown> = { name: finalName, kind, payload };
     if (isOnce) {
       const d = new Date(runAt);
       if (Number.isNaN(d.getTime())) {
@@ -534,7 +569,7 @@ export default function SchedulesPage() {
 
     try {
       await post("/schedules", body);
-      setOk(`Schedule "${name.trim()}" added.`);
+      setOk(`Schedule "${finalName}" added.`);
       setName("");
       setTaskText("");
       setAgentName("builder");
@@ -878,6 +913,11 @@ export default function SchedulesPage() {
                     placeholder="morning-briefing"
                     className="field"
                   />
+                  {!name.trim() && kind === "task" && (
+                    <div data-testid="schedule-name-hint" className="mt-1 text-[11px] text-zinc-500">
+                      {nameHintWords(suggestedName)}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -899,8 +939,10 @@ export default function SchedulesPage() {
                     <option value={ONCE}>Once at a specific time…</option>
                     <option value={ADVANCED}>Advanced cron…</option>
                   </select>
-                  {!isOnce && !isAdvanced && (
-                    <div className="mt-1 font-mono text-[11px] text-zinc-600">{repeat}</div>
+                  {repeat === EVERY_MINUTE_CRON && (
+                    <div data-testid="schedule-every-minute-warning" className="mt-1.5">
+                      <WarnNote>{EVERY_MINUTE_WARNING}</WarnNote>
+                    </div>
                   )}
                 </div>
 
@@ -940,7 +982,7 @@ export default function SchedulesPage() {
 
                 <button
                   type="submit"
-                  disabled={busy || !name.trim() || !triggerReady || !payloadReady}
+                  disabled={busy || !finalName || !triggerReady || !payloadReady}
                   className="btn-accent w-full"
                 >
                   {busy ? <LoaderInline label="Adding…" /> : <><Plus size={14} /> Add schedule</>}
@@ -1199,6 +1241,8 @@ export default function SchedulesPage() {
         <ScheduleEditor
           schedule={editing}
           others={schedules.map((s) => s.name)}
+          agents={[...builtinAgents, ...dynamicAgents.filter((t) => !builtinAgents.includes(t))]}
+          agentName={nameOf}
           onClose={() => setEditing(null)}
           onSaved={(msg) => {
             setEditing(null);
@@ -1313,20 +1357,39 @@ function KnobFields({
   const choices = Array.from(new Set([...others.filter((n) => n && n !== self), contextFrom].filter(Boolean)));
   // v1.316.0: its own ids — KnobFields renders in the add form AND the editor.
   const fid = useId();
+  const folderPicker = useFolderPicker({
+    folder: workspaceRoot.trim() || null,
+    onPick: setWorkspaceRoot,
+    testId: `${fid}-folder-picker`,
+  });
   return (
     <>
       <div>
         <label htmlFor={`${fid}-folder`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
           Folder
         </label>
-        <input
-          id={`${fid}-folder`}
-          value={workspaceRoot}
-          onChange={(e) => setWorkspaceRoot(e.target.value)}
-          placeholder="C:\\Users\\you\\Documents\\reports"
-          aria-label="Folder"
-          className="field font-mono text-xs"
-        />
+        <div className="flex items-center gap-1.5">
+          <input
+            id={`${fid}-folder`}
+            value={workspaceRoot}
+            onChange={(e) => setWorkspaceRoot(e.target.value)}
+            placeholder="C:\\Users\\you\\Documents\\reports"
+            aria-label="Folder"
+            className="field min-w-0 flex-1 font-mono text-xs"
+          />
+          {/* v1.449.0 (Wave D): the shared picker (Windows' own in the
+              desktop app), never a typed path alone. */}
+          <button
+            type="button"
+            onClick={() => void folderPicker.choose()}
+            disabled={folderPicker.asking}
+            data-testid="schedule-folder-choose"
+            className="btn-ghost shrink-0 px-2 py-1 text-xs"
+          >
+            {CHOOSE_FOLDER_WORDS}
+          </button>
+        </div>
+        {folderPicker.dialog}
         <div className="mt-1 text-[11px] text-zinc-600">
           The agent runs in that folder; a rules file AGENTS.md or .ironjarvis.md in that
           folder loads.
@@ -1416,11 +1479,16 @@ function KnobFields({
 function ScheduleEditor({
   schedule,
   others,
+  agents = [],
+  agentName = (a: string) => a,
   onClose,
   onSaved,
 }: {
   schedule: Schedule;
   others: string[];
+  /** v1.449.0: who may run it (built-in + custom), the add form's list. */
+  agents?: string[];
+  agentName?: (a: string) => string;
   onClose: () => void;
   onSaved: (msg: string) => void;
 }) {
@@ -1431,11 +1499,23 @@ function ScheduleEditor({
   const isInterval = tt === "interval" || (!schedule.cron && !!schedule.interval_seconds);
   const name = schedule.name;
   const [cron, setCron] = useState(schedule.cron ?? "");
-  // v1.446.0 (review item 25): the add form's friendly Repeat presets; the
-  // cron box shows only for a custom pattern (or a stored one no preset names).
-  const [editRepeat, setEditRepeat] = useState<string>(
-    CRON_TO_LABEL.has((schedule.cron ?? "").trim()) ? (schedule.cron ?? "").trim() : ADVANCED,
+  // v1.449.0 (Wave D item 35): the stored cron is READ BACK into plain
+  // choices — how often, the time, the days — and written again from them
+  // (lib/scheduleCron). A cron that reader cannot name is "Custom schedule
+  // (advanced)", its string in a fold; the user never has to read one.
+  const readPlan = parseCron(schedule.cron ?? "");
+  const [plan, setPlan] = useState<CronPlan>(
+    readPlan ?? { kind: "daily", everyMinutes: 15, minute: 0, hour: 9, days: [1, 2, 3, 4, 5], dayOfMonth: 1 },
   );
+  const [repeatKind, setRepeatKind] = useState<RepeatKind | "custom">(readPlan ? readPlan.kind : "custom");
+  const [agent, setAgent] = useState(scheduleAgent(schedule));
+  const agentChoices = Array.from(new Set([...agents, agent].filter(Boolean)));
+  // An untouched plan keeps the stored spelling (1,2,3,4,5 is not rewritten
+  // to 1-5 by just opening and saving): only a changed choice sends a cron.
+  const untouched =
+    !!readPlan && repeatKind === readPlan.kind && JSON.stringify(plan) === JSON.stringify(readPlan);
+  const effectiveCron = repeatKind === "custom" ? cron : untouched ? (schedule.cron ?? "") : buildCron(plan);
+  const setPlanPart = (part: Partial<CronPlan>) => setPlan((p) => ({ ...p, ...part }));
   const [runAt, setRunAt] = useState("");
   const [intervalSeconds, setIntervalSeconds] = useState(
     schedule.interval_seconds ? String(schedule.interval_seconds) : "",
@@ -1457,10 +1537,11 @@ function ScheduleEditor({
     e.preventDefault();
     const body = editBody(schedule, {
       name,
-      cron: isOnce || isInterval ? "" : cron,
+      cron: isOnce || isInterval ? "" : effectiveCron,
       runAt: isOnce ? runAt : "",
       intervalSeconds: isInterval ? intervalSeconds : "",
       task,
+      agent: schedule.kind === "task" ? agent : undefined,
       skills,
       workspaceRoot,
       contextFrom,
@@ -1559,39 +1640,160 @@ function ScheduleEditor({
               <select
                 id={`${fid}-repeat`}
                 aria-label="Repeat"
-                value={editRepeat}
+                value={repeatKind}
                 onChange={(e) => {
-                  const v = e.target.value;
-                  setEditRepeat(v);
-                  if (v !== ADVANCED) setCron(v);
+                  const v = e.target.value as RepeatKind | "custom";
+                  setRepeatKind(v);
+                  if (v === "custom") setCron(buildCron(plan));
+                  else setPlanPart({ kind: v });
                 }}
                 data-testid="schedule-editor-repeat"
                 className="field text-sm"
               >
-                {REPEAT_PRESETS.map((p) => (
-                  <option key={p.cron} value={p.cron}>
-                    {p.label}
+                {REPEAT_KINDS.map((k) => (
+                  <option key={k.kind} value={k.kind}>
+                    {k.label}
                   </option>
                 ))}
-                <option value={ADVANCED}>Custom (cron)…</option>
+                <option value="custom">{CUSTOM_SCHEDULE_WORDS}</option>
               </select>
             </div>
-            {editRepeat === ADVANCED && (
+            {repeatKind === "minutes" && (
               <div>
-                <label htmlFor={`${fid}-cron`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
-                  Cron expression
+                <label htmlFor={`${fid}-every`} className="mb-1 block text-[11px] font-medium text-zinc-400">
+                  Every (minutes)
                 </label>
                 <input
-                  id={`${fid}-cron`}
-                  value={cron}
-                  onChange={(e) => setCron(e.target.value)}
-                  aria-label="Cron expression"
-                  className="field font-mono text-sm"
+                  id={`${fid}-every`}
+                  type="number"
+                  min={2}
+                  max={59}
+                  value={plan.everyMinutes}
+                  onChange={(e) => {
+                    const n = Math.round(Number(e.target.value));
+                    if (Number.isFinite(n)) setPlanPart({ everyMinutes: Math.min(59, Math.max(2, n)) });
+                  }}
+                  aria-label="Every (minutes)"
+                  className="field w-28 text-sm"
                 />
-                <div className="mt-1 font-mono text-[11px] text-zinc-600">
-                  min hour day month weekday{CRON_TO_LABEL.get(cron.trim()) ? ` · ${CRON_TO_LABEL.get(cron.trim())}` : ""}
-                </div>
               </div>
+            )}
+            {repeatKind === "hourly" && (
+              <div>
+                <label htmlFor={`${fid}-minute`} className="mb-1 block text-[11px] font-medium text-zinc-400">
+                  Minutes past the hour
+                </label>
+                <input
+                  id={`${fid}-minute`}
+                  type="number"
+                  min={0}
+                  max={59}
+                  value={plan.minute}
+                  onChange={(e) => {
+                    const n = Math.round(Number(e.target.value));
+                    if (Number.isFinite(n)) setPlanPart({ minute: Math.min(59, Math.max(0, n)) });
+                  }}
+                  aria-label="Minutes past the hour"
+                  className="field w-28 text-sm"
+                />
+              </div>
+            )}
+            {(repeatKind === "daily" || repeatKind === "weekly" || repeatKind === "monthly") && (
+              <div>
+                <label htmlFor={`${fid}-time`} className="mb-1 block text-[11px] font-medium text-zinc-400">
+                  Time
+                </label>
+                <input
+                  id={`${fid}-time`}
+                  type="time"
+                  value={timeValue(plan)}
+                  onChange={(e) => {
+                    const t = readTime(e.target.value);
+                    if (t) setPlanPart(t);
+                  }}
+                  aria-label="Time"
+                  className="field w-36 text-sm"
+                />
+              </div>
+            )}
+            {repeatKind === "weekly" && (
+              <fieldset data-testid="schedule-editor-days">
+                <legend className="mb-1 block text-[11px] font-medium text-zinc-400">Days</legend>
+                <div className="flex flex-wrap gap-1.5">
+                  {DAY_ORDER.map((day) => {
+                    const on = plan.days.includes(day);
+                    return (
+                      <label key={day} className="flex items-center gap-1 text-xs text-zinc-300">
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          aria-label={DAY_WORDS[day]}
+                          // Never no day: the last one ticked stays ticked.
+                          disabled={on && plan.days.length === 1}
+                          onChange={() =>
+                            setPlanPart({
+                              days: on ? plan.days.filter((d) => d !== day) : [...plan.days, day].sort((a, b) => a - b),
+                            })
+                          }
+                        />
+                        {DAY_WORDS[day]}
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            )}
+            {repeatKind === "monthly" && (
+              <div>
+                <label htmlFor={`${fid}-dom`} className="mb-1 block text-[11px] font-medium text-zinc-400">
+                  Day of the month
+                </label>
+                <input
+                  id={`${fid}-dom`}
+                  type="number"
+                  min={1}
+                  max={31}
+                  value={plan.dayOfMonth}
+                  onChange={(e) => {
+                    const n = Math.round(Number(e.target.value));
+                    if (Number.isFinite(n)) setPlanPart({ dayOfMonth: Math.min(31, Math.max(1, n)) });
+                  }}
+                  aria-label="Day of the month"
+                  className="field w-28 text-sm"
+                />
+              </div>
+            )}
+            {repeatKind !== "custom" && (
+              <div data-testid="schedule-editor-plan" className="text-[11px] text-zinc-500">
+                {planWords(plan)}
+              </div>
+            )}
+            {repeatKind === "minute" && (
+              <div data-testid="schedule-editor-every-minute-warning">
+                <WarnNote>{EVERY_MINUTE_WARNING}</WarnNote>
+              </div>
+            )}
+            {repeatKind === "custom" && (
+              <details data-testid="schedule-editor-custom" open={!readPlan}>
+                <summary className="cursor-pointer text-[11px] text-zinc-500 hover:text-zinc-300">
+                  The schedule as stored (advanced)
+                </summary>
+                <div className="mt-2">
+                  <label htmlFor={`${fid}-cron`} className="mb-1 block text-[11px] font-medium text-zinc-400">
+                    Cron expression
+                  </label>
+                  <input
+                    id={`${fid}-cron`}
+                    value={cron}
+                    onChange={(e) => setCron(e.target.value)}
+                    aria-label="Cron expression"
+                    className="field font-mono text-sm"
+                  />
+                  <div className="mt-1 font-mono text-[11px] text-zinc-600">
+                    min hour day month weekday{CRON_TO_LABEL.get(cron.trim()) ? ` · ${CRON_TO_LABEL.get(cron.trim())}` : ""}
+                  </div>
+                </div>
+              </details>
             )}
           </div>
         )}
@@ -1609,6 +1811,25 @@ function ScheduleEditor({
                 aria-label="Task text"
                 className="field resize-y text-sm leading-relaxed"
               />
+            </div>
+            <div>
+              <label htmlFor={`${fid}-agent`} className="mb-1 block text-[11px] font-medium text-zinc-400">
+                Who runs it
+              </label>
+              <select
+                id={`${fid}-agent`}
+                aria-label="Agent"
+                value={agent}
+                onChange={(e) => setAgent(e.target.value)}
+                data-testid="schedule-editor-agent"
+                className="field text-sm"
+              >
+                {agentChoices.map((a) => (
+                  <option key={a} value={a}>
+                    {agentName(a)}
+                  </option>
+                ))}
+              </select>
             </div>
             <SkillChips value={skills} onChange={setSkills} scope={schedule.name} testId="edit-skills" />
             <KnobFields

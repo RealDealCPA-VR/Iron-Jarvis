@@ -337,6 +337,85 @@ def inspect_folder(folder: str) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# making a folder a repository (v1.449.0, Wave D item 36)
+# --------------------------------------------------------------------------- #
+
+#: The first commit's message when Iron Jarvis makes a folder a repository.
+FIRST_COMMIT_MESSAGE = "First commit (made by Iron Jarvis so the night shift can branch from here)"
+ALREADY_A_REPO = "This folder is already in a git repository."
+NETWORK_FOLDER = (
+    "That folder is on a network location, so Iron Jarvis cannot make it a repository. "
+    "Pick a folder on this PC."
+)
+INIT_NEEDS_FILES = (
+    "This folder holds nothing a first commit could take, so no repository was made. "
+    "Put the files to work on in it first."
+)
+
+
+def init_repo(folder: str) -> dict[str, Any]:
+    """Make ``folder`` a git repository with ONE first commit holding its
+    files (``git init -q``, ``git add -A``, the night commit's own screen
+    (``harness/night_commit.screen``: secret-named files, key-shaped text,
+    files over 50 MB, dependency folders are LEFT OUT and named), ``git
+    commit``), so a night task — which works on its own branch — can start
+    from it. The same rules as :func:`start`: a network spelling is refused
+    by its TEXT before anything is looked at, ``fs_policy.root_problem``
+    decides whether the folder may be worked in, git must be installed, and
+    a folder already in a repository is left exactly as it is (``made``
+    False). Answers :func:`inspect_folder`'s facts plus ``made`` and
+    ``left_out``; raises :class:`GitRefused` in words. BLOCKING."""
+    from ..core.fs_policy import root_problem
+    from .night_commit import screen
+    from .sessions import _network_spelling
+
+    text = str(folder or "").strip()
+    if not text:
+        raise GitRefused("Choose the folder first.", 400)
+    if _network_spelling(text):
+        raise GitRefused(NETWORK_FOLDER, 400)
+    problem = root_problem(text)
+    if problem:
+        raise GitRefused(f"This folder cannot be used: {problem}", 400)
+    if not git_path():
+        raise GitRefused(NO_GIT, 400)
+    before = inspect_folder(text)
+    if before.get("repo"):
+        return {**before, "made": False, "left_out": [], "note": before.get("note") or ALREADY_A_REPO}
+    where = Path(text)
+    made = _g(["init", "-q"], where)
+    if not made.ok:
+        raise GitRefused("Git could not make a repository in this folder.", 409, _masked(made.err or made.out))
+    added = _g(["add", "-A"], where)
+    if not added.ok:
+        raise GitRefused("Git made the repository but could not stage its files.", 409,
+                         _masked(added.err or added.out))
+    left_out: list[dict[str, str]] = []
+    try:
+        left_out = list(screen(where) or [])
+    except GitRefused:
+        raise
+    except Exception as exc:  # noqa: BLE001 — unscreened is never committed
+        _g(["reset", "-q"], where)
+        raise GitRefused(
+            "Iron Jarvis could not check what it was about to commit, so it committed nothing.", 409,
+            _masked(f"{type(exc).__name__}: {exc}"),
+        ) from exc
+    if _g(["diff", "--cached", "--quiet"], where).code == 0:
+        raise GitRefused(INIT_NEEDS_FILES, 409)
+    own = has_identity(where, git_env())
+    args = ([] if own else default_identity()) + ["commit", "-q", "-F", "-"]
+    got = _g(args, where, timeout=START_S, input=(FIRST_COMMIT_MESSAGE + "\n").encode("utf-8"))
+    if got.timed_out:
+        raise GitRefused(_timed_out_words("The first commit", START_S), 504)
+    if not got.ok:
+        raise GitRefused("Git made the repository but did not make the first commit.", 409,
+                         _masked(got.err or got.out))
+    after = inspect_folder(text)
+    return {**after, "made": True, "left_out": left_out}
+
+
+# --------------------------------------------------------------------------- #
 # starting a session's branch
 # --------------------------------------------------------------------------- #
 

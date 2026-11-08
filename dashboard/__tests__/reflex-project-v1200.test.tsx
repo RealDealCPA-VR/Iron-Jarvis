@@ -132,6 +132,11 @@ async function openForm() {
   fireEvent.click(await screen.findByText("Add reflex"));
   // The picker's options come from GET /projects — wait for them.
   await screen.findByRole("option", { name: "Tax Client A" });
+  // v1.449.0 (Wave D item 34, moved on purpose): the form opens on the
+  // everyday rule (a message → an agent's task); these pins drive the full
+  // form, whose old default action was a workflow.
+  fireEvent.click(screen.getByTestId("reflex-shape-other"));
+  fireEvent.change(screen.getByLabelText("Action"), { target: { value: "workflow" } });
 }
 
 /* ------------------------------------------------------ the form's project */
