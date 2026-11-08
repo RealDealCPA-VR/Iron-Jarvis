@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { RETIRED, readableCopy, retiredHits, scannedFiles } from "./helpers/retiredWords";
+import { ALL_RETIRED, RETIRED, readableCopy, retiredHits, scannedFiles } from "./helpers/retiredWords";
 
 /**
  * One name per concept (v1.113.0).
@@ -276,6 +276,20 @@ const ALLOW: ReadonlyArray<{ file: string; text: string; why: string }> = [
     text: "isolated worktree",
     why: "the same developer page (above): a git worktree is the exact thing the Maintainer edits and tests in",
   },
+  // v1.455.0 (Wave E, item 1): the model-server surfaces say "model server".
+  // These two are the daemon's own seed labels for the two config slots
+  // (lib/onboarding SEED_ENDPOINT_LABELS, pinned equal to chat_turn's twin):
+  // `machineName` reads them as NOT a machine's name and never shows them.
+  {
+    file: "lib/onboarding.ts",
+    text: "Custom endpoint",
+    why: "SEED_ENDPOINT_LABELS: the daemon's own seed label for the custom slot, matched to know the user has NOT named the machine; never shown",
+  },
+  {
+    file: "lib/onboarding.ts",
+    text: "Ollama endpoint",
+    why: "SEED_ENDPOINT_LABELS: the daemon's own seed label for the Ollama slot, matched to know the user has NOT named the machine; never shown",
+  },
   // v1.420.0 (C5.2): lines the lane that retired these words could not
   // touch — each file belongs to another lane of the same wave (or to no lane
   // yet). Reword the line ("its own copy of the folder", "can't be undone")
@@ -407,5 +421,26 @@ describe("the canon is a scan, not a list of strings (v1.357.0)", () => {
     expect(canon).toContain(
       "| the view is **Code**; its list is **Coding sessions**; one of them is a **coding session** | IJ harness, harness, Build session |",
     );
+  });
+
+  it("v1.455.0 (Wave E): one word for each thing, and the scoped rows bite only where they apply", () => {
+    const words = ALL_RETIRED.map((r) => r.word);
+    for (const w of ["tool server", "reflex", "Build session", "endpoint", "node", "Iron-Proxy"]) {
+      expect(words).toContain(w);
+    }
+    const planted = `export const P = () => <p>Pick another model or check the endpoint. Add a node.</p>;`;
+    // A model-server surface: both words are hits.
+    expect(retiredHits("components/chat/probe.tsx", planted).map((h) => h.word).sort()).toEqual(["endpoint", "node"]);
+    // A memory base's search address is a different thing: no hit there.
+    expect(retiredHits("components/memory/probe.tsx", planted)).toEqual([]);
+    // Node.js is a program's name, never a model server.
+    expect(retiredHits("lib/nav.ts", `export const N = "Get Node.js (free)";`)).toEqual([]);
+    // The dashboard-wide rows read every page.
+    const anywhere = `export const Q = () => <p>Your reflex ran. Add a tool server. Open the Build session.</p>;`;
+    expect(retiredHits("app/webhooks/probe.tsx", anywhere).map((h) => h.word).sort()).toEqual([
+      "Build session",
+      "reflex",
+      "tool server",
+    ]);
   });
 });

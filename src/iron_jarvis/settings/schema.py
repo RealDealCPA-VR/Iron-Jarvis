@@ -381,15 +381,16 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("ollama_model", "Ollama model", "models", "string",
       "Default model on that Ollama server.", tier="allow",
       section="Local and custom models", advanced=True, placeholder="llama3.1"),
-    S("custom_base_url", "Custom endpoint URL", "models", "string",
-      "Any OpenAI-compatible endpoint — LM Studio, vLLM, a private gateway. Add its key under Connections.",
+    S("custom_base_url", "Your model server's address", "models", "string",
+      "Any OpenAI-compatible model server, such as LM Studio, vLLM or a private gateway. Add its key under Connections.",
       tier="ask", section="Local and custom models", advanced=True, placeholder="https://…/v1",
       # v1.434.0 (chat-first plan, Wave 2 group E): the words people use for
       # one ("add my LM Studio server at 192.168.1.20:1234").
-      aliases=("lm studio", "vllm", "custom endpoint", "model server", "openai compatible")),
-    S("custom_model", "Custom endpoint model", "models", "string",
-      "Default model id for that custom endpoint.", tier="allow",
-      section="Local and custom models", advanced=True),
+      aliases=("lm studio", "vllm", "custom endpoint", "model server", "openai compatible",
+               "custom endpoint url")),
+    S("custom_model", "Your model server's model", "models", "string",
+      "The model that server uses by default.", tier="allow",
+      section="Local and custom models", advanced=True, aliases=("custom endpoint model",)),
     S("prefer_local_when_capable", "Prefer my own hardware", "models", "bool",
       "Route work to your own machines first, and use a cloud model only when a local one can't do it.",
       tier="allow", section="Local and custom models", advanced=True, aliases=("prefer local", "local model", "local models")),
@@ -407,17 +408,21 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("opencode_local_models", "OpenCode local models", "models", "string",
       "Comma-separated OpenCode models to offer as local.", tier="ask",
       section="Local and custom models", advanced=True),
-    S("fleet_code_route_enabled", "Send coding work to the fleet", "models", "bool",
-      "Route coding tasks to a fleet node.", tier="ask", section="Model servers", advanced=True),
-    S("fleet_code_target", "Fleet coding target", "models", "string",
-      "provider:model that takes coding work.", tier="ask", section="Model servers", advanced=True),
-    S("fleet_code_task_classes", "Fleet coding task classes", "models", "string",
-      "Comma-separated task classes; empty = the built-in set.", tier="ask", section="Model servers", advanced=True),
-    S("fleet_sampling_enabled", "Fleet telemetry", "models", "bool",
-      "Sample local endpoints in the background for the Model servers page.", tier="allow",
-      section="Model servers", advanced=True),
-    S("fleet_sampling_seconds", "Fleet telemetry every (seconds)", "models", "number",
-      "Idle sampling cadence.", tier="allow", section="Model servers", advanced=True, check=_range(5, 3600)),
+    S("fleet_code_route_enabled", "Send coding work to a model server", "models", "bool",
+      "Send coding tasks to one of your model servers.", tier="ask", section="Model servers", advanced=True,
+      aliases=("send coding work to the fleet",)),
+    S("fleet_code_target", "Model server for coding work", "models", "string",
+      "The model that takes coding work, written provider:model.", tier="ask", section="Model servers",
+      advanced=True, aliases=("fleet coding target",)),
+    S("fleet_code_task_classes", "Kinds of coding work it takes", "models", "string",
+      "Comma-separated kinds of work; empty = the built-in set.", tier="ask", section="Model servers",
+      advanced=True, aliases=("fleet coding task classes",)),
+    S("fleet_sampling_enabled", "Check model servers in the background", "models", "bool",
+      "Read each model server's numbers in the background for the Model servers page.", tier="allow",
+      section="Model servers", advanced=True, aliases=("fleet telemetry",)),
+    S("fleet_sampling_seconds", "Check model servers every (seconds)", "models", "number",
+      "How often they are read while nothing is running.", tier="allow", section="Model servers",
+      advanced=True, check=_range(5, 3600), aliases=("fleet telemetry every",)),
     S("fleet_savings_baseline", "Savings baseline model", "models", "string",
       "The cloud model local runs are compared against on Usage.", tier="allow",
       section="Model servers", advanced=True),
@@ -469,9 +474,9 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="allow", section="Model team",
       aliases=("team notes", "working habits", "habits from reviews", "learn from reviewers",
                "member habits")),
-    S("voice_transcribe_base_url", "Voice: speech-to-text endpoint", "models", "string",
+    S("voice_transcribe_base_url", "Voice: speech-to-text server address", "models", "string",
       "Optional dedicated whisper server for dictation. Its key is set under Connections.",
-      tier="ask", section="Voice", advanced=True),
+      tier="ask", section="Voice", advanced=True, aliases=("speech-to-text endpoint",)),
     S("voice_transcribe_model", "Voice: speech-to-text model", "models", "string",
       "The transcription model that server serves. Empty = auto-discover.",
       tier="allow", section="Voice", advanced=True),
@@ -528,7 +533,7 @@ SETTINGS: tuple[SettingDef, ...] = (
       placeholder="Look for primary sources\nAnswer concisely, only what I need to know",
       aliases=("browsing preferences", "browser preferences", "web page preferences")),
     S("calendar_trigger_enabled", "Calendar reminders", "connections", "bool",
-      "Start work when a calendar event is about to begin. The calendar link is set as a secret.",
+      "Start work when a calendar event is about to begin. Add your calendar link on the Rules page.",
       tier="ask", section="Calendar", aliases=("calendar",)),
     S("calendar_lead_minutes", "Calendar lead time (minutes)", "connections", "number",
       "How long before an event to fire.", tier="allow", section="Calendar", check=_range(0, 1440)),
@@ -625,14 +630,15 @@ SETTINGS: tuple[SettingDef, ...] = (
     # v1.367.0 (IJ harness Phase 4): one Build session turn's tool rounds.
     # v1.384.0: 0 = no limit, the default (like Claude Code); a number is
     # still honoured. The safety stop is harness.mode.BUILD_SAFETY_ROUNDS.
-    S("build_round_budget", "Steps per Build session reply", "automation", "number",
-      "How many steps (tool rounds) one reply in a Build session may take. 0 = no limit "
+    S("build_round_budget", "Steps per coding reply", "automation", "number",
+      "How many steps (tool rounds) one reply in a coding session may take. 0 = no limit "
       "(the default): it works until it is done or you press Stop, with a safety stop at "
       "1,000 steps so a reply stuck in a loop cannot run for days. A reply that reaches its "
       "limit says what it got done, and Keep going carries on from there. The work stays "
       "in the session; nothing is handed to an agent.",
       tier="allow", check=_range(0, 1000),
-      aliases=("build round budget", "build steps", "build step limit")),
+      aliases=("build round budget", "build steps", "build step limit",
+               "steps per build session reply")),
     # v1.393.0 (the long-jobs plan's Phase 4, decision 4): a coding reply cut
     # off by its account's limit waits for the reset and carries on by itself
     # (today's "Resume when ready", with no press). Read live.
@@ -715,14 +721,14 @@ SETTINGS: tuple[SettingDef, ...] = (
       "Let Iron Jarvis think about your goals in the background and suggest next steps "
       "(or, within the limits below, take them).",
       tier="ask-floor", section="Autonomy", aliases=("autonomy", "the pulse")),
-    S("autonomy_level", "Autonomy ceiling", "automation", "enum",
+    S("autonomy_level", "How far it may act on its own", "automation", "enum",
       "How far it may go on its own. High-risk steps are never done automatically.",
       options=(("suggest", "Suggest only"), ("act_low", "Act on low-risk steps"),
                ("act_all", "Act on low- and medium-risk steps")),
-      tier="ask-floor", section="Autonomy"),
-    S("autonomy_dry_run", "Dry-run mode", "automation", "bool",
-      "Propose what it WOULD do without executing anything.",
-      tier="allow", floor_when=(False,), section="Autonomy"),
+      tier="ask-floor", section="Autonomy", aliases=("autonomy ceiling",)),
+    S("autonomy_dry_run", "Only suggest, never act", "automation", "bool",
+      "Say what it WOULD do without doing any of it.",
+      tier="allow", floor_when=(False,), section="Autonomy", aliases=("dry-run mode",)),
     # v1.351.0 (readiness audit G13): the promise is now enforced at
     # ``Orchestrator.create_session`` (every unattended door) and engaging it
     # stops what those doors have running — so the words name what it stops.
@@ -741,9 +747,9 @@ SETTINGS: tuple[SettingDef, ...] = (
       "How much model text work it started by itself may use in any 24 hours, counted in "
       "tokens (a token is about three quarters of a word).", tier="ask", section="Autonomy",
       check=_range(0), aliases=("max tokens per day", "token budget")),
-    S("sentinels_enabled", "Folder watchers (sentinels)", "automation", "bool",
+    S("sentinels_enabled", "Folder watchers", "automation", "bool",
       "Watchers that notice changes and suggest work (they never act on their own).",
-      tier="ask", section="Watchers", aliases=("sentinels", "watchers")),
+      tier="ask", section="Watchers", aliases=("sentinels", "watchers", "folder watchers (sentinels)")),
     S("sentinels_tick_seconds", "Watch every (seconds)", "automation", "number",
       "How often the watchers check.", tier="ask", section="Watchers", check=_range(10, 86400)),
     S("skill_learning_enabled", "Learn new skills from my work", "automation", "bool",
@@ -836,14 +842,15 @@ SETTINGS: tuple[SettingDef, ...] = (
       "Write your profile into Antigravity's own instructions file on this PC.",
       tier="ask", put=False, section="Share with Build"),
     # v1.370.0 (IJ harness Phase 7): the Build experience library.
-    S("build_reflect", "Learn from Build sessions", "memory", "bool",
-      "When a Build session has been idle for 10 minutes after replies that changed files or ran "
+    S("build_reflect", "Learn from coding sessions", "memory", "bool",
+      "When a coding session has been idle for 10 minutes after replies that changed files or ran "
       "commands, Iron Jarvis may suggest one lesson for that folder, and sometimes a small edit to "
       "the folder's coding-session instructions. It sends one request, cut to a fixed size, to the session's own "
       "model on the session's own account, so on a Claude Code or Codex plan it counts toward that "
       "plan's limits. It waits while that account is at or near its limit. Nothing is kept until "
       "you accept it.",
-      tier="allow", aliases=("build library", "build lessons", "learn from build")),
+      tier="allow", aliases=("build library", "build lessons", "learn from build",
+                            "learn from build sessions")),
     # v1.406.0 (brain/): which Brain Profile chat and agent runs use, app-wide.
     # Its own control in Settings › Memory & you (CONTROLLED_IN_SECTION); a
     # project may choose its own (Project.brain_profile). Choosing where
@@ -887,10 +894,11 @@ SETTINGS: tuple[SettingDef, ...] = (
       "The project new chats are grounded in. Empty = none.", tier="allow",
       aliases=("focus project", "active project")),
     # ------------------------------------------------------------- permissions
-    S("comm_trust", "Runs started from inbound messages", "permissions", "enum",
+    S("comm_trust", "Work started by your messages", "permissions", "enum",
       "A message from your phone, Slack or email starts a run. Low trust may read and answer but not change memory, settings, agents or skills.",
       options=(("low", "Low trust (default)"), ("full", "Full trust")),
-      tier="ask", floor_when=("full",), aliases=("phone trust", "inbound trust")),
+      tier="ask", floor_when=("full",), aliases=("phone trust", "inbound trust",
+                                           "runs started from inbound messages")),
     # v1.356.0 (G81): what chat and agents may read is a setting, not an
     # environment variable. Read LIVE by core/fs_policy; every folder is
     # checked when it is saved (settings/writer -> fs_policy.read_root_problem).
@@ -1101,8 +1109,8 @@ SECRETS: tuple[SecretDef, ...] = (
     # (``tool_server.<pack>__<slot>`` → the vault name the pack door launches
     # with, resolved by ``credentials._resolve_tool_server``) and a web
     # service's bearer token, under the name the Connections page gives it.
-    SecretDef("tool_server.{name}", "A tool server's key", "connections",
-              "A key, token or password a tool server you are adding needs.",
+    SecretDef("tool_server.{name}", "An extension's key", "connections",
+              "A key, token or password an extension you are adding needs.",
               vault_key="mcp.{name}", pattern=True),
     SecretDef("web_service.{name}", "A web service's key", "connections",
               "The bearer token of a web service you saved.",

@@ -19,7 +19,7 @@ PR that ships it.
 | One piece of work Jarvis does for you: what a chat hands an agent, a step of an objective, a queued task for an agent, a schedule's fire, a task another Jarvis sent | **task**; one attempt at it is a **run** | job, assignment |
 | Anything recall reads | **memory base** | source, memory source, brain, LTM |
 | Anything the app talks to | **connection** | integration, connector |
-| An MCP server (a connection that adds tools) | **extension** | plug-in, pack, tool pack, MCP pack |
+| An MCP server (a connection that adds tools) | **extension** | plug-in, pack, tool pack, MCP pack, tool server (v1.455.0) |
 | The built-in stand-in that answers when no AI model is chosen (provider id `mock`) | **demo model**; what it says is "a scripted demo, not real answers"; under one reply: "Demo answer. No AI model ran." | mock, offline mock, offline demo, offline model, simulated mode |
 | One shell or CLI window on the Build page | **terminal** | pane |
 | The chat page's other view (v1.406.0: the switch at its top reads **Chat \| Code**), where Jarvis writes, runs and checks code in a folder, one conversation per session | the view is **Code**; its list is **Coding sessions**; one of them is a **coding session** | IJ harness, harness, Build session |
@@ -40,6 +40,8 @@ PR that ships it.
 | A folder Iron Jarvis keeps an eye on, suggesting work when files change (/sentinels, v1.452.0) | **watcher**; the page is **Watchers** | sentinel, sentinels |
 | The scripts and files agents made and kept (/artifacts, v1.452.0) | the page is **What agents made** | artifacts |
 | The page that shows every model server you can reach (/fleet, v1.452.0) | **Model servers** | fleet, local fleet |
+| One machine or program on your network that serves AI models (Ollama, LM Studio, vLLM, a LiteLLM proxy, the custom address in Settings; v1.455.0) | **model server**; in the model menu and receipts, **your model server** until you name it | endpoint, custom endpoint, node, fleet node |
+| The page that lists every task an agent ran, step by step (/sessions, owner decision 34, v1.455.0) | the page is **Agent runs**; one of them is an **agent run** ("sessions" still finds it) | Sessions (as the page's name) |
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |
 | A destination you can talk back to | **two-way destination** | gateway, messaging platform |
 | The one-tap connect gallery | **Directory** | marketplace |

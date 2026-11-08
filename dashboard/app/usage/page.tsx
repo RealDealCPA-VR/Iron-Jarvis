@@ -473,7 +473,7 @@ export default function UsagePage() {
       <Reveal>
         <PageHeader
           title="Usage"
-          subtitle="Token spend and run volume across your providers."
+          subtitle="What each AI model used and cost, and how much work ran."
           actions={
             <div className="flex items-center gap-2">
               {/* v1.447.0 (calm sweep): the header's refresh arrow. */}

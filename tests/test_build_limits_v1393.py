@@ -314,7 +314,7 @@ async def test_a_bad_group_is_refused_in_words(app, fake, groups, words):
 
 async def test_a_group_needs_iron_proxy_to_know_its_accounts(app):
     status, body = await _groups(app, {"Work": ["c-work"]})
-    assert status == 400 and "Iron-Proxy is off" in body["detail"]
+    assert status == 400 and "Several accounts is off" in body["detail"]
 
 
 async def test_an_account_removed_later_never_blocks_a_save(app, fake):

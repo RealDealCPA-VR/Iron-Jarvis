@@ -253,7 +253,7 @@ describe("G33: the chat's warning above the message box names the program and of
       />,
     );
     expect(screen.getByTestId("ij-preflight-note").textContent).toBe(
-      "DGX Spark isn't reachable right now. This turn will fail. Pick another model or bring the endpoint back.",
+      "DGX Spark isn't reachable right now. This turn will fail. Pick another model or start that model server again.",
     );
     cleanup();
     render(<PreflightNote provider="fleet-custom" available={true} cooldownS={23} />);

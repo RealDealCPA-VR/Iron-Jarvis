@@ -153,7 +153,8 @@ describe("ease item 73's one-line wordings", () => {
     ["components/TitleBar.tsx", 'aria-label="Iron Jarvis: Home"', "Iron Jarvis — Overview"],
     ["app/documents/page.tsx", "Hide personal details (SSNs, phone numbers…)", '<Card title="Redact PII"'],
     ["lib/buildApp.ts", "These accounts are marked as at their limit.", "Iron-Proxy has these marked"],
-    ["components/buildCode/CodePanes.tsx", "Its own tool servers", "Its own MCP servers"],
+    // v1.455.0 (Wave E, moved on purpose): "extension" is the canon's word.
+    ["components/buildCode/CodePanes.tsx", "Its own extensions", "Its own MCP servers"],
     ["components/terminal/TerminalPane.tsx", "Starts without Iron Jarvis's memory and browser", 'no Jarvis capabilities"'],
     ["components/terminal/TerminalPane.tsx", "where this PC can find it. Get it here.", "isn't on your PATH"],
     ["components/chat/HomeReadiness.tsx", "Type your question in the box.", "Ask anything below.\n"],

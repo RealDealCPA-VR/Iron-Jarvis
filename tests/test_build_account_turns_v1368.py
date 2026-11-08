@@ -431,7 +431,7 @@ async def test_iron_proxy_turned_off_under_an_account_refuses_in_words(app, fake
     status, raw = await open_turn(app, sid, {"text": "hi", "turn_id": "acc-offd"})
     assert status == 409
     detail = json.loads(raw)["detail"]
-    assert '"Work Max"' in detail and "Iron-Proxy is off" in detail
+    assert '"Work Max"' in detail and "Several accounts is off" in detail
     assert messages_of(app, sid) == [] and beh.calls == []
 
 

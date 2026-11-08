@@ -96,7 +96,7 @@ describe("U6 — Usage lists models that did work", () => {
     // endpoint"); the raw id stays in the row's title. The mock check keys on
     // the MODEL id, which is shown as-is, so it cannot pass just because the
     // provider word changed.
-    expect(screen.getByText(/your own endpoint · brain/)).toBeInTheDocument();
+    expect(screen.getByText(/your model server · brain/)).toBeInTheDocument();
     expect(document.querySelector('[title^="custom · brain"]')).not.toBeNull();
     expect(screen.queryByText(/mock-1/)).toBeNull();
     expect(screen.queryByText(/bogusmodel/)).toBeNull();
@@ -264,7 +264,7 @@ describe("U12 — Activity tiles and rows", () => {
     expect(humanSummary("provider.routed brain")).toBe("Picked a model for this turn · brain");
     expect(humanSummary("provider.routed")).toBe("Picked a model for this turn");
     expect(humanSummary("provider.failover claude-cli")).toBe(
-      "Switched provider after a failure · claude-cli",
+      "Switched to another AI after a failure · claude-cli",
     );
     // An unknown type keeps its summary verbatim (reads oddly, never vanishes).
     expect(humanSummary("weird.new_kind x")).toBe("weird.new_kind x");

@@ -167,7 +167,7 @@ PLAIN_NAMES: dict[str, str] = {
     "xai": "xAI",
     "openrouter": "OpenRouter",
     "ollama": "Ollama",
-    "custom": "your own endpoint",
+    "custom": "your model server",
     # v1.358.0: the two local model servers the dashboard now names (lane
     # 8D's FRIENDLY rows) — kept equal by tests/test_integrate_wave4_v13540.
     "lmstudio": "LM Studio",

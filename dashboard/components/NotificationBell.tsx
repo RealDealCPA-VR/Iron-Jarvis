@@ -355,7 +355,7 @@ const UNATTENDED_SUBJECT: Record<string, (name: string) => string> = {
   schedule: (n) => (n ? `Your schedule ${n}` : "A schedule"),
   goal: () => "Your goal's run",
   workflow: (n) => (n ? `A step of your workflow ${n}` : "A workflow step"),
-  reflex: (n) => (n ? `Your reflex ${n}` : "A reflex rule"),
+  reflex: (n) => (n ? `Your rule ${n}` : "A rule"),
   comm: (n) => (n ? `Your request from ${n}` : "A request from your phone"),
   autonomy: () => "An autonomy run",
   // v1.357.0 (G76, with G61): a task another computer running Iron Jarvis

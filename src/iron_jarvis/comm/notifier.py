@@ -124,7 +124,7 @@ def _event_field(event: Any, attr: str, default: Any = None) -> Any:
 #: pinned equal by ``tests/test_integrate_wave4_v13540.py``.
 EVENT_WORDS: dict[str, str] = {
     "provider.routed": "Picked a model for this turn",
-    "provider.failover": "Switched provider after a failure",
+    "provider.failover": "Switched to another AI after a failure",
     "provider.downgraded": "No real model answered",
     "autonomy.proposed": "Proposed an action on its own",
     "autonomy.executed": "Ran an action on its own",
@@ -245,7 +245,7 @@ _UNATTENDED_SUBJECT: dict[str, Any] = {
     "schedule": lambda n: f"Your schedule {n}" if n else "A schedule",
     "goal": lambda n: "Your goal's run",
     "workflow": lambda n: f"A step of your workflow {n}" if n else "A workflow step",
-    "reflex": lambda n: f"Your reflex {n}" if n else "A reflex rule",
+    "reflex": lambda n: f"Your rule {n}" if n else "A rule",
     "comm": lambda n: f"Your request from {n}" if n else "A request from your phone",
     "autonomy": lambda n: "An autonomy run",
     # v1.357.0 (G61 + G76): a task another computer running Iron Jarvis sent

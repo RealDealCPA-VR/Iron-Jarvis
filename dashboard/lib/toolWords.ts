@@ -89,7 +89,7 @@ const WORDS: Record<string, string> = {
   account_add: "add an account",
   memory_base_add: "add a memory base",
   // v1.448.0 (Wave A item 4, settings/records_tools).
-  mcp_server_add: "add a tool server",
+  mcp_server_add: "add an extension",
   web_service_add: "save a web service",
   // v1.350.0: the daemon's own plan approval (agents/runtime.py
   // PLAN_APPROVAL_TOOL), not a registry tool: its arguments are the plan's

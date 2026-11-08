@@ -22,7 +22,7 @@ interface SecretKind {
 }
 
 const FALLBACK_KINDS: SecretKind[] = [
-  { key: "connection.{provider}", label: "API key for a model provider", pattern: true },
+  { key: "connection.{provider}", label: "API key for an AI service", pattern: true },
   { key: "channel.{name}", label: "A notification channel's token", pattern: true },
   { key: "app.{name}", label: "An app's token", pattern: true },
   { key: "secret.{name}", label: "A named secret", pattern: true },

@@ -640,8 +640,8 @@
     {
       "tool": "mcp_server_add",
       "kind": "table",
-      "card": "add a tool server",
-      "desktop": "add a tool server"
+      "card": "add an extension",
+      "desktop": "add an extension"
     },
     {
       "tool": "web_service_add",

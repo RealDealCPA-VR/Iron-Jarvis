@@ -17,7 +17,7 @@ this PC awake while work runs"). Each change shows what it was and offers
 | **Steps for runs you start** | `60` (default) | Room for a real piece of work. Runs that start by themselves keep a smaller limit. |
 | **Ask me to approve an agent's plan before it starts** | off, unless you want to read every plan | When on, a run that writes a plan waits for your Allow before its first step. |
 | **Run app tools without asking** | off (default) | Apps you connect ask before each use until you trust them. |
-| **Work on my goals by itself** | off until you want it; then **Autonomy ceiling** at **Suggest only** first | Its daily limits and **Emergency stop** stay in place. |
+| **Work on my goals by itself** | off until you want it; then **How far it may act on its own** at **Suggest only** first | Its daily limits and **Emergency stop** stay in place. |
 | **Self-development** | off | Only for letting an agent change Iron Jarvis's own code, and every change waits for your review. |
 | **Keep activity history (days)** | `90` (default) | How far back Activity and the change ledger go. |
 | **Extra folders for file search** | the folders where your client documents live | File search and the chat's memory then reach the places your real work is. |
@@ -46,7 +46,7 @@ this PC awake while work runs"). Each change shows what it was and offers
 | Setting | Recommended | Why |
 |---|---|---|
 | **Ollama server URL** | your Ollama address | The simplest way to use a model on this PC. Or ask in chat: "add my local Ollama model". |
-| **Custom endpoint URL** | your OpenAI-compatible server (LiteLLM, vLLM, LM Studio) | For a model server Ollama does not front. |
+| **Your model server's address** | your OpenAI-compatible server (LiteLLM, vLLM, LM Studio) | For a model server Ollama does not front. |
 | **Context windows** | the window of every local model you use | Iron Jarvis fits each conversation to it; an unknown window is a guess. |
 | **Prefer my own hardware** | on once your local model has proven itself | Sends suitable work to your local model only after enough good results. |
 | **Break big tasks into steps for local models** | on (default) | A smaller model gets a plan, then each step, then a check, instead of one long leap. |

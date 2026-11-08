@@ -3638,7 +3638,7 @@ const MessageRow = memo(function MessageRow({
       {!m.route && m.viaProvider && (
         <div
           className="mt-1 text-[12px] text-tone-warn"
-          title={`Your selected model couldn't take this turn (it may not support tools, or it errored), so the router used ${m.viaProvider} instead. Verify the endpoint's tool support in Connections to keep turns local.`}
+          title={`Your selected model couldn't take this turn (it may not support tools, or it errored), so the router used ${m.viaProvider} instead. Check that model server's tool support in Connections to keep turns local.`}
         >
           answered by {m.viaProvider}
         </div>
@@ -13640,7 +13640,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         {failedTurn && !busy && turnFix?.kind === "sign_in" && signInHere &&
                           cliSignIns[turnFix.cli.cli]?.paneId !== undefined && (
                           <div data-testid="chat-turn-sign-in-hint" className="basis-full text-[12px] leading-5 text-zinc-400">
-                            A Build terminal opened with {turnFix.cli.name} running.{" "}
+                            A terminal opened in Build with {turnFix.cli.name} running.{" "}
                             {codeParts(turnFix.cli.paneHint).map((part, k) =>
                               part.code ? (
                                 <code key={k} className="font-mono text-zinc-300">

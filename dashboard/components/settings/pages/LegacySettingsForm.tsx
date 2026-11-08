@@ -837,10 +837,9 @@ export function LocalCapabilitiesCard() {
   return (
     <Card title="Local model capabilities" icon={<Cpu size={15} />}>
       <p className="text-[12px] leading-relaxed text-zinc-500">
-        Probe every local endpoint (your added endpoints plus the Ollama/custom
-        slots) with a live tool call and a vision check, and see exactly what
-        each model can — and can&apos;t — do. Results are saved, so routing and
-        the Connections page reflect them immediately.
+        Check what each of your own models can do: a test with a tool and a
+        picture, on every model server you added. The results are saved, so
+        Iron Jarvis and the Connections page use them right away.
       </p>
       <button
         type="button"
@@ -849,7 +848,7 @@ export function LocalCapabilitiesCard() {
         className="btn-accent mt-3 w-full justify-center py-1.5 text-xs"
       >
         {busy ? (
-          <LoaderInline label="Probing endpoints… (a sleeping box can take a minute)" />
+          <LoaderInline label="Checking your models… (a machine that was asleep can take a minute)" />
         ) : (
           <>
             <Cpu size={14} /> Verify all local models
@@ -865,7 +864,7 @@ export function LocalCapabilitiesCard() {
         <div className="mt-4 space-y-2">
           {rows.length === 0 ? (
             <p className="text-[12px] text-zinc-500">
-              No local endpoints found — add one on the Connections page.
+              No models of your own yet. Add a model server on the Connections page.
             </p>
           ) : (
             rows.map((r) => (
@@ -892,8 +891,8 @@ export function LocalCapabilitiesCard() {
                 ) : blockedList(r).length > 0 ? (
                   <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
                     Not available on this model: {blockedList(r).join("; ")}.
-                    Turns needing these run on another provider (or fail
-                    honestly with the strict pin on).
+                    Turns that need these run on another model (or stop with
+                    a plain message when you keep one model pinned).
                   </p>
                 ) : (
                   <p className="mt-1 text-[11px] leading-relaxed text-emerald-300/80">

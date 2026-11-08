@@ -1020,13 +1020,13 @@ describe("Fleet — words and the empty state", () => {
     expect(hrefs.some((h) => /^\/connections(\?focus=endpoints|#conn-card-custom)$/.test(h))).toBe(true);
     expect(hrefs).toContain("/settings");
     // The page's own add-by-URL form is still right there.
-    expect(screen.getByLabelText("Base URL")).toBeInTheDocument();
+    expect(screen.getByLabelText("Server address")).toBeInTheDocument();
   });
 
   it("the example address is not a real-looking private tailnet IP", () => {
     S.responses["/fleet"] = { nodes: [] };
     render(<FleetPage />);
-    expect((screen.getByLabelText("Base URL") as HTMLInputElement).placeholder).not.toMatch(/^https?:\/\/100\./);
+    expect((screen.getByLabelText("Server address") as HTMLInputElement).placeholder).not.toMatch(/^https?:\/\/100\./);
   });
 
   it("the savings line names the baseline in words, with the raw id in a title", () => {

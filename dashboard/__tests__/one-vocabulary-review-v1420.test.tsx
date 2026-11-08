@@ -81,6 +81,10 @@ describe("the daemon's scans never read the on-screen-only words (review 2)", ()
       "Rescan local CLIs",
       "No OAuth client configured",
       "Open Channels",
+      // v1.455.0 (Wave E, moved on purpose): three more on-screen words.
+      "tool server",
+      "reflex",
+      "Build session",
     ]);
   });
 });

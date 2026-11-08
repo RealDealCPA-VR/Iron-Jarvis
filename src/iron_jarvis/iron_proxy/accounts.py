@@ -519,8 +519,8 @@ VENDOR_OF = dict(_SUBS.VENDOR_OF)  # v1.426.0 (E5): THE table (providers/subscri
 #: The pinned pick needs ``pick-pinned``; an older Iron-Proxy IGNORES
 #: ``pinned`` (it would answer the next ready account), so it is never asked.
 PINNED_TOO_OLD = (
-    "The Iron-Proxy running on this PC is too old to keep a Build session on one "
-    "account — update Iron-Proxy, then try again."
+    "The account manager on this PC is too old to keep this work on one account "
+    "— update it, then try again."
 )
 
 #: A park kind a later reset (or a sign-in) can end — "Resume when ready" waits
@@ -616,7 +616,9 @@ def _other_provider_refused(spec: ProviderAccounts | None, ij_provider: str,
     held = PROVIDERS.get(pin.ij_provider)
     label = held.label if held is not None else pin.ij_provider
     title = pin.title or "the session's account"
-    words = (f'This Build session runs on the {label} account "{title}", so nothing was sent '
+    # v1.455.0 review: a chat can be pinned to an account too (v1.424.0,
+    # D6), so the words name neither a "Build session" nor the program.
+    words = (f'This work runs on the {label} account "{title}", so nothing was sent '
              f"to another account.")
     err = ProviderError(f"{ij_provider}: {words}", transient=False)
     err.no_failover = True  # type: ignore[attr-defined]
@@ -670,8 +672,8 @@ def _pinned_lease(spec: ProviderAccounts, pin: "_pin.AccountPin") -> Lease:
         _note("client", exc)
         raise _unanswered_error(spec, exc) from None
     if client is None:
-        raise _refusal(spec, f'Iron-Proxy is off, so this session cannot run on the {spec.label} '
-                             f'account "{title}" — turn Iron-Proxy on in Connections to continue.')
+        raise _refusal(spec, f'Several accounts is off, so this cannot run on the {spec.label} '
+                             f'account "{title}" — turn it on in Settings › Connections to continue.')
     if not _has_feature(client, PINNED_PICK_FEATURE):
         raise _refusal(spec, PINNED_TOO_OLD)
     try:
@@ -680,8 +682,8 @@ def _pinned_lease(spec: ProviderAccounts, pin: "_pin.AccountPin") -> Lease:
         raise _pinned_error(spec, pin, exc) from None
     got = _lease_of(spec, answer)
     if got is None or got.profile_id != pin.profile_id:
-        raise _refusal(spec, f'Iron-Proxy answered with a different {spec.label} account than '
-                             f'"{title}", so nothing was sent — update Iron-Proxy.')
+        raise _refusal(spec, f'The account manager answered with a different {spec.label} account than '
+                             f'"{title}", so nothing was sent — update it.')
     if not pin.title:
         pin.title = got.title
     pin.leased.append(got.profile_id)

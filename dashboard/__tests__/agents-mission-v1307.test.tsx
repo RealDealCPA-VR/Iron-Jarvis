@@ -501,6 +501,9 @@ describe("a project's mission screen", () => {
     // Board / Waiting on you / Completed — opening on what waits for the user
     const work = screen.getByTestId("mission-project-work");
     expect(within(work).getByTestId("project-tab-waiting").getAttribute("aria-selected")).toBe("true");
+    // v1.455.0 (Wave E): the tabs read the one status table's words.
+    expect(within(work).getByTestId("project-tab-waiting").textContent).toMatch(/^Waiting for you/);
+    expect(within(work).getByTestId("project-tab-completed").textContent).toBe("Done");
     expect(work.textContent).toContain("Allow shell for the close");
     fireEvent.click(within(work).getByTestId("project-tab-board"));
     expect(screen.getByTestId("world-board").getAttribute("data-project")).toBe("p1");

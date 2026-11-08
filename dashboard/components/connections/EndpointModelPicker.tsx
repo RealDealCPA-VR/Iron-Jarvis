@@ -238,7 +238,7 @@ export function EndpointModelPicker({
   async function fetchModels() {
     const url = baseUrl.trim();
     if (!/^https?:\/\/\S+/i.test(url)) {
-      setError("Enter the endpoint address first, starting with http:// or https://.");
+      setError("Enter the server address first, starting with http:// or https://.");
       return;
     }
     const mine = ++gen.current;

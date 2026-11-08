@@ -176,7 +176,7 @@ def test_an_install_job_never_runs_on_an_iron_proxy_account(client):
     adds one is refused in words, as for every set-up job."""
     r = client.post("/terminals/launch", json={"cli": "claude-code-install", "account": "default"})
     assert r.status_code == 400
-    assert "does not run on an Iron-Proxy account" in r.json()["detail"]
+    assert "does not run on one of your accounts" in r.json()["detail"]
 
 
 def test_the_launch_menu_route_never_offers_the_installs(client):

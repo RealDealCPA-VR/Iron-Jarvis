@@ -35,15 +35,15 @@ log = logging.getLogger(__name__)
 MAX_ID = 120
 
 OFF_WORDS = (
-    "Iron-Proxy is off, so the chosen account cannot be used — turn it on in Settings › "
+    "Several accounts is off, so the chosen account cannot be used — turn it on in Settings › "
     "Connections, or choose No account."
 )
-NOT_READ_WORDS = "Iron-Proxy has not listed its accounts yet — try again in a moment."
+NOT_READ_WORDS = "Your accounts are not listed yet — try again in a moment."
 UNKNOWN_WORDS = (
-    "Iron-Proxy does not list that account any more — choose another account, or No account."
+    "That account is no longer in your accounts — choose another account, or No account."
 )
 TURNED_OFF_WORDS = (
-    "The account “{name}” is turned off in Iron-Proxy — turn it on in Settings › Connections, "
+    "The account “{name}” is turned off on the Several accounts card — turn it on in Settings › Connections, "
     "or choose another account."
 )
 NOT_A_PLAN_WORDS = (

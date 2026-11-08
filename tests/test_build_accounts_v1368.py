@@ -627,7 +627,7 @@ async def test_with_iron_proxy_off_a_session_is_exactly_phase_4(app, work):
     status, body = await asgi(app, "POST", "/build/sessions", {
         "folder": str(work), "provider": "claude-cli", "account": "c-work",
     })
-    assert status == 409 and body["detail"] == "Iron-Proxy is off; turn it on in Connections first."
+    assert status == 409 and body["detail"] == "Several accounts is off; turn it on in Settings › Connections first."
 
 
 async def test_a_local_model_or_an_api_key_has_no_account(app, fake, work):

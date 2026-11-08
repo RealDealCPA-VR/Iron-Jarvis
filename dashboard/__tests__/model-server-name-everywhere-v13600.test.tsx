@@ -369,7 +369,7 @@ describe("the helper card and the helper row read the one /models reader", () =>
   it("the card under an agent's answer: 'answered by DGX Spark'", async () => {
     render(<RunResultCard result={RESULT} />);
     await waitFor(() => expect(screen.getByTestId("run-result-model").textContent).toBe("answered by DGX Spark"));
-    expect(screen.getByTestId("run-result-model").getAttribute("title")).toBe("your own endpoint · fleet");
+    expect(screen.getByTestId("run-result-model").getAttribute("title")).toBe("your model server · fleet");
   });
 
   it("the settled helper row: 'Ran on DGX Spark'", async () => {

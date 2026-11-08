@@ -628,7 +628,7 @@ def test_an_iron_proxy_that_declines_to_park_still_continues_and_says_so(client,
     _print(c, old["id"], f"  ⎿  {REAL_SESSION}")
     out = c.post(f"/terminals/{old['id']}/continue-on-next").json()
     assert out["parked"] is False and out["to"]["id"] == personal["id"]
-    assert 'Iron-Proxy did not mark "Work Max" as limited' in out["note"]
+    assert 'The account manager did not mark "Work Max" as limited' in out["note"]
     assert _backend_of(out["pane"]["id"]).env["CLAUDE_CONFIG_DIR"] == personal["cli"]["home"]
 
 

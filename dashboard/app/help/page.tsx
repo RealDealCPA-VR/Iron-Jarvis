@@ -98,7 +98,7 @@ const SUBSYSTEMS: Subsystem[] = [
   },
   {
     href: "/sessions",
-    title: "Sessions",
+    title: "Agent runs",
     icon: Boxes,
     desc: "Hand an agent a task in plain language and watch it work the task end to end, step by step.",
   },
@@ -112,7 +112,7 @@ const SUBSYSTEMS: Subsystem[] = [
     href: "/workflows",
     title: "Workflows",
     icon: Workflow,
-    desc: "Chain several sessions into a repeatable, multi-step pipeline that runs as one unit.",
+    desc: "Join several steps into one repeatable piece of work that runs start to finish.",
   },
   {
     href: "/schedules",
@@ -142,7 +142,7 @@ const SUBSYSTEMS: Subsystem[] = [
     href: "/connections",
     title: "Connections & secrets",
     icon: PlugZap,
-    desc: "Connect a model with an API key or OAuth; keys and tokens live in an encrypted, write-only vault.",
+    desc: "Connect a model with an API key or a sign-in. Keys are stored encrypted and never shown again.",
   },
   {
     href: "/channels",
@@ -154,7 +154,7 @@ const SUBSYSTEMS: Subsystem[] = [
     href: "/computeruse",
     title: "Browser",
     icon: MonitorCog,
-    desc: "Pair your own Chrome so Jarvis can see your open tabs and read the page you are looking at — plus opt-in agent control of a separate browser, fenced by allowlists and approval gates.",
+    desc: "Pair your own Chrome or Edge with the browser add-on, so Jarvis can see your open tabs, read the page you are looking at and, with your OK, click and type there for you.",
   },
   {
     href: "/self-dev",
@@ -213,7 +213,7 @@ const GLOSSARY: GlossaryTerm[] = [
   },
   {
     term: "Workflow",
-    def: "A saved, repeatable series of steps that runs several sessions as one unit.",
+    def: "A saved, repeatable series of steps that runs start to finish as one piece of work.",
   },
   {
     term: "Skill",
@@ -233,7 +233,7 @@ const GLOSSARY: GlossaryTerm[] = [
   },
   {
     term: "Browser",
-    def: "Your own Chrome, paired with Iron Jarvis so it can see your open tabs and read the page in front of you — and opt-in agent control of a separate browser, gated by your approvals.",
+    def: "Your own Chrome or Edge, paired with Iron Jarvis through the browser add-on, so it can see your open tabs, read the page in front of you and, with your OK, click and type there.",
   },
   {
     term: "Connections",
@@ -823,7 +823,7 @@ export default function HelpPage() {
           <p className="mt-1.5 text-[12px] text-zinc-600">
             Want to watch an agent run step by step?{" "}
             <Link href="/sessions" className="text-zinc-500 underline decoration-white/10 underline-offset-2 hover:text-zinc-300">
-              Sessions
+              Agent runs
             </Link>{" "}
             shows every run in detail.
           </p>

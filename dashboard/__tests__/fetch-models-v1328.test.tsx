@@ -313,7 +313,7 @@ describe("failures are one plain sentence", () => {
     render(<Host url="box:1234" />);
     fireEvent.click(link());
     expect(screen.getByTestId("endpoint-models-error").textContent).toMatch(
-      /Enter the endpoint address first/,
+      /Enter the server address first/,
     );
     expect(probes()).toHaveLength(0);
   });
@@ -389,7 +389,7 @@ describe("on the Connections page", () => {
     fireEvent.click(within(panel).getByText("llama3.2:3b"));
     expect((within(card).getByLabelText("Model") as HTMLInputElement).value).toBe("llama3.2:3b");
 
-    fireEvent.click(within(card).getByRole("button", { name: /Save endpoint/ }));
+    fireEvent.click(within(card).getByRole("button", { name: /Save model server/ }));
     await waitFor(() =>
       expect(hooks.posts.find((p) => p.path === "/fleet/nodes")?.body).toEqual({
         base_url: "http://box:1234/v1",

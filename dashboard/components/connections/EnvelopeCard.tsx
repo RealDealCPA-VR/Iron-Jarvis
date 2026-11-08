@@ -143,7 +143,7 @@ export function sourceBadge(source: string): SourceBadge {
       return {
         label: "seeded",
         mark: null,
-        title: "Reported by the endpoint itself. It is not verified until you press Measure.",
+        title: "Reported by the model server itself. It is not verified until you press Measure.",
       };
     case "probe_failed":
       return {
@@ -335,7 +335,7 @@ function effectiveWindowWords(source: string): string {
     case "measured":
       return "measured";
     case "endpoint":
-      return "from the endpoint";
+      return "from the model server";
     default:
       return "conservative default";
   }
@@ -403,10 +403,10 @@ export function MeasuredEndpoints({ entries }: { entries: MeasuredEntry[] }) {
   return (
     <section data-testid="measured-endpoints" className="card-surface p-5">
       <div className="mb-3">
-        <h2 className="text-sm font-semibold text-zinc-100">Measured endpoints</h2>
+        <h2 className="text-sm font-semibold text-zinc-100">Measured models</h2>
         <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-500">
-          What each local model was measured to do. An endpoint shows up here once it has
-          been measured. Measure is on the endpoint rows above.
+          What each local model was measured to do. A model shows up here once it has
+          been measured. Measure is on the model server rows above.
         </p>
       </div>
       <div className="space-y-2">
@@ -469,7 +469,7 @@ function MeasuredProfileCard({
   const verdict = !measured
     ? profile.source === "probe_failed"
       ? "Measuring failed. Using the floor defaults."
-      : "Reported by the endpoint. Not verified yet."
+      : "Reported by the model server. Not verified yet."
     : selectedRung === "native"
       ? "Fully usable, with native tool calls."
       : selectedRung === "strict_json"
@@ -545,7 +545,7 @@ function MeasuredProfileCard({
       {!ctxMeasured && (
         <p className="mt-0.5 text-[11px] text-zinc-500">
           context not yet deep-measured; the app uses{" "}
-          {ew?.source === "pin" ? "your pinned value" : "the endpoint's value"}
+          {ew?.source === "pin" ? "your pinned value" : "the model server's value"}
         </p>
       )}
 
@@ -558,7 +558,7 @@ function MeasuredProfileCard({
                   r.refused ? (
                     <div key={r.rung} data-rung={r.rung} className="text-[11px]">
                       <span className="text-zinc-400">{r.label}: </span>
-                      <span className="text-tone-warn">the endpoint refused them</span>
+                      <span className="text-tone-warn">the model server refused them</span>
                       {notes[`tool_protocols.${r.rung}`] && (
                         <p className="mt-0.5 text-[10px] leading-relaxed text-zinc-500">
                           {notes[`tool_protocols.${r.rung}`]}
@@ -625,7 +625,7 @@ function MeasuredProfileCard({
             </p>
           ) : (
             <p className="text-[11px] text-zinc-500">
-              Capabilities reported by the endpoint, not verified. Measure runs the real checks.
+              Capabilities reported by the model server, not verified. Measure runs the real checks.
             </p>
           )}
         </div>

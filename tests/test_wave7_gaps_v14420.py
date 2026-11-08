@@ -135,7 +135,7 @@ def test_the_gmail_line_is_what_its_card_and_app_connect_really_do():
     gmail = get_connector("gmail")
     assert gmail.connect_via == "mcp" and "Google developer setup" in gmail.needs and gmail.docs_url
     line = _line("gmail_setup")
-    assert P.DIRECTORY_PLACE in line and "Docs link" in line and "one-time Google developer setup" in line
+    assert P.DIRECTORY_PLACE in line and "program's own page on GitHub" in line and "one-time Google developer setup" in line
     # app_connect says it did not start while the setup is missing (its own
     # words, settings.records), so the line may say the tools are not there.
     src = _read("src/iron_jarvis/settings/records.py")
@@ -288,10 +288,10 @@ def test_the_watcher_line_is_what_a_watcher_really_does():
     i = src.index("def add_backlog")
     assert "it never spawns a session" in src[i:i + 1500]
     assert "Autonomy → Proposals" in _read("dashboard/app/sentinels/page.tsx")
-    assert {s.key: s.label for s in schema.SETTINGS}["sentinels_enabled"] == "Folder watchers (sentinels)"
+    assert {s.key: s.label for s in schema.SETTINGS}["sentinels_enabled"] == "Folder watchers"
     assert Config.model_fields["sentinels_enabled"].default is False
     line = _line("watcher_suggests")
-    assert '"Folder watchers (sentinels)"' in line and "Proposals list on the Autonomy page" in line
+    assert '"Folder watchers"' in line and "Proposals list on the Autonomy page" in line
     assert "nothing runs until the user approves it" in line
 
 

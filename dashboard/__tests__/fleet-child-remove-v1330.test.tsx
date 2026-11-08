@@ -183,7 +183,7 @@ describe("Fleet: Remove is offered only where it can work", () => {
 
     // The one real node keeps both controls; the proxy's model has none.
     expect(removeButtons()).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "Rename this endpoint" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Rename this model server" })).toHaveLength(1);
     expect(screen.getAllByTestId("fleet-child-note")).toHaveLength(1);
   });
 

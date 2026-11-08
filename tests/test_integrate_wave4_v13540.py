@@ -317,7 +317,7 @@ def test_every_default_alert_reaches_the_phone_in_plain_words(tmp_path, etype):
         # finish even when an ask expired — the bell's and the row's verdict.
         ({"status": "failed", "summary": "", "origin": "comm:telegram", "outcome": "needs_you"}, "Your request from telegram could not finish"),
         ({"status": "completed", "summary": "", "origin": "comm:telegram", "outcome": "needs_you"}, "Your request from telegram needs you"),
-        ({"status": "cancelled", "summary": "", "origin": "reflex:on-invoice", "outcome": None}, "Your reflex on-invoice was stopped"),
+        ({"status": "cancelled", "summary": "", "origin": "reflex:on-invoice", "outcome": None}, "Your rule on-invoice was stopped"),
         ({"status": "completed", "summary": "", "origin": "autonomy", "outcome": None}, "An autonomy run finished. Check what it did"),
     ],
 )

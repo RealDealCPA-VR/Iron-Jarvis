@@ -495,7 +495,7 @@ def test_the_sign_in_needs_no_account_and_says_no_to_one(client):
     assert _connect(client, "common").status_code == 200
     r = client.post("/terminals/launch", json={"cli": SIGNIN_JOB, "account": "default"})
     assert r.status_code == 400
-    assert "does not run on an Iron-Proxy account" in r.json()["detail"]
+    assert "does not run on one of your accounts" in r.json()["detail"]
 
 
 def test_a_sign_in_whose_card_cannot_be_read_starts_nothing(client, monkeypatch):

@@ -711,7 +711,7 @@ describe("the crumb names the page the way the page names itself", () => {
       expect(hrefs).not.toContain(alias);
     }
     // Nested routes and the prefix-collision rule still hold.
-    expect(labelForPath("/sessions/abc123")).toBe("Sessions");
+    expect(labelForPath("/sessions/abc123")).toBe("Agent runs");
     expect(labelForPath("/filesearch")).not.toBe(labelForPath("/fleet"));
   });
 });

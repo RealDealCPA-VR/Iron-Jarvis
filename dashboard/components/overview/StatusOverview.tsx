@@ -166,7 +166,7 @@ export default function OverviewPage({ embedded = false }: { embedded?: boolean 
         : failedPacks.length > 0
           ? `${failedPacks.length} thing${failedPacks.length === 1 ? "" : "s"} need${failedPacks.length === 1 ? "s" : ""} attention`
           : failures > 0
-            ? `${failures} provider hiccup${failures === 1 ? "" : "s"} in the last 24h`
+            ? `${failures} model failure${failures === 1 ? "" : "s"} in the last 24h`
             : // v1.313.0: never "all good" while every reply is the scripted
               // demo, and say neither until /health has answered.
               daemon.provided && !health.data

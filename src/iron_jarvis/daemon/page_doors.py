@@ -676,8 +676,8 @@ STEPS: tuple[PageStep, ...] = (
         # can save it before, and then says "did not start" (pinned).
         "gmail_setup", _APPS_FIX_HREF, "Open Gmail's card in Settings",
         f"Gmail is connected from its card in {DIRECTORY_PLACE}, and it starts only after a one-time Google "
-        "developer setup the user makes in their own Google account, in their browser (the card's Docs link "
-        "has the steps); Iron Jarvis cannot make that setup for them. app_connect, when it is offered in this "
+        "developer setup the user makes in their own Google account, in their browser (the card's link to the "
+        "program's own page on GitHub has the steps); Iron Jarvis cannot make that setup for them. app_connect, when it is offered in this "
         "reply, can save Gmail before that, but Gmail does not start and its tools are not in the chat until "
         "the setup is done. If Gmail is already connected, none of this is needed. Say so plainly and point "
         "there.",
@@ -831,7 +831,7 @@ NOT_OFFERED: tuple[NotOffered, ...] = (
         "A folder watcher (sentinel_add, when it is offered in this reply) only notices new or changed files: "
         "each time, it leaves one suggestion, carrying the task it was given, in the Proposals list on the "
         "Autonomy page, and nothing runs until the user approves it there. Watchers are off until the setting "
-        "\"Folder watchers (sentinels)\" is turned on. So Iron Jarvis cannot file new files by itself the "
+        "\"Folder watchers\" is turned on. So Iron Jarvis cannot file new files by itself the "
         "moment they arrive: the filing runs when the user approves a suggestion, or right now in this chat. "
         "Say so plainly.",
     ),

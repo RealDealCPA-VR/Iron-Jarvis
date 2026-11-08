@@ -1776,7 +1776,7 @@ class HostedService:
             if str(prof.get("id")) == account and prof.get("provider") == W.PROXY[harness]:
                 cli = prof.get("cli") if isinstance(prof.get("cli"), dict) else {}
                 return {"id": account, "home": str(cli.get("home") or "")}
-        raise Refused("That account is not one Iron-Proxy lists for this tool.", 404)
+        raise Refused("That account is not one of your accounts for this tool.", 404)
 
     async def list_sessions(self, *, archived: bool = False, folder: str = "", disk: bool = False,
                             account: str = "") -> dict[str, Any]:
@@ -4216,7 +4216,7 @@ class HostedService:
                     try:
                         client.unpark(str(prof.get("id")))
                     except Exception as exc:  # noqa: BLE001
-                        raise Refused(f'Iron-Proxy would not let "{title}" be tried again: '
+                        raise Refused(f'The account manager would not let "{title}" be tried again: '
                                       f"{PA._unavailable_sentence(exc)}") from None
                     st = {**st, "status": "ready", "parkedUntil": ""}
                 if home and CO._usable(st):
@@ -4224,11 +4224,11 @@ class HostedService:
                     lease = _acc.make_lease(PA.SPECS[CO.PROVIDER], pid, title,
                                             home, sorted(PA.PANE_OWN_KEYS[CO.PROVIDER]))
                 elif st.get("status") == "unauthenticated" or _acc._account_kind(dict(st)) == "signin":
-                    raise Refused(f'"{title}" needs to sign in again on {_acc._CONNECTIONS} first.')
+                    raise Refused(f'"{title}" needs to sign in again on {PA._CONNECTIONS} first.')
                 else:
                     raise Refused(f'"{title}" cannot take over right now.')
             if lease is None:
-                raise Refused("That account is not another Claude account in Iron-Proxy.", 404)
+                raise Refused("That account is not another Claude account in your accounts.", 404)
         else:
             lease = CO._own_choice(profiles, states, current, mine)
             if lease is None:

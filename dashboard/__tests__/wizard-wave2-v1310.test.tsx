@@ -311,7 +311,7 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
     render(<ConnectDoors />);
     fireEvent.click(screen.getByRole("button", { name: DOOR_SUB }));
     const text = dialog().textContent ?? "";
-    expect(text).toContain("Claude Code (the command-line tool)");
+    expect(text).toContain("Claude Code (Anthropic's app for your Claude plan)");
     expect(text).not.toMatch(/Claude app\/CLI/);
     // The one honest sentence: the app they pay for can't be shared here.
     expect(text).toMatch(/(desktop|web)/i);

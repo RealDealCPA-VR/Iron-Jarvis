@@ -247,7 +247,7 @@ describe("the server type", () => {
     await waitFor(() => expect(within(card).queryByTestId("endpoint-protocol")).toBeNull());
     fireEvent.click(within(panel).getByText("Sonnet 9"));
 
-    fireEvent.click(within(card).getByRole("button", { name: /Save endpoint/ }));
+    fireEvent.click(within(card).getByRole("button", { name: /Save model server/ }));
     await waitFor(() =>
       expect(saved()).toEqual({
         base_url: "https://relay.test/anthropic",
@@ -274,7 +274,7 @@ describe("the server type", () => {
     expect(card.textContent).not.toMatch(/speaks both/);
 
     fireEvent.click(within(panel).getByText("Opus 9"));
-    fireEvent.click(within(card).getByRole("button", { name: /Save endpoint/ }));
+    fireEvent.click(within(card).getByRole("button", { name: /Save model server/ }));
     await waitFor(() => expect(saved()?.protocol).toBe("anthropic"));
   });
 
@@ -291,7 +291,7 @@ describe("the server type", () => {
       /answered the OpenAI way, so Iron\s+Jarvis will talk to it as OpenAI-compatible\./,
     );
     fireEvent.click(within(panel).getByText("qwen3"));
-    fireEvent.click(within(card).getByRole("button", { name: /Save endpoint/ }));
+    fireEvent.click(within(card).getByRole("button", { name: /Save model server/ }));
     await waitFor(() => expect(saved()?.protocol).toBe("openai"));
   });
 
@@ -303,7 +303,7 @@ describe("the server type", () => {
     expect(within(card).queryByTestId("endpoint-protocol")).toBeNull();
     expect(within(panel).queryByTestId("endpoint-models-protocol-note")).toBeNull();
     fireEvent.click(within(panel).getByText("qwen3"));
-    fireEvent.click(within(card).getByRole("button", { name: /Save endpoint/ }));
+    fireEvent.click(within(card).getByRole("button", { name: /Save model server/ }));
     await waitFor(() => expect(saved()?.protocol).toBe("openai"));
   });
 });

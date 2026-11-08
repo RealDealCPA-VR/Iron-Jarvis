@@ -42,7 +42,7 @@ import { toolWords } from "@/lib/toolWords";
  *  keep each row on one line with plain double quotes. */
 export const EVENT_WORDS: Record<string, string> = {
   "provider.routed": "Picked a model for this turn",
-  "provider.failover": "Switched provider after a failure",
+  "provider.failover": "Switched to another AI after a failure",
   // v1.314.0: never "mock" in words, and true to the router since v1.162.0 —
   // this event now means the chosen model could not answer (it refuses; the
   // only time the demo model still answers is the mock-default trap, where

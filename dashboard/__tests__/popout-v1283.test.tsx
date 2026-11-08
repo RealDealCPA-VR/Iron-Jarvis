@@ -132,7 +132,7 @@ describe("the title bar door and badge", () => {
     routerState.pathname = "/sessions/abc";
     render(<TitleBar />);
     await screen.findByTestId("popout-badge");
-    expect(document.title).toBe("Sessions — Iron Jarvis");
+    expect(document.title).toBe("Agent runs — Iron Jarvis");
   });
 });
 
@@ -173,7 +173,7 @@ describe("labelForPath (the one rule the strip and the window title share)", () 
   it("resolves nested routes to their module and answers null for the root and the unknown", () => {
     expect(labelForPath("/chat")).toBe("Chat");
     expect(labelForPath("/terminals")).toBe("Build");
-    expect(labelForPath("/sessions/abc123")).toBe("Sessions");
+    expect(labelForPath("/sessions/abc123")).toBe("Agent runs");
     expect(labelForPath("/")).toBeNull();
     expect(labelForPath("/no-such-page")).toBeNull();
     expect(labelForPath(null)).toBeNull();

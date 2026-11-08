@@ -443,7 +443,7 @@ async function redactDocument() {
   };
   render(<DocumentsPage />);
   fireEvent.change(screen.getByLabelText("Document to redact"), { target: { value: "C:\\in\\organizer.docx" } });
-  fireEvent.click(screen.getByRole("button", { name: /Scan for PII/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Find personal details/ }));
   fireEvent.click(await screen.findByRole("button", { name: /Redact 1 item/ }));
   await screen.findByText(REDACTED); // the write happened first (see createDocument)
   return await screen.findByTestId("doc-redact-saved");

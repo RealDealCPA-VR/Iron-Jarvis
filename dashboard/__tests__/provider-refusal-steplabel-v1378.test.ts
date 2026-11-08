@@ -38,7 +38,7 @@ describe("v1.378.0 review: a refusal on a run's timeline", () => {
   });
 
   it("control: an ordinary failure keeps its line", () => {
-    expect(stepLabel(ev("provider.failed", { provider: "openai", error: "boom" }))).toBe("Provider openai failed: boom");
+    expect(stepLabel(ev("provider.failed", { provider: "openai", error: "boom" }))).toBe("OpenAI failed: boom");
   });
 });
 

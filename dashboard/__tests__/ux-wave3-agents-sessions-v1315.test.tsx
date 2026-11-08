@@ -452,7 +452,7 @@ describe("Session board page: named for what it is, lanes in plain words", () =>
     // v1.352.0 (G17, updated on purpose): the drag hint names the lanes by
     // their new words — "In Review" / "Completed" no longer exist on the board.
     expect(screen.getByText(/drag a card from Waiting for you onto Done to approve/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /All sessions/ }).getAttribute("href")).toBe("/sessions");
+    expect(screen.getByRole("link", { name: /All agent runs/ }).getAttribute("href")).toBe("/sessions");
   });
 });
 

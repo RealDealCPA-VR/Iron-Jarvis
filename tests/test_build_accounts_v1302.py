@@ -46,7 +46,12 @@ FIXTURE = Path(__file__).parent / "fixtures" / "fake_iron_proxy_v1301.py"
 sys.path.insert(0, str(FIXTURE.parent))
 from fake_iron_proxy_v1301 import FEATURES_PICK_PROFILE, FakeIronProxy  # noqa: E402
 
-OFF = "Iron-Proxy is off; turn it on in Connections first."
+# v1.455.0 (Wave E, moved on purpose): a coding surface names the card, never
+# the program (VOCABULARY.md row 29).
+OFF = "Several accounts is off; turn it on in Settings › Connections first."
+#: The Connections card's own Open press (routes/iron_proxy.py) names the
+#: program: it IS the Iron-Proxy card (VOCABULARY.md row 29).
+CARD_OFF = "Iron-Proxy is off; turn it on in Connections first."
 DAEMON_ONLY = ("IRONJARVIS_TOKEN", "IRONJARVIS_MCP_TOKEN")
 
 
@@ -301,9 +306,9 @@ def _assert_no_new_pane(c, before: int, shells_before: int) -> None:
         ("usage", 'The Claude account "Work Max" is at its usage limit until'),
         ("rate", 'The Claude account "Work Max" is at its request limit until'),
         ("signin", 'The Claude account "Work Max" needs to sign in again — sign it in on '
-                   "the Connections page (Iron-Proxy card)"),
-        ("disabled", 'The Claude account "Work Max" is turned off on the Iron-Proxy card'),
-        ("missing", 'The Claude account "prof_gone" no longer exists in Iron-Proxy'),
+                   "the Several accounts card in Settings › Connections"),
+        ("disabled", 'The Claude account "Work Max" is turned off on the Several accounts card'),
+        ("missing", 'The Claude account "prof_gone" is no longer in your accounts'),
     ],
 )
 @pytest.mark.parametrize("lenient", [False, True])
@@ -390,7 +395,7 @@ def test_an_iron_proxy_without_pick_profile_refuses_a_chosen_account(client, fak
     before, shells = len(_panes(c)), len(_RecordingBackend.instances)
     r = c.post("/terminals", json={"accounts": {"anthropic": second["id"]}})
     assert r.status_code == 409, r.text
-    assert "too old to open a terminal on a chosen account — update Iron-Proxy" in r.json()["detail"]
+    assert "too old to open a terminal on a chosen account — update the account manager" in r.json()["detail"]
     _assert_no_new_pane(c, before, shells)
     assert not any("profileId" in q for q in _picks(fake))
     _refresh(c)
@@ -438,7 +443,7 @@ def test_iron_proxy_not_answering(client, fake, tmp_path):
     before, shells = len(_panes(c)), len(_RecordingBackend.instances)
     r = c.post("/terminals", json={"accounts": {"anthropic": work["id"]}})
     assert r.status_code == 409, r.text
-    assert "Iron-Proxy is on but not answering" in r.json()["detail"]
+    assert "Several accounts is on but the account manager is not answering" in r.json()["detail"]
     _assert_no_new_pane(c, before, shells)
 
     r = c.post("/terminals", json={})  # the snapshot went with the client
@@ -654,7 +659,7 @@ def test_restore_reapplies_the_recorded_home_with_no_iron_proxy_call(
         }
         assert panes[on_c["id"]]["accounts"]["anthropic"] == {
             "id": old["id"], "title": "Old", "source": "iron-proxy", "state": "missing",
-            "note": 'This terminal still runs on "Old"\'s folder; Iron-Proxy no longer lists it.',
+            "note": 'This terminal still runs on "Old"\'s folder; it is no longer in your accounts.',
         }
         assert panes[on_pc["id"]]["accounts"]["anthropic"]["state"] == "default"
         assert boot_calls == []
@@ -671,7 +676,7 @@ def test_restore_with_iron_proxy_off_keeps_the_folder_and_says_so(proj, fake, bo
         rec = _panes(c2)[pane["id"]]["accounts"]["anthropic"]
         assert rec == {
             "id": work["id"], "title": "Work Max", "source": "iron-proxy", "state": "unknown",
-            "note": 'Iron-Proxy is off; this terminal still runs on "Work Max"\'s folder.',
+            "note": 'Several accounts is off; this terminal still runs on "Work Max"\'s folder.',
         }
         assert _backend_of(pane["id"]).env["CLAUDE_CONFIG_DIR"] == work["cli"]["home"]
     assert boot_calls == []
@@ -797,7 +802,7 @@ def test_a_legacy_snapshot_is_bounded_to_the_restore_budget(tmp_path):
     for i in range(3):
         acc = m.get(f"term_{i:04d}").accounts["anthropic"]
         assert acc["id"] is None and acc["source"] == "default"
-        assert acc["note"].startswith("Iron-Proxy did not answer in time when this terminal came back")
+        assert acc["note"].startswith("The account manager did not answer in time when this terminal came back")
         assert '"Work Max"' in acc["note"]
 
 
@@ -855,7 +860,7 @@ def test_launch_refusals(client, fake):
     r = c.post("/terminals/launch", json={"cli": "not-a-cli"})
     assert r.status_code == 400 and "not a CLI on the Launch menu" in r.json()["detail"]
     r = c.post("/terminals/launch", json={"cli": "opencode", "account": work["id"]})
-    assert r.status_code == 400 and "does not run on an Iron-Proxy account" in r.json()["detail"]
+    assert r.status_code == 400 and "does not run on one of your accounts" in r.json()["detail"]
     r = c.post("/terminals/launch", json={"cli": "claude", "near": "term_nope"})
     assert r.status_code == 404
     _assert_no_new_pane(c, before, shells)
@@ -904,7 +909,7 @@ def test_open_in_build_launches_the_accounts_cli(client, fake):
 
 def test_open_in_build_with_iron_proxy_off_is_409(client):
     r = client.post("/iron-proxy/accounts/prof_0001/open")
-    assert r.status_code == 409 and r.json()["detail"] == OFF
+    assert r.status_code == 409 and r.json()["detail"] == CARD_OFF
 
 
 # --------------------------------------------------------------------------- #

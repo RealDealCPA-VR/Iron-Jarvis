@@ -108,10 +108,10 @@ def test_after_fifteen_seconds_the_line_says_a_start_can_take_a_minute():
     the page still loads nothing and runs no script.
     MUTATION: drop either animation, or its 15 s delay -> red."""
     page = _page()
-    assert (
-        '<p class="later">Still starting — the first start after an update can take a minute.</p>'
-        in page
-    )
+    # v1.455.0 (Wave E, moved on purpose): a FIRST install is not "after an
+    # update", so the line says only what is true on both.
+    assert '<p class="later">Still starting. The first start can take a minute.</p>' in page
+    assert "after an update" not in page
     css = _rules_outside_media(_style())
     first = re.search(r"\.words \.first\s*\{([^}]*)\}", css).group(1)
     later = re.search(r"\.words \.later\s*\{[^}]*animation:([^;]*);", css).group(1)

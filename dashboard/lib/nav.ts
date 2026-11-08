@@ -165,9 +165,12 @@ export const NAV: NavSectionDef[] = [
       },
       {
         href: "/sessions",
-        label: "Sessions",
+        // v1.455.0 (owner decision 34): "Sessions" meant three things (an
+        // agent run, a coding session, a terminal); this page is the agent
+        // runs. The old word stays searchable (VOCABULARY.md rename rule).
+        label: "Agent runs",
         icon: Boxes,
-        aliases: ["runs", "past work", "history", "agent runs", "transcript", "what the agent did"],
+        aliases: ["sessions", "runs", "past work", "history", "transcript", "what the agent did"],
         // v1.353.0 (G66): Sessions and Agents read as the same thing; this
         // one is the record of what ran, Agents is where a job is given.
         blurb: "Every task an agent ran, step by step.",
@@ -478,7 +481,7 @@ export const NAV: NavSectionDef[] = [
           "accounts",
           "providers",
         ],
-        blurb: "Your accounts and model endpoints. Connect once and everything can use them.",
+        blurb: "Your accounts and model servers. Connect once and everything can use them.",
       },
       // Advanced-only by construction: NOT in Sidebar's ESSENTIAL_HREFS.
       {
@@ -548,7 +551,7 @@ export const NAV: NavSectionDef[] = [
         // Billing anxiety is the trigger: "how much am I spending" comes long
         // before anyone thinks of the word "usage".
         aliases: ["tokens", "cost", "spend", "how much", "billing", "credits", "quota"],
-        blurb: "Token spend and run volume across your providers.",
+        blurb: "What each AI model used and cost, and how much work ran.",
       },
       {
         href: "/updates",

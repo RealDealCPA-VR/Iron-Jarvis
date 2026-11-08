@@ -364,7 +364,7 @@ ASK_WORDS: dict[str, str] = {
     "account_add": "add an account",
     "memory_base_add": "add a memory base",
     # v1.448.0 (Wave A item 4, settings/records_tools).
-    "mcp_server_add": "add a tool server",
+    "mcp_server_add": "add an extension",
     "web_service_add": "save a web service",
     "approve_plan": "follow this plan",
     # v1.435.0 (chat-first plan Wave 3 group G): projects and the user's own
@@ -501,7 +501,7 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "account_add": ("added an account", "account addition"),
     "memory_base_add": ("added a memory base", "memory base addition"),
     # v1.448.0 (Wave A item 4; twin lib/runWords.ts AGENT_TOOLS).
-    "mcp_server_add": ("added a tool server", "tool server addition"),
+    "mcp_server_add": ("added an extension", "extension addition"),
     "web_service_add": ("saved a web service", "web service addition"),
     "code_load": ("opened a saved script", "script read"),
     "code_run": ("ran a saved script", "saved script run"),

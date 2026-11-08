@@ -448,8 +448,8 @@ describe("Measured endpoints — the effective window, never the floor", () => {
       effective_window: { value: 131072, source: "endpoint" },
     });
     const text = card.textContent ?? "";
-    expect(text).toContain("context window: 131,072 (from the endpoint)");
-    expect(text).toContain("not yet deep-measured; the app uses the endpoint's value");
+    expect(text).toContain("context window: 131,072 (from the model server)");
+    expect(text).toContain("not yet deep-measured; the app uses the model server's value");
     expect(text).not.toContain("8,192");
     expect(text).not.toContain("4,096");
     expect(within(card).getByTestId(`${OLLAMA_CARD}-source`).textContent).toBe("seeded");
@@ -486,8 +486,8 @@ describe("Measured endpoints — the effective window, never the floor", () => {
       effective_window: { value: 131072, source: "endpoint" },
     });
     const text = card.textContent ?? "";
-    expect(text).toContain("context window: 131,072 (from the endpoint)");
-    expect(text).toContain("not yet deep-measured; the app uses the endpoint's value");
+    expect(text).toContain("context window: 131,072 (from the model server)");
+    expect(text).toContain("not yet deep-measured; the app uses the model server's value");
     expect(text).not.toContain("8,192");
   });
 });
@@ -516,7 +516,7 @@ describe("Measured endpoints — a floored rung is a refusal, not a score", () =
     fireEvent.click(within(card).getByTestId(`${OLLAMA_CARD}-expand`));
     const detail = within(card).getByTestId(`${OLLAMA_CARD}-detail`);
     const native = detail.querySelector('[data-rung="native"]');
-    expect(native?.textContent).toContain("native tool calls: the endpoint refused them");
+    expect(native?.textContent).toContain("native tool calls: the model server refused them");
     expect(native?.textContent).toContain(
       "native trials errored: HTTP 400 — tool role unsupported",
     );
@@ -607,13 +607,13 @@ describe("Measured endpoints — unmeasured provenance never dresses up as evide
     });
     expect(within(card).getByTestId(`${OLLAMA_CARD}-source`).textContent).toBe("seeded");
     expect(within(card).getByTestId(`${OLLAMA_CARD}-verdict`).textContent).toBe(
-      "Reported by the endpoint. Not verified yet.",
+      "Reported by the model server. Not verified yet.",
     );
     expect(card.textContent).not.toContain("SELECTED");
     fireEvent.click(within(card).getByTestId(`${OLLAMA_CARD}-expand`));
     expect(within(card).queryByTestId(`${OLLAMA_CARD}-ladder`)).toBeNull();
     expect(within(card).getByTestId(`${OLLAMA_CARD}-detail`).textContent).toContain(
-      "Capabilities reported by the endpoint, not verified. Measure runs the real checks.",
+      "Capabilities reported by the model server, not verified. Measure runs the real checks.",
     );
   });
 
@@ -633,7 +633,7 @@ describe("Measured endpoints — unmeasured provenance never dresses up as evide
     expect(within(card).getByTestId(`${OLLAMA_CARD}-verdict`).textContent).toBe(
       "Measuring failed. Using the floor defaults.",
     );
-    expect(card.textContent).toContain("context window: 131,072 (from the endpoint)");
+    expect(card.textContent).toContain("context window: 131,072 (from the model server)");
     expect(card.textContent).not.toContain("8,192");
     expect(card.textContent).not.toContain("4,096");
     expect(card.textContent).not.toContain("SELECTED");

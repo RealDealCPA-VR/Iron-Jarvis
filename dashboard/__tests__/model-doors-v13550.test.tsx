@@ -416,7 +416,7 @@ describe("G72: Settings › Connections' Add an endpoint form", () => {
     ]);
 
     fireEvent.click(within(panel).getByText("qwen2.5-7b-instruct"));
-    fireEvent.click(within(card).getByRole("button", { name: /Save endpoint/ }));
+    fireEvent.click(within(card).getByRole("button", { name: /Save model server/ }));
     await waitFor(() =>
       expect(hooks.posts.find((p) => p.path === "/fleet/nodes")?.body).toEqual({
         base_url: "http://localhost:1234/v1",

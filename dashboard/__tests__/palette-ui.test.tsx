@@ -252,7 +252,7 @@ describe("CommandPalette — deep links reach mid-page capabilities", () => {
     await openViaEvent();
     await type("redact");
 
-    expect(activeOption().textContent).toContain("Documents → Redact PII");
+    expect(activeOption().textContent).toContain("Documents → Hide personal details");
     await press("Enter");
     expect(routerMock.push).toHaveBeenCalledWith("/documents?focus=redact");
   });
@@ -320,7 +320,7 @@ describe("CommandPalette — the live catalogue", () => {
     // Five actions + the three fixture threads, and a blank title degrades to a
     // readable placeholder rather than an empty row.
     expect(options()).toHaveLength(8);
-    expect(labels()[0]).toContain("New session");
+    expect(labels()[0]).toContain("New agent run");
     expect(labels()[5]).toContain("Q2 depreciation schedule");
     expect(labels()[7]).toContain("(untitled)");
   });
@@ -372,10 +372,12 @@ describe("CommandPalette — the selection can never strand", () => {
     // asked for by retyping), and activeIdx's clamp guarantees that even a
     // shrink NO keystroke caused can't leave the index past the end. What is
     // asserted is the union of both — a live, visible, single selection.
-    await type("endpoints");
+    // v1.455.0 (Wave E, moved on purpose): the deep link is "Your model
+    // servers"; the old word "endpoints" is one of its aliases.
+    await type("your model servers");
     expect(options().length).toBeLessThan(8);
     expect(options().indexOf(activeOption())).toBe(0);
-    expect(activeOption().textContent).toContain("Your endpoints");
+    expect(activeOption().textContent).toContain("Your model servers");
   });
 
   it("clearing the query swaps in the empty screen without losing the highlight", async () => {
@@ -516,7 +518,7 @@ describe("CommandPalette — the live catalogue is fetched once, per source", ()
     expect(screen.queryByText("Recent chats")).not.toBeInTheDocument();
 
     await type("redact");
-    expect(activeOption().textContent).toContain("Documents → Redact PII");
+    expect(activeOption().textContent).toContain("Documents → Hide personal details");
     await press("Enter");
     expect(routerMock.push).toHaveBeenCalledWith("/documents?focus=redact");
   });
