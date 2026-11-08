@@ -16259,6 +16259,57 @@ does not need a bump, stop and bump it.
   web-service JSON editor drops `auth_kind`; a POST-read 500 raises no
   banner; never driven in the packaged app.
 
+- **A streamed reply from the user's OWN model server may go silent 10
+  minutes; a chat's phone alert waits for the turn's end, names the chat,
+  and stays quiet while it is on screen** (v1.455.1, a USER BUG.
+  - **The cause, read off the live ledger.** The model was writing a whole
+    workbook as one `write_document` call. vLLM's GLM tool parser buffers
+    the call's arguments, so the stream sent nothing, and the adapter's
+    60 s httpx read cut the reply twice: `ReadTimeout`, `partial`.
+  - **What reached the phone.** Slack said "Fleet-custom couldn't answer"
+    while the owner was looking at that chat.
+  - **The owner's decision.** 10 minutes of silence for their own servers.
+    Jobs run 45+ min, so NEVER add a whole-job time limit.
+  - **The 10-minute read.** `reply_budget.LOCAL_STREAM_READ_S = 600` via
+    `ReplyBudget.stream_timeout`, which answers None for a cloud-routed name
+    (`facts["cloud"]`) so cloud keeps 60 s. It is passed per STREAM request
+    only (`OpenAIAdapter._stream_kw`, `AnthropicFleetAdapter.stream`), and
+    only for a budgeted adapter, so test doubles with no `timeout` keyword
+    still work. Non-stream calls keep 60 s, and Stop still closes the stream
+    at once. The page's 60 s `STREAM_STALL_MS` is kept alive by the 10 s
+    heartbeat, and the bubble says "Still working".
+  - **Names.** `failure_words.own_server_name` (with `SEED_ENDPOINT_LABELS`
+    now living there) reads a seed label or a bare slot as "your model
+    server"; a label the user gave is kept, and a `custom` slot uses its
+    `fleet-custom` twin's label.
+  - **Turn identity on provider events.**
+    - `core/turn_ref.CURRENT` is set by `durable_turns._drive`, and only
+      while the turn is running (`TurnRef.running`).
+    - It is CLEARED inside `Orchestrator.run_session` (an agent run the turn
+      starts is not the turn) and in event-bus handlers. A timer created
+      inside a turn (library reflection) must never carry it.
+    - All 12 provider publishes go through
+      `ModelRouter._publish_provider_event`, which adds `turn_id`,
+      `thread_id` and `looked_at` inside a turn (`label` stays last).
+  - **The notifier.**
+    - It HOLDS an in-turn `provider.failed` until the turn ends
+      (`durable_turns.after_turn`), then sends ONE line, with the newest
+      failure, only if the turn ended in error and no window was showing it.
+    - The line names the chat ("Your chat “…” didn't finish: …"). The
+      "press Retry" ending is used only for a fix Retry really is.
+    - A hidden window is not looking: the chat page posts the away route
+      on `visibilitychange` (`{viewer}`, and `{viewer, back: true}` when
+      shown again).
+  - **Pins:** `tests/test_local_stream_wait_v14550.py`,
+    `test_chat_drop_words_v14550.py`, `test_chat_drop_review_v14550.py`,
+    and the v1.455.1 block of `chat-waiting-where-you-are-v1387`.
+  - **OPEN:**
+    - Chat › Code and the Build pane chat follow with no viewer id, so a
+      hidden window there still counts as looking.
+    - A turn cut off by shutdown sends no phone line.
+    - Two failures heard after their turn's end can send two lines.
+    - The local-only and cooldown refusals still say "press Retry".
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

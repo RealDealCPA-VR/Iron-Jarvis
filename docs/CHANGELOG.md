@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.455.1
+
+**Long replies from your own model server, and a phone alert that names the chat.** **Your own model server may go quiet for up to 10 minutes.** While a model on your own server writes a big step, like a whole workbook, the server can send nothing until the step is finished.
+
 ## v1.455.0
 
 **One word for each thing, and "did it work?" answered to the end.** **One word for each thing.** A server for models you run is a **model server** everywhere (it was "endpoint" or "node").
@@ -77,7 +81,3 @@
 ## v1.436.0
 
 **A button to the right page, and honest answers.** **One button when a step needs a page.** Ask chat to sign in to Claude Code, Codex or Grok, add a second account, sign in to Microsoft 365, get your Microsoft 365 admin's approval, set up Google or Slack, install the browser add-on, or pick a local model, and one button appears under the reply that opens the exact place.
-
-## v1.435.0
-
-**Projects, agents, apps and more from chat.** Each of these shows a card before anything changes, and each change has an Undo.

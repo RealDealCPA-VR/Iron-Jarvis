@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.455.0 (2026-11-08).*
+holds itself to. Current as of v1.455.1 (2026-11-08).*
 
 ---
 
@@ -2041,6 +2041,25 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Long replies from your own model server, and a phone alert that names the chat (v1.455.1)
+
+- **Your own model server may go quiet for up to 10 minutes.** While a
+  model on your own server writes a big step, like a whole workbook, the
+  server can send nothing until the step is finished. Iron Jarvis used to
+  give up after 60 seconds of silence and cut the reply off. It now waits up
+  to 10 minutes on a server on your computer or your own network, and the
+  chat keeps saying it is still working. A cloud service keeps the
+  60-second limit. Stop still ends a reply at once. A job itself has no time
+  limit: a long job is many replies.
+- **A failure names the server plainly**: "your model server", or the name
+  you gave it, never "Fleet-custom" or "Custom endpoint".
+- **The phone alert for a failed chat names the chat**, and says what to do
+  next, for example: "Your chat “…” didn't finish: …".
+  - **It is sent only when the reply really failed.** A failure that Iron
+    Jarvis got past during the reply sends nothing.
+  - **It is not sent while that chat is on your screen.** If the window is
+    minimised or covered, the alert is sent.
 
 ## One word for each thing, and "did it work?" answered to the end (v1.455.0)
 
