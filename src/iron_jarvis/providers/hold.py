@@ -84,7 +84,7 @@ def refusal_words(held: str, asked: str, who: str = "") -> str:
             f"sent to {asked}. Change its model in Settings › Model team if you want that."
         )
     return (
-        f"This Build session runs on {held}, so its work is never sent to "
+        f"This coding session runs on {held}, so its work is never sent to "
         f"{asked}. Choose another model for the session if you want that."
     )
 

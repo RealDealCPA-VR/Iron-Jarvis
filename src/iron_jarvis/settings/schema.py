@@ -728,7 +728,7 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="ask-floor", section="Autonomy", aliases=("autonomy ceiling",)),
     S("autonomy_dry_run", "Only suggest, never act", "automation", "bool",
       "Say what it WOULD do without doing any of it.",
-      tier="allow", floor_when=(False,), section="Autonomy", aliases=("dry-run mode", "dry run")),
+      tier="allow", floor_when=(False,), section="Autonomy", aliases=("dry-run mode",)),
     # v1.351.0 (readiness audit G13): the promise is now enforced at
     # ``Orchestrator.create_session`` (every unattended door) and engaging it
     # stops what those doors have running — so the words name what it stops.

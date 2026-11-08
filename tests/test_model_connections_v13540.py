@@ -59,9 +59,11 @@ def _set_custom_slot(client: TestClient, url: str = DEAD) -> None:
 
 def test_the_source_is_the_acceptance_wording_and_the_dashboard_key_reads_it():
     # The readiness gap's acceptance line, word for word.
-    assert ENDPOINT_SOURCE == "your endpoint — no key needed"
+    # v1.455.0 (Wave E review): the pill's tooltip shows this sentence, so it
+    # says "model server" (VOCABULARY.md row 43), never "endpoint".
+    assert ENDPOINT_SOURCE == "your model server — no key needed"
     # dashboard/lib/modelServers.isOwnEndpoint keys on the leading words.
-    assert ENDPOINT_SOURCE.startswith("your endpoint ")
+    assert ENDPOINT_SOURCE.startswith("your model server ")
     assert "custom" in ENDPOINT_SLOTS and "ollama" in ENDPOINT_SLOTS
 
 

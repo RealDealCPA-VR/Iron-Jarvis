@@ -40,6 +40,11 @@ CODING_ACCOUNT_FILES = (
     SRC / "daemon" / "routes" / "terminals.py",
     SRC / "hosted" / "service.py",
     SRC / "hosted" / "codex_move.py",
+    # Review (v1.455.0): the chat's own account choice (ChatBody.account,
+    # refused in the chat line) and the usage press on Chat › Code's account
+    # cards and Build › Code's Usage tab say these files' sentences too.
+    SRC / "iron_proxy" / "choice.py",
+    SRC / "iron_proxy" / "usage_read.py",
 )
 IRON_PROXY = re.compile(r"\biron[- ]?proxy\b", re.I)
 
@@ -165,3 +170,95 @@ def test_the_renamed_settings_keep_their_old_names_as_search_words():
     ):
         assert old in [a.lower() for a in rows[key].aliases], key
         assert rows[key].label.lower() != old, key
+
+
+def test_a_model_called_default_is_never_called_the_plans_on_the_card():
+    """Review (v1.455.0): ``default_model = "default"`` is the custom server's
+    and a fleet node's own default (``ProviderManager`` and ``fleet/adapter``
+    send "default" when no model is named), not a plan's: only
+    "subscription" (``routes/settings.PLAN_DEFAULT_MODEL``) is the plan's own
+    default. The card names "default" without claiming a plan."""
+    from iron_jarvis.daemon.routes.settings import PLAN_DEFAULT_MODEL
+    from iron_jarvis.settings import schema, tools
+
+    row = next(s for s in schema.SETTINGS if s.key == "default_model")
+    assert tools.value_label(row, PLAN_DEFAULT_MODEL) == tools.PLAN_DEFAULT_MODEL_WORDS
+    said = tools.value_label(row, "default")
+    assert said and "plan" not in said.lower(), said
+    assert said == tools.OWN_DEFAULT_MODEL_WORDS
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "use the dry run flag in terraform",
+        "please do a dry run of the payroll import before you post it",
+        "set the job to dry run first, then the real run",
+    ],
+)
+def test_a_dry_run_of_the_users_own_work_arms_no_settings_writer(text):
+    """Review (v1.455.0): Wave E added the two-word alias "dry run" to the
+    autonomy row, and "dry run" is an everyday phrase for the user's own work
+    (a script, an import, terraform) — with a cue word beside it, it armed
+    config_set. The old label "dry-run mode" stays the search words."""
+    from iron_jarvis.settings.trigger import settings_tools_for
+
+    assert "config_set" not in settings_tools_for(text, auto_tools=True), text
+
+
+def test_the_autonomy_dry_run_row_is_still_reached_by_its_own_words():
+    from iron_jarvis.settings.trigger import settings_ask, settings_tools_for
+
+    for text in ("turn on dry-run mode for autonomy", "turn on only suggest, never act"):
+        assert "config_set" in settings_tools_for(text, auto_tools=True), text
+        assert "autonomy_dry_run" in settings_ask(text).keys, text
+
+
+def test_a_pinned_accounts_refusals_name_neither_the_program_nor_a_build_session(monkeypatch):
+    """Review (v1.455.0): a coding session's held model and its pinned account
+    refuse in these words on the Chat › Code failure line — and since v1.424.0
+    (D6) a plain CHAT can be pinned to an account too, so "This Build session
+    runs on …" was said in a chat. Neither names Iron-Proxy (canon row 29) nor
+    a "Build session" (row 25)."""
+    from iron_jarvis.iron_proxy import accounts
+    from iron_jarvis.iron_proxy import pin as _pin
+    from iron_jarvis.providers import hold as HOLD
+
+    build_session = re.compile(r"\bbuild sessions?\b", re.I)
+    pin = _pin.AccountPin(ij_provider="claude-cli", profile_id="p1", title="Work")
+    spec = accounts.PROVIDERS["claude-cli"]
+    refused = str(accounts._other_provider_refused(spec, "codex-cli", pin))
+    for words in (accounts.PINNED_TOO_OLD, refused):
+        assert not IRON_PROXY.search(words) and not build_session.search(words), words
+    assert '"Work"' in refused and "nothing was sent" in refused
+    # The held model's own refusal, outside a team member's run.
+    said = str(HOLD.HeldProviderRefused("claude-cli", "google"))
+    assert not build_session.search(said) and said.startswith("This coding session runs on"), said
+
+
+def _subject_lines(path: Path, name: str) -> dict[str, str]:
+    """The ``<door>: (n) => (n ? `…${n}` : "…")`` rows of the run-subject
+    table *name* in a JS/TS file, as {door: (with-name, without-name)}."""
+    text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    start = text.index(f"{name}")
+    body = text[start:text.index("\n};", start)]
+    out: dict[str, str] = {}
+    for m in re.finditer(r'^\s*(\w+): \(n\) => \(n \? `([^`]*)\$\{n\}` : "([^"]*)"\),$', body, re.M):
+        out[m.group(1)] = (m.group(2).strip(), m.group(3))
+    return out
+
+
+def test_the_three_run_subject_twins_say_a_rule_the_same_way():
+    """Review (v1.455.0): item 4 changed the bell, the tray and the phone
+    together, but nothing held them equal: the bell (NotificationBell
+    UNATTENDED_SUBJECT) and the tray (desktop/main.js RUN_OUTCOME_SUBJECT)
+    could go back to "Your reflex" with every test green."""
+    from iron_jarvis.comm import notifier
+
+    bell = _subject_lines(ROOT / "dashboard" / "components" / "NotificationBell.tsx", "UNATTENDED_SUBJECT")
+    tray = _subject_lines(ROOT / "desktop" / "main.js", "RUN_OUTCOME_SUBJECT")
+    for door in ("schedule", "workflow", "reflex", "comm"):
+        phone = notifier._UNATTENDED_SUBJECT[door]
+        want = (phone("X").removesuffix("X").strip(), phone(""))
+        assert bell[door] == want, (door, bell.get(door), want)
+        assert tray[door] == want, (door, tray.get(door), want)

@@ -203,7 +203,7 @@ async def test_a_member_helper_in_a_coding_session_is_named_too_and_the_session_
     with H.pinned(parent):
         with pytest.raises(HOLD.HeldProviderRefused) as caught:
             await _ask_google(w.p)
-    assert str(caught.value) == ("This Build session runs on claude-cli, so its work is never sent to "
+    assert str(caught.value) == ("This coding session runs on claude-cli, so its work is never sent to "
                                  "google. Choose another model for the session if you want that.")
 
 

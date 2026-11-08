@@ -13640,7 +13640,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         {failedTurn && !busy && turnFix?.kind === "sign_in" && signInHere &&
                           cliSignIns[turnFix.cli.cli]?.paneId !== undefined && (
                           <div data-testid="chat-turn-sign-in-hint" className="basis-full text-[12px] leading-5 text-zinc-400">
-                            A window opened with {turnFix.cli.name} running.{" "}
+                            A terminal opened in Build with {turnFix.cli.name} running.{" "}
                             {codeParts(turnFix.cli.paneHint).map((part, k) =>
                               part.code ? (
                                 <code key={k} className="font-mono text-zinc-300">

@@ -208,8 +208,10 @@ afterEach(() => cleanup());
 
 describe("G47: the model-server card matches what answers", () => {
   it("the daemon's source is the acceptance wording and the page's key reads it", () => {
-    expect(ENDPOINT_SOURCE).toBe("your endpoint — no key needed");
+    expect(ENDPOINT_SOURCE).toBe("your model server — no key needed");
     expect(isOwnEndpoint({ connected: true, source: ENDPOINT_SOURCE })).toBe(true);
+    // v1.455.0 review: an older daemon's words still read as the same thing.
+    expect(isOwnEndpoint({ connected: true, source: "your endpoint — no key needed" })).toBe(true);
     // A stored key, an inherited login and a row that is not connected never match.
     expect(isOwnEndpoint({ connected: true, source: "vault" })).toBe(false);
     expect(isOwnEndpoint({ connected: true, source: "inherited from claude-cli" })).toBe(false);

@@ -649,7 +649,7 @@ export default function ReflexPage() {
       <Reveal>
         <PageHeader
           title="Rules"
-          subtitle="When a webhook fires or a message arrives, run a workflow, a remote agent, or one of your agents, automatically."
+          subtitle="When a webhook fires or a message arrives, run a workflow, a remote agent, or Jarvis on this PC, automatically."
           actions={
             <button
               type="button"
@@ -1072,7 +1072,7 @@ export default function ReflexPage() {
                 an agent on another machine
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <TerminalSquare size={13} className="text-emerald-300" /> agent — runs one of your agents
+                <TerminalSquare size={13} className="text-emerald-300" /> agent — Jarvis takes the task
                 on this PC
               </span>
             </div>

@@ -25,7 +25,8 @@ export function connectionTitle(conn: { provider: string; display_name: string }
  * "inherited from …", so a stored key (`source: "vault"`) never matches.
  */
 export function isOwnEndpoint(conn: { connected?: boolean; source?: string | null }): boolean {
-  return Boolean(conn.connected) && /^your endpoint\b/.test(conn.source ?? "");
+  // v1.455.0: "your model server …"; an older daemon said "your endpoint …".
+  return Boolean(conn.connected) && /^your (?:model server|endpoint)\b/.test(conn.source ?? "");
 }
 
 /**

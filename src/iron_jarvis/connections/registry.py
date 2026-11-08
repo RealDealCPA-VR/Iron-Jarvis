@@ -48,8 +48,9 @@ OAuthAppResolver = Callable[[str], dict]
 ENDPOINT_SLOTS = ("custom", "ollama")
 
 #: The ``source`` such a row reports (the dashboard keys its words on the
-#: leading "your endpoint").
-ENDPOINT_SOURCE = "your endpoint — no key needed"
+#: leading "your model server"; v1.455.0: it is the status pill's tooltip, so
+#: it says "model server", never "endpoint" — VOCABULARY.md row 43).
+ENDPOINT_SOURCE = "your model server — no key needed"
 
 
 def _account_label(token: dict) -> str:

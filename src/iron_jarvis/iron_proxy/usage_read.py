@@ -90,9 +90,9 @@ SUPPORTED = ("claude", "codex")
 NOT_SUPPORTED = "Checking usage now works for Claude Code and Codex accounts only."
 OFF_WORDS = "This account is turned off; turn it on first."
 SIGN_IN_WORDS = "This account needs to sign in again before its usage can be read."
-PROXY_OFF = "Iron-Proxy is off; turn it on in Connections first."
-PROXY_UPDATE = "Iron-Proxy needs an update to keep usage numbers."
-PROXY_NOT_ANSWERING = "Iron-Proxy is not answering, so the usage could not be kept."
+PROXY_OFF = "Several accounts is off; turn it on in Settings › Connections first."
+PROXY_UPDATE = "The account manager needs an update to keep usage numbers."
+PROXY_NOT_ANSWERING = "The account manager is not answering, so the usage could not be kept."
 #: v1.441.0 (review X1, MEASURED on Claude Code 2.1.316 with a scratch
 #: CLAUDE_CONFIG_DIR that holds no sign-in, no model call): ``get_usage``
 #: answers ``{subscription_type: null, rate_limits_available: false,
@@ -101,8 +101,8 @@ PROXY_NOT_ANSWERING = "Iron-Proxy is not answering, so the usage could not be ke
 NO_PLAN_WORDS = (
     "This login has no Claude plan usage to report; sign in with a Claude plan to see it."
 )
-UNKNOWN_ACCOUNT = "Iron-Proxy does not list that account."
-NO_HOME_WORDS = "Iron-Proxy does not say where this account's sign-in is kept, so its usage cannot be read."
+UNKNOWN_ACCOUNT = "That account is not in your accounts."
+NO_HOME_WORDS = "The account manager does not say where this account's sign-in is kept, so its usage cannot be read."
 
 _LABEL = {"claude": "Claude Code", "codex": "Codex"}
 _BINARY = {"claude": "claude", "codex": "codex"}
@@ -603,7 +603,7 @@ def _tell(svc: Any, account_id: str, vendor: str, got: Any) -> None:
         else:
             client.signal(account_id, status=200, rate_limits=got)
     except IronProxyError as exc:
-        raise _Said(f"Iron-Proxy did not keep it: {_mask(exc.sentence)}") from None
+        raise _Said(f"The account manager did not keep it: {_mask(exc.sentence)}") from None
 
 
 def read_usage(svc: Any, account_id: str, *, force: bool = False) -> dict[str, Any]:

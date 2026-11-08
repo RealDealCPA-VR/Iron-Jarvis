@@ -871,7 +871,7 @@ export function ConnectDoors({
                             data-testid={`pane-hint-${c.cli}`}
                             className="mt-1.5 block text-zinc-400"
                           >
-                            A window opened with {c.name} running. {withCode(c.paneHint)} This
+                            A terminal opened in Build with {c.name} running. {withCode(c.paneHint)} This
                             turns green by itself a few seconds after {c.name} says you&apos;re signed
                             in, or press “{CHECK_NOW_LABEL}”.{" "}
                             <Link

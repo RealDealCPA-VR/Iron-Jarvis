@@ -300,7 +300,7 @@ describe("G29: the failure line has a headline, folded details and the fix press
       }),
     );
     const hint = await screen.findByTestId("chat-turn-sign-in-hint");
-    expect(hint.textContent).toContain("A window opened with Claude Code running.");
+    expect(hint.textContent).toContain("A terminal opened in Build with Claude Code running.");
     expect(hint.textContent).toContain("/login");
     expect(within(hint).getByRole("link", { name: "Open the Build terminal" })).toHaveAttribute(
       "href",

@@ -182,7 +182,10 @@ describe("G33 — a signed-out Claude Code is one press from signing in", () => 
       account: "default",
     });
     const hint = await screen.findByTestId("cli-pane-hint-claude-cli");
-    expect(hint.textContent).toMatch(/A window opened with Claude Code running\. Type \/login there/);
+    expect(hint.textContent).toMatch(/A terminal opened in Build with Claude Code running\. Type \/login there/);
+    // Review (v1.455.0): nothing opens a separate window; the terminal is in
+    // Build, which the link right after opens.
+    expect(hint.textContent).not.toMatch(/window/i);
     expect(hint.textContent).toMatch(/turns green by itself/);
     expect(within(hint).getByRole("link", { name: "Open the Build terminal" }).getAttribute("href")).toBe(
       "/terminals?focus=pane-7",
