@@ -208,6 +208,12 @@ export interface HarnessRowHandlers {
   onOpenRewind: () => void;
   /** Open a document the receipt names. */
   onOpenDocument: (path: string) => void;
+  /** v1.449.0 (G-N item 8): a Local only refusal's "Choose a local model" —
+   *  open the session's model menu. */
+  onOpenModelMenu?: () => void;
+  /** v1.449.0: a Local only refusal's "Send to <model> once" — the reply at
+   *  this index asked again, with `provider` allowed for that one message. */
+  onSendOnce?: (index: number, provider: string) => void;
 }
 
 type Health = ComponentProps<typeof HarnessFailureLine>["health"];
@@ -240,6 +246,8 @@ export interface HarnessMessageRowProps {
   health: Health;
   /** The session's provider (a reply that kept none is read on it). */
   provider: string;
+  /** v1.449.0: the apps holding the session Local only (no "Send once"). */
+  localOnlyHeld?: readonly string[];
   /** v1.418.0 (C2.5): the next-step box's recap, under the NEWEST settled
    *  reply only ("" elsewhere) — folded into this reply's line (the box keeps
    *  its buttons visible). */
@@ -267,6 +275,7 @@ function HarnessMessageRowImpl({
   models,
   health,
   provider,
+  localOnlyHeld,
   nextRecap = "",
   undoFor,
   onUndo,
@@ -454,6 +463,10 @@ function HarnessMessageRowImpl({
           canRewind={canRewind}
           onRewind={h.onOpenRewind}
           carriedOn={carriedOn}
+          models={models}
+          localOnlyHeld={localOnlyHeld}
+          onChooseLocal={h.onOpenModelMenu}
+          onSendOnce={h.onSendOnce ? (p) => h.onSendOnce?.(index, p) : undefined}
         />
         <ReplyLine
           parts={lineParts}

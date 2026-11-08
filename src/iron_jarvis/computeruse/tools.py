@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ..core import risk_door as _risk_door
 from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 from .approvals import ApprovalQueue
 from .base import Action, Browser, PolicyDenied, Selector
@@ -263,18 +264,24 @@ class WebActionTool(_GatedTool):
                 req = self.cu.approvals.create_request(
                     run_id, action, decision.reason, screenshot_b64=shot or ""
                 )
-                resolver = self.cu.approval_resolver
-                granted = bool(resolver(req)) if resolver is not None else False
+                # v1.449.0 (G54): the chat stream lane's or the agent run's
+                # own resolver first (core/risk_door), else the injected one;
+                # none = a refusal in plain words with no queue id (the
+                # "Pending approval id" words were a dead end from chat).
+                resolver = _risk_door.resolver_for(ctx, self.cu.approval_resolver)
+                granted, tail = await _risk_door.consult(
+                    resolver, req, ctx, name=self.name, args=dict(args or {})
+                )
                 if not granted:
                     if resolver is not None:
                         self.cu.approvals.deny(req.id)
                     return ToolResult(
                         ok=False,
-                        error=(
-                            f"approval required: {decision.reason}. "
-                            f"Pending approval id={req.id}."
-                        ),
-                        data={"approval_id": req.id, "status": "pending"},
+                        error=_risk_door.refusal_words(decision.reason, resolver=resolver, tail=tail),
+                        data={
+                            "approval_id": req.id,
+                            "status": "denied" if resolver is not None else "pending",
+                        },
                     )
                 self.cu.approvals.approve(req.id)
 

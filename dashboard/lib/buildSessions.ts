@@ -148,6 +148,10 @@ export interface BuildSetup {
   reasoning: string;
   approvalMode: string;
   localOnly: boolean;
+  /** v1.449.0: the apps holding the session Local only (the daemon's
+   *  `local_only_holds`, egress.HOLDS_KEY): a held session's refusal offers
+   *  no "Send once" (the chat page's rule). Empty when nothing holds it. */
+  localOnlyHolds: string[];
   grantedTools: string[];
   /** Phase 5: the account the session runs on ("" = none), and its name. */
   account: string;
@@ -519,6 +523,9 @@ function decodeSetup(raw: unknown): BuildSetup {
     reasoning: str(r.reasoning, 20),
     approvalMode: str(r.approval_mode, 40),
     localOnly: r.local_only === true,
+    localOnlyHolds: Array.isArray(r.local_only_holds)
+      ? r.local_only_holds.filter((t): t is string => typeof t === "string" && !!t.trim()).slice(0, 20)
+      : [],
     grantedTools: Array.isArray(r.granted_tools)
       ? r.granted_tools.filter((t): t is string => typeof t === "string" && !!t)
       : [],

@@ -1247,6 +1247,10 @@ def session_view(row: Any, *, states: "dict[str, dict[str, bool]] | None" = None
         "setup": {
             k: setup[k] for k in (
                 "provider", "model", "reasoning", "approval_mode", "local_only", "granted_tools",
+                # v1.449.0: the apps holding the session Local only
+                # (egress.HOLDS_KEY) — a held session's refusal offers no
+                # "Send once" (the chat page's rule).
+                "local_only_holds",
                 "account", "account_name",
                 # v1.392.0 (decision 8): the session's optional cap.
                 "cap",

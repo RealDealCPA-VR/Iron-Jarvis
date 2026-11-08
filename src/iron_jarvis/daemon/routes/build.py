@@ -361,6 +361,12 @@ class BuildTurnBody(BaseModel):
     #: (an older dashboard, an API caller): exactly as before — the settings
     #: tool says the setting is per device.
     device_id: str | None = None
+    #: v1.449.0 (Wave B, G-N item 8): "Send to <model> once" on a Local only
+    #: coding session's refusal — the ONE cloud provider the user said yes to
+    #: for THIS message (``ChatBody.allow_cloud_once``, the chat page's field:
+    #: honoured only when it names the turn's chosen provider, never
+    #: remembered). "" = nothing allowed, exactly as before.
+    allow_cloud_once: str = Field(default="", max_length=80)
 
 
 #: v1.422.0 (B1): the 409 when "Continue from where it stopped" finds nothing
@@ -1322,6 +1328,16 @@ class _ReplyWatch:
             kind = str(err.get("fix_kind") or "")
             if kind == "refusal":
                 line["errorKind"] = "refusal"
+            elif str(err.get("code") or "") == "local_only":
+                # v1.449.0 (Wave B, G-N item 8): a LOCAL ONLY refusal (the
+                # lane's `LocalOnlyRefused.payload()`: code + provider +
+                # model) — the session offers the chat page's two ways out,
+                # "Choose a local model" and "Send to <model> once" (unless an
+                # app holds the session local), never a bare Retry.
+                line["errorKind"] = "local_only"
+                provider = str(err.get("provider") or "").strip()[:80]
+                if provider:
+                    line["errorProvider"] = provider
             elif kind in ("sign_in", "key"):
                 # Harness gaps (fix 2): the ONE press that fixes it (the chat's
                 # `fix_action`) is kept too — a signed-out Claude Code / Codex
@@ -2870,7 +2886,8 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            model_note: str = "",
                            low_trust: str = "",
                            on_night_note: Any = None,
-                           device_id: str = "") -> Any:
+                           device_id: str = "",
+                           allow_cloud_once: str = "") -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
     (follow it with ``lg.follow()``; nobody has to). The question is written
     when the turn starts, the reply when it ends (:func:`recorded_turn`).
@@ -3340,6 +3357,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # into the tool context, so a per-device setting changed here
             # lands on that screen. None when there is none (as before).
             device_id=str(device_id or "") or None,
+            # v1.449.0: "Send to <model> once" on a Local only session's refusal
+            # (the chat page's field; the lane honours it for this turn only).
+            allow_cloud_once=str(allow_cloud_once or "").strip()[:80],
         )
         # v1.391.0: every coding-session turn keeps its own conversation (the
         # lane saves it; `recorded_turn` drops it when the turn ends), so a
@@ -5220,7 +5240,8 @@ def register(app: FastAPI, d: Any) -> None:
                                         files=list(body.files or []),
                                         folder_skill=body.folder_skill,
                                         command=body.command,
-                                        device_id=body.device_id or "")
+                                        device_id=body.device_id or "",
+                                        allow_cloud_once=body.allow_cloud_once or "")
         except SessionBusy:
             return JSONResponse(
                 status_code=409,

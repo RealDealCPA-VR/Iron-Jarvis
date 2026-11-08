@@ -567,6 +567,20 @@ def _send_chunked_sync(ch: Any, body: str, *, chat_id: Any) -> bool:
         return False
 
 
+def _safety_card(payload: Any) -> bool:
+    """An ``approval.requested`` that is a once-only SAFETY card
+    (``core/approvals.SAFETY_REASONS``) — never registered for a phone
+    answer, never sent as an alert (v1.449.0)."""
+    from ..core.approvals import SAFETY_REASONS
+
+    try:
+        return bool(payload.get("once_only")) and str(
+            payload.get("once_reason") or ""
+        ).strip() in SAFETY_REASONS
+    except Exception:  # noqa: BLE001 — an odd payload is an ordinary ask
+        return False
+
+
 def handle_approval_requested(
     event: Any,
     *,
@@ -598,6 +612,12 @@ def handle_approval_requested(
         payload = _event_field(event, "payload", {}) or {}
         approval_id = str(payload.get("approval_id") or "").strip()
         if not approval_id:
+            return []
+        if _safety_card(payload):
+            # v1.449.0 (G54): a SAFETY card — a page click that pays or
+            # sends, a commit / push, a guarded edit — is answered where it
+            # is read, never from a phone (the coding session's own rule,
+            # ``harness/stall.phone_may_ask``, for every agent run too).
             return []
         tool = str(payload.get("tool") or "").strip() or "a tool"
         question = approval_question(tool)

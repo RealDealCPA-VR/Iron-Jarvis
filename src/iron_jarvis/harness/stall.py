@@ -123,7 +123,9 @@ STOP_GRACE_S = 3.0
 #: from chat ("undo", which cannot itself be undone) —
 #: settings/records_history LOCAL_ONLY_REASON / UNDO_REASON.
 #: Never sent to the phone.
-SAFETY_REASONS = frozenset({"command", "git", "page", "guarded", "privacy", "undo"})
+#: v1.449.0: ONE definition, in ``core/approvals`` (the phone's handlers
+#: read it too); this name stays for its readers.
+from ..core.approvals import SAFETY_REASONS  # noqa: E402
 
 
 def now() -> float:

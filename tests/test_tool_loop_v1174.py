@@ -856,7 +856,9 @@ def test_the_runtime_still_reads_error_on_failure():
 
     from iron_jarvis.agents import runtime as _rt
 
-    body = inspect.getsource(_rt.AgentRuntime.perceive_act)
+    # v1.449.0 (G54): `perceive_act` is a thin wrapper that arms the website
+    # risk door's resolver for the run; the loop's body is `_perceive_act_body`.
+    body = inspect.getsource(_rt.AgentRuntime._perceive_act_body)
     assert "result.error" in body
     assert "call_signature" in body
 

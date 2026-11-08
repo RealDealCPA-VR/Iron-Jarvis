@@ -98,6 +98,7 @@ from typing import Any
 from ..computeruse.base import Action, Selector
 from ..computeruse.policy import Decision
 from ..computeruse.safety import wrap_untrusted
+from ..core import risk_door as _risk_door
 from ..tools.base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
 from . import protocol as P
 from .errors import BrowserError, BrowserErrorCode, browser_error
@@ -1324,29 +1325,28 @@ class _ActingTool(_BrowserTool):
             await asyncio.to_thread(queue.consume, prior.id)
             return None
         req = await asyncio.to_thread(queue.create_request, run_id, action, decision.reason)
-        resolver = getattr(self.browser, "approval_resolver", None)
-        granted = (
-            await _consult_resolver(
-                resolver, req, ctx, name=self.name, args=self.redact_args(dict(args or {}))
-            )
-            if resolver is not None
-            else False
+        # v1.449.0 (G54): WHO CAN ASK about this call — the chat stream
+        # lane's resolver for its turn, the agent runtime's for its run, else
+        # the runtime-wide one (the sidebar's, v1.276.0). None = nothing on
+        # this surface can show a card (the POST lane, a headless run): the
+        # refusal says so in plain words, with NO queue id anywhere a user
+        # reads — "approve it in Iron Jarvis, then make the identical call
+        # again" was a dead end from the chat page and from every agent run.
+        resolver = _risk_door.resolver_for(ctx, getattr(self.browser, "approval_resolver", None))
+        granted, tail = await _risk_door.consult(
+            resolver, req, ctx, name=self.name, args=self.redact_args(dict(args or {}))
         )
         if not granted:
             if resolver is not None:
                 await asyncio.to_thread(queue.deny, req.id)
-            text = (
-                f"approval required: {decision.reason}. Nothing has been done to "
-                f"the page. Ask the user to approve it in Iron Jarvis, then make "
-                f"the identical call again. Pending approval id={req.id}."
-            )
+            text = _risk_door.refusal_words(decision.reason, resolver=resolver, tail=tail)
             return ToolResult(
                 ok=False,
                 error=text,
                 output=text,
                 data={
                     "approval_id": req.id,
-                    "status": "pending",
+                    "status": "denied" if resolver is not None else "pending",
                     "risk": risk_row(self.risk_name(args), decision, tool=self.name),
                     "tab_id": plan.tab_id,
                     "url": plan.page_url,
@@ -1376,24 +1376,12 @@ async def _consult_resolver(resolver: Any, req: Any, ctx: Any, *, name: str, arg
     answer only for its own turn), the words for the card, and time — it is
     ``async``. A one-argument resolver is still called as before; a failure
     inside the resolver is a refusal, never an exception out of the door.
-    """
-    import inspect
 
-    try:
-        params = inspect.signature(resolver).parameters
-        wide = len(params) >= 2 or any(
-            p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params.values()
-        )
-    except (TypeError, ValueError):
-        wide = False
-    try:
-        outcome = resolver(req, ctx, name=name, args=args) if wide else resolver(req)
-        if inspect.isawaitable(outcome):
-            outcome = await outcome
-        return bool(outcome)
-    except Exception:  # noqa: BLE001 — a resolver that fails has not granted anything
-        logger.debug("approval resolver failed; treating as refused", exc_info=True)
-        return False
+    v1.449.0: the rule lives in ``core/risk_door.consult`` (the door reads the
+    refusal's words from it too); this name stays for its callers.
+    """
+    granted, _tail = await _risk_door.consult(resolver, req, ctx, name=name, args=args)
+    return granted
 
 
 class BrowserActivateTabTool(_ActingTool):
