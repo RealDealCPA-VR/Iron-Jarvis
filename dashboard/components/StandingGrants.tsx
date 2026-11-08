@@ -23,6 +23,7 @@ import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
 import type { StandingGrant } from "@/lib/types";
 import { Card, ConfirmButton, ErrorNote } from "@/components/ui";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 
 /** "expires in 29 d" / "expires today" / "expired" / "" (no expiry). */
 export function expiresWords(iso: string | null | undefined, now = Date.now()): string {
@@ -142,7 +143,12 @@ export function StandingGrants() {
           arguments, one scope, 30 days. Different arguments still ask.
         </p>
         {grants.error ? (
-          <ErrorNote>{grants.error.message}</ErrorNote>
+          <LoadFailedLine
+            thing="Standing grants"
+            error={grants.error}
+            onRetry={reload}
+            testId="standing-grants-failed"
+          />
         ) : rows.length === 0 ? (
           // v1.314.0: plain words — where a grant comes from and why it is
           // listed (no "daemon", no "key a grant"). The button only appears

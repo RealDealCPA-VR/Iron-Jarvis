@@ -45,6 +45,7 @@ import type { ModelOption } from "@/lib/types";
 import { Button, Card, ConfirmButton, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
 import { TeamRoleChecks } from "@/components/agents/TeamRoleChecks";
 import { FixRequestButton } from "@/components/team/FixRequestButton";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 
 interface AccountRow {
   id: string;
@@ -513,7 +514,14 @@ export function ModelTeam() {
         </p>
         <FixRequestButton />
         {team.loading && !team.data ? <LoaderInline /> : null}
-        {team.error ? <ErrorNote>{team.error.message}</ErrorNote> : null}
+        {team.error ? (
+          <LoadFailedLine
+            thing="The model team"
+            error={team.error}
+            onRetry={reloadTeam}
+            testId="model-team-failed"
+          />
+        ) : null}
         {team.data && view.members.length === 0 ? (
           <p data-testid="team-empty" className="text-sm text-zinc-400">
             No one is on the team yet. Make a starter team from the models you have connected, or give any
