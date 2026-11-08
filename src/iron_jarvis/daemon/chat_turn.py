@@ -10255,6 +10255,10 @@ async def run_chat_turn(
             # v1.276.0 — lock-step: the sidebar's turn id, for the risk door's
             # resolver; "" for the chat page (the ask stays a queue row).
             turn_id=str(getattr(body, "turn_id", "") or ""),
+            # v1.449.0 (G54): this lane draws no card, so the website risk
+            # door refuses in plain words here (MIRROR NOTE: the stream lane
+            # registers a resolver for its turn instead, routes/chat.py).
+            cannot_ask=True,
             # Redesign S3 — lock-step: per-device settings land on this device.
             device_id=str(getattr(body, "device_id", "") or ""),
             # v1.346.0 — lock-step: the SAVED chat this turn belongs to, so a

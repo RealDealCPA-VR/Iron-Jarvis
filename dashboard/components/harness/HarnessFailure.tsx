@@ -40,6 +40,8 @@ import {
   failureAction,
 } from "@/lib/failureActions";
 import { CONTINUE_TITLE, CONTINUE_WORDS, RETRY_FROM_START_TITLE, RETRY_WORDS } from "@/lib/buildRetry";
+import { CHOOSE_LOCAL_WORDS, cloudModelName, sendOnceWords } from "@/lib/localOnly";
+import type { ModelOption } from "@/lib/types";
 import { CONTINUED_BELOW, CUT_CARRIED_ON } from "@/lib/buildResume";
 import type { BuildMessage } from "@/lib/buildSessions";
 import type { Health } from "@/lib/types";
@@ -101,6 +103,10 @@ export function HarnessFailureLine({
   canContinue = false,
   onContinue,
   continuedBelow = false,
+  models = [],
+  localOnlyHeld = [],
+  onChooseLocal,
+  onSendOnce,
 }: {
   /** The failed (or cut-off) reply. */
   m: BuildMessage;
@@ -126,6 +132,16 @@ export function HarnessFailureLine({
   onContinue?: () => void;
   /** v1.422.0 (B1): the user already continued this failed reply below. */
   continuedBelow?: boolean;
+  /** v1.449.0 (G-N item 8): the model catalog (the refused model's name). */
+  models?: readonly ModelOption[];
+  /** v1.449.0: the apps holding the session Local only — with any, no
+   *  "Send once" (the daemon would refuse it; the chat page's rule). */
+  localOnlyHeld?: readonly string[];
+  /** v1.449.0: "Choose a local model" opens the session's model menu. */
+  onChooseLocal?: () => void;
+  /** v1.449.0: "Send to <model> once" — this reply's question again, with
+   *  the refused provider allowed for that one message. */
+  onSendOnce?: (provider: string) => void;
 }) {
   const failed = typeof m.error === "string" && m.error.trim() !== "";
   if (!failed && m.interrupted !== true) return null;
@@ -155,7 +171,7 @@ export function HarnessFailureLine({
     ? failureAction({ fixKind: m.errorKind, fixProvider: m.errorProvider }, health, turnProvider)
     : null;
   const live = newest && !busy;
-  const press = live && action && action.kind !== "refusal" ? action : null;
+  const press = live && action && action.kind !== "refusal" && action.kind !== "local_only" ? action : null;
   const headline = typeof m.errorTitle === "string" ? m.errorTitle.trim() : "";
   const words = failed ? (press && headline ? headline : (m.error as string)) : "This answer is incomplete.";
   return (
@@ -180,6 +196,31 @@ export function HarnessFailureLine({
         <button type="button" data-testid="harness-refusal-rewind" onClick={onRewind} className={PRESS}>
           <History size={12} aria-hidden />
           {REWIND_PICK_WORDS}
+        </button>
+      ) : null}
+      {/* v1.449.0 (Wave B, G-N item 8): A LOCAL ONLY REFUSAL on the newest
+          reply — the chat page's two ways out: pick a local model (opens the
+          session's model menu), or send THIS one message to the model it
+          named (the press is the OK; the session stays Local only). Never
+          offered while an app holds the session local. No Retry: it would be
+          refused again. */}
+      {live && action?.kind === "local_only" && onChooseLocal ? (
+        <button type="button" data-testid="harness-local-choose" onClick={onChooseLocal} className={PRESS}>
+          {CHOOSE_LOCAL_WORDS}
+        </button>
+      ) : null}
+      {/* (review) …and only with a provider to send to: a line the daemon
+          stamped with no `errorProvider` has nothing for the press to allow,
+          and `sendOnceReply` would drop an empty one on the floor. */}
+      {live && action?.kind === "local_only" && action.provider && onSendOnce && localOnlyHeld.length === 0 ? (
+        <button
+          type="button"
+          data-testid="harness-local-send-once"
+          onClick={() => onSendOnce(action.provider)}
+          title="Send only this message there. The session stays local only."
+          className={PRESS}
+        >
+          {sendOnceWords(cloudModelName(action.provider, "", models))}
         </button>
       ) : null}
       {/* THE PRESS THAT FIXES IT, before Retry: the one Sign in (a Build

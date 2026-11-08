@@ -82,6 +82,19 @@ if TYPE_CHECKING:  # pragma: no cover
 #: card. A lane with no store or no scope reads it as "once".
 DECISIONS = ("once", "conversation", "deny", "tab", "always")
 
+#: A once-only card's reasons that are SAFETY cards (``lib/onceReason``,
+#: the twin): a project's or a plugin's command line ("command"), a commit /
+#: push on a session's branch ("git"), a page click that pays, sends or
+#: deletes ("page" — the website risk door, ``core/risk_door``), an edit of
+#: Git's or Iron Jarvis's own files ("guarded"), turning a chat's Local only
+#: OFF ("privacy") and an undo from chat ("undo"). Enter never allows one,
+#: and NONE of them goes to the phone: the whole card must be read where
+#: it is answered (``comm/prompts`` and ``comm/notifier`` skip an
+#: ``approval.requested`` carrying one; ``harness/stall.phone_may_ask`` is
+#: the coding session's own rule). Lived in ``harness/stall`` until
+#: v1.449.0, which still re-exports it.
+SAFETY_REASONS = frozenset({"command", "git", "page", "guarded", "privacy", "undo"})
+
 #: How long a turn will hold for an answer before denying honestly. Long
 #: enough to read what the tool wants and decide; short enough that a stream
 #: whose user walked away ends instead of pinning a connection forever.

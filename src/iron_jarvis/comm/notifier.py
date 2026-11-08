@@ -1014,6 +1014,15 @@ class Notifier:
             ):
                 targets = self.without_desktop(targets)
         elif etype == EventType.APPROVAL_REQUESTED:
+            # v1.449.0 (G54): a once-only SAFETY card (a page click that pays
+            # or sends, a commit / push, a guarded edit) goes to NO
+            # destination: it is answered where it is read, and the bell
+            # already lists it (``core/approvals.SAFETY_REASONS``).
+            from .prompts import _safety_card
+
+            _ask_payload = _event_field(event, "payload", {}) or {}
+            if isinstance(_ask_payload, dict) and _safety_card(_ask_payload):
+                return {}
             # v1.360.0 integrate (lane 10A note g): ONE notice per ask on this
             # PC too. Every agent ask is listed by GET /chat/approvals/pending,
             # which the bell counts and pings ("N pending · an agent asking

@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from ..core import procs as _procs
+from ..core import risk_door as _risk_door
 from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
@@ -3804,6 +3805,97 @@ class AgentRuntime:
             self._waiting_depth[run.id] = depth
 
     async def perceive_act(
+        self,
+        run: AgentRun,
+        session: Session,
+        agent_def: AgentDefinition,
+        *,
+        system_prompt: str,
+        messages: list[LLMMessage],
+        tool_specs: list,
+        session_allow: set[str],
+        sink,
+        max_steps: int,
+        breaker_state: "dict[str, Any] | None" = None,
+        transcript: bool = False,
+    ) -> tuple[bool, str]:
+        """The perceive→act body (``_perceive_act_body``, the seam every
+        caller drives — the flat loop and the decomposition mini-loops), with
+        THE WEBSITE RISK DOOR'S WAY TO THE USER armed for the run (v1.449.0,
+        G54). A browser or computer-use action that reads as a payment, a
+        password, a deletion or a flagged page stops INSIDE its tool
+        (``browser/tools._ActingTool._require_approval``); until now an agent
+        run's door found no resolver and refused with "approve it in Iron
+        Jarvis, then make the identical call again" — a dead end, nothing
+        there could approve it. The run now registers a resolver for its
+        session (``core/risk_door.register_session``) that asks through the
+        runtime's OWN pause (``_pause_for_approval``: the same card, the same
+        registry, the same answer route as every ask of the run): ONE card
+        with the door's words, Allow once / Deny only (``once_only``, reason
+        "page", a SAFETY reason — never the phone), an attended origin waits
+        with no clock, an unattended one is refused in words (``attended_only``).
+        Approve → the call goes on (the door consumes one); Deny → the tool
+        answers a refusal and the run goes on. A nested call (a decomposed
+        run's mini-loop) puts the outer resolver back when it ends.
+        """
+        resolver = self._risk_door_resolver(run, session, agent_def, session_allow)
+        previous = (
+            _risk_door.register_session(str(session.id), resolver) if resolver is not None else None
+        )
+        try:
+            return await self._perceive_act_body(
+                run, session, agent_def, system_prompt=system_prompt, messages=messages,
+                tool_specs=tool_specs, session_allow=session_allow, sink=sink,
+                max_steps=max_steps, breaker_state=breaker_state, transcript=transcript,
+            )
+        finally:
+            if resolver is not None:
+                _risk_door.unregister_session(str(session.id), resolver, restore=previous)
+
+    def _risk_door_resolver(
+        self, run: AgentRun, session: Session, agent_def: AgentDefinition, session_allow: set[str]
+    ):
+        """The run's answer to the website risk door (v1.449.0, G54): a
+        resolver ``core/risk_door.consult`` calls as ``(req, ctx, name=,
+        args=)`` and that asks through ``_pause_for_approval`` with a
+        once-only, attended-only spend check carrying the door's reason. None
+        for a platform with no registry (nothing could ask — the door then
+        refuses in words) and for the chat lanes' own "chat" session id (a
+        chat turn's door is the stream lane's, never a run's)."""
+        if getattr(self.p, "approvals", None) is None or str(session.id) in ("", "chat"):
+            return None
+        from ..providers.adapters.base import ToolCall
+
+        counter = [0]
+
+        async def _ask(req: Any, ctx: Any, *, name: str, args: dict) -> _risk_door.Verdict:
+            reason = " ".join(str(getattr(req, "reason", "") or "").split())
+            counter[0] += 1
+            call = ToolCall(
+                id=f"risk_{getattr(run, 'id', '') or session.id}_{counter[0]}",
+                name=str(name or ""), arguments=dict(args or {}),
+            )
+            words = reason or f"{name} acts on a page in a way that needs the user's OK"
+            spend = SpendCheck(
+                ask=True, words=words, cost_note="", once_only=True, reason=_risk_door.REASON,
+                dont_ask_skips=False, attended_only=True,
+            )
+            deny, _grant = await self._pause_for_approval(
+                session, call, agent_def, session_allow, run=run, spend=spend
+            )
+            if not deny:
+                return _risk_door.Verdict(True)
+            if deny == "the user declined this call when asked":
+                return _risk_door.Verdict(False, _risk_door.DECLINED_TAIL)
+            tail = str(deny)
+            for lead in (f"{words}. ", f"{words}: "):
+                if tail.startswith(lead):
+                    tail = tail[len(lead):]
+            return _risk_door.Verdict(False, tail)
+
+        return _ask
+
+    async def _perceive_act_body(
         self,
         run: AgentRun,
         session: Session,

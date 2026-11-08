@@ -1257,8 +1257,12 @@ def test_a_destructive_target_stops_for_approval_and_the_page_is_untouched(tmp_p
     assert "delete" in (result.error or "").lower()
     assert result.data["status"] == "pending"
     assert result.data["approval_id"] == approvals.rows[-1].id
-    # The model is told what to do next, in the shape consume-on-use needs.
-    assert "identical call again" in (result.error or "")
+    # v1.449.0 (G54): with nothing here able to ask, the model is told so in
+    # plain words — never a queue id, never "make the identical call again"
+    # (a dead end from the chat page and from every agent run).
+    assert "needs your OK on the chat page" in (result.error or "")
+    assert "identical call again" not in (result.error or "")
+    assert approvals.rows[-1].id not in (result.error or "")
 
 
 def test_an_ordinary_target_does_not_stop_and_writes_no_approval_row(tmp_path):
@@ -2069,8 +2073,10 @@ def test_the_paused_row_names_the_page_the_approval_is_about(tmp_path):
     assert "Account" in result.output, "the paused row names no tab title"
     assert "https://portal.example/account" in result.output, "the paused row names no URL"
     assert "e5" in result.output, "the paused row names no element"
-    # And the pending id is still there for the user to answer.
-    assert approvals.rows[-1].id in result.output
+    # v1.449.0: the pending id rides ``data`` for the queue, never the words a
+    # user or a model reads.
+    assert result.data["approval_id"] == approvals.rows[-1].id
+    assert approvals.rows[-1].id not in result.output
 
 
 def test_an_install_with_no_queue_still_records_what_it_refused_to_do(tmp_path):

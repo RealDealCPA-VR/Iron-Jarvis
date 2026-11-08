@@ -44,6 +44,7 @@ from ...core.approvals import InterruptNote as _InterruptNote
 from ...core.approvals import settled_actor as _settled_actor
 from ...core.approvals import surface_for as _interrupt_surface
 from ...core.grants import args_hash as _grant_hash
+from ...core import risk_door as _risk_door
 from ...core import auto_approve as _auto
 from ...core.turns import CHAT_INFLIGHT, TURNS, thread_key
 from ...tools.reversible import reversible_flag as _reversible_flag
@@ -5106,6 +5107,105 @@ async def chat_stream(
         # its call runs, kept in the turn's log (a rejoin replays them).
         _ti.side.put_nowait((event, data))
 
+    # THE WEBSITE RISK DOOR (v1.449.0, G54). A browser or computer-use action
+    # that reads as a payment, a password, a deletion or a flagged page stops
+    # INSIDE its tool after this lane's own card let the call through
+    # (``browser/tools._ActingTool._require_approval``). From the chat page
+    # that stop was a dead end — "approve it in Iron Jarvis, then make the
+    # identical call again. Pending approval id=…" — because only the browser
+    # SIDEBAR had a resolver (v1.276.0). This turn registers its own
+    # (``core/risk_door.register_turn``, keyed on the turn id that rides
+    # ``ToolContext.turn_id``): it files the ask in the ONE ``ChatApprovals``
+    # registry, puts this lane's own ``approval`` frame on the side channel
+    # (yielded while the tool waits, like a pack's question), marked as the
+    # door's — ``once_only``, reason "page", ``floor: true``, Allow once /
+    # Deny only, ``why`` = the door's reason — waits like any attended card
+    # (no clock; Stop and a dropped connection checked every _ASK_POLL_S; a
+    # night task's card wait is its only clock) and, on Allow, lets the
+    # call go on (the door approves and consumes ONE). A RISK CARD IS NEVER
+    # A GRANT: a wider answer is read as once. Not the sidebar's turn
+    # (``arm_family`` marks it: its own resolver answers, byte-identical),
+    # and never the POST lane (it registers nothing, so the door refuses in
+    # the same words minus the card — MIRROR NOTE).
+    async def _risk_ask(req: Any, ctx: Any, *, name: str, args: dict) -> "_risk_door.Verdict":
+        if _ti.closed or await _stop():
+            return _risk_door.Verdict(False, _risk_door.STOPPED_TAIL)
+        _rapr = _approvals(d)
+        _reason = " ".join(str(getattr(req, "reason", "") or "").split())
+        _rargs = dict(args or {})
+        _rid, _rfut = _rapr.request(
+            name, _rargs, once_only=True, once_reason=_risk_door.REASON,
+        )
+        _rframe = {
+            "id": _rid, "call_id": "", "tool": name, "args": _rargs,
+            "args_hash": "", "quarantined": False, "can_always": False,
+            "timeout_s": (max(1, int(_night_turn.card_wait_s)) if _night_turn is not None else 0),
+            "once_only": True, "once_reason": _risk_door.REASON, "floor": True,
+            "asker": "model",
+            "why": _reason or f"{name} would act on the page in a way Iron Jarvis asks about first",
+        }
+        _rnote = _InterruptNote(
+            getattr(d.platform, "event_bus", None),
+            kind="card", tool=name,
+            surface=_interrupt_surface(_tool_session, night=_night_turn),
+            ask_id=_rid,
+            thread_id=(
+                _tool_session.split(":", 1)[1] if _tool_session.startswith("build:")
+                else str(getattr(body, "thread_id", "") or "")
+            ),
+            turn_id=_step_turn, once_only=True, reason=_risk_door.REASON,
+            thread_for=_turn_thread_lookup(d, _step_turn),
+        )
+        _rnote.asked()
+        if thread_turn is not None:
+            thread_turn.park()
+        _ti.side.put_nowait(("approval", _rframe))
+        _rdecision = "timeout"
+        _rstopped = False
+        _rnormal = False
+        _rloop = asyncio.get_running_loop()
+        _rdeadline = _rloop.time() + _night_turn.card_wait_s if _night_turn is not None else None
+        try:
+            while True:
+                _rnow = _rloop.time()
+                if _rdeadline is not None and _rnow >= _rdeadline:
+                    break
+                _rslice = _ASK_POLL_S if _rdeadline is None else min(_ASK_POLL_S, max(0.01, _rdeadline - _rnow))
+                try:
+                    _rdecision = await asyncio.wait_for(asyncio.shield(_rfut), timeout=_rslice)
+                    break
+                except asyncio.TimeoutError:
+                    if _ti.closed or await _stop():
+                        _rstopped = True
+                        break
+            _rnormal = True
+        finally:
+            _ractor = _settled_actor(_rapr, _rid, "stopped" if _rstopped else _rdecision)
+            if not _rnormal:
+                _rnote.answered("stopped", "app")
+            _rapr.pop(_rid)
+            if thread_turn is not None:
+                thread_turn.unpark()
+        if _rstopped:
+            _rnote.answered("stopped", _ractor)
+            return _risk_door.Verdict(False, _risk_door.STOPPED_TAIL)
+        if _rdecision == "timeout":
+            # A night task's card wait ran out: that step is declined.
+            _rnote.answered("timeout", _ractor)
+            _ti.side.put_nowait(("approval_resolved", {"id": _rid, "call_id": "", "tool": name, "decision": "deny"}))
+            return _risk_door.Verdict(False, _risk_door.NOT_ALLOWED_TAIL)
+        if _rdecision != "deny":
+            _rdecision = "once"
+        _rnote.answered(_rdecision, _ractor)
+        _ti.side.put_nowait(("approval_resolved", {"id": _rid, "call_id": "", "tool": name, "decision": _rdecision}))
+        if _rdecision == "deny":
+            return _risk_door.Verdict(False, _risk_door.DECLINED_TAIL)
+        return _risk_door.Verdict(True)
+
+    _risk_turn = _step_turn if (_step_turn and arm_family is None) else ""
+    if _risk_turn:
+        _risk_door.register_turn(_risk_turn, _risk_ask)
+
     # ------------------------------------------------------------------ #
     # STREAM — the round + tool loop, emitting SSE frames as it goes.
     # ------------------------------------------------------------------ #
@@ -7839,6 +7939,9 @@ async def chat_stream(
                 yield _chunk
     finally:
         _detach_session_turn(_sg_turn)
+        # v1.449.0: the risk door's way to this turn goes with the turn.
+        if _risk_turn:
+            _risk_door.unregister_turn(_risk_turn, _risk_ask)
         # v1.324.0: the turn is over however it ended (done, error, Stop, a
         # dropped connection) — every ask still parked is resolved "stopped"
         # so no pack waits on a card nobody can answer any more.

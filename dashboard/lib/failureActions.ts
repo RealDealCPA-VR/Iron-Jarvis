@@ -25,16 +25,24 @@
  */
 
 import type { Health } from "@/lib/types";
-import { healthRow, SUBSCRIPTION_CLIS, type SubscriptionCli } from "@/lib/onboarding";
+import { healthRow } from "@/lib/onboarding";
+import { signInCliFor, type SignInCli } from "@/lib/signInClis";
 
 /** What fixes the failure: sign in to a subscription CLI, update a key, or
  *  (v1.378.0) leave a conversation the provider's safety check declined —
  *  a new chat here, Rewind in a Build session. A refusal offers NO Retry:
  *  the same conversation is judged again, so a Retry is declined too. */
 export type FailureAction =
-  | { kind: "sign_in"; cli: SubscriptionCli }
+  | { kind: "sign_in"; cli: SignInCli }
   | { kind: "key"; provider: string }
-  | { kind: "refusal" };
+  | { kind: "refusal" }
+  /** v1.449.0 (Wave B, G-N item 8): a LOCAL ONLY refusal — nothing was sent
+   *  to `provider` (a cloud model) because the conversation stays on this
+   *  PC. Its two ways out are the chat page's: pick a local model, or send
+   *  this one message there with the user's OK. Never a Retry (refused
+   *  again). Read from the typed `fix_kind` a coding session's reply line
+   *  keeps (`errorKind: "local_only"`, routes/build.recorded_turn). */
+  | { kind: "local_only"; provider: string };
 
 /** v1.378.0: the chat's press after a safety refusal (the failure line's
  *  sentence says why; the press does what it says). */
@@ -54,7 +62,7 @@ export const DRAFT_BACK_WORDS = "Your message is back in the box.";
 export const DETAILS_WORDS = "Details";
 
 /** The press's words: "Sign in to Claude Code". */
-export function signInLabel(cli: Pick<SubscriptionCli, "name">): string {
+export function signInLabel(cli: Pick<SignInCli, "name">): string {
   return `Sign in to ${cli.name}`;
 }
 
@@ -83,8 +91,11 @@ export function failureFacts(e: unknown): { title: string; fixKind: string; fixP
   return { title: text(f.title), fixKind: text(f.fixKind), fixProvider: text(f.fixProvider) };
 }
 
-function cliOf(provider: string): SubscriptionCli | undefined {
-  return SUBSCRIPTION_CLIS.find((c) => c.provider === provider);
+/** v1.449.0: EVERY CLI with a Sign in press (lib/signInClis: Claude Code,
+ *  Codex and Grok) — it read lib/onboarding's two plan CLIs, so a Grok
+ *  sign-in failure had the sentence and no press. */
+function cliOf(provider: string): SignInCli | undefined {
+  return signInCliFor(provider);
 }
 
 /**
@@ -96,7 +107,7 @@ function cliOf(provider: string): SubscriptionCli | undefined {
 export function signedOutCliFor(
   health: Health | null | undefined,
   provider: string,
-): SubscriptionCli | undefined {
+): SignInCli | undefined {
   const p = text(provider);
   if (!p) return undefined;
   const row = healthRow(health, p);
@@ -124,6 +135,7 @@ export function failureAction(
   // v1.378.0: a safety refusal is answered by leaving the conversation (or
   // going back before what set it off), never by signing in or retrying.
   if (kind === "refusal") return { kind: "refusal" };
+  if (kind === "local_only") return { kind: "local_only", provider };
   if (kind === "sign_in") {
     const cli = cliOf(provider) ?? signedOutCliFor(health, turnProvider);
     if (cli) return { kind: "sign_in", cli };

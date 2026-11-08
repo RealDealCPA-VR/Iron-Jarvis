@@ -71,6 +71,12 @@ class ToolContext:
     #: otherwise, saying so. None = every other call: ``view_image`` answers
     #: a question about the picture with a vision model, exactly as before.
     picture_read: "tuple[str, str] | None" = None
+    #: v1.449.0 (G54): this call runs where NOBODY can show a card — the POST
+    #: chat lane (the phone, an API caller). The website risk door
+    #: (``core/risk_door.resolver_for``) then asks no resolver at all and
+    #: refuses in plain words ("this needs your OK on the chat page"), never
+    #: a queue id. False everywhere a card can be drawn.
+    cannot_ask: bool = False
 
 
 @dataclass

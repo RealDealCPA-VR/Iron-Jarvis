@@ -83,6 +83,13 @@ export function cloudAskBody(name: string): string {
 /** The receipt's words for a reply the user let leave this PC once. */
 export const SENT_WITH_OK = "sent with your OK";
 
+/** v1.449.0: the refusal line's two ways out, the chat page's words (the
+ *  coding session's failure line says the same). */
+export const CHOOSE_LOCAL_WORDS = "Choose a local model";
+export function sendOnceWords(name: string): string {
+  return `Send to ${name} once`;
+}
+
 /** The last value the user chose (false when storage is unreadable). */
 export function readLocalOnlyDefault(): boolean {
   try {

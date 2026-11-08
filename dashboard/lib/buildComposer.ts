@@ -499,6 +499,10 @@ export interface QueuedItem {
    *  message queued while a reply works keeps them (they rode the next
    *  message typed instead, and this one ran as a plain turn). */
   tryOn?: { provider: string; model: string; label: string }[];
+  /** v1.449.0: "Send to <model> once" on a Local only session's refusal — the
+   *  ONE cloud provider this message may go to (`allow_cloud_once` on the
+   *  turn; the daemon honours it for that turn only). Never saved. */
+  cloudOnce?: string;
 }
 
 function str(v: unknown, cap: number): string {

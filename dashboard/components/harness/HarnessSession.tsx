@@ -346,6 +346,9 @@ interface TurnExtras {
    *  turn id; the daemon carries it on from its kept rounds (nothing typed
    *  is sent, nothing goes back in the box). */
   continueTurn?: string;
+  /** v1.449.0: "Send to <model> once" — the ONE cloud provider this message
+   *  may go to (`allow_cloud_once`; the daemon honours it for this turn). */
+  cloudOnce?: string;
 }
 
 /** The live reply: subscribed HERE, so the session does not re-render per token.
@@ -1460,6 +1463,9 @@ export function HarnessSession({
                 // v1.397.0: the "Try on…" control's models (the daemon starts
                 // one attempt per model; the words alone ask the same).
                 ...(extras?.tryOn?.length ? { try_on: tryOnBody(extras.tryOn) } : {}),
+                // v1.449.0: a Local only refusal's "Send to <model> once"
+                // (the chat page's field; this turn only).
+                ...(extras?.cloudOnce ? { allow_cloud_once: extras.cloudOnce } : {}),
                 ...(preview ? { preview_url: preview } : {}),
                 // v1.434.0 (Wave 2, F): which screen asked (the chat page's
                 // field) — a per-device setting changed in this session
@@ -1862,6 +1868,7 @@ export function HarnessSession({
       skill: picked,
       ...(command ? { command, typed: typedLine } : {}),
       ...(trying.length ? { tryOn: trying } : {}),
+      ...(item?.cloudOnce ? { cloudOnce: item.cloudOnce } : {}),
     });
   }
 
@@ -2809,6 +2816,15 @@ export function HarnessSession({
     const item = retryItemFor(shown, index, view.messages ?? [], view.folder);
     if (item) void send(item);
   };
+  /** v1.449.0 (Wave B, G-N item 8): "Send to <model> once" on a Local only
+   *  refusal — the failed reply's question again (its words, files and
+   *  skill, like Retry) with the refused provider allowed for that ONE
+   *  message (`allow_cloud_once`). The session stays Local only. */
+  const sendOnceReply = (index: number, provider: string) => {
+    if (busy || !view || !provider) return;
+    const item = retryItemFor(shown, index, view.messages ?? [], view.folder);
+    if (item) void send({ ...item, cloudOnce: provider });
+  };
   /** v1.422.0 (Wave 2 "Never lose work", B1): "Continue from where it
    *  stopped" — a new turn that carries the failed reply on from the rounds
    *  the daemon kept (nothing is typed: the question it continues is the
@@ -2828,6 +2844,7 @@ export function HarnessSession({
   const liveHandlers = useRef({
     retryReply,
     continueReply,
+    sendOnceReply,
     send,
     compact,
     onRewound,
@@ -2835,7 +2852,7 @@ export function HarnessSession({
     load,
     onChanged,
   });
-  liveHandlers.current = { retryReply, continueReply, send, compact, onRewound, branchFrom, load, onChanged };
+  liveHandlers.current = { retryReply, continueReply, sendOnceReply, send, compact, onRewound, branchFrom, load, onChanged };
   const rowHandlers = useMemo<HarnessRowHandlers>(
     () => ({
       onRewound: (q, extras) => void liveHandlers.current.onRewound(q, extras),
@@ -2851,6 +2868,9 @@ export function HarnessSession({
       onOpenDocument: (path) => {
         post("/documents/open", { path }).catch(() => {});
       },
+      // v1.449.0: a Local only refusal's two ways out.
+      onOpenModelMenu: () => setModelMenuOpen(true),
+      onSendOnce: (index, provider) => liveHandlers.current.sendOnceReply(index, provider),
     }),
     [],
   );
@@ -3292,6 +3312,7 @@ export function HarnessSession({
               models={catalog.models}
               health={daemon.health}
               provider={provider}
+              localOnlyHeld={view.setup.localOnlyHolds}
               undoFor={undoFor}
               onUndo={onUndo}
               h={rowHandlers}

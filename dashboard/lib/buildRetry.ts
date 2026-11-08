@@ -41,6 +41,9 @@ export function retryOffered(
 ): boolean {
   if (!m || m.role !== "assistant" || !o.newest || o.busy || o.archived) return false;
   if (m.errorKind === "refusal") return false;
+  // v1.449.0: a Local only refusal is answered by its own two presses
+  // (a local model, or "send once"); a Retry would only be refused again.
+  if (m.errorKind === "local_only") return false;
   if (m.accountLimit) return false;
   // v1.397.0 review: a reply that tried the work on several models keeps its
   // card (a finished attempt can still be kept); Retry would start every
