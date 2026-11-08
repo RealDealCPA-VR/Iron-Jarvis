@@ -53,7 +53,7 @@ export default function KanbanPage() {
                 className="inline-flex items-center gap-1.5 rounded-md border border-white/10 px-3 py-1.5 text-[13px] text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200"
                 title="Back to all sessions"
               >
-                <ArrowLeft size={14} /> All sessions
+                <ArrowLeft size={14} /> All agent runs
               </Link>
             </span>
           }

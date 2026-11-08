@@ -105,9 +105,11 @@ describe("plain words on the primary paths", () => {
       expect(s, now).toContain(now);
   });
 
-  it("Build › Code's tool servers", () => {
-    expect(read("components/buildCode/CodePanes.tsx")).toContain('title="Its own tool servers"');
-    expect(MCP_RELOAD_WORDS).toBe("Reload its tool servers");
+  // v1.455.0 (Wave E, moved on purpose): an MCP server is an "extension"
+  // (VOCABULARY.md row 22); "tool server" was a second name for it.
+  it("Build › Code's extensions", () => {
+    expect(read("components/buildCode/CodePanes.tsx")).toContain('title="Its own extensions"');
+    expect(MCP_RELOAD_WORDS).toBe("Reload its extensions");
     expect(mcpReloadTitle("Codex")).not.toMatch(/\bMCP\b/);
   });
 

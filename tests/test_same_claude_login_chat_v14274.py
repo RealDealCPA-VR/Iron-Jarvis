@@ -245,7 +245,7 @@ def test_a_refused_clear_is_said_in_words(tmp_path):
     client.unpark = refuse
     platform = SimpleNamespace(iron_proxy=_Svc(client))
     problem = build_routes.continue_problem(platform, {"account": "p1"}, "p3", force=True)
-    assert problem is not None and problem["detail"].startswith('Iron-Proxy would not let "Other" be tried again')
+    assert problem is not None and problem["detail"].startswith('The account manager would not let "Other" be tried again')
 
 
 async def test_the_route_refuses_before_anything_moves(tmp_path, monkeypatch):

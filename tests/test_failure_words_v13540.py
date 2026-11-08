@@ -164,7 +164,7 @@ def test_a_secret_in_the_server_text_never_reaches_any_field():
 def test_names_keep_a_brands_casing_and_a_fleet_label():
     assert plain_name("claude-cli") == "Claude Code" and plain_name("codex-cli") == "Codex"
     assert heading(plain_name("xai")) == "xAI", "a brand keeps its casing (never 'XAI')"
-    assert heading(plain_name("custom")) == "Your own endpoint"
+    assert heading(plain_name("custom")) == "Your model server"
     assert plain_name("openai (ChatGPT backend)") == "OpenAI"
 
 

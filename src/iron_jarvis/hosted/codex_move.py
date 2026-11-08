@@ -47,9 +47,9 @@ NO_CODEX_FILE = (
     "The conversation's file is not in this account's Codex folder, so it cannot move to "
     "another account — nothing was changed."
 )
-NO_OTHER = "There is no other Codex account in Iron-Proxy to continue on."
+NO_OTHER = "There is no other Codex account in your accounts to continue on."
 NONE_FREE = "No other Codex account can take over right now: {why}."
-NOT_OTHER = "That account is not another Codex account in Iron-Proxy."
+NOT_OTHER = "That account is not another Codex account in your accounts."
 CANNOT_TAKE = '"{title}" cannot take over right now.'
 CANNOT_COPY = "The conversation could not be copied to the other account — nothing was changed."
 DIVERGED = (

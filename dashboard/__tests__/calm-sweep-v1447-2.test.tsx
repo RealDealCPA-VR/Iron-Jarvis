@@ -267,7 +267,7 @@ const SITES: { file: string; label: string; tip: RegExp; old: string }[] = [
   {
     file: "app/fleet/page.tsx",
     label: 'label="Refresh"',
-    tip: /tip="Force a fresh probe of every node"/,
+    tip: /tip="Check every model server again now"/,
     old: "Refresh\n              </button>",
   },
   {

@@ -242,7 +242,7 @@ function RuleSentence({ r }: { r: ReflexRule }) {
     ) : r.action === "remote_agent" ? (
       <>delegate to agent {chip(r.target || "?")}</>
     ) : (
-      <>start a session</>
+      <>run an agent</>
     );
   return (
     <span className="text-sm text-zinc-300">
@@ -649,7 +649,7 @@ export default function ReflexPage() {
       <Reveal>
         <PageHeader
           title="Rules"
-          subtitle="When a webhook fires or a message arrives, run a workflow, a remote agent, or a session — automatically."
+          subtitle="When a webhook fires or a message arrives, run a workflow, a remote agent, or one of your agents, automatically."
           actions={
             <button
               type="button"
@@ -805,7 +805,7 @@ export default function ReflexPage() {
                   >
                     <option value="workflow">Run a workflow</option>
                     <option value="remote_agent">Delegate to a remote agent</option>
-                    <option value="session">Start a session</option>
+                    <option value="session">Run an agent</option>
                   </select>
                 </div>
                 {targetNeeded && (
@@ -1068,12 +1068,12 @@ export default function ReflexPage() {
                 multi-step process
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <Bot size={13} className="text-violet-300" /> remote agent — delegates the task to
-                a remote endpoint
+                <Bot size={13} className="text-violet-300" /> remote agent — hands the task to
+                an agent on another machine
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <TerminalSquare size={13} className="text-emerald-300" /> session — starts a
-                supervised local session
+                <TerminalSquare size={13} className="text-emerald-300" /> agent — runs one of your agents
+                on this PC
               </span>
             </div>
           </Card>

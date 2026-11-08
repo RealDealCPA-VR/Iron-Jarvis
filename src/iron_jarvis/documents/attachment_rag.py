@@ -108,7 +108,7 @@ _NOTHING_READ = ", so NOTHING in this file was read"
 _PARTIAL_READ = "; only the small text layer below was read"
 
 OCR_DISABLED_NOTE = (
-    f"{_PDF_HEAD}, and OCR is turned off (config ocr_enabled){_NOTHING_READ}"
+    f"{_PDF_HEAD}, and reading scanned pages is turned off{_NOTHING_READ}"
 )
 OCR_NO_ROUTER_NOTE = (
     f"{_PDF_HEAD}, and no model is wired to transcribe it{_NOTHING_READ}"

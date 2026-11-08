@@ -300,8 +300,8 @@ function SessionsList() {
     <PageShell>
       <Reveal>
         <PageHeader
-          title="Sessions"
-          subtitle="Run agents and inspect past sessions."
+          title="Agent runs"
+          subtitle="Hand an agent a task, and look back at every run it made."
           actions={
             // v1.356.0 (G77): the button says everything it removes —
             // "Clear finished" also deleted failed and stopped sessions.
@@ -356,14 +356,14 @@ function SessionsList() {
       <Reveal>
         <PageGrid cols={3}>
           <div className="lg:col-span-1">
-            <Card title="New session" icon={<Plus size={15} />}>
+            <Card title="New agent run" icon={<Plus size={15} />}>
               <NewSessionForm onCreated={reload} />
             </Card>
           </div>
 
           <div className="lg:col-span-2">
             <Card
-              title={`All sessions${sessions.length ? ` · ${sessions.length}` : ""}`}
+              title={`All agent runs${sessions.length ? ` · ${sessions.length}` : ""}`}
               icon={<Boxes size={15} />}
               right={
                 // v1.360.0 (lane 10A, G80's other half): the same rule as
@@ -481,10 +481,10 @@ function SessionsList() {
                   // page's OWN task box (one box — never a second form).
                   <Empty
                     icon={<Boxes size={26} />}
-                    title="No sessions yet"
+                    title="No agent runs yet"
                     action={{ label: "Describe a task", onClick: focusTaskBox }}
                   >
-                    A session is one task you hand to an agent. Describe it in the New session box and it shows up here.
+                    An agent run is one task you hand to an agent. Describe it in the New agent run box and it shows up here.
                   </Empty>
                 )
               ) : visible.length === 0 ? (
@@ -708,7 +708,7 @@ export default function SessionsPage() {
   }
   return (
     <div>
-      <div role="tablist" aria-label="Sessions view" className="mb-3 flex gap-1" data-testid="sessions-view">
+      <div role="tablist" aria-label="Agent runs view" className="mb-3 flex gap-1" data-testid="sessions-view">
         {(
           [
             ["list", "List"],

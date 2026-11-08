@@ -75,7 +75,7 @@ describe("a provider and a model are named, never an id", () => {
     expect(providerDetail("fleet-custom")).toBe("your model server");
     expect(providerDetail("fleet-spark-2")).toBe("your model server");
     // The slots the names table knows keep its words.
-    expect(providerDetail("custom")).toBe("your own endpoint");
+    expect(providerDetail("custom")).toBe("your model server");
     expect(providerDetail("ollama")).toBe("Ollama");
     expect(eventHeadline("provider.failed", { provider: "fleet-custom", error: "boom" })).toBe(
       "A model failed to answer · your model server",

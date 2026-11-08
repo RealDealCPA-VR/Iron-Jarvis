@@ -336,7 +336,7 @@ CODEX_CONTINUE = (
     "open a new session on the other account instead."
 )
 THIS_PC = (
-    "This session runs on this PC's login — start a session on an Iron-Proxy account "
+    "This session runs on this PC's login. Start a session on one of your accounts "
     "to move between accounts."
 )
 GONE_DURING_TURN = "{label} stopped while it was working."

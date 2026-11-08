@@ -955,7 +955,7 @@ function ConnectionCard({
             name: secretName,
             value: key.trim(),
             kind: "api_key",
-            description: `API key for endpoint ${epName.trim() || baseUrl.trim()}`,
+            description: `API key for model server ${epName.trim() || baseUrl.trim()}`,
           });
           await patch(`/fleet/nodes/${encodeURIComponent(nodeId)}`, {
             api_key_name: secretName,
@@ -1000,7 +1000,7 @@ function ConnectionCard({
         } else {
           setTest({
             ok: true,
-            detail: `Endpoint saved. Pick "${shown}" in any model picker.${verifyNote}`,
+            detail: `Model server saved. Pick "${shown}" in any model picker.${verifyNote}`,
           });
         }
         setEpName("");
@@ -1487,7 +1487,7 @@ function ConnectionCard({
                         if (e.key === "Escape") setRenaming(null);
                       }}
                       onBlur={() => void saveRename(ep)}
-                      aria-label="Endpoint name"
+                      aria-label="Server name"
                       className="w-32 shrink-0 rounded-md border border-accent/40 bg-ink-950 px-1.5 py-0.5 text-[11px] text-zinc-100 outline-none"
                     />
                   ) : (
@@ -1784,7 +1784,7 @@ function ConnectionCard({
                     {busy ? (
                       <LoaderInline label={isCustom ? "Saving…" : "Connecting…"} />
                     ) : (
-                      <><Plug size={14} /> {isCustom ? "Save endpoint" : "Connect"}</>
+                      <><Plug size={14} /> {isCustom ? "Save model server" : "Connect"}</>
                     )}
                   </button>
                   <button

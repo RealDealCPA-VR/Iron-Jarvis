@@ -127,7 +127,7 @@ function MetricStat({
   accent?: boolean;
 }) {
   const missing = value === null;
-  const why = reason || "not reported by this endpoint";
+  const why = reason || "not reported by this model server";
   return (
     <Stat
       label={label}
@@ -369,7 +369,7 @@ function ChildRow({ snap, onChecked }: { snap: NodeSnapshot; onChecked?: () => v
             snap.node.tool_use && (
               <span
                 className="inline-flex items-center gap-1 rounded-full border border-white/10 px-1.5 py-0.5 text-[11px] leading-none text-zinc-400"
-                title="Checked: this endpoint calls tools."
+                title="Checked: this model server calls tools."
               >
                 tools <span className="text-tone-success">✓</span>
               </span>
@@ -400,7 +400,7 @@ function ChildRow({ snap, onChecked }: { snap: NodeSnapshot; onChecked?: () => v
           <span className="text-zinc-600">{hostOf(snap.node.base_url)}</span>
         )}
         {!model && !snap.node.base_url && (
-          <span className="text-zinc-600">no backing endpoint reported</span>
+          <span className="text-zinc-600">no backing server reported</span>
         )}
       </div>
       {snap.error && <div className="mt-1.5 text-[11px] text-tone-danger/80">{snap.error}</div>}
@@ -531,7 +531,7 @@ function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () =>
             if (e.key === "Escape") setEditing(false);
           }}
           disabled={busy}
-          aria-label="Endpoint name"
+          aria-label="Server name"
           className="w-44 rounded-md border border-white/10 bg-ink-950 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-accent/40"
         />
         <button
@@ -566,8 +566,8 @@ function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () =>
           setDraft(node.label || "");
           setEditing(true);
         }}
-        title="Rename this endpoint"
-        aria-label="Rename this endpoint"
+        title="Rename this model server"
+        aria-label="Rename this model server"
         className={CALM_ICON_ACTION}
       >
         <Pencil size={12} />
@@ -578,8 +578,8 @@ function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () =>
         onConfirm={remove}
         title={
           node.source === "config"
-            ? "Remove this endpoint (also clears its Settings URL, retiring the provider)"
-            : "Remove this endpoint"
+            ? "Remove this model server (also clears its address in Settings, so it leaves every model list)"
+            : "Remove this model server"
         }
       />
     </span>
@@ -726,7 +726,7 @@ function NodeCard({
         // No metric row at all, and a plain sentence saying why. An empty grid
         // of dashes would imply we tried to read numbers this server never had.
         <div className="rounded-xl border border-white/[0.05] bg-white/[0.015] px-3 py-2.5 text-xs text-zinc-500">
-          {reason || "This endpoint exposes no serving metrics."}
+          {reason || "This model server reports no serving numbers."}
         </div>
       )}
 
@@ -923,7 +923,7 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
                     className={`truncate ${n.retired ? "text-zinc-600" : "text-zinc-400"}`}
                     title={
                       n.retired
-                        ? "This endpoint was removed. Its past usage is kept here."
+                        ? "This model server was removed. Its past usage is kept here."
                         : undefined
                     }
                   >
@@ -1037,7 +1037,7 @@ function AddNodeForm({ onAdded }: { onAdded: () => void }) {
           name: secretName,
           value: key.trim(),
           kind: "api_key",
-          description: `API key for endpoint ${label.trim() || u}`,
+          description: `API key for model server ${label.trim() || u}`,
         });
         await patch(`/fleet/nodes/${encodeURIComponent(nodeId)}`, { api_key_name: secretName });
         // The review: the node was ADDED (and its kind detected) before the
@@ -1059,7 +1059,7 @@ function AddNodeForm({ onAdded }: { onAdded: () => void }) {
   }
 
   return (
-    <Card title="Add a node" icon={<Plus size={15} />}>
+    <Card title="Add a model server" icon={<Plus size={15} />}>
       <form onSubmit={save} className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-[2fr_1fr]">
           <input
@@ -1070,7 +1070,7 @@ function AddNodeForm({ onAdded }: { onAdded: () => void }) {
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             spellCheck={false}
-            aria-label="Base URL"
+            aria-label="Server address"
           />
           <input
             className="field text-xs"
@@ -1101,7 +1101,7 @@ function AddNodeForm({ onAdded }: { onAdded: () => void }) {
         {probing && <div className="text-xs text-zinc-500">probing {url.trim()}…</div>}
         {!probing && probeError && (
           <div className="text-xs text-tone-warn">
-            Could not read that endpoint: {probeError}. You can still add it. It
+            Could not read that model server: {probeError}. You can still add it. It
             shows as offline until it answers.
           </div>
         )}
@@ -1162,7 +1162,7 @@ function AddNodeForm({ onAdded }: { onAdded: () => void }) {
           disabled={saving || !url.trim()}
           className="btn-accent py-1.5 text-xs"
         >
-          <Plus size={14} /> {saving ? "Adding…" : "Add node"}
+          <Plus size={14} /> {saving ? "Adding…" : "Add model server"}
         </button>
       </form>
     </Card>
@@ -1252,7 +1252,7 @@ export default function FleetPage() {
                   "Refresh" with its tip. */}
               <IconButton
                 label="Refresh"
-                tip="Force a fresh probe of every node"
+                tip="Check every model server again now"
                 testId="fleet-refresh"
                 icon={<RefreshCw size={15} aria-hidden className={refreshing ? "animate-spin" : ""} />}
                 onClick={refresh}
@@ -1302,13 +1302,13 @@ export default function FleetPage() {
 
       {firstLoad ? (
         <Reveal>
-          <Card title="Nodes" icon={<Server size={15} />}>
+          <Card title="Your model servers" icon={<Server size={15} />}>
             <SkeletonRows rows={4} />
           </Card>
         </Reveal>
       ) : roots.length === 0 ? (
         <Reveal>
-          <Card title="Nodes" icon={<Server size={15} />}>
+          <Card title="Your model servers" icon={<Server size={15} />}>
             {/* v1.314.0 (UX wave 2): the primary way forward is the place a
                 user actually adds an endpoint — Connections' custom-endpoint
                 card, whose form posts /fleet/nodes (so it lists here).

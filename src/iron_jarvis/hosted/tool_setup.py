@@ -137,13 +137,13 @@ ERROR_CHARS = 300
 
 #: The tools that report their MCP servers here (the others: :data:`NOT_REPORTED`).
 REPORTS_MCP: frozenset[str] = frozenset({"claude-code", "codex", "grok", "antigravity"})
-NOT_REPORTED = "{tool} does not report its own MCP servers here."
+NOT_REPORTED = "{tool} does not report its own extensions here."
 #: v1.441.0: where a tool that does not report them says their state itself.
 NOT_REPORTED_HOW: dict[str, str] = {
     "pi": "Type /mcp in the box and Pi says each one's state.",
 }
-NOT_YET = "{tool} says which of its own MCP servers started when it starts — they show after its next start."
-NONE_REPORTED = "{tool} reported no MCP servers of its own."
+NOT_YET = "{tool} says which of its own extensions started when it starts. They show after its next start."
+NONE_REPORTED = "{tool} reported no extensions of its own."
 
 #: How each tool signs in to one of its own MCP servers (ITS OWN way; never a
 #: press of Iron Jarvis's). "Open in terminal" opens this session's

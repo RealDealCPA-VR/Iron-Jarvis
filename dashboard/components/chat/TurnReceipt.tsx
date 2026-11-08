@@ -280,7 +280,7 @@ export function replyWhere(rt: TurnRoute | null | undefined): ReplyWhere | null 
   const label = typeof rt.label === "string" ? rt.label.replace(/\s+/g, " ").trim() : "";
   const local = rt.on_this_network;
   const cloudTitle = `Ran in the cloud: this message left your network for ${
-    providerDisplay(rt.provider) || "the provider"
+    providerDisplay(rt.provider) || "the AI service"
   }.`;
   return {
     on: label ? `on ${label}` : null,

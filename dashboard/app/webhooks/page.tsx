@@ -352,7 +352,7 @@ export default function WebhooksPage() {
             <p className="text-[12px] text-zinc-500">
               To decide what happens when one arrives,{" "}
               <Link href="/reflex" className="text-accent-soft underline-offset-2 hover:underline">
-                add a reflex →
+                add a rule →
               </Link>
             </p>
           </div>
@@ -375,7 +375,7 @@ export default function WebhooksPage() {
               action={{ label: "Add your first webhook", onClick: () => setOpen(true) }}
               secondary={{ label: "Most people want Rules instead →", href: "/reflex" }}
             >
-              A webhook lets another app tell Iron Jarvis something happened (a reflex decides what
+              A webhook lets another app tell Iron Jarvis something happened (a rule decides what
               to do about it), or lets Iron Jarvis tell another app when work finishes.
             </Empty>
           ) : (

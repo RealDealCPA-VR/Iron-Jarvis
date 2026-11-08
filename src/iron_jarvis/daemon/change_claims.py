@@ -224,7 +224,7 @@ _RECORD_NOUN = {
     "model_server": "model server",
     "account": "account",
     "memory_base": "memory base",
-    "tool_server": "tool server",
+    "tool_server": "extension",
     "web_service": "web service",
 }
 

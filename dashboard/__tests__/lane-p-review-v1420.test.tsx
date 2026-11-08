@@ -262,7 +262,7 @@ describe("the server type stays reachable", () => {
     const change = await within(card).findByTestId("endpoint-protocol-change");
     fireEvent.click(change);
     fireEvent.click(within(card).getByTestId("endpoint-protocol-anthropic"));
-    fireEvent.click(within(card).getByRole("button", { name: /Save endpoint/ }));
+    fireEvent.click(within(card).getByRole("button", { name: /Save model server/ }));
     await waitFor(() => expect(saved()?.protocol).toBe("anthropic"));
   });
 

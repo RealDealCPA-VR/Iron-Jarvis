@@ -66,12 +66,12 @@ log = logging.getLogger(__name__)
 PROVIDER = "anthropic"
 
 THIS_PC = (
-    "This pane runs on this PC's login — open a pane on an Iron-Proxy account "
-    "from Launch to use account switching."
+    "This terminal runs on this PC's login. Open a terminal on one of your accounts "
+    "from Launch to move between accounts."
 )
 NO_OTHER = (
-    "There is no other Claude account in Iron-Proxy to continue on — add one on "
-    "the Connections page (Iron-Proxy card)."
+    "There is no other Claude account in your accounts to continue on. Add one on "
+    "the Several accounts card in Settings › Connections."
 )
 
 #: v1.427.3 (a USER BUG): an account signed in to the SAME Claude account as
@@ -568,9 +568,9 @@ def _none_free(
                 "why": (f"{_acc._WHAT.get(kind, 'parked')}{when}").strip(),
             })
         if kind == "signin":
-            parts.append(f'"{title}" needs to sign in again on {_acc._CONNECTIONS}')
+            parts.append(f'"{title}" needs to sign in again on {_pa._CONNECTIONS}')
         elif st.get("status") == "disabled":
-            parts.append(f'"{title}" is turned off on the Iron-Proxy card')
+            parts.append(f'"{title}" is turned off on the Several accounts card')
         elif kind in _acc._WHAT:
             parts.append(f'"{title}" is {_acc._WHAT[kind]}{when}')
         else:
@@ -634,14 +634,14 @@ def prepare(
             answer = client.signal(current, text=found_limit.signal_text())
             parked = bool(isinstance(answer, dict) and answer.get("parked") is True)
             told = "" if parked else (
-                f'Iron-Proxy did not mark "{title}" as limited from that message, so it may '
+                f'The account manager did not mark "{title}" as limited from that message, so it may '
                 "still offer it."
             )
         except Exception as exc:  # noqa: BLE001 — the user pressed the button: continue
             _acc._note("continue signal", exc)
-            told = f'Iron-Proxy could not be told that "{title}" hit its limit.'
+            told = f'The account manager could not be told that "{title}" hit its limit.'
     else:
-        told = f'No limit message was on screen, so Iron-Proxy was not told about "{title}".'
+        told = f'No limit message was on screen, so the account manager was not told about "{title}".'
 
     # The next account: Iron-Proxy's pick, unless it hands back this one (it
     # declined to park it) or nothing — then the next usable one in its order.

@@ -1154,7 +1154,7 @@ export default function DocumentsPage() {
                 className="btn-accent"
               >
                 {redScanBusy ? <LoaderInline /> : <ShieldCheck size={14} />}
-                {redScanBusy ? "Scanning…" : "Scan for PII"}
+                {redScanBusy ? "Looking…" : "Find personal details"}
               </button>
             </form>
 

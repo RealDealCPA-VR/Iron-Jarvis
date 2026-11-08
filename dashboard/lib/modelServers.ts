@@ -11,7 +11,7 @@
 export const MODEL_SERVERS_TITLE = "Model servers on your network";
 
 /** The status pill on that card while a keyless server on it answers. */
-export const OWN_ENDPOINT_LABEL = "Connected · your endpoint · no key needed";
+export const OWN_ENDPOINT_LABEL = "Connected · your model server · no key needed";
 
 /** The card title for one connection row: only the custom slot is renamed. */
 export function connectionTitle(conn: { provider: string; display_name: string }): string {

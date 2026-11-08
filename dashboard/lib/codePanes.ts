@@ -407,10 +407,11 @@ export interface CodeMcp {
 }
 
 /** v1.447.0: the whole list's own reload (Codex). */
-// Wave D item 33: "MCP" is the wire's name; a person reads "tool servers".
-export const MCP_RELOAD_WORDS = "Reload its tool servers";
+// Wave D item 33: "MCP" is the wire's name; v1.455.0 (Wave E): a person reads
+// "extensions" (VOCABULARY.md row 22), never "tool servers".
+export const MCP_RELOAD_WORDS = "Reload its extensions";
 export function mcpReloadTitle(toolName: string): string {
-  return `${toolName} reads its tool-server settings again: servers you added or changed start, ones you took out go. Nothing else restarts.`;
+  return `${toolName} reads its extension settings again: extensions you added or changed start, ones you took out go. Nothing else restarts.`;
 }
 
 export const MCP_STATES: readonly string[] = ["connected", "starting", "failed", "needs_sign_in", "off", "on"];

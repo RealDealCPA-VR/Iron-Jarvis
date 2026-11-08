@@ -229,7 +229,7 @@ describe("G03: an unattended run that fails or falls short rings, in plain words
     const title = (origin: string) => toActivity(finished(origin, failed))!.title;
     expect(title("goal:goal_3f2a9c")).toBe("Your goal's run could not finish"); // never the id
     expect(title("workflow:Weekly report")).toBe("A step of your workflow Weekly report could not finish");
-    expect(title("reflex:invoice-drop")).toBe("Your reflex invoice-drop could not finish");
+    expect(title("reflex:invoice-drop")).toBe("Your rule invoice-drop could not finish");
     expect(title("comm:telegram")).toBe("Your request from telegram could not finish");
     expect(title("autonomy")).toBe("An autonomy run could not finish");
   });

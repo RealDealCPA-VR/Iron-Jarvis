@@ -325,7 +325,7 @@
     "ltm_search": "search your knowledge base",
     "mcp_list_resources": "list an app's resources",
     "mcp_read_resource": "read something from one of your apps",
-    "mcp_server_add": "add a tool server",
+    "mcp_server_add": "add an extension",
     "memory_base_add": "add a memory base",
     "memory_propose": "suggest something to remember",
     "memory_read": "look up a memory",
@@ -744,8 +744,8 @@
       "Reading an app's resource"
     ],
     "mcp_server_add": [
-      "Added a tool server",
-      "Adding a tool server"
+      "Added an extension",
+      "Adding an extension"
     ],
     "memory_base_add": [
       "Added a memory base",

@@ -115,8 +115,10 @@ describe("the step line for provider.downgraded reads `used`", () => {
   });
 
   it("provider.failed has no dash aside", () => {
-    expect(stepLabel(ev("provider.failed", { provider: "openai", error: "boom" }))).toBe("Provider openai failed: boom");
-    expect(stepLabel(ev("provider.failed", { provider: "openai" }))).toBe("Provider openai failed");
+    // v1.455.0 (Wave E, moved on purpose): the provider in words, never its id.
+    expect(stepLabel(ev("provider.failed", { provider: "openai", error: "boom" }))).toBe("OpenAI failed: boom");
+    expect(stepLabel(ev("provider.failed", { provider: "openai" }))).toBe("OpenAI failed");
+    expect(stepLabel(ev("provider.failed", { provider: "claude-cli" }))).toBe("Claude Code failed");
     expect(stepLabel(ev("provider.failed", {}))).toBe("A model failed");
   });
 });

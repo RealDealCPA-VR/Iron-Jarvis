@@ -147,8 +147,15 @@ export function stepLabel(e: IJEvent): string | null {
           : named;
         return p.partial === true ? `${who} declined to finish the answer` : `${who} declined to answer`;
       }
-      const who =
-        typeof p.provider === "string" && p.provider ? `Provider ${p.provider}` : "A model";
+      // v1.455.0 (Wave E): the provider in words ("Claude Code failed"), never
+      // its raw id ("Provider claude-cli failed").
+      const named = providerDisplay(typeof p.provider === "string" ? p.provider : "");
+      const lead = named.split(" ")[0];
+      const who = !named
+        ? "A model"
+        : lead === lead.toLowerCase()
+        ? named.charAt(0).toUpperCase() + named.slice(1)
+        : named;
       const why = String(p.error || "").slice(0, 120).trim();
       return why ? `${who} failed: ${why}` : `${who} failed`;
     }

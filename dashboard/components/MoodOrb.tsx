@@ -65,7 +65,10 @@ const LABEL: Record<Mood, string> = {
   // chat or a Build coding session answering — not only a session.
   thinking: "Working — something is running",
   waiting: "Waiting for you — a reply needs your answer",
-  alert: "Attention needed — something is waiting for you",
+  // v1.455.0 (Wave E): named, so it never reads like `waiting` above. The
+  // alert is a change to review or a suggestion (review.requested,
+  // autonomy.proposed), never a reply's question.
+  alert: "Attention needed — a change to review or a suggestion is waiting",
 };
 
 /**

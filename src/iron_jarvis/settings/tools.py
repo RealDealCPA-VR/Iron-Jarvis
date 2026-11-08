@@ -227,6 +227,13 @@ def _show(value: Any) -> str:
     return str(value)
 
 
+#: v1.455.0 (Wave E): the ``default_model`` values that mean "whatever the
+#: plan's own CLI uses" (``routes/settings.promote_model`` saves
+#: "subscription"), and the words a card shows for them.
+_PLAN_DEFAULT_IDS = frozenset({"subscription", "default"})
+PLAN_DEFAULT_MODEL_WORDS = "Your plan's own default model"
+
+
 def value_label(d: Any, value: Any, manager: Any = None) -> str | None:
     """v1.448.0 (Wave A, A3): the DISPLAY NAME of *value* for the schema row
     *d* — what the Settings page shows for it — or ``None`` when the row has
@@ -262,6 +269,10 @@ def value_label(d: Any, value: Any, manager: Any = None) -> str | None:
 
             name = plain_name(str(value), manager)
             return name or None
+        if key == "default_model" and wanted in _PLAN_DEFAULT_IDS:
+            # v1.455.0 (Wave E): "subscription" is the wire's word for the
+            # plan's own default model; a card says it in words.
+            return PLAN_DEFAULT_MODEL_WORDS
         return None
     except Exception:  # noqa: BLE001 — a label never breaks a change
         return None

@@ -722,7 +722,7 @@ describe("an older or unhappy daemon is silent, not broken", () => {
     // ...and the palette itself is untouched: name matching and the ask row work.
     await type("redact");
     await settle();
-    expect(labels()[0]).toContain("Documents → Redact PII");
+    expect(labels()[0]).toContain("Documents → Hide personal details");
     expect(labels()[labels().length - 1]).toContain("Ask Iron Jarvis");
   });
 

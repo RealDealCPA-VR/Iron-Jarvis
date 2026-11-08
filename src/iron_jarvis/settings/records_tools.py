@@ -1,4 +1,4 @@
-"""Tool servers and web services from chat (v1.448.0, Wave A "chat configures
+"""Extensions and web services from chat (v1.448.0, Wave A "chat configures
 everything", item 4 of docs/PRODUCT-READINESS-RESULTS.md 0h.5).
 
 Two doors existed only on pages: the Tools page's "Add" (paste a server's
@@ -42,7 +42,7 @@ over newer work.
   anything is looked at. Undo removes the service this call made (its row,
   its saved key, its spec); one changed since is refused.
 
-Words a person reads say "tool server" and "web service" — never the
+Words a person reads say "extension" (VOCABULARY.md row 22; v1.455.0 Wave E retired "tool server") and "web service" — never the
 engine's words. Every snapshot, vault write and add is BLOCKING; the tools
 run them through ``asyncio.to_thread``.
 """
@@ -107,12 +107,12 @@ NO_CONFIG = (
     "or one of the prebuilt names (filesystem, fetch, memory, git, playwright, box, github)."
 )
 SEVERAL_SERVERS = "That config holds {n} servers ({names}): add them one at a time, naming the one to add."
-NAME_IN_USE = "A tool server called {name!r} is already added. Choose another name, or remove that one first."
+NAME_IN_USE = "An extension called {name!r} is already added. Choose another name, or remove that one first."
 SAME_SERVER = "That server is already added as {other!r}."
 BAD_NAME = (
-    "A tool server's name starts with a letter and uses letters, digits, - or _ (at most 40 characters)."
+    "An extension's name starts with a letter and uses letters, digits, - or _ (at most 40 characters)."
 )
-NETWORK_FOLDER = "A folder on a network share (\\\\host\\…) is not used as a tool server's folder."
+NETWORK_FOLDER = "A folder on a network share (\\\\host\\…) is not used as an extension's folder."
 VALUE_NEEDED = (
     "The config leaves {names} to be filled in. Pass them in `values` (they are not keys: a folder, a "
     "repository path) — ask the user for them in chat."
@@ -124,7 +124,7 @@ VALUE_IS_A_KEY = (
 VALUE_LOOKS_SECRET = "The value given for {name} looks like a key or token: never pass one in the chat."
 WAITING_WORDS = (
     "Nothing is added yet: the user pastes {what} on the secure card below (never in the chat). Once "
-    "{saved}, the tool server {name!r} is added and starts."
+    "{saved}, the extension {name!r} is added and starts."
 )
 NOT_WAITING = (
     "That server is no longer waiting to be added (Iron Jarvis restarted, or the card expired): ask "
@@ -135,13 +135,13 @@ NOT_WAITING = (
 #: second paste.
 NOT_WAITING_DROPPED = NOT_WAITING + " The value you pasted was not kept."
 WAITING_ALREADY = (
-    "A tool server called {name!r} is already waiting for its key on a secure card: paste it there, or "
+    "An extension called {name!r} is already waiting for its key on a secure card: paste it there, or "
     "press Undo on that card first."
 )
-WITHDRAWN = "undo: withdrew the card for the tool server '{name}'; nothing had been added"
-NEVER_ADDED = "The tool server {name!r} was never added (or was removed since), so there is nothing to undo."
+WITHDRAWN = "undo: withdrew the card for the extension '{name}'; nothing had been added"
+NEVER_ADDED = "The extension {name!r} was never added (or was removed since), so there is nothing to undo."
 CHANGED_SINCE = (
-    "The tool server {name!r} was changed since, so this Undo would undo that too: remove it on its row "
+    "The extension {name!r} was changed since, so this Undo would undo that too: remove it on its row "
     "in Settings › Tools instead."
 )
 NOT_CARRIED = "a web service's key is never passed in the chat: set `needs_key` true and the user pastes it on the secure card"
@@ -240,7 +240,7 @@ def _network_spelling(text: Any) -> bool:
 
 
 # =========================================================================== #
-# Tool servers
+# Extensions
 # =========================================================================== #
 @lru_cache(maxsize=1)
 def _catalog_specs() -> dict[str, Any]:
@@ -539,7 +539,7 @@ class Plan:
         tail = ""
         if self.slots:
             tail = f" It needs {self._asked_words()}, which the user pastes on a secure card (never in the chat)."
-        return f"Adds the tool server {self.name}; {what}.{tail}"
+        return f"Adds the extension {self.name}; {what}.{tail}"
 
     def _asked_words(self) -> str:
         parts = [_slot_label(self.name, s).split(": ", 1)[1] for s in self.slots]
@@ -867,7 +867,7 @@ def on_secret_saved(platform: Any, arg: str) -> dict[str, Any]:
                     secrets.delete(_slot_vault_name(pack, s))
                 except Exception:  # noqa: BLE001
                     pass
-        out.update({"tools_loaded": 0, "load_reason": f"the tool server was not added: {why}"})
+        out.update({"tools_loaded": 0, "load_reason": f"the extension was not added: {why}"})
         return out
     entry = result["added"]
     loaded = int(entry.get("tools_loaded") or 0)
@@ -925,14 +925,14 @@ def restore_tool_server(platform: Any, name: str, desc: dict[str, Any]) -> str:
         raise R.RecordError(exc.detail) from None
     keys = int(out.get("secrets_removed") or 0)
     tail = f" and its {keys} saved key{'s' if keys != 1 else ''}" if keys else ""
-    return f"undo: removed the tool server '{name}'{tail}"
+    return f"undo: removed the extension '{name}'{tail}"
 
 
 class McpServerAddTool(R._RecordTool):
     name = "mcp_server_add"
     RECORD = TOOL_SERVER
     description = (
-        "Add a tool server (an MCP server) the user wants Jarvis to use: `config` is its command line "
+        "Add an extension (an MCP server) the user wants Jarvis to use: `config` is its command line "
         "(\"npx -y @modelcontextprotocol/server-filesystem C:\\Clients\"), its address (https://…/sse or "
         "…/mcp), a pasted config block (Claude Desktop / Claude Code / Codex / VS Code shape), or a "
         "prebuilt name (filesystem, fetch, memory, git, playwright, box, github); `name` what to call "
@@ -1030,7 +1030,7 @@ class McpServerAddTool(R._RecordTool):
                     "name": f"{TOOL_SERVER_SECRET}{name}__{slot}",
                     "label": _slot_label(name, slot),
                     "help": "",
-                    "why": f"so the tool server {name} can start",
+                    "why": f"so the extension {name} can start",
                     "request_id": new_id("seq"),
                 }
                 for slot in plan.slots
@@ -1038,14 +1038,14 @@ class McpServerAddTool(R._RecordTool):
             what = plan._asked_words()
             saved = "it is saved" if len(plan.slots) == 1 else "they are saved"
             data: dict[str, Any] = {"secret_requests": requests, "tool_server": name, "waiting_for": plan.slots}
-            card = R.create_card(TOOL_SERVER, name, f"waiting for {what}", label=f"Tool server {_q(name)}")
+            card = R.create_card(TOOL_SERVER, name, f"waiting for {what}", label=f"Extension {_q(name)}")
             if card:
-                card["title"] = "Tool server waiting for its key"
+                card["title"] = "Extension waiting for its key"
                 data["record_change"] = card
             return ToolResult(ok=True, output=WAITING_WORDS.format(what=what, saved=saved, name=name), data=data)
         result = await asyncio.to_thread(_add_through_door, self.platform, plan.filled_spec())
         if result is None or not result.get("added"):
-            return ToolResult(ok=False, error=f"The tool server {name!r} was not added: {(result or {}).get('why')}.")
+            return ToolResult(ok=False, error=f"The extension {name!r} was not added: {(result or {}).get('why')}.")
         R.bind_created(name)
         row = await asyncio.to_thread(R.snap_app, self.platform, name)
         _note(after=comparable(row))
@@ -1053,14 +1053,14 @@ class McpServerAddTool(R._RecordTool):
         loaded = int(entry.get("tools_loaded") or 0)
         if loaded:
             state = f"{loaded} tool{'s' if loaded != 1 else ''}"
-            output = f"Added the tool server {name!r} ({state}). Jarvis can use its tools now."
+            output = f"Added the extension {name!r} ({state}). Jarvis can use its tools now."
         else:
             state = R.NOT_STARTED_STATE
-            output = f"Added the tool server {name!r}, but it did not start{await asyncio.to_thread(R._why_not_started, name)}"
+            output = f"Added the extension {name!r}, but it did not start{await asyncio.to_thread(R._why_not_started, name)}"
         data = {"tool_server": name, "tools_loaded": loaded}
-        card = R.create_card(TOOL_SERVER, name, state, label=f"Tool server {_q(name)}")
+        card = R.create_card(TOOL_SERVER, name, state, label=f"Extension {_q(name)}")
         if card:
-            card["title"] = "Tool server added"
+            card["title"] = "Extension added"
             data["record_change"] = card
         return ToolResult(ok=True, output=output, data=data)
 
@@ -1289,7 +1289,7 @@ def tools_record_tools(platform: Any) -> list[Any]:
 _MAX_TEXT = 20_000
 
 _ADD = r"(?:add|install|connect|set\s+up|setup|register|hook\s+up|plug\s+in|load|enable|configure|wire\s+up|bring\s+in|put\s+in|use|save|link)"
-#: What a tool server is called.
+#: What an extension is called.
 _SERVER_WORD = (
     r"(?:mcp(?:\s+servers?)?|tool(?:s)?\s+servers?|model\s+context\s+protocol(?:\s+servers?)?"
     r"|mcp\s+(?:extension|connector|pack|plugin))"
@@ -1396,7 +1396,7 @@ def _wants_web_service(t: str) -> bool:
         return False
     if _SERVICE_NOT_ADD.search(t):
         return False
-    # An MCP server's address is a tool server, not a web service.
+    # An MCP server's address is an extension, not a web service.
     if _SERVER_ADDRESS.search(t) or _COMMAND_LINE.search(t):
         return False
     return True

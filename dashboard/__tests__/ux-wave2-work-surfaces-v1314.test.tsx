@@ -237,7 +237,7 @@ describe("Kanban page at zero sessions", () => {
     const link = within(empty).getByRole("link", { name: /start a session/i });
     expect(link.getAttribute("href") ?? "").toMatch(/^\/sessions(\?|$)/);
     // Anti-vacuity: the header's "All sessions" door is still there.
-    expect(screen.getByRole("link", { name: /All sessions/ }).getAttribute("href")).toBe("/sessions");
+    expect(screen.getByRole("link", { name: /All agent runs/ }).getAttribute("href")).toBe("/sessions");
   });
 
   it("still shows the four lanes, so the user learns what the board is", () => {
@@ -335,7 +335,7 @@ describe("Sessions list at zero sessions: the empty state opens the page's own f
     hooks.responses["/projects"] = { projects: [] };
     render(<SessionsPage />);
     const empty = screen.getByTestId("empty-state");
-    expect(empty.textContent ?? "").toMatch(/No sessions yet/);
+    expect(empty.textContent ?? "").toMatch(/No agent runs yet/);
     // "on the left" is false on a phone, where the form sits ABOVE the list.
     expect(empty.textContent ?? "").not.toMatch(/on the left/i);
     const go = within(empty).getByRole("button");

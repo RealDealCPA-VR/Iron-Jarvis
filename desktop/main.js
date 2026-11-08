@@ -3591,7 +3591,7 @@ const TOOL_WORDS = {
   account_add: "add an account",
   memory_base_add: "add a memory base",
   // v1.448.0 (Wave A item 4): a tool server, a web service.
-  mcp_server_add: "add a tool server",
+  mcp_server_add: "add an extension",
   web_service_add: "save a web service",
   approve_plan: "follow this plan",
   write_document: "create a document",
@@ -3782,7 +3782,7 @@ const TOOL_WORDS_BUILTIN = {
   ltm_search: "search your knowledge base",
   mcp_list_resources: "list an app's resources",
   mcp_read_resource: "read something from one of your apps",
-  mcp_server_add: "add a tool server",
+  mcp_server_add: "add an extension",
   memory_base_add: "add a memory base",
   memory_propose: "suggest something to remember",
   memory_read: "look up a memory",
@@ -4178,7 +4178,7 @@ const RUN_OUTCOME_SUBJECT = {
   schedule: (n) => (n ? `Your schedule ${n}` : "A schedule"),
   goal: () => "Your goal's run",
   workflow: (n) => (n ? `A step of your workflow ${n}` : "A workflow step"),
-  reflex: (n) => (n ? `Your reflex ${n}` : "A reflex rule"),
+  reflex: (n) => (n ? `Your rule ${n}` : "A rule"),
   comm: (n) => (n ? `Your request from ${n}` : "A request from your phone"),
   autonomy: () => "An autonomy run",
   // lib/remoteTask.remoteTaskSubject

@@ -260,12 +260,12 @@ async def test_a_placeholder_after_a_secret_flag_is_a_card_slot_vaulted_where_th
     assert row["args"][2] == "***" and p.secrets.get("mcp.argtok.arg.2") == S["token_arg"]
     assert S["token_arg"] not in _everything_plus(app, frames, caplog, seen)
     # The predicted row IS the stored row, so the Undo's check is honest …
-    card = _card(frames, "Tool server waiting for its key")
+    card = _card(frames, "Extension waiting for its key")
     look = json.loads(await _lookup(app, card))
     assert look["after"] == RT.comparable(row)
     # … and the Undo removes the server and its key.
     status, text = _undo(app, card)
-    assert status == 200 and "removed the tool server 'argtok' and its 1 saved key" in text, text
+    assert status == 200 and "removed the extension 'argtok' and its 1 saved key" in text, text
     assert R.snap_app(p, "argtok") is None and p.secrets.get("mcp.argtok.arg.2") is None
 
 
@@ -296,7 +296,7 @@ async def test_a_non_secret_placeholder_filled_from_values_is_added_through_the_
     assert [t for t, _ in seen] == ["mcp_server_add"]
     assert json.dumps(r"C:\Clients\Acme")[1:-1] in _text(seen[0][1]), "the card shows the filled command line"
     out = _text(_finished(frames, "mcp_server_add"))
-    assert "Added the tool server 'fsx'" in out, out
+    assert "Added the extension 'fsx'" in out, out
     row = R.snap_app(p, "fsx")
     assert row is not None and row["args"][-1] == r"C:\Clients\Acme", row
 

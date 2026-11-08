@@ -142,21 +142,21 @@ export function connectedOf(card: ConfigCard | undefined): AppConnected | undefi
 }
 
 /** "GitHub connected · 26 tools" (only when tools loaded); a tool server
- *  reads "Tool server “fetch” added · 3 tools". */
+ *  reads "Extension “fetch” added · 3 tools". */
 export function connectedWords(c: AppConnected): string {
   const count = `${c.tools} ${c.tools === 1 ? "tool" : "tools"}`;
-  if (c.kind === "tool_server") return `Tool server “${c.name}” added · ${count}`;
+  if (c.kind === "tool_server") return `Extension “${c.name}” added · ${count}`;
   return `${c.name} connected · ${count}`;
 }
 
 /** "Box still needs its Client secret" — an app waiting for another key;
- *  a tool server: "The tool server “x” still needs its API_KEY". */
+ *  an extension: "The extension “x” still needs its API_KEY". */
 export function waitingWords(c: AppConnected): string {
   // "Box client secret" under "Box still needs its …" reads "client secret".
   const own = `${c.name.toLowerCase()} `;
   const list = (c.waiting ?? []).map((w) => (w.toLowerCase().startsWith(own) ? w.slice(own.length) : w));
   const named = list.length <= 1 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list.at(-1)}`;
-  if (c.kind === "tool_server") return `The tool server “${c.name}” still needs its ${named}`;
+  if (c.kind === "tool_server") return `The extension “${c.name}” still needs its ${named}`;
   return `${c.name} still needs its ${named}`;
 }
 

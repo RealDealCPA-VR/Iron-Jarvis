@@ -109,6 +109,10 @@ describe("nav catalogue — the friction phrases resolve", () => {
     ["reflexes", "/reflex"],
     ["artifacts", "/artifacts"],
     ["local fleet", "/fleet"],
+    // v1.455.0 (owner decision 34): the Sessions page is "Agent runs"; the
+    // old word still finds it.
+    ["sessions", "/sessions"],
+    ["agent runs", "/sessions"],
     // A dead ollama endpoint is BOTH a connection to edit and a fleet member
     // that stopped serving — the search must offer both pages, not pick one.
     ["ollama", "/fleet"],

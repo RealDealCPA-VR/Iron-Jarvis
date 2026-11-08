@@ -190,8 +190,9 @@ async def test_adding_a_server_asks_once_only_shows_the_command_adds_it_and_undo
     assert row is not None and row["command"] == sys.executable and row["args"][-1] == "hello"
     assert p.registry.get("mcp__argv-test__argv") is not None, "its tools loaded through the one door"
     out = _text(_finished(frames, "mcp_server_add"))
-    assert "Added the tool server 'argv-test'" in out and "1 tool" in out
-    card = _card(frames, "Tool server added")
+    # v1.455.0 (Wave E, moved on purpose): an MCP server is an "extension".
+    assert "Added the extension 'argv-test'" in out and "1 tool" in out
+    card = _card(frames, "Extension added")
     assert card["key"] == "tool_server.argv-test"
     # The row the add stored is exactly what the plan predicted.
     plan = RT.Plan(p, {"config": _stdio_config("argv-test", extra_args=["hello"])})
@@ -251,7 +252,7 @@ async def test_a_blank_key_is_asked_on_the_secure_card_and_the_server_is_added_o
     done = _done(frames)
     secure = [c for c in done["config_cards"] if c.get("kind") == "secret"]
     assert [c["name"] for c in secure] == ["tool_server.keyed__env__API_KEY"]
-    waiting = _card(frames, "Tool server waiting for its key")
+    waiting = _card(frames, "Extension waiting for its key")
     # The card is saved: the server is added with THAT value, through the door.
     status, raw = await _asgi_post(app, "/config/secret", {"name": secure[0]["name"], "value": SENTINELS["env"]})
     assert status == 200, raw
@@ -275,7 +276,7 @@ async def test_undo_before_the_card_is_saved_withdraws_it(tmp_path):
     p = app.state.platform
     seen: list = []
     frames = await _drive_stream(app, _body("add this MCP server: " + cfg), await _approve_all(app, seen))
-    card = _card(frames, "Tool server waiting for its key")
+    card = _card(frames, "Extension waiting for its key")
     assert RT.pending_for("waiting") is not None
     status, text = _undo(app, card)
     assert status == 200 and "withdrew the card" in text, text
@@ -295,7 +296,7 @@ async def test_undo_over_a_server_edited_since_refuses_and_keeps_it(tmp_path):
     p = app.state.platform
     seen: list = []
     frames = await _drive_stream(app, _body("add this MCP server: " + _stdio_config()), await _approve_all(app, seen))
-    card = _card(frames, "Tool server added")
+    card = _card(frames, "Extension added")
     from iron_jarvis.mcp.pack_door import install_config
 
     row = dict(R.snap_app(p, "edited"))
@@ -312,7 +313,7 @@ async def test_undo_of_a_server_removed_since_says_so(tmp_path):
     p = app.state.platform
     seen: list = []
     frames = await _drive_stream(app, _body("add this MCP server: " + _stdio_config()), await _approve_all(app, seen))
-    card = _card(frames, "Tool server added")
+    card = _card(frames, "Extension added")
     from iron_jarvis.mcp.pack_door import remove_pack
 
     remove_pack(p, "gone")
@@ -640,7 +641,7 @@ def test_the_matchers_are_linear_on_pathological_input():
 @pytest.mark.parametrize(
     "reply, used, noted",
     [
-        ("I added the GitHub MCP server for you.", [], "No tool server was created in this reply."),
+        ("I added the GitHub MCP server for you.", [], "No extension was created in this reply."),
         ("I added the GitHub MCP server for you.", ["mcp_server_add"], ""),
         ("I've saved the Pricing web service.", [], "No web service was created in this reply."),
         ("I've saved the Pricing web service.", ["web_service_add"], ""),

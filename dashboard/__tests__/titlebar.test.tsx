@@ -129,7 +129,7 @@ describe("TitleBar — page label (longest-prefix over NAV_ENTRIES)", () => {
 
   it("resolves a nested route to its parent entry", () => {
     renderAt("/sessions/abc123");
-    expect(screen.getByText("Sessions")).toBeInTheDocument();
+    expect(screen.getByText("Agent runs")).toBeInTheDocument();
   });
 
   it("does not match a sibling that merely shares a prefix string", () => {

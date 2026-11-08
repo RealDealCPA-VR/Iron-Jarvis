@@ -346,9 +346,9 @@ def vendor_of(platform: Any, provider: str) -> str:
 # the views
 # --------------------------------------------------------------------------- #
 
-OFF_NOTE = "Iron-Proxy is off; turn it on in Connections to run Build sessions on your accounts."
-NOT_READ_NOTE = "Iron-Proxy has not listed its accounts yet; try again in a moment."
-UPDATE_NOTE = "Iron-Proxy needs an update to keep a Build session on one account."
+OFF_NOTE = "Several accounts is off; turn it on in Settings › Connections to run coding sessions on your accounts."
+NOT_READ_NOTE = "Your accounts are not listed yet; try again in a moment."
+UPDATE_NOTE = "The account manager needs an update to keep a coding session on one account."
 
 
 def _proxy_state(svc: Any) -> dict[str, Any]:
@@ -432,8 +432,8 @@ NEW_WORK_MAX_PERCENT = 80.0
 #: busy is not "at its limit": its card asks the user (or waits), no move.
 MOVE_KINDS = frozenset({"usage", "rate", "other", "unknown"})
 
-GROUP_NOT_READ = "Iron-Proxy has not listed its accounts yet; try again in a moment"
-GROUP_OFF = "Iron-Proxy is off; turn it on in Connections first"
+GROUP_NOT_READ = "Your accounts are not listed yet; try again in a moment"
+GROUP_OFF = "Several accounts is off; turn it on in Settings › Connections first"
 
 
 def group_of(groups: Any, account_id: str) -> tuple[str, list[str]] | None:
@@ -640,7 +640,7 @@ def group_problem(svc: Any, groups: Any, kept: Any = None) -> str | None:
         return GROUP_NOT_READ
     for pid in new:
         if find(svc, pid) is None:
-            return f"there is no Claude Code, Codex or Grok account “{pid}” in Iron-Proxy"
+            return f"there is no Claude Code, Codex or Grok account “{pid}” in your accounts"
     return None
 
 

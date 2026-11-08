@@ -64,7 +64,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..iron_proxy import accounts as _acc
-from ..iron_proxy.service import NOT_ANSWERING, PICK_PROFILE_FEATURE
+from ..iron_proxy.service import PICK_PROFILE_FEATURE
 
 log = logging.getLogger(__name__)
 
@@ -100,15 +100,23 @@ PANE_OWN_KEYS: dict[str, frozenset[str]] = {
     "xai": frozenset({"XAI_API_KEY", "GROK_API_KEY"}),
 }
 
-_CONNECTIONS = _acc._CONNECTIONS
-_OFF = "Iron-Proxy is off; turn it on in Connections first."
+#: v1.455.0 (Wave E): a coding surface names the card, never the program.
+_CONNECTIONS = "the Several accounts card in Settings › Connections"
+_OFF = "Several accounts is off; turn it on in Settings › Connections first."
 #: The note on a pane that asked for no account while Iron-Proxy was on and
 #: not answering (the shared contract's words).
-NOT_ANSWERING_NOTE = "Iron-Proxy was not answering — this terminal uses this PC's login."
+NOT_ANSWERING_NOTE = "The account manager was not answering, so this terminal uses this PC's login."
 #: ...and while Iron-Proxy is on but its account snapshot is not read yet.
-STARTING_NOTE = "Iron-Proxy is not answering yet (starting or stopped) — this terminal uses this PC's login."
+STARTING_NOTE = "The account manager is not answering yet (starting or stopped), so this terminal uses this PC's login."
+#: A dropped connection to the account manager, in the coding surfaces' words
+#: (the service's own NOT_ANSWERING names the program; this one names the card).
+NOT_ANSWERING_NOW = (
+    "Several accounts is on but the account manager is not answering. Iron Jarvis will "
+    "not use this PC's own login behind your back; turn Several accounts off in "
+    "Settings › Connections to use it."
+)
 _TOO_OLD = (
-    "The Iron-Proxy running on this PC is too old to open a terminal on a chosen account"
+    "The account manager on this PC is too old to open a terminal on a chosen account"
 )
 
 
@@ -230,7 +238,7 @@ def from_recorded(
 def late_note(title: str) -> str:
     """A legacy restore that Iron-Proxy could not answer within the budget."""
     return (
-        "Iron-Proxy did not answer in time when this terminal came back, so it uses this "
+        "The account manager did not answer in time when this terminal came back, so it uses this "
         f'PC\'s login instead of "{title}" — open a new terminal on that account from Launch.'
     )
 
@@ -283,25 +291,25 @@ def _refuse_parked(
 
 
 def _refuse_missing(spec: _acc.ProviderAccounts, title: str) -> PaneAccountRefused:
-    what = f'The {spec.label} account "{title}" no longer exists in Iron-Proxy'
+    what = f'The {spec.label} account "{title}" is no longer in your accounts'
     return PaneAccountRefused(f"{what} — check the account list on {_CONNECTIONS}.", what=what)
 
 
 def _refuse_disabled(spec: _acc.ProviderAccounts, title: str) -> PaneAccountRefused:
-    what = f'The {spec.label} account "{title}" is turned off on the Iron-Proxy card'
+    what = f'The {spec.label} account "{title}" is turned off on the Several accounts card'
     return PaneAccountRefused(f"{what} — turn it on on the Connections page first.", what=what)
 
 
 def _refuse_too_old() -> PaneAccountRefused:
     return PaneAccountRefused(
-        f"{_TOO_OLD} — update Iron-Proxy (a terminal that does not choose an account still "
+        f"{_TOO_OLD} — update the account manager (a terminal that does not choose an account still "
         "gets its first free one).",
         what=_TOO_OLD,
     )
 
 
 def _refuse_unlent(spec: _acc.ProviderAccounts, title: str, said: str) -> PaneAccountRefused:
-    what = f'Iron-Proxy would not lend the {spec.label} account "{title}" right now'
+    what = f'The account manager would not lend the {spec.label} account "{title}" right now'
     if said:
         what += f" ({said.rstrip('.')})"
     return PaneAccountRefused(
@@ -320,8 +328,8 @@ def _said(exc: BaseException) -> str:
 def _unavailable_sentence(exc: BaseException) -> str:
     if str(getattr(exc, "code", "") or "") == "UNREACHABLE":
         # A dropped connection: the service's plain sentence, not a URL.
-        return NOT_ANSWERING
-    said = _said(exc) or "Iron-Proxy is on but not answering."
+        return NOT_ANSWERING_NOW
+    said = _said(exc) or "Several accounts is on but the account manager is not answering."
     return said if said.endswith((".", "!", "?")) else said + "."
 
 
@@ -391,8 +399,8 @@ def _pick_explicit(
     if lease is None or lease.profile_id != pid:
         # An Iron-Proxy that ignored the id (or lent a non-CLI account): never
         # run the pane as an account the user did not choose.
-        what = f'Iron-Proxy answered with a different {spec.label} account than "{title}"'
-        raise PaneAccountRefused(f"{what} — update Iron-Proxy.", what=what)
+        what = f'The account manager answered with a different {spec.label} account than "{title}"'
+        raise PaneAccountRefused(f"{what} — update the account manager.", what=what)
     return lease
 
 
@@ -443,12 +451,12 @@ def _restore_note(what: str) -> str:
 
 
 def _off_note(title: str) -> str:
-    return f"Iron-Proxy is off, so this terminal came back on this PC's login instead of \"{title}\"."
+    return f"Several accounts is off, so this terminal came back on this PC's login instead of \"{title}\"."
 
 
 def _unanswered_note(title: str) -> str:
     return (
-        f"Iron-Proxy was not answering, so this terminal came back on this PC's login instead of "
+        f"The account manager was not answering, so this terminal came back on this PC's login instead of "
         f'"{title}" — open a new terminal on that account from Launch.'
     )
 
@@ -525,7 +533,7 @@ def resolve(
             except Exception as exc:  # noqa: BLE001
                 raise PaneAccountRefused(_unavailable_sentence(exc)) from None
             if not isinstance(profiles, list) or not isinstance(states, dict):
-                raise PaneAccountRefused("Iron-Proxy could not list its accounts.")
+                raise PaneAccountRefused("The account manager could not list your accounts.")
             try:
                 svc.note_accounts(profiles, states)  # the chips read the same read
             except Exception:  # noqa: BLE001
@@ -676,11 +684,11 @@ def _still_runs_note(row: Mapping[str, Any], enabled: bool) -> str:
     title = str(row.get("title") or row.get("id") or "")
     folder = f"This terminal still runs on \"{title}\"'s folder"
     if row.get("state") == "missing" and row.get("reason") == "disabled":
-        return f"{folder}; it is turned off on the Iron-Proxy card."
+        return f"{folder}; it is turned off on the Several accounts card."
     if row.get("state") == "missing":
-        return f"{folder}; Iron-Proxy no longer lists it."
+        return f"{folder}; it is no longer in your accounts."
     if row.get("state") == "unknown" and not enabled:
-        return f"Iron-Proxy is off; {folder[0].lower()}{folder[1:]}."
+        return f"Several accounts is off; {folder[0].lower()}{folder[1:]}."
     return ""
 
 

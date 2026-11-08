@@ -377,8 +377,8 @@
       "failed": "tried a resource read and it failed"
     },
     "mcp_server_add": {
-      "ok": "added a tool server",
-      "failed": "tried a tool server addition and it failed"
+      "ok": "added an extension",
+      "failed": "tried an extension addition and it failed"
     },
     "memory_base_add": {
       "ok": "added a memory base",

@@ -504,7 +504,7 @@ describe("recipeNote — what the Launch menu knows before the launch", () => {
       "Jarvis tools ready",
     );
     expect(recipeNote(cli({ recipe: { ok: true, method: "mcp_http" } })).title).toBe(
-      "Jarvis capabilities over HTTP",
+      "Iron Jarvis's tools, connected over HTTP",
     );
     expect(recipeNote(cli({ recipe: { ok: true, method: "mcp_stdio" } })).ready).toBe(true);
     expect(recipeMethodWord("mcp_stdio")).toBe("over stdio");
@@ -550,13 +550,13 @@ describe("LaunchRecipeNote — the rendered row", () => {
     expect(screen.getByTestId("launch-recipe-claude").textContent).toContain(
       "Codex 0.1 cannot be pointed at a config.",
     );
-    expect(screen.getByText(/No Jarvis capabilities on this version/i)).toBeInTheDocument();
+    expect(screen.getByText(/Starts without Iron Jarvis's tools on this version/i)).toBeInTheDocument();
   });
 
   it("says what a working recipe configured", () => {
     render(<LaunchRecipeNote cli={cli({ recipe: { ok: true, method: "mcp_http" } })} />);
     expect(screen.getByText("Jarvis tools ready")).toBeInTheDocument();
-    expect(screen.getByText("Jarvis tools ready").getAttribute("title")).toBe("Jarvis capabilities over HTTP");
+    expect(screen.getByText("Jarvis tools ready").getAttribute("title")).toBe("Iron Jarvis's tools, connected over HTTP");
   });
 });
 

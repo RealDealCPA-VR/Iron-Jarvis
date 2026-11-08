@@ -147,7 +147,7 @@ export function recipeNote(cli: LaunchCli): {
   const limitations = (recipe.limitations ?? []).filter((l) => typeof l === "string" && l.trim());
   if (recipe.ok === false) {
     return {
-      headline: "No Jarvis capabilities on this version",
+      headline: "Starts without Iron Jarvis's tools on this version",
       ready: false,
       // ok:false with nothing to show would render an empty warning, which
       // reads as "fine". Name the gap instead of implying there is none.
@@ -164,7 +164,7 @@ export function recipeNote(cli: LaunchCli): {
     headline: RECIPE_READY_HEADLINE,
     ready: true,
     limitations,
-    title: `Jarvis capabilities ${recipeMethodWord(method)}`,
+    title: `Iron Jarvis's tools, connected ${recipeMethodWord(method)}`,
   };
 }
 
@@ -1597,7 +1597,7 @@ export function TerminalPane({
             e.stopPropagation();
             setLaunchOpen((v) => !v);
           }}
-          title="Launch an AI CLI in this terminal (Claude, Codex, …)"
+          title="Start a coding tool in this terminal (Claude Code, Codex, …)"
           className={`grid h-5 w-5 shrink-0 place-items-center rounded-md transition-colors ${
             launchOpen
               ? "bg-accent/15 text-accent"
@@ -1731,7 +1731,7 @@ export function TerminalPane({
               installedClis.filter((c) => c.recipe && c.recipe.method !== "none").length > 0 && (
                 <>
                   <div className="px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
-                    With Jarvis capabilities — opens a new terminal
+                    With Iron Jarvis's tools (opens a new terminal)
                   </div>
                   {installedClis
                     .filter((c) => c.recipe && c.recipe.method !== "none")
@@ -2009,7 +2009,7 @@ export function TerminalPane({
             <button
               type="button"
               onClick={copyContext}
-              title="Copy this terminal's context — paste it into another terminal's AI CLI (claude, codex…) or anywhere else"
+              title="Copy this terminal's context — paste it into another terminal's coding tool (Claude Code, Codex…) or anywhere else"
               className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-accent/15 hover:text-accent-soft"
             >
               {ctxCopied ? <Check size={12} className="text-tone-success" /> : <ClipboardCopy size={12} />}

@@ -253,7 +253,7 @@ describe("PreflightNote", () => {
     expect(note.textContent).toContain(
       "Your model server isn't reachable right now. This turn will fail.",
     );
-    expect(note.textContent).toContain("Pick another model or bring the endpoint back.");
+    expect(note.textContent).toContain("Pick another model or start that model server again.");
     // v1.329.0: the warn TONE (amber on the dark themes, a deep ink on the
     // light ones), not a literal amber that only reads through an override.
     expect(note.className).toContain("text-tone-warn");

@@ -402,7 +402,7 @@ describe("source guard: Connections and Fleet use whole pixels and theme tokens"
     const src = read("ConnectionsPage.tsx");
     expect(src).toContain("Paste your API key. It is stored encrypted and never shown again.");
     expect(src).not.toMatch(/Paste your API key —/);
-    expect(src).not.toMatch(/Endpoint saved —/);
+    expect(src).not.toMatch(/(?:Endpoint|Model server) saved —/);
   });
 });
 

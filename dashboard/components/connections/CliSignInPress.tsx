@@ -143,7 +143,7 @@ export function CliSignInPress({
     <div data-testid={`${testIdPrefix}-sign-in-${provider}`} className="mt-1 text-[11px] leading-relaxed text-zinc-500">
       {si.paneId !== undefined ? (
         <span data-testid={`${testIdPrefix}-pane-hint-${provider}`}>
-          A Build terminal opened with {cli.name} running. {withCode(cli.paneHint)} This turns green by
+          A window opened with {cli.name} running. {withCode(cli.paneHint)} This turns green by
           itself once you&apos;re signed in.{" "}
           <Link
             href={paneHref(si.paneId)}

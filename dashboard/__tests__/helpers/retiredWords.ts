@@ -103,6 +103,18 @@ export const RETIRED_ON_SCREEN: readonly Retired[] = [
   onScreen("Rescan local CLIs", /rescan local clis/i, "Look again"),
   onScreen("No OAuth client configured", /no oauth client configured/i, "the sign-in set-up sentence"),
   onScreen("Open Channels", /\bopen channels\b/i, "Open Notifications"),
+  // v1.455.0 (Wave E, item 3): an MCP server is an "extension" (VOCABULARY.md
+  // row 22); v1.448.0's chat door called it a "tool server", a second name.
+  // Dashboard-only because a user's own words ("connect this tool server")
+  // are still read by the daemon's matchers.
+  onScreen("tool server", /\btool[- ]servers?\b/i, "extension"),
+  // v1.455.0 (Wave E, item 4): the page is Rules since v1.452.0; "reflex"
+  // stayed in the run notices. Dashboard-only: the daemon's ids, event types
+  // and its own 404s ("no such reflex rule") still carry the word.
+  onScreen("reflex", /\breflex(?:es)?\b/i, "rule (the page is Rules)"),
+  // v1.455.0 (Wave E, item 6): a coding session is never a "Build session"
+  // on screen (VOCABULARY.md row 25); the daemon's own 404s still say it.
+  onScreen("Build session", /\bbuild sessions?\b/i, "coding session"),
 ];
 
 /** A retired word read on SOME dashboard surfaces only (see RETIRED_ON_SURFACES). */
@@ -148,8 +160,41 @@ export const RETIRED_ON_SURFACES: readonly Retired[] = [
   ),
 ];
 
+/** v1.455.0 (Wave E, item 1): the surfaces where the user's own model server
+ *  is named — the model menu and receipts (providerDisplay in lib/onboarding),
+ *  the chat, Connections and its cards, the Model servers page, the first-run
+ *  doors, the nav and the palette. There it is a "model server", never an
+ *  "endpoint" or a "node". Advanced places that use the word for something
+ *  else (a memory base's search address, a remote agent) are outside it. */
+export function isModelServerSurface(file: string): boolean {
+  return (
+    file.startsWith("components/chat/") ||
+    file === "app/chat/page.tsx" ||
+    file === "app/fleet/page.tsx" ||
+    file === "components/settings/pages/ConnectionsPage.tsx" ||
+    file === "components/connections/EnvelopeCard.tsx" ||
+    file === "components/connections/EndpointModelPicker.tsx" ||
+    file === "components/onboarding/ConnectDoors.tsx" ||
+    file === "components/CommandPalette.tsx" ||
+    file === "lib/onboarding.ts" ||
+    file === "lib/modelServers.ts" ||
+    file === "lib/nav.ts"
+  );
+}
+
+/** v1.455.0 (Wave E, item 1): the model-server words, scoped (see above). */
+export const RETIRED_ON_MODEL_SERVER_SURFACES: readonly Retired[] = [
+  onSurfaces("endpoint", /\bendpoints?\b/i, "model server", isModelServerSurface),
+  onSurfaces("node", /\bnodes?\b(?!\.js)/i, "model server", isModelServerSurface),
+];
+
 /** Every retired row, in one list (a scoped row applies only to its files). */
-export const ALL_RETIRED: readonly Retired[] = [...RETIRED, ...RETIRED_ON_SCREEN, ...RETIRED_ON_SURFACES];
+export const ALL_RETIRED: readonly Retired[] = [
+  ...RETIRED,
+  ...RETIRED_ON_SCREEN,
+  ...RETIRED_ON_SURFACES,
+  ...RETIRED_ON_MODEL_SERVER_SURFACES,
+];
 
 /** Wave D item 33: the HTML entities JSX text may spell a character with
  *  (`&amp;`, `&rsquo;`, `&#39;`, `&#x27;`). The scanner reads JSX text as

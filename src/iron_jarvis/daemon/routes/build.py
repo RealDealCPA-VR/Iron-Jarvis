@@ -583,20 +583,20 @@ CONTINUE_TEXT = (
     "Carry on with the task above from where it stopped. Do not repeat work that is "
     "already done; check the files first if you are not sure what was finished."
 )
-ACCOUNT_OFF = "Iron-Proxy is off; turn it on in Connections first."
+ACCOUNT_OFF = "Several accounts is off; turn it on in Settings › Connections first."
 ACCOUNT_UNKNOWN = (
     # v1.424.0 (D6): Grok's accounts are a session's choices too.
-    "There is no Claude Code, Codex or Grok account like that in Iron-Proxy — choose one from "
+    "There is no Claude Code, Codex or Grok account like that in your accounts — choose one from "
     "the account list."
 )
 ACCOUNT_TURNED_OFF = (
-    "That account is turned off on the Iron-Proxy card — turn it on in Connections first."
+    "That account is turned off on the Several accounts card — turn it on in Settings › Connections first."
 )
 NOTHING_TO_WAIT_FOR = (
     "This session's account is not waiting on a limit — send your message, or choose "
     "another account."
 )
-NO_ACCOUNT = "This session does not run on an Iron-Proxy account."
+NO_ACCOUNT = "This session does not run on one of your accounts."
 
 
 def _svc_of(platform: Any) -> Any:
@@ -693,7 +693,7 @@ def continue_problem(platform: Any, setup: dict[str, Any], account_id: str,
             return {"detail": ACCOUNT_OFF, "code": ""}
         client.unpark(target)
     except Exception as exc:  # noqa: BLE001 — said in words
-        return {"detail": f'Iron-Proxy would not let "{title}" be tried again: '
+        return {"detail": f'The account manager would not let "{title}" be tried again: '
                           f"{PA._unavailable_sentence(exc)}", "code": ""}
     with contextlib.suppress(Exception):
         svc.refresh_accounts()  # the list shows it ready again
@@ -764,8 +764,8 @@ def turn_account(platform: Any, thread_id: str, setup: dict[str, Any]) -> "tuple
         who = f' "{name}"' if name else ""
         raise HTTPException(
             status_code=409,
-            detail=f"This session runs on the account{who}, and Iron-Proxy is off — turn it on "
-                   "in Connections to continue.",
+            detail=f"This session runs on the account{who}, and Several accounts is off — turn it on "
+                   "in Settings › Connections to continue.",
         )
     row = BA.find(svc, account)
     if row is not None:
@@ -5377,7 +5377,7 @@ def register(app: FastAPI, d: Any) -> None:
         if limit.get("resumable") is False:
             raise HTTPException(
                 status_code=409,
-                detail="This account no longer exists in Iron-Proxy — choose another account.",
+                detail="This account is no longer in your accounts — choose another account.",
             )
         wait = wait_record(setup, limit.get("resets_at"))
         row = await asyncio.to_thread(S.update, platform.engine, thread_id, setup={"account_wait": wait})

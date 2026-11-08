@@ -254,7 +254,7 @@ def launch_pane(
     if account and provider is None:
         raise HTTPException(
             status_code=400,
-            detail=f"{cat['label']} does not run on an Iron-Proxy account.",
+            detail=f"{cat['label']} does not run on one of your accounts.",
         )
     terminals = platform.terminals
     cwd = locked_cwd or (body.cwd or "").strip() or None

@@ -898,8 +898,11 @@ export default function SchedulesPage() {
                       <option value="none">Don&apos;t notify</option>
                     </select>
                     <div className="mt-1 text-[11px] text-zinc-600">
-                      Add more on the Notifications page — Telegram puts results on
-                      your phone.
+                      Add more on the{" "}
+                      <Link href="/channels" className="text-accent-soft underline-offset-2 hover:underline">
+                        Notifications page
+                      </Link>
+                      . Telegram puts results on your phone.
                     </div>
                   </div>
                 )}

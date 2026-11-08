@@ -262,7 +262,7 @@ export function SavedWorkflows() {
                       </p>
                     ) : refsFailed ? (
                       <p className="text-[12px] text-tone-warn">
-                        Couldn’t check whether a schedule or reflex rule still uses
+                        Couldn’t check whether a schedule or rule still uses
                         it. If one does, it will fail until re-pointed.
                       </p>
                     ) : refs && refs.length > 0 ? (

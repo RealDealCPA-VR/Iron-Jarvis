@@ -305,9 +305,10 @@ def check_agent_browser() -> dict:
         fix = "Install Microsoft Edge: https://www.microsoft.com/edge"
     else:
         detail = problem
-        fix = (
-            "Reinstall dependencies (`uv sync --extra dev --extra voice`); if this is the packaged "
-            "app, Playwright's driver is missing from the build."
+        fix = _reinstall_fix(
+            "its browser driver",
+            "Reinstall dependencies (`uv sync --extra dev --extra voice`); Playwright's driver is "
+            "missing from this checkout.",
         )
     return _result("agent_browser", ok, detail, fix=fix, level=RECOMMENDED)
 
@@ -332,8 +333,10 @@ def check_pdf_classifier() -> dict:
         if ok
         else "pdf-inspector is missing — scanned pages inside an otherwise "
         "text-based PDF will not be found (whole-file scans still are).",
-        fix="" if ok else "Reinstall dependencies (`uv sync`); if this is the "
-        "packaged app, the native extension is missing from the build.",
+        fix="" if ok else _reinstall_fix(
+            "its reader for scanned pages",
+            "Reinstall dependencies (`uv sync`); pdf-inspector is missing from this checkout.",
+        ),
         level=RECOMMENDED,
     )
 
@@ -707,6 +710,19 @@ def check_legacy_office() -> dict:
         ),
         level=RECOMMENDED,
     )
+
+
+def _reinstall_fix(missing: str, dev_fix: str) -> str:
+    """v1.455.0 (Wave E): the frozen-aware fix of ``_xls_missing_fix``, for any
+    part a build can lose. The packaged app's user is never told to run
+    ``uv sync`` (a developer's fix for a source checkout): a frozen build
+    missing a part is a broken build, and the fix is a reinstall."""
+    if getattr(sys, "frozen", False):
+        return (
+            f"This copy of Iron Jarvis is missing {missing}. Reinstall it from the "
+            "Updates page or the installer."
+        )
+    return dev_fix
 
 
 def _xls_missing_fix() -> str:

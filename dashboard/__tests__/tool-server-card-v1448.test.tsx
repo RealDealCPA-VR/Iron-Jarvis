@@ -52,9 +52,9 @@ describe("a tool server's secure card (A2 review)", () => {
   it("decodes the daemon's answer to a tool server's save, and nothing to a web service's", () => {
     const added = connectedFromSave("tool_server.keyed__env__API_KEY", { ...SAVED, app: "keyed", app_name: "keyed", tools_loaded: 1 });
     expect(added).toEqual({ app: "keyed", name: "keyed", tools: 1, kind: "tool_server" });
-    expect(connectedWords(added!)).toBe("Tool server “keyed” added · 1 tool");
+    expect(connectedWords(added!)).toBe("Extension “keyed” added · 1 tool");
     const waiting = connectedFromSave("tool_server.two__env__API_KEY", { app: "two", app_name: "two", tools_loaded: 0, waiting_for: ["the X-Api-Key header"] });
-    expect(waitingWords(waiting!)).toBe("The tool server “two” still needs its the X-Api-Key header");
+    expect(waitingWords(waiting!)).toBe("The extension “two” still needs its the X-Api-Key header");
     const dead = connectedFromSave("tool_server.hp__auth", { app: "hp", app_name: "hp", tools_loaded: 0, load_reason: "saved, but it did not start" });
     expect(notLoadedDoor(dead!)).toEqual({ href: "/tools", words: "open Settings › Tools" });
     // An app's card is byte-for-byte what it was.
@@ -77,7 +77,7 @@ describe("a tool server's secure card (A2 review)", () => {
       saved: "stored", connected: { app: "hp", name: "hp", tools: 0, kind: "tool_server", reason: "saved, but it did not start" },
     } as ConfigCard;
     render(<ConfigCards cards={[added, dead]} onSettle={() => {}} onContinue={() => {}} />);
-    expect(screen.getByTestId("credential-card-connected").textContent).toContain("Tool server “keyed” added · 1 tool");
+    expect(screen.getByTestId("credential-card-connected").textContent).toContain("Extension “keyed” added · 1 tool");
     expect(screen.getByTestId("credential-card-continue")).toBeTruthy();
     const notLoaded = screen.getByTestId("credential-card-not-loaded");
     expect(notLoaded.textContent).toContain("did not load");

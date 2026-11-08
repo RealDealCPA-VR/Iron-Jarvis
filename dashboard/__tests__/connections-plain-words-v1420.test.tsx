@@ -246,9 +246,9 @@ describe("the Gemini door says free tier (C6.12)", () => {
 describe("Fleet's Add a node takes a key (C6.12)", () => {
   it("vaults the key under the node's own name and wires it to the node", async () => {
     render(<FleetPage />);
-    fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "http://192.168.1.50:4000" } });
+    fireEvent.change(screen.getByLabelText("Server address"), { target: { value: "http://192.168.1.50:4000" } });
     fireEvent.change(screen.getByTestId("fleet-add-key"), { target: { value: "sk-master-123" } });
-    fireEvent.click(screen.getByRole("button", { name: /Add node/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Add model server/ }));
     await waitFor(() => expect(hooks.patches.length).toBe(1));
     const secret = hooks.posts.find((p) => p.path === "/secrets")?.body as Record<string, string>;
     expect(secret).toMatchObject({ name: "endpoint_spark_key", value: "sk-master-123", kind: "api_key" });
@@ -262,10 +262,10 @@ describe("Fleet's Add a node takes a key (C6.12)", () => {
 
   it("no key typed: nothing is vaulted", async () => {
     render(<FleetPage />);
-    fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "http://192.168.1.50:4000" } });
-    fireEvent.click(screen.getByRole("button", { name: /Add node/ }));
+    fireEvent.change(screen.getByLabelText("Server address"), { target: { value: "http://192.168.1.50:4000" } });
+    fireEvent.click(screen.getByRole("button", { name: /Add model server/ }));
     await waitFor(() => expect(hooks.posts.some((p) => p.path === "/fleet/nodes")).toBe(true));
-    await waitFor(() => expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe(""));
+    await waitFor(() => expect((screen.getByLabelText("Server address") as HTMLInputElement).value).toBe(""));
     expect(hooks.posts.some((p) => p.path === "/secrets")).toBe(false);
     expect(hooks.patches).toEqual([]);
   });

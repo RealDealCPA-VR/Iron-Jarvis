@@ -16,6 +16,7 @@ import { WorldBoard } from "@/components/agents/world/WorldBoard";
 import { WaitingList } from "@/components/agents/world/WaitingList";
 import { CompletedList } from "@/components/agents/world/CompletedList";
 import { ProjectCodingSessions } from "@/components/projects/ProjectCodingSessions";
+import { statusWords } from "@/lib/statusWords";
 
 type Tab = "waiting" | "board" | "completed";
 
@@ -32,10 +33,13 @@ export function ProjectWork({
   coding?: unknown;
 }) {
   const [tab, setTab] = useState<Tab>(waiting.length > 0 ? "waiting" : "board");
+  // v1.455.0 (Wave E): the tab words are the one status table's ("Waiting
+  // for you", "Done"), the words every badge and row already says.
+  const waitingWord = statusWords("waiting").word;
   const tabs: { key: Tab; label: string }[] = [
     { key: "board", label: "Board" },
-    { key: "waiting", label: waiting.length ? `Waiting on you (${waiting.length})` : "Waiting on you" },
-    { key: "completed", label: "Completed" },
+    { key: "waiting", label: waiting.length ? `${waitingWord} (${waiting.length})` : waitingWord },
+    { key: "completed", label: statusWords("completed").word },
   ];
   return (
     <section data-testid="mission-project-work">

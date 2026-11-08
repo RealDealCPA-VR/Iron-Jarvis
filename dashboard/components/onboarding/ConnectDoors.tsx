@@ -724,10 +724,9 @@ export function ConnectDoors({
       {door === "subscription" && (
         <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
           <p className="text-xs leading-relaxed text-zinc-400">
-            Iron Jarvis can use your plan through each company&apos;s own command-line tool,
-            signed in on this PC: Claude Code (the command-line tool) for a Claude Pro or Max
-            plan, or Codex (OpenAI&apos;s command-line tool) for ChatGPT Plus or Pro. Nothing to
-            paste, and it never signs in for you.
+            Iron Jarvis can use your plan through each company&apos;s own app, signed in on
+            this PC: Claude Code for a Claude Pro or Max plan, or Codex for ChatGPT Plus or
+            Pro. Nothing to paste, and it never signs in for you.
           </p>
           {anyNotInstalled && (
             <p className="mt-2 text-xs leading-relaxed text-zinc-400">
@@ -872,7 +871,7 @@ export function ConnectDoors({
                             data-testid={`pane-hint-${c.cli}`}
                             className="mt-1.5 block text-zinc-400"
                           >
-                            A Build terminal opened with {c.name} running. {withCode(c.paneHint)} This
+                            A window opened with {c.name} running. {withCode(c.paneHint)} This
                             turns green by itself a few seconds after {c.name} says you&apos;re signed
                             in, or press “{CHECK_NOW_LABEL}”.{" "}
                             <Link

@@ -83,7 +83,7 @@ _MOCK_NOTE = (
     "fabricated OCR is worse than none; connect a vision-capable model and retry"
 )
 _DISABLED_NOTE = (
-    "scanned document — OCR is turned off (settings: ocr_enabled = false), so "
+    "scanned document — reading scanned pages is turned off, so "
     "this file's text was NOT recovered; nothing here was read"
 )
 

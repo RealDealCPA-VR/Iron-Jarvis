@@ -193,7 +193,7 @@ async function card() {
 async function saveEndpoint(c: HTMLElement, url: string) {
   fireEvent.click(within(c).getByRole("button", { name: /Add (a|another) model server/ }));
   fireEvent.change(within(c).getByPlaceholderText("http://localhost:1234/v1"), { target: { value: url } });
-  fireEvent.click(within(c).getByRole("button", { name: /Save endpoint/ }));
+  fireEvent.click(within(c).getByRole("button", { name: /Save model server/ }));
 }
 
 beforeEach(() => {
@@ -216,12 +216,12 @@ describe("G47: the model-server card matches what answers", () => {
     expect(isOwnEndpoint({ connected: false, source: ENDPOINT_SOURCE })).toBe(false);
   });
 
-  it("reads 'Connected · your endpoint · no key needed' while its own server answers, and keeps its list and add form", async () => {
+  it("reads 'Connected · your model server · no key needed' while its own server answers, and keeps its list and add form", async () => {
     seed(customRow({ connected: true, status: "connected", source: ENDPOINT_SOURCE }), [SAVED_NODE]);
     const c = await card();
     const pill = within(c).getByTestId("conn-status-pill");
     expect(pill.textContent?.replace(/\s+/g, " ").trim()).toBe(OWN_ENDPOINT_LABEL);
-    expect(OWN_ENDPOINT_LABEL).toBe("Connected · your endpoint · no key needed");
+    expect(OWN_ENDPOINT_LABEL).toBe("Connected · your model server · no key needed");
     // The daemon's raw words ride the title, like the inherited source.
     expect(pill.getAttribute("title")).toBe(ENDPOINT_SOURCE);
     // The daemon's name for the slot stays reachable as the title's tooltip.
@@ -278,7 +278,7 @@ describe("G47: a save whose check could not reach the server says so", () => {
     await waitFor(() => expect(within(c).getByText(SAID)).toBeInTheDocument());
     const note = within(c).getByText(SAID).closest("[data-tone]") as HTMLElement;
     expect(note.getAttribute("data-tone")).toBe("warn");
-    expect(c.textContent).not.toMatch(/Endpoint saved/);
+    expect(c.textContent).not.toMatch(/Model server saved/);
     // The endpoint itself WAS saved (its own provider), exactly as before.
     expect(hooks.posts.find((p) => p.path === "/fleet/nodes")?.body).toMatchObject({
       base_url: "http://bxo:1234/v1",
@@ -298,7 +298,7 @@ describe("G47: a save whose check could not reach the server says so", () => {
         ),
       ).toBeInTheDocument(),
     );
-    expect(c.textContent).not.toMatch(/Endpoint saved/);
+    expect(c.textContent).not.toMatch(/Model server saved/);
   });
 
   it("v1.355.0 integrate: a check that REACHED the server and got an error never says 'could not reach'", async () => {
@@ -320,7 +320,7 @@ describe("G47: a save whose check could not reach the server says so", () => {
     const note = within(c).getByText(said).closest("[data-tone]") as HTMLElement;
     expect(note.getAttribute("data-tone")).toBe("warn");
     expect(c.textContent).not.toMatch(/could not reach/);
-    expect(c.textContent).not.toMatch(/Endpoint saved/);
+    expect(c.textContent).not.toMatch(/Model server saved/);
   });
 
   it("a server that answers keeps the green note, with no warning", async () => {
@@ -332,7 +332,7 @@ describe("G47: a save whose check could not reach the server says so", () => {
       // v1.424.0 (D8, MOVED ON PURPOSE): the note is about the MODEL the
       // check asked ("It runs tools" spoke for the whole server).
       expect(
-        within(c).getByText(/Endpoint saved\. Pick "box" in any model picker\. This model calls tools/),
+        within(c).getByText(/Model server saved\. Pick "box" in any model picker\. This model calls tools/),
       ).toBeInTheDocument(),
     );
     expect(c.querySelector('[data-tone="warn"]')).toBeNull();
