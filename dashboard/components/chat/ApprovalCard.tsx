@@ -215,8 +215,10 @@ export function ApprovalCard({
   who?: string;
   /** v1.449.0: called once an answer has LANDED (the daemon took it), with
    *  the decision — the mission screen re-reads its view at once instead of
-   *  waiting for its poll. A refused answer calls nothing (the card says
-   *  why and keeps its buttons). */
+   *  waiting for its poll. Also called on a 404 (the ask was already
+   *  answered elsewhere and the daemon let it go): the surface re-reads and
+   *  the card leaves. A REFUSED answer (anything else) calls nothing (the
+   *  card says why and keeps its buttons). */
   onAnswered?: (decision: "once" | "conversation" | "deny" | "tab" | "always") => void;
 }) {
   const where: ApprovalScope = scope ?? (docked || onConversation ? "chat" : "run");
@@ -283,6 +285,14 @@ export function ApprovalCard({
       // the user is never stranded mid-pause with a dead card.
       setSent("");
       setError(err instanceof Error ? err.message : String(err));
+      // v1.449.0 review: a surface that re-reads on an answer (the mission
+      // screen) must re-read on a 404 too — the ask was answered elsewhere
+      // (the bell, another window, the phone) and the daemon has let it go,
+      // so the card leaves at once instead of sitting on a dead ask until
+      // the next poll, as the mission's old card did.
+      // (Read off the error's shape, not `ApiError`: ~70 tests mock lib/api
+      // with their own error class.)
+      if (err && typeof err === "object" && (err as { status?: unknown }).status === 404) onAnswered?.(decision);
     }
   }
 

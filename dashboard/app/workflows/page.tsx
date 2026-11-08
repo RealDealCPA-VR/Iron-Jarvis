@@ -823,6 +823,13 @@ function RunHistory() {
                             <button
                               type="button"
                               data-testid={`run-stop-${String(r.id)}`}
+                              // (review) a run parked on the user is stopped
+                              // without an answer: the press says so.
+                              title={
+                                r.status === "waiting"
+                                  ? "Stops the run now; the question it is waiting on is dropped."
+                                  : "Stops the run before its next step."
+                              }
                               onClick={(e) => {
                                 e.stopPropagation();
                                 void stopRun(String(r.id));

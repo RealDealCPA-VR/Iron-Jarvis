@@ -18,6 +18,7 @@
 
 import { ApiError, post } from "@/lib/api";
 import { onceReasonOf, type OnceReason } from "@/lib/onceReason";
+import { statusWords } from "@/lib/statusWords";
 
 /** At most this many attempts start for one message (the daemon refuses more). */
 export const MAX_ATTEMPTS = 3;
@@ -259,12 +260,16 @@ export function attemptName(a: AttemptView): string {
   return a.accountName ? `${who} · ${a.accountName}` : who;
 }
 
-/** How a running row reads ("Working · 3 steps", "Waiting for your OK"). */
+/** How a running row reads ("Working · 3 steps", "Waiting for you").
+ *  v1.449.0 review: the status words are the ONE table's (lib/statusWords),
+ *  as on every other surface — this file spelled "Waiting for your OK" and
+ *  "Finished" of its own. */
 export function liveWords(a: AttemptView): string {
-  if (a.state === "waiting") return "Waiting for your OK";
+  if (a.state === "waiting") return statusWords("waiting").word;
   if (a.state === "starting") return "Starting";
   if (FINAL.has(a.state)) return endWords(a);
-  return a.steps > 0 ? `Working · ${a.steps} step${a.steps === 1 ? "" : "s"}` : "Working";
+  const working = statusWords("working").word;
+  return a.steps > 0 ? `${working} · ${a.steps} step${a.steps === 1 ? "" : "s"}` : working;
 }
 
 /** Why it stopped, in words (the daemon's own, else by its kind). */
@@ -272,15 +277,15 @@ export function endWords(a: AttemptView): string {
   if (a.words) return a.words;
   switch (a.why) {
     case "finished":
-      return "Finished";
+      return statusWords("completed").word;
     case "limit":
       return "Stopped at an account limit";
     case "cut_off":
       return "Cut off when Iron Jarvis stopped";
     case "failed":
-      return a.error ? `Failed: ${a.error}` : "Failed";
+      return a.error ? `${statusWords("failed").word}: ${a.error}` : statusWords("failed").word;
     default:
-      return "Stopped";
+      return statusWords("cancelled").word;
   }
 }
 

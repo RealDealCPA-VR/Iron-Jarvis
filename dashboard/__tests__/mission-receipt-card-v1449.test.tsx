@@ -247,6 +247,16 @@ describe("the card is the chat's ApprovalCard", () => {
     expect(onChanged).not.toHaveBeenCalled();
   });
 
+  it("(review) an ask answered elsewhere (404) re-reads the view at once, so the card leaves; the daemon's words show meanwhile", async () => {
+    const onChanged = vi.fn();
+    H.postFail = { status: 404, message: "no such pending approval" };
+    renderOutput(asking({ approval_id: "ask-4", tool: "write_file" }), onChanged);
+    const wrap = await screen.findByTestId("mission-approval");
+    fireEvent.click(within(wrap).getByText("Allow once"));
+    expect(await within(wrap).findByText("no such pending approval")).toBeTruthy();
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  });
+
   it("the source: MissionOutput draws no card of its own any more", async () => {
     const { readFileSync } = await import("node:fs");
     const path = await import("node:path");

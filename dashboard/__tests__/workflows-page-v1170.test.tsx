@@ -471,6 +471,9 @@ describe("RunHistory (via the page)", () => {
     const stop = await screen.findByTestId("run-stop-r-run");
     expect(stop.textContent).toBe("Stop");
     expect(screen.getByTestId("run-stop-r-wait").textContent).toBe("Stop");
+    // (review) a parked run is stopped without an answer: the press says so.
+    expect(screen.getByTestId("run-stop-r-wait").getAttribute("title")).toMatch(/question .* dropped/);
+    expect(stop.getAttribute("title")).toBe("Stops the run before its next step.");
     expect(screen.queryByTestId("run-stop-r-done")).toBeNull();
     expect(screen.queryByTestId("run-stop-r-part")).toBeNull();
     // An interrupted run has Resume, never Stop (nothing runs).

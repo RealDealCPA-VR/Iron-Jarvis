@@ -97,6 +97,7 @@ import {
   type TryOnPick,
 } from "@/lib/buildAttempts";
 import { decodeMessage } from "@/lib/buildSessions";
+import { statusWords } from "@/lib/statusWords";
 
 /* ------------------------------------------------------------- fixtures */
 
@@ -242,7 +243,8 @@ describe("while they run: one row per attempt, from the turn's own frames", () =
       s.push("attempt", { id: "try2", state: "waiting", ask: { id: "apr_9", tool: "shell", args: { command: "pytest" } } });
     });
     const ask = await screen.findByTestId("attempt-ask");
-    expect(attemptRow("try2")).toHaveTextContent("Waiting for your OK");
+    // v1.449.0 review: the ONE status table's word ("Waiting for you").
+    expect(attemptRow("try2")).toHaveTextContent(statusWords("waiting").word);
     expect(ask).toHaveTextContent("pytest");
     fireEvent.click(within(ask).getByRole("button", { name: /Allow once/ }));
     await waitFor(() =>

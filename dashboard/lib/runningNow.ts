@@ -485,10 +485,16 @@ export function runningItems(
   const chats = (threads ?? [])
     .filter((t) => t && typeof t.id === "string" && (t.running === true || t.waiting === true))
     .map(chatItem);
-  const builds = [...buildReplyItems(replies, now), ...buildAppReplyItems(replies, now)];
   const flows = workflowRunItems(extra?.workflows, now);
   const media = mediaJobItems(extra?.media, now);
   const night = nightTaskItems(extra?.night, now);
+  // (v1.449.0 review) a night task's reply IS a coding session's running
+  // turn, which the replies list carries too: one piece of work, one row —
+  // the night row, which says what it is. Matched by the session both open.
+  const nightHrefs = new Set(night.map((i) => i.href));
+  const builds = [...buildReplyItems(replies, now), ...buildAppReplyItems(replies, now)].filter(
+    (i) => !(i.kind === "build" && nightHrefs.has(i.href)),
+  );
   const waiting = [
     ...runs.filter((i) => i.waiting),
     ...chats.filter((i) => i.waiting),

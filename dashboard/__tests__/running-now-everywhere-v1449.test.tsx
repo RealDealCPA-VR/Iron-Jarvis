@@ -253,6 +253,19 @@ describe("lib/runningNow: the three new kinds, in words", () => {
     expect(old.map((i) => i.key)).toEqual(["s:s-run"]);
     expect(runningItems(null, null, NOW, null, { workflows: null, media: null, night: null })).toEqual([]);
   });
+
+  it("(review) a night task's reply is its coding session's running turn: ONE row, the night one", () => {
+    const replies = [
+      { turn_id: "t-night", surface: "build", thread_id: "b-night", title: "Add the invoice export", started_at: ago(25 * MIN) },
+      { turn_id: "t-mine", surface: "build", thread_id: "b-mine", title: "My own session", started_at: ago(2 * MIN) },
+    ];
+    const night = [{ id: "n-run", folder: "C:\work\shop", words: "Invoices", state: "running", thread_id: "b-night", started_at: ago(25 * MIN) }];
+    const items = runningItems(null, null, NOW, replies, { night });
+    expect(items.map((i) => i.key)).toEqual(["b:t-mine", "n:n-run"]);
+    // The night row still opens that session; the user's own coding session is untouched.
+    expect(items[1]!.href).toBe(items.find((i) => i.key === "n:n-run")!.href);
+    expect(runningItems(null, null, NOW, replies, null).map((i) => i.key)).toEqual(["b:t-mine", "b:t-night"]);
+  });
 });
 
 describe("the orb's list", () => {

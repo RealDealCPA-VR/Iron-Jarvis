@@ -56,6 +56,7 @@ import {
   type SavedHelper,
 } from "@/lib/buildHelpers";
 import type { CatalogRow } from "@/lib/answeredModel";
+import { statusWords } from "@/lib/statusWords";
 import { helperTeamName, type TeamRoster } from "@/lib/sessionTeam";
 import { LinkedRefs } from "@/components/harness/OpenInEditor";
 
@@ -209,7 +210,7 @@ export function LiveHelperRow({
         since={helper.since}
         progress={stepsSoFar(helper.steps)}
         tools={helper.tools}
-        phaseTitle={asking ? "Waiting for your OK" : helper.phase ? phaseWords(helper.phase) : null}
+        phaseTitle={asking ? statusWords("waiting").word : helper.phase ? phaseWords(helper.phase) : null}
         phaseDetail={asking ? null : helper.phaseDetail || null}
         // v1.374.0: the run's plan, ticking off as it works (the chat's
         // checklist, AgentRunLive's own `plan`) — absent for most helpers.
@@ -263,7 +264,7 @@ function phaseWords(phase: string): string {
     case "assembling":
       return "Putting the answer together";
     default:
-      return "Working";
+      return statusWords("working").word;
   }
 }
 

@@ -22,6 +22,7 @@ import { codingStateWords } from "@/lib/codingSessions";
 import { statusTone, statusWords as threadWords } from "@/lib/threadStatus";
 import { missionHeadline, type MissionView } from "@/lib/mission";
 import { LANES } from "@/lib/kanban";
+import { endWords, liveWords, type AttemptView } from "@/lib/buildAttempts";
 
 const ROOT = path.join(__dirname, "..");
 const read = (...p: string[]) => readFileSync(path.join(ROOT, ...p), "utf8").replace(/\r\n/g, "\n");
@@ -33,6 +34,12 @@ const FILES = [
   ["lib", "kanban.ts"],
   ["lib", "threadStatus.ts"],
   ["lib", "runningNow.ts"],
+  // (review) three more surfaces that spelled "Waiting for your OK",
+  // "Finished" and "Working" of their own: the Try-on attempt rows, the
+  // helper rows and the Build › Code session list.
+  ["lib", "buildAttempts.ts"],
+  ["components", "harness", "HarnessHelpers.tsx"],
+  ["components", "buildCode", "BuildCodeView.tsx"],
 ] as const;
 
 /** The table's own words plus every spelling these files used to have —
@@ -124,6 +131,20 @@ describe("each reader hands back the table's word and tone", () => {
     expect(done.title).toBe(statusWords("completed").word);
     expect(STATUS_WORDS.has(done.hint)).toBe(false);
     for (const l of LANES) expect(STATUS_WORDS.has(l.hint), `${l.id} hint "${l.hint}"`).toBe(false);
+  });
+
+  it("(review) a Try-on attempt row's words are the table's", () => {
+    const a = (over: Partial<AttemptView>): AttemptView =>
+      ({ state: "running", steps: 0, why: "", words: "", error: "", ...over }) as unknown as AttemptView;
+    expect(liveWords(a({ state: "waiting" }))).toBe(statusWords("waiting").word);
+    expect(liveWords(a({ state: "running", steps: 0 }))).toBe(statusWords("working").word);
+    expect(liveWords(a({ state: "running", steps: 3 }))).toBe(`${statusWords("working").word} · 3 steps`);
+    expect(endWords(a({ state: "done", why: "finished" }))).toBe(statusWords("completed").word);
+    expect(endWords(a({ state: "failed", why: "failed" }))).toBe(statusWords("failed").word);
+    expect(endWords(a({ state: "failed", why: "failed", error: "boom" }))).toBe(`${statusWords("failed").word}: boom`);
+    expect(endWords(a({ state: "stopped", why: "stopped" }))).toBe(statusWords("cancelled").word);
+    // The daemon's own words still win.
+    expect(endWords(a({ state: "done", why: "finished", words: "All green" }))).toBe("All green");
   });
 
   it("toneInkClass maps every tone to a theme token (never a literal hue)", () => {
