@@ -458,6 +458,7 @@ import {
 import type { AccountsView } from "@/lib/buildAccounts";
 // v1.356.0 (G75): the chat's controls in plain words, one place.
 import {
+  ARMED_TOOLS_RUN_UNASKED,
   COMPACTION_NOT_NOW_TITLE,
   COMPACTION_OFFER_BUTTON,
   COMPACTION_OFFER_WORDS,
@@ -14706,6 +14707,16 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                                 <div className="mt-1 border-t hairline pt-1">
                                   <p className="px-2.5 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-zinc-500">
                                     Turned on for this chat
+                                  </p>
+                                  {/* v1.452.0 (readiness item 9, the owner's
+                                      decision): turning a tool on IS the OK —
+                                      it runs with no card for the rest of this
+                                      chat — and the menu says so. */}
+                                  <p
+                                    data-testid="armed-tools-unasked"
+                                    className="px-2.5 pb-1 text-[11px] leading-snug text-zinc-500"
+                                  >
+                                    {ARMED_TOOLS_RUN_UNASKED}
                                   </p>
                                   {/* v1.356.0 (G75): each tool by what it does ("Read
                                       files", "gmail: search messages"); the exact id is

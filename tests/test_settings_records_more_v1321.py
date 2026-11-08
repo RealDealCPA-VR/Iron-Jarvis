@@ -156,7 +156,7 @@ async def test_sentinel_pause_asks_and_undo_resumes_it(tmp_path):
     frames = await _drive_stream(app, _body("pause my downloads watcher"), await _approve_all(app, seen))
     assert seen == ["sentinel_update"]
     assert p.sentinels.get("downloads").enabled is False
-    await _undo_card(app, _card(frames, "Sentinel changed"))
+    await _undo_card(app, _card(frames, "Watcher changed"))
     assert _row(p.sentinels.get("downloads")) == before
 
 
@@ -170,7 +170,7 @@ async def test_sentinel_delete_undo_recreates_it_with_its_memory(tmp_path):
     seen: list[str] = []
     frames = await _drive_stream(app, _body("delete the downloads sentinel"), await _approve_all(app, seen))
     assert seen == ["sentinel_delete"] and p.sentinels.get("downloads") is None
-    await _undo_card(app, _card(frames, "Sentinel removed"))
+    await _undo_card(app, _card(frames, "Watcher removed"))
     after = _row(p.sentinels.get("downloads"))
     assert after == before
     assert json.loads(after["last_state_json"]) == {"seen": {"a.pdf": 1.5}}, "it must not re-fire for what it had seen"
@@ -463,7 +463,7 @@ async def test_sentinel_add_from_chat_has_an_undo(tmp_path):
     p = app.state.platform
     frames = await _drive_stream(app, {**_body("watch this folder"), "tools": ["sentinel_add"]}, _never)
     assert p.sentinels.get("inbox") is not None
-    await _undo_card(app, _card(frames, "Sentinel created"))
+    await _undo_card(app, _card(frames, "Watcher created"))
     assert p.sentinels.get("inbox") is None
 
 

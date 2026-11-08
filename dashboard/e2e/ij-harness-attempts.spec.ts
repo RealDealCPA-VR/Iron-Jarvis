@@ -141,8 +141,9 @@ async function startInFolder(page: Page, folder: string, message: string, branch
   if (branch !== null) {
     const sw = page.getByTestId("harness-new-branch-switch");
     await expect(sw).toBeVisible({ timeout: 20_000 });
-    await expect(sw).toBeChecked();
-    if (!branch) await sw.uncheck();
+    // v1.452.0: off by default.
+    await expect(sw).not.toBeChecked();
+    if (branch) await sw.check();
   }
   await box.fill(message);
   await box.press("Enter");

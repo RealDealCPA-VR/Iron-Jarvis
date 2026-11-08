@@ -361,7 +361,7 @@ const FIELDS: FieldDef[] = [
   },
   {
     key: "sentinels_enabled",
-    label: "Sentinels (watchers)",
+    label: "Watchers",
     type: "boolean",
     section: "automation",
     hint: "Always-on watchers that notice changes and add suggestions to the Autonomy backlog (they never act on their own). Off by default; takes effect immediately.",

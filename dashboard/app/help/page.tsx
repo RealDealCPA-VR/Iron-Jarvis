@@ -224,7 +224,7 @@ const GLOSSARY: GlossaryTerm[] = [
     def: "Durable notes it can search and add to — a local folder, Notion, or a remote SSH folder.",
   },
   {
-    term: "Sentinels / Watchers",
+    term: "Watchers",
     def: "Background watchers that suggest tasks based on what they notice. Off by default.",
   },
   {

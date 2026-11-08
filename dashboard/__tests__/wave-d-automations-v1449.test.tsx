@@ -296,7 +296,7 @@ function mountRules(rules: unknown[] = [], triggers: unknown = { triggers: {} })
 describe("item 34 — Rules", () => {
   it("the form opens on a message arriving and an agent doing a task", async () => {
     mountRules();
-    fireEvent.click(await screen.findByText("Add reflex"));
+    fireEvent.click(await screen.findByText("Add rule"));
     const source = (await screen.findByLabelText("Signal source")) as HTMLSelectElement;
     expect(source.value).toBe("comm");
     expect(Array.from(source.options).map((o) => o.value)).toEqual(["comm", "email", "slack"]);
@@ -316,7 +316,7 @@ describe("item 34 — Rules", () => {
   it("Edit opens the form prefilled and saves with PATCH", async () => {
     mountRules([ruleRow()]);
     fireEvent.click(await screen.findByTestId("reflex-edit-reflex_1"));
-    expect(screen.getByText("Edit reflex")).toBeTruthy();
+    expect(screen.getByText("Edit rule")).toBeTruthy();
     expect((screen.getByLabelText("Signal source") as HTMLSelectElement).value).toBe("slack");
     const keyword = screen.getByDisplayValue("deploy");
     fireEvent.change(keyword, { target: { value: "release" } });

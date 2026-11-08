@@ -114,7 +114,7 @@ interface SourceMeta {
 const SOURCE_META: Record<ReflexSource, SourceMeta> = {
   webhook: {
     option: "Webhook fires",
-    section: "Webhook reflexes",
+    section: "Webhook rules",
     badge: "webhook",
     tone: "cyan",
     icon: WebhookIcon,
@@ -125,7 +125,7 @@ const SOURCE_META: Record<ReflexSource, SourceMeta> = {
   },
   comm: {
     option: "Message arrives",
-    section: "Message reflexes",
+    section: "Message rules",
     badge: "message",
     tone: "violet",
     icon: MessageSquare,
@@ -136,7 +136,7 @@ const SOURCE_META: Record<ReflexSource, SourceMeta> = {
   },
   email: {
     option: "Email arrives",
-    section: "Email reflexes",
+    section: "Email rules",
     badge: "email",
     tone: "green",
     icon: Mail,
@@ -147,7 +147,7 @@ const SOURCE_META: Record<ReflexSource, SourceMeta> = {
   },
   calendar: {
     option: "Calendar event",
-    section: "Calendar reflexes",
+    section: "Calendar rules",
     badge: "calendar",
     tone: "amber",
     icon: CalendarClock,
@@ -158,7 +158,7 @@ const SOURCE_META: Record<ReflexSource, SourceMeta> = {
   },
   slack: {
     option: "Slack message",
-    section: "Slack reflexes",
+    section: "Slack rules",
     badge: "slack",
     tone: "violet",
     icon: Hash,
@@ -411,7 +411,7 @@ export default function ReflexPage() {
     e.preventDefault();
     // Client-side mirror of the backend's 400s — surface early, still trust the server.
     if (source === "webhook" && !match.trim()) {
-      setFormError("A webhook reflex needs a webhook slug.");
+      setFormError("A webhook rule needs a webhook slug.");
       return;
     }
     if (targetNeeded && !target.trim()) {
@@ -447,7 +447,7 @@ export default function ReflexPage() {
           project_id: projectShown && projectId ? projectId : null,
           enabled,
         });
-        setFormOk("Reflex added — it's live now and survives restarts.");
+        setFormOk("Rule added — it's live now and survives restarts.");
         setName("");
         setMatch("");
         setTarget("");
@@ -599,7 +599,7 @@ export default function ReflexPage() {
               type="button"
               onClick={() => test(r)}
               disabled={acting === `test:${r.id}`}
-              title="Fire this reflex now with a synthetic signal"
+              title="Try this rule now with a test signal"
               className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-40"
             >
               {acting === `test:${r.id}` ? (
@@ -614,8 +614,8 @@ export default function ReflexPage() {
               type="button"
               onClick={() => startEdit(r)}
               data-testid={`reflex-edit-${r.id}`}
-              title={`Edit reflex "${r.name || r.id}"`}
-              aria-label={`Edit reflex ${r.name || r.id}`}
+              title={`Edit rule "${r.name || r.id}"`}
+              aria-label={`Edit rule ${r.name || r.id}`}
               className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
             >
               <Pencil size={13} /> Edit
@@ -623,7 +623,7 @@ export default function ReflexPage() {
             <ConfirmButton
               onConfirm={() => remove(r)}
               label="Delete"
-              title={`Delete reflex "${r.name || r.id}"`}
+              title={`Delete rule "${r.name || r.id}"`}
             />
           </div>
         </div>
@@ -648,7 +648,7 @@ export default function ReflexPage() {
     <PageShell>
       <Reveal>
         <PageHeader
-          title="Reflexes"
+          title="Rules"
           subtitle="When a webhook fires or a message arrives, run a workflow, a remote agent, or a session — automatically."
           actions={
             <button
@@ -662,7 +662,7 @@ export default function ReflexPage() {
               }}
               className="btn-accent"
             >
-              <Plus size={14} /> Add reflex
+              <Plus size={14} /> Add rule
             </button>
           }
         />
@@ -675,7 +675,7 @@ export default function ReflexPage() {
 
       {open && (
         <Reveal>
-          <Card title={editingId ? "Edit reflex" : "Add reflex"} icon={editingId ? <Pencil size={15} /> : <Plus size={15} />}>
+          <Card title={editingId ? "Edit rule" : "Add rule"} icon={editingId ? <Pencil size={15} /> : <Plus size={15} />}>
             <form onSubmit={submit} className="space-y-3.5">
               {/* v1.449.0 (Wave D item 34): the everyday shape first; the
                   other shapes behind one choice. */}
@@ -973,7 +973,7 @@ export default function ReflexPage() {
                     "Save changes"
                   ) : (
                     <>
-                      <Plus size={14} /> Add reflex
+                      <Plus size={14} /> Add rule
                     </>
                   )}
                 </button>
@@ -989,7 +989,7 @@ export default function ReflexPage() {
                 </button>
               </div>
               <div className="text-[11px] text-zinc-600">
-                Every fired reflex still runs through the normal permission engine — nothing acts
+                Every fired rule still runs through the normal permission engine — nothing acts
                 unreviewed.
               </div>
               {formOk && <SuccessNote>{formOk}</SuccessNote>}
@@ -1000,7 +1000,7 @@ export default function ReflexPage() {
       )}
 
       <Reveal>
-        <Card title={`Reflexes${rules.length ? ` · ${rules.length}` : ""}`} icon={<Zap size={15} />}>
+        <Card title={`Your rules${rules.length ? ` · ${rules.length}` : ""}`} icon={<Zap size={15} />}>
           {rowError && (
             <div className="mb-3">
               <ErrorNote>{rowError}</ErrorNote>
@@ -1023,9 +1023,9 @@ export default function ReflexPage() {
                 "When a calendar event called “standup” is coming up, run a workflow",
                 "When another app calls your webhook, start a session",
               ]}
-              action={{ label: "Add your first reflex", onClick: openFromEmpty }}
+              action={{ label: "Add your first rule", onClick: openFromEmpty }}
             >
-              A reflex is an if-this-then-that rule: a signal comes in, and Iron Jarvis starts the
+              A rule works like if-this-then-that: a signal comes in, and Iron Jarvis starts the
               work you picked. Anything risky still asks you first.
             </Empty>
           ) : (
@@ -1133,7 +1133,7 @@ function TriggersCard() {
       setIcsUrl(""); // clear — the URL is a secret, never re-displayed
       setOk(
         enabled
-          ? "Calendar polling on — upcoming events will fire matching reflexes."
+          ? "Calendar polling on — upcoming events will fire matching rules."
           : "Calendar polling off.",
       );
       reload();
@@ -1153,7 +1153,7 @@ function TriggersCard() {
       const res = await del<{ removed?: boolean }>("/triggers/calendar/url");
       setOk(
         res?.removed
-          ? "The saved calendar link was removed. Calendar events no longer start reflexes until you paste a new link."
+          ? "The saved calendar link was removed. Calendar events no longer start rules until you paste a new link."
           : "There was no saved calendar link to remove.",
       );
       reload();
@@ -1165,7 +1165,7 @@ function TriggersCard() {
   return (
     <Card title="Triggers" icon={<Antenna size={15} />}>
       <p className="mb-4 text-[12px] text-zinc-500">
-        Let the world start the work. These sources fire the same reflexes above — each still runs
+        Let the world start the work. These sources fire the same rules above — each still runs
         through the normal permission engine, and each is off until you turn it on.
       </p>
       <div className="space-y-3">
@@ -1187,7 +1187,7 @@ function TriggersCard() {
                       onConfirm={removeCalendarUrl}
                       label="Remove"
                       confirmLabel="Remove the link?"
-                      title="Forget the saved calendar link (press twice). Calendar events stop starting reflexes until you paste a new one."
+                      title="Forget the saved calendar link (press twice). Calendar events stop starting rules until you paste a new one."
                     />
                   </span>
                 </>
@@ -1275,7 +1275,7 @@ function TriggersCard() {
             <Link href="/channels" className="text-accent-soft underline-offset-2 hover:underline">
               Notifications
             </Link>{" "}
-            page, then add an <span className="text-zinc-400">Email arrives</span> reflex above.
+            page, then add an <span className="text-zinc-400">Email arrives</span> rule above.
           </div>
         </div>
 
@@ -1303,7 +1303,7 @@ function TriggersCard() {
             <Link href="/channels" className="text-accent-soft underline-offset-2 hover:underline">
               Notifications
             </Link>{" "}
-            page, then add a <span className="text-zinc-400">Slack message</span> reflex above.
+            page, then add a <span className="text-zinc-400">Slack message</span> rule above.
           </div>
         </div>
       </div>

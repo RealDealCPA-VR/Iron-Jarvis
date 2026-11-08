@@ -16030,6 +16030,56 @@ does not need a bump, stop and bump it.
     click; the init limits are guesses; none of it driven in the packaged
     app or a real browser.
 
+- **The owner's four answers (2026-11-08): plain page names, coding straight
+  in the folder, ticked tools run unasked, Gmail/Slack apps skipped**
+  (v1.452.0; readiness items 9, 43, 44, 45). ITEM 44 (VOCABULARY.md's rename
+  rule): `lib/nav.ts` labels Watchers (/sentinels), Rules (/reflex), What
+  agents made (/artifacts), Model servers (/fleet), each OLD word an alias
+  (nav.test friction rows pin them; an alias equal to the label is refused,
+  so "watchers"/"rules" left the aliases); `/fleet` left `CRUMB_LABELS` (its
+  title and label agree now); page titles and prose follow ("Add rule",
+  "Turn watchers on", "Your rules · N", "Your watchers · N" — the list cards
+  are not named like the page); OriginChip words Rule / Watcher; the Status
+  map's star labels (`routes/system_map.py`, units rule / item); the
+  watcher's proposal title "Watcher '<name>' noticed file changes"; the
+  record cards "Watcher changed/removed/created"; Settings' Models section
+  "Model servers"; `run_code`'s description names the "What agents made"
+  page. NOT renamed: ids, routes, event types, the `sentinels_enabled`
+  setting's label "Folder watchers (sentinels)" (wave-7 pins), and the
+  retired words are NOT in the vocabulary scanner (lowercase `reflex` /
+  `sentinel` are data values everywhere). ITEM 43 (folder-first): Chat ›
+  Code's switch is "Work in a separate copy of the folder", OFF by default
+  in BOTH the start box (`HarnessStartComposer`: initial state and the
+  git-read reset) and an empty session's folder chip (`HarnessStartFolder`);
+  words in `lib/buildGit` (`BRANCH_SWITCH_LABEL`, `branchSwitchWords`). The
+  daemon is unchanged — `branch: None` still makes a branch for a folder
+  that can have one — so the screen never leaves it silent: the start box
+  sends `branch: false` while the folder's git facts are unread or failed
+  (`gitKnownHere`), and the folder chip moves with `false` when its git read
+  failed. The night shift and the bench still branch (they pass True).
+  "Keep these changes" (`HarnessBranch`, `branch-keep`, first and primary in
+  the Branch view's row, shown while there is work to bring back): commits
+  what is not committed (`keepCommitMessage` = the session's PR-draft title,
+  NO model call) then merges into the base through the Commit and Merge
+  routes; a merge refused after its commit says both. ONE press (the
+  owner's words), unlike Merge's two. ITEM 9: a tool turned on for a chat
+  (the Tools menu's "Turned on for this chat" list: a card's "Allow for
+  this conversation", a saved chat's setup, project file tools) keeps
+  running WITHOUT a card — the owner overruled forcing the ask tier — and
+  the menu says so (`chatControlWords.ARMED_TOOLS_RUN_UNASKED`,
+  `armed-tools-unasked`). The "+" menu's per-tool picker (`toolGroups`,
+  `toggleTool`) has no renderer since the calm redesign; that dead code
+  still fetches GET /tools when "+" opens (left). ITEM 45: skipped. Pins:
+  `chat-words-v13560` (item 9), `ij-harness-git-v1375` +
+  `ij-harness-start-composer-v1418` (item 43), `nav.test` (item 44); moved
+  on purpose: everything-v1321, everything-tiers-v13530, reflex-project-
+  v1200, running-now-v13520, saved-workflows-v1222, titlebar,
+  ux-wave2-automation-v1314, ux-wave2-contracts-v1314, ux-wave4-automation-
+  forms-v1316, wave-d-automations-v1449, ij-harness-start-box{,-review}-
+  v1437, the three ij-harness e2e helpers, test_settings_records_more_v1321
+  (12 mutations, 11 red; the start box's first-render default survives —
+  equivalent, the git read resets it before the switch can show).
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

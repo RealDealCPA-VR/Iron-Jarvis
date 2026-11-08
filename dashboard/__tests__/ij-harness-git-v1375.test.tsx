@@ -192,26 +192,40 @@ describe("choosing a folder asks about the branch only for a repository", () => 
   });
   const folderPath = (p: string) => `/build/git/folder?path=${encodeURIComponent(p)}`;
 
-  it("a repository: the switch is on by default, and turning it off works in the folder directly", async () => {
+  // v1.452.0 (readiness item 43, the owner's decision; moved on purpose): the
+  // switch is OFF by default and says what it does in plain words.
+  it("a repository: the switch is off by default, and turning it on makes a separate copy", async () => {
     api.gets[folderPath(REPO)] = { git: true, repo: true, branch: "main", can_branch: true, note: "", worktrees_dir: `${REPO}.ij-worktrees` };
     const onMove = renderChip();
     const sw = (await screen.findByTestId("harness-start-branch-switch")) as HTMLInputElement;
-    expect(sw.checked).toBe(true);
-    expect(screen.getByTestId("harness-start-branch")).toHaveTextContent("on its own ij/ branch from main");
-    expect(screen.getByTestId("harness-start-branch")).toHaveTextContent("Your checkout is not touched.");
+    expect(sw.checked).toBe(false);
+    const ask = screen.getByTestId("harness-start-branch");
+    expect(ask).toHaveTextContent("Work in a separate copy of the folder");
+    expect(ask).toHaveTextContent("Off: changes go straight into this folder.");
+    expect(ask.textContent ?? "").not.toMatch(/worktree|ij\//);
     expect(onMove).not.toHaveBeenCalled();
     fireEvent.click(sw);
-    expect(screen.getByTestId("harness-start-branch")).toHaveTextContent("works in the folder directly");
+    expect(ask).toHaveTextContent("Changes go to a copy of this folder, on a new branch from main.");
+    expect(ask).toHaveTextContent("Your folder stays as it is until you press Keep these changes.");
     fireEvent.click(screen.getByTestId("harness-start-branch-use"));
-    await waitFor(() => expect(onMove).toHaveBeenCalledWith(REPO, false));
+    await waitFor(() => expect(onMove).toHaveBeenCalledWith(REPO, true));
   });
 
-  it("the switch left on sends branch: true", async () => {
+  it("the switch left off sends branch: false", async () => {
     api.gets[folderPath(REPO)] = { git: true, repo: true, branch: "main", can_branch: true, note: "", worktrees_dir: "" };
     const onMove = renderChip();
     await screen.findByTestId("harness-start-branch-switch");
     fireEvent.click(screen.getByTestId("harness-start-branch-use"));
-    await waitFor(() => expect(onMove).toHaveBeenCalledWith(REPO, true));
+    await waitFor(() => expect(onMove).toHaveBeenCalledWith(REPO, false));
+  });
+
+  it("v1.452.0: a folder whose git facts could not be read moves with the switch said off", async () => {
+    // No answer for the folder's git read: the daemon, left to decide, would
+    // make a branch by itself for a folder that can have one.
+    const onMove = renderChip();
+    await waitFor(() => expect(onMove).toHaveBeenCalled());
+    expect(onMove.mock.calls[0]).toEqual([REPO, false]);
+    expect(screen.queryByTestId("harness-start-branch")).toBeNull();
   });
 
   it("a folder outside a repository: no switch, no line, the folder alone is sent (exactly as before)", async () => {
@@ -430,6 +444,62 @@ describe("the Branch view", () => {
     await screen.findByText(`1 commit on ${BRANCH} · nothing waiting to commit · 1 not pushed to origin`);
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     expect(screen.getByRole("button", { name: "Confirm discard" })).toBeTruthy();
+  });
+
+  // v1.452.0 (readiness item 43, the owner's decision): ONE press brings the
+  // work back into the folder the session started from.
+  it("Keep these changes commits (the session's title, no model call) then merges, in one press", async () => {
+    api.posts["POST /build/sessions/s1/git/commit"] = { committed: true, sha: "9f8e7d6c5b4a", subject: "Add the cart" };
+    api.posts["POST /build/sessions/s1/git/merge"] = { merged: true, into: "main", where: REPO, commit: "aa11", offer_remove: true };
+    const { onChanged } = renderBranch();
+    await screen.findByText("cart.py");
+    const keep = screen.getByTestId("branch-keep");
+    expect(keep).toHaveTextContent("Keep these changes");
+    expect(keep.className).toContain("btn-accent");
+    // It is the first press in the row.
+    expect(screen.getByTestId("branch-actions").querySelector("button")).toBe(keep);
+    fireEvent.click(keep);
+    expect(await screen.findByTestId("branch-note")).toHaveTextContent(
+      `Committed 9f8e7d6c5b4a. Kept: the changes are in main in ${REPO}.`,
+    );
+    expect(posted("/build/sessions/s1/git/draft")).toEqual([]);
+    expect(posted("/build/sessions/s1/git/commit")[0].body).toEqual({ message: "Add the cart" });
+    expect(posted("/build/sessions/s1/git/merge")).toHaveLength(1);
+    expect(await screen.findByTestId("branch-merged")).toBeInTheDocument();
+    expect(screen.queryByTestId("branch-keep")).toBeNull();
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("Keep these changes with everything committed only merges", async () => {
+    api.gets["/build/sessions/s1/git"] = status({ uncommitted: 0 });
+    api.posts["POST /build/sessions/s1/git/merge"] = { merged: true, into: "main", where: "", commit: "aa11" };
+    renderBranch();
+    await screen.findByText(`1 commit on ${BRANCH} · nothing waiting to commit · 1 not pushed to origin`);
+    fireEvent.click(screen.getByTestId("branch-keep"));
+    expect(await screen.findByTestId("branch-note")).toHaveTextContent(
+      "Kept: the changes are in main. It is not checked out anywhere, so no folder changed.",
+    );
+    expect(posted("/build/sessions/s1/git/commit")).toEqual([]);
+  });
+
+  it("a merge refused after Keep's commit says both: what was committed, and the daemon's words", async () => {
+    api.posts["POST /build/sessions/s1/git/commit"] = { committed: true, sha: "9f8e7d6c5b4a", subject: "Add the cart" };
+    api.posts["POST /build/sessions/s1/git/merge"] = new api.ApiError("x", 409, false, {
+      detail: "Merging would conflict in app.py. Nothing was changed: bring main's changes into this branch and settle them first, then merge.",
+    });
+    renderBranch();
+    await screen.findByText("cart.py");
+    fireEvent.click(screen.getByTestId("branch-keep"));
+    const err = await screen.findByTestId("branch-error");
+    expect(err).toHaveTextContent("Committed 9f8e7d6c5b4a. Merging would conflict in app.py. Nothing was changed");
+    expect(screen.queryByTestId("branch-merged")).toBeNull();
+  });
+
+  it("Keep these changes is not offered when there is nothing to bring back", async () => {
+    api.gets["/build/sessions/s1/git"] = status({ ahead: 0, in_base: true, uncommitted: 0 });
+    renderBranch();
+    await screen.findByText(`0 commits on ${BRANCH} · nothing waiting to commit · 1 not pushed to origin`);
+    expect(screen.queryByTestId("branch-keep")).toBeNull();
   });
 
   it("a refused merge says the daemon's words; nothing else happens", async () => {

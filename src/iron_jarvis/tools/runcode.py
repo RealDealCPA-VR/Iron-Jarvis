@@ -165,7 +165,7 @@ class RunCodeTool(Tool):
         "SAVED so the user can find and re-run it later — always pass 'purpose' "
         "(one plain sentence about what this script is for) and a readable "
         "'filename', because they become the script's card in the user's "
-        "Artifacts gallery. If the script SOLVED a hard problem, save the "
+        "'What agents made' page. If the script SOLVED a hard problem, save the "
         "approach + code as a skill with skill_create too."
     )
     input_schema = {

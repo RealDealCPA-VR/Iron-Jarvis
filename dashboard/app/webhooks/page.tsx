@@ -68,9 +68,9 @@ function isLoopbackBase(base: string): boolean {
  *  URL, so the Zapier example is true everywhere. */
 function webhookExamples(loopback: boolean): string[] {
   const inbound = loopback
-    ? ["A script or app on this PC tells Iron Jarvis something happened (a reflex decides what to do)"]
+    ? ["A script or app on this PC tells Iron Jarvis something happened (a rule decides what to do)"]
     : [
-        "A web form tells Iron Jarvis when someone fills it in (a reflex decides what to do)",
+        "A web form tells Iron Jarvis when someone fills it in (a rule decides what to do)",
         "GitHub tells Iron Jarvis when code is pushed",
       ];
   return [...inbound, "Iron Jarvis tells Zapier when a task finishes"];
@@ -169,7 +169,7 @@ export default function WebhooksPage() {
       <Reveal>
         <PageHeader
           title="Webhooks"
-          subtitle="Let other apps tell Iron Jarvis something happened (a reflex decides what to do), or let Iron Jarvis tell other apps when work finishes."
+          subtitle="Let other apps tell Iron Jarvis something happened (a rule decides what to do), or let Iron Jarvis tell other apps when work finishes."
           actions={
             <button
               type="button"
@@ -331,7 +331,7 @@ export default function WebhooksPage() {
 
       <Reveal>
         {/* v1.314.0: lead with what a webhook is FOR; the address and the
-            HTTP detail follow, and most people are pointed to Reflexes. */}
+            HTTP detail follow, and most people are pointed to Rules. */}
         <Card>
           <div className="space-y-2 text-sm text-zinc-400">
             {/* The empty state below teaches the same idea, so the lead
@@ -373,7 +373,7 @@ export default function WebhooksPage() {
               title="Connect another app"
               examples={webhookExamples(loopback)}
               action={{ label: "Add your first webhook", onClick: () => setOpen(true) }}
-              secondary={{ label: "Most people want Reflexes instead →", href: "/reflex" }}
+              secondary={{ label: "Most people want Rules instead →", href: "/reflex" }}
             >
               A webhook lets another app tell Iron Jarvis something happened (a reflex decides what
               to do about it), or lets Iron Jarvis tell another app when work finishes.

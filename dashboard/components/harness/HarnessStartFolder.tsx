@@ -15,14 +15,17 @@
  * the chip and nothing moves.
  *
  * A folder in a git repository that can start a branch asks one thing first,
- * as New session's form did (v1.375.0): "Work on a new branch" (on by
- * default) — off works in the folder directly.
+ * as New session's form did (v1.375.0). v1.452.0 (readiness item 43, the
+ * owner's decision): the question is "Work in a separate copy of the
+ * folder", OFF by default — off works in the folder directly — and a folder
+ * whose git facts could not be read moves with the switch said off (never
+ * left for the daemon to decide, which would make a branch).
  */
 
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { FolderChip } from "@/components/folders/FolderChip";
-import { fetchFolderGit, folderGitLine, type FolderGit } from "@/lib/buildGit";
+import { BRANCH_SWITCH_LABEL, branchSwitchWords, fetchFolderGit, folderGitLine, type FolderGit } from "@/lib/buildGit";
 
 export function HarnessStartFolder({
   folder,
@@ -45,7 +48,7 @@ export function HarnessStartFolder({
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState<{ folder: string; info: FolderGit } | null>(null);
-  const [onBranch, setOnBranch] = useState(true);
+  const [onBranch, setOnBranch] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
   async function move(path: string, branch?: boolean) {
@@ -63,13 +66,15 @@ export function HarnessStartFolder({
     const info = await fetchFolderGit(path);
     setBusy(false);
     if (info && info.repo && info.canBranch) {
-      setOnBranch(true);
+      setOnBranch(false);
       setAsking({ folder: path, info });
       return;
     }
     const line = folderGitLine(info);
     if (line) setNote(line);
-    await move(path);
+    // Unread git facts: say "off" out loud (the daemon would branch by
+    // itself when the folder turned out to be able to).
+    await move(path, info ? undefined : false);
   }
 
   return (
@@ -108,12 +113,8 @@ export function HarnessStartFolder({
               className="mt-0.5 accent-accent"
             />
             <span className="min-w-0">
-              Work on a new branch
-              <span className="block text-[11px] text-zinc-500">
-                {onBranch
-                  ? `Its own copy of the folder beside the repository, on its own ij/ branch from ${asking.info.branch || "the current commit"}. Your checkout is not touched.`
-                  : "Off: the session works in the folder directly, on the branch checked out there."}
-              </span>
+              {BRANCH_SWITCH_LABEL}
+              <span className="block text-[11px] text-zinc-500">{branchSwitchWords(onBranch, asking.info.branch)}</span>
             </span>
           </label>
           <button

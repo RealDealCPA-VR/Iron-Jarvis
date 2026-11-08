@@ -1224,7 +1224,7 @@ export default function FleetPage() {
     <PageShell>
       <Reveal>
         <PageHeader
-          title="Fleet"
+          title="Model servers"
           subtitle="Every model server you can reach: what is loaded, what is serving, and what we cannot see."
           actions={
             <div className="flex items-center gap-2">
@@ -1271,7 +1271,7 @@ export default function FleetPage() {
 
       {error && !offline && (
         <Reveal>
-          <LoadFailedLine thing="The fleet" error={error} onRetry={reload} />
+          <LoadFailedLine thing="Your model servers" error={error} onRetry={reload} />
         </Reveal>
       )}
 

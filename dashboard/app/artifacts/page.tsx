@@ -161,7 +161,7 @@ export default function ArtifactsPage() {
     <PageShell>
       <Reveal>
         <PageHeader
-          title="Artifacts"
+          title="What agents made"
           subtitle="The code agents write to get things done — kept, readable, and runnable again long after the session that produced it is gone."
         />
       </Reveal>

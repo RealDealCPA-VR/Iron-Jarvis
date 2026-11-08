@@ -36,11 +36,14 @@ Each was fixed and pinned before release.
 
 **What remains to 100:**
 
-- **Owner's decisions (not built):** item 9 (a writer hand-picked from the
-  chat's "+ Tools" menu runs with no card), item 43 (Chat › Code's "Work on
-  a new branch" default for a folder-first user), item 44 (rename Sentinels,
-  Reflexes, Artifacts and Local fleet in the nav), item 45 (Gmail and Slack
-  need the user's own developer app).
+- **Owner's decisions, answered 2026-11-08 (v1.452.0):** item 9: a tool
+  turned on for a chat keeps running without a card (turning it on is the
+  OK), and the Tools menu now says so; item 43: Chat › Code's separate copy
+  of the folder is OFF by default, in plain words, with one "Keep these
+  changes" press when it is on; item 44: the four pages are Watchers, Rules,
+  What agents made and Model servers (the old names still find them);
+  item 45: skipped (Gmail and Slack keep the user's own developer app).
+  Next: a fresh re-audit against v1.452.0.
 - **Out of reach or decided against:** G83/G85 (controlling other desktop
   apps), G86 (a bundled model), a two-PC run of the remote node, the browser
   add-on in the stores, code signing (in progress), ease item 5 (Creative

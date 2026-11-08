@@ -7,7 +7,8 @@
  * row of chips under it, the way Build › Code starts (components/buildCode/
  * StartComposer): Folder (Choose… = Windows' own picker in the desktop app,
  * the app's folder tree in a browser — components/folders/FolderChip),
- * "Work on a new branch" (only for a folder in a git repository that can
+ * "Work in a separate copy of the folder" (v1.452.0: off by default; only
+ * for a folder in a git repository that can
  * start one), the approvals posture, the model, and Local only.
  *
  * NOTHING EXISTS ON THE DAEMON UNTIL SEND: Send makes the session with ONE
@@ -50,7 +51,7 @@ import {
 } from "@/components/chat/ModelMenu";
 import { TryOnControl } from "@/components/harness/HarnessTryOn";
 import { TeamControl, type KnownMembers } from "@/components/harness/HarnessTeam";
-import { fetchFolderGit, folderGitLine, type FolderGit } from "@/lib/buildGit";
+import { BRANCH_SWITCH_LABEL, branchSwitchWords, fetchFolderGit, folderGitLine, type FolderGit } from "@/lib/buildGit";
 import { useModels } from "@/lib/useModels";
 import { useDaemon } from "@/lib/daemon";
 import { modelRowName } from "@/lib/onboarding";
@@ -256,7 +257,9 @@ export function HarnessStartComposer({
   /** v1.437.0: the folder `git` was read for (until then Try on waits). */
   const [gitFor, setGitFor] = useState<string | null>(null);
   const [gitNote, setGitNote] = useState<string | null>(null);
-  const [onBranch, setOnBranch] = useState(seeded?.branch ?? true);
+  // v1.452.0 (readiness item 43): OFF unless the user turns it on — a
+  // folder-first session works straight in the folder.
+  const [onBranch, setOnBranch] = useState(seeded?.branch ?? false);
   const [posture, setPosture] = useState<PermissionMode | null>(seeded?.approval_mode ?? null);
   const [pick, setPick] = useState(seeded?.provider ? `${seeded.provider}::${seeded.model ?? ""}` : "");
   // v1.437.0: the account the model was picked under ("" = the daemon's rule).
@@ -277,7 +280,7 @@ export function HarnessStartComposer({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(seed?.problem || null);
   // The branch switch as the user left it (a seed's own answer survives the
-  // folder's git read that resets it to on).
+  // folder's git read that resets it to off).
   const branchKeptRef = useRef<boolean | null>(typeof seeded?.branch === "boolean" ? seeded.branch : null);
   const busyRef = useRef(false);
   const att = useHarnessAttachments();
@@ -334,13 +337,18 @@ export function HarnessStartComposer({
       setGitNote(folderGitLine(info));
       const keptBranch = branchKeptRef.current;
       branchKeptRef.current = null;
-      setOnBranch(keptBranch ?? true);
+      setOnBranch(keptBranch ?? false);
     });
     return () => {
       live = false;
     };
   }, [folder]);
   const canBranch = !!folder && !!git && git.repo && git.canBranch;
+  // v1.452.0 (readiness item 43): the daemon makes a branch by itself when
+  // the create says nothing and the folder can have one. While this folder's
+  // git facts are not known yet (or could not be read) the switch is not
+  // shown, so the create says "off" out loud instead of saying nothing.
+  const gitKnownHere = !!folder && gitFor === folder && !!git;
 
   // v1.437.0: the Iron-Proxy accounts (GET /build/accounts — the session's
   // own list), read when the box opens and each time the model menu opens.
@@ -563,7 +571,7 @@ export function HarnessStartComposer({
     setProblem(null);
     const err = await onStart({
       folder: folder ?? "",
-      ...(canBranch ? { branch: onBranch } : {}),
+      ...(canBranch ? { branch: onBranch } : folder && !gitKnownHere ? { branch: false } : {}),
       ...(pickProvider ? { provider: pickProvider, model: pickModel ?? "" } : {}),
       ...(pickProvider && account ? { account } : {}),
       ...(reasoning ? { reasoning } : {}),
@@ -775,12 +783,8 @@ export function HarnessStartComposer({
               className="mt-0.5 accent-accent"
             />
             <span className="min-w-0">
-              Work on a new branch
-              <span className="block text-[11px] text-zinc-500">
-                {onBranch
-                  ? `Its own copy of the folder beside the repository, on its own ij/ branch from ${git?.branch || "the current commit"}. Your checkout is not touched.`
-                  : "Off: the session works in the folder directly, on the branch checked out there."}
-              </span>
+              {BRANCH_SWITCH_LABEL}
+              <span className="block text-[11px] text-zinc-500">{branchSwitchWords(onBranch, git?.branch ?? "")}</span>
             </span>
           </label>
         ) : gitNote ? (

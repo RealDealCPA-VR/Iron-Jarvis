@@ -335,7 +335,7 @@ describe("the sidebar footer", () => {
       sessions: [row({ id: "s-new", origin: "reflex:inbox-watch", created_at: ago(5_000) }), SCHEDULE],
     };
     act(() => socket().frame("e-new", "session.created", {}, "s-new"));
-    await within(pop).findByText("Reflex · inbox-watch · under a minute", {}, W);
+    await within(pop).findByText("Rule · inbox-watch · under a minute", {}, W);
     expect(count(RUNNING_SESSIONS_PATH)).toBe(2);
   });
 

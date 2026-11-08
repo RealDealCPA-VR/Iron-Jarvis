@@ -231,6 +231,9 @@ describe("C2.6 the empty view is a composer with the caret in it", () => {
     // The switch shows only once the folder is known to be a repository that
     // can start a branch.
     const sw = await screen.findByTestId("harness-new-branch-switch");
+    // v1.452.0 (readiness item 43): off by default; the user turns it on.
+    expect(sw).not.toBeChecked();
+    fireEvent.click(sw);
     expect(sw).toBeChecked();
     // v1.437.0 (moved on purpose): under Local only the start box's model
     // menu offers only models that stay on this PC or your network (a cloud
@@ -281,6 +284,24 @@ describe("C2.6 the empty view is a composer with the caret in it", () => {
       await new Promise((r) => setTimeout(r, 20));
     });
     expect(screen.queryByTestId("harness-new-branch-switch")).toBeNull();
+  });
+
+  it("v1.452.0 (readiness item 43): a folder whose git facts could not be read is made with the switch said off", async () => {
+    // The daemon, told nothing, would make a branch by itself for a folder
+    // that can have one; the box never shows the switch here, so it says off.
+    const pickFolder = vi.fn(async () => ({ path: "C:\\work\\shop" }));
+    (window as unknown as { ironjarvis?: unknown }).ironjarvis = { isDesktop: true, dialog: { pickFolder } };
+    api.gets["/build/git/folder?path=C%3A%5Cwork%5Cshop"] = new api.ApiError("Iron Jarvis isn't responding", 0);
+    renderView();
+    const box = await screen.findByTestId("harness-new-box");
+    fireEvent.click(screen.getByTestId("harness-new-folder-choose"));
+    await waitFor(() => expect(count("GET", "/build/git/folder?path=C%3A%5Cwork%5Cshop")).toBe(1));
+    expect(screen.queryByTestId("harness-new-branch-switch")).toBeNull();
+    fireEvent.change(box, { target: { value: "Fix the cart" } });
+    fireEvent.click(screen.getByTestId("harness-new-send"));
+    await waitFor(() => expect(count("POST", "/build/sessions")).toBe(1));
+    const created = api.calls.find((c) => c.method === "POST" && c.path === "/build/sessions");
+    expect(created?.body).toEqual({ folder: "C:\\work\\shop", branch: false });
   });
 
   it("New session opens the composer (no create) and a refused folder keeps the words and makes nothing", async () => {

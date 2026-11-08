@@ -100,6 +100,18 @@ export function turnOffToolLabel(name: string): string {
   return words ? `Turn off ${words} (${name})` : `Turn off ${name}`;
 }
 
+/**
+ * v1.452.0 (readiness item 9, the owner's decision of 2026-11-08): a tool
+ * turned on for this chat (the Tools menu's "Turned on for this chat" list)
+ * runs WITHOUT an approval card for the rest of the chat — turning it on is
+ * the OK. The menu says so under the list, so turning on "Remove a
+ * destination" is never a surprise. The few safety cards that ask every time
+ * (a commit or push, a cloud send from a Local only chat, a paid
+ * generation, Iron Jarvis's own protected settings) still ask.
+ */
+export const ARMED_TOOLS_RUN_UNASKED =
+  "These run in this chat without asking you first (a few safety checks still ask). Press × to turn one off.";
+
 /** The web switch's hover in the tools menu, the same words as the toolbar's
  *  Web chip. */
 export function webSwitchTitle(on: boolean, room: boolean, max: number): string {

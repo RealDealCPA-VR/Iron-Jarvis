@@ -36,6 +36,10 @@ PR that ships it.
 | How a team member's pieces of work for one role went, and the one sentence that says why it was given a piece (v1.395.0) | its **record** for that role ("good (4 of 5 passed)", "no record yet"); the sentence is the **why** line ("Why: local: good record for reading") | routing decision, dispatch reason |
 | Where a model runs, and what it costs (a team member's facts, the planner's list, Settings › Model team) | **this PC** / **your network** / **cloud**; **free** / **your plan** / **pay per use** | — |
 | Anything Iron Jarvis knows how to do | **skill** | — |
+| When something happens, an agent acts (the page at /reflex, v1.452.0) | **rule**; the page is **Rules** | reflex, reflexes |
+| A folder Iron Jarvis keeps an eye on, suggesting work when files change (/sentinels, v1.452.0) | **watcher**; the page is **Watchers** | sentinel, sentinels |
+| The scripts and files agents made and kept (/artifacts, v1.452.0) | the page is **What agents made** | artifacts |
+| The page that shows every model server you can reach (/fleet, v1.452.0) | **Model servers** | fleet, local fleet |
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |
 | A destination you can talk back to | **two-way destination** | gateway, messaging platform |
 | The one-tap connect gallery | **Directory** | marketplace |

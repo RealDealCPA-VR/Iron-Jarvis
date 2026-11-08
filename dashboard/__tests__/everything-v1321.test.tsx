@@ -117,7 +117,7 @@ describe("Everything", () => {
     // v1.353.0 (G66): Local fleet is a developer page, listed under System's
     // "More"; its row (and so its pin door) shows once that is opened.
     fireEvent.click(screen.getByRole("button", { name: "More System pages" }));
-    for (const label of ["Usage", "Local fleet", "Connections"]) {
+    for (const label of ["Usage", "Model servers", "Connections"]) {
       fireEvent.click(screen.getByLabelText(`Pin ${label} to the sidebar`));
     }
     expect(readPins()).toEqual(["/usage", "/fleet", "/connections"]);

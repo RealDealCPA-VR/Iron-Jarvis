@@ -135,9 +135,9 @@ describe("TitleBar — page label (longest-prefix over NAV_ENTRIES)", () => {
   it("does not match a sibling that merely shares a prefix string", () => {
     // "/fleet" must not be answered by "/filesearch" (or vice versa).
     renderAt("/fleet");
-    // v1.313.0: the crumb names the page as its own title does ("Fleet");
-    // the sidebar row keeps "Local fleet" (lib/nav.ts CRUMB_LABELS).
-    expect(screen.getByText("Fleet")).toBeInTheDocument();
+    // v1.313.0: the crumb names the page as its own title does; since
+    // v1.452.0 the sidebar row and the title are both "Model servers".
+    expect(screen.getByText("Model servers")).toBeInTheDocument();
     expect(screen.queryByText("File Search")).not.toBeInTheDocument();
   });
 

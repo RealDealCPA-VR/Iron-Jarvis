@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.452.0
+
+**Plain page names, and coding straight in your folder.** **Four pages have plain names**: Sentinels is now **Watchers**, Reflexes is **Rules**, Artifacts is **What agents made**, and Local fleet is **Model servers**.
+
 ## v1.451.0
 
 **Settings, the automations pages and Help, today.** **Settings** keeps expert rows under a closed "More options" per group; it says how many of them you have changed.
@@ -77,7 +81,3 @@
 ## v1.432.0
 
 **Build › Code's mode menu shows names only too.** The mode menu in Build › Code (the shield chip under the message box, and the one on a new session) now lists the modes by name only, the same way as the chat's approvals menu.
-
-## v1.430.0
-
-**The approvals menu shows names only.** The menu behind the shield chip in the chat box (in Chat and in Chat › Code) now lists the levels by name only, one line each:

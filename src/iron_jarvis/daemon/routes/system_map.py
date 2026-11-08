@@ -404,8 +404,8 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
 
         enabled = _count(db, select(func.count()).select_from(ReflexRule).where(ReflexRule.enabled == True))  # noqa: E712
         return _node(
-            "reflexes", "Reflexes", "/reflex", setup=enabled, used=_event_count(db, ("reflex.fired",), since),
-            unit="reflex", detail="Something happens, Jarvis acts — on its own.",
+            "reflexes", "Rules", "/reflex", setup=enabled, used=_event_count(db, ("reflex.fired",), since),
+            unit="rule", detail="Something happens, Jarvis acts — on its own.",
         )
 
     def sentinels() -> dict[str, Any]:
@@ -434,7 +434,7 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
             .where(SentinelRecord.last_error != ""),
         ) if on else 0
         return _node(
-            "sentinels", "Sentinels", "/sentinels", setup=enabled, used=used, unit="watcher",
+            "sentinels", "Watchers", "/sentinels", setup=enabled, used=used, unit="watcher",
             detail="Always-on watchers that suggest, never act.",
             attention=f"{erroring} watcher{'s' if erroring != 1 else ''} cannot check" if erroring else None,
         )
@@ -470,8 +470,8 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
         (schedules, "schedules", "Schedules", "/schedules"),
         (workflows, "workflows", "Workflows", "/workflows"),
         (goals, "goals", "Autonomy", "/autonomy"),
-        (reflexes, "reflexes", "Reflexes", "/reflex"),
-        (sentinels, "sentinels", "Sentinels", "/sentinels"),
+        (reflexes, "reflexes", "Rules", "/reflex"),
+        (sentinels, "sentinels", "Watchers", "/sentinels"),
         (webhooks, "webhooks", "Webhooks", "/webhooks"),
     ):
         star(fn, key, label, href)
@@ -523,7 +523,7 @@ def _knowledge(d, db, since) -> list[dict[str, Any]]:
             db, select(func.count()).select_from(CodeArtifactRecord).where(CodeArtifactRecord.last_run_at >= since)  # type: ignore[operator]
         )
         return _node(
-            "artifacts", "Artifacts", "/artifacts", setup=total, used=used, unit="artifact",
+            "artifacts", "What agents made", "/artifacts", setup=total, used=used, unit="item",
             detail="Files and code your agents made.",
         )
 
@@ -546,7 +546,7 @@ def _knowledge(d, db, since) -> list[dict[str, Any]]:
     for fn, key, label, href in (
         (memory, "memory", "Memory", "/memory"),
         (skills, "skills", "Skills", "/skills"),
-        (artifacts, "artifacts", "Artifacts", "/artifacts"),
+        (artifacts, "artifacts", "What agents made", "/artifacts"),
         (you, "you", "You", "/you"),
     ):
         star(fn, key, label, href)
@@ -631,7 +631,7 @@ def _system(d, db, since) -> tuple[list[dict[str, Any]], dict[str, Any]]:
                 if metrics is not None and (getattr(metrics, "requests_running", 0) or 0) > 0:
                     busy += 1
         return _node(
-            "fleet", "Local fleet", "/fleet", setup=len(listing), used=online, live=busy, unit="server",
+            "fleet", "Model servers", "/fleet", setup=len(listing), used=online, live=busy, unit="server",
             detail=f"{online} of {len(listing)} model server{'s' if len(listing) != 1 else ''} reachable.",
         )
 
@@ -652,7 +652,7 @@ def _system(d, db, since) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         (sessions, "sessions", "Sessions", "/sessions"),
         (activity, "activity", "Activity", "/activity"),
         (usage, "usage", "Usage", "/usage"),
-        (fleet, "fleet", "Local fleet", "/fleet"),
+        (fleet, "fleet", "Model servers", "/fleet"),
         (self_dev, "self-dev", "Self-development", "/self-dev"),
     ):
         star(fn, key, label, href)

@@ -83,7 +83,7 @@ export function referencesSentence(refs: WorkflowReference[]): string {
     r.kind === "schedule"
       ? `schedule “${r.name}”`
       : r.kind === "reflex"
-        ? `reflex rule “${r.name || r.id || "unnamed"}”`
+        ? `rule “${r.name || r.id || "unnamed"}”`
         : `${r.kind} “${r.name}”`,
   );
   return `Still used by ${parts.join(", ")}. ${

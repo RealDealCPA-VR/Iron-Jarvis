@@ -266,7 +266,7 @@ describe("A1 Reflexes: the empty state teaches and opens the add form", () => {
     fireEvent.click(emptyButton(empty));
     expect(await screen.findByLabelText("Signal source")).toBeInTheDocument();
     // Anti-vacuity: the header door is still there.
-    expect(screen.getAllByRole("button", { name: /add reflex/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole("button", { name: /add rule/i }).length).toBeGreaterThanOrEqual(1);
   });
 
   it("pressing it while the form is already open keeps ONE form open (opens, never toggles)", async () => {
@@ -274,7 +274,7 @@ describe("A1 Reflexes: the empty state teaches and opens the add form", () => {
     render(<ReflexPage />);
     const empty = await findEmpty();
     // Open through the header first (the first /add reflex/ button is the header's).
-    fireEvent.click(screen.getAllByRole("button", { name: /add reflex/i })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: /add rule/i })[0]);
     await screen.findByLabelText("Signal source");
     fireEvent.click(emptyButton(empty));
     expect(screen.getAllByLabelText("Signal source")).toHaveLength(1);
@@ -378,7 +378,7 @@ describe("B Sentinels: the off-banner speaks plainly and has ONE primary", () =>
   it("renders no config key, no 'no-op', no 'arms', and no false 30-second cadence", async () => {
     seedSentinels([SENTINEL], false);
     render(<SentinelsPage />);
-    const enable = await screen.findByRole("button", { name: /enable sentinels/i });
+    const enable = await screen.findByRole("button", { name: /turn watchers on/i });
     const text = document.body.textContent ?? "";
     expect(text).not.toMatch(/no-op/i);
     expect(text).not.toContain("sentinels_enabled");
@@ -394,21 +394,21 @@ describe("B Sentinels: the off-banner speaks plainly and has ONE primary", () =>
   it("while off, exactly one btn-accent sits above the Watchers card (Enable is THE primary)", async () => {
     seedSentinels([SENTINEL], false);
     render(<SentinelsPage />);
-    await screen.findByRole("button", { name: /enable sentinels/i });
-    const watchers = screen.getByText(/^Watchers/);
+    await screen.findByRole("button", { name: /turn watchers on/i });
+    const watchers = screen.getByText(/^Your watchers/);
     const above = Array.from(document.querySelectorAll(".btn-accent")).filter(
       (b) => b.compareDocumentPosition(watchers) & Node.DOCUMENT_POSITION_FOLLOWING,
     );
     expect(above).toHaveLength(1);
-    expect(above[0].textContent).toMatch(/enable sentinels/i);
-    // Anti-vacuity: Add sentinel is still a button in the header.
-    expect(screen.getByRole("button", { name: /add sentinel/i })).toBeInTheDocument();
+    expect(above[0].textContent).toMatch(/turn watchers on/i);
+    // Anti-vacuity: Add watcher is still a button in the header.
+    expect(screen.getByRole("button", { name: /add watcher/i })).toBeInTheDocument();
   });
 
   it("Enable still writes sentinels_enabled=true through /settings (the wire is unchanged)", async () => {
     seedSentinels([SENTINEL], false);
     render(<SentinelsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: /enable sentinels/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /turn watchers on/i }));
     await waitFor(() => expect(api.puts).toHaveLength(1));
     expect(api.puts[0]).toEqual({ path: "/settings", body: { values: { sentinels_enabled: true } } });
   });
@@ -417,10 +417,10 @@ describe("B Sentinels: the off-banner speaks plainly and has ONE primary", () =>
     seedSentinels([SENTINEL], false);
     api.postResponses["/sentinels/poll"] = { ran: false, reason: "sentinels_disabled", proposals: [] };
     render(<SentinelsPage />);
-    await screen.findByRole("button", { name: /enable sentinels/i });
+    await screen.findByRole("button", { name: /turn watchers on/i });
     expect(screen.queryByRole("button", { name: /poll now/i })).toBeNull();
     const check = screen.getByRole("button", { name: /check now/i });
-    expect(check.getAttribute("title") ?? "").toMatch(/turn sentinels on first/i);
+    expect(check.getAttribute("title") ?? "").toMatch(/turn watchers on first/i);
     expect((check as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(check);
     await waitFor(() => expect(api.posts.map((p) => p.path)).toContain("/sentinels/poll"));
@@ -1083,7 +1083,7 @@ describe("Review fix: webhook examples are TRUE for a loopback install", () => {
     // not say it does (the empty state above already says a reflex decides).
     const s = code("app/webhooks/page.tsx");
     expect(s).not.toMatch(/starts? work here|start work in Iron Jarvis/);
-    expect(s).toMatch(/a reflex decides what to do/);
+    expect(s).toMatch(/a rule decides what to do/);
   });
 });
 

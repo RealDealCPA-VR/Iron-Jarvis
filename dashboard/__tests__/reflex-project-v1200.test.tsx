@@ -129,7 +129,7 @@ function rule(over: Record<string, unknown> = {}) {
 
 async function openForm() {
   render(<ReflexPage />);
-  fireEvent.click(await screen.findByText("Add reflex"));
+  fireEvent.click(await screen.findByText("Add rule"));
   // The picker's options come from GET /projects — wait for them.
   await screen.findByRole("option", { name: "Tax Client A" });
   // v1.449.0 (Wave D item 34, moved on purpose): the form opens on the

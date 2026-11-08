@@ -280,9 +280,9 @@ export const NAV: NavSectionDef[] = [
       },
       {
         href: "/sentinels",
-        label: "Sentinels",
+        label: "Watchers",
         icon: Radar,
-        aliases: ["watchers", "watch a folder", "monitor", "alerts", "triggers"],
+        aliases: ["sentinels", "watch a folder", "monitor", "alerts", "triggers"],
         blurb: "Watch a folder and get a suggestion when files change.",
       },
       {
@@ -315,9 +315,9 @@ export const NAV: NavSectionDef[] = [
       },
       {
         href: "/reflex",
-        label: "Reflexes",
+        label: "Rules",
         icon: Zap,
-        aliases: ["when this then that", "rules", "auto react", "if this", "triggers"],
+        aliases: ["reflexes", "when this then that", "auto react", "if this", "triggers"],
         blurb: "When a webhook fires or a message arrives, run something automatically.",
       },
       {
@@ -446,9 +446,9 @@ export const NAV: NavSectionDef[] = [
       },
       {
         href: "/artifacts",
-        label: "Artifacts",
+        label: "What agents made",
         icon: Code2,
-        aliases: ["scripts", "generated code", "outputs", "saved code", "run again"],
+        aliases: ["artifacts", "scripts", "generated code", "outputs", "saved code", "run again"],
         blurb: "The code agents wrote to get things done — kept, readable, runnable.",
       },
     ],
@@ -483,13 +483,15 @@ export const NAV: NavSectionDef[] = [
       // Advanced-only by construction: NOT in Sidebar's ESSENTIAL_HREFS.
       {
         href: "/fleet",
-        label: "Local fleet",
+        label: "Model servers",
         icon: Server,
         // "ollama"/"vllm" answer HERE as well as at /connections — deliberately.
         // A dead ollama endpoint was the exact thing a user searched for this
         // month, and both pages are a legitimate answer: /connections to edit
         // it, /fleet to see whether it is actually serving anything.
         aliases: [
+          "local fleet",
+          "fleet",
           "local models",
           "my own models",
           "offline models",
@@ -633,8 +635,8 @@ export function labelForPath(pathname: string | null | undefined): string | null
     if (!best || entry.href.length > best.href.length) best = entry;
   }
   // v1.313.0: a crumb override wins over a nav row of the SAME or a shorter
-  // href, so "/fleet" reads "Fleet" (its page title) while the sidebar keeps
-  // its longer "Local fleet", and the deep-link routes get a crumb at all.
+  // href, so a page whose sidebar word differed from its title was named by
+  // its title, and the deep-link routes get a crumb at all.
   // v1.315.0: a NON_RAIL_ENTRIES page is named by its own label (one place —
   // the palette shows the same words), ahead of the crumb overrides.
   const crumbs: [string, string][] = [
@@ -658,7 +660,8 @@ export function labelForPath(pathname: string | null | undefined): string | null
  *  - deep-link routes with no rail row of their own: /marketplace
  *    (its page is titled "Directory"), and /ltm + /lessons, which render the
  *    Memory surface and so ARE the Memory page;
- *  - a route whose sidebar word is longer than its page title (/fleet).
+ *  - (v1.452.0: /fleet left this list — its sidebar word and its title
+ *    are both "Model servers" now.)
  * /integrations is a server redirect to /connections and needs no entry.
  */
 const CRUMB_LABELS: Readonly<Record<string, string>> = {
@@ -667,7 +670,6 @@ const CRUMB_LABELS: Readonly<Record<string, string>> = {
   "/marketplace": "Directory",
   "/ltm": "Memory",
   "/lessons": "Memory",
-  "/fleet": "Fleet",
   // Calm UI redesign S6: the directory of every surface (lib/surfaces.ts).
   "/everything": "Everything",
 };

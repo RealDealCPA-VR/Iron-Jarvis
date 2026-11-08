@@ -99,7 +99,7 @@ describe("helpers", () => {
       { kind: "reflex", name: "on-upload" },
     ]);
     expect(s).toContain("schedule “close-books”");
-    expect(s).toContain("reflex rule “on-upload”");
+    expect(s).toContain("rule “on-upload”");
     expect(s).toContain("will fail");
   });
 });

@@ -65,14 +65,14 @@ const EXACT_WORDS: Record<string, string> = {
  *  run ids) show the kind word alone — the id stays in the title. */
 const KIND_WORDS: Record<string, { word: string; showName: boolean }> = {
   schedule: { word: "Schedule", showName: true },
-  reflex: { word: "Reflex", showName: true },
+  reflex: { word: "Rule", showName: true },
   comm: { word: "Message", showName: true },
   workflow: { word: "Workflow", showName: false },
   goal: { word: "Goal", showName: false },
   assignment: { word: "Queued task", showName: false },
   project: { word: "Project task", showName: false },
   job: { word: "Task", showName: true },
-  sentinel: { word: "Sentinel", showName: true },
+  sentinel: { word: "Watcher", showName: true },
 };
 
 /**

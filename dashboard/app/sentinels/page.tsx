@@ -192,7 +192,7 @@ export default function SentinelsPage() {
       // armed, then every sentinels_tick_seconds (300 s by default, config.py)
       // — so "every few minutes", never "every 30 seconds".
       setStatusOk(
-        "Sentinels are on. The first check runs in about half a minute, then every few " +
+        "Watchers are on. The first check runs in about half a minute, then every few " +
           "minutes. “Check now” works right away too.",
       );
       reload();
@@ -211,7 +211,7 @@ export default function SentinelsPage() {
       const r = await post<PollResult>("/sentinels/poll");
       if (!r.ran) {
         setStatusOk(
-          "Nothing was checked — sentinels are off. Turn them on first, then check again.",
+          "Nothing was checked — watchers are off. Turn them on first, then check again.",
         );
       } else if (r.proposals.length === 0) {
         setStatusOk("Checked — no changes noticed, nothing to suggest.");
@@ -254,7 +254,7 @@ export default function SentinelsPage() {
           agent_type: agentType,
           risk,
         });
-        setOk(`Sentinel "${editingName}" saved.`);
+        setOk(`Watcher "${editingName}" saved.`);
         resetForm();
         setOpen(false);
         reload();
@@ -262,7 +262,7 @@ export default function SentinelsPage() {
       }
       await post("/sentinels", body);
       setOk(
-        `Sentinel "${name.trim()}" added. Its first check records a baseline — pre-existing files never fire.`,
+        `Watcher "${name.trim()}" added. Its first check records a baseline — pre-existing files never fire.`,
       );
       setName("");
       setPath("");
@@ -294,8 +294,8 @@ export default function SentinelsPage() {
     <PageShell>
       <Reveal>
         <PageHeader
-          title="Sentinels"
-          subtitle="Watchers that keep an eye on a folder and SUGGEST a next step when files change. Each suggestion waits in Autonomy → Proposals for your approval."
+          title="Watchers"
+          subtitle="Each watcher keeps an eye on a folder and SUGGESTS a next step when files change. Each suggestion waits in Autonomy → Proposals for your approval."
           actions={
             <div className="flex items-center gap-2">
               {/* v1.314.0: "Check now" (was "Poll now"). While sentinels are
@@ -305,12 +305,12 @@ export default function SentinelsPage() {
                 type="button"
                 onClick={pollNow}
                 disabled={polling}
-                title={featureEnabled ? "Check every watched folder now" : "Turn sentinels on first"}
+                title={featureEnabled ? "Check every watched folder now" : "Turn watchers on first"}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-2 text-sm text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-40"
               >
                 {polling ? <LoaderInline label="Checking…" /> : <><Radar size={14} /> Check now</>}
               </button>
-              {/* While sentinels are off, "Enable sentinels" is THE primary on
+              {/* While watchers are off, "Turn watchers on" is THE primary on
                   the page; Add stays here, quieter, one press as before. */}
               <button
                 type="button"
@@ -323,7 +323,7 @@ export default function SentinelsPage() {
                 }}
                 className={featureEnabled ? "btn-accent" : "btn-ghost"}
               >
-                <Plus size={14} /> Add sentinel
+                <Plus size={14} /> Add watcher
               </button>
             </div>
           }
@@ -343,13 +343,13 @@ export default function SentinelsPage() {
               <div className="text-sm">
                 {featureEnabled ? (
                   <span className="text-zinc-200">
-                    Sentinels are <span className="text-emerald-300">on</span> — your watched
+                    Watchers are <span className="text-emerald-300">on</span> — your watched
                     folders are checked every few minutes.
                   </span>
                 ) : (
                   <span className="text-zinc-300">
-                    Sentinels are <span className="text-amber-300">off</span> — nothing is being
-                    watched. Your watchers are kept and start again when you turn sentinels on.
+                    Watchers are <span className="text-amber-300">off</span> — nothing is being
+                    watched. Your watchers are kept and start again when you turn watchers on.
                   </span>
                 )}
                 <div className="mt-0.5 text-[11px] text-zinc-500">
@@ -376,7 +376,7 @@ export default function SentinelsPage() {
                   {enabling ? (
                     <LoaderInline label="Enabling…" />
                   ) : (
-                    <><Power size={14} /> Enable sentinels</>
+                    <><Power size={14} /> Turn watchers on</>
                   )}
                 </button>
               )}
@@ -405,7 +405,7 @@ export default function SentinelsPage() {
       {open && (
         <Reveal>
           <Card
-            title={editingName ? `Edit sentinel “${editingName}”` : "Add sentinel"}
+            title={editingName ? `Edit watcher “${editingName}”` : "Add watcher"}
             icon={editingName ? <Pencil size={15} /> : <Plus size={15} />}
           >
             <form onSubmit={submit} className="space-y-3.5">
@@ -508,7 +508,7 @@ export default function SentinelsPage() {
                   className="field"
                 />
                 <div className="mt-1 text-[11px] text-zinc-600">
-                  Becomes the proposal's task when this sentinel fires. Leave blank for a
+                  Becomes the proposal's task when this watcher fires. Leave blank for a
                   generic “review what changed” suggestion.
                 </div>
               </div>
@@ -569,7 +569,7 @@ export default function SentinelsPage() {
                   ) : editingName ? (
                     "Save changes"
                   ) : (
-                    <><Plus size={14} /> Add sentinel</>
+                    <><Plus size={14} /> Add watcher</>
                   )}
                 </button>
                 <button
@@ -596,7 +596,7 @@ export default function SentinelsPage() {
 
       <Reveal>
         <Card
-          title={`Watchers${sentinels.length ? ` · ${sentinels.length}` : ""}`}
+          title={`Your watchers${sentinels.length ? ` · ${sentinels.length}` : ""}`}
           icon={<Eye size={15} />}
         >
           {deleteError && (
@@ -620,7 +620,7 @@ export default function SentinelsPage() {
               ]}
               action={{ label: "Watch a folder", onClick: openFromEmpty }}
             >
-              A sentinel watches a folder. When files change, it suggests a next step for you to
+              A watcher keeps an eye on a folder. When files change, it suggests a next step for you to
               approve.
             </Empty>
           ) : (
@@ -694,8 +694,8 @@ export default function SentinelsPage() {
                           type="button"
                           onClick={() => startEdit(s)}
                           data-testid={`sentinel-edit-${s.id}`}
-                          title={`Edit sentinel "${s.name}"`}
-                          aria-label={`Edit sentinel ${s.name}`}
+                          title={`Edit watcher "${s.name}"`}
+                          aria-label={`Edit watcher ${s.name}`}
                           className="mr-1.5 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
                         >
                           <Pencil size={13} /> Edit
@@ -703,7 +703,7 @@ export default function SentinelsPage() {
                         <ConfirmButton
                           onConfirm={() => remove(s.name)}
                           label="Delete"
-                          title={`Delete sentinel "${s.name}"`}
+                          title={`Delete watcher "${s.name}"`}
                         />
                       </td>
                     </tr>

@@ -613,7 +613,8 @@ describe("the first message of the session the box makes", () => {
       { provider: "ollama", model: "glm-local" },
     ]);
     const created = api.calls.find((c) => c.method === "POST" && c.path === "/build/sessions");
-    expect(created?.body).toEqual({ folder: REPO, branch: true });
+    // v1.452.0 (readiness item 43): the branch switch is off by default.
+    expect(created?.body).toEqual({ folder: REPO, branch: false });
   });
 
   it("refused before its turn started: back in the box WITH its picks, the refusal under the box", async () => {

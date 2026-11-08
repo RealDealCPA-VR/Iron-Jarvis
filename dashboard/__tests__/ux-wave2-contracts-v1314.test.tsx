@@ -70,7 +70,7 @@ describe("originLabel / OriginChip — plain words, raw kept", () => {
     ["job:mission-member", "Objective teammate"],
     ["schedule:nightly-brief", "Schedule · nightly-brief"],
     ["comm:email", "Message · email"],
-    ["reflex:on-mail", "Reflex · on-mail"],
+    ["reflex:on-mail", "Rule · on-mail"],
     ["assignment:asg_123abc", "Queued task"],
     ["project:project_c4078b", "Project task"],
     ["self_dev", "Self-development"],

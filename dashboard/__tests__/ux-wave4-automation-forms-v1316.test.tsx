@@ -324,7 +324,7 @@ describe("A3 Reflexes: the add form and the calendar trigger name their fields",
   it("default form (webhook, no inbound webhooks yet) + calendar: every label tied", async () => {
     seedReflex();
     render(<ReflexPage />);
-    fireEvent.click((await screen.findAllByRole("button", { name: /add reflex/i }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: /add rule/i }))[0]);
     await screen.findByLabelText("Signal source");
     // v1.449.0 (Wave D item 34, moved on purpose): the form opens on the
     // everyday rule; the webhook shape is behind "Another kind of rule".
@@ -344,7 +344,7 @@ describe("A3 Reflexes: the add form and the calendar trigger name their fields",
   it("a session action reveals the task and project fields — tied too", async () => {
     seedReflex();
     render(<ReflexPage />);
-    fireEvent.click((await screen.findAllByRole("button", { name: /add reflex/i }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: /add rule/i }))[0]);
     fireEvent.click(await screen.findByTestId("reflex-shape-other")); // v1.449.0: moved on purpose
     fireEvent.change(await screen.findByLabelText("Action"), { target: { value: "session" } });
     const task = await screen.findByPlaceholderText("Triage this: {body}");
@@ -358,7 +358,7 @@ describe("A4 Sentinels: the add form names its fields", () => {
   it("Name / Path to watch / Glob / Suggested task tied; Watcher kind, Agent type, Risk keep aria-labels", async () => {
     seedSentinels();
     render(<SentinelsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: /add sentinel/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /add watcher/i }));
     await screen.findByPlaceholderText("downloads-watch");
     expect(controlOfLabel("Name")).toHaveAttribute("placeholder", "downloads-watch");
     expect(controlOfLabel(/Path to watch/).tagName).toBe("INPUT");
@@ -714,7 +714,7 @@ describe("C3 Sentinels: the picker and the row read agent names, values stay ids
   it("maintainer reads 'Maintainer' in the picker; a custom agent keeps its name", async () => {
     seedSentinels([]);
     render(<SentinelsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: /add sentinel/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /add watcher/i }));
     const picker = (await screen.findByLabelText("Agent type")) as HTMLSelectElement;
     await waitFor(() => expect(Array.from(picker.options).map((o) => o.value)).toContain("ledger-checker"));
     expect(Array.from(picker.options).map((o) => o.value)).toEqual(["builder", "maintainer", "ledger-checker"]);
@@ -738,7 +738,7 @@ describe("D1 Reflexes: a reflex's task text is a task, not a 'template'", () => 
   it("the form names it as a task; it still posts task_template (the wire is unchanged)", async () => {
     seedReflex();
     render(<ReflexPage />);
-    fireEvent.click((await screen.findAllByRole("button", { name: /add reflex/i }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: /add rule/i }))[0]);
     // v1.449.0 (Wave D item 34, moved on purpose): the webhook shape is
     // behind "Another kind of rule".
     fireEvent.click(await screen.findByTestId("reflex-shape-other"));
@@ -847,7 +847,7 @@ describe("E1 Reflexes: 'Add your first reflex' scrolls to and focuses the opened
     seedReflex();
     render(<ReflexPage />);
     const btn = await emptyButton();
-    fireEvent.click(screen.getAllByRole("button", { name: /add reflex/i })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: /add rule/i })[0]);
     const form = (await screen.findByLabelText("Signal source")).closest("form") as HTMLElement;
     (document.body as HTMLElement).focus();
     scrolled.length = 0;
@@ -861,7 +861,7 @@ describe("E1 Reflexes: 'Add your first reflex' scrolls to and focuses the opened
     seedReflex();
     render(<ReflexPage />);
     await emptyButton();
-    const header = screen.getAllByRole("button", { name: /add reflex/i })[0];
+    const header = screen.getAllByRole("button", { name: /add rule/i })[0];
     fireEvent.click(header);
     expect(await screen.findByLabelText("Signal source")).toBeInTheDocument();
     fireEvent.click(header);
@@ -884,7 +884,7 @@ describe("E2 Sentinels: 'Watch a folder' scrolls to and focuses the opened form"
     seedSentinels([]);
     render(<SentinelsPage />);
     const btn = await emptyButton();
-    fireEvent.click(screen.getByRole("button", { name: /add sentinel/i }));
+    fireEvent.click(screen.getByRole("button", { name: /add watcher/i }));
     const form = (await screen.findByPlaceholderText("downloads-watch")).closest("form") as HTMLElement;
     (document.body as HTMLElement).focus();
     scrolled.length = 0;
@@ -898,7 +898,7 @@ describe("E2 Sentinels: 'Watch a folder' scrolls to and focuses the opened form"
     seedSentinels([]);
     render(<SentinelsPage />);
     await emptyButton();
-    const header = screen.getByRole("button", { name: /add sentinel/i });
+    const header = screen.getByRole("button", { name: /add watcher/i });
     fireEvent.click(header);
     expect(await screen.findByPlaceholderText("downloads-watch")).toBeInTheDocument();
     fireEvent.click(header);

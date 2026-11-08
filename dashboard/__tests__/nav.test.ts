@@ -103,6 +103,12 @@ describe("nav catalogue — the friction phrases resolve", () => {
     ["cost", "/usage"],
     // "where are my local models"
     ["local models", "/fleet"],
+    // v1.452.0 (readiness item 44): four pages renamed to plain words;
+    // the old names stay searchable (VOCABULARY.md rename rule).
+    ["sentinels", "/sentinels"],
+    ["reflexes", "/reflex"],
+    ["artifacts", "/artifacts"],
+    ["local fleet", "/fleet"],
     // A dead ollama endpoint is BOTH a connection to edit and a fleet member
     // that stopped serving — the search must offer both pages, not pick one.
     ["ollama", "/fleet"],

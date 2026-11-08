@@ -3032,8 +3032,8 @@ class SentinelUpdateTool(_RecordTool):
         old, new = _describe_sentinel(before), _describe_sentinel(after)
         return ToolResult(
             ok=True,
-            output=f"Sentinel '{name}': {old} → {new}.",
-            data={"record_change": self._card("Sentinel changed", f"Sentinel “{name}”", old, new, f"sentinel.{name}")},
+            output=f"Watcher '{name}': {old} → {new}.",
+            data={"record_change": self._card("Watcher changed", f"Watcher “{name}”", old, new, f"sentinel.{name}")},
         )
 
 
@@ -3052,7 +3052,7 @@ class SentinelDeleteTool(_RecordTool):
         return ToolResult(
             ok=True,
             output=f"Removed the sentinel '{name}'.",
-            data={"record_change": self._card("Sentinel removed", f"Sentinel “{name}”", _describe_sentinel(before), None, f"sentinel.{name}")},
+            data={"record_change": self._card("Watcher removed", f"Watcher “{name}”", _describe_sentinel(before), None, f"sentinel.{name}")},
         )
 
 
@@ -3632,7 +3632,7 @@ _CREATE_WORDS = {
     "schedule": "Schedule",
     "workflow": "Workflow",
     "webhook": "Webhook",
-    "sentinel": "Sentinel",
+    "sentinel": "Watcher",
     "goal": "Goal",
     "reflex": "Rule",
 }

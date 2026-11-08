@@ -127,6 +127,7 @@ import { CompactionCard } from "@/components/chat/CompactionCard";
 import { ModelRowChips } from "@/components/ModelRowBits";
 import { AgentRunSettled } from "@/components/chat/AgentRunRow";
 import {
+  ARMED_TOOLS_RUN_UNASKED,
   COMPACTION_OFFER_WORDS,
   armedToolWords,
   turnOffToolLabel,
@@ -341,6 +342,22 @@ describe("the tools menu lists tools by what they do", () => {
     await waitFor(() => expect(within(menu).getAllByTestId("armed-tool-row")).toHaveLength(2));
     const web = within(menu).getByRole("switch", { name: /Web & research/ });
     expect(web.getAttribute("title")).toBe("Turn on web research for this chat");
+  });
+
+  it("v1.452.0 (readiness item 9, the owner's decision): the list says a turned-on tool runs without asking", async () => {
+    const menu = await openMenu();
+    const note = within(menu).getByTestId("armed-tools-unasked");
+    expect(note.textContent).toBe(ARMED_TOOLS_RUN_UNASKED);
+    // It says what it means, in words a first-time user reads: no card, and
+    // how to take the OK back.
+    expect(ARMED_TOOLS_RUN_UNASKED).toMatch(/without asking you first/);
+    expect(ARMED_TOOLS_RUN_UNASKED).toMatch(/Press × to turn one off/);
+    // The note sits with the list it describes (after its heading, before the
+    // first row).
+    const heading = within(menu).getByText("Turned on for this chat");
+    const firstRow = within(menu).getAllByTestId("armed-tool-row")[0];
+    expect(heading.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(note.compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 

@@ -345,7 +345,7 @@ class SentinelService:
         # STABLE title (no count) so every change for this sentinel folds into ONE
         # pending proposal (add_backlog refreshes its rationale) instead of either
         # spamming a new proposal per count or silently swallowing changes.
-        title = f"Sentinel '{rec.name}' noticed file changes"
+        title = f"Watcher '{rec.name}' noticed file changes"
         task = rec.task or (
             f"The '{rec.name}' watcher noticed file changes. Review what changed "
             "and summarise whether any follow-up is needed; take no action yet."

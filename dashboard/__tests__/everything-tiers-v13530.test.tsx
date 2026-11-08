@@ -160,7 +160,7 @@ describe("Everything: everyday entries first, developer pages under More", () =>
       const s = surfaceFor(href)!;
       expect(within(region).getByTestId(`everything-link-${href.slice(1)}`).textContent).toContain(s.blurb);
     }
-    fireEvent.click(screen.getByLabelText("Pin Local fleet to the sidebar"));
+    fireEvent.click(screen.getByLabelText("Pin Model servers to the sidebar"));
     expect(readPins()).toEqual(["/fleet"]);
     // Other columns stay folded (per column).
     expect(screen.getByTestId("everything-more-setup").getAttribute("data-open")).toBe("false");

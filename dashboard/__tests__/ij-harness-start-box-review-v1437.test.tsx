@@ -283,7 +283,8 @@ describe("a first message refused before its turn started puts EVERY chip back",
     pickPlan();
     await addWorker("ollama", "glm-local");
     send("fix the cart");
-    const first = { folder: REPO, branch: true, provider: "claude-cli", model: "opus", account: "c-home", reasoning: "high", mode: "plan", team: { workers: ["glm-w"], reviewer: "" } };
+    // v1.452.0 (readiness item 43): the branch switch is off by default.
+    const first = { folder: REPO, branch: false, provider: "claude-cli", model: "opus", account: "c-home", reasoning: "high", mode: "plan", team: { workers: ["glm-w"], reviewer: "" } };
     await waitFor(() => expect(creates()).toEqual([first]));
     // The refusal: the empty session is taken back and the box reopens.
     await waitFor(

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.451.1 (2026-11-07).*
+holds itself to. Current as of v1.452.0 (2026-11-08).*
 
 ---
 
@@ -145,14 +145,15 @@ searching.
 - **Pins.** On **Everything**, press the pin beside any entry to put it
   under the five places in the sidebar (up to three).
 - **Everything.** Four columns — **Work** (Agents, Creative, Templates,
-  Documents, File Search), **Automations** (Workflows, Schedules, Reflexes,
-  Sentinels, Autonomy, Webhooks), **Knowledge** (Memory, Skills, Artifacts,
-  You, Train), **System** (Sessions, Activity, Usage, Fleet, Self-development,
+  Documents, File Search), **Automations** (Workflows, Schedules, Rules,
+  Watchers, Autonomy, Webhooks), **Knowledge** (Memory, Skills, What agents
+  made, You, Train), **System** (Sessions, Activity, Usage, Model servers,
+  Self-development,
   Updates, Help) — plus **Setup**, and a **Status** tab (running work,
   health, failing background tasks, recent events, the getting-started
   checklist). Since v1.353.0 each column lists its everyday
-  pages first; the developer pages (Webhooks, Artifacts, Secrets, Local
-  fleet, Self-development, Session board) sit under that column's **More**,
+  pages first; the developer pages (Webhooks, What agents made, Secrets, Model
+  servers, Self-development, Session board) sit under that column's **More**,
   and typing in the filter still finds them.
 - **Settings, in seven groups.** **Models**, **Connections**, **Agents &
   automation**, **Memory & you**, **Permissions & ledger**, **Appearance**,
@@ -728,12 +729,13 @@ with the request typed in.
   `{{Name.data}}` whose `Name` is not one of the workflow's steps (a typo
   like `{{Scna.data}}` would render nothing on every run); a bare
   `{{Name}}` naming no step is read as a run input.
-- **Reflexes**: webhook-triggered actions. **Sentinels**: watched folders.
+- **Rules** (once called Reflexes): something happens, and an agent acts.
+  **Watchers** (once called Sentinels): watched folders that suggest work.
   **Autonomy**: off by default; when on, starts at *suggest* level with hard
   daily action/token caps and a kill switch.
 - **A reflex rule that cannot start says so on its row and in the reply**
   (v1.231.0). When a signal matches a rule whose workflow was deleted or
-  whose remote agent is gone, the rule's row on the Reflexes page shows
+  whose remote agent is gone, the rule's row on the Rules page shows
   *could not start: <reason>* until a later fire succeeds, the webhook's
   answer lists it under `failed` instead of counting it as fired, and a
   phone message that matched it gets `Rule "<name>" could not start:
@@ -744,7 +746,7 @@ with the request typed in.
   is visible rather than a silent 200.
 - **A sentinel whose folder vanished keeps its memory** (v1.231.0). When a
   watched folder is unreachable (USB stick unplugged, OneDrive folder
-  offline), the Sentinels page shows *root unreachable since <time>* on the
+  offline), the Watchers page shows *root unreachable since <time>* on the
   row and the watcher keeps the files it had already seen; plugging the
   drive back in proposes nothing for untouched files instead of treating
   every one of them as new. You can add a sentinel for a folder that is not
@@ -2037,6 +2039,24 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Plain page names, and coding straight in your folder (v1.452.0)
+
+- **Four pages have plain names**: Sentinels is now **Watchers**, Reflexes
+  is **Rules**, Artifacts is **What agents made**, and Local fleet is
+  **Model servers**. Searching for an old name still finds the page.
+- **Chat › Code works straight in your folder.** "Work in a separate copy
+  of the folder" (it was "Work on a new branch") is now off unless you turn
+  it on. When it is on, the Changes pane's **Keep these changes** commits
+  what is not committed yet and brings the work back into the branch your
+  folder is on, in one press. A merge that cannot go through cleanly
+  changes nothing and says why.
+- **A tool you turn on for a chat runs without asking** for the rest of
+  that chat; turning it on is the OK. The Tools menu now says so under
+  "Turned on for this chat", and × turns one off. A few safety checks still
+  ask every time (a commit or push, a cloud send from a Local only chat, a
+  paid generation, Iron Jarvis's own protected settings).
+- Gmail and Slack still use your own Google or Slack developer app.
 
 ## Settings, the automations pages and Help, today (v1.451.0)
 

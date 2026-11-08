@@ -31,6 +31,34 @@ function num(v: unknown): number {
 
 // ------------------------------------------------------------ New session
 
+/**
+ * v1.452.0 (readiness item 43, the owner's decision of 2026-11-08): the
+ * owner works folder-first, so a new coding session works STRAIGHT IN the
+ * folder by default. The switch is OFF unless the user turns it on (New
+ * session's box and an empty session's folder chip), and it says what it
+ * does without the word "worktree". When it is on, the Branch view's one
+ * press "Keep these changes" brings the work back into the folder.
+ */
+export const BRANCH_SWITCH_LABEL = "Work in a separate copy of the folder";
+
+/** The line under the switch: what on and off each do. `from` = the branch
+ *  the copy starts from ("" when the folder is on no branch). */
+export function branchSwitchWords(on: boolean, from: string): string {
+  return on
+    ? `Changes go to a copy of this folder, on a new branch from ${from || "the current commit"}. Your folder stays as it is until you press Keep these changes.`
+    : "Off: changes go straight into this folder.";
+}
+
+/** The Branch view's one press: commit what is not committed yet, then merge
+ *  the branch into the branch the session started from. */
+export const KEEP_CHANGES_LABEL = "Keep these changes";
+
+/** The commit message "Keep these changes" writes (no model call). */
+export function keepCommitMessage(title: string): string {
+  const t = title.replace(/\s+/g, " ").trim();
+  return t ? t.slice(0, 200) : "Changes from a coding session";
+}
+
 /** What New session knows about a folder (GET /build/git/folder). */
 export interface FolderGit {
   /** git is installed on this PC. */

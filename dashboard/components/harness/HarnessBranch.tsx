@@ -15,7 +15,11 @@
  *    compare link opens GitHub's own page), Merge into <base> (two presses;
  *    a refusal is said in words, nothing changed) — then "Remove the
  *    worktree" — and Discard (two presses: the worktree goes to the trash,
- *    the branch stays, the session is archived).
+ *    the branch stays, the session is archived);
+ *  - v1.452.0 (readiness item 43, the owner's decision): ONE press, "Keep
+ *    these changes", first in the row — Commit (a plain message, no model
+ *    call) then Merge into <base>, through the same two routes, so the work
+ *    comes back into the folder the session started from.
  *
  * A refusal shows the daemon's own sentence; git's output (masked by the
  * daemon) folds under Details. A pull request's checks are read when asked
@@ -38,6 +42,8 @@ import {
   getBranchStatus,
   getPr,
   gitRefusal,
+  KEEP_CHANGES_LABEL,
+  keepCommitMessage,
   mergeBranch,
   moreFiles,
   pushBranch,
@@ -243,6 +249,37 @@ export function BranchView({
     });
   }
 
+  // v1.452.0 (readiness item 43): "Keep these changes" — what is not
+  // committed yet is committed (a plain message from the session's title,
+  // no model call), then the branch is merged into its base: the Commit and
+  // Merge buttons' own routes, so a refusal is the daemon's sentence and a
+  // merge that cannot go through cleanly changes nothing. A commit that
+  // landed before a refused merge is said beside the refusal.
+  async function keep() {
+    await act("keep", async () => {
+      let committed = "";
+      if ((status?.uncommitted ?? 0) > 0) {
+        const c = await commitBranch(sessionId, keepCommitMessage(status?.prDraft.title ?? ""));
+        committed = `Committed ${c.sha}.`;
+      }
+      try {
+        const done = await mergeBranch(sessionId);
+        setMerged({ into: done.into, where: done.where });
+        onChanged?.();
+        const kept = done.where
+          ? `Kept: the changes are in ${done.into} in ${done.where}.`
+          : `Kept: the changes are in ${done.into}. It is not checked out anywhere, so no folder changed.`;
+        return committed ? `${committed} ${kept}` : kept;
+      } catch (e) {
+        if (!committed) throw e;
+        const r = gitRefusal(e);
+        setRefusal({ ...r, detail: `${committed} ${r.detail}` });
+        onChanged?.();
+        return null;
+      }
+    });
+  }
+
   // v1.406.0 part 4: the next-step box pressed Commit / "Open a pull
   // request": the SAME press as the buttons here, made once the branch has
   // been read (a press that arrives before the read waits for it) and only
@@ -262,6 +299,14 @@ export function BranchView({
   // Review (v1.375.0): hidden as soon as a merge answers, not when the
   // branch is read again — a second press only met "Nothing to merge".
   const canMerge = !!status && status.ahead > 0 && status.baseExists && !status.inBase && !!base && !merged;
+  // v1.452.0: "Keep these changes" shows while there is work to bring back.
+  const canKeep =
+    !!status &&
+    !!base &&
+    status.baseExists &&
+    !merged &&
+    !git.merged &&
+    (status.uncommitted > 0 || (status.ahead > 0 && !status.inBase));
   // Review (v1.375.0): the second press of Discard says what goes with the
   // worktree when some of its work is not committed (it is in the trash,
   // not lost — the title says where).
@@ -309,6 +354,18 @@ export function BranchView({
       ) : null}
 
       <div data-testid="branch-actions" className="flex flex-wrap items-center gap-1">
+        {canKeep ? (
+          <button
+            type="button"
+            data-testid="branch-keep"
+            disabled={!!busy}
+            title={`Commits what is not committed yet, then merges ${git.branch} into ${base}, the branch your folder started from. Refused with nothing merged when it cannot go through cleanly.`}
+            onClick={() => void keep()}
+            className="btn-accent text-xs"
+          >
+            {KEEP_CHANGES_LABEL}
+          </button>
+        ) : null}
         <button
           type="button"
           data-testid="branch-commit"
