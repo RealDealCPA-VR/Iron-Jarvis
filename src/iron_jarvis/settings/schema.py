@@ -265,10 +265,13 @@ S = SettingDef
 
 SETTINGS: tuple[SettingDef, ...] = (
     # ---------------------------------------------------------------- models
-    S("default_provider", "Default provider", "models", "string",
+    # Wave D item 33: the first row of Models read "Default provider" — the
+    # engine room's word. The old words stay searchable as aliases (and keep
+    # the chat trigger's phrases: "default ai" was one already).
+    S("default_provider", "Default AI", "models", "string",
       "The AI service used when a chat doesn't pick one. Manage accounts and keys under Connections. "
       "One chat can pick its own model from the model menu above the message box without changing this.",
-      tier="ask", aliases=("ai provider", "which ai", "default ai"), placeholder="anthropic"),
+      tier="ask", aliases=("ai provider", "which ai", "default ai", "default provider"), placeholder="anthropic"),
     S("default_model", "Default model", "models", "string",
       "The model that answers by default. One chat can pick its own model from the model menu above "
       "the message box without changing this.", tier="allow",

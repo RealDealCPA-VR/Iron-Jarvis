@@ -812,7 +812,7 @@ function ToolMcpSection({
 }) {
   const at = mcp.at ? agoWords(mcp.at) : "";
   return (
-    <Section id="mcp" title="Its own MCP servers">
+    <Section id="mcp" title="Its own tool servers">
       {!mcp.known || mcp.servers.length === 0 ? (
         <p data-testid="code-session-mcp-note" className={QUIET}>
           {mcp.note}

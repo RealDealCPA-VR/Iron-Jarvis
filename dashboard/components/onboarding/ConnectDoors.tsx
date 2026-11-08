@@ -229,7 +229,9 @@ const WHERE_FALLBACK: Record<string, string> = {
 const OTHER_NAMES: Record<string, string> = {
   "opencode-cli": "OpenCode",
   "grok-cli": "Grok",
-  fleet: "Your model fleet",
+  // Wave D item 33: the canon's one name for the user's own servers
+  // (lib/loopWords says the same).
+  fleet: "Your model servers",
 };
 
 /** A label as it reads mid-sentence ("With your own model server, …"). */

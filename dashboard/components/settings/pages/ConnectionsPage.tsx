@@ -1353,7 +1353,7 @@ function ConnectionCard({
           {isCustom && endpoints.length > 0 && (
             <div className="space-y-1.5">
               <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                Saved endpoints
+                Your model servers
               </span>
               {endpoints.map((ep) => (
                 <div
@@ -1492,7 +1492,7 @@ function ConnectionCard({
                     onConfirm={() => void (ep.seeded ? removeLegacy() : removeEndpoint(ep))}
                     label={epBusy === ep.id ? "…" : "Delete"}
                     confirmLabel="Delete?"
-                    title={`Remove "${ep.label}". Its provider disappears from every picker and the saved key is cleaned up.`}
+                    title={`Remove "${ep.label}". It disappears from every model picker and the saved key is cleaned up.`}
                   />
                   {/* The report card for THIS endpoint's provider
                       ("fleet-<id>") — what auto-tier's quality judgment sees
@@ -1514,7 +1514,7 @@ function ConnectionCard({
               ))}
               {epError && <ErrorNote>{epError}</ErrorNote>}
               <p className="text-[10px] leading-relaxed text-zinc-600">
-                Each endpoint is its own provider in every model picker.
+                Each model server is listed on its own in every model picker.
               </p>
             </div>
           )}
@@ -1531,8 +1531,8 @@ function ConnectionCard({
                   ? "Use an API key instead"
                   : isCustom
                     ? endpoints.length > 0
-                      ? "Add another endpoint"
-                      : "Add an endpoint"
+                      ? "Add another model server"
+                      : "Add a model server"
                     : "Connect"}
               </button>
             ) : (
@@ -1558,7 +1558,7 @@ function ConnectionCard({
                     </label>
                     <label className="block space-y-1">
                       <span className="text-[11px] font-medium text-zinc-400">
-                        Endpoint base URL
+                        Server address
                       </span>
                       <input
                         type="text"
@@ -2309,7 +2309,7 @@ export default function ConnectionsPage() {
                   >
                     {notConnected.length === 0 ? (
                       <div className="px-3 py-2 text-xs text-zinc-400">
-                        All providers connected 🎉
+                        Everything is connected 🎉
                       </div>
                     ) : (
                       notConnected.map((c) => {
@@ -2395,7 +2395,7 @@ export default function ConnectionsPage() {
               href="#subscription-providers"
               className="ml-7 inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-soft hover:text-accent sm:ml-0 sm:mt-0.5"
             >
-              See subscription &amp; local providers <ArrowRight size={12} aria-hidden />
+              See your plans and model servers <ArrowRight size={12} aria-hidden />
             </a>
           </div>
         </Reveal>

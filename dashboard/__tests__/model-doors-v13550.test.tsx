@@ -388,7 +388,7 @@ describe("G72: Settings › Connections' Add an endpoint form", () => {
     const card = (await screen.findByText("Model servers on your network")).closest(
       "#conn-card-custom",
     ) as HTMLElement;
-    fireEvent.click(within(card).getByRole("button", { name: /Add an endpoint/ }));
+    fireEvent.click(within(card).getByRole("button", { name: /Add a model server/ }));
     return card;
   }
 

@@ -45,10 +45,13 @@ export function vendorOfCli(provider: string): AccountVendor | null {
   return ACCOUNT_VENDORS.find((v) => CLI_OF_VENDOR[v] === provider) ?? null;
 }
 
-/** The note under a CLI's accounts when Iron-Proxy cannot serve a chat's. */
+/** The note under a CLI's accounts when the account manager cannot serve a
+ *  chat's. Wave D item 33 (canon row 29): the chat says "Several accounts"
+ *  (its switch on Connections) and "the account manager", never the
+ *  program's name. */
 export const CHAT_ACCOUNT_OFF_NOTE =
-  "Iron-Proxy is off, so this chat's account cannot be used — turn it on in Settings › Connections, or choose Any free account.";
-export const CHAT_ACCOUNT_UPDATE_NOTE = "Iron-Proxy needs an update to keep a chat on one account.";
+  "Several accounts is off, so this chat's account cannot be used — turn it on in Settings › Connections, or choose Any free account.";
+export const CHAT_ACCOUNT_UPDATE_NOTE = "The account manager needs an update to keep a chat on one account.";
 
 function accountIn(view: AccountsView | null | undefined, id: string): BuildAccount | null {
   if (!view || !id) return null;

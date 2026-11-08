@@ -355,7 +355,7 @@ describe("helpers", () => {
       "Several conversations hit the limit at once, so none was carried — use /resume in the new pane.";
     expect(continueNote({ ...ANSWER, resumed: false, note: several })).toBe(several);
     expect(continueNote({ ...ANSWER, note: null, parked: false })).toMatch(
-      /Iron-Proxy did not mark “Work Max” as out of usage/,
+      /The account manager did not mark “Work Max” as out of usage/,
     );
   });
 });

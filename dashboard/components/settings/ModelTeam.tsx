@@ -291,7 +291,7 @@ function MemberRow({
           >
             <option
               value=""
-              title="In a coding session it runs on the session's account (or one of the session's account group); for other work Iron-Proxy picks one."
+              title="In a coding session it runs on the session's account (or one of the session's account group); for other work the account manager picks one."
             >
               No account of its own
             </option>

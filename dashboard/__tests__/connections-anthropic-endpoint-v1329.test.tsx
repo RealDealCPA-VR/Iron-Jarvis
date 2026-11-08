@@ -195,7 +195,7 @@ async function openForm() {
   seed();
   render(<ConnectionsPage />);
   const card = (await screen.findByText("Model servers on your network")).closest("#conn-card-custom") as HTMLElement;
-  fireEvent.click(within(card).getByRole("button", { name: /Add an endpoint/ }));
+  fireEvent.click(within(card).getByRole("button", { name: /Add a model server/ }));
   fireEvent.change(within(card).getByPlaceholderText("http://localhost:1234/v1"), {
     target: { value: "https://relay.test/anthropic" },
   });

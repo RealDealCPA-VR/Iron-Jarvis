@@ -13,6 +13,10 @@
 
 export const SETTINGS_OPEN_EVENT = "ij:settings-open";
 
+/** Wave D item 32: `#settings-<key>` names one setting's row, like
+ *  `?focus=<key>`; a folded (advanced) row's fold opens for it. */
+export const SETTINGS_HASH = "#settings-";
+
 export interface SettingsTarget {
   section: string;
   focus: string;
@@ -26,7 +30,8 @@ export function settingsTarget(href: string): SettingsTarget | null {
     if (url.pathname !== "/settings" && url.pathname !== "/settings/") return null;
     let section = url.searchParams.get("section") || "";
     if (!section && url.hash === "#appearance") section = "appearance";
-    const focus = url.searchParams.get("focus") || "";
+    let focus = url.searchParams.get("focus") || "";
+    if (!focus && url.hash.startsWith(SETTINGS_HASH)) focus = decodeURIComponent(url.hash.slice(SETTINGS_HASH.length));
     return section || focus ? { section, focus } : null;
   } catch {
     return null;

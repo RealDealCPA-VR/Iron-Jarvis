@@ -125,7 +125,7 @@ function LocalServerRowView({ row, onChanged }: { row: LocalServerRow; onChanged
           ) : row.slot === "taken" ? (
             <div data-testid={`local-server-taken-${row.key}`} className="mt-1 text-[11px] leading-relaxed text-zinc-500">
               Running on this PC. Your own model server is set to another address, so add this one
-              with Add an endpoint, then {row.name} on this PC.
+              with Add a model server, then {row.name} on this PC.
             </div>
           ) : null}
           {error && (

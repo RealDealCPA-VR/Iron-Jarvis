@@ -251,13 +251,16 @@ export function GoalContractCard({
         <div className="flex flex-wrap gap-2.5">
           <label className="block min-w-[180px] flex-1">
             <span className="text-[11px] uppercase tracking-[0.08em] text-zinc-500">
-              Schedule (cron)
+              Repeat
             </span>
             <input
               value={schedule}
               onChange={(e) => setSchedule(e.target.value)}
               aria-label="Goal schedule"
-              placeholder="empty = manual — you run it; a cron fires on schedule"
+              // Wave D item 33: "cron" was the engine room's word. The box
+              // still takes a cron line; the card fills it from words like
+              // "daily" or "every night" (suggestSchedule).
+              placeholder="empty = you run it yourself; else it runs on a schedule, like daily or every night"
               className="field mt-1 w-full py-1.5 text-[13px]"
             />
           </label>

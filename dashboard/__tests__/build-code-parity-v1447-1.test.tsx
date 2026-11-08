@@ -155,7 +155,7 @@ describe("Codex: Reload MCP servers", () => {
     renderPanes();
     const button = await screen.findByTestId("code-session-mcp-reload");
     expect(button.textContent).toBe(MCP_RELOAD_WORDS);
-    expect(button.getAttribute("title")).toContain("Codex reads its MCP settings again");
+    expect(button.getAttribute("title")).toContain("Codex reads its tool-server settings again");
     setGets(overview({ ...MCP, servers: [MCP.servers[0]], reload: true }));
     fireEvent.click(button);
     await waitFor(() => expect(H.posts.map((p) => p.path)).toContain(`${BASE}/mcp-reload`));

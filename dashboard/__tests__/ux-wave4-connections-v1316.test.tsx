@@ -441,7 +441,7 @@ describe("Connections — one filled accent on the screen (accent-overuse-no-pri
       ["openrouter", /^Connect$/],
       ["xai", /^Connect$/],
       ["pixio", /^Connect$/],
-      ["custom", /Add an endpoint/],
+      ["custom", /Add a model server/],
       ["dropbox", /Set up & log in/],
       ["google_drive", /Set up & log in/],
     ];
