@@ -16080,6 +16080,50 @@ does not need a bump, stop and bump it.
   (12 mutations, 11 red; the start box's first-render default survives —
   equivalent, the git read resets it before the switch can show).
 
+- **Archiving a Build › Code session writes a short Markdown summary from
+  its OWN record, never a model** (v1.453.0; the owner: "a general summary
+  … in markdown (to avoid bloat) … what project was worked on … what state
+  the project was in before … and after"). `hosted/archive_summary.py`
+  (BLOCKING): `build_summary(row, events, dropped=, engine=)` reads the
+  events log (helper-tagged `parent` events left out) and git in the folder
+  through `hosted/panes` (`_base_commit` = the newest first-parent commit
+  before `created_at` − 1 s, `git_changes(base=)`, plus `log`, `status
+  --porcelain=v1 -z`, `@{u}` ahead count; all `_g` reads, bounded); a
+  share / gone folder / no git / not a repo / git refusing is SAID, never
+  guessed. Sections: who/where (folder, project via
+  `projects/locate.project_for_path`, tool, model, account), Before (base
+  commit + first ask quoted), What was done (asks, files differing from the
+  start, commits after it, test runs via `harness/finish.status_is_tests`,
+  CI checks (`gh run …` / `gh pr checks`) and `git push` from the tool's own
+  command steps — "finished without an error" / "ended with an error",
+  NEVER "passed"), After (branch + commit, uncommitted count, unpushed
+  commits, plan steps not done, the end of the last reply QUOTED). Every
+  string masked before its cut AND the whole text masked again (both locks
+  needed: either alone survives a mutation); ≤ `MAX_CHARS` 8,000. Written
+  to `<home>/hosted/<id>/summary.md` (temp + replace) — it goes to the
+  trash with a delete, stays on unarchive, is rewritten by a later archive.
+  `HostedService.archive`: refuses `W.ARCHIVE_BACKGROUND` while the running
+  tool `keeps_working` / `working_alone` / `replying_alone` (BEFORE the
+  claim; a running reply is still `_claim`'s `W.RUNNING`), stops the tool,
+  then writes the summary from `live.log.read(EV.MAX_LINES)` +
+  `_with_transcript`; a summary that fails NEVER stops the archive (answer
+  key `archive_summary_error`, else `archive_summary {path, at}`). The view
+  (`GET /build/app/sessions/{id}`) carries `archive_summary` when one is
+  kept (one stat). Routes `GET …/summary` (`{text, path, at}`, 404 none)
+  and `POST …/summary/open` (Iron Jarvis's own path through
+  `documents._open_native`, never a caller's). Dashboard: the row's ⋯ gains
+  **Archive** (`code-row-archive-<id>`, not on archived or disk rows,
+  disabled while running; a refusal and a summary error go to
+  `code-row-note`), the header's Archive says the same title;
+  `components/buildCode/ArchiveSummary.tsx` (`code-archive-summary`, open
+  for an archived session with Copy / Open file / Bring back, folded once
+  brought back; read only when shown), words in `lib/buildArchive.ts`. Pins:
+  `tests/test_build_app_archive_summary_v1453.py`,
+  `dashboard/__tests__/build-code-archive-v1453.test.tsx` (16 mutations,
+  all red). OPEN: the branch at the START is not known (only the commit);
+  "files that differ" counts the user's own edits too (said in the text);
+  a Build session whose log was trimmed shows only what the log kept.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

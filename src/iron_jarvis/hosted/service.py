@@ -110,6 +110,8 @@ from . import typed as T  # v1.439.0: Claude Code's and Grok's typed built-ins
 from .process import HarnessGone, HarnessProcess, binary_for, build_env
 from . import hostlink as HL  # v1.422.0: the code host
 from . import open_steps as OS  # v1.427.2: a step runs only while its tool does
+from . import archive_summary as AS  # v1.453.0: the summary kept at archive time
+from . import events as EV
 
 log = logging.getLogger(__name__)
 
@@ -1890,6 +1892,10 @@ class HostedService:
             folder = await asyncio.to_thread(self._pi_folder_view, row)
             if folder is not None:
                 out["pi_folder"] = folder
+        # v1.453.0: the summary kept from an archive (one stat; absent when none).
+        facts = await asyncio.to_thread(AS.summary_facts, self.home, row.id)
+        if facts is not None:
+            out["archive_summary"] = facts
         # v1.418.0 (C4.6): "Load earlier" reads the page before this cursor.
         out["older"] = got["older"]
         # v1.418.0 (C4.8): the messages waiting behind the reply.
@@ -2281,20 +2287,61 @@ class HostedService:
     async def archive(self, sid: str, archived: bool = True) -> dict[str, Any]:
         row = await self._row(sid)
         live = self._live(row)
-        if archived:
-            self._claim(live, "being archived")
-            try:
-                await self._stop_process(live, why="archived")
-                # v1.412.0 review: an archived session KEEPS its own folder,
-                # empty or not — Claude Code and Pi keep a conversation by
-                # the folder it ran in, so unarchiving must find it at the
-                # same path (only a real delete may remove an empty one).
-                row = await asyncio.to_thread(store.update, self.engine, sid, archived_at=utcnow())
-            finally:
-                live.claim = ""
-        else:
+        if not archived:
+            # v1.453.0: the summary written at archive time stays with it.
             row = await asyncio.to_thread(store.update, self.engine, sid, archived_at=None)
-        return self._with_live(store.view(row))
+            return self._with_live(store.view(row))
+        # v1.453.0: never while work runs in the background — the stop below
+        # would end it (Claude Code's helpers and background commands, Pi's
+        # run of its own, a reply the tool writes by itself).
+        now = self.clock()
+        if live.running and (live.keeps_working(now) or live.working_alone or live.replying_alone(now)):
+            raise Refused(W.ARCHIVE_BACKGROUND.format(label=W.label(row.harness)))
+        self._claim(live, "being archived")
+        summary: dict[str, Any] | None = None
+        summary_error = ""
+        try:
+            await self._stop_process(live, why="archived")
+            # v1.453.0: the short Markdown summary (``hosted/archive_summary``),
+            # from the session's own log and git — never a model call. A
+            # summary that cannot be written never stops the archive; it is said.
+            try:
+                summary = await self._write_archive_summary(row, live)
+            except AS.SummaryNotWritten as exc:
+                summary_error = exc.words
+            except Exception:  # noqa: BLE001 — the archive itself must still land
+                log.warning("could not write a Code-view session's archive summary", exc_info=True)
+                summary_error = W.ARCHIVE_SUMMARY_FAILED
+            # v1.412.0 review: an archived session KEEPS its own folder,
+            # empty or not — Claude Code and Pi keep a conversation by
+            # the folder it ran in, so unarchiving must find it at the
+            # same path (only a real delete may remove an empty one).
+            row = await asyncio.to_thread(store.update, self.engine, sid, archived_at=utcnow())
+        finally:
+            live.claim = ""
+        out = self._with_live(store.view(row))
+        if summary is not None:
+            out["archive_summary"] = {"path": summary["path"], "at": summary["at"]}
+        if summary_error:
+            out["archive_summary_error"] = summary_error
+        return out
+
+    async def _write_archive_summary(self, row: Any, live: LiveSession) -> dict[str, Any]:
+        """v1.453.0: every event the log keeps (flushed first), the tool's own
+        transcript for a conversation that lived outside this view, then the
+        summary written beside the log."""
+        events, _total, dropped = await asyncio.to_thread(live.log.read, EV.MAX_LINES)
+        events = await self._with_transcript(row, live, events, cut=False)
+        return await asyncio.to_thread(AS.write_summary, self.home, row, events, dropped=dropped,
+                                       engine=self.engine)
+
+    async def archive_summary(self, sid: str) -> dict[str, Any]:
+        """v1.453.0: the kept summary ``{text, path, at}`` (404 when none)."""
+        row = await self._row(sid)
+        got = await asyncio.to_thread(AS.read_summary, self.home, row.id)
+        if got is None:
+            raise Refused(W.NO_ARCHIVE_SUMMARY, 404)
+        return got
 
     async def delete(self, sid: str) -> dict[str, Any]:
         row = await self._row(sid)

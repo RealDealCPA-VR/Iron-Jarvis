@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.453.0
+
+**Archiving a Build › Code session keeps a short summary of it.** **Archive is in each session's ⋯ menu** in Build › Code (the row in the list, and the session's own ⋯ at the top).
+
 ## v1.452.0
 
 **Plain page names, and coding straight in your folder.** **Four pages have plain names**: Sentinels is now **Watchers**, Reflexes is **Rules**, Artifacts is **What agents made**, and Local fleet is **Model servers**.
@@ -77,7 +81,3 @@
 ## v1.433.0
 
 **Seventeen fixes from the deep review.** A deep review of the whole app found 17 bugs.
-
-## v1.432.0
-
-**Build › Code's mode menu shows names only too.** The mode menu in Build › Code (the shield chip under the message box, and the one on a new session) now lists the modes by name only, the same way as the chat's approvals menu.

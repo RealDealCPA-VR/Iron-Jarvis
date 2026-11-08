@@ -2040,6 +2040,33 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Archiving a Build › Code session keeps a short summary of it (v1.453.0)
+
+- **Archive is in each session's ⋯ menu** in Build › Code (the row in the
+  list, and the session's own ⋯ at the top). It is refused, in plain words,
+  while a reply is running or the tool still works in the background
+  (helpers, background commands, or a reply it writes by itself), because
+  archiving stops the tool.
+- **Archiving writes a short Markdown summary** and keeps it with the
+  session: which folder and project, which tool, model and account; the
+  folder **before** the work (the last commit before the session started,
+  and what the first message asked); **what was done** (the later asks, the
+  files that differ from the start, the commits made, and the test runs, CI
+  checks and pushes the session's own steps show — each said as "finished
+  without an error" or "ended with an error", never "passed"); and the state
+  **after** (the branch and commit it ended on, what is left uncommitted or
+  not pushed, plan steps not marked done, and the end of the last reply,
+  quoted).
+- **No AI writes it.** Iron Jarvis builds it from the session's own log and
+  git, so it never claims anything the record does not show; what the
+  record cannot tell (a folder that is not a git repository, a log that
+  dropped older events) is said instead. Secrets are masked.
+- **Open an archived session** from "Archived sessions" to read its summary
+  at the top, with **Copy**, **Open file** (the summary is a `summary.md`
+  file in the session's own folder inside Iron Jarvis's data) and **Bring
+  back**. A session brought back keeps its summary, folded under one press;
+  archiving it again writes a new one.
+
 ## Plain page names, and coding straight in your folder (v1.452.0)
 
 - **Four pages have plain names**: Sentinels is now **Watchers**, Reflexes

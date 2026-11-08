@@ -96,6 +96,16 @@ import {
   type BranchFacts,
 } from "@/lib/buildAppBranch";
 import { CodePanes } from "@/components/buildCode/CodePanes";
+import { ArchiveSummaryCard } from "@/components/buildCode/ArchiveSummary";
+import {
+  ARCHIVE_FAILED,
+  ARCHIVE_ROW,
+  ARCHIVE_ROW_TITLE,
+  ARCHIVE_RUNNING_TITLE,
+  archiveSummaryError,
+  archiveSummaryFacts,
+  type ArchiveSummaryFacts,
+} from "@/lib/buildArchive";
 import { CodeAskCard, type CodeAnswer } from "@/components/buildCode/CodeAskCard";
 import { MENU_BUTTON_HOVER_FADE, useMenuClose } from "@/components/buildCode/useMenuClose";
 import {
@@ -325,6 +335,7 @@ function SessionPane({
   onChanged,
   onOpenedTerminal,
   onArchived,
+  onUnarchive,
   firstMessage = null,
   firstFiles = null,
   onFirstSent,
@@ -336,7 +347,10 @@ function SessionPane({
   tools: readonly CodingTool[];
   onChanged: (s: CodeSession) => void;
   onOpenedTerminal: (terminalId: string) => void;
-  onArchived: (id: string) => void;
+  /** v1.453.0: with the daemon's words when the summary was not written. */
+  onArchived: (id: string, note?: string) => void;
+  /** v1.453.0: "Bring back" on an archived session's summary card. */
+  onUnarchive?: (id: string) => Promise<void> | void;
   /** v1.412.0: the start composer's words — sent as this session's first
    *  message as soon as it is read (one press: make + send). */
   firstMessage?: string | null;
@@ -375,6 +389,8 @@ function SessionPane({
    *  them for this session), or the session already loads them. */
   const [piFolder, setPiFolder] = useState<PiFolder | null>(null);
   const [dropped, setDropped] = useState(0);
+  /** v1.453.0: the summary kept from an archive (where it is), or null. */
+  const [summaryFacts, setSummaryFacts] = useState<ArchiveSummaryFacts | null>(null);
   /** v1.418.0 (C4.6): steps loaded with "Load earlier" (oldest first), the
    *  cursor of the page before them, and how many are older still. */
   const [earlierEvents, setEarlierEvents] = useState<CodeEvent[]>([]);
@@ -562,6 +578,7 @@ function SessionPane({
         onChanged(view.session);
         setExtra(view.pending);
         setDropped(view.dropped);
+        setSummaryFacts(archiveSummaryFacts(raw));
         if (view.commands) setViewCommands(view.commands);
         setKeepsLast(view.keepsLast);
         setPiFolder(view.piFolder);
@@ -1357,10 +1374,10 @@ function SessionPane({
     if (!session) return;
     setMoreOpen(false);
     try {
-      await post(`${SESSIONS}/${encodeURIComponent(session.id)}/archive`);
-      onArchived(session.id);
+      const raw = await post<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/archive`);
+      onArchived(session.id, archiveSummaryError(raw));
     } catch (e) {
-      setNote(errorWords(e, "The session was not archived."));
+      setNote(errorWords(e, ARCHIVE_FAILED));
     }
   }, [session, onArchived]);
 
@@ -1602,11 +1619,12 @@ function SessionPane({
                   type="button"
                   role="menuitem"
                   data-testid="code-archive"
-                  disabled={running}
+                  disabled={running || isArchived(session)}
+                  title={running ? ARCHIVE_RUNNING_TITLE : ARCHIVE_ROW_TITLE}
                   onClick={() => void archive()}
                   className="flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06] disabled:opacity-50"
                 >
-                  Archive
+                  {ARCHIVE_ROW}
                 </button>
               </div>
             ) : null}
@@ -1622,6 +1640,23 @@ function SessionPane({
           className="relative min-h-0 flex-1 overflow-y-auto px-4 py-4"
         >
           <div className={HARNESS_COLUMN}>
+            {/* v1.453.0: the summary written when it was archived (open from
+                "Archived sessions"); folded once it is brought back. */}
+            <ArchiveSummaryCard
+              sessionId={session.id}
+              facts={summaryFacts}
+              archived={isArchived(session)}
+              onBringBack={
+                onUnarchive
+                  ? () => {
+                      void (async () => {
+                        await onUnarchive(session.id);
+                        void load({ follow: false });
+                      })();
+                    }
+                  : undefined
+              }
+            />
             {/* v1.418.0 (C4.6): what is older than this read, said — and one
                 press loads the page before it. */}
             {older.earlier > 0 ? (
@@ -2317,12 +2352,31 @@ export function BuildCodeView({
   );
 
   const archived = useCallback(
-    (id: string) => {
+    (id: string, note?: string) => {
       setSessions((prev) => (prev ? prev.filter((s) => s.id !== id) : prev));
       if (openId === id) open(null);
       if (showArchived) readArchived();
+      // v1.453.0: archived, but its summary could not be written: said.
+      if (note) setRowNote(note);
     },
     [openId, open, showArchived, readArchived],
+  );
+
+  /** v1.453.0: Archive from the row — the daemon writes the session's
+   *  summary and refuses (in words, said here) while a reply or background
+   *  work runs; nothing leaves the list then. */
+  const rowArchive = useCallback(
+    async (id: string) => {
+      setRowMenu(null);
+      setRowNote(null);
+      try {
+        const raw = await post<unknown>(`${SESSIONS}/${encodeURIComponent(id)}/archive`);
+        archived(id, archiveSummaryError(raw));
+      } catch (e) {
+        setRowNote(errorWords(e, ARCHIVE_FAILED));
+      }
+    },
+    [archived],
   );
 
   const rowOpenTerminal = useCallback(
@@ -2612,6 +2666,20 @@ export function BuildCodeView({
               {EXPORT_MARKDOWN}
             </button>
           ) : null}
+          {/* v1.453.0: Archive writes the session's summary and keeps it. */}
+          {!archivedRow && s.source !== "disk" ? (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid={`code-row-archive-${s.id}`}
+              disabled={s.running}
+              title={s.running ? ARCHIVE_RUNNING_TITLE : ARCHIVE_ROW_TITLE}
+              onClick={() => void rowArchive(s.id)}
+              className="flex w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06] disabled:opacity-50"
+            >
+              {ARCHIVE_ROW}
+            </button>
+          ) : null}
           {/* v1.420.0 (fix plan C4.10): Rename in the row; Delete takes two
               presses. */}
           <button
@@ -2896,6 +2964,7 @@ export function BuildCodeView({
             onChanged={noteOpen}
             onOpenedTerminal={onOpenedTerminal}
             onArchived={archived}
+            onUnarchive={unarchive}
             firstMessage={firstFor && firstFor.id === openId ? firstFor.text : null}
             firstFiles={firstFor && firstFor.id === openId ? firstFor.files : null}
             onFirstSent={clearFirst}

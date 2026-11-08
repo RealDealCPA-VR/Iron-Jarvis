@@ -10,6 +10,7 @@ The route names keep ``/build/app/…`` (internal); the dashboard calls the view
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -213,6 +214,33 @@ def register(app: FastAPI, d: Any) -> None:
             return await svc().archive(sid, False)
         except S.Refused as r:
             raise _http(r) from None
+
+    @app.get("/build/app/sessions/{sid}/summary")
+    async def app_archive_summary(sid: str) -> dict[str, Any]:
+        """v1.453.0: the Markdown summary written when the session was
+        archived (``hosted/archive_summary``) — ``{text, path, at}``; 404 when
+        none is kept."""
+        try:
+            return await svc().archive_summary(sid)
+        except S.Refused as r:
+            raise _http(r) from None
+
+    @app.post("/build/app/sessions/{sid}/summary/open")
+    async def app_archive_summary_open(sid: str) -> dict[str, Any]:
+        """v1.453.0: open the summary file in the PC's own app for .md files.
+        The path is Iron Jarvis's own (the session's folder in its home),
+        never one the caller sends."""
+        try:
+            got = await svc().archive_summary(sid)
+        except S.Refused as r:
+            raise _http(r) from None
+        from .documents import _open_native
+
+        try:
+            await asyncio.to_thread(_open_native, got["path"])
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail=f"The summary file could not be opened: {exc}") from None
+        return {"ok": True, "path": got["path"]}
 
     @app.delete("/build/app/sessions/{sid}")
     async def app_delete(sid: str) -> dict[str, Any]:

@@ -101,6 +101,15 @@ POOL_FULL = (
 )
 NO_SESSION_YET = "This session has no conversation yet — send a message first."
 RUNNING = "This session is working on a message — stop it or let it finish first."
+#: v1.453.0: Archive is refused while the tool still works in the background
+#: (archiving stops the tool, and what it runs in the background with it).
+ARCHIVE_BACKGROUND = (
+    "{label} is still working in the background in this session (helpers, commands, or a reply of "
+    "its own). Archiving stops it, so wait for that to finish, or ask it to stop, then archive."
+)
+#: v1.453.0: the summary could not be built (the archive still happened).
+ARCHIVE_SUMMARY_FAILED = "The session was archived, but its summary could not be written."
+NO_ARCHIVE_SUMMARY = "This session has no archive summary yet — one is written when it is archived."
 #: v1.417.0 review: what runs in the background dies with the process — a
 #: restart (effort, model, tools) waits for it, and "Open in terminal" is refused.
 BACKGROUND_OPEN_TERMINAL = (
