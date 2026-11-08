@@ -75,8 +75,17 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
   // already loaded it, so this form renders the list instead of refetching it.
   const { data: modelsData } = useModels();
   const { data: health } = useApi<Health>("/health");
-  const { data: agentsData } = useApi<{ builtin: string[]; dynamic: { name: string }[] }>("/agents");
-  const builtinAgents = agentsData?.builtin ?? FALLBACK_AGENTS;
+  const agents = useApi<{ builtin: string[]; dynamic: { name: string }[] }>("/agents");
+  const agentsData = agents.data;
+  // v1.449.0 (readiness item 19): the agent list is drawn ONCE, after GET
+  // /agents has answered — the fallback used to render first in ITS order and
+  // the daemon's list then re-ordered the keyed <option>s under a controlled
+  // <select>, which threw a React error on about one Sessions-page load in
+  // four. Until the answer the select is a disabled placeholder; a read that
+  // FAILED (or a hook that is not loading and holds nothing) falls back to the
+  // built-in list, so the form never waits forever.
+  const agentsSettled = agentsData != null || agents.error != null || !agents.loading;
+  const builtinAgents = agentsData?.builtin ?? (agentsSettled ? FALLBACK_AGENTS : []);
   const dynamicAgents = (agentsData?.dynamic ?? []).map((d) => d.name);
 
   const [task, setTask] = useState("");
@@ -270,6 +279,11 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
           <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">
             Agent type
           </label>
+          {!agentsSettled ? (
+            <select aria-label="Agent type" className="field" disabled value="" onChange={() => {}}>
+              <option value="">Loading the agents…</option>
+            </select>
+          ) : (
           <select
             aria-label="Agent type"
             value={agentType}
@@ -293,6 +307,7 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
               </option>
             ))}
           </select>
+          )}
         </div>
         <div>
           <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-zinc-400">

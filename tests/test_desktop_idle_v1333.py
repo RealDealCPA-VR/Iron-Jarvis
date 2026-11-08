@@ -76,6 +76,8 @@ class Notification {
   show() { notes.push({ title: this.o.title, body: this.o.body }); }
 }
 const DASHBOARD_URL = "http://127.0.0.1:8788";
+const path = require("path");
+const shell = { openPath: async () => "" };
 let mainWin = null;
 function showMainWindow() {}
 const MODE = process.argv[2];
@@ -102,6 +104,10 @@ def _watch(tmp_path: Path, mode: str, statuses: str, ticks: int) -> dict:
         [
             _decl("SPOTLIGHT_POLL_MS"),
             _decl("SPOTLIGHT_WATCH_CAP_MS"),
+            # v1.449.0: the toast reads the row's outcome and says the status
+            # table's words (tests/test_desktop_spotlight_outcome_v1449.py).
+            _decl("SPOTLIGHT_OUTCOME_WORDS"),
+            _lift("function spotlightFolder("),
             _lift("function spotlightOutcome("),
             _lift("function watchSpotlightTask("),
         ]
@@ -118,9 +124,9 @@ def _watch(tmp_path: Path, mode: str, statuses: str, ticks: int) -> dict:
 
 
 @requires_node
-def test_a_cancelled_quick_task_ends_the_watch_and_says_cancelled(tmp_path):
+def test_a_cancelled_quick_task_ends_the_watch_and_says_stopped(tmp_path):
     out = _watch(tmp_path, "answer", "active,cancelled", 10)
-    assert out["notes"] == [{"title": "Task cancelled", "body": "Click to open the result."}]
+    assert out["notes"] == [{"title": "Stopped: rename the photos", "body": "Click to open the result."}]
     assert out["cleared"] == 1
     assert out["requests"] == 2, "the watch kept polling a cancelled task"
 
@@ -140,7 +146,7 @@ def test_at_the_fifteen_minute_cap_a_running_task_is_called_still_running_not_do
 @requires_node
 def test_a_finished_quick_task_still_says_done_with_its_summary(tmp_path):
     out = _watch(tmp_path, "answer", "active,completed", 5)
-    assert out["notes"] == [{"title": "Task done: rename the photos", "body": "All set."}]
+    assert out["notes"] == [{"title": "Done: rename the photos", "body": "All set."}]
 
 
 @requires_node

@@ -171,6 +171,104 @@ def _dialect_hint(kind: str, body: str) -> str:
     return ""
 
 
+#: v1.449.0 (readiness item 19): the fix a remote agent's Test answer gets,
+#: said for the press that asked (a Test on the agent's card — never "Retry",
+#: never "this chat") and for what a REMOTE has (a token on its card, a
+#: dialect, a time limit).
+REMOTE_TEST_FIX: dict[str, str] = {
+    "timeout": (
+        "Press Test again. If it keeps happening, check that the other computer "
+        "is awake, or raise its time limit on this card (Edit)."
+    ),
+    "unreachable": (
+        "Check its address, and that the other computer can be reached from this "
+        "one, then press Test again."
+    ),
+    "refused": "Update its token on this card (Edit), then press Test again.",
+    "http": "Press Test again in a moment. If it keeps failing, check the service behind that address.",
+    "shape": (
+        "Check its dialect on this card (Edit): the address answered, but not in "
+        "the shape that dialect expects."
+    ),
+    "other": "Press Test again. If it keeps failing, check its address and token on this card.",
+}
+
+
+class _RemoteProbeFailure(Exception):
+    """A Test's typed facts in the shape ``failure_words.friendly_error`` reads
+    (a router refusal ``kind``, the ``failed_provider``, an HTTP
+    ``status_code``), so the headline of a remote that timed out, could not be
+    reached or answered an error is the SAME classifier every chat failure
+    goes through — never a second wording (v1.449.0)."""
+
+    def __init__(self, name: str, kind: str, status: "int | None") -> None:
+        super().__init__(f"{name} test: {kind} {status or ''}".strip())
+        self.kind = kind
+        self.failed_provider = name
+        self.status_code = status
+
+
+def remote_test_words(name: str, probe: dict[str, Any]) -> dict[str, str]:
+    """``{title, fix, technical}`` for a remote agent's Test (v1.449.0,
+    readiness item 19), read off the TYPED facts :meth:`RemoteAgentRegistry.run`
+    answers beside its unchanged ``detail`` (``kind``: timeout | unreachable |
+    http | shape | door, ``status``) — never off the detail's text. The
+    headline of a timeout, an unreachable address or an error status comes
+    from ``failure_words.friendly_error``; the fix is said for a Test on this
+    card (:data:`REMOTE_TEST_FIX`); ``technical`` is the probe's own text,
+    masked, for a failed Test only (it folds under Details). A probe another
+    Iron Jarvis's door already worded (``kind == "door"``) is the headline
+    itself. ``detail`` stays as it was for a headless caller. Never raises."""
+    from ..providers import failure_words as fw
+
+    try:
+        shown = " ".join(str(name or "").split()) or "the remote agent"
+        head = fw.heading(shown)
+        if probe.get("ok"):
+            return {"title": f"{head} replied", "fix": "", "technical": ""}
+        detail = str(probe.get("detail") or "")
+        technical = fw.mask_failure_text(detail)[:400]
+        kind = str(probe.get("kind") or "")
+        status = probe.get("status")
+        status = status if isinstance(status, int) and not isinstance(status, bool) else None
+        if kind == "door" and detail:
+            return {"title": fw.mask_failure_text(detail)[:400], "fix": "", "technical": ""}
+        if kind in ("timeout", "unreachable"):
+            words = fw.friendly_error(_RemoteProbeFailure(shown, kind, None), provider=shown)
+            return {"title": str(words.get("title") or ""), "fix": REMOTE_TEST_FIX[kind], "technical": technical}
+        if kind == "http":
+            if status in (401, 403):
+                return {"title": f"{head} refused the token", "fix": REMOTE_TEST_FIX["refused"], "technical": technical}
+            words = fw.friendly_error(_RemoteProbeFailure(shown, "answered_error", status), provider=shown)
+            return {"title": str(words.get("title") or ""), "fix": REMOTE_TEST_FIX["http"], "technical": technical}
+        if kind == "shape":
+            return {
+                "title": f"{head} answered, but not in the shape Iron Jarvis expected",
+                "fix": REMOTE_TEST_FIX["shape"],
+                "technical": technical,
+            }
+        return {"title": f"{head} didn't pass the check", "fix": REMOTE_TEST_FIX["other"], "technical": technical}
+    except Exception:  # noqa: BLE001 — words are never a new failure
+        return {}
+
+
+#: What a remote's echoed bearer token reads as in its error text.
+TOKEN_HIDDEN = "[token hidden]"
+
+
+def _without_token(text: str, token: str) -> str:
+    """*text* with the bearer token THIS request carried taken out (review of
+    v1.449.0). A remote that answers 401 with "invalid token <the token>" put
+    the user's own credential into ``detail`` — shown raw on the card before,
+    folded under Details now — and ``failure_words.mask_failure_text`` knows
+    key shapes, not the word the user typed on the card. A token shorter than
+    six characters is left (replacing every "t" would wreck the words; the
+    mask's Bearer rule still covers the header form)."""
+    if not text or not token or len(token) < 6:
+        return text
+    return text.replace(token, TOKEN_HIDDEN)
+
+
 def _door_refusal(record: Any, status: int, body: str) -> str:
     """Plain words for another Iron Jarvis's task door turning a task away
     (v1.357.0, G61), or "" when the remote is not such a door (its old
@@ -537,10 +635,11 @@ class RemoteAgentRegistry:
                     "ok": False,
                     "result": "",
                     "detail": f"{record.name} did not answer within {timeout}s",
+                    "kind": "timeout",
                 }
-            return {"ok": False, "result": "", "detail": f"request failed: {exc}"}
+            return {"ok": False, "result": "", "detail": f"request failed: {exc}", "kind": "unreachable"}
         except Exception as exc:  # noqa: BLE001 — timeout / connection / DNS
-            return {"ok": False, "result": "", "detail": f"request failed: {exc}"}
+            return {"ok": False, "result": "", "detail": f"request failed: {exc}", "kind": "unreachable"}
 
         status = getattr(resp, "status_code", 0)
         if status == 202:
@@ -551,26 +650,29 @@ class RemoteAgentRegistry:
             snippet = ""
             body_text = ""
             try:
-                body_text = (resp.text or "")[:2000]
+                # Review of v1.449.0: a body that echoes the token we sent is
+                # never carried into ``detail`` (the card, the chat room, the
+                # phone and the log all read it).
+                body_text = _without_token((resp.text or "")[:2000], token)
                 snippet = body_text[:200]
             except Exception:  # noqa: BLE001
                 snippet = ""
             door_words = _door_refusal(record, status, body_text)
             if door_words:
                 # v1.357.0 (G61): another Iron Jarvis said why, in words.
-                return {"ok": False, "result": "", "detail": door_words}
+                return {"ok": False, "result": "", "detail": door_words, "kind": "door", "status": status}
             detail = f"remote returned HTTP {status}"
             if snippet:
                 detail += f": {snippet}"
             hint = _dialect_hint(record.kind, snippet)
             if hint:
                 detail += f" — {hint}"
-            return {"ok": False, "result": "", "detail": detail}
+            return {"ok": False, "result": "", "detail": detail, "kind": "http", "status": status}
 
         try:
             data = resp.json()
         except Exception:  # noqa: BLE001 — not JSON
-            return {"ok": False, "result": "", "detail": "remote returned a non-JSON body"}
+            return {"ok": False, "result": "", "detail": "remote returned a non-JSON body", "kind": "shape"}
 
         if (
             isinstance(data, dict)
@@ -588,6 +690,7 @@ class RemoteAgentRegistry:
                 return {
                     "ok": False,
                     "result": "",
+                    "kind": "shape",
                     "detail": "remote reply had no choices[0].message.content",
                 }
             return {
@@ -603,6 +706,7 @@ class RemoteAgentRegistry:
                 return {
                     "ok": False,
                     "result": "",
+                    "kind": "shape",
                     "detail": "remote reply had no output_text / output[].content[].text",
                 }
             return {
@@ -622,6 +726,7 @@ class RemoteAgentRegistry:
             return {
                 "ok": False,
                 "result": "",
+                "kind": "shape",
                 "detail": "remote reply had no 'result' or 'output' string field",
             }
         return {
@@ -652,9 +757,10 @@ class RemoteAgentRegistry:
             secret_resolver,
             timeout_s=min(record.timeout_s or 120, 15),
         )
+        words = remote_test_words(record.name, probe)
         if probe.get("ok"):
-            return {"ok": True, "detail": f"{record.name} replied"}
-        return {"ok": False, "detail": probe.get("detail") or "probe failed"}
+            return {"ok": True, "detail": f"{record.name} replied", **words}
+        return {"ok": False, "detail": probe.get("detail") or "probe failed", **words}
 
     async def _test_door(
         self, record: RemoteAgentRecord, secret_resolver: SecretResolver

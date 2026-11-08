@@ -29,6 +29,8 @@ import {
   X,
 } from "lucide-react";
 import { API_BASE, ApiError, del, get, ijToken, patch, post, put } from "@/lib/api";
+import { testWords, type ConnectionTestWords } from "@/lib/connectionTestWords";
+import { DETAILS_WORDS } from "@/lib/failureActions";
 import type { AgentApprovalMode, DynamicAgent, ModelOption } from "@/lib/types";
 import { PERMISSION_LEVELS, permissionLevel, readsLevelLine } from "@/lib/permissionLevels";
 import { refreshReadFacts, useReadFacts } from "@/lib/readFacts";
@@ -2045,7 +2047,10 @@ function RemoteRow({
   onFaceChanged: () => void;
 }) {
   const [testing, setTesting] = useState(false);
-  const [test, setTest] = useState<{ ok: boolean; detail: string } | null>(null);
+  // v1.449.0 (readiness item 19): the daemon's Test answers `title` + `fix`
+  // beside the unchanged `detail` and the masked `technical` text — the same
+  // shape every connection Test answers (lib/connectionTestWords).
+  const [test, setTest] = useState<ConnectionTestWords | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   // MESSAGE BACK (v1.285.0): the inbound token is shown ONCE, right here,
@@ -2108,12 +2113,15 @@ function RemoteRow({
     setError(null);
     setTest(null);
     try {
-      const r = await post<{ ok?: boolean; detail?: string }>(
+      const r = await post<{ ok?: boolean; detail?: string; title?: string; fix?: string; technical?: string }>(
         `/agents/remote/${encodeURIComponent(agent.name)}/test`,
       );
       setTest({
         ok: r.ok !== false,
         detail: r.detail ?? (r.ok !== false ? "Reachable." : "Unreachable."),
+        title: typeof r.title === "string" ? r.title : undefined,
+        fix: typeof r.fix === "string" ? r.fix : undefined,
+        technical: typeof r.technical === "string" ? r.technical : undefined,
       });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
@@ -2316,11 +2324,27 @@ function RemoteRow({
           {agent.base_url}
         </code>
       </div>
-      {test && (
-        <p className={`mt-1.5 pl-7 text-[11px] ${test.ok ? "text-tone-success" : "text-tone-danger"}`}>
-          {test.detail}
-        </p>
-      )}
+      {test &&
+        (() => {
+          // v1.449.0: the plain words (title + fix) with the probe's own text
+          // folded under Details — the Connections page's own fold; an older
+          // daemon's raw detail exactly as before.
+          const w = testWords(test);
+          return (
+            <div
+              data-testid={`remote-test-${agent.name}`}
+              className={`mt-1.5 pl-7 text-[11px] ${test.ok ? "text-tone-success" : "text-tone-danger"}`}
+            >
+              <p>{w.text}</p>
+              {w.technical && (
+                <details data-testid="remote-test-technical" className="mt-1 opacity-80">
+                  <summary className="cursor-pointer">{DETAILS_WORDS}</summary>
+                  <p className="mt-1 break-words font-mono">{w.technical}</p>
+                </details>
+              )}
+            </div>
+          );
+        })()}
       {error && <div className="mt-2"><ErrorNote>{error}</ErrorNote></div>}
     </li>
   );

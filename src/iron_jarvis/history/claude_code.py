@@ -167,8 +167,14 @@ def summarize(
     head: Iterable[tuple[int, dict]], tail: Iterable[tuple[int, dict]], path: Path
 ) -> dict:
     """Summary fields readable from the head and tail records alone."""
+    # The FILE is the session (v1.449.0): a resumed or forked conversation
+    # lands in a NEW file whose records still carry the earlier conversation's
+    # ``sessionId``, so reading the id off a record listed two files under one
+    # id and opened whichever came first. The file's own name is the id
+    # ``index.summarize`` already falls back to, and the id a caller matches
+    # against the listing (never joined into a path).
     out: dict[str, Any] = {
-        "id": "",
+        "id": id_from_path(path),
         "project": "",
         "title": "",
         "started": None,
@@ -176,8 +182,6 @@ def summarize(
     }
     named = ""
     for _, rec in head:
-        if not out["id"]:
-            out["id"] = s(rec.get("sessionId"))
         if not out["project"]:
             out["project"] = s(rec.get("cwd"))
         if out["started"] is None:
