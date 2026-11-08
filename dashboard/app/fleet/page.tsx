@@ -964,7 +964,7 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
 
 /** v1.455.0 (readiness Wave H item 31): the address the one add form lives at
  *  (Connections' model-server card, `useFocusRef("endpoints")`). */
-export const ADD_MODEL_SERVER_HREF = "/connections?focus=endpoints";
+const ADD_MODEL_SERVER_HREF = "/connections?focus=endpoints";
 
 /**
  * v1.455.0 (readiness Wave H item 31): a model server is added in ONE place.
