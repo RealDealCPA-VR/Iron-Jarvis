@@ -708,6 +708,11 @@ describe("Iron-Proxy card: Open in Build", () => {
     expect(parked.title).toMatch(/parked/);
     expect((screen.getByTestId("iron-proxy-open-d") as HTMLButtonElement).title).toMatch(/Sign this account in/);
     expect((screen.getByTestId("iron-proxy-open-e") as HTMLButtonElement).title).toMatch(/switched off/);
+    // v1.455.0 (0j.4 item 44): the reason is seen, not only on hover.
+    expect(screen.getByTestId("iron-proxy-open-why-c").textContent).toMatch(/parked/);
+    expect(screen.getByTestId("iron-proxy-open-why-d").textContent).toMatch(/Sign this account in/);
+    expect(screen.getByTestId("iron-proxy-open-why-e").textContent).toMatch(/switched off/);
+    expect(screen.queryByTestId("iron-proxy-open-why-x")).toBeNull();
   });
 
   it("an answer without a pane shows a sentence and navigates nowhere", async () => {

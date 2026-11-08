@@ -113,6 +113,7 @@ import {
   TRY_ON_NEEDS_FOLDER,
   TRY_ON_NOT_A_REPO,
   TRY_ON_PLANNING,
+  TRY_ON_SET_UP,
   TRY_ON_WORDS_ONLY,
   isFolderProblem,
   localOnlyDroppedWords,
@@ -497,6 +498,40 @@ describe("Try on in a new session", () => {
     renderBox({ initialFolder: NOTES });
     await waitFor(() => expect(screen.getByTestId("harness-try-on")).toHaveAttribute("title", TRY_ON_NOT_A_REPO));
     expect(screen.getByTestId("harness-try-on")).toHaveTextContent("Try on…");
+  });
+
+  // v1.455.0 (0j.4 item 33): Try on explains itself in the user's words, and
+  // a folder not set up for copies yet gets the press that sets it up.
+  it("v1.455.0: no git words; 'Set this folder up for Try on' sets it up and Try on opens", async () => {
+    let gitAnswer: unknown = NOT_A_REPO;
+    api.gets[gitPath(NOTES)] = () => gitAnswer;
+    api.posts["/build/git/init"] = () => {
+      gitAnswer = GIT_OK;
+      return { made: true, can_branch: true, left_out: [], note: "" };
+    };
+    renderBox({ initialFolder: NOTES });
+    const chip = screen.getByTestId("harness-try-on");
+    await waitFor(() => expect(chip).toHaveAttribute("title", TRY_ON_NOT_A_REPO));
+    for (const w of [TRY_ON_NOT_A_REPO, TRY_ON_NEEDS_FOLDER, TRY_ON_CHECKING]) {
+      expect(w).not.toMatch(/git repository|branch/i);
+    }
+    fireEvent.click(chip);
+    const fix = screen.getByTestId("harness-try-on-fix");
+    expect(fix.textContent).toBe(TRY_ON_SET_UP);
+    fireEvent.click(fix);
+    await waitFor(() =>
+      expect(api.calls.find((c) => c.method === "POST" && c.path === "/build/git/init")?.body).toEqual({ path: NOTES }),
+    );
+    // Read again: the chip is usable now, and the note says what was done.
+    await waitFor(() => expect(screen.getByTestId("harness-try-on")).not.toHaveAttribute("aria-disabled"));
+    expect(screen.getByTestId("harness-try-on-fix-note").textContent).toMatch(/set up for Try on/);
+    expect(screen.queryByTestId("harness-try-on-fix")).toBeNull();
+  });
+
+  it("v1.455.0 CONTROL: no folder offers no set-up press (there is nothing to set up)", () => {
+    renderBox();
+    fireEvent.click(screen.getByTestId("harness-try-on"));
+    expect(screen.queryByTestId("harness-try-on-fix")).toBeNull();
   });
 
   it("a session that starts by planning says so, and its picks are not kept", async () => {

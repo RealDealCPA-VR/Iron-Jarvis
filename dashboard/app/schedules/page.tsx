@@ -76,6 +76,8 @@ import { runNowNote, scheduleDetail } from "@/lib/scheduleOutcome";
 import { scheduleRunWords, toneTextClass } from "@/lib/statusWords";
 // v1.355.0 (G65): the five-minute sentence every unattended-work form shows.
 import { UnattendedAskNote } from "@/components/UnattendedAskNote";
+import { DisabledNote } from "@/components/DisabledNote";
+import { whyDisabled } from "@/lib/whyDisabled";
 // v1.446.0 (review item 23): is Emergency stop on — the app-wide store the
 // strip in the layout keeps (no poll of its own here).
 import { useEmergencyStop } from "@/components/EmergencyStopStrip";
@@ -508,6 +510,22 @@ export default function SchedulesPage() {
   const suggestedName =
     kind === "task" ? uniqueScheduleName(nameFromTask(taskText), schedules.map((s) => s.name)) : "";
   const finalName = name.trim() || suggestedName;
+  // v1.455.0 (0j.4 item 26): Add greyed out with no visible reason. The
+  // first thing it waits for, in words (lib/whyDisabled), as the press's
+  // title AND a line under it.
+  const addWhy = busy
+    ? null
+    : whyDisabled(
+        kind === "task" && !taskText.trim() && "Write what the task should do first.",
+        kind === "workflow" && !workflowName && "Choose a saved workflow first.",
+        !finalName && "Give the schedule a name first.",
+        !triggerReady &&
+          (isOnce
+            ? "Pick the date and time it runs first."
+            : isAdvanced
+              ? "Type a cron expression first."
+              : "Choose how often it repeats first."),
+      );
 
   function applyTemplate(t: (typeof TEMPLATES)[number]) {
     setKind("task");
@@ -985,10 +1003,13 @@ export default function SchedulesPage() {
                 <button
                   type="submit"
                   disabled={busy || !finalName || !triggerReady || !payloadReady}
+                  title={addWhy ?? undefined}
+                  aria-describedby={addWhy ? `${fid}-add-why` : undefined}
                   className="btn-accent w-full"
                 >
                   {busy ? <LoaderInline label="Adding…" /> : <><Plus size={14} /> Add schedule</>}
                 </button>
+                <DisabledNote why={addWhy} id={`${fid}-add-why`} testId="schedule-add-why" />
                 {/* v1.355.0 (G65): a schedule runs with nobody watching, so an
                     ask waits 5 minutes and then that step is skipped — said
                     BEFORE the user relies on it. Not for an event schedule:

@@ -70,6 +70,7 @@ import {
 import { CLI_ACCOUNT_PROVIDER, openedPaneId } from "@/lib/paneAccounts";
 import { CALM_ACTION, CALM_ICON_ACTION } from "@/components/connections/endpointChip";
 import { UsageRefresh } from "@/components/accounts/UsageRefresh";
+import { DisabledNote } from "@/components/DisabledNote";
 
 /** v1.330.0 (calm M3): ONE look per account row. Every secondary action
  *  (Sign in on a signed-in account, Check again, Open in Build, Unpark, the
@@ -894,6 +895,11 @@ function AccountRow({
           >
             <SquareTerminal size={13} /> Open in Build
           </button>
+        )}
+        {/* v1.455.0 (0j.4 item 44): the greyed press says why where it is
+            seen, not only on hover. */}
+        {canOpen && !busy && (
+          <DisabledNote why={openBlocked} testId={`iron-proxy-open-why-${a.id}`} className="basis-full" />
         )}
         {parked && (
           <button type="button" onClick={onUnpark} disabled={busy} className={CALM_ACTION}>
