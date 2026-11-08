@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.448.1 (2026-11-07).*
+holds itself to. Current as of v1.449.0 (2026-11-07).*
 
 ---
 
@@ -2043,6 +2043,47 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Did it work? The app tells you, everywhere (v1.449.0)
+
+Every place that reports on work now gives the same, plain verdict.
+
+- **Build › Code receipts** open with a check mark or a warning sign, say
+  "2 min 14 s" instead of "2 m 14 s", and count failed steps apart ("2
+  failed").
+- **Running now** (the orb) lists workflow runs, media being made and night
+  tasks beside replies and sessions, and never lists the same piece of work
+  twice.
+- **Workflows › Run history** has a Stop on every live row; a run that is
+  stopping says "Stopping".
+- **The mission screen** uses the same approval card as chat, and its receipt
+  says how long the mission took and how many actions it ran.
+- **One status vocabulary**: "Done", "Failed", "Stopped", "Waiting for you",
+  "Part failed" and "Working" mean the same thing on every list, badge,
+  toast and headline.
+- **Activity rows** have a plain headline for every kind of event ("A webhook
+  was refused · github-push · bad signature"), and never show a path, a key,
+  an e-mail address, an ID number or anything that looks like a credential.
+- **Spotlight** notifications say Done / Needs you / Part failed / Failed /
+  Stopped and name the folder the work was in.
+- **The chat** says when its chat list could not be read (with Try again),
+  shows small failures (an upload, a rename, a project move) as one quiet
+  line you can dismiss, and tells a screen reader "Reply ready." or "Reply
+  stopped." A failed reply keeps its own Retry line.
+- **Eleven pages** that used to print a raw error now say "<Thing> couldn't
+  load. Try again."
+- **A remote agent's Test** says what went wrong in plain words and never
+  echoes the token you typed.
+- **Browser and desktop safety checks** (a payment page, a password field, a
+  destructive word, a flagged page) now ask you in the chat you are in — in
+  chat, in a coding session and in an agent run — instead of filing a request
+  you had to approve elsewhere and then repeat. One Allow covers exactly one
+  action. These safety cards never go to your phone.
+- **A Local only coding session** that needs a cloud model offers "Choose a
+  local model" or "Send to <provider> once" (never when the chat is held
+  local by an app that read your data).
+- **Grok CLI** gets the same Sign in press as Claude Code and Codex when it is
+  signed out.
 
 ## Chat configures the rest: models, tool servers, web services (v1.448.0)
 

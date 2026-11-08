@@ -15637,6 +15637,136 @@ does not need a bump, stop and bump it.
   tool-server plan lives in memory; not driven with a real model or in the
   packaged app.
 
+- **Wave B of the readiness plan: "did it work?" is answered everywhere**
+  (v1.449.0; ease-of-use items 1-5, 10-19 and G54 of
+  docs/PRODUCT-READINESS-RESULTS.md 0h.5; four builders + four independent
+  reviewers, who found 13 more defects, two of them real leaks, each red
+  first and mutation-checked).
+  - RECEIPTS, LISTS, ONE TABLE (B1): a Build › Code reply's collapsed
+    `code-receipt` LEADS with a check or a warning (`receiptOutcome`: warn
+    for a stopped/failed/cut-off reply or any failed step; "N failed" said
+    apart, `TurnReceipt.failed`) and times itself in the app's words
+    (`lib/durationWords.secondsText`: "2 min 14 s", "9.0 s", "63 min" —
+    never "2 m 14 s"). Running now lists workflow runs
+    (`/workflows/runs?limit=50&slim=true`), media jobs (`/media/jobs`) and
+    running night tasks (`/build/night`) beside replies and sessions, reads
+    only while the popover is open, drops a build reply row a night row
+    already names, and treats a 404/503 as "none of that kind". Workflows ›
+    Run history: every live row has Stop (a parked row's title says the
+    question it waits on is dropped; `cancelling` reads "Stopping", a new
+    `lib/statusWords` row). The mission screen mounts the chat's
+    `ApprovalCard` (props `who`, `onAnswered`; its own card is deleted;
+    `onAnswered` also fires on a 404 so a card answered elsewhere leaves);
+    the mission receipt adds "· 4 min 12 s · 23 actions". `threadStatus`,
+    `codingSessions`, the mission headline, the kanban Done-lane hint,
+    runningNow, `buildAttempts`, `HarnessHelpers` and `BuildCodeView` read
+    `lib/statusWords` ("Waiting for you", "Done"); the scan pin
+    `status-words-one-table-v1449` fails on a capitalised status literal in
+    those files. OPEN: the chat card drops the old "…and N more steps" line
+    when a plan's `total` exceeds its listed steps.
+  - WORDS EVERYWHERE (B2): `lib/eventWords.ts` and `comm/notifier.EVENT_WORDS`
+    hold a plain headline for all 105 published event types (87 EventType +
+    18 `OTHER_PUBLISHED_TYPES`), pinned equal BOTH ways and against
+    `known_event_types()` — a new EventType with no row fails the test.
+    `eventDetail()` adds whitelisted payload facts; REVIEW: a run's `task`
+    and a preference's `text` reached the Activity headline unmasked (an
+    e-mail, an SSN, a card number, a JWT, `password hunter2` all passed) — a
+    value is DROPPED when `maskDetailText` would change it, when it holds
+    `@`, nine+ digits with separators, a JWT, a PEM marker, a credential word
+    + value or a key shape; a provider is named through `providerDetail`
+    (a `fleet-*` id = "your model server", an unknown id adds nothing), a
+    model through `friendlyModelName`, a status through `statusDetail` =
+    `lib/statusWords`. Spotlight toasts read the row's `outcome`
+    (`SPOTLIGHT_OUTCOME_WORDS` == statusWords) and offer "Open folder" (an
+    Electron action on macOS only; a network-spelled folder never offered).
+    History: `claude_code.summarize` ids a conversation by its file stem (a
+    resumed conversation is one row; two files with one stem in different
+    project folders still list as two rows with one id — pre-existing). The
+    Sessions form's agent select is a disabled placeholder until `/agents`
+    settles, falling back to the built-ins. A remote agent's Test answers
+    typed `kind`/`status`, worded by `remote_test_words()`
+    (`REMOTE_TEST_FIX`, never "Press Retry"); REVIEW: `run()` takes the sent
+    bearer token out of an echoing 401 body (`_without_token`,
+    `TOKEN_HIDDEN`) before any wording.
+  - THE CHAT SAYS WHAT FAILED (B3): a chat list that could not be read says
+    "Your chats couldn't load. Try again." (LoadFailedLine; `lib/chatList`
+    `loadFailed`, the page's `threadsFailed` per scope) and the empty words
+    show only for a list that really answered empty. Small failures (an
+    upload, the 4-file cap, Remember, Commit to memory, rename, project
+    moves, a saved workflow's run, queue/steer refusals, open-folder,
+    @-mention unknowns) go to `chat-notice` (× dismisses, cleared on open /
+    new chat) — REVIEW: its words are read through an always-mounted sr-only
+    `role=status` `chat-notice-live` (a region mounted WITH its words is not
+    announced, the v1.352.0 lesson). `chat-reply-live` says "Reply ready."
+    on a clean end and "Reply stopped." on Stop, cleared when the next turn
+    starts; a failed turn is not repeated (its line is already an alert);
+    REVIEW: a turn LEFT (open another chat / New chat) announces nothing
+    (`liveConvGenRef`), and an escalated turn is silent through the hand-off
+    gap (`handOffRef`; the agent's end is the announced reply). Eleven
+    pages' raw `error.message` for a failed READ became LoadFailedLine +
+    Try again (`lib/loadFailed.couldnt`, `serverSentence()`, `failureOf()`).
+    OPEN: ~25 PRESS failures (Fleet probe/save, Skills apply, Artifacts run,
+    Updates apply, Browser save, Creative mkdir/delete/publish) still show a
+    5xx's raw text through `ErrorNote`.
+  - THE RISK DOOR RESUMES (B4, G54): `core/risk_door.py` is the ONE registry
+    the browser and computer-use acting tools consult for a risk ask
+    (`resolver_for`: the turn's resolver → the run's → the runtime-wide one
+    = the sidebar's; keyed by the ToolContext's turn id / session id, never a
+    ContextVar). The chat STREAM lane registers a resolver per turn (only
+    when `arm_family is None`: the sidebar and `browser/panel.py` are
+    byte-identical) and cards it in chat: `once_only`, `once_reason:
+    "page"`, `floor: true`, `why` = the door's reason, `can_always: false`,
+    no clock, Stop/disconnect checked every `_ASK_POLL_S`; Allow runs ONE
+    call (the door approves + consumes), wider answers read as once, Deny is
+    a refusal in words. The POST lane sets `ToolContext.cannot_ask=True` and
+    the door refuses in words with no id. The runtime wraps `perceive_act`
+    around `_perceive_act_body` with `_risk_door_resolver` and asks through
+    `_pause_for_approval` as a once-only `attended_only` SpendCheck
+    (unattended origins refused in words, never parked). No path prints
+    "Pending approval id" / "identical call again" any more.
+    `SAFETY_REASONS` lives in `core/approvals` (stall re-exports; pinned ⊆
+    the dashboard's `onceReason`), and `comm/prompts` + `comm/notifier` skip
+    an `approval.requested` carrying one — no safety card reaches the phone
+    from any lane (closes the Wave 3 OPEN item). REVIEW: a cancelled wait
+    DENIES the door's queue row (it stayed PENDING, and every chat turn
+    shares run id "ad-hoc", so a hand approval later could spend it); the
+    computer-use `web_action` now CONSUMES the Allow it was given (it
+    approved without consuming — one Allow, two clicks). Chat › Code Local
+    only: `recorded_turn` stamps `errorKind: "local_only"` + `errorProvider`;
+    `BuildTurnBody.allow_cloud_once` → `ChatBody` (dropped daemon-side for a
+    held chat); `HarnessFailure` offers "Choose a local model" and "Send to
+    <provider> once" (hidden when held or when no provider is stamped), no
+    Retry. Grok's Sign in press: `lib/signInClis.ts` (React-free;
+    `lib/cliSignIn` re-exports) → `failureActions.cliOf`.
+  - Pins: `tests/test_{event_words_every_type,desktop_spotlight_outcome,
+    history_resumed_claude,remote_test_words,review_b2,risk_door_resumes,
+    risk_door_review,harness_local_only_ways_out}_v1449.py`,
+    `dashboard/__tests__/{build-code-receipt,running-now-everywhere,
+    mission-receipt-card,status-words-one-table,event-words-every-type,
+    new-session-agents-settled,remote-test-words,review-b2,wave-b-did-it-work,
+    harness-local-only-ways-out,harness-local-only-ways-out-review,
+    grok-signin-failure}-v1449.test.*`; moved on purpose: `test_tool_loop_v1174`
+    (source pin → `_perceive_act_body`), two `test_browser_actions_v1237`
+    pins, `test_desktop_idle_v1333`, `test_another_jarvis_v13570`,
+    `iron-proxy-card-v1301`, `build-app-answers-v1417`, `approval-words-v13520`,
+    `mission-cost-note-v13560`, `plan-mission-v1350`, `receipt-seams-v13520`,
+    `mission-copy-v1329`, `mission-headline-part-failed-v13510`,
+    `project-coding-sessions-v1414`, `ux-wave3-agents-sessions-v1315`,
+    `build-attempts-v1397`, `ij-harness-helpers-v1372`, the "Working"/"Waiting
+    for you" pins in `build-code-spine-v1414`, `chat-list-one-shape-v1329`,
+    `chat-thread-list-v1327`, `harness-gaps-running-v1389`,
+    `thread-groups-v1327`, `running-now-v13520`, `one-vocabulary-v1420`,
+    and the notice-word pins in `borrow-wave-a-v1322`,
+    `approval-redirect-page-review-v1448`, `chat-steer-v1278`.
+  - OPEN: an unnamed stream turn (an API caller with no `turn_id`) gets the
+    sidebar's fallback resolver and reads "did not get the user's OK" rather
+    than "nothing here can ask"; `ComputerUseHarness.run` (the standalone
+    loop) still approves without consuming; a `brain_change` ask from an
+    agent run still reaches the phone ("memory" is a TS once-reason only);
+    `sendComm` does not reset `stoppedRef`; a workflow run and its agent
+    step both show in Running now; none of it driven in the packaged app, a
+    real browser, a screen reader or a real phone.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
