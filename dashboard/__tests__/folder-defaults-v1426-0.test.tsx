@@ -216,7 +216,12 @@ describe("Chat › Code's start composer", () => {
     fireEvent.click(screen.getByTestId("harness-new-send"));
     await waitFor(() => expect(got).toHaveLength(1));
     expect(got[0]).toMatchObject({ provider: "ollama", model: "qwen3:8b", reasoning: "high", approval_mode: "accept_edits" });
-    expect(startCreateBody(got[0])).toEqual({
+    // v1.452.0 (readiness item 43; moved on purpose): a Send that lands
+    // before the folder's git read says the separate copy is off out loud
+    // (`branch: false`); after it, nothing. Never a branch the user did not ask for.
+    const { branch, ...body } = startCreateBody(got[0]);
+    expect(branch === undefined || branch === false).toBe(true);
+    expect(body).toEqual({
       provider: "ollama",
       model: "qwen3:8b",
       reasoning: "high",
