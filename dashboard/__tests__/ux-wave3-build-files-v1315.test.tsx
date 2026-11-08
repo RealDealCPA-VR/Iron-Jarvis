@@ -24,6 +24,7 @@
  * the Browse… picker.
  */
 
+import { answerPageQuestions } from "./helpers/pageQuestion";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -216,7 +217,8 @@ function dropFiles(files: File[]) {
 describe("Creative: 'also publish' asks once per batch, before anything is sent", () => {
   it("declined: uploads WITHOUT publishing and says so; asked once, before the first POST", async () => {
     const askedAt: number[] = [];
-    const confirmSpy = vi.spyOn(window, "confirm").mockImplementation(() => {
+    const confirmSpy = answerPageQuestions("publish-confirm", false);
+    confirmSpy.mockImplementation(() => {
       askedAt.push(uploads().length);
       return false;
     });
@@ -237,7 +239,7 @@ describe("Creative: 'also publish' asks once per batch, before anything is sent"
   });
 
   it("accepted: every file in the batch publishes, and the prompt still ran exactly once", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const confirmSpy = answerPageQuestions("publish-confirm", true);
     const { container } = renderCreative();
     fireEvent.click(publishBox());
     pickFiles(container, [png("a.png"), png("b.png")]);
@@ -250,7 +252,7 @@ describe("Creative: 'also publish' asks once per batch, before anything is sent"
   });
 
   it("drag-and-drop goes through the same gate (declined -> no publish)", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const confirmSpy = answerPageQuestions("publish-confirm", false);
     renderCreative();
     fireEvent.click(publishBox());
     dropFiles([png("drop.png")]);
@@ -261,8 +263,27 @@ describe("Creative: 'also publish' asks once per batch, before anything is sent"
     expect((uploads()[0].body as Record<string, unknown>).publish).toBeUndefined();
   });
 
+  it("AN review: a second drop while the question is open — the first batch is NOT published, the second asks its own question", async () => {
+    renderCreative();
+    fireEvent.click(publishBox());
+    dropFiles([png("first.png")]);
+    await screen.findByTestId("publish-confirm");
+    expect(uploads()).toHaveLength(0); // nothing left before an answer
+    dropFiles([png("second.png")]);
+    // The second question answers the first "no": first.png goes up, unpublished.
+    await waitFor(() => expect(uploads().map((u) => (u.body as { filename: string }).filename)).toContain("first.png"));
+    const first = uploads().find((u) => (u.body as { filename: string }).filename === "first.png");
+    expect((first?.body as Record<string, unknown>).publish).toBeUndefined();
+    // second.png waits for ITS answer.
+    expect(uploads().some((u) => (u.body as { filename: string }).filename === "second.png")).toBe(false);
+    fireEvent.click(await screen.findByTestId("publish-confirm-yes"));
+    await waitFor(() => expect(uploads()).toHaveLength(2));
+    const second = uploads().find((u) => (u.body as { filename: string }).filename === "second.png");
+    expect((second?.body as Record<string, unknown>).publish).toBe(true);
+  });
+
   it("anti-vacuity: unticked, an upload is one action with no prompt and no publish", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const confirmSpy = answerPageQuestions("publish-confirm", true);
     const { container } = renderCreative();
     expect(publishBox().checked).toBe(false);
     pickFiles(container, [png("plain.png")]);
@@ -293,6 +314,7 @@ describe("Creative: 'also publish' asks once per batch, before anything is sent"
     expect(s.slice(start, end)).toMatch(/confirmPublish\(\)/);
     // Anti-vacuity: ONE gate, its words untouched.
     expect(s.match(/function confirmPublish\(\)/g)).toHaveLength(1);
+    // v1.450.0: the sentence lives in PUBLISH_QUESTION, asked by the page.
     expect(s).toContain(`"${CONSENT}"`);
   });
 });

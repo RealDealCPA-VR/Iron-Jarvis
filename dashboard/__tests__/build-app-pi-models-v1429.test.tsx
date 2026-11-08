@@ -65,7 +65,7 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
   ),
 }));
 
-import { BuildCodeView, TOOLS_REREAD_MS } from "@/components/buildCode/BuildCodeView";
+import { BuildCodeView, TOOLS_REREAD_MS, TOOLS_REREAD_TRIES } from "@/components/buildCode/BuildCodeView";
 import { LAST_TOOL_KEY } from "@/components/buildCode/StartComposer";
 import {
   COMMAND_SOURCE_WORDS,
@@ -216,6 +216,51 @@ describe("starting a Pi session", () => {
       expect(reads).toBe(2);
     },
     TOOLS_REREAD_MS + 8000,
+  );
+});
+
+/* v1.450.0 (Wave D, item 40): the re-reads have an end. */
+describe("a model list that never arrives", () => {
+  it(
+    "after the last re-read the box says it couldn't read the list, and Try again asks again",
+    async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        let reads = 0;
+        let ready = false;
+        H.gets["/build/app/harnesses"] = () => {
+          reads += 1;
+          return ready
+            ? { harnesses: [PI] }
+            : { harnesses: [{ ...PI, models: [{ id: "", label: "Pi's default" }], models_reading: true }] };
+        };
+        await startStage();
+        expect(screen.getByTestId("code-start-models-note").textContent).toBe("Reading Pi's model list…");
+        for (let i = 0; i < TOOLS_REREAD_TRIES; i++) {
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(TOOLS_REREAD_MS + 10);
+          });
+        }
+        await waitFor(() =>
+          expect(screen.getByTestId("code-start-models-note").getAttribute("data-state")).toBe("gave-up"),
+        );
+        expect(reads).toBe(TOOLS_REREAD_TRIES + 1);
+        expect(screen.getByTestId("code-start-models-note").textContent).toBe("Couldn't read Pi's model list. Try again");
+        // Nothing more is read by itself.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(TOOLS_REREAD_MS * 3);
+        });
+        expect(reads).toBe(TOOLS_REREAD_TRIES + 1);
+        // Try again re-arms the re-reads; the list arrives.
+        ready = true;
+        fireEvent.click(screen.getByTestId("code-start-models-retry"));
+        await waitFor(() => expect(screen.queryByTestId("code-start-models-note")).toBeNull());
+        expect(reads).toBe(TOOLS_REREAD_TRIES + 2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+    20_000,
   );
 });
 

@@ -110,7 +110,7 @@ function CodeCopyButton({ text }: { text: string }) {
         onClick={copy}
         title="Copy code"
         aria-label="Copy code"
-        className="absolute right-2 top-2 z-10 grid h-6 w-6 place-items-center rounded-md border border-white/10 bg-white/[0.06] text-zinc-400 opacity-0 transition-opacity hover:text-zinc-100 focus-visible:opacity-100 group-hover/code:opacity-100 motion-reduce:transition-none"
+        className="absolute right-2 top-2 z-10 grid h-6 w-6 place-items-center rounded-md border border-white/10 bg-white/[0.06] text-zinc-400 opacity-0 transition-opacity hover:text-zinc-100 focus-visible:opacity-100 group-hover/code:opacity-100 [@media(hover:none)]:opacity-100 motion-reduce:transition-none"
       >
         {copied ? <Check size={12} aria-hidden className="text-tone-success" /> : <Copy size={12} aria-hidden />}
       </button>

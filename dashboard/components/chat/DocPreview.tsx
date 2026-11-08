@@ -35,6 +35,8 @@ import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { diffLines, type DiffLine } from "@/lib/diff";
 import { ErrorNote, LoaderInline } from "@/components/ui";
 import { FilePickerModal } from "@/components/FilePickerModal";
+// v1.450.0 (Wave D, item 37): "Replace it?" is the panel's own question.
+import { PageQuestion, usePageQuestion } from "@/components/PageQuestion";
 
 /** A common save destination offered by GET /documents/places. */
 interface SavePlace {
@@ -317,6 +319,7 @@ export function DocPreview({
   const [saving, setSaving] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const replaceQuestion = usePageQuestion();
   const [pickFolder, setPickFolder] = useState(false);
   const [imgError, setImgError] = useState(false);
   // The last-viewed lines this payload DIFFERS from (null = no change to show)
@@ -500,10 +503,13 @@ export function DocPreview({
       // someone's file — the whole point of this row is no surprises.
       if (err instanceof ApiError && err.status === 409 && !overwrite) {
         setSaving(null);
+        // v1.450.0 (Wave D, item 37): the panel's own question line
+        // (doc-replace-confirm: Replace it / Keep both as they are).
         if (
-          window.confirm(
-            `${name} is already in that folder. Replace it?`,
-          )
+          await replaceQuestion.ask(`${name} is already in that folder. Replace it?`, {
+            yes: "Replace it",
+            no: "Don't replace",
+          })
         )
           return saveTo(folder, true);
         return;
@@ -728,6 +734,12 @@ export function DocPreview({
       {saveError && (
         <p className="shrink-0 px-1 text-[11px] text-tone-danger">{saveError}</p>
       )}
+      <PageQuestion
+        state={replaceQuestion.state}
+        onAnswer={replaceQuestion.answer}
+        testId="doc-replace-confirm"
+        className="shrink-0 px-1"
+      />
       {openNote && (
         <p className="shrink-0 px-1 text-[11px] text-tone-success">{openNote}</p>
       )}

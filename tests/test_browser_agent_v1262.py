@@ -384,7 +384,9 @@ def test_the_card_is_three_answers_and_the_panel_explains_its_mode():
     extension, there should just be a simple toggle".
     """
     html = _src(_ADDON / "sidepanel.html")
-    assert re.search(r'id="approve"[^>]*>\s*Allow\s*<', html), "no Allow button"
+    # v1.450.0 (Wave D, item 37): the one-call answer is the canon's
+    # "Allow once" (dashboard/lib/approvalWords.ALLOW_ONCE), as on every card.
+    assert re.search(r'id="approve"[^>]*>\s*Allow once\s*<', html), "no Allow once button"
     assert re.search(r'id="approve-always"[^>]*>\s*Allow all page actions\s*<', html), "no Allow-all-page-actions button"
     assert 'id="approve-task"' not in html and 'id="approve-tab"' not in html, (
         "the sidebar's card grew back a per-task or per-tab button beside the switch"

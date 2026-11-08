@@ -34,6 +34,7 @@ import {
   SuccessNote,
   LoaderInline,
   ConfirmButton,
+  Button,
   statusTone,
   Field,
 } from "@/components/ui";
@@ -409,15 +410,11 @@ export default function AutonomyPage() {
           actions={
             <div className="flex flex-wrap items-center gap-2">
               {/* Master enable (off by default) — writes autonomy_enabled via /settings. */}
-              <button
-                type="button"
+              <Button
+                variant={s?.enabled ? "soft" : "secondary"}
+                aria-pressed={!!s?.enabled}
                 onClick={() => toggleEnabled(!s?.enabled)}
                 disabled={enableBusy || !s}
-                className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
-                  s?.enabled
-                    ? "border-emerald-500/40 bg-emerald-500/[0.1] text-emerald-300 hover:bg-emerald-500/[0.16]"
-                    : "border-white/15 bg-white/[0.04] text-zinc-200 hover:bg-white/[0.08]"
-                }`}
                 title={s?.enabled ? "Disable autonomy" : "Enable autonomy (off by default)"}
               >
                 {enableBusy ? (
@@ -427,35 +424,33 @@ export default function AutonomyPage() {
                     <Power size={15} /> {s?.enabled ? "Autonomy on" : "Enable autonomy"}
                   </>
                 )}
-              </button>
+              </Button>
               {/* Deliberate once right now (works even before the background
                   loop arms). v1.314.0: "Check now" (was "Run a tick") — an
                   honest verb: it may also conclude there is nothing to do. */}
-              <button
-                type="button"
+              <Button
+                variant="soft"
                 onClick={runTick}
                 disabled={tickBusy || !s}
-                className="inline-flex items-center gap-2 rounded-xl border border-accent/30 bg-accent/[0.08] px-3.5 py-2 text-sm font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
                 title="Think once right now: look at your goals and suggest a next step if one is worth it"
               >
                 {tickBusy ? <LoaderInline label="Thinking…" /> : <><Activity size={15} /> Check now</>}
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                // v1.450.0 (Wave D, item 37): the shared Button. Engaged it
+                // is a plain press; while autonomy is off and nothing waits
+                // it rests neutral and turns red on hover (v1.316.0); else
+                // it is the danger press.
+                variant={killed || killQuiet ? "secondary" : "danger"}
                 onClick={() => toggleKill(!killed)}
                 disabled={killBusy || !s}
-                className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
+                className={
                   killed
-                    ? "border-emerald-500/40 bg-emerald-500/[0.1] text-emerald-300 hover:bg-emerald-500/[0.16]"
+                    ? ""
                     : killQuiet
-                      ? // v1.316.0 (UX wave 4): while autonomy is OFF and
-                        // nothing waits, it rests neutral and turns red on
-                        // hover. Still enabled, still "Kill switch", still one
-                        // press. (Since v1.351.0 it also stops schedules,
-                        // goals, rules and phone jobs; the look is unchanged.)
-                        "border-white/15 bg-white/[0.04] text-zinc-300 hover:border-rose-500/40 hover:bg-rose-500/[0.1] hover:text-rose-300"
-                      : "border-rose-500/40 bg-rose-500/[0.1] text-rose-300 hover:bg-rose-500/[0.16]"
-                }`}
+                      ? "hover:border-tone-danger/40 hover:text-tone-danger"
+                      : "border-tone-danger/40 text-tone-danger"
+                }
                 title={
                   killed
                     ? "Turn Emergency stop off: schedules, goals and rules start on their own again"
@@ -475,7 +470,7 @@ export default function AutonomyPage() {
                     <ShieldAlert size={15} /> Emergency stop
                   </>
                 )}
-              </button>
+              </Button>
             </div>
           }
         />
@@ -611,14 +606,14 @@ export default function AutonomyPage() {
                         </div>
                       </div>
                       <div className="flex shrink-0 items-center gap-1.5">
-                        <button
-                          type="button"
+                        <Button
+                          variant="soft"
+                          size="sm"
                           onClick={() => approve(p)}
                           title="Approve and execute this proposal"
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.08] px-2.5 py-1 text-xs font-medium text-emerald-300 transition-colors hover:bg-emerald-500/[0.14]"
                         >
                           <CircleCheck size={13} /> Approve
-                        </button>
+                        </Button>
                         <ConfirmButton
                           onConfirm={() => reject(p)}
                           label="Reject"
@@ -639,12 +634,12 @@ export default function AutonomyPage() {
             title="Morning briefing"
             icon={<Sun size={15} />}
             right={
-              <button
-                type="button"
+              <Button
+                variant="soft"
+                size="sm"
                 onClick={pushBriefing}
                 disabled={briefBusy}
                 title="Summarise now and send it to your notification destinations"
-                className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
               >
                 {briefBusy ? (
                   <LoaderInline label="Sending…" />
@@ -653,7 +648,7 @@ export default function AutonomyPage() {
                     <Send size={13} /> Send briefing
                   </>
                 )}
-              </button>
+              </Button>
             }
           >
             {briefing.loading && !briefing.data ? (
@@ -1205,9 +1200,6 @@ function GoalsSection() {
     }
   }
 
-  const smallBtn =
-    "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50";
-
   return (
     // v1.316.0 (UX wave 4): "Goals from Chat" — the page has a second kind of
     // goal (Simple goals, below), so this title says where these come from.
@@ -1380,8 +1372,9 @@ function GoalsSection() {
                             )}
                           </span>
                           <span className="flex shrink-0 items-center gap-1.5">
-                            <button
-                              type="button"
+                            <Button
+                              variant="soft"
+                              size="sm"
                               disabled={busy !== null}
                               onClick={() => allowGrant(g, offer)}
                               title={
@@ -1389,7 +1382,6 @@ function GoalsSection() {
                                   ? `Grant "${tool}" with exactly these arguments on "${g.name}" for 30 days`
                                   : `Grant "${tool}" on "${g.name}" from now on`
                               }
-                              className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
                             >
                               {busy === `${g.id}:grant:${offerKey(g.id, offer)}` ? (
                                 <LoaderInline label="Allowing…" />
@@ -1398,15 +1390,14 @@ function GoalsSection() {
                               ) : (
                                 "Allow"
                               )}
-                            </button>
-                            <button
-                              type="button"
+                            </Button>
+                            <Button
+                              size="sm"
                               onClick={() => dismissOffer(g.id, offer)}
                               title="Keep asking each time (hides this offer here)"
-                              className="rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
                             >
                               Not now
-                            </button>
+                            </Button>
                           </span>
                         </div>
                       );
@@ -1487,12 +1478,12 @@ function GoalsSection() {
                       terminal except through the explicit /reopen door. */}
                   <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                     {g.state === "active" && (
-                      <button
-                        type="button"
+                      <Button
+                        variant="soft"
+                        size="sm"
                         disabled={busy !== null}
                         onClick={() => act(g, "run", `"${g.name}" is running now.`)}
                         title={`Run "${g.name}" now, ahead of its schedule`}
-                        className={`${smallBtn} border-accent/30 bg-accent/[0.08] text-accent-soft hover:bg-accent/[0.14]`}
                       >
                         {isBusy("run") ? (
                           <LoaderInline label="Starting…" />
@@ -1501,17 +1492,17 @@ function GoalsSection() {
                             <Play size={13} /> Run now
                           </>
                         )}
-                      </button>
+                      </Button>
                     )}
                     {(g.state === "satisfied" || g.state === "failed" || g.state === "stopped") && (
-                      <button
-                        type="button"
+                      <Button
+                        variant="soft"
+                        size="sm"
                         disabled={busy !== null}
                         onClick={() =>
                           act(g, "reopen", `"${g.name}" reopened — it is active again.`)
                         }
                         title={`Reopen "${g.name}" — back to active, then Run now works`}
-                        className={`${smallBtn} border-accent/30 bg-accent/[0.08] text-accent-soft hover:bg-accent/[0.14]`}
                       >
                         {isBusy("reopen") ? (
                           <LoaderInline label="Reopening…" />
@@ -1520,15 +1511,15 @@ function GoalsSection() {
                             <RotateCcw size={13} /> Reopen
                           </>
                         )}
-                      </button>
+                      </Button>
                     )}
                     {g.state === "active" && (
-                      <button
-                        type="button"
+                      <Button
+                        variant="secondary"
+                        size="sm"
                         disabled={busy !== null}
                         onClick={() => act(g, "pause", `"${g.name}" paused.`)}
                         title={`Pause "${g.name}" — no iterations until you resume`}
-                        className={`${smallBtn} border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.08]`}
                       >
                         {isBusy("pause") ? (
                           <LoaderInline label="Pausing…" />
@@ -1537,11 +1528,12 @@ function GoalsSection() {
                             <Pause size={13} /> Pause
                           </>
                         )}
-                      </button>
+                      </Button>
                     )}
                     {(g.state === "paused" || g.state === "tripped") && (
-                      <button
-                        type="button"
+                      <Button
+                        variant="soft"
+                        size="sm"
                         disabled={busy !== null}
                         onClick={() => act(g, "resume", `"${g.name}" resumed.`)}
                         title={
@@ -1549,7 +1541,6 @@ function GoalsSection() {
                             ? `Clear the breaker and resume "${g.name}"`
                             : `Resume "${g.name}"`
                         }
-                        className={`${smallBtn} border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-300 hover:bg-emerald-500/[0.14]`}
                       >
                         {isBusy("resume") ? (
                           <LoaderInline label="Resuming…" />
@@ -1558,7 +1549,7 @@ function GoalsSection() {
                             <Play size={13} /> Resume
                           </>
                         )}
-                      </button>
+                      </Button>
                     )}
                     {/* Stop only where the transition table allows it —
                         active/paused/tripped. On the terminal states it would
@@ -1700,10 +1691,11 @@ function NewGoalCard({
             </select>
           </Field>
         </div>
-        <button
+        <Button
           type="submit"
+          variant="primary"
           disabled={busy || !text.trim()}
-          className="btn-accent w-full"
+          className="w-full"
         >
           {busy ? (
             <LoaderInline label="Adding…" />
@@ -1712,7 +1704,7 @@ function NewGoalCard({
               <Plus size={14} /> Add goal
             </>
           )}
-        </button>
+        </Button>
         {/* v1.355.0 (G65): a goal's runs are unattended — an ask waits 5
             minutes, then that step is skipped. Said under the form. */}
         <UnattendedAskNote />
@@ -1815,8 +1807,9 @@ function StarterGoalsCard({
                   <span title={`P${r.priority}`}>{priorityWord(r.priority)} priority</span> ·
                   suggest only
                 </span>
-                <button
-                  type="button"
+                <Button
+                  variant="soft"
+                  size="sm"
                   onClick={() => add(r)}
                   disabled={isAdded || busyId !== null}
                   title={
@@ -1824,11 +1817,7 @@ function StarterGoalsCard({
                       ? "Already in your simple goals"
                       : `Add "${r.title}" as a suggest-only goal`
                   }
-                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
-                    isAdded
-                      ? "border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-300"
-                      : "border-accent/30 bg-accent/[0.08] text-accent-soft hover:bg-accent/[0.14] disabled:opacity-50"
-                  }`}
+                  className="shrink-0"
                 >
                   {isBusy ? (
                     <LoaderInline label="Adding…" />
@@ -1841,7 +1830,7 @@ function StarterGoalsCard({
                       <Plus size={13} /> Add
                     </>
                   )}
-                </button>
+                </Button>
               </div>
             </div>
           );

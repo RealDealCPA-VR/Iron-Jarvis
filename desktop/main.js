@@ -2274,6 +2274,15 @@ function installDaemonWatchdog() {
   _dwTimer = setInterval(daemonWatchdogTick, DAEMON_WATCHDOG_MS);
 }
 
+// v1.450.0 (Wave D, item 39): WHERE the Releases page is and WHAT to take
+// from it, in one sentence each dialog reuses — "reinstall the previous
+// version from Releases" named a page the user had never seen and no file.
+// One line each on purpose: the node pins lift them with a single-line regex.
+const RELEASES_PAGE = "https://github.com/RealDealCPA-VR/Iron-Jarvis/releases";
+const RELEASES_PREVIOUS_HOW = "Open the Releases page (github.com/RealDealCPA-VR/Iron-Jarvis/releases), find the version listed just below this one, download its file named Iron-Jarvis-Setup-<version>.exe and run it.";
+const RELEASES_LATEST_HOW = "Open the Releases page (github.com/RealDealCPA-VR/Iron-Jarvis/releases), download the file named Iron-Jarvis-Setup-<version>.exe under the newest version and run it.";
+const DATA_STAYS = "Your settings, chats and keys stay where they are.";
+
 // --- Failed-update recovery sentinel ------------------------------------
 // electron-updater/NSIS keep no prior version, so a bad auto-update that won't
 // boot would strand the user. Before installing we drop a marker; each launch
@@ -2489,7 +2498,7 @@ function handleCorruptInstall(result) {
       "interrupted.\n\n" +
       (cached
         ? "Repair re-runs the already-downloaded installer."
-        : "Reinstall the latest version from the Releases page.") +
+        : RELEASES_LATEST_HOW) +
       " Your data, settings, and sessions are untouched.\n\n" +
       `First affected files:\n    ${examples}`,
   });
@@ -3098,14 +3107,47 @@ function watchSpotlightTask(id, task) {
   return timer;
 }
 
+// v1.450.0 (Wave D, item 39): what Spotlight says when its task did not
+// start — "connect ECONNREFUSED 127.0.0.1:8787" told the user nothing. A
+// connection that never opened means Iron Jarvis is not running (or still
+// starting); a sentence Iron Jarvis answered with (a refusal written for the
+// user) is kept; anything else is one plain line. The raw text is logged.
+function spotlightErrorWords(raw) {
+  const m = String(raw || "");
+  if (/ECONNREFUSED|ECONNRESET|EPIPE|socket hang up|ENOTFOUND|EADDRNOTAVAIL/i.test(m)) {
+    return "Iron Jarvis isn't running yet. Open the main window.";
+  }
+  if (/did not answer in time|ETIMEDOUT/i.test(m)) {
+    return "Iron Jarvis didn't answer in time. Open the main window and try again.";
+  }
+  if (!m || /^HTTP \d{3}$/.test(m) || /could not start the task/i.test(m)) {
+    return "The task didn't start. Open the main window and try again.";
+  }
+  // AN review: only a SENTENCE Iron Jarvis wrote for the user is kept. A 500's
+  // "internal error [err_…]: KeyError: …", a 422's detail list (which reaches
+  // here as "[object Object]"), a stack or a JSON body is developer text: the
+  // plain line, with the raw text already in the desktop log.
+  if (isUserSentence(m)) return m;
+  return "The task didn't start. Open the main window and try again.";
+
+  function isUserSentence(m) {
+    if (m.length > 300 || /[\r\n]/.test(m)) return false;
+    if (!/^[A-Z]/.test(m) || !/[.!?]$/.test(m)) return false;
+    if (/internal error|\[object |Traceback|\berr_[0-9a-f]+|[{}[\]]|Error:|Exception\b|\bat \S+:\d+/.test(m)) return false;
+    return true;
+  }
+}
+
 function installSpotlightIpc() {
   ipcMain.handle("spotlight:submit", async (_e, task) => {
     const t = String(task || "").trim();
-    if (!t) return { ok: false, error: "empty task" };
+    if (!t) return { ok: false, error: "Type a task first." };
     try {
       return await runSpotlightTask(t);
     } catch (err) {
-      return { ok: false, error: (err && err.message) || String(err) };
+      const raw = (err && err.message) || String(err);
+      desktopLog("warn", `[spotlight] the quick task did not start: ${raw}`);
+      return { ok: false, error: spotlightErrorWords(raw) };
     }
   });
   ipcMain.on("spotlight:close", () => {
@@ -5380,9 +5422,11 @@ function abortUpdateInstall(err) {
       message: "The update could not be started, so Iron Jarvis is still running the current version.",
       detail:
         `${friendly}\n\n` +
-        "Nothing was changed and your data is untouched. Iron Jarvis will look for " +
-        "the update again shortly; you can also install it manually from the " +
-        "Releases page.",
+        "Nothing was changed and Iron Jarvis keeps working on the current version " +
+        "meanwhile. It will look for the update again shortly. To install it by hand " +
+        "instead, open the Releases page (github.com/RealDealCPA-VR/Iron-Jarvis/releases), " +
+        "download the file named Iron-Jarvis-Setup-<version>.exe under the newest version " +
+        "and run it.",
     });
   } catch (dlgErr) {
     desktopLog("error", "[update] could not show the abort dialog:", dlgErr && dlgErr.message);
@@ -6032,8 +6076,8 @@ function classifyStartupFailure(context) {
       cause: "upgrade",
       message: "The step that updates your saved data for this version did not finish.",
       detail:
-        "Nothing has been deleted. Press Retry; if it fails again, use Open logs and reinstall " +
-        "the previous version from the Releases page.",
+        "Nothing has been deleted. Press Retry. If it fails again, go back to the version " +
+        "you had: " + RELEASES_PREVIOUS_HOW + " " + DATA_STAYS,
     };
   }
   if (has(/ENOENT|EACCES|EPERM|not recognized as an internal|cannot find the (file|path)/i)) {
@@ -6059,6 +6103,9 @@ function classifyStartupFailure(context) {
   };
 }
 
+// v1.450.0 (Wave D, item 39): the line under every startup dialog's cause.
+const STARTUP_LOG_LINE = "The technical details are in the logs (Open logs).";
+
 // Shared startup-failure path. After a just-applied update that repeatedly fails
 // to boot, offer a concrete recovery (reinstall the previous release) instead of
 // looping on a generic error — electron-updater/NSIS keep no prior version.
@@ -6066,6 +6113,9 @@ function classifyStartupFailure(context) {
 // / Quit, instead of an error box that only ever quit.
 function handleStartupFailure(title, message, pendingUpdate, context) {
   if (pendingUpdate && pendingUpdate.attempts >= 2) {
+    // AN review: this branch's dialog shows no technical text either, so the
+    // raw gate error is logged here too (it was logged on the other branch only).
+    desktopLog("error", `[startup] ${title} (update ${pendingUpdate.version || "unknown"} not starting): ${(context && context.gateError) || message}`);
     const choice = dialog.showMessageBoxSync({
       type: "error",
       buttons: ["Open Releases page", "Quit"],
@@ -6073,11 +6123,11 @@ function handleStartupFailure(title, message, pendingUpdate, context) {
       title: "Iron Jarvis — update failed to start",
       message: `The update to version ${pendingUpdate.version || "(unknown)"} is not starting.`,
       detail:
-        "Reinstall the previous working version from the Releases page, then relaunch. " +
-        "Your data (settings, sessions, keys) is untouched.",
+        "Go back to the version you had, then open Iron Jarvis again. " +
+        RELEASES_PREVIOUS_HOW + " " + DATA_STAYS,
     });
     if (choice === 0) {
-      shell.openExternal("https://github.com/RealDealCPA-VR/Iron-Jarvis/releases");
+      shell.openExternal(RELEASES_PAGE);
     }
   } else {
     const info = classifyStartupFailure({
@@ -6088,6 +6138,10 @@ function handleStartupFailure(title, message, pendingUpdate, context) {
       port: context && context.port,
       timeoutS: context && context.timeoutS,
     });
+    // v1.450.0 (Wave D, item 39): the raw gate error goes to the LOG (where
+    // Open logs shows it), never into the dialog: the dialog says the cause
+    // in one sentence and offers Open logs.
+    desktopLog("error", `[startup] ${title} (${info.cause}): ${(context && context.gateError) || message}`);
     for (;;) {
       let choice = 2;
       try {
@@ -6099,7 +6153,7 @@ function handleStartupFailure(title, message, pendingUpdate, context) {
           noLink: true,
           title,
           message: info.message,
-          detail: `${info.detail}\n\nDetails: ${(context && context.gateError) || message}`,
+          detail: `${info.detail}\n\n${STARTUP_LOG_LINE}`,
         });
       } catch {
         choice = 2; // no dialog (no display?) — fall through to the quit below
@@ -6310,11 +6364,22 @@ function recoveryAllowed() {
   return _wdRecoveries.length < RECOVERY_MAX_IN_WINDOW;
 }
 
+// v1.450.0 (Wave D, item 39): what the notice says after the window was
+// reloaded — in words, never Chromium's reason code ("oom", "crashed",
+// "unresponsive"), which goes to renderer.log. Only an out-of-memory reload
+// says "Nothing was lost" outright; any other crash can drop a half-typed
+// message, so it says what is kept.
+function recoveredWords(reason) {
+  if (reason === "oom") return "The window ran out of memory and was reloaded. Nothing was lost.";
+  return "The window stopped working and was reloaded. Your chats and settings are kept; anything you were typing may need typing again.";
+}
+
 function notifyRecovered(reason) {
+  rendererLog(`[watchdog] reloaded the window (${reason})`);
   try {
     new Notification({
       title: "Iron Jarvis",
-      body: `The window stopped responding (${reason}) and was reloaded. Nothing was lost — chats and settings live in the local service.`,
+      body: recoveredWords(reason),
     }).show();
   } catch {
     /* notifications unavailable */

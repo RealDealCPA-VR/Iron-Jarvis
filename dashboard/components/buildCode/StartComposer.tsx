@@ -66,6 +66,9 @@ import {
   usingDefaultsLine,
   type ToolDefaults,
 } from "@/lib/folderDefaults";
+import { DisabledNote } from "@/components/DisabledNote";
+import { TRY_AGAIN_WORDS, modelsReadingWords, modelsUnreadWords } from "@/lib/buildStuck";
+import { START_NEEDS_ACCOUNT, START_NEEDS_WORDS, whyDisabled } from "@/lib/whyDisabled";
 import {
   AttachButton,
   AttachmentChips,
@@ -323,6 +326,8 @@ function errorWords(e: unknown, fallback: string): string {
 export function StartComposer({
   tools,
   toolsError,
+  modelsGaveUp = false,
+  onRereadModels,
   startFolder = null,
   startAt = null,
   workRoot = "",
@@ -331,6 +336,10 @@ export function StartComposer({
   /** GET /build/app/harnesses (null while it is read). */
   tools: readonly CodingTool[] | null;
   toolsError: string | null;
+  /** v1.450.0 (Wave D, item 40): the re-reads of a tool's model list ran
+   *  out and it is still being read — say "couldn't read", with Try again. */
+  modelsGaveUp?: boolean;
+  onRereadModels?: () => void;
   /** The folder this start is on (a folder heading's "+"); null = none. */
   startFolder?: string | null;
   /** Where Choose… opens when no folder is chosen (the folder in front, else
@@ -450,6 +459,16 @@ export function StartComposer({
       : "No coding tool here can start a session right now: sign in first."
     : null;
   const ready = !!tool && !unavailable && !accountMissing && (!!text.trim() || att.files.length > 0) && !busy;
+  // v1.450.0 (Wave D, item 38): the one reason Start waits, in order.
+  const startWhy = ready || busy
+    ? null
+    : whyDisabled(
+        unavailable,
+        stuckWords,
+        noAccount,
+        accountMissing && START_NEEDS_ACCOUNT,
+        !text.trim() && att.files.length === 0 && START_NEEDS_WORDS,
+      );
 
   function chooseTool(id: string) {
     setToolOpen(false);
@@ -626,7 +645,7 @@ export function StartComposer({
               disabled={!ready}
               onClick={() => void start()}
               aria-label="Start the session and send"
-              title={unavailable ?? stuckWords ?? noAccount ?? (accountMissing ? "Choose an account first" : "Send (Enter)")}
+              title={startWhy ?? "Send (Enter)"}
               className="grid h-8 w-8 place-items-center rounded-full bg-accent text-ink-950 transition-opacity disabled:opacity-40"
             >
               {busy ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={15} aria-hidden="true" />}
@@ -861,10 +880,29 @@ export function StartComposer({
           {tool && (tool.modelsReading || tool.modelsNote) ? (
             <span
               data-testid="code-start-models-note"
+              data-state={!tool.modelsNote && modelsGaveUp ? "gave-up" : undefined}
               role="status"
-              className={`px-1 text-[12px] ${tool.modelsNote ? "text-tone-warn" : "text-zinc-500"}`}
+              className={`px-1 text-[12px] ${tool.modelsNote || modelsGaveUp ? "text-tone-warn" : "text-zinc-500"}`}
             >
-              {tool.modelsNote ?? `Reading ${tool.label}'s model list…`}
+              {tool.modelsNote ? (
+                tool.modelsNote
+              ) : modelsGaveUp ? (
+                <>
+                  {modelsUnreadWords(tool.label)}{" "}
+                  {onRereadModels ? (
+                    <button
+                      type="button"
+                      data-testid="code-start-models-retry"
+                      onClick={onRereadModels}
+                      className="rounded-sm text-accent-soft underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+                    >
+                      {TRY_AGAIN_WORDS}
+                    </button>
+                  ) : null}
+                </>
+              ) : (
+                modelsReadingWords(tool.label)
+              )}
             </span>
           ) : null}
           {tool && efforts.length ? (
@@ -931,6 +969,9 @@ export function StartComposer({
           <p data-testid="code-start-no-account" className="px-2 text-[12px] text-zinc-500">
             {noAccount}
           </p>
+        ) : startWhy === START_NEEDS_ACCOUNT ? (
+          // v1.450.0 (Wave D, item 38): the one reason not drawn elsewhere.
+          <DisabledNote why={startWhy} testId="code-start-why" className="px-2" />
         ) : null}
         {error ? (
           <p role="alert" data-testid="code-start-error" className="px-2 text-[12px] text-tone-danger">

@@ -359,3 +359,16 @@ def test_the_sidebars_wide_answer_names_every_tab():
     assert label == "Allow all page actions"
     assert "every tab" in title and "Payments, passwords" in title
     assert ">Always allow<" not in html
+
+
+def test_the_sidebars_one_call_answer_is_allow_once_the_cards_word():
+    """v1.450.0 (Wave D, item 37): the sidebar's card said a bare "Allow"
+    while every other card says "Allow once" (lib/approvalWords.ALLOW_ONCE).
+    Read the TS constant, never copy it, so the two cannot drift."""
+    ts = _read("dashboard/lib/approvalWords.ts")
+    m = re.search(r'export const ALLOW_ONCE = "([^"]+)";', ts)
+    assert m, "lib/approvalWords.ts lost ALLOW_ONCE"
+    html = _read("extensions/chrome/src/sidepanel/sidepanel.html")
+    button = re.search(r'<button[^>]*id="approve"[^>]*>([^<]*)<', html)
+    assert button, "the sidebar's one-call answer is gone"
+    assert button.group(1).strip() == m.group(1)

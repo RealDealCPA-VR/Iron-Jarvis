@@ -1072,7 +1072,12 @@ export function ModelMenu({
                 e.stopPropagation();
                 return;
               }
-              if (!companies || e.key !== "Escape") return;
+              if (e.key !== "Escape") return;
+              // v1.450.0 (Wave D, item 38): Escape closes the menu from ANY
+              // row in the chat too (it closed only from the find box). The
+              // find box's own Escape closes it there and keeps the focus
+              // where it was (pinned by chat-model-menu-unchanged-v1376).
+              if (!companies && e.target === filterRef.current) return;
               e.preventDefault();
               e.stopPropagation();
               closeToChip();
