@@ -657,6 +657,9 @@ async def _three_changes(app, tmp_path):
     await _drive_stream(app, {**_body("rewrite notes.txt"), "tools": ["write_file"]}, _never)
     p.router.stream = _calls_stream([("schedule_update", {"name": "nightly", "cron": "0 7 * * *"})])
     await _drive_stream(app, _body("move my nightly schedule to 7am"), _approver(app, []))
+    # v1.449.0 (item 25, moved on purpose): the card tests a provider key
+    # before storing it — a stand-in that accepts, never the live probe.
+    p.connections._prober = lambda provider, cred: (True, f"{provider} reachable — credential accepted")
     status, _ = await _asgi_post(app, "/config/secret", {"name": "connection.openai", "value": SECRET})
     assert status == 200
 

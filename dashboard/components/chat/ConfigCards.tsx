@@ -145,17 +145,34 @@ export function CredentialCard({
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  /** v1.449.0 (readiness Wave C, item 25): the daemon tested the key before
+   *  storing it and it failed — its words (never the key). The value stays
+   *  in the box so a typo can be fixed; nothing was saved. */
+  const [notSaved, setNotSaved] = useState("");
 
   async function save(e: FormEvent) {
     e.preventDefault();
     if (!value.trim()) return;
     setBusy(true);
     setError("");
+    setNotSaved("");
     try {
-      const res = await post<{ status: "stored" | "replaced"; action_id?: string }>("/config/secret", {
+      const res = await post<{
+        status: "stored" | "replaced" | "not_saved";
+        action_id?: string;
+        words?: string;
+      }>("/config/secret", {
         name: card.name,
         value,
       });
+      if (res.status === "not_saved") {
+        setNotSaved(
+          typeof res.words === "string" && res.words && !res.words.includes(value)
+            ? res.words
+            : "That key didn't pass its check. Nothing was saved.",
+        );
+        return;
+      }
       setValue(""); // never kept in the page once saved
       // v1.351.0 (G15): what the app did, when it is an app's card (names,
       // a count and plain words — the daemon never answers with a value).
@@ -273,6 +290,11 @@ export function CredentialCard({
         </button>
       </div>
       {card.help && <p className="text-[11px] text-zinc-500">{card.help}</p>}
+      {notSaved && (
+        <p role="status" data-testid="credential-card-not-saved" className="text-[12px] text-tone-danger">
+          {notSaved}
+        </p>
+      )}
       {error && (
         <p role="alert" className="text-[12px] text-tone-danger">
           {error}

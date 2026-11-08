@@ -307,7 +307,7 @@ afterEach(() => {
 /* =========================== 4. the subscription door's three states === */
 
 describe("the subscription door tells the truth in three states (W2-3 rows)", () => {
-  it("NOT INSTALLED: a web/desktop subscription can't be used here + vendor links; no irm|iex, no false 'turns green' promise", async () => {
+  it("NOT INSTALLED: a web/desktop subscription can't be used here + vendor links; no irm|iex; an 'Install … for me' press (v1.449.0)", async () => {
     render(<ConnectDoors />);
     fireEvent.click(screen.getByRole("button", { name: DOOR_SUB }));
     const text = dialog().textContent ?? "";
@@ -320,9 +320,18 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
     const hrefs = Array.from(dialog().querySelectorAll("a")).map((a) => a.getAttribute("href") ?? "");
     expect(hrefs.some((h) => /^https:\/\/[^/]*(anthropic\.com|claude\.com|claude\.ai)\//.test(h))).toBe(true);
     expect(hrefs.some((h) => /^https:\/\/[^/]*(openai\.com|github\.com\/openai\/codex)/.test(h))).toBe(true);
-    // Never a pipe-to-shell installer, never an "install in a Build pane" press.
+    // Never a pipe-to-shell command on screen for the user to paste.
     expect(text).not.toMatch(/\birm\b|\biex\b/);
-    expect(within(dialog()).queryByRole("button", { name: /install/i })).toBeNull();
+    // v1.449.0 (readiness Wave C item 20, moved on purpose): the press that
+    // was refused here now exists — it opens a Build terminal running the
+    // vendor's OWN installer in view (never silently), asked for by the
+    // daemon's catalog id; the page still sends no command.
+    const installs = within(dialog()).getAllByRole("button", { name: /^Install .* for me$/ });
+    expect(installs.map((b) => b.textContent)).toEqual(["Install Claude Code for me", "Install Codex for me"]);
+    fireEvent.click(installs[0]);
+    await waitFor(() =>
+      expect(hooks.posts.find((p) => p.path === "/terminals/launch")?.body).toEqual({ cli: "claude-code-install" }),
+    );
     // Nothing installed → nothing will "turn green on its own".
     expect(text).not.toMatch(/turns green on its own/i);
   });
@@ -337,7 +346,10 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
       /Not signed in yet — press Sign in below\. A window opens; type \/login there/,
     );
     expect(dialog().textContent).not.toContain(SIGN_IN_FIX_CLAUDE);
-    expect(dialog().textContent).not.toMatch(/terminal/i);
+    // v1.449.0 (moved on purpose): the not-installed Codex row beside it
+    // names the Build terminal its install press opens; the signed-out ROW
+    // itself still never says "terminal".
+    expect(screen.getByTestId("signed-out-line-claude").closest("li")!.textContent).not.toMatch(/terminal/i);
     const signIn = within(dialog()).getAllByRole("button", { name: /^Sign in/ });
     expect(signIn).toHaveLength(1); // codex is not installed → no Sign in for it
     fireEvent.click(signIn[0]);
@@ -477,21 +489,21 @@ describe("ConnectDoors never offers promotion over the user's own choice", () =>
 /* =========================================== 5. the Ollama door's press === */
 
 describe("the Ollama door ends in the same explicit press", () => {
-  it("saved URL + Ollama reachable → 'Use it for answers' posts {provider: 'ollama'}", async () => {
+  it("Ollama reachable → the door's own 'Use Ollama for answers' posts {provider: 'ollama'} (v1.449.0, moved on purpose)", async () => {
+    // v1.449.0 (readiness Wave C item 21): step 3 IS the one press — the
+    // same use-model press the Ready panel offers (the daemon saves this
+    // PC's address as part of it, G34), so "Connect" + "Use it" is one press.
     hooks.useModelAnswer = { promoted: { provider: "ollama", model: "llama3.2" }, reason: "" };
-    const { rerender } = render(<ConnectDoors />);
-    fireEvent.click(screen.getByRole("button", { name: DOOR_LOCAL }));
-    fireEvent.click(screen.getByRole("button", { name: "Connect to Ollama on this PC" }));
-    await waitFor(() => expect(hooks.puts.some((p) => p.path === "/settings")).toBe(true));
-    // The health poll now proves Ollama is reachable.
     setState(OLLAMA_UP);
-    rerender(<ConnectDoors />);
-    const press = await within(dialog()).findByRole("button", { name: /for answers/i });
-    fireEvent.click(press);
+    render(<ConnectDoors />);
+    fireEvent.click(screen.getByRole("button", { name: DOOR_LOCAL }));
+    expect(screen.queryByRole("button", { name: "Connect to Ollama on this PC" })).toBeNull();
+    fireEvent.click(screen.getByTestId("ollama-use"));
     await waitFor(() =>
       expect(within(dialog()).getByRole("status").textContent).toMatch(/ollama|llama3\.2/i),
     );
     expect((useModelPosts()[0].body as Record<string, unknown>).provider).toBe("ollama");
+    expect(hooks.puts.some((p) => p.path === "/settings")).toBe(false); // the daemon saves the address
   });
 });
 

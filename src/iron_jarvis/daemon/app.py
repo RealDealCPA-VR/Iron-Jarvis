@@ -2602,11 +2602,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 try:
                     from ..providers import ollama_seen
 
-                    row["detected"] = bool(
-                        ollama_seen.seen(getattr(platform.config, "ollama_base_url", None))
-                    )
+                    found = ollama_seen.state(getattr(platform.config, "ollama_base_url", None))
+                    row["detected"] = bool(found.has_model)
+                    # v1.449.0 (readiness Wave C, item 21): the two facts
+                    # under "detected", so the first-run door can grey its
+                    # download step until Ollama is on this PC and say
+                    # "running but has no model yet" instead of "not seen".
+                    row["installed"] = bool(found.installed)
+                    row["running"] = bool(found.running)
                 except Exception:  # noqa: BLE001 — health must never fail
                     row["detected"] = False
+                    row["installed"] = False
+                    row["running"] = False
                 # v1.353.0 integrate: whether the user saved an Ollama
                 # address (a config read). A saved address that does not
                 # answer is "not answering there" -- never "Get Ollama", which

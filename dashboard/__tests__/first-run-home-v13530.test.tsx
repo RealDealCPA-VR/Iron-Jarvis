@@ -305,8 +305,11 @@ describe("G36 — the empty chat's machine check and connect-your-apps line", ()
   it("a brand-new user sees how many helpers are ready, the first missing one, and Details", async () => {
     render(<ChatPage />);
     const line = await screen.findByTestId("home-machine");
-    // 6 end-user rows (the dev 'node' row never counts), 1 missing.
-    expect(line.textContent).toBe("This PC: 5 of 6 helpers ready — Reading old .doc and .xls files · Details");
+    // v1.449.0 (item 26, moved on purpose): REQUIRED rows are counted (one
+    // here); the optional miss ("Reading old .doc and .xls files", a PC
+    // without Word) folds into one phrase — a normal PC never reads "5 of
+    // 6 helpers ready" on its first screen. The dev 'node' row never counts.
+    expect(line.textContent).toBe("This PC: 1 of 1 helper ready · 1 optional extra not set up · Details");
     expect(within(line).getByRole("link", { name: "Details" }).getAttribute("href")).toBe("/everything#status");
     // Replies are still the demo: no apps line yet.
     expect(screen.queryByTestId("home-apps")).toBeNull();
@@ -360,6 +363,9 @@ describe("G36 — the empty chat's machine check and connect-your-apps line", ()
     expect([h.ready, h.total, h.firstMissing]).toEqual([5, 6, "Reading old .doc and .xls files"]);
     expect(h.requiredMissing).toBe(false); // only a recommended extra is missing
     expect(showMachineLine(h)).toBe(false); // a settled PC is not nagged by an extra
+    // v1.449.0 (item 26, moved on purpose): the line counts REQUIRED rows and
+    // folds the optional miss.
+    expect(machineText(h)).toBe("This PC: 1 of 1 helper ready · 1 optional extra not set up");
     const required = decodeHomeReadiness({
       doctor: { ok: false, checks: [{ name: "guide_docs", ok: false, level: "required", label: "Guides" }] },
     })!;
@@ -430,7 +436,10 @@ describe("G34 / G35 / G33 — the connect doors", () => {
     expect(screen.getByTestId("signed-out-line-claude").textContent).toBe(
       "Not signed in yet — press Sign in below. A window opens; type /login there and finish in your browser.",
     );
-    expect(document.body.textContent).not.toMatch(/terminal/i);
+    // v1.449.0 (moved on purpose): the not-installed Codex row beside it
+    // now offers "Install Codex for me", which names the Build terminal it
+    // opens; the signed-out ROW itself still never says "terminal".
+    expect(screen.getByTestId("signed-out-line-claude").closest("li")!.textContent).not.toMatch(/terminal/i);
     expect(screen.getByRole("button", { name: "Sign in to Claude Code" })).toBeTruthy();
   });
 });

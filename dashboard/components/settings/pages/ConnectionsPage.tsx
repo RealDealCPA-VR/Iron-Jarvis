@@ -48,7 +48,11 @@ import type { LocalServerPreset } from "@/lib/localServerPresets";
 import { useApi } from "@/lib/useApi";
 import { useFocusRef } from "@/lib/useFocusRef";
 import { useDaemon } from "@/lib/daemon";
-import { OLLAMA_LOCAL_URL, providerDisplay, type HealthRow } from "@/lib/onboarding";
+import { OLLAMA_LOCAL_URL, isDemoDefault, providerDisplay, type HealthRow, type KeySaveAnswer } from "@/lib/onboarding";
+
+/** v1.449.0 (item 25): what the card says under a key that failed its
+ *  pre-save check (the chat door's own sentence). */
+export const KEY_NOT_SAVED_NOTE = "Nothing was saved, and what answers you didn't change. Fix the key and press Connect again.";
 import { subscriptionCliFor } from "@/lib/cliSignIn";
 import { CliSignInPress } from "@/components/connections/CliSignInPress";
 import {
@@ -936,9 +940,35 @@ function ConnectionCard({
         setProtocolOpen(false);
         void reloadEndpoints();
       } else {
-        await post(`/connections/${conn.provider}/key`, { key: key.trim() });
-        const result = await post<ConnectionTestResult>(`/connections/${conn.provider}/test`);
+        // v1.449.0 (readiness Wave C, item 25): TESTED before it is stored,
+        // like the chat's connect door (`?check=1`). A key that fails its
+        // check is NOT saved — the box keeps it for a fix, the Test's words
+        // say why, and "Nothing was saved" says what did not change. An
+        // older daemon ignores `check` and answers without `saved`.
+        const answer = await post<KeySaveAnswer>(`/connections/${conn.provider}/key?check=1`, {
+          key: key.trim(),
+        });
+        if (answer?.saved === false) {
+          if (answer.test && typeof answer.test.ok === "boolean") setTest(answer.test as ConnectionTestResult);
+          setSaveWarn(KEY_NOT_SAVED_NOTE);
+          return;
+        }
+        const result =
+          answer?.test && typeof answer.test.ok === "boolean"
+            ? (answer.test as ConnectionTestResult)
+            : await post<ConnectionTestResult>(`/connections/${conn.provider}/test`);
         setTest(result);
+        // The checked route makes nothing the default; while replies are
+        // still the demo, a key that passed is chosen for answers with the
+        // one explicit press, as the chat door does — the first key used to
+        // be promoted on this page, and a user pasting one here expects it.
+        if (result?.ok && isDemoDefault(health)) {
+          try {
+            await post("/onboarding/use-model", { provider: conn.provider });
+          } catch {
+            /* the key is saved either way; the Connections card offers Make default */
+          }
+        }
       }
       setKey("");
       setOpen(false);

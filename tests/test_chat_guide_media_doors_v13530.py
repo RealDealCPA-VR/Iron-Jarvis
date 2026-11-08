@@ -363,6 +363,10 @@ def test_the_key_saved_on_that_card_connects_the_service_the_next_turn_reads(app
     lands where the media registry looks, so the very next "make a picture"
     keeps ``generate_media`` and says nothing about a missing service."""
     platform = app.state.platform
+    # v1.449.0 (item 25, moved on purpose): the card TESTS a provider key
+    # before storing it; this test is about where the key lands, so the
+    # check is a stand-in that accepts (never the live probe).
+    platform.connections._prober = lambda provider, cred: (True, f"{provider} reachable — credential accepted")
     with TestClient(app) as client:
         r = client.post("/config/secret", json={"name": "connection.pixio", "value": "pxio_live_cardtest"})
         assert r.status_code == 200, r.text

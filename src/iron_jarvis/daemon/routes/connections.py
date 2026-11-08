@@ -1234,7 +1234,10 @@ def rescan_providers(d) -> dict[str, Any]:
     try:
         from ...providers import ollama_seen
 
-        ollama_seen.record(any(dm.provider == "ollama" and dm.available for dm in detected))
+        # v1.449.0 (item 21): the whole answer (installed / running / has a
+        # model), so a Look again after installing Ollama ungreys the door's
+        # download step at once. A repeated miss is free (the probe's memo).
+        ollama_seen.probe_now(getattr(d.platform.config, "ollama_base_url", None))
     except Exception:  # noqa: BLE001 — a cache write never breaks the rescan
         pass
     # v1.358.0 (integrate, lane 8D review): Re-detect looks again for LM
