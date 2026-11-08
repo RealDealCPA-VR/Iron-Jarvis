@@ -228,9 +228,32 @@ export function foldedRow(def: Pick<SchemaSetting, "advanced" | "type">): boolea
   return !!def.advanced || def.type === "dict";
 }
 
-/** The words on the fold: how many rows it hides. */
-export function moreOptionsLabel(count: number): string {
-  return `More options (${count})`;
+/** The words on the fold: how many rows it hides, and (review) how many of
+ *  them hold a value other than a fresh install's or an unsaved edit — a
+ *  closed fold must never hide that an expert setting was changed. */
+export function moreOptionsLabel(count: number, changed = 0): string {
+  return changed > 0 ? `More options (${count}, ${changed} changed)` : `More options (${count})`;
+}
+
+/** A stable reading of a value for comparison with the schema's default:
+ *  object keys sorted, and "", null and undefined all read as "not set". */
+function stableValue(v: unknown): string {
+  if (v === undefined || v === null || v === "") return "null";
+  const norm = (x: unknown): unknown => {
+    if (Array.isArray(x)) return x.map(norm);
+    if (x && typeof x === "object") {
+      return Object.fromEntries(Object.keys(x as Record<string, unknown>).sort().map((k) => [k, norm((x as Record<string, unknown>)[k])]));
+    }
+    return x;
+  };
+  return JSON.stringify(norm(v));
+}
+
+/** Review: a folded row whose SAVED value is not the default the schema
+ *  states (`default` absent = not known: never reported). */
+export function changedFromDefault(def: Pick<SchemaSetting, "default">, saved: unknown): boolean {
+  if (!def || !("default" in def)) return false;
+  return stableValue(saved) !== stableValue(def.default);
 }
 
 function readSection(): { section: string; focus: string } {
@@ -241,7 +264,13 @@ function readSection(): { section: string; focus: string } {
     let focus = p.get("focus") || "";
     // Wave D item 32: `#settings-<key>` names a row too (lib/settingsOpen
     // reads the same form).
-    if (!focus && window.location.hash.startsWith(SETTINGS_HASH)) focus = window.location.hash.slice(SETTINGS_HASH.length);
+    if (!focus && window.location.hash.startsWith(SETTINGS_HASH)) {
+      try {
+        focus = decodeURIComponent(window.location.hash.slice(SETTINGS_HASH.length));
+      } catch {
+        focus = window.location.hash.slice(SETTINGS_HASH.length);
+      }
+    }
     return { section, focus };
   } catch {
     return { section: "", focus: "" };
@@ -325,6 +354,8 @@ export function SettingsHome() {
     const open = (t: SettingsTarget | null) => {
       if (!t) return;
       if (t.focus) {
+        // Review: a search left in the box would hide the row the link names.
+        setQuery("");
         setFocusKey(t.focus);
         setFocusN((n) => n + 1);
       }
@@ -448,6 +479,10 @@ export function SettingsHome() {
   const folded = q ? [] : groupRows.filter(foldedRow);
   const foldOpen = !!moreOpen[active];
   const foldedSections = Array.from(new Set(folded.map((d) => d.section)));
+  // Review: what the closed fold holds that is not a fresh install's value,
+  // or an edit not saved yet — said on the fold, so it is never out of sight.
+  const foldChanged = folded.filter((d) => changedFromDefault(d, original[d.key]) || !same(form[d.key], original[d.key]));
+  const foldUnsaved = folded.filter((d) => !same(form[d.key], original[d.key]));
   const viaControlled = q
     ? defs.filter((d) => d.key in CONTROLLED_IN_SECTION && matches(d, q)).map((d) => CONTROLLED_IN_SECTION[d.key])
     : [];
@@ -624,8 +659,14 @@ export function SettingsHome() {
               >
                 {foldOpen ? <ChevronDown size={15} className="text-zinc-400" aria-hidden /> : <ChevronRight size={15} className="text-zinc-400" aria-hidden />}
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[13px] font-medium text-zinc-300">{moreOptionsLabel(folded.length)}</span>
+                  <span className="block text-[13px] font-medium text-zinc-300">{moreOptionsLabel(folded.length, foldChanged.length)}</span>
                   <span className="block text-[12px] text-zinc-500">Expert settings and raw values. Most people never need these.</span>
+                  {foldChanged.length > 0 && (
+                    <span data-testid="settings-more-changed" className="block text-[12px] text-tone-warn">
+                      Changed: {foldChanged.map((d) => d.label).join(", ")}
+                      {foldUnsaved.length > 0 ? ` (${foldUnsaved.length} not saved yet)` : ""}.
+                    </span>
+                  )}
                 </span>
               </button>
               {foldOpen && (

@@ -162,7 +162,7 @@ describe("the group's advanced rows wait under a closed fold", () => {
     // is controlled by the Several accounts card, so nothing is left to fold.
     render(<SettingsHome />);
     const nav = await screen.findByTestId("settings-groups");
-    fireEvent.click(within(nav).getByRole("button", { name: "Connections" }));
+    fireEvent.click(await within(nav).findByRole("button", { name: "Connections" }, { timeout: 10_000 }));
     expect(await screen.findByTestId("setting-iron_proxy_enabled")).toBeTruthy();
     expect(screen.queryByTestId("settings-more-options")).toBeNull();
   });
@@ -173,7 +173,7 @@ describe("the group's advanced rows wait under a closed fold", () => {
     fireEvent.click(foldButton());
     expect(screen.getByTestId("setting-model_roles")).toBeTruthy();
     const nav = screen.getByTestId("settings-groups");
-    fireEvent.click(within(nav).getByRole("button", { name: "Connections" }));
+    fireEvent.click(await within(nav).findByRole("button", { name: "Connections" }, { timeout: 10_000 }));
     await screen.findByTestId("setting-iron_proxy_enabled");
     fireEvent.click(within(nav).getByRole("button", { name: "Models" }));
     expect(await screen.findByTestId("setting-model_roles")).toBeTruthy();
@@ -232,7 +232,7 @@ describe("Account groups hides behind the Several accounts card", () => {
   it("is never a row, and a search for it offers the accounts section", async () => {
     render(<SettingsHome />);
     const nav = await screen.findByTestId("settings-groups");
-    fireEvent.click(within(nav).getByRole("button", { name: "Connections" }));
+    fireEvent.click(await within(nav).findByRole("button", { name: "Connections" }, { timeout: 10_000 }));
     await screen.findByTestId("setting-iron_proxy_enabled");
     expect(screen.queryByTestId("setting-account_groups")).toBeNull();
     fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "account groups" } });

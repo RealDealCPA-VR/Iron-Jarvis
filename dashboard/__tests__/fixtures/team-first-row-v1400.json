@@ -21,7 +21,8 @@
    "store": "config",
    "placeholder": "",
    "secret": false,
-   "pattern": false
+   "pattern": false,
+   "default": 0.0
   },
   {
    "key": "team_first",
@@ -47,7 +48,8 @@
    "store": "config",
    "placeholder": "",
    "secret": false,
-   "pattern": false
+   "pattern": false,
+   "default": false
   }
  ]
 }
