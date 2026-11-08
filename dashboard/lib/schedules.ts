@@ -53,6 +53,23 @@ export function nameFromTask(task: string): string {
   return slug;
 }
 
+/** AN review (v1.449.0): a filled-in name no schedule already has. The daemon
+ *  refuses a name in use ("already exists"), and two schedules made from the
+ *  same task would otherwise both be called the same; the next free
+ *  "<name>-2", "<name>-3"… is used instead, cut to fit NAME_MAX_CHARS. */
+export function uniqueScheduleName(base: string, taken: Iterable<string>): string {
+  if (!base) return "";
+  const used = new Set(Array.from(taken, (n) => String(n)));
+  if (!used.has(base)) return base;
+  for (let i = 2; i < 1000; i++) {
+    const tail = `-${i}`;
+    const head = base.slice(0, Math.max(1, NAME_MAX_CHARS - tail.length)).replace(/-+$/, "");
+    const next = `${head}${tail}`;
+    if (!used.has(next)) return next;
+  }
+  return base;
+}
+
 /** The hint under an empty Name box. */
 export function nameHintWords(suggested: string): string {
   return suggested

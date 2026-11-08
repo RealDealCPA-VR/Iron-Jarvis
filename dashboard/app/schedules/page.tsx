@@ -23,6 +23,7 @@ import {
   EVERY_MINUTE_WARNING,
   REPEAT_PRESETS,
   nameFromTask,
+  uniqueScheduleName,
   nameHintWords,
 } from "@/lib/schedules";
 import {
@@ -504,7 +505,8 @@ export default function SchedulesPage() {
     kind === "task" ? !!taskText.trim() : kind === "workflow" ? !!workflowName : true;
   // v1.449.0 (Wave D item 35): a task schedule the user did not name is named
   // from its task's first words (said under the Name box before Add).
-  const suggestedName = kind === "task" ? nameFromTask(taskText) : "";
+  const suggestedName =
+    kind === "task" ? uniqueScheduleName(nameFromTask(taskText), schedules.map((s) => s.name)) : "";
   const finalName = name.trim() || suggestedName;
 
   function applyTemplate(t: (typeof TEMPLATES)[number]) {

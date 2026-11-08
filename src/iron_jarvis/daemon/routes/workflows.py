@@ -396,7 +396,26 @@ def register(app: FastAPI, d) -> None:
             names = set(d.platform.registry.names())
         except Exception:  # noqa: BLE001 — the fire would fail by itself; the save is not the place to guess
             return False
-        return bool(names) and tool_name not in names
+        if not names or tool_name in names:
+            return False
+        # AN review (v1.449.0): an extension's tool (``mcp__<pack>__<tool>``)
+        # is in the registry only once its pack has STARTED — at boot packs
+        # load in the background, and a failing or switched-off pack lists
+        # none. Refuse it only when its pack is loaded and running and still
+        # has no such tool; anything less is not known yet.
+        if tool_name.startswith("mcp__"):
+            try:
+                from ...mcp.tools import load_statuses
+
+                for server, rec in load_statuses().items():
+                    if tool_name.startswith(f"mcp__{server}__"):
+                        return str((rec or {}).get("state") or "") == "ok" and not (
+                            (rec or {}).get("last_error")
+                        )
+            except Exception:  # noqa: BLE001 — unsure = refuse nothing
+                return False
+            return False
+        return True
 
     def _validate_step_shapes(steps: list[dict]) -> None:
         """SAVE-time strictness (v1.170.0): a step whose ``kind``/``on_failure``

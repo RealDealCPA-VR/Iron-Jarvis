@@ -353,9 +353,81 @@ INIT_NEEDS_FILES = (
 )
 
 
+#: AN review (v1.449.0): what a first commit may take at most. ``git add -A``
+#: of a home or a whole drive would copy every file into ``.git`` (gigabytes,
+#: minutes); a folder past either bound is refused in words, nothing kept.
+MAX_INIT_FILES = 10_000
+MAX_INIT_BYTES = 1024 * 1024 * 1024
+INIT_TOO_BIG = (
+    "This folder holds too much for a first commit ({what}), so no repository was made. "
+    "Pick the project's own folder, not one that holds everything."
+)
+INIT_TOP_FOLDER = (
+    "That is the top of a drive or your home folder, so Iron Jarvis will not make it a "
+    "repository. Pick the project's own folder inside it."
+)
+INIT_INSIDE_REPO = (
+    "This folder is inside another git repository, so making it one would put a repository "
+    "inside a repository. Pick a folder outside it, or work in that repository."
+)
+#: An empty hooks folder for the first commit: neither a template's hooks nor
+#: the user's ``core.hooksPath`` run code on a press that only meant "init".
+_NO_HOOKS = ".git/ij-no-hooks"
+
+
+def _remove_new_git(where: Path) -> None:
+    """Take back the ``.git`` folder :func:`init_repo` just made (AN review):
+    a refused first commit must leave the folder as it was, or the next
+    press reads "already a repository" over an empty, commit-less one. Git
+    writes its object files read-only on Windows, so those are made writable
+    first. Never raises."""
+    import stat
+
+    def _writable(func, path, _exc):  # noqa: ANN001 — shutil's onerror shape
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except Exception:  # noqa: BLE001
+            pass
+
+    target = where / ".git"
+    try:
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target, onerror=_writable)
+    except Exception:  # noqa: BLE001
+        log.warning("could not take back the new repository in %s", where, exc_info=True)
+
+
+def _top_folder(path: Path) -> bool:
+    """A drive's top or the user's home folder (by its spelling, never
+    resolved across a link). Unsure = True (refused)."""
+    try:
+        norm = os.path.normcase(os.path.normpath(str(path))).rstrip("\\/")
+        anchor = os.path.normcase(os.path.normpath(path.anchor)).rstrip("\\/")
+        if not norm or norm == anchor:
+            return True
+        home = os.path.normcase(os.path.normpath(str(Path.home()))).rstrip("\\/")
+        return norm == home
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _inside_a_repo(path: Path) -> bool:
+    """Is there a ``.git`` in ``path`` or any folder above it? Read by name
+    (``lstat``) — a repository git refuses to read (dubious ownership) still
+    counts, so a press never nests a repository inside one."""
+    for folder in (path, *path.parents):
+        try:
+            os.lstat(folder / ".git")
+            return True
+        except OSError:
+            continue
+    return False
+
+
 def init_repo(folder: str) -> dict[str, Any]:
     """Make ``folder`` a git repository with ONE first commit holding its
-    files (``git init -q``, ``git add -A``, the night commit's own screen
+    files (``git init``, ``git add -A``, the night commit's own screen
     (``harness/night_commit.screen``: secret-named files, key-shaped text,
     files over 50 MB, dependency folders are LEFT OUT and named), ``git
     commit``), so a night task — which works on its own branch — can start
@@ -363,7 +435,11 @@ def init_repo(folder: str) -> dict[str, Any]:
     by its TEXT before anything is looked at, ``fs_policy.root_problem``
     decides whether the folder may be worked in, git must be installed, and
     a folder already in a repository is left exactly as it is (``made``
-    False). Answers :func:`inspect_folder`'s facts plus ``made`` and
+    False). AN review: a drive's top and the home folder are refused, a
+    folder inside another repository (even one git cannot read) is refused,
+    a folder past :data:`MAX_INIT_FILES` / :data:`MAX_INIT_BYTES` is refused,
+    no hook runs, and every refusal after ``git init`` takes the new ``.git``
+    back. Answers :func:`inspect_folder`'s facts plus ``made`` and
     ``left_out``; raises :class:`GitRefused` in words. BLOCKING."""
     from ..core.fs_policy import root_problem
     from .night_commit import screen
@@ -374,6 +450,9 @@ def init_repo(folder: str) -> dict[str, Any]:
         raise GitRefused("Choose the folder first.", 400)
     if _network_spelling(text):
         raise GitRefused(NETWORK_FOLDER, 400)
+    where = Path(text)
+    if where.is_absolute() and _top_folder(where):
+        raise GitRefused(INIT_TOP_FOLDER, 400)
     problem = root_problem(text)
     if problem:
         raise GitRefused(f"This folder cannot be used: {problem}", 400)
@@ -382,35 +461,57 @@ def init_repo(folder: str) -> dict[str, Any]:
     before = inspect_folder(text)
     if before.get("repo"):
         return {**before, "made": False, "left_out": [], "note": before.get("note") or ALREADY_A_REPO}
-    where = Path(text)
-    made = _g(["init", "-q"], where)
+    if _inside_a_repo(where):
+        raise GitRefused(INIT_INSIDE_REPO, 409)
+    made = _g(["init", "-q", "--template="], where)
     if not made.ok:
+        _remove_new_git(where)
         raise GitRefused("Git could not make a repository in this folder.", 409, _masked(made.err or made.out))
-    added = _g(["add", "-A"], where)
-    if not added.ok:
-        raise GitRefused("Git made the repository but could not stage its files.", 409,
-                         _masked(added.err or added.out))
-    left_out: list[dict[str, str]] = []
     try:
-        left_out = list(screen(where) or [])
-    except GitRefused:
+        listed = _g(["ls-files", "-z", "--others", "--exclude-standard"], where, timeout=START_S)
+        if not listed.ok:
+            raise GitRefused("Git could not list this folder's files, so no repository was made.", 409,
+                             _masked(listed.err or listed.out))
+        names = [n for n in listed.out.split("\0") if n]
+        if len(names) > MAX_INIT_FILES:
+            raise GitRefused(INIT_TOO_BIG.format(what=f"more than {MAX_INIT_FILES:,} files"), 409)
+        total = 0
+        for rel in names:
+            try:
+                total += (where / rel).lstat().st_size
+            except OSError:
+                continue
+            if total > MAX_INIT_BYTES:
+                raise GitRefused(INIT_TOO_BIG.format(what="more than 1 GB of files"), 409)
+        added = _g(["add", "-A"], where, timeout=START_S)
+        if not added.ok:
+            raise GitRefused("Git made the repository but could not stage its files.", 409,
+                             _masked(added.err or added.out))
+        left_out: list[dict[str, str]] = []
+        try:
+            left_out = list(screen(where) or [])
+        except GitRefused:
+            raise
+        except Exception as exc:  # noqa: BLE001 — unscreened is never committed
+            raise GitRefused(
+                "Iron Jarvis could not check what it was about to commit, so it committed nothing.", 409,
+                _masked(f"{type(exc).__name__}: {exc}"),
+            ) from exc
+        if _g(["diff", "--cached", "--quiet"], where).code == 0:
+            raise GitRefused(INIT_NEEDS_FILES, 409)
+        own = has_identity(where, git_env())
+        args = ([] if own else default_identity()) + [
+            "-c", f"core.hooksPath={_NO_HOOKS}", "commit", "-q", "--no-verify", "-F", "-",
+        ]
+        got = _g(args, where, timeout=START_S, input=(FIRST_COMMIT_MESSAGE + "\n").encode("utf-8"))
+        if got.timed_out:
+            raise GitRefused(_timed_out_words("The first commit", START_S), 504)
+        if not got.ok:
+            raise GitRefused("Git made the repository but did not make the first commit.", 409,
+                             _masked(got.err or got.out))
+    except BaseException:
+        _remove_new_git(where)
         raise
-    except Exception as exc:  # noqa: BLE001 — unscreened is never committed
-        _g(["reset", "-q"], where)
-        raise GitRefused(
-            "Iron Jarvis could not check what it was about to commit, so it committed nothing.", 409,
-            _masked(f"{type(exc).__name__}: {exc}"),
-        ) from exc
-    if _g(["diff", "--cached", "--quiet"], where).code == 0:
-        raise GitRefused(INIT_NEEDS_FILES, 409)
-    own = has_identity(where, git_env())
-    args = ([] if own else default_identity()) + ["commit", "-q", "-F", "-"]
-    got = _g(args, where, timeout=START_S, input=(FIRST_COMMIT_MESSAGE + "\n").encode("utf-8"))
-    if got.timed_out:
-        raise GitRefused(_timed_out_words("The first commit", START_S), 504)
-    if not got.ok:
-        raise GitRefused("Git made the repository but did not make the first commit.", 409,
-                         _masked(got.err or got.out))
     after = inspect_folder(text)
     return {**after, "made": True, "left_out": left_out}
 

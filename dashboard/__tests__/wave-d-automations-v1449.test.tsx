@@ -79,7 +79,7 @@ vi.mock("@/components/PageHeader", () => ({
 }));
 
 import { buildCron, parseCron, planWords, CUSTOM_SCHEDULE_WORDS } from "@/lib/scheduleCron";
-import { EVERY_MINUTE_WARNING, REPEAT_PRESETS, nameFromTask } from "@/lib/schedules";
+import { EVERY_MINUTE_WARNING, REPEAT_PRESETS, nameFromTask, uniqueScheduleName } from "@/lib/schedules";
 import { SLACK_OFF_WORDS, sourceOffWords } from "@/lib/reflexRules";
 import { jsonProblem, stepProblemOf } from "@/lib/workflowStepProblems";
 import SchedulesPage from "@/app/schedules/page";
@@ -182,6 +182,24 @@ describe("item 35 — the Schedules page", () => {
     await waitFor(() => expect(api.posts.find((p) => p.path === "/schedules")).toBeTruthy());
     expect((api.posts.find((p) => p.path === "/schedules")!.body as { name: string }).name).toBe(
       "tidy-my-downloads-folder-every",
+    );
+  });
+
+  // AN review: the daemon refuses a name in use ("already exists"), so a second
+  // schedule made from the same task takes the next free name.
+  it("a filled-in name never takes one a schedule already has", async () => {
+    expect(uniqueScheduleName("a", [])).toBe("a");
+    expect(uniqueScheduleName("a", ["a", "a-2"])).toBe("a-3");
+    expect(uniqueScheduleName("x".repeat(40), ["x".repeat(40)]).length).toBeLessThanOrEqual(40);
+    mountSchedules([scheduleRow({ name: "tidy-my-downloads-folder-every" })]);
+    const task = await screen.findByLabelText("Task text");
+    await waitFor(() => expect(screen.getAllByText(/tidy-my-downloads-folder-every/).length).toBeGreaterThan(0));
+    fireEvent.change(task, { target: { value: "Tidy my Downloads folder every evening" } });
+    expect(screen.getByTestId("schedule-name-hint").textContent).toContain("tidy-my-downloads-folder-every-2");
+    fireEvent.submit(task.closest("form")!);
+    await waitFor(() => expect(api.posts.find((p) => p.path === "/schedules")).toBeTruthy());
+    expect((api.posts.find((p) => p.path === "/schedules")!.body as { name: string }).name).toBe(
+      "tidy-my-downloads-folder-every-2",
     );
   });
 

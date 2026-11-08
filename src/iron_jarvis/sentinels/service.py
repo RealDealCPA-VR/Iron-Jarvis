@@ -41,6 +41,13 @@ from .watcher import Scanner, default_scanner, diff_state
 log = get_logger("sentinels")
 
 
+#: AN review (v1.449.0): a watch path on a network location, refused by text.
+NETWORK_WATCH = (
+    "That path is on a network location, so a watcher cannot watch it. "
+    "Pick a folder on this PC."
+)
+
+
 class SentinelService:
     """Persistent registry of always-on, suggest-only watchers."""
 
@@ -143,6 +150,15 @@ class SentinelService:
             # every reader honors) and validate the glob so a bad pattern is a
             # clear error, not a silently-inert watcher.
             wpath = str(cfg.get("path") or "")
+            # AN review (v1.449.0): a network or device spelling is refused by
+            # its TEXT before the policy check or the scanner looks at it —
+            # either one stats the path, and a stat of ``\\host\share``
+            # is an SMB connection (the v1.379.0 lesson; ``sentinel_add`` is a
+            # chat tool, so the path can be model-written).
+            from ..harness.sessions import _network_spelling
+
+            if _network_spelling(os.path.expanduser(wpath)):
+                raise ValueError(NETWORK_WATCH)
             probe = os.path.expanduser(wpath)
             for ch in "*?[":
                 cut = probe.find(ch)
