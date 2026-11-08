@@ -61,6 +61,7 @@ import {
   type RepoMade,
 } from "@/lib/buildGit";
 import { couldnt, failureOf, serverSentence } from "@/lib/loadFailed";
+import { folderOnShare } from "@/lib/codeEditor";
 import { useModels } from "@/lib/useModels";
 import { useDaemon } from "@/lib/daemon";
 import { modelRowName } from "@/lib/onboarding";
@@ -723,7 +724,9 @@ export function HarnessStartComposer({
             // v1.455.0 (0j.4 item 33): a folder not set up for copies yet
             // gets the press that sets it up, right where the reason is said.
             fix={
-              tryOnState.why === TRY_ON_NOT_A_REPO
+              // Review: never on a network share — the daemon refuses to set
+              // one up by its spelling, so the press would be dead there.
+              tryOnState.why === TRY_ON_NOT_A_REPO && !folderOnShare(folder ?? "")
                 ? { label: TRY_ON_SET_UP, busy: setUpBusy, onPress: () => void setUpForTryOn() }
                 : undefined
             }

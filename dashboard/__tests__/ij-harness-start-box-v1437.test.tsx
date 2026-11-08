@@ -528,6 +528,36 @@ describe("Try on in a new session", () => {
     expect(screen.queryByTestId("harness-try-on-fix")).toBeNull();
   });
 
+  // Review (v1.455.0): the daemon refuses to set up a folder on a network
+  // share by its spelling (`branches.NETWORK_FOLDER`), so the press would be
+  // dead there — the v1.405.0 lesson: a press the daemon always refuses is
+  // not offered.
+  it("review: a folder on a network share offers no set-up press", async () => {
+    const SHARE = "\\\\nas\\clients\\notes";
+    api.gets[gitPath(SHARE)] = NOT_A_REPO;
+    renderBox({ initialFolder: SHARE });
+    const chip = screen.getByTestId("harness-try-on");
+    await waitFor(() => expect(chip).toHaveAttribute("title", TRY_ON_NOT_A_REPO));
+    fireEvent.click(chip);
+    expect(screen.queryByTestId("harness-try-on-fix")).toBeNull();
+  });
+
+  it("review: a set-up the daemon refuses says the daemon's sentence and reads nothing again", async () => {
+    api.gets[gitPath(NOTES)] = NOT_A_REPO;
+    const refusal = "That is the top of a drive or your home folder, so Iron Jarvis will not make it a repository. Pick the project's own folder inside it.";
+    api.posts["/build/git/init"] = new api.ApiError(refusal, 400);
+    renderBox({ initialFolder: NOTES });
+    const chip = screen.getByTestId("harness-try-on");
+    await waitFor(() => expect(chip).toHaveAttribute("title", TRY_ON_NOT_A_REPO));
+    fireEvent.click(chip);
+    const reads = () => api.calls.filter((c) => c.method === "GET" && c.path === gitPath(NOTES)).length;
+    const before = reads();
+    fireEvent.click(screen.getByTestId("harness-try-on-fix"));
+    await waitFor(() => expect(screen.getByTestId("harness-try-on-fix-note").textContent).toBe(refusal));
+    expect(reads()).toBe(before);
+    expect(screen.getByTestId("harness-try-on-fix")).not.toBeDisabled();
+  });
+
   it("v1.455.0 CONTROL: no folder offers no set-up press (there is nothing to set up)", () => {
     renderBox();
     fireEvent.click(screen.getByTestId("harness-try-on"));
