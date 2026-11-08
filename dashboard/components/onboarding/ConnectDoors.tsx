@@ -60,6 +60,20 @@
  *    the Connections form's own picker (G72); and the free-and-private door's
  *    step 2 is a "Download a starter model" press that opens a Build pane
  *    running the download, with no command to copy (G73, lib/starterModel).
+ *  - v1.449.0 (readiness Wave C, items 20, 21, 25): a subscriber WITHOUT the
+ *    command-line tool gets "Install Claude Code for me" / "Install Codex for
+ *    me" — a Build terminal running the vendor's own documented installer
+ *    (lib/cliInstall; never silent, the terminal shows it), then "I've
+ *    installed it — check now" (the rescan), then the Sign in press as
+ *    before. The Ollama door reads the row's `installed` / `running`: step 2
+ *    is greyed until Ollama is on this PC, "running but has no model yet" is
+ *    said in words, step 3 is folded into the ONE "Use Ollama for answers"
+ *    press (the same use-model press as the Ready panel; it saves this PC's
+ *    address as part of the press), and Gemini's free key is named as the
+ *    quick alternative. The Anthropic and OpenAI key tabs say where a key
+ *    comes from and that it is billed per use; the model-servers tab reads
+ *    the `?check=1` answer, so a failed check says "Nothing was saved" there
+ *    too.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -68,6 +82,13 @@ import { CheckCircle2, Download, KeyRound, Loader2, RefreshCw, TerminalSquare } 
 import { post, put } from "@/lib/api";
 import { cacheSet, cachedGet } from "@/lib/apiCache";
 import { codeParts, paneHref, signedOutLine, useCliSignIn } from "@/lib/cliSignIn";
+import {
+  INSTALLED_CHECK_LABEL,
+  installLabel,
+  installingLine,
+  stillNotInstalledLine,
+  useCliInstall,
+} from "@/lib/cliInstall";
 import { EndpointModelPicker } from "@/components/connections/EndpointModelPicker";
 import { LocalServerChips, useFetchModelsSoon } from "@/components/connections/LocalServerChips";
 import type { LocalServerPreset } from "@/lib/localServerPresets";
@@ -127,9 +148,31 @@ const KEY_PROVIDERS: {
   /** Where to get one, when a new user may not know (v1.355.0). */
   keyUrl?: string;
   keyLabel?: string;
+  /** v1.449.0 (item 25): how that key is charged, in one sentence. Only
+   *  what the vendor's own key page says: a pay-as-you-go account, billed
+   *  for what the answers use, not a monthly plan. */
+  billing?: string;
 }[] = [
-  { id: "anthropic", label: "Anthropic", placeholder: "sk-ant-…" },
-  { id: "openai", label: "OpenAI", placeholder: "sk-…" },
+  // v1.449.0 (item 25): where a key comes from, and that it is billed per
+  // use — a new user with a Claude.ai or ChatGPT PLAN often has no key and
+  // does not know the key is a second, metered account. Pages read
+  // 2026-11-07: console.anthropic.com/settings/keys, platform.openai.com/api-keys.
+  {
+    id: "anthropic",
+    label: "Anthropic",
+    placeholder: "sk-ant-…",
+    keyUrl: "https://console.anthropic.com/settings/keys",
+    keyLabel: "the Anthropic Console",
+    billing: "Anthropic bills that account per use (pay as you go) — it is separate from a Claude plan.",
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    placeholder: "sk-…",
+    keyUrl: "https://platform.openai.com/api-keys",
+    keyLabel: "OpenAI's platform",
+    billing: "OpenAI bills that account per use (pay as you go) — it is separate from a ChatGPT plan.",
+  },
   // v1.355.0 (G46): the AI Studio key most Gemini users have. It used to be a
   // pointer to the account login, because the google connection refused a key.
   {
@@ -323,18 +366,24 @@ export function ConnectDoors({
    *  signed out. */
   const [checkNote, setCheckNote] = useState<Record<string, string>>({});
 
-  async function rescan(c?: SubscriptionCli) {
+  async function rescan(c?: SubscriptionCli, lookFor: "signed-in" | "installed" = "signed-in") {
     setRescanBusy(true);
     if (c) setCheckNote((n) => ({ ...n, [c.cli]: "" }));
     try {
       // The rescan RE-PROBES each installed CLI's sign-in (blocking, on the
       // daemon's threadpool), so the very next /health read says the truth.
+      // v1.449.0 (item 20): it also looks for the tool's program again (the
+      // presence memo is dropped first), so a tool installed a moment ago is
+      // found at once — the rescan lists a subscription CLI only when its
+      // program is on this PC.
       const res = await post<{ detected?: { provider?: string; signed_in?: boolean | null }[] }>(
         "/providers/rescan",
       );
       if (c) {
         const row = (res?.detected ?? []).find((r) => r?.provider === c.provider);
-        if (!row || row.signed_in !== true) {
+        if (lookFor === "installed") {
+          if (!row) setCheckNote((n) => ({ ...n, [c.cli]: stillNotInstalledLine(c.name) }));
+        } else if (!row || row.signed_in !== true) {
           setCheckNote((n) => ({ ...n, [c.cli]: stillSignedOutLine(c.name) }));
         }
       }
@@ -368,7 +417,26 @@ export function ConnectDoors({
   }, [signInNow]);
   const signIn: typeof signInNow = { ...signInNow };
   for (const [cli, paneId] of Object.entries(rememberedPanes)) {
-    if (!signIn[cli]) signIn[cli] = { paneId };
+    if (!cli.startsWith("install:") && !signIn[cli]) signIn[cli] = { paneId };
+  }
+
+  /* v1.449.0 (item 20): "Install Claude Code for me" — a Build terminal
+     running the vendor's own installer (lib/cliInstall), remembered for the
+     visit under "install:<cli>" so a return from the terminal never opens a
+     second one. The click is the consent; the terminal shows every step. */
+  const { install: installNow, start: startInstall } = useCliInstall(() => after());
+  useEffect(() => {
+    const opened: Record<string, string | null> = {};
+    for (const [cli, st] of Object.entries(installNow)) {
+      if (st && st.paneId !== undefined) opened[`install:${cli}`] = st.paneId;
+    }
+    if (Object.keys(opened).length) writeVisit({ panes: opened });
+  }, [installNow]);
+  const install: typeof installNow = { ...installNow };
+  for (const [key, paneId] of Object.entries(rememberedPanes)) {
+    if (key.startsWith("install:") && !install[key.slice("install:".length)]) {
+      install[key.slice("install:".length)] = { paneId };
+    }
   }
 
   /* Ollama door (v1.197.0). Rescan does NOT detect Ollama: the provider only
@@ -378,7 +446,22 @@ export function ConnectDoors({
   const [ollamaBusy, setOllamaBusy] = useState(false);
   const [ollamaSaved, setOllamaSaved] = useState(false);
   const [ollamaError, setOllamaError] = useState<string | null>(null);
-  const ollamaUp = Boolean(healthRow(health, "ollama")?.available);
+  const ollamaRow = healthRow(health, "ollama");
+  const ollamaUp = Boolean(ollamaRow?.available);
+  /* v1.449.0 (item 21): the three facts the door says (daemon: the ollama
+     row's `installed` / `running` / `detected`). An older daemon sends none
+     of the first two: "not known" greys nothing and claims nothing. */
+  const ollamaKnown = typeof ollamaRow?.running === "boolean";
+  const ollamaRunning = ollamaRow?.running === true || ollamaUp || ollamaRow?.detected === true;
+  const ollamaOnPc = ollamaRow?.installed === true || ollamaRunning;
+  const ollamaHasModel = ollamaUp || ollamaRow?.detected === true;
+  /** The one "Use Ollama for answers" press: the SAME use-model press the
+   *  Ready panel offers (it saves this PC's address as part of the press). */
+  const ollamaCandidate: AnswerCandidate = {
+    provider: "ollama",
+    label: PRESS_LABELS.ollama,
+    where: candidates.find((c) => c.provider === "ollama")?.where ?? "stays on this PC",
+  };
 
   async function connectOllama() {
     setOllamaBusy(true);
@@ -466,10 +549,19 @@ export function ConnectDoors({
         await put("/settings", {
           values: { custom_base_url: customBaseUrl.trim(), custom_model: customModel.trim() },
         });
+        // v1.449.0 (item 25): the `?check=1` answer is READ here too — a key
+        // the server refused was not stored, and the panel says so, instead
+        // of a Test's failure with nothing about what was kept.
+        let keyAnswer: KeySaveAnswer | undefined;
         if (keyValue.trim()) {
-          await post(`/connections/custom/key?check=1`, { key: keyValue.trim() });
+          keyAnswer = await post<KeySaveAnswer>(`/connections/custom/key?check=1`, { key: keyValue.trim() });
         }
-        result = await post<ConnectionTestResult>(`/connections/custom/test`);
+        if (keyAnswer?.saved === false && keyAnswer.test && typeof keyAnswer.test.ok === "boolean") {
+          saved = false;
+          result = keyAnswer.test as ConnectionTestResult;
+        } else {
+          result = await post<ConnectionTestResult>(`/connections/custom/test`);
+        }
       } else {
         const answer = await post<KeySaveAnswer>(`/connections/${keyProvider}/key?check=1`, {
           key: keyValue.trim(),
@@ -659,15 +751,101 @@ export function ConnectDoors({
                     {state === "not-installed" && (
                       <>
                         <span className="text-zinc-300">{c.longName}</span> isn&apos;t on this PC
-                        yet.{" "}
-                        <a
-                          href={c.installUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent"
-                        >
-                          {c.installLabel}
-                        </a>
+                        yet.
+                        {/* v1.449.0 (item 20): one press installs it in a Build
+                            terminal running the vendor's own installer, in
+                            view — never silently. The vendor's page stays as
+                            the way to read about it first. */}
+                        {(install[c.cli] ?? {}).paneId !== undefined ? (
+                          <span
+                            data-testid={`install-pane-${c.cli}`}
+                            className="mt-1.5 block text-zinc-400"
+                          >
+                            {installingLine(c.name)}{" "}
+                            <Link
+                              href={paneHref(install[c.cli]?.paneId)}
+                              onClick={() => onOpenPane?.()}
+                              className="font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent"
+                            >
+                              Open the Build terminal
+                            </Link>
+                            {!installNow[c.cli] && (
+                              <>
+                                {" · "}
+                                <button
+                                  type="button"
+                                  data-testid={`install-again-${c.cli}`}
+                                  onClick={() => void startInstall(c.cli)}
+                                  className="text-zinc-400 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-200"
+                                >
+                                  Closed it? Open a new one
+                                </button>
+                              </>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <button
+                              type="button"
+                              data-testid={`install-${c.cli}`}
+                              onClick={() => void startInstall(c.cli)}
+                              disabled={install[c.cli]?.busy}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
+                            >
+                              {install[c.cli]?.busy ? (
+                                <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+                              ) : (
+                                <TerminalSquare size={13} aria-hidden="true" />
+                              )}
+                              {installLabel(c.name)}
+                            </button>
+                            <span className="text-zinc-500">
+                              Opens a Build terminal that runs {c.name}&apos;s own installer where you can
+                              watch it — nothing is installed quietly. Or{" "}
+                              <a
+                                href={c.installUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-zinc-400 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-200"
+                              >
+                                read the vendor&apos;s install page
+                              </a>
+                              .
+                            </span>
+                          </span>
+                        )}
+                        {install[c.cli]?.error && (
+                          <span role="alert" className="mt-1 block text-tone-danger">
+                            {install[c.cli]?.error}
+                          </span>
+                        )}
+                        {(install[c.cli] ?? {}).paneId !== undefined && (
+                          <>
+                            <button
+                              type="button"
+                              data-testid={`installed-check-${c.cli}`}
+                              onClick={() => void rescan(c, "installed")}
+                              disabled={rescanBusy}
+                              className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
+                            >
+                              {rescanBusy ? (
+                                <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+                              ) : (
+                                <RefreshCw size={13} aria-hidden="true" />
+                              )}
+                              {INSTALLED_CHECK_LABEL}
+                            </button>
+                            {checkNote[c.cli] && (
+                              <span
+                                role="status"
+                                data-testid={`installed-check-note-${c.cli}`}
+                                className="mt-1 block text-zinc-400"
+                              >
+                                {checkNote[c.cli]}
+                              </span>
+                            )}
+                          </>
+                        )}
                       </>
                     )}
                     {state === "checking" && (
@@ -801,7 +979,7 @@ export function ConnectDoors({
       {door === "local" && (
         <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
           <ol className="space-y-2 text-xs leading-relaxed text-zinc-400">
-            <li>
+            <li data-testid="ollama-step-1">
               1.{" "}
               <a
                 href="https://ollama.com/download"
@@ -812,11 +990,29 @@ export function ConnectDoors({
                 Download Ollama
               </a>{" "}
               and install it.
+              {/* v1.449.0 (item 21): the row says when step 1 is done. */}
+              {ollamaOnPc && (
+                <span
+                  data-testid="ollama-on-pc"
+                  className="ml-1.5 inline-flex items-center gap-1 text-tone-success"
+                >
+                  <CheckCircle2 size={12} className="text-tone-success" aria-hidden="true" />
+                  Ollama is on this PC.
+                </span>
+              )}
             </li>
-            <li>
+            <li data-testid="ollama-step-2">
               {/* v1.355.0 (G73): no command to copy. One press opens a Build
-                  pane that runs the download, the way Sign in opens one. */}
+                  pane that runs the download, the way Sign in opens one.
+                  v1.449.0 (item 21): greyed until Ollama is on this PC —
+                  pressed before step 1 the terminal only showed an error
+                  while this said "downloading". */}
               2. Download a starter model ({STARTER_MODEL_LABEL}, about 2 GB):
+              {ollamaKnown && ollamaRunning && !ollamaHasModel && starter.paneId === undefined && (
+                <span data-testid="ollama-no-model" className="mt-1 block text-tone-warn">
+                  Ollama is running but has no model yet — press Download a starter model.
+                </span>
+              )}
               {starter.paneId !== undefined ? (
                 <span data-testid="starter-model-pane" className="mt-1.5 block text-zinc-400">
                   A Build terminal opened and is downloading it. That takes a few minutes; when the
@@ -830,20 +1026,27 @@ export function ConnectDoors({
                   </Link>
                 </span>
               ) : (
-                <button
-                  type="button"
-                  data-testid="starter-model-download"
-                  onClick={() => void starter.start()}
-                  disabled={starter.busy}
-                  className="mt-1.5 flex w-fit items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
-                >
-                  {starter.busy ? (
-                    <Loader2 size={13} className="animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Download size={13} aria-hidden="true" />
+                <>
+                  <button
+                    type="button"
+                    data-testid="starter-model-download"
+                    onClick={() => void starter.start()}
+                    disabled={starter.busy || (ollamaKnown && !ollamaOnPc)}
+                    className="mt-1.5 flex w-fit items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {starter.busy ? (
+                      <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Download size={13} aria-hidden="true" />
+                    )}
+                    Download a starter model
+                  </button>
+                  {ollamaKnown && !ollamaOnPc && (
+                    <span data-testid="starter-model-wait" className="mt-1 block text-zinc-500">
+                      Install Ollama first (step 1) — this turns on by itself once Ollama is on this PC.
+                    </span>
                   )}
-                  Download a starter model
-                </button>
+                </>
               )}
               {starter.error && (
                 <span role="alert" className="mt-1 block text-tone-danger">
@@ -851,17 +1054,53 @@ export function ConnectDoors({
                 </span>
               )}
             </li>
-            <li>3. Tell Iron Jarvis to use it:</li>
+            <li data-testid="ollama-step-3">
+              {/* v1.449.0 (item 21): step 3 IS the one press — the same
+                  "Use … for answers" the Ready panel offers (the daemon saves
+                  this PC's address as part of it, G34), so nobody has to come
+                  back up for a second press. Greyed until Ollama answers with
+                  a model; the daemon's own sentence when it has none. With a
+                  real default already chosen the press has nothing to choose,
+                  so the old "connect" (save the address) stands there. */}
+              3. Tell Iron Jarvis to use it:
+              {demo ? (
+                <button
+                  type="button"
+                  data-testid="ollama-use"
+                  onClick={() =>
+                    void press(ollamaCandidate, (provider, label) => {
+                      onEnabled?.(provider);
+                      onChosen?.(label);
+                    })
+                  }
+                  disabled={pressBusy !== null || (ollamaKnown && !ollamaHasModel)}
+                  className="mt-1.5 flex w-fit items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {pressBusy === "ollama" && (
+                    <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+                  )}
+                  Use Ollama for answers
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void connectOllama()}
+                  disabled={ollamaBusy}
+                  className="mt-1.5 flex w-fit items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {ollamaBusy && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
+                  Connect to Ollama on this PC
+                </button>
+              )}
+              {demo && ollamaKnown && !ollamaHasModel && (
+                <span data-testid="ollama-use-wait" className="mt-1 block text-zinc-500">
+                  {ollamaRunning
+                    ? "Turns on once a model is downloaded (step 2)."
+                    : "Turns on once Ollama is running with a model (steps 1 and 2)."}
+                </span>
+              )}
+            </li>
           </ol>
-          <button
-            type="button"
-            onClick={() => void connectOllama()}
-            disabled={ollamaBusy}
-            className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {ollamaBusy && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
-            Connect to Ollama on this PC
-          </button>
           {ollamaError && (
             <p role="alert" className="mt-2 text-xs text-tone-danger">
               {ollamaError}
@@ -884,6 +1123,28 @@ export function ConnectDoors({
             Honest note: a small local model is less capable than a frontier one — but it costs
             nothing and nothing leaves this machine.
           </p>
+          {/* v1.449.0 (item 21): the quick alternative to a 2 GB download,
+              named only while lib/freeTiers has the tier on record. */}
+          {freeTierWords("google") && (
+            <p data-testid="ollama-gemini-alternative" className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+              Prefer no download? A Google Gemini key has a {freeTierWords("google")} —{" "}
+              <button
+                type="button"
+                data-testid="ollama-gemini-switch"
+                onClick={() => {
+                  setDoor("key");
+                  setKeyProvider("google");
+                  setKeyResult(null);
+                  setKeyError(null);
+                  setShapeSwitchedFrom(null);
+                }}
+                className="text-zinc-400 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-200"
+              >
+                paste one under “I have an API key”
+              </button>
+              . {freeTierNote("google")}
+            </p>
+          )}
         </div>
       )}
 
@@ -1051,6 +1312,12 @@ export function ConnectDoors({
                   {" "}
                   {keyPick.label} has a {freeTierWords(keyPick.id)}. {freeTierNote(keyPick.id)}
                 </span>
+              )}
+              {/* v1.449.0 (item 25): how the key is charged, in the vendor's
+                  own terms — a plan holder often does not know a key is a
+                  second, metered account. */}
+              {keyPick.billing && (
+                <span data-testid="key-door-billing"> {keyPick.billing}</span>
               )}
             </p>
           )}

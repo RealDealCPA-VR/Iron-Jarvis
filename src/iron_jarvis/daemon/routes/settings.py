@@ -1034,13 +1034,20 @@ def register(app: FastAPI, d) -> None:
         elif name in ("ollama", "custom"):
             target, model = name, (adopted_model or _first_local_model(d, name))
             if not model:
-                hint = " (for example `ollama pull llama3.2`)" if name == "ollama" else ""
+                # v1.449.0 (readiness Wave C, item 21): never a command to
+                # type. The connect door has a "Download a starter model"
+                # press, and Ollama's own window downloads models too.
+                hint = (
+                    " Press “Download a starter model” on the connect door, or add one in"
+                    " Ollama's own window,"
+                    if name == "ollama"
+                    else " Add one,"
+                )
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        f"{provider_label(d.platform, name)} is set up, but I "
-                        f"couldn't find a model on it yet. Add one{hint}, then "
-                        "try again."
+                        f"{provider_label(d.platform, name)} is running, but it has "
+                        f"no model yet.{hint} then try again."
                     ),
                 )
         else:

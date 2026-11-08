@@ -236,6 +236,10 @@ async def test_t6_a_credential_from_chat_never_touches_the_transcript_ledger_eve
     frames = await _drive_stream(app, _body("connect my OpenAI api key"), never)
     (card,) = _done(frames)["config_cards"]
     assert card["kind"] == "secret" and card["name"] == "connection.openai"
+    # v1.449.0 (item 25, moved on purpose): the card tests a provider key
+    # before storing it (tests/test_key_checked_before_saving_v14490.py) —
+    # here a stand-in that accepts, never the live probe.
+    p.connections._prober = lambda provider, cred: (True, f"{provider} reachable — credential accepted")
     # The user pastes into the CARD, which posts straight to the daemon.
     status, raw = await _asgi_post(app, "/config/secret", {"name": "connection.openai", "value": SECRET})
     body = json.loads(raw)

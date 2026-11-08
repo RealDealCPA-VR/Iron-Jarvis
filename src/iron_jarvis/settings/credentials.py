@@ -112,6 +112,24 @@ def _resolve_tool_server(name: str) -> tuple[schema.SecretDef, str, str]:
     return sdef, arg, vault
 
 
+#: v1.449.0 (item 25): what the card says under a key that failed its check.
+NOT_SAVED_TAIL = "Nothing was saved, and what answers you didn't change."
+
+
+def not_saved_words(tested: dict[str, Any]) -> str:
+    """One plain sentence for a key that failed its check: the Test's own
+    title and fix when the route worded it, else its detail, then
+    :data:`NOT_SAVED_TAIL`. Never the key."""
+    title = str(tested.get("title") or "").strip().rstrip(".")
+    fix = str(tested.get("fix") or "").strip()
+    if title:
+        head = f"{title}. {fix} ".rstrip() + " "
+    else:
+        detail = str(tested.get("detail") or "").strip().rstrip(".")
+        head = f"Not connected — {detail}. " if detail else "Not connected. "
+    return head + NOT_SAVED_TAIL
+
+
 class CredentialStore:
     def __init__(self, d: Any) -> None:
         self.d = d
@@ -128,6 +146,25 @@ class CredentialStore:
         sdef, arg, vault = resolve_secret(name)
         if name.startswith("channel.") and self._webhook_channel(arg) is not None:
             return self._store_webhook(name, arg, value, sdef, actor)
+        if name.startswith("connection."):
+            # v1.449.0 (readiness Wave C, item 25): a model provider's key is
+            # TESTED before it is stored, as the connect door's
+            # ``POST /connections/{p}/key?check=1`` does — a wrong key used to
+            # land in the vault (and be made the default) with the card
+            # saying "saved securely". A failed check stores nothing, writes
+            # no ledger row, and the card gets the Test's words plus "Nothing
+            # was saved". Nothing to check with (no prober, an unknown
+            # provider) stores as before.
+            tested = self._check_key(arg, value)
+            if tested is not None and not tested.get("ok"):
+                return {
+                    "secret": name,
+                    "label": sdef.label,
+                    "status": "not_saved",
+                    "saved": False,
+                    "test": tested,
+                    "words": not_saved_words(tested),
+                }
         secrets = self.platform.secrets
         with self._lock:
             change_id = new_id("sec")
@@ -186,6 +223,18 @@ class CredentialStore:
             # and plain words only; never a value.
             out.update(self._app_outcome(arg))
         return out
+
+    def _check_key(self, provider: str, value: str) -> dict[str, Any] | None:
+        """The connect door's own pre-save check (``routes.connections.
+        check_key_first``): the Test route's verdict for a candidate key, or
+        None when there is nothing to check with. Never raises and never
+        carries the key (the prober scrubs it). Blocking: one small request."""
+        try:
+            from ..daemon.routes.connections import check_key_first
+
+            return check_key_first(self.d, provider, value)
+        except Exception:  # noqa: BLE001 — a check that cannot run stores as before
+            return None
 
     # ----------------------------------------------------------- webhooks
     #

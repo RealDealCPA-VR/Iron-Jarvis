@@ -277,6 +277,7 @@ import {
   AppsLine,
   ChosenLine,
   MachineLine,
+  NextStepLine,
   decodeHomeReadiness,
   type HomeReadiness,
 } from "@/components/chat/HomeReadiness";
@@ -10937,6 +10938,22 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           Chats
         </button>
       )}
+      {/* v1.449.0 (readiness Wave C, item 27): on a phone the only New chat
+          sat two taps deep, behind "Chats" in the drawer. One tap here, only
+          where no sidebar holds the list (below md). */}
+      {!chatSlot && (
+        <button
+          type="button"
+          data-testid="chat-new-chat-phone"
+          onClick={newChat}
+          aria-label="New chat"
+          title="Start a new conversation"
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-1.5 text-[13px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 md:hidden"
+        >
+          <Plus size={14} aria-hidden />
+          New chat
+        </button>
+      )}
       {titleRename && titleRename.id === threadId ? (
         // v1.329.0 (calm chat W4 F8): the ⋯ menu's Rename. The title turns
         // into a box right where it is read; Enter saves, Escape leaves it as
@@ -11442,9 +11459,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
             </>
           )}
         </ChatMoreMenu>
-        {/* NO "New chat" HERE (v1.215.0). The thread rail's header already
-            carries one; two buttons doing one thing is the duplication the
-            user called out in the Agents module. */}
+        {/* NO "New chat" HERE on a wide screen (v1.215.0). The thread rail's
+            header already carries one; two buttons doing one thing is the
+            duplication the user called out in the Agents module. The one
+            exception is the phone's `md:hidden` button at the bar's start
+            (v1.449.0), where the rail — and its New chat — is in a drawer. */}
       </div>
     </div>
   );
@@ -14838,6 +14857,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                           missing), and once a real model answers, the
                           optional way to connect the apps the user has. */}
                       <MachineLine h={homeReadiness} />
+                      {/* v1.449.0 (item 26): once a real model answers and the
+                          checklist is still open, ONE quiet line says what to
+                          try next (the step the checklist names). */}
+                      {healthKnown && !showConnectDoors && <NextStepLine h={homeReadiness} />}
                       {healthKnown && !showConnectDoors && homeReadiness?.appsOpen && homeReadiness.settingUp && (
                         <AppsLine names={marketplaceTeasers.map((c) => c.name)} />
                       )}
