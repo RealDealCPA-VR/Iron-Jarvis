@@ -830,7 +830,9 @@ def test_a_doors_refusal_is_said_in_words(tmp_path, monkeypatch):
     for status, (payload, words) in cases.items():
         _capture_posts(monkeypatch, lambda url, body, s=status, p=payload: (s, p))
         out = asyncio.run(reg.run(rec, "x", lambda n: None))
-        assert out == {"ok": False, "result": "", "detail": words}
+        # v1.449.0: run() answers typed facts beside the words (kind, status).
+        assert (out["ok"], out["result"], out["detail"]) == (False, "", words)
+        assert out["kind"] == "door" and out["status"] == status
     _capture_posts(monkeypatch, lambda url, body: (401, {"detail": "nope"}))
     out = asyncio.run(reg.run(rec, "x", lambda n: None))
     assert "token does not match" in out["detail"] and "401" not in out["detail"]
