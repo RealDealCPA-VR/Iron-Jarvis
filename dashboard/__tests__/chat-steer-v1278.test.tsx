@@ -228,7 +228,8 @@ describe("a chat turn is steered from the composer (v1.278.0)", () => {
     enter(el);
     await waitFor(() => expect(steerPosts()).toHaveLength(1));
     // v1.329.0 (K1): two plain sentences, no dash aside.
-    expect(await screen.findByText(/already finished\. Send it as a new message/)).not.toBeNull();
+    // v1.449.0 (AN review): the words sit on the notice line and in its sr-only announcer; read the line.
+    expect((await screen.findByTestId("chat-notice")).textContent).toMatch(/already finished\. Send it as a new message/);
     expect(el.value).toBe("shorter");
     expect(screen.queryByTestId("steer-notes")).toBeNull();
     H.stream.release!({ reply: "done" });

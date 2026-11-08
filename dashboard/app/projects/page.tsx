@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { del, patch, post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import type { Project } from "@/lib/types";
 import {
   Card,
@@ -738,7 +739,7 @@ export default function ProjectsPage() {
             </Card>
           ) : error && !offline ? (
             <Card>
-              <ErrorNote>{error.message}</ErrorNote>
+              <LoadFailedLine thing="Your projects" error={error} onRetry={reload} />
             </Card>
           ) : totalCount === 0 ? null : projects.length === 0 ? (
             <Card>

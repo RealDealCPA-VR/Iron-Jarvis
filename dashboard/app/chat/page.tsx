@@ -390,6 +390,9 @@ import {
 } from "@/lib/useChatStream";
 import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
 import { postFailureFields, turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
+import { failureOf, type FailureLike } from "@/lib/loadFailed";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
+import { replyLiveWords } from "@/lib/replyLive";
 import { adoptDaemonLines, daemonLineFor, panelWorkingLabel, threadIsNewer } from "@/lib/chatReread";
 import { settledSplit } from "@/lib/streamSplit";
 import { useModels } from "@/lib/useModels";
@@ -4165,6 +4168,40 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // CARET (v1.105.0), not the start of the message, so it needs to know where
   // the cursor is — mid-sentence "/" is the whole point of that change.
   const [error, setError] = useState<string | null>(null);
+  // v1.449.0 (Wave B, item 16): a SMALL action's failure — a file that
+  // would not upload, a chat that would not commit to memory, a saved
+  // workflow that would not start, a queue or steer refusal — has its own
+  // dismissible line (`chat-notice`, role=status, an ×). It used to share
+  // `error` with the turn, so a failed upload read as a failed reply: the
+  // danger tone, an alert, and no way to clear it short of the next turn.
+  const [notice, setNotice] = useState<string | null>(null);
+  // v1.449.0 (Wave B, item 16): the ONE always-mounted announcer a screen
+  // reader hears when a turn ends (lib/replyLive): empty while a turn runs,
+  // set ONCE at its end ("Reply ready." / the failure line's words /
+  // "Stopped."), cleared when the next turn starts. The live bubble's own
+  // region exists only while it streams, so nothing used to say the reply
+  // had landed.
+  const [replyLive, setReplyLive] = useState("");
+  const wasChatBusyRef = useRef(false);
+  const stoppedBeforeRef = useRef(false);
+  // AN review (v1.449.0): the conversation the running turn belongs to
+  // (`convGenRef` at its start). Leaving it mid-turn (New chat, another chat)
+  // ends the wait by `setChatBusy(false)` / `setAwaitingId(null)` with NO
+  // reply — the announcer must say nothing then, not "Reply ready.".
+  const liveConvGenRef = useRef(0);
+  // AN review (v1.449.0): a hand-off to an agent is under way — `sendAgent`
+  // has been called and has not yet named its session (or failed). Between
+  // the chat lane's `setChatBusy(false)` and `setAwaitingId(id)` nothing is
+  // busy for a moment, and that gap is not a reply landing.
+  const handOffRef = useRef(false);
+  // AN review (v1.449.0): the small-action notice's sr-only announcer. The
+  // visible `chat-notice` line is mounted WITH its words, which a screen
+  // reader often never reads (the bell's v1.352.0 lesson), so the words are
+  // ALSO put into this always-mounted status region.
+  const noticeLive = notice ?? "";
+  // The failure line's VISIBLE words, as rendered this pass, for the
+  // announcer to read at the moment a turn ends (a ref: no extra effect dep).
+  const errorLineRef = useRef<string | null>(null);
   // v1.354.0 (G28): the technical text behind the CURRENT failure line, kept
   // with the line it belongs to so a later error from another path never
   // wears a stale hover (read only when `text === error`). A ref, not state:
@@ -4195,6 +4232,52 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     errFacts && !localRefusal
       ? failureAction(errFacts, daemonHealthForFix, trouble.provider)
       : null;
+  // v1.449.0 (Wave B, item 16): the words the failure line SHOWS this pass
+  // (the same expression the line renders), kept for the announcer below.
+  errorLineRef.current = error
+    ? turnFix && turnFix.kind !== "refusal" && errFacts?.title
+      ? errFacts.title
+      : error
+    : null;
+  // v1.449.0 (Wave B, item 16): the announcer follows the turn's edge. A
+  // turn starting empties it (so the next end is a CHANGE a screen reader
+  // reads); a turn ending fills it once — nothing when the failure line
+  // (an alert of its own) carries the sentence, "Reply stopped." for a Stop
+  // (the `stoppedRef` the queue effects read), else "Reply ready.". `error`
+  // and the busy flag land in the same commit on every end path (both chat
+  // lanes set the line, then the flag, in one continuation), so the ref
+  // already holds the line here.
+  // AN review (v1.449.0): the edge is `busy` (a chat turn OR an agent's
+  // run), not the chat lane's flag alone — an escalated turn ends the chat
+  // lane and hands the question to an agent, and its reply is ready when the
+  // AGENT's reply lands, not when the chat lane let go. Two silences: a
+  // hand-off in flight (`handOffRef`: the lane's flag is down, the session
+  // not yet named), and a conversation that was LEFT mid-turn (`convGenRef`
+  // moved: the wait ended with no reply).
+  const anyBusy = awaitingId !== null || chatBusy;
+  useEffect(() => {
+    if (anyBusy) {
+      // Captured on EVERY rise (a hand-off's agent run rises in the same
+      // conversation with the same flags, so re-reading them changes
+      // nothing; a turn after a failed hand-off and a New chat must read the
+      // NEW conversation, or its end would be silenced as "left").
+      liveConvGenRef.current = convGenRef.current;
+      // A Stop flag left by an EARLIER turn is not this turn's (sendChat
+      // resets it; the messaging lane does not).
+      stoppedBeforeRef.current = stoppedRef.current;
+      wasChatBusyRef.current = true;
+      setReplyLive("");
+      return;
+    }
+    if (!wasChatBusyRef.current) return;
+    // A hand-off in flight: the agent's run is about to be busy; wait for it.
+    if (handOffRef.current) return;
+    wasChatBusyRef.current = false;
+    // Left mid-turn: no reply landed here, so nothing to announce.
+    if (liveConvGenRef.current !== convGenRef.current) return;
+    const stopped = stoppedRef.current && !stoppedBeforeRef.current;
+    setReplyLive(replyLiveWords({ stopped, errorLine: errorLineRef.current }));
+  }, [anyBusy]);
   // v1.355.0 (G29): the Sign in press — the same hook the Accounts row and
   // the connect doors use; a pane that opened refreshes /health so the
   // provider turns green by itself once the user finishes there.
@@ -4306,6 +4389,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   const [rememberingId, setRememberingId] = useState<string | null>(null);
   const [rememberedId, setRememberedId] = useState<string | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(true); // first threads fetch
+  // v1.449.0 (Wave B, item 16): why the rail's LAST list read failed, null
+  // once one lands. Shown only while the rail has nothing to show: a failed
+  // first read used to be a quiet catch and an empty rail ("my chats are
+  // gone"); now it is "Your chats couldn't load. Try again." (lib/loadFailed).
+  const [threadsFailed, setThreadsFailed] = useState<FailureLike | null>(null);
   // v1.311.0: the scope the sidebar's list was last ASKED for (undefined =
   // never). A list answer applies only while its scope is still this one, so a
   // slow answer for an old scope can never repaint the rail; and a request for
@@ -4521,7 +4609,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       return true;
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
-      else setError(e instanceof ApiError ? e.message : String(e));
+      else setNotice(e instanceof ApiError ? e.message : String(e));
       return false;
     } finally {
       setAssigningThread(false);
@@ -4552,7 +4640,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       return true;
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
-      else setError(e instanceof ApiError ? e.message : String(e));
+      else setNotice(e instanceof ApiError ? e.message : String(e));
       return false;
     }
   }
@@ -5579,7 +5667,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       markSetupChanged();
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
-      else setError(e instanceof ApiError ? e.message : String(e));
+      else setNotice(e instanceof ApiError ? e.message : String(e));
     } finally {
       setPromoting(false);
     }
@@ -5625,6 +5713,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // v1.446.0: another scope's older pages are not this one's.
       olderPagesRef.current = noOlderPages();
       setOlderUi({ may: false, busy: false, failed: false });
+      setThreadsFailed(null); // another scope's failure is not this one's
       const cached = cachedGet<{ threads?: ThreadSummary[] }>(path);
       if (cached) {
         const first = cached.threads ?? [];
@@ -5653,9 +5742,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           return merged.threads;
         });
         setOlderUi((u) => ({ ...u, may: mayShowOlder(olderPagesRef.current) }));
+        setThreadsFailed(null);
       }
-    } catch {
-      /* quiet — the sidebar keeps what it shows */
+    } catch (e) {
+      // v1.449.0 (Wave B, item 16): the sidebar keeps what it shows — and
+      // when it shows nothing, it says the read failed (the rail reads
+      // `threadsFailed` only beside an empty list), never the empty words.
+      if (mountedRef.current && listScopeRef.current === scope) setThreadsFailed(failureOf(e));
     } finally {
       if (mountedRef.current && listScopeRef.current === scope) setThreadsLoading(false);
     }
@@ -6446,6 +6539,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     }
     setSteerBack(false); // a returned steer note went with the box
     setError(null);
+    setNotice(null);
     setOffline(false);
     sinceRef.current = null;
     finalizingRef.current = false;
@@ -6685,7 +6779,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       void refreshThreads();
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
-      else setError(e instanceof ApiError ? e.message : String(e));
+      else setNotice(e instanceof ApiError ? e.message : String(e));
     }
   }
 
@@ -6790,7 +6884,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
             : `Could not archive this chat. ${e instanceof Error ? e.message : String(e)}`,
         );
       } else if (offlineNow) setOffline(true);
-      else setError(e instanceof ApiError ? e.message : String(e));
+      else setNotice(e instanceof ApiError ? e.message : String(e));
     } finally {
       setArchiveBusy(false);
     }
@@ -6812,7 +6906,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       }
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
-      else setError(e instanceof ApiError ? e.message : String(e));
+      else setNotice(e instanceof ApiError ? e.message : String(e));
     }
   }
 
@@ -6856,7 +6950,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     } catch (e) {
       setThreadMenu(null);
       // The honest offline 400 ("connect a model…") lands here too.
-      setError(e instanceof ApiError ? e.message : String(e));
+      setNotice(e instanceof ApiError ? e.message : String(e));
     } finally {
       setCrystallizingId(null);
     }
@@ -6878,7 +6972,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       );
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
-      else setError(e instanceof ApiError ? e.message : String(e));
+      else setNotice(e instanceof ApiError ? e.message : String(e));
     } finally {
       setRememberingId(null);
     }
@@ -6887,20 +6981,20 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // ---------------------------------------------------------------- attachments
 
   async function addFiles(files: File[]) {
-    setError(null);
+    setNotice(null);
     const room = MAX_ATTACHMENTS - attachmentsRef.current.length;
     if (room <= 0) {
-      setError(`Up to ${MAX_ATTACHMENTS} files per message.`);
+      setNotice(`Up to ${MAX_ATTACHMENTS} files per message.`);
       return;
     }
     const accepted: File[] = [];
     for (const f of files) {
       if (f.size > MAX_FILE_BYTES) {
-        setError(`${f.name} is too large (max 20 MB).`);
+        setNotice(`${f.name} is too large (max 20 MB).`);
         continue;
       }
       if (accepted.length >= room) {
-        setError(`Up to ${MAX_ATTACHMENTS} files per message.`);
+        setNotice(`Up to ${MAX_ATTACHMENTS} files per message.`);
         break;
       }
       accepted.push(f);
@@ -6950,7 +7044,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       }
       if (wentOffline) setOffline(true);
       if (failed.length) {
-        setError(
+        setNotice(
           failed.length === 1
             ? `Couldn't attach ${failed[0].name}: ${failed[0].why}`
             : `Couldn't attach ${failed.length} files (${failed.map((f) => f.name).join(", ")}). The others are attached.`,
@@ -6960,7 +7054,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       }
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
-      else setError(e instanceof ApiError ? e.message : String(e));
+      else setNotice(e instanceof ApiError ? e.message : String(e));
     } finally {
       uploadingRef.current = false;
       setUploading(false);
@@ -7014,7 +7108,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       });
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) throw e; // offline — the caller says so
-      setError(
+      setNotice(
         `Attached, but this chat has no folder to save its work in: ${
           e instanceof ApiError ? e.message : String(e)
         }`,
@@ -7235,9 +7329,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   async function runSavedWorkflow(name: string) {
     setToolsOpen(false);
     setPlusSub(null);
-    setError(null);
+    setNotice(null);
     if (commMetaRef.current) {
-      setError(
+      setNotice(
         "This messaging thread is server-owned, so the run card can't persist here. Run it from the Workflows page instead.",
       );
       return;
@@ -7259,7 +7353,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       queueSave(next);
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
-      else setError(e instanceof ApiError ? e.message : String(e));
+      else setNotice(e instanceof ApiError ? e.message : String(e));
     }
   }
 
@@ -7386,10 +7480,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     const cur = attachmentsRef.current;
     if (cur.some((a) => a.path === e.path)) return;
     if (cur.length >= MAX_ATTACHMENTS) {
-      setError(`Up to ${MAX_ATTACHMENTS} files per message.`);
+      setNotice(`Up to ${MAX_ATTACHMENTS} files per message.`);
       return;
     }
-    setError(null);
+    setNotice(null);
     setAttachments((prev) =>
       prev.some((a) => a.path === e.path) || prev.length >= MAX_ATTACHMENTS
         ? prev
@@ -8279,7 +8373,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         });
       }
     } catch (e) {
-      setError(
+      setNotice(
         e instanceof ApiError && e.message
           ? e.message
           : "Could not summarize this conversation.",
@@ -9626,11 +9720,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     const words = text.trim();
     if (!words && attachmentsRef.current.length === 0) return;
     if (uploadingRef.current) {
-      setError("Wait for the files to finish uploading, then queue the message.");
+      setNotice("Wait for the files to finish uploading, then queue the message.");
       return;
     }
     if (queuedRef.current.length >= MAX_QUEUED) {
-      setError(`Up to ${MAX_QUEUED} messages can wait for this reply. Send or remove one first.`);
+      setNotice(`Up to ${MAX_QUEUED} messages can wait for this reply. Send or remove one first.`);
       return;
     }
     const item: QueuedMessage = {
@@ -9761,14 +9855,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     if (!note) return;
     const id = turnIdRef.current;
     if (!id) {
-      setError("Nothing is running to steer. Send it as a message.");
+      setNotice("Nothing is running to steer. Send it as a message.");
       return;
     }
     try {
       await post(`/chat/turns/${encodeURIComponent(id)}/steer`, { text: note });
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 0;
-      setError(
+      setNotice(
         status === 404
           ? "That turn has already finished. Send it as a new message."
           : `Couldn't send the steer note: ${e instanceof Error ? e.message : String(e)}`,
@@ -9800,7 +9894,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         const status = e instanceof ApiError ? e.status : 0;
         if (status !== 404) {
           composer.setText(note);
-          setError(`Couldn't send that: ${e instanceof Error ? e.message : String(e)}`);
+          setNotice(`Couldn't send that: ${e instanceof Error ? e.message : String(e)}`);
           return;
         }
         // The turn ended before the note: send it as the next message.
@@ -9884,6 +9978,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       keepGoing?: string;
     } = {},
   ) {
+    // AN review (v1.449.0): a hand-off is under way until this run is named
+    // (or fails) — read by the reply announcer, which must not call the
+    // chat lane letting go "Reply ready.". Set BEFORE any await: the
+    // escalating lane's `finally` drops its busy flag right after this call.
+    handOffRef.current = true;
     // ESCALATION (v1.108.0): chat already appended the user's bubble and
     // already consumed the attachment chips, so re-doing either would show the
     // message twice and drop the files. The turn is being RE-RUN, not restarted.
@@ -10191,6 +10290,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       restoreComposerDraft(messagesRef.current);
     } finally {
       sendingRef.current = false;
+      // AN review (v1.449.0): named (awaitingId set in the same continuation
+      // above), failed (the error line speaks) or torn down — no longer in
+      // flight either way.
+      handOffRef.current = false;
     }
   }
 
@@ -10247,7 +10350,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // MESSAGING threads take plain text only — refuse honestly instead of
     // silently dropping the files (the composer keeps both text and chips).
     if (commMetaRef.current && attachmentsRef.current.length > 0) {
-      setError(
+      setNotice(
         "Attachments can't be sent to a messaging thread yet. Remove them, or start a new chat.",
       );
       return;
@@ -10474,7 +10577,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         queueSave(full, box);
       }
       if (res.unknown_mentions?.length) {
-        setError(
+        setNotice(
           `No agent matched ${res.unknown_mentions
             .map((u) => "@" + u)
             .join(", ")}. Check the Agents page.`,
@@ -10833,6 +10936,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     setActiveSkill("");
     composer.reset();
     setError(null);
+    setNotice(null);
     setOffline(false);
     setThreadId(null);
     setAddressee([]); // a fresh conversation is with Iron Jarvis
@@ -11939,6 +12043,18 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       <div key={i} className="skeleton h-9 w-full" />
                     ))}
                   </div>
+                ) : threadsFailed && threads.length === 0 ? (
+                  /* v1.449.0 (Wave B, item 16): a failed read with nothing
+                     to show says so — lib/loadFailed's words, Try again
+                     re-reading the rail's own scope — never "No saved
+                     chats yet", which a user with chats reads as a loss. */
+                  <LoadFailedLine
+                    thing="Your chats"
+                    error={threadsFailed}
+                    onRetry={() => void refreshThreads()}
+                    testId="thread-rail-failed"
+                    className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500"
+                  />
                 ) : (railLead ? listedThreads.length : threads.length) === 0 ? (
                   <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
                     {(railScoped && activeProject) || railLead
@@ -13078,6 +13194,24 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       offer, queued messages, the edit Undo, a held key, who the chat
                       is talking to) sits ABOVE the card and attached to it: narrower,
                       tucked under its top edge. Empty, it takes no room at all. */}
+                  {/* v1.449.0 (Wave B, item 16): THE ANNOUNCER. Mounted with the
+                      page and empty until a turn ends (the bell's v1.352.0 rule:
+                      a region that mounts with its words is often never read);
+                      then "Reply ready." / the failure line's words / "Stopped."
+                      exactly once, cleared when the next turn starts. Outside
+                      the tray on purpose: the tray hides itself when EMPTY, and
+                      this element is never empty of its node. */}
+                  <p role="status" data-testid="chat-reply-live" className="sr-only">
+                    {replyLive}
+                  </p>
+                  {/* AN review (v1.449.0): the small-action notice's announcer —
+                      always mounted and empty, filled with the notice's words
+                      when one is set, so a screen reader hears "Couldn't attach
+                      b.pdf: …" (the visible line below mounts WITH its words,
+                      which is often not read at all). Cleared with the notice. */}
+                  <p role="status" data-testid="chat-notice-live" className="sr-only">
+                    {noticeLive}
+                  </p>
                   <div
                     data-testid="composer-notices"
                     className="relative mx-4 -mb-4 flex flex-col rounded-t-2xl bg-ink-875 px-1 pb-4 pt-0.5 shadow-[0_0_0_0.5px_rgb(var(--white)/0.08)] empty:hidden sm:mx-7 [&>*+*]:border-t [&>*+*]:border-white/[0.06]"
@@ -13141,6 +13275,35 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                           type="button"
                           aria-label="Dismiss"
                           onClick={() => setGrantCapNote(null)}
+                          className="btn-ghost shrink-0 py-1 text-[12px]"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    )}
+                    {/* v1.449.0 (Wave B, item 16): A SMALL ACTION'S FAILURE — a
+                        file that would not upload, a chat that would not commit
+                        to memory, a saved workflow that would not start, a
+                        queue or steer refusal. One calm line in the warn tone,
+                        a status (not an alert), an × that clears it: it never
+                        shares the turn's error line below, so a failed upload
+                        never reads as a failed reply (and never offers the
+                        reply's Retry). AN review: no live role here — this line
+                        mounts WITH its words, so the always-mounted
+                        `chat-notice-live` region above speaks for it; a second
+                        live region would say it twice to the readers that do
+                        read a freshly mounted one. */}
+                    {notice && (
+                      <div
+                        data-testid="chat-notice"
+                        className="flex items-center gap-2 px-3 py-2 text-[12px]"
+                      >
+                        <span className="min-w-0 flex-1 break-words text-tone-warn">{notice}</span>
+                        <button
+                          type="button"
+                          aria-label="Dismiss"
+                          data-testid="chat-notice-dismiss"
+                          onClick={() => setNotice(null)}
                           className="btn-ghost shrink-0 py-1 text-[12px]"
                         >
                           <X size={12} />
@@ -13733,7 +13896,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                               type="button"
                               onClick={() => {
                                 void post("/documents/open", { path: workfolder }).catch((e) =>
-                                  setError(e instanceof ApiError ? e.message : String(e)),
+                                  setNotice(e instanceof ApiError ? e.message : String(e)),
                                 );
                               }}
                               aria-label="Open this chat's folder"

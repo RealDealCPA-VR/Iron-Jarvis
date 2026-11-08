@@ -31,6 +31,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
 
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import ThreadGroups, { GROUP_LIMIT, ShowOlderChats, ThreadSnippet } from "@/components/chat/ThreadGroups";
 import {
   CHAT_SEARCH_FALLBACK_WORDS,
@@ -44,7 +45,8 @@ import { readLastViewed, threadStatuses } from "@/lib/threadStatus";
 
 export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }) {
   const router = useRouter();
-  const { threads, projects, statuses, mayShowOlder, olderFailed, loadOlder } = useChatList();
+  const { threads, projects, statuses, mayShowOlder, olderFailed, loadOlder, loadFailed, refresh } =
+    useChatList();
   const [olderBusy, setOlderBusy] = useState(false);
   const [pinned, setPinned] = useState<string[]>([]);
   const [query, setQuery] = useState("");
@@ -65,6 +67,23 @@ export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }
 
   if (threads === null) return null;
   if (threads.length === 0) {
+    // v1.449.0 (Wave B, item 16): a FAILED first read is not an empty list.
+    // The words are lib/loadFailed's ("Your chats couldn't load. Try
+    // again."), and Try again re-reads; "Your chats appear here." is for a
+    // list that really answered empty.
+    if (loadFailed) {
+      return (
+        <div data-testid="sidebar-recent-chats" className="min-w-0">
+          <LoadFailedLine
+            thing="Your chats"
+            error={loadFailed}
+            onRetry={refresh}
+            testId="sidebar-chats-failed"
+            className="px-2.5 py-1 text-[12px] leading-relaxed text-zinc-500"
+          />
+        </div>
+      );
+    }
     return (
       <p data-testid="sidebar-recent-chats" className="px-2.5 py-1 text-[12px] text-zinc-500">
         Your chats appear here.

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { ApiError, get } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import type { Drive, FsListing, Project } from "@/lib/types";
 
 /** What a marker means, in words, for the chip's tooltip (v1.315.0: a bare
@@ -296,7 +297,7 @@ export function DirectoryTree({
    *  every other picker keeps browsing only. */
   pickTypedPath?: boolean;
 }) {
-  const { data, error, loading } = useApi<{ drives: Drive[] }>("/fs/drives");
+  const { data, error, loading, reload } = useApi<{ drives: Drive[] }>("/fs/drives");
   const drives = data?.drives ?? [];
   // A null path = no request (useApi), so a picker without showProjects never
   // asks for projects. A project whose folder is gone is skipped: selecting it
@@ -438,9 +439,12 @@ export function DirectoryTree({
         {/* The tree itself. */}
         <div className="-mx-2 min-h-0 flex-1 overflow-y-auto py-2">
           {error ? (
-            <div className="flex items-center gap-1.5 px-2 py-3 text-[12px] text-tone-danger">
-              <TriangleAlert size={13} /> {error.message}
-            </div>
+            <LoadFailedLine
+              thing="Your drives"
+              error={error}
+              onRetry={reload}
+              className="px-2 py-3 text-[12px] text-zinc-500"
+            />
           ) : activeRoot ? (
             <DirNode
               key={activeRoot}
@@ -599,9 +603,12 @@ export function DirectoryTree({
           {/* The tree itself */}
           <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
             {error ? (
-              <div className="flex items-center gap-1.5 px-2 py-3 text-[12px] text-tone-danger/80">
-                <TriangleAlert size={13} /> {error.message}
-              </div>
+              <LoadFailedLine
+                thing="Your drives"
+                error={error}
+                onRetry={reload}
+                className="px-2 py-3 text-[12px] text-zinc-500"
+              />
             ) : activeRoot ? (
               <DirNode
                 key={activeRoot}

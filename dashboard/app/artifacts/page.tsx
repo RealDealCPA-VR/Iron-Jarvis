@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useApi } from "@/lib/useApi";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { post, del, ApiError } from "@/lib/api";
 import {
   Card,
@@ -320,7 +321,7 @@ export default function ArtifactsPage() {
                   </pre>
                 </div>
               ) : (
-                <Empty>Could not load this script.</Empty>
+                <LoadFailedLine thing="This script" error={detail.error} onRetry={detail.reload} />
               )}
             </Card>
 

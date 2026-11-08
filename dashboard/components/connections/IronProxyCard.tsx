@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { post, patch, del, put } from "@/lib/api";
 import { useApi, type ApiState } from "@/lib/useApi";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { useDocumentVisible } from "@/lib/useDocumentVisible";
 import { Badge, Card, ConfirmButton, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
 import {
@@ -252,7 +253,7 @@ export function IronProxyCard() {
     return (
       <div id="iron-proxy-card">
         <Card title={CARD_TITLE} icon={<Users size={15} />}>
-          <ErrorNote>Could not load Iron-Proxy: {error.message}</ErrorNote>
+          <LoadFailedLine thing="Your accounts" error={error} onRetry={reload} testId="iron-proxy-failed" />
         </Card>
       </div>
     );

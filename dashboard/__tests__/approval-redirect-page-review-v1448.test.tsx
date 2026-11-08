@@ -270,7 +270,9 @@ describe("the chat page's redirect (A3 review)", () => {
     await askAnswered();
     expect(H.stream.bodies).toHaveLength(1);
     await waitFor(() => expect(box().value).toBe("do it in drafts"));
-    expect((await screen.findByText(/Couldn't send that/)).textContent).toContain("a note cannot be empty");
+    // v1.449.0 (AN review): the words sit on the notice line and in its sr-only announcer; read the line.
+    expect((await screen.findByTestId("chat-notice")).textContent).toContain("Couldn't send that");
+    expect(screen.getByTestId("chat-notice").textContent).toContain("a note cannot be empty");
   });
 
   it("with the turn over, the words go out as the next message — ONE new turn, after the deny", async () => {

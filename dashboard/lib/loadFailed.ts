@@ -63,5 +63,40 @@ export function failureDetail(error: FailureLike | null | undefined): string | u
  *  isn't responding." `action` is the verb phrase ("upload", "start the
  *  session"). */
 export function couldntWhileNoAnswer(action: string): string {
-  return `Couldn't ${action}. ${NOT_RESPONDING}`;
+  return couldnt(action, null);
+}
+
+/** v1.449.0 (Wave B, item 17): a press that failed, in the same shape as a
+ *  failed read — "Couldn't end the session. Try again." / "Couldn't end the
+ *  session. Iron Jarvis isn't responding." The server's own 4xx sentence is
+ *  the caller's to keep (that is a sentence meant for the user); this is for
+ *  the 5xx and the no-answer cases, whose raw text names the engine. */
+export function couldnt(action: string, error: FailureLike | null | undefined): string {
+  return `Couldn't ${action}. ${noAnswer(error) ? NOT_RESPONDING : TRY_AGAIN}`;
+}
+
+/** v1.449.0 (Wave B, item 16): the `FailureLike` behind a caught value —
+ *  an ApiError (or any `{status, message}` look-alike) keeps its status and
+ *  message; anything else (a thrown string, a TypeError) reads as "nothing
+ *  answered", which is the honest default for a read that never came back.
+ *  Duck-typed on purpose: this module is read by stores that must not import
+ *  lib/api (tests mock that module wholesale, and `instanceof` against a
+ *  mocked class is only as good as the mock). */
+export function failureOf(e: unknown): FailureLike {
+  if (e && typeof e === "object") {
+    const status = (e as { status?: unknown }).status;
+    const message = (e as { message?: unknown }).message;
+    return {
+      status: typeof status === "number" && Number.isFinite(status) ? status : 0,
+      message: typeof message === "string" ? message : undefined,
+    };
+  }
+  return { status: 0, message: typeof e === "string" ? e : undefined };
+}
+
+/** True when the server's own words are the ones to show: a 4xx carries a
+ *  `detail` written for the user (a refused value, a missing record), where
+ *  a 5xx or no answer carries engine text (a traceback, a socket error). */
+export function serverSentence(error: FailureLike | null | undefined): boolean {
+  return !!error && error.status >= 400 && error.status < 500 && !!(error.message ?? "").trim();
 }
