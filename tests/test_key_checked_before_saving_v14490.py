@@ -106,3 +106,52 @@ def test_the_words_lead_with_the_tests_title_or_its_detail():
     assert plain == f"Not connected — openai probe returned HTTP 503. {NOT_SAVED_TAIL}"
     assert not_saved_words({"ok": False}) == f"Not connected. {NOT_SAVED_TAIL}"
     assert "`" not in json.dumps([worded, plain])
+
+
+# --------------------------------------------------------------------------- #
+# AN review: the card's fix words are true to the CARD
+# --------------------------------------------------------------------------- #
+def test_the_cards_fix_never_names_a_test_button_or_another_page(client):
+    """The Test route's fixes say "press Test again" and "Update it in
+    Settings › Connections" — written for the Connections page. The chat's
+    secure card has no Test button and IS where the key is typed, so each
+    such fix is said for the card. Driven through the real route with the
+    three refusals the prober can hand back.
+    MUTATION: hand the route's fix through untouched -> red."""
+    p = client.app.state.platform
+    cases = {
+        "refused": "openai rejected the credential (401) — the key/token is invalid",
+        "unreachable": "could not reach openai (probe failed: timeout)",
+        "http": "openai probe returned HTTP 503",
+    }
+    seen: dict[str, str] = {}
+    for name, detail in cases.items():
+        p.connections._prober = lambda provider, cred, detail=detail: (False, detail)
+        r = client.post("/config/secret", json={"name": "connection.openai", "value": KEY})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["status"] == "not_saved"
+        seen[name] = body["words"]
+    for words in seen.values():
+        assert "Test" not in words and "Settings" not in words, words
+        assert KEY not in words
+        assert words.endswith(NOT_SAVED_TAIL)
+    assert "paste it again" in seen["refused"]
+    assert "save it again" in seen["unreachable"]
+    assert "Save it again" in seen["http"]
+
+
+def test_every_test_route_fix_that_names_the_page_has_card_words():
+    """The table in credentials covers the route's own fix sentences: a new
+    Test fix that says "press Test" needs a card wording here."""
+    from iron_jarvis.daemon.routes import connections as routes
+    from iron_jarvis.settings.credentials import card_fix
+
+    fixes = [*routes._TEST_FIX.values(), "Press Test again. If it keeps failing, connect it again with a working key."]
+    for fix in fixes:
+        if "Test" in fix:
+            assert "Test" not in card_fix(fix), fix
+    # A fix with no page words is kept as it is.
+    assert card_fix("Check the key on the Anthropic Console and paste it again.") == (
+        "Check the key on the Anthropic Console and paste it again."
+    )

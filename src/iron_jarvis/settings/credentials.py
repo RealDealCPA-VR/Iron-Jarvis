@@ -26,6 +26,7 @@ import threading
 from typing import Any
 
 from ..core.ids import new_id
+from ..providers.failure_words import ACCOUNTS_PLACE
 from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 from . import schema
 
@@ -116,12 +117,36 @@ def _resolve_tool_server(name: str) -> tuple[schema.SecretDef, str, str]:
 NOT_SAVED_TAIL = "Nothing was saved, and what answers you didn't change."
 
 
+#: v1.449.0 (AN review): the Test route's fixes are written for the
+#: Connections page, which has a Test button and IS the place to update a key.
+#: The chat's secure card has neither — the key is in the box in front of
+#: the user and the button says "Save securely" — so those two sentences
+#: are said for the card. Keyed on the route's exact words; an unknown fix
+#: is kept as it is.
+CARD_FIX_WORDS: dict[str, str] = {
+    "then press Test again.": "then save it again.",
+    "Press Test again in a moment.": "Save it again in a moment.",
+    "Press Test again.": "Save it again.",
+    f"Update it in {ACCOUNTS_PLACE}.": "Check the key and paste it again.",
+}
+
+
+def card_fix(fix: str) -> str:
+    """The Test route's fix sentence said for the secure card (see
+    :data:`CARD_FIX_WORDS`)."""
+    out = str(fix or "").strip()
+    for page_words, card_words in CARD_FIX_WORDS.items():
+        out = out.replace(page_words, card_words)
+    return out
+
+
 def not_saved_words(tested: dict[str, Any]) -> str:
     """One plain sentence for a key that failed its check: the Test's own
-    title and fix when the route worded it, else its detail, then
-    :data:`NOT_SAVED_TAIL`. Never the key."""
+    title and fix (the fix said for the card, :func:`card_fix`) when the
+    route worded it, else its detail, then :data:`NOT_SAVED_TAIL`. Never
+    the key."""
     title = str(tested.get("title") or "").strip().rstrip(".")
-    fix = str(tested.get("fix") or "").strip()
+    fix = card_fix(tested.get("fix") or "")
     if title:
         head = f"{title}. {fix} ".rstrip() + " "
     else:

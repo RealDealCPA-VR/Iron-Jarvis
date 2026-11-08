@@ -27,7 +27,7 @@ const hooks = vi.hoisted(() => {
     responses: {} as Record<string, unknown>,
     posts: [] as { path: string; body: unknown }[],
     postResponses: {} as Record<string, unknown>,
-    health: { default_provider: "mock", providers: [] } as Record<string, unknown>,
+    health: { default_provider: "mock", providers: [] } as Record<string, unknown> | null,
   };
 });
 
@@ -210,6 +210,13 @@ describe("Settings › Connections tests a key before saving it", () => {
     expect(within(card).queryByText(KEY_NOT_SAVED_NOTE)).toBeNull();
     // The form closed (the key left the box) — the stored key is in the vault.
     await waitFor(() => expect(document.body.contains(box)).toBe(false));
+  });
+
+  it("with /health not yet read, a passing key still asks the daemon (isDemoDefault reads no answer as the demo; its rule decides)", async () => {
+    hooks.health = null;
+    hooks.postResponses["/connections/anthropic/key?check=1"] = PASSED;
+    await pasteKey();
+    await waitFor(() => expect(paths()).toEqual(["/connections/anthropic/key?check=1", "/onboarding/use-model"]));
   });
 
   it("CONTROL: with a real default already chosen, a passing key is stored and nothing is chosen", async () => {
