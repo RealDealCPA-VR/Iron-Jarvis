@@ -74,8 +74,10 @@ describe("the machine's name, when the user gave one (machineName)", () => {
     expect(machineName("", { label: "DGX Spark" })).toBe("");
   });
 
-  it("the dashboard's default labels are the daemon's (chat_turn.SEED_ENDPOINT_LABELS)", () => {
-    const py = read("src/iron_jarvis/daemon/chat_turn.py");
+  it("the dashboard's default labels are the daemon's (failure_words.SEED_ENDPOINT_LABELS)", () => {
+    // v1.455.1 (moved on purpose): the one definition lives in
+    // providers/failure_words.py now; daemon/chat_turn re-exports it.
+    const py = read("src/iron_jarvis/providers/failure_words.py");
     const m = /SEED_ENDPOINT_LABELS[^=]*=\s*\{([^}]*)\}/.exec(py);
     expect(m).not.toBeNull();
     const pairs = Object.fromEntries([...m![1].matchAll(/"(\w+)":\s*"([^"]+)"/g)].map((x) => [x[1], x[2]]));
