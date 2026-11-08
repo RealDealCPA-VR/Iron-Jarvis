@@ -76,6 +76,7 @@ import { Dispatcher } from "../bridge/dispatch";
 import { BridgeSocket, toggleAction, type BridgeStatus } from "../bridge/socket";
 import { awaitDownload, watchDownloads } from "./downloads";
 import { AgentGlow } from "./glow";
+import { ActionPointer } from "./pointer";
 import { hasHostPermission, onHostPermissionChanged, openMicPage, openSetupPage } from "./hostperms";
 import {
   activateTab,
@@ -149,6 +150,9 @@ const dispatcher = new Dispatcher();
 // v1.273.0: THE GLOW. Every command that worked in a tab paints that tab's page;
 // the sidebar's turn frames, a lost socket and a closed tab clear it (glow.ts).
 const glow = new AgentGlow();
+// v1.454.0: THE POINTER. Before a click or typing it moves to the element; after
+// it, a ripple and a highlight where the action landed (pointer.ts).
+const pointer = new ActionPointer(runInPage);
 dispatcher.onResult = (method, result) => {
   void glow.afterCommand(method, result);
 };
@@ -342,11 +346,18 @@ dispatcher.register(METHOD_NAVIGATE, async (params) => {
 // `content/actions.ts`, inside the page, where the live node is.
 
 dispatcher.register(METHOD_CLICK, async (params) => {
+  const host = await hasHostPermission();
+  // v1.454.0: the pointer moves to the element FIRST, and the click waits for it.
+  // It never refuses and never changes the click: a target it cannot see is
+  // drawn nothing for, and the click below answers exactly as before.
+  await pointer.before(METHOD_CLICK, params, host);
   // BEFORE the click, not after: `awaitDownload` will only accept a completion
   // recorded at or after this moment, which is what stops a click that downloaded
   // nothing from claiming a file the user downloaded themselves earlier.
   const startedAt = Date.now();
-  const result = await clickInPage(params, await hasHostPermission());
+  const result = await clickInPage(params, host);
+  // The ripple where it landed — not awaited: the answer never waits for a drawing.
+  void pointer.after(METHOD_CLICK, result, host);
   // Plan 10.3. `clickInPage` has already resolved the real tab, so the result's
   // `tab_id` attributes the download better than the caller's params could — a
   // click with no `tab_id` acts on the active tab, and `params` would say `null`.
@@ -362,7 +373,12 @@ dispatcher.register(METHOD_CLICK, async (params) => {
 });
 
 dispatcher.register(METHOD_TYPE_TEXT, async (params) => {
-  return typeTextInPage(params, await hasHostPermission());
+  const host = await hasHostPermission();
+  // v1.454.0: as for a click — the pointer goes to the field, then the typing.
+  await pointer.before(METHOD_TYPE_TEXT, params, host);
+  const result = await typeTextInPage(params, host);
+  void pointer.after(METHOD_TYPE_TEXT, result, host);
+  return result;
 });
 
 dispatcher.register(METHOD_PRESS_KEY, async (params) => {

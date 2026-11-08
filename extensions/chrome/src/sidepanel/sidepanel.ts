@@ -39,6 +39,7 @@ import {
   PANEL_EVENT_HISTORY,
   PANEL_EVENT_MODELS,
   PANEL_EVENT_RESET,
+  PANEL_EVENT_SKILLS,
   PANEL_EVENT_STATE,
   PANEL_EVENT_STEERED,
   PANEL_EVENT_TOOL,
@@ -176,6 +177,11 @@ const el = {
   pointed: document.getElementById("pointed"),
   pointedText: document.getElementById("pointed-text"),
   unpoint: document.getElementById("unpoint") as HTMLButtonElement | null,
+  // v1.454.0: skills, from the "/" list.
+  skill: document.getElementById("skill"),
+  skillText: document.getElementById("skill-text"),
+  unskill: document.getElementById("unskill") as HTMLButtonElement | null,
+  skills: document.getElementById("skills") as HTMLUListElement | null,
 };
 
 /** The id of the ask the approval card is currently showing, or `""`. */
@@ -652,6 +658,12 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       applyTranscript(payload);
       return;
     }
+    case PANEL_EVENT_SKILLS: {
+      // v1.454.0: the skills the "/" list offers (the chat composer's own rows).
+      skillRows = skillsFrom(payload);
+      refreshSkillMenu();
+      return;
+    }
     case PANEL_EVENT_DELTA: {
       setTurn(true);
       if (!streaming) {
@@ -834,6 +846,12 @@ export function keyToPress(
 }
 
 el.ask?.addEventListener("keydown", (event: KeyboardEvent) => {
+  // v1.454.0: while the "/" list is open, the arrows move in it, Enter or Tab
+  // picks, and Esc closes it — none of them reach the turn.
+  if (skillMenuKey(event)) {
+    event.preventDefault();
+    return;
+  }
   // The ONE place the running state is written is `setTurn` (the body attribute
   // the stylesheet reads), so it is the one place this reads it from.
   const press = keyToPress(event.key, event.shiftKey, document.body.dataset["turn"] === "running");
@@ -843,11 +861,30 @@ el.ask?.addEventListener("keydown", (event: KeyboardEvent) => {
 });
 
 function sendNow(): void {
-  const text = (el.ask?.value ?? "").trim();
-  if (!text) {
+  let text = (el.ask?.value ?? "").trim();
+  // v1.454.0: the skill rides THIS Send — the one picked from the list, else a
+  // message that starts with "/<a skill's exact name>" (the chat page's rule).
+  let skill = skillPick;
+  if (!skill) {
+    const typed = typedSkill(text, skillRows);
+    if (typed) {
+      skill = typed.skill;
+      text = typed.text;
+    }
+  }
+  if (!text && !skill) {
     return;
   }
-  const you = say("you", text);
+  closeSkillMenu();
+  const you = say("you", text || `Use the skill “${skill}”`);
+  if (skill) {
+    const note = document.createElement("span");
+    note.className = "pointed-note";
+    note.textContent = `Skill: ${skill}`;
+    you.appendChild(note);
+    skillPick = "";
+    paintSkill();
+  }
   // v1.400.9: the pointed element rides THIS Send, then the chip clears.
   const point = pointed;
   // v1.400.9: a pick still running would keep the page's clicks; Send ends it.
@@ -875,6 +912,9 @@ function sendNow(): void {
   if (point) {
     send["pointed"] = { ...point.element, tab_id: point.tab_id };
   }
+  if (skill) {
+    send["skill"] = skill;
+  }
   void post(PANEL_ACTION_SEND, send).then((sent) => {
     if (!sent) {
       // v1.353.0 (G53 review): no turn started, so no start time is kept —
@@ -886,6 +926,11 @@ function sendNow(): void {
       if (point && pointed === null) {
         pointed = point;
         paintPointed();
+      }
+      // And so is the skill.
+      if (skill && !skillPick) {
+        skillPick = skill;
+        paintSkill();
       }
     }
   });
@@ -902,14 +947,17 @@ el.send?.addEventListener("click", () => {
     return;
   }
   const text = (el.ask?.value ?? "").trim();
-  if (text) {
+  if (text || skillPick) {
     sendNow();
   } else {
     void startDictation();
   }
 });
 
-el.ask?.addEventListener("input", () => refreshComposer());
+el.ask?.addEventListener("input", () => {
+  refreshSkillMenu();
+  refreshComposer();
+});
 
 el.stop?.addEventListener("click", () => {
   // The button is NOT flipped to idle here. Stop is a request the daemon answers
@@ -1034,15 +1082,16 @@ let voiceCtx: AudioContext | null = null;
 let voiceProc: ScriptProcessorNode | null = null;
 
 /** Which face the composer button shows, from the box's content and the voice state. */
-export function composerMode(text: string, state: VoiceState): "mic" | "send" | "stop" {
+export function composerMode(text: string, state: VoiceState, skill = false): "mic" | "send" | "stop" {
   if (state === "listening") return "stop";
-  return text.trim() ? "send" : "mic";
+  // v1.454.0: a picked skill is something to send even with the box empty.
+  return text.trim() || skill ? "send" : "mic";
 }
 
 function refreshComposer(): void {
   const button = el.send;
   if (!button) return;
-  const mode = composerMode(el.ask?.value ?? "", voiceState);
+  const mode = composerMode(el.ask?.value ?? "", voiceState, skillPick !== "");
   button.dataset["mode"] = mode;
   document.body.dataset["voice"] = voiceState;
   // NEVER `disabled`: a click on a disabled button dispatches nothing (the
@@ -1221,6 +1270,180 @@ function applyTranscript(payload: Record<string, unknown>): void {
     refreshComposer();
   }
 }
+
+// --- skills (v1.454.0) ------------------------------------------------------
+//
+// "I want to be able to use skills in the browser extension." The rows are the
+// chat composer's "/" menu rows (the daemon's `skills` frame, from the same
+// registry `GET /skills` reads). A skill picked here rides the next Send as
+// `skill`, and the daemon applies it exactly as the chat page does. Typing
+// "/<an exact skill name> words" and pressing Enter runs it too.
+
+export interface SkillRow {
+  name: string;
+  description: string;
+  argument_hint: string;
+}
+
+/** At most this many rows show in the "/" list at once. */
+export const SKILL_MENU_MAX = 8;
+
+/** The skills the daemon offered; empty until its `skills` frame arrives. */
+let skillRows: SkillRow[] = [];
+/** The skill picked for the next Send, or `""`. */
+let skillPick = "";
+/** The rows the list shows now, and which one Enter picks. */
+let skillMatches: SkillRow[] = [];
+let skillIndex = 0;
+
+/** The `skills` frame's rows, read as untrusted input (the frame came over a socket). */
+export function skillsFrom(payload: Record<string, unknown>): SkillRow[] {
+  const raw = Array.isArray(payload["skills"]) ? (payload["skills"] as unknown[]) : [];
+  const out: SkillRow[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const name = typeof row["name"] === "string" ? row["name"].trim() : "";
+    if (!name) continue;
+    out.push({
+      name,
+      description: typeof row["description"] === "string" ? row["description"] : "",
+      argument_hint: typeof row["argument_hint"] === "string" ? row["argument_hint"] : "",
+    });
+  }
+  return out;
+}
+
+/** The "/word" being typed when it is ALL the box holds, without the slash; else null. */
+export function skillQuery(text: string): string | null {
+  const m = /^\/([^\s/]*)$/.exec(text);
+  return m ? (m[1] ?? "") : null;
+}
+
+/** The rows a query shows: names that start with it first, then names and descriptions holding it. */
+export function matchSkills(rows: SkillRow[], query: string): SkillRow[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return rows.slice(0, SKILL_MENU_MAX);
+  const starts = rows.filter((r) => r.name.toLowerCase().startsWith(q));
+  const inName = rows.filter((r) => !starts.includes(r) && r.name.toLowerCase().includes(q));
+  const inDesc = rows.filter(
+    (r) => !starts.includes(r) && !inName.includes(r) && r.description.toLowerCase().includes(q),
+  );
+  return [...starts, ...inName, ...inDesc].slice(0, SKILL_MENU_MAX);
+}
+
+/**
+ * A message that starts with "/<a skill's exact name>" names that skill, and the
+ * words after it are the message. Anything else (an unknown "/word", a path
+ * such as "/etc/hosts") is just text — the chat page's own rule.
+ */
+export function typedSkill(text: string, rows: SkillRow[]): { skill: string; text: string } | null {
+  const m = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+  if (!m) return null;
+  const wanted = (m[1] ?? "").toLowerCase();
+  const row = rows.find((r) => r.name.toLowerCase() === wanted);
+  return row ? { skill: row.name, text: (m[2] ?? "").trim() } : null;
+}
+
+function skillMenuOpen(): boolean {
+  return Boolean(el.skills && !el.skills.hidden);
+}
+
+function closeSkillMenu(): void {
+  skillMatches = [];
+  skillIndex = 0;
+  if (el.skills) {
+    el.skills.hidden = true;
+    el.skills.textContent = "";
+  }
+  el.ask?.removeAttribute("aria-activedescendant");
+}
+
+function refreshSkillMenu(): void {
+  const list = el.skills;
+  if (!list) return;
+  const query = skillQuery(el.ask?.value ?? "");
+  const matches = query === null ? [] : matchSkills(skillRows, query);
+  if (!matches.length) {
+    closeSkillMenu();
+    return;
+  }
+  skillMatches = matches;
+  skillIndex = Math.min(skillIndex, matches.length - 1);
+  list.textContent = "";
+  matches.forEach((row, i) => {
+    const item = document.createElement("li");
+    item.id = `skill-option-${i}`;
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", i === skillIndex ? "true" : "false");
+    item.dataset["skill"] = row.name;
+    const name = document.createElement("span");
+    name.textContent = `/${row.name}${row.argument_hint ? ` ${row.argument_hint}` : ""}`;
+    item.appendChild(name);
+    if (row.description) {
+      const desc = document.createElement("span");
+      desc.className = "skill-desc";
+      desc.textContent = row.description;
+      item.appendChild(desc);
+    }
+    // mousedown, not click: the box keeps its focus, so the caret stays put.
+    item.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      pickSkill(row.name);
+    });
+    list.appendChild(item);
+  });
+  list.hidden = false;
+  el.ask?.setAttribute("aria-activedescendant", `skill-option-${skillIndex}`);
+}
+
+function pickSkill(name: string): void {
+  skillPick = name;
+  if (el.ask) {
+    el.ask.value = "";
+  }
+  closeSkillMenu();
+  paintSkill();
+  refreshComposer();
+  el.ask?.focus();
+}
+
+function paintSkill(): void {
+  if (el.skill) {
+    el.skill.hidden = skillPick === "";
+  }
+  if (el.skillText) {
+    el.skillText.textContent = skillPick ? `Skill: ${skillPick}` : "";
+  }
+}
+
+/** The "/" list's own keys. True when the key was the list's (the caller stops it). */
+function skillMenuKey(event: KeyboardEvent): boolean {
+  if (!skillMenuOpen() || !skillMatches.length) return false;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    skillIndex = (skillIndex + step + skillMatches.length) % skillMatches.length;
+    refreshSkillMenu();
+    return true;
+  }
+  if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+    const row = skillMatches[skillIndex] ?? skillMatches[0];
+    if (row) pickSkill(row.name);
+    return true;
+  }
+  if (event.key === "Escape") {
+    closeSkillMenu();
+    return true;
+  }
+  return false;
+}
+
+el.unskill?.addEventListener("click", () => {
+  skillPick = "";
+  paintSkill();
+  refreshComposer();
+  el.ask?.focus();
+});
 
 // --- the model (v1.267.0) ---------------------------------------------------
 

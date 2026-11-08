@@ -595,7 +595,8 @@
         color: var(--cyan);
         background: var(--cyan-wash);
       }
-      #pointed {
+      #pointed,
+      #skill {
         display: flex;
         align-items: center;
         gap: 6px;
@@ -606,17 +607,21 @@
         color: var(--ink);
         font-size: 12px;
       }
-      #pointed[hidden] {
+      #pointed[hidden],
+      #skill[hidden],
+      #skills[hidden] {
         display: none;
       }
-      #pointed-text {
+      #pointed-text,
+      #skill-text {
         flex: 1;
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      #unpoint {
+      #unpoint,
+      #unskill {
         width: 22px;
         height: 22px;
         padding: 0;
@@ -625,6 +630,34 @@
         background: transparent;
         color: var(--muted);
         cursor: pointer;
+      }
+      /* v1.454.0: the "/" list of skills, above the box while a "/word" is typed. */
+      #skills {
+        list-style: none;
+        margin: 0 4px 6px;
+        padding: 4px;
+        max-height: 200px;
+        overflow-y: auto;
+        border-radius: 12px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+      }
+      #skills li {
+        padding: 5px 8px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 12.5px;
+      }
+      #skills li[aria-selected="true"] {
+        background: var(--cyan-wash);
+      }
+      #skills .skill-desc {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       .pointed-note {
         display: block;
@@ -784,12 +817,19 @@
       <div class="composer">
         <!-- v1.264.0's keyboard contract, in the tooltip: Enter sends (Steer
              while Jarvis is working) · Shift+Enter starts a new line. -->
-        <!-- v1.400.9: the element the user pointed at, until the next Send. -->
+        <!-- v1.400.9: the element the user pointed at, until the next Send.
+             v1.454.0: below it, a skill picked from the "/" list (also for the
+             next Send), and the "/" list itself while a "/word" is typed. -->
         <div id="pointed" hidden>
           <span id="pointed-text"></span>
           <button id="unpoint" type="button" aria-label="Stop pointing" title="Forget this element">×</button>
         </div>
-        <textarea id="ask" rows="2" placeholder="Ask about this page…" title="Enter sends (Steer while Jarvis is working) · Shift+Enter starts a new line · Esc stops"></textarea>
+        <div id="skill" hidden>
+          <span id="skill-text"></span>
+          <button id="unskill" type="button" aria-label="Don't use this skill" title="Send without this skill">×</button>
+        </div>
+        <ul id="skills" role="listbox" aria-label="Skills" hidden></ul>
+        <textarea id="ask" rows="2" placeholder="Ask about this page…" aria-controls="skills" title="Enter sends (Steer while Jarvis is working) · Shift+Enter starts a new line · Esc stops · Type / to use one of your skills"></textarea>
         <div class="controls">
           <button class="warn" id="stop" type="button" title="Stop prevents the next step. A tool that is already running finishes, and what it wrote stays written.">Stop</button>
           <button class="ghost" id="steer" type="button" title="Adds a note the turn picks up at its next step — it cannot interrupt a sentence already being written.">Steer</button>

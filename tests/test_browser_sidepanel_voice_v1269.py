@@ -307,7 +307,8 @@ def test_the_top_is_the_mark_and_the_controls_are_in_the_composer():
 def test_the_panel_decides_the_button_from_the_box_and_talks_only_to_the_daemon():
     ts = _src(PANEL_TS)
     assert re.search(r'if \(voiceState === "listening"\) \{\s*stopDictation\(\);', ts)
-    assert "if (text) {\n    sendNow();\n  } else {\n    void startDictation();\n  }" in ts
+    # v1.454.0 (moved on purpose): a picked skill is something to send too.
+    assert "if (text || skillPick) {\n    sendNow();\n  } else {\n    void startDictation();\n  }" in ts
     assert "webkitSpeechRecognition" not in ts and "SpeechRecognition" not in ts, (
         "dictation must not go through the browser vendor's speech service"
     )
@@ -320,6 +321,7 @@ __FN__
 process.stdout.write(JSON.stringify([
   composerMode("", "idle"), composerMode("  ", "idle"), composerMode("hi", "idle"),
   composerMode("", "listening"), composerMode("hi", "listening"), composerMode("hi", "transcribing"),
+  composerMode("", "idle", true), composerMode("", "listening", true),
 ]) + "\\n");
 """
 
@@ -330,12 +332,13 @@ def test_composer_mode_under_node(tmp_path):
     start = ts.index("export function composerMode")
     fn = ts[start : ts.index("\n}\n", start) + 3].replace("export function", "function")
     fn = re.sub(r'\): "mic" \| "send" \| "stop"', ")", fn)
-    fn = fn.replace("(text: string, state: VoiceState)", "(text, state)")
+    # v1.454.0 (moved on purpose): a third argument, whether a skill is picked.
+    fn = fn.replace("(text: string, state: VoiceState, skill = false)", "(text, state, skill = false)")
     f = tmp_path / "mode.js"
     f.write_text(_MODE_HARNESS.replace("__FN__", fn), encoding="utf-8")
     proc = subprocess.run(["node", str(f)], capture_output=True, text=True, encoding="utf-8", timeout=60, env={**os.environ})
     assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout.strip().splitlines()[-1]) == ["mic", "mic", "send", "stop", "stop", "send"]
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == ["mic", "mic", "send", "stop", "stop", "send", "send", "stop"]
 
 
 def test_the_shared_helpers_are_module_level_and_the_routes_are_wrappers():

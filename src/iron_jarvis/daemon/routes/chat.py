@@ -173,6 +173,7 @@ from ..chat_turn import (
     # v1.262.0 — the browser-agent seams, lock-step with chat_turn.
     BROWSER_AGENT_BLOCK,  # noqa: F401 — the template; rendered by browser_agent_block
     browser_agent_block,
+    browsing_preferences_block,
     _BROWSER_STATUS_TOOL,
     _filter_browser_tools,
     _is_browser_agent_turn,
@@ -4817,6 +4818,14 @@ async def chat_stream(
         # is a lie. MIRROR NOTE (lock-step): chat_turn's Tools seam.
         if _is_browser_agent_turn({*armed, *ask_armed}):
             system += "\n\n" + browser_agent_block({*armed, *ask_armed})
+        # v1.454.0: the user's browsing preferences (Settings › Your browser):
+        # any turn with a browser tool, "" when unset. MIRROR NOTE
+        # (lock-step): chat_turn's Tools seam.
+        _browse_prefs = browsing_preferences_block(
+            d.platform.config, {*armed, *ask_armed}, event_bus=d.platform.event_bus
+        )
+        if _browse_prefs:
+            system += "\n\n" + _browse_prefs
         # THE MEMORY BRIEF (v1.279.0). MIRROR NOTE (lock-step): chat_turn's
         # Tools seam.
         _pref = preference_block({*armed, *ask_armed})

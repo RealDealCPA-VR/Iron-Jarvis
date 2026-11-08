@@ -520,6 +520,10 @@ def default_sandbox_policy() -> dict[str, Any]:
     }
 
 
+#: v1.454.0: the most characters the browsing preferences may hold. They ride
+#: every browser turn's system prompt, which the history planner cannot shrink.
+BROWSING_PREFERENCES_MAX = 2000
+
 class Config(BaseModel):
     # Validate on assignment so a bad value via PUT /settings is rejected (400)
     # rather than silently persisted to config.toml and bricking the next boot.
@@ -952,6 +956,11 @@ class Config(BaseModel):
     #   read_only    → the inspection tools only
     #   interactive  → the full MVP tool set (risk classification still applies)
     browser_access: str = "off"
+    # v1.454.0: the user's standing instructions for working on web pages
+    # ("look for primary sources", "answer concisely"), added to every turn
+    # that has a browser tool (chat_turn.browsing_preferences_block). "" =
+    # nothing added. Capped at BROWSING_PREFERENCES_MAX characters.
+    browsing_preferences: str = ""
     # IRON-PROXY (v1.301.0) — shared subscription accounts. OFF by default:
     # when on, the daemon starts (or reuses) Iron-Proxy and runs CLI-lane calls
     # AS the account it picks. Managed by POST /iron-proxy/enable|disable (which
@@ -1169,6 +1178,15 @@ class Config(BaseModel):
         # boot. Only a real true/false is a choice; anything else is "not
         # chosen here", the desktop shell's own reading (desktopSwitchSetting).
         return v if isinstance(v, bool) else None
+
+    @field_validator("browsing_preferences")
+    @classmethod
+    def _valid_browsing_preferences(cls, v: str) -> str:
+        # v1.454.0: a hand-edited config.toml can hold anything. Loading never
+        # refuses (a refusal here would stop the app starting); a value past the
+        # cap is kept cut to it. Saving one is refused in words before it gets
+        # here (settings/schema.py `_browsing_preferences_text`).
+        return str(v or "")[:BROWSING_PREFERENCES_MAX]
 
     @field_validator("browser_access")
     @classmethod

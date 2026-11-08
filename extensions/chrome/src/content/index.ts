@@ -33,9 +33,11 @@ import {
   METHOD_TYPE_TEXT,
 } from "../protocol";
 import { BridgeError } from "../bridge/errors";
-import { click, pressKey, scroll, typeText } from "./actions";
+import { click, lastActed, locate, pressKey, scroll, typeText } from "./actions";
 import {
   isPageRequest,
+  LAST_ACTED_OP,
+  LOCATE_OP,
   PICK_CANCEL_OP,
   PICK_OP,
   type PageFailure,
@@ -98,6 +100,14 @@ function handle(request: PageRequest): Record<string, unknown> {
   // when they click it (picker.ts).
   if (request.op === PICK_OP) {
     return { ...startPick() };
+  }
+  // v1.454.0: the pointer's two questions (background/pointer.ts). Read-only:
+  // a box and nothing the element says; never a scroll, focus or refusal.
+  if (request.op === LOCATE_OP) {
+    return locate(params);
+  }
+  if (request.op === LAST_ACTED_OP) {
+    return lastActed(params);
   }
   if (request.op === PICK_CANCEL_OP) {
     return { ...cancelPick() };

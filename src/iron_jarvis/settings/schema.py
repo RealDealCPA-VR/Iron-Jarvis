@@ -226,6 +226,25 @@ def _brain_profile_shape(value: Any) -> None:
         raise ValueError("must be one of the profiles in Settings › Memory & you")
 
 
+def _browsing_preferences_text(value: Any) -> None:
+    """v1.454.0: the browsing preferences reach every browser turn's prompt,
+    and from chat a model writes them, so they are capped in words and scanned
+    for an instruction planted for the assistant (the formatting rules' rule)."""
+    from ..core.config import BROWSING_PREFERENCES_MAX
+
+    text = str(value or "")
+    if len(text) > BROWSING_PREFERENCES_MAX:
+        raise ValueError(f"must be at most {BROWSING_PREFERENCES_MAX} characters (these are {len(text)})")
+    if text.strip():
+        from ..core.promptguard import scan_context
+
+        if scan_context(text, source="browsing preferences", cap=None).blocked:
+            raise ValueError(
+                "read like an instruction planted for the assistant, so they were not saved; "
+                "write them in your own words"
+            )
+
+
 def _profile_rules_text(value: Any) -> None:
     """v1.438.0 (Wave 4 group C): "Formatting rules" reach EVERY prompt (the
     profile block), and from chat a model writes them — so they are capped in
@@ -497,6 +516,17 @@ SETTINGS: tuple[SettingDef, ...] = (
       "What Jarvis may do in your own browser through the add-on.",
       options=(("off", "Off"), ("read_only", "Read pages only"), ("interactive", "Read and act (each action asks)")),
       tier="ask", floor_when=("interactive",), aliases=("browser", "chrome", "edge")),
+    # v1.454.0: the owner's "a preference of interaction on a page". Added to
+    # every turn that has a browser tool (the sidebar's and the chat page's),
+    # before the history planner, scanned and capped. Controlled on the Your
+    # browser section's card (SettingsHome CONTROLLED_IN_SECTION).
+    S("browsing_preferences", "How Jarvis works on web pages", "connections", "string",
+      "Your own standing instructions for when Jarvis reads or acts on web pages, one per line "
+      "(for example \"Look for primary sources\" or \"Answer concisely, only what I need to know\"). "
+      "They are added to every browser task's instructions. Empty adds nothing.",
+      tier="allow", section="Browser", check=_browsing_preferences_text,
+      placeholder="Look for primary sources\nAnswer concisely, only what I need to know",
+      aliases=("browsing preferences", "browser preferences", "web page preferences")),
     S("calendar_trigger_enabled", "Calendar reminders", "connections", "bool",
       "Start work when a calendar event is about to begin. The calendar link is set as a secret.",
       tier="ask", section="Calendar", aliases=("calendar",)),

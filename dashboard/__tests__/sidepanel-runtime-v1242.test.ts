@@ -1098,4 +1098,135 @@ if (absent.length) {
       expect((el("pointed") as HTMLElement).hidden).toBe(true);
     });
   });
+
+  /* ------------------------------------------------------------------------ */
+  /*  Skills (v1.454.0)                                                       */
+  /* ------------------------------------------------------------------------ */
+
+  describe("Skills: the / list picks one and it rides the next Send (v1.454.0)", () => {
+    const SKILLS = [
+      { name: "pii-redaction", description: "Find and black out personal details.", argument_hint: "" },
+      { name: "primary-sources", description: "Trace every claim to where it came from.", argument_hint: "[topic]" },
+      { name: "summary", description: "A short summary.", argument_hint: "" },
+    ];
+    const sends = (h: Harness) =>
+      h.sent.filter((m) => m["kind"] === "panel_action" && m["action"] === "send");
+    const ask = () => el("ask") as HTMLTextAreaElement;
+    function type(text: string): void {
+      ask().value = text;
+      ask().dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    function key(name: string): void {
+      ask().dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
+    }
+    const rows = () => Array.from(el("skills").querySelectorAll<HTMLElement>("li"));
+
+    async function withSkills(): Promise<Harness> {
+      const h = await panelReady({
+        state: "connected",
+        access: "interactive",
+        paired: true,
+        hostPermission: true,
+      });
+      h.emit("skills", { skills: SKILLS });
+      return h;
+    }
+
+    it("typing / opens the list of the daemon's skills, filtered as you type", async () => {
+      await withSkills();
+      expect((el("skills") as HTMLElement).hidden).toBe(true);
+      type("/");
+      await waitFor(() => expect((el("skills") as HTMLElement).hidden).toBe(false));
+      expect(rows().map((r) => r.dataset["skill"])).toEqual(["pii-redaction", "primary-sources", "summary"]);
+      type("/pr");
+      await waitFor(() => expect(rows().map((r) => r.dataset["skill"])).toEqual(["primary-sources"]));
+      // The argument hint shows beside the name; the description under it.
+      expect(rows()[0]?.textContent).toContain("/primary-sources [topic]");
+      expect(rows()[0]?.textContent).toContain("Trace every claim");
+      // A word with a space after it is not a skill query any more.
+      type("/pr and more");
+      await waitFor(() => expect((el("skills") as HTMLElement).hidden).toBe(true));
+    });
+
+    it("Enter picks the highlighted skill (never sends), and Send carries it once", async () => {
+      const h = await withSkills();
+      type("/pii");
+      await waitFor(() => expect(rows()).toHaveLength(1));
+      key("Enter");
+      await waitFor(() => expect((el("skill") as HTMLElement).hidden).toBe(false));
+      expect(el("skill-text").textContent).toBe("Skill: pii-redaction");
+      expect(ask().value).toBe("");
+      expect(sends(h)).toHaveLength(0);
+      // A picked skill is something to send with the box empty: the arrow, not the mic.
+      expect(el("send").dataset["mode"]).toBe("send");
+
+      type("the form on this page");
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(sends(h)).toHaveLength(1));
+      const params = sends(h)[0]["params"] as Record<string, unknown>;
+      expect(params["text"]).toBe("the form on this page");
+      expect(params["skill"]).toBe("pii-redaction");
+      expect((el("skill") as HTMLElement).hidden).toBe(true);
+      const you = turns().find((t) => t.dataset["who"] === "you");
+      expect(you?.querySelector(".pointed-note")?.textContent).toBe("Skill: pii-redaction");
+
+      // The NEXT Send carries no skill.
+      h.emit("done", {});
+      await waitFor(() => expect(document.body.dataset.turn).toBe("idle"));
+      type("and now?");
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(sends(h)).toHaveLength(2));
+      expect((sends(h)[1]["params"] as Record<string, unknown>)["skill"]).toBeUndefined();
+    });
+
+    it("arrows move in the list and Esc closes it without stopping anything", async () => {
+      const h = await withSkills();
+      type("/");
+      await waitFor(() => expect(rows()).toHaveLength(3));
+      key("ArrowDown");
+      await waitFor(() => expect(rows()[1]?.getAttribute("aria-selected")).toBe("true"));
+      key("Escape");
+      await waitFor(() => expect((el("skills") as HTMLElement).hidden).toBe(true));
+      expect(h.sent.some((m) => m["action"] === "stop")).toBe(false);
+    });
+
+    it("/<an exact skill name> words, then Enter, runs that skill on those words", async () => {
+      const h = await withSkills();
+      type("/summary this article");
+      key("Enter");
+      await waitFor(() => expect(sends(h)).toHaveLength(1));
+      const params = sends(h)[0]["params"] as Record<string, unknown>;
+      expect(params["skill"]).toBe("summary");
+      expect(params["text"]).toBe("this article");
+    });
+
+    it("a /word that names no skill is plain text (a path, a typo)", async () => {
+      const h = await withSkills();
+      type("/etc/hosts what is this file");
+      key("Enter");
+      await waitFor(() => expect(sends(h)).toHaveLength(1));
+      const params = sends(h)[0]["params"] as Record<string, unknown>;
+      expect(params["skill"]).toBeUndefined();
+      expect(params["text"]).toBe("/etc/hosts what is this file");
+    });
+
+    it("× forgets the picked skill", async () => {
+      await withSkills();
+      type("/sum");
+      await waitFor(() => expect(rows()).toHaveLength(1));
+      key("Tab");
+      await waitFor(() => expect((el("skill") as HTMLElement).hidden).toBe(false));
+      (el("unskill") as HTMLButtonElement).click();
+      expect((el("skill") as HTMLElement).hidden).toBe(true);
+      expect(el("send").dataset["mode"]).toBe("mic");
+    });
+
+    it("a skills frame of junk shows nothing and breaks nothing", async () => {
+      const h = await panelReady({ state: "connected", access: "interactive", paired: true });
+      h.emit("skills", { skills: [null, 3, { name: "" }, { description: "no name" }] });
+      type("/");
+      expect((el("skills") as HTMLElement).hidden).toBe(true);
+      expect(transcript()).not.toContain("does not understand");
+    });
+  });
 }

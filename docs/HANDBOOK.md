@@ -2040,6 +2040,36 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Skills, how Jarvis works on pages, and a pointer you can watch in the browser sidebar (v1.454.0)
+
+- **Skills in the browser sidebar.** Type **/** in the sidebar's box and the
+  same skills the chat's "/" menu offers are listed; type more to narrow them,
+  use the arrows, and press **Enter** (or **Tab**) to pick one. It shows as
+  "Skill: <name>" above the box and goes with your next message only; **×**
+  takes it off. Typing "/<a skill's exact name> your words" and pressing
+  **Enter** runs it straight away. The skill is applied exactly as in chat. A
+  "/" word that is not a skill's name (a file path, say) is sent as ordinary
+  text.
+- **How Jarvis works on web pages.** Settings › Connections › Your browser has
+  a box for your own standing instructions, one per line, for example "Look
+  for primary sources" or "Answer concisely, only what I need to know". The
+  example buttons under it add a line; **Save** keeps them. They are added to
+  every task that uses the browser, in the sidebar and from chat, from your
+  next message. Leave the box empty to add nothing. They are checked when you
+  save: more than 2,000 characters, or a line that reads like an instruction
+  planted for the assistant, is refused with a sentence saying why. You can
+  also change them from chat ("change my browser preferences to …").
+- **You can see Jarvis at work on the page.** While Jarvis works in a tab, a
+  small **"Jarvis is controlling this tab"** badge sits at the top of the page,
+  beside the glow around the tab's edges. Before it clicks or types, a pointer
+  moves to the button or field, which is outlined for a moment; a click shows a
+  ripple where it landed. None of this can be clicked, it reads nothing on the
+  page, and it does not change what the click does (the click only waits a
+  moment for the pointer to arrive). With your computer set to reduce motion,
+  the pointer is placed without moving and the ripple stays still, but the
+  outline of the button or field still shows. If Jarvis cannot find the thing
+  on screen, it draws nothing and the click or typing goes ahead as before.
+
 ## Archiving a Build › Code session keeps a short summary of it (v1.453.0)
 
 - **Archive is in each session's ⋯ menu** in Build › Code (the row in the

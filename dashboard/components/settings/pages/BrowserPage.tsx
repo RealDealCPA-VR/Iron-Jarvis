@@ -47,6 +47,7 @@ import { timeAgo } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { YourBrowserCard } from "@/components/browser/YourBrowserCard";
+import { BrowsingPreferencesCard } from "@/components/browser/BrowsingPreferencesCard";
 import { PageGrid } from "@/components/PageGrid";
 // v1.353.0 (G54): the app's one "Denied" sentence (dependency-free), and
 // (integrate) the app's one pair of answer words — the queue card says
@@ -608,6 +609,12 @@ export default function ComputerUsePage() {
           section stays exactly where it was, once. */}
       <Reveal>
         <YourBrowserCard />
+      </Reveal>
+
+      {/* v1.454.0: how Jarvis works on web pages — the user's standing
+          instructions for the browser (the `browsing_preferences` setting). */}
+      <Reveal>
+        <BrowsingPreferencesCard />
       </Reveal>
 
       {/* v1.315.0: the page holds TWO products and nothing said where the

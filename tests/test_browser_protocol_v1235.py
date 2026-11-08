@@ -283,6 +283,8 @@ def test_the_panel_vocabularies_are_exactly_the_plans_seven_and_seven():
         # are taken back (the lane's own `reset`, or a final reply that does
         # not continue what was shown). Not the `reset` ACTION: opposite way.
         "reset",
+        # v1.454.0: the skills the sidebar's "/" list offers (sent on open).
+        "skills",
     )
     assert len(set(P.ALL_PANEL_ACTIONS)) == len(P.ALL_PANEL_ACTIONS)
     assert len(set(P.ALL_PANEL_EVENTS)) == len(P.ALL_PANEL_EVENTS)

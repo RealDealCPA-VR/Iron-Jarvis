@@ -174,6 +174,12 @@ logger = get_logger(__name__)
 #: this is a memory bound, not a context bound.
 PANEL_HISTORY_MESSAGES = 40
 
+#: v1.454.0: the panel's "/" list. At most this many skills, each name and
+#: description cut to these lengths (a list row shows a line, never a body).
+PANEL_SKILLS_MAX = 200
+PANEL_SKILL_NAME_CHARS = 120
+PANEL_SKILL_DESC_CHARS = 200
+
 #: How long a risk-door card waits for the user in the sidebar (v1.276.0).
 #: Bounded, unlike the lane's own attended ask, because it runs INSIDE a tool
 #: call that the lane's tool deadline (600 s) would otherwise end with a
@@ -698,6 +704,9 @@ class PanelTurns:
             # parallel suite found exactly that: a replay that arrived after
             # the probe, past the reader's budget.
             await self.emit(conn, P.PANEL_EVENT_HISTORY, self.history_view())
+            # v1.454.0: the skills the "/" list offers. A dictionary read of
+            # the registry (no file, no probe), so it rides the open inline.
+            await self.emit(conn, P.PANEL_EVENT_SKILLS, self.skills_view())
             # v1.267.0: the model list rides the open, so the picker is filled
             # before the user reaches for it. v1.274.0: OFF THE READ LOOP. This
             # handler is awaited inline by the socket's frame loop, and the
@@ -721,6 +730,7 @@ class PanelTurns:
                 provider=str(params.get("provider") or "").strip(),
                 model=str(params.get("model") or "").strip(),
                 pointed=pointed_from(params.get("pointed")),
+                skill=str(params.get("skill") or "").strip()[:PANEL_SKILL_NAME_CHARS],
             )
             return
         if act == P.PANEL_ACTION_STOP:
@@ -832,6 +842,56 @@ class PanelTurns:
             await self.emit(conn, P.PANEL_EVENT_MODELS, await self.models())
         except Exception:  # noqa: BLE001 — a probe that fails must not become a socket error
             logger.debug("panel model list failed", exc_info=True)
+
+    # --- the skills list (v1.454.0) ---------------------------------------
+
+    def skills_view(self) -> dict[str, Any]:
+        """The ``skills`` payload: the rows the chat composer's "/" menu offers.
+
+        The same registry ``GET /skills`` reads, projected to what a list
+        needs (``name``, ``description``, ``argument_hint``) and without the
+        skills marked not to be offered in a "/" menu (``user-invocable:
+        false``). Never a skill's body. A registry that cannot be read is an
+        empty list with the reason, never a guessed one; never raises.
+        """
+        reg = getattr(self.platform, "skills", None)
+        try:
+            rows = list(reg.list()) if reg is not None else []
+        except Exception as exc:  # noqa: BLE001 — an unreadable registry is said, not invented
+            logger.debug("panel skills list failed", exc_info=True)
+            return {"skills": [], "error": f"{type(exc).__name__}: {exc}"[:200]}
+        out: list[dict[str, str]] = []
+        for sk in rows:
+            if not bool(getattr(sk, "user_invocable", True)):
+                continue
+            name = str(getattr(sk, "name", "") or "").strip()
+            if not name:
+                continue
+            out.append({
+                "name": name[:PANEL_SKILL_NAME_CHARS],
+                "description": " ".join(str(getattr(sk, "description", "") or "").split())[:PANEL_SKILL_DESC_CHARS],
+                "argument_hint": str(getattr(sk, "argument_hint", "") or "")[:80],
+            })
+        out.sort(key=lambda row: row["name"].lower())
+        return {"skills": out[:PANEL_SKILLS_MAX]}
+
+    def _skill_refusal(self, name: str) -> str:
+        """``""`` when ``name`` may run from the panel, else the sentence why not."""
+        if not name:
+            return ""
+        reg = getattr(self.platform, "skills", None)
+        try:
+            sk = reg.get(name) if reg is not None else None
+        except Exception:  # noqa: BLE001 — unreadable reads as missing
+            sk = None
+        if sk is None:
+            return (
+                f"There is no skill named “{name}” any more. Type / to pick"
+                " from the skills you have now."
+            )
+        if not bool(getattr(sk, "user_invocable", True)):
+            return f"The skill “{name}” is not offered in a / list, so it cannot be picked here."
+        return ""
 
     # --- the model list (v1.267.0) -----------------------------------------
 
@@ -1116,7 +1176,14 @@ class PanelTurns:
         provider: str = "",
         model: str = "",
         pointed: dict[str, Any] | None = None,
+        skill: str = "",
     ) -> None:
+        if skill and not text:
+            # A skill picked alone, the chat page's own words for it (the lane
+            # reads them as "no arguments", ``chat_turn.skill_invocation_args``).
+            from ..harness.sessions import SKILL_ALONE
+
+            text = SKILL_ALONE.format(name=skill)
         if not text:
             await self.emit(
                 conn, P.PANEL_EVENT_ERROR, {"text": "There was nothing to send."}
@@ -1143,6 +1210,14 @@ class PanelTurns:
         # v1.267.0: the pick is checked before anything is spent on the turn.
         if await self._refuse_pick(conn, provider, model):
             return
+        # v1.454.0: so is the skill — the lane's own refusal of an unknown
+        # skill is an HTTP 404, which here would read as a crash.
+        skill_refusal = self._skill_refusal(skill)
+        if skill_refusal:
+            await self.emit(
+                conn, P.PANEL_EVENT_ERROR, {"text": skill_refusal, "reason": "skill_unknown"}
+            )
+            return
         self._conn = conn
         self._turn_id = f"panel_{secrets.token_hex(8)}"
         self._steers.clear()
@@ -1159,7 +1234,8 @@ class PanelTurns:
         await self.emit(conn, P.PANEL_EVENT_STATE, self._state(running=True))
         self._task = asyncio.ensure_future(
             self._run(
-                conn, text, self._turn_id, provider=provider, model=model, pointed=pointed
+                conn, text, self._turn_id, provider=provider, model=model, pointed=pointed,
+                skill=skill,
             )
         )
 
@@ -1487,6 +1563,7 @@ class PanelTurns:
         provider: str = "",
         model: str = "",
         pointed: dict[str, Any] | None = None,
+        skill: str = "",
     ) -> None:
         """Run one turn and translate its SSE frames into panel events.
 
@@ -1523,6 +1600,11 @@ class PanelTurns:
             # the lane fences and scans it (``chat_turn._pointed_section``).
             # Not remembered with the conversation: its words are the page's.
             pointed=pointed,
+            # v1.454.0: the skill picked from the panel's "/" list, for THIS
+            # turn only. The lane applies it exactly as for the chat page
+            # (``chat_turn.skill_playbook``: the skill's body with the turn's
+            # words as its arguments, scanned when it is not the user's own).
+            skill=skill,
         )
         # THE CEILING. Computed here, per turn, from the live registry, and
         # passed to the chat lane — which drops anything outside it BEFORE the

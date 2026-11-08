@@ -5632,6 +5632,51 @@ def browser_agent_block(armed_names) -> str:
     return block
 
 
+#: v1.454.0: the heading the user's browsing preferences ride under.
+BROWSING_PREFERENCES_HEAD = (
+    "# How the user wants you to work on web pages\n"
+    "These are the user's own standing instructions, from Settings. Follow them "
+    "whenever you read or act on a web page, and when you answer about one:"
+)
+
+
+def _is_browser_turn(armed_names) -> bool:
+    """Is any browser add-on tool (reading or acting) armed this turn? (v1.454.0)"""
+    try:
+        return any(str(n).startswith("browser_") for n in (armed_names or ()))
+    except TypeError:
+        return False
+
+
+def browsing_preferences_block(config, armed_names, *, event_bus=None) -> str:
+    """v1.454.0: the user's browsing preferences for a turn that has a browser
+    tool, else ``""`` (and ``""`` when the setting is empty, so the prompt is
+    then byte-identical). The text is the user's own, but config.toml can be
+    edited by hand and chat can write it, so it is promptguard-scanned and cut
+    at ``BROWSING_PREFERENCES_MAX`` here too. MIRROR NOTE (lock-step): both
+    lanes call this at their Tools seam, before the history planner."""
+    if not _is_browser_turn(armed_names):
+        return ""
+    raw = str(getattr(config, "browsing_preferences", "") or "").strip()
+    if not raw:
+        return ""
+    from ..core.config import BROWSING_PREFERENCES_MAX
+    from ..core.promptguard import publish_blocked, scan_context
+
+    try:
+        result = scan_context(raw, source="browsing preferences", cap=BROWSING_PREFERENCES_MAX)
+    except Exception:  # noqa: BLE001 — a scan that cannot run adds nothing
+        log.warning("scanning the browsing preferences failed", exc_info=True)
+        return ""
+    if result.blocked and event_bus is not None:
+        try:
+            publish_blocked(event_bus, "chat", result)
+        except Exception:  # noqa: BLE001
+            pass
+    text = result.text.strip()
+    return f"{BROWSING_PREFERENCES_HEAD}\n{text}" if text else ""
+
+
 def _is_browser_agent_turn(armed_names) -> bool:
     """Is a page-ACTING browser tool armed (or ask-armed) this turn? (v1.262.0)"""
     return bool(_BROWSER_ACTING_TOOLS & set(armed_names or ()))
@@ -10275,6 +10320,13 @@ async def run_chat_turn(
         # on a turn that can actually act in the browser.
         if _is_browser_agent_turn(armed):
             system += "\n\n" + browser_agent_block(armed)
+        # v1.454.0: the user's browsing preferences — lock-step with the
+        # stream lane: any turn with a browser tool, "" when unset.
+        _browse_prefs = browsing_preferences_block(
+            d.platform.config, armed, event_bus=d.platform.event_bus
+        )
+        if _browse_prefs:
+            system += "\n\n" + _browse_prefs
         # THE MEMORY BRIEF (v1.279.0) — lock-step with the stream lane.
         _pref = preference_block(armed)
         if _pref:

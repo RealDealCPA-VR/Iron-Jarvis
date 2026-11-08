@@ -35,6 +35,7 @@ import {
   METHOD_SCROLL,
   METHOD_TYPE_TEXT,
 } from "../protocol";
+import { badgeInTab, clearInTab } from "./pointer";
 
 /** The element's id inside the page; the style element is `${GLOW_ID}-style`. */
 export const GLOW_ID = "ij-agent-glow";
@@ -150,6 +151,9 @@ export class AgentGlow {
       // A page closed to add-ons, or a tab mid-navigation: no glow there, and no
       // error either — the command itself already reported what it could.
     }
+    // v1.454.0: the "Jarvis is controlling this tab" badge rides the glow, so it
+    // is there exactly as long (pointer.ts).
+    await badgeInTab(tabId);
     this.armLinger();
   }
 
@@ -166,6 +170,8 @@ export class AgentGlow {
     } catch {
       // The tab closed or navigated: the element went with the page.
     }
+    // v1.454.0: the badge and the pointer go with the glow.
+    await clearInTab(tabId);
   }
 
   private armLinger(): void {

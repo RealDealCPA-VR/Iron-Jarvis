@@ -1444,6 +1444,61 @@ does not need a bump, stop and bump it.
   reaches `chrome` is still type-checked. A change that adds or edits a
   dashboard test runs `npx tsc --noEmit` (or `pnpm build`) before the push.
 
+- **The browser sidebar has skills, the user's browsing preferences, and a
+  pointer the user can watch** (v1.454.0; the owner: "use skills in the
+  browser extension and have a preference of interaction on a page in the
+  settings … see when it has control of the browser and specifically when it
+  is clicking"). SKILLS: `PANEL_EVENT_SKILLS` (`{skills: [{name, description,
+  argument_hint}]}`, protocol.py, regenerated into `protocol.ts` — the panel
+  vocabulary is 10 actions / 12 events now) is sent inline on `open` from
+  `PanelTurns.skills_view` (the registry `GET /skills` reads, minus
+  `user_invocable: false`, names and one-line descriptions only, never a
+  body); `send` takes `skill`, checked by `_skill_refusal` BEFORE a turn
+  (reason `skill_unknown`; the lane's own unknown-skill refusal is an HTTP 404
+  that would read as a crash), a skill alone sends `SKILL_ALONE`, and it rides
+  `ChatBody.skill` so the lane applies it exactly as the chat page's "/". The
+  panel's "/" list (`sidepanel.ts` `skillQuery` / `matchSkills` /
+  `typedSkill`, `#skills`, chip `#skill`): a "/word" that is ALL the box
+  opens it; Enter/Tab pick, arrows move, Esc closes (handled before
+  `keyToPress`, so Enter never sends and Esc never stops while it is open);
+  "/<exact name> words" + Enter runs it; any other "/word" is text;
+  `composerMode(text, state, skill)` shows the arrow for a skill picked alone.
+  PREFERENCE: `Config.browsing_preferences` (≤ `BROWSING_PREFERENCES_MAX`
+  2000; LOADING cuts, never refuses — a refusal would stop the app starting)
+  + schema row `browsing_preferences` (connections › Browser, allow tier,
+  `_browsing_preferences_text` refuses too long or a promptguard-flagged text
+  in words on SAVE) whose one control is `components/browser/
+  BrowsingPreferencesCard.tsx` on the Your browser section
+  (`CONTROLLED_IN_SECTION`, PUT /settings/values). `chat_turn.
+  browsing_preferences_block(config, armed)` rides the Tools seam of BOTH
+  lanes (lock-step) for any turn with a `browser_*` tool armed (reading or
+  acting), scanned + capped again (config.toml is hand-editable; a flagged
+  line becomes the `[BLOCKED…]` placeholder); unset = prompt byte-identical.
+  POINTER: `background/pointer.ts` — before a click or typing the worker asks
+  the page `LOCATE_OP` (content/actions.ts `locate`: the action's own
+  `resolveTarget`, a viewport box + `on_screen`, never a scroll, focus or
+  refusal), paints the pointer moving there + a highlight, and AWAITS
+  `POINTER_MOVE_MS` (420) — then the action runs unchanged (download window
+  starts after the wait); after it `LAST_ACTED_OP` (the box `clickNode` /
+  `typeText` noted after their own scroll) gets the ripple + highlight,
+  NEVER awaited. Nothing drawn when the target is not found, off screen, no
+  site access, or the page is closed to add-ons. The "Jarvis is controlling
+  this tab" badge rides `AgentGlow.show`/`clear` (`badgeInTab`,
+  `clearInTab`). Painters are self-contained (`executeScript`), every node
+  `pointer-events: none` + aria-hidden, words in CSS `content:` (a page read
+  never sees them), only their own ids, none of the registry's
+  `WATCHED_ATTRIBUTES` (page_version and element ids are untouched); reduced
+  motion: placed not moved, a still ring, the highlight still shows. KNOWN:
+  press_key and scroll draw no pointer; a click that navigates gets no ripple
+  (no reader left); the badge lingers with the glow (20 s) after a turn
+  driven from the chat page. Pins: `tests/test_browser_skills_prefs_v1454.py`
+  (12 mutations, all red), `dashboard/__tests__/addon-pointer-v1454.test.ts`
+  (tsconfig-excluded: it reaches `chrome`), the "Skills" block of
+  `sidepanel-runtime-v1242.test.ts` (runs the BUILT bundle),
+  `browsing-preferences-v1454.test.tsx`; moved on purpose:
+  `test_browser_protocol_v1235`, `test_browser_sidepanel_context_v1270`,
+  `test_browser_sidepanel_voice_v1269`.
+
 - **Updates come from the `updates` branch manifest first; GitHub's releases
   feed is the FALLBACK, and no raw HttpError ever reaches the Updates page**
   (v1.260.0). electron-updater's GitHub provider opens every check by reading

@@ -223,6 +223,9 @@ PANEL_ACTION_OPEN = "open"
 #: title, role, name, tag, input_type, text, css, unique_name}``, read off the
 #: page the way a snapshot reads it (never a field's value). It describes; it
 #: grants nothing, and the daemon fences it as untrusted data for that turn.
+#: v1.454.0: ``skill`` is a skill the user picked from the panel's "/" list (a
+#: name from the ``skills`` event); it is applied the way the chat page applies
+#: one (``ChatBody.skill`` -> ``chat_turn.skill_playbook``), for that turn only.
 PANEL_ACTION_SEND = "send"
 PANEL_ACTION_STOP = "stop"
 PANEL_ACTION_STEER = "steer"
@@ -300,6 +303,11 @@ PANEL_EVENT_HISTORY = "history"
 #: not continue what was shown. Not the ``reset`` ACTION, which forgets the
 #: whole conversation: the two travel in opposite directions.
 PANEL_EVENT_RESET = "reset"
+#: v1.454.0: ``{skills: [{name, description, argument_hint}]}`` — the skills the
+#: user may pick from the panel's "/" list, the same rows ``GET /skills`` serves
+#: minus the ones marked not to be offered in a "/" menu (``user_invocable``
+#: false). Sent on ``open``. Names and descriptions only, never a skill's body.
+PANEL_EVENT_SKILLS = "skills"
 
 ALL_PANEL_EVENTS: tuple[str, ...] = (
     PANEL_EVENT_STATE,
@@ -313,6 +321,7 @@ ALL_PANEL_EVENTS: tuple[str, ...] = (
     PANEL_EVENT_TRANSCRIPT,
     PANEL_EVENT_HISTORY,
     PANEL_EVENT_RESET,
+    PANEL_EVENT_SKILLS,
 )
 
 # --------------------------------------------------------------------------- #
@@ -1856,6 +1865,7 @@ __all__ = [
     "PANEL_EVENT_HISTORY",
     "PANEL_EVENT_MODELS",
     "PANEL_EVENT_RESET",
+    "PANEL_EVENT_SKILLS",
     "PANEL_EVENT_STATE",
     "PANEL_EVENT_STEERED",
     "PANEL_EVENT_TOOL",

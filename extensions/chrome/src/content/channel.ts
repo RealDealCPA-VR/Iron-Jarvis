@@ -35,6 +35,21 @@ export const PICK_OP = "pick_element";
 /** Worker -> page: stop a pick that is still waiting for its click. */
 export const PICK_CANCEL_OP = "pick_cancel";
 
+/**
+ * v1.454.0: worker -> page, before a click or typing: where is the target? The
+ * page answers `{found, x, y, width, height, on_screen, tab_id}` — a box in the
+ * viewport, never anything the element says. It never scrolls and never
+ * refuses: a target it cannot find answers `{found: false}`, and the action
+ * itself then reports why (background/pointer.ts).
+ */
+export const LOCATE_OP = "locate_target";
+
+/**
+ * v1.454.0: worker -> page, after a click or typing: where was the element the
+ * last action acted on (after its own scroll into view)? Same answer shape.
+ */
+export const LAST_ACTED_OP = "last_acted";
+
 /** Page -> worker, when the user clicked the element they mean. */
 export const PICKED_KIND = "element_picked";
 

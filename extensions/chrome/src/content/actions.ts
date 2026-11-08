@@ -384,6 +384,9 @@ function mouseInit(): MouseEventInit {
  */
 function clickNode(node: Element): void {
   node.scrollIntoView({ block: "center", inline: "nearest" });
+  // v1.454.0: where the element is now, for the pointer's ripple. Its OWN box,
+  // read before the click (a click can replace or remove the node).
+  noteActed(node);
   const focusable = node as Element & { focus?: (options?: FocusOptions) => void };
   if (typeof focusable.focus === "function") {
     focusable.focus({ preventScroll: true });
@@ -426,6 +429,73 @@ export function click(params: Record<string, unknown>): ClickResult {
     page_version: state.page_version,
     navigated: state.navigated,
   };
+}
+
+// --- where the pointer goes (v1.454.0) --------------------------------------
+//
+// background/pointer.ts draws a pointer moving to the element before a click or
+// typing, and a ripple where it landed. These two answers are all it learns:
+// the element's box in the viewport and whether it is on screen — never what the
+// element says, holds or is called. Neither scrolls, focuses or refuses, so
+// asking changes nothing about the action that follows.
+
+interface ActedBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** The box of the element the last click or typing acted on, or null. */
+let lastActedBox: ActedBox | null = null;
+
+function boxOf(node: Element): ActedBox {
+  const r = node.getBoundingClientRect();
+  return { x: r.left, y: r.top, width: r.width, height: r.height };
+}
+
+function noteActed(node: Element): void {
+  try {
+    lastActedBox = boxOf(node);
+  } catch {
+    lastActedBox = null;
+  }
+}
+
+function onScreenBox(box: ActedBox): boolean {
+  const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+  const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+  return box.x + box.width > 0 && box.y + box.height > 0 && box.x < vw && box.y < vh;
+}
+
+/** `locate_target`: where an action's target is now. Never throws, never scrolls. */
+export function locate(params: Record<string, unknown>): Record<string, unknown> {
+  const tabId = Number(params["tab_id"] ?? 0);
+  try {
+    const resolved = resolveTarget(
+      params["target"] as Record<string, unknown> | undefined,
+      (params["snapshot_id"] as string | undefined) ?? null,
+    );
+    if (!isRendered(resolved.node)) {
+      return { found: false, tab_id: tabId };
+    }
+    const box = boxOf(resolved.node);
+    return { found: true, on_screen: onScreenBox(box), tab_id: tabId, ...box };
+  } catch {
+    // The action will refuse this target in its own words; the pointer just
+    // is not drawn.
+    return { found: false, tab_id: tabId };
+  }
+}
+
+/** `last_acted`: where the element the last action acted on was. */
+export function lastActed(params: Record<string, unknown>): Record<string, unknown> {
+  const tabId = Number(params["tab_id"] ?? 0);
+  const box = lastActedBox;
+  if (!box) {
+    return { found: false, tab_id: tabId };
+  }
+  return { found: true, on_screen: onScreenBox(box), tab_id: tabId, ...box };
 }
 
 // --- typing -----------------------------------------------------------------
@@ -684,6 +754,8 @@ export function typeText(params: Record<string, unknown>): TypeTextResult {
   const ref = targetRef(resolved);
   const text = String(params["text"] ?? "");
   const cleared = typeInto(node, text, params["clear"] === true);
+  // v1.454.0: the field's box after focusing it scrolled it into view.
+  noteActed(node);
   const submitted = params["press_enter"] === true ? pressOn(node, "Enter") : false;
   const state = pageState(before);
   return {

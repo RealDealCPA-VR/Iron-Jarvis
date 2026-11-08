@@ -224,6 +224,8 @@ export const CONTROLLED_IN_SECTION: Record<string, string> = {
   // config-driven (v1.365.3) — so the plain row is their only editor and
   // stays (the Wave C review found the first cut had hidden it).
   browser_access: "connections-browser",
+  // v1.454.0: the browsing preferences' card sits on the same section.
+  browsing_preferences: "connections-browser",
   backup_mirror_dir: "system-maintenance",
   backup_mirror_media: "system-maintenance",
   // Wave D item 32: the Several accounts card on Connections has a Group
