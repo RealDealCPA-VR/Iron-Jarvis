@@ -407,7 +407,8 @@ import {
 } from "@/lib/useChatStream";
 import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
 import { postFailureFields, turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
-import { failureOf, type FailureLike } from "@/lib/loadFailed";
+import { couldnt, failureOf, type FailureLike } from "@/lib/loadFailed";
+import { isFailedMediaLine, MEDIA_RETRY_GONE, MEDIA_TRY_AGAIN, mediaRetryText } from "@/lib/mediaRetry";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { replyLiveWords } from "@/lib/replyLive";
 import { adoptDaemonLines, daemonLineFor, panelWorkingLabel, threadIsNewer } from "@/lib/chatReread";
@@ -833,6 +834,9 @@ interface ChatMessage {
    *  `progress` renders as a quiet line, `question`/`done` as a reply;
    *  `pending` = the remote took the task and will report back. */
   panelKind?: string;
+  /** v1.455.0 (Wave F, item 16): on a media line the daemon appended
+   *  (`panelKind: "media"`), the media job it reports on. */
+  mediaJob?: string;
   /** v1.285.0: the room entry's timestamp the line was mirrored from — the
    *  dedupe key, so a live event and a reopen never show one line twice. */
   panelAt?: string;
@@ -3046,6 +3050,9 @@ export interface RowHandlers {
   openDoor: (index: number, door: Door) => boolean;
   /** v1.320.0: the user rated reply `index` — store it on the message, save. */
   rateReply: (index: number, rating: ReplyRatingValue) => void;
+  /** v1.455.0 (Wave F, item 16): Try again under a failed media line —
+   *  the job's own request, sent as the next message. */
+  retryMedia: (jobId: string) => void;
   crystallize: (threadId: string) => void;
   promote: (content: string) => Promise<void>;
   /** The receipt's own prop types, not a second description of them: these
@@ -3472,6 +3479,21 @@ const MessageRow = memo(function MessageRow({
               Continue
             </button>
           )}
+        </div>
+      )}
+      {/* v1.455.0 (Wave F, item 16): a media job that could not be made
+          offers Try again (its own request, sent as the next message). */}
+      {isFailedMediaLine(m) && (
+        <div className="mt-1">
+          <button
+            type="button"
+            data-testid="media-try-again"
+            disabled={busy}
+            onClick={() => h.retryMedia(String(m.mediaJob))}
+            className="inline-flex h-7 items-center rounded-lg px-2 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 disabled:opacity-50"
+          >
+            {MEDIA_TRY_AGAIN}
+          </button>
         </div>
       )}
       {/* v1.170.0: the turn RAN a workflow (the model via the workflow_run
@@ -11843,6 +11865,21 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // Local only too (the door must not carry the words out of that promise).
     openDoor: (index, door) =>
       startCodingFromDoor(messagesRef.current, index, door.href, atFilesRoot, localOnlyRef.current),
+    // v1.455.0 (Wave F, item 16): the failed media job's own request, made
+    // again as the next message (every card and spend check applies to it).
+    retryMedia: (jobId) => {
+      if (busy || uploadingRef.current || sendingRef.current) return;
+      get<{ kind?: unknown; prompt?: unknown }>(`/media/jobs/${encodeURIComponent(jobId)}`)
+        .then((job) => {
+          const text = mediaRetryText(job?.kind, job?.prompt);
+          if (text) sendRef.current(text);
+          else setNotice(MEDIA_RETRY_GONE);
+        })
+        .catch((e) => {
+          const f = failureOf(e);
+          setNotice(f.status === 404 ? MEDIA_RETRY_GONE : couldnt("make it again", f));
+        });
+    },
     promote: (content) => promoteNoteToKnowledge(content),
     openDocument: (path) => openDocPreview(path),
     undoFor: (path) => undoForPath(path),
@@ -11941,6 +11978,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       settleSuggestion: (index, next) =>
         rowImplRef.current.settleSuggestion(index, next),
       rateReply: (index, rating) => rowImplRef.current.rateReply(index, rating),
+      retryMedia: (jobId) => rowImplRef.current.retryMedia(jobId),
       settleConfigCard: (index, cardIndex, next) =>
         rowImplRef.current.settleConfigCard(index, cardIndex, next),
       continueConnected: (index, cardIndex) =>

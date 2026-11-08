@@ -6,7 +6,8 @@ import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { post, ApiError } from "@/lib/api";
-import { couldntLoad, couldntWhileNoAnswer } from "@/lib/loadFailed";
+import { couldnt, couldntLoad, couldntWhileNoAnswer, failureOf, serverSentence } from "@/lib/loadFailed";
+import { summaryLine } from "@/lib/plainText";
 import type { WorkflowRun, WorkflowStep } from "@/lib/types";
 import {
   STARTERS,
@@ -575,6 +576,42 @@ function parseStepOuts(r: WorkflowRun): Record<string, StepOut> {
   }
 }
 
+/** v1.455.0 (Wave F, item 16): the FIRST failed step of a run, in plan
+ *  order — its name and the first line of what it said — so a failed row
+ *  says why without being opened. Null when no step failed. */
+function firstFailedStep(r: WorkflowRun): { name: string; words: string } | null {
+  const defs = parseStepDefs(r);
+  const outs = parseStepOuts(r);
+  for (let i = 0; i < defs.length; i++) {
+    const nm = defs[i].name?.trim() || `step-${i + 1}`;
+    const o = outs[nm];
+    if (o?.status === "failed") {
+      const first = String(o.summary ?? "")
+        .split("\n")
+        .map((s) => s.trim())
+        .find(Boolean);
+      const line = summaryLine(first ?? "").trim().slice(0, 240);
+      return { name: nm, words: line };
+    }
+  }
+  return null;
+}
+
+/** v1.455.0 (Wave F, item 16): the inputs a run was started with (each one
+ *  is a pre-seeded output of kind "input"), so Run again starts it the same
+ *  way. */
+function runInputs(r: WorkflowRun): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(parseStepOuts(r))) {
+    const rec = v as StepOut & { kind?: unknown };
+    if (rec && rec.kind === "input" && typeof rec.summary === "string") out[k] = rec.summary;
+  }
+  return out;
+}
+
+/** v1.455.0: a run that ended short of the job — failed, or a step failed. */
+const FAILED_RUN = new Set(["failed", "completed_with_failures"]);
+
 /** A waiting run's parked question (v1.121.0). */
 function parseWaiting(r: WorkflowRun): { question?: string } | null {
   try {
@@ -682,6 +719,37 @@ function RunHistory() {
       reload();
     } finally {
       setStoppingRunId(null);
+    }
+  }
+
+  // v1.455.0 (Wave F, item 16): "Run again" on a failed row — the saved
+  // workflow by name (POST /workflows/run, the canvas's own Run), with the
+  // inputs this run was started with.
+  const [rerunningId, setRerunningId] = useState<string | null>(null);
+  const [rerunNote, setRerunNote] = useState<{ id: string; message: string; ok: boolean } | null>(null);
+
+  async function runAgain(r: WorkflowRun) {
+    const runId = String(r.id ?? "");
+    if (rerunningId || !r.workflow_name) return;
+    setRerunningId(runId);
+    setRerunNote(null);
+    try {
+      const inputs = runInputs(r);
+      await post("/workflows/run", {
+        name: r.workflow_name,
+        ...(Object.keys(inputs).length ? { inputs } : {}),
+      });
+      setRerunNote({ id: runId, message: "Started again. The new run is at the top.", ok: true });
+      reload();
+    } catch (e) {
+      const f = failureOf(e);
+      setRerunNote({
+        id: runId,
+        message: serverSentence(f) ? f.message ?? "" : couldnt("run it again", f),
+        ok: false,
+      });
+    } finally {
+      setRerunningId(null);
     }
   }
 
@@ -840,7 +908,48 @@ function RunHistory() {
                               {stoppingRunId === String(r.id) ? "Stopping…" : "Stop"}
                             </button>
                           )}
+                          {/* v1.455.0 (Wave F, item 16): a failed run starts
+                              again from here, as the canvas's Run does. */}
+                          {FAILED_RUN.has(r.status ?? "") && r.workflow_name && r.id != null && (
+                            <button
+                              type="button"
+                              data-testid={`run-again-${String(r.id)}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void runAgain(r);
+                              }}
+                              disabled={rerunningId != null}
+                              className={WF_GHOST_ON_SM}
+                            >
+                              {rerunningId === String(r.id) ? "Starting…" : "Run again"}
+                            </button>
+                          )}
                         </div>
+                        {(() => {
+                          // v1.455.0 (Wave F, item 16): why it failed, on the
+                          // collapsed row — the first failed step's words.
+                          if (!FAILED_RUN.has(r.status ?? "")) return null;
+                          const ff = firstFailedStep(r);
+                          if (!ff) return null;
+                          return (
+                            <p
+                              data-testid={`run-failed-step-${String(r.id)}`}
+                              className="mt-1 max-w-[36rem] truncate text-[12px] text-tone-danger"
+                              title={ff.words || undefined}
+                            >
+                              {ff.words ? `${ff.name} failed: ${ff.words}` : `${ff.name} failed.`}
+                            </p>
+                          );
+                        })()}
+                        {rerunNote && rerunNote.id === String(r.id) && (
+                          <p
+                            data-testid={`run-again-note-${String(r.id)}`}
+                            role="status"
+                            className={`mt-1 text-[12px] ${rerunNote.ok ? "text-zinc-400" : "text-tone-danger"}`}
+                          >
+                            {rerunNote.message}
+                          </p>
+                        )}
                         {resumeErr && resumeErr.id === String(r.id) && (
                           <p className="mt-1 text-[12px] text-tone-danger">
                             {resumeErr.message}
