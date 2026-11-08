@@ -148,6 +148,17 @@ vi.mock("framer-motion", async () => {
 });
 
 import fixture from "./fixtures/receipt-seams-v13520.json";
+
+// v1.455.0 (integration, moved on purpose): the daemon's own row now carries
+// `why`/`asker` (Wave F2), which draws the short card. These two cases pin
+// the LONG card, i.e. an older daemon's row, so they drop those two keys.
+const OLDER_ROW = (() => {
+  const { why: _why, asker: _asker, ...rest } = fixture.asks.waiting_on as typeof fixture.asks.waiting_on & {
+    why?: string;
+    asker?: string;
+  };
+  return rest;
+})();
 import SessionDetailPage from "@/app/sessions/[id]/page";
 import { APPROVAL_LABELS, undoLine } from "@/lib/approvalWords";
 import type { SessionView } from "@/lib/types";
@@ -186,7 +197,7 @@ function renderPaused(waitingOn: Record<string, unknown>) {
 
 describe("sessions/[id] — a paused run's ask", () => {
   it("answers in the run's words and says the save can be undone (the daemon's own row)", async () => {
-    renderPaused(fixture.asks.waiting_on);
+    renderPaused(OLDER_ROW);
     await act(async () => {});
     const card = within(screen.getByTestId("session-approval")).getByTestId("chat-approval-card");
     const names = within(card).getAllByRole("button").map((b) => (b.textContent ?? "").trim());
@@ -218,7 +229,7 @@ describe("sessions/[id] — a paused run's ask", () => {
   });
 
   it("v1.455.0 CONTROL: a row with no `why` keeps the long card (no redirect)", async () => {
-    renderPaused(fixture.asks.waiting_on);
+    renderPaused(OLDER_ROW);
     await act(async () => {});
     const card = within(screen.getByTestId("session-approval")).getByTestId("chat-approval-card");
     expect(within(card).queryByTestId("approval-redirect")).toBeNull();

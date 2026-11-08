@@ -358,7 +358,7 @@ def test_the_reachability_note_names_the_windows_firewall_prompt():
 def test_the_model_servers_page_links_the_one_add_form():
     page = _src(DASH / "app" / "fleet" / "page.tsx")
     assert "function AddNodeForm" not in page and "<AddNodeForm" not in page
-    assert 'export const ADD_MODEL_SERVER_HREF = "/connections?focus=endpoints";' in page
+    assert 'const ADD_MODEL_SERVER_HREF = "/connections?focus=endpoints";' in page
     assert "<AddModelServerLink />" in page
     conn = _src(DASH / "components" / "settings" / "pages" / "ConnectionsPage.tsx")
     assert "/detect`, {})" in conn  # the one form re-detects once a key is on the server
