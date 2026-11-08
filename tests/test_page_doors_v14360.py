@@ -625,7 +625,7 @@ def test_nothing_matched_leaves_the_system_prompt_byte_identical(app, monkeypatc
     text = "what should I name the quarterly report?"
     assert P.prompt_block(text) == ""
     _, with_block = turn(app, text)
-    monkeypatch.setattr(CT, "page_steps_block", lambda body: "")
+    monkeypatch.setattr(CT, "page_steps_block", lambda body, platform=None: "")
     _, without = turn(app, text)
     assert P.BLOCK_HEADING not in with_block
     assert with_block == without

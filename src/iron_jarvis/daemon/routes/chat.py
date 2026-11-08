@@ -4126,7 +4126,7 @@ async def chat_stream(
     _query_tail += _grounding.query()
     # v1.436.0 (Wave 5, B3): the lock-step copy of chat_turn's page-step and
     # "not offered" lines ("" when the message names none — byte-identical).
-    _query_tail += _chat_turn.page_steps_block(body)
+    _query_tail += _chat_turn.page_steps_block(body, platform)
     conn_tools = _grounding.conn_tools
 
     # Routing choice (hoisted, mirrors chat_complete) — attachment budgets

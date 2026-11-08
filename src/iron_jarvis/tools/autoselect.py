@@ -3768,7 +3768,16 @@ _REPO_WORDS = (
     # v1.455.0 (readiness Wave G, item 23): the repo may have its NAME before
     # the word ("my ClosePilot repo", "the iron-jarvis repository").
     r"(?:\b(?:my|our|the|this|that)\s+"
-    r"(?:(?!(?:of|for|in|on|at|to|with|and|or|a|an|the)\b)[\w.'’-]{1,40}\s+)?"
+    # Review (v1.455.0): never a store of the person's own documents, photos
+    # or mail — "my photo repo", "my Dropbox repository", "my tax-docs
+    # repository" are folders of files, not code. The name's LAST part is
+    # read ("our tax-tools repository" and "the client-portal repo" are code).
+    r"(?:(?!(?:of|for|in|on|at|to|with|and|or|a|an|the)\b)"
+    r"(?![\w.'’-]{0,40}?\b(?:photos?|pictures?|images?|videos?|music|documents?|docs?|files?|papers?|records?"
+    r"|forms?|templates?|contracts?|receipts?|invoices?|scans?|pdfs?|spreadsheets?|reports?|notes?|archives?"
+    r"|backups?|e-?mails?|mail|tax(?:es)?|clients?|recipes?|knowledge|dropbox|onedrive|sharepoint|box|google"
+    r"|g?drive|onenote|outlook|notion|evernote|icloud)\s)"
+    r"[\w.'’-]{1,40}\s+)?"
     r"(?:git\s*hub\s+|git\s+|local\s+|project\s+)?"
     r"(?:repo|repos|repository|codebase|code\s+base)\b(?!\s+of\b)"
     r"|\bgithub\.com/[\w.-]+/[\w.-]+)"
@@ -3851,6 +3860,43 @@ _MISSION_PAYLOAD = re.compile(
     r"(?:this|the\s+following|below)\b",
     re.IGNORECASE,
 )
+#: Review (v1.455.0): more of the shapes a team's objective is NOT, each read
+#: on the request's first 300 characters (bounded, linear):
+#: * someone else's words pasted to be answered — "Draft a reply to the email
+#:   below:", "Here's an email from the client, what do they want?";
+_MISSION_PASTED = re.compile(
+    r"\b(?:e-?mails?|messages?|letters?|notes?|memos?|texts?|transcripts?|threads?)\s+(?:below|above)\b"
+    r"|\bhere(?:['’]s|\s+is|\s+are)\s+(?:an?|the|my|his|her|their|our|some)\b"
+    r"|\b(?:reply|respond|answer|write\s+back)\s+to\s+(?:this|the|that|an?|his|her|their|[\w-]+['’]s)\s+"
+    r"(?:e-?mail|message|letter|note|text)",
+    re.IGNORECASE,
+)
+#: * a question about HOW to do the work — "Can you explain how I should
+#:   research…", "How should we…";
+_MISSION_HOW = re.compile(
+    r"\b(?:explain|tell\s+me|teach\s+me|show\s+me|walk\s+me\s+through)\s+(?:how|what|why|when|which)\b"
+    r"|\bhow\s+(?:should|do|would|could|can|might)\s+(?:i|we)\b",
+    re.IGNORECASE,
+)
+#: * the person telling, not asking — "Just so you know…", "No need to do
+#:   anything", "Yesterday I had to research…", "I already drafted…";
+_MISSION_TELLING = re.compile(
+    r"\b(?:just\s+so\s+you\s+know|fyi|for\s+context|for\s+your\s+information|no\s+need\s+to\s+do"
+    r"|(?:don['’]?t|do\s+not)\s+(?:do|start)\s+anything|nothing\s+(?:to\s+do|for\s+you\s+to\s+do))\b"
+    r"|^(?:yesterday|last\s+(?:week|month|night|year|friday|monday)|earlier\s+today|this\s+morning)\b"
+    r"|\b(?:i|we)\s+(?:had\s+to|already|have\s+already|used\s+to|spent\s+(?:the|all|my))\b",
+    re.IGNORECASE,
+)
+#: * a coding task with no repository named (the coding offer reads a
+#:   repository or a program to build) — "…write tests in settings.test.tsx,
+#:   then review the diff", "fix the function, update the docstring".
+_MISSION_CODE = re.compile(
+    r"\b(?:pull\s+requests?|unit\s+tests?|failing\s+tests?|test\s+suite|lint(?:er|ing)?\s*(?:errors?|warnings?)?"
+    r"|refactor\w*|docstrings?|type\s+hints?|stack\s+traces?|the\s+diff|readme|code\s*base|source\s+code"
+    r"|merge\s+(?:the|my|this)\s+(?:pr|branch|pull)|(?:the|this)\s+(?:function|component|endpoint))\b"
+    r"|\b[\w/\\-]{1,120}\.(?:py|tsx?|jsx?|java|cs|go|rs|rb|php|cpp|kt|swift|sql|sh|ps1)\b",
+    re.IGNORECASE,
+)
 
 
 def mission_offer(text: str) -> "dict[str, str] | None":
@@ -3881,6 +3927,13 @@ def mission_offer(text: str) -> "dict[str, str] | None":
         # A pasted payload ("Rewrite this email: …") holds the orders of the
         # person who wrote it, not the user's.
         if _MISSION_PAYLOAD.search(head):
+            return None
+        # Review (v1.455.0): pasted words to answer, a "how should I"
+        # question, the person telling rather than asking, a coding task.
+        head300 = t.lstrip()[:300]
+        if _MISSION_PASTED.search(head300) or _MISSION_HOW.search(head300) or _MISSION_TELLING.search(head300):
+            return None
+        if _MISSION_CODE.search(t):
             return None
         listed = len(_MISSION_LIST_PART.findall(t))
         clauses = len(_MISSION_CLAUSE_PART.findall(t))

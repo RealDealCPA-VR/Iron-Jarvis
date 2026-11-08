@@ -3752,9 +3752,30 @@ def _page_door_checks(platform: Any) -> tuple[Any, Any]:
         from ..agents.model_team import provider_ready
         from ..providers.manager import known_cli_presence
 
-        return (lambda p: provider_ready(platform, p)), known_cli_presence
+        def ready(p: str) -> "bool | None":
+            # Review (v1.455.0): ``provider_ready`` reads cached SIGN-IN
+            # verdicts, but a CLI provider's availability (and an API name
+            # served through one) first asks whether the CLI is installed —
+            # and a binary never looked for (after Re-detect, say) is a PATH
+            # scan on the calling thread, here the event loop. Not looked for
+            # yet: not known (the door stays).
+            binary = _PAGE_DOOR_CLI_BINARY.get(str(p or "").strip().lower())
+            if binary and known_cli_presence(binary) is None:
+                return None
+            return provider_ready(platform, p)
+
+        return ready, known_cli_presence
     except Exception:  # noqa: BLE001 — not known: every door stays
         return None, None
+
+
+#: The program each provider's availability asks about first (a CLI, or an
+#: API name a CLI may serve keyless — ``ProviderManager._INHERIT_ALIAS``).
+_PAGE_DOOR_CLI_BINARY: dict[str, str] = {
+    "claude-cli": "claude", "anthropic": "claude",
+    "codex-cli": "codex", "openai": "codex",
+    "opencode-cli": "opencode",
+}
 
 
 def with_page_door(
@@ -3790,18 +3811,24 @@ def with_page_door(
         return base
 
 
-def page_steps_block(body: Any) -> str:
+def page_steps_block(body: Any, platform: Any = None) -> str:
     """The plain lines the model is given for a step only a page can do and
     for what Iron Jarvis does not offer (v1.436.0, Wave 5 B3 —
     ``daemon/page_doors.prompt_block``), read from the user's last message;
     ``""`` when nothing matches, so the system prompt is byte-identical.
     Joined to the query tail right after the grounding's query sections,
     BEFORE the planner (its cost is priced). MIRROR NOTE (lock-step): both
-    lanes. Never raises."""
+    lanes. Never raises.
+
+    Review (v1.455.0): with the *platform*, a step whose door this PC no
+    longer needs (an install press for a program already installed) gives
+    no line either — the model was told about a press the reply did not
+    carry."""
     try:
         from .page_doors import prompt_block
 
-        return prompt_block(_last_user_text(getattr(body, "messages", None)))
+        _ready, installed = _page_door_checks(platform)
+        return prompt_block(_last_user_text(getattr(body, "messages", None)), installed=installed)
     except Exception:  # noqa: BLE001 — no line beats a broken turn
         return ""
 
@@ -9882,7 +9909,7 @@ async def run_chat_turn(
     # Jarvis does not offer, is said to the model in one plain line ("" when
     # the message names none — byte-identical). MIRROR NOTE (lock-step):
     # routes/chat.py adds the same block at the same seam.
-    _query_tail += page_steps_block(body)
+    _query_tail += page_steps_block(body, platform)
     conn_tools = _grounding.conn_tools
 
     # Routing choice (hoisted above attachments): an explicit body choice

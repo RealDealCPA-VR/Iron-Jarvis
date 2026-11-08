@@ -220,12 +220,24 @@ _PERSONS_AFTER = re.compile(
     re.IGNORECASE,
 )
 _BUSY_BEFORE = frozenset({"busy", "packed", "hectic", "crazy", "full", "tight", "overloaded", "jammed"})
+#: Review (v1.455.0): a verb that only ACTS ON one of Iron Jarvis's schedules
+#: right before "my … schedule" — "Pause my schedule today", "Turn off my
+#: schedule this week", "Delete my schedule for tomorrow": the app's, whatever
+#: day word follows (before the review those armed no schedule writer). A
+#: calendar is cleared or checked, never paused or turned off.
+_APP_VERB_BEFORE = re.compile(
+    r"\b(?:pause|un-?pause|resume|turn\s+(?:off|on)|switch\s+(?:off|on)|disable|enable|stop|run|re-?run"
+    r"|trigger|rename|edit|delete|remove)\s+(?:my|our|your|the)\s+" + _PERSONS_ADJ + r"(?:[\w'’-]+\s+){0,2}$",
+    re.IGNORECASE,
+)
 
 
 def _persons_schedule(t: str, start: int, end: int) -> bool:
     """Is the "schedule" at ``t[start:end]`` the person's own calendar?"""
     before = t[max(0, start - 48):start]
     after = t[end:end + 40]
+    if _APP_VERB_BEFORE.search(before):
+        return False
     word = _WORD_BEFORE.search(t[max(0, start - 40):start])
     if word is not None and word.group(1).lower() in _BUSY_BEFORE:
         return True

@@ -142,7 +142,10 @@ _MAIL_ARRIVES = re.compile(
 MAIL_FROM_RULE = re.compile(
     r"\b(?:when|whenever|every\s+time|each\s+time|any\s*time|if|as\s+soon\s+as)\s+(?:i|we)\s+"
     r"(?:get|receive|am\s+sent|are\s+sent|get\s+sent)\s+(?:an?\s+|any\s+)?(?:new\s+)?"
-    r"(?:e-?mails?|mail)\s+(?:from|by)\b[^.!?\n]{1,60}?"
+    # Review (v1.455.0): e-mail only. "When we get mail from the IRS, file
+    # it in the cabinet" is a LETTER (the IRS writes by post), and a rule
+    # cannot hear the post.
+    r"e-?mails?\s+(?:from|by)\b[^.!?\n]{1,60}?"
     r"(?:,\s*|\s+then\s+|\s+(?:please|can\s+you|could\s+you)\s+)(?:then\s+)?(?:please\s+)?"
     r"(?:forward|send|text|tell|notify|alert|ping|message|let\s+me\s+know|reply|answer|respond|draft|file"
     r"|save|move|summari[sz]e|flag|label|tag|star|print|copy|start|run|add|put|remind)\b",
@@ -205,7 +208,10 @@ _FILE_THING = (
 #: own name before it ("my Google Drive folder" is the app's).
 _A_FOLDER = (
     r"(?:in|into|to|inside|under|on)\s+(?:(?:my|the|our|this|that)\s+)?"
-    r"(?:[A-Za-z]:[\\/][^\s.,;!?]{0,80}"
+    # Review (v1.455.0): possessive, so a guard after the path cannot be
+    # dodged by shortening it ("C:\Scans I file them" read as "C:\Sca" +
+    # "ns I…").
+    r"(?:[A-Za-z]:[\\/][^\s.,;!?]{0,80}+"
     r"|(?:(?!(?:google|onedrive|dropbox|sharepoint|icloud|box|git\w*|code|repo\w*)\b)[\w'’-]{1,30}\s+){0,2}?"
     r"(?:folder|directory|downloads|desktop(?!\s+(?:apps?|programs?|applications?)\b)|documents)\b)"
 )
@@ -214,11 +220,27 @@ _ARRIVES = (
     r"|gets?\s+(?:saved|added|dropped|downloaded|put|copied|moved|created)"
     r"|is\s+(?:saved|added|dropped|downloaded|put|copied|moved|created))"
 )
+#: Review (v1.455.0): the person's own HABIT right after the folder ("…shows
+#: up in my Downloads folder I rename it by hand") is not a request. Read
+#: with an optional trailing "folder" so a shorter folder match ("my
+#: Downloads") cannot slip past it.
+_NOT_A_HABIT_AFTER = (
+    r"(?!(?:\s+(?:folder|directory))?\s*,?\s*(?:i|we)\s+(?!(?:want|need|would|will|['’]d|['’]ll)\b)[a-z])"
+)
+#: A first person doing something INSIDE the "every new …" span ("Any new
+#: receipts I get I save to my Desktop") is the person's habit — unless a
+#: request follows the folder ("…I save to my Desktop should be renamed").
+_NO_FIRST_PERSON = r"(?:(?!\b(?:i|we)\s+(?!(?:want|need|would|will)\b)[a-z])[^.!?\n]){0,30}?"
+_A_REQUEST_FOLLOWS = r"(?=[^.!?\n]{0,60}?\b(?:should|must|needs?\s+to|has\s+to|have\s+to|please)\b)"
 FILES_ARRIVE_IN_FOLDER = re.compile(
     r"\b(?:when|whenever|every\s+time|each\s+time|any\s*time|as\s+soon\s+as)\b[^.!?\n]{0,40}?\b"
-    + _FILE_THING + r"\b[^.!?\n]{0,30}?\b" + _ARRIVES + r"\b[^.!?\n]{0,20}?\b" + _A_FOLDER
+    # Review (v1.455.0): no comma between the arrival and the folder — a
+    # folder after the comma is where the person PUTS it ("When the client's
+    # documents arrive, put them in the client folder"), not where it lands.
+    + _FILE_THING + r"\b[^.!?\n]{0,30}?\b" + _ARRIVES + r"\b[^.!?\n,;]{0,20}?\b" + _A_FOLDER + _NOT_A_HABIT_AFTER
     + r"|\b(?:every|each|any|all)\s+new\s+(?:[\w-]+\s+)?" + _FILE_THING
-    + r"\b[^.!?\n]{0,30}?\b" + _A_FOLDER,
+    + r"\b(?:" + _NO_FIRST_PERSON + r"\b" + _A_FOLDER + _NOT_A_HABIT_AFTER
+    + r"|[^.!?\n]{0,30}?\b" + _A_FOLDER + _A_REQUEST_FOLLOWS + r")",
     re.IGNORECASE,
 )
 

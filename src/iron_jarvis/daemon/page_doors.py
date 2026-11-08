@@ -212,11 +212,22 @@ def _install_rules(name: str) -> tuple[re.Pattern[str], ...]:
         r"(?:phone|iphone|android|ipad|tablet|mac|macbook|laptop|linux|server|vm|box|brother|sister|mom|dad"
         r"|wife|husband|son|daughter|kids?|friends?|clients?|team)\b)"
     )
+    # Review (v1.455.0): the program ITSELF — never something of it ("Download
+    # Claude Code's release notes", "get the Codex logs") and never the
+    # program put to work ("get Codex to review this PR", "I can't get Codex
+    # to work"). A bare "get" installs only as "get me X" or "get X
+    # installed / set up".
+    not_its_thing = (
+        r"(?![’']s\b)(?!\s+to\b)(?!\s+(?:logs?|release|notes?|docs?|documentation|output|history|transcripts?"
+        r"|sessions?|config(?:uration)?|settings|usage|bill(?:ing)?|errors?|changelog|source|answer|reply"
+        r"|review|summary|working|running|back)\b)"
+    )
+    product = name + r"(?:\s+(?:cli|app|program|tool))?\b" + not_its_thing
     return tuple(
         re.compile(r, re.IGNORECASE)
         for r in (
-            r"\b(?:install|re-?install|download|get)\s+(?:me\s+)?(?:the\s+)?" + name
-            + r"(?:\s+(?:cli|app|program|tool))?\b" + tail,
+            r"\b(?:(?:install|re-?install|download)\s+(?:me\s+)?|get\s+me\s+)(?:the\s+)?" + product + tail,
+            r"\bget\s+(?:the\s+)?" + product + r"\s+(?:installed|set\s+up|downloaded)\b" + tail,
         )
     )
 _ORDINAL = r"(?:second|another|other|2nd|third|3rd|extra|new|different|work|personal|business|separate)"
@@ -640,13 +651,15 @@ def _install_line(name: str, vendor: str) -> str:
     # The press opens POST /terminals/launch {cli: "<name>-install"}: a Build
     # terminal running the vendor's own documented installer, every step on
     # screen (terminals/ai_clis.SETUP_LAUNCHES).
+    # Review (v1.455.0): the line reaches every surface (the phone, the
+    # browser sidebar, a Build terminal's chat), and only the chat page draws
+    # the press under the reply — so Connections' press leads.
     return (
-        f"Iron Jarvis can install {name} on this PC: the \"Install {name} for me\" press under this reply opens "
-        f"a terminal in Build that runs {vendor}'s own installer, and every step shows there (the same press is "
-        f"beside {name} in {CONNECTIONS_PLACE}). Iron Jarvis does not install anything until the user presses "
-        f"it. After it "
-        f"finishes, {name} still has to be signed in, with its Sign in button there. Say so plainly and point "
-        "there."
+        f"Iron Jarvis can install {name} on this PC: the \"Install {name} for me\" press beside {name} in "
+        f"{CONNECTIONS_PLACE} (on the chat page, also under this reply) opens a terminal in Build that runs "
+        f"{vendor}'s own installer, and every step shows there. Iron Jarvis does not install anything until "
+        f"the user presses it. After it finishes, {name} still has to be signed in, with its Sign in button "
+        "there. Say so plainly and point there."
     )
 
 
@@ -998,16 +1011,20 @@ def not_offered(text: Any) -> list[NotOffered]:
     return out
 
 
-def prompt_block(text: Any) -> str:
+def prompt_block(text: Any, *, installed: "Callable[[str], bool | None] | None" = None) -> str:
     """The section the model is given for this message: one line per step
     the message is about and per thing not offered, under
     :data:`BLOCK_HEADING`; ``""`` when nothing matches (the system prompt is
-    then byte-identical to before). Never raises."""
+    then byte-identical to before). Never raises.
+
+    Review (v1.455.0): an install step for a program already on this PC
+    (``installed(binary)`` True) gives no line — :func:`with_page_door` leaves
+    its press out, and the line names that press."""
     try:
         # Review: a "not offered" line is the one that stops the model
         # pretending, so it is never the line the cap cuts: the steps give up
         # their places first (the door's own step always keeps one).
-        steps = page_steps(text)
+        steps = [s for s in page_steps(text) if not (s.install and step_not_needed(s, text, installed=installed))]
         nots = not_offered(text)
         room = max(1 if steps else 0, MAX_LINES - len(nots))
         lines = [s.line for s in steps[:room]] + [n.line for n in nots]
