@@ -25,7 +25,7 @@ import {
   type Tone,
 } from "@/components/ui";
 import { timeAgo, clockTime } from "@/lib/format";
-import { EVENT_WORDS, humanSummary } from "@/lib/eventWords";
+import { EVENT_WORDS, humanSummary, rowHeadline } from "@/lib/eventWords";
 import { couldntLoad } from "@/lib/loadFailed";
 import { originLabel } from "@/components/sessions/OriginChip";
 import { sessionLinkFor } from "@/lib/buildLinks";
@@ -613,7 +613,10 @@ function TimelineRow({
       ? `Tried to ${tw}`
       : tw.charAt(0).toUpperCase() + tw.slice(1)
     : "";
-  const said = humanSummary(e.summary);
+  // v1.449.0 (readiness 0h.5 item 14): every event type has words, and the
+  // payload's own detail rides the headline ("A webhook was refused ·
+  // github-push · bad signature") — lib/eventWords.rowHeadline.
+  const said = rowHeadline(e);
   const headline = toolHead || said || e.tool || meta.label;
   const chipWord = e.tool || meta.label;
   const chip = chipWord && chipWord !== headline ? chipWord : "";
