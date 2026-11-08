@@ -54,6 +54,7 @@ import { PageGrid } from "@/components/PageGrid";
 // "Allow once" / "Deny" like every other ask (an approval here lets the
 // agent's next identical step run ONCE, so "once" is literally true).
 import { ALLOW_ONCE, DENY, answeredLine } from "@/lib/approvalWords";
+import { queueRunWords, targetWords } from "@/lib/browserQueueWords";
 
 /* -------------------------------------------------------------------------- */
 /*  Local contracts (daemon additions not yet in lib/types)                    */
@@ -200,8 +201,12 @@ function prettyAction(actionJson: string): { kind: string; detail: string } {
 function ApprovalCard({
   approval,
   onResolved,
+  runTask = "",
 }: {
   approval: ApprovalWithScreenshot;
+  /** v1.455.0 (Wave F, item 18): the run's own task words, when the Recent
+   *  runs list holds it ("" = not known). */
+  runTask?: string;
   /** v1.353.0 (G54): which answer landed, so the queue can say what to do
    *  next after this card leaves. */
   onResolved: (verdict: "approve" | "deny") => void;
@@ -239,7 +244,16 @@ function ApprovalCard({
               >
                 {ACTIONS.find((x) => x.kind === kind)?.label ?? kind}
               </span>
-              <span className="text-[11px] text-zinc-500">run {approval.run_id}</span>
+              {/* v1.455.0 (Wave F, item 18): what the step acts on, in words. */}
+              {targetWords(approval.action_json) && (
+                <span data-testid="cu-queue-target" className="text-[12px] text-zinc-300">
+                  {targetWords(approval.action_json)}
+                </span>
+              )}
+            </div>
+            {/* The task it belongs to; the run's id stays on hover only. */}
+            <div data-testid="cu-queue-run" className="mt-0.5 text-[11px] text-zinc-500" title={`Run ${approval.run_id}`}>
+              {queueRunWords(runTask)}
             </div>
             <div className="mt-1 text-sm text-amber-100/90">{approval.reason}</div>
           </div>
@@ -571,6 +585,9 @@ export default function ComputerUsePage() {
   // and the section renders its quiet empty state instead of crashing.
   const runsState = useApi<{ runs: RunSummary[] }>("/computeruse/runs?limit=20");
   const runs = runsState.data?.runs ?? [];
+  // v1.455.0 (Wave F, item 18): a queued step names its run by the run's
+  // own task (from this same list), never by its id.
+  const runTaskOf = (runId: string): string => runs.find((r) => r.id === runId)?.task ?? "";
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
 
   // Auto-refresh the list when a run reaches a terminal state. The buffer is
@@ -995,7 +1012,12 @@ export default function ComputerUsePage() {
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
               {approvals.map((a) => (
-                <ApprovalCard key={a.id} approval={a} onResolved={onApprovalResolved} />
+                <ApprovalCard
+                  key={a.id}
+                  approval={a}
+                  onResolved={onApprovalResolved}
+                  runTask={runTaskOf(a.run_id)}
+                />
               ))}
             </div>
           )}

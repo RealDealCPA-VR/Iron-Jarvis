@@ -577,7 +577,7 @@ describe("on the chat page", () => {
     fireEvent.change(el, { target: { value: "think" } });
     fireEvent.keyDown(el, { key: "Enter" });
     const live = await screen.findByTestId("live-work");
-    await waitFor(() => expect(within(live).getByTestId("turn-clock").textContent).toMatch(/^1[2-9]s$/));
+    await waitFor(() => expect(within(live).getByTestId("turn-clock").textContent).toMatch(/^1[2-9] s$/));
     expect(within(live).queryByTestId("live-work-words")).toBeNull();
   });
 });

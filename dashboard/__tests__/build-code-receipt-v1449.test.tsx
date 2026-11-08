@@ -55,7 +55,7 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
 }));
 
 import { BuildCodeView } from "@/components/buildCode/BuildCodeView";
-import { decodeCodeEvent, foldConversation, receiptDuration, receiptLine, receiptOutcome, type CodeEvent } from "@/lib/buildApp";
+import { decodeCodeEvent, foldConversation, receiptDuration, receiptLine, receiptOutcome, codeReceiptWhere, RECEIPT_OUTCOME_WORDS, type CodeEvent } from "@/lib/buildApp";
 import { secondsText } from "@/lib/durationWords";
 
 const TOOLS = {
@@ -190,6 +190,32 @@ describe("the outcome's glyph", () => {
     // The usage line is inside the fold, said once.
     expect(screen.getAllByTestId("code-usage")).toHaveLength(1);
     expect(within(receipt).getByTestId("code-usage").textContent).toContain("1,200 in");
+  });
+
+  // v1.455.0 (Wave F, item 18): the glyph is for the eye; a screen reader
+  // hears the outcome in a word, and the receipt names where it ran.
+  it("v1.455.0: a screen reader hears 'Finished' / 'Needs a look', and the receipt says it ran in the cloud", async () => {
+    open("a1", reply(OK_STEPS, "completed"));
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const receipt = await screen.findByTestId("code-receipt", {}, { timeout: 10_000 });
+    const word = within(receipt).getByTestId("code-receipt-outcome");
+    expect(word.textContent).toBe("Finished: ");
+    expect(word.getAttribute("class")).toContain("sr-only");
+    expect(within(receipt).getByTestId("code-receipt-where").textContent).toBe("· cloud");
+    cleanup();
+    open("a1", reply(OK_STEPS, "interrupted"));
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const warned = await screen.findByTestId("code-receipt", {}, { timeout: 10_000 });
+    expect(within(warned).getByTestId("code-receipt-outcome").textContent).toBe("Needs a look: ");
+  });
+
+  it("v1.455.0: where it ran comes from the tool alone; Pi and OpenCode say nothing (their pick decides)", () => {
+    expect(codeReceiptWhere("claude-code")).toBe("cloud");
+    expect(codeReceiptWhere("codex")).toBe("cloud");
+    expect(codeReceiptWhere("pi")).toBe("");
+    expect(codeReceiptWhere("opencode")).toBe("");
+    expect(codeReceiptWhere("")).toBe("");
+    expect(RECEIPT_OUTCOME_WORDS).toEqual({ ok: "Finished", warn: "Needs a look" });
   });
 
   it("on screen: a stopped reply leads with a ⚠ in the warning tone", async () => {

@@ -466,14 +466,14 @@ describe("the live row", () => {
     );
   }
 
-  it("reads '<Agent> is working · <step> · 1:24', is a real disclosure, and draws no box", () => {
+  it("reads '<Agent> is working · <step> · 1 min 24 s', is a real disclosure, and draws no box", () => {
     render(live());
     const row = screen.getByTestId("agent-run-row");
     expect(row.getAttribute("data-state")).toBe("running");
     expect(screen.getByTestId("agent-run-words").textContent).toBe(
       "The researcher is working · Step 2 of 4: draft the summary",
     );
-    expect(screen.getByTestId("agent-run-clock").textContent).toMatch(/^1:2[4-9]$/);
+    expect(screen.getByTestId("agent-run-clock").textContent).toMatch(/^1 min 2[4-9] s$/);
     // The header (words AND the per-second clock) is not a live region: the
     // bubble around it is polite, and a clock read out every second would be
     // noise; the step rows below announce themselves as they arrive.
@@ -515,7 +515,7 @@ describe("the live row", () => {
     expect(screen.queryByTestId("agent-run-clock")).toBeNull();
     expect(screen.getByTestId("live-work-words").textContent).toMatch(/^Working for 1 min 2[4-9] s · read 1 file$/);
     fireEvent.click(screen.getByTestId("agent-run-toggle"));
-    expect(screen.getByTestId("agent-run-clock").textContent).toMatch(/^1:2[4-9]$/);
+    expect(screen.getByTestId("agent-run-clock").textContent).toMatch(/^1 min 2[4-9] s$/);
   });
 
   it("an agent turn with no hand-off line still gets the row, unnamed", () => {
@@ -538,11 +538,11 @@ describe("the live row", () => {
       );
     }
     render(<Parent />);
-    expect(screen.getByTestId("agent-run-clock").textContent).toBe("5s");
+    expect(screen.getByTestId("agent-run-clock").textContent).toBe("5 s");
     act(() => {
       vi.advanceTimersByTime(3_000);
     });
-    expect(screen.getByTestId("agent-run-clock").textContent).toBe("8s");
+    expect(screen.getByTestId("agent-run-clock").textContent).toBe("8 s");
     expect(parentRenders).toBe(1);
   });
 
@@ -667,7 +667,7 @@ describe("on the chat page", () => {
     );
     // Wait for the THING asserted: the clock reading the session's own start
     // (84 s ago), not the row's mount ("0s" would be a resumed run's lie).
-    await waitFor(() => expect(screen.getByTestId("agent-run-clock").textContent).toMatch(/^1:2\d$/));
+    await waitFor(() => expect(screen.getByTestId("agent-run-clock").textContent).toMatch(/^1 min 2\d s$/));
     // The saved line is NOT drawn as well: its sentence is said once, inside
     // the row (why it was handed over).
     const said = screen.getAllByText(SENTENCE);

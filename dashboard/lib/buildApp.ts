@@ -1573,6 +1573,25 @@ export function receiptOutcome(stop: Extract<CodeEvent, { type: "done" }>["stop"
   return r && r.failed > 0 ? "warn" : "ok";
 }
 
+/** v1.455.0 (Wave F, item 18): the outcome a screen reader hears — the ✓ /
+ *  ⚠ glyph is drawn for the eye only. */
+export const RECEIPT_OUTCOME_WORDS: Record<ReceiptOutcome, string> = {
+  ok: "Finished",
+  warn: "Needs a look",
+};
+
+/** v1.455.0 (Wave F, item 18): the coding tools whose model always answers
+ *  on the vendor's service — the daemon's `hosted/panes.CLOUD_TOOLS` (a
+ *  Python test keeps the two equal). Pi and OpenCode pick a provider of their
+ *  own, so where they ran is not known from the tool alone (nothing said). */
+export const CODE_CLOUD_TOOLS: readonly string[] = ["claude-code", "codex", "grok", "antigravity"];
+
+/** Where a Build › Code reply ran, for its receipt: "cloud" for a tool in
+ *  CODE_CLOUD_TOOLS (the daemon's WHERE_CLOUD word), else "" (not known). */
+export function codeReceiptWhere(tool: string): string {
+  return CODE_CLOUD_TOOLS.includes((tool || "").trim().toLowerCase()) ? "cloud" : "";
+}
+
 /** v1.417.0 (C4.9): the reply line — "answered by <model> on <account> ·
  *  2 min 14 s · 7 actions · 3 files changed", the way Chat › Code's receipt
  *  reads. A part with nothing to say is left out; "" when nothing is known.

@@ -363,7 +363,7 @@ describe("G16: a run you stopped reads Stopped, not Task failed", () => {
     await screen.findByTestId("agent-run-row");
     // Wait for the THING the settle reads: the run's own start, shown by the
     // live row's clock (0:4x, from the session's created_at).
-    await waitFor(() => expect(screen.getByTestId("agent-run-clock").textContent).toMatch(/^4\ds$/));
+    await waitFor(() => expect(screen.getByTestId("agent-run-clock").textContent).toMatch(/^4\d s$/));
     fireEvent.click(screen.getByRole("button", { name: /Stop/ }));
     await waitFor(() => expect(H.api.posts.some((p) => p.path === "/sessions/s1/cancel")).toBe(true));
     await waitFor(() =>

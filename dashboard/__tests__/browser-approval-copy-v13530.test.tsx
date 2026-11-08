@@ -182,6 +182,33 @@ describe("the Approval queue says what really happens (G54)", () => {
   });
 });
 
+describe("v1.455.0 (Wave F, item 18): the queue card words its run and its target", () => {
+  it("names the task the step belongs to (never the run's id) and what it acts on", async () => {
+    api.approvals = [
+      {
+        ...APPROVAL,
+        action_json: JSON.stringify({ kind: "click", selector: { role: "button", name: "Pay now" } }),
+      },
+    ];
+    api.runs = [
+      { id: "run_7", task: "Pay the March invoice", status: "running", ok: null, started_at: new Date().toISOString(), finished_at: null },
+    ];
+    render(<BrowserPage />);
+    await waitFor(() => expect(screen.getByTestId("cu-queue-run").textContent).toBe("For “Pay the March invoice”"));
+    expect(screen.getByTestId("cu-queue-run").getAttribute("title")).toBe("Run run_7");
+    expect(screen.getByTestId("cu-queue-target").textContent).toBe("the “Pay now” button");
+    // The raw id is never a visible word on the card.
+    expect(screen.getByTestId("cu-queue-run").closest(".card-surface")?.textContent).not.toMatch(/run_7/);
+  });
+
+  it("a run the recent list does not hold reads as a browser task; a bare selector is a page element", async () => {
+    api.approvals = [APPROVAL];
+    render(<BrowserPage />);
+    await waitFor(() => expect(screen.getByTestId("cu-queue-run").textContent).toBe("For a browser task"));
+    expect(screen.getByTestId("cu-queue-target").textContent).toBe("the page element #pay");
+  });
+});
+
 describe("v1.353.0 integrate: the queue card answers in the app's one approval language", () => {
   it("its two buttons are lib/approvalWords' Allow once / Deny — never 'Approve'", async () => {
     const words = await import("@/lib/approvalWords");

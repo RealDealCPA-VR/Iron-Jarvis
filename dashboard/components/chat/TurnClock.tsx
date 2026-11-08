@@ -13,12 +13,13 @@
 import { Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-/** 12000 → "12s", 65000 → "1:05". */
+/** A running clock in the app's own duration words (v1.455.0, Wave F item
+ *  18: it read "12s" / "1:05" beside a settled "1 min 5 s"): 12000 → "12 s",
+ *  65000 → "1 min 5 s", 120000 → "2 min". Whole seconds, so a ticking clock
+ *  never flickers tenths (lib/durationWords.secondsText shows tenths under
+ *  10 s for a SETTLED time); the same shape at and above 10 s. */
 export function formatElapsed(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  return `${m}:${String(s % 60).padStart(2, "0")}`;
+  return elapsedWords(Math.max(0, ms)) ?? "0 s";
 }
 
 /** v1.348.0: a running turn's time in the words the folded line uses

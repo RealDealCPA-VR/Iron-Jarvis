@@ -292,7 +292,7 @@ describe("the pane folds a reply's work into the chat page's line", () => {
     S.stream.startedAt = Date.now() - 12_000;
     render(<PaneChat paneId="p1" cwd={CWD} />);
     const live = await screen.findByTestId("pane-chat-live");
-    await waitFor(() => expect(within(live).getByTestId("turn-clock").textContent).toMatch(/^1[2-9]s$/));
+    await waitFor(() => expect(within(live).getByTestId("turn-clock").textContent).toMatch(/^1[2-9] s$/));
     expect(within(live).queryByTestId("live-work-words")).toBeNull();
   });
 });
