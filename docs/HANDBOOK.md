@@ -573,6 +573,13 @@ with the request typed in.
   `/ltm`); since Simple mode hides `/ltm` from the nav, the Memory page's
   other tabs carry a one-line link **Import from ChatGPT/Claude/Takeout →
   Long-term memory** that opens it.
+  A base you add on the Memory page is READ BACK the moment it is saved:
+  the note under **Add source** says "Added and answering.", or why not
+  ("Added, but it is not answering: folder not found: …", in the warning
+  tone) — the same words chat's "add my vault as memory" gives. The
+  **Obsidian vault** and **Notion database** rows in Settings › Memory are
+  read when Iron Jarvis starts, so they say "after a restart"; the Memory
+  page's **Add a memory base** is the door that works at once.
 - **Memory profiles** (v1.406.0; called Brain profiles until v1.408.0):
   choose where your durable memory lives and how Jarvis searches, saves to
   and trusts it — see "Your durable brain: Brain Profiles" and "Memory
@@ -2689,6 +2696,8 @@ go only on the secure card, never in the chat.
 - **Memory bases.** "Use Notion as your long-term memory" (the token goes on
   the secure card and it works without a restart), or a notes folder such as
   an Obsidian vault. Chat can also make it where Jarvis saves what it learns.
+  The reply reads the new base back — "Added and answering.", or why it is
+  not — exactly as the Memory page does.
 - **Preferences, lessons and personas.** "Forget the preference about short
   answers", "change it to bullet points", "add a lesson: always cite the IRS
   section", "make a persona that answers like a CPA", "delete the CPA
@@ -7812,7 +7821,12 @@ The look of the app is the same.
 - **Bring your tools from your other apps.** Settings › Tools › **Add a
   tool** opens on **Bring your tools from Claude, Codex, Cursor…**. It also
   reads VS Code's `mcp.json`, a project's `.vscode` / `.cursor` settings,
-  Windsurf, Gemini CLI and the Claude Code plugins you installed. Each tool
+  Windsurf, Gemini CLI, the Claude Code plugins you installed and — since
+  the readiness plan's Wave C — the four coding tools Build › Code drives:
+  OpenCode (`opencode.json(c)` / `config.json`, and a project's own), Grok
+  (`~/.grok/config.toml`, and a project's `.grok/config.toml`), Antigravity
+  (`~/.gemini/config/mcp_config.json`) and Pi (`~/.pi/agent/mcp.json`, and
+  a project's `.pi/mcp.json`), each listed by the tool's name. Each tool
   says in one line what it does (the command is under **Details**); one you
   switched off in its app is listed unticked as "turned off in Claude
   Desktop"; one you already have reads "already connected". After **Add
@@ -8328,10 +8342,14 @@ in the same preview list:
   **Add selected** and they are added and started; a pack that did not start
   says why, like any other.
 - **Import from your other apps.** One press lists the packs already set up
-  in Claude Code, Claude Desktop, Codex, Cursor and VS Code on this PC, read
-  from their own files (never changed), grouped by app, with the same
-  preview rows. Pick the ones you want; their keys move straight from that
-  file into Jarvis's encrypted vault without passing through the page.
+  in Claude Code, Claude Desktop, Codex, Cursor, VS Code, Windsurf, Gemini
+  CLI, OpenCode, Grok, Antigravity and Pi on this PC, read from their own
+  files (never changed), grouped by app, with the same preview rows. A
+  placeholder the app would fill at start (`${TOKEN}`, OpenCode's
+  `{env:TOKEN}` or `{file:…}`) becomes a box to type the value in — the file
+  it names is never read. Pick the ones you want; their keys move straight
+  from that file into Jarvis's encrypted vault without passing through the
+  page.
 - **HTTP server.** A pack that runs as a web service: its address, optional
   headers and an optional bearer token. Tokens and any header whose name
   looks like a secret are kept in the vault.

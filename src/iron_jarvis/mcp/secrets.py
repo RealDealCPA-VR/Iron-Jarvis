@@ -200,12 +200,26 @@ def split_args(args: list[Any] | None, *, keep: Any = ()) -> tuple[list[str], di
     return shown, values
 
 
+#: Wave C review: a query parameter NAMED like a credential on a pack's
+#: address (``?key=…``, ``?token=…``, Smithery-style ``?api_key=…`` — the
+#: shared ``mask`` knows only the key-word shapes it reads everywhere, not a
+#: bare ``key``) — its value is a secret on a server ADDRESS whatever its
+#: shape. The name is matched whole, case-blind, after ``?`` or ``&``.
+_URL_SECRET_PARAM_RX = re.compile(
+    r"""([?&](?:key|apikey|api[_-]key|token|access[_-]token|auth|secret|password|passwd|pwd|sig|signature)=)(?![*]{3}(?:&|$))[^&#\s]+""",
+    re.IGNORECASE,
+)
+
+
 def split_url(url: Any) -> tuple[str, str]:
     """``(shown_url, secret_url)``: the url through ``mask`` (``?api_key=***``,
-    ``https://me:***@host``) and, when that changed it, the real url for the
-    vault (``""`` otherwise)."""
+    ``https://me:***@host``) and a credential-named query parameter's value
+    (``?key=***``, :data:`_URL_SECRET_PARAM_RX`) and, when that changed it,
+    the real url for the vault (``""`` otherwise)."""
     u = "" if url is None else str(url)
     shown = mask(u) if u else u
+    if shown:
+        shown = _URL_SECRET_PARAM_RX.sub(r"\1" + MASK, shown)
     return shown, (u if shown != u else "")
 
 

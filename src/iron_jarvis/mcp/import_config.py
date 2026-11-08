@@ -27,6 +27,10 @@ TRANSPORTS: tuple[str, ...] = ("stdio", "http", "sse")
 
 #: Where a spec came from (the preview and the Tools page say it in words).
 #: v1.354.0 (G50): Windsurf and Gemini CLI read through the same parser.
+#: Wave C (item 30): OpenCode (``"mcp": {name: {type local|remote, command
+#: [..], environment}}``), Grok (``[mcp_servers.<name>]`` TOML like Codex's,
+#: plus a top-level ``disabled_mcp_servers`` list), Antigravity and Pi (both
+#: the plain ``mcpServers`` map).
 SOURCES: tuple[str, ...] = (
     "paste",
     "claude-code",
@@ -36,6 +40,10 @@ SOURCES: tuple[str, ...] = (
     "vscode",
     "windsurf",
     "gemini-cli",
+    "opencode",
+    "grok",
+    "antigravity",
+    "pi",
     "form",
 )
 
@@ -316,12 +324,17 @@ class PackSpec:
         :func:`host_of`), both read off the MASKED parts, so a row the catalog
         does not know can still say what it is in plain words."""
         from ..detections.redact import mask
-        from .secrets import is_secret_key
+        from .secrets import is_secret_key, split_args, split_url
 
         env_keys = sorted(self.env)
         command = mask(self.command)
-        args = [mask(a) for a in self.args]
-        url = mask(self.url)
+        # Wave C review: the SAME split the add stores (``mcp/pack_door``):
+        # the value after a secret-named flag (``--api-key VALUE``, which
+        # ``mask`` alone cannot see) and a credential-named query parameter
+        # (``?key=…``) are ``***`` in the preview too — the row is read by
+        # the browser, and an imported Grok/OpenCode/Pi config carries them.
+        args, _arg_values = split_args(self.args)
+        url, _url_value = split_url(self.url)
         stdio = self.transport == "stdio"
         return {
             "name": self.name,
@@ -353,9 +366,28 @@ class PackSpec:
 # (import_sources._with_plugin_root), so it is never a question.
 # --------------------------------------------------------------------------- #
 
-_PLACEHOLDER_RX = re.compile(r"\$\{([^{}]+)\}")
+#: ``${NAME}`` / ``${input:x}`` / ``${NAME:-default}`` — and, since Wave C
+#: (item 30), OpenCode's own ``{env:NAME}`` / ``{file:PATH}`` (its config
+#: reads a variable or a file at start; an imported pack asks for the value
+#: instead — the file's contents are NEVER read here).
+_PLACEHOLDER_RX = re.compile(r"\$\{([^{}]+)\}|\{(?:env|file):([^{}]+)\}")
 #: Placeholders the import resolves itself.
 _RESOLVED_PLACEHOLDERS: frozenset[str] = frozenset({"CLAUDE_PLUGIN_ROOT"})
+
+
+def _placeholder_inside(m: "re.Match[str]") -> str:
+    """The text inside ONE placeholder match, either shape."""
+    if m.group(1) is not None:
+        return m.group(1)
+    body = (m.group(2) or "").strip()
+    if m.group(0).startswith("{file:"):
+        # A file's NAME is what the user is asked for ("token" for
+        # ``{file:~/.config/token}``); never its contents.
+        tail = body.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        if "." in tail and not tail.startswith("."):
+            tail = tail.rsplit(".", 1)[0]
+        return tail.lstrip(".") or body
+    return body
 
 
 def _placeholder_name(inner: str) -> tuple[str, str]:
@@ -378,7 +410,7 @@ def _with_defaults(text: str) -> str:
     other app does when NAME is unset); other placeholders stay."""
 
     def _sub(m: "re.Match[str]") -> str:
-        name, default = _placeholder_name(m.group(1))
+        name, default = _placeholder_name(_placeholder_inside(m))
         if name in _RESOLVED_PLACEHOLDERS or not default:
             return m.group(0)
         return default
@@ -391,7 +423,7 @@ def _open_placeholders(text: str) -> list[tuple[str, str]]:
     already written in; ``${CLAUDE_PLUGIN_ROOT}`` is never open)."""
     out: list[tuple[str, str]] = []
     for m in _PLACEHOLDER_RX.finditer(text):
-        name, _default = _placeholder_name(m.group(1))
+        name, _default = _placeholder_name(_placeholder_inside(m))
         if name and name not in _RESOLVED_PLACEHOLDERS:
             out.append((m.group(0), name))
     return out
@@ -546,6 +578,10 @@ _BLOCK_COMMENT_RX = re.compile(r"/\*.*?\*/", re.DOTALL)
 _VERSION_SUFFIX_RX = re.compile(r"@[~^]?\d[^/]*$")
 _TRANSPORT_WORDS = {
     "stdio": "stdio",
+    # Wave C (item 30): OpenCode's ``type``: ``local`` = a command, ``remote``
+    # = an address (streamable HTTP; a /sse address is still SSE).
+    "local": "stdio",
+    "remote": "",
     "http": "http",
     "streamable-http": "http",
     "streamable_http": "http",
@@ -645,8 +681,16 @@ def _str_map(value: Any) -> dict[str, str]:
 def _spec_from_entry(raw_name: str, entry: dict[str, Any], *, source: str, origin: str) -> PackSpec | None:
     """One config-dialect server entry → a spec, or ``None`` for Iron
     Jarvis's own server / an entry with neither a command nor a URL."""
-    command = str(entry.get("command") or "").strip()
+    raw_command = entry.get("command")
     args = _str_list(entry.get("args"))
+    if isinstance(raw_command, (list, tuple)):
+        # Wave C (item 30): OpenCode writes the whole line as a LIST
+        # (``"command": ["npx", "-y", "@playwright/mcp"]``).
+        words = [str(w) for w in raw_command if str(w).strip()]
+        command = words[0].strip() if words else ""
+        args = words[1:] + args
+    else:
+        command = str(raw_command or "").strip()
     # Codex's `command = "npx -y pkg"` and VS Code's "command": "npx" both
     # appear; a command carrying spaces is a command LINE.
     if command and not args and " " in command and not _has_path_sep(command):
@@ -662,6 +706,8 @@ def _spec_from_entry(raw_name: str, entry: dict[str, Any], *, source: str, origi
             break
     kind_raw = str(entry.get("transport") or entry.get("type") or "").strip().lower()
     kind = _TRANSPORT_WORDS.get(kind_raw, "")
+    if kind_raw == "remote" and not url:
+        return None  # OpenCode's remote server with no address: nothing to reach
     if not kind and url:
         # v1.354.0 (G50): Gemini CLI names the transport by the KEY —
         # ``httpUrl`` is streamable HTTP, ``url`` is SSE — so its address
@@ -680,7 +726,8 @@ def _spec_from_entry(raw_name: str, entry: dict[str, Any], *, source: str, origi
         return None
     if _is_own_server(command, args) or any(m in url.lower() for m in _OWN_SERVER_MARKS):
         return None
-    env = _str_map(entry.get("env"))
+    # OpenCode spells the server's variables ``environment``.
+    env = _str_map(entry.get("env") if entry.get("env") is not None else entry.get("environment"))
     headers = _str_map(entry.get("headers") or entry.get("http_headers"))
     auth_raw = entry.get("auth")
     auth = dict(auth_raw) if isinstance(auth_raw, dict) and auth_raw.get("value") else None
@@ -804,6 +851,11 @@ def _specs_from_json(obj: dict[str, Any], *, source: str, origin: str) -> tuple[
     if isinstance(mcp, dict) and isinstance(mcp.get("servers"), dict):
         recognised = True
         specs += _specs_from_map(mcp["servers"], source=source or "vscode", origin=origin)
+    elif isinstance(mcp, dict) and _looks_like_server_map(mcp):
+        # Wave C (item 30): OpenCode's ``"mcp"`` IS the map of servers
+        # (each entry carries ``type``), where VS Code's holds ``servers``.
+        recognised = True
+        specs += _specs_from_map(mcp, source=source or "opencode", origin=origin)
     if isinstance(obj.get("servers"), dict) and not recognised:
         recognised = True
         specs += _specs_from_map(obj["servers"], source=source or "vscode", origin=origin)
@@ -824,7 +876,11 @@ def _specs_from_toml(data: dict[str, Any], *, source: str, origin: str) -> tuple
     servers = data.get("mcp_servers")
     if not isinstance(servers, dict):
         return [], False
-    return _specs_from_map(servers, source=source or "codex", origin=origin), True
+    # Wave C (item 30): Grok's ``grok mcp disable`` writes the name into a
+    # top-level ``disabled_mcp_servers`` list beside the blocks (its own
+    # docs: "MCP server names to skip without deleting their blocks").
+    off = _name_list(data.get("disabled_mcp_servers"))
+    return _specs_from_map(servers, source=source or "codex", origin=origin, off_names=off), True
 
 
 # -- names for a pack that carries none ------------------------------------ #
@@ -1217,6 +1273,15 @@ def _source_for_path(path: str) -> str:
     name = low.rsplit("/", 1)[-1]
     if name == "claude_desktop_config.json":
         return "claude-desktop"
+    # Wave C (item 30): the four coding tools' own files.
+    if name == "config.toml" and "/.grok/" in low:
+        return "grok"
+    if name == "mcp_config.json" and "/.gemini/" in low:
+        return "antigravity"
+    if name == "mcp.json" and "/.pi/" in low:
+        return "pi"
+    if name in ("opencode.json", "opencode.jsonc") or "/.opencode/" in low or "/opencode/config.json" in low:
+        return "opencode"
     if name == "config.toml" or "/.codex/" in low:
         return "codex"
     if "/.cursor/" in low:
