@@ -3000,16 +3000,41 @@ async function runSpotlightTask(task) {
 const SPOTLIGHT_POLL_MS = 4000;
 const SPOTLIGHT_WATCH_CAP_MS = 15 * 60 * 1000;
 
-// What the watcher says for one status read, or null to keep watching
-// (v1.333.0). `cancelled` is an end too: it used to be watched for the whole
-// 15 minutes and then announced as "Task done". At the cap the task is
-// usually STILL RUNNING, so the toast says so instead of claiming it is done.
-function spotlightOutcome(status, elapsed, task) {
+// The words a finished quick task's toast says (v1.449.0, readiness item 14):
+// the SAME words every status badge reads from dashboard/lib/statusWords.ts
+// (STATUS completed / failed / cancelled and OUTCOME needs_you /
+// completed_with_failures), held equal by
+// tests/test_desktop_spotlight_outcome_v1449.py. One line on purpose: the
+// node pins lift it with a single-line regex.
+const SPOTLIGHT_OUTCOME_WORDS = { completed: "Done", failed: "Failed", cancelled: "Stopped", needs_you: "Needs you", completed_with_failures: "Part failed" };
+
+// The session's folder, named for the toast — or "" when the row carries none
+// or spells a network path (never opened from a toast: an SMB connection is
+// not a press the user made; the v1.379.0 rule).
+function spotlightFolder(raw) {
+  const folder = typeof raw === "string" ? raw.trim() : "";
+  if (!folder || /^(\\\\|\/\/)/.test(folder)) return "";
+  return folder;
+}
+
+// What the watcher says for one read of the slim session row, or null to keep
+// watching (v1.333.0; v1.449.0 reads the ROW, not only its status). The
+// ledger's verdict (`outcome`: needs_you / completed_with_failures) LEADS a
+// completed row — "Done" over work that still needs the user, or that partly
+// failed, was the readiness audit's finding — and a stopped task reads
+// "Stopped", never "cancelled". At the 15-minute cap the task is usually STILL
+// RUNNING, so the toast says so instead of claiming it is done.
+function spotlightOutcome(sess, elapsed, task) {
   const label = String(task).slice(0, 60);
-  if (status === "completed") return { title: `Task done: ${label}`, final: true };
-  if (status === "failed") return { title: "Task failed", final: true };
-  if (status === "cancelled") return { title: "Task cancelled", final: true };
-  if (elapsed > SPOTLIGHT_WATCH_CAP_MS) return { title: `Still running: ${label}`, final: false };
+  const row = sess && typeof sess === "object" ? sess : { status: sess };
+  const status = typeof row.status === "string" ? row.status : "";
+  if (status === "completed" || status === "failed" || status === "cancelled") {
+    const outcome = typeof row.outcome === "string" ? row.outcome : "";
+    const verdict = status === "completed" && SPOTLIGHT_OUTCOME_WORDS[outcome] ? outcome : status;
+    const folder = spotlightFolder(row.workspace_path);
+    return { title: `${SPOTLIGHT_OUTCOME_WORDS[verdict]}: ${label}`, final: true, verdict, folder };
+  }
+  if (elapsed > SPOTLIGHT_WATCH_CAP_MS) return { title: `Still running: ${label}`, final: false, verdict: "", folder: "" };
   return null;
 }
 
@@ -3018,6 +3043,9 @@ function spotlightOutcome(status, elapsed, task) {
 // the "started" they already saw. v1.333.0: the read is the SLIM one
 // (`?transcript=0`, still nested: the toast reads only the session row), and a
 // tick never starts while the previous read is still on its way.
+// v1.449.0: a final toast whose row carries a folder NAMES it and offers an
+// "Open folder" button (Electron draws notification actions on macOS only;
+// on Windows the click opens the session page, which has Open folder).
 function watchSpotlightTask(id, task) {
   let elapsed = 0;
   let busy = false;
@@ -3037,24 +3065,31 @@ function watchSpotlightTask(id, task) {
     // session (a top-level s.status was always undefined, so the "done"
     // notification never fired until the 15-min cap).
     const sess = (s && s.session) || s || {};
-    const outcome = spotlightOutcome(sess.status, elapsed, task);
+    const outcome = spotlightOutcome(sess, elapsed, task);
     if (!outcome) return;
     clearInterval(timer);
     try {
-      const note = new Notification({
-        title: outcome.title,
-        body: !outcome.final
-          ? "It has been working for 15 minutes. Click to open it."
-          : sess.summary
-            ? String(sess.summary).slice(0, 140)
-            : "Click to open the result.",
-      });
+      const folderName = outcome.folder ? path.basename(outcome.folder) || outcome.folder : "";
+      let body = !outcome.final
+        ? "It has been working for 15 minutes. Click to open it."
+        : sess.summary
+          ? String(sess.summary).slice(0, 140)
+          : "Click to open the result.";
+      if (outcome.final && folderName) body = `${body}\nIn ${folderName}`;
+      const options = { title: outcome.title, body };
+      if (outcome.final && outcome.folder) options.actions = [{ type: "button", text: "Open folder" }];
+      const note = new Notification(options);
       note.on("click", () => {
         showMainWindow();
         if (mainWin && !mainWin.isDestroyed()) {
           mainWin.loadURL(`${DASHBOARD_URL}/sessions/${id}`);
         }
       });
+      if (outcome.final && outcome.folder) {
+        note.on("action", () => {
+          shell.openPath(outcome.folder).catch(() => {});
+        });
+      }
       note.show();
     } catch {
       /* notifications unavailable */
