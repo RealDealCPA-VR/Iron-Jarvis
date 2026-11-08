@@ -331,7 +331,9 @@ describe("uploads belong to the conversation they started in (v1.322.0)", () => 
       await new Promise((r) => setTimeout(r, 20));
     });
     expect(await screen.findByText("a.pdf")).toBeTruthy();
-    expect(screen.getByText(/Couldn't attach b\.pdf: disk full/)).toBeTruthy();
+    // v1.449.0 (AN review): the words are on the notice line AND in its
+    // sr-only announcer (`chat-notice-live`), so the read is scoped to the line.
+    expect(within(screen.getByTestId("chat-notice")).getByText(/Couldn't attach b\.pdf: disk full/)).toBeTruthy();
   });
 });
 

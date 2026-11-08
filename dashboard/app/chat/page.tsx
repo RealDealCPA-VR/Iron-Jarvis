@@ -4184,6 +4184,21 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   const [replyLive, setReplyLive] = useState("");
   const wasChatBusyRef = useRef(false);
   const stoppedBeforeRef = useRef(false);
+  // AN review (v1.449.0): the conversation the running turn belongs to
+  // (`convGenRef` at its start). Leaving it mid-turn (New chat, another chat)
+  // ends the wait by `setChatBusy(false)` / `setAwaitingId(null)` with NO
+  // reply — the announcer must say nothing then, not "Reply ready.".
+  const liveConvGenRef = useRef(0);
+  // AN review (v1.449.0): a hand-off to an agent is under way — `sendAgent`
+  // has been called and has not yet named its session (or failed). Between
+  // the chat lane's `setChatBusy(false)` and `setAwaitingId(id)` nothing is
+  // busy for a moment, and that gap is not a reply landing.
+  const handOffRef = useRef(false);
+  // AN review (v1.449.0): the small-action notice's sr-only announcer. The
+  // visible `chat-notice` line is mounted WITH its words, which a screen
+  // reader often never reads (the bell's v1.352.0 lesson), so the words are
+  // ALSO put into this always-mounted status region.
+  const noticeLive = notice ?? "";
   // The failure line's VISIBLE words, as rendered this pass, for the
   // announcer to read at the moment a turn ends (a ref: no extra effect dep).
   const errorLineRef = useRef<string | null>(null);
@@ -4226,25 +4241,43 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     : null;
   // v1.449.0 (Wave B, item 16): the announcer follows the turn's edge. A
   // turn starting empties it (so the next end is a CHANGE a screen reader
-  // reads); a turn ending fills it once — the failure line's own words, or
-  // "Stopped." for a Stop (the `stoppedRef` the queue effects read), else
-  // "Reply ready.". `error` and `chatBusy` land in the same commit on every
-  // end path (both chat lanes set the line, then the busy flag, in one
-  // continuation), so the ref already holds the line here.
+  // reads); a turn ending fills it once — nothing when the failure line
+  // (an alert of its own) carries the sentence, "Reply stopped." for a Stop
+  // (the `stoppedRef` the queue effects read), else "Reply ready.". `error`
+  // and the busy flag land in the same commit on every end path (both chat
+  // lanes set the line, then the flag, in one continuation), so the ref
+  // already holds the line here.
+  // AN review (v1.449.0): the edge is `busy` (a chat turn OR an agent's
+  // run), not the chat lane's flag alone — an escalated turn ends the chat
+  // lane and hands the question to an agent, and its reply is ready when the
+  // AGENT's reply lands, not when the chat lane let go. Two silences: a
+  // hand-off in flight (`handOffRef`: the lane's flag is down, the session
+  // not yet named), and a conversation that was LEFT mid-turn (`convGenRef`
+  // moved: the wait ended with no reply).
+  const anyBusy = awaitingId !== null || chatBusy;
   useEffect(() => {
-    if (chatBusy) {
-      wasChatBusyRef.current = true;
+    if (anyBusy) {
+      // Captured on EVERY rise (a hand-off's agent run rises in the same
+      // conversation with the same flags, so re-reading them changes
+      // nothing; a turn after a failed hand-off and a New chat must read the
+      // NEW conversation, or its end would be silenced as "left").
+      liveConvGenRef.current = convGenRef.current;
       // A Stop flag left by an EARLIER turn is not this turn's (sendChat
       // resets it; the messaging lane does not).
       stoppedBeforeRef.current = stoppedRef.current;
+      wasChatBusyRef.current = true;
       setReplyLive("");
       return;
     }
     if (!wasChatBusyRef.current) return;
+    // A hand-off in flight: the agent's run is about to be busy; wait for it.
+    if (handOffRef.current) return;
     wasChatBusyRef.current = false;
+    // Left mid-turn: no reply landed here, so nothing to announce.
+    if (liveConvGenRef.current !== convGenRef.current) return;
     const stopped = stoppedRef.current && !stoppedBeforeRef.current;
     setReplyLive(replyLiveWords({ stopped, errorLine: errorLineRef.current }));
-  }, [chatBusy]);
+  }, [anyBusy]);
   // v1.355.0 (G29): the Sign in press — the same hook the Accounts row and
   // the connect doors use; a pane that opened refreshes /health so the
   // provider turns green by itself once the user finishes there.
@@ -9945,6 +9978,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       keepGoing?: string;
     } = {},
   ) {
+    // AN review (v1.449.0): a hand-off is under way until this run is named
+    // (or fails) — read by the reply announcer, which must not call the
+    // chat lane letting go "Reply ready.". Set BEFORE any await: the
+    // escalating lane's `finally` drops its busy flag right after this call.
+    handOffRef.current = true;
     // ESCALATION (v1.108.0): chat already appended the user's bubble and
     // already consumed the attachment chips, so re-doing either would show the
     // message twice and drop the files. The turn is being RE-RUN, not restarted.
@@ -10252,6 +10290,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       restoreComposerDraft(messagesRef.current);
     } finally {
       sendingRef.current = false;
+      // AN review (v1.449.0): named (awaitingId set in the same continuation
+      // above), failed (the error line speaks) or torn down — no longer in
+      // flight either way.
+      handOffRef.current = false;
     }
   }
 
@@ -13162,6 +13204,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                   <p role="status" data-testid="chat-reply-live" className="sr-only">
                     {replyLive}
                   </p>
+                  {/* AN review (v1.449.0): the small-action notice's announcer —
+                      always mounted and empty, filled with the notice's words
+                      when one is set, so a screen reader hears "Couldn't attach
+                      b.pdf: …" (the visible line below mounts WITH its words,
+                      which is often not read at all). Cleared with the notice. */}
+                  <p role="status" data-testid="chat-notice-live" className="sr-only">
+                    {noticeLive}
+                  </p>
                   <div
                     data-testid="composer-notices"
                     className="relative mx-4 -mb-4 flex flex-col rounded-t-2xl bg-ink-875 px-1 pb-4 pt-0.5 shadow-[0_0_0_0.5px_rgb(var(--white)/0.08)] empty:hidden sm:mx-7 [&>*+*]:border-t [&>*+*]:border-white/[0.06]"
@@ -13238,10 +13288,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         a status (not an alert), an × that clears it: it never
                         shares the turn's error line below, so a failed upload
                         never reads as a failed reply (and never offers the
-                        reply's Retry). */}
+                        reply's Retry). AN review: no live role here — this line
+                        mounts WITH its words, so the always-mounted
+                        `chat-notice-live` region above speaks for it; a second
+                        live region would say it twice to the readers that do
+                        read a freshly mounted one. */}
                     {notice && (
                       <div
-                        role="status"
                         data-testid="chat-notice"
                         className="flex items-center gap-2 px-3 py-2 text-[12px]"
                       >

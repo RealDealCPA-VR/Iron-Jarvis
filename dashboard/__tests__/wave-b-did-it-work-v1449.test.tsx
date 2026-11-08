@@ -370,6 +370,10 @@ describe("a small action's failure has its own dismissible notice (v1.449.0, ite
     const held = heldUploads();
     render(<ChatPage />);
     await screen.findByPlaceholderText(/Message Iron Jarvis/);
+    // AN review: the notice's announcer is mounted with the page, empty.
+    const noticeLive = screen.getByTestId("chat-notice-live");
+    expect(noticeLive).toHaveAttribute("role", "status");
+    expect(noticeLive.textContent).toBe("");
     attach("a.pdf", "b.pdf");
     await waitFor(() => expect(held).toHaveLength(2));
     await act(async () => {
@@ -379,8 +383,14 @@ describe("a small action's failure has its own dismissible notice (v1.449.0, ite
     });
     expect(await screen.findByText("a.pdf")).toBeTruthy();
     const notice = await screen.findByTestId("chat-notice");
-    expect(notice).toHaveAttribute("role", "status");
     expect(notice.textContent).toContain("Couldn't attach b.pdf: disk full");
+    // AN review: the visible line mounts WITH its words (a freshly mounted
+    // live region is often never read — the v1.352.0 lesson), so it carries
+    // no live role; the ALWAYS-mounted sr-only announcer speaks for it.
+    expect(notice.getAttribute("role")).toBeNull();
+    expect(notice.getAttribute("aria-live")).toBeNull();
+    expect(noticeLive.textContent).toBe(notice.textContent);
+    expect(screen.getByTestId("chat-notice-live")).toBe(noticeLive);
     // The TURN's line is untouched: no alert, no Retry — nothing says a reply failed.
     expect(screen.queryByTestId("chat-turn-error")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Retry/ })).toBeNull();
@@ -389,6 +399,9 @@ describe("a small action's failure has its own dismissible notice (v1.449.0, ite
     // The × clears it.
     fireEvent.click(screen.getByTestId("chat-notice-dismiss"));
     expect(screen.queryByTestId("chat-notice")).toBeNull();
+    // ...and empties the announcer too (the same element, never unmounted).
+    expect(screen.getByTestId("chat-notice-live").textContent).toBe("");
+    expect(screen.getByTestId("chat-notice-live")).toBe(noticeLive);
   });
 
   it("the attachment cap is the same quiet notice", async () => {
@@ -524,8 +537,15 @@ const RAW_MESSAGE_ALLOWED: { file: string; line: string; why: string }[] = [
 
 const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8").replace(/\r\n/g, "\n");
 
-describe("the eleven pages never print a raw error.message (v1.449.0, item 17)", () => {
-  it("every `.message` reach is a LoadFailedLine / couldnt() now, or allow-listed with a reason", () => {
+/** AN review: this scan reads only a `.message` RENDERED in place (a JSX
+ *  `{x.message}` or a template `${x.message}`) — the eleven pages' failed
+ *  READS. A PRESS that fails (`setErr(e.message)` into an ErrorNote: Fleet's
+ *  probe/save, Skills' card/apply/form, Artifacts' run/remove, Updates'
+ *  apply, Browser's save, Creative's mkdir/delete/publish) still shows the
+ *  daemon's own sentence — right for a 4xx, engine text for a 5xx with no
+ *  `detail` ("500 Internal Server Error") — and is NOT covered here. */
+describe("the eleven pages never print a raw error.message for a failed READ (v1.449.0, item 17)", () => {
+  it("every rendered `.message` reach is a LoadFailedLine / couldnt() now, or allow-listed with a reason", () => {
     const offenders: string[] = [];
     for (const file of RAW_MESSAGE_FILES) {
       const src = read(file);
@@ -552,5 +572,131 @@ describe("the eleven pages never print a raw error.message (v1.449.0, item 17)",
         file,
       ).toBe(true);
     }
+  });
+});
+
+/* ======================================================= AN review (B3) */
+
+/** An escalated hand-off whose POST /sessions answers only when the test
+ *  says so — the REAL shape: the chat lane lets go at once, the session is
+ *  named some hundreds of milliseconds later, and that gap is where a wrong
+ *  "Reply ready." would be heard (an instant mock lands both in one commit
+ *  and hides the gap, so the hold is the test). */
+function heldHandOff() {
+  const h = { open: () => {}, refuse: (_e: Error) => {} };
+  H.postResponses["/sessions"] = () =>
+    new Promise((resolve, reject) => {
+      h.open = () => resolve({ id: "s1", status: "active" });
+      h.refuse = reject;
+    });
+  H.responses["/sessions/s1?transcript=0"] = { session: { id: "s1", status: "active" } };
+  H.responses["/sessions/s1/result"] = {};
+  H.responses["/sessions/s1/plan"] = {};
+  return h;
+}
+
+describe("AN review: the announcer's edges (v1.449.0)", () => {
+  it("leaving the conversation mid-turn (New chat) announces NOTHING — no reply landed", async () => {
+    render(<ChatPage />);
+    const live = await screen.findByTestId("chat-reply-live");
+    await startTurn("hello there");
+    expect(live.textContent).toBe("");
+    // New chat: the turn is torn down (stream.abort → the hook resolves with
+    // an empty reply), busy falls, nothing was answered.
+    act(() => {
+      window.dispatchEvent(new Event("ij:new-chat"));
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(screen.getByTestId("chat-reply-live").textContent).toBe("");
+    // The next turn, in the new conversation, is announced as usual (the
+    // conversation mark is re-read at each start, so "left" never sticks).
+    await startTurn("second question");
+    act(() => H.stream.release({ reply: "An answer." }));
+    await waitFor(() => expect(screen.getByTestId("chat-reply-live").textContent).toBe(REPLY_READY_WORDS));
+  });
+
+  it("an escalated turn is announced when the AGENT's reply lands, not when the chat lane lets go", async () => {
+    const handOff = heldHandOff();
+    render(<ChatPage />);
+    const live = await screen.findByTestId("chat-reply-live");
+    // EVERY word the region ever holds — a "Reply ready." set and cleared a
+    // moment later (the chat lane letting go, then the session named) is
+    // read by a screen reader all the same, and a plain read of the region
+    // after the fact would never see it.
+    const heard: string[] = [];
+    const watch = new MutationObserver(() => heard.push(live.textContent ?? ""));
+    watch.observe(live, { childList: true, characterData: true, subtree: true });
+    await startTurn("rename these files");
+    act(() => H.stream.release({ reply: "", escalate: true, escalateReason: "this one needs the full agent" }));
+    // The chat lane let go and the session was asked for: the hand-off's
+    // gap, then the agent's wait. Neither is "Reply ready.".
+    await waitFor(() => expect(H.posts.some((p) => p.path === "/sessions")).toBe(true));
+    // The gap: the chat lane is done, the session not yet named.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(heard.filter((w) => w !== "")).toEqual([]);
+    act(() => handOff.open());
+    await waitFor(() => expect(count("/sessions/s1?transcript=0")).toBeGreaterThan(0), { timeout: 4000 });
+    expect(screen.getByTestId("chat-reply-live").textContent).toBe("");
+    expect(heard.filter((w) => w !== "")).toEqual([]);
+    // The agent's run ends: THAT is the reply.
+    H.responses["/sessions/s1?transcript=0"] = {
+      session: { id: "s1", status: "completed", summary: "Renamed 3 files." },
+    };
+    await waitFor(() => expect(screen.getByTestId("chat-reply-live").textContent).toBe(REPLY_READY_WORDS), {
+      timeout: 4000,
+    });
+    expect(await screen.findByText("Renamed 3 files.")).toBeTruthy();
+    // Said exactly once, at the agent's end.
+    expect(heard.filter((w) => w !== "")).toEqual([REPLY_READY_WORDS]);
+    watch.disconnect();
+  });
+
+  it("a hand-off that fails to start is said by the failure line; the announcer stays quiet, and the NEXT turn is still announced", async () => {
+    const handOff = heldHandOff();
+    render(<ChatPage />);
+    await screen.findByTestId("chat-reply-live");
+    await startTurn("rename these files");
+    act(() => H.stream.release({ reply: "", escalate: true }));
+    await waitFor(() => expect(H.posts.some((p) => p.path === "/sessions")).toBe(true));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    act(() => handOff.refuse(new H.FakeApiError("No agent can take this right now.", 503)));
+    const line = await screen.findByTestId("chat-turn-error");
+    expect(line.textContent).toContain("No agent can take this right now.");
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(screen.getByTestId("chat-reply-live").textContent).toBe("");
+    // A New chat, then an ordinary turn there: announced. (The conversation
+    // mark is read at EVERY start — a failed hand-off leaves the "busy"
+    // memory armed, and a mark read only on the first rise would still be
+    // the old conversation's, silencing this reply as "left".)
+    act(() => {
+      window.dispatchEvent(new Event("ij:new-chat"));
+    });
+    await startTurn("just answer then");
+    act(() => H.stream.release({ reply: "Sure." }));
+    await waitFor(() => expect(screen.getByTestId("chat-reply-live").textContent).toBe(REPLY_READY_WORDS));
+  });
+});
+
+describe("AN review: the notice never survives into another conversation (v1.449.0)", () => {
+  it("New chat clears a standing notice and its announcer", async () => {
+    heldUploads();
+    render(<ChatPage />);
+    await screen.findByPlaceholderText(/Message Iron Jarvis/);
+    attach("1.pdf", "2.pdf", "3.pdf", "4.pdf", "5.pdf");
+    await screen.findByTestId("chat-notice");
+    expect(screen.getByTestId("chat-notice-live").textContent).toContain("Up to 4 files");
+    act(() => {
+      window.dispatchEvent(new Event("ij:new-chat"));
+    });
+    await waitFor(() => expect(screen.queryByTestId("chat-notice")).toBeNull());
+    expect(screen.getByTestId("chat-notice-live").textContent).toBe("");
   });
 });
