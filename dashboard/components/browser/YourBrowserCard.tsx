@@ -103,7 +103,7 @@ import { copyPlain } from "@/components/settings/MaintenanceTools";
 // already six states long.
 import { BrowserSetupModal } from "@/components/browser/BrowserSetupModal";
 import { RecentDownloads } from "@/components/browser/RecentDownloads";
-import { BROWSERS, pickBrowser, type BrowserWords } from "@/components/browser/browserWords";
+import { BROWSERS, pickBrowser, staleAddonLine, type BrowserWords } from "@/components/browser/browserWords";
 
 /* -------------------------------------------------------------------------- */
 /*  Contracts                                                                 */
@@ -525,8 +525,9 @@ function SidebarNote({ appVersion, browser }: { appVersion: string; browser: Bro
               <span data-testid="browser-sidebar-app-version" className="text-zinc-400">
                 {appVersion}
               </span>
-              , and the sidebar prints the add-on version your browser is running in its own header —
-              an older number there is the copy to reload.
+              ; while the add-on is paired this card compares its version with that number and says
+              so when the browser runs an older copy. The sidebar prints the add-on&apos;s version in
+              its own header too.
             </>
           ) : null}
         </p>
@@ -552,6 +553,12 @@ export function YourBrowserCard() {
   // interval on this card would be traffic bought for a string.
   const { data: health } = useApi<Health>("/health");
   const appVersion = (health?.version ?? "").trim();
+  // v1.449.0 (item 31): the add-on's own version, forwarded by
+  // /browser/status since v1.242.0 (an older daemon sends none → nothing
+  // compared). Read off the row here rather than the shared type, which is
+  // the coordinating session's file.
+  const addonVersion = String((data as { extension_version?: unknown } | null)?.extension_version ?? "");
+  const staleLine = staleAddonLine(addonVersion, appVersion, browser);
 
   const [busy, setBusy] = useState<
     "pair" | "grant" | "test" | "disconnect" | "forget" | "access" | null
@@ -697,6 +704,19 @@ export function YourBrowserCard() {
                   {data.browser_name}
                   {data.browser_version ? ` ${data.browser_version}` : ""}
                 </span>
+              </p>
+            ) : null}
+            {/* v1.449.0 (readiness Wave C, item 31): the add-on's version
+                (reported on hello, forwarded by /browser/status) COMPARED
+                with this app's — an older copy is named, with the one press
+                that fixes it, instead of left for the user to notice. */}
+            {data?.connected && staleLine ? (
+              <p
+                data-testid="browser-addon-stale"
+                role="status"
+                className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-100/80"
+              >
+                {staleLine}
               </p>
             ) : null}
 

@@ -94,6 +94,25 @@ _DOC_PRIOR: dict[str, float] = {
     "computer-use": 1.15,
     "browser": 1.15,
 }
+#: A DEFINITION question ("what is a memory base", "what does Local only
+#: mean", "define a workflow") is what the vocabulary document answers: it is
+#: the one place each concept is named and defined. Without this the Handbook,
+#: which mentions every concept many times over as it grows, crowds the
+#: definition out of the top results (v1.450.0's release notes did exactly
+#: that). Applied on top of the per-document prior, only for such questions.
+_DEFINITION_RX = re.compile(
+    r"^\s*(?:what\s+(?:is|are)\b|what's\b|whats\b|define\b|meaning\s+of\b"
+    r"|what\s+does\s+.+\s+mean\b)",
+    re.I,
+)
+_DEFINITION_BONUS = 1.5
+
+
+def is_definition_question(query: str) -> bool:
+    """True for "what is X" / "what does X mean" / "define X" questions."""
+    return bool(_DEFINITION_RX.search(query[:200]))
+
+
 #: Bonus for an adjacent query pair appearing verbatim ("memory base",
 #: "restart to update") — the strongest signal a section is ABOUT the thing.
 _PHRASE_BONUS = 2.0
@@ -471,6 +490,7 @@ class GuideIndex:
             df[term] = sum(1 for s in secs if term in s.tf)
         phrases = [f"{a} {b}" for a, b in zip(q, q[1:]) if a != b]
         k1, b = 1.2, 0.75
+        defining = is_definition_question(query)
         scored: list[tuple[float, Section]] = []
         for s in secs:
             score = 0.0
@@ -486,6 +506,8 @@ class GuideIndex:
                 flat = " ".join(tokens(s.heading) + tokens(s.text))
                 score += _PHRASE_BONUS * sum(1 for p in phrases if p in flat)
             score *= _DOC_PRIOR.get(s.doc, 1.0)
+            if defining and s.doc == "vocabulary":
+                score *= _DEFINITION_BONUS
             scored.append((score, s))
         scored.sort(key=lambda x: x[0], reverse=True)
         return scored[:k]

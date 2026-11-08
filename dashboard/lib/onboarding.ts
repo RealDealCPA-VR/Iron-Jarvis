@@ -146,6 +146,11 @@ export type HealthRow = ProviderHealth & {
   detected?: boolean;
   /** v1.353.0 (ollama row only): the user saved an Ollama address. */
   address_saved?: boolean;
+  /** v1.449.0 (ollama row only): Ollama's server answered on this PC, with
+   *  or without a model — `detected` says "with a model"; `installed` (the
+   *  shared field) says its program is on this PC. Both absent on an older
+   *  daemon, which the door reads as "not known" (nothing greyed). */
+  running?: boolean;
   /** v1.358.0 (lane 8D, the `custom` row only): LM Studio / llama.cpp
    *  answering on this PC with the model-server slot free — what ONE press
    *  (`POST /onboarding/use-model {provider: key}`) connects and chooses

@@ -1234,7 +1234,10 @@ def rescan_providers(d) -> dict[str, Any]:
     try:
         from ...providers import ollama_seen
 
-        ollama_seen.record(any(dm.provider == "ollama" and dm.available for dm in detected))
+        # v1.449.0 (item 21): the whole answer (installed / running / has a
+        # model), so a Look again after installing Ollama ungreys the door's
+        # download step at once. A repeated miss is free (the probe's memo).
+        ollama_seen.probe_now(getattr(d.platform.config, "ollama_base_url", None))
     except Exception:  # noqa: BLE001 — a cache write never breaks the rescan
         pass
     # v1.358.0 (integrate, lane 8D review): Re-detect looks again for LM
@@ -1539,11 +1542,29 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/connections/{provider}")
     def connect_disconnect(provider: str) -> dict[str, Any]:
+        # v1.449.0 (readiness Wave C, item 24): the DEFAULT model is handed
+        # on BEFORE its account is dropped — to another connected model, else
+        # the demo with a warning (daemon/default_replacement). A keyless API
+        # name its CLI still serves keeps answering and moves nothing.
+        from .. import default_replacement as _default
+
+        default_replaced = None
+        if d.platform.connections.get_spec(provider) is not None:
+            leaving = _default.names_for_disconnect(d, provider)
+            if leaving:
+                default_replaced = _default.apply(d, leaving, actor="connection_disconnect")
+            else:
+                # The name stays (its CLI serves it): only its MODEL may need
+                # the plan's own default (review: Codex refuses an API id).
+                default_replaced = _default.keep_through_cli(d, provider, actor="connection_disconnect")
         try:
             d.platform.connections.disconnect(provider)
         finally:
             invalidate_model_catalog(discovery=True, provider=provider)  # v1.332.0
-        return {"provider": provider, "status": "disconnected"}
+        out: dict[str, Any] = {"provider": provider, "status": "disconnected"}
+        if default_replaced is not None:
+            out["default_replaced"] = default_replaced  # additive; only when something moved
+        return out
 
     @app.get("/oauth/{provider}/start")
     def oauth_start(provider: str) -> dict[str, Any]:

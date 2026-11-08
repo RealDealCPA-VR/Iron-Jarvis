@@ -51,6 +51,7 @@ import {
   Empty,
   ErrorNote,
   SuccessNote,
+  WarnNote,
   LoaderInline,
   ConfirmButton,
   type Tone,
@@ -327,6 +328,9 @@ export function LongTerm() {
   const [srcBusy, setSrcBusy] = useState(false);
   const [srcError, setSrcError] = useState<string | null>(null);
   const [srcOk, setSrcOk] = useState<string | null>(null);
+  // Wave C (item 28): false = the daemon read the new base back and it did
+  // not answer (the note takes the warn tone); true = answering or not checked.
+  const [srcAnswering, setSrcAnswering] = useState<boolean>(true);
 
   // Ingest-document upload
   const fileRef = useRef<HTMLInputElement>(null);
@@ -476,8 +480,17 @@ export function LongTerm() {
         }
         if (Object.keys(cfg).length) body.config = cfg;
       }
-      await post("/ltm/sources", body);
-      setSrcOk(`Source "${srcName.trim()}" added.`);
+      // Wave C (item 28): the daemon READS THE BASE BACK and says so in
+      // its own words — "Added and answering." or why not — the same words
+      // chat's memory_base_add gives (routes/knowledge.read_back). An older
+      // daemon sends no words: the add alone is said.
+      const added = await post<{ name?: string; kind?: string; answering?: boolean | null; words?: string }>(
+        "/ltm/sources",
+        body,
+      );
+      const words = typeof added?.words === "string" && added.words.trim() ? added.words.trim() : "";
+      setSrcOk(words ? `${srcName.trim()}: ${words}` : `Memory base "${srcName.trim()}" added.`);
+      setSrcAnswering(added?.answering === false ? false : true);
       setSrcName("");
       setSrcPath("");
       setSrcDb("");
@@ -1369,7 +1382,12 @@ export function LongTerm() {
                   >
                     {srcBusy ? <LoaderInline label="Adding…" /> : <><Plus size={14} /> Add source</>}
                   </button>
-                  {srcOk && <SuccessNote>{srcOk}</SuccessNote>}
+                  {srcOk && srcAnswering && <SuccessNote>{srcOk}</SuccessNote>}
+                  {srcOk && !srcAnswering && (
+                    <div data-testid="ltm-added-not-answering">
+                      <WarnNote>{srcOk}</WarnNote>
+                    </div>
+                  )}
                   {srcError && <ErrorNote>{srcError}</ErrorNote>}
                 </form>
               </Card>

@@ -521,6 +521,9 @@ async def test_no_value_secret_or_content_reaches_any_frame_of_the_history_tools
         p.router.stream = _calls_stream([("config_change", {"key": "custom_base_url", "value": value})])
         await _drive_stream(app, _body(f"set my custom endpoint url to {value}"), _approver(app, []))
     assert p.config.custom_base_url == url_two
+    # v1.449.0 (item 25, moved on purpose): the card tests a provider key
+    # before storing it — a stand-in that accepts, never the live probe.
+    p.connections._prober = lambda provider, cred: (True, f"{provider} reachable — credential accepted")
     status, _ = await _asgi_post(app, "/config/secret", {"name": "connection.openai", "value": secret})
     assert status == 200
     frames: list = []

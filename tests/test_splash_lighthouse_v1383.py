@@ -94,8 +94,44 @@ def test_the_words_are_the_ones_the_app_always_had():
     page = _page()
     assert "<title>Starting Iron Jarvis…</title>" in page
     assert '<h1>Starting Iron Jarvis<span class="dots"></span></h1>' in page
-    assert "<p>Getting Iron Jarvis ready — this can take a few seconds.</p>" in page
+    # v1.449.0 (readiness Wave C, item 27; moved on purpose): the first line
+    # is the one the app always had — it now carries a class, because a
+    # second line takes its place after 15 s (the next test).
+    assert '<p class="first">Getting Iron Jarvis ready — this can take a few seconds.</p>' in page
     assert "daemon" not in page.lower()
+
+
+def test_after_fifteen_seconds_the_line_says_a_start_can_take_a_minute():
+    """v1.449.0 (readiness Wave C, item 27): the splash said "a few seconds"
+    for up to the 90 s gate. The two lines share one box; the first fades
+    out and the second in, both ONCE and both starting at 15 s — CSS only,
+    the page still loads nothing and runs no script.
+    MUTATION: drop either animation, or its 15 s delay -> red."""
+    page = _page()
+    assert (
+        '<p class="later">Still starting — the first start after an update can take a minute.</p>'
+        in page
+    )
+    css = _rules_outside_media(_style())
+    first = re.search(r"\.words \.first\s*\{([^}]*)\}", css).group(1)
+    later = re.search(r"\.words \.later\s*\{[^}]*animation:([^;]*);", css).group(1)
+    assert re.search(r"animation:\s*words-out [\d.]+s \S+ 15s forwards", first), first
+    assert re.search(r"words-in [\d.]+s \S+ 15s forwards", later), later
+    assert re.search(r"@keyframes words-out\s*\{\s*to\s*\{\s*opacity:\s*0;", css)
+    assert re.search(r"@keyframes words-in\s*\{\s*to\s*\{\s*opacity:\s*1;", css)
+    # The second line sits ON the first (one box), hidden until its turn.
+    later_rule = re.search(r"\.words \.later\s*\{([^}]*)\}", css).group(1)
+    assert "position: absolute" in later_rule and "opacity: 0" in later_rule
+
+
+def test_under_reduce_motion_the_words_still_change_but_do_not_fade():
+    """A change of words is not motion: with "reduce motion" on, the line
+    still changes at 15 s, instantly (a 0 s duration keeps the 15 s delay).
+    MUTATION: put the two lines under `animation: none` -> red (the words
+    would never change for those users)."""
+    reduce = _reduce_block(_style())
+    assert re.search(r"\.words \.first,\s*\.words \.later\s*\{\s*animation-duration:\s*0s;\s*\}", reduce)
+    assert not re.search(r"\.words[^{]*\{[^}]*animation:\s*none", reduce)
 
 
 def test_the_dots_count_at_the_old_pace():
@@ -193,10 +229,15 @@ def test_every_animation_stops_under_reduce_motion():
     for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", _rules_outside_media(css)):
         if re.search(r"animation:\s*(?!none)", body):
             animated.add(sel.strip())
-    assert animated == {".art svg.arc", ".art svg.light", ".art svg.glint", ".dots::after"}
+    # v1.449.0 (moved on purpose): the two word lines fade once at 15 s —
+    # a change of what is said, not motion — so they are the ONE exception
+    # to "every animation stops": under reduce-motion they change instantly
+    # (test_under_reduce_motion_the_words_still_change_but_do_not_fade).
+    words = {".words .first", ".words .later"}
+    assert animated == {".art svg.arc", ".art svg.light", ".art svg.glint", ".dots::after"} | words
     reduce = _reduce_block(css)
     stopped = re.search(r"([^{}]+)\{\s*animation:\s*none;\s*\}", reduce).group(1)
-    assert {s.strip() for s in stopped.split(",")} == animated
+    assert {s.strip() for s in stopped.split(",")} == animated - words
     # With nothing counting, the heading keeps one dot, as in the mockup.
     assert re.search(r'\.dots::after\s*\{\s*content:\s*"\.";\s*\}', reduce)
 

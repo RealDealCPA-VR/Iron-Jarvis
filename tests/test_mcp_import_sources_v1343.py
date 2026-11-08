@@ -255,6 +255,13 @@ def test_sources_lists_every_known_file_with_readable_flags_and_never_a_value(cl
         "vscode",
         "windsurf",
         "gemini-cli",
+        # Wave C (item 30, moved on purpose): the coding tools Build › Code
+        # drives — OpenCode, Grok, Antigravity, Pi (their project rows stay
+        # out while no project is active, like the others).
+        "opencode",
+        "grok",
+        "antigravity",
+        "pi",
     ], "no project is active, so no project row; the rest in the known order"
     rows = _by_source(body)
     for key, path in planted.items():
@@ -321,8 +328,10 @@ def test_sources_lists_every_known_file_with_readable_flags_and_never_a_value(cl
 
 def test_sources_with_nothing_planted_are_all_unreadable_with_empty_notes(client):
     body = client.get("/mcp/import/sources").json()
-    # v1.354.0 (G50, updated on purpose): ten files are looked for now.
-    assert len(body["sources"]) == 10
+    # v1.354.0 (G50): ten files; Wave C (item 30, moved on purpose): fourteen —
+    # OpenCode, Grok, Antigravity and Pi joined (their project rows stay out
+    # while no project is active).
+    assert len(body["sources"]) == 14
     for row in body["sources"]:
         assert row["readable"] is False and row["note"] == "" and row["servers"] == [], row
         assert row["origin"], "even a missing file is named, so the user knows where to put one"
@@ -438,6 +447,12 @@ def test_scan_never_raises_with_no_home_and_no_appdata(monkeypatch, tmp_path):
     monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("CODEX_HOME", raising=False)
+    # Wave C (item 30): the suite points the four coding tools' folders at
+    # scratch places for the session (an override NAMES a place even with no
+    # home); this pin is about a PC with no home and no overrides.
+    for var in ("IRONJARVIS_OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME", "IRONJARVIS_GROK_HOME", "GROK_HOME",
+                "IRONJARVIS_ANTIGRAVITY_HOME", "PI_CODING_AGENT_DIR", "IRONJARVIS_PI_AGENT_DIR"):
+        monkeypatch.delenv(var, raising=False)
 
     def _no_home():
         raise RuntimeError("Could not determine home directory.")
@@ -456,6 +471,12 @@ def test_scan_never_raises_with_no_home_and_no_appdata(monkeypatch, tmp_path):
         "vscode",
         "windsurf",
         "gemini-cli",
+        # Wave C (item 30, moved on purpose): the four coding tools' files
+        # are known places even with no home (their rows name no origin).
+        "opencode",
+        "grok",
+        "antigravity",
+        "pi",
     ]
     for item in out:
         assert item.readable is False and item.note == "" and item.specs == [] and item.origin == ""

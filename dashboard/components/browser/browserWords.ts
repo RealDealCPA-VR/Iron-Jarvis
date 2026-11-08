@@ -78,6 +78,53 @@ export function pickBrowser(status: BrowserStatus | null | undefined): BrowserKe
   return "chrome";
 }
 
+/**
+ * v1.449.0 (readiness Wave C, item 31): is the add-on the browser runs an
+ * OLDER copy than this app? The add-on reports its own version on
+ * `browser.hello` (the manifest's, bumped with the app's by
+ * `scripts/bump_version.py`) and `GET /browser/status` forwards it as
+ * `extension_version`; until now nothing compared the two numbers. Only an
+ * OLDER add-on is said (a newer one — a source checkout ahead of the app —
+ * is nobody's problem); an unreadable number on either side says nothing.
+ */
+export function compareVersions(a: string, b: string): number | null {
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  if (!pa || !pb) return null;
+  for (let i = 0; i < 3; i += 1) {
+    if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1;
+  }
+  return 0;
+}
+
+/** The three numbers of a release version, or null for anything else: a
+ *  dev build ("1.448.1-dev"), a bare word, an empty string. A number with a
+ *  suffix is NOT read by its prefix — a source checkout's bundle is nobody's
+ *  stale copy, and a line about it would send the user to press Reload on
+ *  a copy that is not from a release. */
+function parseVersion(v: string | null | undefined): [number, number, number] | null {
+  const m = /^\s*v?(\d+)\.(\d+)\.(\d+)\s*$/.exec(v ?? "");
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+/** The one sentence for a browser running an older add-on than this app, or
+ *  null when the two agree, the add-on is newer, or either number is missing. */
+export function staleAddonLine(
+  addonVersion: string | null | undefined,
+  appVersion: string | null | undefined,
+  browser: BrowserWords,
+): string | null {
+  const addon = (addonVersion ?? "").trim();
+  const app = (appVersion ?? "").trim();
+  if (!addon || !app) return null;
+  if (compareVersions(addon, app) !== -1) return null;
+  return (
+    `${browser.short} is running an older copy of the add-on (${addon}; this app is ${app}) — ` +
+    `open ${browser.extensionsPage} and press Reload on Iron Jarvis.`
+  );
+}
+
 /** Where the guided window remembers an explicit choice on this device. */
 export const BROWSER_CHOICE_KEY = "ij.browser.setup.browser";
 

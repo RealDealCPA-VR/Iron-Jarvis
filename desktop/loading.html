@@ -115,6 +115,17 @@
         content: "";
         animation: dots 1.4s steps(4, end) infinite;
       }
+      /* v1.449.0 (readiness Wave C, item 27): after 15 s the line changes.
+         CSS only (the page loads nothing and runs no script): both lines
+         share one box, the first fades out and the second fades in, each
+         once, starting at 15 s. A words swap is a change of what is said,
+         not motion, so under reduce-motion it still happens — instantly. */
+      .words { position: relative; }
+      .words .later { position: absolute; left: 0; right: 0; top: 0; opacity: 0; }
+      .words .first { animation: words-out 0.6s ease 15s forwards; }
+      .words .later { animation: words-in 0.6s ease 15s forwards; }
+      @keyframes words-out { to { opacity: 0; } }
+      @keyframes words-in { to { opacity: 1; } }
       @keyframes turn { to { transform: rotate(360deg); } }
       @keyframes breathe {
         0%, 100% { opacity: 0.84; }
@@ -133,6 +144,9 @@
         .art svg.glint,
         .dots::after { animation: none; }
         .dots::after { content: "."; }
+        /* The words still change at 15 s — with no fade. */
+        .words .first,
+        .words .later { animation-duration: 0s; }
       }
     </style>
   </head>
@@ -423,7 +437,13 @@
         </svg>
       </div>
       <h1>Starting Iron Jarvis<span class="dots"></span></h1>
-      <p>Getting Iron Jarvis ready — this can take a few seconds.</p>
+      <!-- The two lines sit on one spot: the first fades out and the second
+           in after 15 s (the .words rules), so a start that takes a minute
+           never keeps saying "a few seconds". -->
+      <div class="words">
+        <p class="first">Getting Iron Jarvis ready — this can take a few seconds.</p>
+        <p class="later">Still starting — the first start after an update can take a minute.</p>
+      </div>
     </div>
   </body>
 </html>

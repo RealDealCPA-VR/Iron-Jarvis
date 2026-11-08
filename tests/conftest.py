@@ -553,6 +553,28 @@ def _isolate_antigravity_home():
             os.environ[_ha.HOME_ENV] = old
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_pi_mcp_import():
+    """Wave C (item 30): the Tools page's import door reads Pi's own
+    ``<agent dir>/mcp.json`` (``mcp.import_sources.pi_agent_dir``). Pi's
+    variable (``PI_CODING_AGENT_DIR``) is one many Pi tests set themselves,
+    so the import's own fallback is pointed at an empty scratch folder for
+    the session: no test reads the developer's real ``~/.pi``."""
+    import tempfile
+
+    from iron_jarvis.mcp import import_sources as _imp
+
+    old = os.environ.get(_imp.PI_IMPORT_DIR_ENV)
+    os.environ[_imp.PI_IMPORT_DIR_ENV] = tempfile.mkdtemp(prefix="ij-test-no-pi-mcp-")
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(_imp.PI_IMPORT_DIR_ENV, None)
+        else:
+            os.environ[_imp.PI_IMPORT_DIR_ENV] = old
+
+
 @pytest.fixture(autouse=True)
 def _fresh_antigravity_models():
     """v1.439.0: the model list an Antigravity session last said is kept in

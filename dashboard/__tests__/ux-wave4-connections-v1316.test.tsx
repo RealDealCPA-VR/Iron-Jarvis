@@ -358,10 +358,14 @@ describe("Connections — a drive that needs an app says so BEFORE the click (oa
     const summary = details!.querySelector("summary");
     expect(summary?.textContent).toMatch(/One-time setup/);
     expect(details!.open).toBe(false); // folded by default
-    // The developer prose and the Secrets step live in it.
+    // The developer prose and the app's boxes live in it. v1.449.0 (readiness
+    // Wave C, item 22), moved ON PURPOSE: the App ID / App secret boxes are on
+    // the card and save under the daemon's names themselves — no Secrets trip,
+    // though the kept names are still said.
     expect(details!.textContent).toContain(DROPBOX_HELP);
     expect(details!.textContent).toContain("dropbox_oauth_client_id");
-    expect(details!.querySelector('a[href="/secrets"]')).not.toBeNull();
+    expect(within(details!).getByTestId("oauth-app-form-dropbox")).toBeTruthy();
+    expect(details!.querySelector('a[href="/secrets"]')).toBeNull();
 
     const button = within(card).getByRole("button", { name: /Set up & log in/ });
     expect(details!.contains(button)).toBe(false); // never gated behind opening it
@@ -376,7 +380,9 @@ describe("Connections — a drive that needs an app says so BEFORE the click (oa
     const card = cardOf("dropbox");
     fireEvent.click(within(card).getByRole("button", { name: /Set up & log in/ }));
     // v1.420.0 (C6.6), moved ON PURPOSE: the plain words (lib words retired).
-    await waitFor(() => expect(within(card).getByText(/No Dropbox app id yet/)).toBeInTheDocument());
+    // v1.449.0 (item 22): "app ID", with the boxes right under it.
+    await waitFor(() => expect(within(card).getByText(/No Dropbox app ID yet/)).toBeInTheDocument());
+    expect(within(card).getByTestId("oauth-app-after-dropbox")).toBeTruthy();
     expect(hooks.gets).toContain("/oauth/dropbox/start");
   });
 

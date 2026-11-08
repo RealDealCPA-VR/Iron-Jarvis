@@ -93,7 +93,11 @@ def test_add_http_rag_source_persists_and_registers(client):
         },
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"name": "my-offsite-rag", "kind": "http_rag"}
+    # Wave C (item 28, moved on purpose): the add READS THE BASE BACK — a
+    # remote kind with no probe is "not checked until you search it".
+    body = resp.json()
+    assert {k: body[k] for k in ("name", "kind")} == {"name": "my-offsite-rag", "kind": "http_rag"}
+    assert body["answering"] is None and body["words"].startswith("Added.")
 
     listing = client.get("/ltm/sources").json()
     assert "my-offsite-rag" in listing["active"]
@@ -120,7 +124,10 @@ def test_add_cloud_drive_source_registers(client):
         json={"name": "work-drive", "kind": "google_drive", "path": "Notes"},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"name": "work-drive", "kind": "google_drive"}
+    # Wave C (item 28, moved on purpose): the answer carries the read-back too.
+    body = resp.json()
+    assert {k: body[k] for k in ("name", "kind")} == {"name": "work-drive", "kind": "google_drive"}
+    assert set(body) == {"name", "kind", "answering", "words"}
     assert "work-drive" in client.get("/ltm/sources").json()["active"]
 
 

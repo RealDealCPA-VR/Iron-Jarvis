@@ -18,6 +18,20 @@ plugin's ``.mcp.json`` and its manifest's ``mcpServers``). A project-only
 source is listed only while a project is active. A server an app has
 switched off arrives with ``disabled`` set (see ``PackSpec.disabled``).
 
+Wave C (item 30): the four coding tools Build › Code drives too, each file
+VERIFIED on the real program (names only, placeholders honoured, the same
+``PackSpec`` path): OpenCode's global ``opencode.json(c)`` / ``config.json``
+(``providers.opencode.opencode_config_paths``, the folder the hosted driver
+reads; a project's own ``opencode.json(c)`` / ``.opencode/``), Grok's
+``~/.grok/config.toml`` (``hosted.grok.default_home``: ``IRONJARVIS_GROK_HOME``
+→ ``GROK_HOME`` → ``~/.grok``; a project's ``.grok/config.toml``),
+Antigravity's ``~/.gemini/config/mcp_config.json`` (agy's own doc: "Global
+Configuration"; a sibling of the ``antigravity-cli`` home the driver reads, so
+the isolated home's PARENT is the root) and Pi's ``<agent dir>/mcp.json``
+(``PI_CODING_AGENT_DIR`` → ``IRONJARVIS_PI_AGENT_DIR`` → ``~/.pi/agent``, the
+driver's rule plus an import-only isolation the suite sets; a project's
+``.pi/mcp.json``).
+
 :func:`scan` reads each file through :func:`mcp.import_config.parse_file`
 (``open(..., "rb")`` only, size-capped, never raises) and answers the
 contract rows with NO values: a missing file is ``readable: False`` with an
@@ -171,6 +185,146 @@ def _in_project(*parts: str) -> Callable[[Any], Path | None]:
 
 def _project_mcp_json(platform: Any) -> Path | None:
     return _in_project(".mcp.json")(platform)
+
+
+# --------------------------------------------------------------------------- #
+# Wave C (item 30): the coding tools' own files
+# --------------------------------------------------------------------------- #
+#: Pi's config folder for THIS module only, read when ``PI_CODING_AGENT_DIR``
+#: is unset: the test suite points it at a scratch folder so no test reads the
+#: developer's real ``~/.pi`` (the hosted driver knows only Pi's own variable).
+PI_IMPORT_DIR_ENV = "IRONJARVIS_PI_AGENT_DIR"
+
+
+def grok_home() -> Path | None:
+    """Grok's folder, the way the Code view reads it (``hosted.grok.
+    default_home``: ``IRONJARVIS_GROK_HOME`` → ``GROK_HOME`` → ``~/.grok``)."""
+    try:
+        from ..hosted.grok import default_home
+
+        return Path(default_home())
+    except Exception:  # noqa: BLE001 — no home is "no such place"
+        return None
+
+
+def pi_agent_dir() -> Path | None:
+    """Pi's config folder: Pi's own ``PI_CODING_AGENT_DIR`` first (the hosted
+    driver's rule, ``hosted.pi.agent_dir``), else :data:`PI_IMPORT_DIR_ENV`,
+    else ``~/.pi/agent``."""
+    own = _env_dir("PI_CODING_AGENT_DIR")
+    if own is not None:
+        return Path(os.path.expanduser(str(own)))
+    isolated = _env_dir(PI_IMPORT_DIR_ENV)
+    if isolated is not None:
+        return isolated
+    home = _home()
+    return home / ".pi" / "agent" if home is not None else None
+
+
+def antigravity_config_dir() -> Path | None:
+    """Where ``agy mcp add`` writes: ``~/.gemini/config`` (agy 1.5.3's own
+    embedded doc names ``~/.gemini/config/mcp_config.json``). The Code view's
+    isolated Antigravity home (``hosted.antigravity.default_home``, a scratch
+    ``…/antigravity-cli`` in the suite) is its SIBLING, so the home's parent
+    is the ``.gemini`` root."""
+    try:
+        from ..hosted.antigravity import HOME_ENV, default_home
+
+        if (os.environ.get(HOME_ENV) or "").strip():
+            return Path(default_home()).parent / "config"
+    except Exception:  # noqa: BLE001
+        pass
+    home = _home()
+    return home / ".gemini" / "config" if home is not None else None
+
+
+def _opencode_global_files() -> list[Path]:
+    """The global files OpenCode merges, in its order (the hosted driver's
+    ``config_files`` minus the project and admin places): ``opencode.jsonc``
+    / ``opencode.json`` in the config folder, the ``config.json`` beside
+    them, and ``~/.opencode`` when no override names the folder."""
+    try:
+        from ..providers.opencode import CONFIG_DIR_ENV, opencode_config_paths
+
+        out = list(opencode_config_paths())
+        out += [p.with_name("config.json") for p in list(out) if p.name == "opencode.json"]
+        if not (os.environ.get(CONFIG_DIR_ENV) or "").strip():
+            home = _home()
+            if home is not None:
+                out += [home / ".opencode" / "opencode.jsonc", home / ".opencode" / "opencode.json"]
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _first_existing(paths: list[Path]) -> Path | None:
+    for p in paths:
+        try:
+            if p.is_file():
+                return p
+        except OSError:
+            continue
+    return paths[0] if paths else None
+
+
+def _opencode_global(platform: Any) -> Path | None:
+    return _first_existing(_opencode_global_files())
+
+
+def _opencode_project_files(root: Path) -> list[Path]:
+    return [root / "opencode.jsonc", root / "opencode.json",
+            root / ".opencode" / "opencode.jsonc", root / ".opencode" / "opencode.json"]
+
+
+def _opencode_project(platform: Any) -> Path | None:
+    root = active_project_root(platform)
+    return _first_existing(_opencode_project_files(Path(root))) if root else None
+
+
+def read_opencode(path: Path, *, project: bool = False) -> tuple[list[PackSpec], bool, str]:
+    """OpenCode merges several files in one place; the row names the first
+    that exists and this reads it AND the siblings OpenCode itself merges
+    (``hosted.opencode.config_files``), one spec per server name. Never
+    raises.
+
+    GLOBAL (``project=False``): ``opencode.jsonc`` / ``opencode.json`` and
+    the ``config.json`` beside them in the config folder.
+
+    PROJECT (``project=True``): ``opencode.jsonc`` / ``opencode.json`` in the
+    project's root and ``.opencode/opencode.jsonc`` / ``.opencode/opencode.json``
+    under it — NEVER a ``config.json``: OpenCode reads that name only in its
+    global folder, so a project's own ``config.json`` is some other program's
+    file (the review found a project's unrelated ``config.json`` listed under
+    "OpenCode (this project)")."""
+    folder = path.parent
+    if project:
+        root = folder.parent if folder.name == ".opencode" else folder
+        siblings = _opencode_project_files(root)
+    else:
+        siblings = [folder / "opencode.jsonc", folder / "opencode.json", folder / "config.json"]
+    specs: list[PackSpec] = []
+    readable = False
+    note = ""
+    seen: set[str] = set()
+    for f in [path, *siblings]:
+        key = str(f).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        found, ok, why = parse_file(f, source="opencode")
+        readable = readable or ok
+        if why and not note:
+            note = why
+        specs.extend(found)
+    return (unique_names(specs), readable, "" if readable else note)
+
+
+def _read_opencode_global(path: Path) -> tuple[list[PackSpec], bool, str]:
+    return read_opencode(path, project=False)
+
+
+def _read_opencode_project(path: Path) -> tuple[list[PackSpec], bool, str]:
+    return read_opencode(path, project=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -473,6 +627,15 @@ KNOWN_SOURCES: tuple[SourceDef, ...] = (
         lambda _p_: _p(_home(), ".codeium", "windsurf", "mcp_config.json"),
     ),
     SourceDef("gemini-cli", "gemini-cli", "Gemini CLI", lambda _p_: _p(_home(), ".gemini", "settings.json")),
+    # Wave C (item 30): the coding tools Build › Code drives.
+    SourceDef("opencode", "opencode", "OpenCode", _opencode_global, read=_read_opencode_global),
+    SourceDef("opencode-project", "opencode", "OpenCode (this project)", _opencode_project, project=True,
+              read=_read_opencode_project),
+    SourceDef("grok", "grok", "Grok", lambda _p_: _p(grok_home(), "config.toml")),
+    SourceDef("grok-project", "grok", "Grok (this project)", _in_project(".grok", "config.toml"), project=True),
+    SourceDef("antigravity", "antigravity", "Antigravity", lambda _p_: _p(antigravity_config_dir(), "mcp_config.json")),
+    SourceDef("pi", "pi", "Pi", lambda _p_: _p(pi_agent_dir(), "mcp.json")),
+    SourceDef("pi-project", "pi", "Pi (this project)", _in_project(".pi", "mcp.json"), project=True),
 )
 
 

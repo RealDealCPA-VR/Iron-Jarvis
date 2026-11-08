@@ -67,6 +67,37 @@ STARTER_MODEL = "llama3.2"
 #: rows are ``connectors.catalog.signin_launches()`` written out (this module
 #: stays free of the connectors package at import); a test holds them equal.
 #: ``agent_cli`` "" = not an AI CLI: the pane reads as a plain shell.
+#: v1.449.0 (readiness Wave C, item 20): INSTALLING Claude Code or Codex is a
+#: set-up job too — a Claude Pro / ChatGPT Plus subscriber without the
+#: command-line tool used to be sent to a vendor page with a PowerShell
+#: command to paste. The pane types each vendor's OWN documented installer
+#: and the user watches it run; nothing is ever installed silently. Both are
+#: the vendors' native installers, which need no Node.js (the npm packages
+#: do). ``command`` is the PowerShell form; ``command_cmd`` the Command
+#: Prompt form, typed instead when the pane's shell is cmd
+#: (:func:`launch_line`). Sources, read 2026-11-07:
+#:
+#: * Claude Code — https://code.claude.com/docs/en/setup ("Install Claude
+#:   Code", Native Install tab): Windows PowerShell ``irm
+#:   https://claude.ai/install.ps1 | iex``; Windows CMD ``curl -fsSL
+#:   https://claude.ai/install.cmd -o install.cmd && install.cmd && del
+#:   install.cmd``. Git for Windows is optional. Sign in: run ``claude``.
+#: * Codex — https://github.com/openai/codex (README, "Installing and
+#:   running Codex CLI"): Windows PowerShell ``powershell -ExecutionPolicy
+#:   ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"`` (inside an
+#:   already-running PowerShell the inner ``irm … | iex`` is that same line);
+#:   npm alternative ``npm install -g @openai/codex`` (needs Node.js). Sign
+#:   in: run ``codex`` and choose "Sign in with ChatGPT".
+#:
+#: Keep these in step with the vendors' pages: a vendor that moves its
+#: installer makes the pane print a download error, which the user sees.
+CLAUDE_CODE_INSTALL = "claude-code-install"
+CODEX_INSTALL = "codex-install"
+#: The install jobs by the CLI they install (the Launch-catalog id of that
+#: CLI), as the dashboard names them (lib/cliInstall.ts; pinned equal by
+#: tests/test_cli_install_jobs_v14490.py).
+INSTALL_JOBS: dict[str, str] = {"claude": CLAUDE_CODE_INSTALL, "codex": CODEX_INSTALL}
+
 SETUP_LAUNCHES: list[dict[str, str]] = [
     {
         "id": "ollama-starter",
@@ -75,6 +106,24 @@ SETUP_LAUNCHES: list[dict[str, str]] = [
         "agent_cli": "ollama",
         "provider": "Ollama",
         "url": "https://ollama.com",
+    },
+    {
+        "id": CLAUDE_CODE_INSTALL,
+        "label": "Install Claude Code",
+        "command": "irm https://claude.ai/install.ps1 | iex",
+        "command_cmd": "curl -fsSL https://claude.ai/install.cmd -o install.cmd && install.cmd && del install.cmd",
+        "agent_cli": "",
+        "provider": "Anthropic",
+        "url": "https://code.claude.com/docs/en/setup",
+    },
+    {
+        "id": CODEX_INSTALL,
+        "label": "Install Codex",
+        "command": "irm https://chatgpt.com/codex/install.ps1 | iex",
+        "command_cmd": 'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
+        "agent_cli": "",
+        "provider": "OpenAI",
+        "url": "https://github.com/openai/codex",
     },
     {
         # v1.428.0: Microsoft 365 is LOCKED DOWN — one sign-in, and the line
@@ -152,6 +201,11 @@ def launch_line(entry: dict[str, str], shell: str | None) -> str:
     command = entry.get("command", "")
     if entry.get("id") not in {job["id"] for job in SETUP_LAUNCHES}:
         return command
+    # v1.449.0 (item 20): an install job carries a Command Prompt form; a
+    # cmd pane gets it, every other shell the PowerShell line. Decided by the
+    # pane's shell NAME (terminals/shells: "pwsh", "powershell", "cmd").
+    if entry.get("command_cmd") and (shell or "").strip().lower() == "cmd":
+        return entry["command_cmd"]
     try:
         argv = command.split()
         if not argv or shutil.which(argv[0]):

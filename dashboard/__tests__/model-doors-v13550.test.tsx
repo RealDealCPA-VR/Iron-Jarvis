@@ -221,11 +221,15 @@ describe("G46: the first-run key door takes a Google Gemini key", () => {
     expect(hooks.posts[0].body).toEqual({ key: NEW_KEY });
   });
 
-  it("only the provider that needs it gets the where-to-get-one line", () => {
+  it("every paid provider gets the where-to-get-one line, with how it is billed (v1.449.0, moved on purpose)", () => {
     render(<ConnectDoors />);
     openDoor(/I have an API key/);
-    // Anthropic is the starting pick: no line (its key page is not ours to explain here).
-    expect(screen.queryByTestId("key-door-get-one")).toBeNull();
+    // Anthropic is the starting pick: readiness Wave C item 25 gave it the
+    // line too — a plan holder often has no key and does not know a key is a
+    // second, metered account (first-run-wave-c-v1449 pins the words).
+    const line = screen.getByTestId("key-door-get-one");
+    expect(within(line).getByRole("link").getAttribute("href")).toBe("https://console.anthropic.com/settings/keys");
+    expect(screen.getByTestId("key-door-billing").textContent).toMatch(/per use/);
   });
 });
 
@@ -250,8 +254,10 @@ describe("G73: the free-and-private door downloads a starter model with one pres
     expect(hooks.posts).toEqual([{ path: "/terminals/launch", body: { cli: "ollama-starter" } }]);
     // The press replaced itself with the pane line: it cannot be pressed twice.
     expect(screen.queryByRole("button", { name: /Download a starter model/ })).toBeNull();
-    // Step 3 is unchanged: the user still tells Iron Jarvis to use it.
-    expect(screen.getByRole("button", { name: /Connect to Ollama on this PC/ })).toBeTruthy();
+    // Step 3 is the ONE press (v1.449.0, item 21, moved on purpose): while
+    // replies are the demo it is "Use Ollama for answers" (the use-model
+    // press, which saves this PC's address as part of it).
+    expect(screen.getByRole("button", { name: /Use Ollama for answers/ })).toBeTruthy();
   });
 
   it("a refusal is said in the daemon's own words and the press stays", async () => {
@@ -514,8 +520,16 @@ describe("G46: Settings › Connections' Gemini card", () => {
     );
     fireEvent.change(box, { target: { value: KEY } });
     fireEvent.click(within(card).getByRole("button", { name: "Connect" }));
+    // v1.449.0 (item 25, moved on purpose): the key is TESTED before it is
+    // stored (`?check=1`, the chat door's rule); this harness answers the
+    // save with no `test`, so the Test route is asked, and a passing key
+    // while the demo answers is chosen with the one use-model press.
     await waitFor(() =>
-      expect(hooks.posts.map((p) => p.path)).toEqual(["/connections/google/key", "/connections/google/test"]),
+      expect(hooks.posts.map((p) => p.path)).toEqual([
+        "/connections/google/key?check=1",
+        "/connections/google/test",
+        "/onboarding/use-model",
+      ]),
     );
     expect(hooks.posts[0].body).toEqual({ key: KEY });
   });

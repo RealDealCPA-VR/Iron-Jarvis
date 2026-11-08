@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.449.1 (2026-11-07).*
+holds itself to. Current as of v1.450.1 (2026-11-07).*
 
 ---
 
@@ -588,6 +588,13 @@ with the request typed in.
   tab of the Memory page (`/memory?scope=longterm`, also reachable as
   `/ltm`); the Memory page's other tabs carry a one-line link **Import from
   ChatGPT/Claude/Takeout → Long-term memory** that opens it.
+  A base you add on the Memory page is READ BACK the moment it is saved:
+  the note under **Add source** says "Added and answering.", or why not
+  ("Added, but it is not answering: folder not found: …", in the warning
+  tone) — the same words chat's "add my vault as memory" gives. The
+  **Obsidian vault** and **Notion database** rows in Settings › Memory are
+  read when Iron Jarvis starts, so they say "after a restart"; the Memory
+  page's **Add a memory base** is the door that works at once.
 - **Memory profiles** (v1.406.0; called Brain profiles until v1.408.0):
   choose where your durable memory lives and how Jarvis searches, saves to
   and trusts it — see "Your durable brain: Brain Profiles" and "Memory
@@ -2031,6 +2038,47 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## The first run, and every connection, in plain words (v1.450.0)
+
+- **No Claude Code or Codex yet?** The connect door offers "Install Claude
+  Code for me" / "Install Codex for me": a Build terminal opens and runs the
+  vendor's own installer where you can watch it. Nothing is installed
+  quietly. When it finishes, press "I've installed it — check now" (or wait
+  a minute) and the Sign in press appears.
+- **Ollama**: the door's steps light up as you go — "Download a starter
+  model" waits until Ollama is on this PC, "running but has no model yet" is
+  said plainly, and ONE press, "Use Ollama for answers", makes it answer your
+  chats. Prefer no download? A Google Gemini key has a free tier.
+- **Keys**: the Anthropic and OpenAI tabs say where a key comes from and that
+  the account is billed per use. A key is TESTED before it is saved — on
+  Settings › Connections, on the Model servers tab and on the secure card in
+  chat; a refused key stays in the box and nothing changes.
+- **The chat home** counts only the helpers you need ("This PC is ready · 2
+  optional extras not set up") and, once a real model answers, says what to
+  try next.
+- **Google Drive, OneDrive, Dropbox**: the sign-in setup lives on the card —
+  the vendor-console step in words, the redirect address with Copy, and the
+  App ID and App secret boxes. Save, then Connect.
+- **"Needs Node.js"** comes with a "Get Node.js (free)" link; the Microsoft
+  365 card links "How your admin sets this up" to its Handbook section.
+- **Removing the model that answers your chats** (a model server, an
+  endpoint, a disconnected key) tells you first what Jarvis will use instead,
+  and the default is moved to a working model before anything goes — never
+  left pointing at nothing. Disconnecting a key while its plan's CLI is
+  signed in keeps the same answers. The move is a ledger row with Undo.
+- **The browser add-on's consent page** says what site access really allows,
+  for your browser by name; the Your browser card says when the add-on is an
+  older copy than the app and tells you to press Reload.
+- **Memory bases** added on the Memory page are read back: "Added and
+  answering." or why not, the same words the chat tool says. The Obsidian and
+  Notion settings rows say they need a restart and point at "Add a memory
+  base", which works at once.
+- **Destination switches** read "Listen for incoming messages", "Chat with
+  Iron Jarvis" — never "true/false".
+- **Import your tools** now reads OpenCode, Grok, Antigravity and Pi configs
+  too (names only; a key in an address or argument is masked and kept in the
+  vault).
+
 ## Did it work? The app tells you, everywhere (v1.449.0)
 
 Every place that reports on work now gives the same, plain verdict.
@@ -2676,6 +2724,8 @@ go only on the secure card, never in the chat.
 - **Memory bases.** "Use Notion as your long-term memory" (the token goes on
   the secure card and it works without a restart), or a notes folder such as
   an Obsidian vault. Chat can also make it where Jarvis saves what it learns.
+  The reply reads the new base back — "Added and answering.", or why it is
+  not — exactly as the Memory page does.
 - **Preferences, lessons and personas.** "Forget the preference about short
   answers", "change it to bullet points", "add a lesson: always cite the IRS
   section", "make a persona that answers like a CPA", "delete the CPA
@@ -7799,7 +7849,12 @@ The look of the app is the same.
 - **Bring your tools from your other apps.** Settings › Tools › **Add a
   tool** opens on **Bring your tools from Claude, Codex, Cursor…**. It also
   reads VS Code's `mcp.json`, a project's `.vscode` / `.cursor` settings,
-  Windsurf, Gemini CLI and the Claude Code plugins you installed. Each tool
+  Windsurf, Gemini CLI, the Claude Code plugins you installed and — since
+  the readiness plan's Wave C — the four coding tools Build › Code drives:
+  OpenCode (`opencode.json(c)` / `config.json`, and a project's own), Grok
+  (`~/.grok/config.toml`, and a project's `.grok/config.toml`), Antigravity
+  (`~/.gemini/config/mcp_config.json`) and Pi (`~/.pi/agent/mcp.json`, and
+  a project's `.pi/mcp.json`), each listed by the tool's name. Each tool
   says in one line what it does (the command is under **Details**); one you
   switched off in its app is listed unticked as "turned off in Claude
   Desktop"; one you already have reads "already connected". After **Add
@@ -8315,10 +8370,14 @@ in the same preview list:
   **Add selected** and they are added and started; a pack that did not start
   says why, like any other.
 - **Import from your other apps.** One press lists the packs already set up
-  in Claude Code, Claude Desktop, Codex, Cursor and VS Code on this PC, read
-  from their own files (never changed), grouped by app, with the same
-  preview rows. Pick the ones you want; their keys move straight from that
-  file into Jarvis's encrypted vault without passing through the page.
+  in Claude Code, Claude Desktop, Codex, Cursor, VS Code, Windsurf, Gemini
+  CLI, OpenCode, Grok, Antigravity and Pi on this PC, read from their own
+  files (never changed), grouped by app, with the same preview rows. A
+  placeholder the app would fill at start (`${TOKEN}`, OpenCode's
+  `{env:TOKEN}` or `{file:…}`) becomes a box to type the value in — the file
+  it names is never read. Pick the ones you want; their keys move straight
+  from that file into Jarvis's encrypted vault without passing through the
+  page.
 - **HTTP server.** A pack that runs as a web service: its address, optional
   headers and an optional bearer token. Tokens and any header whose name
   looks like a secret are kept in the vault.

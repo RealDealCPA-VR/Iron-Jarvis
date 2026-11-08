@@ -289,17 +289,19 @@ describe("the honest pointers", () => {
     fireEvent.click(door("Free & private on this PC"));
     // No rescan claim in THIS door — it would be a lie here.
     expect(screen.queryByRole("button", { name: /Rescan now/ })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Connect to Ollama on this PC" }));
-    // The re-check promise only appears AFTER connecting, when it is true —
-    // waiting on it waits on the real end of the handler.
+    // v1.449.0 (readiness Wave C item 21, moved on purpose): while replies
+    // are the demo the door's step 3 is the ONE "Use Ollama for answers"
+    // press — POST /onboarding/use-model, whose daemon side saves this PC's
+    // Ollama address as part of the press (G34). No PUT /settings from the
+    // page, and still no rescan promise anywhere in this door.
+    fireEvent.click(screen.getByTestId("ollama-use"));
     await waitFor(() =>
-      expect(screen.getByText(/turns green on its own once Ollama is reachable/)).toBeTruthy(),
+      expect(hooks.posts.find((p) => p.path === "/onboarding/use-model")?.body).toEqual({ provider: "ollama" }),
     );
-    expect(hooks.puts).toEqual([
-      { path: "/settings", body: { values: { ollama_base_url: "http://localhost:11434" } } },
-    ]);
-    // ...and if it stays grey the copy says what to check, honestly.
-    expect(screen.getByText(/check that Ollama is actually running/)).toBeTruthy();
+    expect(hooks.puts).toEqual([]);
+    expect(screen.queryByText(/turns green on its own/)).toBeNull();
+    // ...and the honest capability line still rides along.
+    expect(screen.getByText(/less capable than a frontier one/)).toBeTruthy();
     // The subscription door is where the rescan claim IS true (claude/codex
     // presence is a live per-poll /health check) — it keeps the button.
     fireEvent.click(door("I already pay for Claude or ChatGPT"));

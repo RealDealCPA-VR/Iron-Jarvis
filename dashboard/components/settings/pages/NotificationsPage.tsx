@@ -295,8 +295,9 @@ const EMAIL_FIELD_COPY: Record<string, { label?: string; help?: string }> = {
   },
 };
 
-/** What the user READS on the telegram two-way fields (v1.136.0). The server's
- * own labels stay wire-honest ("true/false"); the screen speaks plainly. The
+/** What the user READS on the telegram two-way fields (v1.136.0). Since Wave C
+ * (item 29) the server's own labels are plain words too (the wire's switch
+ * words are gone from the catalog); these keep the fuller Telegram help. The
  * chat toggle's exact wording is the vocabulary decision from the messaging
  * plan: two-way is a per-destination upgrade, not a new noun. */
 const TELEGRAM_FIELD_COPY: Record<string, { label?: string; help?: string }> = {

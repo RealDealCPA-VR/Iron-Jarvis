@@ -41,6 +41,9 @@ import {
   Stat,
 } from "@/components/ui";
 import { CALM_ACTION, CALM_ICON_ACTION } from "@/components/connections/endpointChip";
+// v1.449.0 (readiness Wave C, item 24): what Remove does to the default model.
+import { DefaultImpactLine, defaultReplacedWords, fetchDefaultImpact, type DefaultImpact } from "@/components/connections/DefaultImpact";
+import { useDaemon } from "@/lib/daemon";
 import { IconButton } from "@/components/IconButton";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -435,6 +438,29 @@ function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () =>
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [cleared, setCleared] = useState<string[] | null>(null);
+  // v1.449.0 (item 24): when this endpoint is what answers chats by default,
+  // the confirm says so and names the replacement (the daemon's own rule),
+  // read once before any press; the removal's answer says what happened.
+  const { health, refresh: refreshDaemon } = useDaemon();
+  const isDefault =
+    Boolean(health?.default_provider) &&
+    (health?.default_provider === `fleet-${node.id}` ||
+      (node.source === "config" && health?.default_provider === node.id));
+  const [impact, setImpact] = useState<DefaultImpact | null>(null);
+  const [moved, setMoved] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    if (!isDefault) {
+      setImpact(null);
+      return;
+    }
+    void fetchDefaultImpact([node.id]).then((r) => {
+      if (live) setImpact(r);
+    });
+    return () => {
+      live = false;
+    };
+  }, [isDefault, node.id]);
 
   async function save() {
     const label = draft.trim();
@@ -464,6 +490,13 @@ function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () =>
       // Removing a config-seeded endpoint clears its Settings keys and retires
       // the matching provider — say so rather than doing it silently.
       if (res?.cleared_settings?.length) setCleared(res.cleared_settings);
+      // v1.449.0 (item 24): the daemon moved the default BEFORE the server
+      // went; say where it landed, in its own words.
+      const words = defaultReplacedWords(res);
+      if (words) {
+        setMoved(words);
+        refreshDaemon();
+      }
       onChanged();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : String(e));
@@ -519,6 +552,12 @@ function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () =>
       {cleared && (
         <span className="text-[11px] text-tone-warn" title={cleared.join(", ")}>
           cleared {cleared.length} setting{cleared.length === 1 ? "" : "s"}
+        </span>
+      )}
+      {isDefault && <DefaultImpactLine impact={impact} testId={`fleet-default-impact-${node.id}`} />}
+      {moved && (
+        <span role="status" data-testid={`fleet-default-moved-${node.id}`} className="text-[11px] text-tone-warn">
+          {moved}
         </span>
       )}
       <button

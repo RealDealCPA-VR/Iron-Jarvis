@@ -13,6 +13,55 @@
 
 import { requestHostPermission } from "../background/hostperms";
 
+/**
+ * v1.449.0 (readiness Wave C, item 31): the page names THE BROWSER IT RUNS
+ * IN, never one browser for everybody. Edge's user agent carries "Edg/";
+ * anything else Chromium is read as Chrome, and an unknown one keeps the
+ * neutral words. The same decision the dashboard's browserWords makes from
+ * the add-on's hello, made here from the page's own navigator — no await, no
+ * message to the worker, so the user gesture below is untouched.
+ */
+interface BrowserWords {
+  /** Sentence-opening: "Chrome", "Edge", "Your browser". */
+  name: string;
+  /** Mid-sentence: "Chrome", "Edge", "your browser". */
+  mid: string;
+  possessive: string;
+  extensionsPage: string;
+}
+
+function browserWordsFor(userAgent: string, brands: readonly string[] = []): BrowserWords {
+  const ua = userAgent.toLowerCase();
+  const brandText = brands.join(" ").toLowerCase();
+  if (ua.includes("edg/") || brandText.includes("microsoft edge")) {
+    return { name: "Edge", mid: "Edge", possessive: "Edge's", extensionsPage: "edge://extensions" };
+  }
+  if (ua.includes("chrome/") || brandText.includes("google chrome") || brandText.includes("chromium")) {
+    return { name: "Chrome", mid: "Chrome", possessive: "Chrome's", extensionsPage: "chrome://extensions" };
+  }
+  return {
+    name: "Your browser",
+    mid: "your browser",
+    possessive: "your browser's",
+    extensionsPage: "its add-ons page",
+  };
+}
+
+function fillBrowserWords(words: BrowserWords): void {
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-browser]"))) {
+    const which = el.dataset["browser"];
+    if (which === "name") el.textContent = words.name;
+    else if (which === "possessive") el.textContent = words.possessive;
+    else if (which === "addons-page") el.textContent = words.extensionsPage;
+  }
+}
+
+const brandList = (
+  (navigator as Navigator & { userAgentData?: { brands?: { brand: string }[] } }).userAgentData?.brands ?? []
+).map((b) => b.brand);
+const browser = browserWordsFor(navigator.userAgent, brandList);
+fillBrowserWords(browser);
+
 const button = document.getElementById("grant") as HTMLButtonElement | null;
 const outcome = document.getElementById("outcome");
 
@@ -48,26 +97,29 @@ button?.addEventListener("click", () => {
     return;
   }
   button.disabled = true;
-  report("", "Waiting for Chrome…");
+  report("", `Waiting for ${browser.mid}…`);
   // No await before this call — the user gesture must still be on the stack.
   requestHostPermission()
     .then(async (granted) => {
       if (granted) {
-        report("granted", "Site access granted. Iron Jarvis can now see the tabs you have open.");
+        report(
+          "granted",
+          "Site access granted. Iron Jarvis can now read and act in the pages you open, asking you first.",
+        );
         button.disabled = true;
         await tellWorker(true);
         return;
       }
       report(
         "refused",
-        "Chrome declined the request, so nothing changed. Press the button again if you meant to allow it.",
+        `${browser.name} declined the request, so nothing changed. Press the button again if you meant to allow it.`,
       );
       button.disabled = false;
       await tellWorker(false);
     })
     .catch((err: unknown) => {
       const detail = err instanceof Error ? err.message : String(err);
-      report("error", `Chrome refused the request: ${detail}`);
+      report("error", `${browser.name} refused the request: ${detail}`);
       button.disabled = false;
     });
 });

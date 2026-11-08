@@ -78,8 +78,8 @@ const SLACK_FIELDS = [
   { key: "token", label: "Bot token (option B)", secret: true },
   { key: "channel", label: "Channel (option B)", secret: false },
   { key: "app_token", label: "App-level token (two-way, no exposure)", secret: true },
-  { key: "inbound_enabled", label: "Enable two-way (true/false)", secret: false },
-  { key: "chat_enabled", label: "Chat with Iron Jarvis (true/false)", secret: false },
+  { key: "inbound_enabled", label: "Listen for incoming messages", secret: false, type: "bool" },
+  { key: "chat_enabled", label: "Chat with Iron Jarvis", secret: false, type: "bool" },
   { key: "allowed_senders", label: "Allowlist (Slack member IDs)", secret: false },
 ];
 

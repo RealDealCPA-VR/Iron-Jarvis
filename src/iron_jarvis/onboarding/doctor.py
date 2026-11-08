@@ -701,12 +701,25 @@ def check_legacy_office() -> dict:
         fix=""
         if xls_ok and word_ok
         else (
-            "Reinstall dependencies (`uv sync`); if this is the packaged app, xlrd is missing from the build."
+            _xls_missing_fix()
             if not xls_ok
             else "Install Microsoft Word, or save .doc files as .docx before using them."
         ),
         level=RECOMMENDED,
     )
+
+
+def _xls_missing_fix() -> str:
+    """v1.449.0 (readiness Wave C, item 26): the packaged app's user is never
+    told to run ``uv sync`` — that is a developer's fix for a source
+    checkout. A frozen build that lacks its .xls reader is a broken build:
+    the fix is a reinstall, in plain words."""
+    if getattr(sys, "frozen", False):
+        return (
+            "This copy of Iron Jarvis is missing its .xls reader. Reinstall it "
+            "from the Updates page or the installer."
+        )
+    return "Reinstall dependencies (`uv sync`); xlrd is missing from this checkout."
 
 
 #: Ordered list of every check callable — callers may render this directly.
