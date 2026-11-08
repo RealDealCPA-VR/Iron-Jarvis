@@ -1095,6 +1095,16 @@ _WEB_WEIGHTS: dict[str, int] = {"web_search": 8, "web_fetch": 3}
 #: "what apps can you use to edit photos" are not these).
 _FEATURE_END = r"(?=\s*(?:[?!]|\.(?!\w)|\Z))"  # never "build.gradle" (v1.420.0 review)
 _FEATURE_HERE = r"(?:\s+(?:here|in\s+(?:iron\s*)?jarvis|in\s+this\s+app))?"
+#: v1.455.0 (readiness Wave G, item 23): "How do I make a rule?", "how can I
+#: add a watcher?", "how do I set up a model server?" — one of Iron Jarvis's
+#: own things, the question ending right there (or "here"). Its own string so
+#: :func:`_guide_fires` can read it inside a how-do-I sentence too.
+_FEATURE_HOWTO = (
+    r"how\s+(?:do|can|could|should)\s+i\s+(?:make|create|add|set\s+up|start|use|turn\s+on|find|open)\s+"
+    r"(?:a|an|the|my)\s+(?:new\s+)?(?:rule|watcher|folder\s+watcher|model\s+server|night\s+task|objective"
+    r"|local[\s-]+only\s+chat)s?" + _FEATURE_HERE + _FEATURE_END
+)
+_FEATURE_HOWTO_RX = re.compile(_FEATURE_HOWTO, re.IGNORECASE)
 _FEATURE_QUESTION = (
     # "what apps can you work with?", "which services do you connect to?",
     # "what can you connect to?", "what apps do you support?"
@@ -1118,6 +1128,18 @@ _FEATURE_QUESTION = (
     # "what does the Code view do", "what is Chat › Code", "what is Build › Code for"
     + r"|what(?:\s+(?:is|does|are)|['’]s)\s+(?:the\s+)?(?:code\s+view|(?:chat|build)\s*›\s*code)"
     r"(?:\s+(?:for|do|used\s+for))?" + _FEATURE_HERE + _FEATURE_END
+    # v1.455.0 (readiness Wave G, item 23): the pages renamed in v1.452.0 —
+    # "What are Watchers for?", "What is the Rules page?", "What does Model
+    # servers do?", "What is What agents made?" — by their capitalised page
+    # name, or with a page word ("the rules page"); never "what are the rules?"
+    # nor "what are the rules of the game?".
+    + r"|what(?:\s+(?:is|are|does|do)|['’](?:s|re))\s+(?:the\s+)?"
+    r"(?:(?:rules|watchers|model\s+servers|what\s+agents\s+made|night\s+shift|try\s+on|local\s+only)"
+    r"\s+(?:page|module|view|tab|section|list|switch|chip)"
+    r"|(?-i:Rules|Watchers|Model\s+servers|Model\s+Servers|What\s+agents\s+made|Night\s+shift|Night\s+Shift"
+    r"|Try\s+on|Try\s+On|Local\s+only|Local\s+Only))"
+    r"(?:\s+(?:for|do|used\s+for|about))?" + _FEATURE_HERE + _FEATURE_END
+    + r"|" + _FEATURE_HOWTO
     # v1.448.0 (Wave A "chat configures everything", A1): "Can you work with
     # QuickBooks Online?", "do you connect to Xero?", "could you use Excel?"
     # — a capability asked about a NAMED product (capitalised, up to four
@@ -1396,7 +1418,7 @@ def _guide_fires(msg: str) -> bool:
             if m.group("guide_howdo") is None:
                 return True
             sentence = _sentence_around(msg, m.start(), m.end())
-            if _how_to_is_about_jarvis(sentence):
+            if _how_to_is_about_jarvis(sentence) or _FEATURE_HOWTO_RX.search(sentence):
                 return True
             if named is None:
                 named = _NAMES_JARVIS_RX.search(msg[:4000]) is not None
@@ -3743,7 +3765,20 @@ _BUILD_ME_RX = re.compile(
 #: repo", "add a README to github.com/acme/site". Never a question ("what is
 #: a repository") and never "a repository of knowledge".
 _REPO_WORDS = (
-    r"(?:\b(?:my|our|the|this|that)\s+(?:git\s*hub\s+|git\s+|local\s+|project\s+)?"
+    # v1.455.0 (readiness Wave G, item 23): the repo may have its NAME before
+    # the word ("my ClosePilot repo", "the iron-jarvis repository").
+    r"(?:\b(?:my|our|the|this|that)\s+"
+    # Review (v1.455.0): never a store of the person's own documents, photos
+    # or mail — "my photo repo", "my Dropbox repository", "my tax-docs
+    # repository" are folders of files, not code. The name's LAST part is
+    # read ("our tax-tools repository" and "the client-portal repo" are code).
+    r"(?:(?!(?:of|for|in|on|at|to|with|and|or|a|an|the)\b)"
+    r"(?![\w.'’-]{0,40}?\b(?:photos?|pictures?|images?|videos?|music|documents?|docs?|files?|papers?|records?"
+    r"|forms?|templates?|contracts?|receipts?|invoices?|scans?|pdfs?|spreadsheets?|reports?|notes?|archives?"
+    r"|backups?|e-?mails?|mail|tax(?:es)?|clients?|recipes?|knowledge|dropbox|onedrive|sharepoint|box|google"
+    r"|g?drive|onenote|outlook|notion|evernote|icloud)\s)"
+    r"[\w.'’-]{1,40}\s+)?"
+    r"(?:git\s*hub\s+|git\s+|local\s+|project\s+)?"
     r"(?:repo|repos|repository|codebase|code\s+base)\b(?!\s+of\b)"
     r"|\bgithub\.com/[\w.-]+/[\w.-]+)"
 )
@@ -3778,5 +3813,132 @@ def coding_offer(text: str) -> "dict[str, str] | None":
         if _BUILD_ME_RX.search(t) or _REPO_TASK_RX.search(t):
             return {"href": CODING_OFFER_HREF, "label": CODING_OFFER_LABEL}
         return None
+    except Exception:  # noqa: BLE001 — no offer beats a broken turn
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# THE TEAM OFFER (v1.455.0, readiness Wave G, item 26)
+# --------------------------------------------------------------------------- #
+#: The Agents page's mission door (``app/agents/page.tsx``: no ``?mission=``
+#: opens the "one objective" composer). ``from=chat`` is ignored by the page's
+#: router and keeps this door's address its own, so the dashboard knows to
+#: carry the request into the composer (``dashboard/lib/missionStart``, which
+#: holds the two equal).
+MISSION_OFFER_HREF = "/agents?from=chat"
+MISSION_OFFER_LABEL = "Give this to the team as an objective"
+#: A long request: shorter than this is one task for one reply.
+MISSION_MIN_CHARS = 200
+#: How many separate pieces of work make a team's objective.
+MISSION_MIN_PARTS = 3
+#: The work verbs a PART opens with (an order, never a pasted note's noun).
+_MISSION_VERB = (
+    r"(?:research|find|look\s+up|compare|draft|write|summari[sz]e|review|analy[sz]e|prepare|create|build"
+    r"|make|collect|gather|check|verify|reconcile|update|email|send|list|organi[sz]e|outline|plan|calculate"
+    r"|estimate|translate|proofread|edit|rewrite|format|pull|extract|compile|put\s+together|identify|rank"
+    r"|score|test|audit|map|design|propose|recommend|investigate|read|go\s+through|tally|categori[sz]e)"
+)
+#: A numbered or bulleted line that opens with a work verb.
+_MISSION_LIST_PART = re.compile(
+    r"(?m)^[ \t]{0,8}(?:\d{1,2}[.)]|[-*•])[ \t]+(?:then[ \t]+|also[ \t]+|please[ \t]+)?" + _MISSION_VERB + r"\b",
+    re.IGNORECASE,
+)
+#: A piece of a sentence that opens with a work verb, after a sentence end,
+#: a semicolon, "then", "and then", "after that", "next", "finally", "also".
+_MISSION_CLAUSE_PART = re.compile(
+    r"(?:^|[.!?;:\n]\s*|,\s*(?:and\s+)?(?:then\s+)?|\b(?:and\s+then|then|after\s+that|afterwards|next|finally"
+    r"|also|first|second|third|lastly)\s*,?\s+|\b(?:can|could|would|will)\s+you\s+|\bi\s+(?:need|want)\s+you\s+to\s+)"
+    r"(?:please\s+)?" + _MISSION_VERB + r"\b",
+    re.IGNORECASE,
+)
+
+
+_MISSION_PAYLOAD = re.compile(
+    r"\b(?:this|these|the\s+following)\s+"
+    r"(?:e-?mails?|text|messages?|paragraphs?|letters?|drafts?|memos?|posts?|repl(?:y|ies)|transcripts?)\b"
+    r"|\b(?:rewrite|translate|proofread|summari[sz]e|reword|shorten|fix\s+the\s+grammar\s+(?:in|of))\s+"
+    r"(?:this|the\s+following|below)\b",
+    re.IGNORECASE,
+)
+#: Review (v1.455.0): more of the shapes a team's objective is NOT, each read
+#: on the request's first 300 characters (bounded, linear):
+#: * someone else's words pasted to be answered — "Draft a reply to the email
+#:   below:", "Here's an email from the client, what do they want?";
+_MISSION_PASTED = re.compile(
+    r"\b(?:e-?mails?|messages?|letters?|notes?|memos?|texts?|transcripts?|threads?)\s+(?:below|above)\b"
+    r"|\bhere(?:['’]s|\s+is|\s+are)\s+(?:an?|the|my|his|her|their|our|some)\b"
+    r"|\b(?:reply|respond|answer|write\s+back)\s+to\s+(?:this|the|that|an?|his|her|their|[\w-]+['’]s)\s+"
+    r"(?:e-?mail|message|letter|note|text)",
+    re.IGNORECASE,
+)
+#: * a question about HOW to do the work — "Can you explain how I should
+#:   research…", "How should we…";
+_MISSION_HOW = re.compile(
+    r"\b(?:explain|tell\s+me|teach\s+me|show\s+me|walk\s+me\s+through)\s+(?:how|what|why|when|which)\b"
+    r"|\bhow\s+(?:should|do|would|could|can|might)\s+(?:i|we)\b",
+    re.IGNORECASE,
+)
+#: * the person telling, not asking — "Just so you know…", "No need to do
+#:   anything", "Yesterday I had to research…", "I already drafted…";
+_MISSION_TELLING = re.compile(
+    r"\b(?:just\s+so\s+you\s+know|fyi|for\s+context|for\s+your\s+information|no\s+need\s+to\s+do"
+    r"|(?:don['’]?t|do\s+not)\s+(?:do|start)\s+anything|nothing\s+(?:to\s+do|for\s+you\s+to\s+do))\b"
+    r"|^(?:yesterday|last\s+(?:week|month|night|year|friday|monday)|earlier\s+today|this\s+morning)\b"
+    r"|\b(?:i|we)\s+(?:had\s+to|already|have\s+already|used\s+to|spent\s+(?:the|all|my))\b",
+    re.IGNORECASE,
+)
+#: * a coding task with no repository named (the coding offer reads a
+#:   repository or a program to build) — "…write tests in settings.test.tsx,
+#:   then review the diff", "fix the function, update the docstring".
+_MISSION_CODE = re.compile(
+    r"\b(?:pull\s+requests?|unit\s+tests?|failing\s+tests?|test\s+suite|lint(?:er|ing)?\s*(?:errors?|warnings?)?"
+    r"|refactor\w*|docstrings?|type\s+hints?|stack\s+traces?|the\s+diff|readme|code\s*base|source\s+code"
+    r"|merge\s+(?:the|my|this)\s+(?:pr|branch|pull)|(?:the|this)\s+(?:function|component|endpoint))\b"
+    r"|\b[\w/\\-]{1,120}\.(?:py|tsx?|jsx?|java|cs|go|rs|rb|php|cpp|kt|swift|sql|sh|ps1)\b",
+    re.IGNORECASE,
+)
+
+
+def mission_offer(text: str) -> "dict[str, str] | None":
+    """The door a chat reply may carry for a LONG MULTI-PART request: ``{"href",
+    "label"}`` to the Agents page's objective composer, with the request
+    carried there by the dashboard — at least :data:`MISSION_MIN_CHARS`
+    characters and :data:`MISSION_MIN_PARTS` separate pieces of work, each
+    opening with a work verb (a numbered or bulleted list, or sentences and
+    "then … then …" clauses). ``None`` for a question, a one-task request, a
+    coding task (that has its own offer) or a pasted note whose lines are not
+    orders.
+
+    ONLY AN OFFER: the chat still answers; nothing is started or handed off,
+    and no tool is armed by it. Pure; never raises."""
+    try:
+        t = str(text or "")[:4000]
+        if len(t.strip()) < MISSION_MIN_CHARS:
+            return None
+        if coding_offer(t) is not None:
+            return None
+        head = t.lstrip()[:120].lower()
+        # A real question ("Should I research … or …?") — never a polite
+        # request ("Can you research X, compare Y, then draft Z?").
+        if re.match(r"(?:what|why|how|who|when|where|which|is|are|do|does|did|should|would\s+it)\b", head) and (
+            "?" in t[:400]
+        ):
+            return None
+        # A pasted payload ("Rewrite this email: …") holds the orders of the
+        # person who wrote it, not the user's.
+        if _MISSION_PAYLOAD.search(head):
+            return None
+        # Review (v1.455.0): pasted words to answer, a "how should I"
+        # question, the person telling rather than asking, a coding task.
+        head300 = t.lstrip()[:300]
+        if _MISSION_PASTED.search(head300) or _MISSION_HOW.search(head300) or _MISSION_TELLING.search(head300):
+            return None
+        if _MISSION_CODE.search(t):
+            return None
+        listed = len(_MISSION_LIST_PART.findall(t))
+        clauses = len(_MISSION_CLAUSE_PART.findall(t))
+        if max(listed, clauses) < MISSION_MIN_PARTS:
+            return None
+        return {"href": MISSION_OFFER_HREF, "label": MISSION_OFFER_LABEL}
     except Exception:  # noqa: BLE001 — no offer beats a broken turn
         return None

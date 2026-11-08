@@ -241,6 +241,16 @@ _THEME_TAIL = (
 #: Jarvis, use…", "please use…", "can you use…") — never "the slides should
 #: use a dark blue theme", whose subject is something else.
 _THEME_ASKS_AT = r"(?:" + _ASKS_AT + r"|\b(?:just|also|now|then|so|ok|okay|jarvis|let'?s)\s+)"
+#: Review (v1.455.0, item 22): scoping ONE task or this chat ("You should only
+#: look at the Smith folder for this", "Limit you to the Johnson folder for
+#: this task", "…while doing this") is the request in hand, never the lasting
+#: setting of the folders Jarvis may read. A bounded look ahead: linear.
+_JUST_THIS_TASK = (
+    r"(?![^.!?\n]{0,60}?\b(?:for\s+(?:now|today|this(?:\s+(?:one|task|question|request|chat|conversation"
+    r"|answer|reply|job|return|engagement|client))?\b|the\s+(?:moment|time\s+being|task|question|request|chat))"
+    r"|while\s+(?:you|doing|working|we)|this\s+time|right\s+now|just\s+(?:once|now)"
+    r"|in\s+this\s+(?:chat|conversation|task|answer|reply))\b)"
+)
 _EXTRA_REFERENCES: tuple[re.Pattern[str], ...] = tuple(
     re.compile(p, re.IGNORECASE)
     for p in (
@@ -325,6 +335,22 @@ _EXTRA_REFERENCES: tuple[re.Pattern[str], ...] = tuple(
         # "enable reading files in my Documents folder only", "only let
         # Jarvis read my Documents folder".
         r"\bread(?:ing)?\s+(?:files\s+)?(?:in|from)\s+(?:my\s+)?[\w\s]{0,20}?folders?\s+only\b",
+        # v1.455.0 (readiness Wave G, item 22): "Only let Jarvis look at
+        # C:\Clients", "only allow you to read D:\Firm", "Jarvis may only see
+        # my Clients folder", "limit Jarvis to C:\Clients" — the folders Jarvis
+        # may read (``readable_folders``). A path or a folder named; never "only
+        # let Jarvis look at the attached file".
+        r"(?:\bonly\s+(?:let|allow)\s+(?:(?:iron\s+)?jarvis|you|the\s+app)\s+(?:to\s+)?"
+        r"|\b(?:let|allow)\s+(?:(?:iron\s+)?jarvis|you|the\s+app)\s+(?:to\s+)?only\s+"
+        r"|\b(?:(?:iron\s+)?jarvis|you)\s+(?:may|can|should)\s+only\s+)"
+        r"(?:look\s+(?:at|in|into|through)|see|read|open|access|search|browse|touch)\s+"
+        r"(?:(?:the\s+)?files\s+(?:in|from|under|inside)\s+)?(?:(?:my|the|our)\s+)?"
+        r"(?:[A-Za-z]:[\\/]|(?:[\w'’-]{1,30}\s+){0,2}?(?:folders?|director(?:y|ies)|drives?)\b)"
+        + _JUST_THIS_TASK,
+        r"\b(?:limit|restrict|confine|lock)\s+(?:(?:iron\s+)?jarvis|you|the\s+app|(?:its|your)\s+reading)\s+"
+        r"(?:down\s+)?to\s+(?:(?:the\s+)?files\s+(?:in|from|under|inside)\s+)?(?:(?:my|the|our)\s+)?"
+        r"(?:[A-Za-z]:[\\/]|(?:[\w'’-]{1,30}\s+){0,2}?(?:folders?|director(?:y|ies)|drives?)\b)"
+        + _JUST_THIS_TASK,
         # "start night tasks at 22:00", "night shift at 10pm", "set the night
         # shift to start at 10pm". v1.448.0 (Wave A, A1): a request VERB or
         # the night words as the SUBJECT of starting — "the night shift at
@@ -352,6 +378,9 @@ _EXTRA_REFERENCES: tuple[re.Pattern[str], ...] = tuple(
     # (settings.setup_words); both linear.
     _W.JARVIS_BACKUP,
     _W.WATCH_FOLDER,
+    # v1.455.0 (readiness Wave G, item 20): files arriving in a folder ("Whenever
+    # a new PDF shows up in my Downloads folder…") is a watcher too.
+    _W.FILES_ARRIVE_IN_FOLDER,
     # v1.448.0 (Wave A "chat configures everything", A1): a model VENDOR or
     # PLAN asked to answer — "Use Claude for this chat instead of the
     # default", "I have a ChatGPT Plus plan, can you use that to answer?",

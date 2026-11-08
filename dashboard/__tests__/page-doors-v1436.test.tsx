@@ -235,7 +235,9 @@ describe("DoorsStrip draws a sign-in door as the ONE Sign in press", () => {
   });
 
   it("every other door is a plain link to the daemon's address", () => {
-    const links = FIXTURE.table.steps.map((s) => s.door).filter((d) => !d.press);
+    // v1.455.0 (Wave G item 23, moved on purpose): an install door is the
+    // install press (pinned in chat-finds-the-right-thing-v1455).
+    const links = FIXTURE.table.steps.map((s) => s.door).filter((d) => !d.press && !d.install);
     render(<DoorsStrip doors={decodeDoors(links)} />);
     const hrefs = screen.getAllByRole("link").map((a) => a.getAttribute("href"));
     expect(hrefs).toEqual(links.map((d) => d.href));

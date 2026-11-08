@@ -210,6 +210,18 @@ def cli_binary_present(binary: str) -> bool:
     return present
 
 
+def known_cli_presence(binary: str) -> "bool | None":
+    """The REMEMBERED answer for ``binary`` — never a PATH scan, never a
+    refresh (v1.455.0: a chat door asks it on the event loop). ``None`` when
+    it was never looked for. Never raises."""
+    try:
+        with _CLI_PRESENCE_LOCK:
+            hit = _CLI_PRESENCE.get(binary)
+        return None if hit is None else bool(hit[0])
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def invalidate_cli_presence(binary: str | None = None) -> None:
     """Forget the memo for ``binary`` (or every binary when omitted), so the
     next check scans PATH again — what a rescan / a fresh install needs. A

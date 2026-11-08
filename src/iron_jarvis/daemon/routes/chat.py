@@ -4137,7 +4137,7 @@ async def chat_stream(
     _query_tail += _grounding.query()
     # v1.436.0 (Wave 5, B3): the lock-step copy of chat_turn's page-step and
     # "not offered" lines ("" when the message names none — byte-identical).
-    _query_tail += _chat_turn.page_steps_block(body)
+    _query_tail += _chat_turn.page_steps_block(body, platform)
     conn_tools = _grounding.conn_tools
 
     # Routing choice (hoisted, mirrors chat_complete) — attachment budgets
@@ -7749,11 +7749,20 @@ async def chat_stream(
         door_entries = _chat_turn.with_coding_offer(
             door_entries, body, harness=harness, escalate=escalate, sidebar=arm_family is not None,
         )
+        # TEAM OFFER (v1.455.0, readiness Wave G, item 26): the lock-step copy
+        # of chat_turn's — a long multi-part request gets a door to the Agents
+        # page's objective composer (a link only).
+        door_entries = _chat_turn.with_mission_offer(
+            door_entries, body, harness=harness, escalate=escalate, sidebar=arm_family is not None,
+        )
         door_entries = with_connect_door(door_entries, _grounding.apps_offer, connect_offered)
         # PAGE DOOR (v1.436.0, Wave 5 B3): the lock-step copy of chat_turn's —
         # one door to the place a page-only step is done, last, only with room.
+        # v1.455.0: with the platform, so a door this PC no longer needs (a
+        # vendor already connected, a program already installed) is left out.
         door_entries = _chat_turn.with_page_door(
             door_entries, body, harness=harness, escalate=escalate, sidebar=arm_family is not None,
+            platform=d.platform,
         )
         done_frame: dict[str, Any] = {
             "reply": reply,

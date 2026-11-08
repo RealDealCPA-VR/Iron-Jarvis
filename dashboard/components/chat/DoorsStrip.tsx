@@ -38,6 +38,7 @@ import { recordDoorOpen } from "@/lib/appTiles";
 import { subscriptionCliFor } from "@/lib/cliSignIn";
 import { CliSignInPress } from "@/components/connections/CliSignInPress";
 import { DOOR_PILL } from "@/components/chat/doorStyle";
+import { InstallDoorPress, isInstallPress } from "@/components/chat/InstallDoorPress";
 
 export interface Door {
   href: string;
@@ -45,6 +46,9 @@ export interface Door {
   /** v1.436.0: a sign-in press this door is drawn through ("claude-cli",
    *  "codex-cli", "grok-cli"); absent = a link. */
   press?: string;
+  /** v1.455.0 (readiness Wave G, item 23): an install press this door is
+   *  drawn through ("claude", "codex" — lib/cliInstall); absent = none. */
+  install?: string;
 }
 
 /** The sign-in press a door names, when the dashboard has that press. */
@@ -63,13 +67,15 @@ export function decodeDoors(raw: unknown): Door[] | null {
   const out: Door[] = [];
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
-    const d = item as { href?: unknown; label?: unknown; press?: unknown };
+    const d = item as { href?: unknown; label?: unknown; press?: unknown; install?: unknown };
     if (typeof d.href !== "string" || !d.href.trim()) continue;
     const press = doorPress({ press: typeof d.press === "string" ? d.press : undefined });
+    const install = isInstallPress(d.install) ? d.install : undefined;
     out.push({
       href: d.href,
       label: typeof d.label === "string" && d.label.trim() ? d.label : d.href,
       ...(press ? { press } : {}),
+      ...(install ? { install } : {}),
     });
   }
   return out.length > 0 ? out : null;
@@ -97,6 +103,10 @@ export function DoorsStrip({ doors, onOpen }: DoorsStripProps) {
   return (
     <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
       {usable.map((d) => {
+        if (isInstallPress(d.install)) {
+          // v1.455.0: an install door IS the one install press (lib/cliInstall).
+          return <InstallDoorPress key={d.href + d.install} cli={d.install} onLaunched={() => recordDoorOpen(d.href)} />;
+        }
         const press = doorPress(d);
         if (press) {
           // v1.436.0: a sign-in door IS the one Sign in press; the open is

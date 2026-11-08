@@ -21,7 +21,8 @@
 //   ask says so in amber, sorted first, instead of "Working".
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { takeMissionStart } from "@/lib/missionStart";
 import { ArrowUp, FolderKanban } from "lucide-react";
 import { COMPOSER_CARD_EDGE, composerChipClass } from "@/lib/composerChips";
 import { ApiError, post } from "@/lib/api";
@@ -116,6 +117,13 @@ export function MissionComposer({
   projectName?: string;
 }) {
   const [objective, setObjective] = useState("");
+  // v1.455.0 (readiness Wave G, item 26): a chat's "Give this to the team as
+  // an objective" door put the request in this tab (lib/missionStart); it is
+  // taken once, into the box — nothing starts until Start is pressed.
+  useEffect(() => {
+    const carried = takeMissionStart();
+    if (carried) setObjective((cur) => (cur.trim() ? cur : carried));
+  }, []);
   const [picked, setPicked] = useState("");
   const projectId = fixedProject || picked;
   const [busy, setBusy] = useState(false);

@@ -42,7 +42,8 @@ import { STATUS_HREF } from "@/lib/loopWords";
 import { useApi } from "@/lib/useApi";
 import { guideChatPath } from "@/lib/mission";
 import { BUILD_BLURB, CODING_SESSION, CODING_VIEW_NAME } from "@/lib/buildWords";
-import { headingSlug, readGuideLink, sectionMatches, textOf } from "@/lib/helpLinks";
+import { HELP_GUIDE_EVENT, announceHelpLink, headingSlug, readGuideLink, sectionMatches, textOf } from "@/lib/helpLinks";
+import { FEATURE_ROWS } from "@/lib/featureRows";
 import { HELP_PLACES } from "@/lib/helpPlaces";
 import { Card, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
@@ -466,6 +467,31 @@ function GuidesCard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docs]);
 
+  // v1.455.0: a guide link pressed while Help is already open (its own
+  // feature rows, Ctrl K) — lib/helpLinks announceHelpLink.
+  const fromEvent = useRef<(l: { guide: string; section: string }) => void>(() => {});
+  fromEvent.current = (l) => {
+    if (!docs.some((d) => d.slug === l.guide)) return;
+    pendingSection.current = l.section;
+    if (openSlug === l.guide && doc) {
+      const heading = Array.from(viewer.current?.querySelectorAll<HTMLElement>("[data-heading]") ?? []).find(
+        (el) => sectionMatches(el.dataset.heading ?? "", l.section),
+      );
+      pendingSection.current = "";
+      heading?.scrollIntoView?.({ block: "start" });
+      return;
+    }
+    if (openSlug !== l.guide) openGuide(l.guide);
+  };
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ guide?: unknown; section?: unknown }>).detail;
+      if (d && typeof d.guide === "string") fromEvent.current({ guide: d.guide, section: String(d.section ?? "") });
+    };
+    window.addEventListener(HELP_GUIDE_EVENT, on);
+    return () => window.removeEventListener(HELP_GUIDE_EVENT, on);
+  }, []);
+
   // …and its section comes into view when the guide has drawn.
   useEffect(() => {
     const section = pendingSection.current;
@@ -784,6 +810,31 @@ export default function HelpPage() {
           <p className="mt-3 text-[12px] text-zinc-500">
             <Kbd>Ctrl+K</Kbd> finds any page, setting or chat from anywhere.
           </p>
+        </Card>
+      </Reveal>
+
+      {/* v1.455.0 (readiness Wave G, item 25): the ways of working that live
+          in a composer, each leading to its Handbook section (lib/featureRows;
+          also on Everything and in Ctrl K). */}
+      <Reveal>
+        <Card title="Ways of working you might miss" icon={<Boxes size={15} />}>
+          <ul className="grid gap-3 sm:grid-cols-3" data-testid="help-features">
+            {FEATURE_ROWS.map((f) => (
+              <li key={f.id}>
+                <Link
+                  href={f.href}
+                  data-testid={`help-feature-${f.id}`}
+                  onClick={(e) => {
+                    if (announceHelpLink(f.href)) e.preventDefault();
+                  }}
+                  className="block h-full rounded-2xl border border-white/[0.05] bg-white/[0.02] px-4 py-3 transition-colors hover:border-white/10"
+                >
+                  <div className="text-sm font-semibold text-zinc-100">{f.title}</div>
+                  <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">{f.desc}</p>
+                </Link>
+              </li>
+            ))}
+          </ul>
         </Card>
       </Reveal>
 

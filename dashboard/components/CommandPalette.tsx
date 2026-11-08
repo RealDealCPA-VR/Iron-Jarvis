@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { EVERYTHING_TAB_EVENT, SURFACES } from "@/lib/surfaces";
 import { announceChatViewLink } from "@/lib/chatSurface";
+import { announceHelpLink } from "@/lib/helpLinks";
 import { announceSettingsLink } from "@/lib/settingsOpen";
 import { scorePalette, type PaletteItem } from "@/lib/palette";
 import { get } from "@/lib/api";
@@ -1251,6 +1252,8 @@ export function CommandPalette() {
       // v1.445.0: the same trap for Settings: a "Default model" press while
       // Settings is open changed only the query, and nothing moved.
       announceSettingsLink(row.href);
+      // v1.455.0: and for a Help guide link while Help is open (lib/helpLinks).
+      announceHelpLink(row.href);
     }
   }
 

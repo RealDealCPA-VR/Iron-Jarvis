@@ -473,7 +473,9 @@ WAVE_A_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
     # A local program said to be RUNNING here (records_connections): the
     # model server tools; "connect to it" also reads as an app's connect.
     ("I'm running Ollama with llama3 on this PC, use it.", MS, (S,)),
-    ("LM Studio is running on port 1234, connect to it.", MS, (S, AP)),
+    # v1.455.0 (readiness Wave G, item 23, moved on purpose): the bare
+    # "connect to it" names no app — model server tools only, no app_connect.
+    ("LM Studio is running on port 1234, connect to it.", MS, (S,)),
     ("I installed vLLM on this machine, point Jarvis at it", MS, (S,)),
     # The Wave-4 tools by their everyday nouns.
     (r"Point your long-term memory at my Obsidian vault in D:\Notes.", ("memory_base_add",), ()),
@@ -586,10 +588,81 @@ WAVE_A_NEGATIVES: list[str] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# v1.455.0 (readiness Wave G, items 19-23): the re-audit at v1.452.0 (lane F-K,
+# docs/PRODUCT-READINESS-LANES-v1452.md) found each request below arming the
+# wrong thing or nothing; each is red on v1.454.0.
+# ---------------------------------------------------------------------------
+SENT = ("sentinel_add",)
+WAVE_G_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
+    # 19: a plan used "with Jarvis" / "with you" / "in this app".
+    ("I want to use my Claude Pro subscription with Jarvis.", SET, (S,)),
+    ("I want to use my ChatGPT subscription with Jarvis.", SET, (S,)),
+    ("I'd like to use my Claude Max subscription in this app.", SET, (S,)),
+    ("Use my Claude Pro subscription with Jarvis from now on.", SET, (S,)),
+    # 20: files arriving in a FOLDER is a watcher (never a rule, which has no
+    # folder source) — and the "Folder watchers" setting may need turning on.
+    ("Whenever a new PDF shows up in my Downloads folder, rename it by client name.", SENT + SET, (SE, S)),
+    (r"When a new invoice lands in C:\Scans, file it under the client's folder.", SENT + SET, (SE, S)),
+    ("Every time a PDF is saved to my Desktop, move it to Documents.", SENT + SET, (SE, S)),
+    ("Every new scan in my Scans folder should be renamed by date.", SENT + SET, (SE, S)),
+    # 22: the folders Jarvis may read.
+    (r"Only let Jarvis look at C:\Clients.", SET, (S,)),
+    (r"Only let Jarvis read C:\Clients", SET, (S,)),
+    ("Limit Jarvis to my Clients folder.", SET, (S,)),
+    (r"Jarvis may only read files in D:\Firm.", SET, (S,)),
+    ("Only allow you to open my Clients folder.", SET, (S,)),
+    # 23: a rule on mail FROM someone, an order after it (heard through an
+    # email destination, so its tools come too).
+    ("When I get an email from the IRS, forward it to my phone.", ("reflex_create",), (RE, CH)),
+    ("When I get an email from my bank, text me.", ("reflex_create",), (RE, CH)),
+    ("Whenever I receive an email from the IRS, forward it to my accountant.", ("reflex_create",), (RE, CH)),
+    # 23: Slack as where Jarvis messages the user is a destination, never the
+    # Slack app.
+    ("Send me a Slack message every morning with a summary.", ("schedule_create", "channel_connect"), (SC, CH)),
+    # …while a second app named beside LM Studio keeps its app_connect.
+    ("LM Studio is running on port 1234, connect to it, and connect my GitHub too.",
+     MS + ("app_connect",), (S, AP)),
+]
+WAVE_G_NEGATIVES: list[str] = [
+    # 19: the plan in passing, another window, a comparison.
+    "I want to use ChatGPT with you open in another window to compare.",
+    "I used my Claude Pro subscription with Jarvis last week and it was fine.",
+    "Compare my ChatGPT subscription with you.",
+    # 20: arrivals in an app, in mail, at a desk; a habit.
+    "When the package arrives at my desk, put it in the garage.",
+    "I save new PDFs in my Downloads folder every day.",
+    # 21: the person's own schedule and calendar time.
+    "My schedule is packed this week, help me prioritize.",
+    "Schedule time to review the Smith return.",
+    "Our schedule looks tight next week, what can we move?",
+    "Can you fit the Smith review into my schedule?",
+    "Schedule an hour for the audit on Friday.",
+    "Schedule 30 minutes to call the client.",
+    "What's on my schedule for tomorrow?",
+    "my busy schedule leaves no time for the gym",
+    # 22: the user's own reading, a file, someone else.
+    "Only let Jarvis look at the attached file.",
+    "Only let the client see the summary.",
+    r"Let me only read C:\Clients today.",
+    # 23: a habit after mail; never a rule.
+    "When I get an email from the IRS, I panic.",
+    "When I get an email from my boss I usually reply fast.",
+]
+#: v1.455.0 (item 21, moved on purpose): the app's OWN schedules still arm
+#: their writers beside the person's.
+WAVE_G_SCHEDULES: list[tuple[str, tuple[str, ...]]] = [
+    ("Pause my nightly schedule.", ("schedule_update",)),
+    ("Delete my nightly-brief schedule.", ("schedule_delete",)),
+    ("Make a schedule that runs every weekday at 8am.", ("schedule_create",)),
+    ("Schedule a weekly digest of my inbox every Monday.", ("schedule_create",)),
+]
+
+
 def _all_rows():
     return (
-        SETTINGS_ROWS + RECORD_ROWS + SETUP_ROWS + REVIEW_ROWS + WAVE_A_ROWS
-        + [(t, (), ()) for t in NEGATIVE_ROWS + REVIEW_NEGATIVES + WAVE_A_NEGATIVES]
+        SETTINGS_ROWS + RECORD_ROWS + SETUP_ROWS + REVIEW_ROWS + WAVE_A_ROWS + WAVE_G_ROWS
+        + [(t, (), ()) for t in NEGATIVE_ROWS + REVIEW_NEGATIVES + WAVE_A_NEGATIVES + WAVE_G_NEGATIVES]
     )
 
 
@@ -680,6 +753,40 @@ def test_wave_a_model_words_and_everyday_nouns_arm_the_right_tool(d):
         if stray:
             bad.append((text, stray))
     assert bad == []
+
+
+def test_wave_g_requests_arm_the_right_tool_and_its_near_misses_arm_nothing(d):
+    """v1.455.0 (readiness Wave G, items 19-23). MUTATION (each red): drop the
+    "with Jarvis" tail from setup_words.ANSWERS_TAIL -> the plan rows lose SET;
+    drop the folder-arrival branch in records._record_tools_named -> the
+    watcher rows lose sentinel_add and gain reflex_create; drop the
+    readable-folders shapes in trigger._EXTRA_REFERENCES -> those rows lose
+    SET; drop MAIL_FROM_RULE -> the IRS rows lose reflex_create; drop
+    _persons_schedule or the calendar-time words in _NOT_OUR_SCHEDULE -> the
+    schedule near-misses arm the schedule writers; drop the "send me a Slack
+    message" place -> the Slack row gains app_connect; drop the LM Studio
+    app_connect pruning -> its moved row gains app_connect."""
+    assert _failures(d, WAVE_G_ROWS) == []
+    wave4 = {"model_server_add", "model_server_default", "night_task_add", "build_defaults_set", "build_team_set"}
+    bad = []
+    for text in WAVE_G_NEGATIVES:
+        armed, ask = lanes(d, text)
+        stray = sorted((set(armed) | set(ask)) & (WRITERS | wave4))
+        if stray:
+            bad.append((text, stray))
+    assert bad == []
+    for text, offer in WAVE_G_SCHEDULES:
+        armed, ask = lanes(d, text)
+        assert set(offer) <= set(armed) | set(ask), (text, armed, ask)
+    # Item 20: a folder arrival is never a rule — reflex_create cannot watch
+    # a folder (reflex/models.py sources: webhook, comm, email, calendar,
+    # slack); a rule on new EMAIL keeps it.
+    for text in ("Whenever a new PDF shows up in my Downloads folder, rename it by client name.",
+                 "Every new scan in my Scans folder should be renamed by date."):
+        armed, ask = lanes(d, text)
+        assert "reflex_create" not in set(armed) | set(ask), text
+    _, ask = lanes(d, "Whenever a new email comes in, start an intake session.")
+    assert "reflex_create" in ask
 
 
 def test_a_click_in_a_desktop_program_ask_arms_no_browser_tool(d):

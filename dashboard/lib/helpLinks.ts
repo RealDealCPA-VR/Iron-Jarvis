@@ -65,3 +65,22 @@ export function textOf(children: unknown): string {
   }
   return "";
 }
+
+/** v1.455.0 (readiness Wave G, item 25): a guide link pressed WHILE the Help
+ *  page is open changes only the query, and the page read its link once when
+ *  it opened — so the press tells the page instead (its Guides card listens).
+ *  Answers true when it told it (on /help); never throws. */
+export const HELP_GUIDE_EVENT = "ij:help-guide";
+
+export function announceHelpLink(href: string | null | undefined): boolean {
+  try {
+    if (typeof href !== "string" || typeof window === "undefined") return false;
+    if (window.location.pathname !== "/help" || !href.startsWith("/help?")) return false;
+    const link = readGuideLink(href.slice(href.indexOf("?")));
+    if (!link) return false;
+    window.dispatchEvent(new CustomEvent(HELP_GUIDE_EVENT, { detail: link }));
+    return true;
+  } catch {
+    return false;
+  }
+}

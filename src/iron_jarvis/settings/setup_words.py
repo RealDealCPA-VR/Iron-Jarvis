@@ -136,12 +136,35 @@ _MAIL_ARRIVES = re.compile(
 )
 
 
+#: v1.455.0 (readiness Wave G, item 23): "When I get an email from the IRS,
+#: forward it to my phone" — a rule on mail FROM someone, its action an order
+#: of its own after a comma or "then" ("…, I panic" is the person's habit).
+MAIL_FROM_RULE = re.compile(
+    r"\b(?:when|whenever|every\s+time|each\s+time|any\s*time|if|as\s+soon\s+as)\s+(?:i|we)\s+"
+    r"(?:get|receive|am\s+sent|are\s+sent|get\s+sent)\s+(?:an?\s+|any\s+)?(?:new\s+)?"
+    # Review (v1.455.0): e-mail only. "When we get mail from the IRS, file
+    # it in the cabinet" is a LETTER (the IRS writes by post), and a rule
+    # cannot hear the post.
+    r"e-?mails?\s+(?:from|by)\b[^.!?\n]{1,60}?"
+    r"(?:,\s*|\s+then\s+|\s+(?:please|can\s+you|could\s+you)\s+)(?:then\s+)?(?:please\s+)?"
+    r"(?:forward|send|text|tell|notify|alert|ping|message|let\s+me\s+know|reply|answer|respond|draft|file"
+    r"|save|move|summari[sz]e|flag|label|tag|star|print|copy|start|run|add|put|remind)\b",
+    re.IGNORECASE,
+)
+
+
+def mail_from_rule(text: str) -> bool:
+    """A rule asked for on mail from someone (an order follows)."""
+    return any(MAIL_FROM_RULE.search(s) is not None for s in sentences(text))
+
+
 def every_new_email(text: str) -> bool:
     """A rule asked for on new EMAIL — heard only through an email destination
     with two-way listening on, from its Allowed senders."""
     return any(
         ((m := _EVERY_NEW.search(s)) is not None and _MAIL.search(m.group(0)) and _STANDING.search(s))
         or _MAIL_ARRIVES.search(s) is not None
+        or MAIL_FROM_RULE.search(s) is not None
         for s in sentences(text)
     )
 
@@ -170,9 +193,76 @@ _ACTS_ON_ARRIVALS = re.compile(
 )
 
 
+#: v1.455.0 (readiness Wave G, item 20): FILES arriving in a FOLDER on this
+#: PC — "Whenever a new PDF shows up in my Downloads folder, rename it by
+#: client name", "every new scan in C:\Scans". That is a folder watcher's
+#: job (``sentinel_add``): a rule (``reflex_create``) hears webhooks, email,
+#: messages, the calendar and Slack, never a folder. Never an app's own place
+#: ("…in my Google Drive", "…in QuickBooks"), never a repository.
+_FILE_THING = (
+    r"(?:files?|documents?|docs?|pdfs?|invoices?|receipts?|scans?|images?|photos?|pictures?|screenshots?"
+    r"|spreadsheets?|downloads?|attachments?|statements?|reports?|w-?2s?|1099s?|k-?1s?|csvs?)"
+)
+#: A folder on this PC: a drive path, or one to three words ending in
+#: folder / directory / Downloads / Desktop / Documents. Never a cloud drive's
+#: own name before it ("my Google Drive folder" is the app's).
+_A_FOLDER = (
+    r"(?:in|into|to|inside|under|on)\s+(?:(?:my|the|our|this|that)\s+)?"
+    # Review (v1.455.0): possessive, so a guard after the path cannot be
+    # dodged by shortening it ("C:\Scans I file them" read as "C:\Sca" +
+    # "ns I…").
+    r"(?:[A-Za-z]:[\\/][^\s.,;!?]{0,80}+"
+    r"|(?:(?!(?:google|onedrive|dropbox|sharepoint|icloud|box|git\w*|code|repo\w*)\b)[\w'’-]{1,30}\s+){0,2}?"
+    r"(?:folder|directory|downloads|desktop(?!\s+(?:apps?|programs?|applications?)\b)|documents)\b)"
+)
+_ARRIVES = (
+    r"(?:arrives?|arriving|shows?\s+up|lands?|appears?|comes?\s+in|drops?\s+in"
+    r"|gets?\s+(?:saved|added|dropped|downloaded|put|copied|moved|created)"
+    r"|is\s+(?:saved|added|dropped|downloaded|put|copied|moved|created))"
+)
+#: Review (v1.455.0): the person's own HABIT right after the folder ("…shows
+#: up in my Downloads folder I rename it by hand") is not a request. Read
+#: with an optional trailing "folder" so a shorter folder match ("my
+#: Downloads") cannot slip past it.
+_NOT_A_HABIT_AFTER = (
+    r"(?!(?:\s+(?:folder|directory))?\s*,?\s*(?:i|we)\s+(?!(?:want|need|would|will|['’]d|['’]ll)\b)[a-z])"
+)
+#: A first person doing something INSIDE the "every new …" span ("Any new
+#: receipts I get I save to my Desktop") is the person's habit — unless a
+#: request follows the folder ("…I save to my Desktop should be renamed").
+_NO_FIRST_PERSON = r"(?:(?!\b(?:i|we)\s+(?!(?:want|need|would|will)\b)[a-z])[^.!?\n]){0,30}?"
+_A_REQUEST_FOLLOWS = r"(?=[^.!?\n]{0,60}?\b(?:should|must|needs?\s+to|has\s+to|have\s+to|please)\b)"
+FILES_ARRIVE_IN_FOLDER = re.compile(
+    r"\b(?:when|whenever|every\s+time|each\s+time|any\s*time|as\s+soon\s+as)\b[^.!?\n]{0,40}?\b"
+    # Review (v1.455.0): no comma between the arrival and the folder — a
+    # folder after the comma is where the person PUTS it ("When the client's
+    # documents arrive, put them in the client folder"), not where it lands.
+    + _FILE_THING + r"\b[^.!?\n]{0,30}?\b" + _ARRIVES + r"\b[^.!?\n,;]{0,20}?\b" + _A_FOLDER + _NOT_A_HABIT_AFTER
+    + r"|\b(?:every|each|any|all)\s+new\s+(?:[\w-]+\s+)?" + _FILE_THING
+    + r"\b(?:" + _NO_FIRST_PERSON + r"\b" + _A_FOLDER + _NOT_A_HABIT_AFTER
+    + r"|[^.!?\n]{0,30}?\b" + _A_FOLDER + _A_REQUEST_FOLLOWS + r")",
+    re.IGNORECASE,
+)
+
+
+def files_arrive_in_folder(text: str) -> bool:
+    """Files arriving in a folder on this PC, said as a standing request."""
+    return any(FILES_ARRIVE_IN_FOLDER.search(s) is not None for s in sentences(text))
+
+
+def without_folder_arrivals(text: str) -> str:
+    """*text* with every "files arriving in a folder" span blanked (length
+    kept), so the rule words are read only for what a rule can hear."""
+    return FILES_ARRIVE_IN_FOLDER.sub(lambda m: " " * len(m.group(0)), str(text or ""))
+
+
 def watch_and_act(text: str) -> bool:
-    """A folder watched AND something done to what arrives in it."""
-    return any(WATCH_FOLDER.search(s) and _ACTS_ON_ARRIVALS.search(s) for s in sentences(text))
+    """A folder watched AND something done to what arrives in it — or
+    (v1.455.0) files arriving in a folder, asked as a standing request."""
+    return any(
+        (WATCH_FOLDER.search(s) and _ACTS_ON_ARRIVALS.search(s)) or FILES_ARRIVE_IN_FOLDER.search(s)
+        for s in sentences(text)
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -303,6 +393,10 @@ PLAN = (
 _REQUEST_AT = (
     r"(?:^|(?<=[.!?;:,\n])\s*|\b(?:please|just|now|also|and|then|so|ok|okay|jarvis|let['’]?s)\s+"
     r"|\b(?:can|could|would|will)\s+you\s+(?:please\s+)?|\bi\s+(?:want|need|would\s+like)\s+(?:you\s+)?to\s+"
+    # v1.455.0 (readiness Wave G, item 19): "Can I use my ChatGPT Plus plan
+    # with you?" — a question, so the settings writers stay out (the question
+    # guard), but the Connections door is the answer.
+    r"|\b(?:can|could|may)\s+i\s+(?:please\s+)?"
     r"|\bi['’]d\s+like\s+(?:you\s+)?to\s+)"
 )
 #: What makes the vendor the one who ANSWERS: "for this chat", "for the big
@@ -317,6 +411,12 @@ ANSWERS_TAIL = (
     r"|to\s+(?:answer|reply|respond|chat|talk)(?:\s+(?:me|us|my\s+questions|these|this|here))?"
     r"|as\s+(?:my|the|your)\s+(?:model|assistant|default|ai|provider|brain)|here|in\s+(?:this\s+)?chat|for\s+chat"
     r"|for\s+me|please|instead)\b"
+    # v1.455.0 (readiness Wave G, item 19): "I want to use my Claude Pro
+    # subscription WITH JARVIS" — the plan used here, by this app. Only at the
+    # end of the request (or before "too / from now on / instead"), so "use
+    # ChatGPT with you open in another window" is not it.
+    r"|\s+(?:with|through|in|inside|for)\s+(?:(?:iron\s+)?jarvis|you|this\s+app|the\s+app)"
+    r"(?=\s*(?:[.!?,;]|$|(?:too|as\s+well|instead|from\s+now\s+on|please|now)\b))"
     r"|\s*(?:[.!?]|$))"
 )
 #: "use Claude for this chat", "switch to Gemini from now on", "try Google's
@@ -373,6 +473,46 @@ def names_a_model_provider(text: str) -> bool:
     return any(p.search(t) is not None for p in (USE_VENDOR, USE_PLAN, SET_UP_VENDOR))
 
 
+#: v1.455.0 (readiness Wave G, item 23): which providers a vendor word means.
+#: A vendor counts as connected when ANY of them answers (its plan's CLI
+#: signed in, or its API key saved), so the Connections door is not offered
+#: beside a vendor that already works.
+_VENDOR_WORD = re.compile(r"\b" + VENDOR + r"\b", re.IGNORECASE)
+_VENDOR_PROVIDERS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = tuple(
+    (re.compile(p, re.IGNORECASE), ids)
+    for p, ids in (
+        (r"^(?:claude|anthropic)", ("claude-cli", "anthropic")),
+        (r"^(?:chatgpt|openai|gpt|codex)", ("codex-cli", "openai")),
+        (r"^(?:gemini|google)", ("google",)),
+        (r"^open\s*router", ("openrouter",)),
+        (r"^(?:grok|xai)", ("grok-cli", "xai")),
+        (r"^mistral", ("mistral",)),
+        (r"^deepseek", ("deepseek",)),
+        (r"^perplexity", ("perplexity",)),
+    )
+)
+
+
+def model_providers_named(text: str) -> list[tuple[str, ...]]:
+    """For each vendor the model-provider request names (read inside the
+    matched request only), the providers that vendor means — in order, once
+    each; ``[]`` when there is no such request. Never raises."""
+    t = str(text or "")
+    out: list[tuple[str, ...]] = []
+    try:
+        for rx in (USE_VENDOR, USE_PLAN, SET_UP_VENDOR):
+            for m in rx.finditer(t):
+                for v in _VENDOR_WORD.finditer(m.group(0)):
+                    for prx, ids in _VENDOR_PROVIDERS:
+                        if prx.search(v.group(0)):
+                            if ids not in out:
+                                out.append(ids)
+                            break
+    except Exception:  # noqa: BLE001 — a matcher fault names nothing
+        return []
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Someone else's SCHEDULE (v1.448.0, Wave A, A1 — lifted out of
 # ``daemon.change_claims``, which reads it from here now)
@@ -403,5 +543,5 @@ NOT_OUR_SCHEDULE_BEFORE = frozenset(
 ALL_PATTERNS: tuple[re.Pattern[str], ...] = (
     JARVIS_BACKUP, _SENTENCE, TO_MY_PHONE, SET_UP_TO_MESSAGE_ME, _EDITS_A_WEBHOOK, _EVERY_NEW, _STANDING, _MAIL, _MAIL_ARRIVES, WATCH_FOLDER,
     _ACTS_ON_ARRIVALS, _BUILTIN_AGENT, _LIMIT, _LIMIT_VERB, VOICE, INTERNET_CALLS_IN, _OUTBOUND,
-    USE_VENDOR, USE_PLAN, SET_UP_VENDOR,
+    USE_VENDOR, USE_PLAN, SET_UP_VENDOR, FILES_ARRIVE_IN_FOLDER, MAIL_FROM_RULE, _VENDOR_WORD,
 )
