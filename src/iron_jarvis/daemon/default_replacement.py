@@ -109,9 +109,11 @@ def label_of(d: Any, provider: str) -> str:
 
 
 def affected(d: Any, leaving: set[str]) -> bool:
-    """True when the default model's provider is one of *leaving*."""
+    """True when the default model's provider is one of *leaving*. The demo
+    model and Auto are never "removed" (nothing serves them that a removal
+    takes away), so a junk ``leaving`` that names them moves nothing."""
     current = str(getattr(d.platform.config, "default_provider", "") or "")
-    return bool(current) and current in leaving
+    return bool(current) and current not in (DEMO, "auto") and current in leaving
 
 
 def _candidates(d: Any, leaving: set[str]) -> list[str]:
@@ -138,28 +140,83 @@ def _candidates(d: Any, leaving: set[str]) -> list[str]:
     return out
 
 
-def _model_for(d: Any, name: str) -> str:
-    """The model that goes with a replacement: the Connections page's own
-    rule for a key or a plan, the server's first model for a local slot."""
-    from .routes.settings import _first_local_model, promote_model
+#: Replacements that need a MODEL of their own before they can answer: a
+#: server with nothing listed would trade a dead default for an error. Every
+#: other provider answers with its adapter's own default on an empty model
+#: (checked: google, openrouter, xai, grok-cli, opencode-cli, the demo).
+_NEEDS_A_MODEL = ("ollama", "custom")
 
-    if name in ("ollama", "custom"):
+
+def _fleet_model(d: Any, node_id: str) -> str:
+    """A Fleet node's model: its own default, else the first one the sampler
+    has SEEN it list (a cached reading), else "" (the node is skipped)."""
+    try:
+        node = d.fleet.get(node_id)
+    except Exception:  # noqa: BLE001
+        node = None
+    own = str(getattr(node, "default_model", "") or "").strip()
+    if own:
+        return own
+    try:
+        # The sampler holds what each node LISTED (``platform.fleet_sampler``;
+        # the registry holds no readings); a daemon without one lists nothing.
+        sampler = getattr(getattr(d, "platform", None), "fleet_sampler", None)
+        for snap in sampler.snapshots() if sampler is not None else ():
+            snap_node = getattr(snap, "node", None)
+            if str(getattr(snap_node, "id", "") or getattr(snap, "id", "") or "") != node_id:
+                continue
+            for entry in getattr(snap, "models", None) or ():
+                mid = str(getattr(entry, "id", "") or "").strip()
+                if mid:
+                    return mid
+    except Exception:  # noqa: BLE001 - a snapshot that cannot be read lists nothing
+        pass
+    return ""
+
+
+def _model_for(d: Any, name: str) -> str:
+    """The model that goes with a replacement, NEVER the model the leaving
+    server answered under: the Connections page's own pairing for a key
+    (``_PROMOTE_DEFAULT_MODEL``; the plan's default for a keyless name a CLI
+    serves), the plan's default for a CLI, the server's model for a local
+    slot or a Fleet node, and "" - the adapter's own default - for a provider
+    the table does not name. ``promote_model`` itself is not used here: its
+    fallback is the CURRENT ``default_model``, which is the removed server's."""
+    from .routes.settings import PLAN_DEFAULT_MODEL, _first_local_model
+
+    if name in _NEEDS_A_MODEL:
         try:
             return _first_local_model(d, name)
         except Exception:  # noqa: BLE001
             return ""
     if name in ("claude-cli", "codex-cli"):
-        return "subscription"
+        return PLAN_DEFAULT_MODEL
     if name.startswith("fleet-"):
-        try:
-            node = d.fleet.get(name[len("fleet-"):])
-            return str(getattr(node, "default_model", "") or "")
-        except Exception:  # noqa: BLE001
-            return ""
+        return _fleet_model(d, name[len("fleet-"):])
     try:
-        return str(promote_model(d, name) or "")
+        if d.platform.providers.inherited_from(name):
+            return PLAN_DEFAULT_MODEL
+    except Exception:  # noqa: BLE001 - a probe fault keeps the table's pairing
+        pass
+    try:
+        table = getattr(d, "_PROMOTE_DEFAULT_MODEL", None) or {}
+        return str(table.get(name, "") or "")
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _key_refused(d: Any, name: str) -> bool:
+    """True when the key this provider holds NOW was checked and refused
+    (the Directory's save, a Test press - process memory, never a probe):
+    a present key is not a working key, and the Connections card already
+    says so in amber."""
+    try:
+        from ..connectors.service import key_check
+
+        checked = key_check(d.platform, name)
+    except Exception:  # noqa: BLE001 - no memory reads as "not refused"
+        return False
+    return checked is not None and not checked[0]
 
 
 def pick(d: Any, leaving: set[str]) -> dict[str, Any]:
@@ -175,8 +232,10 @@ def pick(d: Any, leaving: set[str]) -> dict[str, Any]:
                 ok = False
             if not ok:
                 continue
+            if _key_refused(d, name):
+                continue  # a key the service refused is not a connection
             model = _model_for(d, name)
-            if name in ("ollama", "custom") and not model:
+            if (name in _NEEDS_A_MODEL or name.startswith("fleet-")) and not model:
                 continue  # a server with nothing on it would trade a dead default for an error
             return {"provider": name, "model": model, "label": label_of(d, name), "demo": False}
     return {"provider": DEMO, "model": "", "label": label_of(d, DEMO), "demo": True}
@@ -216,9 +275,10 @@ def apply(d: Any, leaving: set[str], *, actor: str) -> dict[str, Any] | None:
             return None
         current = str(d.platform.config.default_provider or "")
         chosen = pick(d, leaving)
-        values: dict[str, Any] = {"default_provider": chosen["provider"]}
-        if chosen["model"]:
-            values["default_model"] = chosen["model"]
+        # The model is ALWAYS written with the provider - "" means the new
+        # adapter's own default. Leaving ``default_model`` alone would keep
+        # the removed server's model name beside the new provider.
+        values: dict[str, Any] = {"default_provider": chosen["provider"], "default_model": chosen["model"]}
         from .routes.settings import config_writer
 
         config_writer(d).apply(values, actor=actor)
@@ -237,4 +297,50 @@ def apply(d: Any, leaving: set[str], *, actor: str) -> dict[str, Any] | None:
         }
     except Exception:  # noqa: BLE001
         log.warning("the default model could not be moved before the removal", exc_info=True)
+        return None
+
+
+#: The words for a keyless name its CLI keeps serving after its key is dropped.
+KEPT_THROUGH_CLI = (
+    "{current} keeps answering your chats through {cli}; its model is now "
+    "the plan's own default, which that sign-in accepts."
+)
+
+
+def keep_through_cli(d: Any, provider: str, *, actor: str) -> dict[str, Any] | None:
+    """A keyless API name its signed-in CLI still serves keeps the default -
+    but the key's MODEL may not survive the hand-over: Codex refuses a model
+    its plan does not offer (the v1.445.0 lesson behind ``promote_model``),
+    so ``openai`` + ``gpt-4o-mini`` served through Codex failed its first
+    answer. Re-pair the default with the plan's own default (what "Use
+    ChatGPT for answers" writes) through the settings writer. Returns what
+    was done, or ``None`` when the default is not this name or already pairs
+    with the plan's default. Never raises."""
+    try:
+        from .routes.settings import PLAN_DEFAULT_MODEL, config_writer
+
+        cfg = d.platform.config
+        current = str(getattr(cfg, "default_provider", "") or "")
+        if current != provider:
+            return None
+        if str(getattr(cfg, "default_model", "") or "") == PLAN_DEFAULT_MODEL:
+            return None
+        alias = _INHERIT_ALIAS.get(provider)
+        if not alias:
+            return None
+        config_writer(d).apply({"default_model": PLAN_DEFAULT_MODEL}, actor=actor)
+        words = KEPT_THROUGH_CLI.format(current=label_of(d, provider), cli=label_of(d, alias))
+        log.info("default %s kept through %s; model re-paired to %s", provider, alias, PLAN_DEFAULT_MODEL)
+        return {
+            "from": provider,
+            "from_label": label_of(d, provider),
+            "to": provider,
+            "to_label": label_of(d, provider),
+            "model": PLAN_DEFAULT_MODEL,
+            "demo": False,
+            "kept": True,
+            "words": words,
+        }
+    except Exception:  # noqa: BLE001
+        log.warning("the kept default's model could not be re-paired", exc_info=True)
         return None

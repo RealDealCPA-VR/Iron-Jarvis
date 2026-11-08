@@ -86,6 +86,9 @@ class ChangeSet:
     #: :meth:`as_dict` — the answers every route gives keep their shape; the
     #: chat tool says it in words.
     cleared_auto_approve: list[str] = field(default_factory=list)
+    #: v1.449.0 (readiness Wave C, item 24 review): the keys an Undo could NOT
+    #: put back, each with the writer's own sentence. Not in :meth:`as_dict`.
+    skipped: dict[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {"updated": self.updated, "changed": self.changed, "action_id": self.action_id}
@@ -250,6 +253,19 @@ class ConfigWriter:
             problem = self._project_problem(str(clean["active_project_id"]))
             if problem:
                 raise SettingError(f"{_label('active_project_id')}: {problem}.")
+        if clean.get("default_provider") and clean["default_provider"] != self.current("default_provider"):
+            # v1.449.0 (readiness Wave C, item 24 review): the default model's
+            # provider must be one this daemon has NOW - a registered provider
+            # or Auto. Before this the key was free text, and the Undo of the
+            # move a removal makes ("the default moved off the server you
+            # removed") put the default straight back on the server that was
+            # gone - the state the move exists to prevent. The same rule
+            # ``_use_model_refusal`` applies to "use <name> for answers". A
+            # value equal to the one already set is not re-checked (a full
+            # Settings save must not fail on a name that went away since).
+            problem = self._provider_problem(str(clean["default_provider"]))
+            if problem:
+                raise SettingError(f"{_label('default_provider')}: {problem}")
         if clean.get("account_groups") and not restoring:
             # v1.393.0 (the long-jobs plan's Phase 4): every account a group
             # ADDS is one Iron-Proxy lists now (its CACHED snapshot — never a
@@ -360,6 +376,29 @@ class ConfigWriter:
                 self._publish(out, actor)
             return out
 
+    def _provider_problem(self, name: str) -> str:
+        """One sentence when *name* is not a provider this daemon has (a
+        registered factory, or Auto), else "". A platform with no readable
+        provider list (a test double) refuses nothing - the old behaviour."""
+        if name in ("auto", "mock"):
+            return ""
+        pm = getattr(self.platform, "providers", None)
+        factories = getattr(pm, "_factories", None)
+        try:
+            known = set(factories or ())
+        except TypeError:
+            known = set()
+        if not known or name in known:
+            return ""
+        return (
+            f"\u201c{name}\u201d is not a model server or account Iron Jarvis has right now, "
+            "so the default was not pointed at it. Connect it first, or pick another from the model menu."
+        )
+
+    #: Keys an Undo restores TOGETHER or not at all: a default model put back
+    #: without its provider pairs a model with the wrong server.
+    _PAIRED_RESTORE: dict[str, tuple[str, ...]] = {"default_provider": ("default_model",)}
+
     def restore(
         self,
         prior: dict[str, Any],
@@ -369,18 +408,29 @@ class ConfigWriter:
     ) -> ChangeSet:
         """Undo: apply the prior values unjournaled (the undo route records the
         reversal). A key that no longer exists or no longer validates is
-        skipped, never fatal. ``restore_fn`` (``core.config.
-        restore_config_values``, handed in by the undo route) restores the
-        plain config fields in one write; everything else — hooked keys,
-        profile, device — goes through :meth:`apply`. Side effects run once."""
+        skipped, never fatal - and named on ``ChangeSet.skipped`` with the
+        reason (v1.449.0), its paired keys (``_PAIRED_RESTORE``) skipped with
+        it. ``restore_fn`` (``core.config.restore_config_values``, handed in
+        by the undo route) restores the plain config fields in one write;
+        everything else - hooked keys, profile, device - goes through
+        :meth:`apply`. Side effects run once."""
         ok: dict[str, Any] = {}
+        skipped: dict[str, str] = {}
         for k, v in prior.items():
             try:
                 ok.update(self._validate({k: v}, restoring=True))
-            except SettingError:
-                continue
+            except SettingError as exc:
+                skipped[k] = str(exc)
+        for k, partners in self._PAIRED_RESTORE.items():
+            if k in skipped:
+                for partner in partners:
+                    if partner in ok:
+                        ok.pop(partner)
+                        skipped[partner] = f"{_label(partner)} travels with {_label(k)}, which could not be restored."
         if restore_fn is None:
-            return self.apply(ok, actor="undo", device_id=device_id, journal=False, restoring=True)
+            out = self.apply(ok, actor="undo", device_id=device_id, journal=False, restoring=True)
+            out.skipped = skipped
+            return out
 
         def _plain(k: str) -> bool:
             d = schema.get(k)
@@ -397,6 +447,7 @@ class ConfigWriter:
             out = self.apply(rest, actor="undo", device_id=device_id, journal=False, restoring=True)
             self._side_effects(restored)
             out.updated = restored + out.updated
+            out.skipped = skipped
             return out
 
     # ---------------------------------------------------------- side effects

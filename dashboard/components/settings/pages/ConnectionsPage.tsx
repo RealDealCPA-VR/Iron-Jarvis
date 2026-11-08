@@ -896,10 +896,15 @@ function ConnectionCard({
       const res = await del<unknown>(`/fleet/nodes/${encodeURIComponent(ep.id)}`);
       const moved = defaultReplacedWords(res);
       if (moved) setEpNote(moved);
-      try {
-        await del(`/connections/${encodeURIComponent(ep.id)}`);
-      } catch {
-        /* no stored key — fine */
+      if (ep.id === "custom") {
+        // Only the custom slot has a connection record (its saved key); the
+        // ollama slot has none, and asking the daemon to disconnect a name
+        // it has no record of is an error on every Delete (review).
+        try {
+          await del(`/connections/${encodeURIComponent(ep.id)}`);
+        } catch {
+          /* no stored key — fine */
+        }
       }
       void reloadEndpoints();
       onChanged();

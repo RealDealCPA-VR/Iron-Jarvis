@@ -1547,9 +1547,13 @@ def register(app: FastAPI, d) -> None:
 
         default_replaced = None
         if d.platform.connections.get_spec(provider) is not None:
-            default_replaced = _default.apply(
-                d, _default.names_for_disconnect(d, provider), actor="connection_disconnect"
-            )
+            leaving = _default.names_for_disconnect(d, provider)
+            if leaving:
+                default_replaced = _default.apply(d, leaving, actor="connection_disconnect")
+            else:
+                # The name stays (its CLI serves it): only its MODEL may need
+                # the plan's own default (review: Codex refuses an API id).
+                default_replaced = _default.keep_through_cli(d, provider, actor="connection_disconnect")
         try:
             d.platform.connections.disconnect(provider)
         finally:

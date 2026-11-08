@@ -165,8 +165,14 @@ def test_a_keyless_api_name_its_signed_in_cli_still_serves_keeps_the_default(cli
     _available(client, monkeypatch, {"claude-cli", "anthropic", "google"})
     r = client.delete("/connections/anthropic")
     assert r.status_code == 200
-    assert r.json().get("default_replaced") is None  # additive: absent when nothing moved
     assert cfg.default_provider == "anthropic"
+    # v1.449.0 review: the NAME stays, and the model it answered under
+    # (``claude-opus-4-8``, an API id) is re-paired with the plan's own default
+    # the sign-in accepts (``kept: true``); a default already on it says nothing
+    # (test_default_replacement_review_v14490).
+    kept = r.json()["default_replaced"]
+    assert kept["kept"] is True and kept["to"] == "anthropic"
+    assert cfg.default_model == "subscription"
 
 
 def test_the_same_disconnect_with_no_sign_in_behind_it_moves_the_default(client, monkeypatch):

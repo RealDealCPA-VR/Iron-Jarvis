@@ -97,8 +97,13 @@ export function compareVersions(a: string, b: string): number | null {
   return 0;
 }
 
+/** The three numbers of a release version, or null for anything else: a
+ *  dev build ("1.448.1-dev"), a bare word, an empty string. A number with a
+ *  suffix is NOT read by its prefix — a source checkout's bundle is nobody's
+ *  stale copy, and a line about it would send the user to press Reload on
+ *  a copy that is not from a release. */
 function parseVersion(v: string | null | undefined): [number, number, number] | null {
-  const m = /^\s*v?(\d+)\.(\d+)\.(\d+)/.exec(v ?? "");
+  const m = /^\s*v?(\d+)\.(\d+)\.(\d+)\s*$/.exec(v ?? "");
   if (!m) return null;
   return [Number(m[1]), Number(m[2]), Number(m[3])];
 }

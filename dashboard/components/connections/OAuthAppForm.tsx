@@ -23,6 +23,8 @@ import { useState } from "react";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { copyPlain } from "@/components/settings/MaintenanceTools";
+// The calm secondary action (review: no hand-rolled bordered button on Connections).
+import { CALM_ACTION } from "@/components/connections/endpointChip";
 import {
   VENDOR_CONSOLES,
   oauthClientIdName,
@@ -118,7 +120,7 @@ export function OAuthAppForm({
           type="button"
           onClick={() => void copyRedirect()}
           data-testid={`${testId}-copy`}
-          className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] px-1.5 py-0.5 text-[11px] text-zinc-300 transition-colors hover:text-accent-soft"
+          className={`${CALM_ACTION} text-[11px]`}
           title="Copy the redirect address"
         >
           {copied === "copied" ? <Check size={11} aria-hidden /> : <Copy size={11} aria-hidden />}
@@ -181,7 +183,7 @@ export function OAuthAppForm({
           {note.text}
         </p>
       )}
-      <p className="text-[10.5px] text-zinc-600">
+      <p className="text-[10px] text-zinc-600">
         Kept in Secrets as <code className="font-mono">{oauthClientIdName(provider)}</code> and{" "}
         <code className="font-mono">{oauthClientSecretName(provider)}</code>.
       </p>

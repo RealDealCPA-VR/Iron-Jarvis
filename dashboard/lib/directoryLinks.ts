@@ -32,16 +32,30 @@ export const RUNTIME_DOWNLOADS: Record<string, { name: string; url: string }> = 
   docker: { name: "Docker", url: "https://www.docker.com/products/docker-desktop/" },
 };
 
+/** True for an address a download link may open: https only — a daemon
+ *  (or an extension's own manifest) that sends anything else is not followed
+ *  (a plain http download of a program is a swap waiting to happen; a
+ *  javascript: or file: address is not a download at all). */
+export function isDownloadAddress(url: string | null | undefined): boolean {
+  try {
+    const u = new URL((url ?? "").trim());
+    return u.protocol === "https:" && Boolean(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /** The download link for a helper program's word ("Node", "Node.js",
- *  "Python (uv)"), with the daemon's own address winning when it sent one.
- *  Null when the word names nothing the table knows. */
+ *  "Python (uv)"), with the daemon's own address winning when it sent an
+ *  https one. Null when the word names nothing the table knows. */
 export function runtimeDownload(
   needs: string | null | undefined,
   url?: string | null,
 ): { label: string; href: string } | null {
   const key = (needs ?? "").trim().toLowerCase();
   const known = RUNTIME_DOWNLOADS[key];
-  const href = (url ?? "").trim() || known?.url || "";
+  const sent = (url ?? "").trim();
+  const href = (isDownloadAddress(sent) ? sent : "") || known?.url || "";
   if (!href) return null;
   const name = known?.name ?? (needs ?? "").trim();
   if (!name) return null;
