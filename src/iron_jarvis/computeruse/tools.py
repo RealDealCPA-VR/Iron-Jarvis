@@ -282,15 +282,18 @@ class WebActionTool(_GatedTool):
                         self.cu.approvals.deny(req.id)
                     raise
                 if not granted:
-                    if resolver is not None:
-                        self.cu.approvals.deny(req.id)
+                    # Readiness 0j.5 item 18: the row is DENIED whether or not
+                    # anything could ask. A lane that cannot ask (the POST
+                    # lane, an unattended run) used to leave it PENDING on the
+                    # Browser page, where an Approve there authorised the next
+                    # identical call with no card in front of the person who
+                    # asked — a stale approval nothing in this turn could see.
+                    # The refusal's own words (no queue id) say what to do.
+                    self.cu.approvals.deny(req.id)
                     return ToolResult(
                         ok=False,
                         error=_risk_door.refusal_words(decision.reason, resolver=resolver, tail=tail),
-                        data={
-                            "approval_id": req.id,
-                            "status": "denied" if resolver is not None else "pending",
-                        },
+                        data={"approval_id": req.id, "status": "denied"},
                     )
                 self.cu.approvals.approve(req.id)
                 # v1.449.0 review: AND SPEND IT, in the same breath (the browser

@@ -133,6 +133,21 @@ ORPHAN_STOP_S = 3600.0
 MAX_STORED_CHARS = 8_000_000
 #: Finished records older than this are removed at boot.
 KEEP_RECORDS_DAYS = 7
+#: Readiness 0j.5 item 17: WHY the orphan guard stopped a chat turn, in the
+#: turn's own error frame (and so on its record). The title / fix split the
+#: page's failure line reads (``chat_turn.error_payload``'s keys).
+ORPHAN_STOP_TITLE = "Iron Jarvis stopped this answer"
+ORPHAN_STOP_FIX = (
+    "No window had shown it for an hour, so it stopped rather than keep working"
+    " unwatched. What it had written so far is kept; press Retry to ask again."
+)
+ORPHAN_STOP_DETAIL = f"{ORPHAN_STOP_TITLE}. {ORPHAN_STOP_FIX}"
+#: Frames that open a card the turn waits on besides an approval (an app's
+#: question or model request, the model's own question), and the frame that
+#: closes them. A turn parked on any of them is never an orphan.
+_CARD_OPEN_EVENTS = frozenset({"mcp_elicitation", "mcp_sampling", "ask_user"})
+_CARD_CLOSE_EVENT = "mcp_resolved"
+
 #: The error a turn cut off by a restart ends with.
 INTERRUPTED_DETAIL = (
     "Iron Jarvis stopped while answering (a restart or a crash). What it had"
@@ -287,6 +302,14 @@ class TurnLog:
         #: saved), but nobody is looking at its card any more.
         self._viewers: dict[asyncio.Queue, str] = {}
         self._away: set[str] = set()
+        #: Readiness 0j.5 item 17: the other cards this turn waits on (an
+        #: app's question, a model request, the model's own question) — ids
+        #: only. Beside ``_asks``: a turn parked on any card is never stopped
+        #: for being unwatched (:func:`stop_predicate`).
+        self._cards: set[str] = set()
+        #: WHY the turn was stopped by the daemon itself (the orphan guard),
+        #: "" otherwise; ``TurnLogs._drive`` writes it as the turn's error.
+        self.stop_why: str = ""
 
     # -- the stored frames ---------------------------------------------------
     @property
@@ -389,8 +412,37 @@ class TurnLog:
             out.append((position_of(self.frames, j), e, d))
         return out
 
+    def parked_on_a_card(self) -> bool:
+        """Is this turn waiting on a card right now (an approval, an app's
+        question, a model request, the model's own question)? Readiness 0j.5
+        item 17: such a turn waits for its person however long that takes."""
+        return bool(self._asks) or bool(self._cards)
+
+    def _note_card(self, event: str, data: str) -> None:
+        if event not in _CARD_OPEN_EVENTS and event != _CARD_CLOSE_EVENT:
+            return
+        try:
+            frame = json.loads(data)
+        except ValueError:
+            return
+        cid = frame.get("id") if isinstance(frame, dict) else None
+        if not isinstance(cid, str) or not cid:
+            return
+        if event in _CARD_OPEN_EVENTS:
+            self._cards.add(cid)
+        else:
+            self._cards.discard(cid)
+            self._card_closed()
+
+    def _card_closed(self) -> None:
+        """A card closed: the time the turn spent parked on it was not time
+        it worked unwatched, so the orphan clock starts again now."""
+        if not self._followers and not self.parked_on_a_card():
+            self._last_seen = time.monotonic()
+
     def _note_ask(self, event: str, data: str) -> None:
         """Keep the open approval cards' ids and tool names (v1.351.0, G05)."""
+        self._note_card(event, data)
         if event not in ("approval", "approval_resolved"):
             return
         try:
@@ -406,6 +458,7 @@ class TurnLog:
             self._asks[aid] = (str(frame.get("tool") or ""), _iso_utc(utcnow()) or "")
         else:
             self._asks.pop(aid, None)
+            self._card_closed()
 
     def open_asks(self, pending: "set[str] | frozenset[str]") -> list[tuple[str, str, str]]:
         """``[(approval id, tool, asked at)]`` for this turn's cards that are
@@ -720,6 +773,17 @@ class TurnLogs:
                     lg.maybe_persist(self.engine)
             last = lg.last_event()
             status = "done" if last == "done" else "error" if last == "error" else "stopped"
+            if lg.stop_why and last != "done":
+                # Readiness 0j.5 item 17: the daemon stopped it (no window had
+                # shown it for an hour) — the turn's own error frame says so,
+                # and so does its record; it is still a stop, not a failure.
+                lg.add(sse("error", {
+                    "detail": lg.stop_why,
+                    "title": ORPHAN_STOP_TITLE,
+                    "fix": ORPHAN_STOP_FIX,
+                    "stopped_by": "unwatched",
+                }))
+                status = "stopped"
         except asyncio.CancelledError:
             # The daemon is shutting down: what was written is kept, and the
             # log says the turn was cut off.
@@ -969,7 +1033,17 @@ def stop_predicate(get_log: Any) -> Any:
 
     def _stop() -> bool:
         lg = get_log()
-        return lg is not None and lg.unwatched_for() > ORPHAN_STOP_S
+        if lg is None:
+            return False
+        # Readiness 0j.5 item 17: a turn parked on a card waits for its
+        # person, however long — never stopped for being unwatched.
+        if lg.parked_on_a_card():
+            return False
+        if lg.unwatched_for() > ORPHAN_STOP_S:
+            # ...and a turn this guard DOES stop says why (``_drive``).
+            lg.stop_why = ORPHAN_STOP_DETAIL
+            return True
+        return False
 
     return _stop
 

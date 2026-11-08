@@ -50,7 +50,9 @@
           "args_hash": "61197ecfef0bedf7f3999fd6145f562b4d751ef98948eb557930e9ad1d2cbddd",
           "quarantined": false,
           "can_always": false,
-          "once_only": true
+          "once_only": true,
+          "why": "it ends planning and starts the work",
+          "asker": "model"
         }
       },
       {
@@ -119,6 +121,8 @@
       "requested_at": "2026-10-17T12:00:00",
       "timeout_s": 0,
       "once_only": true,
+      "why": "it ends planning and starts the work",
+      "asker": "model",
       "mission_id": null,
       "project_id": null,
       "task": "Create a file named statements.txt that notes the three quarterly statements, and after that produce a second file name…",

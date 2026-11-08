@@ -3211,18 +3211,18 @@ def register(app: FastAPI, d) -> None:
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="no such conversation")
-        try:
-            await d.platform.event_bus.publish(
-                EventType.REMOTE_MESSAGE,
-                {"agent": name, "thread_id": room.id, "kind": kind, "documents": documents},
-            )
-        except Exception:  # noqa: BLE001 — an event must never fail the post
-            pass
-
         # A PHONE conversation hears it too — on the thread and on the phone.
         phoned = False
         phone_rate_limited = False
         chat_thread_id = str(getattr(room, "chat_thread_id", "") or "")
+        # Readiness 0j.5 item 10: a HANDED-OVER job's room (an agent run, or a
+        # chat turn, gave a remote a task it accepted) carries the chat it
+        # came from as ``home_chat_id`` — never as ``chat_thread_id``, which is
+        # the chat's one @-panel room. Its report comes home to that chat.
+        job_room = False
+        if not chat_thread_id:
+            chat_thread_id = str(getattr(room, "home_chat_id", "") or "").strip()
+            job_room = bool(chat_thread_id)
         store = getattr(d, "comm_thread_store", None)
         poller = getattr(d, "inbound_poller", None)
         # Which kind of chat the room belongs to — NEVER both paths (v1.345.0):
@@ -3245,9 +3245,13 @@ def register(app: FastAPI, d) -> None:
                 "role": "assistant",
                 "content": text,
                 "panelWho": who,
-                "panelThreadId": room.id,
                 "panelKind": kind,
             }
+            if not job_room:
+                # A job's room is never the chat's @-panel room: the page reads
+                # the last ``panelThreadId`` as the room its next @-round
+                # adopts, and a job room adopted there would replace it.
+                line["panelThreadId"] = room.id
             if panel_at:
                 line["panelAt"] = panel_at
             if documents:
@@ -3292,6 +3296,17 @@ def register(app: FastAPI, d) -> None:
                         )
                     except Exception:  # noqa: BLE001
                         log.warning("remote inbound: phone send failed", exc_info=True)
+        # Published AFTER the line came home (readiness 0j.5 item 10), so the
+        # bell's row can open the chat that holds it.
+        event_payload: dict[str, Any] = {
+            "agent": name, "thread_id": room.id, "kind": kind, "documents": documents,
+        }
+        if chat_thread_id and (homed or daemon_owned):
+            event_payload["chat_thread_id"] = chat_thread_id
+        try:
+            await d.platform.event_bus.publish(EventType.REMOTE_MESSAGE, event_payload)
+        except Exception:  # noqa: BLE001 — an event must never fail the post
+            pass
         return {
             "ok": True,
             "thread_id": room.id,

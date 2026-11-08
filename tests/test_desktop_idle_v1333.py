@@ -109,6 +109,9 @@ def _watch(tmp_path: Path, mode: str, statuses: str, ticks: int) -> dict:
             _decl("SPOTLIGHT_OUTCOME_WORDS"),
             _lift("function spotlightFolder("),
             _lift("function spotlightOutcome("),
+            # Readiness 0j.5 item 18 (moved on purpose): the toast's folder
+            # offer is its own helper now.
+            _lift("function spotlightToastPlan("),
             _lift("function watchSpotlightTask("),
         ]
     )

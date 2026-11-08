@@ -151,6 +151,9 @@ CHECKER_WHY = "Iron Jarvis runs the project's own checker"
 #: The default card's reason (Ask first: the permission asks and nothing in
 #: this chat granted it yet).
 NOT_GRANTED_WHY = "it is not in this chat's grants yet"
+#: The same for an agent RUN's card (readiness 0j.5 item 13): a run's grants
+#: are its own, never "this chat's".
+RUN_NOT_GRANTED_WHY = "it is not in this run's grants yet"
 #: "Ask before every action".
 STRICT_WHY = "you chose to approve every action"
 #: The plan door (exit_plan_mode / approve_plan).
@@ -172,14 +175,15 @@ def checker_why(name: str) -> str:
 
 
 def card_why(*, own: str = "", spend_words: str = "", once_reason: str = "", forced: str = "",
-             rule: str = "", strict: bool = False, plan: bool = False) -> str:
+             rule: str = "", strict: bool = False, plan: bool = False,
+             default: str = NOT_GRANTED_WHY) -> str:
     """The ONE reason line a card carries (``approval`` frame ``why``), in
     plain words: Iron Jarvis's own call says so first (``own``), then the plan
     door, a spend check's own sentence (a git guard's, a project command's, a
     price), a once-only reason, a forced rule (Local only, the night), the
     eased posture's rule that kept it, "Ask before every action", else the
-    default (the permission asks and this chat granted nothing yet). Never
-    empty."""
+    default (the permission asks and this chat granted nothing yet; an agent
+    run passes ``default=RUN_NOT_GRANTED_WHY``). Never empty."""
     for text in (
         own,
         PLAN_WHY if plan else "",
@@ -188,6 +192,7 @@ def card_why(*, own: str = "", spend_words: str = "", once_reason: str = "", for
         ASK_RULES.get(str(forced or ""), ""),
         rule_words(str(rule or "")),
         STRICT_WHY if strict else "",
+        default,
         NOT_GRANTED_WHY,
     ):
         text = " ".join(str(text or "").split())

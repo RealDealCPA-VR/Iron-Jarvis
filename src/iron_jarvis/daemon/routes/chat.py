@@ -1874,6 +1874,17 @@ def register(app: FastAPI, d) -> None:
             # absent for a read-only tool), so the bell says it too.
             if isinstance(payload.get("reversible"), bool):
                 meta[aid]["reversible"] = payload["reversible"]
+            # Readiness 0j.5 item 13 — WORDS, never args: who asks and why
+            # (the runtime's `card_why`), so the bell and a reloaded page can
+            # draw the short card. Re-masked and cut here: this listing fans
+            # out to every page.
+            from ...core.approvals import _ASKERS as _askers, _why_sentence
+
+            _why = _why_sentence(payload.get("why"))
+            if _why:
+                meta[aid]["why"] = _why
+            if payload.get("asker") in _askers:
+                meta[aid]["asker"] = payload["asker"]
         # Ids with no event row are DROPPED, not padded with "unknown": the
         # chat stream lane files into this same registry but announces via
         # its SSE frame only — that ask's one answering surface is the chat

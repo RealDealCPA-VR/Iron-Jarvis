@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json as _json
 from typing import Any, Callable
+from urllib.parse import quote
 
 from ..core.events import EventType
 from ..core.logging import get_logger
@@ -191,10 +192,17 @@ class ReflexRouter:
         # v1.231.0 (audit AE6): the row carries the outcome either way — a
         # failed start is written as ``last_error`` where the user looks,
         # and is NOT counted as a fire.
+        if result.get("ok"):
+            # Readiness 0j.5 item 15: what started, in plain words, and where
+            # to see it — the Test press's answer and the row's last fire
+            # both say it (never "Fired session · session <id>").
+            words, href = result_words(result)
+            result = {**result, "words": words, "href": href}
         self.store.mark_result(
             rule.id,
             ok=bool(result.get("ok")),
-            detail=str(result.get("error") or _result_detail(result)),
+            detail=str(result.get("error") or result.get("words") or _result_detail(result)),
+            href=str(result.get("href") or "") if result.get("ok") else "",
         )
         await self._publish(rule, result)
         if not result.get("ok"):
@@ -440,6 +448,27 @@ def _masked(text: str) -> str:
         out = ""
     out = " ".join(str(out or "").split())
     return out if len(out) <= 240 else out[:239] + "…"
+
+
+def result_words(result: dict[str, Any]) -> tuple[str, str]:
+    """``(words, href)`` for a successful fire (readiness 0j.5 item 15): what
+    the rule started, in plain words, and the page where it can be seen. The
+    Rules page shows both on the Test press's answer and on the row's last
+    fire. An id is never part of the words. Never raises."""
+    kind = str(result.get("kind") or "")
+    if kind == "workflow":
+        name = " ".join(str(result.get("workflow") or "").split())
+        words = f"Started the workflow “{name}”." if name else "Started a workflow."
+        return words, "/workflows"
+    if kind == "session":
+        sid = str(result.get("session_id") or "").strip()
+        href = f"/sessions/{quote(sid, safe='')}" if sid else "/sessions"
+        return "Started an agent run.", href
+    if kind == "remote_agent":
+        name = " ".join(str(result.get("agent") or "").split())
+        words = f"Handed the task to {name}." if name else "Handed the task to a remote agent."
+        return words, "/agents?view=team"
+    return "Started.", ""
 
 
 def _result_detail(result: dict[str, Any]) -> str:

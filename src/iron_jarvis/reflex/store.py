@@ -142,7 +142,9 @@ class ReflexStore:
             db.add(row)
             db.commit()
 
-    def mark_result(self, rule_id: str, *, ok: bool, detail: str = "") -> None:
+    def mark_result(
+        self, rule_id: str, *, ok: bool, detail: str = "", href: str = ""
+    ) -> None:
         """Record what the last matched signal did (v1.231.0, audit AE6).
 
         A successful start counts as a fire (``fire_count``/``last_fired_at``,
@@ -158,6 +160,8 @@ class ReflexStore:
                 row.fire_count = (row.fire_count or 0) + 1
                 row.last_fired_at = utcnow()
                 row.last_result = (detail or "")[:500] or None
+                # Readiness 0j.5 item 15: where that start can be seen.
+                row.last_href = (href or "")[:300] or None
                 row.last_error = None
             else:
                 row.last_error = (detail or "failed")[:500]

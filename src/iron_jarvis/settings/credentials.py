@@ -240,6 +240,15 @@ class CredentialStore:
                 out.update(on_secret_saved(self.platform, arg))
             except Exception:  # noqa: BLE001 — the value is stored either way
                 log.warning("tool server %s: could not be added after its key was saved", arg, exc_info=True)
+        if name.startswith("web_service."):
+            # Readiness 0j.5 item 18: a web service's key just landed — its
+            # own Test runs with it and the card says whether it answers.
+            try:
+                from .records_tools import on_web_service_key_saved
+
+                out.update(on_web_service_key_saved(self.platform, arg))
+            except Exception:  # noqa: BLE001 — the key is stored either way
+                log.warning("web service %s: could not be checked after its key was saved", arg, exc_info=True)
         if name.startswith("app."):
             # A pack saved by app_connect waits for this token: load it now.
             # v1.351.0 (G15): and SAY what happened — the card reads "GitHub

@@ -489,12 +489,14 @@ class InboundPoller:
         ``_recover_inflight`` then sends :data:`DROPPED_REPLY` to this chat.
         A desktop Cancel of the job is the same ``CancelledError`` with the
         flag False: the user stopped it on purpose, nothing to re-arm."""
+        ran = False
         try:
             if dyn_def is not None:
                 done = await self._run_dynamic_session(session, dyn_def)
             else:
                 done = await self.orchestrator.run_session(session.id)
             summary = (done.summary or "(no result)").strip()
+            ran = str(getattr(getattr(done, "status", None), "value", getattr(done, "status", ""))) == "completed"
         except asyncio.CancelledError:
             if self._shutting_down:
                 try:
@@ -512,6 +514,10 @@ class InboundPoller:
                 manager=getattr(getattr(self, "platform", None), "providers", None),
                 provider=str(getattr(session, "provider", "") or ""),
             )
+        # Readiness 0j.5 item 18: the reply NAMES the files the run wrote (or,
+        # for a run that did not finish, the ones it kept) — names only,
+        # never where on this PC they are. Off the loop; never fails it.
+        summary += await self._files_line(session.id, finished=ran, summary=summary)
         async with self._identity_lock(name, msg.sender_id):
             if tid:
                 self._safe_append(
@@ -524,6 +530,25 @@ class InboundPoller:
                 # The one-shot lane's historical wire shape: prefixed + capped.
                 body = f"{self.reply_prefix}{summary}"[: self.max_reply_chars]
                 await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
+
+    async def _files_line(self, session_id: str, *, finished: bool, summary: str) -> str:
+        """" Files it wrote: a.md, b.xlsx." (a finished run) or " The files it
+        wrote are kept: …" (one that did not finish) — read off the run's
+        ledger card (``agents/outcome``), ``""`` when it wrote nothing, the
+        card cannot be read, or the summary already says it. Never raises."""
+        try:
+            from ..agents.outcome import kept_files_note, session_result, wrote_files_note
+
+            engine = getattr(getattr(self, "platform", None), "engine", None)
+            if engine is None:
+                return ""
+            result = await asyncio.to_thread(session_result, engine, str(session_id))
+            line = wrote_files_note(result) if finished else kept_files_note(result)
+            if not line or line.strip() in summary:
+                return ""
+            return "\n\n" + line.strip()
+        except Exception:  # noqa: BLE001 — wording never fails a delivery
+            return ""
 
     # -- restart mid-run (v1.291.0, io-03) ---------------------------------
     def notify_interrupted(self, *, since: Any) -> int:

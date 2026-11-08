@@ -827,7 +827,9 @@ def accepted_no_reply_words(name: str) -> str:
     )
 
 
-async def open_handoff_room(platform: Any, record: Any, task: str) -> dict[str, Any]:
+async def open_handoff_room(
+    platform: Any, record: Any, task: str, chat_thread_id: str = ""
+) -> dict[str, Any]:
     """A room the remote can REPORT BACK into, for one handed-over job
     (v1.420.0, C6.3, G62). A remote that answers ``202`` delivers its report
     later through ``POST /agents/remote/{name}/inbound``, which only accepts a
@@ -840,7 +842,14 @@ async def open_handoff_room(platform: Any, record: Any, task: str) -> dict[str, 
     another Iron Jarvis's task door, ``reply_token`` / ``local_only``) — or
     ``{}`` when the remote cannot message back (the call is then sent exactly
     as before). Never raises: a room that cannot be opened sends the job
-    without one."""
+    without one.
+
+    ``chat_thread_id`` (readiness 0j.5 item 10) is the chat the job was asked
+    from — an agent run's ``options["chat_thread_id"]`` or a chat turn's own
+    thread, both carried as ``ToolContext.thread_id``. The room records it as
+    its ``home_chat_id`` so the remote's later report is appended to THAT chat
+    by the inbound route; ``""`` keeps the old behaviour (the report stays in
+    the room)."""
     from types import SimpleNamespace
 
     try:
@@ -855,7 +864,13 @@ async def open_handoff_room(platform: Any, record: Any, task: str) -> dict[str, 
             {"key": f"remote:{name}", "source": "remote", "name": name, "role": "helper"}
         ]
         title = " ".join(str(task or "").split())[:60] or "a task"
-        room = await asyncio.to_thread(threads.create, f"{name}: {title}", participants)
+        room = await asyncio.to_thread(
+            threads.create,
+            f"{name}: {title}",
+            participants,
+            "",
+            str(chat_thread_id or "").strip(),
+        )
         await asyncio.to_thread(
             threads._append,
             room.id,
@@ -937,7 +952,9 @@ class DelegateRemoteTool(Tool):
             return ToolResult(ok=False, error=f"unknown remote agent '{agent}'")
         if not record.enabled:
             return ToolResult(ok=False, error=f"remote agent '{agent}' is disabled")
-        room = await open_handoff_room(self.platform, record, task)
+        room = await open_handoff_room(
+            self.platform, record, task, getattr(ctx, "thread_id", "") or ""
+        )
         if room:
             res = await registry.run(record, task, self.platform.secrets.get, **room["kwargs"])
         else:

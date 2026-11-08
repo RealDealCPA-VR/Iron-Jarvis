@@ -3047,6 +3047,22 @@ function spotlightOutcome(sess, elapsed, task) {
   return null;
 }
 
+// How a final quick-task toast offers its folder (readiness 0j.5 item 18).
+// Electron draws a notification's action BUTTONS on macOS only, so v1.449.0's
+// "Open folder" never appeared on Windows — the platform the app ships on.
+// On macOS: the button, and a click opens the session. Everywhere else: a
+// click on a toast that names a folder OPENS THAT FOLDER (and the session
+// page behind it), and the body says so. A network path never reaches here
+// (`spotlightFolder`). Pure, so the node pins can read it.
+function spotlightToastPlan(platform, outcome) {
+  const folder = outcome && outcome.final && outcome.folder ? String(outcome.folder) : "";
+  if (!folder) return { actions: [], clickOpensFolder: false, bodyTail: "" };
+  if (platform === "darwin") {
+    return { actions: [{ type: "button", text: "Open folder" }], clickOpensFolder: false, bodyTail: "" };
+  }
+  return { actions: [], clickOpensFolder: true, bodyTail: " · click to open the folder" };
+}
+
 // Poll a spotlight task for completion (up to ~15 min) then notify.
 // Best-effort — a failure to poll/notify never surfaces to the user beyond
 // the "started" they already saw. v1.333.0: the read is the SLIM one
@@ -3054,7 +3070,7 @@ function spotlightOutcome(sess, elapsed, task) {
 // tick never starts while the previous read is still on its way.
 // v1.449.0: a final toast whose row carries a folder NAMES it and offers an
 // "Open folder" button (Electron draws notification actions on macOS only;
-// on Windows the click opens the session page, which has Open folder).
+// on Windows the click itself opens the folder: `spotlightToastPlan`).
 function watchSpotlightTask(id, task) {
   let elapsed = 0;
   let busy = false;
@@ -3084,17 +3100,23 @@ function watchSpotlightTask(id, task) {
         : sess.summary
           ? String(sess.summary).slice(0, 140)
           : "Click to open the result.";
-      if (outcome.final && folderName) body = `${body}\nIn ${folderName}`;
+      const plan = spotlightToastPlan(process.platform, outcome);
+      if (outcome.final && folderName) body = `${body}\nIn ${folderName}${plan.bodyTail}`;
       const options = { title: outcome.title, body };
-      if (outcome.final && outcome.folder) options.actions = [{ type: "button", text: "Open folder" }];
+      if (plan.actions.length) options.actions = plan.actions;
       const note = new Notification(options);
       note.on("click", () => {
         showMainWindow();
         if (mainWin && !mainWin.isDestroyed()) {
           mainWin.loadURL(`${DASHBOARD_URL}/sessions/${id}`);
         }
+        if (plan.clickOpensFolder) {
+          // Readiness 0j.5 item 18: Windows has no toast buttons — the click
+          // is the press, and it opens the folder the toast names.
+          shell.openPath(outcome.folder).catch(() => {});
+        }
       });
-      if (outcome.final && outcome.folder) {
+      if (plan.actions.length) {
         note.on("action", () => {
           shell.openPath(outcome.folder).catch(() => {});
         });
@@ -4158,8 +4180,10 @@ function planPaneNotifications(seen, panes, windowOpen) {
 // v1.446.0 (ease-of-use review items 20, 22): and a rule that could not start
 // its action (`reflex.failed`), and a workflow that finished with a failed
 // step it was told to skip (`workflow.completed` `completed_with_failures`).
+// Readiness 0j.5 item 10: and a remote agent's report-back (`remote.message`,
+// never its progress lines), opening the chat it came home to.
 const RUN_OUTCOME_AUDIT_TYPES =
-  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary,build.ci_done,chat.turn_finished,reflex.failed";
+  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary,build.ci_done,chat.turn_finished,reflex.failed,remote.message";
 //: Entries one read asks for (the bell's own replay reads 50).
 const RUN_OUTCOME_LIMIT = 50;
 //: How many seen ids the watcher remembers (newest kept).
@@ -4346,6 +4370,33 @@ function runOutcomeNotice(entry) {
       title: name ? `Your rule ${name} couldn't start` : "A rule couldn't start",
       body: runOutcomeClip(p.reason) || RUN_OUTCOME_NO_DETAIL,
       href: "/reflex",
+    };
+  }
+  if (entry.type === "remote.message") {
+    // Readiness 0j.5 item 10: the bell's row, word for word (NotificationBell
+    // `toActivity`, comm/notifier.remote_message_title). A progress line is
+    // the bell's quiet row and is never said from the tray.
+    const kind = typeof p.kind === "string" ? p.kind : "";
+    if (kind === "progress") return null;
+    const name = typeof p.agent === "string" && p.agent.trim() ? p.agent.trim() : "A remote agent";
+    const chat = typeof p.chat_thread_id === "string" ? p.chat_thread_id.trim() : "";
+    const room = typeof p.thread_id === "string" ? p.thread_id.trim() : "";
+    const files = Array.isArray(p.documents) ? p.documents.length : 0;
+    return {
+      id,
+      ts: runOutcomeTsMs(entry.ts),
+      title:
+        kind === "done"
+          ? `${name} reported back`
+          : kind === "question"
+            ? `${name} has a question`
+            : `${name} sent a message`,
+      body: files ? `It sent ${files} file${files === 1 ? "" : "s"}.` : RUN_OUTCOME_NO_DETAIL,
+      href: chat
+        ? `/chat?thread=${encodeURIComponent(chat)}`
+        : room
+          ? `/agents?thread=${encodeURIComponent(room)}`
+          : "/agents",
     };
   }
   if (entry.type === "workflow.completed") {

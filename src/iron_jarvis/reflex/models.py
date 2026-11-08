@@ -64,3 +64,9 @@ class ReflexRule(SQLModel, table=True):
     #: via ``core.db._reconcile_additive_columns`` (same as ``project_id``).
     last_error: str | None = None
     last_result: str | None = None
+    #: Readiness 0j.5 item 15: WHERE the last successful start can be seen
+    #: (``/sessions/<id>``, ``/workflows``, the team page), beside
+    #: ``last_result``, which now holds the start in plain words ("Started
+    #: an agent run."). None on a row older than this, and on one that never
+    #: started anything. Additive column (auto-reconciled).
+    last_href: str | None = None

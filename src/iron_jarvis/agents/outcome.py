@@ -526,6 +526,51 @@ def session_result(
     return out
 
 
+#: How many file names a "kept" line names before "and N more".
+KEPT_NAMES_MAX = 5
+
+
+def _files_note(result: Any, one: str, many: str) -> str:
+    try:
+        if not isinstance(result, dict):
+            return ""
+        names: list[str] = []
+        for key in ("files_created", "files_changed"):
+            for p in result.get(key) or []:
+                name = Path(str(p)).name.strip()
+                if name and name not in names:
+                    names.append(name)
+        total = int(result.get("files_created_total") or 0) + int(
+            result.get("files_changed_total") or 0
+        )
+        total = max(total, len(names))
+        if not names:
+            return ""
+        shown = ", ".join(names[:KEPT_NAMES_MAX])
+        more = total - min(len(names), KEPT_NAMES_MAX)
+        tail = f" (and {more} more)" if more > 0 else ""
+        return f" {one if total == 1 else many}: {shown}{tail}."
+    except Exception:  # noqa: BLE001 — wording never breaks a finalize
+        return ""
+
+
+def wrote_files_note(result: Any) -> str:
+    """" Files it wrote: report.md, q3.xlsx." for a run that FINISHED — the
+    phone's reply names its files (readiness 0j.5 item 18). Names only."""
+    return _files_note(result, "The file it wrote", "Files it wrote")
+
+
+def kept_files_note(result: Any) -> str:
+    """Readiness 0j.5 item 17: what a run that did NOT finish leaves behind,
+    said in its own words — " The files it wrote are kept: report.md,
+    notes.txt (and 2 more)." — read off the undo journal's record of the run
+    (``files_created`` + ``files_changed``, which :func:`session_result`
+    derives; a failed tool's writes are never counted). ``""`` when the run
+    wrote nothing, or ``result`` is not a ledger card. Leading space: it is
+    appended to a summary. Names only (``Path.name``); never raises."""
+    return _files_note(result, "The file it wrote is kept", "The files it wrote are kept")
+
+
 def did_nothing(result: dict[str, Any]) -> bool:
     """True when a session completed without running a single tool.
 

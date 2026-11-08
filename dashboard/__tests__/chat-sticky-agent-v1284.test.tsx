@@ -493,3 +493,45 @@ describe("a reopened conversation is still with its agent (v1.284.0)", () => {
     expect(screen.queryByTestId("addressee-strip")).toBeNull();
   });
 });
+
+describe("a remote's job report that came home does not take the conversation (Wave F review)", () => {
+  // The daemon now appends a handed-over job's report to the chat it was
+  // asked from (readiness 0j.5 item 10): panelWho "remote:<name>", and NO
+  // panelThreadId (the job's room is never the chat's @-room). The user never
+  // addressed that remote here — an agent run did — so the chat stays with
+  // Jarvis: a plain next message must not go to the other machine (with the
+  // conversation so far).
+  it("a reopened chat ending on a job report is with Jarvis", async () => {
+    H.api.getResponses["/chat/threads/t9"] = {
+      id: "t9",
+      title: "Q3",
+      messages: [
+        { role: "user", content: "have hermes summarise the filings" },
+        { role: "assistant", content: "Hermes accepted the task and will report back." },
+        { role: "assistant", content: "Revenue is up 4%.", panelWho: "remote:hermes", panelKind: "done" },
+      ],
+    };
+    window.history.replaceState({}, "", "/chat?thread=t9");
+    render(<ChatPage />);
+    await screen.findByText("Revenue is up 4%.");
+    expect(screen.queryByTestId("addressee-strip")).toBeNull();
+  });
+
+  it("control: a remote line of this chat's own @-room still keeps it", async () => {
+    H.api.getResponses["/chat/threads/t9"] = {
+      id: "t9",
+      title: "Q3",
+      messages: [
+        { role: "user", content: "@hermes status?" },
+        { role: "assistant", content: "Remote says hi.", panelWho: "remote:hermes", panelThreadId: "athr9" },
+      ],
+    };
+    H.api.getResponses["/agents/mentionable"] = {
+      agents: [{ ...BUILDER, mention: "hermes", name: "remote:hermes", kind: "remote", source: "remote" }],
+    };
+    window.history.replaceState({}, "", "/chat?thread=t9");
+    render(<ChatPage />);
+    await screen.findByText("Remote says hi.");
+    expect(await screen.findByTestId("addressee-strip")).toHaveTextContent(/Talking to hermes/);
+  });
+});

@@ -80,7 +80,11 @@ class Notification {
   on(name, fn) { this.handlers[name] = fn; }
   show() { notes.push({ title: this.o.title, body: this.o.body, actions: this.o.actions || null, hasAction: !!this.handlers.action }); }
   act() { if (this.handlers.action) this.handlers.action(); }
+  click() { if (this.handlers.click) this.handlers.click(); }
 }
+// Readiness 0j.5 item 18 (moved on purpose): the toast's folder offer
+// depends on the platform (Electron draws action buttons on macOS only).
+Object.defineProperty(process, "platform", { value: process.argv[3] || "darwin" });
 let lastNote = null;
 const _Notification = Notification;
 const path = require("path");
@@ -102,21 +106,26 @@ const flush = () => new Promise((r) => setImmediate(r));
 """
 
 
-def _watch(tmp_path: Path, row: dict) -> dict:
-    lifted = "\n".join(
+def _lifted() -> str:
+    return "\n".join(
         [
             _decl("SPOTLIGHT_POLL_MS"),
             _decl("SPOTLIGHT_WATCH_CAP_MS"),
             _decl("SPOTLIGHT_OUTCOME_WORDS"),
             _lift("function spotlightFolder("),
             _lift("function spotlightOutcome("),
+            _lift("function spotlightToastPlan("),
             _lift("function watchSpotlightTask("),
         ]
     )
+
+
+def _watch(tmp_path: Path, row: dict, platform: str = "darwin") -> dict:
+    lifted = _lifted()
     f = tmp_path / "watch.js"
     f.write_text(_HARNESS.replace("__LIFTED__", lifted), encoding="utf-8")
     proc = subprocess.run(
-        ["node", str(f), json.dumps(row)],
+        ["node", str(f), json.dumps(row), platform],
         capture_output=True, text=True, encoding="utf-8", timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
@@ -177,16 +186,7 @@ def test_a_network_folder_is_never_offered(tmp_path, folder):
 
 @requires_node
 def test_the_open_folder_action_opens_the_rows_folder(tmp_path):
-    lifted = "\n".join(
-        [
-            _decl("SPOTLIGHT_POLL_MS"),
-            _decl("SPOTLIGHT_WATCH_CAP_MS"),
-            _decl("SPOTLIGHT_OUTCOME_WORDS"),
-            _lift("function spotlightFolder("),
-            _lift("function spotlightOutcome("),
-            _lift("function watchSpotlightTask("),
-        ]
-    )
+    lifted = _lifted()
     harness = _HARNESS.replace(
         "show() { notes.push(",
         "show() { lastNote = this; notes.push(",
@@ -201,3 +201,55 @@ def test_the_open_folder_action_opens_the_rows_folder(tmp_path):
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout.strip().splitlines()[-1])
     assert out["opened"] == ["C:\\\\work\\\\photos"]
+
+
+# --------------------------------------------------------------------------- #
+# Readiness 0j.5 item 18: "Open folder" works on WINDOWS (no toast buttons)
+# --------------------------------------------------------------------------- #
+
+
+def _click(tmp_path: Path, row: dict, platform: str) -> dict:
+    harness = _HARNESS.replace(
+        "show() { notes.push(",
+        "show() { lastNote = this; notes.push(",
+    ).replace(
+        'console.log(JSON.stringify({ notes, cleared, opened }));',
+        'lastNote.click(); await flush(); console.log(JSON.stringify({ notes, cleared, opened }));',
+    )
+    f = tmp_path / "click.js"
+    f.write_text(harness.replace("__LIFTED__", _lifted()), encoding="utf-8")
+    proc = subprocess.run(
+        ["node", str(f), json.dumps(row), platform],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@requires_node
+def test_on_windows_a_click_on_the_toast_opens_the_folder_it_names(tmp_path):
+    row = {"status": "completed", "summary": "All set.", "workspace_path": "C:\\\\work\\\\photos"}
+    out = _click(tmp_path, row, "win32")
+    note = out["notes"][0]
+    assert note["actions"] is None, "Windows draws no toast buttons"
+    assert note["body"] == "All set.\nIn photos · click to open the folder"
+    assert out["opened"] == ["C:\\\\work\\\\photos"]
+
+
+@requires_node
+def test_on_windows_a_toast_with_no_folder_opens_none(tmp_path):
+    out = _click(tmp_path, {"status": "completed", "summary": "All set."}, "win32")
+    assert out["opened"] == []
+    assert out["notes"][0]["body"] == "All set."
+
+
+@requires_node
+def test_on_windows_a_network_folder_is_never_opened(tmp_path):
+    out = _click(tmp_path, {"status": "completed", "summary": "x", "workspace_path": "//nas/share/w"}, "win32")
+    assert out["opened"] == []
+
+
+@requires_node
+def test_on_macos_a_click_still_opens_the_session_not_the_folder(tmp_path):
+    out = _click(tmp_path, {"status": "completed", "summary": "x", "workspace_path": "C:\\\\work\\\\photos"}, "darwin")
+    assert out["opened"] == []

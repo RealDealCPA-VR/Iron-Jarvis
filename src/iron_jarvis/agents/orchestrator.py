@@ -1472,11 +1472,13 @@ class Orchestrator:
                 # — the inversion v1.185.0 removed.
                 from ..daemon.chat_turn import _claimed_write_note, custom_tools_used
 
+                _kept: list[str] = []
                 tools_used, outcome = await asyncio.to_thread(
                     self._settle_finished_run,
                     session,
                     getattr(run, "id", None),  # test doubles carry no id
                     session.status,
+                    _kept,
                 )
                 # v1.351.0: a user-made command tool that ran may have changed
                 # the file the summary names (same rule as both chat lanes).
@@ -1484,6 +1486,10 @@ class Orchestrator:
                     run.result or "", tools_used,
                     custom_tools=custom_tools_used(self.p, tools_used),
                 )
+                # Readiness 0j.5 item 17: a run that did NOT finish says which
+                # files it wrote are kept (a finished run's card lists them).
+                if session.status is SessionStatus.FAILED and _kept and _kept[0]:
+                    note = f"{note}{_kept[0]}"
                 if note:
                     session.summary = _with_folder_note(prior_summary, f"{run.result}{note}")
                 session.outcome = outcome
@@ -1888,7 +1894,8 @@ class Orchestrator:
             return 0
 
     def _settle_finished_run(
-        self, session: Session, run_id: str, status: SessionStatus
+        self, session: Session, run_id: str, status: SessionStatus,
+        kept: "list[str] | None" = None,
     ) -> tuple[list[str], str | None]:
         """One off-loop read at finalize: release the run's worklist claims,
         then read the ledger ONCE for both the claimed-write check and the
@@ -1907,6 +1914,12 @@ class Orchestrator:
             return [], None
         tools = [str(t.get("tool") or "") for t in result.get("tools_used") or []]
         outcome = derive_outcome(result, status)
+        if kept is not None:
+            # Readiness 0j.5 item 17: the files a run that did not finish
+            # wrote, read off the same ledger card (never a second read).
+            from .outcome import kept_files_note
+
+            kept.append(kept_files_note(result))
         # v1.351.0 integrate (G09 seam): a MISSION whose worklist kept failed
         # items did not get all of its objective done, whatever the ledger
         # says of the coordinator's own calls. The mission screen read that
@@ -2265,6 +2278,7 @@ class Orchestrator:
         # failure's own (masked) words ride the row apart, for the run page's
         # folded Details — the chat's title/fix/technical split, for a run.
         reason, technical = self._plain_failure(error, str(getattr(session, "provider", "") or ""))
+        _prior_summary = session.summary
         session.summary = _with_folder_note(
             session.summary,
             _prose(session.summary) or f"The run failed: {reason}",
@@ -2296,8 +2310,9 @@ class Orchestrator:
                     db.commit()
             except Exception:  # noqa: BLE001 - never block teardown on bookkeeping
                 log.exception("failed to settle the run rows of %s", session.id)
-            return self._settle_finished_run(session, "", session.status)
+            return self._settle_finished_run(session, "", session.status, _kept)
 
+        _kept: list[str] = []
         # v1.227.1 order: let a pause's shielded WAITING -> RUNNING restore
         # land BEFORE the settle, or it could resurrect RUNNING afterwards.
         drain = getattr(getattr(self, "runtime", None), "drain_inflight_state", None)
@@ -2312,6 +2327,12 @@ class Orchestrator:
             # out before the crash. Off the loop; never fatal to the teardown.
             _tools, outcome = await asyncio.to_thread(_settle_failed)
             session.outcome = outcome
+            # Readiness 0j.5 item 17: which files the run wrote are kept.
+            if _kept and _kept[0]:
+                session.summary = _with_folder_note(
+                    _prior_summary,
+                    (_prose(_prior_summary) or f"The run failed: {reason}") + _kept[0],
+                )
         except Exception:  # noqa: BLE001 - never block teardown on bookkeeping
             log.exception("failed to settle the ledger for %s", session.id)
         try:
