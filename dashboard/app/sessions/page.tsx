@@ -312,7 +312,20 @@ function SessionsList() {
             // v1.450.0 (ease item 73): a press that deletes every finished
             // run is not the page's main button — it sits in a ⋯ menu, and
             // still takes two presses.
-            <details className="relative" data-testid="sessions-more">
+            // Escape closes the menu and puts the caret back on ⋯ (a bare
+            // <details> ignores Escape); the wipe still takes two presses.
+            <details
+              className="relative"
+              data-testid="sessions-more"
+              onKeyDown={(e) => {
+                const menu = e.currentTarget;
+                if (e.key !== "Escape" || !menu.open) return;
+                e.preventDefault();
+                e.stopPropagation();
+                menu.open = false;
+                menu.querySelector("summary")?.focus();
+              }}
+            >
               <summary
                 aria-label="More actions"
                 title="More actions"
