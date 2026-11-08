@@ -66,6 +66,9 @@ import { ErrorNote, OfflineHint } from "@/components/ui";
 import { Markdown, MemoMarkdown } from "@/components/Markdown";
 import { composerChipClass } from "@/lib/composerChips";
 import { PaneAsk, onScreen } from "@/components/terminal/PaneAsk";
+// v1.450.0 (Wave D, item 37): the Undo's question is the pane's own line,
+// never the browser's confirm().
+import { PageQuestion, usePageQuestion } from "@/components/PageQuestion";
 import {
   PANE_COMPOSER_BOX,
   PANE_COMPOSER_CARD,
@@ -342,6 +345,8 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
   const [undoneActions, setUndoneActions] = useState<Set<string>>(new Set());
   // One undo in flight at a time (keyed by normalized path).
   const [undoBusyPath, setUndoBusyPath] = useState<string | null>(null);
+  // v1.450.0 (Wave D, item 37): the Undo's "are you sure", the pane's own.
+  const undoQuestion = usePageQuestion();
   // Per-run-button notes ("terminal not connected"), keyed "<msg>:<block>".
   const [runNotes, setRunNotes] = useState<Record<string, string>>({});
 
@@ -542,7 +547,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     const row = undoByPath.get(norm);
     const newer =
       typeof index === "number" && !!row && docReappearsLater(messagesRef.current, index, norm);
-    if (!window.confirm(paneUndoPrompt(row?.kind, paneBasename(path), newer))) return;
+    // v1.450.0 (Wave D, item 37): the pane's own question line (pane-undo-
+    // confirm: Undo it / Keep) — it was the browser's window.confirm.
+    if (!(await undoQuestion.ask(paneUndoPrompt(row?.kind, paneBasename(path), newer), { yes: "Undo it" })))
+      return;
     setUndoBusyPath(norm);
     try {
       await post(`/undo/${encodeURIComponent(actionId)}`, {});
@@ -1402,6 +1410,12 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
             paneRoot={rootRef}
           />
         ) : null}
+        <PageQuestion
+          state={undoQuestion.state}
+          onAnswer={undoQuestion.answer}
+          testId="pane-undo-confirm"
+          className="mb-1.5"
+        />
         <div
           ref={composerRef}
           data-testid="pane-chat-composer"

@@ -53,6 +53,8 @@ import {
   type SwitchAnswer,
 } from "@/lib/extensionWords";
 import { attentionWords, cardHealth, healthCounts, keySaveNote } from "@/lib/directoryHealth";
+import { fillInFirst } from "@/lib/whyDisabled";
+import { DisabledNote } from "@/components/DisabledNote";
 
 /* -------------------------------------------------------------------------- */
 /*  Types (local — lib/types.ts is intentionally untouched)                    */
@@ -311,6 +313,18 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
   const [testResult, setTestResult] = useState<TestResult | null>(null);
 
   const requiredFields = c.fields.filter((f) => !f.optional);
+  // v1.450.0 (Wave D, item 38): a greyed Connect names the boxes it waits for.
+  const connectWhy =
+    c.connect_via === "oauth"
+      ? null
+      : c.connect_via === "api_key"
+        ? (values.key ?? "").trim()
+          ? null
+          : fillInFirst([c.fields.find((f) => f.name === "key")?.label || "the key"], "connect")
+        : fillInFirst(
+            requiredFields.filter((f) => !(values[f.name] ?? "").trim()).map((f) => f.label || f.name),
+            "connect",
+          );
   const canConnect =
     c.connect_via === "oauth"
       ? true
@@ -1039,6 +1053,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
                 <button
                   type="submit"
                   disabled={busy || !canConnect}
+                  title={busy ? undefined : (connectWhy ?? undefined)}
                   className="btn-accent flex-1 py-1.5 text-xs"
                 >
                   {busy ? (
@@ -1061,6 +1076,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
                   <X size={14} /> Cancel
                 </button>
               </div>
+              <DisabledNote why={busy ? null : connectWhy} testId={`connector-why-${c.id}`} />
             </form>
           )}
 

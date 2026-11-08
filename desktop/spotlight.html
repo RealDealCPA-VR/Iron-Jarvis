@@ -77,7 +77,9 @@
         input.disabled = false;
       }
     } catch (err) {
-      setStatus(String(err && err.message || err), true);
+      // v1.450.0: the IPC itself failed (the app is closing): a sentence,
+      // never the bridge's error text.
+      setStatus("The task didn't start. Open the main window and try again.", true);
       input.disabled = false;
     }
   });

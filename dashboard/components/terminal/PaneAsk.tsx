@@ -18,9 +18,16 @@
 // The card itself is the shared ApprovalCard in its docked form, so the words,
 // the buttons and the POST are exactly the chat page's.
 
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
-import { dockAskKeyHint, dockKeyAction, enterAllows, type DockAskItem } from "@/lib/dockAsk";
+import {
+  ENTER_BLOCKED_MS,
+  ENTER_BLOCKED_NOTE,
+  dockAskKeyHint,
+  dockKeyAction,
+  enterAllows,
+  type DockAskItem,
+} from "@/lib/dockAsk";
 import type { PendingApproval } from "@/lib/useChatStream";
 
 /** How long after a question appears before Enter / Esc answer it. The same
@@ -68,6 +75,17 @@ export function PaneAsk({
   // allowed by Enter — the chat dock's rule (lib/dockAsk.enterAllows).
   const item: DockAskItem = { kind: "approval", id: approval.id, approval };
   const enterOk = enterAllows(item);
+  // v1.450.0 (Wave D, item 37; the v1.417.0 OPEN item): an Enter refused on
+  // a safety card SAYS so, briefly, as the chat page's dock does — it was
+  // swallowed in silence here.
+  const [enterBlockedOn, setEnterBlockedOn] = useState<string | null>(null);
+  const enterBlockedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (enterBlockedTimer.current) clearTimeout(enterBlockedTimer.current);
+    },
+    [],
+  );
 
   // A new question on screen: start the key guard, and take the focus when
   // the pane is visible and the focus was in this pane (its composer, now
@@ -88,7 +106,12 @@ export function PaneAsk({
    *  click runs. False = nothing happened. */
   function press(which: "primary" | "decline"): boolean {
     if (Date.now() - shownAtRef.current < armDelayMs) return false;
-    if (which === "primary" && !enterOk) return false;
+    if (which === "primary" && !enterOk) {
+      setEnterBlockedOn(approval.id);
+      if (enterBlockedTimer.current) clearTimeout(enterBlockedTimer.current);
+      enterBlockedTimer.current = setTimeout(() => setEnterBlockedOn(null), ENTER_BLOCKED_MS);
+      return false;
+    }
     const btn = wrapRef.current?.querySelector<HTMLButtonElement>(`[data-dock-${which}]`);
     if (!btn || btn.disabled) return false;
     btn.click();
@@ -130,6 +153,15 @@ export function PaneAsk({
         <ApprovalCard key={approval.id} approval={approval} onConversation={onConversation} docked />
       </div>
       <p className="px-2 text-[11px] text-zinc-500">{dockAskKeyHint("approval", item)}</p>
+      {/* The live region is mounted with the card and the note is put INTO it
+          (a region mounted together with its words is often not announced). */}
+      <div role="status" data-testid="pane-ask-enter-live">
+        {enterBlockedOn !== null && enterBlockedOn === approval.id && (
+          <p data-testid="pane-ask-enter-blocked" className="px-2 text-[12px] font-medium text-tone-warn">
+            {ENTER_BLOCKED_NOTE}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

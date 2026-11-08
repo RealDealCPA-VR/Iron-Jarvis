@@ -403,17 +403,12 @@ describe("G68: removing a writing sample takes two presses", () => {
  *  delete handler above all — fails here until it is a ConfirmButton or is
  *  listed with its reason. */
 const KNOWN_NATIVE_CONFIRMS: Record<string, { count: number; why: string }> = {
-  "app/chat/page.tsx": { count: 1, why: "undo of a chat's file change (confirmUndoPrompt says what it will do)" },
-  "components/terminal/PaneChat.tsx": { count: 1, why: "undo of a pane's file change (paneUndoPrompt)" },
-  // v1.369.0 .. v1.420.0: the IJ harness session's Undo was a native prompt
-  // (undoPrompt); since v1.420.0 it is the page's own question
-  // (harness-undo-confirm: "Undo it" / "Keep"), so no native call is left.
-  // v1.355.0 integrate: "End this session?" became a ConfirmButton.
-  "app/creative/page.tsx": { count: 1, why: "publish to a public link (confirmPublish)" },
-  "components/chat/DocPreview.tsx": { count: 1, why: "replace a file of the same name when saving a copy" },
-  // v1.355.0 integrate: removing / hiding a memory-graph link is a picked
-  // link + ConfirmButton in the rail now (no native dialog left there).
-};
+  // v1.450.0 (Wave D, item 37): the last four native prompts — the chat's
+  // and a Build terminal chat's Undo, DocPreview's "Replace it?" and
+  // Creative's publish gate — are the page's own question now
+  // (components/PageQuestion.tsx). The list is EMPTY: any native confirm()
+  // anywhere in the dashboard fails this test.
+}
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -451,7 +446,7 @@ function nativeConfirms(rel: string, src = readSrc(rel)): number {
 }
 
 describe("G68: destructive actions are handled one way (source pin)", () => {
-  it("no native confirm() beyond the known undo / publish / replace prompts", () => {
+  it("no native confirm() anywhere in the dashboard (the four left became the page's own question)", () => {
     const files = ["app", "components", "lib"].flatMap(sourceFiles);
     expect(files.length).toBeGreaterThan(200); // anti-vacuity: the walk found the app
     const found: Record<string, number> = {};

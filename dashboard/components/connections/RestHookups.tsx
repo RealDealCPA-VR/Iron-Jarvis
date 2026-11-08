@@ -26,6 +26,8 @@ import {
   LoaderInline,
 } from "@/components/ui";
 import { CALM_ACTION } from "@/components/connections/endpointChip";
+import { fillInFirst } from "@/lib/whyDisabled";
+import { DisabledNote } from "@/components/DisabledNote";
 
 /* -------------------------------------------------------------------------- */
 
@@ -240,6 +242,13 @@ function AddIntegrationForm({
   const [error, setError] = useState<string | null>(null);
 
   const canSubmit = name.trim() !== "" && baseUrl.trim() !== "" && !busy;
+  // v1.450.0 (Wave D, item 38): a greyed Add names the boxes it waits for.
+  const addWhy = busy
+    ? null
+    : fillInFirst(
+        [name.trim() ? "" : "Name", baseUrl.trim() ? "" : "Base URL"],
+        "add the service",
+      );
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -353,7 +362,7 @@ function AddIntegrationForm({
         {error && <ErrorNote>{error}</ErrorNote>}
 
         <div className="flex items-center gap-2">
-          <button type="submit" disabled={!canSubmit} className="btn-accent px-3 py-1.5 text-xs">
+          <button type="submit" disabled={!canSubmit} title={addWhy ?? undefined} className="btn-accent px-3 py-1.5 text-xs">
             {busy ? (
               <LoaderInline label="Adding…" />
             ) : (
@@ -371,6 +380,7 @@ function AddIntegrationForm({
             Cancel
           </button>
         </div>
+        <DisabledNote why={addWhy} testId="add-integ-why" />
       </form>
     </Card>
   );

@@ -21,6 +21,7 @@
  * source-pin would not have caught "the click is swallowed".
  */
 
+import { answerPageQuestions } from "./helpers/pageQuestion";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -140,7 +141,7 @@ describe("publishing asks first, on every surface", () => {
   }
 
   it("the lightbox Share button NAMES the upload and does not publish when declined", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const confirmSpy = answerPageQuestions("publish-confirm", false);
     await openLightbox();
 
     // The label says what the click does — "Share" alone reads as a menu.
@@ -155,7 +156,7 @@ describe("publishing asks first, on every surface", () => {
   });
 
   it("the lightbox Share button publishes once accepted, then opens the destinations", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    answerPageQuestions("publish-confirm", true);
     api.postResponses["/creative/publish"] = { url: "https://cdn.test/sunset.png" };
     await openLightbox();
 
@@ -169,7 +170,7 @@ describe("publishing asks first, on every surface", () => {
   });
 
   it('the lightbox "Get public URL" button asks too', async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const confirmSpy = answerPageQuestions("publish-confirm", false);
     await openLightbox();
 
     fireEvent.click(screen.getByRole("button", { name: /Get public URL/i }));
@@ -179,7 +180,7 @@ describe("publishing asks first, on every surface", () => {
   });
 
   it("the tile popover still asks — the two surfaces share ONE gate", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const confirmSpy = answerPageQuestions("publish-confirm", false);
     api.getResponses[ITEMS_PATH] = { items: [ITEM], count: 1 };
     render(<CreativePage />);
 

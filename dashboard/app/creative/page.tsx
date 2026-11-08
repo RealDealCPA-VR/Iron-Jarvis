@@ -64,6 +64,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal } from "@/components/Modal";
+import { PageQuestionDialog, usePageQuestion, type PageQuestionLabels } from "@/components/PageQuestion";
 import { PageShell, Reveal } from "@/components/motion";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 
@@ -445,10 +446,18 @@ function ShareRow({
  * and the lightbox did not, which is exactly the kind of divergence a shared
  * prompt makes impossible.
  */
-function confirmPublish(): boolean {
-  return window.confirm(
-    "Publish this file to Pixio's public CDN? Anyone with the link can view it, and the URL is permanent.",
-  );
+const PUBLISH_QUESTION =
+  "Publish this file to Pixio's public CDN? Anyone with the link can view it, and the URL is permanent.";
+
+/** v1.450.0 (Wave D, item 37): the gate asks through the PAGE's own question
+ *  (a small dialog, "Publish" / "Don't publish"), never the browser's
+ *  confirm(). CreativePage registers its asker; with none (a surface rendered
+ *  outside the page) the answer is no — publishing is never the default. */
+let publishAsker: ((words: string, labels: PageQuestionLabels) => Promise<boolean>) | null = null;
+
+async function confirmPublish(): Promise<boolean> {
+  if (!publishAsker) return false;
+  return publishAsker(PUBLISH_QUESTION, { yes: "Publish", no: "Don't publish" });
 }
 
 /**
@@ -480,7 +489,7 @@ function TileShare({
   const dlRef = useRef<HTMLAnchorElement | null>(null);
 
   const publish = useCallback(async () => {
-    if (!confirmPublish()) return;
+    if (!(await confirmPublish())) return;
     setBusy(true);
     setErr(null);
     try {
@@ -1181,7 +1190,7 @@ function MediaLightbox({
    *  a public CDN on a single click, which is the one action on this dialog
    *  that cannot be taken back. */
   const publish = async (): Promise<boolean> => {
-    if (!confirmPublish()) return false;
+    if (!(await confirmPublish())) return false;
     setPubBusy(true);
     setPubErr(null);
     try {
@@ -3596,6 +3605,15 @@ export default function CreativePage() {
   const [filter, setFilter] = useState<Filter>("all");
   const [selected, setSelected] = useState<CreativeItem | null>(null);
   const closeLightbox = useCallback(() => setSelected(null), []);
+  // v1.450.0 (Wave D, item 37): the publish gate's question, drawn here.
+  const publishQuestion = usePageQuestion();
+  const askPublish = publishQuestion.ask;
+  useEffect(() => {
+    publishAsker = askPublish;
+    return () => {
+      if (publishAsker === askPublish) publishAsker = null;
+    };
+  }, [askPublish]);
 
   // Sort + search — each view keeps its own state.
   const [creSort, setCreSort] = useState<SortKey>("newest");
@@ -3749,7 +3767,7 @@ export default function CreativePage() {
       // batch, before anything leaves the page. Declined = the files still
       // upload (that is what the user also asked for), just not published —
       // and the note says so.
-      const publish = alsoPublish ? confirmPublish() : false;
+      const publish = alsoPublish ? await confirmPublish() : false;
       const declinedPublish = alsoPublish && !publish;
       setUploading(true);
       const oks: string[] = [];
@@ -4429,6 +4447,12 @@ export default function CreativePage() {
           </div>
         </div>
       )}
+      <PageQuestionDialog
+        state={publishQuestion.state}
+        onAnswer={publishQuestion.answer}
+        testId="publish-confirm"
+        label="Publish to a public link"
+      />
     </PageShell>
   );
 }

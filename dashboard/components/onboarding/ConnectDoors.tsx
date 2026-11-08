@@ -966,6 +966,18 @@ export function ConnectDoors({
             <button
               type="submit"
               disabled={keyBusy || (keyProvider === "custom" ? !customBaseUrl.trim() : !keyValue.trim())}
+              // v1.450.0 (Wave D, item 38): a greyed Connect says what it waits for.
+              title={
+                keyBusy
+                  ? undefined
+                  : keyProvider === "custom"
+                    ? customBaseUrl.trim()
+                      ? undefined
+                      : "Type the model server's address first."
+                    : keyValue.trim()
+                      ? undefined
+                      : "Paste a key first."
+              }
               className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
             >
               {keyBusy && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}

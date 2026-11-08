@@ -27,6 +27,9 @@ import {
   X,
 } from "lucide-react";
 import { ApiError, del, get, patch, post } from "@/lib/api";
+import { DETECT_BOUND_MS, TERMINALS_THING, type DetectState } from "@/lib/buildStuck";
+import { couldnt, failureOf, serverSentence, type FailureLike } from "@/lib/loadFailed";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { paneTurn } from "@/components/terminal/paneChatCore";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
 import { STORE_SHELL_TITLE, defaultShellName, shellLabel, type ShellOption } from "@/lib/shells";
@@ -317,6 +320,33 @@ export default function TerminalsPage() {
   const catalog = useModels();
   const models = catalog.usable;
   const [aiClis, setAiClis] = useState<AiCli[]>([]); // per-pane "Launch CLI" menu
+  // v1.450.0 (Wave D, item 40): the Launch menu's read has an end — it
+  // answered (ready), or it failed / passed DETECT_BOUND_MS (failed: the
+  // menu says it could not check, with Try again).
+  const [aiClisState, setAiClisState] = useState<DetectState>("detecting");
+  const aiClisSeq = useRef(0);
+  const readAiClis = useCallback(() => {
+    const seq = ++aiClisSeq.current;
+    setAiClisState("detecting");
+    const bound = setTimeout(() => {
+      if (seq === aiClisSeq.current) setAiClisState((s) => (s === "detecting" ? "failed" : s));
+    }, DETECT_BOUND_MS);
+    get<{ clis: AiCli[] }>("/terminals/ai-clis")
+      .then((clis) => {
+        if (seq !== aiClisSeq.current) return;
+        setAiClis(Array.isArray(clis?.clis) ? clis.clis : []);
+        setAiClisState("ready");
+      })
+      .catch(() => {
+        if (seq === aiClisSeq.current) setAiClisState("failed");
+      })
+      .finally(() => clearTimeout(bound));
+  }, []);
+  // v1.450.0 (Wave D, item 40): the list of terminals could not be read —
+  // said through the one load-failed line with Try again (it printed the raw
+  // error beside "No terminals yet"). `loadKey` re-runs the load.
+  const [loadFailure, setLoadFailure] = useState<FailureLike | null>(null);
+  const [loadKey, setLoadKey] = useState(0);
   const [skills, setSkills] = useState<Skill[]>([]); // per-pane AI skill picker
   const [shell, setShell] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -913,7 +943,7 @@ export default function TerminalsPage() {
       } catch (e) {
         if (cancelled) return;
         if (e instanceof ApiError && e.status === 0) setOffline(true);
-        else setError(e instanceof ApiError ? e.message : String(e));
+        else setLoadFailure(failureOf(e));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -936,13 +966,8 @@ export default function TerminalsPage() {
     // The model catalog comes from the shared hook (v1.250.0, S-02) — see
     // `catalog` above — so it is no longer one of the slow catalogs this
     // effect waits on.
-    get<{ clis: AiCli[] }>("/terminals/ai-clis")
-      .then((clis) => {
-        if (!cancelled) setAiClis(clis.clis);
-      })
-      .catch(() => {
-        /* the Launch menu keeps saying "Detecting…" */
-      });
+    // v1.450.0: bounded, with its own Try again (readAiClis).
+    readAiClis();
     get<{ skills: Skill[] }>("/skills")
       .then((sks) => {
         if (!cancelled) setSkills(sks.skills);
@@ -953,7 +978,7 @@ export default function TerminalsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadKey, readAiClis]);
 
   const addTerminal = useCallback(
     async (cwd?: string | null, recipe?: string | null): Promise<TerminalInfo | null> => {
@@ -984,7 +1009,13 @@ export default function TerminalsPage() {
         return info;
       } catch (e) {
         if (e instanceof ApiError && e.status === 0) setOffline(true);
-        else setError(e instanceof ApiError ? e.message : String(e));
+        // v1.450.0 (Wave D, item 40): a 4xx keeps Iron Jarvis's own sentence
+        // (a refused folder names it); a 5xx reads "Couldn't open a terminal.
+        // Try again." — never engine text.
+        else {
+          const f = failureOf(e);
+          setError(serverSentence(f) ? f.message ?? "" : couldnt("open a terminal", f));
+        }
         return null;
       } finally {
         setBusy(false);
@@ -1055,6 +1086,8 @@ export default function TerminalsPage() {
         onOutput={(chunk) => noteTermOutput(t.id, chunk)}
         models={models}
         aiClis={aiClis}
+        aiClisState={aiClisState}
+        onRetryAiClis={readAiClis}
         skills={skills}
         otherTerminals={terminals.map((x) => ({
           id: x.id,
@@ -1187,6 +1220,20 @@ export default function TerminalsPage() {
       )}
       {/* v1.329.0 (calm chat): one plain line in the danger tone, never a
           red bordered card. The daemon's own words carry the path. */}
+      {loadFailure && (
+        <Reveal>
+          <LoadFailedLine
+            thing={TERMINALS_THING}
+            error={loadFailure}
+            testId="build-load-failed"
+            className="text-[13px] text-zinc-400"
+            onRetry={() => {
+              setLoadFailure(null);
+              setLoadKey((k) => k + 1);
+            }}
+          />
+        </Reveal>
+      )}
       {error && (
         <Reveal>
           <p

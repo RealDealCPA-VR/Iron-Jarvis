@@ -2208,34 +2208,54 @@ export function BuildCodeView({
       })
       .catch((e) => setListError(errorWords(e, "The sessions could not be read.")));
   }, []);
+  // v1.429.0: a tool whose model list is still being read (Pi, the first
+  // time) is looked at again a few times, a moment apart — never polled.
+  // v1.450.0 (Wave D, item 40): when those re-reads run out and a list is
+  // STILL being read, the start box says it couldn't read it, with Try again
+  // (`rereadModels`), which arms the same few re-reads once more.
+  const [modelsGaveUp, setModelsGaveUp] = useState(false);
+  const toolsReadRef = useRef<{ tries: number; timer: ReturnType<typeof setTimeout> | null; gone: boolean }>({
+    tries: 0,
+    timer: null,
+    gone: false,
+  });
+  const readTools = useCallback(() => {
+    const st = toolsReadRef.current;
+    get<unknown>(TOOLS)
+      .then((raw) => {
+        if (st.gone) return;
+        const got = decodeCodingTools(raw);
+        setTools(got);
+        const reading = got.some((t) => t.modelsReading);
+        if (reading && st.tries < TOOLS_REREAD_TRIES) {
+          st.tries += 1;
+          st.timer = setTimeout(readTools, TOOLS_REREAD_MS);
+        } else {
+          setModelsGaveUp(reading);
+        }
+      })
+      .catch((e) => {
+        if (!st.gone) setToolsError(errorWords(e, "The coding tools could not be looked for."));
+      });
+  }, []);
+  const rereadModels = useCallback(() => {
+    const st = toolsReadRef.current;
+    if (st.timer) clearTimeout(st.timer);
+    st.tries = 0;
+    setModelsGaveUp(false);
+    readTools();
+  }, [readTools]);
   useEffect(() => {
     readList();
-    // v1.429.0: a tool whose model list is still being read (Pi, the first
-    // time) is looked at again a few times, a moment apart — never polled.
-    let tries = 0;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let gone = false;
-    const readTools = () => {
-      get<unknown>(TOOLS)
-        .then((raw) => {
-          if (gone) return;
-          const got = decodeCodingTools(raw);
-          setTools(got);
-          if (got.some((t) => t.modelsReading) && tries < TOOLS_REREAD_TRIES) {
-            tries += 1;
-            timer = setTimeout(readTools, TOOLS_REREAD_MS);
-          }
-        })
-        .catch((e) => {
-          if (!gone) setToolsError(errorWords(e, "The coding tools could not be looked for."));
-        });
-    };
+    const st = toolsReadRef.current;
+    st.gone = false;
+    st.tries = 0;
     readTools();
     return () => {
-      gone = true;
-      if (timer) clearTimeout(timer);
+      st.gone = true;
+      if (st.timer) clearTimeout(st.timer);
     };
-  }, [readList]);
+  }, [readList, readTools]);
   useVisibleInterval(readList, CODE_LIST_REREAD_MS);
 
   const readArchived = useCallback(() => {
@@ -2857,6 +2877,8 @@ export function BuildCodeView({
             key={creating ? `new-${newOn.n}` : "empty"}
             tools={tools}
             toolsError={toolsError}
+            modelsGaveUp={modelsGaveUp}
+            onRereadModels={rereadModels}
             startFolder={creating ? newOn.folder : null}
             workRoot={workRoot}
             startAt={openSessionFolder ?? startFolder}

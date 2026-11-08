@@ -248,6 +248,21 @@ import {
   type UndoRowLike,
 } from "@/components/chat/ArtifactsRail";
 import { PreflightNote } from "@/components/chat/PreflightNote";
+// v1.450.0 (Wave D, item 37): the Undo's question is the page's own, never
+// the browser's confirm().
+import { PageQuestion, usePageQuestion } from "@/components/PageQuestion";
+import { SEND_NEEDS_WORDS, whyDisabled } from "@/lib/whyDisabled";
+import {
+  FOLDED_BOX_PX,
+  SHOWN_BOX_SHARE,
+  SHOW_LESS_WORDS,
+  STEER_PLACEHOLDER_NARROW,
+  STEER_PLACEHOLDER_WIDE,
+  foldWords,
+  foldsAt,
+  lineCount,
+  showAllWords,
+} from "@/lib/composerFold";
 import { HomeLine } from "@/components/chat/HomeLine";
 import { ChatMoreMenu } from "@/components/chat/ChatMoreMenu";
 import { ChatUsageLine } from "@/components/chat/ChatUsageLine";
@@ -2123,15 +2138,31 @@ const ComposerInput = memo(function ComposerInput({
   // 390px phone the hints wrapped the placeholder onto three lines.
   const wide = useWideScreen();
 
-  // Auto-grow to fit multi-line text (up to ~1/4 viewport) and shrink back
+  // v1.450.0 (Wave D, item 38): a long pasted message FOLDS. The box keeps
+  // its normal height and one line under it says how long the message is,
+  // with "Show all N lines"; the text in the store (what is sent) is never
+  // cut. The press resets when the message is short again (sent, cleared).
+  const lines = useMemo(() => lineCount(text), [text]);
+  const long = foldsAt(lines);
+  const [showAll, setShowAll] = useState(false);
+  useEffect(() => {
+    if (!long) setShowAll(false);
+  }, [long]);
+  const capPx =
+    long && showAll && typeof window !== "undefined"
+      ? Math.max(FOLDED_BOX_PX, Math.round(window.innerHeight * SHOWN_BOX_SHARE))
+      : FOLDED_BOX_PX;
+
+  // Auto-grow to fit multi-line text (up to the cap) and shrink back
   // when it is cleared on send, so a Shift+Enter draft is never trapped in
   // one row. Runs on every text change, including the programmatic reset.
   useLayoutEffect(() => {
     const el = inputRef.current;
     if (!el) return;
+    el.style.maxHeight = `${capPx}px`;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  }, [text, inputRef]);
+    el.style.height = `${Math.min(el.scrollHeight, capPx)}px`;
+  }, [text, inputRef, capPx]);
 
   // The "/" menu's one open rule (lib/composerMenus), as the picker reads it.
   const slashToken = slashMenuOpen(composerState, busy) ? slashTokenAt(text, caret) : null;
@@ -2232,6 +2263,7 @@ const ComposerInput = memo(function ComposerInput({
   }
 
   return (
+    <>
     <textarea
       ref={inputRef}
       value={text}
@@ -2266,9 +2298,13 @@ const ComposerInput = memo(function ComposerInput({
       aria-label="Message"
       // v1.326.0 (calm chat): the keys moved to the quiet line under the
       // card (from sm up), so the box only says who it talks to.
+      // v1.450.0 (Wave D, item 38): while a reply runs the box says what
+      // Enter does now — a note to the reply, Ctrl+Enter waits for its end.
       placeholder={
         busy && onSteer
-          ? "Steer Jarvis mid-turn…"
+          ? wide && onQueue
+            ? STEER_PLACEHOLDER_WIDE
+            : STEER_PLACEHOLDER_NARROW
           : talkingTo
             ? wide
               ? `Message ${talkingTo}…  (@ to bring in someone else · Back to Jarvis above)`
@@ -2281,6 +2317,27 @@ const ComposerInput = memo(function ComposerInput({
       // whole width above the toolbar at every size.
       className="block max-h-40 min-h-[2.75rem] w-full resize-none bg-transparent px-[18px] pb-1 pt-3 text-sm leading-6 text-zinc-100 caret-accent outline-none placeholder:text-zinc-500"
     />
+    {long && (
+      <div
+        data-testid="composer-fold"
+        className="flex flex-wrap items-center gap-x-2 px-[18px] pb-1 text-[12px] text-zinc-500"
+      >
+        <span>{foldWords(lines)}</span>
+        <button
+          type="button"
+          data-testid="composer-fold-toggle"
+          aria-expanded={showAll}
+          onClick={() => {
+            setShowAll((v) => !v);
+            inputRef.current?.focus({ preventScroll: true });
+          }}
+          className="rounded-sm text-accent-soft underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+        >
+          {showAll ? SHOW_LESS_WORDS : showAllWords(lines)}
+        </button>
+      </div>
+    )}
+    </>
   );
 });
 
@@ -2885,13 +2942,15 @@ const SendArrow = memo(function SendArrow({
   const { text } = useComposer(store);
   // v1.275.0: a file alone is a message.
   const ready = !busy && Boolean(text.trim() || hasAttachments);
+  // v1.450.0 (Wave D, item 38): a greyed Send says what it waits for.
+  const why = ready ? null : whyDisabled(busy && "Wait for this reply to finish, or press Stop.", SEND_NEEDS_WORDS);
   return (
     <button
       type="button"
       onClick={() => onSend(store.get().text)}
       disabled={!ready}
       aria-label="Send"
-      title="Send (Enter)"
+      title={why ?? "Send (Enter)"}
       // ml-auto pins Send to the right end of the toolbar whatever wraps.
       // Only a message ready to go wears the accent (one primary per view).
       className={`ml-auto grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full p-0 ${
@@ -4814,6 +4873,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // land on the one now open (same shape as chatGenRef for turns).
   const compactionGenRef = useRef(0);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  // v1.450.0 (Wave D, item 37): the Undo's "are you sure" is a question line
+  // above the composer (chat-undo-confirm), answered with Undo it / Keep.
+  const undoQuestion = usePageQuestion();
   // v1.400.0: the composer's toolbar is ONE ROW whatever model is picked
   // (lib/toolbarFit): it gives up space one chip at a time, least needed
   // first (CHAT_FIT_ORDER: the project's name, Web, Auto tools, "Local only"
@@ -7589,6 +7651,24 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     return () => document.removeEventListener("mousedown", onDown);
   }, [toolMenuOpen]);
 
+  // v1.450.0 (Wave D, item 38): Escape closes the composer's own menus — the
+  // "+" menu, the tools chip's menu and the project menu (the "@", "/", model
+  // and permission menus close on Escape themselves). Caught first (capture)
+  // and kept there, so the same Escape never also stops a running reply.
+  useEffect(() => {
+    if (!toolsOpen && !toolMenuOpen && !projMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setToolsOpen(false);
+      setToolMenuOpen(false);
+      setProjMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [toolsOpen, toolMenuOpen, projMenuOpen]);
+
   function toggleTool(name: string) {
     setSelectedTools((prev) =>
       prev.includes(name)
@@ -8786,14 +8866,15 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   }
 
   /** The one undo implementation both call sites share (rail row + receipt
-   *  file chip): explicit confirm (window.confirm — the DocPreview
-   *  convention), POST /undo/{id}, mark the row undone, refresh an open
+   *  file chip): the page's own question (v1.450.0: a `PageQuestion` line
+   *  above the composer, "Undo it" / "Keep" — it was the browser's
+   *  window.confirm), POST /undo/{id}, mark the row undone, refresh an open
    *  preview and the candidate list. THROWS on failure so each call site
    *  surfaces the server's error where the user clicked. */
   async function undoWrite(actionId: string, path: string) {
     const row = undoByPath.get(normalizeFsPath(path));
     const base = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-    if (!window.confirm(confirmUndoPrompt(row?.kind, base))) return;
+    if (!(await undoQuestion.ask(confirmUndoPrompt(row?.kind, base), { yes: "Undo it" }))) return;
     await post(`/undo/${encodeURIComponent(actionId)}`, {});
     setUndoneIds((prev) => {
       const next = new Set(prev);
@@ -13768,6 +13849,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     onStop={stop}
                     returnFocus={focusComposerAfterAsk}
                     onRedirect={redirectAfterDeny}
+                  />
+                  {/* v1.450.0 (Wave D, item 37): the Undo's question, in the
+                      page's own voice, right above the box (Undo it / Keep). */}
+                  <PageQuestion
+                    state={undoQuestion.state}
+                    onAnswer={undoQuestion.answer}
+                    testId="chat-undo-confirm"
+                    className="mb-1.5"
                   />
                   <div
                     data-testid="chat-composer"

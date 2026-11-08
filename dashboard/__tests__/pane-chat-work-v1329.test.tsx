@@ -16,6 +16,7 @@
  *  5. TOKENS: no literal hues in the pane chat (Daylight does not remap them).
  */
 
+import { answerPageQuestions } from "./helpers/pageQuestion";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -424,7 +425,7 @@ describe("the chat page's 'files changed' line under a pane reply", () => {
     H.api.undo = [
       { action_id: "act_1", kind: "file_restore", undoable: true, path: "summary.md", workspace: CWD },
     ];
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const confirm = answerPageQuestions("pane-undo-confirm", true);
     writing();
     render(<PaneChat paneId="p1" cwd={CWD} />);
     fireEvent.click(await screen.findByTestId("changed-files-line"));
@@ -433,6 +434,7 @@ describe("the chat page's 'files changed' line under a pane reply", () => {
     await waitFor(() => expect(H.api.posts.some((p) => p.path === "/undo/act_1")).toBe(true));
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(String(confirm.mock.calls[0][0])).toContain("terminals and Chat share one journal");
+    confirm.stop();
   });
 });
 

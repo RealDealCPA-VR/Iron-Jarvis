@@ -697,6 +697,7 @@ def test_the_ask_watcher_is_actually_installed_and_reads_the_bell_s_listing():
 _CLASSIFY_HARNESS = """
 const DAEMON_PORT = 8787;
 const STARTUP_TIMEOUT_MS = 90000;
+__RELEASES__
 __LIFTED__
 const cases = JSON.parse(process.argv[2]);
 process.stdout.write(JSON.stringify({ out: cases.map((c) => classifyStartupFailure(c)) }) + "\\n");
@@ -704,7 +705,12 @@ process.stdout.write(JSON.stringify({ out: cases.map((c) => classifyStartupFailu
 
 
 def _classify(cases: list, tmp_path: Path) -> list[dict]:
-    script = _CLASSIFY_HARNESS.replace(
+    # v1.450.0 (Wave D, item 39): the upgrade cause names the Releases page
+    # through one-line top-level constants, lifted with it.
+    releases = "\n".join(
+        _decl(name) for name in ("RELEASES_PREVIOUS_HOW", "DATA_STAYS")
+    )
+    script = _CLASSIFY_HARNESS.replace("__RELEASES__", releases).replace(
         "__LIFTED__", _lift("function classifyStartupFailure", "function classifyStartupFailure")
     )
     return _run(script, tmp_path, "classify", json.dumps(cases))["out"]
@@ -782,9 +788,16 @@ def test_a_failed_start_offers_retry_instead_of_only_quitting():
 
 
 def test_the_dialog_still_shows_the_underlying_error(tmp_path):
-    """R-06 replaces the WORDS, not the evidence: the raw gate error stays in
-    the detail so a report can still be diagnosed."""
+    """R-06 replaces the WORDS, not the evidence. v1.450.0 (Wave D, item 39),
+    moved on purpose: the raw gate error is no longer printed INTO the dialog
+    (a person read "Details: ECONNREFUSED…"); it is written to the desktop
+    log BEFORE the dialog opens, and the dialog says so and offers Open logs —
+    so a report can still be diagnosed."""
     fn = _lift("function handleStartupFailure", "function handleStartupFailure")
-    assert "Details: ${(context && context.gateError) || message}" in fn, (
-        "the underlying error is no longer shown anywhere"
+    raw = "(context && context.gateError) || message"
+    assert f"desktopLog(\"error\", `[startup] ${{title}} (${{info.cause}}): ${{{raw}}}`);" in fn, (
+        "the underlying error is no longer written to the log"
     )
+    assert fn.index("desktopLog(\"error\", `[startup]") < fn.index("showMessageBoxSync({\n          type: \"error\",\n          buttons: [\"Retry\"")
+    assert "Details: ${" not in fn, "the raw error is back in the dialog"
+    assert "${STARTUP_LOG_LINE}" in fn and '"Open logs"' in fn

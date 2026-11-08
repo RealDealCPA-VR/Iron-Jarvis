@@ -22,6 +22,7 @@
  *    daemon-down is the OfflineHint, with the composer disabled.
  */
 
+import { answerPageQuestions } from "./helpers/pageQuestion";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
@@ -942,11 +943,11 @@ describe("a reply's files: listed once, opened and undone from the receipt (BC2;
     return screen.findByTestId("turn-receipt-detail");
   }
 
-  let confirmSpy: ReturnType<typeof vi.spyOn>;
+  let confirmSpy: ReturnType<typeof answerPageQuestions>;
   beforeEach(() => {
-    confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    confirmSpy = answerPageQuestions("pane-undo-confirm", true);
   });
-  afterEach(() => confirmSpy.mockRestore());
+  afterEach(() => confirmSpy.stop());
 
   it("no pane file cards; the receipt counts the file once and Open posts the full path", async () => {
     seedFileThread("pc");

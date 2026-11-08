@@ -73,6 +73,13 @@ import {
 } from "@/components/terminal/PaneAccountChip";
 import { paneFrameClass } from "@/components/terminal/paneFrame";
 import { modelPickTitle, modelPickWords } from "@/lib/onboarding";
+import {
+  DETECTING_WORDS,
+  DETECT_FAILED_WORDS,
+  NONE_FOUND_WORDS,
+  TRY_AGAIN_WORDS,
+  type DetectState,
+} from "@/lib/buildStuck";
 
 type AIResult = {
   reply: string;
@@ -466,6 +473,8 @@ export function TerminalPane({
   reserveViewToggle = false,
   models = [],
   aiClis = [],
+  aiClisState = "ready",
+  onRetryAiClis,
   skills = [],
   otherTerminals = [],
 }: {
@@ -538,6 +547,11 @@ export function TerminalPane({
   models?: ModelOption[];
   /** AI CLIs detected on this machine, for the "Launch" dropdown. */
   aiClis?: AiCli[];
+  /** v1.450.0 (Wave D, item 40): where that read is — still reading, done,
+   *  or failed / past its bound (the menu then says it could not check). */
+  aiClisState?: DetectState;
+  /** Ask for the list again (the failed menu's Try again). */
+  onRetryAiClis?: () => void;
   /** The discovered skill library — usable by ANY provider via the AI assist. */
   skills?: Skill[];
   /** All live terminals (self included; filtered here) — lets THIS pane's AI
@@ -1629,7 +1643,31 @@ export function TerminalPane({
           />
           <div className="absolute right-2 top-11 z-40 max-h-[70%] w-60 overflow-auto rounded-xl border border-white/10 bg-ink-900/95 p-1 shadow-card backdrop-blur">
             {installedClis.length === 0 && notInstalledClis.length === 0 && (
-              <div className="px-2 py-2 text-[11px] text-zinc-500">Detecting…</div>
+              // v1.450.0 (Wave D, item 40): "Detecting…" has an end.
+              <div data-testid="launch-detect" data-state={aiClisState} className="px-2 py-2 text-[11px] text-zinc-500">
+                {aiClisState === "failed" ? (
+                  <>
+                    {DETECT_FAILED_WORDS}{" "}
+                    {onRetryAiClis ? (
+                      <button
+                        type="button"
+                        data-testid="launch-detect-retry"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRetryAiClis();
+                        }}
+                        className="rounded-sm text-accent-soft underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+                      >
+                        {TRY_AGAIN_WORDS}
+                      </button>
+                    ) : null}
+                  </>
+                ) : aiClisState === "ready" ? (
+                  NONE_FOUND_WORDS
+                ) : (
+                  DETECTING_WORDS
+                )}
+              </div>
             )}
             {installedClis.length > 0 && (
               <div className="px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">

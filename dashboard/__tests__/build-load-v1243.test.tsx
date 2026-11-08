@@ -180,6 +180,12 @@ describe("Build draws its panes before the catalogs answer", () => {
   it("the pane list itself failing is still the page's error", async () => {
     api.failing.add("/terminals");
     render(<TerminalsPage />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("boom /terminals");
+    // v1.450.0 (Wave D, item 40), moved on purpose: still the page's own
+    // error — now in the one load-failed line with Try again, never the raw
+    // error text.
+    expect(await screen.findByTestId("build-load-failed")).toHaveTextContent(
+      "Your terminals couldn't load. Try again.",
+    );
+    expect(document.body.textContent).not.toContain("boom /terminals");
   });
 });
