@@ -243,31 +243,17 @@ describe("the Gemini door says free tier (C6.12)", () => {
 
 /* ---------------------------------------------------- 4. fleet form key */
 
-describe("Fleet's Add a node takes a key (C6.12)", () => {
-  it("vaults the key under the node's own name and wires it to the node", async () => {
+// v1.455.0 (readiness Wave H item 31, moved on purpose): a model server is
+// added in ONE place now — Settings › Connections, whose form has always taken
+// a key (and now re-detects once it is on the server, as this page's form did).
+// The Model servers page links there instead of holding a second form.
+describe("Model servers links the one add form (Wave H item 31)", () => {
+  it("no second form, a link to Connections' model-server form", async () => {
     render(<FleetPage />);
-    fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "http://192.168.1.50:4000" } });
-    fireEvent.change(screen.getByTestId("fleet-add-key"), { target: { value: "sk-master-123" } });
-    fireEvent.click(screen.getByRole("button", { name: /Add node/ }));
-    await waitFor(() => expect(hooks.patches.length).toBe(1));
-    const secret = hooks.posts.find((p) => p.path === "/secrets")?.body as Record<string, string>;
-    expect(secret).toMatchObject({ name: "endpoint_spark_key", value: "sk-master-123", kind: "api_key" });
-    expect(hooks.patches[0]).toEqual({ path: "/fleet/nodes/spark", body: { api_key_name: "endpoint_spark_key" } });
-    // the key never rides the node's own create body
-    const node = hooks.posts.find((p) => p.path === "/fleet/nodes")?.body as Record<string, unknown>;
-    expect(JSON.stringify(node)).not.toContain("sk-master-123");
-    // and the box is cleared for the next node
-    await waitFor(() => expect((screen.getByTestId("fleet-add-key") as HTMLInputElement).value).toBe(""));
-  });
-
-  it("no key typed: nothing is vaulted", async () => {
-    render(<FleetPage />);
-    fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "http://192.168.1.50:4000" } });
-    fireEvent.click(screen.getByRole("button", { name: /Add node/ }));
-    await waitFor(() => expect(hooks.posts.some((p) => p.path === "/fleet/nodes")).toBe(true));
-    await waitFor(() => expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe(""));
-    expect(hooks.posts.some((p) => p.path === "/secrets")).toBe(false);
-    expect(hooks.patches).toEqual([]);
+    const link = await screen.findByTestId("fleet-add-link");
+    expect(link.querySelector("a")?.getAttribute("href")).toBe("/connections?focus=endpoints");
+    expect(screen.queryByTestId("fleet-add-key")).toBeNull();
+    expect(screen.queryByLabelText("Base URL")).toBeNull();
   });
 });
 

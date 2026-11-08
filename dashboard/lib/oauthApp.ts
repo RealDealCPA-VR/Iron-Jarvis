@@ -35,32 +35,45 @@ export function oauthRedirectAddress(provider: string): string {
   return `http://localhost:8787/oauth/${provider}/callback`;
 }
 
-/** The vendor's console (and its name) for each app's registration. */
-export const VENDOR_CONSOLES: Record<string, { name: string; url: string; where: string }> = {
+/** The vendor's console (and its name) for each app's registration.
+ *  `redirectBox: false` (v1.455.0, Wave H item 27): Google's Desktop app
+ *  client has no box for a redirect address — Google lets it return to an
+ *  address on this PC by itself — so the card must not tell the user to
+ *  "allow" one there (the review found a user would stall on it). */
+export const VENDOR_CONSOLES: Record<string, { name: string; url: string; where: string; redirectBox: boolean }> = {
   google_drive: {
     name: "Google",
     url: "https://console.cloud.google.com/apis/credentials",
     where: "Google Cloud Console, as a “Desktop app” OAuth client",
+    redirectBox: false,
   },
   onedrive: {
     name: "Microsoft",
-    url: "https://portal.azure.com",
-    where: "Microsoft Entra (the Azure portal), with a “Mobile and desktop” platform",
+    url: "https://entra.microsoft.com",
+    where: "Microsoft Entra, with a “Mobile and desktop” platform",
+    redirectBox: true,
   },
   dropbox: {
     name: "Dropbox",
     url: "https://www.dropbox.com/developers/apps",
     where: "the Dropbox App Console",
+    redirectBox: true,
   },
 };
 
-/** The one sentence that says the vendor-console step in plain words. */
+/** The one sentence that says the vendor-console step in plain words. The
+ *  whole walk-through (consent screen, test users, the API switch) is the
+ *  Help guide the form links (`lib/directoryLinks.ownAppGuideHref`). */
 export function vendorConsoleSentence(provider: string, appName: string): string {
   const c = VENDOR_CONSOLES[provider];
   const who = c?.name ?? appName;
   const where = c ? ` in ${c.where}` : " in its developer console";
+  const redirect =
+    c && !c.redirectBox
+      ? " (it has no box for the redirect address below, so there is nothing to allow)"
+      : ", allow the redirect address below";
   return (
-    `${who} needs an app of your own before it lets Iron Jarvis sign in: make one${where}, ` +
-    "allow the redirect address below, then paste the app’s ID and secret here. About 5 minutes, once."
+    `${who} needs an app of your own before it lets Iron Jarvis sign in: make one${where}${redirect}, ` +
+    "then paste the app’s ID and secret here. About 10 minutes, once."
   );
 }

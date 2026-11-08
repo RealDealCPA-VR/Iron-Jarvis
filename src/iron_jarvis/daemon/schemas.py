@@ -1229,12 +1229,20 @@ class CommThreadSendBody(BaseModel):
 
 
 class IntegrationCreate(BaseModel):
-    """Add a custom REST integration (bearer token stored in the vault)."""
+    """Add a custom REST integration (its key stored in the vault).
+
+    v1.455.0 (Wave H item 31): ``auth_kind`` bearer (default) | header |
+    basic; ``auth_header`` the header the key goes in, ``auth_user`` the
+    basic sign-in's username. ``auth_token`` is still the KEY (the password
+    for basic), written only to the vault."""
 
     name: str
     base_url: str
     description: str = ""
     auth_token: str = ""
+    auth_kind: str = "bearer"
+    auth_header: str = ""
+    auth_user: str = ""
 
 
 class TerminalAIBody(BaseModel):

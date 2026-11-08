@@ -55,6 +55,7 @@ import { OLLAMA_LOCAL_URL, isDemoDefault, providerDisplay, type HealthRow, type 
 export const KEY_NOT_SAVED_NOTE = "Nothing was saved, and what answers you didn't change. Fix the key and press Connect again.";
 import { subscriptionCliFor } from "@/lib/cliSignIn";
 import { CliSignInPress } from "@/components/connections/CliSignInPress";
+import { CliInstallPress, OllamaStarterPress, hasInstallJob } from "@/components/connections/InstallPresses";
 import {
   OWN_ENDPOINT_LABEL,
   connectionTitle,
@@ -960,6 +961,13 @@ function ConnectionCard({
           await patch(`/fleet/nodes/${encodeURIComponent(nodeId)}`, {
             api_key_name: secretName,
           });
+          // v1.455.0 (readiness Wave H item 31): this is now the ONE add form
+          // (the Model servers page links here), so it carries what that
+          // page's form learned in review: the server was added — and its
+          // kind detected — BEFORE the key existed, so a keyed gateway read
+          // keyless keeps the kind a 401 gives. Detect again now the key is
+          // on the server. Best-effort: the server is saved either way.
+          await post(`/fleet/nodes/${encodeURIComponent(nodeId)}/detect`, {}).catch(() => {});
         }
         const shown = epName.trim() || created.node?.label || nodeId || "it";
         // AUTO-VERIFY tool support right away (live ping-tool probe) for the
@@ -1995,6 +2003,7 @@ function CliProviderRow({
   notInstalled = false,
   detected = false,
   addressSaved = false,
+  runningNoModel = false,
   report = [],
   envelopeModels = [],
 }: {
@@ -2013,6 +2022,9 @@ function CliProviderRow({
   /** v1.353.0 integrate (Ollama only): the user saved an address of their
    *  own — while it does not answer, the row says so, not "Get Ollama". */
   addressSaved?: boolean;
+  /** v1.455.0 (Ollama only): Ollama answers on this PC (`running`) but has
+   *  no model yet (`detected` is false) — the starter download press. */
+  runningNoModel?: boolean;
   /** Model report card rows (v1.169.0) — rendered only for LOCAL providers
    *  (ollama, opencode-cli); the cloud CLI rows never get a report line. */
   report?: QualityRow[];
@@ -2029,6 +2041,18 @@ function CliProviderRow({
   // Ollama. Anything else keeps its one-line hint.
   const action = available ? null : signedOut && cli ? (
     <CliSignInAction provider={info.provider} />
+  ) : notInstalled && cli && hasInstallJob(cli.cli) ? (
+    // v1.455.0 (readiness Wave H item 28): the first-run door's own press —
+    // the vendor's installer in a Build terminal, in view.
+    <div data-testid={`cli-get-${info.provider}`}>
+      <CliInstallPress
+        provider={info.provider}
+        cli={cli.cli}
+        name={cli.name}
+        installUrl={cli.installUrl}
+        installUrlLabel={cli.installLabel}
+      />
+    </div>
   ) : notInstalled && cli ? (
     <div data-testid={`cli-get-${info.provider}`} className="mt-1 text-[11px] leading-relaxed text-zinc-500">
       Not on this PC yet.
@@ -2043,6 +2067,9 @@ function CliProviderRow({
     </div>
   ) : isOllama && detected ? (
     <UseOllamaAction />
+  ) : isOllama && runningNoModel ? (
+    // v1.455.0 (Wave H item 28): running but no model — never "Not running".
+    <OllamaStarterPress />
   ) : isOllama && addressSaved ? (
     <div data-testid="ollama-not-answering" className="mt-1 text-[11px] leading-relaxed text-zinc-500">
       Not answering at the address you saved. Make sure Ollama is running there, then press
@@ -2257,6 +2284,12 @@ export default function ConnectionsPage() {
   // answer — the row says so rather than "Get Ollama".
   const ollamaAddressSaved = (daemonProviders as HealthRow[]).some(
     (p) => p.provider === "ollama" && p.address_saved === true,
+  );
+  // v1.455.0 (Wave H item 28): Ollama answers here but holds no model — the
+  // first-run door's "running but has no model yet" reading (/health's
+  // `running`, Wave C), so this row never says "Not running".
+  const ollamaRunningNoModel = (daemonProviders as HealthRow[]).some(
+    (p) => p.provider === "ollama" && !p.available && p.running === true && p.detected !== true,
   );
 
   // Which models a LOCAL provider's row can Measure (v1.201.0): the models
@@ -2641,6 +2674,7 @@ export default function ConnectionsPage() {
                 notInstalled={isNotInstalled(info.provider)}
                 detected={info.provider === "ollama" && ollamaDetected}
                 addressSaved={info.provider === "ollama" && ollamaAddressSaved}
+                runningNoModel={info.provider === "ollama" && ollamaRunningNoModel}
                 report={qualityRows}
                 envelopeModels={envelopeModelsFor(info.provider)}
               />

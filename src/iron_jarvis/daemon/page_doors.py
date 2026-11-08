@@ -75,7 +75,7 @@ HELP_PATH = "/help"
 SIGN_IN_PRESSES: tuple[str, ...] = ("claude-cli", "codex-cli", "grok-cli")
 
 #: The guides the Help page serves (``routes/helpdocs._DOCS``; pinned equal).
-HELP_GUIDES: tuple[str, ...] = ("handbook", "recommended-settings", "local-models", "changelog")
+HELP_GUIDES: tuple[str, ...] = ("handbook", "recommended-settings", "local-models", "own-apps", "changelog")
 
 
 def heading_slug(text: str) -> str:
@@ -666,8 +666,9 @@ STEPS: tuple[PageStep, ...] = (
         "google_setup", ACCOUNTS_HREF, "Open Google's one-time setup in Settings",
         "Google Drive and Gmail need a one-time Google developer setup that the user makes in their own "
         "Google account, in their browser (the Google Cloud console); Iron Jarvis cannot make it for them. "
-        f"Google Drive's steps are on its card in {CONNECTIONS_PLACE} (its One-time setup), and Gmail's "
-        f"card in {DIRECTORY_PLACE} links its own steps; say so plainly and point there.",
+        f"Google Drive's boxes are on its card in {CONNECTIONS_PLACE} (its One-time setup), Gmail's card is "
+        f"in {DIRECTORY_PLACE}, and Help › Your own sign-in apps has the steps for both (the consent screen, "
+        "a test user, turning on the API, a Desktop app client); say so plainly and point there.",
     ),
     PageStep(
         # v1.442.0 (chat-first plan Wave 7, group A): CONNECTING Gmail. Its
@@ -676,8 +677,9 @@ STEPS: tuple[PageStep, ...] = (
         # can save it before, and then says "did not start" (pinned).
         "gmail_setup", _APPS_FIX_HREF, "Open Gmail's card in Settings",
         f"Gmail is connected from its card in {DIRECTORY_PLACE}, and it starts only after a one-time Google "
-        "developer setup the user makes in their own Google account, in their browser (the card's Docs link "
-        "has the steps); Iron Jarvis cannot make that setup for them. app_connect, when it is offered in this "
+        "developer setup the user makes in their own Google account, in their browser (the card's "
+        "Step-by-step setup link opens the steps: Help › Your own sign-in apps, its Gmail section); Iron "
+        "Jarvis cannot make that setup for them. app_connect, when it is offered in this "
         "reply, can save Gmail before that, but Gmail does not start and its tools are not in the chat until "
         "the setup is done. If Gmail is already connected, none of this is needed. Say so plainly and point "
         "there.",

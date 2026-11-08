@@ -279,15 +279,27 @@ def register(app: FastAPI, d) -> None:
         — the ONE add the chat's ``web_service_add`` goes through too; the
         answers and the stored shape are unchanged byte for byte.
         """
-        from ...integrations.hookups import add_hookup, hookup_id
+        from ...integrations.builtin import auth_problem
+        from ...integrations.hookups import (
+            ADDRESS_REQUIRED,
+            NAME_IN_USE,
+            NAME_REQUIRED,
+            add_hookup,
+            hookup_id,
+        )
 
         iid = hookup_id(body.name)
         if not iid:
-            raise HTTPException(status_code=400, detail="integration name is required")
+            raise HTTPException(status_code=400, detail=NAME_REQUIRED)
         if not (body.base_url or "").strip():
-            raise HTTPException(status_code=400, detail="base URL is required")
+            raise HTTPException(status_code=400, detail=ADDRESS_REQUIRED)
+        # v1.455.0 (Wave H item 31): a key's way of travelling is checked
+        # BEFORE the key is written, so a refused add leaves no vault row.
+        problem = auth_problem(body.auth_kind, body.auth_header, body.auth_user)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
         if d.platform.integrations.get_spec(iid) is not None:
-            raise HTTPException(status_code=400, detail=f"'{iid}' already exists")
+            raise HTTPException(status_code=400, detail=NAME_IN_USE.format(name=body.name.strip() or iid))
         sname = ""
         if (body.auth_token or "").strip():
             sname = f"integration_{iid}_token"
@@ -300,6 +312,9 @@ def register(app: FastAPI, d) -> None:
                 description=body.description or "",
                 auth_secret=sname,
                 persist=d._persist_config,
+                auth_kind=body.auth_kind,
+                auth_header=body.auth_header,
+                auth_user=body.auth_user,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))

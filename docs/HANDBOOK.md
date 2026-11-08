@@ -1468,7 +1468,9 @@ machine cannot until you choose to open a door — the token box says so and
 names the two ways: turn on **Let other computers on my network reach this
 Iron Jarvis** in Settings › Connections and restart Iron Jarvis (since
 v1.358.0; Windows may ask once to allow it on your network, and every
-request still needs its token), or put a tunnel or reverse proxy in front of
+request still needs its token — if that question was dismissed, other
+computers stay blocked until you allow Iron Jarvis in Windows Security ›
+Firewall & network protection › Allow an app through firewall), or put a tunnel or reverse proxy in front of
 127.0.0.1:8787 and paste its address as the inbound URL. Nothing opens on
 its own. Files a remote sends land under the app's remote inbox folder,
 never in a project it was not given, with the same name, size and host checks

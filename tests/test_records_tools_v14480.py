@@ -517,9 +517,11 @@ def test_the_pages_door_stores_the_same_shape_as_before(tmp_path):
     assert p.secrets.get("integration_acme_crm_token") == "tok-" + "v14480"
     assert p.config.custom_integrations == [{"id": "acme_crm", "name": "Acme CRM", "description": ""}]
     r = client.post("/integrations", json={"name": "Acme CRM", "base_url": "https://crm.example.com/api"})
-    assert r.status_code == 400 and "already exists" in r.text
+    # v1.455.0 (Wave H item 31, moved on purpose): the refusals are plain
+    # words now ("integration name is required" / "'acme_crm' already exists").
+    assert r.status_code == 400 and "already saved" in r.json()["detail"]
     r = client.post("/integrations", json={"name": "", "base_url": "https://x.example.com"})
-    assert r.status_code == 400 and "name is required" in r.text
+    assert r.status_code == 400 and r.json()["detail"] == "Give the web service a name (letters and digits)."
 
 
 # =========================================================================== #

@@ -167,6 +167,12 @@ def named_hookup_ask_tools(
 # id rule, the spec, the stored config and what survives a restart cannot
 # drift. Nothing here logs, returns or raises a VALUE — names only.
 # --------------------------------------------------------------------------- #
+#: v1.455.0 (Wave H item 31): the add door's refusals, in plain words.
+NAME_REQUIRED = "Give the web service a name (letters and digits)."
+ADDRESS_REQUIRED = "Give the web service's address (it starts with http:// or https://)."
+NAME_IN_USE = "A web service named “{name}” is already saved. Give this one another name."
+
+
 def hookup_id(name: Any) -> str:
     """The id a hookup's display name gets (the page's own rule)."""
     return _slug(str(name or ""))
@@ -181,6 +187,9 @@ def add_hookup(
     auth_secret: str = "",
     allow_internal: bool = False,
     persist: Any = None,
+    auth_kind: str = "bearer",
+    auth_header: str = "",
+    auth_user: str = "",
 ) -> str:
     """Register a REST hookup live, store its config and keep it in
     ``config.custom_integrations`` so it survives a restart; returns its id.
@@ -189,19 +198,30 @@ def add_hookup(
     empty name = no token). ``allow_internal`` lets its address be on the
     user's own network (the chat door sets it for a private address; the
     page's route never did). Raises ``ValueError`` in plain words for a
-    missing name or address or a name in use. BLOCKING."""
+    missing name or address or a name in use. BLOCKING.
+
+    v1.455.0 (readiness Wave H item 31): ``auth_kind`` says how the key
+    travels (``builtin.AUTH_KINDS``: bearer — the default, stored as nothing
+    so an older config reads the same — header, basic); ``auth_header`` names
+    the header for ``header``, ``auth_user`` the username for ``basic``. The
+    KEY itself is only ever the vault row ``auth_secret`` names. The refusals
+    are plain words (they used to say "integration name is required")."""
     from .base import IntegrationSpec
-    from .builtin import REST_SPEC, RestApiIntegration
+    from .builtin import REST_SPEC, RestApiIntegration, auth_problem
 
     shown = str(name or "").strip()
     iid = hookup_id(shown)
     if not iid:
-        raise ValueError("integration name is required")
+        raise ValueError(NAME_REQUIRED)
     if not str(base_url or "").strip():
-        raise ValueError("base URL is required")
+        raise ValueError(ADDRESS_REQUIRED)
+    kind = str(auth_kind or "bearer").strip().lower()
+    problem = auth_problem(kind, auth_header, auth_user)
+    if problem:
+        raise ValueError(problem)
     registry = platform.integrations
     if registry.get_spec(iid) is not None:
-        raise ValueError(f"'{iid}' already exists")
+        raise ValueError(NAME_IN_USE.format(name=shown or iid))
     registry.register(
         IntegrationSpec(
             id=iid,
@@ -218,6 +238,12 @@ def add_hookup(
         config["auth_secret"] = str(auth_secret)
     if allow_internal:
         config["allow_internal"] = True
+    if kind == "header":
+        config["auth_kind"] = "header"
+        config["auth_header"] = str(auth_header).strip()
+    elif kind == "basic":
+        config["auth_kind"] = "basic"
+        config["auth_user"] = str(auth_user)
     registry.configure(iid, config)
     registry.enable(iid, True)
     customs = [c for c in (platform.config.custom_integrations or []) if c.get("id") != iid]

@@ -56,6 +56,14 @@ _DOCS: dict[str, tuple[str, str, str]] = {
         "LOCAL-MODELS.md",
         "What to run at each RAM size.",
     ),
+    # v1.455.0 (readiness Wave H item 27): the steps for the sign-in app a
+    # Drive / Gmail / OneDrive / Dropbox connection needs, one section per
+    # vendor; each card links its own section.
+    "own-apps": (
+        "Your own sign-in apps",
+        "OWN-APPS.md",
+        "The one-time app Google Drive, Gmail, OneDrive and Dropbox need.",
+    ),
     # v1.450.0: the release notes moved out of the Handbook into their own
     # generated file (scripts/gen_changelog.py); the Updates card links here.
     "changelog": (

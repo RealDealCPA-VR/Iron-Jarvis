@@ -52,6 +52,7 @@ BUNDLED_DOCS: tuple[tuple[str, str, str], ...] = (
     ("changelog", "docs/CHANGELOG.md", "What changed in each version"),
     ("recommended-settings", "docs/RECOMMENDED-SETTINGS.md", "Recommended Settings"),
     ("local-models", "docs/LOCAL-MODELS.md", "Local Models by RAM Tier"),
+    ("own-apps", "docs/OWN-APPS.md", "Your own sign-in apps"),
     ("reflex", "docs/REFLEX.md", "Reflex rules"),
     ("computer-use", "docs/COMPUTER-USE.md", "Computer use"),
     ("browser", "docs/BROWSER.md", "Your browser"),
@@ -90,6 +91,7 @@ _DOC_PRIOR: dict[str, float] = {
     "changelog": 1.0,
     "recommended-settings": 1.15,
     "local-models": 1.15,
+    "own-apps": 1.15,
     "reflex": 1.15,
     "computer-use": 1.15,
     "browser": 1.15,
@@ -106,6 +108,67 @@ _DEFINITION_RX = re.compile(
     re.I,
 )
 _DEFINITION_BONUS = 1.5
+
+#: v1.455.0 (readiness Wave H item 32): the Handbook is the manual AND, after
+#: its overview, the full release history — one section per version since
+#: v1.2xx, which still names pages and switches as they were then (the
+#: re-audit found the Guide quoting "Build is the terminals only" and the old
+#: page names from those sections). ``docs/CHANGELOG.md`` is the reading of
+#: that history for "what changed"; the Guide's MAIN reading is the overview
+#: and the newest releases. A Handbook section after
+#: :data:`HISTORY_STARTS_AFTER` (the last overview chapter) is history; the
+#: newest :data:`CURRENT_RELEASES` versions in it keep their weight, every
+#: older one is weighted :data:`OLD_RELEASE_PRIOR` — still found when nothing
+#: newer answers, never above a current section that does.
+HISTORY_STARTS_AFTER = "Troubleshooting in one minute"
+CURRENT_RELEASES = 12
+OLD_RELEASE_PRIOR = 0.35
+_VERSION_IN_HEADING = re.compile(r"\bv(\d+)\.(\d+)\.(\d+)\b")
+
+
+_PART_SUFFIX = re.compile(r" \(\d+/\d+\)$")
+
+
+def _chapter(heading: str) -> str:
+    """A section's chapter: its heading's second part (the first is the
+    Handbook's own title), without a long chapter's "(2/8)" part number."""
+    parts = heading.split(" › ")
+    return _PART_SUFFIX.sub("", parts[1]) if len(parts) > 1 else ""
+
+
+def mark_release_history(sections: list["Section"]) -> int:
+    """Set ``prior`` on the Handbook's old release sections, in place; returns
+    how many were marked. A section's chapter is its heading's second part
+    (the first is the Handbook's own title). Never raises."""
+    try:
+        chapters: list[str] = []
+        seen: set[str] = set()
+        for sec in sections:
+            chapter = _chapter(sec.heading)
+            if chapter and chapter not in seen:
+                seen.add(chapter)
+                chapters.append(chapter)
+        base = next((c for c in chapters if c.split(" (")[0] == HISTORY_STARTS_AFTER), "")
+        if not base:
+            return 0
+        history = chapters[chapters.index(base) + 1:]
+
+        def version(chapter: str) -> tuple[int, ...]:
+            m = _VERSION_IN_HEADING.search(chapter)
+            return tuple(int(g) for g in m.groups()) if m else ()
+
+        versions = sorted({version(c) for c in history if version(c)}, reverse=True)
+        current = set(versions[:CURRENT_RELEASES])
+        old = {c for c in history if version(c) not in current}
+        marked = 0
+        for sec in sections:
+            chapter = _chapter(sec.heading)
+            if chapter in old:
+                sec.prior = OLD_RELEASE_PRIOR
+                marked += 1
+        return marked
+    except Exception:  # noqa: BLE001 — a weighting fault leaves every section equal
+        return 0
 
 
 def is_definition_question(query: str) -> bool:
@@ -157,6 +220,9 @@ class Section:
     #: the body says "the installer").
     tf: dict[str, int] = field(default_factory=dict)
     length: int = 0
+    #: v1.455.0: this section's own weight (an old Handbook release section
+    #: is below 1; see :func:`mark_release_history`).
+    prior: float = 1.0
 
     def __post_init__(self) -> None:
         words = tokens(self.text) + tokens(self.heading) * 2
@@ -450,6 +516,8 @@ class GuideIndex:
                 self.missing.append({"slug": slug, "file": Path(rel).name, "error": str(exc)})
                 continue
             secs = split_markdown(slug, title, text)
+            if slug == "handbook":
+                mark_release_history(secs)
             self.docs.extend(secs)
             self.loaded.append(
                 {"slug": slug, "file": Path(rel).name, "title": title,
@@ -505,7 +573,7 @@ class GuideIndex:
             if phrases:
                 flat = " ".join(tokens(s.heading) + tokens(s.text))
                 score += _PHRASE_BONUS * sum(1 for p in phrases if p in flat)
-            score *= _DOC_PRIOR.get(s.doc, 1.0)
+            score *= _DOC_PRIOR.get(s.doc, 1.0) * s.prior
             if defining and s.doc == "vocabulary":
                 score *= _DEFINITION_BONUS
             scored.append((score, s))

@@ -165,6 +165,21 @@ SERVICE_KEY_WORDS = (
     " It needs a key: the user pastes it on the secure card below (never in the chat); calls carry it "
     "as a bearer token once it is saved"
 )
+#: v1.455.0 (readiness Wave H item 31): how calls carry the key, by kind.
+SERVICE_KEY_HOW = {
+    "bearer": "as a bearer token",
+    "header": "in the {header} header",
+    "basic": "as the password of a sign-in as {user}",
+}
+
+
+def service_key_words(kind: str, header: str = "", user: str = "") -> str:
+    """The added-line's key sentence for one way of sending the key."""
+    how = SERVICE_KEY_HOW.get(kind, SERVICE_KEY_HOW["bearer"]).format(header=header, user=user)
+    return (
+        " It needs a key: the user pastes it on the secure card below (never in the chat); calls carry it "
+        f"{how} once it is saved"
+    )
 
 #: v1.448.0: a few shapes that are PLACEHOLDERS in a pasted config, never
 #: the value ("<your token>", "YOUR_TOKEN_HERE", "xxx", "...", "changeme").
@@ -1133,8 +1148,11 @@ class WebServiceAddTool(R._RecordTool):
         "Jarvis can call it with rest_call (\"hook up our pricing API at https://api.example.com/v1\"): "
         "`name` what to call it, `address` its base address (http:// or https://), `description` what "
         "it is for. If it takes a key or bearer token, set `needs_key` true — NEVER pass the key: the "
-        "user pastes it on a secure card. An address on the user's own network is fine. The user "
-        "approves on a card that says where it points; Undo removes it."
+        "user pastes it on a secure card. How calls carry the key: `key_in` \"bearer\" (the default, "
+        "Authorization: Bearer), \"header\" (set `header` to the header's name, e.g. X-API-Key) or "
+        "\"basic\" (a username and password sign-in: set `username`; the password is the key on the card). "
+        "An address on the user's own network is fine. The user approves on a card that says where it "
+        "points; Undo removes it."
     )
     input_schema = {
         "type": "object",
@@ -1143,20 +1161,40 @@ class WebServiceAddTool(R._RecordTool):
             "address": {"type": "string", "description": "e.g. https://api.example.com/v1"},
             "description": {"type": "string"},
             "needs_key": {"type": "boolean"},
+            "key_in": {"type": "string", "enum": ["bearer", "header", "basic"]},
+            "header": {"type": "string", "description": "the header's name when key_in is header"},
+            "username": {"type": "string", "description": "the sign-in's username when key_in is basic"},
         },
         "required": ["name", "address"],
     }
-    _DECLARED = frozenset({"name", "address", "description", "needs_key"})
+    _DECLARED = frozenset({"name", "address", "description", "needs_key", "key_in", "header", "username"})
 
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
         drop = set(_secret_args(args, self._DECLARED)) | set(_KEY_ARGS)
         out = {k: v for k, v in (args or {}).items() if k not in drop}
         # A2 review: an address with ``?key=…`` is refused — and its ledger
         # row masks the key (``mask`` knows ``api_key=``, not ``key=``).
-        for k in ("address", "description", "name"):
+        for k in ("address", "description", "name", "header", "username"):
             if isinstance(out.get(k), str):
                 out[k] = _mask_text(out[k])
         return R.masked_args(out)
+
+    @staticmethod
+    def _auth(args: dict[str, Any]) -> tuple[str, str, str, str]:
+        """``(kind, header, username, problem)`` for how calls carry the key
+        (v1.455.0). Only meaningful with ``needs_key``; without a key nothing
+        travels, so the way is not checked."""
+        from ..integrations.builtin import auth_problem
+
+        a = args or {}
+        kind = str(a.get("key_in") or "bearer").strip().lower()
+        header = " ".join(str(a.get("header") or "").split())
+        user = str(a.get("username") or "").strip()
+        if a.get("needs_key") is not True:
+            return "bearer", "", "", ""
+        if _mask_text(header) != header or _mask_text(user) != user:
+            return kind, header, user, SERVICE_WORDS_LOOK_SECRET
+        return kind, header, user, auth_problem(kind, header, user)
 
     def _target(self, args: dict[str, Any]) -> str:
         return ""
@@ -1190,6 +1228,9 @@ class WebServiceAddTool(R._RecordTool):
         other = _address_in_use(self.platform, address)
         if other:
             return "", shown, address, SERVICE_SAME_ADDRESS.format(other=other)
+        _kind, _header, _user, auth = self._auth(args)
+        if auth:
+            return "", shown, address, auth
         return iid, shown, address, ""
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
@@ -1217,6 +1258,7 @@ class WebServiceAddTool(R._RecordTool):
         if problem:
             return ToolResult(ok=False, error=problem)
         keyed = (args or {}).get("needs_key") is True
+        kind, header, user, _problem = self._auth(args)
         description = " ".join(str((args or {}).get("description") or "").split())[:300]
         key_name = f"integration_{iid}_token" if keyed else ""
         private = bool(private_host(address))
@@ -1230,6 +1272,9 @@ class WebServiceAddTool(R._RecordTool):
                 auth_secret=key_name,
                 allow_internal=private,
                 persist=persist_for(self.platform),
+                auth_kind=kind,
+                auth_header=header,
+                auth_user=user,
             )
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
@@ -1242,7 +1287,7 @@ class WebServiceAddTool(R._RecordTool):
             data["secret_requests"] = [
                 {
                     "name": f"{WEB_SERVICE_SECRET}{iid}",
-                    "label": f"{shown}'s key",
+                    "label": f"{shown}'s password" if kind == "basic" else f"{shown}'s key",
                     "help": "",
                     "why": f"to call the web service {shown}",
                     "request_id": new_id("seq"),
@@ -1254,7 +1299,10 @@ class WebServiceAddTool(R._RecordTool):
             data["record_change"] = card
         return ToolResult(
             ok=True,
-            output=SERVICE_ADDED.format(name=shown, address=address, where=where, key=SERVICE_KEY_WORDS if keyed else ""),
+            output=SERVICE_ADDED.format(
+                name=shown, address=address, where=where,
+                key=service_key_words(kind, header, user) if keyed else "",
+            ),
             data=data,
         )
 

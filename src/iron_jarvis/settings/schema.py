@@ -682,26 +682,26 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("night_window_start", "Night tasks start at", "automation", "string",
       "Tasks in Coding sessions › Tonight start from this time (24-hour, like 23:00), each on its own "
       "branch. A task not started before the window ends waits for the next night.",
-      tier="ask", section="Night shift", check=_night_time, placeholder="23:00",
+      tier="ask", section="Night shift", advanced=True, check=_night_time, placeholder="23:00",
       aliases=("night window", "night shift start", "tonight starts")),
     S("night_window_end", "Night tasks stop starting at", "automation", "string",
       "No new night task starts after this time (24-hour, like 07:00). A task already running "
       "finishes under its own time limit; one waiting for its account's limit to reset is stopped.",
-      tier="ask", section="Night shift", check=_night_time, placeholder="07:00",
+      tier="ask", section="Night shift", advanced=True, check=_night_time, placeholder="07:00",
       aliases=("night window end", "night shift end")),
     S("night_max_at_once", "Night tasks at once", "automation", "number",
       "How many night tasks may run at the same time. Never two in the same folder.",
-      tier="ask", section="Night shift", check=_range(1, 8),
+      tier="ask", section="Night shift", advanced=True, check=_range(1, 8),
       aliases=("night tasks at once", "night shift at once")),
     S("night_task_minutes", "Time limit per night task (minutes)", "automation", "number",
       "A night task stops after this many minutes and says what it got done.",
-      tier="ask", section="Night shift", check=_range(5, 1440),
+      tier="ask", section="Night shift", advanced=True, check=_range(5, 1440),
       aliases=("night task limit", "night time limit")),
     S("night_card_wait_minutes", "Wait for an answer at night (minutes)", "automation", "number",
       "When a night task needs your OK, it waits this long (your phone gets the question, if a phone "
       "channel is set up). Then that one step is skipped, the task carries on with the rest, and the "
       "step is listed as needing you.",
-      tier="allow", section="Night shift", check=_range(1, 240),
+      tier="allow", section="Night shift", advanced=True, check=_range(1, 240),
       aliases=("night card wait", "night question wait")),
     # v1.350.0: an agent's plan, shown before any step runs. Turning it OFF
     # from chat asks every time (a model must not quietly drop the check).
@@ -914,7 +914,7 @@ SETTINGS: tuple[SettingDef, ...] = (
     # (daemon/app._event_prune_loop), so no restart.
     S("event_retention_days", "Keep activity history (days)", "permissions", "number",
       "How long the activity log and ledger are kept. Older entries are removed once a day. "
-      "0 = forever.", tier="ask-floor",
+      "0 = forever.", tier="ask-floor", advanced=True,
       check=_range(0, 36500)),
     # ---------------------------------------------------------------- system
     S("git_native", "Git-native workspaces", "system", "bool",

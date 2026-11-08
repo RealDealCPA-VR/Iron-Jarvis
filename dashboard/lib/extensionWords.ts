@@ -196,3 +196,23 @@ export function humanFieldLabel(raw: string): string {
   const joined = out.join(" ");
   return joined.charAt(0).toUpperCase() + joined.slice(1);
 }
+
+/** v1.455.0 (readiness Wave H, the owner's decision on item 33): a connected
+ *  app stays OFF in every chat until it is turned on there — a client's data
+ *  stays out of a chat unless asked — and the card says that naming the app
+ *  in a message is enough. TRUE because the chat page's lane ask-arms a
+ *  named, connected app's tools for that one message
+ *  (`daemon/chat_turn.named_app_ask_tools`, v1.354.0): visible to the model,
+ *  every use carded. Not in a Local only or low-trust chat, where the switch
+ *  is the one door — and so never for Microsoft 365, whose tools answer only
+ *  in a Local only chat (`connectors/ms365`): its card keeps the switch line. */
+export const CHAT_HINT_NAMED =
+  "It's off in chats until you turn it on in Tools › Connections, or name it in your message (Jarvis asks before each use).";
+export const CHAT_HINT_SWITCH_ONLY = "Turn it on in a chat with Tools › Connections";
+/** The apps whose tools naming never arms (see above). */
+export const NAMING_DOES_NOT_ARM: ReadonlySet<string> = new Set(["microsoft_365"]);
+
+/** The connected card's chat line for app `id`. */
+export function chatHintWords(id: string): string {
+  return NAMING_DOES_NOT_ARM.has(id) ? CHAT_HINT_SWITCH_ONLY : CHAT_HINT_NAMED;
+}
