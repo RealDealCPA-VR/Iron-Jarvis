@@ -143,6 +143,17 @@ def _replies_running(d) -> dict[str, int]:
     return out
 
 
+def _background_running(d) -> dict[str, int]:
+    """``{"workflows": n, "media": n}`` (v1.455.0, Wave F item 11). Never
+    raises."""
+    try:
+        from ..background_counts import background_running
+
+        return background_running(d)
+    except Exception:  # noqa: BLE001 — /health must never fail
+        return {"workflows": 0, "media": 0}
+
+
 def _with_grok_sign_in(rows: "list[dict[str, Any]]") -> "list[dict[str, Any]]":
     """v1.420.0 (C6.8): the Grok CLI row carries ``installed`` / ``signed_in``
     / ``sign_in_fix`` like the Claude Code and Codex rows, so Settings ›
@@ -416,6 +427,11 @@ def register(app: FastAPI, d) -> None:
             # "Idle — nothing running". Counts only: /health is polled every
             # 5 s by every window, and an equal answer keeps the held object.
             "replies": _replies_running(d),
+            # v1.455.0 (Wave F, item 11): workflow runs and media jobs working
+            # now — {"workflows": n, "media": n}, in memory only
+            # (daemon/background_counts.py). Running now lists them; the orb
+            # reads this so it never says "Idle" beside that list.
+            "background": _background_running(d),
         }
 
     @app.get("/system/activity")

@@ -101,6 +101,20 @@ export function repliesWaiting(health: Health | null | undefined): number {
   return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
 }
 
+/**
+ * v1.455.0 (Wave F, item 11): workflow runs and media jobs working right now
+ * (/health's `background`, in memory on the daemon). Running now lists a
+ * tool-only workflow run and a picture being made; the orb said "Idle —
+ * nothing running" beside that list. Read defensively: an older Iron Jarvis
+ * (no field) counts 0, so the orb behaves exactly as before.
+ */
+export function backgroundRunning(health: Health | null | undefined): number {
+  const b = health?.background;
+  if (!b || typeof b !== "object") return 0;
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+  return n(b.workflows) + n(b.media);
+}
+
 /** The /events types the orb reads (v1.311.0, wave 3): reviews and
  *  proposals for ALERT, session/agent lifecycle for THINKING. The orb is in
  *  the layout on every page; any other frame cost it a render for nothing.
@@ -170,6 +184,7 @@ export function MoodOrb({
   const daemon = useDaemon();
   const replies = daemon.online ? repliesRunning(daemon.health) : 0;
   const waiting = daemon.online ? repliesWaiting(daemon.health) : 0;
+  const background = daemon.online ? backgroundRunning(daemon.health) : 0;
   // The START frames of runs the daemon said had ended when asked after a
   // reconnect (see above). Keyed by the frame, not the session: a continue
   // re-publishes session.created under the SAME session id, and that new
@@ -245,11 +260,13 @@ export function MoodOrb({
     // session is in flight beside them) — nothing is working, the app is
     // waiting for you. A session in flight may still be working, so it keeps
     // the orb thinking.
-    if (inFlight.length === 0 && replies > 0 && waiting >= replies) return "waiting";
-    if (inFlight.length > 0 || replies > 0) return "thinking";
+    // v1.455.0 (Wave F, item 11): a workflow run or a media job working is
+    // something running too (never "waiting": it needs nobody).
+    if (inFlight.length === 0 && background === 0 && replies > 0 && waiting >= replies) return "waiting";
+    if (inFlight.length > 0 || replies > 0 || background > 0) return "thinking";
 
     return "idle";
-  }, [events, inFlight, replies, waiting]);
+  }, [events, inFlight, replies, waiting, background]);
 
   const color = COLOR[mood];
   const thinking = mood === "thinking";

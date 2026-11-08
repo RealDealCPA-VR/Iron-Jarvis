@@ -152,6 +152,25 @@ it("the one sentence says what the forms promise", () => {
   expect(UNATTENDED_ASK_NOTE).toBe(SENTENCE);
 });
 
+describe("v1.455.0 (0j.4 item 26): Schedules' Add says why it is greyed out", () => {
+  it("names the first thing it waits for, under the press and as its title; nothing once it can go", async () => {
+    seedSchedules();
+    render(<SchedulesPage />);
+    const task = (await screen.findByLabelText("Task text")) as HTMLTextAreaElement;
+    const form = task.closest("form") as HTMLFormElement;
+    const add = within(form).getByRole("button", { name: /Add schedule/ }) as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+    const why = within(form).getByTestId("schedule-add-why");
+    expect(why.textContent).toBe("Write what the task should do first.");
+    expect(add.getAttribute("title")).toBe(why.textContent);
+    expect(add.getAttribute("aria-describedby")).toBe(why.id);
+    fireEvent.change(task, { target: { value: "Summarise yesterday's email" } });
+    await waitFor(() => expect(add.disabled).toBe(false));
+    expect(within(form).queryByTestId("schedule-add-why")).toBeNull();
+    expect(add.getAttribute("title")).toBeNull();
+  });
+});
+
 describe("Schedules: Add schedule", () => {
   it("shows the sentence in the add form, under its button", async () => {
     seedSchedules();

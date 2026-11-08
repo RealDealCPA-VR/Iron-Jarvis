@@ -46,6 +46,7 @@ import type { GrantOffer, StandingGrant } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
 import { Markdown } from "@/components/Markdown";
 import { PageGrid } from "@/components/PageGrid";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 // v1.355.0 (G65): the five-minute sentence every unattended-work form shows.
 import { UnattendedAskNote } from "@/components/UnattendedAskNote";
 // v1.446.0 (review item 23): the app-wide Emergency stop store — this page
@@ -483,7 +484,12 @@ export default function AutonomyPage() {
       )}
       {status.error && !offline && (
         <Reveal>
-          <ErrorNote>{status.error.message}</ErrorNote>
+          <LoadFailedLine
+            thing="Autonomy"
+            error={status.error}
+            onRetry={status.reload}
+            testId="autonomy-status-failed"
+          />
         </Reveal>
       )}
 
@@ -575,7 +581,12 @@ export default function AutonomyPage() {
             {proposals.loading && !proposals.data ? (
               <SkeletonRows rows={3} />
             ) : proposals.error && proposals.error.status !== 0 ? (
-              <ErrorNote>{proposals.error.message}</ErrorNote>
+              <LoadFailedLine
+                thing="Proposals"
+                error={proposals.error}
+                onRetry={proposals.reload}
+                testId="autonomy-proposals-failed"
+              />
             ) : pending.length === 0 ? (
               <Empty icon={<CircleCheck size={24} />}>
                 Nothing awaiting your call. Proposals Iron Jarvis wants to act on
@@ -654,7 +665,12 @@ export default function AutonomyPage() {
             {briefing.loading && !briefing.data ? (
               <SkeletonRows rows={3} />
             ) : briefing.error && briefing.error.status !== 0 ? (
-              <ErrorNote>{briefing.error.message}</ErrorNote>
+              <LoadFailedLine
+                thing="The briefing"
+                error={briefing.error}
+                onRetry={briefing.reload}
+                testId="autonomy-briefing-failed"
+              />
             ) : briefing.data ? (
               // v1.314.0: the briefing is a note, so it reads like one — the ONE
               // markdown renderer (components/Markdown.tsx), not a monospace
@@ -716,7 +732,12 @@ export default function AutonomyPage() {
           {goals.loading && !goals.data ? (
             <SkeletonRows rows={4} />
           ) : goals.error && goals.error.status !== 0 ? (
-            <ErrorNote>{goals.error.message}</ErrorNote>
+            <LoadFailedLine
+              thing="Simple goals"
+              error={goals.error}
+              onRetry={goals.reload}
+              testId="autonomy-goals-failed"
+            />
           ) : goalList.length === 0 ? (
             // v1.316.0: names the form instead of pointing — it said "Add one
             // above" while the form sat below it. One quiet line (like Goals
@@ -931,7 +952,12 @@ function GoalsDigest() {
           {digest.loading && !digest.data ? (
             <SkeletonRows rows={2} />
           ) : digest.error && digest.error.status !== 0 ? (
-            <ErrorNote>{digest.error.message}</ErrorNote>
+            <LoadFailedLine
+              thing="The last 24 hours"
+              error={digest.error}
+              onRetry={digest.reload}
+              testId="autonomy-digest-failed"
+            />
           ) : rows.length === 0 ? (
             <p className="text-sm text-zinc-500">Nothing ran in the last 24 hours.</p>
           ) : (
@@ -1227,7 +1253,12 @@ function GoalsSection() {
       {goals.loading && !goals.data ? (
         <SkeletonRows rows={3} />
       ) : goals.error && goals.error.status !== 0 ? (
-        <ErrorNote>{goals.error.message}</ErrorNote>
+        <LoadFailedLine
+          thing="Goals from Chat"
+          error={goals.error}
+          onRetry={goals.reload}
+          testId="autonomy-chat-goals-failed"
+        />
       ) : list.length === 0 ? (
         // One quiet line — no CTA to a creation form that doesn't exist.
         // v1.316.0: and a pointer to the OTHER kind — the New goal form writes

@@ -337,6 +337,59 @@ describe("item 26 — the home counts REQUIRED helpers and folds the optional on
   });
 });
 
+/* ===================================== v1.455.0 (Wave F, item 12) === */
+
+describe("v1.455.0 item 12 — the Next: line shows after the first real answer", () => {
+  it("a NEW empty chat re-reads GET /onboarding, so a step the first answer opened is said", async () => {
+    // The first visit: the demo answers, the checklist still says connect.
+    H.getResponses["/chat/threads"] = {
+      threads: [{ id: "t1", title: "First question", updated_at: "2026-11-08T10:00:00", message_count: 2 }],
+    };
+    H.getResponses["/chat/threads/t1"] = {
+      id: "t1",
+      title: "First question",
+      messages: [
+        { role: "user", content: "What can you do?" },
+        { role: "assistant", content: "The first real answer." },
+      ],
+    };
+    render(<ChatPage />);
+    await screen.findByTestId("home-machine");
+    const firstReads = H.gets.filter((p) => p === "/onboarding").length;
+    expect(firstReads).toBe(1);
+    expect(screen.queryByTestId("home-next-step")).toBeNull();
+
+    // A conversation happens (the chat is opened), and a real model answered:
+    // the daemon's checklist now has its next step.
+    cleanup();
+    window.history.replaceState({}, "", "/chat?thread=t1");
+    setHealth(CLAUDE_SIGNED_IN, "anthropic");
+    setOnboarding({
+      first_run: false,
+      next_step: { key: "work_with_document", title: "Work with a document" },
+      model: { default_provider: "anthropic", default_model: "x", is_mock: false, usable: [] },
+    });
+    H.gets = [];
+    render(<ChatPage />);
+    await screen.findByText("The first real answer.");
+    const beforeNew = H.gets.filter((p) => p === "/onboarding").length;
+    // Back to an empty chat: it asks again and the line is drawn.
+    fireEvent.click(screen.getByTestId("chat-new-chat-phone"));
+    await waitFor(() =>
+      expect(H.gets.filter((p) => p === "/onboarding").length).toBe(beforeNew + 1),
+    );
+    const next = await screen.findByTestId("home-next-step");
+    expect(next.textContent).toMatch(/^Next: Work with a document/);
+  });
+
+  it("CONTROL: an empty chat that stays empty asks once (never polled)", async () => {
+    render(<ChatPage />);
+    await screen.findByTestId("home-machine");
+    await new Promise((r) => setTimeout(r, 80));
+    expect(H.gets.filter((p) => p === "/onboarding")).toHaveLength(1);
+  });
+});
+
 /* ================================================================ item 27 === */
 
 describe("item 27 — on a phone, New chat is one tap in the top bar", () => {

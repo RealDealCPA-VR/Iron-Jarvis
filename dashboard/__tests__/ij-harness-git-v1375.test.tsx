@@ -502,6 +502,27 @@ describe("the Branch view", () => {
     expect(screen.queryByTestId("branch-keep")).toBeNull();
   });
 
+  // Review (v1.455.0, Wave F item 14): the next-step box's "Keep these
+  // changes" arrives as a branchPress; the Branch view makes it only when its
+  // OWN fresh read says there is work to bring back (the box's facts can be a
+  // read older), never a merge the daemon would answer "Nothing to merge".
+  it("review: the box's Keep press runs Keep when there is work to bring back", async () => {
+    api.posts["POST /build/sessions/s1/git/commit"] = { committed: true, sha: "9f8e7d6c5b4a", subject: "Add the cart" };
+    api.posts["POST /build/sessions/s1/git/merge"] = { merged: true, into: "main", where: REPO, commit: "aa11" };
+    renderBranch({}, { branchPress: { kind: "keep", n: 1 } });
+    await waitFor(() => expect(posted("/build/sessions/s1/git/merge")).toHaveLength(1));
+    expect(posted("/build/sessions/s1/git/commit")).toHaveLength(1);
+  });
+
+  it("review: the box's Keep press does nothing when the Branch view's read has nothing to keep", async () => {
+    api.gets["/build/sessions/s1/git"] = status({ ahead: 0, in_base: true, uncommitted: 0 });
+    renderBranch({}, { branchPress: { kind: "keep", n: 1 } });
+    await screen.findByText(`0 commits on ${BRANCH} · nothing waiting to commit · 1 not pushed to origin`);
+    await act(async () => {});
+    expect(posted("/build/sessions/s1/git/merge")).toEqual([]);
+    expect(posted("/build/sessions/s1/git/commit")).toEqual([]);
+  });
+
   it("a refused merge says the daemon's words; nothing else happens", async () => {
     api.posts["POST /build/sessions/s1/git/merge"] = new api.ApiError("x", 409, false, {
       detail: "Merging would conflict in app.py. Nothing was changed: bring main's changes into this branch and settle them first, then merge.",

@@ -9,8 +9,9 @@ Wave D, item 39 of docs/PRODUCT-READINESS-RESULTS.md 0h.5 (ease item 68):
   the app is still running says it keeps working meanwhile.
 * The window-recovered notice printed Chromium's reason code ("The window
   stopped responding (oom) …"); it says "The window ran out of memory and was
-  reloaded. Nothing was lost." for an out-of-memory reload and what is kept
-  for any other crash. The code goes to renderer.log.
+  reloaded." for an out-of-memory reload and what is kept after any reload
+  (v1.455.0: never "Nothing was lost" — a draft is saved on pagehide, which
+  an out-of-memory renderer never runs). The code goes to renderer.log.
 * The startup dialog printed the raw gate error ("Details: …"); it says the
   cause in one sentence and offers Open logs, and the raw text is written to
   the desktop log first (pinned in test_desktop_reliability_v1249).
@@ -104,12 +105,17 @@ def _recovered(reasons: list[str], tmp_path: Path) -> list[str]:
 def test_the_recovered_notice_never_names_chromiums_reason(tmp_path):
     reasons = ["oom", "crashed", "abnormal-exit", "launch-failed", "integrity-failure", "unresponsive"]
     words = _recovered(reasons, tmp_path)
-    assert words[0] == "The window ran out of memory and was reloaded. Nothing was lost."
+    # v1.455.0 (Wave F, item 17, moved on purpose): no reload promises
+    # "Nothing was lost". The chat saves a half-typed message on pagehide,
+    # which a renderer that ran out of memory never runs, and the desktop
+    # cannot know whether a draft was saved — so every line says what is kept.
+    assert words[0] == (
+        "The window ran out of memory and was reloaded. Your chats and settings are kept; "
+        "anything you were typing may need typing again."
+    )
     for reason, line in zip(reasons, words):
         assert f"({reason})" not in line and reason not in line.lower().split(), (reason, line)
-    # Only the out-of-memory reload promises nothing was lost; a crash can
-    # drop a half-typed message, so the others say what is kept.
-    for line in words[1:]:
+    for line in words:
         assert "Nothing was lost" not in line, line
         assert "chats and settings are kept" in line, line
 

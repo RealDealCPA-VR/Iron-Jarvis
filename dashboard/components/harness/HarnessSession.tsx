@@ -906,6 +906,9 @@ export function HarnessSession({
   const [branchError, setBranchError] = useState<string | null>(null);
   const nextGenRef = useRef(0);
   const busy = sending || stream.streaming;
+  // v1.455.0 (Wave F, item 13): the card's redirect reads these at press time.
+  const busyNowRef = useRef(busy);
+  busyNowRef.current = busy;
   // v1.412.0 review: once the user puts anything into this session — words,
   // a file, an "@" file, a skill, a message — it is never cleaned up as an
   // abandoned New session (lib/emptySessions; IjHarnessView).
@@ -921,7 +924,7 @@ export function HarnessSession({
   // v1.406.0 part 4: the box's Commit / "Open a pull request" open the
   // Branch view's own press (its form waits for the user) — a counter, so a
   // second press opens it again.
-  const [branchPress, setBranchPress] = useState<{ kind: "commit" | "pr"; n: number } | null>(null);
+  const [branchPress, setBranchPress] = useState<{ kind: "commit" | "pr" | "keep"; n: number } | null>(null);
   const branchSeq = useRef(0);
   // The Branch view changed the branch (a commit, a push, a pull request).
   const [branchReads, setBranchReads] = useState(0);
@@ -1872,6 +1875,9 @@ export function HarnessSession({
     });
   }
 
+  const sendNowRef = useRef(send);
+  sendNowRef.current = send;
+
   /** v1.379.0: the session's own "/" commands — picked from the menu or typed
    *  ("/plan fix the login" plans first and sends the words). */
   async function runCommand(id: CommandId, args: string) {
@@ -1939,6 +1945,39 @@ export function HarnessSession({
             : String(e),
       );
     }
+  }
+
+  /** v1.455.0 (Wave F, item 13): the card's "No, tell it what to do instead"
+   *  — the card has already declined the step; the words go to the reply
+   *  that is still running as a note (the steer the box sends), or, when the
+   *  reply ended before they landed, as the next message. The chat page's
+   *  `redirectAfterDeny`, in this session's own terms. Read through refs:
+   *  the card holds the closure from its last render. */
+  async function redirectAfterDeny(words: string): Promise<void> {
+    const note = words.trim();
+    if (!note) return;
+    const id = turnRef.current;
+    if (id && busyNowRef.current) {
+      try {
+        await post(`/chat/turns/${encodeURIComponent(id)}/steer`, { text: note });
+        writeSentSteers(threadId, [...readSentSteers(threadId), { turnId: id, text: note }]);
+        setSteers([...steerRef.current, note]);
+        if (posRef.current) keepRunning(id, posRef.current);
+        return;
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 404)) {
+          setInput(note);
+          setError(e instanceof Error ? e.message : String(e));
+          return;
+        }
+        // The reply ended before the note: send it as the next message.
+      }
+    }
+    if (busyNowRef.current) {
+      setInput(note);
+      return;
+    }
+    await sendNowRef.current({ text: note });
   }
 
   /** Ctrl+Enter while it works: the box waits to be sent after the reply —
@@ -2152,8 +2191,11 @@ export function HarnessSession({
       const words = a.text;
       setInput((cur) => withNextStep(cur, words));
       boxRef.current?.focus({ preventScroll: true });
-    } else if (a.kind === "commit" || a.kind === "open_pr") {
-      setBranchPress((p) => ({ kind: a.kind === "commit" ? "commit" : "pr", n: (p?.n ?? 0) + 1 }));
+    } else if (a.kind === "commit" || a.kind === "open_pr" || a.kind === "keep") {
+      // v1.455.0 (Wave F, item 14): "Keep these changes" is the Branch
+      // view's own one press, made there.
+      const kind = a.kind === "commit" ? "commit" : a.kind === "keep" ? "keep" : "pr";
+      setBranchPress((p) => ({ kind, n: (p?.n ?? 0) + 1 }));
     }
   }
 
@@ -3543,6 +3585,9 @@ export function HarnessSession({
               onAnswerQuestion={answerAsk}
               onStop={() => void stop()}
               returnFocus={() => boxRef.current?.focus({ preventScroll: true })}
+              // v1.455.0 (Wave F, item 13): "No, tell it what to do instead",
+              // as the chat and Build › Code have it.
+              onRedirect={redirectAfterDeny}
             />
           ) : null}
           {asking ? (

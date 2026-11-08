@@ -12,7 +12,7 @@
  * with the transport mocked (cooldown-confinement-v1232's).
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const api = vi.hoisted(() => {
   class FakeApiError extends Error {
@@ -151,6 +151,7 @@ import fixture from "./fixtures/receipt-seams-v13520.json";
 import SessionDetailPage from "@/app/sessions/[id]/page";
 import { APPROVAL_LABELS, undoLine } from "@/lib/approvalWords";
 import type { SessionView } from "@/lib/types";
+import { RUN_REDIRECT_KEPT } from "@/lib/askWhy";
 
 afterEach(() => {
   cleanup();
@@ -192,6 +193,35 @@ describe("sessions/[id] — a paused run's ask", () => {
     expect(names).toEqual([APPROVAL_LABELS.once, APPROVAL_LABELS.run, APPROVAL_LABELS.deny]);
     expect(card.textContent).not.toMatch(/conversation/);
     expect(within(card).getByTestId("approval-undo").textContent).toBe(undoLine(true));
+  });
+
+  it("v1.455.0 (Wave F, item 13): a row with `why` draws the short card; its redirect declines and keeps the words", async () => {
+    renderPaused({ ...fixture.asks.waiting_on, why: "Saving a file changes your folder.", asker: "model" });
+    await act(async () => {});
+    const card = within(screen.getByTestId("session-approval")).getByTestId("chat-approval-card");
+    expect(within(card).getByTestId("approval-why").textContent).toMatch(/Saving a file changes your folder\./);
+    fireEvent.click(within(card).getByTestId("approval-redirect"));
+    fireEvent.change(within(card).getByTestId("approval-redirect-input"), {
+      target: { value: "Write it to the Drafts folder instead" },
+    });
+    fireEvent.click(within(card).getByTestId("approval-redirect-send"));
+    await waitFor(() => expect(screen.getByTestId("session-redirect-note").textContent).toBe(RUN_REDIRECT_KEPT));
+    const id = fixture.asks.waiting_on.approval_id;
+    expect(api.posts.filter((p) => p.path === `/chat/approvals/${id}`).map((p) => p.body)).toEqual([
+      { decision: "deny" },
+    ]);
+    // A running agent run takes no note: nothing was continued, the words wait.
+    expect(api.posts.some((p) => p.path.endsWith("/continue"))).toBe(false);
+    expect((screen.getByPlaceholderText(/Send a follow-up/) as HTMLInputElement).value).toBe(
+      "Write it to the Drafts folder instead",
+    );
+  });
+
+  it("v1.455.0 CONTROL: a row with no `why` keeps the long card (no redirect)", async () => {
+    renderPaused(fixture.asks.waiting_on);
+    await act(async () => {});
+    const card = within(screen.getByTestId("session-approval")).getByTestId("chat-approval-card");
+    expect(within(card).queryByTestId("approval-redirect")).toBeNull();
   });
 
   it("a row from an older daemon (no verdict) shows no undo line", async () => {

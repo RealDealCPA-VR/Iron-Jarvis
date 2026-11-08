@@ -76,6 +76,7 @@ import {
   FIX_TESTS_TEXT,
   MAX_NEXT_ACTIONS,
   NEXT_KEEP_GOING_TEXT,
+  NEXT_KEEP_LABEL,
   YES_TEXT,
   chatNextStep,
   chatReplyFacts,
@@ -85,6 +86,7 @@ import {
   type GitFacts,
 } from "@/lib/nextStep";
 import { KEEP_GOING_TEXT } from "@/lib/buildSessions";
+import { KEEP_CHANGES_LABEL } from "@/lib/buildGit";
 
 const fx = (name: string) =>
   JSON.parse(readFileSync(join(__dirname, "fixtures", name), "utf8").replace(/\r\n/g, "\n"));
@@ -123,8 +125,10 @@ describe("the table: a reply's record → the recap and its buttons", () => {
       name: "a team-reviewed reply (the daemon's finish record) on a branch with work not committed",
       reply: line({ documents: ["a.py", "b.py"], finish: TEAM_FINISH }),
       git: GIT_DIRTY,
-      recap: "Changed 2 files, tests pass and the reviewer approved it. The changes on ij/cart-3f2a are not committed yet.",
-      actions: ["commit"],
+      // v1.455.0 (Wave F, item 14, moved on purpose): a branch is the
+      // separate copy of the folder; the box offers "Keep these changes".
+      recap: "Changed 2 files, tests pass and the reviewer approved it. The changes are in a separate copy of your folder.",
+      actions: ["keep"],
     },
     {
       name: "tests failing → Fix the failing tests",
@@ -179,11 +183,27 @@ describe("the table: a reply's record → the recap and its buttons", () => {
       actions: ["fill_offer"],
     },
     {
-      name: "committed, no pull request → Open a pull request",
+      // v1.455.0 (Wave F, item 14, moved on purpose): Commit / Open a pull
+      // request stay in the Branch view; the box offers Keep.
+      name: "committed, not yet in the base → Keep these changes",
       reply: line(),
       git: GIT_COMMITTED,
-      recap: "Changed 1 file. ij/cart-3f2a is committed; there is no pull request yet.",
-      actions: ["open_pr"],
+      recap: "Changed 1 file. The changes are in a separate copy of your folder.",
+      actions: ["keep"],
+    },
+    {
+      name: "v1.455.0: committed and already in the base → nothing to keep",
+      reply: line(),
+      git: { ...GIT_COMMITTED, inBase: true },
+      recap: "Changed 1 file.",
+      actions: [],
+    },
+    {
+      name: "v1.455.0: the base branch is gone → no Keep (the view would refuse it)",
+      reply: line(),
+      git: { ...GIT_DIRTY, baseExists: false },
+      recap: "Changed 1 file.",
+      actions: [],
     },
     {
       name: "a pull request exists → nothing more on the branch",
@@ -574,48 +594,40 @@ describe("a coding session's next-step box", () => {
     expect(screen.queryByTestId("harness-keep-going")).toBeNull();
   });
 
-  it("a Commit press is made ONCE: going to another tab and back does not draft it again", async () => {
+  // v1.455.0 (Wave F, item 14, moved on purpose): the box's branch press is
+  // "Keep these changes" (the separate copy's one way back), never Commit.
+  it("Keep these changes is the Branch view's own press: commit, then merge, made ONCE", async () => {
     const git = { branch: "ij/cart-3f2a", base: "main", base_commit: "abc", worktree: "C:\\w", checkout: "C:\\c", repo: "C:\\r" };
     api.gets["/build/sessions/s1"] = view({ git, messages: [q("t1"), reply({ documents: ["cart.py"] })] });
-    api.gets["/build/sessions/s1/git"] = { exists: true, ahead: 0, behind: 0, uncommitted: 2, remote: "origin", pushed: false };
+    api.gets["/build/sessions/s1/git"] = {
+      exists: true, ahead: 0, behind: 0, uncommitted: 2, remote: "origin", pushed: false,
+      base_exists: true, in_base: false,
+    };
     api.gets["/build/sessions/s1/git/diff"] = { files: [] };
-    api.posts["/build/sessions/s1/git/draft"] = { drafted: true, message: "Fix the cart total", note: "" };
+    api.posts["/build/sessions/s1/git/commit"] = { sha: "abc1234", subject: "Fix the cart total", note: "" };
+    api.posts["/build/sessions/s1/git/merge"] = { into: "main", where: "C:\\c", commit: "def5678" };
     renderSession();
     const next = await screen.findByTestId("next-step-box");
-    await waitFor(() => expect(within(next).getByRole("button", { name: "Commit" })).toBeInTheDocument());
-    fireEvent.click(within(next).getByRole("button", { name: "Commit" }));
-    await screen.findByLabelText("Commit message");
-    const drafts = () => api.calls.filter((c) => c.method === "POST" && c.path === "/build/sessions/s1/git/draft").length;
-    expect(drafts()).toBe(1);
-    fireEvent.click(screen.getByTestId("harness-pane-tab-plan"));
-    await waitFor(() => expect(screen.queryByLabelText("Commit message")).toBeNull());
-    fireEvent.click(screen.getByTestId("harness-pane-tab-changes"));
-    await screen.findByTestId("pane-changes");
-    await new Promise((r) => setTimeout(r, 50));
-    expect(drafts()).toBe(1);
-    expect(screen.queryByLabelText("Commit message")).toBeNull();
-  });
-
-  it("Commit opens the Branch view's own Commit press (its draft), and commits nothing itself", async () => {
-    const git = { branch: "ij/cart-3f2a", base: "main", base_commit: "abc", worktree: "C:\\w", checkout: "C:\\c", repo: "C:\\r" };
-    api.gets["/build/sessions/s1"] = view({ git, messages: [q("t1"), reply({ documents: ["cart.py"] })] });
-    api.gets["/build/sessions/s1/git"] = { exists: true, ahead: 0, behind: 0, uncommitted: 2, remote: "origin", pushed: false };
-    api.gets["/build/sessions/s1/git/diff"] = { files: [] };
-    api.posts["/build/sessions/s1/git/draft"] = { drafted: true, message: "Fix the cart total", note: "" };
-    renderSession();
-    const next = await screen.findByTestId("next-step-box");
-    // v1.418.0 (moved on purpose): the recap is in the reply's line.
     fireEvent.click(screen.getAllByTestId("reply-line-toggle").at(-1)!);
     await waitFor(() =>
       expect(screen.getByTestId("next-step-recap")).toHaveTextContent(
-        "Changed 1 file. The changes on ij/cart-3f2a are not committed yet.",
+        "Changed 1 file. The changes are in a separate copy of your folder.",
       ),
     );
-    fireEvent.click(within(next).getByRole("button", { name: "Commit" }));
-    // The Branch view's own form, with its drafted message, waiting for the user.
-    const msg = (await screen.findByLabelText("Commit message")) as HTMLTextAreaElement;
-    await waitFor(() => expect(msg.value).toBe("Fix the cart total"));
-    expect(api.calls.filter((c) => c.method === "POST" && c.path === "/build/sessions/s1/git/draft")).toHaveLength(1);
-    expect(api.calls.some((c) => c.method === "POST" && c.path === "/build/sessions/s1/git/commit")).toBe(false);
+    expect(within(next).queryByRole("button", { name: "Commit" })).toBeNull();
+    fireEvent.click(within(next).getByRole("button", { name: NEXT_KEEP_LABEL }));
+    const done = (p: string) => api.calls.filter((c) => c.method === "POST" && c.path === p).length;
+    await waitFor(() => expect(done("/build/sessions/s1/git/merge")).toBe(1));
+    expect(done("/build/sessions/s1/git/commit")).toBe(1);
+    const order = api.calls.filter((c) => c.method === "POST").map((c) => c.path);
+    expect(order.indexOf("/build/sessions/s1/git/commit")).toBeLessThan(order.indexOf("/build/sessions/s1/git/merge"));
+    // Going to another tab and back never presses it again.
+    fireEvent.click(screen.getByTestId("harness-pane-tab-plan"));
+    fireEvent.click(screen.getByTestId("harness-pane-tab-changes"));
+    await screen.findByTestId("pane-changes");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(done("/build/sessions/s1/git/merge")).toBe(1);
+    expect(done("/build/sessions/s1/git/commit")).toBe(1);
+    expect(NEXT_KEEP_LABEL).toBe(KEEP_CHANGES_LABEL);
   });
 });

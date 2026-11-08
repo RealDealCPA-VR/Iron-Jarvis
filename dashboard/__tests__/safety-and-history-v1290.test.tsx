@@ -279,17 +279,23 @@ describe("Safety checks card (v1.290.0)", () => {
     expect(screen.queryByTestId("safety-error")).toBeNull();
   });
 
-  it("a 500 renders the daemon's error, NOT the empty state", async () => {
+  it("a 500 renders the one load-failed line, NOT the empty state", async () => {
     answers["/detections/findings?hours=24"] = () =>
       new (ApiError as unknown as new (m: string, s: number) => Error)(
         "detection scan failed: OperationalError: database is locked",
         500,
       );
     render(<ActivityPage />);
+    // v1.455.0 (Wave F, item 9, moved on purpose): the line is the app's
+    // words; the server's raw text rides the hover title only.
     await waitFor(() =>
       expect(screen.getByTestId("safety-error").textContent).toMatch(
-        /Could not load safety checks: detection scan failed: OperationalError/,
+        /Safety checks couldn't load\. Try again\./,
       ),
+    );
+    expect(screen.getByTestId("safety-error").textContent).not.toMatch(/OperationalError/);
+    expect(screen.getByTestId("data-error").getAttribute("title")).toMatch(
+      /HTTP 500: detection scan failed: OperationalError/,
     );
     expect(screen.queryByTestId("safety-empty")).toBeNull();
     expect(document.body.textContent).not.toMatch(/No safety findings/);
@@ -405,9 +411,14 @@ describe("Other agents card (v1.290.0)", () => {
     answers["/history/sessions"] = () =>
       new (ApiError as unknown as new (m: string, s: number) => Error)("history read failed", 500);
     render(<ActivityPage />);
+    // v1.455.0 (Wave F, item 9, moved on purpose): the one load-failed line;
+    // the server's words ride the hover title.
     await waitFor(() =>
-      expect(screen.getByTestId("history-error").textContent).toMatch(/history read failed/),
+      expect(screen.getByTestId("history-error").textContent).toMatch(
+        /Other agents' sessions couldn't load\. Try again\./,
+      ),
     );
+    expect(screen.getByTestId("data-error").getAttribute("title")).toMatch(/history read failed/);
     expect(screen.queryByTestId("history-empty")).toBeNull();
   });
 });

@@ -181,9 +181,9 @@ describe("useChatStream says where the turn is (v1.246.0)", () => {
 
 describe("TurnClock / QuietNote", () => {
   it("formats elapsed time", () => {
-    expect(formatElapsed(0)).toBe("0s");
-    expect(formatElapsed(12_400)).toBe("12s");
-    expect(formatElapsed(65_000)).toBe("1:05");
+    expect(formatElapsed(0)).toBe("0 s");
+    expect(formatElapsed(12_400)).toBe("12 s");
+    expect(formatElapsed(65_000)).toBe("1 min 5 s");
   });
 
   it("a fast turn shows no clock; a slow one counts up", () => {
@@ -193,7 +193,7 @@ describe("TurnClock / QuietNote", () => {
     act(() => {
       vi.advanceTimersByTime(4_000);
     });
-    expect(screen.getByTestId("turn-clock").textContent).toBe("4s");
+    expect(screen.getByTestId("turn-clock").textContent).toBe("4 s");
   });
 
   it("QuietNote appears only after the turn has gone quiet", () => {
@@ -203,7 +203,7 @@ describe("TurnClock / QuietNote", () => {
     act(() => {
       vi.advanceTimersByTime(9_000);
     });
-    expect(screen.getByTestId("turn-quiet").textContent).toContain("Still working · 9s");
+    expect(screen.getByTestId("turn-quiet").textContent).toContain("Still working · 9 s");
   });
 
   it("no turn, no clock", () => {

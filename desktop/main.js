@@ -6417,12 +6417,16 @@ function recoveryAllowed() {
 
 // v1.450.0 (Wave D, item 39): what the notice says after the window was
 // reloaded — in words, never Chromium's reason code ("oom", "crashed",
-// "unresponsive"), which goes to renderer.log. Only an out-of-memory reload
-// says "Nothing was lost" outright; any other crash can drop a half-typed
-// message, so it says what is kept.
+// "unresponsive"), which goes to renderer.log. v1.455.0 (Wave F, item 17):
+// no reload says "Nothing was lost". The chat saves a half-typed message on
+// `pagehide` / unmount, which a renderer that ran out of memory never runs,
+// and this process cannot know whether a draft was saved — so every reload
+// says what IS kept and that typing may need doing again.
+// (Self-contained: the tests lift this function alone and run it under node.)
 function recoveredWords(reason) {
-  if (reason === "oom") return "The window ran out of memory and was reloaded. Nothing was lost.";
-  return "The window stopped working and was reloaded. Your chats and settings are kept; anything you were typing may need typing again.";
+  const kept = "Your chats and settings are kept; anything you were typing may need typing again.";
+  if (reason === "oom") return `The window ran out of memory and was reloaded. ${kept}`;
+  return `The window stopped working and was reloaded. ${kept}`;
 }
 
 function notifyRecovered(reason) {

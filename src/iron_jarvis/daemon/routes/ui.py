@@ -121,6 +121,16 @@ def status_line(d) -> dict[str, int]:
     # CHAT reply is not counted here on purpose: this line is drawn above the
     # chat's own composer, where the reply being written is already on screen.
     out["running"] += build_replies_running(d)
+    # v1.455.0 (Wave F, item 11): a media job being made (a picture, a clip)
+    # is work running too — Running now lists it, so the home line says it.
+    # A workflow run is already in ``orchestrator._running`` (its run id is
+    # spawned there, ``daemon/background_counts.py``), so only media is added.
+    try:
+        from ..background_counts import background_running
+
+        out["running"] += int(background_running(d)["media"])
+    except Exception:  # noqa: BLE001 — a count we cannot read is zero
+        pass
     try:
         from sqlalchemy import func
 

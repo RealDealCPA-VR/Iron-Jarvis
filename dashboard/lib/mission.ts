@@ -39,6 +39,10 @@ export interface WaitingOn {
   /** v1.356.0 (G79): a priced ask's cost sentence (SpendCheck.words), from
    *  pending_for; absent for an unpriced ask. */
   cost_note?: string;
+  /** v1.455.0 (Wave F, item 13): why it asks and who, when the daemon says
+   *  (read through lib/askWhy). */
+  why?: string;
+  asker?: string;
 }
 
 export interface MissionMember {

@@ -201,7 +201,7 @@ for (const size of SIZES) {
       const tryOn = bar.getByTestId("harness-try-on");
       await expect(tryOn).toHaveAttribute("aria-disabled", "true");
       await tryOn.click({ force: true });
-      await expect(page.getByTestId("harness-try-on-unavailable")).toContainText("needs a folder in a git repository");
+      await expect(page.getByTestId("harness-try-on-unavailable")).toContainText("Choose a folder first.");
       const menu = await page.getByTestId("harness-try-on-menu").boundingBox();
       expect.soft(menu && menu.x >= 0 && menu.y >= 0 && menu.x + menu.width <= size.width, `${tag}: the reason is inside the window`).toBe(true);
       await page.getByTestId("harness-try-on-done").click();

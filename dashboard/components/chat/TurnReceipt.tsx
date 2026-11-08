@@ -231,7 +231,11 @@ export interface TurnRoute {
    *  (D6): a plain chat's turn on the account the user chose carries it too
    *  (`chat_turn.account_pinned_frames`); absent on a chat reply that ran on
    *  no chosen account. */
-  account?: { id?: string; name?: string; note?: string } | null;
+  account?: {
+    id?: string;
+    name?: string;
+    note?: string;
+  } | null;
   /** v1.387.0 (the reply budget): a reply this turn was cut off at the
    *  model's OUTPUT limit before a tool call was complete — how many, and
    *  whether the turn went on past it (daemon truth, LAST on the route, only

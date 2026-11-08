@@ -164,6 +164,7 @@ import { turnWindow } from "@/lib/turnChanges";
 import { FollowupChips } from "@/components/chat/FollowupChips";
 import { DockAsk } from "@/components/chat/DockAsk";
 import { collectDockAsks, dockAskKeyHint } from "@/lib/dockAsk";
+import { askWhyOf } from "@/lib/askWhy";
 import { PackPromptForm } from "@/components/chat/PackPromptForm";
 import {
   answerElicitation,
@@ -406,7 +407,8 @@ import {
 } from "@/lib/useChatStream";
 import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
 import { postFailureFields, turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
-import { failureOf, type FailureLike } from "@/lib/loadFailed";
+import { couldnt, failureOf, type FailureLike } from "@/lib/loadFailed";
+import { isFailedMediaLine, MEDIA_RETRY_GONE, MEDIA_TRY_AGAIN, mediaRetryText } from "@/lib/mediaRetry";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { replyLiveWords } from "@/lib/replyLive";
 import { adoptDaemonLines, daemonLineFor, panelWorkingLabel, threadIsNewer } from "@/lib/chatReread";
@@ -686,6 +688,9 @@ interface SessionAsk {
   /** v1.352.0 (G25): can the action be undone (the ask's own verdict, off
    *  the event or the listing)? Absent when the daemon did not say. */
   reversible?: boolean;
+  /** v1.455.0 (Wave F, item 13): why it asks and who, when the daemon says. */
+  why?: string;
+  asker?: "model" | "iron_jarvis";
 }
 
 interface ChatMessage {
@@ -829,6 +834,9 @@ interface ChatMessage {
    *  `progress` renders as a quiet line, `question`/`done` as a reply;
    *  `pending` = the remote took the task and will report back. */
   panelKind?: string;
+  /** v1.455.0 (Wave F, item 16): on a media line the daemon appended
+   *  (`panelKind: "media"`), the media job it reports on. */
+  mediaJob?: string;
   /** v1.285.0: the room entry's timestamp the line was mirrored from — the
    *  dedupe key, so a live event and a reopen never show one line twice. */
   panelAt?: string;
@@ -3047,6 +3055,9 @@ export interface RowHandlers {
   openDoor: (index: number, door: Door) => boolean;
   /** v1.320.0: the user rated reply `index` — store it on the message, save. */
   rateReply: (index: number, rating: ReplyRatingValue) => void;
+  /** v1.455.0 (Wave F, item 16): Try again under a failed media line —
+   *  the job's own request, sent as the next message. */
+  retryMedia: (jobId: string) => void;
   crystallize: (threadId: string) => void;
   promote: (content: string) => Promise<void>;
   /** The receipt's own prop types, not a second description of them: these
@@ -3473,6 +3484,21 @@ const MessageRow = memo(function MessageRow({
               Continue
             </button>
           )}
+        </div>
+      )}
+      {/* v1.455.0 (Wave F, item 16): a media job that could not be made
+          offers Try again (its own request, sent as the next message). */}
+      {isFailedMediaLine(m) && (
+        <div className="mt-1">
+          <button
+            type="button"
+            data-testid="media-try-again"
+            disabled={busy}
+            onClick={() => h.retryMedia(String(m.mediaJob))}
+            className="inline-flex h-7 items-center rounded-lg px-2 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 disabled:opacity-50"
+          >
+            {MEDIA_TRY_AGAIN}
+          </button>
         </div>
       )}
       {/* v1.170.0: the turn RAN a workflow (the model via the workflow_run
@@ -8167,6 +8193,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           ...(p.once_only === true ? { onceOnly: true } : {}),
           // v1.352.0 (G25): the undo line the chat's own card shows.
           ...(typeof p.reversible === "boolean" ? { reversible: p.reversible } : {}),
+          // v1.455.0 (Wave F, item 13): why it asks and who (lib/askWhy).
+          ...askWhyOf(p),
         });
       }
     }
@@ -8191,6 +8219,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           timeout_s?: unknown;
           once_only?: unknown;
           reversible?: unknown;
+          why?: unknown;
+          asker?: unknown;
         }[];
       }>("/chat/approvals/pending");
       if (awaitingIdRef.current !== id) return;
@@ -8203,6 +8233,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           ...(typeof a.timeout_s === "number" ? { timeoutS: a.timeout_s } : {}),
           ...(a.once_only === true ? { onceOnly: true } : {}),
           ...(typeof a.reversible === "boolean" ? { reversible: a.reversible } : {}),
+          ...askWhyOf(a),
         }));
       setPolledAsks(mine);
     } catch {
@@ -8254,6 +8285,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               timeoutS: ask.timeoutS,
               ...(ask.onceOnly ? { onceOnly: true } : {}),
               ...(typeof ask.reversible === "boolean" ? { reversible: ask.reversible } : {}),
+              ...(ask.why ? { why: ask.why } : {}),
+              ...(ask.asker ? { asker: ask.asker } : {}),
             }))
           : null,
       }),
@@ -11837,6 +11870,21 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // Local only too (the door must not carry the words out of that promise).
     openDoor: (index, door) =>
       startCodingFromDoor(messagesRef.current, index, door.href, atFilesRoot, localOnlyRef.current),
+    // v1.455.0 (Wave F, item 16): the failed media job's own request, made
+    // again as the next message (every card and spend check applies to it).
+    retryMedia: (jobId) => {
+      if (busy || uploadingRef.current || sendingRef.current) return;
+      get<{ kind?: unknown; prompt?: unknown }>(`/media/jobs/${encodeURIComponent(jobId)}`)
+        .then((job) => {
+          const text = mediaRetryText(job?.kind, job?.prompt);
+          if (text) sendRef.current(text);
+          else setNotice(MEDIA_RETRY_GONE);
+        })
+        .catch((e) => {
+          const f = failureOf(e);
+          setNotice(f.status === 404 ? MEDIA_RETRY_GONE : couldnt("make it again", f));
+        });
+    },
     promote: (content) => promoteNoteToKnowledge(content),
     openDocument: (path) => openDocPreview(path),
     undoFor: (path) => undoForPath(path),
@@ -11935,6 +11983,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       settleSuggestion: (index, next) =>
         rowImplRef.current.settleSuggestion(index, next),
       rateReply: (index, rating) => rowImplRef.current.rateReply(index, rating),
+      retryMedia: (jobId) => rowImplRef.current.retryMedia(jobId),
       settleConfigCard: (index, cardIndex, next) =>
         rowImplRef.current.settleConfigCard(index, cardIndex, next),
       continueConnected: (index, cardIndex) =>
@@ -12316,7 +12365,16 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   const [homeReadiness, setHomeReadiness] = useState<HomeReadiness | null>(null);
   const homeReadinessAskedRef = useRef(false);
   useEffect(() => {
-    if (!emptyHero || homeReadinessAskedRef.current) return;
+    // v1.455.0 (Wave F, item 12): asked once per EMPTY CHAT, not once per
+    // visit. The "Next:" line keys off a real model having answered, which
+    // happens in the chat this read was made for; a read kept from before the
+    // first answer never showed it. Leaving the empty chat (the first message
+    // went) lets the next new empty chat ask again. Still never polled.
+    if (!emptyHero) {
+      homeReadinessAskedRef.current = false;
+      return;
+    }
+    if (homeReadinessAskedRef.current) return;
     homeReadinessAskedRef.current = true;
     get<unknown>("/onboarding")
       .then((raw) => setHomeReadiness(decodeHomeReadiness(raw)))

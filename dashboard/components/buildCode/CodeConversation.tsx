@@ -74,6 +74,8 @@ import {
   planChecklistSteps,
   receiptLine,
   receiptOutcome,
+  RECEIPT_OUTCOME_WORDS,
+  codeReceiptWhere,
   resolvedWords,
   steerWords,
   toolLabel,
@@ -457,6 +459,8 @@ interface FailurePresses {
 interface ReceiptFacts {
   model: string;
   account: string;
+  /** v1.455.0 (Wave F, item 18): where it ran ("cloud"), "" = not known. */
+  where?: string;
 }
 
 // A row draws again only when ITS item changed (the fold keeps unchanged
@@ -701,7 +705,17 @@ const Item = memo(function Item({
                 ) : (
                   <Check size={12} aria-hidden data-testid="code-receipt-check" className="shrink-0 text-tone-success" />
                 )}
+                {/* v1.455.0 (Wave F, item 18): the glyph is for the eye; a
+                    screen reader hears the outcome in a word. */}
+                <span data-testid="code-receipt-outcome" className="sr-only">
+                  {`${RECEIPT_OUTCOME_WORDS[outcome]}: `}
+                </span>
                 <span data-testid="code-receipt-line">{line || "Details"}</span>
+                {facts?.where ? (
+                  <span data-testid="code-receipt-where" className="text-zinc-600">
+                    {`· ${facts.where}`}
+                  </span>
+                ) : null}
               </summary>
               {r.usage ? (
                 <p data-testid="code-usage" className="mt-0.5 pl-3">
@@ -764,7 +778,7 @@ export const CodeConversation = memo(function CodeConversation({
   /** v1.441.0: Branch from here / Rewind to here (absent = none offered). */
   messageActions?: MessageActions | null;
 }) {
-  const facts = useMemo(() => ({ model, account }), [model, account]);
+  const facts = useMemo(() => ({ model, account, where: codeReceiptWhere(tool) }), [model, account, tool]);
   const copies = useMemo(() => replyCopyTexts(items), [items]);
   let lastError = -1;
   items.forEach((it, i) => {

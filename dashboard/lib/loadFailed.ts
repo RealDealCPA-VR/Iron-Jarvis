@@ -36,6 +36,9 @@ export const TRY_AGAIN = `${TRY_AGAIN_PRESS}.`;
 export interface FailureLike {
   status: number;
   message?: string;
+  /** v1.455.0 (Wave F, item 8): the server's raw text when `message` is the
+   *  plain press-problem sentence (`ApiError.technical`). */
+  technical?: string;
 }
 
 /** True when nothing answered at all (no error in hand counts as that too —
@@ -55,7 +58,8 @@ export function couldntLoad(thing: string, error: FailureLike | null | undefined
  *  is no code to show) — the visible sentence already says so. */
 export function failureDetail(error: FailureLike | null | undefined): string | undefined {
   if (noAnswer(error)) return undefined;
-  const msg = (error!.message ?? "").trim();
+  // The raw envelope (with its err_ id) wins over the plain words it became.
+  const msg = (error!.technical ?? error!.message ?? "").trim();
   return msg ? `HTTP ${error!.status}: ${msg}` : `HTTP ${error!.status}`;
 }
 
@@ -86,9 +90,11 @@ export function failureOf(e: unknown): FailureLike {
   if (e && typeof e === "object") {
     const status = (e as { status?: unknown }).status;
     const message = (e as { message?: unknown }).message;
+    const technical = (e as { technical?: unknown }).technical;
     return {
       status: typeof status === "number" && Number.isFinite(status) ? status : 0,
       message: typeof message === "string" ? message : undefined,
+      ...(typeof technical === "string" ? { technical } : {}),
     };
   }
   return { status: 0, message: typeof e === "string" ? e : undefined };

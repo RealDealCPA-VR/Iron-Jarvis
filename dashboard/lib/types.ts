@@ -35,6 +35,9 @@ export interface Health {
    *  — a chat's and a Build coding session's (the durable turn registry, in
    *  memory). Absent on an older Iron Jarvis. */
   replies?: { chat?: number; build?: number; /** v1.414.0: Build › Code. */ build_app?: number } | null;
+  /** v1.455.0 (Wave F, item 11): workflow runs and media jobs working now
+   *  (in memory). Absent on an older Iron Jarvis. */
+  background?: { workflows?: number; media?: number } | null;
 }
 
 export interface Metrics {
@@ -116,6 +119,10 @@ export interface SessionWaitingOn {
   /** v1.352.0 (G25): can the action be undone (the daemon's verdict, the
    *  same one the ask's own event carries)? Absent = nothing to say. */
   reversible?: boolean;
+  /** v1.455.0 (Wave F, item 13): why it asks and who ("model" |
+   *  "iron_jarvis"), when the daemon says. Read through lib/askWhy. */
+  why?: string;
+  asker?: string;
 }
 
 export interface AgentRun {

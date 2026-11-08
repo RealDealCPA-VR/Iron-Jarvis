@@ -5,6 +5,10 @@ import { NOT_MODIFIED, rememberEtag } from "./etag";
 // v1.354.0 (G30): a status-0 error says the app's name, never "daemon
 // offline" — every surface that prints `err.message` shows it.
 import { OFFLINE_WORDS } from "./offlineWords";
+// v1.455.0 (Wave F, item 8): a 500 on a press reads in plain words; the raw
+// envelope rides as `technical` (lib/pressFailure.ts, outside this module
+// because hundreds of tests mock it wholesale).
+import { pressWords, rememberServerProblem } from "./pressFailure";
 
 export const API_BASE = (
   process.env.NEXT_PUBLIC_IJ_API || "http://127.0.0.1:8787"
@@ -79,12 +83,23 @@ export class ApiError extends Error {
    *  "local only" 409 names the provider and model it did not send to).
    *  Undefined otherwise; `message` stays the flattened `detail`. */
   body?: unknown;
-  constructor(message: string, status: number, cancelled = false, body?: unknown) {
+  /** v1.455.0 (Wave F, item 8): the server's raw text when `message` was
+   *  reworded (a 500 envelope "internal error [err_…]: …" becomes "Iron
+   *  Jarvis hit a problem doing that. Try again."). Undefined otherwise. */
+  technical?: string;
+  constructor(
+    message: string,
+    status: number,
+    cancelled = false,
+    body?: unknown,
+    technical?: string,
+  ) {
     super(message);
     this.status = status;
     this.cancelled = cancelled;
     this.name = "ApiError";
     if (body !== undefined) this.body = body;
+    if (technical !== undefined) this.technical = technical;
   }
 }
 
@@ -159,6 +174,13 @@ function signalNetworkError(): void {
 // then resolves to the NOT_MODIFIED marker instead of a body (never an error).
 export type ApiInit = RequestInit & { timeoutMs?: number; ifNoneMatch?: string };
 
+/** A request a page makes to READ (no method, GET or HEAD), as against a
+ *  press that changes something. */
+function isPageRead(method: string | undefined): boolean {
+  const m = (method || "GET").toUpperCase();
+  return m === "GET" || m === "HEAD";
+}
+
 export async function api<T>(path: string, init?: ApiInit): Promise<T> {
   const { timeoutMs, ifNoneMatch, ...rest } = init || {};
   const controller = timeoutMs ? new AbortController() : null;
@@ -208,19 +230,29 @@ export async function api<T>(path: string, init?: ApiInit): Promise<T> {
   }
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) signalAuth(true);
-    else if (res.status >= 500) signalError(true); // SERVER error — surface globally
+    else if (res.status >= 500 && isPageRead(rest.method)) signalError(true);
+    // A SERVER error on a page READ surfaces globally ("Part of this page didn't
+    // load"). v1.455.0 (Wave F, item 8): never for a PRESS (POST/PUT/PATCH/
+    // DELETE) — the press says its own sentence where it was pressed, and the
+    // banner's "It will try again in a moment" is untrue for a button.
     // (a 4xx like 404/400/422 is a normal per-request condition the page handles —
     //  never flash a global banner for it)
     let detail = `${res.status} ${res.statusText}`;
     let parsed: unknown;
+    let hadDetail = false;
     try {
       const body = await res.json();
       parsed = body;
-      if (body?.detail) detail = flattenDetail(body.detail);
+      if (body?.detail) {
+        detail = flattenDetail(body.detail);
+        hadDetail = true;
+      }
     } catch {
       /* ignore */
     }
-    throw new ApiError(detail, res.status, false, parsed);
+    const words = pressWords(res.status, detail, hadDetail);
+    if (words.technical !== undefined) rememberServerProblem(words.technical);
+    throw new ApiError(words.message, res.status, false, parsed, words.technical);
   }
   // A successful DATA response clears the error signals. Skip /health for BOTH: it
   // is auth-exempt (a bad token still 200s) AND it polls every 5s, so clearing on it

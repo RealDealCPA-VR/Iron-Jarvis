@@ -51,7 +51,17 @@ import {
 } from "@/components/chat/ModelMenu";
 import { TryOnControl } from "@/components/harness/HarnessTryOn";
 import { TeamControl, type KnownMembers } from "@/components/harness/HarnessTeam";
-import { BRANCH_SWITCH_LABEL, branchSwitchWords, fetchFolderGit, folderGitLine, type FolderGit } from "@/lib/buildGit";
+import {
+  BRANCH_SWITCH_LABEL,
+  branchSwitchWords,
+  fetchFolderGit,
+  folderGitLine,
+  initRepo,
+  type FolderGit,
+  type RepoMade,
+} from "@/lib/buildGit";
+import { couldnt, failureOf, serverSentence } from "@/lib/loadFailed";
+import { folderOnShare } from "@/lib/codeEditor";
 import { useModels } from "@/lib/useModels";
 import { useDaemon } from "@/lib/daemon";
 import { modelRowName } from "@/lib/onboarding";
@@ -164,16 +174,33 @@ export function tryOnAvailability(o: {
   return { why: "", settled: true };
 }
 
+// v1.455.0 (0j.4 item 33): Try on explains itself in the user's words — each
+// model works in its OWN COPY of the folder and you keep the one you like —
+// never "git repository" / "branch". A folder that is not set up for copies
+// yet gets the press that sets it up (`TRY_ON_SET_UP`, POST /build/git/init).
 export const TRY_ON_NEEDS_FOLDER =
-  "Try on needs a folder in a git repository: each model works on its own branch. Choose one first.";
-export const TRY_ON_CHECKING = "Checking whether this folder is in a git repository…";
-export const TRY_ON_UNREAD =
-  "Iron Jarvis could not tell whether this folder is in a git repository, so Try on is off for now.";
-export const TRY_ON_NO_GIT = "Try on needs git, which is not installed on this PC: each model works on its own branch.";
+  "Try on lets several models each work in their own copy of a folder, and you keep the one you like. Choose a folder first.";
+export const TRY_ON_CHECKING = "Checking whether this folder is ready for Try on…";
+export const TRY_ON_UNREAD = "Iron Jarvis could not check this folder, so Try on is off for now.";
+export const TRY_ON_NO_GIT =
+  "Try on needs Git, a free program that keeps each model's copy of the folder apart. It is not installed on this PC.";
 export const TRY_ON_NOT_A_REPO =
-  "Try on needs a folder in a git repository: each model works on its own branch, and this folder is not in one.";
-const TRY_ON_NO_BRANCH_LEAD = "This repository cannot start a branch here.";
-const TRY_ON_NEEDS_BRANCH = "Try on needs one: each model works on its own branch.";
+  "Try on gives each model its own copy of the folder, and this folder is not set up for copies yet.";
+/** The press under TRY_ON_NOT_A_REPO. */
+export const TRY_ON_SET_UP = "Set this folder up for Try on";
+const TRY_ON_NO_BRANCH_LEAD = "This folder cannot make a separate copy right now.";
+const TRY_ON_NEEDS_BRANCH = "Try on needs one for each model.";
+
+/** What the set-up press says when it worked (the daemon's own note when it
+ *  did nothing). Plain words: the first copy is Git's first commit. */
+export function tryOnSetUpWords(r: RepoMade): string {
+  if (!r.made) return r.note || "This folder was already set up.";
+  const head = "Done: this folder is set up for Try on, with a first saved copy of its files.";
+  if (r.leftOut.length === 0) return head;
+  const names = r.leftOut.slice(0, 3).map((x) => x.path).join(", ");
+  const more = r.leftOut.length > 3 ? ` and ${r.leftOut.length - 3} more` : "";
+  return `${head} Left out of it: ${names}${more}.`;
+}
 export const TRY_ON_PLANNING =
   "This session starts by planning. Turn Plan off to try your first message on several models.";
 /** The daemon's WORDS_ONLY refusal, said before anything is made. */
@@ -257,6 +284,11 @@ export function HarnessStartComposer({
   /** v1.437.0: the folder `git` was read for (until then Try on waits). */
   const [gitFor, setGitFor] = useState<string | null>(null);
   const [gitNote, setGitNote] = useState<string | null>(null);
+  // v1.455.0 (0j.4 item 33): "Set this folder up for Try on" — bumping the
+  // nonce reads the folder's facts again after the set-up.
+  const [gitNonce, setGitNonce] = useState(0);
+  const [setUpBusy, setSetUpBusy] = useState(false);
+  const [setUpNote, setSetUpNote] = useState<string | null>(null);
   // v1.452.0 (readiness item 43): OFF unless the user turns it on — a
   // folder-first session works straight in the folder.
   const [onBranch, setOnBranch] = useState(seeded?.branch ?? false);
@@ -342,7 +374,25 @@ export function HarnessStartComposer({
     return () => {
       live = false;
     };
+  }, [folder, gitNonce]);
+  // A different folder forgets the last set-up's note.
+  useEffect(() => {
+    setSetUpNote(null);
   }, [folder]);
+  async function setUpForTryOn() {
+    if (!folder || setUpBusy) return;
+    setSetUpBusy(true);
+    try {
+      const r = await initRepo(folder);
+      setSetUpNote(tryOnSetUpWords(r));
+      setGitNonce((n) => n + 1);
+    } catch (e) {
+      const f = failureOf(e);
+      setSetUpNote(serverSentence(f) ? f.message ?? "" : couldnt("set this folder up", f));
+    } finally {
+      setSetUpBusy(false);
+    }
+  }
   const canBranch = !!folder && !!git && git.repo && git.canBranch;
   // v1.452.0 (readiness item 43): the daemon makes a branch by itself when
   // the create says nothing and the folder can have one. While this folder's
@@ -671,6 +721,16 @@ export function HarnessStartComposer({
             iconOnly={fitOn("tryon")}
             teamSet={teamSet}
             unavailable={tryOnState.why}
+            // v1.455.0 (0j.4 item 33): a folder not set up for copies yet
+            // gets the press that sets it up, right where the reason is said.
+            fix={
+              // Review: never on a network share — the daemon refuses to set
+              // one up by its spelling, so the press would be dead there.
+              tryOnState.why === TRY_ON_NOT_A_REPO && !folderOnShare(folder ?? "")
+                ? { label: TRY_ON_SET_UP, busy: setUpBusy, onPress: () => void setUpForTryOn() }
+                : undefined
+            }
+            fixNote={setUpNote}
           />
           {/* The new session's team, before the session exists: untouched,
               the folder's saved team (the create applies it by itself). */}

@@ -76,6 +76,8 @@ export function TryOnControl({
   iconOnly = false,
   teamSet = false,
   unavailable = "",
+  fix,
+  fixNote = null,
 }: {
   models: readonly (TryOnRow & CatalogRow)[];
   localOnly: boolean;
@@ -90,6 +92,11 @@ export function TryOnControl({
   teamSet?: boolean;
   /** v1.437.0: why Try on cannot be used here, in words ("" = it can). */
   unavailable?: string;
+  /** v1.455.0 (0j.4 item 33): a press that removes the reason (the folder
+   *  is not set up for copies yet: set it up), drawn under it. */
+  fix?: { label: string; busy?: boolean; onPress: () => void };
+  /** What that press said (done, or why not). */
+  fixNote?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [place, setPlace] = useState<Place | null>(null);
@@ -217,13 +224,37 @@ export function TryOnControl({
     >
       {unavailable ? (
         // v1.437.0: why it cannot be used here, in the list's place.
-        <p data-testid="harness-try-on-unavailable" className="shrink-0 px-1 pb-1 text-[12px] leading-5 text-zinc-400">
-          {unavailable}
-        </p>
+        <div className="shrink-0">
+          <p data-testid="harness-try-on-unavailable" className="px-1 pb-1 text-[12px] leading-5 text-zinc-400">
+            {unavailable}
+          </p>
+          {fix ? (
+            <button
+              type="button"
+              data-testid="harness-try-on-fix"
+              onClick={fix.onPress}
+              disabled={fix.busy}
+              className="mx-1 mb-1 inline-flex h-7 items-center rounded-lg border border-white/10 px-2 text-[12px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
+            >
+              {fix.busy ? "Setting it up…" : fix.label}
+            </button>
+          ) : null}
+          {fixNote ? (
+            <p data-testid="harness-try-on-fix-note" role="status" className="px-1 pb-1 text-[12px] leading-5 text-zinc-400">
+              {fixNote}
+            </p>
+          ) : null}
+        </div>
       ) : (
         <>
+          {fixNote ? (
+            <p data-testid="harness-try-on-fix-note" role="status" className="shrink-0 px-1 pb-1 text-[12px] leading-5 text-zinc-400">
+              {fixNote}
+            </p>
+          ) : null}
           <p className="shrink-0 px-1 pb-1 text-[12px] leading-5 text-zinc-400">
-            Pick up to {MAX_ATTEMPTS} models. Each tries your next message on its own branch; you keep one.
+            {/* v1.455.0 (0j.4 item 33): the user's words, never "branch". */}
+            Pick up to {MAX_ATTEMPTS} models. Each tries your next message in its own copy of the folder; you keep one.
             {localOnly ? " Local only: models on this PC or your network." : ""}
             {teamSet ? " Each one works alone, without the team." : ""}
           </p>

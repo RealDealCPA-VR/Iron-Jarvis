@@ -456,6 +456,70 @@ describe("RunHistory (via the page)", () => {
     expect(screen.queryByText("Resume")).toBeNull();
   });
 
+  // v1.455.0 (Wave F, item 16): a failed row says why without being opened,
+  // and starts again from here.
+  it("a failed row shows its FIRST failed step's words collapsed, and Run again posts the saved workflow with its inputs", async () => {
+    api.responses[RUNS_PATH] = {
+      runs: [
+        run({
+          id: "r-fail",
+          status: "failed",
+          outputs_json: JSON.stringify({
+            client: { status: "completed", summary: "Acme", kind: "input" },
+            Scan: { status: "completed", summary: "12 files" },
+            Triage: { status: "failed", summary: "The planner could not read the folder.\nMore detail here." },
+            Check: { status: "failed", summary: "later failure" },
+          }),
+        }),
+        run({ id: "r-ok", status: "completed" }),
+      ],
+    };
+    renderHistory();
+    const line = await screen.findByTestId("run-failed-step-r-fail");
+    expect(line.textContent).toBe("Triage failed: The planner could not read the folder.");
+    expect(screen.queryByTestId("run-failed-step-r-ok")).toBeNull();
+    expect(screen.queryByTestId("run-again-r-ok")).toBeNull();
+    fireEvent.click(screen.getByTestId("run-again-r-fail"));
+    await waitFor(() =>
+      expect(api.posts.find((p) => p.path === "/workflows/run")?.body).toEqual({
+        name: "intake",
+        inputs: { client: "Acme" },
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("run-again-note-r-fail").textContent).toBe(
+        "Started again. The new run is at the top.",
+      ),
+    );
+  });
+
+  it("a part-failed row (a step failed, the rest went on) gets the same line and Run again", async () => {
+    api.responses[RUNS_PATH] = {
+      runs: [
+        run({
+          id: "r-part",
+          status: "completed_with_failures",
+          outputs_json: JSON.stringify({ Scan: { status: "failed", summary: "" } }),
+        }),
+      ],
+    };
+    renderHistory();
+    expect((await screen.findByTestId("run-failed-step-r-part")).textContent).toBe("Scan failed.");
+    expect(screen.getByTestId("run-again-r-part").textContent).toBe("Run again");
+  });
+
+  it("a Run again the server refuses says why in plain words (a 5xx never shows engine text)", async () => {
+    api.responses[RUNS_PATH] = {
+      runs: [run({ id: "r-fail", status: "failed", outputs_json: JSON.stringify({ Scan: { status: "failed", summary: "x" } }) })],
+    };
+    api.postResponses["/workflows/run"] = new api.FakeApiError("internal error [err_1]: KeyError: steps", 500);
+    renderHistory();
+    fireEvent.click(await screen.findByTestId("run-again-r-fail"));
+    await waitFor(() =>
+      expect(screen.getByTestId("run-again-note-r-fail").textContent).toBe("Couldn't run it again. Try again."),
+    );
+  });
+
   // v1.449.0 (plan 0h.5 item 12): Stop on every live row.
   it("a running row and a waiting row get Stop: POST the cancel route, then reload; terminal rows get none", async () => {
     api.responses[RUNS_PATH] = {

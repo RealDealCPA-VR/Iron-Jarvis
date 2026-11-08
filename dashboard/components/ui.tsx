@@ -14,6 +14,8 @@ import Link from "next/link";
 import { DESKTOP_OFFLINE_HINT, isDesktopShell } from "@/lib/desktopShell";
 import { OFFLINE_SAVED_SENTENCE, OFFLINE_TITLE } from "@/lib/offlineWords";
 import { DEMO_CHIP_TITLE, DEMO_MODEL } from "@/lib/demoWords";
+import { lastServerProblem, PRESS_DETAILS_WORDS, saysPressProblem } from "@/lib/pressFailure";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { ICON_BUTTON_DANGER_CLASS, useIconTip } from "@/components/IconButton";
 
 /** v1.354.0 (G30): the app's own words for an outage ("Iron Jarvis isn't
@@ -538,14 +540,48 @@ export function OfflineHint({ detail }: { detail?: string }) {
   );
 }
 
+/** The plain text of a note's children (strings and numbers only). */
+function noteText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(noteText).join("");
+  if (isValidElement(node)) {
+    return noteText((node.props as { children?: ReactNode }).children);
+  }
+  return "";
+}
+
 export function ErrorNote({ children }: { children: ReactNode }) {
+  // v1.455.0 (Wave F, item 8): a press whose request hit an unexpected
+  // server error says PRESS_PROBLEM_WORDS (lib/api.ts rewords the 500
+  // envelope); the raw text, with its err_ id, is folded under Details —
+  // read once when the note appears, so a later failure elsewhere never
+  // rewrites what this note says.
+  // Review: read again whenever the note's WORDS change (a page that keeps
+  // one note mounted and swaps a refusal for a 500 must still fold the 500's
+  // text); the same words re-rendered keep the text they were read with.
+  const text = noteText(children);
+  const problem = saysPressProblem(text);
+  const [read, setRead] = useState(() => ({ text, technical: problem ? lastServerProblem() : "" }));
+  let technical = read.technical;
+  if (read.text !== text) {
+    technical = problem ? lastServerProblem() : "";
+    setRead({ text, technical });
+  }
   return (
     <div
       role="alert"
       className="flex items-start gap-2.5 rounded-xl border border-tone-danger/25 bg-tone-danger/[0.07] px-3 py-2.5 text-sm text-tone-danger"
     >
       <TriangleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-      <span>{children}</span>
+      <span className="min-w-0">
+        {children}
+        {problem && technical && (
+          <details className="mt-1 text-xs text-zinc-400" data-testid="error-note-details">
+            <summary className="cursor-pointer select-none">{PRESS_DETAILS_WORDS}</summary>
+            <span className="mt-1 block break-words font-mono">{technical}</span>
+          </details>
+        )}
+      </span>
     </div>
   );
 }
@@ -560,16 +596,26 @@ export function ErrorNote({ children }: { children: ReactNode }) {
 export function DataError({
   error,
   what = "this",
+  onRetry,
 }: {
-  error: { status: number; message: string } | null | undefined;
-  /** Short noun for the copy: "Could not load {what}: …". */
+  error: { status: number; message: string; technical?: string } | null | undefined;
+  /** Short noun for the copy: "{What} couldn't load. Try again." */
   what?: string;
+  /** Re-read now: "Try again" becomes a press. */
+  onRetry?: () => void;
 }) {
   if (!error || error.status === 0) return null;
+  // v1.455.0 (Wave F, item 9): the one load-failed line (lib/loadFailed),
+  // never the server's raw text ("Could not load safety checks: detection
+  // scan failed: OperationalError"); that rides the hover title only.
+  const thing = what ? what.charAt(0).toUpperCase() + what.slice(1) : "This";
   return (
-    <ErrorNote>
-      Could not load {what}: {error.message}
-    </ErrorNote>
+    <LoadFailedLine
+      thing={thing}
+      error={error}
+      onRetry={onRetry}
+      testId="data-error"
+    />
   );
 }
 
