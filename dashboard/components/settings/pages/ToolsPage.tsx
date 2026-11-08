@@ -1,6 +1,8 @@
 "use client";
 
 import { useRef, useState, type ReactNode } from "react";
+// v1.449.0 (readiness Wave C, item 23): a real download link beside "Needs X".
+import { runtimeDownload } from "@/lib/directoryLinks";
 import Link from "next/link";
 import {
   Wrench,
@@ -1298,6 +1300,20 @@ export default function ToolsPage() {
               }
               needs={entry.needs}
             />
+          )}
+          {/* v1.449.0 (readiness Wave C, item 23): "Needs Node" with a way
+              to get it, not only a word. Only while the helper program is
+              really missing (the daemon's own launcher check). */}
+          {!connected && !broken && !off && entry.needs && entry.runtime_ready !== true && runtimeDownload(entry.needs) && (
+            <a
+              href={runtimeDownload(entry.needs)!.href}
+              target="_blank"
+              rel="noreferrer"
+              data-testid={`catalog-get-runtime-${entry.id}`}
+              className="text-[11px] text-accent-soft underline-offset-2 hover:underline"
+            >
+              {runtimeDownload(entry.needs)!.label}
+            </a>
           )}
         </div>
 

@@ -464,6 +464,18 @@ def delete_fleet_node(d: Any, node_id: str) -> dict[str, Any]:
     family = getattr(d.fleet, "family", None)
     gone = family(node_id) if callable(family) else [node_id]
     from ...fleet.registry import ChildNodeError
+    from .. import default_replacement as _default
+
+    # v1.449.0 (readiness Wave C, item 24): a server that holds the DEFAULT
+    # model hands the default on BEFORE it goes — to another connected
+    # model, else the demo with a warning — so no chat is left pointing at
+    # a name that no longer answers. A child's refusal below comes first in
+    # effect: nothing is re-pointed for a removal that will not happen.
+    default_replaced = None
+    child_refusal = getattr(d.fleet, "child_refusal", None)
+    will_remove = not (callable(child_refusal) and child_refusal(d.fleet.get(node_id)))
+    if will_remove:
+        default_replaced = _default.apply(d, _default.names_for_node(d, node_id), actor="model_server_remove")
 
     try:
         cleared = d.fleet.remove(node_id)
@@ -482,11 +494,40 @@ def delete_fleet_node(d: Any, node_id: str) -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             pass
     _catalog_changed(node_id)
-    return {"ok": True, "cleared_settings": cleared}
+    out: dict[str, Any] = {"ok": True, "cleared_settings": cleared}
+    if default_replaced is not None:
+        # Additive, and only when something moved: a removal that touched no
+        # default answers exactly what it always did.
+        out["default_replaced"] = default_replaced
+    return out
 
 
 def register(app: FastAPI, d) -> None:
     """Attach the /fleet routes to *app*; ``d`` is the create_app deps object."""
+
+    @app.get("/fleet/default-after-removal")
+    def fleet_default_after_removal(leaving: str = "") -> dict[str, Any]:
+        """v1.449.0 (readiness Wave C, item 24): what removing the named
+        providers (``leaving`` = a comma-separated list: ``fleet-<id>``, a
+        slot's name, an account's provider) would do to the DEFAULT model —
+        the words the dashboard's confirm shows BEFORE the press. A Fleet
+        node id alone (``<id>``) counts as every name that node answers
+        under. Reads cached answers only; never fails a page."""
+        from .. import default_replacement as _default
+
+        names: set[str] = set()
+        for raw in (leaving or "").split(","):
+            name = raw.strip()
+            if not name:
+                continue
+            node_id = name[len("fleet-"):] if name.startswith("fleet-") else name
+            if d.fleet.get(node_id) is not None:
+                names |= _default.names_for_node(d, node_id)
+            else:
+                # An account's own name: it leaves only when nothing else
+                # serves it (a keyless API name its CLI still serves stays).
+                names |= _default.names_for_disconnect(d, name)
+        return _default.preview(d, names)
 
     def _node_or_404(node_id: str):
         node = d.fleet.get(node_id)

@@ -868,7 +868,13 @@ class ModelServerRemoveTool(R._RecordTool):
         tail = ""
         if out.get("cleared_settings"):
             tail = " It was set up in Settings, so its address there was cleared too."
-        if was_default:
+        # v1.449.0 (readiness Wave C, item 24): the route hands the default on
+        # itself now (daemon/default_replacement); say where it landed in the
+        # route's own words. An older answer without the key keeps the old line.
+        moved = out.get("default_replaced") if isinstance(out, dict) else None
+        if isinstance(moved, dict) and str(moved.get("words") or "").strip():
+            tail += f" It held your default model. {str(moved['words']).strip()}"
+        elif was_default:
             tail += " It held your default model: choose another default in Settings › Models."
         data: dict[str, Any] = {}
         if R._CHANGE_ID.get():  # noqa: SLF001

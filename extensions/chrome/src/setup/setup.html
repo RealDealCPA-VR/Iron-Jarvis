@@ -14,6 +14,15 @@
   Copy rule: this add-on is never called an "extension" in anything the user reads.
   In Iron Jarvis "extension" already means an MCP server, so the words here are
   "the Iron Jarvis browser add-on".
+
+  v1.449.0 (readiness Wave C, item 31): the words say what site access REALLY lets
+  the add-on do today (read pages, click and type in them, take screenshots — each
+  action shown to you first in Iron Jarvis unless you allowed it) and name no
+  browser: setup.ts fills every [data-browser] span with the browser this page
+  runs in (Chrome, Edge, or "your browser") and the address of ITS add-ons page.
+  Before this it said the add-on "sees only your tab titles" and that acting in a
+  page would "arrive in later versions" — untrue since v1.237.0 — and "Chrome" to
+  every Edge user.
 -->
 <html lang="en">
   <head>
@@ -73,6 +82,14 @@
         margin: 0 0 6px;
         letter-spacing: 0.2px;
       }
+      h2 {
+        font-size: 13px;
+        margin: 0 0 8px;
+        color: var(--muted);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+      }
       .lede {
         color: var(--muted);
         margin: 0 0 24px;
@@ -90,6 +107,10 @@
       }
       li + li {
         margin-top: 6px;
+      }
+      li strong {
+        color: var(--ink);
+        font-weight: 600;
       }
       button {
         appearance: none;
@@ -139,18 +160,29 @@
     <main>
       <h1>Let Iron Jarvis work in your tabs</h1>
       <p class="lede">
-        The Iron Jarvis browser add-on installs with no access to any site. Chrome only lets a page ask
-        for that access when you click a button yourself, which is what this page is for.
+        The Iron Jarvis browser add-on installs with no access to any site.
+        <span data-browser="name">Your browser</span> only lets a page ask for that access when you
+        click a button yourself, which is what this page is for.
       </p>
       <section>
+        <h2>What site access lets Iron Jarvis do</h2>
         <ul>
-          <li>This version sees only the tabs you have open — their titles and addresses.</li>
+          <li><strong>Read</strong> what is on the pages you open — the text, the links, the forms.</li>
           <li>
-            Reading what is on a page, and acting in one, arrive in later versions — and then only
-            while you or an agent asks for it.
+            <strong>Act</strong> in a page when you ask: click, type, fill a form, scroll, take a
+            screenshot, open or close a tab.
           </li>
-          <li>Everything runs on this computer, over <code>127.0.0.1</code>.</li>
-          <li>You can withdraw this access at any time from <code>chrome://extensions</code>.</li>
+          <li>
+            <strong>Each action is shown to you first</strong> in Iron Jarvis, unless you allowed a
+            tab or switched asking off in the sidebar; a payment, a password field or anything that
+            deletes always asks.
+          </li>
+          <li>Everything runs on this computer, over <code>127.0.0.1</code>; nothing is sent to a service of ours.</li>
+          <li>
+            You can withdraw this access at any time from
+            <span data-browser="possessive">your browser's</span> add-ons page,
+            <code data-browser="addons-page">its add-ons page</code>.
+          </li>
         </ul>
         <button id="grant" type="button">Grant site access</button>
         <p id="outcome" role="status" aria-live="polite"></p>
