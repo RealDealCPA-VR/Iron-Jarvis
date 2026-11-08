@@ -4,8 +4,10 @@
 // naming one concept is exactly the drift the repo's vocabulary rule exists
 // to prevent.
 
+// v1.449.0 (Wave D item 35): "Every minute" is the LAST preset — it was the
+// first, so a stray first pick (or a keyboard's Home) started a run 1,440
+// times a day — and the forms show EVERY_MINUTE_WARNING beside it.
 export const REPEAT_PRESETS: { label: string; cron: string }[] = [
-  { label: "Every minute", cron: "* * * * *" },
   { label: "Every 15 minutes", cron: "*/15 * * * *" },
   { label: "Hourly", cron: "0 * * * *" },
   { label: "Daily at midnight", cron: "0 0 * * *" },
@@ -16,7 +18,64 @@ export const REPEAT_PRESETS: { label: string; cron: string }[] = [
   { label: "Weekly Fri 4pm", cron: "0 16 * * 5" },
   { label: "Daily at 6pm", cron: "0 18 * * *" },
   { label: "Monthly 1st", cron: "0 0 1 * *" },
+  { label: "Every minute", cron: "* * * * *" },
 ];
+
+/** The one cron that means every minute. */
+export const EVERY_MINUTE_CRON = "* * * * *";
+
+/** Said beside a schedule set to every minute (add form and editor). */
+export const EVERY_MINUTE_WARNING =
+  "Every minute starts a new run 1,440 times a day, and every run spends model usage. " +
+  "Pick this only for a quick check, and come back to change it.";
+
+/* ---- v1.449.0 (Wave D item 35): a name from the task's first words ------ */
+
+/** The most words a filled-in name takes from the task. */
+export const NAME_FROM_TASK_WORDS = 5;
+
+/** The longest a filled-in name gets. */
+export const NAME_MAX_CHARS = 40;
+
+/** A schedule's name when the user typed none: the task's first words as a
+ *  slug ("Write my morning briefing: summarize…" → "write-my-morning-briefing-summarize").
+ *  "" when the task has no word yet. */
+export function nameFromTask(task: string): string {
+  const words = (task ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]+/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, NAME_FROM_TASK_WORDS);
+  if (words.length === 0) return "";
+  let slug = words.join("-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  if (slug.length > NAME_MAX_CHARS) slug = slug.slice(0, NAME_MAX_CHARS).replace(/-+$/, "");
+  return slug;
+}
+
+/** AN review (v1.449.0): a filled-in name no schedule already has. The daemon
+ *  refuses a name in use ("already exists"), and two schedules made from the
+ *  same task would otherwise both be called the same; the next free
+ *  "<name>-2", "<name>-3"… is used instead, cut to fit NAME_MAX_CHARS. */
+export function uniqueScheduleName(base: string, taken: Iterable<string>): string {
+  if (!base) return "";
+  const used = new Set(Array.from(taken, (n) => String(n)));
+  if (!used.has(base)) return base;
+  for (let i = 2; i < 1000; i++) {
+    const tail = `-${i}`;
+    const head = base.slice(0, Math.max(1, NAME_MAX_CHARS - tail.length)).replace(/-+$/, "");
+    const next = `${head}${tail}`;
+    if (!used.has(next)) return next;
+  }
+  return base;
+}
+
+/** The hint under an empty Name box. */
+export function nameHintWords(suggested: string): string {
+  return suggested
+    ? `Give it a name — or it will be called “${suggested}”.`
+    : "Give it a name — or type the task first and one is filled in from its first words.";
+}
 
 export const CRON_TO_LABEL = new Map(REPEAT_PRESETS.map((p) => [p.cron, p.label]));
 

@@ -17,6 +17,7 @@ import {
   Workflow as WorkflowIcon,
   Bot,
   TerminalSquare,
+  Pencil,
   type LucideIcon,
 } from "lucide-react";
 import { post, patch, del, ApiError } from "@/lib/api";
@@ -37,13 +38,22 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import {
+  EVERYDAY_ACTION,
+  EVERYDAY_SOURCES,
+  isEveryday,
+  sourceActive,
+  sourceOffHref,
+  sourceOffWords,
+  triggersOf,
+  type ReflexAction,
+  type ReflexSource,
+  type TriggersStatus,
+} from "@/lib/reflexRules";
 
 /* -------------------------------------------------------------------------- */
 /*  Types (mirror src/iron_jarvis/reflex/models.py::ReflexRule)                */
 /* -------------------------------------------------------------------------- */
-
-type ReflexSource = "webhook" | "comm" | "email" | "calendar" | "slack";
-type ReflexAction = "workflow" | "remote_agent" | "session";
 
 interface ReflexRule {
   id: string;
@@ -159,38 +169,8 @@ const SOURCE_META: Record<ReflexSource, SourceMeta> = {
   },
 };
 
-/** GET /triggers — world-trigger status. Tolerate missing fields.
- *  v1.439.0: the daemon answers `{triggers: {email, calendar, slack}}`
- *  (routes/triggers.py `_status`), and email/Slack say `enabled` +
- *  `credentialed`, never `active` — the card read the top level and an
- *  `active` key, so a saved calendar link, an on switch and a working
- *  email/Slack source all read as off. `triggersOf` reads both shapes. */
-interface TriggerSource {
-  active?: boolean;
-  enabled?: boolean;
-  credentialed?: boolean;
-}
-interface TriggersParts {
-  email?: TriggerSource;
-  calendar?: { enabled?: boolean; has_url?: boolean; lead_minutes?: number };
-  slack?: TriggerSource;
-}
-interface TriggersStatus extends TriggersParts {
-  triggers?: TriggersParts;
-}
-
-function triggersOf(data: TriggersStatus | null | undefined): TriggersParts {
-  if (!data) return {};
-  return data.triggers && typeof data.triggers === "object" ? data.triggers : data;
-}
-
-/** A source can start work: it is on AND can receive (or an older shape's
- *  own `active`). */
-function sourceActive(s: TriggerSource | undefined): boolean {
-  if (!s) return false;
-  if (typeof s.active === "boolean") return s.active;
-  return !!s.enabled && !!s.credentialed;
-}
+// GET /triggers is read through lib/reflexRules (v1.449.0): the Triggers card
+// and each rule's "isn't listening" line read the SAME reading.
 
 /* -------------------------------------------------------------------------- */
 /*  Small inline toggle switch (arc-reactor cyan when on)                      */
@@ -318,13 +298,24 @@ export default function ReflexPage() {
     el.focus();
   }, [focusForm]);
   const openFromEmpty = () => {
+    resetForm();
     setOpen(true);
     setFocusForm((n) => n + 1);
   };
   const [name, setName] = useState("");
-  const [source, setSource] = useState<ReflexSource>("webhook");
+  // v1.449.0 (Wave D item 34): the form opens on the everyday rule — a
+  // message arrives, an agent does a task — and the other shapes (a webhook,
+  // a calendar event; a workflow, a remote agent) sit behind "Another kind".
+  const [everyday, setEveryday] = useState(true);
+  const [source, setSource] = useState<ReflexSource>("comm");
   const [match, setMatch] = useState("");
-  const [action, setAction] = useState<ReflexAction>("workflow");
+  const [action, setAction] = useState<ReflexAction>(EVERYDAY_ACTION);
+  // The rule being edited (null = adding). Edit opens THIS form prefilled
+  // and saves with PATCH /reflex/rules/{id} (partial, the daemon re-checks).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  // Is each message source listening (GET /triggers, read through
+  // lib/reflexRules — the same reading as the Triggers card below).
+  const triggersApi = useApi<TriggersStatus>("/triggers");
   const [target, setTarget] = useState("");
   const [taskTemplate, setTaskTemplate] = useState("");
   const [projectId, setProjectId] = useState("");
@@ -340,6 +331,7 @@ export default function ReflexPage() {
       const wf = new URLSearchParams(window.location.search).get("workflow");
       if (wf) {
         setOpen(true);
+        setEveryday(false);
         setAction("workflow");
         setTarget(wf);
         setName(`run-${wf}`);
@@ -378,6 +370,42 @@ export default function ReflexPage() {
     setAction(v);
     setTarget(""); // a workflow name isn't a remote-agent name
   }
+  function pickShape(next: boolean) {
+    setEveryday(next);
+    if (next) {
+      if (!(EVERYDAY_SOURCES as readonly string[]).includes(source)) pickSource("comm");
+      if (action !== EVERYDAY_ACTION) pickAction(EVERYDAY_ACTION);
+    }
+  }
+  function resetForm() {
+    setName("");
+    setMatch("");
+    setTarget("");
+    setTaskTemplate("");
+    setProjectId("");
+    setEnabled(true);
+    setEveryday(true);
+    setSource("comm");
+    setAction(EVERYDAY_ACTION);
+    setEditingId(null);
+  }
+  /** v1.449.0: Edit opens the add form prefilled with the rule. */
+  function startEdit(r: ReflexRule) {
+    setEditingId(r.id);
+    setEveryday(isEveryday(r));
+    setName(r.name);
+    setSource(r.source);
+    setMatch(r.match);
+    setAction(r.action);
+    setTarget(r.target);
+    setTaskTemplate(r.task_template);
+    setProjectId(r.project_id ?? "");
+    setEnabled(r.enabled);
+    setFormError(null);
+    setFormOk(null);
+    setOpen(true);
+    setFocusForm((n) => n + 1);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -394,23 +422,39 @@ export default function ReflexPage() {
     setFormError(null);
     setFormOk(null);
     try {
-      await post("/reflex/rules", {
+      const fields = {
         name: name.trim(),
         source,
         match: match.trim(),
         action,
         target: targetNeeded ? target.trim() : "",
         task_template: templateShown ? taskTemplate : "",
-        project_id: projectShown && projectId ? projectId : null,
-        enabled,
-      });
-      setFormOk("Reflex added — it's live now and survives restarts.");
-      setName("");
-      setMatch("");
-      setTarget("");
-      setTaskTemplate("");
-      setProjectId("");
-      setEnabled(true);
+      };
+      if (editingId) {
+        // PARTIAL on the daemon, but the form holds every field, so all ride;
+        // "" clears the grounding (a remote agent has none).
+        await patch(`/reflex/rules/${encodeURIComponent(editingId)}`, {
+          ...fields,
+          project_id: projectShown && projectId ? projectId : "",
+          enabled,
+        });
+        setFormOk("Rule saved — the change applies to the next signal.");
+        resetForm();
+        setOpen(false);
+      } else {
+        await post("/reflex/rules", {
+          ...fields,
+          project_id: projectShown && projectId ? projectId : null,
+          enabled,
+        });
+        setFormOk("Reflex added — it's live now and survives restarts.");
+        setName("");
+        setMatch("");
+        setTarget("");
+        setTaskTemplate("");
+        setProjectId("");
+        setEnabled(true);
+      }
       reload();
     } catch (err) {
       // The daemon's 400 detail is already specific — show it verbatim.
@@ -479,6 +523,10 @@ export default function ReflexPage() {
 
   function renderRule(r: ReflexRule) {
     const res = testResults[r.id];
+    // v1.449.0 (Wave D item 34): a rule whose source cannot hear anything
+    // right now says so on its row (only when /triggers answered — a guess
+    // never reads as "off"; a switched-off rule says nothing more).
+    const offWords = r.enabled ? sourceOffWords(r.source, triggersApi.data) : "";
     return (
       <div
         key={r.id}
@@ -521,6 +569,19 @@ export default function ReflexPage() {
                   could not start: {r.last_error}
                 </span>
               )}
+              {offWords && (
+                <span data-testid={`reflex-source-off-${r.id}`} className="text-tone-warn">
+                  {sourceOffHref(r.source).startsWith("/") ? (
+                    <Link href={sourceOffHref(r.source)} className="underline-offset-2 hover:underline">
+                      {offWords}
+                    </Link>
+                  ) : (
+                    <a href={sourceOffHref(r.source)} className="underline-offset-2 hover:underline">
+                      {offWords}
+                    </a>
+                  )}
+                </span>
+              )}
               {templateShownFor(r) && r.task_template.trim() && (
                 <span className="max-w-[18rem] truncate" title={r.task_template}>
                   task: {r.task_template.trim()}
@@ -548,6 +609,16 @@ export default function ReflexPage() {
                   <Play size={13} /> Test
                 </>
               )}
+            </button>
+            <button
+              type="button"
+              onClick={() => startEdit(r)}
+              data-testid={`reflex-edit-${r.id}`}
+              title={`Edit reflex "${r.name || r.id}"`}
+              aria-label={`Edit reflex ${r.name || r.id}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+            >
+              <Pencil size={13} /> Edit
             </button>
             <ConfirmButton
               onConfirm={() => remove(r)}
@@ -580,7 +651,17 @@ export default function ReflexPage() {
           title="Reflexes"
           subtitle="When a webhook fires or a message arrives, run a workflow, a remote agent, or a session — automatically."
           actions={
-            <button type="button" onClick={() => setOpen((v) => !v)} className="btn-accent">
+            <button
+              type="button"
+              onClick={() => {
+                // An open Edit becomes a fresh Add (never an edit left half done).
+                if (editingId) {
+                  resetForm();
+                  setOpen(true);
+                } else setOpen((v) => !v);
+              }}
+              className="btn-accent"
+            >
               <Plus size={14} /> Add reflex
             </button>
           }
@@ -594,8 +675,36 @@ export default function ReflexPage() {
 
       {open && (
         <Reveal>
-          <Card title="Add reflex" icon={<Plus size={15} />}>
+          <Card title={editingId ? "Edit reflex" : "Add reflex"} icon={editingId ? <Pencil size={15} /> : <Plus size={15} />}>
             <form onSubmit={submit} className="space-y-3.5">
+              {/* v1.449.0 (Wave D item 34): the everyday shape first; the
+                  other shapes behind one choice. */}
+              <div role="radiogroup" aria-label="Kind of rule" className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={everyday}
+                  onClick={() => pickShape(true)}
+                  data-testid="reflex-shape-everyday"
+                  className={`rounded-lg px-2.5 py-1 text-xs transition-colors ${
+                    everyday ? "bg-accent/15 text-zinc-100" : "text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200"
+                  }`}
+                >
+                  A message arrives → an agent does a task
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!everyday}
+                  onClick={() => pickShape(false)}
+                  data-testid="reflex-shape-other"
+                  className={`rounded-lg px-2.5 py-1 text-xs transition-colors ${
+                    !everyday ? "bg-accent/15 text-zinc-100" : "text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200"
+                  }`}
+                >
+                  Another kind of rule
+                </button>
+              </div>
               {/* Signal: source + match */}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
@@ -610,7 +719,7 @@ export default function ReflexPage() {
                     onChange={(e) => pickSource(e.target.value as ReflexSource)}
                     className="field"
                   >
-                    {SOURCE_ORDER.map((s) => (
+                    {(everyday ? EVERYDAY_SOURCES : SOURCE_ORDER).map((s) => (
                       <option key={s} value={s}>
                         {SOURCE_META[s].option}
                       </option>
@@ -675,7 +784,13 @@ export default function ReflexPage() {
                 </div>
               </div>
 
-              {/* Action: action + target */}
+              {/* Action: action + target (the everyday shape is always "an
+                  agent does the task below", so it shows no picker). */}
+              {everyday ? (
+                <p data-testid="reflex-everyday-action" className="text-[12px] text-zinc-400">
+                  Then an agent does the task below, and reports back.
+                </p>
+              ) : (
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <label htmlFor={`${fid}-action`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
@@ -768,6 +883,7 @@ export default function ReflexPage() {
                   </div>
                 )}
               </div>
+              )}
 
               {/* The task it hands over (session / remote_agent only).
                   v1.316.0: shown as "Task" — "template" is the saved prompt
@@ -852,7 +968,9 @@ export default function ReflexPage() {
               <div className="flex items-center gap-2">
                 <button type="submit" disabled={!canSubmit} className="btn-accent">
                   {busy ? (
-                    <LoaderInline label="Adding…" />
+                    <LoaderInline label={editingId ? "Saving…" : "Adding…"} />
+                  ) : editingId ? (
+                    "Save changes"
                   ) : (
                     <>
                       <Plus size={14} /> Add reflex
@@ -861,7 +979,10 @@ export default function ReflexPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setOpen(false)}
+                  onClick={() => {
+                    setOpen(false);
+                    if (editingId) resetForm();
+                  }}
                   className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-2 text-sm text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200"
                 >
                   <X size={14} /> Cancel
@@ -932,7 +1053,9 @@ export default function ReflexPage() {
       </Reveal>
 
       <Reveal>
-        <TriggersCard />
+        <div id="reflex-triggers">
+          <TriggersCard />
+        </div>
       </Reveal>
 
       {/* Legend of what the three actions do (quiet reference). */}

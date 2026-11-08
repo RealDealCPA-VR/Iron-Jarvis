@@ -76,6 +76,12 @@ DRAFT_SYSTEM = (
 )
 
 
+class InitBody(BaseModel):
+    """v1.449.0 (Wave D item 36): the folder to make a repository of."""
+
+    path: str = Field(default="", max_length=4096)
+
+
 class CommitBody(BaseModel):
     message: str = Field(default="", max_length=B.MAX_MESSAGE_CHARS + 100)
 
@@ -205,6 +211,21 @@ def register(app: FastAPI, d: Any) -> None:
             if not ok:
                 return {**B.inspect_folder(""), "git": bool(B.git_path())}
         return B.inspect_folder(folder)
+
+    @app.post("/build/git/init")
+    async def git_init(body: InitBody) -> Any:
+        """v1.449.0 (Wave D item 36): "Make this folder a repository" — one
+        press on Tonight for a folder that is not in one (a night task works
+        on its own branch). ``branches.init_repo``: a network spelling is
+        refused by its text, the folder must pass the folder rules, git must
+        be installed, a folder already in a repository is left alone; else
+        ``git init`` + a first commit of its files through the night
+        commit's own screen (secrets and dependency folders left out, named
+        in ``left_out``). Off the loop; refusals in one sentence."""
+        try:
+            return await asyncio.to_thread(B.init_repo, body.path)
+        except B.GitRefused as exc:
+            return _refused(exc)
 
     @app.get("/build/sessions/{thread_id}/git")
     async def git_status(thread_id: str) -> Any:

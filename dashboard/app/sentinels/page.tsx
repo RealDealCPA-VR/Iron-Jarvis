@@ -10,8 +10,10 @@ import {
   Power,
   Eye,
   FolderSearch,
+  Pencil,
 } from "lucide-react";
-import { post, del, put, ApiError } from "@/lib/api";
+import { post, del, put, patch, ApiError } from "@/lib/api";
+import { CHOOSE_FOLDER_WORDS, useFolderPicker } from "@/components/folders/FolderChip";
 import { usePolledApi, useApi } from "@/lib/useApi";
 import type { AgentsResponse } from "@/lib/types";
 import {
@@ -131,6 +133,7 @@ export default function SentinelsPage() {
     el.focus();
   }, [focusForm]);
   const openFromEmpty = () => {
+    resetForm();
     setOpen(true);
     setFocusForm((n) => n + 1);
   };
@@ -145,6 +148,39 @@ export default function SentinelsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // v1.449.0 (Wave D item 34): the watcher being edited (its name — the key).
+  // Edit opens THIS form prefilled and saves with PATCH /sentinels/{name}.
+  const [editingName, setEditingName] = useState<string | null>(null);
+  const folderPicker = useFolderPicker({
+    folder: path.trim() || null,
+    onPick: setPath,
+    testId: "sentinel-folder-picker",
+  });
+
+  function resetForm() {
+    setName("");
+    setPath("");
+    setGlob("");
+    setTask("");
+    setAgentType("builder");
+    setRisk("low");
+    setEditingName(null);
+  }
+
+  function startEdit(s: Sentinel) {
+    setEditingName(s.name);
+    setName(s.name);
+    setKind(s.kind);
+    setPath(typeof s.config.path === "string" ? s.config.path : "");
+    setGlob(typeof s.config.glob === "string" ? s.config.glob : "");
+    setTask(s.task);
+    setAgentType(s.agent_type);
+    setRisk(s.risk);
+    setFormError(null);
+    setOk(null);
+    setOpen(true);
+    setFocusForm((n) => n + 1);
+  }
 
   async function enableSentinels() {
     setEnabling(true);
@@ -208,6 +244,22 @@ export default function SentinelsPage() {
     };
     if (glob.trim()) body.glob = glob.trim();
     try {
+      if (editingName) {
+        // Partial on the daemon; the form holds every field, so all ride.
+        // "" for the pattern removes it. A new folder starts a new baseline.
+        await patch(`/sentinels/${encodeURIComponent(editingName)}`, {
+          path: path.trim(),
+          glob: glob.trim(),
+          task: task.trim(),
+          agent_type: agentType,
+          risk,
+        });
+        setOk(`Sentinel "${editingName}" saved.`);
+        resetForm();
+        setOpen(false);
+        reload();
+        return;
+      }
       await post("/sentinels", body);
       setOk(
         `Sentinel "${name.trim()}" added. Its first check records a baseline — pre-existing files never fire.`,
@@ -262,7 +314,13 @@ export default function SentinelsPage() {
                   the page; Add stays here, quieter, one press as before. */}
               <button
                 type="button"
-                onClick={() => setOpen((v) => !v)}
+                onClick={() => {
+                  // An open Edit becomes a fresh Add.
+                  if (editingName) {
+                    resetForm();
+                    setOpen(true);
+                  } else setOpen((v) => !v);
+                }}
                 className={featureEnabled ? "btn-accent" : "btn-ghost"}
               >
                 <Plus size={14} /> Add sentinel
@@ -346,7 +404,10 @@ export default function SentinelsPage() {
 
       {open && (
         <Reveal>
-          <Card title="Add sentinel" icon={<Plus size={15} />}>
+          <Card
+            title={editingName ? `Edit sentinel “${editingName}”` : "Add sentinel"}
+            icon={editingName ? <Pencil size={15} /> : <Plus size={15} />}
+          >
             <form onSubmit={submit} className="space-y-3.5">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
@@ -359,7 +420,9 @@ export default function SentinelsPage() {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="downloads-watch"
-                    className="field"
+                    readOnly={!!editingName}
+                    title={editingName ? "The name is the watcher's key — delete and re-add to rename it" : undefined}
+                    className={`field ${editingName ? "opacity-70" : ""}`}
                   />
                 </div>
                 <div>
@@ -390,13 +453,27 @@ export default function SentinelsPage() {
                   <label htmlFor={`${fid}-path`} className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-zinc-400">
                     <FolderSearch size={12} /> Path to watch
                   </label>
-                  <input
-                    id={`${fid}-path`}
-                    value={path}
-                    onChange={(e) => setPath(e.target.value)}
-                    placeholder="C:\Users\you\Downloads"
-                    className="field font-mono"
-                  />
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      id={`${fid}-path`}
+                      value={path}
+                      onChange={(e) => setPath(e.target.value)}
+                      placeholder="C:\Users\you\Downloads"
+                      className="field min-w-0 flex-1 font-mono"
+                    />
+                    {/* v1.449.0 (Wave D): the shared picker — Windows' own
+                        folder dialog in the desktop app. */}
+                    <button
+                      type="button"
+                      onClick={() => void folderPicker.choose()}
+                      disabled={folderPicker.asking}
+                      data-testid="sentinel-folder-choose"
+                      className="btn-ghost shrink-0"
+                    >
+                      {CHOOSE_FOLDER_WORDS}
+                    </button>
+                  </div>
+                  {folderPicker.dialog}
                   <div className="mt-1 text-[11px] text-zinc-600">
                     A file, directory or glob. Protected paths and paths outside the allowed
                     roots are rejected.
@@ -487,11 +564,20 @@ export default function SentinelsPage() {
                   disabled={busy || !name.trim() || !path.trim()}
                   className="btn-accent"
                 >
-                  {busy ? <LoaderInline label="Adding…" /> : <><Plus size={14} /> Add sentinel</>}
+                  {busy ? (
+                    <LoaderInline label={editingName ? "Saving…" : "Adding…"} />
+                  ) : editingName ? (
+                    "Save changes"
+                  ) : (
+                    <><Plus size={14} /> Add sentinel</>
+                  )}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setOpen(false)}
+                  onClick={() => {
+                    setOpen(false);
+                    if (editingName) resetForm();
+                  }}
                   className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-2 text-sm text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200"
                 >
                   <X size={14} /> Cancel
@@ -604,6 +690,16 @@ export default function SentinelsPage() {
                         )}
                       </td>
                       <td className="px-2 py-2.5 text-right">
+                        <button
+                          type="button"
+                          onClick={() => startEdit(s)}
+                          data-testid={`sentinel-edit-${s.id}`}
+                          title={`Edit sentinel "${s.name}"`}
+                          aria-label={`Edit sentinel ${s.name}`}
+                          className="mr-1.5 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
+                        >
+                          <Pencil size={13} /> Edit
+                        </button>
                         <ConfirmButton
                           onConfirm={() => remove(s.name)}
                           label="Delete"

@@ -1596,6 +1596,19 @@ class SentinelAdd(BaseModel):
     risk: str = "low"  # low | med
 
 
+class SentinelPatch(BaseModel):
+    """PARTIAL edit of a watcher (v1.449.0, Wave D item 34): omitted = keep,
+    given = replace; ``glob`` "" removes the pattern. The name is the row's
+    key and is not in the body (rename = remove and add)."""
+
+    path: str | None = None
+    glob: str | None = None
+    task: str | None = None
+    agent_type: str | None = None
+    risk: str | None = None
+    enabled: bool | None = None
+
+
 class TemplateCreateBody(BaseModel):
     name: str
     task: str
@@ -1691,10 +1704,22 @@ class ReflexToggleBody(BaseModel):
     Three intents, kept distinct (the remote-agent-token lesson): omit the
     field (None) = UNCHANGED, ``""`` = CLEAR the grounding, non-empty = set it.
     An unedited form that never mentions ``project_id`` must not clear one.
+
+    v1.449.0 (Wave D item 34): the rule's OTHER fields are editable the same
+    way — omitted = keep, given = replace — and the MERGED rule is checked by
+    exactly the add-time rules, so an edit can never land what an add would
+    refuse. ``match`` / ``target`` / ``task_template`` "" clear (a keyword
+    rule may be "every message"; a session action has no target).
     """
 
     enabled: bool | None = None
     project_id: str | None = None
+    name: str | None = None
+    source: str | None = None
+    match: str | None = None
+    action: str | None = None
+    target: str | None = None
+    task_template: str | None = None
 
 
 class McpAuthBody(BaseModel):

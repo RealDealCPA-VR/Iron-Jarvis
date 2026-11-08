@@ -41,6 +41,13 @@ from .watcher import Scanner, default_scanner, diff_state
 log = get_logger("sentinels")
 
 
+#: AN review (v1.449.0): a watch path on a network location, refused by text.
+NETWORK_WATCH = (
+    "That path is on a network location, so a watcher cannot watch it. "
+    "Pick a folder on this PC."
+)
+
+
 class SentinelService:
     """Persistent registry of always-on, suggest-only watchers."""
 
@@ -115,6 +122,27 @@ class SentinelService:
             cfg["path"] = path
         if glob is not None:
             cfg["glob"] = glob
+        self._check_config(kind, cfg)
+
+        rec = SentinelRecord(
+            name=name,
+            kind=kind,
+            config_json=json.dumps(cfg, default=str),
+            task=task or "",
+            agent_type=agent_type or "builder",
+            risk=risk if risk in ("low", "med", "high") else "low",
+            enabled=enabled,
+        )
+        with session_scope(self.engine) as db:
+            db.add(rec)
+            db.commit()
+            db.refresh(rec)
+        return rec
+
+    def _check_config(self, kind: str, cfg: dict) -> None:
+        """The add-time watch-spec rules, shared by :meth:`add` and
+        :meth:`update` (v1.449.0, Wave D item 34) so an edit can never land a
+        spec the add would have refused. ``ValueError`` in words."""
         if kind == "file" and not cfg.get("path"):
             raise ValueError("file sentinel requires a 'path'")
         if kind == "file":
@@ -122,6 +150,15 @@ class SentinelService:
             # every reader honors) and validate the glob so a bad pattern is a
             # clear error, not a silently-inert watcher.
             wpath = str(cfg.get("path") or "")
+            # AN review (v1.449.0): a network or device spelling is refused by
+            # its TEXT before the policy check or the scanner looks at it —
+            # either one stats the path, and a stat of ``\\host\share``
+            # is an SMB connection (the v1.379.0 lesson; ``sentinel_add`` is a
+            # chat tool, so the path can be model-written).
+            from ..harness.sessions import _network_spelling
+
+            if _network_spelling(os.path.expanduser(wpath)):
+                raise ValueError(NETWORK_WATCH)
             probe = os.path.expanduser(wpath)
             for ch in "*?[":
                 cut = probe.find(ch)
@@ -142,20 +179,60 @@ class SentinelService:
             except Exception as exc:  # noqa: BLE001 — surface a bad glob/path now
                 raise ValueError(f"invalid watch path/glob: {exc}") from exc
 
-        rec = SentinelRecord(
-            name=name,
-            kind=kind,
-            config_json=json.dumps(cfg, default=str),
-            task=task or "",
-            agent_type=agent_type or "builder",
-            risk=risk if risk in ("low", "med", "high") else "low",
-            enabled=enabled,
-        )
+    #: What :meth:`update` may change. The name is the row's key (the page
+    #: and the chat tools refer to a watcher by name), ``kind`` would change
+    #: what the config means, and the seen state is the watcher's own.
+    EDITABLE = ("path", "glob", "task", "agent_type", "risk", "enabled")
+
+    def update(self, name: str, **fields) -> SentinelRecord | None:
+        """PARTIAL edit (v1.449.0, Wave D item 34): only the keys given change,
+        an omitted one keeps its stored value; ``glob`` "" / None removes the
+        pattern. A changed watch spec passes :meth:`_check_config` BEFORE the
+        row is written and RESETS the seen state (the next check records a
+        new baseline for the new spec — never a flood of "new" files from a
+        folder it never watched). None when absent; a key outside
+        :data:`EDITABLE` is a ``ValueError``."""
+        bad = [k for k in fields if k not in self.EDITABLE]
+        if bad:
+            raise ValueError(f"not an editable field: {', '.join(sorted(bad))}")
         with session_scope(self.engine) as db:
+            rec = self._fetch(db, name)
+            if rec is None:
+                return None
+            cfg = rec.decoded_config()
+            spec_changed = False
+            if "path" in fields:
+                new_path = str(fields["path"] or "").strip()
+                if new_path != str(cfg.get("path") or ""):
+                    cfg["path"] = new_path
+                    spec_changed = True
+            if "glob" in fields:
+                new_glob = str(fields["glob"] or "").strip()
+                if new_glob != str(cfg.get("glob") or ""):
+                    if new_glob:
+                        cfg["glob"] = new_glob
+                    else:
+                        cfg.pop("glob", None)
+                    spec_changed = True
+            if spec_changed:
+                self._check_config(rec.kind, cfg)
+                rec.config_json = json.dumps(cfg, default=str)
+                rec.last_state_json = "{}"
+                rec.last_checked_at = None
+                rec.last_error = None
+            if "task" in fields:
+                rec.task = str(fields["task"] or "")
+            if "agent_type" in fields and str(fields["agent_type"] or "").strip():
+                rec.agent_type = str(fields["agent_type"]).strip()
+            if "risk" in fields:
+                risk = str(fields["risk"] or "")
+                rec.risk = risk if risk in ("low", "med", "high") else rec.risk
+            if "enabled" in fields and fields["enabled"] is not None:
+                rec.enabled = bool(fields["enabled"])
             db.add(rec)
             db.commit()
             db.refresh(rec)
-        return rec
+            return rec
 
     def remove(self, name: str) -> bool:
         """Delete a sentinel. Returns False if absent."""

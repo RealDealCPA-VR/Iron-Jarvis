@@ -23,9 +23,11 @@
  */
 
 import { AccountChoice } from "@/components/AccountChoice";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowUp, Loader2, Moon, Plus } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, ArrowDown, ArrowUp, GitBranch, Loader2, Moon, Plus } from "lucide-react";
 import { Badge, ConfirmButton } from "@/components/ui";
+import { CHOOSE_FOLDER_WORDS, useFolderPicker } from "@/components/folders/FolderChip";
+import { fetchFolderGit, initRepo, repoMadeWords, type FolderGit } from "@/lib/buildGit";
 import { TryOnModels } from "@/components/harness/TryOnModels";
 import { MAX_ATTEMPTS, type TryOnPick } from "@/lib/buildAttempts";
 import { modelPickWords } from "@/lib/onboarding";
@@ -68,6 +70,33 @@ function pickKey(p: NightPick): string {
 
 type How = "default" | "team" | "try" | `model:${string}`;
 
+/** v1.449.0 (Wave D item 36): how long the form waits after the folder
+ *  changes before it asks whether it is a repository. */
+export const REPO_CHECK_MS = 400;
+
+/** Said under a folder that is not a git repository. */
+export const NOT_A_REPO_WORDS =
+  "This folder is not a git repository. A night task works on a branch of its own, so it needs one.";
+
+/** The one press that makes it one. */
+export const MAKE_REPO_WORDS = "Make this folder a repository";
+
+interface RepoState {
+  kind: "unknown" | "ok" | "not_repo" | "cannot_branch" | "made";
+  busy: boolean;
+  note: string;
+  error: string;
+}
+
+function repoKindOf(info: FolderGit | null): RepoState {
+  const blank = { busy: false, note: "", error: "" };
+  // No answer, or no git on this PC: the daemon's own check says it at Add.
+  if (!info || !info.git) return { kind: "unknown", ...blank };
+  if (!info.repo) return { kind: "not_repo", ...blank };
+  if (!info.canBranch) return { kind: "cannot_branch", ...blank, note: info.note };
+  return { kind: "ok", ...blank };
+}
+
 function howOf(d: NightDraft): How {
   if ((d.tryOn ?? []).length) return "try";
   if (d.team) return "team";
@@ -99,6 +128,40 @@ function TaskForm({
   const [account, setAccount] = useState(initial.account ?? "");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const picker = useFolderPicker({ folder: folder.trim() || null, onPick: setFolder, testId: "tonight-folder-picker" });
+  // v1.449.0 (Wave D item 36): is the folder a repository a night task can
+  // branch from? Read a moment after the folder settles (GET
+  // /build/git/folder); "not a repository" offers ONE press that makes it one.
+  const [repoState, setRepoState] = useState<RepoState>({ kind: "unknown", busy: false, note: "", error: "" });
+  const repoAsk = useRef(0);
+  useEffect(() => {
+    const path = folder.trim();
+    const n = ++repoAsk.current;
+    if (!path) {
+      setRepoState({ kind: "unknown", busy: false, note: "", error: "" });
+      return;
+    }
+    const timer = setTimeout(() => {
+      void fetchFolderGit(path).then((info) => {
+        if (n !== repoAsk.current) return;
+        setRepoState(repoKindOf(info));
+      });
+    }, REPO_CHECK_MS);
+    return () => clearTimeout(timer);
+  }, [folder]);
+
+  async function makeRepo() {
+    const path = folder.trim();
+    if (!path || repoState.busy) return;
+    setRepoState((s) => ({ ...s, busy: true, error: "" }));
+    try {
+      const made = await initRepo(path);
+      repoAsk.current++;
+      setRepoState({ kind: made.canBranch ? "made" : "cannot_branch", busy: false, note: repoMadeWords(made), error: "" });
+    } catch (e) {
+      setRepoState((s) => ({ ...s, busy: false, error: errorWords(e) }));
+    }
+  }
   // A night task never runs on Local only (it has no such switch); the demo
   // model is left out, as in the box's Try on.
   const groups = useMemo(() => tryOnGroups(models, false), [models]);
@@ -136,22 +199,67 @@ function TaskForm({
         void submit();
       }}
     >
-      <label className="block space-y-1">
-        <span className="text-[12px] text-zinc-400">Folder</span>
-        <input
-          value={folder}
-          onChange={(e) => setFolder(e.target.value)}
-          list="tonight-folders"
-          placeholder="A folder in a git repository"
-          data-testid="tonight-folder"
-          className="field w-full py-1.5 text-[13px]"
-        />
+      <div className="space-y-1">
+        <label htmlFor="tonight-folder-box" className="block text-[12px] text-zinc-400">
+          Folder
+        </label>
+        <div className="flex items-center gap-1.5">
+          <input
+            id="tonight-folder-box"
+            value={folder}
+            onChange={(e) => setFolder(e.target.value)}
+            list="tonight-folders"
+            placeholder="A folder in a git repository"
+            data-testid="tonight-folder"
+            className="field min-w-0 flex-1 py-1.5 text-[13px]"
+          />
+          {/* v1.449.0 (Wave D item 36): the shared picker — Windows' own
+              folder dialog in the desktop app, the folder tree otherwise. */}
+          <button
+            type="button"
+            onClick={() => void picker.choose()}
+            disabled={picker.asking}
+            data-testid="tonight-folder-choose"
+            className={QUIET_BUTTON}
+          >
+            {CHOOSE_FOLDER_WORDS}
+          </button>
+        </div>
+        {picker.dialog}
         <datalist id="tonight-folders">
           {folders.map((f) => (
             <option key={f} value={f} />
           ))}
         </datalist>
-      </label>
+        {repoState.kind === "not_repo" ? (
+          <div data-testid="tonight-not-repo" className="space-y-1 text-[12px] text-zinc-400">
+            <p>{NOT_A_REPO_WORDS}</p>
+            <button
+              type="button"
+              onClick={() => void makeRepo()}
+              disabled={repoState.busy}
+              data-testid="tonight-make-repo"
+              className={QUIET_BUTTON}
+            >
+              {repoState.busy ? <Loader2 size={12} className="animate-spin" /> : <GitBranch size={12} aria-hidden />}
+              {MAKE_REPO_WORDS}
+            </button>
+          </div>
+        ) : repoState.kind === "cannot_branch" ? (
+          <p data-testid="tonight-cannot-branch" className="text-[12px] text-tone-warn">
+            {repoState.note}
+          </p>
+        ) : repoState.kind === "made" ? (
+          <p role="status" data-testid="tonight-repo-made" className="text-[12px] text-zinc-400">
+            {repoState.note}
+          </p>
+        ) : null}
+        {repoState.error ? (
+          <p role="alert" data-testid="tonight-make-repo-problem" className="text-[12px] text-tone-danger">
+            {repoState.error}
+          </p>
+        ) : null}
+      </div>
       <label className="block space-y-1">
         <span className="text-[12px] text-zinc-400">What to do</span>
         <textarea

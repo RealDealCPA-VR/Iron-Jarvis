@@ -268,7 +268,9 @@ describe("Edit a schedule (v1.299.0)", () => {
     editor = await screen.findByTestId("schedule-editor");
     // PATCH /schedules/{name} has no `name` field: the editor never sends one.
     expect(within(editor).getByLabelText("Schedule name")).toHaveAttribute("readonly");
-    fireEvent.change(within(editor).getByLabelText("Cron expression"), { target: { value: "0 3 * * *" } });
+    // v1.449.0 (Wave D item 35, moved on purpose): the editor reads the cron
+    // back into a time; "0 2 * * *" is Daily at 2:00, re-timed to 3:00.
+    fireEvent.change(within(editor).getByLabelText("Time"), { target: { value: "03:00" } });
     fireEvent.change(within(editor).getByLabelText("Task text"), { target: { value: "Nightly rounds, briefly." } });
     fireEvent.click(within(editor).getByTestId("schedule-editor-save"));
     await waitFor(() => expect(api.patches).toHaveLength(1));

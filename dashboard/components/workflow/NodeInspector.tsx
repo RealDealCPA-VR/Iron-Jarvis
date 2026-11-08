@@ -3,7 +3,9 @@
 // Side panel for editing a selected step node: name, agent type, and task
 // (with a voice-dictation mic). Overlays the right edge of the canvas.
 
+import { useEffect, useId, useState } from "react";
 import { X, Trash2, SlidersHorizontal, BadgeCheck } from "lucide-react";
+import { jsonProblem } from "@/lib/workflowStepProblems";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import { useApi } from "@/lib/useApi";
 import type { AgentsResponse } from "@/lib/types";
@@ -33,12 +35,19 @@ export function NodeInspector({
   onChange,
   onDelete,
   onClose,
+  problem = null,
 }: {
   data: StepNodeData;
   onChange: (patch: Partial<StepNodeData>) => void;
   onDelete: () => void;
   onClose: () => void;
+  /** v1.449.0: why the last save refused this step, in the daemon's words. */
+  problem?: string | null;
 }) {
+  const [argsProblem, setArgsProblem] = useState<string | null>(null);
+  const argsProblemId = useId();
+  // Another step opened in the same panel starts without the old problem.
+  useEffect(() => setArgsProblem(null), [data.index]);
   // Live agent roster: built-ins + user/agent-authored dynamic agents. Merge in
   // the step's CURRENT agent so an unknown/dynamic value stays selectable (and
   // isn't silently coerced to Builder) even before /agents resolves.
@@ -69,6 +78,13 @@ export function NodeInspector({
       </header>
 
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
+        {/* v1.449.0 (Wave D item 42): the save refused THIS step — the
+            daemon's own words ("no tool named …"), here beside it. */}
+        {problem ? (
+          <p role="alert" data-testid="step-problem" className="rounded-lg bg-tone-danger/10 px-2.5 py-2 text-[12px] text-tone-danger">
+            {problem}
+          </p>
+        ) : null}
         <div>
           <label className={WF_LABEL}>
             Step name
@@ -175,6 +191,7 @@ export function NodeInspector({
                 value={data.tool ?? ""}
                 onChange={(e) => onChange({ tool: e.target.value || null })}
                 placeholder="e.g. list_folder"
+                aria-invalid={problem ? true : undefined}
                 className="field font-mono"
               />
             </div>
@@ -186,18 +203,26 @@ export function NodeInspector({
                 key={`args-${String(data.index ?? data.name)}`}
                 defaultValue={JSON.stringify(data.args ?? {}, null, 2)}
                 onBlur={(e) => {
-                  try {
-                    const parsed = JSON.parse(e.target.value || "{}");
-                    if (parsed && typeof parsed === "object")
-                      onChange({ args: parsed as Record<string, unknown> });
-                  } catch {
-                    /* leave the last valid args — the hint below explains */
-                  }
+                  // v1.449.0 (Wave D item 42): a box that is not JSON is SAID
+                  // (with the line and column the parser names) — it used to
+                  // keep the last valid value in silence.
+                  const checked = jsonProblem(e.target.value);
+                  if (checked.ok && checked.value) {
+                    setArgsProblem(null);
+                    onChange({ args: checked.value });
+                  } else setArgsProblem(checked.words);
                 }}
                 rows={4}
                 spellCheck={false}
+                aria-invalid={argsProblem ? true : undefined}
+                aria-describedby={argsProblem ? argsProblemId : undefined}
                 className="field resize-y font-mono text-[12px]"
               />
+              {argsProblem ? (
+                <p id={argsProblemId} role="alert" data-testid="step-args-problem" className="mt-1.5 text-[11px] text-tone-danger">
+                  {argsProblem}
+                </p>
+              ) : null}
               <p className="mt-1.5 text-[11px] text-zinc-500">
                 Must be valid JSON (checked when you click away).
                 {" {{Earlier Step}}"} in a value pastes that step&apos;s result.
