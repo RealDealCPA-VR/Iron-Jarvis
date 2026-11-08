@@ -1752,7 +1752,12 @@ def _saved_workflows_block(platform) -> str:
 #: machine (pinned equal to the registry; the dashboard's twin is
 #: ``lib/onboarding.SEED_ENDPOINT_LABELS``). Not a machine's name, so never
 #: the receipt's "on <label>".
-SEED_ENDPOINT_LABELS: dict[str, str] = {"custom": "Custom endpoint", "ollama": "Ollama endpoint"}
+#: v1.455.0: ONE definition, in ``providers/failure_words`` (the failure
+#: words read it too); this name stays for the pins and the readers here.
+from ..providers.failure_words import (  # noqa: E402
+    MODEL_SERVER_WORDS as _MODEL_SERVER_WORDS,
+    SEED_ENDPOINT_LABELS,
+)
 
 
 def route_label(platform: Any, provider: str) -> str:
@@ -1791,7 +1796,9 @@ def route_label(platform: Any, provider: str) -> str:
     except Exception:  # noqa: BLE001 — wording only, never a new failure
         return ""
     label = " ".join(str(label or "").split())
-    return "" if label == p else label
+    # v1.455.0: an unnamed node reads "your model server" in a refusal, but
+    # that is no machine's name for the receipt's "on <label>".
+    return "" if label in (p, _MODEL_SERVER_WORDS) else label
 
 
 def text_only_note(platform: Any, provider: str) -> str:

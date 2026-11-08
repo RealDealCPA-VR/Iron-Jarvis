@@ -175,7 +175,7 @@ async def test_local_primary_that_answered_an_error_refuses_by_name(status, expl
     with pytest.raises(ProviderError) as ei:
         await router.complete(system="", messages=_msgs(), tools=[], **kwargs)
     msg = str(ei.value)
-    assert f"fleet-custom answered HTTP {status}" in msg
+    assert f"Your model server answered HTTP {status}" in msg
     # v1.354.0 (G28): the policy in plain words, never its config key.
     assert "Iron Jarvis won't switch to a different AI without asking." in msg
     assert "You can allow that in Settings." in msg
@@ -198,7 +198,7 @@ async def test_stream_lane_refuses_the_same_way(status):
     cloud = _Ok("claude-cli")
     mgr = _Manager({"fleet-custom": local, "claude-cli": cloud})
     router = _router(mgr, "fleet-custom", bus, deadline_s=1.0)
-    with pytest.raises(ProviderError, match=f"fleet-custom answered HTTP {status}"):
+    with pytest.raises(ProviderError, match=f"Your model server answered HTTP {status}"):
         await _drain(router.stream(system="", messages=_msgs(), tools=[]))
     assert cloud.calls == 0
     assert not bus.of(EventType.PROVIDER_FAILOVER)
@@ -282,7 +282,7 @@ async def test_failover_policy_still_refuses_a_local_box_that_never_answered():
     cloud = _Ok("claude-cli")
     mgr = _Manager({"fleet-custom": local, "claude-cli": cloud})
     router = _router(mgr, "fleet-custom", policy="failover", deadline_s=1.0)
-    with pytest.raises(ProviderError, match="fleet-custom isn't connected"):
+    with pytest.raises(ProviderError, match="Your model server isn't connected"):
         await router.complete(system="", messages=_msgs(), tools=[])
     assert cloud.calls == 0
 
@@ -598,7 +598,7 @@ async def test_the_probe_reaches_through_the_prompted_tools_wrap():
                        tool_use=False)
     mgr = _Manager({"fleet-custom": local})
     spec = [{"name": "t", "description": "", "input_schema": {"type": "object"}}]
-    with pytest.raises(ProviderError, match="fleet-custom isn't connected"):
+    with pytest.raises(ProviderError, match="Your model server isn't connected"):
         await _router(mgr, "fleet-custom").complete(system="", messages=_msgs(), tools=spec)
     assert local.probes == 1 and local.calls == 0
 

@@ -176,6 +176,47 @@ PLAIN_NAMES: dict[str, str] = {
     "auto": "Auto",
 }
 
+#: v1.455.0 (a USER BUG: the phone said "Fleet-custom couldn't answer"): the
+#: words for the user's OWN model server when it has no name of its own —
+#: the ``custom`` slot, a bare ``fleet-<id>``, or a node still wearing the
+#: label the registry SEEDED for a config slot (below). A node the user
+#: labelled keeps its label.
+MODEL_SERVER_WORDS = PLAIN_NAMES["custom"]
+
+#: The labels ``fleet.registry.FleetRegistry.seeded`` gives the two config
+#: endpoint slots until the user names the machine (v1.360.0, lane 10B; pinned
+#: equal to the registry and to the dashboard's ``lib/onboarding.
+#: SEED_ENDPOINT_LABELS``; ``daemon/chat_turn`` re-exports it). Not a name.
+SEED_ENDPOINT_LABELS: dict[str, str] = {"custom": "Custom endpoint", "ollama": "Ollama endpoint"}
+
+
+#: The config slots' provider ids (the slot itself and its fleet twin).
+_SLOT_IDS: frozenset[str] = frozenset(
+    {"custom", *(f"fleet-{slot}" for slot in SEED_ENDPOINT_LABELS)}
+)
+
+
+def own_server_name(name: str, provider: str = "") -> str:
+    """*name* (what a lookup found for *provider*), or
+    :data:`MODEL_SERVER_WORDS` when it is no name: a node still wearing the
+    label the registry seeded ("Custom endpoint"), or a config slot
+    (``custom``, ``fleet-custom``, ``fleet-ollama``) with no label or only
+    its id. Any other provider answers *name* unchanged (else its id).
+    Never raises."""
+    try:
+        pid = " ".join(str(provider or "").split()).lower()
+        n = " ".join(str(name or "").split())
+        if pid != "custom" and not pid.startswith("fleet-"):
+            return n
+        if n in SEED_ENDPOINT_LABELS.values():
+            return MODEL_SERVER_WORDS
+        if pid in _SLOT_IDS and (not n or n.lower() == pid):
+            return MODEL_SERVER_WORDS
+        return n or str(provider or "")
+    except Exception:  # noqa: BLE001 — wording only
+        return str(name or "")
+
+
 #: Brands spelled in lower case on purpose — never capitalised at the start
 #: of a sentence ("llama.cpp couldn't finish this answer").
 _LOWER_CASE_BRANDS: frozenset[str] = frozenset({"llama.cpp"})
@@ -261,12 +302,15 @@ def plain_name(provider: str, manager: Any = None) -> str:
     if head in PLAIN_NAMES:
         return PLAIN_NAMES[head]
     if key.startswith("fleet-"):
+        # v1.455.0: a config slot with no name of its own (no manager to
+        # ask, no label) or a node with the seeded "Custom endpoint" label is
+        # "your model server", never "Fleet-custom couldn't answer".
         try:
             from .egress import friendly_name
 
-            return friendly_name(p, manager) or p
+            return own_server_name(friendly_name(p, manager) or p, p)
         except Exception:  # noqa: BLE001 — wording only
-            return p
+            return own_server_name(p, p)
     return p
 
 

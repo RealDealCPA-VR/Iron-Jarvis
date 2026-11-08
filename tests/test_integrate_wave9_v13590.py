@@ -332,12 +332,12 @@ def test_the_routers_technical_text_is_worded_for_where_it_is_read(tmp_path):
     platform = build_platform(str(tmp_path))
     router = platform.router
     chat = str(router._unavailable_error("ollama", False))
-    assert chat.endswith(" Bring that endpoint back up, or pick another model for this chat, and retry.")
+    assert chat.endswith(" Bring that model server back up, or pick another model for this chat, and retry.")
     with fw.run_surface():
         run = str(router._unavailable_error("ollama", False))
         timeout = str(router._unavailable_error("ollama", False, kind="timeout"))
     assert "this chat" not in run and "this chat" not in timeout
-    assert run.endswith(" Bring that endpoint back up, or choose another model in Settings, and run it again.")
+    assert run.endswith(" Bring that model server back up, or choose another model in Settings, and run it again.")
     assert timeout.endswith("or choose another model in Settings, and run it again.")
 
 

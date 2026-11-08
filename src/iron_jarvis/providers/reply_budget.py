@@ -104,6 +104,32 @@ SERVER_FIT_MARGIN = 16
 #: (compaction, follow-ups, commit messages, reflections).
 NON_STREAM_CAP = REPLY_FLOOR
 
+#: How long a STREAMED reply from the user's own model server may go without
+#: a byte before the read gives up (v1.455.0, a USER BUG). vLLM's tool parser
+#: (GLM, Qwen) BUFFERS a tool call's arguments until the call is complete, so
+#: while a model writes one big ``write_document`` call — a whole workbook —
+#: the stream sends nothing for minutes. The client's old 60-second read
+#: timeout killed the reply twice in a row ("ReadTimeout", partial). 10
+#: minutes is the reply budget's own bound (``DEFAULT_REPLY_TOKENS`` at ~55
+#: tokens a second); Stop still ends the stream at once (a cancel), and the
+#: chat's heartbeat keeps the page from reading the silence as a dead link.
+#: Connect, write and pool timeouts are unchanged, a NOT-streamed request
+#: keeps 60 seconds (:data:`NON_STREAM_CAP` is sized to it), and a hosted
+#: provider has no reply budget, so none of this reaches it. Read at call
+#: time (a test patches it small).
+LOCAL_STREAM_READ_S = 600
+
+
+def local_stream_timeout(base_s: float = 60.0) -> Any:
+    """The ``httpx.Timeout`` a streamed request to a budgeted (local) endpoint
+    carries: ``base_s`` for connect, write and pool — exactly what the
+    adapter's client already uses — and :data:`LOCAL_STREAM_READ_S` between
+    two reads. Passed per request (``client.stream(..., timeout=)``) only by
+    an adapter that has a reply budget."""
+    import httpx  # lazy: the arithmetic above needs no network library
+
+    return httpx.Timeout(base_s, read=float(LOCAL_STREAM_READ_S))
+
 #: ``(provider, model) -> {"window": int|None, "max_output": int|None,
 #: "ratio": float|None, "cloud": bool}`` — what the platform knows about a
 #: model: the window the lanes plan against, the output limit its server

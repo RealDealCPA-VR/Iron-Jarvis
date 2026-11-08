@@ -127,7 +127,7 @@ async def test_an_unavailable_DEFAULT_is_refused_too():
     exactly how the fabricated reply reached the user."""
     mgr = _Manager({"mock": _Mock(), "fleet-custom": _Boom("fleet-custom")}, available={"mock"})
     router = ModelRouter(mgr, default_provider="fleet-custom", event_bus=EventBus())
-    with pytest.raises(Exception, match="fleet-custom isn't connected"):
+    with pytest.raises(Exception, match="Your model server isn't connected"):
         await router.complete(system="", messages=_msgs(), tools=[])
 
 

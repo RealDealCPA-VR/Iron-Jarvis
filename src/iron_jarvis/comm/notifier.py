@@ -533,21 +533,85 @@ def _provider_name(provider: str) -> str:
 _CLASS_PREFIX_RX = re.compile(r"^[A-Za-z_][\w.]*: ")
 
 
+#: v1.455.0: the way back from a failed CHAT turn's phone line — the chat
+#: has the Retry press (the phone line itself has none).
+CHAT_TURN_FAILED_FIX = "Open the chat and press Retry."
+CODE_TURN_FAILED_FIX = f"Open the {CODING_SESSION} and press Retry."
+#: How much of a chat's title the line quotes.
+_CHAT_TITLE_CHARS = 60
+#: The transport failures an event can name by class (the router publishes
+#: ``"<Class>: <message>"``, and an httpx timeout's message is often empty):
+#: after the first words of a reply (``partial``) each is the connection
+#: dropping mid-answer, which is how the chat itself words it.
+_TRANSPORT_CLASSES = frozenset({
+    "ReadTimeout", "ReadError", "RemoteProtocolError", "WriteError", "WriteTimeout",
+    "ConnectError", "ConnectTimeout", "PoolTimeout", "TimeoutException",
+    "NetworkError", "TransportError", "ProtocolError", "CloseError",
+})
+
+
+def _labelled(provider: str, label: str) -> Any:
+    """A stand-in for the provider manager that answers the event's OWN
+    ``label`` for a ``fleet-*`` provider (v1.455.0: the router stamps the
+    label it knows; this module has no manager to ask), else ``None``."""
+    if not label or not provider.startswith("fleet-"):
+        return None
+    from types import SimpleNamespace
+
+    node = SimpleNamespace(label=label)
+
+    class _Manager:
+        def get(self, *_a: Any, **_k: Any) -> Any:
+            return SimpleNamespace(node=node)
+
+    return _Manager()
+
+
+def _chat_title_words(title: Any) -> str:
+    t = " ".join(str(title or "").split()) if isinstance(title, str) else ""
+    if len(t) > _CHAT_TITLE_CHARS:
+        t = t[: _CHAT_TITLE_CHARS - 1].rstrip() + "…"
+    return t
+
+
 def _provider_failed_line(payload: dict) -> str:
     """The SAME sentence the chat's failure line shows for this failure
     (``failure_words`` title + fix), read from the event's error text — the
     router publishes ``"<Class>: <message>"``, so the class is set aside and
-    the message classified. Never the server's raw text."""
+    the message classified. Never the server's raw text.
+
+    v1.455.0: a failure inside a CHAT turn (``turn_id`` on the payload)
+    names the chat ("Your chat “…” didn't finish: <what happened>. Open the
+    chat and press Retry."); the title is the one ``Notifier.on_event``
+    read (``chat_title``). Everything else keeps its line."""
     provider = _text(payload.get("provider"))
+    label = _text(payload.get("label"))
     error = str(payload.get("error") or "")
     head = _CLASS_PREFIX_RX.match(error)
     message = error[head.end():] if head else error
+    in_turn = bool(_text(payload.get("turn_id")))
     try:
-        from ..providers.failure_words import GENERIC_FIX, classify
+        from ..providers.failure_words import GENERIC_FIX, classify, heading, plain_name
 
-        words = classify(RuntimeError(message), provider=provider)
+        manager = _labelled(provider, label)
+        exc = RuntimeError(message)
+        if in_turn and payload.get("partial") is True and head is not None:
+            cls = head.group(0).rstrip(": ").rsplit(".", 1)[-1]
+            if cls in _TRANSPORT_CLASSES:
+                # The chat's own words for it (the router's refusal kind).
+                exc.kind = "interrupted"  # type: ignore[attr-defined]
+                exc.partial = True  # type: ignore[attr-defined]
+        words = classify(exc, provider=provider, manager=manager)
         if words is None:
-            words = (f"{_provider_name(provider)} couldn't answer", GENERIC_FIX)
+            name = heading(plain_name(provider, manager)) or "The AI service"
+            words = (f"{name} couldn't answer", GENERIC_FIX)
+        if in_turn:
+            build = payload.get("chat_surface") == "build"
+            what = CODING_SESSION if build else "chat"
+            title = _chat_title_words(payload.get("chat_title"))
+            named = f"Your {what} “{title}”" if title else f"Your {what}"
+            fix = CODE_TURN_FAILED_FIX if build else CHAT_TURN_FAILED_FIX
+            return f"{named} didn't finish: {words[0]}. {fix}"
         return f"{words[0]}. {words[1]}"
     except Exception:  # noqa: BLE001 — wording only
         return f"{_provider_name(provider)} couldn't answer."
@@ -918,6 +982,43 @@ def is_desktop_channel(channel: Any) -> bool:
         return False
 
 
+def _turn_being_looked_at(payload: dict) -> bool:
+    """Was (or is) a window showing the chat turn this failure happened in?
+    The router's ``looked_at`` at publish time, or the turn's log now
+    (``durable_turns.turn_looked_at``). Never raises."""
+    if payload.get("looked_at") is True:
+        return True
+    try:
+        from ..daemon.durable_turns import turn_looked_at
+
+        return turn_looked_at(_text(payload.get("turn_id"))) is True
+    except Exception:  # noqa: BLE001 — an unknown turn is not being looked at
+        return False
+
+
+def _with_chat(event: Any, payload: dict) -> Any:
+    """*event* with its chat's title and surface on the payload
+    (``chat_title``, ``chat_surface``) for the line. BLOCKING (the title is
+    one read of the chat's row; the bus runs this handler off the loop).
+    Never raises: a title that cannot be read is left out."""
+    try:
+        from ..daemon.durable_turns import turn_chat
+
+        thread, title, surface = turn_chat(
+            _text(payload.get("turn_id")), _text(payload.get("thread_id"))
+        )
+    except Exception:  # noqa: BLE001
+        thread, title, surface = _text(payload.get("thread_id")), "", "chat"
+    out = {**payload, "chat_title": title, "chat_surface": surface}
+    if thread:
+        out["thread_id"] = thread
+    return {
+        "type": _event_field(event, "type"),
+        "payload": out,
+        "session_id": _event_field(event, "session_id"),
+    }
+
+
 class Notifier:
     def __init__(
         self,
@@ -1010,6 +1111,15 @@ class Notifier:
             # retry_round`).
             if isinstance(payload, dict) and payload.get("retry"):
                 return None
+            # v1.455.0 (a USER BUG): a failure inside a CHAT turn. While a
+            # window shows that turn the chat itself shows the failure — no
+            # destination repeats it (the phone got "couldn't answer" while
+            # the user was looking at the very chat). Else the line names the
+            # chat (its title read here, off the loop).
+            if isinstance(payload, dict) and _text(payload.get("turn_id")):
+                if _turn_being_looked_at(payload):
+                    return {}
+                event = _with_chat(event, payload)
         # v1.118.0: fan out to EVERY channel whose per-registration config
         # allows this event type — not just the default. A channel config may
         # carry ``events: [...]`` to narrow what it receives (the Notifications

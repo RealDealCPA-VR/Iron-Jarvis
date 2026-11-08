@@ -91,7 +91,10 @@ def test_the_error_names_the_provider_that_is_down(tmp_path):
     nothing in the reply pointed at it."""
     with _client(tmp_path, "fleet-custom") as client:
         r = client.post("/chat", json={"messages": [{"role": "user", "content": "hi"}]})
-    assert "fleet-custom" in r.text
+    # v1.455.0 (moved on purpose): the config slot's server is named in the
+    # words the user knows it by ("your model server"), never its raw id.
+    assert "Your model server isn't connected" in r.text
+    assert "fleet-custom" not in r.text
 
 
 def test_a_mock_the_user_CHOSE_still_answers(tmp_path):

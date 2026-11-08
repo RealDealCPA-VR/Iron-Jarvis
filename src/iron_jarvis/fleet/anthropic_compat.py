@@ -653,6 +653,11 @@ class AnthropicFleetAdapter(LLMAdapter):
         short reply that reads as complete."""
         import httpx
 
+        # v1.455.0: a streamed reply waits out the silence of a buffered tool
+        # call (vLLM sends a call's arguments only when it is complete) —
+        # the read-idle bound, never connect/write/pool.
+        from ..providers.reply_budget import local_stream_timeout
+
         key = await asyncio.to_thread(self._key)
         self._preflight(key)
         body, raw_prompt = self._planned_body(system, messages, tools, stream=True)
@@ -660,7 +665,8 @@ class AnthropicFleetAdapter(LLMAdapter):
         headers["accept"] = "text/event-stream"
         async with contextlib.AsyncExitStack() as _stack:
             resp = await _stack.enter_async_context(self._client().stream(
-                "POST", f"{self._base}/messages", headers=headers, json=body
+                "POST", f"{self._base}/messages", headers=headers, json=body,
+                timeout=local_stream_timeout(_TIMEOUT_S),
             ))
             status = int(getattr(resp, "status_code", 200) or 200)
             if status >= 300:
@@ -674,7 +680,8 @@ class AnthropicFleetAdapter(LLMAdapter):
                 await _stack.aclose()
                 body = smaller
                 resp = await _stack.enter_async_context(self._client().stream(
-                    "POST", f"{self._base}/messages", headers=headers, json=body
+                    "POST", f"{self._base}/messages", headers=headers, json=body,
+                    timeout=local_stream_timeout(_TIMEOUT_S),
                 ))
                 status = int(getattr(resp, "status_code", 200) or 200)
                 if status >= 300:

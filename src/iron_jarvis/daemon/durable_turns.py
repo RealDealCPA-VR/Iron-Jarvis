@@ -120,6 +120,48 @@ def bind_event_bus(engine: Any, bus: Any) -> None:
         log.debug("could not bind the turns' event bus", exc_info=True)
 
 
+#: v1.455.0: every turn this process is driving, by id (weak: a finished
+#: turn's log leaves with its registry) — read by the notifier, off the loop,
+#: through :func:`turn_looked_at` / :func:`turn_chat`.
+_LIVE: "_weakref.WeakValueDictionary[str, TurnLog]" = _weakref.WeakValueDictionary()
+
+
+def turn_looked_at(turn_id: str) -> "bool | None":
+    """Is a window showing turn *turn_id* right now? ``None`` when this
+    process holds no such turn. Never raises (v1.455.0: a failed chat turn's
+    phone alert stays quiet while the user is looking at the chat, which
+    already shows the failure)."""
+    try:
+        lg = _LIVE.get(str(turn_id or ""))
+        if lg is None:
+            return None
+        return bool(lg.looked_at())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def turn_chat(turn_id: str, thread_id: str = "") -> "tuple[str, str, str]":
+    """``(thread id, title, surface)`` of the chat turn *turn_id* belongs to,
+    as far as this process knows: the live turn's chat (else *thread_id*, the
+    one the event carried) and that chat's title ("" when unknown); surface
+    is "build" for a coding session's turn, else "chat". BLOCKING (one
+    primary-key read of the title column): call it off the loop. Never
+    raises."""
+    thread, surface, engine = str(thread_id or ""), "chat", None
+    try:
+        lg = _LIVE.get(str(turn_id or ""))
+        if lg is not None:
+            thread = str(lg.thread_id or "") or thread
+            surface = "build" if _surface_of(lg) == "build" else "chat"
+            engine = getattr(lg, "engine", None)
+    except Exception:  # noqa: BLE001
+        pass
+    title = ""
+    if thread and engine is not None:
+        title = reply_titles(engine, [thread]).get(thread, "")
+    return thread, title, surface
+
+
 def _bus_for(engine: Any) -> Any:
     try:
         ref = _BUSES.get(engine)
@@ -310,6 +352,9 @@ class TurnLog:
         #: WHY the turn was stopped by the daemon itself (the orphan guard),
         #: "" otherwise; ``TurnLogs._drive`` writes it as the turn's error.
         self.stop_why: str = ""
+        #: v1.455.0: the database this turn's chat lives in (set by
+        #: :meth:`TurnLogs.start`; read by :func:`turn_chat`).
+        self.engine: Any = None
 
     # -- the stored frames ---------------------------------------------------
     @property
@@ -757,20 +802,32 @@ class TurnLogs:
     def start(self, turn_id: str, thread_id: str, frames: AsyncIterator[str]) -> TurnLog:
         """Run ``frames`` (the lane's SSE iterator) as its own task."""
         lg = TurnLog(turn_id, thread_id or self._links.pop(turn_id, ""))
+        lg.engine = self.engine
         self._logs[turn_id] = lg
+        try:
+            _LIVE[turn_id] = lg
+        except Exception:  # noqa: BLE001 — a turn never fails on its index
+            pass
         lg.task = asyncio.ensure_future(self._drive(lg, frames))
         return lg
 
     async def _drive(self, lg: TurnLog, frames: AsyncIterator[str]) -> None:
         from ..core.turns import CHAT_INFLIGHT
+        from ..core.turn_ref import TurnRef, scope as _turn_scope
 
         status = "stopped"
         CHAT_INFLIGHT.enter()
+        # v1.455.0: everything the lane runs (its router calls, the tasks it
+        # makes) knows which turn it is in — the router's provider.failed
+        # carries it, so the phone alert names the chat and stays quiet while
+        # a window shows the turn.
+        ref = TurnRef(lg.turn_id, lambda: lg.thread_id, lg.looked_at)
         try:
-            async with contextlib.aclosing(frames):  # type: ignore[arg-type]
-                async for chunk in frames:
-                    lg.add(chunk)
-                    lg.maybe_persist(self.engine)
+            with _turn_scope(ref):
+                async with contextlib.aclosing(frames):  # type: ignore[arg-type]
+                    async for chunk in frames:
+                        lg.add(chunk)
+                        lg.maybe_persist(self.engine)
             last = lg.last_event()
             status = "done" if last == "done" else "error" if last == "error" else "stopped"
             if lg.stop_why and last != "done":

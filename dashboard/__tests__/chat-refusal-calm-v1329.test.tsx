@@ -281,7 +281,7 @@ const lastSetup = () => {
 /* ======================================================================= */
 // The router's refusal, exactly as v1.329.0 words it for a labelled endpoint.
 const REFUSAL =
-  "Office Spark isn't connected right now, so this turn was not answered. No substitute was used on purpose. A stand-in answer would look like real work that never happened. Bring that endpoint back up, or pick another model for this chat, and retry.";
+  "Office Spark isn't connected right now, so this turn was not answered. No substitute was used on purpose. A stand-in answer would look like real work that never happened. Bring that model server back up, or pick another model for this chat, and retry.";
 
 async function failTurn(detail: string, status = 503) {
   await startTurn("hello there");

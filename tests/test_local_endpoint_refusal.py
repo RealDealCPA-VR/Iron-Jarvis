@@ -278,7 +278,7 @@ async def test_explicit_down_local_pick_refuses_too() -> None:
     cloud = _Cloud()
     mgr = _Manager({"custom": _Down("custom", "house-model"), "anthropic": cloud})
     router = _router(mgr)
-    with pytest.raises(Exception, match="custom isn't connected"):
+    with pytest.raises(Exception, match="Your model server isn't connected"):
         await router.complete(provider="custom", system="", messages=_msgs(), tools=[])
     assert cloud.calls == 0
 
@@ -355,7 +355,7 @@ async def test_a_local_connection_that_breaks_MID_REQUEST_refuses() -> None:
             provider="custom", system="", messages=_msgs(), tools=[]
         )
     assert cloud.calls == 0
-    assert "custom" in str(err.value)
+    assert "your model server" in str(err.value)
 
 
 async def test_timeout_and_a_429_from_the_SAME_local_box_both_refuse_by_default() -> None:
