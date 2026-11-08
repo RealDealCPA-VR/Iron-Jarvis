@@ -22,7 +22,8 @@ const H = vi.hoisted(() => {
     FakeApiError,
     gets: {} as Record<string, unknown>,
     posts: [] as { path: string; body: unknown }[],
-    answer: {} as Record<string, unknown>,
+    // The daemon's next answer: a row, or an Error (a 4xx) the mock throws.
+    answer: {} as unknown,
   };
 });
 
@@ -37,6 +38,8 @@ vi.mock("@/lib/api", () => ({
   },
   post: async (path: string, body?: unknown) => {
     H.posts.push({ path, body });
+    // An Error planted as the answer is the daemon's refusal (a 4xx).
+    if (H.answer instanceof Error) throw H.answer;
     return H.answer;
   },
   put: async () => ({}),
@@ -104,5 +107,23 @@ describe("the Memory page reads a new base back (Wave C, item 28)", () => {
     H.answer = { name: "old", kind: "markdown" };
     await addFolder("old");
     expect(await screen.findByText('Memory base "old" added.')).toBeInTheDocument();
+  });
+
+  it("a refused add (4xx) after a not-answering one shows the refusal alone", async () => {
+    // Wave C review: the read-back's warn note must not outlive a refusal —
+    // the next attempt clears it, and a 409 ends in the error note with
+    // nothing "added" on screen.
+    H.answer = { name: "gone", kind: "markdown", answering: false, words: "Added, but it is not answering: x." };
+    await addFolder("gone");
+    await screen.findByTestId("ltm-added-not-answering");
+    H.posts = [];
+    H.answer = new H.FakeApiError("source 'dup' already exists", 409);
+    fireEvent.change(screen.getByPlaceholderText("my-notes"), { target: { value: "dup" } });
+    fireEvent.change(screen.getByPlaceholderText(String.raw`C:\Users\me\notes`), { target: { value: "D:\\v2" } });
+    fireEvent.click(screen.getByRole("button", { name: /add source/i }));
+    await waitFor(() => expect(H.posts.some((p) => p.path === "/ltm/sources")).toBe(true));
+    expect(await screen.findByText("source 'dup' already exists")).toBeInTheDocument();
+    expect(screen.queryByTestId("ltm-added-not-answering")).toBeNull();
+    expect(screen.queryByText(/^Added|: Added/)).toBeNull();
   });
 });

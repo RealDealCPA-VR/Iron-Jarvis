@@ -324,12 +324,17 @@ class PackSpec:
         :func:`host_of`), both read off the MASKED parts, so a row the catalog
         does not know can still say what it is in plain words."""
         from ..detections.redact import mask
-        from .secrets import is_secret_key
+        from .secrets import is_secret_key, split_args, split_url
 
         env_keys = sorted(self.env)
         command = mask(self.command)
-        args = [mask(a) for a in self.args]
-        url = mask(self.url)
+        # Wave C review: the SAME split the add stores (``mcp/pack_door``):
+        # the value after a secret-named flag (``--api-key VALUE``, which
+        # ``mask`` alone cannot see) and a credential-named query parameter
+        # (``?key=…``) are ``***`` in the preview too — the row is read by
+        # the browser, and an imported Grok/OpenCode/Pi config carries them.
+        args, _arg_values = split_args(self.args)
+        url, _url_value = split_url(self.url)
         stdio = self.transport == "stdio"
         return {
             "name": self.name,

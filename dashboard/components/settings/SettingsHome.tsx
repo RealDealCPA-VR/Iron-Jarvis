@@ -209,18 +209,21 @@ export const CONTROLLED_IN_SECTION: Record<string, string> = {
   // maker's picks; the maker on the Appearance card is its control (picking
   // or editing the chat theme there saves the row, lib/deviceSettings).
   "device.theme_colors": APPEARANCE_SECTION,
-  // Wave C (item 29): four settings had TWO controls on this page — a plain
+  // Wave C (item 29): settings that had TWO controls on this page — a plain
   // row here and the better control in a section — and the two disagreed
   // until a reload. The section's control is the one: the Your browser card
-  // (its access level, with the add-on's state beside it), the Maintenance
+  // (its access level, with the add-on's state beside it) and the Maintenance
   // card's backup copy folder (with the copy's own status line; its media
-  // switch rides the same card), and the Connections page's endpoint rows
-  // (Test, fetch models, a key) for the two endpoint addresses.
+  // switch rides the same card). NOT the two endpoint addresses
+  // (custom_base_url, ollama_base_url): the Connections page's endpoint rows
+  // can Test, fetch models, take a key and REMOVE a seeded slot, and the
+  // Ollama press writes one fixed local address, but nothing there lets the
+  // user TYPE an address — the fleet registry keeps a seeded slot's address
+  // config-driven (v1.365.3) — so the plain row is their only editor and
+  // stays (the Wave C review found the first cut had hidden it).
   browser_access: "connections-browser",
   backup_mirror_dir: "system-maintenance",
   backup_mirror_media: "system-maintenance",
-  custom_base_url: "connections-accounts",
-  ollama_base_url: "connections-accounts",
 };
 
 function readSection(): { section: string; focus: string } {

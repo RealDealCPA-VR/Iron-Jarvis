@@ -281,15 +281,27 @@ def _opencode_project(platform: Any) -> Path | None:
     return _first_existing(_opencode_project_files(Path(root))) if root else None
 
 
-def read_opencode(path: Path) -> tuple[list[PackSpec], bool, str]:
-    """OpenCode merges several files in one folder; the row names the first
-    that exists and this reads it AND its siblings (``opencode.jsonc`` /
-    ``opencode.json`` / ``config.json`` there, and ``.opencode/`` beside a
-    project's own), one spec per server name. Never raises."""
+def read_opencode(path: Path, *, project: bool = False) -> tuple[list[PackSpec], bool, str]:
+    """OpenCode merges several files in one place; the row names the first
+    that exists and this reads it AND the siblings OpenCode itself merges
+    (``hosted.opencode.config_files``), one spec per server name. Never
+    raises.
+
+    GLOBAL (``project=False``): ``opencode.jsonc`` / ``opencode.json`` and
+    the ``config.json`` beside them in the config folder.
+
+    PROJECT (``project=True``): ``opencode.jsonc`` / ``opencode.json`` in the
+    project's root and ``.opencode/opencode.jsonc`` / ``.opencode/opencode.json``
+    under it — NEVER a ``config.json``: OpenCode reads that name only in its
+    global folder, so a project's own ``config.json`` is some other program's
+    file (the review found a project's unrelated ``config.json`` listed under
+    "OpenCode (this project)")."""
     folder = path.parent
-    siblings = [folder / "opencode.jsonc", folder / "opencode.json", folder / "config.json"]
-    if folder.name != ".opencode":
-        siblings += [folder / ".opencode" / "opencode.jsonc", folder / ".opencode" / "opencode.json"]
+    if project:
+        root = folder.parent if folder.name == ".opencode" else folder
+        siblings = _opencode_project_files(root)
+    else:
+        siblings = [folder / "opencode.jsonc", folder / "opencode.json", folder / "config.json"]
     specs: list[PackSpec] = []
     readable = False
     note = ""
@@ -305,6 +317,14 @@ def read_opencode(path: Path) -> tuple[list[PackSpec], bool, str]:
             note = why
         specs.extend(found)
     return (unique_names(specs), readable, "" if readable else note)
+
+
+def _read_opencode_global(path: Path) -> tuple[list[PackSpec], bool, str]:
+    return read_opencode(path, project=False)
+
+
+def _read_opencode_project(path: Path) -> tuple[list[PackSpec], bool, str]:
+    return read_opencode(path, project=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -608,9 +628,9 @@ KNOWN_SOURCES: tuple[SourceDef, ...] = (
     ),
     SourceDef("gemini-cli", "gemini-cli", "Gemini CLI", lambda _p_: _p(_home(), ".gemini", "settings.json")),
     # Wave C (item 30): the coding tools Build › Code drives.
-    SourceDef("opencode", "opencode", "OpenCode", _opencode_global, read=read_opencode),
+    SourceDef("opencode", "opencode", "OpenCode", _opencode_global, read=_read_opencode_global),
     SourceDef("opencode-project", "opencode", "OpenCode (this project)", _opencode_project, project=True,
-              read=read_opencode),
+              read=_read_opencode_project),
     SourceDef("grok", "grok", "Grok", lambda _p_: _p(grok_home(), "config.toml")),
     SourceDef("grok-project", "grok", "Grok (this project)", _in_project(".grok", "config.toml"), project=True),
     SourceDef("antigravity", "antigravity", "Antigravity", lambda _p_: _p(antigravity_config_dir(), "mcp_config.json")),

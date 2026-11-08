@@ -59,15 +59,21 @@ vi.mock("@/components/settings/pages/LegacySettingsForm", () => ({
 
 import { CONTROLLED_IN_SECTION, SettingsHome } from "@/components/settings/SettingsHome";
 
-/** The four (plus the media switch that rides the same Maintenance card) and
- *  the section whose component is their ONE control. */
+/** The hidden rows (the media switch rides the same Maintenance card) and the
+ *  section whose component is their ONE control. */
 const ONE_CONTROL: Record<string, { section: string; file: string }> = {
   browser_access: { section: "connections-browser", file: "components/browser/YourBrowserCard.tsx" },
   backup_mirror_dir: { section: "system-maintenance", file: "components/settings/MaintenanceTools.tsx" },
   backup_mirror_media: { section: "system-maintenance", file: "components/settings/MaintenanceTools.tsx" },
-  custom_base_url: { section: "connections-accounts", file: "components/settings/pages/ConnectionsPage.tsx" },
-  ollama_base_url: { section: "connections-accounts", file: "components/settings/pages/ConnectionsPage.tsx" },
 };
+
+/** Wave C review: the two endpoint ADDRESSES stay plain rows. The Connections
+ *  page's endpoint rows Test, fetch models, take a key and Remove a seeded
+ *  slot, and the Ollama press writes ONE fixed local address — nothing there
+ *  lets the user type an address (the fleet registry keeps a seeded slot's
+ *  address config-driven, v1.365.3), so hiding the row left the daily
+ *  driver's own proxy address with no editor at all. */
+const KEEP_ROWS = ["custom_base_url", "ollama_base_url"];
 
 const GROUPS = [
   { id: "models", label: "Models", description: "Which AI answers." },
@@ -125,13 +131,23 @@ describe("ONE control per setting (Wave C, item 29)", () => {
     }
   });
 
-  it("Models draws the endpoint model rows but neither endpoint ADDRESS row", async () => {
+  it("the endpoint ADDRESS rows are not hidden: nothing else lets the user type one", async () => {
+    for (const key of KEEP_ROWS) expect(CONTROLLED_IN_SECTION[key], key).toBeUndefined();
+    // The Connections page writes custom_base_url only to CLEAR it (Remove)
+    // and ollama_base_url only to one fixed address: no address box there.
+    // (If an address editor is ever added there, this pin is what moves.)
+    const conn = readSrc("components/settings/pages/ConnectionsPage.tsx");
+    const customWrites = [...conn.matchAll(/custom_base_url:\s*([^,}\n]+)/g)].map((m) => m[1].trim());
+    const ollamaWrites = [...conn.matchAll(/ollama_base_url:\s*([^,}\n]+)/g)].map((m) => m[1].trim());
+    expect(customWrites.length).toBeGreaterThan(0);
+    expect(customWrites.every((w) => w === '""')).toBe(true);
+    expect(ollamaWrites.length).toBeGreaterThan(0);
+    expect(ollamaWrites.every((w) => w === "OLLAMA_LOCAL_URL")).toBe(true);
     await open("Models", "Default model");
-    expect(document.getElementById("setting-custom_base_url")).toBeNull();
-    expect(document.getElementById("setting-ollama_base_url")).toBeNull();
-    expect(screen.queryByText("Custom endpoint URL")).toBeNull();
-    expect(screen.queryByText("Ollama server URL")).toBeNull();
-    // The rows that have no other control stay.
+    expect(document.getElementById("setting-custom_base_url")).not.toBeNull();
+    expect(document.getElementById("setting-ollama_base_url")).not.toBeNull();
+    expect(screen.getByText("Custom endpoint URL")).toBeInTheDocument();
+    expect(screen.getByText("Ollama server URL")).toBeInTheDocument();
     expect(document.getElementById("setting-custom_model")).not.toBeNull();
   });
 
@@ -148,12 +164,20 @@ describe("ONE control per setting (Wave C, item 29)", () => {
     expect(screen.getByTestId("settings-sub-system-maintenance")).toBeInTheDocument();
   });
 
-  it("a search for an endpoint's words opens the Connections section, never a row", async () => {
+  it("a search for an endpoint's words finds the address ROW (its one editor), not a section", async () => {
     render(<SettingsHome />);
     await screen.findByTestId("settings-groups");
     fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "lm studio" } });
-    expect(await screen.findByTestId("settings-sub-connections-accounts")).toBeInTheDocument();
-    expect(document.getElementById("setting-custom_base_url")).toBeNull();
+    expect(await screen.findByText("Custom endpoint URL")).toBeInTheDocument();
+    expect(screen.queryByTestId("settings-sub-connections-accounts")).toBeNull();
+  });
+
+  it("a search for the browser's words opens the Your browser section, never a row", async () => {
+    render(<SettingsHome />);
+    await screen.findByTestId("settings-groups");
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "your browser" } });
+    expect(await screen.findByTestId("settings-sub-connections-browser")).toBeInTheDocument();
+    expect(document.getElementById("setting-browser_access")).toBeNull();
   });
 
   it("?focus=browser_access opens the Your browser section", async () => {
