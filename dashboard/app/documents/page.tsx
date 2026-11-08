@@ -1095,7 +1095,7 @@ export default function DocumentsPage() {
       <Reveal>
         {/* ?focus=redact lands here — Card doesn't forward refs, so wrap it. */}
         <div ref={redactFocusRef}>
-        <Card title="Redact PII" icon={<ShieldCheck size={15} />}>
+        <Card title="Hide personal details (SSNs, phone numbers…)" icon={<ShieldCheck size={15} />}>
           <div className="space-y-5">
             <p className="text-sm text-zinc-400">
               Scan a document for personal data, tick exactly what should go,

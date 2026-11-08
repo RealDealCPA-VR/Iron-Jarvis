@@ -43,6 +43,7 @@ import { useApi } from "@/lib/useApi";
 import { guideChatPath } from "@/lib/mission";
 import { BUILD_BLURB, CODING_SESSION, CODING_VIEW_NAME } from "@/lib/buildWords";
 import { headingSlug, readGuideLink, sectionMatches, textOf } from "@/lib/helpLinks";
+import { HELP_PLACES } from "@/lib/helpPlaces";
 import { Card, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -59,8 +60,8 @@ interface Subsystem {
 const HEALTH_QUESTION = "Something is broken. Can you check what's wrong?";
 
 const SUBSYSTEMS: Subsystem[] = [
-  // The four HERO surfaces lead — the exact pages the default Simple-mode nav
-  // leads with (v1.198.0; the grid used to omit all four).
+  // The hero surfaces lead (v1.198.0); the five places themselves are the
+  // "Where things are" card above (lib/helpPlaces, v1.450.0).
   {
     href: "/chat",
     title: "Chat",
@@ -578,6 +579,10 @@ function GuidesCard() {
 
 /* --------------------------------------------------------- troubleshooting */
 
+/** Settings opened on System › Maintenance (readiness item 41 / ease item 73:
+ *  the link opened the top of Settings). */
+const MAINTENANCE_HREF = "/settings?section=system-maintenance";
+
 // Copy kept exact with README "If something looks wrong" + install/data notes —
 // these are the app's real remedies, not new ones invented for this card.
 const TROUBLE: { symptom: string; fix: ReactNode }[] = [
@@ -594,8 +599,8 @@ const TROUBLE: { symptom: string; fix: ReactNode }[] = [
         are saved. If it stays: quit from the tray and relaunch. (The tray adds a{" "}
         <Kbd>Restart Iron Jarvis</Kbd> item only once its own automatic restarts have given
         up; when you see it, use it instead.) Then{" "}
-        <Link href="/settings" className="text-accent-soft hover:text-accent">
-          Settings → Maintenance
+        <Link href={MAINTENANCE_HREF} className="text-accent-soft hover:text-accent">
+          Settings › System › Maintenance
         </Link>{" "}
         → <Kbd>Copy diagnostics</Kbd> / <Kbd>Open logs folder</Kbd> to see why.
       </>
@@ -758,6 +763,28 @@ export default function HelpPage() {
           is the question most people arrive here with. */}
       <Reveal>
         <AskGuideCard />
+      </Reveal>
+
+      {/* v1.450.0: the five places, in the sidebar's order (lib/helpPlaces). */}
+      <Reveal>
+        <Card title="Where things are" icon={<Boxes size={15} />}>
+          <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5" data-testid="help-places">
+            {HELP_PLACES.map((p) => (
+              <li key={p.href}>
+                <Link
+                  href={p.href}
+                  className="block h-full rounded-2xl border border-white/[0.05] bg-white/[0.02] px-4 py-3 transition-colors hover:border-white/10"
+                >
+                  <div className="text-sm font-semibold text-zinc-100">{p.title}</div>
+                  <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">{p.desc}</p>
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-[12px] text-zinc-500">
+            <Kbd>Ctrl+K</Kbd> finds any page, setting or chat from anywhere.
+          </p>
+        </Card>
       </Reveal>
 
       {/* The core loop */}

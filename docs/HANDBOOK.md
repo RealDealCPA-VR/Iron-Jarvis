@@ -18,6 +18,24 @@ load-bearing everywhere: honest errors beat fabricated output, suggest-don't-act
 for anything autonomous, everything reviewable, everything undoable where an
 undo can be captured truthfully.
 
+**The five places.** Everything you do is in one of five places, listed in
+the sidebar (the ☰ menu on a phone):
+
+- **Chat** — ask anything, attach files, and let it work. Its **Chat | Code**
+  switch at the top opens **Code**: coding sessions that write, run and check
+  code in a folder you pick.
+- **Build** — your terminals, and the **Code** view that drives your own
+  Claude Code, Codex, Pi, OpenCode, Grok or Antigravity.
+- **Projects** — a home for each piece of work: a brief, a folder and saved
+  knowledge every chat and task inside it starts from.
+- **Everything** — every other page (agents, workflows, schedules, memory,
+  documents, activity…) with one line each, and **Status**: what is running
+  and how the app is doing.
+- **Settings** — models, connections, automation, memory, permissions,
+  appearance and system. Search finds any setting by what you would call it.
+
+**Ctrl+K** finds any page, setting or chat from anywhere.
+
 **The three processes**
 
 | Process | What | Where |
@@ -28,8 +46,8 @@ undo can be captured truthfully.
 
 **Hotkeys:** `Ctrl+Shift+J` toggles the window — or `Ctrl+Alt+J` when
 another app holds it (the desktop app tries the two in order and retries a
-taken key every 30 minutes); the tray menu and the Overview tips card show
-the key that is live, or say "hotkey unavailable" when both are taken.
+taken key every 30 minutes); the tray menu and **Help › Keyboard shortcuts**
+show the key that is live, or say "hotkey unavailable" when both are taken.
 `Ctrl+Shift+Space` opens Spotlight. State lives in `%APPDATA%/Iron Jarvis/.ironjarvis/` (SQLite DB,
 config.toml, secrets vault, skills, backups). Updates download automatically
 (checked at boot and every 30 min) and install only when you click
@@ -86,8 +104,8 @@ an Undo, like every setting. "Switch model" in Ctrl+K opens the same menu from
 any page.
 
 **4. Everything else is one or two clicks away.** The sidebar holds **New
-chat**, four places — **Build**, **Projects**, **Everything**, **Settings** —
-your recent chats and your projects. **Everything** lists every other part of
+chat**, the five places — **Chat**, **Build**, **Projects**, **Everything**,
+**Settings** — your recent chats and your projects. **Everything** lists every other part of
 the app with one line each; **Ctrl+K** finds any page, any setting, any chat.
 
 **5. The checklist and status.** *Connect your AI*, *Give it your first task*,
@@ -125,14 +143,14 @@ searching.
   what's new). Collapse it to icons with the arrows at the top. On a phone it
   is the ☰ menu.
 - **Pins.** On **Everything**, press the pin beside any entry to put it
-  under the four places in the sidebar (up to three).
+  under the five places in the sidebar (up to three).
 - **Everything.** Four columns — **Work** (Agents, Creative, Templates,
   Documents, File Search), **Automations** (Workflows, Schedules, Reflexes,
   Sentinels, Autonomy, Webhooks), **Knowledge** (Memory, Skills, Artifacts,
   You, Train), **System** (Sessions, Activity, Usage, Fleet, Self-development,
-  Updates, Help) — plus **Setup**, and a **Status** tab: what was the Overview
-  (running work, health, failing background tasks, recent events, the
-  getting-started checklist). Since v1.353.0 each column lists its everyday
+  Updates, Help) — plus **Setup**, and a **Status** tab (running work,
+  health, failing background tasks, recent events, the getting-started
+  checklist). Since v1.353.0 each column lists its everyday
   pages first; the developer pages (Webhooks, Artifacts, Secrets, Local
   fleet, Self-development, Session board) sit under that column's **More**,
   and typing in the filter still finds them.
@@ -393,10 +411,8 @@ and (for agents you made) its folder and coach, plus **New & manage** to create
 an agent or connect one running on another computer. Work is not handed out
 here: you give Jarvis an objective and it picks.
 
-**The round table is gone (v1.308.0).** Old links to a round-table conversation
-open it read-only, exactly as it was. To talk with one agent, @-mention it in
-chat (that works as before); the agents' replies stay in that chat — there is
-no separate page to open them on (v1.309.0). "Ask the Guide" on the Help page puts your question
+**Talking with one agent.** @-mention it in chat; its replies stay in that
+chat. "Ask the Guide" on the Help page puts your question
 into chat as `@guide …`, ready to send.
 - **Custom agents**: author your own (name, prompt, tool list, pinned
   provider/model). **Remote agents**: register an agent running elsewhere
@@ -570,9 +586,8 @@ with the request typed in.
   imports from ChatGPT/Claude/Takeout exports, all grounded into chat
   automatically ("# Relevant from memory"). Imports live on the **Long-term**
   tab of the Memory page (`/memory?scope=longterm`, also reachable as
-  `/ltm`); since Simple mode hides `/ltm` from the nav, the Memory page's
-  other tabs carry a one-line link **Import from ChatGPT/Claude/Takeout →
-  Long-term memory** that opens it.
+  `/ltm`); the Memory page's other tabs carry a one-line link **Import from
+  ChatGPT/Claude/Takeout → Long-term memory** that opens it.
 - **Memory profiles** (v1.406.0; called Brain profiles until v1.408.0):
   choose where your durable memory lives and how Jarvis searches, saves to
   and trusts it — see "Your durable brain: Brain Profiles" and "Memory
@@ -884,7 +899,8 @@ seam); Train (teach it your writing voice, suggest-only).
   update is checked before anything shuts down, so a half-downloaded update
   never costs you a running app.
 - **Work a restart interrupted is offered back** (v1.249.0): jobs cut off by a
-  restart appear on your Overview and in the bell with a **Continue** button,
+  restart appear on **Everything › Status** and in the bell with a
+  **Continue** button,
   for three days. Pressing Continue picks the job up where it stopped.
 - **Jobs waiting on you reach you with the window closed** (v1.249.0): when a
   job needs your permission and Iron Jarvis is in the tray, Windows shows a
@@ -1384,8 +1400,8 @@ output — it was the one place in the app that knew neither your profile, nor
 the project the folder belongs to, nor a single lesson. Now it gets the same
 three things every chat turn gets, plus one line naming the pane, its folder
 and the CLI running in it. Two quieter things: the Build page tidies up after
-panes that no longer exist (their view, chat thread and canvas position used
-to stay in the browser forever), and the Agents page's job card opens on the
+panes that no longer exist (their view and chat thread used to stay in the
+browser forever), and the Agents page's job card opens on the
 agent you last handed work to instead of the Team every time.
 
 **A Build pane can make its folder a project in one press (v1.281.0).** When
@@ -1651,38 +1667,11 @@ nothing was taken away.
   style** now says exactly this, and its button opens Chat with an example
   ("From now on, keep your answers short and to the point") already typed —
   edit it and press Send. Agent runs can still be rated on their own page.
-- **Settings opens short** (v1.319.0). In Simple mode, **Settings** shows
-  the everyday choices — which AI answers, its model, and the default
-  persona — plus Appearance and Maintenance. **Show all settings** opens the
-  whole form (local models, automation limits, history, power-user options),
-  and a link to a particular setting from elsewhere in the app opens it too.
-  Advanced shows the whole form as before. The examples in Chat and in the
-  setup window's first task are everyday tasks now (a packing list, the
-  weekend's weather, a follow-up email). The title bar's theme dots show
-  in Advanced; in Simple mode the theme is in the menu drawer, Settings →
-  Appearance and Ctrl+K.
-- **A calmer start: Simple mode's home and menu** (v1.318.0). Simple mode
-  is the default (the **Advanced** switch at the bottom of the menu turns it
-  off, and Advanced looks exactly as before). In Simple mode:
-  - The menu lists seven places by what you came to do: **Home**, **Work**
-    (Chat, Projects, Agents, Creative, Build), **Files** (Documents, File
-    Search), **Automations** (Workflows, Schedules), **About me** (You,
-    Train Jarvis on me, Memory), **Apps & settings** (Connections, Directory,
-    Notifications, Settings, Updates) and **Help**. The place you are in
-    opens to show its pages.
-  - Pages show their place's other pages as tabs above the title
-    ("Automations: Workflows · Schedules"), so the next page is one press
-    away without opening the menu.
-  - **Home** (the first page) leads with one "Ask Jarvis anything" box and a
-    few everyday starters, then **Pick up where you left off** (your last
-    three chats) and **Where to go** (the places above, each with one line
-    about what it is for). **All modules** shows every module; Ctrl+K finds
-    any page by name. Status figures, the module grid, the run-quality card
-    and "Systems & admin" are on the Advanced Overview.
-  - Where did a page go? Nowhere — every page keeps its address and is in
-    Ctrl+K. Pages for power users (Reflexes, Sentinels, Webhooks, Secrets,
-    Tools, Sessions, Activity, Usage, Local fleet, Self-development) appear
-    in the menu with **Advanced** on, and as a tab while you are on them.
+- **Simple and Advanced modes, v1.318.0–v1.320.0.** For a few versions the
+  menu, the home page and Settings had a short "Simple" form and a full
+  "Advanced" one. The calm layout (v1.321.0) replaced both: there is one
+  sidebar with the five places, Settings in seven groups with a search box,
+  and **Everything** for every other page.
 - **Make your own theme** (v1.317.0). In **Settings → Appearance**, press
   **Make your own**: pick a main colour (or start from one of the built-in
   themes), optionally a second colour for the background glows, how the
@@ -1714,8 +1703,7 @@ nothing was taken away.
 - **Plain words.** Sessions say who started them in words ("Schedule ·
   nightly-brief", "Mission", "Queued job") — the exact origin is still on
   hover. Approval cards say what the action will do; the tool's own name is
-  in the details. The Overview's health card reads "Tasks reviewed",
-  "Finished", "Tools worked" and "Typical reply time".
+  in the details.
 - **The busy screens, calmer** (v1.315.0). On a phone the chat's message
   box gets its own line with the buttons under it, and a chat's ⋯ menu is
   visible without hovering. The thread list says whether it shows this
@@ -1866,15 +1854,14 @@ now it stops while you are not looking and catches up the moment you come back.
    background loop and the scheduler, not just backups. Since v1.229.0 that
    report is *true*, not "armed": the fleet sampler and the Slack socket say
    ok only after a cycle that ran or a connection that opened, and a loop
-   that keeps failing says so with its last error — named on the Overview
-   (the amber line under the hero in Simple mode; the Background loops tile
-   and list under System health in Advanced) and, once it has been failing
+   that keeps failing says so with its last error — named on **Everything ›
+   Status** and, once it has been failing
    for five minutes, as a bell item ("Background task fleet has been failing
    for 12 min — …"). The hero never says "All systems nominal" over a dead
    loop. A tool pack (MCP server) that did not start is treated the same
    way: its row under **Tools → Connected packs** carries an amber "Didn’t
    start: <reason>" line (the exact error, e.g. `npx` not found) with a
-   **Retry** that reloads it live, the Overview hero says "1 thing needs
+   **Retry** that reloads it live, Everything › Status says "1 thing needs
    attention" with the pack named under it, and the doctor's `mcp` check
    names each pack that failed and a missing `npx`. **Test** on that row
    only proves the config (it loads nothing), so a green Test leaves the
@@ -7086,7 +7073,7 @@ Step six of the coding screen: you can use it now. Open **Build** and choose
   Default even when that account is at its limit, so its first reply can be
   that card.
 - **The free-form terminal canvas is gone.** If you last used it, Build now
-  opens on the IJ harness. The Terminals view still has every terminal.
+  opens on its terminals, every one of them still there.
 - **Links open the session.** The bell, the tray and Activity open a coding
   session in Build, never in Chat — also when Build is already open on
   another session or on the Terminals view.
@@ -7537,8 +7524,8 @@ setting you turn on. The look of the app is the same.
   and in chat. An app key (Pixio) is tested when you save it. Settings ›
   Secrets names a key "GitHub: GitHub personal access token". LM Studio and
   llama.cpp running on this PC are offered with one press wherever Ollama is
-  (the chat's start, the first-run steps, the suggestion chip, the Overview,
-  Accounts), and **Re-detect** looks for them again at once.
+  (the chat's start, the first-run steps, the suggestion chip, Everything ›
+  Status, Accounts), and **Re-detect** looks for them again at once.
 - **The desktop speaks plainly.** The tray, Windows notifications and the
   startup message say **Iron Jarvis**. A question waiting while the window
   is closed uses the approval card's words and names the task ("save a file
@@ -9062,37 +9049,10 @@ still running; a remote agent that answers too slowly stops at its time
 limit instead of holding up the chat and your phone; and a job whose model
 goes quiet after doing real work says what it ran and what came back,
 instead of "(no final message)".
-**v1.289.0:** an Overview tile can no longer be dragged off the screen —
-it stops at the edge — and in the desktop app pushing a tile past the
-edge opens that module in its own window instead, with your arrangement
-left as it was.
-**v1.293.0:** the Overview's modules are three screens of ten instead of
-one wall of thirty: **Office** (Chat, Build, Projects, Creative, Documents,
-File Search, Memory, You, Train Jarvis on me, Templates), **Operations** (Agents,
-Workflows, Schedules, Tools, Skills, Autonomy, Sentinels, Reflexes,
-Webhooks, Browser) and **System** (Sessions, Activity, Artifacts, Usage,
-Connections, Local fleet, Secrets, Notifications, Settings,
-Self-development). Change screens with the group tabs above the tiles
-(each has its own icon), the arrows at either side, a swipe across the
-background, a sideways trackpad/wheel gesture, or the arrow keys once the
-strip has focus; the desktop reopens on the screen you left. Everything
-else is as it was — most-used first within each screen until you drag,
-hover for the description, drag to rearrange (a drag never changes
-screens), push a tile past the edge to open it in its own window, Reset to
-most-used — and an arrangement you saved before this version keeps its
-order.
-**v1.293.1:** with ten modules per screen there is room, so each Overview
-tile is twice the size, and a screen is two rows of five until a very wide
-window can show all ten across.
-**v1.294.0:** no more swiping. The Overview opens on three large icons —
-**Office**, **Operations**, **System** — each saying what it holds and how
-many modules are behind it. Press one and the other two step aside while
-that group's ten modules appear in place; the back control at the top left
-(or Esc) brings the three icons back. Inside a group everything is as it
-was: most-used first until you drag, hover for the description, drag to
-rearrange, push a tile past the edge to open it in its own window, Reset to
-most-used. The Overview reopens the way you left it, on a group or on the
-three icons.
+**v1.289.0 – v1.294.0:** changes to the old Overview's module tiles (dragging,
+screens of ten, then three groups). The calm layout (v1.321.0) replaced the
+Overview: **Everything** lists every page, and its **Status** tab shows what
+the Overview used to.
 **v1.295.0 — your agents are employees now.** Every custom agent on the
 Agents page has a **job card** and a **monthly allowance**. The job card
 (open the row, or the "Employee details" disclosure when you create one)

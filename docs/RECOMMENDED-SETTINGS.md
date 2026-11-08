@@ -1,54 +1,67 @@
 # Recommended Settings
 
-*Grounded in `core/config.py` as of v1.167.2. Everything here is changeable
-on the Settings page (or `config.toml`); the daemon re-arms live settings
-without a restart wherever the page says so.*
+*A good daily-driver setup, named the way **Settings** names it. Every row
+below is a setting you can find by typing its name in the Settings search
+box, or change in chat in your own words ("turn on Stable updates", "keep
+this PC awake while work runs"). Each change shows what it was and offers
+**Undo**.*
 
-## The short version (a good daily-driver profile)
-
-| Setting | Recommended | Why |
-|---|---|---|
-| `default_provider` / `default_model` | your real workhorse (local endpoint or a connected CLI) | The fresh-install default is `mock`. Leaving it there means scripted answers. Pick the model you actually want answering chat. |
-| `strict_model_pin` | `false` (on only if you demand exact ids) | With it on, a retired/renamed model id refuses instead of resolving. |
-| `local_primary_policy` | `refuse` (default) | v1.228.0: a local model (Ollama / custom / fleet node) that answers chat with an error refuses by name — nothing stands in, the chat never leaves the machine. `failover` lets another connected provider answer; the receipt then says who failed and why. |
-| `max_concurrent_sessions` | `2`–`3` | New in v1.166: caps how many agent sessions run at once; overflow parks as **Queued** honestly. `0` = unlimited (the default) is fine until a Team job fans out while a schedule fires. |
-| `max_agent_steps` | `12` (default) | Raise only for genuinely long tasks; each step is a model call. |
-| `git_native` | `true` for coding projects | Sessions run on a git worktree branch and finish as a **review** — never auto-merged. |
-| `memory_steward_enabled` | `true` (default) | Curates memory by *proposal*, never silently. |
-| `skill_learning_enabled` / `skill_learning_auto_approve` | `true` / `false` (defaults) | It suggests skills from your successful sessions; you approve. |
-| `mcp_auto_approve` | `false` (default) | Approve MCP tool calls until you trust a server; flip per-server first if needed. |
-| `autonomy_enabled` | `false` until you want it; then `autonomy_level: "suggest"` first | The caps (`5` actions / `50k` tokens per day) and the kill switch stay. |
-| `self_dev_enabled` | `false` | Only for letting agents edit Iron Jarvis's own source (review-gated). |
-| `event_retention_days` | `90` (default) | The activity ledger's history window. |
-| `search_roots` | your client-documents folders | `file_search` and memory grounding can then reach the folders where real work lives. |
-| `default_persona` | whichever voice you want by default | Free text or a built-in slug; per-thread override always wins. |
-
-## Local-model settings (pair with `docs/LOCAL-MODELS.md`)
+## The short version
 
 | Setting | Recommended | Why |
 |---|---|---|
-| `ollama_base_url` / `ollama_model` | your Ollama endpoint + daily model | The simplest local hookup. |
-| `custom_base_url` / `custom_model` | your OpenAI-compatible server (LiteLLM, vLLM, LM Studio) | For anything Ollama doesn't front — e.g. a LiteLLM box exposing several models. |
-| `model_context_windows` | pin every local model you use, e.g. `{"qwen3:32b": 32768}` | The context budget plans history against this. Unpinned models fall back to probe/default and may under-use or overflow. |
-| `model_roles` | route steps to strengths, e.g. `{"plan": "custom:frontier", "extract": "ollama:qwen3:8b", "vision": "custom:vision", "judge": "custom:frontier"}` | Batch/decompose pipelines pick the right model per step. Empty = dormant. |
-| `prefer_local_when_capable` | `true` once your local model clears the bar | Routes eligible work local **only after evidence**: |
-| `local_quality_bar` / `local_quality_min_samples` | `0.75` / `3` (defaults) | A local model must average ≥ 0.75 across ≥ 3 evaluated sessions before auto-tier trusts it with that task class. |
-| `decompose_local_tasks` | `true` (default) | Weak local models get plan → execute → verify instead of one long leap. |
-| `decompose_all_tasks` | `false` unless you want visible plans everywhere | Extends decomposition to frontier models too. |
-| `embedder_provider` / `embedder_model` | `auto` / `nomic-embed-text` | Local embeddings for knowledge/memory retrieval; pull the model in Ollama once. |
-| `routing_local_ladder` | your fallback order, e.g. `["custom:frontier", "ollama:qwen3:8b"]` | Explicit order beats guessing when several local models exist. |
+| **Default model** | the model you really want answering (your Claude or ChatGPT plan, a local model, or a key) | A new install answers with the scripted demo until you choose one. The model menu under the chat box picks it too, and **Make this my default** saves the pick. |
+| **Approvals in chat** | **Ask before commands** | It edits files and searches the web on its own and asks before running a command. **Ask before every action** asks for everything; **Accept edits** and **Auto** ask less; **Don't ask** asks only for a few safety cards. |
+| **If my local model answers with an error** | **Stop and tell me (default)** | A local model that fails says so by name. Nothing else answers in its place, so the chat never leaves your network without you choosing it. |
+| **Runs at once** | `2`–`3` | Caps how many agent runs work at the same time; the rest wait their turn and say so. `0` (no cap) is fine until several schedules fire together. |
+| **Steps for runs you start** | `60` (default) | Room for a real piece of work. Runs that start by themselves keep a smaller limit. |
+| **Ask me to approve an agent's plan before it starts** | off, unless you want to read every plan | When on, a run that writes a plan waits for your Allow before its first step. |
+| **Run app tools without asking** | off (default) | Apps you connect ask before each use until you trust them. |
+| **Work on my goals by itself** | off until you want it; then **Autonomy ceiling** at **Suggest only** first | Its daily limits and **Emergency stop** stay in place. |
+| **Self-development** | off | Only for letting an agent change Iron Jarvis's own code, and every change waits for your review. |
+| **Keep activity history (days)** | `90` (default) | How far back Activity and the change ledger go. |
+| **Extra folders for file search** | the folders where your client documents live | File search and the chat's memory then reach the places your real work is. |
+| **Folders Jarvis may read** | leave empty unless you want to fence reading in | A list limits what Jarvis may read to those folders (plus its own). |
+| **How the assistant talks by default** | whichever voice you like | One chat can still pick another. |
 
-## Notifications & channels
+## Updates, backups and power
 
-Add the built-in **This PC** desktop destination first (zero setup), then
-Slack (one field) or Telegram (chat-id auto-detect). Route event kinds per
-destination — schedule outcomes to the phone, everything else to the desktop.
-Adding a destination *is* the test; the row records the last test result.
+| Setting | Recommended | Why |
+|---|---|---|
+| **Update channel** | **Stable (out for a day first)** on the PC you depend on | Fresh takes every release as it comes out; Stable takes a release only once it has been out a day and nothing replaced it. |
+| **Backup copy folder** | a folder on another drive or a synced folder | Each backup is also copied there, so one failed disk does not take the backups with it. |
+| **Keep this PC awake while work runs** | on (default) | The PC does not sleep in the middle of a long reply or a night task. |
+
+## Coding and teams
+
+| Setting | Recommended | Why |
+|---|---|---|
+| **Carry on by itself after an account's limit** | on (default) | A coding reply that hit an account's limit waits for the reset (or moves within an account group you made) and carries on. |
+| **Fix my pull requests' failing checks** | on (default) | A coding session's pull request is watched; a failed check is fixed, reviewed, and only then pushed. |
+| **Code editor** | **Automatic** | Opens files in VS Code when it is installed, else Cursor. |
+| **Hand work to my team first** | on once you have set up a model team | The coding lead hands pieces to your team members instead of doing everything on its own model. |
+
+## Local models (pair with "Local Models by RAM Tier")
+
+| Setting | Recommended | Why |
+|---|---|---|
+| **Ollama server URL** | your Ollama address | The simplest way to use a model on this PC. Or ask in chat: "add my local Ollama model". |
+| **Custom endpoint URL** | your OpenAI-compatible server (LiteLLM, vLLM, LM Studio) | For a model server Ollama does not front. |
+| **Context windows** | the window of every local model you use | Iron Jarvis fits each conversation to it; an unknown window is a guess. |
+| **Prefer my own hardware** | on once your local model has proven itself | Sends suitable work to your local model only after enough good results. |
+| **Break big tasks into steps for local models** | on (default) | A smaller model gets a plan, then each step, then a check, instead of one long leap. |
+| **Start new chats local only** | on if most of your work must stay on your network | New chats start with Local only on; you can still send one message to a cloud model when you choose. |
+
+## Notifications
+
+Add the built-in **This PC** destination first (nothing to set up), then
+Slack, Telegram or email on **Settings › Connections › Notifications**. Choose
+which alerts each destination gets — schedule results to your phone,
+everything else to this PC. Adding a destination sends a test.
 
 ## Things to leave alone
 
-- `sandbox` / `sandbox_runtime`, `permissions`: the defaults are the safety
-  floor (deny-floored tools stay deny-floored; `repl` stays ask).
-- `fleet_sampling_*`: telemetry cadence — fine as shipped.
-- `context_compaction`: the 0.70 suggest / ~0.92 auto thresholds are tuned;
-  chat always asks before compacting when you're present.
+- **Sandbox runtime** and the tool permissions: the defaults are the safety
+  floor.
+- **Conversation compaction**: the thresholds are tuned, and chat always asks
+  before it summarizes while you are there.

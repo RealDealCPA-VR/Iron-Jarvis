@@ -106,7 +106,7 @@ describe("the newest reply's instructions, in words", () => {
     ]);
     show(v);
     expect(screen.getByTestId("session-rail-instructions-tools").textContent).toBe(
-      "Claude Code's tool names, for a Claude model",
+      "Instructions written for Claude models",
     );
     expect(screen.getByTestId("session-rail-instructions-layers").textContent).toBe(
       "The newest reply's instructions came from Iron Jarvis's defaults, Claude Code's tool words, this folder's own instructions, lessons kept for this folder.",
@@ -134,7 +134,7 @@ describe("the newest reply's instructions, in words", () => {
     ]);
     show(v);
     expect(screen.getByTestId("session-rail-instructions-tools").textContent).toBe(
-      "Iron Jarvis's own tool names, for a GLM model · planning only",
+      "Instructions written for GLM models · planning only",
     );
   });
 
@@ -215,10 +215,10 @@ describe("the readings", () => {
 
   it("words every dialect and leaves an unknown part out", () => {
     expect(instructionToolWords({ family: "gpt", dialect: "gpt", layers: [], note: "", plan: false })).toBe(
-      "Codex's tool names, for a GPT model",
+      "Instructions written for GPT models",
     );
     expect(instructionToolWords({ family: "generic", dialect: "qwen", layers: [], note: "", plan: false })).toBe(
-      "Qwen Code's tool names",
+      "Instructions written the way Qwen Code writes them",
     );
     expect(instructionLayerWords(["default", "family:nope", "mystery", "project"])).toBe(
       "Iron Jarvis's defaults, this folder's own instructions",

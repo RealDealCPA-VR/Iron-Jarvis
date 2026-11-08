@@ -135,7 +135,7 @@ export function recipeNote(cli: LaunchCli): {
   // That CLI is not broken by this work — it simply launches the way it always
   // has, with no Jarvis capabilities, and saying so is cheaper than a mystery.
   if (!recipe) {
-    return { headline: "Launches as-is — no Jarvis capabilities", ready: false, limitations: [] };
+    return { headline: "Starts without Iron Jarvis's memory and browser", ready: false, limitations: [] };
   }
   const limitations = (recipe.limitations ?? []).filter((l) => typeof l === "string" && l.trim());
   if (recipe.ok === false) {
@@ -151,7 +151,7 @@ export function recipeNote(cli: LaunchCli): {
   }
   const method = String(recipe.method ?? "").trim();
   if (!method || method === "none") {
-    return { headline: "Launches as-is — no Jarvis capabilities", ready: false, limitations };
+    return { headline: "Starts without Iron Jarvis's memory and browser", ready: false, limitations };
   }
   return {
     headline: RECIPE_READY_HEADLINE,
@@ -1730,7 +1730,7 @@ export function TerminalPane({
                 href={c.url}
                 target="_blank"
                 rel="noreferrer"
-                title={`${c.label} isn't on your PATH — get it`}
+                title={`${c.label}: not on this PC — get it`}
                 className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.04]"
               >
                 <span>{c.label}</span>

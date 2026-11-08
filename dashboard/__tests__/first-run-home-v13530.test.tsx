@@ -273,7 +273,7 @@ describe("G35 — the choice is confirmed on the home, in the words pressed", ()
       await screen.findByRole("button", { name: "Use Claude (your Claude Code sign-in) for answers" }, DOORS_WAIT),
     );
     const done = await screen.findByTestId("home-chosen");
-    expect(done.textContent).toBe("Done — Claude (your Claude Code sign-in) answers you now. Ask anything below.");
+    expect(done.textContent).toBe("Done — Claude (your Claude Code sign-in) answers you now. Type your question in the box.");
     expect(done.getAttribute("role")).toBe("status");
     // The doors are gone (a real model answers) — the line stays.
     await waitFor(() => expect(screen.queryByRole("button", { name: /I already pay/ })).toBeNull());

@@ -350,15 +350,18 @@ export function newestInstructions(
   return null;
 }
 
-/** "Claude Code's tool names, for a Claude model" — whose names and words
- *  the model was shown, and the family it was read off. */
+/** "Instructions written for Claude models" — the model family the
+ *  instructions were written for (v1.450.0, ease item 73: it said "Claude
+ *  Code's tool names, for a Claude model", an engine-room reading). With no
+ *  known family, the tool whose words they follow ("Instructions written the
+ *  way Qwen Code writes them"); Iron Jarvis's own words are its own. */
 export function instructionToolWords(h: ReplyInstructions): string {
   const label = HARNESS_DIALECT_LABELS[h.dialect];
   const family = FAMILY_WORDS[h.family];
-  const names = label === "Iron Jarvis" ? "Iron Jarvis's own tool names" : label ? `${label}'s tool names` : "";
-  const forModel = family ? `for a ${family} model` : "";
-  const out = [names, forModel].filter(Boolean).join(", ");
-  return out ? out.charAt(0).toUpperCase() + out.slice(1) : "";
+  if (family) return `Instructions written for ${family} models`;
+  if (label === "Iron Jarvis") return "Iron Jarvis's own instructions";
+  if (label) return `Instructions written the way ${label} writes them`;
+  return "";
 }
 
 /** What the instructions were built from, in words: "Iron Jarvis's

@@ -91,8 +91,8 @@ def _score(query_tokens: list[str], *fields: Any) -> float:
 class GuideSearchTool(Tool):
     name = "guide_search"
     description = (
-        "Search the Iron Jarvis reference — the app's own docs (Handbook, "
-        "settings guides, vocabulary, spec, architecture) and live catalogs of "
+        "Search the Iron Jarvis reference — the app's own guides (Handbook, "
+        "what changed in each version, settings guides, vocabulary) and live catalogs of "
         "THIS install (version, connected models, every tool, skill, persona, "
         "agent type and API route). Returns ranked sections with a label to "
         "pass to guide_read for the full text. Use it before answering any "
@@ -151,8 +151,8 @@ class GuideReadTool(Tool):
     description = (
         "Read the full text of one reference section — pass the exact label "
         "guide_search returned (e.g. 'The Handbook › Automation') — or a whole "
-        "doc by slug (handbook, recommended-settings, local-models, reflex, "
-        "computer-use, readme, vocabulary, spec, operating-manual). Quote from "
+        "doc by slug (handbook, changelog, recommended-settings, local-models, "
+        "reflex, computer-use, readme, vocabulary). Quote from "
         "it rather than paraphrasing a setting or a hotkey from memory."
     )
     input_schema = {

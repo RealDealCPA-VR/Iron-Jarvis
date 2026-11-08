@@ -30,11 +30,13 @@ import { PageGrid } from "@/components/PageGrid";
 
 /**
  * v1.314.0 (UX wave 2): where the page sends people to switch it on. The
- * Self-development switch lives in Settings' collapsed Advanced section, and
+ * Self-development switch lived in Settings' collapsed Advanced section, and
  * `?focus=advanced` opens that section (app/settings/page.tsx) — a link to
  * the top of Settings left the user hunting for a switch with another name.
  */
-const SETTINGS_ADVANCED = "/settings?focus=advanced";
+// v1.450.0 (ease item 73): Settings has no "Advanced" section any more;
+// `?focus=<key>` opens the group that holds the switch and brings it into view.
+const SETTINGS_ADVANCED = "/settings?focus=self_dev_enabled";
 
 interface SelfDevStatus {
   enabled: boolean;
@@ -217,14 +219,14 @@ function NotReadyCard({ data }: { data: SelfDevStatus | null }) {
         <p className="text-sm leading-relaxed text-zinc-300">
           {off ? (
             <>
-              Self-development is off. Turn on <strong>Self-development</strong> in Settings →
-              Advanced, then restart Iron Jarvis (Settings → Maintenance → Restart Iron Jarvis) so it
+              Self-development is off. Turn on <strong>Self-development</strong> in Settings ›
+              System, then restart Iron Jarvis (Settings › System › Maintenance → Restart Iron Jarvis) so it
               takes effect.
             </>
           ) : noRepo ? (
             <>
               Self-development is on, but Iron Jarvis can’t find its own source code. Set{" "}
-              <strong>Self-development repo root</strong> in Settings → Advanced to a copy of the
+              <strong>Self-development repo folder</strong> in Settings › System to a copy of the
               Iron Jarvis repo, then restart Iron Jarvis so it takes effect.
             </>
           ) : (
@@ -251,7 +253,7 @@ function NotReadyCard({ data }: { data: SelfDevStatus | null }) {
           href={SETTINGS_ADVANCED}
           className="inline-flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-2 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
         >
-          <SettingsIcon size={14} /> Open Settings → Advanced <ArrowRight size={13} />
+          <SettingsIcon size={14} /> Open Settings › System <ArrowRight size={13} />
         </Link>
       </div>
     </Card>

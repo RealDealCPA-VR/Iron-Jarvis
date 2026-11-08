@@ -283,7 +283,7 @@ export const NAV: NavSectionDef[] = [
         label: "Sentinels",
         icon: Radar,
         aliases: ["watchers", "watch a folder", "monitor", "alerts", "triggers"],
-        blurb: "Always-on watchers that only ever SUGGEST — never act alone.",
+        blurb: "Watch a folder and get a suggestion when files change.",
       },
       {
         href: "/computeruse",

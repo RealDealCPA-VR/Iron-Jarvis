@@ -29,6 +29,9 @@ EXPECTED = {
     "handbook": ("The Handbook", "# Iron Jarvis — The Handbook"),
     "recommended-settings": ("Recommended Settings", "# Recommended Settings"),
     "local-models": ("Local Models by RAM Tier", "# Local Models by RAM Tier"),
+    # v1.450.0 (moved on purpose): the release notes, generated from the
+    # Handbook's version sections, are the fourth guide.
+    "changelog": ("What changed", "# What changed in Iron Jarvis"),
 }
 
 
@@ -49,7 +52,7 @@ def test_docs_dir_resolves_to_the_real_repo_docs_dir():
         assert (d / filename).is_file(), f"allowlisted doc missing: {filename}"
 
 
-def test_list_returns_the_three_docs_in_fixed_order(client):
+def test_list_returns_the_docs_in_fixed_order(client):
     r = client.get("/helpdocs")
     assert r.status_code == 200, r.text
     docs = r.json()["docs"]
@@ -57,6 +60,7 @@ def test_list_returns_the_three_docs_in_fixed_order(client):
         "handbook",
         "recommended-settings",
         "local-models",
+        "changelog",
     ]
     for d in docs:
         assert d["title"] == EXPECTED[d["slug"]][0]

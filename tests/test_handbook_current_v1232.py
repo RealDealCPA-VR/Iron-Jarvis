@@ -111,8 +111,11 @@ def test_help_page_daemon_offline_entry_points_at_maintenance():
     assert at != -1
     entry = src[at:]
     entry = entry[: entry.find("Port 8787")]
-    assert 'href="/settings"' in entry
-    assert "Settings → Maintenance" in entry
+    # v1.450.0 (moved on purpose, ease item 73): the link opens System ›
+    # Maintenance itself, not the top of Settings.
+    assert "href={MAINTENANCE_HREF}" in entry
+    assert 'MAINTENANCE_HREF = "/settings?section=system-maintenance"' in src
+    assert "Settings › System › Maintenance" in entry
 
 
 def test_readme_highlights_carry_the_audit_wave_guarantees():

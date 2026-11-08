@@ -405,7 +405,7 @@ export default function AutonomyPage() {
       <Reveal>
         <PageHeader
           title="Autonomy"
-          subtitle="The trust surface for the Motivation Layer — what Iron Jarvis wants to do on its own, what it's waiting to ask you, and the one switch that stops everything."
+          subtitle="Goals Jarvis works toward on its own, and the switch that stops it all."
           actions={
             <div className="flex flex-wrap items-center gap-2">
               {/* Master enable (off by default) — writes autonomy_enabled via /settings. */}

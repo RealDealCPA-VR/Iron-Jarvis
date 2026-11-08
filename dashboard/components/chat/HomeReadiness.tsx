@@ -102,7 +102,7 @@ export function ChosenLine({ label }: { label: string }) {
   if (!label) return null;
   return (
     <p role="status" data-testid="home-chosen" className="text-center text-[13px] text-tone-success">
-      Done — {label} answers you now. Ask anything below.
+      Done — {label} answers you now. Type your question in the box.
     </p>
   );
 }
