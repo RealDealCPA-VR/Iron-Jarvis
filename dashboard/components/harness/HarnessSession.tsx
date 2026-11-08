@@ -924,7 +924,7 @@ export function HarnessSession({
   // v1.406.0 part 4: the box's Commit / "Open a pull request" open the
   // Branch view's own press (its form waits for the user) — a counter, so a
   // second press opens it again.
-  const [branchPress, setBranchPress] = useState<{ kind: "commit" | "pr"; n: number } | null>(null);
+  const [branchPress, setBranchPress] = useState<{ kind: "commit" | "pr" | "keep"; n: number } | null>(null);
   const branchSeq = useRef(0);
   // The Branch view changed the branch (a commit, a push, a pull request).
   const [branchReads, setBranchReads] = useState(0);
@@ -2191,8 +2191,11 @@ export function HarnessSession({
       const words = a.text;
       setInput((cur) => withNextStep(cur, words));
       boxRef.current?.focus({ preventScroll: true });
-    } else if (a.kind === "commit" || a.kind === "open_pr") {
-      setBranchPress((p) => ({ kind: a.kind === "commit" ? "commit" : "pr", n: (p?.n ?? 0) + 1 }));
+    } else if (a.kind === "commit" || a.kind === "open_pr" || a.kind === "keep") {
+      // v1.455.0 (Wave F, item 14): "Keep these changes" is the Branch
+      // view's own one press, made there.
+      const kind = a.kind === "commit" ? "commit" : a.kind === "keep" ? "keep" : "pr";
+      setBranchPress((p) => ({ kind, n: (p?.n ?? 0) + 1 }));
     }
   }
 

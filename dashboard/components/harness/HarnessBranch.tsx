@@ -65,7 +65,8 @@ type Mode = "idle" | "commit" | "pr";
 /** v1.406.0 part 4: the next-step box's Commit / "Open a pull request" — the
  *  same press as the buttons below (a new `n` presses it once more). */
 export interface BranchPress {
-  kind: "commit" | "pr";
+  /** v1.455.0 (Wave F, item 14): "keep" = the box's "Keep these changes". */
+  kind: "commit" | "pr" | "keep";
   n: number;
 }
 
@@ -291,6 +292,9 @@ export function BranchView({
     onPressed?.();
     if (press.kind === "commit" && status.uncommitted > 0) void startCommit();
     else if (press.kind === "pr" && status.ahead > 0 && git.base) startPr();
+    // v1.455.0 (Wave F, item 14): the box's "Keep these changes" is THIS
+    // view's one press, made only when its button would be shown.
+    else if (press.kind === "keep" && canKeep) void keep();
     // startCommit / startPr read the state of this render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [press, status, busy]);

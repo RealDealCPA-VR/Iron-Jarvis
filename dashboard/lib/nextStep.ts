@@ -53,7 +53,14 @@ export type NextActionKind =
   | "fill_offer"
   | "commit"
   | "open_pr"
+  | "keep"
   | "connect_continue";
+
+/** v1.455.0 (Wave F, item 14): the Branch view's one press, offered by the
+ *  box when the session works in a separate copy — the same words as
+ *  `lib/buildGit.KEEP_CHANGES_LABEL` (a test keeps the two equal; this
+ *  module stays free of lib/api). */
+export const NEXT_KEEP_LABEL = "Keep these changes";
 
 export interface NextAction {
   kind: NextActionKind;
@@ -100,6 +107,10 @@ export interface GitFacts {
   uncommitted: number;
   ahead: number;
   prUrl: string;
+  /** v1.455.0: the Branch view's reading — its commits are already in the
+   *  base / the base branch exists. Absent = not known (read as no / yes). */
+  inBase?: boolean;
+  baseExists?: boolean;
 }
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
@@ -197,6 +208,16 @@ function prAction(): NextAction {
   };
 }
 
+function keepAction(): NextAction {
+  return {
+    kind: "keep",
+    label: NEXT_KEEP_LABEL,
+    title:
+      "Brings the work into your folder: what is not committed yet is committed, then merged into the branch it started from (the Branch view's Keep these changes)",
+    how: "press",
+  };
+}
+
 function capped(actions: NextAction[]): NextAction[] {
   const out: NextAction[] = [];
   for (const a of actions) {
@@ -248,13 +269,20 @@ export function codeNextStep(r: ReplyFacts, git: GitFacts | null): NextStep | nu
   }
   // The branch: only after a reply that changed something (a plain question
   // in a session with work waiting does not nag).
-  if (git && changed) {
-    if (git.uncommitted > 0) {
-      actions.push(commitAction());
-      if (!left) left = `The changes on ${git.branch} are not committed yet.`;
-    } else if (git.ahead > 0 && !git.prUrl && git.base) {
-      actions.push(prAction());
-      if (!left) left = `${git.branch} is committed; there is no pull request yet.`;
+  // v1.455.0 (Wave F, item 14): a session with a branch works in a SEPARATE
+  // COPY of the folder (v1.452.0, item 43), and the one press that brings
+  // the work back is "Keep these changes" — the Branch view's own (commit
+  // what is left, then merge into the base). The box offers that, never
+  // Commit / Open a pull request, which stay in the Branch view.
+  // An open pull request is the user's own way back (nothing to add), and an
+  // offer the reply made about the branch (Commit, a pull request) already
+  // names its press.
+  const branchOffered = actions.some((a) => a.kind === "commit" || a.kind === "open_pr");
+  if (git && changed && git.base && git.baseExists !== false && !git.prUrl && !branchOffered) {
+    const toKeep = git.uncommitted > 0 || (git.ahead > 0 && !git.inBase);
+    if (toKeep) {
+      actions.push(keepAction());
+      if (!left) left = "The changes are in a separate copy of your folder.";
     }
   }
   const first = done.length ? `${cap1(joinAnd(done))}.` : "";
@@ -308,10 +336,18 @@ export function codeReplyFacts(m: {
  *  or a merged branch) and the Branch view's own reading. */
 export function gitFacts(
   git: { branch: string; base: string; prUrl: string; removed: boolean; merged: boolean } | null | undefined,
-  status: { uncommitted: number; ahead: number } | null | undefined,
+  status: { uncommitted: number; ahead: number; inBase?: boolean; baseExists?: boolean } | null | undefined,
 ): GitFacts | null {
   if (!git || git.removed || git.merged || !status) return null;
-  return { branch: git.branch, base: git.base, prUrl: git.prUrl, uncommitted: status.uncommitted, ahead: status.ahead };
+  return {
+    branch: git.branch,
+    base: git.base,
+    prUrl: git.prUrl,
+    uncommitted: status.uncommitted,
+    ahead: status.ahead,
+    ...(typeof status.inBase === "boolean" ? { inBase: status.inBase } : {}),
+    ...(typeof status.baseExists === "boolean" ? { baseExists: status.baseExists } : {}),
+  };
 }
 
 /** A saved CHAT reply, as the box reads it (only these keys). */
