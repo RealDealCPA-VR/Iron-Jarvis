@@ -114,6 +114,31 @@ describe("item 8: ErrorNote folds the raw text under Details", () => {
     expect(details.textContent).toContain("err_1a2b3c4d");
   });
 
+  // Review: a page that keeps ONE ErrorNote mounted and only swaps its words
+  // (setError(next) without clearing first) read the raw text once, at
+  // mount — a refusal sentence first, then a 500, showed no Details at all.
+  it("review: a note whose words BECOME the press problem reads its Details then", async () => {
+    const { rerender } = render(<ErrorNote>Couldn&apos;t save: the name is taken.</ErrorNote>);
+    expect(screen.queryByTestId("error-note-details")).toBeNull();
+    vi.stubGlobal("fetch", vi.fn(async () => mockResponse(500, { detail: ENVELOPE })));
+    const err = await failOf(api("/press", { method: "POST" }));
+    rerender(<ErrorNote>{err.message}</ErrorNote>);
+    expect(screen.getByTestId("error-note-details").textContent).toContain("err_1a2b3c4d");
+  });
+
+  it("review: a note that stays the same keeps its own err id when another press fails later", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => mockResponse(500, { detail: ENVELOPE })));
+    const err = await failOf(api("/press", { method: "POST" }));
+    const { rerender } = render(<ErrorNote>{err.message}</ErrorNote>);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => mockResponse(500, { detail: "internal error [err_99999999]: OSError: x" })),
+    );
+    await failOf(api("/other", { method: "POST" }));
+    rerender(<ErrorNote>{err.message}</ErrorNote>);
+    expect(screen.getByTestId("error-note-details").textContent).toContain("err_1a2b3c4d");
+  });
+
   it("a note that is not the press-problem sentence has no Details", () => {
     render(<ErrorNote>Couldn&apos;t save: the name is taken.</ErrorNote>);
     expect(screen.queryByTestId("error-note-details")).toBeNull();

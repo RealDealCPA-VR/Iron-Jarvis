@@ -199,21 +199,6 @@ describe("the receipt names the account a chat turn ran on", () => {
     expect(said.textContent).toBe("on the Spare account");
   });
 
-  // v1.455.0 (Wave F, item 17): an account switch is said, beside the
-  // account that answered (the daemon's `account.from`, lane F2).
-  it("v1.455.0: a turn that MOVED accounts says which it moved from, with why on hover", async () => {
-    H.stream.route = {
-      ...ROUTE,
-      account: { id: "c-spare", name: "Spare", from: "Work", why: "Work hit its 5-hour limit." },
-    };
-    render(<ChatPage />);
-    await sendHello();
-    const moved = await screen.findByTestId("turn-account-moved");
-    expect(moved.textContent).toBe("moved from the Work account");
-    expect(moved.getAttribute("title")).toBe("Work hit its 5-hour limit.");
-    expect(screen.getByTestId("turn-account").textContent).toBe("on the Spare account");
-  });
-
   it("CONTROL: a route with no account adds nothing", async () => {
     H.stream.route = { ...ROUTE, account: undefined };
     render(<ChatPage />);

@@ -556,8 +556,17 @@ export function ErrorNote({ children }: { children: ReactNode }) {
   // envelope); the raw text, with its err_ id, is folded under Details —
   // read once when the note appears, so a later failure elsewhere never
   // rewrites what this note says.
-  const problem = saysPressProblem(noteText(children));
-  const [technical] = useState(() => (problem ? lastServerProblem() : ""));
+  // Review: read again whenever the note's WORDS change (a page that keeps
+  // one note mounted and swaps a refusal for a 500 must still fold the 500's
+  // text); the same words re-rendered keep the text they were read with.
+  const text = noteText(children);
+  const problem = saysPressProblem(text);
+  const [read, setRead] = useState(() => ({ text, technical: problem ? lastServerProblem() : "" }));
+  let technical = read.technical;
+  if (read.text !== text) {
+    technical = problem ? lastServerProblem() : "";
+    setRead({ text, technical });
+  }
   return (
     <div
       role="alert"

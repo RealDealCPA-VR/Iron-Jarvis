@@ -5,9 +5,8 @@
  *    app/global-error.tsx when the layout itself broke) fold the raw text
  *    under Details instead of forcing it on the user, and say "go home"
  *    (never "the dashboard").
- *  - An account switch in a chat turn is said on the receipt ("moved from
- *    the Personal account"), read defensively off `route.account.from`
- *    (lane F2 sends it); a route with no switch says nothing new.
+ *  - (Review: an account-switch line was dropped — the daemon never sends
+ *    `route.account.from`; see the last block.)
  */
 
 import { renderToStaticMarkup } from "react-dom/server";
@@ -24,7 +23,8 @@ vi.mock("next/link", async () => {
 
 import RouteError from "@/app/error";
 import GlobalError from "@/app/global-error";
-import { accountMoveWords } from "@/components/chat/TurnReceipt";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 afterEach(cleanup);
 
@@ -61,18 +61,27 @@ describe("the page-error screen folds the raw text", () => {
   });
 });
 
-describe("an account switch in chat is said", () => {
-  it("names the account it moved from, with the daemon's reason", () => {
-    expect(
-      accountMoveWords({ account: { id: "w", name: "Work", from: "Personal", why: "Personal hit its 5-hour limit." } }),
-    ).toEqual({ text: "moved from the Personal account", why: "Personal hit its 5-hour limit." });
+// Review (v1.455.0): the first cut drew "moved from the X account" off
+// `route.account.from` / `why`, but NO daemon path sends those keys: a chat
+// turn's `route.account` exists only on a turn PINNED to an account
+// (`iron_proxy/choice.receipt`: id + name), and a pinned turn never moves; an
+// unpinned turn that rotates accounts inside its adapter carries no
+// `route.account` at all. A receipt line for a field nobody sends is a claim
+// with nothing behind it, so it is not drawn.
+describe("the receipt claims no account switch the daemon never reports", () => {
+  it("TurnReceipt reads no `account.from` / `account.why`", () => {
+    const src = readFileSync(join(__dirname, "..", "components", "chat", "TurnReceipt.tsx"), "utf8");
+    expect(src).not.toMatch(/turn-account-moved/);
+    expect(src).not.toMatch(/moved from the/);
   });
 
-  it("CONTROL: no switch, junk or an older daemon says nothing", () => {
-    expect(accountMoveWords({ account: { id: "w", name: "Work" } })).toBeNull();
-    expect(accountMoveWords({ account: { from: "   " } })).toBeNull();
-    expect(accountMoveWords({ account: { from: 3 as unknown as string } })).toBeNull();
-    expect(accountMoveWords({ account: null })).toBeNull();
-    expect(accountMoveWords(null)).toBeNull();
+  it("the daemon's account receipt is still id + name only", () => {
+    const py = readFileSync(
+      join(__dirname, "..", "..", "src", "iron_jarvis", "iron_proxy", "choice.py"),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    const body = py.slice(py.indexOf("def receipt("), py.indexOf("__all__"));
+    expect(body).not.toMatch(/"from"/);
+    expect(body).not.toMatch(/"why"/);
   });
 });
