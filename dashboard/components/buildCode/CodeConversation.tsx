@@ -25,6 +25,7 @@ import {
   Plug,
   Search,
   SquareTerminal,
+  TriangleAlert,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -72,6 +73,7 @@ import {
   signInProvider,
   planChecklistSteps,
   receiptLine,
+  receiptOutcome,
   resolvedWords,
   steerWords,
   toolLabel,
@@ -683,13 +685,23 @@ const Item = memo(function Item({
       // v1.417.0 (C4.9): the reply line, folded like Chat › Code's receipt:
       // who answered, how long, what it did; the usage line inside.
       const line = receiptLine({ ...r, model: friendlyModelName(r.model || facts?.model || "") }, facts?.account ?? "");
+      // v1.449.0 (plan 0h.5 item 10): the collapsed line LEADS with the
+      // outcome's glyph in its tone — a ✓ for a reply that ran to its end
+      // with no failed step, a ⚠ for one stopped, failed, cut off or with a
+      // step that failed — the way WorkLine marks a chat reply's steps.
+      const outcome = receiptOutcome(item.stop, r);
       return (
         <div className="grid gap-1">
           {said}
           {line || r.usage ? (
-            <details data-testid="code-receipt" className="text-[11px] text-zinc-600">
-              <summary data-testid="code-receipt-line" className="cursor-pointer select-none hover:text-zinc-400">
-                {line || "Details"}
+            <details data-testid="code-receipt" data-outcome={outcome} className="text-[11px] text-zinc-600">
+              <summary className="flex cursor-pointer select-none items-center gap-1.5 hover:text-zinc-400">
+                {outcome === "warn" ? (
+                  <TriangleAlert size={12} aria-hidden data-testid="code-receipt-warn" className="shrink-0 text-tone-warn" />
+                ) : (
+                  <Check size={12} aria-hidden data-testid="code-receipt-check" className="shrink-0 text-tone-success" />
+                )}
+                <span data-testid="code-receipt-line">{line || "Details"}</span>
               </summary>
               {r.usage ? (
                 <p data-testid="code-usage" className="mt-0.5 pl-3">

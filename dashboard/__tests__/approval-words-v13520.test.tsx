@@ -420,7 +420,9 @@ describe("the mission screen uses chat's words (G23)", () => {
     H.api["/models"] = CATALOG;
     renderOutput(view());
     const receipt = await screen.findByTestId("mission-receipt");
-    await waitFor(() => expect(folded(receipt.textContent)).toBe("Answered by DGX Spark"));
+    // v1.449.0 (plan 0h.5 item 17, moved on purpose): the receipt now ends
+    // with the mission's action count (the coordinator's one step here).
+    await waitFor(() => expect(folded(receipt.textContent)).toBe("Answered by DGX Spark · 1 action"));
     expect(receipt.querySelector('[title="custom · fleet"]')).not.toBeNull();
     expect(H.gets).toContain("/models");
   });
@@ -430,8 +432,8 @@ describe("the mission screen uses chat's words (G23)", () => {
     const receipt = screen.getByTestId("mission-receipt");
     // v1.360.0 (lane 10B): the machine is not known yet, so the alias is
     // "your model server" (the model menu's words), never "fleet".
-    expect(folded(receipt.textContent)).toBe("Answered by your model server");
-    expect(receipt.textContent).not.toContain("·");
+    expect(folded(receipt.textContent)).toBe("Answered by your model server · 1 action");
+    expect(receipt.textContent).not.toContain("fleet");
   });
 
   it("each finished teammate shows how long it took; one still at work does not", async () => {
@@ -498,9 +500,12 @@ describe("the mission screen uses chat's words (G23)", () => {
       ),
     );
     const card = screen.getByTestId("mission-approval");
-    expect(folded(within(card).getByTestId("mission-approval-ask").textContent)).toBe(
-      "Jarvis wants to save a file. Nothing runs until you answer.",
-    );
+    // v1.449.0 (plan 0h.5 item 17, moved on purpose): the mission screen
+    // mounts THE chat card (components/chat/ApprovalCard), named for the
+    // coordinator — its header, its waiting line, its buttons.
+    expect(within(card).getByTestId("chat-approval-card")).toBeTruthy();
+    expect(folded(card.textContent)).toContain("Jarvis wants to save a file (write_file). Your call.");
+    expect(within(card).getByTestId("approval-waiting").textContent).toBe("Waiting for you.");
     expect(buttonNames(card)).toEqual(["Allow once", "Allow for this run", "Deny"]);
     expect(card.textContent).not.toMatch(/Decline|for this task/);
     fireEvent.click(within(card).getByText("Deny"));

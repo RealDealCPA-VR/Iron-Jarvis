@@ -22,6 +22,8 @@
 //   never reads unread.
 
 import { normalizeIso } from "./format";
+import { statusWords as tableWords } from "./statusWords";
+import type { Tone } from "@/components/ui";
 
 export type ThreadStatus = "running" | "waiting" | "unread" | "idle";
 
@@ -184,10 +186,22 @@ export function formatAge(iso: string | null | undefined, now: number = Date.now
   return `${Math.floor(h / 24)}d`;
 }
 
-/** Words for a status, for screen readers and tooltips ("" for idle). */
+/** Words for a status, for screen readers and tooltips ("" for idle).
+ *  v1.449.0 (plan 0h.5 item 18): a running or waiting chat says the ONE
+ *  status table's word ("Working", "Waiting for you" — lib/statusWords),
+ *  the same word a run, a schedule or a coding session says; "unread" is a
+ *  chat-list notion with no row there and keeps its own words. */
 export function statusWords(status: ThreadStatus): string {
-  if (status === "running") return "Working on it";
-  if (status === "waiting") return "Waiting on you";
+  if (status === "running") return tableWords("working").word;
+  if (status === "waiting") return tableWords("waiting").word;
   if (status === "unread") return "New since you last looked";
   return "";
+}
+
+/** v1.449.0: the status's tone from the same table ("slate" for idle and
+ *  unread, which the table does not know). */
+export function statusTone(status: ThreadStatus): Tone {
+  if (status === "running") return tableWords("working").tone;
+  if (status === "waiting") return tableWords("waiting").tone;
+  return "slate";
 }

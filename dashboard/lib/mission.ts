@@ -11,6 +11,7 @@
 // daemon's `pct: null` — "no count behind this bar" — instead of inventing one.
 
 import { statusWords, type StatusWords } from "@/lib/statusWords";
+import { secondsText } from "@/lib/durationWords";
 
 export type MemberStatus =
   | "queued"
@@ -401,21 +402,46 @@ export function missionHeadlineWarn(v: MissionView): boolean {
   return f === "needs_you" || f === "part_failed";
 }
 
-/** The one-line headline for the whole mission. */
+/** v1.449.0 (plan 0h.5 item 17): how long the mission took, in the app's
+ *  duration words (lib/durationWords: "4 min 12 s") — the coordinator's
+ *  start to its end, read off the session row's own stamps. "" while it is
+ *  still at work (no end yet), or when either stamp is unreadable. */
+export function missionTook(v: Pick<MissionView, "session">): string {
+  const { created_at: a, finished_at: b } = v.session;
+  if (!a || !b) return "";
+  const x = Date.parse(a);
+  const y = Date.parse(b);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || y < x) return "";
+  return secondsText(y - x) ?? "";
+}
+
+/** v1.449.0: the actions the mission took — the coordinator's steps plus
+ *  every teammate's (each `steps` is the daemon's count of that run's tool
+ *  calls). 0 when nothing was counted. */
+export function missionActions(v: Pick<MissionView, "coordinator" | "members">): number {
+  const n = (x: unknown) => (typeof x === "number" && Number.isFinite(x) && x > 0 ? Math.floor(x) : 0);
+  return n(v.coordinator.steps) + v.members.reduce((sum, m) => sum + n(m.steps), 0);
+}
+
+/** The one-line headline for the whole mission. v1.449.0 (plan 0h.5 item
+ *  18): a session's verdict is the ONE status table's word (lib/statusWords
+ *  — "Done", "Failed", "Stopped", "Queued", "Waiting for you"), never a
+ *  second spelling here; the two bell headlines (needs you, part failed)
+ *  stay the bell's own words. */
 export function missionHeadline(v: MissionView): string {
   const st = v.session.status;
   if (st === "completed") {
     const f = missionFinish(v);
     if (f === "needs_you") return NEEDS_YOU_HEADLINE;
     if (f === "part_failed") return PART_FAILED_HEADLINE;
-    return "Finished";
+    return statusWords("completed").word;
   }
-  if (st === "failed") return "Could not finish";
-  if (st === "cancelled") return "Stopped";
-  if (st === "queued") return "Queued, waiting for a free slot";
+  if (st === "failed") return statusWords("failed").word;
+  if (st === "cancelled") return statusWords("cancelled").word;
+  if (st === "queued") return `${statusWords("queued").word}, waiting for a free slot`;
   const { done, total } = v.progress;
   if (v.coordinator.waiting_on || v.members.some((m) => m.status === "waiting_you"))
-    return "Waiting for your OK";
+    return statusWords("waiting").word;
   if (total === 0) return "Jarvis is planning the work";
   return `${done} of ${total} teammate${total === 1 ? "" : "s"} done`;
 }

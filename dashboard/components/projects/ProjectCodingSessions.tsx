@@ -13,11 +13,18 @@ import Link from "next/link";
 import { ArrowRight, Code2 } from "lucide-react";
 import { timeAgo } from "@/lib/format";
 import { CODING_SESSIONS_LIST } from "@/lib/buildWords";
+import { toneInkClass, type StatusWords } from "@/lib/statusWords";
 import {
   codingSessionHref,
   codingStateWords,
   decodeCodingSessions,
 } from "@/lib/codingSessions";
+
+/** The state's ink: the table's tone, except slate (a quiet state keeps the
+ *  row's own grey rather than a louder zinc-400). */
+function stateInk(s: StatusWords): string {
+  return s.tone === "slate" ? "" : toneInkClass(s.tone);
+}
 
 export function ProjectCodingSessions({ items }: { items: unknown }) {
   const rows = decodeCodingSessions(items);
@@ -40,17 +47,10 @@ export function ProjectCodingSessions({ items }: { items: unknown }) {
                 <span className="block truncate text-[13px] text-zinc-200">{c.title || "Untitled"}</span>
                 <span className="block text-[11px] text-zinc-500">
                   {c.tool ? `${c.tool} · ` : ""}
-                  <span
-                    className={
-                      c.state === "waiting"
-                        ? "text-tone-warn"
-                        : c.state === "finished" && c.outcome === "failed"
-                          ? "text-tone-danger"
-                          : ""
-                    }
-                  >
-                    {codingStateWords(c)}
-                  </span>
+                  {/* v1.449.0 (plan 0h.5 item 18): the word AND its tone are
+                      the ONE status table's (lib/statusWords); a quiet state
+                      (no reply yet) keeps the row's own grey. */}
+                  <span className={stateInk(codingStateWords(c))}>{codingStateWords(c).word}</span>
                   {c.updatedAt ? ` · ${timeAgo(c.updatedAt)}` : ""}
                 </span>
               </span>

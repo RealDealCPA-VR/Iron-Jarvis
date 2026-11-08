@@ -127,7 +127,7 @@ describe("the mission headline has no dash aside", () => {
     expect(missionHeadline(view("queued"))).toBe("Queued, waiting for a free slot");
   });
   it("control: a plain finish is one word", () => {
-    expect(missionHeadline(view("completed", "completed"))).toBe("Finished");
+    expect(missionHeadline(view("completed", "completed"))).toBe("Done");
   });
 });
 

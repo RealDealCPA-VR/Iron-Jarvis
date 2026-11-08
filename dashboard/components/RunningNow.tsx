@@ -30,26 +30,37 @@ import { useEvents } from "@/lib/useEvents";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import {
   MAX_RUNNING_ROWS,
+  RUNNING_MEDIA_PATH,
+  RUNNING_NIGHT_PATH,
   RUNNING_POLL_MS,
   RUNNING_REPLIES_PATH,
   RUNNING_SESSIONS_PATH,
   RUNNING_TICK_MS,
+  RUNNING_WORKFLOWS_PATH,
   runningItems,
+  type RunningMediaRow,
+  type RunningNightRow,
   type RunningReplyRow,
   type RunningSessionRow,
+  type RunningWorkflowRow,
 } from "@/lib/runningNow";
 import { announceBuildSessionLink } from "@/lib/buildLinks";
 import { announceBuildCodeLink } from "@/lib/buildApp";
 import { announceChatViewLink } from "@/lib/chatSurface";
 
 /** The frames that start or end a run (the run half of the orb's
- *  MOOD_EVENT_TYPES). Any NEW one re-reads the list. */
+ *  MOOD_EVENT_TYPES). Any NEW one re-reads the list. v1.449.0 (plan 0h.5
+ *  item 13): a workflow run's or a media job's end too — a finished one
+ *  must leave the list at once, not at the next poll. */
 export const RUN_EDGE_TYPES: readonly string[] = [
   "session.created",
   "session.completed",
   "agent.started",
   "agent.completed",
   "sessions.interrupted",
+  "workflow.completed",
+  "media.completed",
+  "media.failed",
 ];
 
 const EVENT_OPTS = { types: RUN_EDGE_TYPES };
@@ -70,6 +81,12 @@ export function RunningNow({
   // replies (in memory there). An older Iron Jarvis without the route (404)
   // lists none, as before.
   const replies = usePolledApi<{ replies?: RunningReplyRow[] }>(RUNNING_REPLIES_PATH, RUNNING_POLL_MS);
+  // v1.449.0 (plan 0h.5 item 13): workflow runs, media jobs and night tasks,
+  // each from the daemon's own route. A route the daemon has not (404) or
+  // media not available (503) lists none of that kind; the rest still show.
+  const flows = usePolledApi<{ runs?: RunningWorkflowRow[] }>(RUNNING_WORKFLOWS_PATH, RUNNING_POLL_MS);
+  const media = usePolledApi<{ jobs?: RunningMediaRow[] }>(RUNNING_MEDIA_PATH, RUNNING_POLL_MS);
+  const night = usePolledApi<{ tasks?: RunningNightRow[] }>(RUNNING_NIGHT_PATH, RUNNING_POLL_MS);
   const chats = useChatList();
   const [now, setNow] = useState(() => Date.now());
   useVisibleInterval(() => setNow(Date.now()), RUNNING_TICK_MS);
@@ -86,6 +103,8 @@ export function RunningNow({
   }, [events]);
   const reload = sessions.reload;
   const reloadReplies = replies.reload;
+  const reloadFlows = flows.reload;
+  const reloadMedia = media.reload;
   const seenRef = useRef(edgeKey);
   useEffect(() => {
     if (edgeKey === seenRef.current) return;
@@ -93,11 +112,18 @@ export function RunningNow({
     setNow(Date.now());
     reload();
     reloadReplies();
-  }, [edgeKey, reload, reloadReplies]);
+    reloadFlows();
+    reloadMedia();
+  }, [edgeKey, reload, reloadReplies, reloadFlows, reloadMedia]);
 
   const items = useMemo(
-    () => runningItems(sessions.data?.sessions ?? null, chats.threads, now, replies.data?.replies ?? null),
-    [sessions.data, chats.threads, now, replies.data],
+    () =>
+      runningItems(sessions.data?.sessions ?? null, chats.threads, now, replies.data?.replies ?? null, {
+        workflows: flows.data?.runs ?? null,
+        media: media.data?.jobs ?? null,
+        night: night.data?.tasks ?? null,
+      }),
+    [sessions.data, chats.threads, now, replies.data, flows.data, media.data, night.data],
   );
   const shown = items.slice(0, MAX_RUNNING_ROWS);
   const more = items.length - shown.length;
@@ -130,7 +156,9 @@ export function RunningNow({
                       // A coding session pressed while Build is already open:
                       // Next keeps the page on a query-only change, so the
                       // session is announced (lib/buildLinks).
-                      if (it.kind === "build") announceBuildSessionLink(it.href);
+                      // (v1.449.0) a night task opens its coding session the
+                      // same way.
+                      if (it.kind === "build" || it.kind === "night") announceBuildSessionLink(it.href);
                       // v1.414.0: a Build › Code session pressed while Build
                       // is already open (the same query-only rule).
                       else if (it.kind === "build_app") announceBuildCodeLink(it.href);

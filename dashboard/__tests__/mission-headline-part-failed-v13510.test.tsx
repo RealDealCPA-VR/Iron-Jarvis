@@ -116,17 +116,17 @@ describe("the headline words", () => {
   });
 
   it("controls: a clean finish is one word; failed, stopped and running keep their words", () => {
-    expect(missionHeadline(view("completed", "completed"))).toBe("Finished");
+    expect(missionHeadline(view("completed", "completed"))).toBe("Done");
     expect(missionHeadline(view("completed", "completed", { total: 3, done: 3, failed: 0, pending: 0, doing: 0 }))).toBe(
-      "Finished",
+      "Done",
     );
     expect(missionHeadlineWarn(view("completed", "completed"))).toBe(false);
-    expect(missionHeadline(view("failed", null))).toBe("Could not finish");
+    expect(missionHeadline(view("failed", null))).toBe("Failed");
     expect(missionHeadline(view("cancelled", null))).toBe("Stopped");
     expect(missionFinish(view("active", null))).toBeNull();
     // A view with no deliverable (the bell copy test's shape) never throws.
     expect(missionHeadline({ session: { status: "completed", outcome: null } } as unknown as MissionView)).toBe(
-      "Finished",
+      "Done",
     );
   });
 });
@@ -148,7 +148,7 @@ describe("the headline on the mission screen", () => {
 
   it("control: a clean finish stays the quiet grey line", () => {
     const head = show(view("completed", "completed"));
-    expect(head.textContent).toBe("Finished");
+    expect(head.textContent).toBe("Done");
     expect(head.className).toContain("text-zinc-400");
     expect(head.className).not.toContain("text-tone-warn");
     expect(head.getAttribute("data-tone")).toBe("plain");

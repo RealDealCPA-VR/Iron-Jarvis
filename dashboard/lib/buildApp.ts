@@ -26,6 +26,7 @@
 import { onceReasonOf } from "./onceReason";
 import { type CarryMark, decodeCarryMark } from "./buildCodeCarry";
 import { SUBSCRIPTION_CLI_ROWS } from "./subscriptionClis";
+import { secondsText } from "./durationWords";
 
 // ── the view and the address ────────────────────────────────────────────────
 
@@ -1538,6 +1539,10 @@ export interface TurnReceipt {
   model: string;
   seconds: number | null;
   actions: number;
+  /** v1.449.0 (plan 0h.5 item 10): the steps that FAILED (a step whose end
+   *  said so and that never landed afterwards). Counted inside `actions`,
+   *  said apart on the line, and what turns the receipt's glyph amber. */
+  failed: number;
   files: number;
   usage: { input: number; output: number; costUsd: number | null; listPrice: boolean; costReportedBy: string } | null;
 }
@@ -1546,27 +1551,40 @@ function secondsBetween(a: string, b: string): number | null {
   const x = Date.parse(a);
   const y = Date.parse(b);
   if (!Number.isFinite(x) || !Number.isFinite(y) || y < x) return null;
-  return Math.round((y - x) / 1000);
+  // v1.449.0: kept to the millisecond — the app's duration words
+  // (lib/durationWords) say "5.3 s" under ten seconds, as the chat does.
+  return (y - x) / 1000;
 }
 
-/** "2 m 14 s", "14 s", "1 h 3 m". */
+/** The app's duration words: "9.0 s", "14 s", "2 min 14 s", "63 min". v1.449.0
+ *  (plan 0h.5 item 10): the same clock vocabulary as every chat receipt
+ *  (lib/durationWords.secondsText) — never "2 m 14 s" or "1 h 3 m". */
 export function receiptDuration(seconds: number): string {
-  const s = Math.max(0, Math.round(seconds));
-  if (s < 60) return `${s} s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m} m ${s % 60} s`;
-  return `${Math.floor(m / 60)} h ${m % 60} m`;
+  return secondsText(Math.max(0, seconds) * 1000) ?? "";
+}
+
+/** v1.449.0 (plan 0h.5 item 10): how the turn ended, for the receipt's
+ *  glyph — "ok" (a ✓) for a reply that ran to its end with no failed step,
+ *  "warn" (a ⚠) for a stopped, failed or cut-off reply or one with a step
+ *  that failed; the outcome's tone, as WorkLine draws a reply's steps. */
+export type ReceiptOutcome = "ok" | "warn";
+export function receiptOutcome(stop: Extract<CodeEvent, { type: "done" }>["stop"], r: Pick<TurnReceipt, "failed"> | null): ReceiptOutcome {
+  if (stop !== "completed") return "warn";
+  return r && r.failed > 0 ? "warn" : "ok";
 }
 
 /** v1.417.0 (C4.9): the reply line — "answered by <model> on <account> ·
- *  2 m 14 s · 7 actions · 3 files changed", the way Chat › Code's receipt
- *  reads. A part with nothing to say is left out; "" when nothing is known. */
+ *  2 min 14 s · 7 actions · 3 files changed", the way Chat › Code's receipt
+ *  reads. A part with nothing to say is left out; "" when nothing is known.
+ *  v1.449.0: a failed step is said apart ("7 actions · 1 failed"), the
+ *  WorkLine way. */
 export function receiptLine(r: TurnReceipt, account = ""): string {
   const parts: string[] = [];
   const who = r.model ? `answered by ${r.model}${account ? ` on ${account}` : ""}` : account ? `on ${account}` : "";
   if (who) parts.push(who);
   if (r.seconds !== null) parts.push(receiptDuration(r.seconds));
   if (r.actions > 0) parts.push(`${r.actions} action${r.actions === 1 ? "" : "s"}`);
+  if (r.failed > 0) parts.push(`${r.failed} failed`);
   if (r.files > 0) parts.push(`${r.files} file${r.files === 1 ? "" : "s"} changed`);
   return parts.join(" · ");
 }
@@ -1637,6 +1655,8 @@ export function foldConversation(
   let usageAt: number | null = null;
   const turnSteps = new Set<string>();
   const turnFiles = new Set<string>();
+  // v1.449.0: the steps that failed (and never landed afterwards).
+  const turnFailed = new Set<string>();
   // (review) the turn's last moment of WORK: a turn the daemon's restart cut
   // off gets its error and done only when Iron Jarvis starts again
   // (service.reconcile_at_boot), hours later — such a turn is timed to its
@@ -1696,6 +1716,7 @@ export function foldConversation(
         usageAt = null;
         turnSteps.clear();
         turnFiles.clear();
+        turnFailed.clear();
         break;
       case "text": {
         const i = textAt.get(ev.item);
@@ -1734,6 +1755,8 @@ export function foldConversation(
       }
       case "tool": {
         if (ev.kind !== "todo") turnSteps.add(ev.item);
+        if (ev.kind !== "todo" && ev.status === "failed") turnFailed.add(ev.item);
+        else if (ev.status === "done") turnFailed.delete(ev.item);
         const i = toolAt.get(ev.item);
         if ((ev.kind === "edit" || ev.kind === "write") && ev.status === "done") {
           // (review) the step's END may name no path: the one it began with.
@@ -1843,6 +1866,7 @@ export function foldConversation(
               ? workAt ? secondsBetween(turnAt, workAt) : null
               : ev.at ? secondsBetween(turnAt, ev.at) : null,
           actions: turnSteps.size,
+          failed: turnFailed.size,
           files: turnFiles.size,
           usage,
         };
@@ -1851,6 +1875,7 @@ export function foldConversation(
         usageAt = null;
         turnSteps.clear();
         turnFiles.clear();
+        turnFailed.clear();
         turnAt = "";
         workAt = "";
         // A turn that ended asks nothing any more.

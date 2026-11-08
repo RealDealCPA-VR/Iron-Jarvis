@@ -100,6 +100,7 @@ import {
   stepKindHint,
 } from "@/components/workflow/starters";
 import { WORKFLOW_RUN_TERMINAL, type WorkflowRun } from "@/lib/types";
+import { statusWords } from "@/lib/statusWords";
 
 const RUNS_PATH = "/workflows/runs?limit=50";
 
@@ -453,6 +454,53 @@ describe("RunHistory (via the page)", () => {
     renderHistory();
     expect(await screen.findByText("intake")).toBeInTheDocument();
     expect(screen.queryByText("Resume")).toBeNull();
+  });
+
+  // v1.449.0 (plan 0h.5 item 12): Stop on every live row.
+  it("a running row and a waiting row get Stop: POST the cancel route, then reload; terminal rows get none", async () => {
+    api.responses[RUNS_PATH] = {
+      runs: [
+        run({ id: "r-run", status: "running" }),
+        run({ id: "r-wait", status: "waiting", waiting_json: JSON.stringify({ step: "Approve", message: "Go?" }) }),
+        run({ id: "r-done", status: "completed" }),
+        run({ id: "r-part", status: "completed_with_failures" }),
+        run({ id: "r-cut", status: "interrupted" }),
+      ],
+    };
+    renderHistory();
+    const stop = await screen.findByTestId("run-stop-r-run");
+    expect(stop.textContent).toBe("Stop");
+    expect(screen.getByTestId("run-stop-r-wait").textContent).toBe("Stop");
+    expect(screen.queryByTestId("run-stop-r-done")).toBeNull();
+    expect(screen.queryByTestId("run-stop-r-part")).toBeNull();
+    // An interrupted run has Resume, never Stop (nothing runs).
+    expect(screen.queryByTestId("run-stop-r-cut")).toBeNull();
+    const before = api.calls.filter((p) => p === RUNS_PATH).length;
+    fireEvent.click(stop);
+    await waitFor(() => expect(api.posts.map((p) => p.path)).toContain("/workflows/runs/r-run/cancel"));
+    await waitFor(() => expect(api.calls.filter((p) => p === RUNS_PATH).length).toBeGreaterThan(before));
+  });
+
+  it("the row follows the Stop: a run the daemon now reports `cancelling` reads Stopping and offers no second Stop", async () => {
+    api.responses[RUNS_PATH] = { runs: [run({ id: "r-run", status: "running" })] };
+    renderHistory();
+    fireEvent.click(await screen.findByTestId("run-stop-r-run"));
+    api.responses[RUNS_PATH] = { runs: [run({ id: "r-run", status: "cancelling" })] };
+    await waitFor(() => expect(api.posts.map((p) => p.path)).toContain("/workflows/runs/r-run/cancel"));
+    expect(await screen.findByText(statusWords("cancelling").word)).toBeInTheDocument();
+    expect(statusWords("cancelling").word).toBe("Stopping");
+    await waitFor(() => expect(screen.queryByTestId("run-stop-r-run")).toBeNull());
+  });
+
+  it("a 409 (the run already ended) shows the server's words beside the row AND reloads it", async () => {
+    api.responses[RUNS_PATH] = { runs: [run({ id: "r-run", status: "running" })] };
+    api.postResponses["/workflows/runs/r-run/cancel"] = new api.FakeApiError("run already completed", 409);
+    renderHistory();
+    const stop = await screen.findByTestId("run-stop-r-run");
+    const before = api.calls.filter((p) => p === RUNS_PATH).length;
+    fireEvent.click(stop);
+    expect((await screen.findByTestId("run-stop-error-r-run")).textContent).toBe("run already completed");
+    await waitFor(() => expect(api.calls.filter((p) => p === RUNS_PATH).length).toBeGreaterThan(before));
   });
 
   it("resuming renders live-cyan; waiting amber; completed keeps green", async () => {

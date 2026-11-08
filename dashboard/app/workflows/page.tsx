@@ -659,6 +659,32 @@ function RunHistory() {
     }
   }
 
+  // v1.449.0 (plan 0h.5 item 12): Stop on every live row — the canvas's own
+  // `cancelRun` (POST /workflows/runs/{id}/cancel), the same plain word.
+  const [stoppingRunId, setStoppingRunId] = useState<string | null>(null);
+  const [stopErr, setStopErr] = useState<{ id: string; message: string } | null>(null);
+
+  async function stopRun(runId: string) {
+    if (stoppingRunId) return;
+    setStoppingRunId(runId);
+    setStopErr(null);
+    try {
+      await post(`/workflows/runs/${encodeURIComponent(runId)}/cancel`, {});
+      // The row follows: a waiting run is "cancelled" at once, a running one
+      // reads "Stopping" until the engine ends it between steps (the live
+      // poll lands the final state).
+      reload();
+    } catch (e) {
+      // 409 = the run already ended ("run already completed"): the server's
+      // words, and a refetch so the row agrees with them instead of keeping
+      // a Stop that can do nothing.
+      setStopErr({ id: runId, message: e instanceof ApiError ? e.message : String(e) });
+      reload();
+    } finally {
+      setStoppingRunId(null);
+    }
+  }
+
   async function submitAnswer(runId: string) {
     const text = (answerDraft[runId] ?? "").trim();
     if (!text || answeringId) return;
@@ -790,10 +816,32 @@ function RunHistory() {
                                 : "Resume"}
                             </button>
                           )}
+                          {/* v1.449.0 (plan 0h.5 item 12): every live row can
+                              be stopped from here, like the canvas's Stop. A
+                              run already stopping shows its state alone. */}
+                          {isLiveRun(r) && r.status !== "cancelling" && r.id != null && (
+                            <button
+                              type="button"
+                              data-testid={`run-stop-${String(r.id)}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void stopRun(String(r.id));
+                              }}
+                              disabled={stoppingRunId != null}
+                              className={WF_GHOST_ON_SM}
+                            >
+                              {stoppingRunId === String(r.id) ? "Stopping…" : "Stop"}
+                            </button>
+                          )}
                         </div>
                         {resumeErr && resumeErr.id === String(r.id) && (
                           <p className="mt-1 text-[12px] text-tone-danger">
                             {resumeErr.message}
+                          </p>
+                        )}
+                        {stopErr && stopErr.id === String(r.id) && (
+                          <p data-testid={`run-stop-error-${String(r.id)}`} className="mt-1 text-[12px] text-tone-danger">
+                            {stopErr.message}
                           </p>
                         )}
                       </td>

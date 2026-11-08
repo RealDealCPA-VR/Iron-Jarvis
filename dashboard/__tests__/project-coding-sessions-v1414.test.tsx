@@ -84,12 +84,12 @@ describe("lib/codingSessions", () => {
   });
 
   it("says each state in words", () => {
-    expect(codingStateWords({ state: "working", outcome: "" })).toBe("Working");
-    expect(codingStateWords({ state: "waiting", outcome: "" })).toBe("Waiting for you");
-    expect(codingStateWords({ state: "finished", outcome: "completed" })).toBe("Finished");
-    expect(codingStateWords({ state: "finished", outcome: "failed" })).toBe("Failed");
-    expect(codingStateWords({ state: "finished", outcome: "cancelled" })).toBe("Stopped");
-    expect(codingStateWords({ state: "idle", outcome: "" })).toBe("No reply yet");
+    expect(codingStateWords({ state: "working", outcome: "" }).word).toBe("Working");
+    expect(codingStateWords({ state: "waiting", outcome: "" }).word).toBe("Waiting for you");
+    expect(codingStateWords({ state: "finished", outcome: "completed" }).word).toBe("Done");
+    expect(codingStateWords({ state: "finished", outcome: "failed" }).word).toBe("Failed");
+    expect(codingStateWords({ state: "finished", outcome: "cancelled" }).word).toBe("Stopped");
+    expect(codingStateWords({ state: "idle", outcome: "" }).word).toBe("No reply yet");
   });
 });
 

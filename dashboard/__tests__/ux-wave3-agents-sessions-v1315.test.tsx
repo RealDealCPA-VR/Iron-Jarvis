@@ -422,7 +422,7 @@ describe("Session board page: named for what it is, lanes in plain words", () =>
     seed();
     render(<KanbanPage />);
     expect(screen.queryByText("Merged & done")).toBeNull();
-    expect(screen.getByText("Finished")).toBeInTheDocument();
+    expect(screen.getByText("Ran to the end")).toBeInTheDocument();
   });
 
   it("'Clear completed' sits in the Completed lane and is still two-press", async () => {
