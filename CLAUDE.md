@@ -15904,6 +15904,132 @@ does not need a bump, stop and bump it.
     codex/grok ambiguity has no product caller; none of it driven in the
     packaged app, against a real vendor console or a real add-on.
 
+- **Wave D of the readiness plan: Settings, words, the automations pages,
+  Help** (v1.451.0; ease-of-use items 32-42 of
+  docs/PRODUCT-READINESS-RESULTS.md 0h.5; four builders + four independent
+  reviewers, who found 17 more defects, each red first and mutation-checked;
+  items 43-45 are the owner's decisions and were not built).
+  - SETTINGS AND WORDS (D1): `SettingsHome` folds `advanced` and
+    `type === "dict"` rows (`foldedRow`) under one closed "More options (N)"
+    per group, not in the DOM until opened; REVIEW: the fold says how many
+    are changed ("More options (3, 1 changed)" + a "Changed: …" line, an
+    unsaved edit counted) against `SettingDef.public()["default"]`
+    (`schema.config_default`, config-store rows only). `?focus=<key>`,
+    `#settings-<key>` (`lib/settingsOpen.SETTINGS_HASH`, decoded on first
+    load) and `SETTINGS_OPEN_EVENT` (which now clears a search) open the
+    fold and land on the row; a search shows matches flat;
+    `account_groups` → `CONTROLLED_IN_SECTION` "connections-accounts".
+    Plain words on primary paths: the schema's `default_provider` label is
+    "Default AI" (alias "default provider" — the trigger and arming tables
+    unchanged), Connections "Everything is connected", "See your plans and
+    model servers", "Add a model server", "Server address", "Your model
+    servers"; Build › Code "Its own tool servers", "Reload its tool
+    servers"; the Iron-Proxy lines on chat/coding surfaces say "your
+    accounts" / "the account manager" / "Several accounts" (the Connections
+    card keeps the program's name); "Your model servers" on the first-run
+    door; the goal card "Repeat"; "isn't installed where this PC can find
+    it. Get it here." The vocabulary scanner decodes HTML entities and has
+    a scoped `onSurfaces(...)` "Iron-Proxy" row (`RETIRED_ON_SURFACES`,
+    `isChatOrCodingSurface`). OPEN: daemon sentences still say Iron-Proxy on
+    coding screens (`harness/build_accounts.py` OFF/NOT_READ/UPDATE/GROUP
+    notes, `hosted/words.py`); `self-dev/page.tsx` once linked a key that
+    does not exist (fixed by D4 to `self_dev_enabled`).
+  - AUTOMATIONS (D2): `PATCH /reflex/rules/{id}` edits every field (merged,
+    then `_check_rule` — the add's own checks; a refused edit changes
+    nothing; `ReflexStore.update` writes only editable fields) and
+    `PATCH /sentinels/{name}` (partial; a changed path/glob through
+    `_check_config`, then a fresh baseline; `glob: ""` removes it; REVIEW: a
+    `\\host` / `//host` path refused by its text, `NETWORK_WATCH`); Edit on
+    both pages; the Rules form opens on "a message arrives → an agent does a
+    task"; a rule whose source cannot hear says so (`lib/reflexRules`, from
+    `/triggers`). Schedules: "Every minute" last with a warning, a name from
+    the task's first five words (REVIEW: never one in use,
+    `uniqueScheduleName`), the editor reads cron back into plain choices
+    and sends nothing unchanged, an unreadable cron is "Custom schedule
+    (advanced)". Tonight: the shared folder picker + `GET /build/git/folder`
+    → "Make this folder a repository" → `POST /build/git/init` →
+    `harness/branches.init_repo` (a network path refused by text,
+    `root_problem`, an existing repo left alone, `git init --template=` +
+    one first commit through the night shift's screen with no hook run;
+    REVIEW: every refusal after `git init` takes the new `.git` back, a
+    drive top or the home folder is refused (`INIT_TOP_FOLDER`), a folder
+    inside another repository is refused (`INIT_INSIDE_REPO`), and a first
+    commit past `MAX_INIT_FILES` 10,000 / `MAX_INIT_BYTES` 1 GB is refused —
+    both limits are guesses). The workflow step editor says a JSON parse
+    error with line/column; Save refuses a tool step naming no tool this
+    install has, except an extension tool whose pack is starting, failed or
+    unknown.
+  - DIALOGS AND SMALL UX (D3): `components/PageQuestion.tsx`
+    (`usePageQuestion`, `<PageQuestion>`, `<PageQuestionDialog>`: a second
+    question answers the first "no", leaving answers "no", Escape = no;
+    REVIEW: a held/repeated Enter or Space never answers, focus returns to
+    the press that asked, leaving a chat answers its Undo question "no")
+    replaces the last four native `confirm()` (chat Undo, Build pane chat
+    Undo, DocPreview replace, Creative publish); `KNOWN_NATIVE_CONFIRMS` in
+    `settings-panel-words-v13540` is EMPTY — a new `confirm()` fails it. The
+    browser sidebar says "Allow once"; PaneAsk shows the blocked-Enter note;
+    Autonomy uses the shared `<Button>`. `lib/whyDisabled.ts` +
+    `components/DisabledNote.tsx` say why a press is off (Send, Build › Code
+    Start, Directory Connect, the key door, Add a web service); a pasted
+    message over 15 lines folds (`lib/composerFold.ts`; the sent text is
+    whole); Escape closes "+", Tools, project and the model menu (capture
+    phase — REVIEW: never while the chat is hidden behind Code, and with an
+    approval card docked the Escape goes on to decline it); Copy on code
+    blocks shows on touch; the steer placeholder says what Enter does.
+    `desktop/main.js`: `RELEASES_PREVIOUS_HOW`, `RELEASES_LATEST_HOW`,
+    `DATA_STAYS`, `recoveredWords(reason)` ("The window ran out of memory
+    and was reloaded. Nothing was lost."), the startup dialog says the cause
+    and "Open logs" with the raw error LOGGED FIRST (both branches), and
+    Spotlight's `spotlightErrorWords` keeps only a plain sentence Iron
+    Jarvis wrote. Build's stuck states end (`lib/buildStuck.ts`):
+    "Detecting…" → "Couldn't check which coding tools are installed. Try
+    again" after `DETECT_BOUND_MS` 20 s or a failed read (one read in
+    flight, the timer cleared on unmount), the terminal list's
+    LoadFailedLine, "Couldn't read X's model list. Try again".
+  - HELP, HANDBOOK, GUIDE (D4): the Handbook overview and a Help "Where
+    things are" card name the five places (`dashboard/lib/helpPlaces.ts`,
+    pinned to `SIDEBAR_HREFS`); retired features (Overview tips, round
+    table, Simple/Advanced, module grid, canvas) are gone from the
+    Handbook. `docs/CHANGELOG.md` is GENERATED (`src/iron_jarvis/
+    changelog.py`, `scripts/gen_changelog.py --check`) from the Handbook's
+    version sections — A RELEASE THAT ADDS A HANDBOOK SECTION RE-RUNS `uv run
+    python scripts/gen_changelog.py` or `test_help_today_v1450` fails; it is
+    in `BUNDLED_DOCS` (the frozen build carries it), a 4th Help guide
+    (`helpdocs._DOCS`, `page_doors.HELP_GUIDES`), and served by
+    `GET /updates/changelog?version=` (`{found, title, text, latest,
+    nearest?}`; token-gated, off the loop, junk versions read as none) to
+    the Updates card's "What changed in vX.Y.Z". `CLAUDE.md` and `SPEC.MD`
+    are no longer in the Guide's corpus (`guide_read` of them answers in
+    words). Recommended Settings speaks Settings' current labels (pinned
+    against `settings/schema.py`). Same release, from the v1.450.0 gate:
+    `guide/corpus.is_definition_question` favours the vocabulary document
+    for "what is / what does X mean / define" (`_DEFINITION_BONUS`).
+  - Pins: `tests/test_{wave_d_settings_words,wave_d_settings_fold_review,
+    help_today,help_today_review,desktop_plain_dialogs,
+    desktop_plain_dialogs_review}_v1450.py`, `tests/test_wave_d_automations
+    {,_review}_v14490.py`, `tests/test_guide_definition_v14501.py`,
+    `dashboard/__tests__/{wave-d-settings-fold,wave-d-plain-words,
+    help-today,help-today-review,wave-d3-questions,wave-d3-composer,
+    wave-d3-build,wave-d3-review-questions,wave-d3-review-composer}-v1450.test.*`,
+    `dashboard/__tests__/wave-d-{automations,canvas-step-problem}-v1449.test.tsx`;
+    moved on purpose: the "Add a model server" pins (connections-anthropic-
+    endpoint, connections-fleet-one-look, connections-honest, fetch-models,
+    lane-p-review, model-doors, ux-wave4-connections), build-accounts-v1302,
+    continue-next-v1303, build-code-parity-v1447-1, model-team-v1394,
+    team-first-row fixture, reflex-project-v1200, ux-wave4-automation-forms,
+    schedule-pause-v1446, schedule-knobs-v1299, test_helpdocs_v1198,
+    test_handbook_current_v1232, docs-copy-v1232, ux-wave2-system-memory,
+    first-run-home-v13530, pane-capabilities-v1238, session-instructions,
+    page-doors fixture, settings-panel-words-v13540, creative-consent-
+    relaunch, ux-wave3-build-files, pane-chat-v1206, pane-chat-work,
+    build-load-v1243, test_desktop_reliability_v1249, test_browser_agent_v1262.
+  - OPEN: the owner's decisions 43 (Chat › Code's "Work on a new branch"
+    default), 44 (nav renames) and 45 (Gmail/Slack own developer apps); a
+    second Creative drop's note says "you declined" for a question nobody
+    answered; the Sessions ⋯ menu closes on Escape, not on an outside
+    click; the init limits are guesses; none of it driven in the packaged
+    app or a real browser.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

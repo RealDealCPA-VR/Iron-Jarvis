@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.451.0
+
+**Settings, the automations pages and Help, today.** **Settings** keeps expert rows under a closed "More options" per group; it says how many of them you have changed.
+
 ## v1.450.0
 
 **The first run, and every connection, in plain words.** **No Claude Code or Codex yet?** The connect door offers "Install Claude Code for me" / "Install Codex for me": a Build terminal opens and runs the vendor's own installer where you can watch it.
@@ -77,7 +81,3 @@
 ## v1.430.0
 
 **The approvals menu shows names only.** The menu behind the shield chip in the chat box (in Chat and in Chat › Code) now lists the levels by name only, one line each:
-
-## v1.428.0
-
-**Microsoft 365, locked down for client data.** Microsoft 365 (Outlook, Calendar, OneDrive) is now set up the safe way for a firm that holds client information.

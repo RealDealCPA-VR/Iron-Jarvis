@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.450.1 (2026-11-07).*
+holds itself to. Current as of v1.451.0 (2026-11-07).*
 
 ---
 
@@ -2037,6 +2037,36 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Settings, the automations pages and Help, today (v1.451.0)
+
+- **Settings** keeps expert rows under a closed "More options" per group; it
+  says how many of them you have changed. A search or a link still opens the
+  row it names.
+- **Plainer words**: "Default AI", "Add a model server", "Server address",
+  "Its own tool servers", "your accounts". The program name Iron-Proxy stays
+  only on its own Connections card.
+- **Rules and watchers can be edited** in place. A new rule starts from the
+  everyday shape: a message arrives, and an agent does a task. A rule whose
+  source is not listening says so on its row.
+- **Schedules** never show a cron string. "Every minute" is last, with a
+  warning. A schedule you don't name gets a name from its task.
+- **Tonight** takes a folder with the folder picker. A folder that is not a
+  repository offers "Make this folder a repository". It refuses a drive, your
+  home folder, a folder inside another repository, and a folder too big for a
+  first commit.
+- **The workflow step editor** shows where its JSON is wrong. Save refuses a
+  step naming a tool this install doesn't have.
+- **No more browser pop-up questions**: Undo, Replace and Publish ask on the
+  page itself, and a held Enter can never answer them.
+- **Presses that are off say why.** A long pasted message folds, and the
+  whole message is still sent. Escape closes every composer menu.
+- **Desktop dialogs** speak in sentences, and the technical details go to the
+  logs ("Open logs").
+- **Build** never stays on "Detecting…" or "Reading…": it says it couldn't
+  check, and offers Try again.
+- **Help** describes the five places (Chat, Build, Projects, Everything,
+  Settings). Settings › System › Updates shows what changed in your version.
 
 ## The first run, and every connection, in plain words (v1.450.0)
 
