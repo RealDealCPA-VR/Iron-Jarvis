@@ -171,6 +171,44 @@ describe("40: the Launch menu's Detecting… has an end", () => {
     expect(lastState()).toBe("failed");
   });
 
+  it("review: Try again after the bound waits for the SAME read, never a second one", async () => {
+    vi.useFakeTimers();
+    let answer: ((v: unknown) => void) | null = null;
+    api.answer["/terminals/ai-clis"] = () =>
+      new Promise((res) => {
+        answer = res;
+      });
+    render(<TerminalsPage />);
+    await advance(DETECT_BOUND_MS + 100);
+    expect(lastState()).toBe("failed");
+    const retry = panes.props[panes.props.length - 1].onRetryAiClis as () => void;
+    act(() => retry());
+    act(() => retry());
+    expect(lastState()).toBe("detecting");
+    expect(api.gets.filter((p) => p === "/terminals/ai-clis")).toHaveLength(1);
+    await act(async () => {
+      answer?.({ clis: [] });
+    });
+    expect(lastState()).toBe("ready");
+    // The re-armed bound was cleared by the answer: no late "failed".
+    await advance(DETECT_BOUND_MS * 2);
+    expect(lastState()).toBe("ready");
+  });
+
+  it("review: the bound timer goes when the page goes", async () => {
+    vi.useFakeTimers();
+    api.answer["/terminals/ai-clis"] = () => new Promise(() => {});
+    const view = render(<TerminalsPage />);
+    await advance(50);
+    const before = vi.getTimerCount();
+    view.unmount();
+    expect(vi.getTimerCount()).toBeLessThan(before);
+    const src = read("app/terminals/page.tsx");
+    const i = src.indexOf("const readAiClis = useCallback(");
+    const tail = src.slice(i, i + 3000);
+    expect(tail).toMatch(/\(\) => \(\) => \{\s*aiClisSeq\.current \+= 1;\s*if \(aiClisBound\.current\) clearTimeout\(aiClisBound\.current\);/);
+  });
+
   it("source: the menu draws the three states in words with Try again", () => {
     const src = read("components/terminal/TerminalPane.tsx");
     const at = src.indexOf('data-testid="launch-detect"');

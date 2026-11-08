@@ -3123,7 +3123,19 @@ function spotlightErrorWords(raw) {
   if (!m || /^HTTP \d{3}$/.test(m) || /could not start the task/i.test(m)) {
     return "The task didn't start. Open the main window and try again.";
   }
-  return m;
+  // AN review: only a SENTENCE Iron Jarvis wrote for the user is kept. A 500's
+  // "internal error [err_…]: KeyError: …", a 422's detail list (which reaches
+  // here as "[object Object]"), a stack or a JSON body is developer text: the
+  // plain line, with the raw text already in the desktop log.
+  if (isUserSentence(m)) return m;
+  return "The task didn't start. Open the main window and try again.";
+
+  function isUserSentence(m) {
+    if (m.length > 300 || /[\r\n]/.test(m)) return false;
+    if (!/^[A-Z]/.test(m) || !/[.!?]$/.test(m)) return false;
+    if (/internal error|\[object |Traceback|\berr_[0-9a-f]+|[{}[\]]|Error:|Exception\b|\bat \S+:\d+/.test(m)) return false;
+    return true;
+  }
 }
 
 function installSpotlightIpc() {
@@ -6101,6 +6113,9 @@ const STARTUP_LOG_LINE = "The technical details are in the logs (Open logs).";
 // / Quit, instead of an error box that only ever quit.
 function handleStartupFailure(title, message, pendingUpdate, context) {
   if (pendingUpdate && pendingUpdate.attempts >= 2) {
+    // AN review: this branch's dialog shows no technical text either, so the
+    // raw gate error is logged here too (it was logged on the other branch only).
+    desktopLog("error", `[startup] ${title} (update ${pendingUpdate.version || "unknown"} not starting): ${(context && context.gateError) || message}`);
     const choice = dialog.showMessageBoxSync({
       type: "error",
       buttons: ["Open Releases page", "Quit"],

@@ -325,13 +325,35 @@ export default function TerminalsPage() {
   // menu says it could not check, with Try again).
   const [aiClisState, setAiClisState] = useState<DetectState>("detecting");
   const aiClisSeq = useRef(0);
+  // AN review: ONE read at a time and ONE bound timer. A read the bound gave
+  // up on may still answer: Try again then waits for that same read (and
+  // re-arms the bound) instead of starting a second one, and the timer is
+  // cleared when the page goes away.
+  const aiClisRead = useRef<Promise<{ clis: AiCli[] }> | null>(null);
+  const aiClisBound = useRef<ReturnType<typeof setTimeout> | null>(null);
   const readAiClis = useCallback(() => {
     const seq = ++aiClisSeq.current;
     setAiClisState("detecting");
-    const bound = setTimeout(() => {
+    if (aiClisBound.current) clearTimeout(aiClisBound.current);
+    aiClisBound.current = setTimeout(() => {
+      aiClisBound.current = null;
       if (seq === aiClisSeq.current) setAiClisState((s) => (s === "detecting" ? "failed" : s));
     }, DETECT_BOUND_MS);
-    get<{ clis: AiCli[] }>("/terminals/ai-clis")
+    let read = aiClisRead.current;
+    if (!read) {
+      const fresh = get<{ clis: AiCli[] }>("/terminals/ai-clis");
+      read = fresh;
+      aiClisRead.current = fresh;
+      fresh.then(
+        () => {
+          if (aiClisRead.current === fresh) aiClisRead.current = null;
+        },
+        () => {
+          if (aiClisRead.current === fresh) aiClisRead.current = null;
+        },
+      );
+    }
+    read
       .then((clis) => {
         if (seq !== aiClisSeq.current) return;
         setAiClis(Array.isArray(clis?.clis) ? clis.clis : []);
@@ -340,8 +362,21 @@ export default function TerminalsPage() {
       .catch(() => {
         if (seq === aiClisSeq.current) setAiClisState("failed");
       })
-      .finally(() => clearTimeout(bound));
+      .finally(() => {
+        if (seq === aiClisSeq.current && aiClisBound.current) {
+          clearTimeout(aiClisBound.current);
+          aiClisBound.current = null;
+        }
+      });
   }, []);
+  useEffect(
+    () => () => {
+      aiClisSeq.current += 1;
+      if (aiClisBound.current) clearTimeout(aiClisBound.current);
+      aiClisBound.current = null;
+    },
+    [],
+  );
   // v1.450.0 (Wave D, item 40): the list of terminals could not be read —
   // said through the one load-failed line with Try again (it printed the raw
   // error beside "No terminals yet"). `loadKey` re-runs the load.

@@ -7655,15 +7655,23 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // "+" menu, the tools chip's menu and the project menu (the "@", "/", model
   // and permission menus close on Escape themselves). Caught first (capture)
   // and kept there, so the same Escape never also stops a running reply.
+  // AN review: two Escapes this must never take. The chat kept behind the
+  // Code view (surfaceHidden) never answers a window key — its open menu
+  // swallowed the Escape that stops a coding session's reply. And while a
+  // question has taken the composer's place (askInDock) the menus are hidden
+  // with it: they close, but the Escape goes on to decline the card.
+  const askInDockRef = useRef(false);
   useEffect(() => {
     if (!toolsOpen && !toolMenuOpen && !projMenuOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.isComposing) return;
-      e.preventDefault();
-      e.stopPropagation();
+      if (surfaceHiddenRef.current) return;
       setToolsOpen(false);
       setToolMenuOpen(false);
       setProjMenuOpen(false);
+      if (askInDockRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -8245,6 +8253,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     [cloudAsk, chatBusy, stream.approval, stream.mcpAsks, awaiting, sessionAsks],
   );
   const askInDock = dockAsks.length > 0;
+  askInDockRef.current = askInDock;
   // The question answered and the card gone: the caret goes back to the box.
   const focusComposerAfterAsk = useCallback(() => inputRef.current?.focus(), []);
 
@@ -10908,6 +10917,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     queuedSendRef.current = false;
     if (dictation.listening) dictation.stop();
     setEditUndo(null);
+    // AN review: an Undo question asked in the conversation being left is
+    // answered "no" — its file belongs to that conversation, and a "yes"
+    // pressed in the next one would undo a change the user is not looking at.
+    undoQuestion.answer(false);
     // v1.324.0: an app resource picked for one conversation is not sent in
     // another.
     setAppResources([]);

@@ -97,10 +97,30 @@ export function PageQuestion({
   className?: string;
 }) {
   const yesRef = useRef<HTMLButtonElement | null>(null);
+  // AN review: where the focus was when the question appeared (the Undo
+  // press, usually). Answered, the yes/no buttons are gone and the focus
+  // would fall to the page — where a later Enter answers whatever card is
+  // docked. It goes back where it came from, as the browser's confirm() did.
+  const cameFromRef = useRef<HTMLElement | null>(null);
+  const wasShownRef = useRef(false);
   // The yes press gets the focus when the question appears, so Enter (or
   // Tab + Enter) answers it from the keyboard; Escape is "no".
   useEffect(() => {
-    if (state) yesRef.current?.focus({ preventScroll: true });
+    if (state) {
+      if (!wasShownRef.current) {
+        const active = typeof document !== "undefined" ? document.activeElement : null;
+        cameFromRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
+      }
+      wasShownRef.current = true;
+      yesRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    if (!wasShownRef.current) return;
+    wasShownRef.current = false;
+    const back = cameFromRef.current;
+    cameFromRef.current = null;
+    const active = document.activeElement;
+    if (back && back.isConnected && (!active || active === document.body)) back.focus({ preventScroll: true });
   }, [state]);
   if (!state) return null;
   return (
@@ -109,6 +129,14 @@ export function PageQuestion({
       role="group"
       aria-label={state.words}
       onKeyDown={(e) => {
+        // AN review: a HELD Enter (or Space) must never answer yes. The key
+        // that pressed Undo moves the focus here; its auto-repeat would
+        // otherwise click "Undo it" a moment later with no decision made.
+        if ((e.key === "Enter" || e.key === " ") && e.repeat) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();

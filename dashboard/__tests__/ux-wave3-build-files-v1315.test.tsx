@@ -263,6 +263,25 @@ describe("Creative: 'also publish' asks once per batch, before anything is sent"
     expect((uploads()[0].body as Record<string, unknown>).publish).toBeUndefined();
   });
 
+  it("AN review: a second drop while the question is open — the first batch is NOT published, the second asks its own question", async () => {
+    renderCreative();
+    fireEvent.click(publishBox());
+    dropFiles([png("first.png")]);
+    await screen.findByTestId("publish-confirm");
+    expect(uploads()).toHaveLength(0); // nothing left before an answer
+    dropFiles([png("second.png")]);
+    // The second question answers the first "no": first.png goes up, unpublished.
+    await waitFor(() => expect(uploads().map((u) => (u.body as { filename: string }).filename)).toContain("first.png"));
+    const first = uploads().find((u) => (u.body as { filename: string }).filename === "first.png");
+    expect((first?.body as Record<string, unknown>).publish).toBeUndefined();
+    // second.png waits for ITS answer.
+    expect(uploads().some((u) => (u.body as { filename: string }).filename === "second.png")).toBe(false);
+    fireEvent.click(await screen.findByTestId("publish-confirm-yes"));
+    await waitFor(() => expect(uploads()).toHaveLength(2));
+    const second = uploads().find((u) => (u.body as { filename: string }).filename === "second.png");
+    expect((second?.body as Record<string, unknown>).publish).toBe(true);
+  });
+
   it("anti-vacuity: unticked, an upload is one action with no prompt and no publish", async () => {
     const confirmSpy = answerPageQuestions("publish-confirm", true);
     const { container } = renderCreative();
