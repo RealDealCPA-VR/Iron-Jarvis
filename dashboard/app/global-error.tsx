@@ -52,15 +52,20 @@ export default function GlobalError({
             <div className="p-5">
               <div className="flex items-start gap-2.5 rounded-xl border border-rose-500/25 bg-rose-500/[0.07] px-3 py-2.5 text-sm text-rose-200">
                 <span>
-                  Something broke while rendering the dashboard. Iron Jarvis and your data are
-                  unaffected — try reloading this view.
+                  Something broke while showing this window. Iron Jarvis and your data are
+                  unaffected. Try again, or go home.
                 </span>
               </div>
+              {/* v1.455.0 (Wave F, item 17): the raw text folded under
+                  Details (self-contained: this screen imports no app module). */}
               {(error.message || error.digest) && (
-                <pre className="mt-4 overflow-x-auto rounded-xl border border-white/[0.06] bg-ink-900/80 px-3 py-2.5 font-mono text-[11px] leading-relaxed text-zinc-500">
-                  {error.message || "Unknown error"}
-                  {error.digest ? `\ndigest: ${error.digest}` : ""}
-                </pre>
+                <details data-testid="page-error-details" className="mt-4 text-[12px] text-zinc-500">
+                  <summary className="cursor-pointer select-none">Details</summary>
+                  <pre className="mt-2 overflow-x-auto rounded-xl border border-white/[0.06] bg-ink-900/80 px-3 py-2.5 font-mono text-[11px] leading-relaxed text-zinc-500">
+                    {error.message || "Unknown error"}
+                    {error.digest ? `\ndigest: ${error.digest}` : ""}
+                  </pre>
+                </details>
               )}
               <div className="mt-5 flex items-center gap-3">
                 <button type="button" onClick={() => reset()} className="btn-accent">

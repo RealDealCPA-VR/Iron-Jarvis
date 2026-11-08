@@ -231,7 +231,16 @@ export interface TurnRoute {
    *  (D6): a plain chat's turn on the account the user chose carries it too
    *  (`chat_turn.account_pinned_frames`); absent on a chat reply that ran on
    *  no chosen account. */
-  account?: { id?: string; name?: string; note?: string } | null;
+  account?: {
+    id?: string;
+    name?: string;
+    note?: string;
+    /** v1.455.0 (Wave F, item 17): the account the turn MOVED from (its
+     *  name), when the daemon switched accounts mid-turn (one at its limit
+     *  or signed out), and why. Absent = no switch to say. */
+    from?: string;
+    why?: string;
+  } | null;
   /** v1.387.0 (the reply budget): a reply this turn was cut off at the
    *  model's OUTPUT limit before a tool call was complete — how many, and
    *  whether the turn went on past it (daemon truth, LAST on the route, only
@@ -241,6 +250,19 @@ export interface TurnRoute {
    *  (LAST on the route, only when it happened; decoded by
    *  `lib/turnRecovery.decodeAutoApproved`). */
   auto_approved?: { count?: number; calls?: { tool?: string; rule?: string; why?: string }[] } | null;
+}
+
+/** v1.455.0 (Wave F, item 17): an account SWITCH in a turn, said ("moved
+ *  from the Personal account"), with the daemon's reason on hover; null when
+ *  the route names none. Read defensively (lane F2 sends it). */
+export function accountMoveWords(
+  rt: Pick<TurnRoute, "account"> | null | undefined,
+): { text: string; why: string } | null {
+  const a = rt?.account;
+  const from = a && typeof a.from === "string" ? a.from.trim().slice(0, 80) : "";
+  if (!from) return null;
+  const why = a && typeof a.why === "string" ? a.why.trim().slice(0, 300) : "";
+  return { text: `moved from the ${from} account`, why };
 }
 
 /** v1.369.0: a Build session reply's account, as the receipt says it ("on
@@ -964,6 +986,16 @@ function TurnReceiptImpl({
       parts.push(
         <span key="account-note" data-testid="turn-account-note" title={account.note} className="text-zinc-500">
           earlier thinking left out
+        </span>,
+      );
+    }
+    // v1.455.0 (Wave F, item 17): an account switch is SAID, beside the
+    // account that answered — never silent.
+    const moved = accountMoveWords(rt);
+    if (moved) {
+      parts.push(
+        <span key="account-moved" data-testid="turn-account-moved" title={moved.why || undefined} className="text-zinc-500">
+          {moved.text}
         </span>,
       );
     }
