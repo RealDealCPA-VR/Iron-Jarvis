@@ -93,7 +93,7 @@ async def test_complete_refusal_names_the_label_in_plain_sentences(tmp_path):
         "No substitute was used on purpose. A stand-in answer would look like"
         " real work that never happened." in text
     )
-    assert "Bring that endpoint back up, or pick another model for this chat, and retry." in text
+    assert "Bring that model server back up, or pick another model for this chat, and retry." in text
 
     [event] = spy.downgraded()
     # The id stays for the logs; the label rides LAST beside it.

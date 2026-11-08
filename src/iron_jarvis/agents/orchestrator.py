@@ -1325,6 +1325,7 @@ class Orchestrator:
         unattended = is_unattended_origin(getattr(session, "origin", None))
         nested = _IN_RUN.get()
         token = _IN_RUN.set(True)
+        from ..core import turn_ref as _turn_ref
         from ..providers import failure_words as _failure_words
 
         try:
@@ -1332,7 +1333,12 @@ class Orchestrator:
             # summary, the background-job banner, an alert) says what to do
             # where a run is read — "Run it again, or choose another model in
             # Settings." — never the chat's "…pick another model for this chat".
-            with procs.background_lane(on=unattended), _failure_words.run_surface():
+            # v1.455.0 review: an agent run is never the chat turn that
+            # started it (``core/turn_ref``) — its provider failures keep
+            # their own alert, and never name that chat or stay quiet because
+            # the chat is open. Reset on the way out (a directly awaited run
+            # gives the turn its reference back).
+            with procs.background_lane(on=unattended), _failure_words.run_surface(),                     _turn_ref.scope(None):
                 return await self._run_session_body(
                     session, definition, unattended=unattended, nested=nested
                 )

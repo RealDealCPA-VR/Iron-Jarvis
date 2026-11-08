@@ -164,6 +164,27 @@ export async function leaveTurn(
   }, Math.max(0, announceAfterMs));
 }
 
+/** v1.455.0 review: the chat page `viewer`'s WINDOW was hidden (minimised,
+ *  covered by another window, the screen locked) or shows it again
+ *  (`hidden` false) while `turnId` runs. Nobody can see a hidden chat, so the
+ *  daemon must not hold back a failed turn's phone line for it ("the chat
+ *  already shows it"); the same `away` route, with `back: true` when the page
+ *  is seen again. Best-effort, never throws (an older daemon ignores `back`
+ *  and simply keeps the page away until it ends). */
+export async function windowShown(
+  turnId: string,
+  viewer: string,
+  hidden: boolean,
+  post: (path: string, body: Record<string, unknown>) => Promise<unknown>,
+): Promise<void> {
+  if (!turnId || !viewer) return;
+  try {
+    await post(awayPath(turnId), hidden ? { viewer } : { viewer, back: true });
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** Tests only. */
 export function __resetChatAway(): void {
   following.clear();

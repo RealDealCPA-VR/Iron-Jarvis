@@ -452,6 +452,15 @@ def _drop_build_turn_scope() -> None:
     except Exception:  # noqa: BLE001
         pass
     try:
+        # v1.455.0: and the chat turn it ran in (core/turn_ref) — a failure in
+        # work a handler starts is not that chat's, and must never name it
+        # or stay quiet because its window is open.
+        from .turn_ref import CURRENT as _CHAT_TURN
+
+        _CHAT_TURN.set(None)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
         # v1.381.0: and its command rule (harness/command_shell) — work a
         # handler starts is not the command's turn.
         from ..harness.command_shell import TURN_RULE

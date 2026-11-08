@@ -67,6 +67,10 @@ class Reply:
     calls: list[tuple[str, str]] = field(default_factory=list)
     finish: str = "stop"
     completion_tokens: int = 10
+    #: v1.455.0: seconds of SILENCE after the thinking and text, before the
+    #: tool calls — the shape vLLM's GLM tool parser gives a big call (it
+    #: buffers the arguments until the call is complete). 0 = no pause.
+    pause_s: float = 0.0
 
 
 def text_reply(text: str) -> Reply:
@@ -144,6 +148,8 @@ class FakeEndpoint:
         self.api_base = api_base
         self.requests: list[dict[str, Any]] = []
         self._lock = threading.Lock()
+        #: Set at exit, so a paused stream ends instead of holding a thread.
+        self._stopping = threading.Event()
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -260,6 +266,7 @@ class FakeEndpoint:
                 if reply.text:
                     for i in range(0, len(reply.text), 40):
                         chunks.append(delta({"content": reply.text[i:i + 40]}))
+                split = len(chunks)  # what is sent before the silence
                 for idx, (name, args) in enumerate(reply.calls):
                     chunks.append(delta({"tool_calls": [{
                         "index": idx, "id": f"call_{idx}", "type": "function",
@@ -274,8 +281,25 @@ class FakeEndpoint:
                     "prompt_tokens": outer.prompt_tokens(body),
                     "completion_tokens": reply.completion_tokens,
                 }})
-                data = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
-                self._send(200, data.encode(), "text/event-stream")
+                head = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks[:split])
+                tail = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks[split:]) + "data: [DONE]\n\n"
+                if not reply.pause_s:
+                    return self._send(200, (head + tail).encode(), "text/event-stream")
+                # v1.455.0: the head, then nothing for ``pause_s`` (a buffered
+                # tool call), then the rest — one response, one Content-Length.
+                head_b, tail_b = head.encode(), tail.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(head_b) + len(tail_b)))
+                self.end_headers()
+                try:
+                    self.wfile.write(head_b)
+                    self.wfile.flush()
+                    outer._stopping.wait(reply.pause_s)
+                    self.wfile.write(tail_b)
+                    self.wfile.flush()
+                except OSError:  # the client left during the silence
+                    return
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _H)
         self._server.daemon_threads = True
@@ -284,6 +308,7 @@ class FakeEndpoint:
         return self
 
     def __exit__(self, *exc: Any) -> None:
+        self._stopping.set()
         if self._server is not None:
             self._server.shutdown()
             self._server.server_close()

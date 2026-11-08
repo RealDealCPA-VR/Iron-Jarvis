@@ -1057,10 +1057,17 @@ class ModelRouter:
         # Plain sentences, no dash asides. Wording only: nothing here changes
         # whether a turn refuses or what it refuses with.
         name = self._endpoint_label(wanted)
+        # v1.455.0: "your model server" (an unnamed own server) starts a
+        # sentence with a capital; a label keeps its own casing.
+        Name = (
+            _failure_words.heading(name)
+            if name == _failure_words.MODEL_SERVER_WORDS
+            else name
+        )
         if kind == "cooldown":
             secs = int(math.ceil(max(0.0, retry_in)))
             text = (
-                f"{name} is in cooldown, retry in {secs} s. It failed"
+                f"{Name} is in cooldown, retry in {secs} s. It failed"
                 f" {self.health.threshold} times in a row, so this turn was not"
                 " sent to it."
             )
@@ -1105,7 +1112,7 @@ class ModelRouter:
             status = getattr(exc, "status_code", None) if exc is not None else None
             what = f"answered HTTP {status}" if status else "answered with an error"
             detail = _short_detail(str(exc) if exc is not None else "", wanted, status)
-            text = f"{name} {what}"
+            text = f"{Name} {what}"
             if detail:
                 text += f": {detail.rstrip(' .')}"
             # v1.354.0 (G28): the policy in plain words, never its config key.
@@ -1115,12 +1122,12 @@ class ModelRouter:
             )
             if pinned:
                 text += " Strict model pin is on as well."
-            text += f" Check that endpoint or {_another_model()} and {_retry_words()}."
+            text += f" Check that model server or {_another_model()} and {_retry_words()}."
             return self._tag_refusal(ProviderError(text), kind, wanted)
         lead = {
-            "timeout": f"{name} didn't respond in time",
+            "timeout": f"{Name} didn't respond in time",
             "interrupted": f"the connection to {name} dropped mid-request",
-        }.get(kind, f"{name} isn't connected right now")
+        }.get(kind, f"{Name} isn't connected right now")
         if partial and kind == "interrupted":
             detail = (
                 f"the connection to {name} dropped mid-answer, so the reply"
@@ -1137,10 +1144,10 @@ class ModelRouter:
             # It IS up — the honest advice is time (a cold 30B/70B load), not a
             # restart of something that never went down.
             "timeout": f" Give it time to finish loading, or {other}, and {again}.",
-            "interrupted": f" Check that endpoint, or {other}, and {again}.",
+            "interrupted": f" Check that model server, or {other}, and {again}.",
         }.get(
             kind,
-            f" Bring that endpoint back up, or {other}, and {again}.",
+            f" Bring that model server back up, or {other}, and {again}.",
         )
         if kind == "interrupted" and not is_local_provider(wanted):
             # v1.287.0 (chat-07 review): a cloud API has no endpoint the user
@@ -1300,6 +1307,42 @@ class ModelRouter:
             name, str(getattr(adapter, "model", "") or ""), manager=self.manager
         )
 
+    async def _publish_provider_event(
+        self, etype: Any, payload: dict[str, Any], *, session_id: Any = None
+    ) -> None:
+        """``provider.failed`` / ``provider.downgraded`` with the CHAT TURN it
+        happened in (v1.455.0): inside a daemon-owned chat turn
+        (``core/turn_ref``, set by ``daemon/durable_turns``) the payload also
+        carries ``turn_id``, ``thread_id`` and ``looked_at`` (was a window
+        showing that turn when it failed), so the phone alert can name the
+        chat and stay quiet while the user is looking at it. Outside a turn
+        the payload is exactly what it was. A payload ending in ``label``
+        keeps it LAST (v1.329.0). MIRROR NOTE: every publish of these two
+        types in complete() AND stream() comes through here."""
+        from ..core.turn_ref import event_keys
+
+        if (
+            etype == EventType.PROVIDER_FAILED
+            and isinstance(payload, dict)
+            and "label" not in payload
+        ):
+            # The user's own server by the name they gave it (else "your
+            # model server"), for a reader with no manager to ask (the phone
+            # alert): "Fleet-custom couldn't answer" named nothing.
+            prov = str(payload.get("provider") or "")
+            if prov == "custom" or prov.startswith("fleet-"):
+                payload = {**payload, "label": self._endpoint_label(prov)}
+        keys = event_keys()
+        if keys and isinstance(payload, dict):
+            if "label" in payload:
+                label = payload["label"]
+                payload = {k: v for k, v in payload.items() if k != "label"}
+                payload.update(keys)
+                payload["label"] = label
+            else:
+                payload = {**payload, **keys}
+        await self.event_bus.publish(etype, payload, session_id=session_id)
+
     def _endpoint_label(self, wanted: str) -> str:
         """The name the user gave a ``fleet-<id>`` endpoint (its node's
         label), else *wanted* unchanged (v1.329.0, calm chat J1).
@@ -1309,15 +1352,25 @@ class ModelRouter:
         so no second registry is consulted. WORDING ONLY and never a new
         failure: an unknown provider, a fake manager, a node with no label or
         any fault answers the id, exactly as the refusal read before."""
-        if not str(wanted or "").startswith("fleet-"):
+        # v1.455.0 (a USER BUG): the user's own server with no name of its
+        # own — the ``custom`` slot, a node with no label, or the label the
+        # registry SEEDED ("Custom endpoint") — reads "your model server"
+        # ("The connection to Custom endpoint dropped" named nothing the user
+        # had ever called it). A node the user labelled keeps its label.
+        w = str(wanted or "")
+        if w != "custom" and not w.startswith("fleet-"):
             return wanted
+        # v1.455.0 review: the ``custom`` slot is named on its fleet twin
+        # (``fleet-custom``, the node the receipt and the model menu read):
+        # a slot the user named keeps that name.
+        lookup = "fleet-custom" if w == "custom" else wanted
         try:
-            adapter = self.manager.get(wanted)
+            adapter = self.manager.get(lookup)
             node = getattr(self._innermost(adapter), "node", None)
             label = " ".join(str(getattr(node, "label", "") or "").split())
         except Exception:  # noqa: BLE001 — wording only, never a new failure
-            return wanted
-        return label[:80] if label else wanted
+            return _failure_words.own_server_name(w, w)
+        return _failure_words.own_server_name(label[:80], w)
 
     def _signed_out_cli(self, wanted: str) -> str | None:
         """The subscription CLI provider behind *wanted* that is installed
@@ -1445,7 +1498,7 @@ class ModelRouter:
             )
         except Exception:  # noqa: BLE001 — a banner's words never fail a turn
             words = {}
-        await self.event_bus.publish(
+        await self._publish_provider_event(
             EventType.PROVIDER_DOWNGRADED,
             {
                 "requested": wanted,
@@ -1667,7 +1720,7 @@ class ModelRouter:
         breaker strike."""
         if is_refusal(exc):
             _settle_refusal(exc, reached=True)
-            await self.event_bus.publish(
+            await self._publish_provider_event(
                 EventType.PROVIDER_FAILED,
                 _failed_payload(adapter.provider, exc, partial=True),
                 session_id=session_id,
@@ -1675,7 +1728,7 @@ class ModelRouter:
             return None
         self.health.record_failure(adapter.provider)
         self._forget_answered(adapter)  # v1.332.0: a death mid-answer is a failure
-        await self.event_bus.publish(
+        await self._publish_provider_event(
             EventType.PROVIDER_FAILED,
             {
                 "provider": adapter.provider,
@@ -1711,7 +1764,7 @@ class ModelRouter:
             return False
         _stamp_failed_provider(exc, alt.provider)
         _settle_refusal(exc, reached=reached)
-        await self.event_bus.publish(
+        await self._publish_provider_event(
             EventType.PROVIDER_FAILED,
             _failed_payload(alt.provider, exc, **({"partial": True} if reached else {})),
             session_id=session_id,
@@ -2154,7 +2207,7 @@ class ModelRouter:
             # The mock-trap: the default provider is still "mock" while a REAL
             # provider is connected, so output would be fabricated with no signal.
             # Surface it loudly (the dashboard banners on PROVIDER_DOWNGRADED).
-            await self.event_bus.publish(
+            await self._publish_provider_event(
                 EventType.PROVIDER_DOWNGRADED,
                 {
                     "requested": "mock (default)",
@@ -2242,7 +2295,7 @@ class ModelRouter:
             if no_failover and (not auto_selected or is_refusal(exc)):
                 # v1.378.0 review: complete() showed the caller nothing.
                 _settle_refusal(exc, reached=False)
-                await self.event_bus.publish(
+                await self._publish_provider_event(
                     EventType.PROVIDER_FAILED,
                     _failed_payload(adapter.provider, exc),
                     session_id=session_id,
@@ -2257,7 +2310,7 @@ class ModelRouter:
                 self.health.record_failure(adapter.provider)
             tried_ids.add(id(adapter))
             tried_providers.add(adapter.provider)
-            await self.event_bus.publish(
+            await self._publish_provider_event(
                 EventType.PROVIDER_FAILED,
                 # v1.422.0 review: `retry` on a patience's later try (see
                 # `_failed_payload`); byte-identical everywhere else.
@@ -2358,7 +2411,7 @@ class ModelRouter:
                         self._forget_answered(alt)  # v1.332.0
                         tried_ids.add(id(alt))
                         tried_providers.add(alt.provider)
-                        await self.event_bus.publish(
+                        await self._publish_provider_event(
                             EventType.PROVIDER_FAILED,
                             {"provider": alt.provider, "error": f"{type(dexc).__name__}: {dexc}"},
                             session_id=session_id,
@@ -2688,7 +2741,7 @@ class ModelRouter:
                 or bool(getattr(self.manager, "has_available_real_endpoint", lambda: False)())
             )
         ):
-            await self.event_bus.publish(
+            await self._publish_provider_event(
                 EventType.PROVIDER_DOWNGRADED,
                 {
                     "requested": "mock (default)",
@@ -2779,7 +2832,7 @@ class ModelRouter:
             if no_failover and (not auto_selected or is_refusal(exc)):
                 # v1.378.0 review: no answer frame reached the caller.
                 _settle_refusal(exc, reached=False)
-                await self.event_bus.publish(
+                await self._publish_provider_event(
                     EventType.PROVIDER_FAILED,
                     _failed_payload(adapter.provider, exc),
                     session_id=session_id,
@@ -2793,7 +2846,7 @@ class ModelRouter:
                 self.health.record_failure(adapter.provider)
             tried_ids.add(id(adapter))
             tried_providers.add(adapter.provider)
-            await self.event_bus.publish(
+            await self._publish_provider_event(
                 EventType.PROVIDER_FAILED,
                 # v1.422.0 review: `retry` on a patience's later try (see
                 # `_failed_payload`); byte-identical everywhere else.
@@ -2892,7 +2945,7 @@ class ModelRouter:
                     self._forget_answered(alt)  # v1.332.0
                     tried_ids.add(id(alt))
                     tried_providers.add(alt.provider)
-                    await self.event_bus.publish(
+                    await self._publish_provider_event(
                         EventType.PROVIDER_FAILED,
                         {"provider": alt.provider, "error": f"{type(dexc).__name__}: {dexc}"},
                         session_id=session_id,

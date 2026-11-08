@@ -339,6 +339,20 @@ class OpenAIAdapter(LLMAdapter):
             return None
         return {**body, field: smaller}
 
+    def _stream_kw(self) -> dict[str, Any]:
+        """Extra keywords for ``client.stream(...)``: a budgeted (local)
+        endpoint's long read-idle timeout
+        (``reply_budget.local_stream_timeout``, v1.455.0 — vLLM buffers a big
+        tool call's arguments and sends nothing meanwhile), and NOTHING for a
+        hosted provider, whose request stays byte for byte what it was (and
+        whose test doubles take no ``timeout`` keyword)."""
+        if self._reply_budget is None:
+            return {}
+        # v1.455.0 review: a cloud model behind the user's model server (or a
+        # cloud API added as one) keeps the 60 seconds.
+        timeout = self._reply_budget.stream_timeout(self.model, 60.0)
+        return {} if timeout is None else {"timeout": timeout}
+
     def _client(self) -> Any:
         if self._http is None:
             import httpx  # lazy: keep import cost off the offline path
@@ -1052,7 +1066,8 @@ class OpenAIAdapter(LLMAdapter):
         while i < len(attempts):
             attempt_body = attempts[i]
             async with self._client().stream(
-                "POST", self._endpoint, headers=headers, json=attempt_body
+                "POST", self._endpoint, headers=headers, json=attempt_body,
+                **self._stream_kw(),
             ) as resp:
                 status = getattr(resp, "status_code", 200)
                 if status >= 400:
