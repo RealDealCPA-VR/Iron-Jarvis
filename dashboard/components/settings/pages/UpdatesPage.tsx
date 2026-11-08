@@ -11,9 +11,13 @@ import {
   CheckCircle2,
   Loader2,
 } from "lucide-react";
+import Link from "next/link";
 import { post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { useDaemon } from "@/lib/daemon";
+import { helpGuideHref } from "@/lib/helpLinks";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
+import { Markdown } from "@/components/Markdown";
 import {
   Card,
   StatusDot,
@@ -55,6 +59,53 @@ interface ApplyResult {
   reason?: string;
   restart_required?: boolean;
   log?: ApplyLogEntry[];
+}
+
+/** GET /updates/changelog?version= — one version's "what changed" paragraph
+ *  (v1.450.0; `iron_jarvis.changelog`). `found` false with `nearest` means this
+ *  exact version wrote no notes (a patch that only moved tests) and `text` is
+ *  the newest version's below it; no `text` at all means nothing to show. */
+interface Changelog {
+  version: string;
+  found: boolean;
+  latest: string;
+  nearest?: string;
+  title: string;
+  text: string;
+  note?: string;
+}
+
+/** The changelog guide on the Help page (routes/helpdocs `_DOCS`). */
+export const CHANGELOG_GUIDE_HREF = helpGuideHref("changelog");
+
+/** "What changed in vX.Y.Z" under the installed version: the paragraph the
+ *  daemon serves from docs/CHANGELOG.md for `version`, drawn as markdown.
+ *  Nothing is drawn while the version is unknown, while the read is out, or
+ *  when the daemon has no paragraph (a missing file is `found: false`, never
+ *  an error here — the card is about installing, this is a footnote). */
+export function WhatChanged({ version }: { version: string | null | undefined }) {
+  const v = (version ?? "").trim();
+  const { data } = useApi<Changelog>(v ? `/updates/changelog?version=${encodeURIComponent(v)}` : null);
+  if (!v || !data || !data.text) return null;
+  const shown = data.found ? data.version : data.nearest ?? "";
+  return (
+    <div className="border-t border-white/[0.06] pt-4" data-testid="what-changed">
+      <div className="text-sm font-semibold text-zinc-100" data-testid="what-changed-title">
+        What changed in {shown}
+      </div>
+      {!data.found && data.nearest && (
+        <p className="mt-0.5 text-[11px] text-zinc-500" data-testid="what-changed-nearest">
+          v{v.replace(/^v/, "")} brought no notes of its own; these are the newest before it.
+        </p>
+      )}
+      <div className="mt-1.5 text-[13px] leading-relaxed text-zinc-400">
+        <Markdown content={data.text} />
+      </div>
+      <Link href={CHANGELOG_GUIDE_HREF} className="mt-2 inline-block text-[12px] text-accent-soft hover:text-accent">
+        Every version → Help
+      </Link>
+    </div>
+  );
 }
 
 /** "not a source checkout" is reported as available:false with this reason text. */
@@ -190,6 +241,10 @@ function DesktopUpdateCard({ bridge }: { bridge: UpdateBridge }) {
           session is never interrupted by surprise.
         </p>
 
+        {/* v1.450.0: the installed version's release notes (they moved out
+            of the Handbook into docs/CHANGELOG.md). */}
+        <WhatChanged version={state?.current ?? null} />
+
         {/* v1.405.0: Stable / Fresh — only with a shell that reads the
             setting (an older one has no `channels` and would ignore it). */}
         {bridge.channels && (
@@ -222,6 +277,7 @@ function ShaPill({ label, sha }: { label: string; sha?: string | null }) {
 
 export default function UpdatesPage() {
   const bridge = updateBridge();
+  const daemonVersion = useDaemon().health?.version ?? null;
   const { data, error, loading, reload } = useApi<UpdateStatus>("/update/check");
   const offline = error && error.status === 0;
 
@@ -318,6 +374,7 @@ export default function UpdatesPage() {
                       Running from a git clone instead? Self-update appears here once
                       Iron Jarvis is started from that checkout.
                     </p>
+                    <WhatChanged version={daemonVersion} />
                   </div>
                 ) : (
                   <div className="space-y-4">

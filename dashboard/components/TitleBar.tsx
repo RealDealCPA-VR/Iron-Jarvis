@@ -200,11 +200,11 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
             component to the rail's internals. */}
         <Link
           href="/"
-          title="Iron Jarvis — Overview"
+          title="Iron Jarvis: Home"
           // v1.313.0: below sm the words hide (the 390px bar had them printed
           // under the search box) and only the dot remains — CSS `hidden`
           // drops them from the accessible name too, so the link names itself.
-          aria-label="Iron Jarvis — Overview"
+          aria-label="Iron Jarvis: Home"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
           className="flex h-9 shrink-0 items-center gap-2 rounded-lg px-1.5 transition-colors hover:bg-white/[0.04] sm:h-8 sm:px-1"
         >

@@ -565,11 +565,14 @@ describe("Self-development — switched off reads as 'Turned off', not a config 
     expect(screen.queryByText("Not available yet")).toBeNull();
     const all = container.textContent || "";
     expect(all.split(OFF_REASON).length - 1).toBe(1); // reachable, not repeated
-    expect(visibleText(container)).toMatch(/Settings → Advanced/);
+    // v1.450.0 (moved on purpose, ease item 73): Settings has no Advanced
+    // section; the link opens the switch itself in System.
+    expect(visibleText(container)).toMatch(/Settings › System/);
+    expect(visibleText(container)).not.toMatch(/Settings → Advanced/);
     expect(visibleText(container)).toMatch(/restart/i);
     // The way to turn it on lands on the switch, not the top of Settings.
     const links = screen.getAllByRole("link").map((a) => a.getAttribute("href"));
-    expect(links).toContain("/settings?focus=advanced");
+    expect(links).toContain("/settings?focus=self_dev_enabled");
     expect(links).not.toContain("/settings");
   });
 

@@ -493,7 +493,7 @@ describe("recipeNote — what the Launch menu knows before the launch", () => {
   it("a CLI with no recipe launches as it always did, and says that", () => {
     const note = recipeNote(cli());
     expect(note.ready).toBe(false);
-    expect(note.headline).toMatch(/no Jarvis capabilities/i);
+    expect(note.headline).toBe("Starts without Iron Jarvis's memory and browser");
     expect(note.limitations).toEqual([]);
   });
 
@@ -516,7 +516,7 @@ describe("recipeNote — what the Launch menu knows before the launch", () => {
   it("ok:true with method none is NOT ready", () => {
     const note = recipeNote(cli({ recipe: { ok: true, method: "none" } }));
     expect(note.ready).toBe(false);
-    expect(note.headline).toMatch(/no Jarvis capabilities/i);
+    expect(note.headline).toBe("Starts without Iron Jarvis's memory and browser");
   });
 
   it("an unsupported version carries its limitation forward, verbatim", () => {

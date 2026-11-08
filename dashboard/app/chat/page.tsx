@@ -7333,7 +7333,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     setNotice(null);
     if (commMetaRef.current) {
       setNotice(
-        "This messaging thread is server-owned, so the run card can't persist here. Run it from the Workflows page instead.",
+        "A run card can't be kept in a messaging conversation. Run it from the Workflows page instead.",
       );
       return;
     }
@@ -12841,7 +12841,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       Drop to attach
                     </p>
                     <p className="text-xs text-zinc-400">
-                      Files are uploaded and grounded into this chat
+                      Files are added to this chat for Jarvis to read
                     </p>
                   </div>
                 </div>
@@ -14358,7 +14358,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                                   disabled={Boolean(commMeta)}
                                   title={
                                     commMeta
-                                      ? "This messaging thread is server-owned, so the run card can't persist here. Run it from the Workflows page instead."
+                                      ? "A run card can't be kept in a messaging conversation. Run it from the Workflows page instead."
                                       : undefined
                                   }
                                   className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"

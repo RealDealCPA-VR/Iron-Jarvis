@@ -14,6 +14,13 @@ In a frozen build the files come from `sys._MEIPASS/ijdocs` (bundled by
 `packaging/ironjarvis.spec`); in dev they come from the repo's `docs/` dir.
 A missing file is an honest 404 naming the file — never a 500, never an
 empty 200 pretending the guide is blank.
+
+`GET /updates/changelog?version=` (v1.450.0) serves ONE version's "what
+changed" paragraph from `docs/CHANGELOG.md` (generated from the Handbook's
+version sections, `iron_jarvis.changelog`) to the Updates card. A version
+with no paragraph of its own answers `found: false` with the newest
+paragraph below it as `nearest`; a missing file answers `found: false` with
+a note. Never a 500: the card draws nothing rather than an error.
 """
 
 from __future__ import annotations
@@ -25,9 +32,14 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
+from ... import changelog as _changelog
+
 # slug -> (title, filename, description). Fixed order — the Help page renders
-# the list as-is. Keep this to the three USER-FACING guides: the rest of
+# the list as-is. Keep this to the USER-FACING guides: the rest of
 # docs/ (TOFIX, audits, plans) is maintainer material and must not ship.
+#: The generated release notes (`scripts/gen_changelog.py`), beside the guides.
+CHANGELOG_FILE = "CHANGELOG.md"
+
 _DOCS: dict[str, tuple[str, str, str]] = {
     "handbook": (
         "The Handbook",
@@ -43,6 +55,13 @@ _DOCS: dict[str, tuple[str, str, str]] = {
         "Local Models by RAM Tier",
         "LOCAL-MODELS.md",
         "What to run at each RAM size.",
+    ),
+    # v1.450.0: the release notes moved out of the Handbook into their own
+    # generated file (scripts/gen_changelog.py); the Updates card links here.
+    "changelog": (
+        "What changed",
+        CHANGELOG_FILE,
+        "One paragraph for each recent version.",
     ),
 }
 
@@ -94,3 +113,20 @@ def register(app: FastAPI, d) -> None:
             "title": title,
             "markdown": raw.decode("utf-8", errors="replace"),
         }
+
+    @app.get("/updates/changelog")
+    async def updates_changelog(version: str = "") -> dict[str, Any]:
+        """What changed in one version, for the Updates card. ``version`` is
+        the installed version ("1.449.1" or "v1.449.1"); the answer carries
+        `found`, `title`, `text` (markdown), `latest` and — when this exact
+        version has no paragraph — `nearest`, the newest version below it
+        that has one. The file read hops off the loop; a missing or
+        unreadable changelog is `found: false` with a `note`, never a 500."""
+        path = _docs_dir() / CHANGELOG_FILE
+        try:
+            raw = await asyncio.to_thread(path.read_bytes)
+        except OSError as exc:
+            answer = _changelog.lookup("", version)
+            answer["note"] = f"the changelog is missing from this install ({CHANGELOG_FILE}): {exc}"
+            return answer
+        return _changelog.lookup(raw.decode("utf-8", errors="replace"), version)

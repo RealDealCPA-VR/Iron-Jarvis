@@ -105,7 +105,7 @@ export function turnOffToolLabel(name: string): string {
 export function webSwitchTitle(on: boolean, room: boolean, max: number): string {
   if (on) return "Web research is on for this chat. Press to turn it off.";
   if (room) return "Turn on web research for this chat";
-  return `All ${max} tool slots are in use. Turn one off first.`;
+  return `You can turn on up to ${max} tools per chat. Turn one off first.`;
 }
 
 /* ---------------------------------------------------------------- folder */

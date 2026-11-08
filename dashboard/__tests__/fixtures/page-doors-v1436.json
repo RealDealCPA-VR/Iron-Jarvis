@@ -14,7 +14,8 @@
     "guides": [
       "handbook",
       "recommended-settings",
-      "local-models"
+      "local-models",
+      "changelog"
     ],
     "handbook_section": "microsoft-365-locked-down-for-client-data",
     "presses": [

@@ -178,9 +178,11 @@ describe("Help 'Daemon offline' entry (v1.232.0)", () => {
     expect(text).toMatch(/Restart Iron Jarvis/);
     expect(text).toMatch(/Copy diagnostics/);
     expect(text).toMatch(/Open logs folder/);
-    expect(within(row as HTMLElement).getByRole("link", { name: /Settings → Maintenance/ })).toHaveAttribute(
+    // v1.450.0 (moved on purpose, ease item 73): the link opens System ›
+    // Maintenance itself, not the top of Settings.
+    expect(within(row as HTMLElement).getByRole("link", { name: /Settings › System › Maintenance/ })).toHaveAttribute(
       "href",
-      "/settings",
+      "/settings?section=system-maintenance",
     );
   });
 });

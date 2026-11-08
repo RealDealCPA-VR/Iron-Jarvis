@@ -309,13 +309,40 @@ function SessionsList() {
             // press only (`idleClassName`); the armed second press wears the
             // calm danger cue (tone-danger text on its fill), which the old
             // `!text-zinc-400` override had painted over.
-            <ConfirmButton
-              label="Clear finished, failed and stopped"
-              confirmLabel="Delete them all?"
-              onConfirm={clearFinished}
-              title="Deletes every session that finished, failed or was stopped. Running and waiting ones stay."
-              idleClassName="hover:!text-accent-soft"
-            />
+            // v1.450.0 (ease item 73): a press that deletes every finished
+            // run is not the page's main button — it sits in a ⋯ menu, and
+            // still takes two presses.
+            // Escape closes the menu and puts the caret back on ⋯ (a bare
+            // <details> ignores Escape); the wipe still takes two presses.
+            <details
+              className="relative"
+              data-testid="sessions-more"
+              onKeyDown={(e) => {
+                const menu = e.currentTarget;
+                if (e.key !== "Escape" || !menu.open) return;
+                e.preventDefault();
+                e.stopPropagation();
+                menu.open = false;
+                menu.querySelector("summary")?.focus();
+              }}
+            >
+              <summary
+                aria-label="More actions"
+                title="More actions"
+                className="grid h-8 w-8 cursor-pointer list-none place-items-center rounded-lg border border-white/10 text-zinc-400 transition-colors hover:text-zinc-100 [&::-webkit-details-marker]:hidden"
+              >
+                ⋯
+              </summary>
+              <div className="absolute right-0 z-20 mt-1 whitespace-nowrap rounded-xl border border-white/10 bg-ink-900 p-1.5 shadow-card-hover">
+                <ConfirmButton
+                  label="Clear finished, failed and stopped"
+                  confirmLabel="Delete them all?"
+                  onConfirm={clearFinished}
+                  title="Deletes every session that finished, failed or was stopped. Running and waiting ones stay."
+                  idleClassName="hover:!text-accent-soft"
+                />
+              </div>
+            </details>
           }
         />
       </Reveal>

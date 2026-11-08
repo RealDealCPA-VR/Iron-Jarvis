@@ -75,7 +75,7 @@ HELP_PATH = "/help"
 SIGN_IN_PRESSES: tuple[str, ...] = ("claude-cli", "codex-cli", "grok-cli")
 
 #: The guides the Help page serves (``routes/helpdocs._DOCS``; pinned equal).
-HELP_GUIDES: tuple[str, ...] = ("handbook", "recommended-settings", "local-models")
+HELP_GUIDES: tuple[str, ...] = ("handbook", "recommended-settings", "local-models", "changelog")
 
 
 def heading_slug(text: str) -> str:

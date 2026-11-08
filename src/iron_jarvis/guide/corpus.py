@@ -2,8 +2,8 @@
 
 Two kinds of source, and the distinction is the honesty argument:
 
-* **Bundled docs** — the user-facing guides and the repo's own reference
-  files, shipped INSIDE the packaged app (``packaging/ironjarvis.spec`` copies
+* **Bundled docs** — the user-facing guides (never the maintainers' manual
+  or a plan), shipped INSIDE the packaged app (``packaging/ironjarvis.spec`` copies
   each one into ``_MEIPASS/ijdocs``, the same place ``routes/helpdocs.py``
   reads from). A build that dropped one degrades to "the Guide does not know
   that doc" and SAYS so (``GuideIndex.status()``/``doctor``), never to a
@@ -40,10 +40,16 @@ GUIDE_PERSONA = "guide"
 
 #: (slug, path relative to the repo root, title). In a frozen build every
 #: file lives flat in ``_MEIPASS/ijdocs/<basename>``. This list is ALSO the
-#: allowlist the .spec bundles from — keep the two in step, and keep the
-#: TOFIX/audit/plan files in docs/ out of it: they are maintainer material.
+#: allowlist the .spec bundles from — keep the two in step. USER-FACING DOCS
+#: ONLY (v1.450.0): the Guide used to read ``CLAUDE.md`` (the maintainers'
+#: operating manual) and ``SPEC.MD`` (the product spec) too, and answered a
+#: user with engine-room words, retired features and plans. The TOFIX, audit,
+#: plan and handoff files in docs/ stay out for the same reason;
+#: ``tests/test_help_today_v1450.py`` pins the list and refuses a developer
+#: document in it.
 BUNDLED_DOCS: tuple[tuple[str, str, str], ...] = (
     ("handbook", "docs/HANDBOOK.md", "The Handbook"),
+    ("changelog", "docs/CHANGELOG.md", "What changed in each version"),
     ("recommended-settings", "docs/RECOMMENDED-SETTINGS.md", "Recommended Settings"),
     ("local-models", "docs/LOCAL-MODELS.md", "Local Models by RAM Tier"),
     ("reflex", "docs/REFLEX.md", "Reflex rules"),
@@ -51,8 +57,6 @@ BUNDLED_DOCS: tuple[tuple[str, str, str], ...] = (
     ("browser", "docs/BROWSER.md", "Your browser"),
     ("readme", "README.md", "README"),
     ("vocabulary", "VOCABULARY.md", "Vocabulary (one name per concept)"),
-    ("spec", "SPEC.MD", "Product spec"),
-    ("operating-manual", "CLAUDE.md", "Architecture and operating manual"),
 )
 
 #: One retrieved section is capped here when a markdown section runs long —
@@ -75,21 +79,20 @@ _STOP = frozenset(
     "from into about as if than then so not no yes any some all".split()
 )
 
-#: A per-document prior. The Guide serves the USER, so the user-facing guides
-#: outrank the maintainers' operating manual and the product spec when both
-#: mention a term — the manual is still retrievable for internals nothing else
-#: covers. Live catalogs stay neutral.
+#: A per-document prior. The Guide serves the USER: the Handbook and the
+#: vocabulary lead, the topic guides follow, the README and the version
+#: notes stay neutral (a note says WHEN something changed; the Handbook says
+#: how it works). Live catalogs stay neutral.
 _DOC_PRIOR: dict[str, float] = {
     "handbook": 1.3,
     "vocabulary": 1.3,
     "readme": 1.0,
+    "changelog": 1.0,
     "recommended-settings": 1.15,
     "local-models": 1.15,
     "reflex": 1.15,
     "computer-use": 1.15,
     "browser": 1.15,
-    "spec": 0.85,
-    "operating-manual": 0.85,
 }
 #: A DEFINITION question ("what is a memory base", "what does Local only
 #: mean", "define a workflow") is what the vocabulary document answers: it is
