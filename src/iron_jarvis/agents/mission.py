@@ -1612,6 +1612,18 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
         cost = first.get("cost_note")
         if isinstance(cost, str) and cost.strip():
             out["cost_note"] = cost
+        # Readiness 0j.5 item 13: who asks and why (the card's own words),
+        # only when the ask carries them — never the arguments.
+        try:
+            from ..core.approvals import _ASKERS, _why_sentence
+
+            why = _why_sentence(first.get("why"))
+            if why:
+                out["why"] = why
+            if first.get("asker") in _ASKERS:
+                out["asker"] = first["asker"]
+        except Exception:  # noqa: BLE001 — wording only
+            pass
         return out
 
     with session_scope(engine) as db:

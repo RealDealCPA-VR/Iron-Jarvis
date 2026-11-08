@@ -113,6 +113,31 @@ WAITED_SESSIONS_MAX = 1024
 COST_NOTE_MAX = 300
 
 
+#: Who may ask on a card (``core/auto_approve.ASKERS``, repeated so this
+#: module imports nothing heavy at load).
+_ASKERS = frozenset({"model", "iron_jarvis"})
+#: ``core/auto_approve.MAX_WHY_CHARS``.
+_WHY_MAX = 400
+
+
+def _why_sentence(why: Any) -> str:
+    """A card's reason line, safe to hand to every listing (readiness 0j.5
+    item 13): one line, masked, cut. ``""`` for anything that is not a
+    non-empty string. Never raises."""
+    if not isinstance(why, str):
+        return ""
+    text = " ".join(why.split())
+    if not text:
+        return ""
+    try:
+        from ..detections.redact import mask
+
+        text = mask(text)
+    except Exception:  # noqa: BLE001 — wording only; fail closed
+        return ""
+    return text[:_WHY_MAX]
+
+
 def _cost_sentence(cost_note: Any) -> str:
     """The quote's sentence as a listing may carry it: a string, masked
     (``detections.redact.mask`` — belt and braces: the words are built from
@@ -170,6 +195,8 @@ class ChatApprovals:
         cost_note: str | None = None,
         once_only: bool = False,
         once_reason: str = "",
+        why: str = "",
+        asker: str = "",
     ) -> tuple[str, "asyncio.Future[str]"]:
         """File one request; returns ``(id, future)``. The future resolves to a
         DECISIONS value. ``tool``/``args`` are kept only as display/matching
@@ -214,6 +241,16 @@ class ChatApprovals:
             reason = str(once_reason or "").strip()
             if reason and len(reason) <= 32 and reason.isidentifier():
                 self._meta[approval_id]["once_reason"] = reason
+        # Readiness 0j.5 item 13: WHO asks ("model" | "iron_jarvis") and WHY,
+        # in Iron Jarvis's own words (``core/auto_approve.card_why``), so a
+        # surface that draws a run's waiting ask from ``pending_for`` (the
+        # session row, the mission screen) can draw the short card. Recorded
+        # only when set; masked and cut — never the call's arguments.
+        _why = _why_sentence(why)
+        if _why:
+            self._meta[approval_id]["why"] = _why
+        if str(asker or "") in _ASKERS:
+            self._meta[approval_id]["asker"] = str(asker)
         return approval_id, fut
 
     def pending_for(self, session_id: str | None) -> list[dict[str, Any]]:
@@ -244,6 +281,9 @@ class ChatApprovals:
                 # v1.381.0: present only on an ask answered once, every time.
                 **({"once_only": True} if m.get("once_only") is True else {}),
                 **({"once_reason": m["once_reason"]} if m.get("once_reason") else {}),
+                # Readiness 0j.5 item 13: present only when the asker said.
+                **({"why": m["why"]} if m.get("why") else {}),
+                **({"asker": m["asker"]} if m.get("asker") else {}),
             }
             for m in self._meta.values()
             if m.get("session_id") == sid

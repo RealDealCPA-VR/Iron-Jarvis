@@ -442,6 +442,23 @@ def _isolate_opencode_sessions():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _no_real_web_service_check():
+    """Readiness 0j.5 item 18: saving a web service from chat runs its own
+    Test (one real HTTP GET of the address the test names — usually a
+    made-up ``api.example.com``). Off for the whole suite; the pins
+    (``tests/test_web_service_check_wavef.py``) turn it on with a stand-in
+    for the GET."""
+    from iron_jarvis.settings import records_tools as _rt
+
+    old = _rt.AUTO_CHECK
+    _rt.AUTO_CHECK = False
+    try:
+        yield
+    finally:
+        _rt.AUTO_CHECK = old
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _no_real_pi_catalog_read():
     """v1.429.0: listing the coding tools starts ONE background read of Pi's
     model list (``hosted.pi_catalog``: a short ``pi --mode rpc`` run) when

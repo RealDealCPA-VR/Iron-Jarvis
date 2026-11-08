@@ -386,6 +386,22 @@ def reflex_failed_title(payload: dict) -> str:
     return f"Your rule {name} couldn't start" if name else "A rule couldn't start"
 
 
+def remote_message_title(payload: dict) -> str:
+    """The bell's and the tray's headline for ``remote.message`` (readiness
+    0j.5 item 10): a remote agent's line back — a job's report comes home to
+    the chat it was asked from. One fixture (one-notice-v13600) holds the
+    bell, the tray and this equal."""
+    name = _text(payload.get("agent")) or "A remote agent"
+    kind = _text(payload.get("kind"))
+    if kind == "done":
+        return f"{name} reported back"
+    if kind == "question":
+        return f"{name} has a question"
+    if kind == "progress":
+        return f"{name} sent an update"
+    return f"{name} sent a message"
+
+
 def _reflex_failed_line(payload: dict) -> str:
     reason = _clip(_text(payload.get("reason")))
     title = reflex_failed_title(payload)
@@ -738,6 +754,10 @@ def bell_pings(event: Any) -> bool:
       pull request's failing checks, or they pass after the fix it pushed —
       counted, said from the tray, one phone line.
 
+    * ``remote.message`` (readiness 0j.5 item 10): a remote agent's report,
+      message or question (never its ``progress`` lines) — counted, said
+      from the tray. Not a default alert, so "This PC" never repeats it.
+
     * ``chat.turn_finished`` (v1.420.0, C6.10) is NOT one: a long chat reply
       that ended is said from the TRAY only (desktop/main.js
       ``runOutcomeNotice``) — with a window open the chat shows its own
@@ -762,6 +782,10 @@ def bell_pings(event: Any) -> bool:
             return _text(payload.get("status")) in ("failed", WORKFLOW_PART_FAILED)
         if etype == EventType.REFLEX_FAILED:
             return True
+        if etype == EventType.REMOTE_MESSAGE:
+            # Readiness 0j.5 item 10: a remote's report, message or question
+            # rings; its progress lines are the bell's quiet rows.
+            return _text(payload.get("kind")) != "progress"
         if etype in (EventType.BUILD_ACCOUNT_LIMIT, EventType.BUILD_RESUMED):
             return True
         if etype in (EventType.BUILD_TURN_FINISHED, EventType.BUILD_TURN_STALLED):

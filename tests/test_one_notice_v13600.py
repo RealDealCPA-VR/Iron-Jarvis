@@ -563,6 +563,8 @@ def test_the_watcher_reads_the_bells_events_and_the_notice_opens_the_run():
         # v1.420.0 (moved on purpose, C6.10): and a long chat reply's end.
         # v1.446.0 (moved on purpose, review item 20): and a rule that could
         # not start its action.
-        'build.ci_done,chat.turn_finished,reflex.failed";'
+        # Readiness 0j.5 item 10 (moved on purpose): and a remote agent's
+        # report-back.
+        'build.ci_done,chat.turn_finished,reflex.failed,remote.message";'
         in src
     )

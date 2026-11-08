@@ -685,6 +685,73 @@
         "body": "took 1 min 15 s",
         "href": "/chat?thread=chat_q4"
       }
+    },
+    {
+      "case": "remote-reported-back",
+      "event": {
+        "id": "evt_remote_done",
+        "type": "remote.message",
+        "session_id": null,
+        "ts": "2026-11-08T10:15:00",
+        "payload": {
+          "agent": "hermes",
+          "thread_id": "athr_job1",
+          "kind": "done",
+          "documents": [
+            "C:/home/remote-inbox/hermes/q3.pdf"
+          ],
+          "chat_thread_id": "chat_c1"
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "phone": false,
+      "this_pc": false,
+      "title": "hermes reported back",
+      "body": "It sent 1 file.",
+      "href": "/chat?thread=chat_c1"
+    },
+    {
+      "case": "remote-question-in-its-room",
+      "event": {
+        "id": "evt_remote_q",
+        "type": "remote.message",
+        "session_id": null,
+        "ts": "2026-11-08T10:16:00",
+        "payload": {
+          "agent": "hermes",
+          "thread_id": "athr_room2",
+          "kind": "question",
+          "documents": []
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "phone": false,
+      "this_pc": false,
+      "title": "hermes has a question",
+      "body": "",
+      "href": "/agents?thread=athr_room2"
+    },
+    {
+      "case": "remote-progress",
+      "event": {
+        "id": "evt_remote_p",
+        "type": "remote.message",
+        "session_id": null,
+        "ts": "2026-11-08T10:17:00",
+        "payload": {
+          "agent": "hermes",
+          "thread_id": "athr_job1",
+          "kind": "progress",
+          "documents": [],
+          "chat_thread_id": "chat_c1"
+        }
+      },
+      "pings": false,
+      "attention": false,
+      "phone": false,
+      "this_pc": false
     }
   ]
 }

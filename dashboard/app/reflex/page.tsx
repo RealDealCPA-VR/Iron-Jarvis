@@ -73,6 +73,10 @@ interface ReflexRule {
    *  (null once a later fire succeeds) / what the last fire started. */
   last_error?: string | null;
   last_result?: string | null;
+  /** Readiness 0j.5 item 15: where the last successful start can be seen;
+   *  with it, `last_result` is the start in plain words ("Started an agent
+   *  run."). Absent on an older daemon's row (nothing is shown then). */
+  last_href?: string | null;
 }
 
 /** POST /reflex/rules/{id}/test result. */
@@ -84,6 +88,15 @@ interface TestResult {
   session_id?: string;
   agent?: string;
   error?: string;
+  /** Readiness 0j.5 item 15: what started, in plain words, and where to see
+   *  it (an older daemon sends neither: the old line is kept). */
+  words?: string;
+  href?: string;
+}
+
+/** An address the Rules page may link to: one of the app's own pages only. */
+function ownPage(href: unknown): string {
+  return typeof href === "string" && href.startsWith("/") && !href.startsWith("//") ? href : "";
 }
 
 const ACTION_LABEL: Record<ReflexAction, string> = {
@@ -560,6 +573,13 @@ export default function ReflexPage() {
               {r.last_fired_at && (
                 <span>last {new Date(r.last_fired_at).toLocaleString()}</span>
               )}
+              {r.last_result && ownPage(r.last_href) && (
+                <span data-testid={`reflex-last-result-${r.id}`} className="text-zinc-400">
+                  <Link href={ownPage(r.last_href)} className="underline-offset-2 hover:underline">
+                    {r.last_result}
+                  </Link>
+                </span>
+              )}
               {r.last_error && (
                 <span
                   data-testid={`reflex-last-error-${r.id}`}
@@ -630,7 +650,21 @@ export default function ReflexPage() {
 
         {res && (
           <div className="mt-3">
-            {res.ok ? (
+            {res.ok && typeof res.words === "string" && res.words.trim() ? (
+              <SuccessNote>
+                <span data-testid={`reflex-test-result-${r.id}`}>
+                  {res.words.trim()}
+                  {ownPage(res.href) ? (
+                    <>
+                      {" "}
+                      <Link href={ownPage(res.href)} className="underline underline-offset-2">
+                        Open it
+                      </Link>
+                    </>
+                  ) : null}
+                </span>
+              </SuccessNote>
+            ) : res.ok ? (
               <SuccessNote>
                 Fired {res.kind}
                 {testDetail(res) ? ` · ${testDetail(res)}` : ""}.

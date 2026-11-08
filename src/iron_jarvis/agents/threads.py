@@ -173,6 +173,15 @@ class AgentThreadRecord(SQLModel, table=True):
     #: project. Additive column (auto-reconciled; indexed at boot by
     #: ``core.db._HOT_INDEXES`` for existing databases).
     project_id: str = Field(default="", index=True)
+    #: THE CHAT A HANDED-OVER JOB'S REPORT COMES HOME TO (readiness
+    #: 0j.5 item 10). A remote that accepts a job from an agent run reports
+    #: back later into the job's own room (``agents.remote.open_handoff_room``)
+    #: — and that room had no chat, so the inbound route's homing never
+    #: appended the report anywhere the user reads. Deliberately NOT
+    #: ``chat_thread_id``: that column is the chat's ONE @-panel room
+    #: (``for_chat`` finds it by that key), and a job's room must never stand
+    #: in for it. ``""`` (and NULL on an older row) = no chat. Additive column.
+    home_chat_id: str = Field(default="")
     #: JSON list of participants:
     #: {key, source, name, role, provider?, model?} — ``key`` is
     #: "<source>:<name>" and unique within the thread.
@@ -685,15 +694,22 @@ class AgentThreads:
     # -- CRUD ----------------------------------------------------------------
 
     def create(
-        self, title: str, participants: list[dict[str, str]], project_id: str = ""
+        self,
+        title: str,
+        participants: list[dict[str, str]],
+        project_id: str = "",
+        home_chat_id: str = "",
     ) -> AgentThreadRecord:
         """A new room. ``project_id`` (v1.304.0) binds it to a project's world;
         the ROUTE validates it (an existing, active project) — the store only
-        records it, so a caller that already checked never pays twice."""
+        records it, so a caller that already checked never pays twice.
+        ``home_chat_id`` (readiness 0j.5 item 10) is the chat a handed-over job's report
+        comes home to."""
         rec = AgentThreadRecord(
             title=(title or "").strip() or "Agent thread",
             participants_json=json.dumps(participants),
             project_id=(project_id or "").strip(),
+            home_chat_id=(home_chat_id or "").strip(),
         )
         with session_scope(self.engine) as db:
             db.add(rec)

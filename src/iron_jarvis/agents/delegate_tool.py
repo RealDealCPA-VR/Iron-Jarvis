@@ -1023,7 +1023,9 @@ class DelegateTool(Tool):
         )
         await publish_delegation_started(self.platform, task=task, **edge)
         try:
-            res = await self._delegate_remote(entry, task, handoff=True)
+            res = await self._delegate_remote(
+                entry, task, handoff=True, chat_thread_id=getattr(ctx, "thread_id", "") or ""
+            )
         except asyncio.CancelledError:
             # Close the announced edge on the way out, as the local path does.
             try:
@@ -1059,7 +1061,9 @@ class DelegateTool(Tool):
         )
         return res
 
-    async def _delegate_remote(self, entry, task: str, *, handoff: bool = False) -> ToolResult:
+    async def _delegate_remote(
+        self, entry, task: str, *, handoff: bool = False, chat_thread_id: str = ""
+    ) -> ToolResult:
         """A roster-validated ``remote:<name>`` target: the existing
         RemoteAgentRegistry ask path (the same machinery reflex ``/ask`` and
         the ``delegate_remote`` tool use) — no local session, the remote's
@@ -1091,7 +1095,13 @@ class DelegateTool(Tool):
 
         # v1.420.0 (C6.3, G62): a HANDED-OVER job (not a consult) gets a room
         # the remote can report back into; the call is unchanged without one.
-        room = await open_handoff_room(self.platform, record, task) if handoff else {}
+        # Readiness 0j.5 item 10: the room carries the chat the job came from,
+        # so the remote's later report is appended there.
+        room = (
+            await open_handoff_room(self.platform, record, task, chat_thread_id)
+            if handoff
+            else {}
+        )
         if room:
             res = await registry.run(record, task, self.platform.secrets.get, **room["kwargs"])
         else:

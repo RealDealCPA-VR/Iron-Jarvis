@@ -2902,6 +2902,15 @@ class HostedService:
         await self._settle_branch(live)
         done = dict(done) if done is not None else make("done", stop=stop)
         done.setdefault("stop", stop)
+        if NEWS.outcome_of(str(done.get("stop"))) == "failed":
+            # Readiness 0j.5 item 17: a reply that FAILED keeps every edit it
+            # made — said, from its own finished edit/write steps, before the
+            # done (nothing is rolled back; the user must not have to guess).
+            from .kept_files import kept_notice
+
+            _kept = kept_notice(list(turn.events))
+            if _kept:
+                self._emit(live, make("notice", text=_kept))
         done["turn"] = turn.id
         live.log.append(done)
         turn.add(done)

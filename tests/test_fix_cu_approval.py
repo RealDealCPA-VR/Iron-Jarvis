@@ -102,12 +102,18 @@ _PASSWORD_ACTION = {"kind": "type", "css": "#password", "value": "hunter2"}
 async def test_resolverless_dashboard_approval_unblocks_next_call(
     approvals, engine, tmp_path
 ):
-    """The production shape (resolver=None): pending -> approve -> retry executes.
+    """The resolver-less shape (a lane that cannot ask).
 
-    1) First sensitive web_action returns pending + creates the row.
-    2) A human approves it (dashboard).
+    Readiness 0j.5 item 18 (moved on purpose): the first call's row is DENIED,
+    never left PENDING — a pending row on the Browser page could be approved
+    there and spent by the next identical call with no card in front of the
+    person who asked. The consume-on-use branch is unchanged for a row a
+    human DID approve:
+
+    1) First sensitive web_action is refused + its row is denied.
+    2) A human approves an identical request (the dashboard queue).
     3) The SAME web_action now EXECUTES exactly once and the row is consumed.
-    4) A THIRD identical call goes pending again (no replay of the consumed grant).
+    4) A THIRD identical call is refused again (no replay of the consumed grant).
     """
     cu = CUContext(
         policy=make_policy(),
@@ -124,13 +130,17 @@ async def test_resolverless_dashboard_approval_unblocks_next_call(
     assert res1.ok is False
     assert "approval required" in (res1.error or "").lower()
     rows = _all_approvals(engine)
-    assert len(rows) == 1 and rows[0].status == "pending"
+    assert len(rows) == 1 and rows[0].status == "denied"
     assert "password" in rows[0].reason.lower()
-    req_id = rows[0].id
     # The password was NOT typed (blocked before execution).
     assert cu.browser.typed == []
 
-    # --- 2) human approves in the dashboard --------------------------------
+    # --- 2) a human approves an identical request in the dashboard ---------
+    req_id = approvals.create_request(
+        getattr(ctx, "agent_run_id", "ad-hoc"),
+        Action(kind="type", selector=Selector(css="#password"), value="hunter2", fallback=False),
+        rows[0].reason,
+    ).id
     approvals.approve(req_id)
 
     # --- 3) the SAME call now executes exactly once + consumes the grant ---
@@ -139,7 +149,7 @@ async def test_resolverless_dashboard_approval_unblocks_next_call(
     assert len(cu.browser.typed) == 1
     assert cu.browser.typed[0]["type"] == "password"
     # No NEW request was minted; the approved row is now consumed (not replayable).
-    assert len(_all_approvals(engine)) == 1
+    assert len(_all_approvals(engine)) == 2
     assert approvals.get(req_id).status == "consumed"
 
     # --- 4) a third identical call is pending again (no replay) ------------
@@ -149,9 +159,9 @@ async def test_resolverless_dashboard_approval_unblocks_next_call(
     # Still typed only once; the consumed approval did not let it through.
     assert len(cu.browser.typed) == 1
     rows3 = _all_approvals(engine)
-    assert len(rows3) == 2  # original (consumed) + a fresh pending one
-    pending = [r for r in rows3 if r.status == "pending"]
-    assert len(pending) == 1 and pending[0].id != req_id
+    assert len(rows3) == 3  # the first (denied), the approved (consumed), a fresh one
+    assert [r for r in rows3 if r.status == "pending"] == [], "nothing is left pending"
+    assert sum(1 for r in rows3 if r.status == "denied") == 2
 
 
 async def test_approved_unconsumed_matches_only_exact_action(approvals, engine):

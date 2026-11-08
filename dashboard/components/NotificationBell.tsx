@@ -269,6 +269,9 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // quiet row (a suggestion is not a failure). Deliberation's own proposals
   // (no watcher) stay off the bell, as before.
   "autonomy.proposed",
+  // Readiness 0j.5 item 10: a remote agent's report-back (or its question)
+  // rings; its progress lines are quiet rows.
+  "remote.message",
 ];
 
 /** Every /events type the bell reads (v1.311.0, wave 3,
@@ -653,6 +656,41 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       title: name ? `Your rule ${name} couldn't start` : "A rule couldn't start",
       body: clip(p.reason),
       attention: true,
+    };
+  }
+  if (e.type === "remote.message") {
+    // Readiness 0j.5 item 10: a remote agent (another machine) sent a line
+    // back — most often the REPORT of a job it accepted from an agent run,
+    // which now comes home to the chat the job was asked from. Payload:
+    // {agent, thread_id (its room), kind, documents, chat_thread_id?}. A
+    // progress line is QUIET (news, not a result); a report, a message or a
+    // question rings and counts. The words are comm/notifier's
+    // remote_message_title (one fixture: one-notice-v13600).
+    const name = typeof p.agent === "string" && p.agent.trim() ? p.agent.trim() : "A remote agent";
+    const kind = typeof p.kind === "string" ? p.kind : "";
+    const chat = typeof p.chat_thread_id === "string" ? p.chat_thread_id.trim() : "";
+    const room = typeof p.thread_id === "string" ? p.thread_id.trim() : "";
+    const files = Array.isArray(p.documents) ? p.documents.length : 0;
+    const title =
+      kind === "done"
+        ? `${name} reported back`
+        : kind === "question"
+          ? `${name} has a question`
+          : kind === "progress"
+            ? `${name} sent an update`
+            : `${name} sent a message`;
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: chat
+        ? `/chat?thread=${encodeURIComponent(chat)}`
+        : room
+          ? `/agents?thread=${encodeURIComponent(room)}`
+          : "/agents",
+      icon: kind === "done" ? CheckCircle2 : MessageSquare,
+      title,
+      body: files ? `It sent ${files} file${files === 1 ? "" : "s"}.` : "",
+      ...(kind === "progress" ? { quiet: true } : { attention: true }),
     };
   }
   if (e.type === "autonomy.proposed") {

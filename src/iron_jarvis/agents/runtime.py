@@ -3418,6 +3418,30 @@ class AgentRuntime:
             _cost_kw["once_only"] = True
             if getattr(spend, "reason", ""):
                 _cost_kw["once_reason"] = spend.reason
+        # Readiness 0j.5 item 13: WHO asks and WHY, as the chat stream lane's
+        # approval frame says it since v1.417.0 (MIRROR NOTE: routes/chat.py's
+        # `_frame["why"]` / `_frame["asker"]`). An agent run's call is always
+        # the model's; the reason is the plan door, a spend check's own
+        # sentence, a once-only reason, "Ask before every action", else "not
+        # in this run's grants yet". Words only, never the arguments; carried
+        # on the event, the registry entry (so `waiting_on`, the mission view
+        # and the pending listing say it), and nothing else.
+        from ..core import auto_approve as _auto_why
+
+        _why = _auto_why.card_why(
+            plan=tc.name == PLAN_APPROVAL_TOOL,
+            spend_words=(
+                str(getattr(spend, "words", "") or "")
+                if spend is not None and getattr(spend, "ask", False) else ""
+            ),
+            once_reason=(
+                str(getattr(spend, "reason", "") or "") if _once_spend(spend) else ""
+            ),
+            strict=str(getattr(session, "approval_mode", "") or "") == "always_ask",
+            default=_auto_why.RUN_NOT_GRANTED_WHY,
+        )
+        _cost_kw["why"] = _why
+        _cost_kw["asker"] = _auto_why.ASKER_MODEL
         if count > 1:
             for c in calls[:_BATCH_EXAMPLES]:
                 ct = self.p.registry.get(c.name)
@@ -3488,6 +3512,9 @@ class AgentRuntime:
         if count > 1:
             requested["count"] = count
             requested["examples"] = examples
+        # Readiness 0j.5 item 13 (additive keys: an older page ignores them).
+        requested["why"] = _why
+        requested["asker"] = _auto_why.ASKER_MODEL
         # v1.402.0 (the autonomy metrics): this pause, for COUNTING ONLY —
         # `interrupt.asked` beside `approval.requested`, `interrupt.answered`
         # (decision, who answered, how long it took) when it settles. Never an

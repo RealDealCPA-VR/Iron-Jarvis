@@ -103,6 +103,24 @@ def _waiting_on(d, session_id: str) -> dict[str, Any] | None:
     _cost = first.get("cost_note")
     if isinstance(_cost, str) and _cost.strip():
         out["cost_note"] = _cost
+    out.update(_ask_words(first))
+    return out
+
+
+def _ask_words(first: dict) -> dict[str, Any]:
+    """Readiness 0j.5 item 13: ``why`` and ``asker`` of a run's waiting ask
+    (the words its card says, ``core/auto_approve.card_why``) — only when the
+    registry entry carries them, masked and cut; never the arguments."""
+    try:
+        from ...core.approvals import _ASKERS, _why_sentence
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict[str, Any] = {}
+    why = _why_sentence(first.get("why"))
+    if why:
+        out["why"] = why
+    if first.get("asker") in _ASKERS:
+        out["asker"] = first["asker"]
     return out
 
 

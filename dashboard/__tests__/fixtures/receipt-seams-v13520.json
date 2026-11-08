@@ -3,10 +3,13 @@
   "asks": {
     "mission_waiting": {
       "approval_id": "apr_fixture",
+      "asker": "model",
       "reversible": true,
-      "tool": "write_file"
+      "tool": "write_file",
+      "why": "it is not in this run's grants yet"
     },
     "pending_row": {
+      "asker": "model",
       "id": "apr_fixture",
       "mission_id": null,
       "origin": "schedule:nightly-brief",
@@ -16,16 +19,19 @@
       "session_id": "session_brief",
       "task": "Write the nightly brief",
       "timeout_s": 300,
-      "tool": "write_file"
+      "tool": "write_file",
+      "why": "it is not in this run's grants yet"
     },
     "requested": {
       "approval_id": "apr_fixture",
       "args_hash": "<args_hash>",
+      "asker": "model",
       "can_always": false,
       "quarantined": false,
       "reversible": true,
       "timeout_s": 300,
-      "tool": "write_file"
+      "tool": "write_file",
+      "why": "it is not in this run's grants yet"
     },
     "stream_frame": {
       "args": {
@@ -45,8 +51,10 @@
     },
     "waiting_on": {
       "approval_id": "apr_fixture",
+      "asker": "model",
       "reversible": true,
-      "tool": "write_file"
+      "tool": "write_file",
+      "why": "it is not in this run's grants yet"
     }
   },
   "receipts": {

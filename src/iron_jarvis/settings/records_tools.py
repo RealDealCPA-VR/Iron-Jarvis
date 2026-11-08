@@ -161,6 +161,72 @@ SERVICE_CHANGED = (
 )
 SERVICE_GONE = "The web service {name!r} was removed since, so there is nothing to undo."
 SERVICE_ADDED = "Added the web service “{name}” at {address} ({where}). Jarvis can call it with rest_call now{key}."
+
+#: Readiness 0j.5 item 18: the service's OWN Test (the Connections page's
+#: Test button, ``integrations.test``) runs once it is saved — and once its
+#: key is, for a keyed one — and its verdict is said in words.
+SERVICE_CHECK_TIMEOUT_S = 20.0
+#: Run the check at all (the test suite turns it off: tests/conftest.py).
+AUTO_CHECK = True
+SERVICE_ANSWERING = "Added and answering: “{name}” replied to a test request."
+SERVICE_NOT_ANSWERING = "Added, but it is not answering: {why}."
+SERVICE_CHECK_LATER = "It is checked once its key is saved."
+
+
+def _check_reason(detail: str) -> str:
+    """The Test's detail ("GET https://… -> 401", "ConnectError: …") as the
+    reason a person reads. Never the address or an exception's class."""
+    import re as _re
+
+    text = str(detail or "")
+    m = _re.search(r"->\s*(\d{3})", text)
+    if m:
+        code = int(m.group(1))
+        if code in (401, 403):
+            return "it refused the test request (it may need a key, or its key was refused)"
+        if code == 404:
+            return "nothing answered at that address (404); check the address"
+        if code == 429:
+            return "it is busy right now (429); try again later"
+        if code >= 500:
+            return f"it had a problem of its own ({code})"
+        return f"it answered with an error ({code})"
+    if "refused unsafe" in text:
+        return "Iron Jarvis would not send a request to that address"
+    if any(w in text.lower() for w in ("timeout", "timed out")):
+        return "it did not answer in time"
+    return "it could not be reached"
+
+
+def check_service(platform: Any, iid: str) -> tuple[bool, str]:
+    """``(answering, words)`` from the saved service's own Test (the same
+    ``integrations.test`` the Connections page's Test button runs: one GET of
+    its address, its key as a bearer token when it has one, the same SSRF
+    guard). BLOCKING (one bounded HTTP GET) — call it off the loop. Never
+    raises; the words never carry the key (the Test's detail never holds it)."""
+    shown = iid
+    try:
+        reg = getattr(platform, "integrations", None)
+        spec = reg.get_spec(iid) if reg is not None else None
+        shown = str(getattr(spec, "display_name", "") or iid)
+        if reg is None:
+            return False, SERVICE_NOT_ANSWERING.format(why="it could not be tested here")
+        out = reg.test(iid, platform.secrets.get)
+    except Exception:  # noqa: BLE001 — a test never fails the add
+        return False, SERVICE_NOT_ANSWERING.format(why="it could not be tested")
+    if out.get("ok"):
+        return True, SERVICE_ANSWERING.format(name=shown)
+    return False, SERVICE_NOT_ANSWERING.format(why=_check_reason(str(out.get("detail") or "")))
+
+
+async def check_service_bounded(platform: Any, iid: str) -> tuple[bool, str]:
+    """:func:`check_service` off the loop, within :data:`SERVICE_CHECK_TIMEOUT_S`."""
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(check_service, platform, iid), SERVICE_CHECK_TIMEOUT_S
+        )
+    except asyncio.TimeoutError:
+        return False, SERVICE_NOT_ANSWERING.format(why="it did not answer in time")
 SERVICE_KEY_WORDS = (
     " It needs a key: the user pastes it on the secure card below (never in the chat); calls carry it "
     "as a bearer token once it is saved"
@@ -1252,11 +1318,37 @@ class WebServiceAddTool(R._RecordTool):
         if card:
             card["title"] = "Web service added"
             data["record_change"] = card
-        return ToolResult(
-            ok=True,
-            output=SERVICE_ADDED.format(name=shown, address=address, where=where, key=SERVICE_KEY_WORDS if keyed else ""),
-            data=data,
+        output = SERVICE_ADDED.format(
+            name=shown, address=address, where=where, key=SERVICE_KEY_WORDS if keyed else ""
         )
+        if keyed:
+            # Its Test needs the key; it runs when the card saves it
+            # (``settings.credentials`` → :func:`on_web_service_key_saved`).
+            output += " " + SERVICE_CHECK_LATER
+        elif AUTO_CHECK:
+            # Readiness 0j.5 item 18: never "added" alone — the service's own
+            # Test says whether it answers.
+            answering, words = await check_service_bounded(self.platform, iid)
+            data["check"] = {"answering": answering, "words": words}
+            output += " " + words
+        return ToolResult(ok=True, output=output, data=data)
+
+
+def on_web_service_key_saved(platform: Any, arg: str) -> dict[str, Any]:
+    """The credential store saved ``web_service.<id>``'s key: run the service's
+    own Test with it (readiness 0j.5 item 18) and answer ``{"check":
+    {answering, words}}`` for the card. BLOCKING. Never raises, never a value."""
+    try:
+        iid = str(arg or "").strip()
+        if not AUTO_CHECK:
+            return {}
+        reg = getattr(platform, "integrations", None)
+        if not iid or reg is None or reg.get_spec(iid) is None:
+            return {}
+        answering, words = check_service(platform, iid)
+        return {"check": {"answering": answering, "words": words}}
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 # =========================================================================== #
