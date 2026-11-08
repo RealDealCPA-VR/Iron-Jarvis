@@ -53,6 +53,8 @@ import {
   type SwitchAnswer,
 } from "@/lib/extensionWords";
 import { attentionWords, cardHealth, healthCounts, keySaveNote } from "@/lib/directoryHealth";
+import { OAuthAppForm } from "@/components/connections/OAuthAppForm";
+import { ADMIN_GUIDES, docsLinkLabel, runtimeDownload, runtimeLinkInError } from "@/lib/directoryLinks";
 
 /* -------------------------------------------------------------------------- */
 /*  Types (local — lib/types.ts is intentionally untouched)                    */
@@ -664,16 +666,6 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               data-testid={`connector-needs-setup-${c.id}`}
             />
           )}
-          {setupNeeds && c.connect_via === "oauth" && (
-            /* The same place the after-the-press note points to. */
-            <Link
-              href="/connections"
-              data-testid={`connector-needs-howto-${c.id}`}
-              className="inline-flex items-center gap-1 text-[11px] text-zinc-400 transition-colors hover:text-accent-soft"
-            >
-              How to set it up <ArrowRight size={11} aria-hidden="true" />
-            </Link>
-          )}
           {runtimeMissing && (
             <Badge
               value={`Needs ${c.runtime}`}
@@ -684,7 +676,36 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               data-testid={`connector-needs-runtime-${c.id}`}
             />
           )}
+          {/* v1.449.0 (readiness Wave C, item 23): a real link beside the
+              badge — the address lived only in the tooltip. */}
+          {runtimeMissing && runtimeDownload(c.runtime, c.runtime_url) && (
+            <a
+              href={runtimeDownload(c.runtime, c.runtime_url)!.href}
+              target="_blank"
+              rel="noreferrer"
+              data-testid={`connector-get-runtime-${c.id}`}
+              className="inline-flex items-center gap-1 text-[11px] text-accent-soft underline-offset-2 hover:underline"
+            >
+              {runtimeDownload(c.runtime, c.runtime_url)!.label} <ExternalLink size={11} aria-hidden="true" />
+            </a>
+          )}
         </div>
+      )}
+
+      {/* v1.449.0 (readiness Wave C, item 22): a drive's sign-in needs an app
+          the user registers — the boxes are ON THE CARD, saved under the
+          names the daemon reads (lib/oauthApp), with the redirect address to
+          copy. Nobody types an internal name. Folded: the card stays calm,
+          the boxes are one press away. */}
+      {!c.connected && setupNeeds && c.connect_via === "oauth" && c.provider && (
+        <details className="group" data-testid={`connector-needs-howto-${c.id}`}>
+          <summary className="flex cursor-pointer select-none items-center gap-1 text-[11px] text-zinc-400 transition-colors hover:text-accent-soft [&::-webkit-details-marker]:hidden">
+            Set up the sign-in (about 5 minutes) <ArrowRight size={11} aria-hidden="true" className="transition-transform group-open:rotate-90" />
+          </summary>
+          <div className="mt-2">
+            <OAuthAppForm provider={c.provider} appName={c.name} onSaved={onChanged} />
+          </div>
+        </details>
       )}
 
       {/* What it unlocks — the plain-English payoff */}
@@ -848,15 +869,30 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
         </p>
       )}
 
-      {/* Docs link */}
+      {/* v1.449.0 (readiness Wave C, item 23): the admin's steps are one
+          press from the card (the Handbook section the chat's page steps
+          open too), BEFORE the program's own page. */}
+      {ADMIN_GUIDES[c.id] && (
+        <Link
+          href={ADMIN_GUIDES[c.id].href}
+          data-testid={`connector-admin-guide-${c.id}`}
+          className="inline-flex w-fit items-center gap-1 text-[11px] text-accent-soft underline-offset-2 hover:underline"
+        >
+          {ADMIN_GUIDES[c.id].label} <ArrowRight size={11} aria-hidden="true" />
+        </Link>
+      )}
+
+      {/* Docs link — labelled by what it opens (a GitHub address is the
+          program's own page, not "Docs"). */}
       {c.docs_url && (
         <a
           href={c.docs_url}
           target="_blank"
           rel="noreferrer"
+          data-testid={`connector-docs-${c.id}`}
           className="inline-flex w-fit items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
         >
-          Docs <ExternalLink size={11} />
+          {docsLinkLabel(c.docs_url)} <ExternalLink size={11} />
         </a>
       )}
 
@@ -1078,12 +1114,28 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
                 <Info size={16} className="mt-0.5 shrink-0 text-amber-300" aria-hidden="true" />
                 <span>{needsApp}</span>
               </div>
-              <Link
-                href="/connections"
-                className="mt-2 inline-flex items-center gap-1 font-medium text-accent-soft underline underline-offset-2 hover:text-accent"
-              >
-                Set it up on the Connections page <ArrowRight size={12} />
-              </Link>
+              {/* v1.449.0 (item 22): the boxes right here, not a trip to
+                  another page. */}
+              {c.provider ? (
+                <div className="mt-2">
+                  <OAuthAppForm
+                    provider={c.provider}
+                    appName={c.name}
+                    testId={`oauth-app-after-${c.id}`}
+                    onSaved={() => {
+                      setNeedsApp(null);
+                      onChanged();
+                    }}
+                  />
+                </div>
+              ) : (
+                <Link
+                  href="/connections"
+                  className="mt-2 inline-flex items-center gap-1 font-medium text-accent-soft underline underline-offset-2 hover:text-accent"
+                >
+                  Set it up on the Connections page <ArrowRight size={12} />
+                </Link>
+              )}
             </div>
           )}
         </div>
@@ -1102,7 +1154,27 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
       {/* Feedback: connect note / success / error */}
       {note && <InfoNote>{note}</InfoNote>}
       {success && <SuccessNote>{success}</SuccessNote>}
-      {error && <ErrorNote>{error}</ErrorNote>}
+      {error && (
+        <ErrorNote>
+          {error}
+          {/* v1.449.0 (item 23): a Node install note gets the real link
+              (the Microsoft 365 program, an extension that needs Node). */}
+          {runtimeLinkInError(error) && (
+            <>
+              {" "}
+              <a
+                href={runtimeLinkInError(error)!.href}
+                target="_blank"
+                rel="noreferrer"
+                data-testid={`connector-error-get-runtime-${c.id}`}
+                className="underline underline-offset-2"
+              >
+                {runtimeLinkInError(error)!.label}
+              </a>
+            </>
+          )}
+        </ErrorNote>
+      )}
 
       {/* Test result — mcp (tools) vs connection (detail) vs memory (bare ok) */}
       {testResult &&

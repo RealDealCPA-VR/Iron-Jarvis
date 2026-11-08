@@ -100,7 +100,13 @@ def _restore_settings(d, desc: dict[str, Any]) -> str:
     change = config_writer(d).restore(
         prior, device_id=device_id, restore_fn=restore_config_values
     )
-    return f"undo: restored settings {', '.join(change.updated) or '(none)'}"
+    words = f"undo: restored settings {', '.join(change.updated) or '(none)'}"
+    skipped = getattr(change, "skipped", None) or {}
+    if skipped:
+        # v1.449.0 (readiness Wave C, item 24 review): a key the writer could
+        # not put back is SAID with its reason, never left as a quiet "(none)".
+        words += "; not restored: " + "; ".join(f"{k} ({why})" for k, why in skipped.items())
+    return words
 
 
 def _finalize(

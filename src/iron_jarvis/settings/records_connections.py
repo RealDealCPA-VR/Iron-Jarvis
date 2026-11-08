@@ -475,9 +475,16 @@ def restore_model_server(platform: Any, node_id: str, meta: dict[str, Any]) -> s
             kept_default = " (the default model was changed since, so it was kept)"
     key_name = str(getattr(node, "api_key_name", "") or "")
     try:
-        delete_fleet_node(d, node_id)
+        out = delete_fleet_node(d, node_id)
     except Exception as exc:  # noqa: BLE001 — the route's own words
         raise R.RecordError(_http_problem(exc)) from None
+    # v1.449.0 (item 24 review): a default the user pointed at THIS server
+    # since cannot be "kept" — the route hands it on before the server goes
+    # (daemon/default_replacement) and says where it landed; say that, not
+    # "kept" over a default that now names another model.
+    moved = out.get("default_replaced") if isinstance(out, dict) else None
+    if isinstance(moved, dict) and str(moved.get("words") or "").strip():
+        kept_default = f" (it held your default model; {str(moved['words']).strip()})"
     gone_key = " and its saved key" if _forget_key(platform, d, node_id, key_name) else ""
     return f"undo: removed the model server '{_node_label(node)}'{gone_key}{kept_default}"
 
@@ -868,7 +875,13 @@ class ModelServerRemoveTool(R._RecordTool):
         tail = ""
         if out.get("cleared_settings"):
             tail = " It was set up in Settings, so its address there was cleared too."
-        if was_default:
+        # v1.449.0 (readiness Wave C, item 24): the route hands the default on
+        # itself now (daemon/default_replacement); say where it landed in the
+        # route's own words. An older answer without the key keeps the old line.
+        moved = out.get("default_replaced") if isinstance(out, dict) else None
+        if isinstance(moved, dict) and str(moved.get("words") or "").strip():
+            tail += f" It held your default model. {str(moved['words']).strip()}"
+        elif was_default:
             tail += " It held your default model: choose another default in Settings › Models."
         data: dict[str, Any] = {}
         if R._CHANGE_ID.get():  # noqa: SLF001

@@ -458,8 +458,12 @@ describe("G45: setup needs are shown before Connect", () => {
     expect((await screen.findByTestId("connector-needs-setup-google_drive")).textContent).toBe(
       "Needs a one-time Google developer setup",
     );
-    // Where it is done: the same place the after-the-press note points.
-    expect(screen.getByTestId("connector-needs-howto-google_drive").getAttribute("href")).toBe("/connections");
+    // v1.449.0 (readiness Wave C, item 22), moved ON PURPOSE: the set-up is
+    // done ON the card — a fold holding the App ID / App secret boxes — not
+    // a trip to the Connections page.
+    const howto = screen.getByTestId("connector-needs-howto-google_drive");
+    expect(howto.tagName).toBe("DETAILS");
+    expect(within(howto).getByTestId("oauth-app-form-google_drive")).toBeTruthy();
     remount();
     api.connectors = [drive("")];
     render(<DirectoryPage />);

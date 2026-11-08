@@ -436,8 +436,14 @@ async def test_undo_of_an_add_keeps_a_default_the_user_chose_since(tmp_path, ser
     frames = await _drive_stream(app, _body(f"add my LM Studio server at {server.url} and make it default"), await _approve_all(app, seen))
     p.config_writer.apply({"default_model": "chosen-since"}, actor="test", journal=False)
     status, text = _undo(app, _card(frames, "Model server added"))
-    assert status == 200 and "was kept" in text, text
-    assert p.config.default_model == "chosen-since"
+    # v1.449.0 (readiness Wave C, item 24), moved ON PURPOSE: the default the
+    # user chose since still NAMED this server, so the Undo cannot "keep" it —
+    # the removal hands the default on (here: nothing else is connected, so
+    # the demo) and the Undo's words say where it landed, in the route's words.
+    assert status == 200, text
+    assert "was kept" not in text and "held your default model" in text and "demo model" in text, text
+    assert p.config.default_provider == "mock"
+    assert p.config.default_model != "chosen-since"
 
 
 # =========================================================================== #

@@ -148,6 +148,15 @@ import { testWords, type ConnectionTestWords } from "@/lib/connectionTestWords";
 import { DETAILS_WORDS } from "@/lib/failureActions";
 // v1.424.0 (D8): one model's own tools / vision, in words.
 import { capabilityOf, saveCheckWords, toolsChip, visionChip, type CapView } from "@/lib/modelCapability";
+// v1.449.0 (readiness Wave C, items 22 + 24).
+import { OAuthAppForm } from "@/components/connections/OAuthAppForm";
+import { oauthRedirectAddress } from "@/lib/oauthApp";
+import {
+  DefaultImpactLine,
+  defaultReplacedWords,
+  fetchDefaultImpact,
+  type DefaultImpact,
+} from "@/components/connections/DefaultImpact";
 
 /** v1.420.0 (C6.6): whose app id a sign-in needs — the card's name without
  *  its "(memory)" note ("Dropbox (memory)" → "Dropbox"). */
@@ -490,7 +499,8 @@ const DIRECTORY_DRIVES = new Set(["dropbox", "google_drive", "onedrive"]);
  *  platform resolver's default (`platform.py`; a
  *  `<provider>_oauth_redirect_uri` secret overrides it). */
 function oauthCallback(provider: string): string {
-  return `http://localhost:8787/oauth/${provider}/callback`;
+  // v1.449.0: the ONE address (lib/oauthApp, pinned to the daemon's).
+  return oauthRedirectAddress(provider);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -711,6 +721,45 @@ function ConnectionCard({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
 
+  // v1.449.0 (readiness Wave C, item 24): when THIS card (or one of its
+  // saved endpoints) is what answers chats by default, the confirm says so
+  // and names the replacement the daemon will choose — read once from the
+  // daemon's own rule, before any press. The removal's answer then carries
+  // the words of what really happened (`default_replaced`).
+  const [impact, setImpact] = useState<DefaultImpact | null>(null);
+  const [epImpact, setEpImpact] = useState<{ id: string; impact: DefaultImpact } | null>(null);
+  const [afterNote, setAfterNote] = useState<string | null>(null);
+  const [epNote, setEpNote] = useState<string | null>(null);
+  const defaultProvider = health?.default_provider ?? "";
+  useEffect(() => {
+    let live = true;
+    if (!isDefault || !conn.connected) {
+      setImpact(null);
+      return;
+    }
+    void fetchDefaultImpact([conn.provider]).then((r) => {
+      if (live) setImpact(r);
+    });
+    return () => {
+      live = false;
+    };
+  }, [isDefault, conn.connected, conn.provider]);
+  const defaultEp = endpoints.find((ep) => defaultProvider === (ep.seeded ? ep.id : `fleet-${ep.id}`)) ?? null;
+  const defaultEpId = defaultEp?.id ?? "";
+  useEffect(() => {
+    let live = true;
+    if (!defaultEpId) {
+      setEpImpact(null);
+      return;
+    }
+    void fetchDefaultImpact([defaultEpId]).then((r) => {
+      if (live) setEpImpact(r ? { id: defaultEpId, impact: r } : null);
+    });
+    return () => {
+      live = false;
+    };
+  }, [defaultEpId]);
+
   // v1.355.0 (G72): "LM Studio on this PC" / "llama.cpp" fill the add form
   // (address, server type, and the name when none is typed) and then press
   // the form's own "Fetch available models", so the server's loaded models
@@ -813,8 +862,16 @@ function ConnectionCard({
   async function removeEndpoint(ep: EndpointRow) {
     setEpBusy(ep.id);
     setEpError(null);
+    setEpNote(null);
     try {
-      await del(`/fleet/nodes/${encodeURIComponent(ep.id)}`);
+      const res = await del<unknown>(`/fleet/nodes/${encodeURIComponent(ep.id)}`);
+      // v1.449.0 (item 24): the daemon moved the default BEFORE the server
+      // went; say where it landed, in its own words.
+      const moved = defaultReplacedWords(res);
+      if (moved) {
+        setEpNote(moved);
+        refreshDaemon();
+      }
       if (ep.api_key_name) {
         try {
           await del(`/secrets/${encodeURIComponent(ep.api_key_name)}`);
@@ -830,19 +887,32 @@ function ConnectionCard({
     }
   }
 
-  /** Clear the legacy single-slot endpoint (settings-managed "custom"). */
-  async function removeLegacy() {
+  /** Clear the settings-seeded slot ("custom" / "ollama"). v1.449.0: through
+   *  the same `DELETE /fleet/nodes/{id}` as any endpoint — the daemon clears
+   *  the slot's settings keys itself (fleet.registry `_SEED_KEYS`) and, when
+   *  the slot held the default model, hands the default on first. A plain
+   *  PUT of blank settings did neither. The slot's saved key still goes. */
+  async function removeLegacy(ep: EndpointRow) {
     setEpBusy("legacy");
     setEpError(null);
+    setEpNote(null);
     try {
-      await put("/settings", { values: { custom_base_url: "", custom_model: "" } });
-      try {
-        await del("/connections/custom");
-      } catch {
-        /* no stored key — fine */
+      const res = await del<unknown>(`/fleet/nodes/${encodeURIComponent(ep.id)}`);
+      const moved = defaultReplacedWords(res);
+      if (moved) setEpNote(moved);
+      if (ep.id === "custom") {
+        // Only the custom slot has a connection record (its saved key); the
+        // ollama slot has none, and asking the daemon to disconnect a name
+        // it has no record of is an error on every Delete (review).
+        try {
+          await del(`/connections/${encodeURIComponent(ep.id)}`);
+        } catch {
+          /* no stored key — fine */
+        }
       }
       void reloadEndpoints();
       onChanged();
+      refreshDaemon();
     } catch (err) {
       setEpError(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -999,8 +1069,16 @@ function ConnectionCard({
     setBusy(true);
     setError(null);
     setTest(null);
+    setAfterNote(null);
     try {
-      await del(`/connections/${conn.provider}`);
+      const res = await del<unknown>(`/connections/${conn.provider}`);
+      // v1.449.0 (item 24): the daemon moved the default BEFORE the account
+      // went; say where it landed, in its own words.
+      const moved = defaultReplacedWords(res);
+      if (moved) {
+        setAfterNote(moved);
+        refreshDaemon();
+      }
       onChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
@@ -1119,17 +1197,16 @@ function ConnectionCard({
               <Code className="break-all">{oauthCallback(conn.provider)}</Code>
             </li>
             <li>
-              In{" "}
-              <Link href="/secrets" className="font-medium text-accent-soft underline">
-                Secrets
-              </Link>
-              , save the {appOwner(conn.display_name)} app id ({appOwner(conn.display_name)} uses
-              it to know which app is asking you to sign in) under the name{" "}
-              <Code>{conn.provider}_oauth_client_id</Code> and, if it has one, the app
-              secret under <Code>{conn.provider}_oauth_client_secret</Code>.
+              Paste the app&apos;s ID and secret below and press Save ({appOwner(conn.display_name)} uses
+              the ID to know which app is asking you to sign in).
             </li>
-            <li>Come back and press Set up &amp; log in.</li>
+            <li>Then press Set up &amp; log in.</li>
           </ol>
+          {/* v1.449.0 (readiness Wave C, item 22): the boxes ON the card,
+              saved under the names the daemon reads — no hand-typed names. */}
+          <div className="mt-2">
+            <OAuthAppForm provider={conn.provider} appName={appOwner(conn.display_name)} onSaved={onChanged} />
+          </div>
           {meta.docsUrl && (
             <a
               href={meta.docsUrl}
@@ -1212,16 +1289,17 @@ function ConnectionCard({
       )}
       {needsSecrets && (
         <div className="rounded-xl border border-tone-warn/25 bg-tone-warn/[0.07] px-3 py-2.5 text-[11px] leading-relaxed text-zinc-300">
-          No {appOwner(conn.display_name)} app id yet. {appOwner(conn.display_name)} needs one
-          to know which app is asking you to sign in. Save it in{" "}
-          <Link href="/secrets" className="font-medium text-accent-soft underline">
-            Secrets
-          </Link>{" "}
-          under the name{" "}
-          <code className="rounded bg-ink-900/80 px-1 font-mono text-tone-warn">
-            {conn.provider}_oauth_client_id
-          </code>
-          , then connect.
+          No {appOwner(conn.display_name)} app ID yet. {appOwner(conn.display_name)} needs one
+          to know which app is asking you to sign in — paste it below, then connect.
+          {/* v1.449.0 (item 22): the boxes, not a trip to Secrets. */}
+          <div className="mt-2">
+            <OAuthAppForm
+              provider={conn.provider}
+              appName={appOwner(conn.display_name)}
+              testId={`oauth-app-after-${conn.provider}`}
+              onSaved={onChanged}
+            />
+          </div>
         </div>
       )}
     </div>
@@ -1329,6 +1407,14 @@ function ConnectionCard({
         // and "Make default" broke onto two lines. Each label stays whole and
         // the last button drops to its own line instead.
         <div data-testid="conn-card-actions" className="flex min-w-0 flex-wrap items-center gap-2">
+          {/* v1.449.0 (item 24): what Disconnect does to the default, said
+              before the press, in the daemon's words. */}
+          {isDefault && <DefaultImpactLine impact={impact} testId="conn-default-impact" />}
+          {afterNote && (
+            <p role="status" data-testid="conn-default-moved" className="basis-full text-[11px] text-tone-warn">
+              {afterNote}
+            </p>
+          )}
           {isDefault ? (
             <span
               title="Jarvis answers with this by default"
@@ -1516,12 +1602,19 @@ function ConnectionCard({
                   )}
                   {/* The actions start their own line, after every tag. */}
                   <span aria-hidden data-testid="endpoint-row-actions-break" className={ROW_ACTIONS_BREAK} />
+                  {/* v1.449.0 (item 24): the default's row says what Delete
+                      does to it, before the press. */}
+                  {epImpact?.id === ep.id && (
+                    <span className="basis-full">
+                      <DefaultImpactLine impact={epImpact.impact} testId={`endpoint-default-impact-${ep.id}`} />
+                    </span>
+                  )}
                   <ConfirmButton
                     variant="calm"
                     className={`${ROW_ACTION} ml-auto shrink-0`}
-                    onConfirm={() => void (ep.seeded ? removeLegacy() : removeEndpoint(ep))}
+                    onConfirm={() => void (ep.seeded ? removeLegacy(ep) : removeEndpoint(ep))}
                     label={epBusy === ep.id ? "…" : "Delete"}
-                    confirmLabel="Delete?"
+                    confirmLabel={epImpact?.id === ep.id ? "Delete the default?" : "Delete?"}
                     title={`Remove "${ep.label}". Its provider disappears from every picker and the saved key is cleaned up.`}
                   />
                   {/* The report card for THIS endpoint's provider
@@ -1543,6 +1636,11 @@ function ConnectionCard({
                 </div>
               ))}
               {epError && <ErrorNote>{epError}</ErrorNote>}
+              {epNote && (
+                <p role="status" data-testid="endpoint-default-moved" className="text-[11px] text-tone-warn">
+                  {epNote}
+                </p>
+              )}
               <p className="text-[10px] leading-relaxed text-zinc-600">
                 Each endpoint is its own provider in every model picker.
               </p>
