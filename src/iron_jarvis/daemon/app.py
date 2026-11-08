@@ -3541,15 +3541,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
                      "dials OUT to Slack over a WebSocket — two-way DMs with "
                      "ZERO public URL / internet exposure. Enable Socket Mode in "
                      "the app (the manifest below already does)."},
-            {"key": "inbound_enabled", "label": "Enable two-way (true/false)", "secret": False,
-             "help": "Set to true to let allowlisted people DM the bot and get "
-                     "agent replies. Off by default."},
-            {"key": "chat_enabled", "label": "Chat with Iron Jarvis (true/false)", "secret": False,
-             "help": "Set to true to hold a real conversation with Iron Jarvis "
-                     "in your Slack messages with the bot — replies remember "
-                     "the thread, and the conversation shows up live on the "
-                     "desktop. Chat implies listening: turning this on also "
-                     "turns two-way ON when saved."},
+            # Wave C (item 29): the two switches are said in plain words — the
+            # page draws them as real toggles (``type: bool``); "(true/false)"
+            # and "Set to true" were the wire's words on the screen.
+            {"key": "inbound_enabled", "label": "Listen for incoming messages", "secret": False, "type": "bool",
+             "help": "Let the people on the allowlist message the bot and get "
+                     "Iron Jarvis's replies. Off until you turn it on."},
+            {"key": "chat_enabled", "label": "Chat with Iron Jarvis", "secret": False, "type": "bool",
+             "help": "Hold a real conversation with Iron Jarvis in your Slack "
+                     "messages with the bot — replies remember the thread, and "
+                     "the conversation shows up live on the desktop. Turning "
+                     "this on also turns listening on when saved."},
             {"key": "allowed_senders", "label": "Allowlist (Slack member IDs)", "secret": False,
              "help": "Comma-separated member IDs (U0123…). Yours: in Slack, click "
                      "your profile picture → Profile → ⋯ → Copy member ID. "
@@ -3565,16 +3567,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
              "help": "From @BotFather."},
             {"key": "chat_id", "label": "Chat ID", "secret": False,
              "help": "Your numeric chat id (message @userinfobot to find it)."},
-            {"key": "inbound_enabled", "label": "Enable two-way (true/false)", "secret": False,
-             "help": "Set to true so Iron Jarvis listens for messages sent to "
-                     "the bot (commands like /status, and chat when enabled "
-                     "below). Off by default."},
-            {"key": "chat_enabled", "label": "Chat with Iron Jarvis (true/false)", "secret": False,
-             "help": "Set to true to hold a real conversation with Iron Jarvis "
-                     "from this destination — replies remember the thread, and "
-                     "the whole conversation shows up live on the desktop. "
-                     "Chat implies listening: turning this on also turns "
-                     "two-way ON when saved."},
+            {"key": "inbound_enabled", "label": "Listen for incoming messages", "secret": False, "type": "bool",
+             "help": "Let Iron Jarvis read messages sent to the bot (commands "
+                     "like /status, and chat when it is on below). Off until "
+                     "you turn it on."},
+            {"key": "chat_enabled", "label": "Chat with Iron Jarvis", "secret": False, "type": "bool",
+             "help": "Hold a real conversation with Iron Jarvis from this "
+                     "destination — replies remember the thread, and the whole "
+                     "conversation shows up live on the desktop. Turning this "
+                     "on also turns listening on when saved."},
             {"key": "allowed_senders", "label": "Allowlist (Telegram user IDs)", "secret": False,
              "help": "Comma-separated numeric user ids allowed to talk to the "
                      "bot (message @userinfobot to find yours). FAIL-CLOSED: an "
@@ -3594,9 +3595,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
             {"key": "imap_host", "label": "IMAP host", "secret": False,
              "help": "e.g. imap.gmail.com — needed only to listen for incoming mail."},
             {"key": "imap_port", "label": "IMAP port", "secret": False, "help": "usually 993"},
-            {"key": "inbound_enabled", "label": "Enable two-way (true/false)", "secret": False,
-             "help": "Set to true so Iron Jarvis reads the inbox and acts on mail from "
-                     "the allowed senders. Off by default."},
+            {"key": "inbound_enabled", "label": "Listen for incoming mail", "secret": False, "type": "bool",
+             "help": "Let Iron Jarvis read the inbox and act on mail from the "
+                     "allowed senders. Off until you turn it on."},
             {"key": "allowed_senders", "label": "Allowlist (email addresses)", "secret": False,
              "help": "Comma-separated From addresses allowed to message Iron Jarvis. "
                      "FAIL-CLOSED: an empty allowlist means nobody may."},

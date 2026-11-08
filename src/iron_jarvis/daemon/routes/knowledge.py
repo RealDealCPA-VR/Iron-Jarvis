@@ -42,12 +42,118 @@ def _unprobed(conn: Any, reason: str) -> dict[str, Any]:
     }
 
 
+def _base_health(conn: Any, kind: str, *, probe: bool, refresh: bool, deadline: float) -> dict[str, Any]:
+    """THE health reading of one live base, the listing's rules (v1.172.0 /
+    v1.173.0): a local base is checked at once; a network base is served
+    from its own cache, re-checked only under ``probe`` or ``refresh``
+    (which also drops the cache), and handed the time left before
+    ``deadline``; a kind with no probe claims nothing (``available: None``).
+    BLOCKING, never raises (a failing probe is ``available: False`` with
+    the error's name). Wave C (item 28): also what :func:`read_back` asks
+    right after an add, so the Memory page and chat's ``memory_base_add``
+    say the same thing about a new base."""
+    import time as _time
+
+    health = getattr(conn, "health", None)
+    info: dict[str, Any] = {}
+    if not callable(health):
+        # Remote kinds (Notion/cloud/http_rag) have no cheap local probe;
+        # claim nothing rather than a comforting default.
+        return {"available": None, "detail": ""}
+    cached = getattr(conn, "cached_health", None)
+    try:
+        if callable(cached):  # a NETWORK probe — cache + budget apply
+            if refresh:
+                invalidate = getattr(conn, "invalidate_health", None)
+                if callable(invalidate):
+                    invalidate()
+            verdict = cached()
+            left = deadline - _time.monotonic()
+            if verdict is not None:
+                info.update(verdict)
+            elif not (probe or refresh):
+                info.update(
+                    _unprobed(
+                        conn,
+                        "this listing does not run network checks; the "
+                        "Memory page's base card checks it (or ask for "
+                        "it with probe=true)",
+                    )
+                )
+            elif left <= 0:
+                info.update(
+                    _unprobed(
+                        conn,
+                        "other bases used up this page's check budget; "
+                        "it is re-checked on the next refresh",
+                    )
+                )
+            else:
+                info.update(health(timeout=max(0.05, left)))
+        else:
+            info.update(health())
+    except Exception as exc:  # noqa: BLE001 — a listing never 500s
+        info.update({"available": False, "detail": f"{type(exc).__name__}: {exc}"})
+    return info
+
+
+#: Wave C (item 28): what a just-added base is told back in, one sentence,
+#: the SAME on the Memory page and in chat's ``memory_base_add``.
+ADDED_ANSWERING = "Added and answering."
+ADDED_NOT_ANSWERING = "Added, but it is not answering: {detail}"
+ADDED_UNCHECKED = "Added. It is not checked until you search it."
+ADDED_NOT_LIVE = "Added, but it is not live yet: {detail}"
+
+
+def added_words(answering: Any, detail: str = "") -> str:
+    """The read-back sentence for ``answering`` True / False / None."""
+    detail = " ".join(str(detail or "").split())
+    if answering is True:
+        return ADDED_ANSWERING
+    if answering is False:
+        body = detail or "it did not answer"
+        return ADDED_NOT_ANSWERING.format(detail=body if body.endswith((".", "!", "?")) else body + ".")
+    return ADDED_UNCHECKED + (f" ({detail.rstrip('.')}.)" if detail else "")
+
+
+def read_back(d: Any, name: str, *, budget: float | None = None) -> dict[str, Any]:
+    """Wave C (item 28): read a memory base BACK right after it was added —
+    ``{answering: True|False|None, detail, words}`` — through the listing's
+    own :func:`_base_health` (a probe, with the listing's budget), so "added
+    and answering" is never claimed by the add alone. A base the live set
+    does not hold answers ``False``. BLOCKING, never raises."""
+    import time as _time
+
+    from ...ltm.sources import CustomSourceStore
+
+    try:
+        conn = d.platform.ltm.get(name)
+    except Exception:  # noqa: BLE001
+        conn = None
+    if conn is None:
+        detail = "it is saved, but not in the live set"
+        return {"answering": False, "detail": detail, "words": ADDED_NOT_LIVE.format(detail=detail + ".")}
+    try:
+        rec = CustomSourceStore(d.platform.engine).get(name)
+        kind = str(getattr(rec, "kind", "") or name)
+    except Exception:  # noqa: BLE001
+        kind = name
+    deadline = _time.monotonic() + (float(budget) if budget is not None else _LTM_PROBE_BUDGET)
+    info = _base_health(conn, kind, probe=True, refresh=True, deadline=deadline)
+    answering = info.get("available")
+    detail = str(info.get("detail") or "")
+    return {"answering": answering if isinstance(answering, bool) else None, "detail": detail,
+            "words": added_words(answering if isinstance(answering, bool) else None, detail)}
+
+
 def add_ltm_source_record(d: Any, body: LTMSourceBody) -> dict[str, Any]:
     """THE add of a custom memory base (v1.438.0: lifted out of ``POST
     /ltm/sources`` so chat's ``memory_base_add`` adds the same way): a new
     secret goes into the vault (only its NAME on the record), the record is
     saved, and the base is registered LIVE (no restart). BLOCKING; raises
-    ``HTTPException(400)``."""
+    ``HTTPException(400)``. Wave C (item 28): the answer also carries the
+    READ-BACK (:func:`read_back`) — ``answering`` and ``words`` — so every
+    door says whether the new base answers, in the same words."""
     import re
 
     from ...ltm.sources import CustomSourceStore, connector_from_record
@@ -111,7 +217,8 @@ def add_ltm_source_record(d: Any, body: LTMSourceBody) -> dict[str, Any]:
         raise HTTPException(
             status_code=400, detail=f"source saved but not loadable: {exc}"
         )
-    return {"name": rec.name, "kind": rec.kind}
+    back = read_back(d, rec.name)
+    return {"name": rec.name, "kind": rec.kind, "answering": back["answering"], "words": back["words"]}
 
 
 def remove_ltm_source_record(d: Any, name: str) -> dict[str, Any]:
@@ -427,49 +534,11 @@ def register(app: FastAPI, d) -> None:
         _kinds = {r.name: r.kind for r in _records}
         for base_name in d.platform.ltm.sources():
             conn = d.platform.ltm.get(base_name)
-            health = getattr(conn, "health", None)
             info: dict[str, Any] = {"name": base_name, "kind": _kinds.get(base_name, base_name)}
             if _kinds.get(base_name) == "mcp":
                 info["tools_set_up"] = bool(getattr(conn, "roles", None))
-            if callable(health):
-                cached = getattr(conn, "cached_health", None)
-                try:
-                    if callable(cached):  # a NETWORK probe — cache + budget apply
-                        if refresh:
-                            invalidate = getattr(conn, "invalidate_health", None)
-                            if callable(invalidate):
-                                invalidate()
-                        verdict = cached()
-                        left = deadline - _time.monotonic()
-                        if verdict is not None:
-                            info.update(verdict)
-                        elif not (probe or refresh):
-                            info.update(
-                                _unprobed(
-                                    conn,
-                                    "this listing does not run network checks; the "
-                                    "Memory page's base card checks it (or ask for "
-                                    "it with probe=true)",
-                                )
-                            )
-                        elif left <= 0:
-                            info.update(
-                                _unprobed(
-                                    conn,
-                                    "other bases used up this page's check budget; "
-                                    "it is re-checked on the next refresh",
-                                )
-                            )
-                        else:
-                            info.update(health(timeout=max(0.05, left)))
-                    else:
-                        info.update(health())
-                except Exception as exc:  # noqa: BLE001 — a listing never 500s
-                    info.update({"available": False, "detail": f"{type(exc).__name__}: {exc}"})
-            else:
-                # Remote kinds (Notion/cloud/http_rag) have no cheap local
-                # probe; claim nothing rather than a comforting default.
-                info.update({"available": None, "detail": ""})
+            # ONE health reading (Wave C: read_back asks the same function).
+            info.update(_base_health(conn, info["kind"], probe=probe, refresh=refresh, deadline=deadline))
             bases.append(info)
         return {
             "sources": [s.model_dump() for s in _records],

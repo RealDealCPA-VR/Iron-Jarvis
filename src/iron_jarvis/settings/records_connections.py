@@ -1348,7 +1348,7 @@ class MemoryBaseAddTool(R._RecordTool):
             token_secret=plan.get("token_secret", ""),
         )
         try:
-            await asyncio.to_thread(add_ltm_source_record, d, body)
+            added = await asyncio.to_thread(add_ltm_source_record, d, body)
         except HTTPException as exc:
             # "saved but not loadable": nothing half-made is left behind.
             if await asyncio.to_thread(CustomSourceStore(self.platform.engine).get, slug) is not None:
@@ -1357,7 +1357,14 @@ class MemoryBaseAddTool(R._RecordTool):
         R.bind_created(slug)
         rec = await asyncio.to_thread(CustomSourceStore(self.platform.engine).get, slug)
         what = f"the Notion database {plan['database_id']}" if plan["kind"] == "notion" else f"the folder {plan['path']}"
-        lines = [f"Added the memory base {_q(slug)} ({what}). It is searched from the next message, with no restart."]
+        # Wave C (item 28): the READ-BACK's own sentence (routes.knowledge
+        # .read_back, the Memory page shows the same words) — never "it is
+        # searched" for a base that did not answer.
+        back_words = str((added or {}).get("words") or "")
+        answering = (added or {}).get("answering")
+        lines = [f"Memory base {_q(slug)} ({what}): {back_words}".rstrip()]
+        if answering is not False:
+            lines.append("It is searched from the next message, with no restart.")
         data: dict[str, Any] = {}
         made: dict[str, Any] | None = None
         prior_choice = str(getattr(self.platform.config, "brain_profile", "") or "")

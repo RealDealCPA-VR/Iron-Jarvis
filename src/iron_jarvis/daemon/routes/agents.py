@@ -4229,6 +4229,13 @@ def register(app: FastAPI, d) -> None:
         is active), Windsurf, Gemini CLI and the installed Claude Code
         plugins; rows carry ``disabled`` / ``exists_as`` / ``blurb`` (see
         :func:`preview_rows`).
+
+        Wave C (item 30): also OpenCode's ``opencode.json(c)`` /
+        ``config.json`` (and a project's own), Grok's ``~/.grok/config.toml``
+        (and a project's ``.grok/config.toml``), Antigravity's
+        ``~/.gemini/config/mcp_config.json`` and Pi's ``~/.pi/agent/mcp.json``
+        (and a project's ``.pi/mcp.json``) — read-only, names only, each
+        tool's placeholders asked for, never a value.
         """
         from ...mcp.import_sources import scan
 

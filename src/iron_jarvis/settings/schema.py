@@ -805,10 +805,19 @@ SETTINGS: tuple[SettingDef, ...] = (
       "looks only in these, and chat may recall short passages from them. You can also add "
       "and remove them on the File Search page; a change applies to the next search.",
       tier="ask", advanced=True),
-    S("obsidian_vault", "Obsidian vault", "memory", "string", "A vault used as long-term memory.",
-      tier="ask", advanced=True),
+    # Wave C (item 28): these two are read at BOOT only (platform.build_platform
+    # registers the connectors), so a change applies after a restart — said on
+    # the row — and the Memory page's "Add a memory base" is the door that
+    # works at once (one door, not two).
+    S("obsidian_vault", "Obsidian vault", "memory", "string",
+      "A vault folder used as long-term memory, read when Iron Jarvis starts. Applies after a restart; "
+      "the Memory page's \"Add a memory base\" adds a folder at once, with no restart.",
+      tier="ask", restart=True, advanced=True, section="Memory bases"),
     S("notion_database_id", "Notion database", "memory", "string",
-      "A Notion database used as long-term memory.", tier="ask", advanced=True),
+      "A Notion database used as long-term memory, read when Iron Jarvis starts (with the notion_token "
+      "secret). Applies after a restart; the Memory page's \"Add a memory base\" adds Notion at once, "
+      "with no restart.",
+      tier="ask", restart=True, advanced=True, section="Memory bases"),
     S("active_project_id", "Focused project", "memory", "string",
       "The project new chats are grounded in. Empty = none.", tier="allow",
       aliases=("focus project", "active project")),

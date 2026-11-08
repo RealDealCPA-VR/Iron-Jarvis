@@ -79,7 +79,7 @@ const EMAIL_FIELDS = [
   { key: "to_addr", label: "Send to", secret: false },
   { key: "imap_host", label: "IMAP host", secret: false },
   { key: "imap_port", label: "IMAP port", secret: false },
-  { key: "inbound_enabled", label: "Enable two-way (true/false)", secret: false },
+  { key: "inbound_enabled", label: "Listen for incoming messages", secret: false, type: "bool" },
   { key: "allowed_senders", label: "Allowlist (email addresses)", secret: false },
 ];
 const DISCORD_FIELDS = [{ key: "webhook_url", label: "Webhook URL", secret: false }];

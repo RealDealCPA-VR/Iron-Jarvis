@@ -82,8 +82,8 @@ const TELEGRAM_TYPE = {
   fields: [
     { key: "token", label: "Bot token", secret: true, help: "From @BotFather." },
     { key: "chat_id", label: "Chat ID", secret: false },
-    { key: "inbound_enabled", label: "Enable two-way (true/false)", secret: false },
-    { key: "chat_enabled", label: "Chat with Iron Jarvis (true/false)", secret: false },
+    { key: "inbound_enabled", label: "Listen for incoming messages", secret: false, type: "bool" },
+    { key: "chat_enabled", label: "Chat with Iron Jarvis", secret: false, type: "bool" },
     { key: "allowed_senders", label: "Allowlist (Telegram user IDs)", secret: false },
   ],
 };

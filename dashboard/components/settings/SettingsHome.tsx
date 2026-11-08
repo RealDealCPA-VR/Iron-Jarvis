@@ -209,6 +209,18 @@ export const CONTROLLED_IN_SECTION: Record<string, string> = {
   // maker's picks; the maker on the Appearance card is its control (picking
   // or editing the chat theme there saves the row, lib/deviceSettings).
   "device.theme_colors": APPEARANCE_SECTION,
+  // Wave C (item 29): four settings had TWO controls on this page — a plain
+  // row here and the better control in a section — and the two disagreed
+  // until a reload. The section's control is the one: the Your browser card
+  // (its access level, with the add-on's state beside it), the Maintenance
+  // card's backup copy folder (with the copy's own status line; its media
+  // switch rides the same card), and the Connections page's endpoint rows
+  // (Test, fetch models, a key) for the two endpoint addresses.
+  browser_access: "connections-browser",
+  backup_mirror_dir: "system-maintenance",
+  backup_mirror_media: "system-maintenance",
+  custom_base_url: "connections-accounts",
+  ollama_base_url: "connections-accounts",
 };
 
 function readSection(): { section: string; focus: string } {
