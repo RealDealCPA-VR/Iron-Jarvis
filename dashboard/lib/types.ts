@@ -119,6 +119,10 @@ export interface SessionWaitingOn {
   /** v1.352.0 (G25): can the action be undone (the daemon's verdict, the
    *  same one the ask's own event carries)? Absent = nothing to say. */
   reversible?: boolean;
+  /** v1.455.0 (Wave F, item 13): why it asks and who ("model" |
+   *  "iron_jarvis"), when the daemon says. Read through lib/askWhy. */
+  why?: string;
+  asker?: string;
 }
 
 export interface AgentRun {

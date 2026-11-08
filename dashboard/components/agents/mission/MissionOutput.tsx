@@ -73,6 +73,7 @@ import { settledSplit } from "@/lib/streamSplit";
 import { useMissionLive, type MissionLive, type MissionLiveStore } from "@/lib/useMission";
 import { receiptLine, receiptVerbFor } from "./receipt";
 import { mockLine } from "./AgentCards";
+import { askWhyOf, MISSION_REDIRECT_KEPT } from "@/lib/askWhy";
 
 export type OutputTab = "report" | "markdown" | "preview";
 
@@ -130,6 +131,9 @@ export function missionAskApproval(waiting: MissionAsk, plan: PlanView | null): 
     args: goals && goals.length > 0 ? { steps: goals } : undefined,
     reversible: waiting.reversible,
     ...(cost ? { costNote: cost } : {}),
+    // v1.455.0 (Wave F, item 13): with the daemon's `why` the card is the
+    // short one, with "No, tell it what to do instead".
+    ...askWhyOf(waiting),
   };
 }
 
@@ -147,6 +151,7 @@ function MissionApproval({
   who,
   session,
   onAnswered,
+  onRedirect,
 }: {
   waiting: MissionAsk;
   who: string;
@@ -155,6 +160,9 @@ function MissionApproval({
    *  while the ask is out; a 404 leaves the words and the two answers). */
   session: string | null;
   onAnswered: () => void;
+  /** v1.455.0 (Wave F, item 13): the words of "No, tell it what to do
+   *  instead", after the card's Deny landed. */
+  onRedirect?: (words: string) => void;
 }) {
   const planAsk = waiting.tool === PLAN_TOOL;
   const [plan, setPlan] = useState<PlanView | null>(null);
@@ -171,7 +179,13 @@ function MissionApproval({
   const approval = useMemo(() => missionAskApproval(waiting, plan), [waiting, plan]);
   return (
     <div data-testid="mission-approval" className="mt-3">
-      <ApprovalCard approval={approval} scope="run" who={who} onAnswered={() => onAnswered()} />
+      <ApprovalCard
+        approval={approval}
+        scope="run"
+        who={who}
+        onAnswered={() => onAnswered()}
+        onRedirect={onRedirect}
+      />
     </div>
   );
 }
@@ -484,6 +498,16 @@ export function MissionOutput({
     const text = followup.trim();
     if (text) void act("followup", `/sessions/${enc}/continue`, { message: text, wait: false });
   };
+  // v1.455.0 (Wave F, item 13): "No, tell it what to do instead". The card
+  // declined the step; a running objective takes no note mid-run, so the
+  // words wait in the Ask for changes box, which opens once it has finished.
+  const [redirectNote, setRedirectNote] = useState<string | null>(null);
+  const redirectAsk = (words: string) => {
+    const note = words.trim();
+    if (!note) return;
+    setFollowup(note);
+    setRedirectNote(MISSION_REDIRECT_KEPT);
+  };
 
   const waiting = view?.coordinator.waiting_on ?? null;
   const memberAsks = (view?.members ?? []).filter((m) => m.waiting_on);
@@ -621,6 +645,7 @@ export function MissionOutput({
             who={view?.coordinator.name ?? "Jarvis"}
             session={sid || null}
             onAnswered={onChanged}
+            onRedirect={redirectAsk}
           />
         )}
         {memberAsks.map((m) => (
@@ -630,8 +655,14 @@ export function MissionOutput({
             who={m.name}
             session={m.session_id}
             onAnswered={onChanged}
+            onRedirect={redirectAsk}
           />
         ))}
+        {redirectNote && (
+          <div data-testid="mission-redirect-note" role="status" className="mt-1 text-[12px] text-zinc-400">
+            {redirectNote}
+          </div>
+        )}
       </header>
 
       <div role="tablist" aria-label="Output views" className="flex items-center gap-1 border-b hairline px-4 pt-2">

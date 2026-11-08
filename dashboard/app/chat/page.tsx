@@ -164,6 +164,7 @@ import { turnWindow } from "@/lib/turnChanges";
 import { FollowupChips } from "@/components/chat/FollowupChips";
 import { DockAsk } from "@/components/chat/DockAsk";
 import { collectDockAsks, dockAskKeyHint } from "@/lib/dockAsk";
+import { askWhyOf } from "@/lib/askWhy";
 import { PackPromptForm } from "@/components/chat/PackPromptForm";
 import {
   answerElicitation,
@@ -686,6 +687,9 @@ interface SessionAsk {
   /** v1.352.0 (G25): can the action be undone (the ask's own verdict, off
    *  the event or the listing)? Absent when the daemon did not say. */
   reversible?: boolean;
+  /** v1.455.0 (Wave F, item 13): why it asks and who, when the daemon says. */
+  why?: string;
+  asker?: "model" | "iron_jarvis";
 }
 
 interface ChatMessage {
@@ -8162,6 +8166,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           ...(p.once_only === true ? { onceOnly: true } : {}),
           // v1.352.0 (G25): the undo line the chat's own card shows.
           ...(typeof p.reversible === "boolean" ? { reversible: p.reversible } : {}),
+          // v1.455.0 (Wave F, item 13): why it asks and who (lib/askWhy).
+          ...askWhyOf(p),
         });
       }
     }
@@ -8186,6 +8192,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           timeout_s?: unknown;
           once_only?: unknown;
           reversible?: unknown;
+          why?: unknown;
+          asker?: unknown;
         }[];
       }>("/chat/approvals/pending");
       if (awaitingIdRef.current !== id) return;
@@ -8198,6 +8206,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           ...(typeof a.timeout_s === "number" ? { timeoutS: a.timeout_s } : {}),
           ...(a.once_only === true ? { onceOnly: true } : {}),
           ...(typeof a.reversible === "boolean" ? { reversible: a.reversible } : {}),
+          ...askWhyOf(a),
         }));
       setPolledAsks(mine);
     } catch {
@@ -8249,6 +8258,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               timeoutS: ask.timeoutS,
               ...(ask.onceOnly ? { onceOnly: true } : {}),
               ...(typeof ask.reversible === "boolean" ? { reversible: ask.reversible } : {}),
+              ...(ask.why ? { why: ask.why } : {}),
+              ...(ask.asker ? { asker: ask.asker } : {}),
             }))
           : null,
       }),

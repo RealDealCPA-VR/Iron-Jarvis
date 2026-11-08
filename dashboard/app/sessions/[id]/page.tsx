@@ -75,6 +75,7 @@ import { tookMs } from "@/lib/ranOnWords";
 import { phaseLabel } from "@/lib/stepWords";
 import { LOW_TRUST_CANNOT } from "@/lib/trustWords";
 import { DETAILS_WORDS } from "@/lib/failureActions";
+import { askWhyOf, RUN_REDIRECT_KEPT } from "@/lib/askWhy";
 import {
   failureDetailShown,
   findContinuation,
@@ -386,13 +387,33 @@ export default function SessionDetailPage({
     }
   }
 
-  async function continueSession() {
-    if (!followup.trim()) return;
+  /** v1.455.0 (Wave F, item 13): the card's "No, tell it what to do instead".
+   *  The card has declined the step; an agent run takes no note while it
+   *  works, so the words wait in the follow-up box (and say so) until it has
+   *  finished — a run that already finished is followed up at once. */
+  const isActiveRef = useRef(isActive);
+  isActiveRef.current = isActive;
+  const [redirectNote, setRedirectNote] = useState<string | null>(null);
+  async function redirectRun(words: string): Promise<void> {
+    const note = words.trim();
+    if (!note) return;
+    setFollowup(note);
+    if (isActiveRef.current) {
+      setRedirectNote(RUN_REDIRECT_KEPT);
+      return;
+    }
+    await continueSession(note);
+  }
+
+  async function continueSession(words?: string) {
+    const message = (words ?? followup).trim();
+    if (!message) return;
+    setRedirectNote(null);
     setActing("continue");
     setActionError(null);
     try {
       const s = await post<SessionView>(`/sessions/${id}/continue`, {
-        message: followup.trim(),
+        message,
         wait: false,
         // v1.354.0 (G20): a follow-up to a run a restart cut off RESUMES its
         // own conversation (v1.337.0), the same as the restart Continue —
@@ -769,10 +790,19 @@ export default function SessionDetailPage({
                     ...(typeof session.waiting_on.reversible === "boolean"
                       ? { reversible: session.waiting_on.reversible }
                       : {}),
+                    // v1.455.0 (Wave F, item 13): with the daemon's `why` the
+                    // card is the short one, with its redirect.
+                    ...askWhyOf(session.waiting_on),
                   }}
+                  onRedirect={redirectRun}
                 />
               </div>
             </Reveal>
+          )}
+          {redirectNote && (
+            <p data-testid="session-redirect-note" role="status" className="max-w-[640px] text-[12px] text-zinc-400">
+              {redirectNote}
+            </p>
           )}
 
           {/* Worklist (v1.174.0, P3) — "12 of 26 done", counted from the
@@ -889,7 +919,7 @@ export default function SessionDetailPage({
                 />
                 <button
                   type="button"
-                  onClick={continueSession}
+                  onClick={() => void continueSession()}
                   disabled={acting === "continue" || !followup.trim()}
                   className="btn-accent !py-1.5"
                 >
