@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { useEvents } from "@/lib/useEvents";
 import type { ComputerUseStatus, Approval } from "@/lib/types";
 import {
@@ -380,7 +381,7 @@ function traceSummary(e: TraceEntry): string {
 /** Inline detail for one expanded run: fetches the EXISTING per-run endpoint
  *  and renders the recorded trace compactly (seq · kind · summary). */
 function RunDetailView({ runId }: { runId: string }) {
-  const { data, error, loading } = useApi<RunDetail>(`/computeruse/runs/${runId}`);
+  const { data, error, loading, reload } = useApi<RunDetail>(`/computeruse/runs/${runId}`);
   const trace = useMemo<TraceEntry[]>(() => {
     if (!data?.trace_json) return [];
     try {
@@ -394,9 +395,7 @@ function RunDetailView({ runId }: { runId: string }) {
   if (loading && !data) return <SkeletonRows rows={2} />;
   if (error)
     return (
-      <div className="py-1 text-xs text-zinc-500">
-        Couldn&apos;t load the trace — {error.message}
-      </div>
+      <LoadFailedLine thing="The trace" error={error} onRetry={reload} className="py-1 text-xs text-zinc-500" />
     );
   if (trace.length === 0)
     return <div className="py-1 text-xs text-zinc-500">No trace recorded for this run.</div>;

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import {
   Card,
   StatusDot,
@@ -381,7 +382,7 @@ export default function UpdatesPage() {
                   </div>
                 )
               ) : error ? (
-                <ErrorNote>{error.message}</ErrorNote>
+                <LoadFailedLine thing="The update status" error={error} onRetry={reload} />
               ) : (
                 <p className="text-sm text-zinc-500">Status unavailable.</p>
               )}

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Sparkles, BookOpen, Plus, Save, RefreshCw, Play, Copy, Check, Cpu, Pin, Archive, Search } from "lucide-react";
 import { useApi } from "@/lib/useApi";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { useModels } from "@/lib/useModels";
 import { post, ApiError } from "@/lib/api";
 import type { Skill, SkillCuratorView, SkillDetail, SkillLearningOverview } from "@/lib/types";
@@ -682,7 +683,7 @@ export default function SkillsPage() {
                   </div>
                 </div>
               ) : (
-                <Empty>Could not load skill.</Empty>
+                <LoadFailedLine thing="This skill" error={detail.error} onRetry={detail.reload} />
               )}
             </Card>
           </div>

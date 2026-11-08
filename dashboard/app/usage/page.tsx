@@ -12,6 +12,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useApi, usePolledApi } from "@/lib/useApi";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import {
   Card,
   Stat,
@@ -513,7 +514,7 @@ export default function UsagePage() {
 
       {error && !offline && (
         <Reveal>
-          <ErrorNote>{error.message}</ErrorNote>
+          <LoadFailedLine thing="Usage" error={error} onRetry={reload} />
         </Reveal>
       )}
 

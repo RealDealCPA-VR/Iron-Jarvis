@@ -29,6 +29,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 
 import { get } from "@/lib/api";
 import { cacheSet, cachedGet } from "@/lib/apiCache";
+import { failureOf, type FailureLike } from "@/lib/loadFailed";
 import { THREAD_POLL_MS, useThreadListPoll } from "@/lib/threadListPoll";
 import {
   readLastViewed,
@@ -70,6 +71,11 @@ let state: ChatListState = { threads: null, projects: null };
 let pages: OlderPages<ChatListThread> = { older: [], next: undefined, firstLen: 0 };
 let olderFlight: Promise<void> | null = null;
 let olderFailed = false;
+// v1.449.0 (Wave B, item 16): the failure behind the LAST list read, kept
+// until a read succeeds. The sidebar shows it only while it has nothing to
+// show (a failed FIRST read used to leave `threads: []`, which read as "Your
+// chats appear here." — a user with chats took that for "my chats are gone").
+let loadFailed: FailureLike | null = null;
 const subs = new Set<() => void>();
 let threadsFlight: Promise<void> | null = null;
 let projectsFlight: Promise<void> | null = null;
@@ -111,8 +117,9 @@ function set(next: Partial<ChatListState>): void {
  * any number of updates during one read cost one more read, never one each.
  * `maxAgeMs` > 0 skips the read when the last one STARTED that recently (a
  * second copy of the list mounting, a second subscriber's poll tick). A
- * failure keeps what is shown (an empty list on the very first failure, so
- * the sidebar can say so).
+ * failure keeps what is shown (an empty list on the very first failure, and
+ * `loadFailed` holds why, so the sidebar can say so — v1.449.0: in words,
+ * "Your chats couldn't load. Try again.", never the empty-list words).
  */
 export function refreshChatList(maxAgeMs = 0): Promise<void> {
   if (threadsFlight) {
@@ -129,9 +136,13 @@ export function refreshChatList(maxAgeMs = 0): Promise<void> {
       // v1.446.0: page 1 only; older pages already read are kept.
       const merged = withFreshFirstPage(d?.threads ?? [], state.threads ?? [], pages);
       pages = merged.pages;
+      loadFailed = null;
       set({ threads: merged.threads });
-    } catch {
-      if (state.threads === null) set({ threads: [] });
+    } catch (e) {
+      loadFailed = failureOf(e);
+      // `set` always: the flag is outside `state`, so a read that failed
+      // again must still redraw the line it keeps up.
+      set(state.threads === null ? { threads: [] } : {});
     } finally {
       threadsFlight = null;
     }
@@ -195,6 +206,7 @@ export function __resetChatList(): void {
   pages = { older: [], next: undefined, firstLen: 0 };
   olderFlight = null;
   olderFailed = false;
+  loadFailed = null;
   adoptedThreads = null;
   adoptedProjects = null;
   threadsFlight = null;
@@ -243,6 +255,9 @@ export interface ChatList extends ChatListState {
   /** The last older page could not be read. */
   olderFailed: boolean;
   loadOlder: () => Promise<void>;
+  /** v1.449.0 (Wave B, item 16): why the last list read failed, or null
+   *  once one succeeded. The sidebar says it only while the list is empty. */
+  loadFailed: FailureLike | null;
 }
 
 /** The sidebar's chat list: read on mount, re-read on a thread update and
@@ -279,6 +294,7 @@ export function useChatList(): ChatList {
     mayShowOlder: mayShowOlder(pages),
     olderFailed,
     loadOlder: loadOlderChats,
+    loadFailed,
   };
 }
 

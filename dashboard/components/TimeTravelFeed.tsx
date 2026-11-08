@@ -472,7 +472,7 @@ export function TimeTravelFeed({
       {offline ? (
         <Empty icon={<RotateCw size={22} />}>{couldntLoad("The timeline", null)}</Empty>
       ) : error ? (
-        <ErrorNote>Could not load the timeline: {error.message}</ErrorNote>
+        <ErrorNote><span title={`HTTP ${error.status}: ${error.message}`}>{couldntLoad("The timeline", error)}</span></ErrorNote>
       ) : loading && entries.length === 0 ? (
         <SkeletonRows rows={6} />
       ) : entries.length === 0 ? (

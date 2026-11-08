@@ -19,6 +19,7 @@ import {
   Pencil,
 } from "lucide-react";
 import { useApi, usePolledApi } from "@/lib/useApi";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { ApiError, del, get, patch, post } from "@/lib/api";
 import { providerDisplay } from "@/lib/onboarding";
 // v1.424.0 (D8): each model's own tools / vision, in words.
@@ -1231,7 +1232,7 @@ export default function FleetPage() {
 
       {error && !offline && (
         <Reveal>
-          <ErrorNote>{error.message}</ErrorNote>
+          <LoadFailedLine thing="The fleet" error={error} onRetry={reload} />
         </Reveal>
       )}
 

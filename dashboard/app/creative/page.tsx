@@ -48,7 +48,8 @@ import { API_BASE, ApiError, del, get, ijToken, post } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
-import { couldntWhileNoAnswer } from "@/lib/loadFailed";
+import { couldnt, couldntWhileNoAnswer, serverSentence } from "@/lib/loadFailed";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { timeAgo } from "@/lib/format";
 import type { AiCli, Drive, FsEntry, FsListing, Skill } from "@/lib/types";
 import {
@@ -1852,6 +1853,7 @@ function StudioView({
     data: clisData,
     error: clisError,
     loading: clisLoading,
+    reload: reloadClis,
   } = useApi<{ clis: AiCli[] }>("/terminals/ai-clis");
   const { data: skillsData } = useApi<{ skills: Skill[] }>("/skills");
   const clis = useMemo(() => clisData?.clis ?? [], [clisData]);
@@ -1910,6 +1912,7 @@ function StudioView({
     data: drivesData,
     error: drivesError,
     loading: drivesLoading,
+    reload: reloadDrives,
   } = useApi<{ drives: Drive[] }>(pickDir === null ? "/fs/drives" : null);
   const drives = drivesData?.drives ?? [];
 
@@ -2504,12 +2507,13 @@ function StudioView({
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
       setDraft(text); // never lose typed work — put it back for a manual retry
+      // v1.449.0 (Wave B, item 17): a 404/409 is the daemon's own sentence
+      // for the user (the terminal is gone); a 5xx or no answer is engine
+      // text, said as "Couldn't send your message. Try again."
       setSayErr(
         err.status === 404 || err.status === 409
           ? `The terminal is gone or has exited — ${err.message}`
-          : err.status === 0
-            ? couldntWhileNoAnswer("send your message")
-            : err.message,
+          : couldnt("send your message", err),
       );
       return false;
     } finally {
@@ -2630,9 +2634,12 @@ function StudioView({
     try {
       await del(`/terminals/${session.terminalId}`);
     } catch (e) {
-      if (!(e instanceof ApiError && e.status === 404)) {
+      const ae = e instanceof ApiError ? e : new ApiError(String(e), 0);
+      if (ae.status !== 404) {
+        // v1.449.0 (Wave B, item 17): a 4xx keeps the daemon's own words; a
+        // 5xx or no answer reads "Couldn't end the session. Try again."
         setSayErr(
-          e instanceof ApiError ? `Could not end the session: ${e.message}` : String(e),
+          serverSentence(ae) ? `Couldn't end the session: ${ae.message}` : couldnt("end the session", ae),
         );
         setEnding(false);
         return;
@@ -3211,7 +3218,7 @@ function StudioView({
               (clisError.status === 0 ? (
                 <OfflineHint />
               ) : (
-                <ErrorNote>Couldn’t detect AI CLIs: {clisError.message}</ErrorNote>
+                <LoadFailedLine thing="The engine list" error={clisError} onRetry={reloadClis} />
               ))}
             {clisLoading && clis.length === 0 ? (
               <div className="grid gap-2 sm:grid-cols-2">
@@ -3407,10 +3414,10 @@ function StudioView({
               (pickError.status === 0 ? (
                 <OfflineHint />
               ) : (
-                <ErrorNote>Couldn’t open this folder: {pickError.message}</ErrorNote>
+                <LoadFailedLine thing="This folder" error={pickError} />
               ))}
             {drivesError && pickDir === null && drivesError.status !== 0 && (
-              <ErrorNote>Couldn’t list drives: {drivesError.message}</ErrorNote>
+              <LoadFailedLine thing="Your drives" error={drivesError} onRetry={reloadDrives} />
             )}
             {drivesError && pickDir === null && drivesError.status === 0 && <OfflineHint />}
 
@@ -3650,6 +3657,7 @@ export default function CreativePage() {
     data: drivesData,
     error: drivesError,
     loading: drivesLoading,
+    reload: reloadDrives,
   } = useApi<{ drives: Drive[] }>(view === "library" && libDir === null ? "/fs/drives" : null);
   const drives = drivesData?.drives ?? [];
 
@@ -3770,7 +3778,7 @@ export default function CreativePage() {
             errs.push(couldntWhileNoAnswer("upload"));
             break; // no point retrying the rest of the batch
           }
-          errs.push(`"${file.name}": ${ae.message}`);
+          errs.push(serverSentence(ae) ? `"${file.name}": ${ae.message}` : couldnt(`upload "${file.name}"`, ae));
         }
       }
       if (oks.length > 0)
@@ -4081,7 +4089,7 @@ export default function CreativePage() {
           )}
           {error && !offline && (
             <Reveal>
-              <ErrorNote>Couldn’t load creations: {error.message}</ErrorNote>
+              <LoadFailedLine thing="Your creations" error={error} onRetry={reload} />
             </Reveal>
           )}
 
@@ -4154,7 +4162,7 @@ export default function CreativePage() {
           )}
           {drivesError && !drivesOffline && (
             <Reveal>
-              <ErrorNote>Couldn’t list drives: {drivesError.message}</ErrorNote>
+              <LoadFailedLine thing="Your drives" error={drivesError} onRetry={reloadDrives} />
             </Reveal>
           )}
 
@@ -4259,7 +4267,7 @@ export default function CreativePage() {
           )}
           {libError && !libOffline && (
             <Reveal>
-              <ErrorNote>Couldn’t open this folder: {libError.message}</ErrorNote>
+              <LoadFailedLine thing="This folder" error={libError} />
             </Reveal>
           )}
           {listing?.truncated && (

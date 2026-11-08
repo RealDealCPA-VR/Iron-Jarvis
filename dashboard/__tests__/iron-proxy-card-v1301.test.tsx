@@ -545,13 +545,14 @@ describe("older daemon, load errors, and the page", () => {
   });
 
   it("a 500 on load shows the error sentence (not an empty card)", async () => {
+    // v1.449.0 (Wave B, item 17): the plain "couldn't load" words with Try
+    // again; the server's own text rides the title only (moved on purpose).
     hooks.getError = { status: 500, message: "Iron-Proxy status is unavailable right now." };
     render(<IronProxyCard />);
-    await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).toBe(
-        "Could not load Iron-Proxy: Iron-Proxy status is unavailable right now.",
-      ),
-    );
+    const line = await screen.findByTestId("iron-proxy-failed");
+    expect(line.textContent).toBe("Your accounts couldn't load. Try again.");
+    expect(line.getAttribute("title")).toBe("HTTP 500: Iron-Proxy status is unavailable right now.");
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("an answer without a status (a stub daemon) renders nothing", async () => {
