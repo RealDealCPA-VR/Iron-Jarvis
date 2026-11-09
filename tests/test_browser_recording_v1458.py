@@ -407,3 +407,12 @@ def test_the_protocol_names_are_generated_into_the_addon():
     assert 'export const PANEL_EVENT_RECORDED = "recorded";' in generated
     assert "export const RECORDING_MAX_STEPS = 100;" in generated
     assert "export const RECORDING_KEYS = " + json.dumps(list(P.RECORDING_KEYS), separators=(", ", ": ")) in generated
+
+
+def test_the_review_creates_plain_text_boxes_only():
+    """The sidebar's review is the one place it holds inputs (the v1235 pin
+    allows them only there): plain text, never a password box."""
+    code = _code(ADDON / "sidepanel" / "recording.ts")
+    types = re.findall(r'\.type = "([a-z]+)"', code)
+    assert types and set(types) <= {"text", "button"}, types
+    assert "password" not in code.replace("a password", "").replace("Never put a password", "")

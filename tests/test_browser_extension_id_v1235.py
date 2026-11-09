@@ -173,6 +173,18 @@ def test_the_side_panel_declares_no_pairing_ui_and_no_settings(  # D28, narrowed
     # rule — the pin has to read what the panel RENDERS, not what it says about
     # itself.
     html = re.sub(r"<!--.*?-->", "", raw, flags=re.S).lower()
+    # v1.458.0 (moved on purpose, the owner's "record a task" request): the
+    # recording REVIEW names the task, so it may hold plain TEXT inputs — only
+    # inside `<section id="review">`, never a password type. Outside it the rule
+    # below is unchanged, and a <form> stays forbidden everywhere.
+    review = re.search(r'<section id="review".*?</section>', html, flags=re.S)
+    if review:
+        for tag in re.findall(r"<input[^>]*>", review.group(0)):
+            assert 'type="text"' in tag and "password" not in tag, (
+                f"the recording review may hold plain text inputs only: {tag}"
+            )
+        assert "<form" not in review.group(0)
+        html = html.replace(review.group(0), "")
     for forbidden in ("<form", "<input"):
         assert forbidden not in html, (
             f"the side panel must not contain {forbidden!r}: D28 keeps pairing "
