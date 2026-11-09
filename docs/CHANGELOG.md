@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.460.0
+
+**Box starts again, and a broken extension says so.** Connecting Box saved its keys, but the extension never started: its row read "Didn't start: the extension's server exited (exit code 1)" with an `ImportError` underneath.
+
 ## v1.459.0
 
 **Six small fixes.** **Compact in Build › Code for Pi, OpenCode and Grok.** The Session tab's Context drop-down now has "Compact session" for these too (it said they "compact by itself").
@@ -77,7 +81,3 @@
 ## v1.441.0
 
 **Build › Code catches up with each tool.** Build › Code runs your own coding tool (Claude Code, Codex, Pi, OpenCode, Grok or Antigravity) and shows its work.
-
-## v1.440.0
-
-**Loose ends tied up.** **Delete a goal you made in chat** from the Autonomy page: press Delete twice.

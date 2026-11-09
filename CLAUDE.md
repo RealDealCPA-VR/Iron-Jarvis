@@ -10834,6 +10834,31 @@ does not need a bump, stop and bump it.
   bell-unattended,work-line-failures,mission-headline-part-failed,connect-
   honest,connect-in-chat,wave1-seams}-v13510.test.tsx` (every lane change
   and every integrator change mutation-checked red).
+- **A catalog pack that STARTS today: an unpinned uvx/npx package can break
+  when an upstream library moves** (v1.460.0, a USER BUG on the office PC:
+  Box connected, never started — `ImportError: cannot import name
+  'box_claude_ai_agent_ask' from 'box_ai_agents_toolkit'`). `mcp-server-box`
+  0.1.2 (2025-06-05) is Box's last PyPI release (repo discontinued for Box's
+  admin-set-up hosted server, which needs an OAuth client flow our remote
+  door lacks) and names its libraries unbounded. `connectors/catalog.BOX_ARGS`
+  = `uvx --python 3.13 --exclude-newer 2025-06-06 --with boxsdk==3.14.0
+  mcp-server-box==0.1.2`, each piece measured: `--exclude-newer` freezes
+  every library at release day (pinning one library at a time was
+  whack-a-mole: mcp 2.x, pydantic), `boxsdk` is imported but never declared,
+  3.13+ is required and June-2025 pydantic-core has no 3.14 build. 30 tools
+  answer. `mcp/package_fixes.REPLACED_LAUNCH_LINES` repairs a row at boot only
+  when its command AND whole args are exactly what the app wrote (stdio;
+  secrets and name kept). `mcp/launch_args.package_arg` reads a line's package
+  past launcher option values (`_server_identity`, `_first_package`; `-p` is
+  left out: uvx `--python` vs npx `--package`). `classify_load_failure` reads
+  a Python ImportError/ModuleNotFoundError or a Node ESM import failure in
+  the child's tail (cut at the transport's "; it will be restarted", this
+  PC's path removed) as "its package is broken upstream … A missing key or
+  setting does not cause this" — checked after the registry 404, before the
+  crash branch. A pinned line starts through uvx each time (direct launch
+  needs the spec first). Pins: `tests/test_box_pack_v1460.py` (13 mutations
+  red; `IJ_LIVE_BOX=1` really starts it). When adding a uvx/npx catalog pack,
+  start it from a scratch `UV_CACHE_DIR` first; consider `--exclude-newer`.
 - **A catalog names a package that EXISTS; a proxy's picker offers its real
   models** (v1.350.1, two user reports off the live install). (1) The
   prebuilt MCP catalog in `daemon/app.py` offered

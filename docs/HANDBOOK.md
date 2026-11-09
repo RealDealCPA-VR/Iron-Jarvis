@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.459.0 (2026-11-09).*
+holds itself to. Current as of v1.460.0 (2026-11-09).*
 
 ---
 
@@ -2041,6 +2041,33 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Box starts again, and a broken extension says so (v1.460.0)
+
+Connecting Box saved its keys, but the extension never started: its row read
+"Didn't start: the extension's server exited (exit code 1)" with an
+`ImportError` underneath. Box's own server (the `mcp-server-box` package)
+is no longer looked after by Box, and the libraries it relies on changed
+after it was published, so downloading it today fetched a newer library that
+no longer has a part the server needs.
+
+- **The Box card now starts Box's server exactly as it was the day it
+  shipped** (5 June 2025): its libraries as they were then, the one old
+  library it needs but never listed, and Python 3.13 (uv fetches it if this
+  PC lacks it). It answers with its 30 Box tools.
+- **If you already connected Box, you do not need to do anything.** The next
+  time Iron Jarvis starts, it updates the saved Box extension to the new
+  launch line, keeping your client id and secret. A Box extension you edited
+  yourself is left as you set it.
+- **An extension whose own code cannot load now says so** on its Tools row:
+  "the extension's own code could not load part of what it needs (…), so
+  its package is broken upstream … A missing key or setting does not cause
+  this", with the next step: look for a newer version of the extension or
+  remove it. Before, it read "a missing key or setting is the usual cause",
+  which sent you to the wrong place.
+
+Box also offers its own hosted server, set up by a Box administrator; Iron
+Jarvis does not connect to that one yet.
 
 ## Six small fixes (v1.459.0)
 
