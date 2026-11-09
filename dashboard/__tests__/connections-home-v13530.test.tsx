@@ -272,12 +272,16 @@ describe("G42: the Directory is one Connections home", () => {
     // The page re-reads the cards and the list (the new packs show at once).
     await waitFor(() => expect(api.gets.filter((p) => p === "/mcp/import/sources")).toHaveLength(2));
     expect(api.gets.filter((p) => p === "/connectors").length).toBeGreaterThanOrEqual(2);
-    // Rows the re-read calls "already added" leave the selection, so the
-    // button never offers to add them a second time.
+    // Rows the re-read calls "already added" are only listed; with nothing
+    // new left the group says so and offers no button (v1.461.0, moved on
+    // purpose: it showed a disabled "Add selected (0)").
     await waitFor(() =>
-      expect(screen.getByTestId("import-source-apply-claude-desktop").textContent).toContain("Add selected (0)"),
+      expect(screen.getByTestId("import-source-nothing-new-claude-desktop").textContent).toBe(
+        "Everything here is already added.",
+      ),
     );
-    expect(screen.getByTestId("import-source-apply-claude-desktop").hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByTestId("import-source-apply-claude-desktop")).toBeNull();
+    expect(within(screen.getByTestId("import-source-claude-desktop")).queryByTestId("import-pick-github")).toBeNull();
   });
 
   it("everything already added: says so, and the button only shows them", async () => {

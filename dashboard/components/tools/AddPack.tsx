@@ -46,6 +46,8 @@ import {
   ADDED_OFF_FAR,
   ADDED_OFF_TAIL,
   ADDED_OFF_WORDS,
+  ALREADY_ADDED_HEADING,
+  NOTHING_NEW_WORDS,
   DOOR_LABELS,
   PASTE_APP,
   TOOLS_ROWS_HREF,
@@ -160,9 +162,17 @@ function PreviewList({
   loaded?: Record<string, string[]>;
 }) {
   if (rows.length === 0) return null;
+  // v1.461.0 (the owner: "if the tools are already added, then they should
+  // just be listed and not shown as potentially new tools to add"): a row
+  // that is already here has no tick box and is never counted; it is listed
+  // apart, under the new ones.
+  const fresh = rows.filter((r) => !r.exists);
+  const added = rows.filter((r) => r.exists);
   return (
-    <ul className="mt-3 space-y-2" data-testid="import-preview">
-      {rows.map((row) => {
+    <div className="mt-3 space-y-3" data-testid="import-preview">
+      {fresh.length > 0 && (
+    <ul className="space-y-2" data-testid="import-new">
+      {fresh.map((row) => {
         const st = rowStatus(row);
         const isHttp = row.transport === "http" || row.transport === "sse";
         // v1.356.0 (G74): a row with no command reads "a program on this PC"
@@ -197,9 +207,7 @@ function PreviewList({
                 className="h-4 w-4 accent-accent"
               />
               <span className="font-mono text-sm font-semibold text-zinc-100">{row.name}</span>
-              {st.status === "added" ? (
-                <Badge value={existsWords(row)} tone="slate" variant="calm" keepCase data-testid={`import-exists-${row.name}`} />
-              ) : off ? (
+              {off ? (
                 <Badge value={offWords(app)} tone="slate" variant="calm" keepCase data-testid={`import-off-${row.name}`} />
               ) : st.status === "available" ? null : (
                 <StatusChip status={st.status} needs={st.needs} />
@@ -287,6 +295,45 @@ function PreviewList({
         );
       })}
     </ul>
+      )}
+      {added.length > 0 && <AddedRows rows={added} app={app} loaded={loaded} />}
+    </div>
+  );
+}
+
+/** The rows already here, only listed: the name, how it is here and what it
+ *  is, with no tick box and no Details (nothing about them can be changed
+ *  from this door; their own row in Tools is where they are managed). */
+function AddedRows({
+  rows,
+  app,
+  loaded,
+}: {
+  rows: ImportRow[];
+  app: string;
+  loaded?: Record<string, string[]>;
+}) {
+  return (
+    <div data-testid="import-added">
+      <p className="text-[12px] font-medium text-zinc-500">{ALREADY_ADDED_HEADING}</p>
+      <ul className="mt-1 space-y-1">
+        {rows.map((row) => (
+          <li
+            key={`${row.origin ?? ""}:${row.name}`}
+            data-testid={`import-row-${row.name}`}
+            data-added="1"
+            className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 px-1 text-[12px]"
+          >
+            <Check size={12} aria-hidden className="shrink-0 self-center text-zinc-500" />
+            <span className="font-mono font-semibold text-zinc-300">{row.name}</span>
+            <Badge value={existsWords(row)} tone="slate" variant="calm" keepCase data-testid={`import-exists-${row.name}`} />
+            <span className="min-w-0 text-zinc-500" data-testid={`import-about-${row.name}`}>
+              {rowAbout(row, app, loaded?.[row.name])}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -530,7 +577,7 @@ function PasteDoor({ onAdded, rowsHere }: { onAdded: () => void; rowsHere: boole
 
   async function apply() {
     if (!preview || busy) return;
-    const names = (preview.servers ?? []).filter((r) => sel.selected.has(r.name)).map((r) => r.name);
+    const names = (preview.servers ?? []).filter((r) => !r.exists && sel.selected.has(r.name)).map((r) => r.name);
     if (names.length === 0) return;
     setBusy("apply");
     setError(null);
@@ -553,7 +600,8 @@ function PasteDoor({ onAdded, rowsHere }: { onAdded: () => void; rowsHere: boole
   }
 
   const rows: ImportRow[] = preview?.servers ?? [];
-  const chosen = rows.filter((r) => sel.selected.has(r.name)).length;
+  const fresh = rows.filter((r) => !r.exists);
+  const chosen = fresh.filter((r) => sel.selected.has(r.name)).length;
 
   return (
     <div data-testid="add-pack-paste-door">
@@ -612,7 +660,12 @@ function PasteDoor({ onAdded, rowsHere }: { onAdded: () => void; rowsHere: boole
         detailsOpen
         loaded={addedTools(result, toolNames)}
       />
-      {rows.length > 0 && (
+      {rows.length > 0 && fresh.length === 0 && (
+        <p className="mt-2 text-[12px] text-zinc-500" data-testid="add-pack-nothing-new">
+          {NOTHING_NEW_WORDS}
+        </p>
+      )}
+      {fresh.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -629,7 +682,6 @@ function PasteDoor({ onAdded, rowsHere }: { onAdded: () => void; rowsHere: boole
               </>
             )}
           </button>
-          <span className="text-[11px] text-zinc-600">An extension that is already added is skipped.</span>
         </div>
       )}
       {result && <ApplyOutcome result={result} rowsHere={rowsHere} toolNames={toolNames} />}
@@ -668,7 +720,7 @@ function SourceGroup({
   }, [addedKey]);
 
   async function apply() {
-    const names = rows.filter((r) => sel.selected.has(r.name)).map((r) => r.name);
+    const names = rows.filter((r) => !r.exists && sel.selected.has(r.name)).map((r) => r.name);
     if (names.length === 0 || busy) return;
     setBusy(true);
     setError(null);
@@ -690,7 +742,8 @@ function SourceGroup({
     }
   }
 
-  const chosen = rows.filter((r) => sel.selected.has(r.name)).length;
+  const fresh = rows.filter((r) => !r.exists);
+  const chosen = fresh.filter((r) => sel.selected.has(r.name)).length;
 
   if (!source.readable) {
     return (
@@ -726,6 +779,11 @@ function SourceGroup({
             showOrigin
             loaded={addedTools(result, toolNames)}
           />
+          {fresh.length === 0 ? (
+            <p className="mt-2 text-[12px] text-zinc-500" data-testid={`import-source-nothing-new-${source.source}`}>
+              {NOTHING_NEW_WORDS}
+            </p>
+          ) : (
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <button
               type="button"
@@ -743,6 +801,7 @@ function SourceGroup({
               )}
             </button>
           </div>
+          )}
         </>
       )}
       {error && (

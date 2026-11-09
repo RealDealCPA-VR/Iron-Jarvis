@@ -211,6 +211,12 @@ export function signedInWords(row: ImportRow): string {
   return "";
 }
 
+/** v1.461.0: the heading over the rows already here (listed, never ticked). */
+export const ALREADY_ADDED_HEADING = "Already added";
+
+/** v1.461.0: a group whose every row is already here has nothing to add. */
+export const NOTHING_NEW_WORDS = "Everything here is already added.";
+
 /** A row ticked when the door opens: new here and switched on in its app. */
 export function startsTicked(row: ImportRow): boolean {
   return !row.exists && !isOff(row);

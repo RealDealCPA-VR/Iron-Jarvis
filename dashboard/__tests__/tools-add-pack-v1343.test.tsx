@@ -219,10 +219,11 @@ describe("paste a config", () => {
     expect(override.type).toBe("password");
     expect(override.value).toBe("");
     expect(brave.textContent).toContain("1 in vault");
-    // already added: badge, unchecked by default
+    // already added: badge, listed apart with no tick box (v1.461.0, moved
+    // on purpose: it was an unticked box the user could still tick)
     const fs = screen.getByTestId("import-row-filesystem");
     expect(within(fs).getByTestId("import-exists-filesystem").textContent).toContain("already added");
-    expect((within(fs).getByTestId("import-pick-filesystem") as HTMLInputElement).checked).toBe(false);
+    expect(within(fs).queryByTestId("import-pick-filesystem")).toBeNull();
     expect(within(fs).queryByTestId("status-ready")).toBeNull();
     // runtime missing: amber "Needs Python (uv)" + the launcher note
     const py = screen.getByTestId("import-row-py");

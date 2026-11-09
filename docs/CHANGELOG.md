@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.461.0
+
+**Tools you already have are listed, not offered again.** When you bring tools from Claude, Codex, Cursor and your other apps (Settings › Tools › Add a tool), or paste a config, a tool that is already in Iron Jarvis now sits in a short **Already added** list under the new ones.
+
 ## v1.460.0
 
 **Box starts again, and a broken extension says so.** Connecting Box saved its keys, but the extension never started: its row read "Didn't start: the extension's server exited (exit code 1)" with an `ImportError` underneath.
@@ -77,7 +81,3 @@
 ## v1.442.0
 
 **Setup from chat, proven on 30 requests.** The chat-first plan set itself one test: 30 everyday setup requests, asked in plain words.
-
-## v1.441.0
-
-**Build › Code catches up with each tool.** Build › Code runs your own coding tool (Claude Code, Codex, Pi, OpenCode, Grok or Antigravity) and shows its work.

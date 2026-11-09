@@ -404,10 +404,11 @@ describe("G50: respects off, knows what is already connected", () => {
     await openTools();
     const drive = await screen.findByTestId("import-row-google-drive");
     expect(within(drive).getByTestId("import-exists-google-drive").textContent).toBe("already connected");
-    expect((within(drive).getByTestId("import-pick-google-drive") as HTMLInputElement).checked).toBe(false);
+    // v1.461.0 (moved on purpose): listed, never a tick box.
+    expect(within(drive).queryByTestId("import-pick-google-drive")).toBeNull();
     const brain = screen.getByTestId("import-row-basic-memory");
     expect(within(brain).getByTestId("import-exists-basic-memory").textContent).toBe("already a memory base");
-    expect((within(brain).getByTestId("import-pick-basic-memory") as HTMLInputElement).checked).toBe(false);
+    expect(within(brain).queryByTestId("import-pick-basic-memory")).toBeNull();
   });
 
   it("the places with nothing to bring fold into one line naming them; a file that could not be read stays in sight", async () => {

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.460.0 (2026-11-09).*
+holds itself to. Current as of v1.461.0 (2026-11-09).*
 
 ---
 
@@ -2041,6 +2041,20 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Tools you already have are listed, not offered again (v1.461.0)
+
+When you bring tools from Claude, Codex, Cursor and your other apps (Settings ›
+Tools › Add a tool), or paste a config, a tool that is already in Iron Jarvis
+now sits in a short **Already added** list under the new ones. It shows its
+name, how it is here ("already added", "already connected", "already a memory
+base") and what it is. It has no tick box, is never counted in **Add
+selected**, and is never sent to be added again. A group where everything is
+already added says "Everything here is already added." and has no Add button.
+
+Before, such a tool was shown unticked with a box you could still tick, and
+pressing Add then answered "skipped: already added". You manage an added tool
+from its own row in Tools.
 
 ## Box starts again, and a broken extension says so (v1.460.0)
 
