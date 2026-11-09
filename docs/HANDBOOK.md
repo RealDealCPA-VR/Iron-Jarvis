@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.458.0 (2026-11-09).*
+holds itself to. Current as of v1.459.0 (2026-11-09).*
 
 ---
 
@@ -2041,6 +2041,30 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Six small fixes (v1.459.0)
+
+- **Compact in Build › Code for Pi, OpenCode and Grok.** The Session tab's
+  Context drop-down now has "Compact session" for these too (it said they
+  "compact by itself"). The press sends each tool's own `/compact`. OpenCode
+  does not list compact in its `/` menu, so Iron Jarvis adds it there.
+  Antigravity is unchanged.
+- **Chat no longer offers to change a setting you only mentioned.** "Only
+  suggest, never act is my motto", "I should learn from coding sessions" or "set
+  the model server … in our team doc" no longer bring up the settings tools.
+  Asking for the change still works.
+- **"Coding session", everywhere.** The last places that still said "Build
+  session" now say "coding session", and a refusal that sent you to Build now
+  sends you to Chat › Code.
+- **A report from another computer finds a new chat.** A job a brand-new chat
+  hands to another computer (before the chat is saved) now reports back into
+  that chat once it is saved, not only into the agent room.
+- **Web services keep their sign-in when you edit them.** Configure opens on
+  what is saved instead of an empty box, and saving keeps the key and how it
+  is sent unless you change them there (write `null` to remove one).
+- **A failed "files changed" read says so.** When the list of a reply's
+  changed files cannot load because of a server error, the "Part of this page
+  didn't load" banner shows, as it does for other reads.
 
 ## Record a task in the browser, and Jarvis keeps it as a skill (v1.458.0)
 

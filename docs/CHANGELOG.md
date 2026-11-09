@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.459.0
+
+**Six small fixes.** **Compact in Build › Code for Pi, OpenCode and Grok.** The Session tab's Context drop-down now has "Compact session" for these too (it said they "compact by itself").
+
 ## v1.458.0
 
 **Record a task in the browser, and Jarvis keeps it as a skill.** **Do a task once; Jarvis can do it again.** In the browser sidebar, press the round **Record** button (beside "Point at it"), then do the task in the tab you are looking at: open pages, click, type, choose from lists, press Enter.
@@ -77,7 +81,3 @@
 ## v1.440.0
 
 **Loose ends tied up.** **Delete a goal you made in chat** from the Autonomy page: press Delete twice.
-
-## v1.439.0
-
-**Antigravity in the Code view, and usage you can check now.** **Google Antigravity is the sixth tool in Build › Code.** If Google's Antigravity CLI (`agy`) is installed on this PC, the Code view offers it beside Claude Code, Codex, Pi, OpenCode and Grok.
