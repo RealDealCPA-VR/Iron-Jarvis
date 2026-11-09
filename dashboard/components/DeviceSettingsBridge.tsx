@@ -2,7 +2,13 @@
 
 import { useEffect, useRef } from "react";
 import { useEvents } from "@/lib/useEvents";
-import { DEVICE_EVENT_TYPES, namesDeviceKey, refreshDeviceSettings } from "@/lib/deviceSettings";
+import {
+  DEVICE_EVENT_TYPES,
+  chooseTextSize,
+  namesDeviceKey,
+  refreshDeviceSettings,
+} from "@/lib/deviceSettings";
+import { storedTextSize, textSizeBridge, textSizeFrom } from "@/lib/textSize";
 
 /** Built ONCE so useEvents sees the same list every render. */
 const DEVICE_EVENTS_OPTS = { types: DEVICE_EVENT_TYPES };
@@ -23,6 +29,41 @@ export function DeviceSettingsBridge() {
 
   useEffect(() => {
     void refreshDeviceSettings();
+  }, []);
+
+  // v1.456.0: the desktop app's Ctrl + = / Ctrl + - / Ctrl + 0 change the
+  // window's zoom in the shell; save that as this device's Text size so
+  // Settings and chat say what the screen shows. The size this window last
+  // chose is handed back to the shell once when the window opens (the shell
+  // keeps its own copy too; this covers a shell whose copy was lost).
+  useEffect(() => {
+    const bridge = textSizeBridge();
+    if (!bridge) return;
+    const kept = storedTextSize();
+    if (kept !== null) {
+      try {
+        void Promise.resolve(bridge.set(kept)).catch(() => {});
+      } catch {
+        /* never throws */
+      }
+    }
+    if (typeof bridge.onChanged !== "function") return;
+    let off: (() => void) | undefined;
+    try {
+      off = bridge.onChanged((raw) => {
+        const size = textSizeFrom(raw);
+        if (size !== null) chooseTextSize(size);
+      });
+    } catch {
+      off = undefined;
+    }
+    return () => {
+      try {
+        off?.();
+      } catch {
+        /* already gone */
+      }
+    };
   }, []);
 
   // A RECONNECT (never the first connect: the read above covers that).

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.455.1 (2026-11-08).*
+holds itself to. Current as of v1.456.0 (2026-11-08).*
 
 ---
 
@@ -2041,6 +2041,22 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Text size (v1.456.0)
+
+- **Make everything in the app bigger or smaller.** Settings › Appearance ›
+  **Text size**: Smaller (90%), Normal (100%), Large (110%), Larger (125%)
+  or Largest (150%). Text, icons and spacing grow together, so nothing is
+  cut off. It is kept for this PC, so a laptop and a desk monitor can each
+  have their own.
+- **From the keyboard:** Ctrl + = makes it larger, Ctrl + - smaller, and
+  Ctrl + 0 puts it back to normal. Ctrl + mouse wheel does the same. The
+  setting follows, so Settings always says the size you see.
+- **From chat:** "make the text bigger" or "set the text size to 125%".
+  A font size inside your own document ("change the font size in my
+  report") is never taken as this setting.
+- Pop-out windows follow the same size. In a browser tab, use the browser's
+  own zoom instead.
 
 ## Long replies from your own model server, and a phone alert that names the chat (v1.455.1)
 

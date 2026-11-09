@@ -82,6 +82,7 @@ import {
   type PaletteMode,
   type Surface,
 } from "@/lib/themePalette";
+import { TEXT_SIZE_STORAGE_KEY, applyTextSize, textSizeFrom, type TextSize } from "@/lib/textSize";
 
 export { __resetDeviceSettings } from "@/lib/deviceSettingsState";
 
@@ -103,6 +104,8 @@ export const DEVICE_THEME_COLORS_KEY = "device.theme_colors";
 export const DEVICE_PERSONA_KEY = "device.chat_persona";
 export const DEVICE_AUTO_TOOLS_KEY = "device.auto_tools";
 export const DEVICE_READ_ALOUD_KEY = "device.read_aloud";
+/** v1.456.0: how big everything looks in the desktop app (lib/textSize). */
+export const DEVICE_TEXT_SIZE_KEY = "device.text_size";
 
 /** The two rows that name "the theme on this device" (settings/theme_colors
  *  LINKED): a save of one owns the other too (refreshDeviceSettings). */
@@ -122,6 +125,7 @@ export const APPLIED_DEVICE_KEYS = [
   DEVICE_PERSONA_KEY,
   DEVICE_AUTO_TOOLS_KEY,
   DEVICE_READ_ALOUD_KEY,
+  DEVICE_TEXT_SIZE_KEY,
 ] as const;
 export type AppliedDeviceKey = (typeof APPLIED_DEVICE_KEYS)[number];
 
@@ -366,6 +370,12 @@ function applyOne(key: AppliedDeviceKey, value: unknown): boolean {
       notify(DEVICE_READ_ALOUD_KEY, value);
       return true;
     }
+    case DEVICE_TEXT_SIZE_KEY: {
+      const size = textSizeFrom(value);
+      if (size === null) return false;
+      applyTextSize(size);
+      return true;
+    }
   }
   return false;
 }
@@ -386,7 +396,9 @@ function screenValue(key: AppliedDeviceKey): Value | undefined {
           ? PERSONA_STORAGE_KEY
           : key === DEVICE_AUTO_TOOLS_KEY
             ? AUTO_TOOLS_STORAGE_KEY
-            : READ_ALOUD_STORAGE_KEY,
+            : key === DEVICE_TEXT_SIZE_KEY
+              ? TEXT_SIZE_STORAGE_KEY
+              : READ_ALOUD_STORAGE_KEY,
     );
   } catch {
     return undefined;
@@ -403,6 +415,10 @@ function screenValue(key: AppliedDeviceKey): Value | undefined {
     case DEVICE_AUTO_TOOLS_KEY:
     case DEVICE_READ_ALOUD_KEY:
       return raw === "1" ? true : raw === "0" ? false : undefined;
+    case DEVICE_TEXT_SIZE_KEY: {
+      const size = textSizeFrom(raw);
+      return size === null ? undefined : String(size);
+    }
   }
   return undefined;
 }
@@ -634,4 +650,16 @@ export function chooseTheme(id: string): Mark | null {
   }
   void writeDeviceValues(values);
   return mark;
+}
+
+/**
+ * v1.456.0: a text size chosen on screen — the desktop app's Ctrl + = /
+ * Ctrl + - / Ctrl + 0 (the shell has already applied it and says so through
+ * `textSize.onChanged`), or a press anywhere else. Keeps it for this window,
+ * hands it to the shell (a no-op when the shell already holds it) and saves
+ * it as this device's row, so Settings and chat's `config_list` say it too.
+ */
+export function chooseTextSize(size: TextSize): void {
+  applyTextSize(size);
+  void writeDeviceValues({ [DEVICE_TEXT_SIZE_KEY]: String(size) });
 }

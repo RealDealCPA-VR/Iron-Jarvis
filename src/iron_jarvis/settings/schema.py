@@ -1067,6 +1067,21 @@ SETTINGS: tuple[SettingDef, ...] = (
                # lower this posture with no card.
                "approve without asking", "stop asking before", "stop asking for permission",
                "stop asking for approval")),
+    # v1.456.0 (the owner: "change font sizes across the app in settings"):
+    # how big everything looks in the desktop app on this PC. The desktop app
+    # applies it as the window's own zoom (desktop/main.js `setTextSize`), so
+    # text, icons and spacing grow together and nothing is cut off; Ctrl + =,
+    # Ctrl + - and Ctrl + 0 step it and save it here. Options are pinned equal
+    # to desktop/main.js TEXT_SIZES and dashboard/lib/textSize.ts.
+    S("device.text_size", "Text size", "appearance", "enum",
+      "How big text and everything else looks in the desktop app on this PC. "
+      "Ctrl + = makes it larger, Ctrl + - smaller and Ctrl + 0 puts it back to normal. "
+      "In a browser tab, use the browser's own zoom instead.",
+      options=(("90", "Smaller (90%)"), ("100", "Normal (100%)"), ("110", "Large (110%)"),
+               ("125", "Larger (125%)"), ("150", "Largest (150%)")),
+      tier="allow", store="device",
+      aliases=("text size", "font size", "font sizes", "size of the text", "bigger text",
+               "larger text", "smaller text", "text bigger", "text larger", "text smaller")),
     S("device.chat_persona", "Chat persona", "appearance", "string",
       "The persona new chats start with on this device.", tier="allow", store="device"),
     S("device.auto_tools", "Auto tools in chat", "permissions", "bool",

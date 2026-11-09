@@ -554,6 +554,102 @@ function setKeepRunningPref(value) {
   noteDesktopSwitchByUser(KEEP_IN_BACKGROUND_KEY, keepRunningPref);
 }
 
+// --- Text size (v1.456.0) ------------------------------------------------
+// The owner: "change font sizes across the app in settings". Iron Jarvis's
+// `device.text_size` setting (90-150 %) is applied as the WINDOW's own zoom,
+// so text, icons and spacing grow together and no layout cuts a word off
+// (most of the dashboard's sizes are whole pixels, which a root font size
+// would not move). Chromium keeps zoom per origin, so one setZoomFactor
+// reaches every dashboard window (pop-outs, Spotlight); it is not kept across
+// restarts, so the size is kept in desktop-settings.json (`textSize`) and
+// applied again whenever a dashboard page loads. The View menu's keys and
+// Ctrl + mouse wheel step through the same sizes and tell the window, which
+// saves the setting (dashboard/lib/deviceSettings `chooseTextSize`).
+// Pinned equal to the schema's options and dashboard/lib/textSize.ts.
+const TEXT_SIZES = [90, 100, 110, 125, 150];
+const DEFAULT_TEXT_SIZE = 100;
+let textSizePct = DEFAULT_TEXT_SIZE;
+
+function cleanTextSize(raw) {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() ? Number(raw) : NaN;
+  return TEXT_SIZES.includes(n) ? n : null;
+}
+
+// The next size for a step: +1 larger, -1 smaller, 0 back to normal. A size
+// at either end stays where it is.
+function nextTextSize(current, step) {
+  if (step === 0) return DEFAULT_TEXT_SIZE;
+  const at = TEXT_SIZES.indexOf(cleanTextSize(current) ?? DEFAULT_TEXT_SIZE);
+  const to = Math.min(TEXT_SIZES.length - 1, Math.max(0, at + (step > 0 ? 1 : -1)));
+  return TEXT_SIZES[to];
+}
+
+function loadTextSize() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(desktopSettingsFile(), "utf8"));
+    textSizePct = cleanTextSize(raw && raw.textSize) ?? DEFAULT_TEXT_SIZE;
+  } catch {
+    textSizePct = DEFAULT_TEXT_SIZE;
+  }
+}
+
+// One window's zoom, for a dashboard page only (the loading splash and any
+// other page keep their own size).
+function applyTextZoom(wc) {
+  try {
+    if (!wc || wc.isDestroyed() || !isDashboardUrl(wc.getURL())) return;
+    wc.setZoomFactor(textSizePct / 100);
+  } catch {
+    /* a window closing */
+  }
+}
+
+function applyTextZoomEverywhere() {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win && !win.isDestroyed()) applyTextZoom(win.webContents);
+  }
+}
+
+function setTextSize(pct) {
+  const clean = cleanTextSize(pct);
+  if (clean === null) return false;
+  if (clean !== textSizePct) {
+    textSizePct = clean;
+    writeDesktopSetting("textSize", clean);
+  }
+  applyTextZoomEverywhere();
+  return true;
+}
+
+// A step from the keyboard or Ctrl + wheel: apply it here, then tell the
+// window it came from so the page saves it as the setting (a page from an
+// older shell simply keeps the zoom).
+function stepTextSize(step, wc) {
+  const next = nextTextSize(textSizePct, step);
+  setTextSize(next);
+  const target =
+    wc && !wc.isDestroyed() && isDashboardUrl(wc.getURL())
+      ? wc
+      : mainWin && !mainWin.isDestroyed()
+        ? mainWin.webContents
+        : null;
+  try {
+    if (target) target.send("textSize:changed", next);
+  } catch {
+    /* window closing */
+  }
+}
+
+function installTextSizeHooks() {
+  app.on("web-contents-created", (_e, wc) => {
+    wc.on("did-finish-load", () => applyTextZoom(wc));
+    // Ctrl + mouse wheel (Electron leaves it to the app).
+    wc.on("zoom-changed", (_ev, direction) => {
+      if (isDashboardUrl(wc.getURL())) stepTextSize(direction === "in" ? 1 : -1, wc);
+    });
+  });
+}
+
 // One-time "where did it go?" hint (v1.197.0). The close prompt explains WHAT
 // keep-running means, but after the window vanishes nothing says WHERE the app
 // went — a non-technical user reads the empty taskbar as "it quit" and
@@ -3252,6 +3348,16 @@ function installSpotlightIpc() {
   // v1.433.0 (D5): sender-checked like clipboard:read. Writing the clipboard is
   // how a hostile frame would plant a command or an account number for the
   // user's next paste. Refused = false, never a write.
+  // v1.456.0: the Text size setting, applied as the window's zoom. Refused
+  // (null) for an untrusted sender; false for a size not on the list.
+  ipcMain.handle("textSize:set", (event, pct) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    return setTextSize(pct);
+  });
+  ipcMain.handle("textSize:get", (event) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    return textSizePct;
+  });
   ipcMain.handle("clipboard:write", (event, text) => {
     if (!isTrustedDashboardSender(event)) return false;
     try {
@@ -5804,9 +5910,23 @@ function buildMenu() {
     {
       label: "View",
       submenu: [
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
+        // v1.456.0: the Text size setting's own steps (never Chromium's
+        // zoom roles, which would leave the setting saying something else).
+        {
+          label: "Larger text",
+          accelerator: "CommandOrControl+=",
+          click: (_item, win) => stepTextSize(1, win && win.webContents),
+        },
+        {
+          label: "Smaller text",
+          accelerator: "CommandOrControl+-",
+          click: (_item, win) => stepTextSize(-1, win && win.webContents),
+        },
+        {
+          label: "Normal text size",
+          accelerator: "CommandOrControl+0",
+          click: (_item, win) => stepTextSize(0, win && win.webContents),
+        },
         { type: "separator" },
         { role: "togglefullscreen" },
       ],
@@ -5824,6 +5944,8 @@ async function startup() {
   // AppUserModelID that matches the installer's appId.
   app.setAppUserModelId("com.realdealcpa.ironjarvis");
   loadDesktopSettings(); // load the close-to-tray preference before menus/tray
+  loadTextSize(); // v1.456.0: the Text size, applied as each dashboard page loads
+  installTextSizeHooks();
   // v1.438.0: a desktop switch changed in Iron Jarvis's settings while this
   // app was closed applies now (nothing is sent: the daemon is not up yet).
   syncDesktopSwitches({ push: false });

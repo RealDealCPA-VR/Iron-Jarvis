@@ -16259,6 +16259,30 @@ does not need a bump, stop and bump it.
   web-service JSON editor drops `auth_kind`; a POST-read 500 raises no
   banner; never driven in the packaged app.
 
+- **Text size is the window's ZOOM, from one per-device row** (v1.456.0;
+  the owner: "change font sizes across the app in settings").
+  `device.text_size` (Appearance, allow, store device; options "90"/"100"/
+  "110"/"125"/"150", pinned equal to desktop/main.js `TEXT_SIZES` and
+  `dashboard/lib/textSize.ts`). It is applied as `webContents.setZoomFactor`
+  (desktop/main.js `setTextSize`), never a root font size: most dashboard
+  sizes are whole pixels, which rem scaling would not move. Chromium keeps
+  zoom per origin (one call reaches every dashboard window) but not across
+  restarts, so main keeps `textSize` in desktop-settings.json and
+  `installTextSizeHooks` re-applies it on every dashboard page's
+  `did-finish-load` (the loading splash is never zoomed). The View menu's
+  Ctrl + = / - / 0 and Ctrl + wheel (`zoom-changed`) call `stepTextSize`
+  (ends clamp, 0 = normal), which applies it and sends `textSize:changed` to
+  that window; `DeviceSettingsBridge` saves it as the row
+  (`lib/deviceSettings.chooseTextSize`). A row set from Settings or chat
+  reaches the shell through `applyOne` → `lib/textSize.applyTextSize` →
+  preload `textSize.set` (IPC sender-checked). NEVER put Chromium's
+  `resetZoom`/`zoomIn`/`zoomOut` roles back in the menu: they zoom without
+  telling the setting. A browser tab has no bridge: the row is saved, the
+  help says to use the browser's zoom. Trigger aliases cover "text size",
+  "font size", "bigger/larger/smaller text"; a font size "in my report" arms
+  no writer (`_about_something_else`). Pins: `tests/test_text_size_v14560.py`,
+  `dashboard/__tests__/text-size-v1456.test.tsx`.
+
 - **A streamed reply from the user's OWN model server may go silent 10
   minutes; a chat's phone alert waits for the turn's end, names the chat,
   and stays quiet while it is on screen** (v1.455.1, a USER BUG.

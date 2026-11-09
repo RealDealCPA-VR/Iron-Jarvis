@@ -145,6 +145,18 @@ contextBridge.exposeInMainWorld("ironjarvis", {
     // so it is never a copy taken when the bridge was exposed).
     speaks: () => popoutSpeaks,
   },
+  // v1.456.0: the Text size setting (90-150 %), applied as the window's zoom.
+  // `onChanged` hears a size the View menu's keys or Ctrl + wheel chose, so
+  // the page saves it as the setting. Calls resolve null when refused.
+  textSize: {
+    set: (percent) => ipcRenderer.invoke("textSize:set", Number(percent)),
+    get: () => ipcRenderer.invoke("textSize:get"),
+    onChanged: (cb) => {
+      const handler = (_e, percent) => cb(percent);
+      ipcRenderer.on("textSize:changed", handler);
+      return () => ipcRenderer.removeListener("textSize:changed", handler);
+    },
+  },
   // App auto-update control for the Updates page (the packaged-app updater).
   update: {
     getState: () => ipcRenderer.invoke("update:getState"),
