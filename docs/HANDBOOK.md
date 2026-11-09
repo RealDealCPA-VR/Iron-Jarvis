@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.462.0 (2026-11-09).*
+holds itself to. Current as of v1.463.0 (2026-11-09).*
 
 ---
 
@@ -2041,6 +2041,30 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Reading web pages works on more sites; page screenshots work again (v1.463.0)
+
+**Reading a web page.** When Jarvis reads a page for you, it used to tell the
+site it was the Chrome browser. Sites that check for that (Wikipedia, cdc.gov,
+dol.gov, the Mayo Clinic) refused it or left it waiting. Measured on this PC
+against 90 ordinary sites, that read 61 of them. Jarvis now says what it is
+first ("IronJarvis, a desktop assistant reading one page its user asked for":
+nothing about you or your PC), and asks once more as a browser only when the
+site did not serve it. The same 90 sites: 71 read.
+
+Some sites refuse every automated reader (the New York Times, Yelp, the SEC's
+search, Stack Overflow). For those Jarvis is now told "The site refuses
+automated readers, so asking for this address again will not help", so it
+looks for the fact somewhere else or asks you to open the page, and does not
+keep asking the same address.
+
+**Page screenshots in a coding session.** With Microsoft Edge 157 the "look at
+this page" step failed every time with "the browser wrote no picture". Edge
+now starts its real browser in a second step and returns at once; Jarvis ended
+the call there and closed the browser before it had drawn anything. Jarvis now
+waits for the browser it started to finish, inside the same time limit as
+before. Checked on this PC with the real Edge: three of three screenshots, in
+about one second each.
 
 ## A missing file says where it really is (v1.462.0)
 

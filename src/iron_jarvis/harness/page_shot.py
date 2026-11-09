@@ -241,6 +241,10 @@ async def _capture(binary: str, url: str, folder: Path, width: int, height: int,
         res = await procs.run_async(
             browser_argv(binary, url, shot, work / "profile", width, height, wait_ms),
             timeout=RUN_TIMEOUT_S,
+            # v1.463.0: Edge 157's own process returns at once and the
+            # browser it started writes the picture afterwards. Without the
+            # wait every screenshot ended "the browser wrote no picture".
+            wait_tree=True,
         )
         problem = await asyncio.to_thread(_shot_problem, shot, res)
         kept = None if problem else await asyncio.to_thread(_keep, shot, folder, url)

@@ -63,6 +63,28 @@ _UA = (
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
+#: v1.463.0 - WHO THE REQUEST SAYS IT IS. Measured on 90 ordinary sites
+#: (2026-11-09, this PC): the browser name alone read 61, an honest name 70,
+#: and the two together 71. Sites that check (Wikipedia, cdc.gov, dol.gov,
+#: mayoclinic.org) refuse or stall a client that claims to be Chrome and is
+#: not, and answer one that says what it is; a few do the opposite. So the
+#: honest name goes first and the browser name is the one retry. No fact about
+#: the user or this PC is in either.
+_HONEST_UA = "IronJarvis/1 (desktop assistant; reads one page its user asked for)"
+_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
+#: Tried in this order; the second only when the first was not served.
+_IDENTITIES = (_HONEST_UA, _UA)
+#: An answer that means "not served to this client": try the other name.
+_NOT_SERVED = frozenset({401, 403, 406, 429, 202})
+#: What a refusal after both names says. A refused page stays refused, and a
+#: model told only "HTTP 403" asks for it again.
+_REFUSED_ADVICE = (
+    " The site refuses automated readers, so asking for this address again"
+    " will not help. Use another source or web_search for the fact, or ask the"
+    " user to open the page."
+)
+
 _DEFAULT_MAX_CHARS = 8_000
 _MAX_MAX_CHARS = 40_000
 _MAX_REDIRECTS = 5
@@ -469,12 +491,43 @@ class WebFetchTool(Tool):
         across hops (each hop is its own client — see ``_send_pinned``).
         """
         import httpx
+
+        first: Any = None
+        first_error: "Exception | None" = None
+        for user_agent in _IDENTITIES:
+            try:
+                page = self._follow(url, user_agent)
+            except FetchRefused:
+                # Our own refusal (an internal address): the name sent to the
+                # site has nothing to do with it, so there is no second try.
+                raise
+            except (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError) as exc:
+                # The site took the connection and then stalled or dropped the
+                # answer: what some do to a client they will not serve
+                # (measured: washingtonpost.com, quickbooks.intuit.com). Any
+                # other failure (no such host, too many redirects) is not
+                # about the name and is raised as it is.
+                if first is None and first_error is None:
+                    first_error = exc
+                continue
+            if page.status_code not in _NOT_SERVED:
+                return page
+            if first is None:
+                first = page
+        if first is not None:
+            return first
+        assert first_error is not None
+        raise first_error
+
+    def _follow(self, url: str, user_agent: str) -> "_Page":
+        """One whole fetch under one name: the URL, then each redirect."""
+        import httpx
         from urllib.parse import urljoin
 
         current = url
         for hop in range(_MAX_REDIRECTS + 1):
             ip = _vet_url(current, self._resolver, hop)
-            resp = self._send_pinned(current, ip)
+            resp = self._send_pinned(current, ip, user_agent)
             location = resp.headers.get("location") if resp.status_code in (
                 301, 302, 303, 307, 308
             ) else None
@@ -483,7 +536,7 @@ class WebFetchTool(Tool):
             current = urljoin(current, location)
         raise httpx.TooManyRedirects(f"more than {_MAX_REDIRECTS} redirects (last: {current})")
 
-    def _send_pinned(self, url: str, ip: str) -> Any:
+    def _send_pinned(self, url: str, ip: str, user_agent: str = _UA) -> Any:
         """GET ``url`` with the TCP connection made to ``ip`` — the address
         :func:`_vet_url` just vetted — so DNS cannot be asked a second time
         (and answer differently) between the check and the connect.
@@ -500,7 +553,11 @@ class WebFetchTool(Tool):
         import httpx
 
         target = httpx.URL(url)
-        headers = {"User-Agent": _UA}
+        headers = {
+            "User-Agent": user_agent,
+            "Accept": _ACCEPT,
+            "Accept-Language": _ACCEPT_LANGUAGE,
+        }
         extensions: dict[str, Any] = {}
         literal = target.host.strip("[]")
         if ip and ip != literal and not _proxied(target.scheme, target.host):
@@ -566,7 +623,8 @@ class WebFetchTool(Tool):
         if isinstance(status, int) and status >= 400:
             return ToolResult(
                 ok=False,
-                error=f"HTTP {status} fetching {final_url}",
+                error=f"HTTP {status} fetching {final_url}"
+                + (f".{_REFUSED_ADVICE}" if status in (401, 403, 429) else ""),
                 data={"url": final_url, "status": status},
             )
 

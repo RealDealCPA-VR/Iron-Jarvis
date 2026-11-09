@@ -874,8 +874,19 @@ def run(
     cancelled: Callable[[], bool] | None = None,
     startupinfo: Any = None,
     breakaway_ok: bool = True,
+    wait_tree: bool = False,
 ) -> Result:
     """Blocking: run a child to completion with a REAL bound, output as bytes.
+
+    ``wait_tree`` (v1.463.0): the call is over when everything the child
+    STARTED has ended too, not when the child itself has. Measured on this PC
+    with Edge 157: ``msedge --headless=new --screenshot=...`` returns in
+    0.05 s with exit 0 and the browser it started writes the picture half a
+    second later - but closing the job on return ended that browser first, so
+    no picture was ever written. The wait shares the call's one ``timeout``;
+    past it the tree is killed and the result says ``timed_out``. Without a
+    job (not Windows, or the job could not be made) there is nothing to wait
+    on and the call returns as before.
 
     ``stdin`` is ``input`` when given, else DEVNULL (the packaged daemon's
     own stdin is a pipe nobody writes; an inherited one parked every
@@ -906,6 +917,7 @@ def run(
         **({"startupinfo": startupinfo} if startupinfo is not None else {}),
     )
     ended_early = True  # a timeout, a cancel or an error: stop what it left
+    started = time.monotonic()
     try:
         if on_spawn is not None and on_spawn(proc):
             kill_tree(proc)
@@ -932,10 +944,35 @@ def run(
         except BaseException:
             kill_tree(proc)
             raise
+        if wait_tree and not _tree_ended(proc, started, timeout, cancelled):
+            kill_tree(proc)
+            return Result(proc.returncode, out or b"", err or b"",
+                          timed_out=True, args=argv, timeout=timeout)
         ended_early = bool(cancelled is not None and cancelled())
         return Result(proc.returncode, out or b"", err or b"", args=argv, timeout=timeout)
     finally:
         release(proc, stop_windowless=ended_early)
+
+
+#: How often :func:`_tree_ended` looks at the job's members.
+TREE_LOOK_S = 0.05
+
+
+def _tree_ended(proc: Any, started: float, timeout: float | None,
+                cancelled: Callable[[], bool] | None) -> bool:
+    """Wait until nothing ``proc`` started is still running. False when the
+    call's ``timeout`` ran out first. A cancelled call stops waiting at once
+    (its tree is killed by whoever cancelled it)."""
+    job = _job_of(proc)
+    if job is None or job.closed:
+        return True
+    while job.member_pids():
+        if cancelled is not None and cancelled():
+            return True
+        if timeout is not None and time.monotonic() - started >= timeout:
+            return False
+        time.sleep(TREE_LOOK_S)
+    return True
 
 
 #: v1.392.0: how often a command writing to FILES is looked at for new output

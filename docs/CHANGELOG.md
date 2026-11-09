@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.463.0
+
+**Reading web pages works on more sites; page screenshots work again.** **Reading a web page.** When Jarvis reads a page for you, it used to tell the site it was the Chrome browser.
+
 ## v1.462.0
 
 **A missing file says where it really is.** When an agent or a coding session's helper asks to read or edit a file that is not there, the refusal now also says where a file of that name is in the same folder: "no such file: apps/shared/src/tokens.ts.
@@ -77,7 +81,3 @@
 ## v1.445.0
 
 **Your first ten minutes, smoother.** An ease-of-use review (docs/EASE-OF-USE-REVIEW-2026-11-07.md) walked the app as a brand-new user.
-
-## v1.443.0
-
-**Antigravity's models and sign-in, and a chat that works in a folder.** **Antigravity's models show up before you start a session.** Once you have signed in to Antigravity (run `agy` in a terminal and sign in with Google), Build › Code's model menu lists Antigravity's own models, each with the thinking levels it takes, before any session has run.
