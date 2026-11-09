@@ -39,6 +39,8 @@ import {
   PANEL_EVENT_HISTORY,
   PANEL_EVENT_MODELS,
   PANEL_EVENT_RESET,
+  PANEL_ACTION_RECORD_SAVE,
+  PANEL_EVENT_RECORDED,
   PANEL_EVENT_SKILLS,
   PANEL_EVENT_STATE,
   PANEL_EVENT_STEERED,
@@ -46,6 +48,7 @@ import {
   PANEL_EVENT_TRANSCRIPT,
 } from "../protocol";
 import { TOGGLE_LABELS, toggleAction, type BridgeStatus } from "../bridge/socket";
+import { RecordingPanel } from "./recording";
 
 interface Rendered {
   tone: "connected" | "waiting" | "off";
@@ -664,6 +667,11 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       refreshSkillMenu();
       return;
     }
+    case PANEL_EVENT_RECORDED: {
+      // v1.459.0: the answer to saving a recorded task.
+      recording.onRecorded(payload);
+      return;
+    }
     case PANEL_EVENT_DELTA: {
       setTurn(true);
       if (!streaming) {
@@ -786,6 +794,10 @@ chrome.runtime.onMessage.addListener((message: unknown, sender?: chrome.runtime.
       paintPointed();
       el.ask?.focus();
     }
+    return;
+  }
+  // v1.459.0: the recording's progress and end come from the WORKER only.
+  if (!fromATab && body.kind && recording.onWorkerMessage(String(body.kind), body as Record<string, unknown>)) {
     return;
   }
   if (body.kind === "pick_ended" && !fromATab) {
@@ -1592,6 +1604,16 @@ el.unpoint?.addEventListener("click", () => {
   paintPointed();
   el.ask?.focus();
 });
+
+// v1.459.0: "Record a task" (sidepanel/recording.ts). A recording running in
+// this browser shows its strip again when the panel reopens.
+const recording = new RecordingPanel({
+  save: (params) => post(PANEL_ACTION_RECORD_SAVE, params),
+  say: (who, text) => {
+    say(who, text);
+  },
+});
+void recording.resume();
 
 paintVersion();
 void refresh();

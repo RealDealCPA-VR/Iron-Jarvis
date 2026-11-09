@@ -747,6 +747,9 @@ class PanelTurns:
         if act == P.PANEL_ACTION_VOICE:
             await self._voice(conn, params)
             return
+        if act == P.PANEL_ACTION_RECORD_SAVE:
+            await self._record_save(conn, params)
+            return
         if act == P.PANEL_ACTION_CLOSE:
             # The panel is gone: a turn narrating to nobody keeps billing.
             # Stop is cooperative, so this is a request, not a kill.
@@ -874,6 +877,32 @@ class PanelTurns:
             })
         out.sort(key=lambda row: row["name"].lower())
         return {"skills": out[:PANEL_SKILLS_MAX]}
+
+    async def _record_save(self, conn: Any, params: dict[str, Any]) -> None:
+        """v1.459.0: save a task the user recorded in this browser as a skill
+        (``browser/recording.py``), answer ``recorded`` in plain words, then
+        send the "/" list again so the new skill is there at once."""
+        from .recording import RecordingRefused, save_and_publish
+
+        try:
+            saved = await save_and_publish(
+                self.platform, params, replace=params.get("replace") is True
+            )
+        except RecordingRefused as exc:
+            await self.emit(conn, P.PANEL_EVENT_RECORDED, {"ok": False, "text": str(exc)})
+            return
+        except Exception as exc:  # noqa: BLE001 — said, never a dead button
+            logger.warning("recording save failed", exc_info=True)
+            await self.emit(
+                conn,
+                P.PANEL_EVENT_RECORDED,
+                {"ok": False, "text": f"Iron Jarvis could not save the recording ({type(exc).__name__}). Try again."},
+            )
+            return
+        await self.emit(
+            conn, P.PANEL_EVENT_RECORDED, {"ok": True, "name": saved.name, "text": saved.words()}
+        )
+        await self.emit(conn, P.PANEL_EVENT_SKILLS, self.skills_view())
 
     def _skill_refusal(self, name: str) -> str:
         """``""`` when ``name`` may run from the panel, else the sentence why not."""

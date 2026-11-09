@@ -189,6 +189,7 @@ EVENT_WORDS: dict[str, str] = {
     "schedule.fired": "A schedule fired",
     "computeruse.run_finished": "A computer-use run finished",
     "skill.proposal_created": "A new skill was proposed",
+    "skill.recorded": "A task you recorded in the browser was saved as a skill",
     "coach.proposal": "A coaching suggestion for an agent",
     "preference.suggested": "Suggested remembering a preference",
     "preference.kept": "A preference was kept",

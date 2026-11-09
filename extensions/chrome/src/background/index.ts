@@ -95,7 +95,27 @@ import {
   tabRow,
   typeTextInPage,
 } from "./tabs";
-import { PICK_CANCEL_OP, PICK_CANCELLED_KIND, PICK_OP, PICKED_KIND } from "../content/channel";
+import {
+  PICK_CANCEL_OP,
+  PICK_CANCELLED_KIND,
+  PICK_OP,
+  PICKED_KIND,
+  RECORD_IDLE_KIND,
+  RECORD_START_OP,
+  RECORD_STOP_OP,
+  RECORDED_STEP_KIND,
+} from "../content/channel";
+import {
+  addPage,
+  addStep,
+  cleanStep,
+  hideSign,
+  inOrder,
+  newRecording,
+  readRecording,
+  showSign,
+  writeRecording,
+} from "./recorder";
 
 /** The dashboard page the side panel's Open Jarvis button goes to. */
 // Loopback at run time; a developer BUILD may point this at another loopback port
@@ -210,6 +230,49 @@ function endPickIn(tabId: number, reason: string): void {
   }
   pickTab = null;
   broadcast({ kind: "pick_ended", reason });
+}
+
+// --- recording a task (v1.459.0) ---------------------------------------------
+
+/** The recording tab moved to `href`: keep the page as a step. */
+async function recordingPageChanged(tabId: number, href: string | undefined): Promise<void> {
+  await inOrder(async () => {
+    const rec = await readRecording();
+    if (!rec || rec.tabId !== tabId || rec.ended) {
+      return;
+    }
+    const next = addPage(rec, href, Date.now());
+    if (next !== rec) {
+      await writeRecording(next);
+      broadcast({ kind: "record_progress", count: next.steps.length });
+    }
+  });
+}
+
+/** A new page loaded in the recording tab: its page reader records too, and shows the sign. */
+async function resumeRecordingIn(tabId: number): Promise<void> {
+  const rec = await readRecording();
+  if (!rec || rec.tabId !== tabId || rec.ended) {
+    return;
+  }
+  try {
+    await runInPage(RECORD_START_OP, { tab_id: tabId }, await hasHostPermission());
+  } catch {
+    // A page closed to add-ons (a browser page): nothing is recorded there.
+  }
+  await showSign(tabId);
+}
+
+/** The recording ended by itself (the tab closed, nothing happened for a while). */
+async function endRecording(tabId: number, reason: string): Promise<void> {
+  await inOrder(async () => {
+    const rec = await readRecording();
+    if (!rec || rec.tabId !== tabId || rec.ended) {
+      return;
+    }
+    await writeRecording({ ...rec, ended: reason });
+    broadcast({ kind: "record_ended", reason, count: rec.steps.length });
+  });
 }
 
 function broadcast(message: Record<string, unknown>): void {
@@ -451,6 +514,7 @@ chrome.tabs.onActivated.addListener((info) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   glow.forget(tabId); // v1.273.0
   endPickIn(tabId, "tab closed"); // v1.400.9
+  void endRecording(tabId, "tab closed"); // v1.459.0
   // THE TAB CLOSED (v1.266.0). The daemon ends that tab's approval grant — "one
   // approval per tab, for as long as the tab is open" is only true if the close
   // is reported — and drops its cached snapshot. No lookup: the tab is gone, and
@@ -463,6 +527,14 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
   // v1.400.9: a page that starts loading took its picker with it.
   if (change.status === "loading") {
     endPickIn(tabId, "page changed");
+  }
+  // v1.459.0: the tab being recorded moved to another page (a step), and a
+  // page that finished loading there records too.
+  if (change.url !== undefined) {
+    void recordingPageChanged(tabId, change.url);
+  }
+  if (change.status === "complete") {
+    void recordingPageChanged(tabId, tab.url).then(() => resumeRecordingIn(tabId));
   }
   // SAME-TAB NAVIGATION. Without this the daemon only ever hears onActivated,
   // which fires when the user SWITCHES tabs — so following a link in the tab you
@@ -669,6 +741,108 @@ chrome.runtime.onMessage.addListener((message: WorkerMessage, sender, respond) =
         if (typeof from === "number" && from === pickTab) {
           pickTab = null;
           broadcast({ kind: "pick_ended", reason: String((message as { reason?: unknown }).reason ?? "") });
+        }
+        respond({ noted: true });
+        return;
+      }
+      case "record_start": {
+        // v1.459.0: record what the user does in the tab they are looking at.
+        const windowId = (message as { windowId?: unknown }).windowId;
+        try {
+          const [tab] = await chrome.tabs.query(
+            typeof windowId === "number"
+              ? { active: true, windowId }
+              : { active: true, lastFocusedWindow: true },
+          );
+          if (!tab || typeof tab.id !== "number") {
+            throw new BridgeError("TAB_NOT_FOUND", { tab_id: "active" });
+          }
+          const running = await readRecording();
+          if (running && !running.ended && running.tabId !== tab.id) {
+            respond({ started: false, code: "BUSY" });
+            return;
+          }
+          if (running && !running.ended && running.tabId === tab.id) {
+            respond({ started: true, tab_id: tab.id, count: running.steps.length });
+            return;
+          }
+          // A pick still running would swallow the first click.
+          if (pickTab !== null) {
+            const old = pickTab;
+            pickTab = null;
+            try {
+              await runInPage(PICK_CANCEL_OP, { tab_id: old }, await hasHostPermission());
+            } catch {
+              // That tab navigated or closed.
+            }
+          }
+          await runInPage(RECORD_START_OP, { tab_id: tab.id }, await hasHostPermission());
+          const rec = newRecording(tab.id, tab.url, Date.now());
+          await inOrder(() => writeRecording(rec));
+          await showSign(tab.id);
+          respond({ started: true, tab_id: tab.id, count: rec.steps.length });
+        } catch (err) {
+          respond({ started: false, code: err instanceof BridgeError ? err.code : "EXTENSION_ERROR" });
+        }
+        return;
+      }
+      case "record_stop": {
+        const rec = await readRecording();
+        if (!rec) {
+          respond({ found: false, steps: [] });
+          return;
+        }
+        if (!rec.ended) {
+          try {
+            // Typing not yet left is sent as a step first (the page reader's own flush).
+            await runInPage(RECORD_STOP_OP, { tab_id: rec.tabId }, await hasHostPermission());
+          } catch {
+            // The tab navigated or closed: its page reader went with it.
+          }
+          // Let the steps that flush just sent reach the queue.
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        const final = await inOrder(async () => {
+          const last = (await readRecording()) ?? rec;
+          await writeRecording(null);
+          return last;
+        });
+        await hideSign(final.tabId);
+        respond({ found: true, steps: final.steps, dropped: final.dropped, ended: final.ended });
+        return;
+      }
+      case "record_status": {
+        const rec = await readRecording();
+        respond({
+          recording: Boolean(rec && !rec.ended),
+          ended: rec?.ended ?? "",
+          tab_id: rec?.tabId ?? null,
+          count: rec?.steps.length ?? 0,
+        });
+        return;
+      }
+      case RECORDED_STEP_KIND: {
+        // Only from the tab being recorded.
+        const from = sender.tab?.id;
+        const step = cleanStep((message as { step?: unknown }).step, Date.now());
+        if (typeof from === "number" && step) {
+          await inOrder(async () => {
+            const rec = await readRecording();
+            if (!rec || rec.tabId !== from || rec.ended) {
+              return;
+            }
+            const next = addStep(rec, step);
+            await writeRecording(next);
+            broadcast({ kind: "record_progress", count: next.steps.length, dropped: next.dropped });
+          });
+        }
+        respond({ noted: true });
+        return;
+      }
+      case RECORD_IDLE_KIND: {
+        const from = sender.tab?.id;
+        if (typeof from === "number") {
+          await endRecording(from, "idle");
         }
         respond({ noted: true });
         return;

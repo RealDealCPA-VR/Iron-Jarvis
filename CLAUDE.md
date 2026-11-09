@@ -1444,6 +1444,61 @@ does not need a bump, stop and bump it.
   reaches `chrome` is still type-checked. A change that adds or edits a
   dashboard test runs `npx tsc --noEmit` (or `pnpm build`) before the push.
 
+- **A task the user RECORDS in the browser becomes a skill; the recorder never
+  reads a value; a replay re-finds every element by role and name**
+  (v1.459.0; the owner: "record a browser based task by the user and that
+  becomes a skill for a browser agent to use in the future"). ADD-ON: the
+  sidebar's Record button (`sidepanel/recording.ts`, `RecordingPanel`) sends
+  `record_start {windowId}` to the worker; `background/recorder.ts` keeps ONE
+  recording (tab id, steps) in `chrome.storage.session` through one `inOrder`
+  queue (a worker sleeps between clicks), adds pages the tab moves to
+  (`pageUrl`: scheme+host+path, never query/fragment; within
+  `ARRIVE_AFTER_STEP_MS` 4 s of a step = `arrive`, checked on replay, else
+  `navigate`), caps at `RECORDING_MAX_STEPS` 100 (`dropped` counted), takes
+  steps only from the recording tab, re-starts the page reader and repaints the
+  sign (`paintRecording`: red inset edge + pill, pointer-events none,
+  aria-hidden, words in CSS `content:`) on every load, and ends on tab close or
+  the content script's 15-min idle (`record_ended`). `content/recorder.ts`
+  (capture listeners): click / input→dirty→focusout|change|Enter = one "type"
+  step / select change / file change / Enter|Escape keys, each element through
+  `describePicked` + `mask.ts` (a byte copy of the dashboard's
+  `DETAIL_MASK_RULES`, pinned); NEVER `.value` (the scrub rule), only
+  `isTrusted` events, never while picking, never while Iron Jarvis acts
+  (content/index.ts wraps click/type/press/scroll in `whileActing` — Jarvis's
+  execCommand typing fires TRUSTED input events). FOUND IN REAL EDGE: Enter in a
+  form field makes Chromium press the submit button for the user with a
+  TRUSTED click (`detail` 0) — `clickFromEnter` drops a no-pointer click within
+  `ENTER_CLICK_MS` of a recorded Enter (it replayed the submit twice), and
+  Enter on a focused button/link records the click, not a bare key. Playwright's
+  `select_option` fires an UNTRUSTED change (use the keyboard in a proof).
+  Stop opens the review (delete a step; each typed text / choice "Ask each time,
+  as <name>" or the user's own "…or always type" text; a password/payment/file
+  step never takes text); Save = panel action `record_save` → `recorded` event
+  + a fresh `skills` event (11 actions / 13 events). DAEMON:
+  `browser/recording.py` `save_and_publish` (also `POST /browser/recordings`,
+  ROUTES-WITHOUT-A-SCREEN row) re-checks every field, refuses a fixed text for a
+  sensitive step or one `detections.redact.mask` would change, scans each
+  step's page words (refused BY STEP NUMBER), escapes a `$` the argument filler
+  would fill (`_escape_dollars`), and writes `<home>/skills/<slug>/SKILL.md`
+  (`created_by: recording` — in `CREATED_BY_VALUES` and `SCANNED_CREATED_BY`,
+  not sweepable; `arguments` / `argument-hint` from the `{{values}}`; a used
+  name refused unless `replace` over another recording); the body tells the
+  agent to re-find each element by role+name with `browser_read_page`, stop on a
+  mismatch, let the user fill sensitive fields, and that every step still
+  cards. One names-only `skill.recorded` event (event-word twins). CHAT: a "/"
+  pick of a recorded skill arms the browser family BY SURFACE in the stream lane
+  (`recording.recorded_skill` → `browser_tool_ceiling`: read tier armed, acting
+  tier ask-armed; POST lane unchanged). `browser_type` into a `<select>`
+  chooses the option by its label (`chooseOption`: `option.label` and
+  `option.selected = true`, never `selectedIndex` / `textContent`, which the
+  v1237 pins forbid). Pins: `tests/test_browser_recording_v1459.py` (8
+  mutations, all red), `dashboard/__tests__/addon-recorder-v1459.test.ts`
+  (tsconfig-excluded), the "Record a task" block of
+  `sidepanel-runtime-v1242`; real Edge 157 against a scratch daemon on 8797
+  (25 checks). OPEN: no model-driven replay was run live; clicks inside
+  iframes and contenteditable rich editors beyond plain typing are not
+  recorded; a recorded skill picked from the POST lane gets no browser tools.
+
 - **The browser sidebar has skills, the user's browsing preferences, and a
   pointer the user can watch** (v1.454.0; the owner: "use skills in the
   browser extension and have a preference of interaction on a page in the

@@ -674,7 +674,8 @@ def test_the_vocabulary_and_the_generated_protocol():
     assert P.PANEL_EVENT_HISTORY in P.ALL_PANEL_EVENTS
     # v1.433.0 (moved on purpose): eleven events — `reset` takes back the words
     # of the answer being written.
-    assert len(P.ALL_PANEL_ACTIONS) == 10 and len(P.ALL_PANEL_EVENTS) == 12  # v1.454.0: + skills
+    # v1.459.0 (moved on purpose): + record_save / recorded.
+    assert len(P.ALL_PANEL_ACTIONS) == 11 and len(P.ALL_PANEL_EVENTS) == 13  # v1.454.0: + skills
     generated = _src(PROTOCOL_TS)
     for name, value in (
         ("PANEL_ACTION_RESET", "reset"),

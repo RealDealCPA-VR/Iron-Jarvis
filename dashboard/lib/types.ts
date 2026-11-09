@@ -207,7 +207,7 @@ export interface Skill {
   source?: string;
   /** v1.297.0 (skill curator): who wrote it — the user, an agent mid-run, or
    *  an accepted learning-loop proposal. Absent on an older daemon. */
-  created_by?: "user" | "agent" | "proposal";
+  created_by?: "user" | "agent" | "proposal" | "recording";
   /** v1.297.0: a pinned skill is never swept into the archive. */
   pinned?: boolean;
 }

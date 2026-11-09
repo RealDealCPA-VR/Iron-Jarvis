@@ -50,6 +50,22 @@ export const LOCATE_OP = "locate_target";
  */
 export const LAST_ACTED_OP = "last_acted";
 
+/**
+ * v1.459.0: worker -> page: start recording what the USER does in this page
+ * (content/recorder.ts), and stop. Each answers at once; the steps travel back
+ * one by one as `RECORDED_STEP_KIND` messages. The worker sends start again
+ * after every page load in the recording tab — a new document has a new page
+ * reader with nothing running.
+ */
+export const RECORD_START_OP = "record_start";
+export const RECORD_STOP_OP = "record_stop";
+
+/** Page -> worker: one step the user took while recording. */
+export const RECORDED_STEP_KIND = "recorded_step";
+
+/** Page -> worker: nothing happened for `RECORDING_IDLE_STOP_MS`; the page stopped recording. */
+export const RECORD_IDLE_KIND = "record_idle";
+
 /** Page -> worker, when the user clicked the element they mean. */
 export const PICKED_KIND = "element_picked";
 

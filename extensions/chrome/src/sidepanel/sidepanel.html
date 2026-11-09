@@ -595,6 +595,128 @@
         color: var(--cyan);
         background: var(--cyan-wash);
       }
+      /* v1.459.0: "Record a task" — the button, the strip while recording,
+         and the review before saving. */
+      #record {
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        display: inline-grid;
+        place-items: center;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+      #record:hover,
+      #record:focus-visible {
+        color: var(--cyan);
+        background: var(--cyan-wash);
+      }
+      body[data-recording="on"] #record {
+        color: var(--amber);
+      }
+      #recording {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 4px 6px;
+        padding: 4px 4px 4px 10px;
+        border-radius: 999px;
+        background: var(--amber-wash);
+        color: var(--ink);
+        font-size: 12px;
+      }
+      #recording[hidden],
+      #review[hidden] {
+        display: none;
+      }
+      #recording-text {
+        flex: 1;
+        min-width: 0;
+      }
+      #recording-text::before {
+        content: "";
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        margin-right: 6px;
+        border-radius: 999px;
+        background: var(--amber);
+      }
+      #review {
+        margin: 6px 8px;
+        padding: 10px;
+        border-radius: 12px;
+        background: var(--cyan-wash);
+        color: var(--ink);
+        font-size: 13px;
+      }
+      #review h2 {
+        margin: 0 0 8px;
+        font-size: 13px;
+      }
+      #review input[type="text"] {
+        width: 100%;
+        box-sizing: border-box;
+        margin: 0 0 6px;
+        padding: 5px 8px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--ink);
+        font: inherit;
+      }
+      #review-steps {
+        margin: 4px 0 8px;
+        padding-left: 20px;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+      .review-step {
+        margin: 0 0 6px;
+      }
+      .review-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .review-words {
+        flex: 1;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .review-remove {
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+      .review-value {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .review-ask {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .review-ask input[type="text"] {
+        margin: 0;
+      }
+      #review-note[data-tone="error"] {
+        color: var(--amber);
+      }
+      #review .row {
+        display: flex;
+        gap: 8px;
+      }
       #pointed,
       #skill {
         display: flex;
@@ -813,6 +935,20 @@
       </div>
     </div>
 
+    <!-- v1.459.0: the steps of a recorded task, reviewed before anything is
+         saved. Hidden until a recording stops. -->
+    <section id="review" hidden aria-labelledby="review-title">
+      <h2 id="review-title">Save this task as a skill</h2>
+      <input id="review-name" type="text" placeholder="Name, e.g. Enter a new invoice" aria-label="Name of the task" autocomplete="off" />
+      <input id="review-description" type="text" placeholder="What it is for (optional)" aria-label="What the task is for" autocomplete="off" maxlength="300" />
+      <ol id="review-steps"></ol>
+      <p class="note" id="review-note" role="status"></p>
+      <div class="row">
+        <button class="primary" id="review-save" type="button" title="Saves the task as a skill you can use from the / list here and in chat.">Save skill</button>
+        <button class="ghost" id="review-discard" type="button" title="Throws this recording away.">Discard</button>
+      </div>
+    </section>
+
     <footer>
       <div class="composer">
         <!-- v1.264.0's keyboard contract, in the tooltip: Enter sends (Steer
@@ -829,6 +965,11 @@
           <button id="unskill" type="button" aria-label="Don't use this skill" title="Send without this skill">×</button>
         </div>
         <ul id="skills" role="listbox" aria-label="Skills" hidden></ul>
+        <!-- v1.459.0: while recording, what the button is doing, with Stop. -->
+        <div id="recording" hidden role="status">
+          <span id="recording-text"></span>
+          <button class="warn" id="record-stop" type="button" title="Stop recording and review the steps">Stop</button>
+        </div>
         <textarea id="ask" rows="2" placeholder="Ask about this page…" aria-controls="skills" title="Enter sends (Steer while Jarvis is working) · Shift+Enter starts a new line · Esc stops · Type / to use one of your skills"></textarea>
         <div class="controls">
           <button class="warn" id="stop" type="button" title="Stop prevents the next step. A tool that is already running finishes, and what it wrote stays written.">Stop</button>
@@ -842,6 +983,14 @@
               <circle cx="12" cy="12" r="7" />
               <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
               <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" />
+            </svg>
+          </button>
+          <!-- v1.459.0: RECORD A TASK. Do the task once in this tab; Jarvis keeps
+               the steps as a skill. What you type is never recorded. -->
+          <button id="record" type="button" aria-pressed="false" aria-label="Record a task" title="Record a task: do it once in this tab, and Jarvis keeps it as a skill. What you type is never recorded.">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+              <circle cx="12" cy="12" r="8" />
+              <circle cx="12" cy="12" r="3.6" fill="currentColor" stroke="none" />
             </svg>
           </button>
           <!-- v1.267.0/v1.269.0: THE MODEL, as a small icon. The select below is

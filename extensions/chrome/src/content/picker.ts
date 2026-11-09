@@ -392,6 +392,11 @@ export function startPick(): { started: boolean; reason?: string } {
   return { started: true };
 }
 
+/** Whether a pick is waiting for its click (v1.459.0: a recording ignores it). */
+export function isPicking(): boolean {
+  return session !== null;
+}
+
 /** Stop a pick the panel no longer wants (it was closed, or the user pressed again). */
 export function cancelPick(): { cancelled: boolean } {
   const had = session !== null;

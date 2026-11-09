@@ -634,7 +634,50 @@ function fireChange(node: Element): void {
  * holds. It runs BEFORE the `if (clear)` block so the clear path is unchanged: an
  * emptied field has one position and this is a no-op on it.
  */
+/**
+ * v1.459.0: "typing" into a list (`<select>`) CHOOSES the option whose label is
+ * the text (case and spacing ignored) — how a recorded "choose Net 30 in Terms"
+ * step is replayed. It WRITES the choice and reads nothing the user chose: the
+ * labels it compares are page words a person sees (`option.label`), never the
+ * field's value; the choice is made by setting the option chosen. No such option
+ * is a refusal that names up to twenty of the labels.
+ */
+function chooseOption(node: HTMLSelectElement, text: string): void {
+  const want = text.replace(/\s+/g, " ").trim().toLowerCase();
+  const labels: string[] = [];
+  const options = Array.from(node.querySelectorAll("option"));
+  for (let i = 0; i < options.length; i += 1) {
+    const option = options[i] as HTMLOptionElement;
+    // `label` is the option's label attribute, else the words it shows: page
+    // text, never the list's chosen value.
+    const label = (option.label || "").replace(/\s+/g, " ").trim();
+    labels.push(label);
+    if (label.toLowerCase() === want && !option.disabled) {
+      const focusable = node as Element & { focus?: (options?: FocusOptions) => void };
+      if (typeof focusable.focus === "function") {
+        focusable.focus({ preventScroll: false });
+      }
+      // A write, never a read: the option becomes the chosen one, and the
+      // `change` below is what every framework's list listens for.
+      option.selected = true;
+      fireInput(node, "insertReplacementText", null);
+      fireChange(node);
+      return;
+    }
+  }
+  const shown = labels.filter((l) => l).slice(0, 20).map((l) => JSON.stringify(l)).join(", ");
+  throw new BridgeError("EXTENSION_ERROR", {
+    detail: `this list has no option labelled ${JSON.stringify(text)}${
+      shown ? `; its options are ${shown}` : ""
+    }`,
+  });
+}
+
 function typeInto(node: Element, text: string, clear: boolean): boolean {
+  if (node.tagName === "SELECT") {
+    chooseOption(node as HTMLSelectElement, text);
+    return false;
+  }
   const focusable = node as Element & { focus?: (options?: FocusOptions) => void };
   if (typeof focusable.focus === "function") {
     focusable.focus({ preventScroll: false });

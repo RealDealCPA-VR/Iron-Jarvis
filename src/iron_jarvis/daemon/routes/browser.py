@@ -243,6 +243,18 @@ def served_paths(platform: Any = None) -> frozenset[str]:
     return _SERVED
 
 
+class RecordingBody(BaseModel):
+    """v1.459.0: a task recorded in the browser add-on, after the user's review.
+
+    ``steps`` are checked one field at a time by ``browser/recording.py``; this
+    model only shapes the JSON."""
+
+    name: str = ""
+    description: str = ""
+    steps: list[Any] = []
+    replace: bool = False
+
+
 class PairBody(BaseModel):
     """``POST /browser/pair`` — the pending request id the card is offering.
 
@@ -1185,6 +1197,27 @@ def register(app: FastAPI, d) -> None:
         await _pump(ws, runtime, conn, inert=inert)
 
     # ------------------------------------------------------------------ HTTP
+
+    @app.post("/browser/recordings")
+    async def browser_recording_save(body: RecordingBody) -> dict[str, Any]:
+        """v1.459.0: save a recorded browser task as a skill. The add-on saves
+        through its panel socket (``record_save``); this is the same save for a
+        script, ending in the same function. 400 with one plain sentence when a
+        step cannot be kept (a password value, a page word that looks like an
+        instruction, a name already used)."""
+        from ...browser.recording import RecordingRefused, save_and_publish
+
+        try:
+            saved = await save_and_publish(d.platform, body.model_dump(), replace=body.replace)
+        except RecordingRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        return {
+            "ok": True,
+            "name": saved.name,
+            "steps": saved.steps,
+            "values": list(saved.values),
+            "words": saved.words(),
+        }
 
     @app.get("/browser/downloads")
     def browser_downloads(limit: int = 10) -> dict[str, Any]:

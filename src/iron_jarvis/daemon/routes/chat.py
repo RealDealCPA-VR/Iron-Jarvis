@@ -4588,10 +4588,24 @@ async def chat_stream(
         # access gate, which strips the acting tier at read_only and all but
         # the status tool at off; the ceiling below applies last, as always.
         _family_ask: list[str] = []
-        if arm_family:
+        # A TASK RECORDED IN THE BROWSER (v1.459.0), picked from the chat's "/"
+        # menu: the skill is a browser agent's playbook, so the browser tools
+        # are armed BY SURFACE exactly as the sidebar's are — the reading tools
+        # armed, the acting ones visible and asking. Never by a sentence; only
+        # a skill whose file says ``created_by: recording``. THIS LANE ONLY:
+        # the POST lane cannot show the cards an acting step needs.
+        _arm_family = arm_family
+        if not _arm_family and (getattr(body, "skill", "") or "").strip():
+            from ...browser.recording import recorded_skill as _recorded_skill
+
+            if _recorded_skill(d.platform, body.skill):
+                from ...browser.panel import browser_tool_ceiling as _browser_ceiling
+
+                _arm_family = _browser_ceiling(d.platform)
+        if _arm_family:
             _reg = d.platform.registry
             _read_tier, _act_tier = [], []
-            for _fname in sorted(arm_family):
+            for _fname in sorted(_arm_family):
                 _ftool = _reg.get(_fname)
                 if _ftool is None:
                     continue

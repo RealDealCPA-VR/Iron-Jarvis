@@ -59,6 +59,8 @@ const SOURCE_META: Record<string, { label: string; cls: string }> = {
 const PROVENANCE_META: Record<string, { label: string; cls: string }> = {
   agent: { label: "Agent-made", cls: "border-amber-500/30 bg-amber-500/10 text-amber-300" },
   proposal: { label: "From a proposal", cls: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300" },
+  // v1.459.0: a task the user recorded in the browser add-on.
+  recording: { label: "Recorded in the browser", cls: "border-cyan-500/30 bg-cyan-500/10 text-cyan-300" },
 };
 
 function SourceBadge({ source, createdBy }: { source?: string; createdBy?: string }) {

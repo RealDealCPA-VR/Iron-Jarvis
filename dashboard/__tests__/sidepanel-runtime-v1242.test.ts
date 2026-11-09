@@ -1229,4 +1229,119 @@ if (absent.length) {
       expect(transcript()).not.toContain("does not understand");
     });
   });
+  describe("Record a task: Stop opens a review, Save sends it to the daemon (v1.459.0)", () => {
+    const STEPS = [
+      { kind: "navigate", url: "https://books.example.com/invoices", at: 1 },
+      { kind: "click", at: 2, target: { role: "button", name: "New invoice", tag: "button", text: "", input_type: "", css: "", unique_name: true } },
+      { kind: "type", at: 3, target: { role: "textbox", name: "Customer name", tag: "input", text: "", input_type: "text", css: "", unique_name: true } },
+      { kind: "type", at: 4, sensitive: true, target: { role: "textbox", name: "Password", tag: "input", text: "", input_type: "password", css: "", unique_name: true } },
+      { kind: "select", at: 5, target: { role: "combobox", name: "Terms", tag: "select", text: "", input_type: "select", css: "", unique_name: true } },
+    ];
+    const deliver = (message: Record<string, unknown>, sender: Record<string, unknown> = {}) =>
+      (globalThis as unknown as { __ijListener: (m: unknown, s?: unknown) => void }).__ijListener(
+        message,
+        sender,
+      );
+
+    async function recordingPanel(stopAnswer: Record<string, unknown> = { found: true, steps: STEPS }): Promise<Harness> {
+      const h = await panelReady({ state: "connected", access: "interactive", paired: true, hostPermission: true });
+      h.answer = (m) => {
+        if (m["kind"] === "record_start") return { started: true, tab_id: 7, count: 1 };
+        if (m["kind"] === "record_stop") return stopAnswer;
+        if (m["kind"] === "record_status") return { recording: false, ended: "", count: 0 };
+        return undefined;
+      };
+      return h;
+    }
+
+    it("Record starts through the worker, the strip counts the steps, and Stop opens the review", async () => {
+      const h = await recordingPanel();
+      (el("record") as HTMLButtonElement).click();
+      await waitFor(() => expect(document.body.dataset["recording"]).toBe("on"));
+      expect(h.sent.some((m) => m["kind"] === "record_start")).toBe(true);
+      expect((el("recording") as HTMLElement).hidden).toBe(false);
+      // Progress counts only from the WORKER (no sender.tab), never a page.
+      deliver({ kind: "record_progress", count: 4 }, { tab: { id: 7 } });
+      expect(el("recording-text").textContent).not.toContain("4 steps");
+      deliver({ kind: "record_progress", count: 4 });
+      expect(el("recording-text").textContent).toContain("4 steps");
+      (el("record-stop") as HTMLButtonElement).click();
+      await waitFor(() => expect((el("review") as HTMLElement).hidden).toBe(false));
+      expect(document.body.dataset["recording"]).toBe("off");
+      const rows = Array.from(el("review-steps").querySelectorAll("li"));
+      expect(rows.map((r) => r.querySelector(".review-words")?.textContent)).toEqual([
+        "Go to books.example.com/invoices",
+        "Click button 'New invoice'",
+        "Type into textbox 'Customer name'",
+        "You type into textbox 'Password' yourself",
+        "Choose in combobox 'Terms'",
+      ]);
+      // A password row has no value to keep; the others ask each time by default.
+      expect(rows[3]?.querySelector(".review-fixed")).toBeNull();
+      expect((rows[2]?.querySelector(".review-ask input") as HTMLInputElement).value).toBe("customer_name");
+    });
+
+    it("Save sends the reviewed steps once; a deleted step is gone; a fixed text rides only its step", async () => {
+      const h = await recordingPanel();
+      (el("record") as HTMLButtonElement).click();
+      await waitFor(() => expect(document.body.dataset["recording"]).toBe("on"));
+      (el("record-stop") as HTMLButtonElement).click();
+      await waitFor(() => expect((el("review") as HTMLElement).hidden).toBe(false));
+      // Delete the click step.
+      (el("review-steps").querySelectorAll(".review-remove")[1] as HTMLButtonElement).click();
+      const terms = Array.from(el("review-steps").querySelectorAll("li"))[3] as HTMLElement;
+      const fixed = terms.querySelector(".review-fixed") as HTMLInputElement;
+      fixed.value = "Net 30";
+      fixed.dispatchEvent(new Event("input"));
+      (el("review-name") as HTMLInputElement).value = "Enter an invoice";
+      (el("review-save") as HTMLButtonElement).click();
+      await waitFor(() => expect(h.sent.some((m) => m["action"] === "record_save")).toBe(true));
+      const save = h.sent.find((m) => m["action"] === "record_save") as Record<string, unknown>;
+      const params = save["params"] as Record<string, unknown>;
+      expect(params["name"]).toBe("Enter an invoice");
+      const steps = params["steps"] as Record<string, unknown>[];
+      expect(steps.map((s) => s["kind"])).toEqual(["navigate", "type", "type", "select"]);
+      expect(steps[1]).toMatchObject({ placeholder: "customer_name" });
+      expect(steps[1]).not.toHaveProperty("fixed");
+      expect(steps[2]).toMatchObject({ sensitive: true });
+      expect(steps[2]).not.toHaveProperty("placeholder");
+      expect(steps[3]).toMatchObject({ placeholder: "terms", fixed: "Net 30" });
+      // The daemon's answer closes the review and is said.
+      h.emit("recorded", { ok: true, name: "Enter an invoice", text: "Saved the skill “Enter an invoice” (4 steps)." });
+      await waitFor(() => expect((el("review") as HTMLElement).hidden).toBe(true));
+      expect(transcript()).toContain("Saved the skill");
+      expect(transcript()).not.toContain("does not understand");
+    });
+
+    it("a refused save keeps the review open and says why", async () => {
+      const h = await recordingPanel();
+      (el("record") as HTMLButtonElement).click();
+      await waitFor(() => expect(document.body.dataset["recording"]).toBe("on"));
+      (el("record-stop") as HTMLButtonElement).click();
+      await waitFor(() => expect((el("review") as HTMLElement).hidden).toBe(false));
+      (el("review-name") as HTMLInputElement).value = "Bad";
+      (el("review-save") as HTMLButtonElement).click();
+      await waitFor(() => expect(h.sent.some((m) => m["action"] === "record_save")).toBe(true));
+      h.emit("recorded", { ok: false, text: "Step 2's words on the page look like instructions to an AI." });
+      await waitFor(() => expect(el("review-note").textContent).toContain("Step 2"));
+      expect((el("review") as HTMLElement).hidden).toBe(false);
+    });
+
+    it("a recording with no steps of its own opens no review", async () => {
+      await recordingPanel({ found: true, steps: [STEPS[0]] });
+      (el("record") as HTMLButtonElement).click();
+      await waitFor(() => expect(document.body.dataset["recording"]).toBe("on"));
+      (el("record-stop") as HTMLButtonElement).click();
+      await waitFor(() => expect(transcript()).toContain("Nothing was recorded"));
+      expect((el("review") as HTMLElement).hidden).toBe(true);
+    });
+
+    it("a refused start says why in the add-on's own words", async () => {
+      const h = await recordingPanel();
+      h.answer = (m) => (m["kind"] === "record_start" ? { started: false, code: "PERMISSION_DENIED" } : undefined);
+      (el("record") as HTMLButtonElement).click();
+      await waitFor(() => expect(transcript()).toContain("Recording needs site access"));
+      expect(document.body.dataset["recording"]).toBe("off");
+    });
+  });
 }

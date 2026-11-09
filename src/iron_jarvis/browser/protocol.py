@@ -251,6 +251,13 @@ PANEL_ACTION_RESET = "reset"
 #: re-asserts its remembered setting on every open, so the daemon's flag is a
 #: mirror of the user's preference, not a second memory of it.
 PANEL_ACTION_AUTO_ALLOW = "auto_allow"
+#: v1.459.0: ``{name, description, steps}`` — save a task the user recorded in
+#: the browser as a skill (``browser/recording.py`` turns it into a SKILL.md a
+#: browser agent follows). The recording itself happens inside the add-on; the
+#: daemon only ever sees the reviewed steps, and never a typed value the user
+#: did not type into the sidebar's own "Always type" box. Answered with a
+#: ``recorded`` event, then a fresh ``skills`` event.
+PANEL_ACTION_RECORD_SAVE = "record_save"
 
 ALL_PANEL_ACTIONS: tuple[str, ...] = (
     PANEL_ACTION_OPEN,
@@ -263,6 +270,7 @@ ALL_PANEL_ACTIONS: tuple[str, ...] = (
     PANEL_ACTION_VOICE,
     PANEL_ACTION_RESET,
     PANEL_ACTION_AUTO_ALLOW,
+    PANEL_ACTION_RECORD_SAVE,
 )
 
 #: ``browser.panel_event`` names -- everything the daemon narrates to the panel.
@@ -308,6 +316,9 @@ PANEL_EVENT_RESET = "reset"
 #: minus the ones marked not to be offered in a "/" menu (``user_invocable``
 #: false). Sent on ``open``. Names and descriptions only, never a skill's body.
 PANEL_EVENT_SKILLS = "skills"
+#: v1.459.0: ``{ok, name, text}`` — the answer to ``record_save``: the skill's
+#: name and one plain sentence (saved, or why not).
+PANEL_EVENT_RECORDED = "recorded"
 
 ALL_PANEL_EVENTS: tuple[str, ...] = (
     PANEL_EVENT_STATE,
@@ -322,7 +333,38 @@ ALL_PANEL_EVENTS: tuple[str, ...] = (
     PANEL_EVENT_HISTORY,
     PANEL_EVENT_RESET,
     PANEL_EVENT_SKILLS,
+    PANEL_EVENT_RECORDED,
 )
+
+# --------------------------------------------------------------------------- #
+# Recording a task (v1.459.0)
+# --------------------------------------------------------------------------- #
+
+#: The kinds of step a recording holds. ``navigate`` goes to an address;
+#: ``arrive`` is a page a step before it led to (checked, never navigated to);
+#: ``click``, ``type``, ``select`` and ``key`` act on one element named by its
+#: role and accessible name; ``file`` is a file field the user fills in
+#: themselves (no tool chooses files).
+RECORDING_STEP_KINDS: tuple[str, ...] = (
+    "navigate",
+    "arrive",
+    "click",
+    "type",
+    "select",
+    "key",
+    "file",
+)
+#: The keys a recording keeps. Letters are typing; these are the keys that DO
+#: something on their own.
+RECORDING_KEYS: tuple[str, ...] = ("Enter", "Escape")
+#: Bounds the add-on keeps and the daemon checks again.
+RECORDING_MAX_STEPS = 100
+RECORDING_NAME_CHARS = 60
+RECORDING_DESCRIPTION_CHARS = 300
+RECORDING_FIXED_TEXT_CHARS = 500
+#: A recording that sees nothing for this long stops by itself, so a recording
+#: the user forgot cannot keep watching a tab all day.
+RECORDING_IDLE_STOP_MS = 15 * 60 * 1000
 
 # --------------------------------------------------------------------------- #
 # Id prefixes and limits
@@ -1857,6 +1899,7 @@ __all__ = [
     "PANEL_ACTION_SEND",
     "PANEL_ACTION_STEER",
     "PANEL_ACTION_STOP",
+    "PANEL_ACTION_RECORD_SAVE",
     "PANEL_ACTION_VOICE",
     "PANEL_EVENT_APPROVAL",
     "PANEL_EVENT_DELTA",
@@ -1865,6 +1908,7 @@ __all__ = [
     "PANEL_EVENT_HISTORY",
     "PANEL_EVENT_MODELS",
     "PANEL_EVENT_RESET",
+    "PANEL_EVENT_RECORDED",
     "PANEL_EVENT_SKILLS",
     "PANEL_EVENT_STATE",
     "PANEL_EVENT_STEERED",
@@ -1875,6 +1919,13 @@ __all__ = [
     "PAYMENT_AUTOCOMPLETE",
     "PROTOCOL_VERSION",
     "READ_METHODS",
+    "RECORDING_DESCRIPTION_CHARS",
+    "RECORDING_FIXED_TEXT_CHARS",
+    "RECORDING_IDLE_STOP_MS",
+    "RECORDING_KEYS",
+    "RECORDING_MAX_STEPS",
+    "RECORDING_NAME_CHARS",
+    "RECORDING_STEP_KINDS",
     "REMEDIES",
     "REQUEST_ID_PREFIX",
     "RESTRICTED_INBOUND_FRAMES",

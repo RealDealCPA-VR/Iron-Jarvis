@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.457.0 (2026-11-08).*
+holds itself to. Current as of v1.459.0 (2026-11-09).*
 
 ---
 
@@ -2041,6 +2041,50 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Record a task in the browser, and Jarvis keeps it as a skill (v1.459.0)
+
+- **Do a task once; Jarvis can do it again.** In the browser sidebar, press the
+  round **Record** button (beside "Point at it"), then do the task in the tab
+  you are looking at: open pages, click, type, choose from lists, press Enter.
+  While it records, the page has a red edge and a small **"Recording your
+  steps"** sign, and the sidebar counts the steps. Press **Stop** when you are
+  done.
+- **Review before anything is saved.** Stop shows the steps in plain words
+  ("Click button 'New invoice'", "Type into textbox 'Customer name'"). Delete
+  any step with **×**. Give the task a name (and, if you like, what it is for),
+  then press **Save skill**; **Discard** throws it away. Nothing leaves your
+  browser until you press Save.
+- **What you type is never recorded.** The add-on writes down WHICH field you
+  typed into or which list you chose from, never what you typed or chose. Each
+  one becomes a value the skill asks for every time it runs (for example
+  `{{customer_name}}`), unless you type a fixed text into that step's
+  "…or always type" box during review. A password, card or file field is
+  always yours to fill: the skill asks you to do it and waits. A fixed text
+  that looks like a password or a key is refused. Addresses keep the site and
+  page only, never the part after "?" where sign-in links carry their codes.
+- **Using it.** The new skill is in the "/" list in the sidebar and in chat at
+  once. Pick it, add the values after its name if you want ("/Enter a new
+  invoice Acme Ltd"), and Jarvis follows the steps: it finds each button and
+  field again on the live page by its name, asks you for any value it does not
+  have, and stops to tell you which step did not match if the page has
+  changed. Every click and typing step asks you as usual, and a payment, a
+  password, a deletion or a page that tries to give Jarvis instructions always
+  asks, whatever the skill says. From chat, picking a recorded skill turns on
+  the browser tools for that message by itself.
+- **Only your own actions are recorded.** Clicks a page makes by itself, what
+  Jarvis does while you record, and a "Point at it" click are left out. Only the
+  tab you started in is recorded, one recording at a time. Clicks inside an
+  embedded frame (a payment box, a sign-in widget) are not recorded. A recording
+  with nothing happening for 15 minutes stops by itself, and closing its tab
+  stops it too; the steps so far are offered for review.
+- **Lists by typing.** Jarvis can now choose an option in a page's drop-down
+  list by typing its label into it, which is how a recorded "choose Net 30 in
+  Terms" step is done.
+- Recorded skills show **"Recorded in the browser"** on the Skills page. Page
+  words in a recording that read like instructions planted for an AI refuse the
+  save, naming the step to delete; the skill is checked again every time it is
+  used.
 
 ## A tidier start box in Build › Code (v1.457.0)
 

@@ -40,11 +40,14 @@ import {
   LOCATE_OP,
   PICK_CANCEL_OP,
   PICK_OP,
+  RECORD_START_OP,
+  RECORD_STOP_OP,
   type PageFailure,
   type PageReply,
   type PageRequest,
 } from "./channel";
 import { cancelPick, startPick } from "./picker";
+import { startRecording, stopRecording, whileActing } from "./recorder";
 import { registry } from "./elements";
 import { getElements, readPage } from "./snapshot";
 
@@ -83,17 +86,28 @@ function handle(request: PageRequest): Record<string, unknown> {
   if (ACTING_OPS.has(request.op)) {
     cancelPick();
   }
+  // v1.459.0: what Iron Jarvis does on the page is never recorded as the
+  // user's step — `whileActing` holds a recording deaf for the action, and the
+  // typing's own trusted `input` events with it.
   if (request.op === METHOD_CLICK) {
-    return { ...click(params) };
+    return whileActing(() => ({ ...click(params) }));
   }
   if (request.op === METHOD_TYPE_TEXT) {
-    return { ...typeText(params) };
+    return whileActing(() => ({ ...typeText(params) }));
   }
   if (request.op === METHOD_PRESS_KEY) {
-    return { ...pressKey(params) };
+    return whileActing(() => ({ ...pressKey(params) }));
   }
   if (request.op === METHOD_SCROLL) {
-    return { ...scroll(params) };
+    return whileActing(() => ({ ...scroll(params) }));
+  }
+  // v1.459.0: "Record a task". Starting answers at once; the user's steps go
+  // to the worker one by one (recorder.ts).
+  if (request.op === RECORD_START_OP) {
+    return { ...startRecording() };
+  }
+  if (request.op === RECORD_STOP_OP) {
+    return { ...stopRecording() };
   }
   // v1.400.9: "Point at it". Starting answers at once (synchronous, like
   // everything here); the element the user clicks is sent on its own message
