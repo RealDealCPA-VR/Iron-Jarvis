@@ -2066,6 +2066,20 @@ waits for the browser it started to finish, inside the same time limit as
 before. Checked on this PC with the real Edge: three of three screenshots, in
 about one second each.
 
+**Questions that need the web now reach it.** Asked "What is the IRS standard
+mileage rate for business use in 2026?", Jarvis used to answer that it could
+not look it up, because nothing in the sentence turned web search on. A
+question about a published figure (a rate, limit, deadline, bracket,
+deduction) for a named year, or for "current" / "today's" / "right now", now
+turns web search on by itself. A question about your own figures ("what rate
+did we charge in 2026", "the rate in the attached file", anything naming a
+client, an invoice or a project) does not. Local only still keeps the web off.
+
+**"Is anything broken?" is answered from the app's own health check** however
+it is worded ("is anything broken in Jarvis right now", "any problems with the
+app"). It used to be answered from memory unless the sentence ended on
+"broken".
+
 ## A missing file says where it really is (v1.462.0)
 
 When an agent or a coding session's helper asks to read or edit a file that is

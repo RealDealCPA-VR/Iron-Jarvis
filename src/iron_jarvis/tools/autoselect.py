@@ -1033,6 +1033,13 @@ _FAILURE_WORDS = (
     + r"|\b(?:is|are|was|were|'s|seems?|looks?|got|gets|appears?|all|still|"
     r"totally|completely)\s+broken\b"
     + r"|\bbroken\b(?=\s*(?:[.!?,;:]|$|again\b|now\b|since\b|after\b|too\b))"
+    # v1.463.0, found by asking the running app "Is anything broken in Jarvis
+    # right now?": it armed nothing, and the model answered from memory. An
+    # indefinite subject ("anything", "something") asks about the state of
+    # things whatever words follow, and "problems with the app" names the app.
+    + r"|\b(?:anything|something|nothing|everything)\s+(?:else\s+)?broken\b"
+    + r"|\b(?:problems?|issues?|trouble)\s+with\s+(?:the\s+|my\s+|this\s+)?"
+    + _APP_NOUN + r"\b"
     + r"|\bcrash(?:ed|es|ing)?\b"
     + r"|\b" + _APP_NOUN + r"\b[^.!?]{0,20}\b(?:died|dies|is\s+dead|has\s+died)\b"
     + r"|\b(?:not|isn'?t|aren'?t|wasn'?t|stopped|quit|won'?t|doesn'?t|didn'?t|"
@@ -1565,6 +1572,39 @@ def _web_signal_is_an_app(msg: str, apps_on: "frozenset[str] | set[str] | tuple[
 
 
 # Signal rules: (regex, {tool: weight}). Scores accumulate across rules; the
+#: v1.463.0: a QUESTION about a published figure for a named year or for "now".
+#: Three conditions, each read once from the start of the message (so the
+#: whole pattern is linear, and only the first 4,000 characters are read):
+#:  1. nothing says the figure is the user's OWN (my/our/we, a client, an
+#:     invoice, an attached or open file): that is their data, not the web's;
+#:  2. it is a question (a question word first, or a "?" anywhere);
+#:  3. a figure noun sits in one clause with a year, or right after a word
+#:     for "now".
+_PF_FIGURE = (
+    r"(?:rates?|limits?|thresholds?|deadlines?|due\s+dates?|brackets?|"
+    r"deductions?|exemptions?|caps?|wage\s+base|minimum\s+wage|phase.?outs?|"
+    r"per\s+diem|allowances?|penalt(?:y|ies))"
+)
+_PF_YEAR = r"(?:20[2-4]\d|this\s+year(?:'s)?|next\s+year(?:'s)?)"
+_PF_NOW = r"(?:current(?:ly)?|today'?s|right\s+now|as\s+of\s+today|at\s+the\s+moment)"
+_PF_OWN = (
+    r"(?:my|our|we|us|clients?(?:'s)?|invoices?|engagements?|projects?|"
+    r"attached|attachment|spreadsheet|workbook|worksheet|"
+    r"(?:this|the)\s+(?:file|document|doc|sheet|pdf|report|contract|lease|chat))"
+)
+_PUBLISHED_FIGURE_RX = re.compile(
+    r"\A(?![\s\S]{0,4000}?\b" + _PF_OWN + r"\b)"
+    r"(?=\s*(?:what|when|how\s+much|how\s+many|which|who|is|are|does|did|has|will)\b"
+    r"|[\s\S]{0,4000}?\?)"
+    r"(?=[\s\S]{0,4000}?(?:"
+    r"\b" + _PF_YEAR + r"\b[^.!?\n]{0,80}?\b" + _PF_FIGURE + r"\b"
+    r"|\b" + _PF_FIGURE + r"\b[^.!?\n]{0,80}?\b" + _PF_YEAR + r"\b"
+    r"|\b" + _PF_NOW + r"\b[^.!?\n]{0,40}?\b" + _PF_FIGURE + r"\b"
+    r"|\b" + _PF_FIGURE + r"\b[^.!?\n]{0,40}?\b" + _PF_NOW + r"(?!\w)"
+    r"))",
+    re.IGNORECASE,
+)
+
 # highest-scoring tools fill the free slots. Weights are relative only.
 _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
     # --- what the browser downloaded (v1.444.0) -----------------------------
@@ -1589,6 +1629,14 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
         ),
         _WEB_WEIGHTS,
     ),
+    # --- a published figure for a named year, or "current" (v1.463.0) -------
+    # Found by asking the running app "What is the IRS standard mileage rate
+    # for business use in 2026?": no web tool was armed, so the model said it
+    # could not look it up. The same for "what's the current federal funds
+    # rate" and "what is the 2026 401k contribution limit". A question about a
+    # published figure (rate, limit, deadline...) for a named year or for "now"
+    # can only be answered from the web.
+    (_PUBLISHED_FIGURE_RX, _WEB_WEIGHTS),
     # --- working with existing files / folders ---------------------------
     (
         # A SECOND ALTERNATIVE USED TO LIVE HERE — `|\bin\s+(?:the|my|this)\s+
