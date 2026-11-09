@@ -637,23 +637,245 @@ export function StartComposer({
             }}
             className={HARNESS_COMPOSER_BOX}
           />
-          <div className="flex items-center justify-between px-2 pb-2">
-            <AttachButton onPick={(picked) => void att.add(picked)} disabled={busy} />
-            <button
-              type="button"
-              data-testid="code-start-send"
-              disabled={!ready}
-              onClick={() => void start()}
-              aria-label="Start the session and send"
-              title={startWhy ?? "Send (Enter)"}
-              className="grid h-8 w-8 place-items-center rounded-full bg-accent text-ink-950 transition-opacity disabled:opacity-40"
-            >
-              {busy ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={15} aria-hidden="true" />}
-            </button>
+          {/* v1.457.0: the choices sit INSIDE the card, on the box's own bottom
+              row, as Chat › Code's start box does: the tool and its mode on the
+              left, the model, effort and Send on the right. Only the folder and
+              quiet notes stay under the card. */}
+          <div data-testid="code-start-row" className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-2">
+              <AttachButton onPick={(picked) => void att.add(picked)} disabled={busy} />
+
+            <div className="relative">
+              <button
+                type="button"
+                data-testid="code-start-tool"
+                aria-haspopup="menu"
+                aria-expanded={toolOpen}
+                disabled={busy || !tools || tools.length === 0}
+                onClick={() => {
+                  setToolOpen((v) => !v);
+                  setAccountOpen(false);
+                }}
+                title="The coding tool this session runs"
+                className={CHIP_BTN}
+              >
+                <Code2 size={13} aria-hidden="true" className="shrink-0" />
+                <span className="truncate">{toolWords}</span>
+                <ChevronDown size={12} aria-hidden="true" className="shrink-0" />
+              </button>
+              <ChipProblem field="tool" problem={chipProblem} />
+              {toolOpen && tools ? (
+                <div
+                  ref={toolMenuRef}
+                  role="menu"
+                  data-testid="code-start-tool-menu"
+                  style={toolShift ? { transform: `translateX(${toolShift}px)` } : undefined}
+                  className={MENU}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setToolOpen(false);
+                    }
+                  }}
+                >
+                  {tools.map((t) => {
+                    const why = toolUnavailable(t);
+                    // v1.445.0: a signed-out tool with the app's one-press Sign
+                    // in offers it right under its row (outside the row's own
+                    // button: a button never holds another).
+                    const press = why && toolSignedOut(t) ? toolSignInProvider(t.id) : "";
+                    return (
+                      <div key={t.id} role="none">
+                        <button
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={t.id === toolId}
+                          data-testid={`code-start-tool-${t.id}`}
+                          data-available={why ? "false" : "true"}
+                          disabled={!!why}
+                          onClick={() => chooseTool(t.id)}
+                          className={`${MENU_ROW} ${t.id === toolId ? "text-zinc-100" : "text-zinc-300"}`}
+                        >
+                          <span className="mt-0.5 w-3.5 shrink-0">{t.id === toolId ? <Check size={13} aria-hidden="true" /> : null}</span>
+                          <span className="min-w-0">
+                            <span className="block">{t.label}</span>
+                            {why ? (
+                              <span data-testid={`code-start-tool-why-${t.id}`} className="block text-[12px] text-zinc-500">
+                                {why}
+                              </span>
+                            ) : null}
+                          </span>
+                        </button>
+                        {press ? (
+                          <div data-testid={`code-start-tool-signin-${t.id}`} className="pb-1.5 pl-8 pr-2 text-[12px] text-zinc-500">
+                            <CliSignInPress provider={press} variant="inline" testIdPrefix="code-start-menu" />
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+
+            {showAccount ? (
+              <div className="relative">
+                <button
+                  type="button"
+                  data-testid="code-start-account"
+                  aria-haspopup="menu"
+                  aria-expanded={accountOpen}
+                  disabled={busy || !!noAccount}
+                  onClick={() => {
+                    setAccountOpen((v) => !v);
+                    setToolOpen(false);
+                  }}
+                  title={noAccount ?? `The ${tool?.label ?? ""} account this session runs on`}
+                  className={CHIP_BTN}
+                >
+                  <UserRound size={13} aria-hidden="true" className="shrink-0" />
+                  <span className="truncate">{accountName}</span>
+                  <ChevronDown size={12} aria-hidden="true" className="shrink-0" />
+                </button>
+                <ChipProblem field="account" problem={chipProblem} />
+                {accountOpen ? (
+                  <div
+                    ref={accountMenuRef}
+                    role="menu"
+                    aria-label={`Which ${tool?.label ?? ""} account?`}
+                    data-testid="code-start-account-menu"
+                    style={accountShift ? { transform: `translateX(${accountShift}px)` } : undefined}
+                    className={MENU}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        setAccountOpen(false);
+                      }
+                    }}
+                  >
+                    <p className="px-2.5 pb-1 pt-1.5 text-[12px] text-zinc-500">Which {tool?.label} account?</p>
+                    {choices.map((a) => {
+                      const st = accountStatusWords(a.status);
+                      return (
+                        <button
+                          key={a.id}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={a.id === account}
+                          data-testid={`code-start-account-${a.id}`}
+                          disabled={!st.usable}
+                          onClick={() => {
+                            setAccount(a.id);
+                            setAccountOpen(false);
+                            boxRef.current?.focus({ preventScroll: true });
+                          }}
+                          className={`${MENU_ROW} ${a.id === account ? "text-zinc-100" : "text-zinc-300"}`}
+                        >
+                          <span className="mt-0.5 w-3.5 shrink-0">{a.id === account ? <Check size={13} aria-hidden="true" /> : null}</span>
+                          <span className="min-w-0">
+                            <span className="block truncate">{a.name}</span>
+                            {st.words ? <span className="block text-[12px] text-zinc-500">{st.words}</span> : null}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {tool ? (
+              <ModeChip
+                tool={tool}
+                value={mode.id}
+                onChange={(id, confirm) => {
+                  touched.current.mode = true;
+                  setMode({ id, confirm });
+                }}
+                disabled={busy}
+                testId="code-start-mode"
+              />
+            ) : null}
+            <ChipProblem field="mode" problem={chipProblem} />
+
+
+            <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
+              {tool && tool.models.length ? (
+                <select
+                  aria-label={`${tool.label} model`}
+                  data-testid="code-start-model"
+                  value={model}
+                  disabled={busy}
+                  onChange={(e) => {
+                    touched.current.model = true;
+                    setModel(e.target.value);
+                  }}
+                  aria-invalid={chipProblem?.field === "model" || undefined}
+                  className={CHIP_SELECT}
+                >
+                  {tool.models.some((m) => m.id === "") ? null : (
+                    <option value="">
+                      {tool.label}&apos;s default{tool.defaultName ? ` (${tool.defaultName})` : ""}
+                    </option>
+                  )}
+                  {/* v1.429.0: grouped by provider, as Pi's own picker sorts them. */}
+                  {modelGroups(tool.models).map(({ group, models: list }) =>
+                    group ? (
+                      <optgroup key={group} label={group}>
+                        {list.map((m) => (
+                          <option key={m.id || "default"} value={m.id}>
+                            {m.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : (
+                      list.map((m) => (
+                        <option key={m.id || "default"} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))
+                    ),
+                  )}
+                </select>
+              ) : null}
+              {tool && efforts.length ? (
+                <select
+                  aria-label="Effort"
+                  data-testid="code-start-effort"
+                  value={effort}
+                  disabled={busy}
+                  onChange={(e) => {
+                    touched.current.effort = true;
+                    setEffort(e.target.value);
+                  }}
+                  aria-invalid={chipProblem?.field === "effort" || undefined}
+                  className={CHIP_SELECT}
+                >
+                  <option value="">Default effort</option>
+                  {efforts.map((x) => (
+                    <option key={x} value={x}>
+                      {x.charAt(0).toUpperCase() + x.slice(1)} effort
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <button
+                type="button"
+                data-testid="code-start-send"
+                disabled={!ready}
+                onClick={() => void start()}
+                aria-label="Start the session and send"
+                title={startWhy ?? "Send (Enter)"}
+                className="grid h-8 w-8 place-items-center rounded-full bg-accent text-ink-950 transition-opacity disabled:opacity-40"
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={15} aria-hidden="true" />}
+              </button>
+            </div>
+            <ChipProblem field="model" problem={chipProblem} />
+            <ChipProblem field="effort" problem={chipProblem} />
           </div>
         </div>
 
-        <div data-testid="code-start-chips" className="flex min-w-0 flex-wrap items-start gap-x-1 gap-y-1 px-1">
+        <div data-testid="code-start-chips" className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 px-1">
           <FolderChip
             folder={folder}
             onPick={(p) => {
@@ -675,79 +897,6 @@ export function StartComposer({
             testId="code-start-folder"
           />
 
-          <div className="relative">
-            <button
-              type="button"
-              data-testid="code-start-tool"
-              aria-haspopup="menu"
-              aria-expanded={toolOpen}
-              disabled={busy || !tools || tools.length === 0}
-              onClick={() => {
-                setToolOpen((v) => !v);
-                setAccountOpen(false);
-              }}
-              title="The coding tool this session runs"
-              className={CHIP_BTN}
-            >
-              <Code2 size={13} aria-hidden="true" className="shrink-0" />
-              <span className="truncate">{toolWords}</span>
-              <ChevronDown size={12} aria-hidden="true" className="shrink-0" />
-            </button>
-            <ChipProblem field="tool" problem={chipProblem} />
-            {toolOpen && tools ? (
-              <div
-                ref={toolMenuRef}
-                role="menu"
-                data-testid="code-start-tool-menu"
-                style={toolShift ? { transform: `translateX(${toolShift}px)` } : undefined}
-                className={MENU}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    setToolOpen(false);
-                  }
-                }}
-              >
-                {tools.map((t) => {
-                  const why = toolUnavailable(t);
-                  // v1.445.0: a signed-out tool with the app's one-press Sign
-                  // in offers it right under its row (outside the row's own
-                  // button: a button never holds another).
-                  const press = why && toolSignedOut(t) ? toolSignInProvider(t.id) : "";
-                  return (
-                    <div key={t.id} role="none">
-                      <button
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={t.id === toolId}
-                        data-testid={`code-start-tool-${t.id}`}
-                        data-available={why ? "false" : "true"}
-                        disabled={!!why}
-                        onClick={() => chooseTool(t.id)}
-                        className={`${MENU_ROW} ${t.id === toolId ? "text-zinc-100" : "text-zinc-300"}`}
-                      >
-                        <span className="mt-0.5 w-3.5 shrink-0">{t.id === toolId ? <Check size={13} aria-hidden="true" /> : null}</span>
-                        <span className="min-w-0">
-                          <span className="block">{t.label}</span>
-                          {why ? (
-                            <span data-testid={`code-start-tool-why-${t.id}`} className="block text-[12px] text-zinc-500">
-                              {why}
-                            </span>
-                          ) : null}
-                        </span>
-                      </button>
-                      {press ? (
-                        <div data-testid={`code-start-tool-signin-${t.id}`} className="pb-1.5 pl-8 pr-2 text-[12px] text-zinc-500">
-                          <CliSignInPress provider={press} variant="inline" testIdPrefix="code-start-menu" />
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-
           {tool && tool.ownSignIn ? (
             <span
               data-testid="code-start-account-own"
@@ -758,125 +907,6 @@ export function StartComposer({
               {ownSignInWords(tool.id, tools)}
             </span>
           ) : null}
-          {showAccount ? (
-            <div className="relative">
-              <button
-                type="button"
-                data-testid="code-start-account"
-                aria-haspopup="menu"
-                aria-expanded={accountOpen}
-                disabled={busy || !!noAccount}
-                onClick={() => {
-                  setAccountOpen((v) => !v);
-                  setToolOpen(false);
-                }}
-                title={noAccount ?? `The ${tool?.label ?? ""} account this session runs on`}
-                className={CHIP_BTN}
-              >
-                <UserRound size={13} aria-hidden="true" className="shrink-0" />
-                <span className="truncate">{accountName}</span>
-                <ChevronDown size={12} aria-hidden="true" className="shrink-0" />
-              </button>
-              <ChipProblem field="account" problem={chipProblem} />
-              {accountOpen ? (
-                <div
-                  ref={accountMenuRef}
-                  role="menu"
-                  aria-label={`Which ${tool?.label ?? ""} account?`}
-                  data-testid="code-start-account-menu"
-                  style={accountShift ? { transform: `translateX(${accountShift}px)` } : undefined}
-                  className={MENU}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      setAccountOpen(false);
-                    }
-                  }}
-                >
-                  <p className="px-2.5 pb-1 pt-1.5 text-[12px] text-zinc-500">Which {tool?.label} account?</p>
-                  {choices.map((a) => {
-                    const st = accountStatusWords(a.status);
-                    return (
-                      <button
-                        key={a.id}
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={a.id === account}
-                        data-testid={`code-start-account-${a.id}`}
-                        disabled={!st.usable}
-                        onClick={() => {
-                          setAccount(a.id);
-                          setAccountOpen(false);
-                          boxRef.current?.focus({ preventScroll: true });
-                        }}
-                        className={`${MENU_ROW} ${a.id === account ? "text-zinc-100" : "text-zinc-300"}`}
-                      >
-                        <span className="mt-0.5 w-3.5 shrink-0">{a.id === account ? <Check size={13} aria-hidden="true" /> : null}</span>
-                        <span className="min-w-0">
-                          <span className="block truncate">{a.name}</span>
-                          {st.words ? <span className="block text-[12px] text-zinc-500">{st.words}</span> : null}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          {tool ? (
-            <ModeChip
-              tool={tool}
-              value={mode.id}
-              onChange={(id, confirm) => {
-                touched.current.mode = true;
-                setMode({ id, confirm });
-              }}
-              disabled={busy}
-              testId="code-start-mode"
-            />
-          ) : null}
-          <ChipProblem field="mode" problem={chipProblem} />
-
-          {tool && tool.models.length ? (
-            <select
-              aria-label={`${tool.label} model`}
-              data-testid="code-start-model"
-              value={model}
-              disabled={busy}
-              onChange={(e) => {
-                touched.current.model = true;
-                setModel(e.target.value);
-              }}
-              aria-invalid={chipProblem?.field === "model" || undefined}
-              className={CHIP_SELECT}
-            >
-              {tool.models.some((m) => m.id === "") ? null : (
-                <option value="">
-                  {tool.label}&apos;s default{tool.defaultName ? ` (${tool.defaultName})` : ""}
-                </option>
-              )}
-              {/* v1.429.0: grouped by provider, as Pi's own picker sorts them. */}
-              {modelGroups(tool.models).map(({ group, models: list }) =>
-                group ? (
-                  <optgroup key={group} label={group}>
-                    {list.map((m) => (
-                      <option key={m.id || "default"} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                ) : (
-                  list.map((m) => (
-                    <option key={m.id || "default"} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))
-                ),
-              )}
-            </select>
-          ) : null}
-          <ChipProblem field="model" problem={chipProblem} />
           {tool && (tool.modelsReading || tool.modelsNote) ? (
             <span
               data-testid="code-start-models-note"
@@ -905,28 +935,6 @@ export function StartComposer({
               )}
             </span>
           ) : null}
-          {tool && efforts.length ? (
-            <select
-              aria-label="Effort"
-              data-testid="code-start-effort"
-              value={effort}
-              disabled={busy}
-              onChange={(e) => {
-                touched.current.effort = true;
-                setEffort(e.target.value);
-              }}
-              aria-invalid={chipProblem?.field === "effort" || undefined}
-              className={CHIP_SELECT}
-            >
-              <option value="">Default effort</option>
-              {efforts.map((x) => (
-                <option key={x} value={x}>
-                  {x.charAt(0).toUpperCase() + x.slice(1)} effort
-                </option>
-              ))}
-            </select>
-          ) : null}
-          <ChipProblem field="effort" problem={chipProblem} />
         </div>
 
         {folder && (defaultsWords || offerSave || defaultsNote) ? (

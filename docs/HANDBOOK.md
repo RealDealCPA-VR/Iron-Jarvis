@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.456.0 (2026-11-08).*
+holds itself to. Current as of v1.457.0 (2026-11-08).*
 
 ---
 
@@ -2041,6 +2041,13 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A tidier start box in Build › Code (v1.457.0)
+
+Build › Code's start box now looks like Chat › Code's: the coding tool, its
+mode, the model and the effort sit inside the box on its bottom row, beside
+the paperclip and Send. Only the folder ("No folder" / Choose…) and a few quiet
+notes stay under the box. Nothing about what the choices do has changed.
 
 ## Text size (v1.456.0)
 

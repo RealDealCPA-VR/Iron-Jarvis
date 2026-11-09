@@ -212,8 +212,13 @@ describe("the composer is there at once", () => {
     const chips = screen.getByTestId("code-start-chips");
     expect(within(chips).getByTestId("code-start-folder").textContent).toBe("No folder");
     expect(within(chips).getByTestId("code-start-folder-choose").textContent).toBe("Choose…");
-    expect(within(chips).getByTestId("code-start-mode-button").textContent).toContain("Ask first");
-    expect(within(chips).getByTestId("code-start-model")).toBeInTheDocument();
+    // v1.457.0: the tool, mode, model and effort sit in the card's own row
+    // (moved on purpose); the folder stays under the card.
+    const row = screen.getByTestId("code-start-row");
+    expect(within(row).getByTestId("code-start-mode-button").textContent).toContain("Ask first");
+    expect(within(row).getByTestId("code-start-model")).toBeInTheDocument();
+    expect(within(row).getByTestId("code-start-send")).toBeInTheDocument();
+    expect(within(screen.getByTestId("code-start-composer")).getByTestId("code-start-row")).toBeTruthy();
     // Nothing typed: Send waits.
     expect(screen.getByTestId("code-start-send")).toBeDisabled();
   });

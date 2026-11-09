@@ -152,7 +152,7 @@ for (const size of [
     await box.fill("Fix the off-by-one in cart.py and make every test pass again");
     await expect(page.getByTestId("code-start-send")).toBeEnabled();
     await page.waitForTimeout(300);
-    expect(await outside(page, '[data-testid="code-start-chips"] > *, [data-testid="code-start-composer"]')).toEqual([]);
+    expect(await outside(page, '[data-testid="code-start-chips"] > *, [data-testid="code-start-row"] > *, [data-testid="code-start-composer"]')).toEqual([]);
     expect(await widest(page)).toBeLessThanOrEqual(1);
 
     // Claude Code has two logins: picking it asks which account, at once.
@@ -169,7 +169,7 @@ for (const size of [
     // Its effort levels are listed; the chips still fit.
     await expect(page.getByTestId("code-start-effort")).toBeVisible();
     await page.waitForTimeout(200);
-    expect(await outside(page, '[data-testid="code-start-chips"] > *')).toEqual([]);
+    expect(await outside(page, '[data-testid="code-start-chips"] > *, [data-testid="code-start-row"] > *')).toEqual([]);
     expect(await widest(page)).toBeLessThanOrEqual(1);
     // v1.412.0 review: a model that takes no effort hides the chip.
     await page.getByTestId("code-start-model").selectOption("claude-fable-5-1");

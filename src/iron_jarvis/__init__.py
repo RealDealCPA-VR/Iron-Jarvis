@@ -8,7 +8,7 @@ integrations, comm channels, an encrypted secrets vault, opt-in computer use, an
 a Next.js control center.
 """
 
-__version__ = "1.456.0"
+__version__ = "1.457.0"
 
 
 def _platform_without_wmi() -> None:
