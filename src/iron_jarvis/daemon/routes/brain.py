@@ -172,10 +172,13 @@ def register(app: FastAPI, d: Any) -> None:
         ref = str(active.profile.get("guide_ref") or "").strip()
         if ref:
             try:
-                text = conn.read(ref)
+                from ...brain.turn import read_guide_note
+
+                text, used = read_guide_note(conn, ref)
                 ok = bool(str(text or "").strip())
+                found_as = f", found as {used}" if ok and used != ref else ""
                 steps.append({"step": "guide", "ok": ok, "words": (
-                    f"The operating guide “{ref}” was read ({len(text)} characters)." if ok
+                    f"The operating guide “{ref}” was read ({len(text)} characters{found_as})." if ok
                     else f"The operating guide “{ref}” is empty.")})
             except Exception as exc:  # noqa: BLE001
                 steps.append({"step": "guide", "ok": False,

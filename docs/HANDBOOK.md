@@ -2080,6 +2080,16 @@ it is worded ("is anything broken in Jarvis right now", "any problems with the
 app"). It used to be answered from memory unless the sentence ended on
 "broken".
 
+**A memory profile's guide is found by its title.** A memory profile names an
+operating guide that Jarvis follows in every chat. If you named it by its
+title ("Agent Operating Guide") and your memory base opens notes only by their
+path ("procedures/agent-operating-guide.md"), the guide was never loaded and
+each chat was only told it "could not be read". Jarvis now searches the base
+for the name and reads the note when exactly one result has that same name.
+Two notes with the name, or only a similar name, are never guessed between:
+the guide is followed as instructions. The profile's Check says where it
+found it.
+
 ## A missing file says where it really is (v1.462.0)
 
 When an agent or a coding session's helper asks to read or edit a file that is

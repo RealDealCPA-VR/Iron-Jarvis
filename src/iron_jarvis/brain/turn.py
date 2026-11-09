@@ -95,6 +95,62 @@ def forget_guides() -> None:
 GUIDE_TOO_SLOW = "it took too long to read"
 
 
+def _same_name(a: str) -> str:
+    """A note's name the way two spellings of it compare equal: "Agent
+    Operating Guide", "agent-operating-guide" and
+    "procedures/agent-operating-guide.md" are one name."""
+    tail = str(a or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    if "." in tail and len(tail.rsplit(".", 1)[-1]) <= 5:
+        tail = tail.rsplit(".", 1)[0]
+    return "".join(ch for ch in tail.lower() if ch.isalnum())
+
+
+def read_guide_note(conn: Any, ref: str) -> tuple[str, str]:
+    """``(text, ref used)`` of the note the user named as the guide.
+
+    v1.463.0, found on the live install: the profile named the guide by its
+    TITLE ("Agent Operating Guide") and the memory base opens notes only by
+    path ("procedures/agent-operating-guide.md"), so every chat for a week
+    was told the guide "could not be read" and none followed it. When the
+    name as written does not open a note, the base is searched for it and a
+    note is read only when exactly ONE result carries that same name (by its
+    title or by its file name). Anything less certain keeps the first error:
+    the guide is followed as instructions, so a near match is never used.
+    Raises what the first read raised when nothing certain is found."""
+    first: "Exception | None" = None
+    try:
+        text = str(conn.read(ref) or "")
+        if text.strip():
+            return text, ref
+    except Exception as exc:  # noqa: BLE001 - tried again by name below
+        first = exc
+    want = _same_name(ref)
+    found: list[str] = []
+    if want:
+        try:
+            hits = conn.search(ref, 8) or []
+        except Exception:  # noqa: BLE001 - the search is only a second way in
+            hits = []
+        for hit in hits:
+            if not isinstance(hit, dict):
+                continue
+            other = str(hit.get("ref") or "").strip()
+            if not other or other == ref or other in found:
+                continue
+            if want in (_same_name(hit.get("title") or ""), _same_name(other)):
+                found.append(other)
+    if len(found) == 1:
+        try:
+            text = str(conn.read(found[0]) or "")
+            if text.strip():
+                return text, found[0]
+        except Exception:  # noqa: BLE001 - the first error is the one to say
+            pass
+    if first is not None:
+        raise first
+    return "", ref
+
+
 def _read_guide(conn: Any, base: str, ref: str, *, cached_only: bool = False) -> tuple[str, str]:
     """``(text, error)`` of the operating guide, cached ``GUIDE_TTL_S``.
     ``cached_only``: never ask the base (the bounded build's fallback — the
@@ -109,7 +165,7 @@ def _read_guide(conn: Any, base: str, ref: str, *, cached_only: bool = False) ->
         return "", GUIDE_TOO_SLOW
     text, error = "", ""
     try:
-        text = str(conn.read(ref) or "")
+        text, _used = read_guide_note(conn, ref)
         if not text.strip():
             error = "the note is empty"
     except Exception as exc:  # noqa: BLE001 — said in the block, never a crash
