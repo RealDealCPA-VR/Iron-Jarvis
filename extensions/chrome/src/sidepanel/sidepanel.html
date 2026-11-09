@@ -595,7 +595,7 @@
         color: var(--cyan);
         background: var(--cyan-wash);
       }
-      /* v1.459.0: "Record a task" — the button, the strip while recording,
+      /* v1.458.0: "Record a task" — the button, the strip while recording,
          and the review before saving. */
       #record {
         width: 30px;
@@ -935,7 +935,7 @@
       </div>
     </div>
 
-    <!-- v1.459.0: the steps of a recorded task, reviewed before anything is
+    <!-- v1.458.0: the steps of a recorded task, reviewed before anything is
          saved. Hidden until a recording stops. -->
     <section id="review" hidden aria-labelledby="review-title">
       <h2 id="review-title">Save this task as a skill</h2>
@@ -965,7 +965,7 @@
           <button id="unskill" type="button" aria-label="Don't use this skill" title="Send without this skill">×</button>
         </div>
         <ul id="skills" role="listbox" aria-label="Skills" hidden></ul>
-        <!-- v1.459.0: while recording, what the button is doing, with Stop. -->
+        <!-- v1.458.0: while recording, what the button is doing, with Stop. -->
         <div id="recording" hidden role="status">
           <span id="recording-text"></span>
           <button class="warn" id="record-stop" type="button" title="Stop recording and review the steps">Stop</button>
@@ -985,7 +985,7 @@
               <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" />
             </svg>
           </button>
-          <!-- v1.459.0: RECORD A TASK. Do the task once in this tab; Jarvis keeps
+          <!-- v1.458.0: RECORD A TASK. Do the task once in this tab; Jarvis keeps
                the steps as a skill. What you type is never recorded. -->
           <button id="record" type="button" aria-pressed="false" aria-label="Record a task" title="Record a task: do it once in this tab, and Jarvis keeps it as a skill. What you type is never recorded.">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">

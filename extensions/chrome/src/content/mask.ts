@@ -1,4 +1,4 @@
-// v1.459.0: the redaction rules, in the page, for what a recording sends out.
+// v1.458.0: the redaction rules, in the page, for what a recording sends out.
 //
 // A recording describes the elements the user acted on with the page's own
 // words (role, accessible name, nearby text). A page can print a token in a
@@ -7,7 +7,7 @@
 // rule block below is a byte-for-byte copy of the dashboard's
 // `DETAIL_MASK_RULES` (dashboard/lib/stepDetail.ts), which
 // tests/test_redact_linear_v1349.py keeps equal to the daemon's;
-// tests/test_browser_recording_v1459.py keeps this copy equal to that one.
+// tests/test_browser_recording_v1458.py keeps this copy equal to that one.
 // (The add-on cannot import from the dashboard: it is bundled on its own.)
 
 const MASK = "***";

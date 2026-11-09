@@ -51,7 +51,7 @@ export const LOCATE_OP = "locate_target";
 export const LAST_ACTED_OP = "last_acted";
 
 /**
- * v1.459.0: worker -> page: start recording what the USER does in this page
+ * v1.458.0: worker -> page: start recording what the USER does in this page
  * (content/recorder.ts), and stop. Each answers at once; the steps travel back
  * one by one as `RECORDED_STEP_KIND` messages. The worker sends start again
  * after every page load in the recording tab — a new document has a new page

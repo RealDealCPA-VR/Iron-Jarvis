@@ -879,7 +879,7 @@ class PanelTurns:
         return {"skills": out[:PANEL_SKILLS_MAX]}
 
     async def _record_save(self, conn: Any, params: dict[str, Any]) -> None:
-        """v1.459.0: save a task the user recorded in this browser as a skill
+        """v1.458.0: save a task the user recorded in this browser as a skill
         (``browser/recording.py``), answer ``recorded`` in plain words, then
         send the "/" list again so the new skill is there at once."""
         from .recording import RecordingRefused, save_and_publish

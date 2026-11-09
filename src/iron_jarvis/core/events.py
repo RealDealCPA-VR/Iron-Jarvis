@@ -204,7 +204,7 @@ class EventType:
     # skill. {proposal_id, kind, skill_name, auto} — auto=True means the
     # explicit auto-approve setting already wrote it to the skills directory.
     SKILL_PROPOSAL_CREATED = "skill.proposal_created"
-    # v1.459.0: a task the user recorded in the browser add-on was saved as a
+    # v1.458.0: a task the user recorded in the browser add-on was saved as a
     # skill. NAMES ONLY {skill_name, steps, values, hosts} — never a step's
     # words or a value (browser/recording.ledger_row).
     SKILL_RECORDED = "skill.recorded"

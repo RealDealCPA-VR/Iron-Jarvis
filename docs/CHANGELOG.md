@@ -2,7 +2,7 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
-## v1.459.0
+## v1.458.0
 
 **Record a task in the browser, and Jarvis keeps it as a skill.** **Do a task once; Jarvis can do it again.** In the browser sidebar, press the round **Record** button (beside "Point at it"), then do the task in the tab you are looking at: open pages, click, type, choose from lists, press Enter.
 

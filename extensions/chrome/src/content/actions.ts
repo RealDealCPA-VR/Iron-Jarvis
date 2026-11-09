@@ -635,7 +635,7 @@ function fireChange(node: Element): void {
  * emptied field has one position and this is a no-op on it.
  */
 /**
- * v1.459.0: "typing" into a list (`<select>`) CHOOSES the option whose label is
+ * v1.458.0: "typing" into a list (`<select>`) CHOOSES the option whose label is
  * the text (case and spacing ignored) — how a recorded "choose Net 30 in Terms"
  * step is replayed. It WRITES the choice and reads nothing the user chose: the
  * labels it compares are page words a person sees (`option.label`), never the

@@ -1446,7 +1446,7 @@ does not need a bump, stop and bump it.
 
 - **A task the user RECORDS in the browser becomes a skill; the recorder never
   reads a value; a replay re-finds every element by role and name**
-  (v1.459.0; the owner: "record a browser based task by the user and that
+  (v1.458.0; the owner: "record a browser based task by the user and that
   becomes a skill for a browser agent to use in the future"). ADD-ON: the
   sidebar's Record button (`sidepanel/recording.ts`, `RecordingPanel`) sends
   `record_start {windowId}` to the worker; `background/recorder.ts` keeps ONE
@@ -1491,8 +1491,8 @@ does not need a bump, stop and bump it.
   tier ask-armed; POST lane unchanged). `browser_type` into a `<select>`
   chooses the option by its label (`chooseOption`: `option.label` and
   `option.selected = true`, never `selectedIndex` / `textContent`, which the
-  v1237 pins forbid). Pins: `tests/test_browser_recording_v1459.py` (8
-  mutations, all red), `dashboard/__tests__/addon-recorder-v1459.test.ts`
+  v1237 pins forbid). Pins: `tests/test_browser_recording_v1458.py` (8
+  mutations, all red), `dashboard/__tests__/addon-recorder-v1458.test.ts`
   (tsconfig-excluded), the "Record a task" block of
   `sidepanel-runtime-v1242`; real Edge 157 against a scratch daemon on 8797
   (25 checks). OPEN: no model-driven replay was run live; clicks inside

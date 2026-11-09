@@ -267,7 +267,7 @@ def test_the_panel_vocabularies_are_exactly_the_plans_seven_and_seven():
         "voice",  # v1.269.0: dictation through the app's own engine
         "reset",  # v1.270.0: a new conversation (the daemon holds the old one)
         "auto_allow",  # v1.270.0: the sidebar's one switch for the ordinary cards
-        "record_save",  # v1.459.0 (moved on purpose): save a recorded task as a skill
+        "record_save",  # v1.458.0 (moved on purpose): save a recorded task as a skill
     )
     assert P.ALL_PANEL_EVENTS == (
         "state",
@@ -286,7 +286,7 @@ def test_the_panel_vocabularies_are_exactly_the_plans_seven_and_seven():
         "reset",
         # v1.454.0: the skills the sidebar's "/" list offers (sent on open).
         "skills",
-        # v1.459.0 (moved on purpose): the answer to `record_save`.
+        # v1.458.0 (moved on purpose): the answer to `record_save`.
         "recorded",
     )
     assert len(set(P.ALL_PANEL_ACTIONS)) == len(P.ALL_PANEL_ACTIONS)

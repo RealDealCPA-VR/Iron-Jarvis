@@ -232,7 +232,7 @@ function endPickIn(tabId: number, reason: string): void {
   broadcast({ kind: "pick_ended", reason });
 }
 
-// --- recording a task (v1.459.0) ---------------------------------------------
+// --- recording a task (v1.458.0) ---------------------------------------------
 
 /** The recording tab moved to `href`: keep the page as a step. */
 async function recordingPageChanged(tabId: number, href: string | undefined): Promise<void> {
@@ -514,7 +514,7 @@ chrome.tabs.onActivated.addListener((info) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   glow.forget(tabId); // v1.273.0
   endPickIn(tabId, "tab closed"); // v1.400.9
-  void endRecording(tabId, "tab closed"); // v1.459.0
+  void endRecording(tabId, "tab closed"); // v1.458.0
   // THE TAB CLOSED (v1.266.0). The daemon ends that tab's approval grant — "one
   // approval per tab, for as long as the tab is open" is only true if the close
   // is reported — and drops its cached snapshot. No lookup: the tab is gone, and
@@ -528,7 +528,7 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (change.status === "loading") {
     endPickIn(tabId, "page changed");
   }
-  // v1.459.0: the tab being recorded moved to another page (a step), and a
+  // v1.458.0: the tab being recorded moved to another page (a step), and a
   // page that finished loading there records too.
   if (change.url !== undefined) {
     void recordingPageChanged(tabId, change.url);
@@ -746,7 +746,7 @@ chrome.runtime.onMessage.addListener((message: WorkerMessage, sender, respond) =
         return;
       }
       case "record_start": {
-        // v1.459.0: record what the user does in the tab they are looking at.
+        // v1.458.0: record what the user does in the tab they are looking at.
         const windowId = (message as { windowId?: unknown }).windowId;
         try {
           const [tab] = await chrome.tabs.query(

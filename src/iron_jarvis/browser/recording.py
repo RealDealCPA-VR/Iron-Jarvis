@@ -1,4 +1,4 @@
-"""A task the user RECORDED in the browser, saved as a skill (v1.459.0).
+"""A task the user RECORDED in the browser, saved as a skill (v1.458.0).
 
 The owner: "in the browser extension there should be the capability to record
 a browser based task by the user and that becomes a skill for a browser agent

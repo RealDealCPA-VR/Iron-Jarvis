@@ -251,7 +251,7 @@ PANEL_ACTION_RESET = "reset"
 #: re-asserts its remembered setting on every open, so the daemon's flag is a
 #: mirror of the user's preference, not a second memory of it.
 PANEL_ACTION_AUTO_ALLOW = "auto_allow"
-#: v1.459.0: ``{name, description, steps}`` — save a task the user recorded in
+#: v1.458.0: ``{name, description, steps}`` — save a task the user recorded in
 #: the browser as a skill (``browser/recording.py`` turns it into a SKILL.md a
 #: browser agent follows). The recording itself happens inside the add-on; the
 #: daemon only ever sees the reviewed steps, and never a typed value the user
@@ -316,7 +316,7 @@ PANEL_EVENT_RESET = "reset"
 #: minus the ones marked not to be offered in a "/" menu (``user_invocable``
 #: false). Sent on ``open``. Names and descriptions only, never a skill's body.
 PANEL_EVENT_SKILLS = "skills"
-#: v1.459.0: ``{ok, name, text}`` — the answer to ``record_save``: the skill's
+#: v1.458.0: ``{ok, name, text}`` — the answer to ``record_save``: the skill's
 #: name and one plain sentence (saved, or why not).
 PANEL_EVENT_RECORDED = "recorded"
 
@@ -337,7 +337,7 @@ ALL_PANEL_EVENTS: tuple[str, ...] = (
 )
 
 # --------------------------------------------------------------------------- #
-# Recording a task (v1.459.0)
+# Recording a task (v1.458.0)
 # --------------------------------------------------------------------------- #
 
 #: The kinds of step a recording holds. ``navigate`` goes to an address;

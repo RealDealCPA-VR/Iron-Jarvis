@@ -1,4 +1,4 @@
-// v1.459.0: "Record a task", the sidebar's half.
+// v1.458.0: "Record a task", the sidebar's half.
 //
 // Record starts recording in the tab the user is looking at (the worker and the
 // page reader do the watching); a strip above the box says it is recording and

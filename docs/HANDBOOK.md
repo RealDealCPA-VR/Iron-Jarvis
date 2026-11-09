@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.459.0 (2026-11-09).*
+holds itself to. Current as of v1.458.0 (2026-11-09).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Record a task in the browser, and Jarvis keeps it as a skill (v1.459.0)
+## Record a task in the browser, and Jarvis keeps it as a skill (v1.458.0)
 
 - **Do a task once; Jarvis can do it again.** In the browser sidebar, press the
   round **Record** button (beside "Point at it"), then do the task in the tab

@@ -1,4 +1,4 @@
-// v1.459.0: "Record a task" — the worker's half.
+// v1.458.0: "Record a task" — the worker's half.
 //
 // The page reader records what the user does (content/recorder.ts) and sends
 // each step here; this file keeps the list for the ONE tab being recorded, adds

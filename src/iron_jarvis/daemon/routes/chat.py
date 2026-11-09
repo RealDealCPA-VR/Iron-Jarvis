@@ -4588,7 +4588,7 @@ async def chat_stream(
         # access gate, which strips the acting tier at read_only and all but
         # the status tool at off; the ceiling below applies last, as always.
         _family_ask: list[str] = []
-        # A TASK RECORDED IN THE BROWSER (v1.459.0), picked from the chat's "/"
+        # A TASK RECORDED IN THE BROWSER (v1.458.0), picked from the chat's "/"
         # menu: the skill is a browser agent's playbook, so the browser tools
         # are armed BY SURFACE exactly as the sidebar's are — the reading tools
         # armed, the acting ones visible and asking. Never by a sentence; only

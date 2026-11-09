@@ -1,5 +1,5 @@
 /**
- * v1.459.0: "Record a task" — the add-on's recorder, pinned against its own
+ * v1.458.0: "Record a task" — the add-on's recorder, pinned against its own
  * source in jsdom (extensions/chrome/src/content/recorder.ts, the worker's
  * background/recorder.ts and the panel's sidepanel/recording.ts).
  *

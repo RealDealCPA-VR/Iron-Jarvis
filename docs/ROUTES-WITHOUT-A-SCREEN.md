@@ -68,7 +68,7 @@ are routes the check counts as called that have no caller.
 | GET | `/assignments/{assignment_id}` | KEEP | The single read of the assignments API (the list, create, cancel, unblock and retry have screens). |
 | GET | `/coach/proposals` | KEEP | The coach's cross-agent list; each agent's card reads its own through `GET /agents/{name}/coach`. |
 | GET | `/media/jobs` | KEEP | Headless read of the media job queue; the chat gets a finished job's line from the daemon itself. |
-| POST | `/browser/recordings` | KEEP | v1.459.0: save a task recorded in the browser as a skill, for a script. The add-on saves the same way through its panel socket (`record_save`), which ends in the same function (`browser/recording.save_and_publish`). |
+| POST | `/browser/recordings` | KEEP | v1.458.0: save a task recorded in the browser as a skill, for a script. The add-on saves the same way through its panel socket (`record_save`), which ends in the same function (`browser/recording.save_and_publish`). |
 | GET | `/media/jobs/{job_id}` | KEEP | Headless read of one media job (as above). |
 | GET | `/agents/{name}/face` | KEEP | One agent's face override; the pages read all of them from `GET /agents/faces`, and `PUT`/`DELETE` of this path have screens (by hand). |
 | DELETE | `/goals/{goal_id}` | KEEP (group D) | Deleting a goal from Chat: group D is giving it a button on the Autonomy page (by hand: `GET` of the path is called). |

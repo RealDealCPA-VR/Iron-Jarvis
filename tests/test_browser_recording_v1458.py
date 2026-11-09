@@ -1,4 +1,4 @@
-"""v1.459.0: a task recorded in the browser add-on becomes a SKILL.
+"""v1.458.0: a task recorded in the browser add-on becomes a SKILL.
 
 The owner: "in the browser extension there should be the capability to record
 a browser based task by the user and that becomes a skill for a browser agent

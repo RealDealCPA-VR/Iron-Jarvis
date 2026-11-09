@@ -244,7 +244,7 @@ def served_paths(platform: Any = None) -> frozenset[str]:
 
 
 class RecordingBody(BaseModel):
-    """v1.459.0: a task recorded in the browser add-on, after the user's review.
+    """v1.458.0: a task recorded in the browser add-on, after the user's review.
 
     ``steps`` are checked one field at a time by ``browser/recording.py``; this
     model only shapes the JSON."""
@@ -1200,7 +1200,7 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/browser/recordings")
     async def browser_recording_save(body: RecordingBody) -> dict[str, Any]:
-        """v1.459.0: save a recorded browser task as a skill. The add-on saves
+        """v1.458.0: save a recorded browser task as a skill. The add-on saves
         through its panel socket (``record_save``); this is the same save for a
         script, ending in the same function. 400 with one plain sentence when a
         step cannot be kept (a password value, a page word that looks like an

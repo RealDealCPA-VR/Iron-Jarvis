@@ -1229,7 +1229,7 @@ if (absent.length) {
       expect(transcript()).not.toContain("does not understand");
     });
   });
-  describe("Record a task: Stop opens a review, Save sends it to the daemon (v1.459.0)", () => {
+  describe("Record a task: Stop opens a review, Save sends it to the daemon (v1.458.0)", () => {
     const STEPS = [
       { kind: "navigate", url: "https://books.example.com/invoices", at: 1 },
       { kind: "click", at: 2, target: { role: "button", name: "New invoice", tag: "button", text: "", input_type: "", css: "", unique_name: true } },

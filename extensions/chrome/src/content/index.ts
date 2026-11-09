@@ -86,7 +86,7 @@ function handle(request: PageRequest): Record<string, unknown> {
   if (ACTING_OPS.has(request.op)) {
     cancelPick();
   }
-  // v1.459.0: what Iron Jarvis does on the page is never recorded as the
+  // v1.458.0: what Iron Jarvis does on the page is never recorded as the
   // user's step — `whileActing` holds a recording deaf for the action, and the
   // typing's own trusted `input` events with it.
   if (request.op === METHOD_CLICK) {
@@ -101,7 +101,7 @@ function handle(request: PageRequest): Record<string, unknown> {
   if (request.op === METHOD_SCROLL) {
     return whileActing(() => ({ ...scroll(params) }));
   }
-  // v1.459.0: "Record a task". Starting answers at once; the user's steps go
+  // v1.458.0: "Record a task". Starting answers at once; the user's steps go
   // to the worker one by one (recorder.ts).
   if (request.op === RECORD_START_OP) {
     return { ...startRecording() };

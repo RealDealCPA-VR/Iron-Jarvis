@@ -392,7 +392,7 @@ export function startPick(): { started: boolean; reason?: string } {
   return { started: true };
 }
 
-/** Whether a pick is waiting for its click (v1.459.0: a recording ignores it). */
+/** Whether a pick is waiting for its click (v1.458.0: a recording ignores it). */
 export function isPicking(): boolean {
   return session !== null;
 }

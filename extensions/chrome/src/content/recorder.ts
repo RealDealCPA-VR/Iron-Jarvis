@@ -1,4 +1,4 @@
-// v1.459.0: "Record a task" — what the USER does in this page, step by step.
+// v1.458.0: "Record a task" — what the USER does in this page, step by step.
 //
 // The owner: "record a browser based task by the user and that becomes a skill
 // for a browser agent to use in the future." The sidebar's Record button asks
