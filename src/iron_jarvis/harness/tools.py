@@ -44,7 +44,7 @@ from ..tools.base import (
     safe_path,
     unwritable_workspace_error,
 )
-from ..tools.builtins import _bool_arg, _int_arg, unreadable_reason
+from ..tools.builtins import _bool_arg, _int_arg, missing_file_reason
 from ..tools.undo import (
     INLINE_MAX_BYTES,
     PATCH_UNDO_KIND,
@@ -202,7 +202,7 @@ class MultiEditTool(Tool):
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = safe_path(ctx.workspace, args["path"])
         label = str(args["path"])
-        reason = await asyncio.to_thread(unreadable_reason, path, label)
+        reason = await asyncio.to_thread(missing_file_reason, path, label, ctx.workspace)
         if reason is not None:
             return ToolResult(ok=False, error=reason)
         try:
@@ -940,7 +940,7 @@ class NotebookEditTool(Tool):
         if not label:
             return ToolResult(ok=False, error="`path` is required (the .ipynb file)")
         path = safe_path(ctx.workspace, label)
-        reason = await asyncio.to_thread(unreadable_reason, path, label)
+        reason = await asyncio.to_thread(missing_file_reason, path, label, ctx.workspace)
         if reason is not None:
             return ToolResult(ok=False, error=reason)
         if path.suffix.lower() != ".ipynb":

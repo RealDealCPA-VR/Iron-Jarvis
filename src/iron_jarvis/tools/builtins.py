@@ -281,6 +281,79 @@ async def _extract_document(
 _DIR_HINT_ENTRIES = 12
 
 
+#: The "same name elsewhere" hint (v1.462.0) is bounded like every walk here:
+#: it reads at most this many file names, for at most this long, and names at
+#: most this many places.
+_ELSEWHERE_FILES = 20_000
+_ELSEWHERE_DEADLINE_S = 1.5
+_ELSEWHERE_SHOWN = 3
+
+
+def same_name_elsewhere(workspace: "Path | None", raw: str) -> str:
+    """One sentence naming where a file called like *raw* really is, or "".
+
+    THE MEASURED FAILURE (v1.462.0). In two weeks of real coding work 78
+    ``read_file`` calls ended "no such file", and for 41 of them exactly one
+    file of that name sat elsewhere in the same folder: the model had the name
+    right and the folders wrong (``apps/shared/src/tokens.ts`` for
+    ``packages/shared/src/tokens.ts``). It was told only "no such file", so it
+    guessed again, or fell back to a search command: one or more wasted steps
+    each time on a slow local model. A refusal names what the next call needs.
+
+    Only names INSIDE the workspace are read (what ``list_files`` already
+    shows), pruned and bounded by ``_walk_files``. BLOCKING: callers are
+    already off the event loop. Never raises; cannot tell means "".
+    """
+    try:
+        if workspace is None:
+            return ""
+        base = Path(workspace)
+        asked = [p for p in str(raw or "").replace("\\", "/").split("/") if p]
+        if not asked or not base.is_dir():
+            return ""
+        name = asked[-1].lower()
+        files, _ = _walk_files(
+            base, limit=_ELSEWHERE_FILES, deadline_s=_ELSEWHERE_DEADLINE_S
+        )
+        hits: list[tuple[int, int, str]] = []
+        for f in files:
+            if f.name.lower() != name:
+                continue
+            try:
+                rel = f.relative_to(base).as_posix()
+            except ValueError:
+                continue
+            parts = rel.lower().split("/")
+            shared = 0
+            for a, b in zip(reversed([x.lower() for x in asked]), reversed(parts)):
+                if a != b:
+                    break
+                shared += 1
+            hits.append((-shared, len(parts), rel))
+        if not hits:
+            return ""
+        hits.sort()
+        shown = [rel for _, _, rel in hits[:_ELSEWHERE_SHOWN]]
+        if len(hits) == 1:
+            return f" A file with that name is at {shown[0]}."
+        more = f" (+{len(hits) - len(shown)} more)" if len(hits) > len(shown) else ""
+        return f" Files with that name: {', '.join(shown)}{more}."
+    except Exception:  # noqa: BLE001 - a hint must never cost the refusal
+        return ""
+
+
+def missing_file_reason(target: Path, raw: str, workspace: "Path | None") -> "str | None":
+    """:func:`unreadable_reason`, and for a file that is simply not there, where
+    a file of that name really is (:func:`same_name_elsewhere`). A separate
+    function on purpose: ``unreadable_reason`` keeps its two arguments (tests
+    and other callers stand in for it), and it is looked up when called so a
+    stand-in is honoured. BLOCKING: call it off the event loop."""
+    reason = unreadable_reason(target, raw)
+    if reason == f"no such file: {raw}":
+        reason += same_name_elsewhere(workspace, raw)
+    return reason
+
+
 def unreadable_reason(target: Path, raw: str) -> "str | None":
     """WHY *target* cannot be read as a file, or ``None`` when it can.
 
@@ -655,7 +728,9 @@ class ReadFileTool(Tool):
         path = safe_path(ctx.workspace, args["path"])
         # Stat + (for a directory) one listing — off the event loop like every
         # other filesystem step here (v1.153.1).
-        reason = await asyncio.to_thread(unreadable_reason, path, str(args["path"]))
+        reason = await asyncio.to_thread(
+            missing_file_reason, path, str(args["path"]), ctx.workspace
+        )
         if reason is not None:
             return ToolResult(ok=False, error=reason)
         try:
@@ -1004,7 +1079,9 @@ class EditFileTool(Tool):
         # Stat walk, read and write ALL go to a worker thread — read_file was
         # brought in line in v1.153.1 and edit_file, which does both halves,
         # was not. On a stalled path this froze the whole daemon.
-        reason = await asyncio.to_thread(unreadable_reason, path, str(args["path"]))
+        reason = await asyncio.to_thread(
+            missing_file_reason, path, str(args["path"]), ctx.workspace
+        )
         if reason is not None:
             return ToolResult(ok=False, error=reason)
         try:

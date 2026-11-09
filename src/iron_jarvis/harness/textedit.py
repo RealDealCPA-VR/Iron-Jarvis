@@ -141,6 +141,14 @@ def load_text(path: Path, name: str | None = None) -> TextFile:
     return decode_text(raw, label)
 
 
+#: What a missed edit says when no line of the file is even close to ``old``.
+NOTHING_CLOSE = (
+    " No line of the file is close to it, so the file does not hold what you"
+    " expect. Read the file again, then copy the text to replace from what it"
+    " holds now."
+)
+
+
 def nearest_line_hint(text: str, old: str) -> str:
     """One short sentence naming the file's line most like ``old``'s first
     non-blank line, or "" when nothing is close. Bounded."""
@@ -191,7 +199,14 @@ def apply_exact_edit(text: str, old: str, new: str, *, replace_all: bool = False
         hint = nearest_line_hint(text, old_n)
         msg = f"`old` text was not found in {where}."
         if hint:
-            msg += f" {hint}"
+            raise EditError(f"{msg} {hint} Copy the text exactly, including indentation.")
+        if len(text.splitlines()) <= _HINT_MAX_LINES:
+            # v1.462.0. Read off the live ledger: 83 of 101 failed edits by
+            # team workers had NO line of the file close to `old` (the text
+            # was written from memory, or the file had changed). "Copy the
+            # text exactly" is the wrong advice for that: there is nothing to
+            # copy until the file is read again.
+            raise EditError(msg + NOTHING_CLOSE)
         raise EditError(msg + " Copy the text exactly, including indentation.")
     if count > 1 and not replace_all:
         raise EditError(

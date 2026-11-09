@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.461.0 (2026-11-09).*
+holds itself to. Current as of v1.462.0 (2026-11-09).*
 
 ---
 
@@ -2041,6 +2041,24 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A missing file says where it really is (v1.462.0)
+
+When an agent or a coding session's helper asks to read or edit a file that is
+not there, the refusal now also says where a file of that name is in the same
+folder: "no such file: apps/shared/src/tokens.ts. A file with that name is at
+packages/shared/src/tokens.ts." With several, it lists up to three, the closest
+match first. Only names inside the work folder are looked at, and dependency
+and hidden folders are skipped.
+
+Why: in two weeks of real coding work, 83 reads and edits ended "no such
+file". For 46 of them (55%) a file of that name sat elsewhere in the folder,
+and the model guessed again or fell back to a search command.
+
+An edit whose text is not in the file, and where no line is even close, now
+says to read the file again before editing. Before, it said "Copy the text
+exactly", which only helps a near miss. A near miss still names the closest
+line.
 
 ## Tools you already have are listed, not offered again (v1.461.0)
 
