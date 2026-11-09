@@ -577,22 +577,22 @@ def classify(command: Any, _depth: int = 0) -> list[GitAct]:
 
 
 FORCE_REFUSAL = (
-    "Refused: a force push rewrites the remote's history, and a Build session that works on its "
+    "Refused: a force push rewrites the remote's history, and a coding session that works on its "
     "own branch never does that. Push without --force, or let the user press Push (it never forces)."
 )
 _REFUSALS = {
     "force": FORCE_REFUSAL,
     "delete_remote": (
-        "Refused: this push deletes a branch on the remote, and a Build session that works on its "
+        "Refused: this push deletes a branch on the remote, and a coding session that works on its "
         "own branch never deletes a branch. The user can do that themself."
     ),
     "rewrite": (
         "Refused: this rewrites the branch's history (an amend, a rebase, a reset to another commit, "
-        "or a ref moved by hand), and a Build session that works on its own branch never does that. "
+        "or a ref moved by hand), and a coding session that works on its own branch never does that. "
         "Make a new commit instead; the user can rewrite history themself."
     ),
     "delete_branch": (
-        "Refused: this deletes, renames or force-moves a branch or a tag, and a Build session never "
+        "Refused: this deletes, renames or force-moves a branch or a tag, and a coding session never "
         "does that. The user can do that themself."
     ),
     "worktree": (
@@ -600,7 +600,7 @@ _REFUSALS = {
         "folder is missing right now, the user's own included). The session's own worktree is "
         "removed with Discard."
     ),
-    "delete_repo": "Refused: this deletes a repository on GitHub. A Build session never does that.",
+    "delete_repo": "Refused: this deletes a repository on GitHub. A coding session never does that.",
 }
 
 

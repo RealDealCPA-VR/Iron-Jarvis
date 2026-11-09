@@ -613,7 +613,7 @@ async def _transcribe(
         # that can see; a model without vision must not "read" a scan it was
         # never shown. What this PC read itself is kept by the caller.
         return [], (
-            "scanned document — the model this Build session uses cannot read "
+            "scanned document — the model this coding session uses cannot read "
             "pictures, so the scan was not read by a model; choose a model that "
             "can (Claude or Codex) for the session"
         )

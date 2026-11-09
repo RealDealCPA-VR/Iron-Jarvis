@@ -658,6 +658,39 @@ def _about_something_else(toks: list[str], start: int, end: int, *, before: bool
         return True
     if nxt == "to" and after in _ACTION_AFTER_TO:
         return True
+    if _content_after(toks, end):
+        return True
+    return False
+
+
+#: v1.458.0: the user's own files and documents named a little LATER in the
+#: sentence ("set the model server for coding work in our team DOC", "change
+#: your model server's address in the README") — the words go into that
+#: content, never into this app's settings.
+_TAIL_CONTENT = _CONTENT_NOUNS | frozenset(
+    {
+        "yaml", "yml", "json", "dockerfile", "makefile", "script", "scripts", "syllabus", "contract",
+        "essay", "resume", "article", "blog", "post", "manuscript", "thesis", "textbook", "course",
+        "spec", "specs", "ticket", "tickets", "config.yaml", "manual", "handbook", "playbook",
+    }
+)
+_TAIL_PREPS = frozenset({"in", "into", "inside", "on"})
+_TAIL_WINDOW = 8
+
+
+def _content_after(toks: list[str], end: int) -> bool:
+    """Within ``_TAIL_WINDOW`` words after the phrase: "in / into / on" (never "to":
+    "set my brain profile to the work wiki" names what it is set TO)
+    then (after at most two words) one of the user's own documents."""
+    stop = min(len(toks), end + 1 + _TAIL_WINDOW)
+    for i in range(end + 1, stop):
+        if toks[i] not in _TAIL_PREPS:
+            continue
+        for j in range(i + 1, min(stop + 2, i + 4, len(toks))):
+            if toks[j] in _APP_WORDS:
+                break
+            if toks[j] in _TAIL_CONTENT:
+                return True
     return False
 
 
@@ -720,6 +753,11 @@ def _settings_ask(text: str) -> SettingsAsk:
     }
     keys: list[str] = []
     spans: list[tuple[int, int]] = []
+    #: v1.458.0: the phrase's OWN words, per span — a label that holds a cue
+    #: word ("Only suggest, NEVER act", "LEARN from coding sessions") is not
+    #: asked for by that word ("only suggest, never act is my motto").
+    own_words: list[frozenset[str]] = []
+    tok_starts = [m.start() for m in _TOKEN.finditer(flat)]
     for ph in _index():
         if present.isdisjoint(ph.words[0]):
             continue
@@ -733,6 +771,7 @@ def _settings_ask(text: str) -> SettingsAsk:
                 ):
                     keys.append(ph.key)
                     spans.append((i, i))
+                    own_words.append(frozenset())
                     break
             continue
         at = _match_at(toks, ph.words)
@@ -751,6 +790,7 @@ def _settings_ask(text: str) -> SettingsAsk:
         if not _about_something_else(toks, *at, before=ph.kind != "distinct"):
             keys.append(ph.key)
             spans.append(at)
+            own_words.append(frozenset().union(*ph.words))
     found = bool(keys)
     keys = [k for k in dict.fromkeys(keys) if k]
     extra = any(p.search(text) for p in _EXTRA_REFERENCES)
@@ -762,9 +802,35 @@ def _settings_ask(text: str) -> SettingsAsk:
     # or right after it ("turn keep awake ON") — a long pasted text with a
     # "use" in one paragraph and "local model" in another asks nothing.
     writers = extra or any(
-        start - _CUE_BEFORE <= c <= end + _CUE_AFTER for start, end in spans for c in cue_at
+        start - _CUE_BEFORE <= c <= end + _CUE_AFTER
+        and _cue_counts(c, start, end, own, toks, tok_starts, flat)
+        for (start, end), own in zip(spans, own_words)
+        for c in cue_at
     )
     return SettingsAsk(reader=True, writers=writers, keys=tuple(keys))
+
+
+#: After a phrase: it is being DESCRIBED ("only suggest, never act IS my
+#: motto"), never asked for.
+_DESCRIBED_AFTER = frozenset({"is", "was", "are", "were", "sounds", "seems", "means", "feels"})
+
+
+def _cue_counts(
+    c: int, start: int, end: int, own: frozenset[str], toks: list[str], tok_starts: list[int], flat: str
+) -> bool:
+    """v1.458.0: a cue that is one of the phrase's OWN words counts only when
+    the phrase opens a clause as an order ("Learn from my coding sessions.")
+    and is not described right after ("…never act is my motto"). Any other
+    cue counts as before."""
+    if not (start <= c <= end and toks[c] in own):
+        return True
+    nxt = toks[end + 1] if end + 1 < len(toks) else ""
+    if nxt in _DESCRIBED_AFTER:
+        return False
+    if start == 0:
+        return True
+    head = flat[: tok_starts[start]].rstrip()
+    return not head or head[-1] in ".!?;:\n"
 
 
 def settings_tools_for(text: str, *, auto_tools: bool) -> list[str]:

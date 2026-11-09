@@ -475,7 +475,7 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str,
     with session_scope(engine) as db:
         row = db.get(ChatThreadRecord, str(thread_id or ""))
         if row is None or not is_build_thread(row):
-            raise RewindError("no such Build session", 404)
+            raise RewindError("no such coding session", 404)
         messages = _messages(row)
     starts = turn_starts(messages)
     index = next((i for i, m in starts if m["turnId"] == to), None)
@@ -635,7 +635,7 @@ def checkpoints(engine: Any, thread_id: str) -> list[dict[str, Any]]:
     with session_scope(engine) as db:
         row = db.get(ChatThreadRecord, str(thread_id or ""))
         if row is None or not is_build_thread(row):
-            raise RewindError("no such Build session", 404)
+            raise RewindError("no such coding session", 404)
         messages = _messages(row)
     starts = turn_starts(messages)
     if not starts:

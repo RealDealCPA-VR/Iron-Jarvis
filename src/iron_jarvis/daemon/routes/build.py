@@ -2514,7 +2514,7 @@ NO_FOLDER_NO_BRANCH = (
 )
 #: The title a folderless session's own folder takes when its first message
 #: has no words to name it (a picture alone, a skill alone).
-WORK_FOLDER_TITLE = "Build session"
+WORK_FOLDER_TITLE = "Coding session"
 
 
 def _work_folder_title(text: str) -> str:
@@ -3033,7 +3033,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     try:
         row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         if getattr(row, "archived_at", None) is not None:
             raise HTTPException(status_code=409, detail=ARCHIVED_SENTENCE)
         folder = S.folder_of(row)
@@ -3067,7 +3067,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 made_folder = folder
             row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
             if row is None:
-                raise HTTPException(status_code=404, detail="no such Build session")
+                raise HTTPException(status_code=404, detail="no such coding session")
         problem = await asyncio.to_thread(S.folder_problem, folder)
         if problem:
             raise HTTPException(
@@ -3564,7 +3564,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             if not saved.get("ok"):
                 with contextlib.suppress(Exception):
                     await gen.aclose()
-                raise HTTPException(status_code=404, detail="no such Build session")
+                raise HTTPException(status_code=404, detail="no such coding session")
             lg = logs.start(turn_id, thread_id, recorded_turn(
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
                 no_limit=no_limit, record=record, account_move=move_line,
@@ -4149,7 +4149,7 @@ async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
     try:
         row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         if getattr(row, "archived_at", None) is not None:
             raise HTTPException(status_code=409, detail=ARCHIVED_SENTENCE)
         try:
@@ -4326,7 +4326,7 @@ def register(app: FastAPI, d: Any) -> None:
     def _session_or_404(thread_id: str) -> Any:
         row = S.get_row(engine_of(), thread_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         return row
 
     def _full_view(row: Any) -> dict[str, Any]:
@@ -4696,7 +4696,7 @@ def register(app: FastAPI, d: Any) -> None:
         title = body.title if "title" in fields else None
         row = S.update(engine_of(), thread_id, title=title, setup=setup)
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         return _full_view(row)
 
     @app.post("/build/sessions/{thread_id}/archive")
@@ -4734,7 +4734,7 @@ def register(app: FastAPI, d: Any) -> None:
         _session_or_404(thread_id)
         out = set_thread_archived(engine_of(), thread_id, False)
         if out is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         return out
 
     @app.delete("/build/sessions/{thread_id}")
@@ -4806,7 +4806,7 @@ def register(app: FastAPI, d: Any) -> None:
             if not drop_empty_work_folder(d.platform, thread_id):
                 kept_folder = S.folder_of(row)
         if not delete_thread(engine_of(), thread_id):
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         # v1.422.0 review: a failed reply's kept rounds (a copy of the whole
         # conversation, tool outputs included) go with the session — nothing
         # else would remove them for a week.
@@ -4901,7 +4901,7 @@ def register(app: FastAPI, d: Any) -> None:
 
         row = S.get_row(d.platform.engine, thread_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         try:
             known = set(d.platform.registry.names())
         except Exception:  # noqa: BLE001 — the validator then skips tool names
@@ -4950,7 +4950,7 @@ def register(app: FastAPI, d: Any) -> None:
 
         row = S.get_row(d.platform.engine, thread_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         found = CC.discover(command_folders(row), registry=getattr(d.platform, "skills", None))
         return {
             "commands": [c.row() for c in found.commands] + [s.row() for s in found.skills],
@@ -5334,7 +5334,7 @@ def register(app: FastAPI, d: Any) -> None:
         )
         row = await asyncio.to_thread(S.update, platform.engine, thread_id, setup=patch)
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         turn_id = ""
         if body.continue_:
             turn_id = "bt_" + secrets.token_hex(8)
@@ -5382,7 +5382,7 @@ def register(app: FastAPI, d: Any) -> None:
         wait = wait_record(setup, limit.get("resets_at"))
         row = await asyncio.to_thread(S.update, platform.engine, thread_id, setup={"account_wait": wait})
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         wake_wait_loop()
         return await asyncio.to_thread(_full_view, row)
 
@@ -5395,5 +5395,5 @@ def register(app: FastAPI, d: Any) -> None:
             S.update, d.platform.engine, thread_id, setup={"account_wait": None},
         )
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         return await asyncio.to_thread(_full_view, row)

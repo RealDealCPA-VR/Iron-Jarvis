@@ -182,6 +182,12 @@ class AgentThreadRecord(SQLModel, table=True):
     #: (``for_chat`` finds it by that key), and a job's room must never stand
     #: in for it. ``""`` (and NULL on an older row) = no chat. Additive column.
     home_chat_id: str = Field(default="")
+    #: v1.459.0: the chat TURN a job was handed over from, when that chat had
+    #: no id yet (a new chat's first question goes out before its first save
+    #: names it). The inbound route reads the chat that turn was linked to
+    #: (``POST /chat/turns/{id}/thread``) and writes it into ``home_chat_id``
+    #: — the media jobs' rule (``media/jobs._thread_of_turn``). Additive.
+    home_turn_id: str = Field(default="")
     #: JSON list of participants:
     #: {key, source, name, role, provider?, model?} — ``key`` is
     #: "<source>:<name>" and unique within the thread.
@@ -699,6 +705,7 @@ class AgentThreads:
         participants: list[dict[str, str]],
         project_id: str = "",
         home_chat_id: str = "",
+        home_turn_id: str = "",
     ) -> AgentThreadRecord:
         """A new room. ``project_id`` (v1.304.0) binds it to a project's world;
         the ROUTE validates it (an existing, active project) — the store only
@@ -710,6 +717,7 @@ class AgentThreads:
             participants_json=json.dumps(participants),
             project_id=(project_id or "").strip(),
             home_chat_id=(home_chat_id or "").strip(),
+            home_turn_id="" if (home_chat_id or "").strip() else (home_turn_id or "").strip(),
         )
         with session_scope(self.engine) as db:
             db.add(rec)

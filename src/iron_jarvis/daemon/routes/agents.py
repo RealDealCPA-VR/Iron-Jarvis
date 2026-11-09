@@ -3020,6 +3020,49 @@ def register(app: FastAPI, d) -> None:
         header = request.headers.get("authorization") or ""
         return header[7:].strip() if header.lower().startswith("bearer ") else ""
 
+    def _home_from_turn(d, threads, room) -> str:
+        """v1.459.0: the chat a handed-over job's room belongs to when the job
+        came from a NEW chat (no id yet): the chat its turn was linked to —
+        the live turn's link, else the turn's record — written onto the room
+        as ``home_chat_id`` so the next report needs no lookup. "" when the
+        room has no turn or the turn was never linked (a chat never saved).
+        SYNC; never raises."""
+        turn_id = str(getattr(room, "home_turn_id", "") or "").strip()
+        if not turn_id:
+            return ""
+        found = ""
+        platform = getattr(d, "platform", None)
+        logs = getattr(platform, "turn_logs", None)
+        if logs is not None:
+            try:
+                found = str(logs.thread_for(turn_id) or "")
+            except Exception:  # noqa: BLE001 — an odd holder reads as unknown
+                found = ""
+        if not found:
+            try:
+                from ...core.db import session_scope
+                from ...core.models import ChatTurnRecord
+
+                with session_scope(threads.engine) as db:
+                    rec = db.get(ChatTurnRecord, turn_id)
+                    found = str(rec.thread_id or "") if rec is not None else ""
+            except Exception:  # noqa: BLE001 — not known yet
+                found = ""
+        if found:
+            try:
+                from ...agents.threads import AgentThreadRecord
+                from ...core.db import session_scope
+
+                with session_scope(threads.engine) as db:
+                    row = db.get(AgentThreadRecord, room.id)
+                    if row is not None and not (row.home_chat_id or "").strip():
+                        row.home_chat_id = found
+                        db.add(row)
+                        db.commit()
+            except Exception:  # noqa: BLE001 — the lookup still serves this report
+                log.warning("could not keep a job room's chat", exc_info=True)
+        return found
+
     def _last_inbound_at(threads, room_id: str, who: str) -> str:
         """The ``at`` of the room's newest inbound entry by ``who`` — the key
         the page's ``mirrorRoomInbound`` dedupes on (v1.345.0). "" when the
@@ -3236,6 +3279,11 @@ def register(app: FastAPI, d) -> None:
         job_room = False
         if not chat_thread_id:
             chat_thread_id = str(getattr(room, "home_chat_id", "") or "").strip()
+            if not chat_thread_id:
+                # v1.459.0: a job handed over from a NEW chat (no id yet)
+                # kept the chat turn instead; the chat that turn was linked
+                # to is its home, written onto the room once found.
+                chat_thread_id = await asyncio.to_thread(_home_from_turn, d, threads, room)
             job_room = bool(chat_thread_id)
         store = getattr(d, "comm_thread_store", None)
         poller = getattr(d, "inbound_poller", None)

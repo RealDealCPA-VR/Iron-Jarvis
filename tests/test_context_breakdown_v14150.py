@@ -365,7 +365,7 @@ async def test_claude_code_is_asked_its_own_context_only_when_idle(tmp_path, mon
     assert body["compact"] == {"how": "message", "text": "/compact"}
 
 
-async def test_a_tool_that_says_only_a_total_says_so_and_offers_no_compact(tmp_path, monkeypatch):
+async def test_a_tool_that_says_only_a_total_says_so_and_offers_its_own_compact(tmp_path, monkeypatch):
     work = tmp_path / "work"
     work.mkdir()
     use_fake_pi(monkeypatch, "pi_read", tmp_path / "fake.log")
@@ -381,4 +381,6 @@ async def test_a_tool_that_says_only_a_total_says_so_and_offers_no_compact(tmp_p
     r = body["reading"]
     assert (r["used"], r["window"], r["percent"], r["parts"]) == (60_000, 200_000, 30, [])
     assert body["note"] == "Pi says only how full the conversation is, not what fills it."
-    assert body["compact"]["how"] == "" and "compacts by itself" in body["compact"]["why"]
+    # v1.459.0 (moved on purpose): Pi's own /compact is a press too (the
+    # Code view runs Pi's RPC compact for the typed command).
+    assert body["compact"] == {"how": "message", "text": "/compact"}

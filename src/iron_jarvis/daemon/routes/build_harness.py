@@ -151,5 +151,5 @@ def register(app: FastAPI, d: Any) -> None:
         unknown session. Sync: the threadpool runs it."""
         row = S.get_row(d.platform.engine, thread_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         return instructions_view(d.platform, row)

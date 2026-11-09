@@ -216,7 +216,7 @@ def append_to_chat_thread(
                 # line from an @-panel round, an agent's delivery, a media job
                 # or a remote's inbound must not land in its transcript (nor
                 # un-archive it); the caller reads ``why``.
-                out["why"] = "a Build session — its own turns write it"
+                out["why"] = "a coding session — its own turns write it"
                 return out
             try:
                 msgs = json.loads(r.messages_json or "[]")

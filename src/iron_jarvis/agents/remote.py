@@ -828,7 +828,7 @@ def accepted_no_reply_words(name: str) -> str:
 
 
 async def open_handoff_room(
-    platform: Any, record: Any, task: str, chat_thread_id: str = ""
+    platform: Any, record: Any, task: str, chat_thread_id: str = "", turn_id: str = ""
 ) -> dict[str, Any]:
     """A room the remote can REPORT BACK into, for one handed-over job
     (v1.420.0, C6.3, G62). A remote that answers ``202`` delivers its report
@@ -849,7 +849,9 @@ async def open_handoff_room(
     thread, both carried as ``ToolContext.thread_id``. The room records it as
     its ``home_chat_id`` so the remote's later report is appended to THAT chat
     by the inbound route; ``""`` keeps the old behaviour (the report stays in
-    the room)."""
+    the room). ``turn_id`` (v1.459.0) is the chat turn the job came from when
+    the chat had no id yet: the room keeps it as ``home_turn_id`` and the
+    inbound route finds the chat that turn was linked to later."""
     from types import SimpleNamespace
 
     try:
@@ -870,6 +872,7 @@ async def open_handoff_room(
             participants,
             "",
             str(chat_thread_id or "").strip(),
+            str(turn_id or "").strip(),
         )
         await asyncio.to_thread(
             threads._append,
@@ -953,7 +956,11 @@ class DelegateRemoteTool(Tool):
         if not record.enabled:
             return ToolResult(ok=False, error=f"remote agent '{agent}' is disabled")
         room = await open_handoff_room(
-            self.platform, record, task, getattr(ctx, "thread_id", "") or ""
+            self.platform,
+            record,
+            task,
+            getattr(ctx, "thread_id", "") or "",
+            getattr(ctx, "turn_id", "") or "",
         )
         if room:
             res = await registry.run(record, task, self.platform.secrets.get, **room["kwargs"])

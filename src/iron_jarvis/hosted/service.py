@@ -487,6 +487,17 @@ def check_effort(harness: str, effort: Any, model: Any = "", pi_rows: list[dict[
     return text
 
 
+#: v1.459.0: the tools whose own compact is a "/compact" MESSAGE (the Session
+#: tab's Context press sends it; every other tool compacts by itself).
+#: Antigravity also lists ``compact`` but was never measured here.
+COMPACTS_BY_MESSAGE = (CLAUDE, CODEX, PI, OPENCODE, GROK)
+#: OpenCode's compact in its `/` menu (it does not list it itself).
+OPENCODE_COMPACT_ROW: dict[str, str] = {
+    "name": "compact",
+    "description": "Summarize the conversation to free up room (OpenCode's own compact).",
+}
+
+
 # --------------------------------------------------------------------------- #
 # Homes and the harnesses' own saved sessions
 # --------------------------------------------------------------------------- #
@@ -1468,6 +1479,13 @@ class HostedService:
         # /effort; Claude Code with a note row for each built-in that needs its
         # own terminal and is not in its own list.
         rows = T.menu_rows(harness, rows)
+        if harness == OPENCODE and not any(str(c.get("name") or "").lower() == "compact" for c in rows):
+            # v1.459.0: OpenCode does not LIST its compact, but its ACP side
+            # turns a message that is exactly "/compact" into its own
+            # summarize (read from opencode 1.18.18's program and measured
+            # with a stand-in model server: a summarization request, the
+            # summary as the reply, ``end_turn``).
+            rows = [*rows, dict(OPENCODE_COMPACT_ROW)]
         # v1.418.0 (C4.8): the `/` menu shows each command's argument hint.
         # v1.426.0 (E4): a Codex skill is typed ``$<name>`` (``prefix``).
         return [{"name": c["name"], "description": c.get("description", ""),
@@ -1536,9 +1554,13 @@ class HostedService:
             out["note"] = f"{label} says only how full the conversation is, not what fills it."
         if waiting:
             out["waiting_note"] = f"{label} is asked again when this reply ends."
-        if harness in (CLAUDE, CODEX):
+        if harness in COMPACTS_BY_MESSAGE:
             # v1.426.0 (E4): Codex's own compact too — "/compact" as a message,
             # which its driver turns into ``thread/compact/start`` (measured).
+            # v1.459.0: Pi (the Code view runs Pi's RPC ``compact`` for the
+            # typed command, ``PiDriver.run_builtin``), OpenCode (its ACP side
+            # summarizes on "/compact", measured) and Grok (it lists
+            # ``compact`` in its own commands) — the same press for each.
             out["compact"] = {"how": "message", "text": "/compact"}
         else:
             out["compact"] = {"how": "", "why": f"{label} compacts by itself when the conversation is full."}

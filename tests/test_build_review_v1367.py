@@ -198,7 +198,7 @@ def test_the_daemons_chat_writer_refuses_a_build_session(tmp_path, work):
     out = append_to_chat_thread(engine, sid, [{
         "role": "assistant", "content": "an @-agent's reply", "panelWho": "builtin:builder",
     }])
-    assert out["ok"] is False and "Build session" in out["why"], out
+    assert out["ok"] is False and "coding session" in out["why"], out
     assert messages_of(app, sid) == before, "a chat line landed in a Build session"
     with session_scope(engine) as db:
         assert db.get(ChatThreadRecord, sid).archived_at is not None, "the append un-archived it"

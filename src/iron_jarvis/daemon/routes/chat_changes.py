@@ -255,7 +255,7 @@ def changes_session(session_id: str) -> str:
         return CHAT_SESSION
     if thread_of(sid) and len(sid) <= 120:
         return sid
-    raise HTTPException(status_code=422, detail="session_id must be 'chat' or a Build session's id")
+    raise HTTPException(status_code=422, detail="session_id must be 'chat' or a coding session's id")
 
 
 def collect_changes(

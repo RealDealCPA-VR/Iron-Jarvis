@@ -318,7 +318,7 @@ def _end_build_programs(thread_id: str) -> None:
 #: harness session is never shown as a chat (`chat_surface_only`), so a link
 #: either door writes ("/chat?thread=<id>") would open nothing; refuse it here.
 BUILD_SESSION_NOT_A_CHAT = (
-    "That is a Build session, not a chat, so it cannot be used here."
+    "That is a coding session, not a chat, so it cannot be used here."
 )
 
 
@@ -2376,7 +2376,7 @@ def register(app: FastAPI, d) -> None:
             if r is not None and is_build_thread(r):
                 raise HTTPException(
                     status_code=409,
-                    detail="This is a Build session — change it in Build.",
+                    detail="This is a coding session — change it in Chat › Code.",
                 )
             # getattr-read (defaults "user") so the guard works even before
             # the additive owner column lands — no import-order coupling.

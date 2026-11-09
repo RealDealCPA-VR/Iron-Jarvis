@@ -131,7 +131,9 @@ export async function fetchTurnChangeSet(args: TurnChangesArgs): Promise<TurnCha
   if (args.until !== undefined) body.until = iso(args.until);
   if (args.paths && args.paths.length) body.paths = args.paths;
   if (args.sessionId) body.session_id = args.sessionId;
-  const raw = await post<unknown>("/chat/changes", body);
+  // v1.459.0: a READ (the Changes pane, a reply's files) — its server error
+  // raises the page's banner like any other read (lib/api `pageRead`).
+  const raw = await post<unknown>("/chat/changes", body, { pageRead: true });
   const more =
     !!raw &&
     typeof raw === "object" &&

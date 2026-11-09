@@ -51,7 +51,7 @@ MAX_PLAN_STEPS = 50
 
 #: The words the model reads when nobody can see its question.
 NOBODY_TO_ASK = (
-    "Nobody can answer a question in this turn (only a Build session's live "
+    "Nobody can answer a question in this turn (only a coding session's live "
     "conversation can ask the user). Decide yourself and say what you assumed."
 )
 #: ...when the turn was stopped before the user answered.
@@ -75,7 +75,7 @@ PLAN_APPROVED = (
     "one short line saying you are starting on the plan."
 )
 #: exit_plan_mode called outside a Build session.
-NOT_A_SESSION = "Plan mode exists only in a Build session."
+NOT_A_SESSION = "Plan mode exists only in a coding session."
 
 
 # --------------------------------------------------------------------------- #

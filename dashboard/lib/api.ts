@@ -172,17 +172,20 @@ function signalNetworkError(): void {
 // cold-Ollama semantic search legitimately runs far longer than any poll timeout.
 // `ifNoneMatch` (v1.230.0, FP3): send the ETag a previous response carried; a 304
 // then resolves to the NOT_MODIFIED marker instead of a body (never an error).
-export type ApiInit = RequestInit & { timeoutMs?: number; ifNoneMatch?: string };
+export type ApiInit = RequestInit & { timeoutMs?: number; ifNoneMatch?: string; pageRead?: boolean };
 
 /** A request a page makes to READ (no method, GET or HEAD), as against a
- *  press that changes something. */
-function isPageRead(method: string | undefined): boolean {
+ *  press that changes something. v1.459.0: a READ that goes out as a POST
+ *  (its question is a body — "what did this reply change?") says so with
+ *  `pageRead`, so its server error raises the banner like any other read. */
+function isPageRead(method: string | undefined, pageRead?: boolean): boolean {
+  if (pageRead) return true;
   const m = (method || "GET").toUpperCase();
   return m === "GET" || m === "HEAD";
 }
 
 export async function api<T>(path: string, init?: ApiInit): Promise<T> {
-  const { timeoutMs, ifNoneMatch, ...rest } = init || {};
+  const { timeoutMs, ifNoneMatch, pageRead, ...rest } = init || {};
   const controller = timeoutMs ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   let res: Response;
@@ -230,7 +233,7 @@ export async function api<T>(path: string, init?: ApiInit): Promise<T> {
   }
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) signalAuth(true);
-    else if (res.status >= 500 && isPageRead(rest.method)) signalError(true);
+    else if (res.status >= 500 && isPageRead(rest.method, pageRead)) signalError(true);
     // A SERVER error on a page READ surfaces globally ("Part of this page didn't
     // load"). v1.455.0 (Wave F, item 8): never for a PRESS (POST/PUT/PATCH/
     // DELETE) — the press says its own sentence where it was pressed, and the
@@ -274,7 +277,7 @@ export const get = <T>(path: string, opts?: { timeoutMs?: number; ifNoneMatch?: 
 export const post = <T>(
   path: string,
   body?: unknown,
-  opts?: { timeoutMs?: number; signal?: AbortSignal },
+  opts?: { timeoutMs?: number; signal?: AbortSignal; pageRead?: boolean },
 ) =>
   api<T>(path, {
     method: "POST",

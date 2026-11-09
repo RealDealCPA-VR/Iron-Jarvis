@@ -97,7 +97,7 @@ PROMPT_SHARE = 0.6
 SCAN_SOURCE = "the summary of earlier turns"
 
 # The press's refusals, in plain words (the route answers them as they are).
-NO_SESSION = "no such Build session"
+NO_SESSION = "no such coding session"
 #: Harness gaps (fix 4): the press is "Summarize", the chat's word (v1.356.0
 #: G75 retired "Compact now"); the "/compact" command keeps Claude Code's name.
 ARCHIVED = "This session is archived. Bring it back before you summarize it."

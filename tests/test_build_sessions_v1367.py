@@ -351,7 +351,7 @@ def test_a_chat_can_never_become_a_session_or_back(home, work):
     sid = new_session(client, work)["id"]
     # The chat page saving over a session is refused — one writer.
     r = client.put(f"/chat/threads/{sid}", json={"messages": [{"role": "user", "content": "hijack"}]})
-    assert r.status_code == 409 and "Build session" in r.json()["detail"]
+    assert r.status_code == 409 and "coding session" in r.json()["detail"]
     r = client.put(f"/chat/threads/{sid}", json={"title": "x", "setup": {}})
     assert r.status_code == 409
     assert thread_row(client.app, sid).surface == "build" and messages_of(client.app, sid) == []

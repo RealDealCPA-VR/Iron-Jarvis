@@ -726,7 +726,7 @@ def cut_transcript(engine: Any, thread_id: str, turn_id: str, keep: int, cut_at:
         with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
             row = db.get(ChatThreadRecord, str(thread_id or ""))
             if row is None or not is_build_thread(row):
-                return {"ok": False, "reason": "no such Build session"}
+                return {"ok": False, "reason": "no such coding session"}
             msgs = _messages(row)
             here = msgs[keep] if 0 <= keep < len(msgs) else None
             if (

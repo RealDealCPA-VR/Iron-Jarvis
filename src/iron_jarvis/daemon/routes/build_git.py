@@ -152,7 +152,7 @@ def register(app: FastAPI, d: Any) -> None:
     def _row_facts(thread_id: str) -> "tuple[Any, dict[str, str]]":
         row = S.get_row(engine_of(), thread_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         facts = B.facts_of(_setup_of(row))
         if facts is None:
             raise HTTPException(status_code=409, detail=no_branch_words(row))
@@ -574,7 +574,7 @@ async def draft_message(d: Any, thread_id: str) -> Any:
     engine = platform.engine
     row = await asyncio.to_thread(S.get_row, engine, thread_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="no such Build session")
+        raise HTTPException(status_code=404, detail="no such coding session")
     setup = S._setup(row)
     facts = B.facts_of(setup)
     if facts is None:

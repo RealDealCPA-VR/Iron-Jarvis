@@ -151,16 +151,17 @@ def test_opencodes_commands_are_kept_per_folder(app, tmp_path):
 
     said(a, ["init", "review", "deploy-a"])
     # One folder known: nothing of it shows anywhere else.
-    assert [r["name"] for r in svc.commands_for(O.HARNESS, folder=str(a))] == ["init", "review", "deploy-a"]
-    assert svc.commands_for(O.HARNESS, folder=str(b)) == []
-    assert svc.commands_for(O.HARNESS) == []
+    assert [r["name"] for r in svc.commands_for(O.HARNESS, folder=str(a))] == ["init", "review", "deploy-a", "compact"]
+    # v1.459.0: OpenCode's own compact is always offered (it does not list it).
+    assert [r["name"] for r in svc.commands_for(O.HARNESS, folder=str(b))] == ["compact"]
+    assert [r["name"] for r in svc.commands_for(O.HARNESS)] == ["compact"]
     said(b, ["init", "review", "lint-b"])
     # The folder's own list; another folder (or none) sees only what every
     # folder had.
-    assert [r["name"] for r in svc.commands_for(O.HARNESS, folder=str(b))] == ["init", "review", "lint-b"]
-    assert [r["name"] for r in svc.commands_for(O.HARNESS, folder=str(c))] == ["init", "review"]
+    assert [r["name"] for r in svc.commands_for(O.HARNESS, folder=str(b))] == ["init", "review", "lint-b", "compact"]
+    assert [r["name"] for r in svc.commands_for(O.HARNESS, folder=str(c))] == ["init", "review", "compact"]
     listed = next(h for h in svc.harnesses() if h["id"] == O.HARNESS)["commands"]
-    assert [r["name"] for r in listed] == ["init", "review"]
+    assert [r["name"] for r in listed] == ["init", "review", "compact"]
     # The same folder in other capitals and separators is the same folder.
     assert "deploy-a" in [r["name"] for r in svc.commands_for(O.HARNESS, folder=str(a).upper() + os.sep)]
     # Other tools keep one list.

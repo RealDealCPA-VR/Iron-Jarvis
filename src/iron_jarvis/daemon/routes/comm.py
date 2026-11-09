@@ -291,7 +291,15 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/integrations")
     def list_integrations() -> dict[str, Any]:
-        return {"integrations": d.platform.integrations.list_status()}
+        rows = d.platform.integrations.list_status()
+        # v1.459.0: a web service's own saved settings ride its row, so the
+        # page's "Config (JSON)" box opens on what is saved (it opened on "{}"
+        # and a Save then dropped the address and how the key is sent). Only
+        # names and addresses are kept there — the key itself is a vault row
+        # (``auth_secret`` NAMES it) — and every value is masked anyway.
+        for row in rows:
+            row["config"] = shown_integration_config(d.platform.integrations.stored_config(row["id"]))
+        return {"integrations": rows}
 
     @app.post("/integrations")
     def add_integration(body: IntegrationCreate) -> dict[str, Any]:
@@ -364,7 +372,19 @@ def register(app: FastAPI, d) -> None:
     def configure_integration(iid: str, body: IntegrationConfigBody) -> dict[str, Any]:
         if d.platform.integrations.get_spec(iid) is None:
             raise HTTPException(status_code=404, detail="unknown integration")
-        d.platform.integrations.configure(iid, body.config)
+        merged = merged_integration_config(
+            d.platform.integrations.stored_config(iid), body.config
+        )
+        from ...integrations.builtin import auth_problem
+
+        problem = auth_problem(
+            str(merged.get("auth_kind") or "bearer"),
+            str(merged.get("auth_header") or ""),
+            str(merged.get("auth_user") or ""),
+        )
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+        d.platform.integrations.configure(iid, merged)
         return {"id": iid, "configured": True}
 
     @app.post("/integrations/{iid}/test")
@@ -1294,3 +1314,37 @@ def register(app: FastAPI, d) -> None:
             status = 404 if rejected == "unknown_slug" else 401
             return JSONResponse(status_code=status, content=result)
         return result
+
+
+#: v1.459.0: how a saved web service signs in — kept by a Configure save that
+#: does not name them, so editing the address never drops the key's way of
+#: travelling (or the key's vault row, or the "on this network" allowance).
+#: A key named with ``null`` in the box is removed.
+KEPT_INTEGRATION_KEYS = ("auth_secret", "auth_kind", "auth_header", "auth_user", "allow_internal")
+
+
+def merged_integration_config(stored: dict[str, Any], sent: dict[str, Any]) -> dict[str, Any]:
+    """The config a Configure save stores: what was sent, plus the sign-in
+    keys (``KEPT_INTEGRATION_KEYS``) it did not name; a key sent as ``null``
+    is removed. Never raises."""
+    out = {k: stored[k] for k in KEPT_INTEGRATION_KEYS if isinstance(stored, dict) and k in stored}
+    for k, v in (sent or {}).items():
+        if v is None:
+            out.pop(k, None)
+        else:
+            out[k] = v
+    return out
+
+
+def shown_integration_config(config: dict[str, Any]) -> dict[str, Any]:
+    """A saved config as the page may show it: plain values only, each string
+    masked (``detections.redact.mask``). Never raises."""
+    from ...detections.redact import mask
+
+    out: dict[str, Any] = {}
+    for k, v in (config or {}).items():
+        if isinstance(v, str):
+            out[str(k)] = mask(v)
+        elif isinstance(v, (bool, int, float)) or v is None:
+            out[str(k)] = v
+    return out

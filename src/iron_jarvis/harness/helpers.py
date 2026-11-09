@@ -329,7 +329,7 @@ def target_refusal(parent: "HelperParent | None", *, entry: Any = None, raw: str
     kind = str(getattr(entry, "kind", "") or "")
     if kind == "remote" or name.lower().startswith("remote:"):
         return (
-            f"'{name}' runs on another computer. A Build session's helpers work on this PC, "
+            f"'{name}' runs on another computer. A coding session's helpers work on this PC, "
             "on the session's own account and model — start a helper here instead "
             "(researcher, builder or reviewer)."
         )
@@ -351,7 +351,7 @@ def target_refusal(parent: "HelperParent | None", *, entry: Any = None, raw: str
         if other or (mod and parent.model and mod != parent.model):
             pinned = "/".join(p for p in (prov, mod) if p)
             return (
-                f"'{name}' is set to use {pinned}. A Build session's helpers always use the "
+                f"'{name}' is set to use {pinned}. A coding session's helpers always use the "
                 f"session's own model ({parent.provider}"
                 + (f"/{parent.model}" if parent.model else "")
                 + ") — pick a helper with no model of its own (researcher, builder, reviewer)."

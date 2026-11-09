@@ -146,7 +146,7 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
     try:
         row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         if getattr(row, "archived_at", None) is not None:
             raise HTTPException(status_code=409, detail=ARCHIVED_SENTENCE)
         setup = _setup_of(row)
@@ -235,7 +235,7 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
         question: dict[str, Any] = {"role": "user", "content": text or task, "turnId": turn_id}
         saved = await asyncio.to_thread(S.append_lines, platform.engine, thread_id, [question])
         if not saved.get("ok"):
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         logs = _turn_logs(d)
         # v1.398.0: a night task's attempts run under the night wait — armed
         # while the driver task is created (each attempt's context copies it).

@@ -374,6 +374,9 @@ export interface Integration {
   enabled: boolean;
   configured: boolean;
   required_secrets: string[];
+  /** v1.459.0: what is saved (names and addresses only, masked); absent
+   *  from an older daemon. */
+  config?: Record<string, unknown>;
 }
 
 export interface IntegrationTestResult {

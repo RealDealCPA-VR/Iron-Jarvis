@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 #: A Build session gets at most this many suggestions.
 MAX_BUILD_SUGGESTIONS = 2
 BUSY_REASON = "A reply is still running."
-NO_SESSION_REASON = "no such Build session"
+NO_SESSION_REASON = "no such coding session"
 
 
 async def suggest(platform: Any, thread_id: str, *, running: bool = False) -> dict[str, Any]:

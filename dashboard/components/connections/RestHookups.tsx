@@ -40,7 +40,11 @@ function IntegrationCard({
 }) {
   const [busy, setBusy] = useState<"enable" | "configure" | "test" | null>(null);
   const [showConfig, setShowConfig] = useState(false);
-  const [config, setConfig] = useState("{\n  \n}");
+  // v1.459.0: the box opens on what is SAVED (it opened on "{}", and a Save
+  // then dropped the address and how the key is sent). The daemon also keeps
+  // the sign-in settings a save does not name (routes/comm
+  // ``merged_integration_config``).
+  const [config, setConfig] = useState(() => savedConfigText(integ.config));
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [test, setTest] = useState<IntegrationTestResult | null>(null);
@@ -160,7 +164,10 @@ function IntegrationCard({
           )}
         </button>
         <button
-          onClick={() => setShowConfig((v) => !v)}
+          onClick={() => {
+            if (!showConfig) setConfig(savedConfigText(integ.config));
+            setShowConfig((v) => !v);
+          }}
           disabled={busy !== null}
           className={CALM_ACTION}
         >
@@ -190,6 +197,9 @@ function IntegrationCard({
             spellCheck={false}
             className="field resize-y font-mono text-xs"
           />
+          <p data-testid={`integ-config-kept-${integ.id}`} className="text-[11px] leading-relaxed text-zinc-500">
+            {CONFIG_KEPT_WORDS}
+          </p>
           <button onClick={saveConfig} disabled={busy === "configure"} className="btn-accent px-3 py-1.5 text-xs">
             {busy === "configure" ? <LoaderInline label="Saving…" /> : "Save config"}
           </button>
@@ -221,6 +231,20 @@ function IntegrationCard({
       )}
     </Card>
   );
+}
+
+/** v1.459.0: what the Config box says under it. */
+export const CONFIG_KEPT_WORDS =
+  "The key and how it is sent are kept unless you change them here; set one to null to remove it.";
+
+/** The saved config as the box's starting text (empty braces when nothing is saved). */
+export function savedConfigText(config: Record<string, unknown> | undefined): string {
+  if (!config || typeof config !== "object" || Object.keys(config).length === 0) return "{\n  \n}";
+  try {
+    return JSON.stringify(config, null, 2);
+  } catch {
+    return "{\n  \n}";
+  }
 }
 
 /* -------------------------------------------------------------------------- */

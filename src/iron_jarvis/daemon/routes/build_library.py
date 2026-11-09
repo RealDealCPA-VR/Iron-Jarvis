@@ -65,7 +65,7 @@ def register(app: FastAPI, d: Any) -> None:
         runs once the session has been idle; the screen re-reads then)."""
         row = S.get_row(engine_of(), thread_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         if S.is_folderless(row):
             # v1.379.0: the experience library belongs to a FOLDER the user
             # works in again; a session with no folder has its own one-off
@@ -109,7 +109,7 @@ def register(app: FastAPI, d: Any) -> None:
         platform = d.platform
         row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="no such Build session")
+            raise HTTPException(status_code=404, detail="no such coding session")
         turn_id = (body.turn_id if body is not None else "").strip()
         turns: list[str] = [turn_id] if turn_id else []
         if not turn_id:

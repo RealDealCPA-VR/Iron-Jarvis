@@ -131,12 +131,12 @@ def check_git() -> dict:
         ok,
         f"git found at {path}."
         if ok
-        else "git is not on PATH — Build sessions then work in their folder directly, with "
+        else "git is not on PATH — coding sessions then work in their folder directly, with "
         "no branch of their own (and git-native review is off).",
         fix=""
         if ok
         else "Install Git: https://git-scm.com/downloads (optional unless you "
-        "want Build sessions on their own branch, or git-native review).",
+        "want coding sessions on their own branch, or git-native review).",
         level=RECOMMENDED,
     )
 
@@ -153,7 +153,7 @@ def check_gh() -> dict:
         ok,
         f"GitHub CLI (gh) found at {path}."
         if ok
-        else "The GitHub CLI (gh) is not on PATH — a Build session's Create PR opens "
+        else "The GitHub CLI (gh) is not on PATH — a coding session's Create PR opens "
         "GitHub's own page instead.",
         fix=""
         if ok
@@ -299,7 +299,7 @@ def check_agent_browser() -> dict:
         fix = ""
     elif not edge:
         detail = (
-            "Microsoft Edge was not found — a Build session's agent cannot open your dev server "
+            "Microsoft Edge was not found — a coding session's agent cannot open your dev server "
             "in its own browser (page_open, page_click, page_type, page_read)."
         )
         fix = "Install Microsoft Edge: https://www.microsoft.com/edge"

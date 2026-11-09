@@ -220,7 +220,7 @@ FRESH_AFTER_DIED = (
     "opened: what the page held before (typed text, a sign-in) is gone."
 )
 TOO_MANY = (
-    f"{MAX_BROWSERS} Build sessions already have the agent's browser open and each is in the "
+    f"{MAX_BROWSERS} coding sessions already have the agent's browser open and each is in the "
     "middle of an action, so another cannot start now. Try again in a moment."
 )
 BUSY = (

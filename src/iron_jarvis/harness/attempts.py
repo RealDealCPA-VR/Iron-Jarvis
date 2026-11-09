@@ -1993,7 +1993,7 @@ def keep(platform: Any, thread_id: str, turn_id: str, attempt_id: str) -> dict[s
 
     row = S.get_row(platform.engine, thread_id)
     if row is None:
-        raise AttemptsRefused("no such Build session", 404)
+        raise AttemptsRefused("no such coding session", 404)
     if getattr(row, "archived_at", None) is not None:
         raise AttemptsRefused("This session is archived. Bring it back before you keep an attempt.", 409)
     line = next(
@@ -2255,7 +2255,7 @@ def discard(platform: Any, thread_id: str, turn_id: str) -> dict[str, Any]:
 
     row = S.get_row(platform.engine, thread_id)
     if row is None:
-        raise AttemptsRefused("no such Build session", 404)
+        raise AttemptsRefused("no such coding session", 404)
     line = next(
         (m for m in reversed(S._messages(row))  # noqa: SLF001
          if m.get("role") == "assistant" and m.get("turnId") == turn_id),

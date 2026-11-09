@@ -140,12 +140,12 @@ describe("decodeChanges + fetchTurnChanges", () => {
       since: "2026-10-09T12:00:00.000Z",
       until: "2026-10-09T12:00:30.000Z",
       paths: ["C:/a.txt"],
-    });
+    }, { pageRead: true });
     expect(out.map((c) => c.path)).toEqual(["C:/a.txt"]);
 
     postMock.mockResolvedValue({ changes: [] });
     await fetchTurnChanges({ since: "2026-10-09T12:00:00Z", paths: [] });
-    expect(postMock).toHaveBeenLastCalledWith("/chat/changes", { since: "2026-10-09T12:00:00Z" });
+    expect(postMock).toHaveBeenLastCalledWith("/chat/changes", { since: "2026-10-09T12:00:00Z" }, { pageRead: true });
   });
 });
 

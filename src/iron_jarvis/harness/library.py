@@ -164,7 +164,7 @@ LEDGER_ROWS = 2000
 COMMAND_TOOLS = frozenset({"shell", "process_start", "process_write", "run_code"})
 _FILE_KINDS = frozenset({"file_restore", "file_delete", "files_delete", "files_patch", "file_rename"})
 
-REASON_OFF = "learning from Build sessions is turned off"
+REASON_OFF = "learning from coding sessions is turned off"
 REASON_NO_TURN = "the turn's question or reply is not in the session"
 REASON_NO_WORK = "the turn changed no file and ran no command"
 REASON_MOCK = "the demo model answered — the library never learns from it"

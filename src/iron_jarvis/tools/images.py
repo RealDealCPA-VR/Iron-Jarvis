@@ -613,7 +613,7 @@ def _vision_result(result: Any, raw: str, media_type: str, blob: bytes) -> ToolR
 #: see, so a model without vision gets an honest refusal instead of the
 #: picture being dropped and "described" anyway.
 _HELD_NO_VISION_ERROR = (
-    "The model this Build session uses cannot look at pictures, so the picture "
+    "The model this coding session uses cannot look at pictures, so the picture "
     "was not described. Choose a model that can (Claude or Codex) for the session."
 )
 
