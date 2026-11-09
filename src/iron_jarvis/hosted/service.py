@@ -1480,7 +1480,7 @@ class HostedService:
         # own terminal and is not in its own list.
         rows = T.menu_rows(harness, rows)
         if harness == OPENCODE and not any(str(c.get("name") or "").lower() == "compact" for c in rows):
-            # v1.459.0: OpenCode does not LIST its compact, but its ACP side
+            # v1.459.0: OpenCode does not LIST its compact, but the program itself
             # turns a message that is exactly "/compact" into its own
             # summarize (read from opencode 1.18.18's program and measured
             # with a stand-in model server: a summarization request, the
@@ -1558,7 +1558,7 @@ class HostedService:
             # v1.426.0 (E4): Codex's own compact too — "/compact" as a message,
             # which its driver turns into ``thread/compact/start`` (measured).
             # v1.459.0: Pi (the Code view runs Pi's RPC ``compact`` for the
-            # typed command, ``PiDriver.run_builtin``), OpenCode (its ACP side
+            # typed command, ``PiDriver.run_builtin``), OpenCode (the program itself
             # summarizes on "/compact", measured) and Grok (it lists
             # ``compact`` in its own commands) — the same press for each.
             out["compact"] = {"how": "message", "text": "/compact"}
