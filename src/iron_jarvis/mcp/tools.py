@@ -807,6 +807,45 @@ def _missing_package_in(raw: str) -> str | None:
     return None
 
 
+#: v1.460.0: the extension's OWN code could not load part of what it needs —
+#: Python's ImportError / ModuleNotFoundError, or Node's ESM "does not provide
+#: an export named" / "Cannot find package … imported from" /
+#: ERR_PACKAGE_PATH_NOT_EXPORTED. The stderr tail folds lines to " | ", so a
+#: message ends at "|" or a line end; every run is bounded (linear).
+_PY_IMPORT_RE = re.compile(r"\b(?:ImportError|ModuleNotFoundError): ([^|\r\n]{1,300})")
+_NODE_IMPORT_RE = re.compile(
+    r"(The requested module '[^'|\r\n]{1,200}' does not provide an export named '[^'|\r\n]{1,120}'"
+    r"|Cannot find package '[^'|\r\n]{1,200}' imported from"
+    r"|ERR_PACKAGE_PATH_NOT_EXPORTED[^|\r\n]{0,200})"
+)
+#: A path in parentheses in Python's message (where the library lives on this
+#: PC; the closing bracket may be past a cut tail) — left out of the sentence.
+_PATH_IN_BRACKETS_RE = re.compile(r"\s*\((?:[A-Za-z]:[\\/]|/)[^()|\r\n]{0,400}(?:\)|$)")
+#: Where the transport's own words start after the child's tail (``client.py``:
+#: "; its last output: <tail>; it will be restarted on the next call. …").
+_AFTER_TAIL = "; it will be restarted on the next call"
+#: Launchers that fetch a published package (uv / npm): the package came from
+#: its registry as its makers published it.
+_PUBLISHED_LAUNCHERS = frozenset({"uvx", "uv", "npx", "npx.cmd", "uvx.exe", "uv.exe", "pnpx", "bunx"})
+
+
+def _broken_package_in(raw: str) -> str | None:
+    """What the extension's own code could not load, in its own words (cut,
+    with this PC's paths left out), or None when the text says nothing of the
+    kind."""
+    cut = raw.find(_AFTER_TAIL)
+    if cut >= 0:
+        raw = raw[:cut]
+    m = _PY_IMPORT_RE.search(raw)
+    if m:
+        text = _PATH_IN_BRACKETS_RE.sub("", m.group(1)).strip()
+        return text[:200]
+    m = _NODE_IMPORT_RE.search(raw)
+    if m:
+        return m.group(1).strip()[:200]
+    return None
+
+
 def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict[str, str]:
     """Turn a raw load exception into a sentence the user can act on (v1.256.0, R-02).
 
@@ -846,6 +885,35 @@ def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict
         return {
             "reason": f"the package{name} is not in its registry, so the extension's name for it is wrong",
             "fix": "edit the extension in Settings → Tools and correct the package name (its README gives the exact one)",
+        }
+
+    # THE PACKAGE IS BROKEN (v1.460.0). The server started and its OWN code
+    # failed to import part of what it needs — on the owner's office PC Box's
+    # `mcp-server-box` imported a name its unpinned library had since dropped.
+    # A key or a setting cannot cause this, so the crash branch's "a missing
+    # key or setting is the usual cause" sent the user the wrong way. Checked
+    # before the crash branch for the same reason as the 404 above.
+    broken = _broken_package_in(raw)
+    if broken is not None:
+        command_word = Path(command).name.lower() if command else ""
+        published = command_word in _PUBLISHED_LAUNCHERS
+        return {
+            "reason": (
+                "the extension's own code could not load part of what it needs "
+                f"({broken}), so its package is broken"
+                + (
+                    " upstream, usually because a library it uses changed after it was "
+                    "published. A missing key or setting does not cause this"
+                    if published
+                    else ". A missing key or setting does not cause this"
+                )
+            ),
+            "fix": (
+                "look for a newer version of this extension (its README or the Directory), "
+                "or remove it; reconnecting the same package fails the same way"
+                if published
+                else "install what it needs into the program that runs it, or remove the extension"
+            ),
         }
 
     # A CRASH (v1.342.0): the pack's server started and then exited — at the

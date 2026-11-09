@@ -181,6 +181,31 @@ OLDER_PACKAGE_NOTE = "Uses an older package its makers no longer update."
 # --------------------------------------------------------------------------- #
 _GH = "https://github.com/settings/tokens"
 
+#: Box's server, frozen as it was the day it shipped (v1.460.0). The PyPI
+#: package ``mcp-server-box`` 0.1.2 (2025-06-05) is the last one Box published
+#: (its GitHub repository is discontinued in favour of Box's hosted server,
+#: which needs a Box admin's integration and an OAuth sign-in), and it names
+#: its libraries without upper bounds, so ``uvx mcp-server-box`` today pulls a
+#: ``box-ai-agents-toolkit`` that no longer has ``box_claude_ai_agent_ask``
+#: and the server dies at import. Measured on this PC, each piece needed:
+#: ``--exclude-newer 2025-06-06`` resolves every library as of that day;
+#: ``--with boxsdk==3.14.0`` adds the old SDK the package imports but never
+#: declared; ``--python 3.13`` because the package needs 3.13+ and June-2025
+#: ``pydantic-core`` has no build for 3.14 (uv fetches 3.13 when missing).
+#: With it the server answers ``tools/list`` with 30 tools. A row saved with
+#: the old line is repaired at boot (``mcp/package_fixes``).
+BOX_ARGS: tuple[str, ...] = (
+    "--python",
+    "3.13",
+    "--exclude-newer",
+    "2025-06-06",
+    "--with",
+    "boxsdk==3.14.0",
+    "mcp-server-box==0.1.2",
+)
+#: The line every Box row was saved with before v1.460.0.
+BOX_OLD_ARGS: tuple[str, ...] = ("mcp-server-box",)
+
 #: v1.355.0 (G44): GitHub's own maintained server, hosted by GitHub and
 #: reached over Streamable HTTP. Read off github/github-mcp-server's README
 #: (2026-10-19): `"type": "http", "url": "https://api.githubcopilot.com/mcp/"`
@@ -552,8 +577,12 @@ CATALOG: list[Connector] = [
         connect_via="mcp",
         scopes=["Read & manage files"],
         docs_url="https://developer.box.com",
+        # v1.460.0: Box's own PyPI server (0.1.2, June 2025) is discontinued
+        # and its unpinned libraries moved on, so a plain `uvx mcp-server-box`
+        # fails at start (ImportError). The launch line freezes every library
+        # at the day it shipped; see BOX_ARGS.
         command="uvx",
-        args=["mcp-server-box"],
+        args=list(BOX_ARGS),
         fields=[
             Field("BOX_CLIENT_ID", "Box client id", help="From a Box custom app."),
             Field("BOX_CLIENT_SECRET", "Box client secret", help="From a Box custom app."),

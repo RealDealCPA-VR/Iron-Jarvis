@@ -145,7 +145,10 @@ def _server_identity(cfg: dict[str, Any]) -> tuple[str, str, str, str]:
     transport = str(cfg.get("transport") or "stdio").lower()
     if transport in ("http", "sse"):
         return (transport, str(cfg.get("url") or ""), "", "")
-    package = next((str(a) for a in (cfg.get("args") or []) if not str(a).startswith("-")), "")
+    # v1.460.0: past a launcher option's value (`uvx --python 3.13 pkg`).
+    from .launch_args import package_arg
+
+    package = package_arg(cfg.get("args"))
     return ("stdio", "", str(cfg.get("command") or ""), package)
 
 

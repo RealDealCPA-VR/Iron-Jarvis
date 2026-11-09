@@ -711,6 +711,12 @@ def _package_key(arg: Any) -> str:
 
 
 def _first_package(args: Any) -> str:
+    # v1.460.0: past a launcher option's value (`uvx --python 3.13 pkg`).
+    from ...mcp.launch_args import package_arg
+
+    key = _package_key(package_arg(args))
+    if key:
+        return key
     for arg in list(args or []):
         key = _package_key(arg)
         if key:

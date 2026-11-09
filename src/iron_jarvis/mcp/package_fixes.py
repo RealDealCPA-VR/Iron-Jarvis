@@ -13,12 +13,21 @@ Only names in :data:`RENAMED_PACKAGES` are touched — a table of mistakes the
 app itself made, never a guess about a user's own pack. An argument is
 replaced only when it IS the bad name, or the bad name with an ``@version``
 suffix (kept). Names are logged; nothing else in the entry changes.
+
+v1.460.0 adds :data:`REPLACED_LAUNCH_LINES`: a WHOLE launch line the app
+wrote that no longer starts because the package's own libraries moved on
+upstream (Box's ``uvx mcp-server-box``, whose ``box-ai-agents-toolkit``
+dropped a name the server imports). A row is repaired only when its command
+and its ENTIRE argument list are exactly what the app wrote; a user who
+pinned, edited or added anything keeps their row as it is. The env, the
+vault secrets and the name are untouched, so nothing has to be typed again.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from ..connectors.catalog import BOX_ARGS, BOX_OLD_ARGS
 from ..core.config import persist_config_values
 from ..core.logging import get_logger
 
@@ -28,6 +37,24 @@ log = get_logger(__name__)
 RENAMED_PACKAGES: dict[str, str] = {
     "@modelcontextprotocol/server-sequentialthinking": "@modelcontextprotocol/server-sequential-thinking",
 }
+
+
+#: (command, the exact args the app wrote) -> the args that start today.
+REPLACED_LAUNCH_LINES: dict[tuple[str, tuple[str, ...]], list[str]] = {
+    ("uvx", BOX_OLD_ARGS): list(BOX_ARGS),
+}
+
+
+def _replaced_line(entry: dict[str, Any], args: list[Any]) -> list[str] | None:
+    """The new args for a row whose whole launch line the app wrote and
+    :data:`REPLACED_LAUNCH_LINES` replaces, else None."""
+    if str(entry.get("transport") or "stdio").lower() != "stdio":
+        return None
+    command = entry.get("command")
+    if not isinstance(command, str) or not all(isinstance(a, str) for a in args):
+        return None
+    new = REPLACED_LAUNCH_LINES.get((command, tuple(args)))
+    return list(new) if new is not None else None
 
 
 def _fixed_arg(arg: Any) -> Any:
@@ -43,7 +70,9 @@ def _fixed_arg(arg: Any) -> Any:
 
 def repair_known_package_names(*, config: Any) -> list[str]:
     """Rewrite the args of every installed pack that names a package in
-    :data:`RENAMED_PACKAGES`; persist and return the repaired pack names.
+    :data:`RENAMED_PACKAGES`, or whose whole launch line is one
+    :data:`REPLACED_LAUNCH_LINES` replaces; persist and return the repaired
+    pack names.
     Idempotent; never raises (a failed write is logged and the in-memory
     config still launches the right package this boot)."""
     try:
@@ -57,7 +86,7 @@ def repair_known_package_names(*, config: Any) -> list[str]:
             new_servers.append(entry)
             continue
         args = list(entry["args"])
-        fixed = [_fixed_arg(a) for a in args]
+        fixed = _replaced_line(entry, args) or [_fixed_arg(a) for a in args]
         if fixed == args:
             new_servers.append(entry)
             continue
@@ -77,5 +106,5 @@ def repair_known_package_names(*, config: Any) -> list[str]:
             type(exc).__name__,
         )
         return repaired
-    log.info("MCP pack(s) %s: repaired a package name the app had shipped wrong", ", ".join(repaired))
+    log.info("MCP pack(s) %s: repaired a launch line the app had shipped wrong", ", ".join(repaired))
     return repaired
