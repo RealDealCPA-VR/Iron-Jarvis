@@ -724,8 +724,19 @@ def _write_xlsx(
                 else:
                     ws.append([for_file(row)])
         else:
-            for line in _as_lines(content):
+            from .excel_formula import for_file
+
+            for n, line in enumerate(_as_lines(content), start=1):
                 ws.append([line])
+                # A line that starts with "=" is stored as a FORMULA. It takes
+                # the formula's way in (the refusal of one that would reach
+                # outside the workbook); text that only starts with "="
+                # ("=== see memo ===") stays the text it is.
+                if isinstance(line, str) and line.startswith("="):
+                    if _XLSX_FORMULA_RX.match(line):
+                        ws.cell(row=n, column=1).value = for_file(line)
+                    else:
+                        ws.cell(row=n, column=1).data_type = "s"
     if opts:
         for ws in wb.worksheets:
             xlsx_apply_beauty(ws, theme, opts, warnings)

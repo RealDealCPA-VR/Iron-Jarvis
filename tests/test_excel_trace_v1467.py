@@ -544,3 +544,18 @@ def test_goal_seek_gives_the_round_figure_when_one_lands_on_the_goal(tmp_path):
     wb.save(tmp_path / "third.xlsx")
     third = _run(tmp_path, path="third.xlsx", mode="goal_seek", cell="P!A4", goal=1, change="P!A3")
     assert abs(third.data["answer"] - 1 / 3) < 1e-9
+
+
+def test_a_round_value_that_cannot_be_worked_out_is_passed_over(tmp_path):
+    """=1000/(A1-3) reaches 2,000,000 at A1 = 3.0005. Rounded to 3 the target
+    is a division by zero: the answer must be a finer value, never an error."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "P"
+    ws["A1"] = 5
+    ws["A2"] = "=1000/(A1-3)"
+    wb.save(tmp_path / "pole.xlsx")
+    res = _run(tmp_path, path="pole.xlsx", mode="goal_seek", cell="P!A2", goal=2000000, change="P!A1", low=3.0001, high=5)
+    assert res.ok, res.error
+    assert abs(res.data["answer"] - 3.0005) < 1e-9
+    assert abs(res.data["reaches"] - 2000000) < 1
