@@ -329,7 +329,7 @@ async def test_undo_says_what_was_left_alone(excel, tmp_path):
     assert ok and words == "Budget.xlsx is back to how it was before that change."
     excel.restore.update(left=["Data!B4 changed again since, so it was left as it is"])
     words, ok = await L.restore({"pre_ref": str(f)})
-    assert ok and words.startswith("Put back most of that change in Budget.xlsx. Left as it is: Data!B4 changed again since")
+    assert ok and words.startswith("Put back part of that change in Budget.xlsx. Left as it is: Data!B4 changed again since")
     excel.restore.update(restored=0)
     words, ok = await L.restore({"pre_ref": str(f)})
     assert not ok and words.startswith("Nothing in Budget.xlsx was put back")
@@ -690,3 +690,287 @@ async def test_a_reply_that_claims_a_change_excel_refused_gets_the_note_in_both_
 def test_both_lanes_append_the_note():
     for path in ("daemon/chat_turn.py", "daemon/routes/chat.py"):
         assert "_xl_unchanged(getattr(body, \"turn_id\", \"\"), tools_used)" in _text(SRC / path), path
+
+
+# ------------------------------------------------------------ the review's pins --
+# Each of these was RED on the first cut.
+
+DELETE = {"workbook": "Budget.xlsx", "ops": [{"op": "delete_rows", "sheet": "Data", "at": 3, "count": 2}]}
+
+
+async def test_a_deletion_asks_once_only_whatever_excel_said_about_the_plan(excel, tmp_path):
+    """The card was decided from the child's plan alone: with Excel busy for
+    that one moment, or the rows on a sheet renamed earlier in the call, a
+    deletion ran on the ordinary approval (none at all under Don't ask) and
+    with no copy kept."""
+    tool = L.ExcelLiveEditTool()
+    excel.plan = {"ok": False, "code": "busy", "error": W.BUSY_WORDS}
+    check = await tool.spend_check(dict(DELETE), _ctx(tmp_path))
+    assert check is not None and check.ask and check.once_only and not check.dont_ask_skips
+    assert "cannot be undone" in check.words
+    excel.plan = dict(FakeExcel().plan)  # ...and a plan that did not see the deletion as one
+    tool = L.ExcelLiveEditTool()
+    check = await tool.spend_check(dict(DELETE), _ctx(tmp_path))
+    assert check is not None and check.ask and check.once_only
+    res = await tool.execute(dict(DELETE), _ctx(tmp_path))
+    assert res.ok, res.error
+    copy = next(r for r in excel.asked if r["op"] == "apply")["copy_path"]
+    assert copy and Path(copy).parent == tmp_path / "excel-live" / "copies", "the copy is kept for every deletion"
+    assert L.is_destructive([{"op": "set"}, {"op": "delete_sheet"}]) and not L.is_destructive([{"op": "set"}, {"op": "clear"}])
+    assert not L.is_destructive("nonsense") and not L.is_destructive([None, 3])
+    assert L.DESTRUCTIVE_OPS == W.DESTRUCTIVE_OPS, "one list of what cannot be put back"
+    assert set(L.EDIT_OPS) == set(W.OPS), "the tool offers exactly the steps the child knows"
+
+
+async def test_the_change_lands_on_the_workbook_the_card_named(tmp_path, monkeypatch):
+    """With no workbook named, "the one in front" was worked out again after
+    the card: a user who looked at another workbook while deciding had the
+    change (a deletion, even) made in THAT one."""
+    asked: list[dict] = []
+    front = {"path": r"C:\Clients\A\Budget.xlsx", "name": "Budget.xlsx"}
+
+    def child(request, timeout):
+        asked.append(request)
+        path = request.get("workbook") or front["path"]
+        name = path.rsplit("\\", 1)[-1]
+        if request["op"] == "plan":
+            return {"ok": True, "workbook": name, "path": path, "steps": [], "overwrites": 0, "formulas_lost": 0,
+                    "destructive": ["delete rows 3:4 on Data (6 cell(s) hold something)"], "autosave": False, "calculation": "automatic"}
+        return dict(FakeExcel().apply, workbook=name, path=path)
+
+    monkeypatch.setattr(L, "_ask_worker", child)
+    monkeypatch.setattr(L, "_read_refusal", lambda path: "")
+    tool = L.ExcelLiveEditTool()
+    args = {"ops": DELETE["ops"]}
+    check = await tool.spend_check(args, _ctx(tmp_path))
+    assert "In Budget.xlsx" in check.words
+    front.update(path=r"C:\Clients\B\Payroll.xlsx", name="Payroll.xlsx")  # the user looks at another workbook
+    tool._plans.clear()  # ...for longer than the plan is remembered
+    res = await tool.execute(args, _ctx(tmp_path))
+    assert res.ok and res.data["workbook"] == "Budget.xlsx", res.output
+    assert [r["workbook"] for r in asked if r["op"] == "apply"] == [r"C:\Clients\A\Budget.xlsx"]
+
+
+async def test_a_child_stopped_before_it_began_says_nothing_was_changed(tmp_path, monkeypatch):
+    """No undo record means the child never reached its first step. The answer
+    said "stopped part-way ... cannot be undone" about a workbook nobody touched."""
+    asked = []
+
+    def child(request, timeout):
+        asked.append(request["op"])
+        if request["op"] == "plan":
+            return dict(FakeExcel().plan)
+        return {"ok": False, "code": "no_answer", "error": L.NO_ANSWER, "timed_out": True}  # and it wrote no undo record
+
+    monkeypatch.setattr(L, "_ask_worker", child)
+    res = await L.ExcelLiveEditTool().execute(dict(EDIT), _ctx(tmp_path))
+    assert not res.ok and res.error.startswith(L.UNCHANGED_LEAD) and "part-way" not in res.error
+    assert asked == ["plan", "apply"], "there is nothing to put back"
+
+
+async def test_a_stopped_change_that_could_not_be_put_back_is_never_called_unchanged(excel, tmp_path):
+    L._TURNS.clear()
+    excel.apply = {"ok": False, "code": "no_answer", "error": L.NO_ANSWER, "timed_out": True}
+    excel.restore = {"ok": False, "code": "busy", "error": W.BUSY_WORDS}
+    ctx = _ctx(tmp_path)
+    ctx.turn_id = "t-stopped"
+    res = await L.ExcelLiveEditTool().execute(dict(EDIT), ctx)
+    assert not res.ok and "stopped part-way" in res.error and "may still be in the workbook" in res.error
+    assert L.unchanged_note("t-stopped", []) == "", "something may have changed: the reply is not told otherwise"
+    excel.restore = dict(FakeExcel().restore)
+    ctx.turn_id = "t-put-back"
+    res = await L.ExcelLiveEditTool().execute(dict(EDIT), ctx)
+    assert "back to how it was" in res.error and L.unchanged_note("t-put-back", []) == L.UNCHANGED_NOTE
+
+
+async def test_looking_says_nothing_about_a_workbook_in_a_folder_jarvis_may_not_read(excel, tmp_path, monkeypatch):
+    """Without a range, the look listed every open workbook's sheets, tables
+    and selection whatever folder it was in."""
+    private = str(tmp_path / "private" / "Payroll.xlsx")
+    excel.look["workbooks"].append({"name": "Payroll.xlsx", "path": private, "saved": True, "read_only": False, "autosave": False, "active": False,
+                                    "sheets": [{"name": "Smith K-1", "visible": True, "used": "A1:D9", "tables": ["Salaries"]}]})
+    monkeypatch.setattr("iron_jarvis.core.fs_policy.fs_read_ok", lambda p: (("private" not in str(p)), "That folder isn't one Jarvis may read."))
+    res = await L.ExcelLiveLookTool().execute({}, _ctx(tmp_path))
+    assert res.ok and "Payroll.xlsx" in res.output and "not one Jarvis may read" in res.output
+    assert "Smith K-1" not in res.output and "Salaries" not in res.output and "private" not in res.output
+    assert "Smith K-1" not in json.dumps(res.data) and "sheet Data: A1:B4" in res.output, "the readable workbook is still listed in full"
+    excel.look["active"] = {"workbook": "Payroll.xlsx", "path": private, "sheet": "Smith K-1", "selection": "B4", "cell": "B4", "calculation": "automatic"}
+    res = await L.ExcelLiveLookTool().execute({}, _ctx(tmp_path))
+    assert "Smith K-1" not in res.output and "Smith K-1" not in json.dumps(res.data)
+
+
+async def test_a_refused_plan_for_a_workbook_jarvis_may_not_read_quotes_nothing_from_it(excel, tmp_path, monkeypatch):
+    private = str(tmp_path / "private" / "Payroll.xlsx")
+    excel.plan = {"ok": False, "code": "bad_step", "path": private,
+                  "error": "step 1 (sort): 'Pay' is neither a column letter inside the range nor one of its headings (Name, SSN, Salary)"}
+    monkeypatch.setattr("iron_jarvis.core.fs_policy.fs_read_ok", lambda p: (False, "That folder isn't one Jarvis may read."))
+    res = await L.ExcelLiveEditTool().execute(dict(EDIT), _ctx(tmp_path))
+    assert not res.ok and "SSN" not in res.error and "isn't one Jarvis may read" in res.error
+    excel.plan = dict(FakeExcel().plan, path=private, destructive=["delete rows 3:4 on Smith K-1 (6 cell(s) hold something)"])
+    check = await L.ExcelLiveEditTool().spend_check(dict(DELETE), _ctx(tmp_path))
+    assert check.once_only and "Smith K-1" not in check.words
+
+
+async def test_undo_never_says_most_when_it_cannot_know(excel, tmp_path):
+    f = tmp_path / "u.jsonl"
+    f.write_text("{}\n", encoding="utf-8")
+    excel.restore.update(restored=1, left=["Data!B5, B6 and 40 more changed again since, so they were left as they are"])
+    words, ok = await L.restore({"pre_ref": str(f)})
+    assert ok and words.startswith("Put back part of that change in Budget.xlsx. Left as it is:") and "most" not in words
+
+
+def test_a_folder_check_that_fails_is_a_refusal_not_a_pass(monkeypatch, tmp_path):
+    def boom(p):
+        raise RuntimeError("policy unreadable")
+
+    monkeypatch.setattr("iron_jarvis.core.fs_policy.fs_read_ok", boom)
+    assert L._read_refusal(str(tmp_path / "Budget.xlsx")) != ""
+    assert L._read_refusal("Book1") == "" and L._read_refusal("https://d.docs.live.net/x/Budget.xlsx") == ""
+
+
+async def test_a_write_excel_dropped_is_said_and_nothing_at_all_is_not_a_change(excel, tmp_path):
+    L._TURNS.clear()
+    warn = "no cell changed at Data!H1: it already held this, or Excel did not take it (a merged cell takes a value only in its first cell)"
+    excel.apply.update(changes=[], changed_cells=0, steps=[{"op": "set", "summary": "write 1 cell(s) at Data!H1", "warning": warn, "no_change": True}])
+    ctx = _ctx(tmp_path)
+    ctx.turn_id = "t-merged"
+    res = await L.ExcelLiveEditTool().execute(dict(EDIT), ctx)
+    assert not res.ok and res.error.startswith(L.UNCHANGED_LEAD) and "merged cell" in res.error
+    assert L.unchanged_note("t-merged", []) == L.UNCHANGED_NOTE
+    excel.apply.update(changed_cells=1, changes=[{"sheet": "Data", "cell": "B4", "before": 1, "after": 2}],
+                       steps=[{"op": "set", "summary": "write 1 cell(s) at Data!B4"}, {"op": "set", "summary": "write 1 cell(s) at Data!H1", "warning": warn, "no_change": True}])
+    res = await L.ExcelLiveEditTool().execute(dict(EDIT), ctx)
+    assert res.ok and "2. write 1 cell(s) at Data!H1" in res.output and "WARNING: no cell changed at Data!H1" in res.output
+
+
+def test_a_copy_keeps_the_workbooks_own_ending():
+    assert W.copy_name("ledger.csv") == "ledger.csv" and W.copy_name("Budget.xlsm") == "Budget.xlsm"
+    assert W.copy_name("Book1") == "Book1.xlsx" and W.copy_name('a<b>:c?.xlsx') == "a_b_c_.xlsx"
+    long = "Q" * 80 + ".xlsm"
+    assert L._safe_name(long).endswith(".xlsm") and len(L._safe_name(long)) <= 70, "a long name keeps its ending"
+    assert L._safe_name("ledger.csv") == "ledger.csv"
+
+
+async def test_the_copy_kept_before_a_deletion_is_a_file_excel_can_open(excel, tmp_path):
+    for name, ending in (("ledger.csv", "ledger.csv"), ("Book1", "Book1.xlsx"), ("Q" * 80 + ".xlsm", ".xlsm")):
+        excel.asked.clear()
+        excel.plan.update(workbook=name, destructive=["delete rows 3:4 on Data"])
+        await L.ExcelLiveEditTool().execute(dict(DELETE), _ctx(tmp_path))
+        copy = next(r for r in excel.asked if r["op"] == "apply")["copy_path"]
+        assert copy.endswith(ending) and not copy.endswith(".csv.xlsx"), copy
+
+
+async def test_a_map_of_something_that_is_not_a_workbook_is_refused_in_words(excel, tmp_path, monkeypatch):
+    def child(request, timeout):
+        out = Path(request["dir"]) / "ledger.csv"
+        out.write_text("a,b\n1,2\n", encoding="utf-8")
+        return {"ok": True, "path": str(out), "workbook": "ledger.csv", "source": "Book1", "saved": True}
+
+    monkeypatch.setattr(L, "_ask_worker", child)
+    res = await L.ExcelLiveLookTool().execute({"map": True}, _ctx(tmp_path))
+    assert not res.ok and "ledger.csv" in res.error and "range" in res.error
+    assert not any((tmp_path / "excel-live" / "snap").iterdir()), "the reading copy is removed"
+
+
+class _Book:
+    def __init__(self, name, folder="C:\\w"):
+        self.Name, self.FullName = name, f"{folder}\\{name}"
+
+
+class _App:
+    def __init__(self, *books):
+        self.Workbooks, self.ActiveWorkbook = list(books), books[0]
+
+
+def test_a_name_with_a_dot_never_picks_another_workbook():
+    """"Budget.2025" lost its ".2025" as if it were a file ending, and so
+    named Budget.xlsx."""
+    plain, dated = _Book("Budget.xlsx"), _Book("Budget.2025.xlsx")
+    apps = [_App(plain, dated)]
+    assert W._find_book(apps, "Budget.2025")[1] is dated and W._find_book(apps, "budget")[1] is plain
+    assert W._find_book(apps, "BUDGET.XLSX")[1] is plain and W._find_book(apps, "C:\\w\\Budget.2025.xlsx")[1] is dated
+    with pytest.raises(W.Refusal):
+        W._find_book([_App(plain)], "Budget.2025")
+    with pytest.raises(W.Refusal, match="More than one"):
+        W._find_book([_App(plain), _App(_Book("Budget.xlsx", "D:\\other"))], "Budget.xlsx")
+    # Undo names the workbook by where it was open from, and nothing looser.
+    other = _Book("Budget.xlsx", "D:\\other")
+    with pytest.raises(W.Refusal, match="not open in Excel now"):
+        W._find_book([_App(other)], "C:\\w\\Budget.xlsx", exact=True)
+    assert W._find_book([_App(other, plain)], "c:\\W\\budget.xlsx", exact=True)[1] is plain
+
+
+def test_a_rollback_excel_was_too_busy_for_is_never_reported_as_nothing_changed(monkeypatch, tmp_path):
+    """Excel busy while the finished steps were being put back surfaced as a
+    plain "Excel is busy", which the tool read as "nothing was changed"."""
+
+    class Busy(Exception):
+        hresult = -2147418111
+
+    book = SimpleNamespace(Name="Budget.xlsx", FullName="C:\\w\\Budget.xlsx", ReadOnly=False, Worksheets=[], AutoSaveOn=False, Saved=True)
+    monkeypatch.setattr(W, "_apps", lambda: [object()])
+    monkeypatch.setattr(W, "_find_book", lambda apps, ref, **kw: (SimpleNamespace(Calculation=-4105), book))
+    monkeypatch.setattr(W.time, "sleep", lambda s: None)
+
+    def steps(cx, ops):
+        if not cx.planning:
+            cx.steps.append({"op": "set"})
+            raise Busy()
+
+    tries = []
+
+    def restore(app, wb, path, forgiving):
+        tries.append(forgiving)
+        raise Busy()
+
+    monkeypatch.setattr(W, "_run_steps", steps)
+    monkeypatch.setattr(W, "_restore_file", restore)
+    out = W.op_apply({"op": "apply", "ops": [{"op": "set"}, {"op": "set"}], "undo_path": str(tmp_path / "u.jsonl")})
+    assert out["ok"] is False and out.get("partly") and not out.get("unchanged"), out
+    assert "could not all be put back" in out["error"] and len(tries) > 1, "the rollback is tried more than once"
+
+
+TABLE_ARMS_WHILE_OPEN = [
+    "why is this formula returning #REF!", "fix my formula in D12", "my VLOOKUP returns #N/A", "add a total under column C",
+    "sum rows 2 to 40", "what's in the tab I'm on?", "highlight the duplicates in this column", "freeze the top row of this sheet",
+]
+TABLE_NEVER = [
+    "my current cell phone plan is too expensive", "the active cell phone numbers on file", "what is the current range of estimates",
+    "the K-1 for the Smith trust arrived", "review the W-2 box 12 codes", "Q3 estimated payments are due", "list the open items for the audit",
+    "who are our active clients", "send the selected clients a reminder", "I want to excel at tax planning",
+    "make me a spreadsheet of my 2025 expenses", "create a new workbook for the Jones engagement", "export this to Excel",
+    "build an excel file with one tab per month", "what is the formula for the QBI deduction",
+    "prepare the balance sheet", "the current year return", "fill out the social security benefits worksheet",
+]
+
+
+def test_the_tab_i_am_on_is_a_browsers_tab_unless_excel_is_running():
+    assert not wants_live_excel("summarize the tab I'm on", False), "it armed the Excel tools with Excel closed"
+    assert wants_live_excel("add a total row to the sheet I'm on", False), "a sheet is never a browser's"
+
+
+@pytest.mark.parametrize("text", TABLE_ARMS_WHILE_OPEN)
+def test_natural_requests_about_the_open_workbook_arm_the_look_while_excel_runs(text):
+    assert wants_live_excel(text, True) and not wants_live_excel(text, True, has_files=True)
+
+
+@pytest.mark.parametrize("text", TABLE_NEVER)
+def test_a_cpas_everyday_words_and_a_request_for_a_new_file_arm_nothing(text):
+    assert not wants_live_excel(text, True) and not wants_live_excel(text, False), text
+
+
+def test_the_review_arming_words_are_linear_on_a_long_message():
+    import subprocess
+    import sys
+
+    code = (
+        "import time\n"
+        "from iron_jarvis.tools.autoselect import wants_live_excel\n"
+        "t = time.perf_counter()\n"
+        "for s in ('make ' * 40000, 'create a new ' * 20000, 'formula ' * 30000, 'this ' * 40000, 'rows ' * 40000 + '1', 'column ' * 30000, 'excel at ' * 20000):\n"
+        "    wants_live_excel(s, True)\n"
+        "    wants_live_excel(s * 8, True)\n"
+        "print(time.perf_counter() - t)\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0 and float(out.stdout.strip()) < 5.0, out.stdout + out.stderr

@@ -561,6 +561,10 @@ def op_look(req: dict) -> dict:
     if active_wb is not None:
         act: dict[str, Any] = {"workbook": str(active_wb.Name), "calculation": _calc_words(front)}
         try:
+            act["path"] = str(active_wb.FullName)  # so the daemon can judge its folder before showing the selection
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             act["sheet"] = str(front.ActiveSheet.Name)
             act["selection"] = _addr(front.Selection)
             act["cell"] = _addr(front.ActiveCell)

@@ -202,22 +202,44 @@ def sweep(home: "str | Path") -> None:
 
 
 def _safe_name(name: str) -> str:
-    return re.sub(r"[^A-Za-z0-9 ._-]+", "_", name)[:60] or "workbook"
+    """A workbook's name as a file name, its ending kept: the copy is written
+    in the workbook's own format, and Excel will not open a .xlsm or a .csv
+    that is named .xlsx."""
+    clean = re.sub(r"[^A-Za-z0-9 ._-]+", "_", name) or "workbook"
+    m = re.search(r"\.[A-Za-z0-9]{1,5}$", clean)
+    ending = m.group(0) if m else ""
+    return clean[: len(clean) - len(ending)][:60] + ending
+
+
+#: The steps whose effect cannot be put back (the child's own list).
+DESTRUCTIVE_OPS = ("delete_sheet", "delete_rows", "delete_columns")
+NOT_READABLE = "That workbook is in a folder Jarvis could not check against the folders it may read."
+
+
+def is_destructive(ops: Any) -> bool:
+    """Whether the steps hold one that cannot be put back. Read from the
+    steps themselves, never from Excel's answer: the card for a deletion must
+    not depend on Excel being free to answer at that moment."""
+    return isinstance(ops, list) and any(isinstance(o, dict) and str(o.get("op") or "") in DESTRUCTIVE_OPS for o in ops)
 
 
 def _read_refusal(path: str) -> str:
     """Why Jarvis may not read this open workbook, or "". Only a saved local
-    file is judged: an unsaved Book1 or a OneDrive address has no folder."""
+    file is judged: an unsaved Book1 or a OneDrive address has no folder. A
+    check that fails is a refusal, never a pass."""
     try:
         p = Path(path)
         if "://" in path or not p.is_absolute():
             return ""
+    except Exception:  # noqa: BLE001
+        return ""
+    try:
         from ..core.fs_policy import fs_read_ok  # noqa: PLC0415
 
         ok, why = fs_read_ok(p)
-        return "" if ok else why
+        return "" if ok else (why or NOT_READABLE)
     except Exception:  # noqa: BLE001
-        return ""
+        return NOT_READABLE
 
 
 def snapshot(home: "str | Path", workbook: str) -> "tuple[Path | None, dict]":
@@ -321,11 +343,32 @@ def group_formulas(formulas: "dict[str, str]", limit: int = 80) -> "list[str]":
     return lines
 
 
+def hide_unreadable(out: dict) -> None:
+    """Take out of a look's answer everything about a workbook that is open
+    from a folder Jarvis may not read: its place, its sheets, tables and
+    selection. Only its NAME stays, so the user can be told why it was left
+    out. BLOCKING (the folder check); changes *out* in place."""
+    hidden: set[str] = set()
+    books = out.get("workbooks")
+    for i, b in enumerate(books if isinstance(books, list) else []):
+        if isinstance(b, dict) and _read_refusal(str(b.get("path") or "")):
+            hidden.add(str(b.get("name") or ""))
+            books[i] = {"name": b.get("name"), "not_readable": True, "active": bool(b.get("active"))}
+    act = out.get("active")
+    if isinstance(act, dict) and (_read_refusal(str(act.get("path") or "")) or str(act.get("workbook") or "") in hidden):
+        out["active"] = {"workbook": act.get("workbook"), "not_readable": True}
+    elif isinstance(act, dict):
+        act.pop("path", None)
+
+
 def render_look(out: dict) -> str:
     if not out.get("excel_open"):
         return "Excel is not open on this PC (or no workbook is open in it)."
     lines: list[str] = []
     for b in out.get("workbooks") or []:
+        if b.get("not_readable"):
+            lines.append(f"open workbook: {b.get('name')} (in a folder that is not one Jarvis may read, so nothing in it is shown)")
+            continue
         tags = []
         if b.get("active"):
             tags.append("in front")
@@ -350,8 +393,10 @@ def render_look(out: dict) -> str:
     for name in out.get("protected_view") or []:
         lines.append(f"open in Protected View (cannot be read or changed until the user presses Enable Editing): {name}")
     act = out.get("active") or {}
-    if act:
-        sel = f"{act.get('sheet', '')}!{act.get('selection', '')}" if act.get("selection") else "nothing a cell range"
+    if act.get("not_readable"):
+        lines.append(f"in front now: {act.get('workbook', '')} (not shown)")
+    elif act:
+        sel =f"{act.get('sheet', '')}!{act.get('selection', '')}" if act.get("selection") else "nothing a cell range"
         lines.append(f"selected now: {sel} in {act.get('workbook', '')} (active cell {act.get('cell', '?')}); calculation: {act.get('calculation', 'automatic')}")
     rng = out.get("range")
     if rng:
@@ -448,6 +493,7 @@ class ExcelLiveLookTool(Tool):
             bad = await asyncio.to_thread(_read_refusal, str(rng.get("path") or ""))
             if bad:
                 return ToolResult(ok=False, error=bad)
+        await asyncio.to_thread(hide_unreadable, out)
         return ToolResult(ok=True, output=render_look(out), data={k: out[k] for k in ("excel_open", "workbooks", "active", "range", "protected_view") if k in out})
 
     async def _map(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -463,6 +509,8 @@ class ExcelLiveLookTool(Tool):
                     data = workbook_map(path)
                 except ValueError as exc:
                     return ToolResult(ok=False, error=f"{name}: {exc}. Ask for a range with excel_live_look instead.")
+                except Exception:  # noqa: BLE001 — a .csv or an old .xls open in Excel is not a file the map can read
+                    return ToolResult(ok=False, error=f"{name} is not a kind of workbook the map can read. Ask for a range with excel_live_look instead.")
                 saved = "" if out.get("saved") else " It has changes that are not saved yet; this is the workbook as it is on screen."
                 return ToolResult(ok=True, output=f"{name} as it is open in Excel now.{saved}\n" + render(name, data), data={"workbook": name, "map": data})
             finally:
@@ -529,14 +577,23 @@ class ExcelLiveEditTool(Tool):
         # SAME args object (the pdf_tools pattern).
         self._pending: dict[int, dict[str, str]] = {}
         self._plans: dict[str, tuple[float, dict]] = {}
+        # The workbook a call's card was shown for (its full path), by the
+        # call's args: "the workbook in front" is worked out ONCE, for the
+        # card. A user who looks at another workbook while deciding must not
+        # have the change made in that one (the review).
+        self._targets: dict[str, str] = {}
 
-    async def _plan(self, args: dict[str, Any]) -> dict:
-        key = json.dumps([args.get("workbook"), args.get("sheet"), args.get("ops")], sort_keys=True, default=str)
+    @staticmethod
+    def _key(args: dict[str, Any]) -> str:
+        return json.dumps([args.get("workbook"), args.get("sheet"), args.get("ops")], sort_keys=True, default=str)
+
+    async def _plan(self, args: dict[str, Any], workbook: str = "") -> dict:
+        key = self._key(args)
         held = self._plans.get(key)
         if held and time.monotonic() - held[0] < 20:
             return held[1]
-        out = await ask({"op": "plan", "workbook": args.get("workbook") or "", "sheet": args.get("sheet") or "",
-                         "ops": args.get("ops")}, PLAN_S)
+        out = await ask({"op": "plan", "workbook": workbook or args.get("workbook") or "",
+                         "sheet": args.get("sheet") or "", "ops": args.get("ops")}, PLAN_S)
         if len(self._plans) > 32:
             self._plans.clear()
         self._plans[key] = (time.monotonic(), out)
@@ -549,12 +606,28 @@ class ExcelLiveEditTool(Tool):
         plain value). Everything else follows the ordinary approval."""
         if not isinstance(args.get("ops"), list) or not args["ops"]:
             return None
+        key = self._key(args)
+        self._targets.pop(key, None)  # each call's card names its workbook afresh
         out = await self._plan(args)
-        if not out.get("ok"):
-            return None  # execute says why, in the same words
+        if out.get("ok") and out.get("path"):
+            if len(self._targets) > 64:
+                self._targets.pop(next(iter(self._targets)))
+            self._targets[key] = str(out["path"])
+        gone_words = (
+            "In the workbook open in Excel: this deletes rows, columns or a sheet. This cannot be undone here; "
+            "a copy of the workbook as it is now is kept first."
+        )
+        hidden = bool(out.get("path")) and bool(await asyncio.to_thread(_read_refusal, str(out.get("path") or "")))
+        if not out.get("ok") or hidden:
+            # A deletion is carded whatever Excel answered (it was busy for a
+            # moment, or the workbook is one Jarvis may not read): the card
+            # is decided by the steps. Anything else: execute says why.
+            return SpendCheck(ask=True, once_only=True, words=gone_words) if is_destructive(args["ops"]) else None
         name = str(out.get("workbook") or "the workbook")
         gone = [str(x) for x in out.get("destructive") or []]
-        if gone:
+        if gone or is_destructive(args["ops"]):
+            if not gone:
+                return SpendCheck(ask=True, once_only=True, words=gone_words.replace("the workbook open in Excel", f"{name}, open in Excel"))
             return SpendCheck(
                 ask=True, once_only=True,
                 words=(f"In {name}, open in Excel: {'; '.join(gone)[:300]}. This cannot be undone here; "
@@ -597,38 +670,55 @@ class ExcelLiveEditTool(Tool):
         if not isinstance(ops, list) or not ops:
             return ToolResult(ok=False, error="give the steps to make in 'ops'")
         await asyncio.to_thread(sweep, ctx.config.home)
-        plan = await self._plan(args)
-        if not plan.get("ok"):
-            return self._unchanged(ctx, str(plan.get("error") or NO_ANSWER))
+        # The workbook the card was shown for, not "whichever is in front now".
+        plan = await self._plan(args, self._targets.pop(self._key(args), ""))
+        # A refusal can quote the workbook's sheet names and headings: for a
+        # workbook in a folder Jarvis may not read, only that is said.
         bad = await asyncio.to_thread(_read_refusal, str(plan.get("path") or ""))
         if bad:
             return self._unchanged(ctx, bad)
+        if not plan.get("ok"):
+            return self._unchanged(ctx, str(plan.get("error") or NO_ANSWER))
         name = str(plan.get("workbook") or "workbook")
         copy = ""
-        if plan.get("destructive"):
+        if plan.get("destructive") or is_destructive(ops):
             stamp = time.strftime("%Y-%m-%d %H%M%S")
-            copy = str(await asyncio.to_thread(lambda: live_dir(ctx.config.home, "copies") / f"{stamp} {_safe_name(name)}"))
-            if not copy.lower().endswith((".xlsx", ".xlsm", ".xls", ".xlsb")):
-                copy += ".xlsx"
+            keep = _safe_name(name)
+            if "." not in keep:
+                keep += ".xlsx"  # a workbook never saved (Book1): Excel writes that as .xlsx
+            copy = str(await asyncio.to_thread(lambda: live_dir(ctx.config.home, "copies") / f"{stamp} {keep}"))
         self._plans.clear()
         out = await ask({"op": "apply", "workbook": plan.get("path") or args.get("workbook") or "", "ops": ops,
                          "sheet": args.get("sheet") or "", "undo_path": held["undo_path"], "copy_path": copy}, APPLY_S)
         if out.get("timed_out"):
+            if not await asyncio.to_thread(lambda: Path(held["undo_path"]).is_file()):
+                # The child writes its undo record before its first step: with
+                # none, it was stopped before it changed anything.
+                return self._unchanged(ctx, NO_ANSWER)
             # The child was stopped part-way: put back what it had done.
-            words, _ok = await restore({"pre_ref": held["undo_path"]}, forgiving=True)
-            note_turn(ctx, False)
-            return ToolResult(ok=False, error=f"{NO_ANSWER} The change was stopped part-way. {words}")
+            words, ok = await restore({"pre_ref": held["undo_path"]}, forgiving=True)
+            if ok or "nothing recorded" in words:
+                note_turn(ctx, False)
+                return ToolResult(ok=False, error=f"{NO_ANSWER} The change was stopped part-way. {words if ok else 'Nothing had been changed yet.'}")
+            note_turn(ctx, True)  # what it had done may still be in the workbook: never "nothing was changed"
+            return ToolResult(ok=False, error=(f"{NO_ANSWER} The change was stopped part-way and could not be put back ({words}) "
+                                               "What it had already done may still be in the workbook: look before going on."))
         if not out.get("ok"):
             if out.get("partly"):
                 note_turn(ctx, True)  # something DID change and could not all be put back
                 return ToolResult(ok=False, error=str(out.get("error") or NO_ANSWER))
             return self._unchanged(ctx, str(out.get("error") or NO_ANSWER))
+        steps = [s for s in out.get("steps") or [] if isinstance(s, dict)]
+        if steps and all(s.get("no_change") for s in steps):
+            # Excel took the call and no cell is different (a value written
+            # into a merged cell's second cell goes nowhere): not a change.
+            return self._unchanged(ctx, "; ".join(str(s.get("warning") or "") for s in steps)[:600])
         note_turn(ctx, True)
         lines = [f"Changed {name}, open in Excel ({change_summary(out)}). It is NOT saved: the user saves it in Excel."]
         if out.get("autosave"):
             lines[0] = f"Changed {name}, open in Excel ({change_summary(out)}). AutoSave is on, so Excel has already saved this to its cloud copy."
-        for n, s in enumerate(out.get("steps") or [], start=1):
-            lines.append(f"{n}. {s.get('summary') or s.get('op')}")
+        for n, s in enumerate(steps, start=1):
+            lines.append(f"{n}. {s.get('summary') or s.get('op')}" + (f"  WARNING: {s['warning']}" if s.get("warning") else ""))
         changed = render_changes(out)
         if changed:
             lines.append("changed cells (before -> after):")
@@ -672,7 +762,8 @@ def note_turn(ctx: Any, changed: bool) -> None:
 
 def unchanged_note(turn_id: Any, tools_used: Any) -> str:
     """The note for a reply whose turn TRIED to change the open workbook and
-    never did (refused by Excel, by the user, or by a check). Decided from
+    never did (refused by Excel or by a check; a card the user DECLINED never
+    reaches the tool, so this note is not about that). Decided from
     what ran, never from the reply's words. MIRROR NOTE (lock-step): both
     chat lanes append this beside the other honesty notes. Never raises."""
     try:
@@ -700,7 +791,8 @@ async def restore(undo: dict[str, Any], *, forgiving: bool = False) -> "tuple[st
         return f"Nothing in {name} was put back: " + "; ".join(left)[:500], False
     words = f"{name} is back to how it was before that change."
     if left:
-        words = f"Put back most of that change in {name}. Left as it is: " + "; ".join(left)[:500]
+        # "part", never "most": how much was left is not counted.
+        words = f"Put back part of that change in {name}. Left as it is: " + "; ".join(left)[:500]
     return words, True
 
 
