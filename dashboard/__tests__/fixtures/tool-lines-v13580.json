@@ -292,6 +292,10 @@
       "ok": "queried a workbook",
       "failed": "tried a workbook query and it failed"
     },
+    "excel_reconcile": {
+      "ok": "matched two lists of transactions",
+      "failed": "tried a transaction match and it failed"
+    },
     "excel_sheet_spec": {
       "ok": "captured a sheet's layout",
       "failed": "tried a sheet layout capture and it failed"

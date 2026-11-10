@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.468.0 (2026-11-09).*
+holds itself to. Current as of v1.469.0 (2026-11-09).*
 
 ---
 
@@ -2041,6 +2041,59 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Matching two lists, and Excel's features in a saved workbook (v1.469.0)
+
+**Matching two lists of transactions.** Ask Jarvis to reconcile a bank
+statement to the books, tie a sub-ledger out to its control account, or
+compare two exports, and it now does the matching in code instead of reading
+the rows. Attach the two workbooks (or have them open in Excel) and say which
+is which.
+
+- Amounts are compared in whole cents, and each row is matched once.
+- Rows are matched first by amount and reference (a cheque or invoice
+  number), then by amount with dates within a few days of each other (five
+  unless you say otherwise), then, only if you allow a tolerance, amounts that
+  differ by no more than that.
+- The answer gives both totals, how many pairs matched and how, and every row
+  left over on each side, named by its row number in the sheet.
+- It proves the result: the difference between the two totals must equal the
+  left-over rows, and the answer says "It ties" or says how much is
+  unexplained. This holds whatever the lists contain.
+- It also lists, without counting them as matched: rows with the same amount
+  but dates too far apart, and one row that equals several rows of one day on
+  the other side (a deposit made of several receipts). Those are yours to
+  judge.
+- If the two lists use opposite signs (money out is negative in one and
+  positive in the other) it says so rather than guess.
+- Ask for the result as a workbook and it writes a new file with Summary,
+  Matched and the two left-over lists. It never changes either list, and
+  never replaces an existing file.
+
+Only the first 50,000 rows of each list are read; the answer says when a
+list was cut.
+
+**Colour rules, dropdowns and more in a saved workbook.** Jarvis could
+already add these to a workbook open in Excel. It can now add them to a
+saved file too: colour rules (greater than, between, contains text,
+duplicates, top or bottom, a formula, data bars, colour scales), dropdown
+lists and number or date limits, frozen headings, column widths, named
+ranges, tables, cell notes and print layout. These were checked by opening
+the result in Excel itself: the rules colour exactly the cells they should.
+If one step of a request cannot be made, nothing is saved and the file is as
+it was. The whole change is one Undo.
+
+**What still needs the workbook open in Excel.** Inserting or deleting rows
+and columns, sorting, renaming a sheet, pivot tables and charts. Done on a
+saved file from outside Excel, these would leave formulas pointing at the
+wrong cells, so Jarvis says so and asks you to open the workbook, where
+Excel itself does the work correctly.
+
+**Starter skills.** In the Accounting starter skills, the bank
+reconciliation review now uses the matching tool, and the variance analysis
+follows a figure back to the cells it is built from. A copy you loaded
+before this version keeps its old text; load it again from Templates to get
+the new one.
 
 ## Jarvis beside Excel (v1.468.0)
 

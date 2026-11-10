@@ -189,7 +189,7 @@ class ExcelReadTool(Tool):
 
 
 def _apply_edits(path: Path, sheet: "str | None", edits: list[dict[str, Any]],
-                 add_sheets: list[str]) -> dict[str, Any]:
+                 add_sheets: list[str], features: "list[dict[str, Any]] | None" = None) -> dict[str, Any]:
     from openpyxl import load_workbook
 
     # keep_vba MUST track the extension: this saves back over the SAME path, and
@@ -221,11 +221,23 @@ def _apply_edits(path: Path, sheet: "str | None", edits: list[dict[str, Any]],
         # else: a formatting-only edit (it may name a range) changes no value
         _apply_cell_format(target, cell, e)
         applied += 1
+    feature_lines: list[str] = []
+    if features:
+        # v1.469.0: Excel's own features (colour rules, dropdowns, frozen
+        # headings...). A step that fails raises BEFORE the save, so the file
+        # is left exactly as it was. A step must know its sheet: the call's
+        # 'sheet', or the only sheet of a one-sheet workbook.
+        from .excel_features import apply_features
+
+        only = wb.sheetnames[0] if len(wb.sheetnames) == 1 else None
+        feature_lines = apply_features(wb, sheet or only, features)
     wb.save(str(path))
     formulas = _count_formulas(wb)
     sheets = list(wb.sheetnames)
     wb.close()
     out: dict[str, Any] = {"applied": applied, "sheets": sheets, "formulas": formulas}
+    if feature_lines:
+        out["features"] = feature_lines
     if formulas:
         # v1.465.0: saving from here drops every result Excel had worked out.
         # They are worked out again and saved in the file, and each formula
@@ -375,7 +387,16 @@ class ExcelEditTool(Tool):
         "formula:'=SUM(A1:A10)'}, optional per-edit sheet), format cells "
         "(number_format like '#,##0.00' or '0.0%' or 'yyyy-mm-dd', bold, "
         "italic, fill and font_color as hex, align, wrap; a formatting-only "
-        "edit may name a range like 'A1:D1'), and add sheets. Every formula "
+        "edit may name a range like 'A1:D1'), and add sheets. 'features' adds "
+        "Excel's own features, each {op, sheet?, ...} with the same fields as "
+        "for an open workbook: conditional_format {range, rule, value?, "
+        "value2?, formula?, fill?, font_color?, bold?}, validation {range, "
+        "list | source | type+min/max, message?}, freeze {cell | 'none'}, "
+        "column_width {columns, width}, autofit {columns?}, name {name, "
+        "refers_to}, table {range, name?}, note {cell, text}, print_setup "
+        "{orientation?, fit_width?, print_area?, title_rows?, header?, "
+        "footer?}. Inserting or deleting rows and columns, sorting, pivot "
+        "tables and charts need the workbook open in Excel. Every formula "
         "you write is WORKED OUT and its result is returned and saved in the "
         "file: read the results and report those numbers, never your own "
         "arithmetic. Untouched cells keep their formatting/formulas. Undoable. "
@@ -408,6 +429,11 @@ class ExcelEditTool(Tool):
                 },
             },
             "add_sheets": {"type": "array", "items": {"type": "string"}},
+            "features": {
+                "type": "array",
+                "description": "Excel's own features to add, each {op, ...} (see the description)",
+                "items": {"type": "object", "properties": {"op": {"type": "string"}, "sheet": {"type": "string"}}, "required": ["op"]},
+            },
         },
         "required": ["path"],
     }
@@ -456,13 +482,29 @@ class ExcelEditTool(Tool):
             return ToolResult(ok=False, error=f"not an Excel workbook: {target.name}")
         edits = [e for e in (args.get("edits") or []) if isinstance(e, dict)]
         add_sheets = [str(s) for s in (args.get("add_sheets") or []) if str(s).strip()]
-        if not edits and not add_sheets:
-            return ToolResult(ok=False, error="nothing to do — pass edits and/or add_sheets")
+        features = args.get("features") or []
+        if features:
+            # Checked before the workbook is opened: a step only Excel itself
+            # can make safely (a sort, an inserted row) is refused in words.
+            from .excel_features import FeatureRefused, check_features
+
+            try:
+                check_features(features)
+            except FeatureRefused as exc:
+                return ToolResult(ok=False, error=f"{exc} Nothing was changed.")
+        if not edits and not add_sheets and not features:
+            return ToolResult(ok=False, error="nothing to do — pass edits, add_sheets and/or features")
         try:
             result = await asyncio.to_thread(
-                _apply_edits, target, args.get("sheet"), edits, add_sheets
+                _apply_edits, target, args.get("sheet"), edits, add_sheets, features
             )
         except Exception as exc:  # noqa: BLE001
+            from .excel_features import FeatureRefused
+
+            if isinstance(exc, FeatureRefused):
+                # A step's own refusal (a bad range, an unknown sheet): raised
+                # before the save, so the file is as it was.
+                return ToolResult(ok=False, error=f"{exc} Nothing was changed.")
             return ToolResult(ok=False, error=_open_error(exc, target))
         rel = str(target.relative_to(Path(ctx.workspace).resolve())).replace("\\", "/")
         # ABSOLUTE, like write_document and redact_pii (the v1.153.2 rule): a
@@ -478,6 +520,8 @@ class ExcelEditTool(Tool):
             shown = (_shown(r["value"]) if "value" in r
                      else f"NOT WORKED OUT ({r['error']})")
             lines.append(f"{r['sheet']}!{r['cell']} {r['formula']} = {shown}")
+        if result.get("features"):
+            lines.append("added: " + "; ".join(result["features"]))
         if result.get("note"):
             lines.append(result["note"])
         return ToolResult(

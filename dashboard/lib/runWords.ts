@@ -134,6 +134,7 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   excel_formula_check: { did: "Checked a formula", noun: "formula check" },
   calculate: { did: "Worked out the figures", noun: "calculation" },
   excel_trace: { did: "Traced how a number is built", noun: "number trace" },
+  excel_reconcile: { did: "Matched two lists of transactions", noun: "transaction match" },
   excel_live_look: { did: "Looked at the workbook open in Excel", noun: "look at Excel", nouns: "looks at Excel" },
   excel_live_edit: { did: "Changed the workbook open in Excel", noun: "change in Excel", nouns: "changes in Excel" },
   excel_sheet_spec: { did: "Captured a sheet's layout", noun: "sheet layout capture" },

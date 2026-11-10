@@ -312,6 +312,9 @@ def default_permissions() -> dict[str, str]:
         "excel_live_look": "allow",
         "excel_live_edit": "ask",
         "excel_trace": "allow",  # v1.467.0: reads and works out; changes nothing
+        # v1.469.0: reads two lists; writes only a NEW result file in the
+        # workspace when asked to (like convert_document).
+        "excel_reconcile": "allow",
         # Office capability tools (C-03/C-07/C-09): docx_edit and pdf_form_fill
         # write workspace-confined, TX-01 undoable files (a copy by default) —
         # the same three facts that put excel_edit here. compare_documents and

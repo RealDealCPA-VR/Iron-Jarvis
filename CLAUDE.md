@@ -16639,6 +16639,67 @@ does not need a bump, stop and bump it.
     written from Excel's documented error codes, not driven; no panel inside
     Excel; agents and the POST lane cannot change a workbook.
 
+- **Matching two lists of transactions in whole cents; Excel's own features
+  in a SAVED workbook; what only Excel can do safely is refused** (v1.469.0;
+  step 5 of the live-Excel plan).
+  - **`documents/excel_reconcile.py`, tool `excel_reconcile`** (allow tier;
+    REVERSIBLE only because `save_as` writes a NEW .xlsx in the workspace,
+    undo kind `file_delete`, an existing file refused; untrusted content; on
+    the rosters beside `excel_trace`). Each side is `{path (a file or
+    live:<name>), sheet?, amount | money_in + money_out, date?, ref?,
+    description?, header_row?, flip?}` read through `_load_table_computed`
+    (unsaved formulas worked out; `MAX_ROWS` 50,000, said when cut).
+    `to_cents` rounds the way Excel shows a number (15 significant digits,
+    half away from zero) and reads "1,234.50", "(45.00)", "$12", "15.00-".
+    PASSES, each row matched at most once: amount + reference (`norm_ref`:
+    no case, punctuation or leading zeros), amount + dates within
+    `date_window_days` (default 5; inside one amount both lists are walked in
+    date order, `_walk`, which finds the MOST pairs: pinned against a
+    brute-force answer), amount alone only when a list has no date column,
+    then `tolerance`. NEVER matched, only listed: the same amount outside the
+    window (`near`), one row equal to several unmatched rows of one day on
+    the other side (`groups`). `opposite_signs` is noticed, never applied.
+  - **THE PROOF IS AN INVARIANT:** `totals()` gives `difference` (total A −
+    total B) and `explained` (only-in-A − only-in-B + differences inside
+    tolerance pairs); they are equal for any lists (300 random cases pinned,
+    with "no row lost, invented or matched twice"). The answer prints "It
+    ties" from that comparison, never from a claim.
+  - **`documents/excel_features.py`** (`excel_edit` `features`): steps with
+    the LIVE tool's names and fields (pinned against `excel_live._EDIT_HELP`):
+    `FEATURE_OPS` conditional_format, validation, freeze, column_width,
+    autofit (by text length; a saved file has no Excel to measure fonts, and
+    the answer says so), name, table, note, print_setup. `NEEDS_EXCEL`
+    (insert/delete rows and columns, sort, filter, rename_sheet, delete_sheet,
+    pivot, chart, refresh) is refused by `check_features` BEFORE the workbook
+    is opened: openpyxl adjusts no references, so those would leave formulas
+    pointing at the wrong cells. A step that fails raises `FeatureRefused`
+    before `wb.save`, so the file is byte-identical (pinned by hash) and the
+    answer ends "Nothing was changed."; only `FeatureRefused` gets those
+    words, every other error keeps `_open_error`. A step never guesses its
+    sheet (the call's `sheet`, `Sheet!A1`, or a one-sheet workbook). Formula
+    results are stored again after the save (`store_results`).
+  - **Checked in the real Excel**
+    (`tests/test_excel_features_real_v1469.py`, `IJ_LIVE_EXCEL=1`): the saved
+    file is opened read-only in the test's own hidden Excel and each colour
+    rule is read through `DisplayFormat` cell by cell, the dropdowns through
+    `Validation`, plus the name, table, note, widths, print setup and frozen
+    heading.
+  - **Arming:** `autoselect.wants_excel_reconcile(text, picked)` only beside
+    a spreadsheet tool the turn already has, and in
+    `live_excel_companions`; armed under the ceiling in
+    `_resolve_armed_tools` with the trace.
+  - **Skills:** the starter `bank-reconciliation-review` and
+    `variance-analysis` name the new tools (still five skills per bundle,
+    pinned). A copy the user loaded earlier keeps its old text.
+  - **Pins:** `tests/test_excel_reconcile_v1469.py`,
+    `tests/test_excel_features_v1469.py`,
+    `tests/test_excel_features_real_v1469.py`.
+  - **OPEN:** rows past 50,000 are not read; a group is offered only for
+    rows of ONE day; `.csv` lists must be converted first; charts and pivot
+    tables in a saved file are not built (openpyxl can draw simple charts,
+    not tried); a workbook's existing pivot tables and some charts can still
+    be simplified by any save from here (the tool's older note says so).
+
 - **Jarvis beside Excel: the chat knows what is in front in Excel, by the
   user's own switch; a narrow chat window stays beside the workbook**
   (v1.468.0; step 4 of the live-Excel plan).

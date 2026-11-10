@@ -4760,11 +4760,14 @@ def _resolve_armed_tools(
     # with any spreadsheet tool the turn already has. Each only while the
     # ceiling has room, like the calculator.
     if getattr(body, "auto_tools", False) or _excel_on:
-        from ..tools.autoselect import live_excel_companions, wants_excel_trace
+        from ..tools.autoselect import live_excel_companions, wants_excel_reconcile, wants_excel_trace
 
         _extra = live_excel_companions(last_user) if "excel_live_look" in auto else []
         if wants_excel_trace(last_user, explicit + auto) and "excel_trace" not in _extra:
             _extra.append("excel_trace")
+        # v1.469.0: matching two lists rides the same way.
+        if wants_excel_reconcile(last_user, explicit + auto) and "excel_reconcile" not in _extra:
+            _extra.append("excel_reconcile")
         for _name in _extra:
             if (
                 (_ceiling >= _MAX_ARMED_TOOLS or len(explicit) + len(auto) < _ceiling)

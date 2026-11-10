@@ -3467,6 +3467,26 @@ def wants_excel_trace(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
     return bool(_TRACE_RX.search((text or "")[:4000]))
 
 
+#: MATCHING TWO LISTS (v1.469.0): words that ask for a reconciliation. Like
+#: tracing, they arm ``excel_reconcile`` only beside a spreadsheet tool the
+#: turn already has: "reconcile" is an everyday word too.
+_RECONCILE_RX = re.compile(
+    r"(?i)\b(?:reconcil\w*|bank\s+rec\b|tie[\s-]?outs?\b|ties?\s+(?:out|to|back)\b|unmatched|outstanding\s+(?:cheques|checks|deposits|items)"
+    r"|(?:cheques|checks|deposits|items)\b[^.?!\n]{0,40}?\boutstanding\b"
+    r"|deposits\s+in\s+transit|match(?:es|ed|ing)?\b[^.?!\n]{0,60}?\b(?:against|to|with)\b"
+    r"|compare\b[^.?!\n]{0,60}?\b(?:statement|ledger|books|bank)\b[^.?!\n]{0,60}?\b(?:to|with|against)\b"
+    r"|(?:missing|not)\s+(?:in|from|on)\s+the\s+(?:bank|books|ledger|statement))"
+)
+
+
+def wants_excel_reconcile(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
+    """True when the turn already has a spreadsheet tool and the message asks
+    to match two lists. Pure, linear."""
+    if not _TRACE_CARRIERS.intersection(picked):
+        return False
+    return bool(_RECONCILE_RX.search((text or "")[:4000]))
+
+
 def live_excel_companions(text: str) -> "list[str]":
     """The read tools that go with ``excel_live_look`` for this message: they
     read the open workbook through a ``live:`` path, so they must be armed to
@@ -3477,6 +3497,8 @@ def live_excel_companions(text: str) -> "list[str]":
         out.append("excel_trace")
     if _QUERY_TALK_RX.search(msg):
         out.append("excel_query")
+    if _RECONCILE_RX.search(msg):
+        out.append("excel_reconcile")
     return out
 
 

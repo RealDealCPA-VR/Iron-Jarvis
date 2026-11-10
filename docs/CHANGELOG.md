@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.469.0
+
+**Matching two lists, and Excel's features in a saved workbook.** **Matching two lists of transactions.** Ask Jarvis to reconcile a bank statement to the books, tie a sub-ledger out to its control account, or compare two exports, and it now does the matching in code instead of reading the rows.
+
 ## v1.468.0
 
 **Jarvis beside Excel.** Jarvis can now sit beside your workbook and know what you have selected, the way a panel inside Excel would.
@@ -77,7 +81,3 @@
 ## v1.451.0
 
 **Settings, the automations pages and Help, today.** **Settings** keeps expert rows under a closed "More options" per group; it says how many of them you have changed.
-
-## v1.450.0
-
-**The first run, and every connection, in plain words.** **No Claude Code or Codex yet?** The connect door offers "Install Claude Code for me" / "Install Codex for me": a Build terminal opens and runs the vendor's own installer where you can watch it.
