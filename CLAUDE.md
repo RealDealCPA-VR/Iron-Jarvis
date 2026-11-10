@@ -16480,6 +16480,12 @@ does not need a bump, stop and bump it.
       and one output line per formula it wrote; takes formatting keys
       (`_FORMAT_KEYS`: number_format, bold, italic, fill, font_color, align,
       wrap; a formatting-only edit may name a range and writes NO value).
+    - `write_document` of an .xlsx appends `excel_map.written_summary`
+      (formula count, ≤ 8 totals with values, ≤ 6 WORTH A LOOK lines;
+      `data["workbook"]`): the model's own workbook is reviewed in the answer
+      to the write. A workbook with no formula adds nothing.
+    - `Grid._peek` reads a cell without creating it (asking openpyxl for a
+      missing cell makes one and grows `max_row`).
     - `excel_read` (values) and `excel_query` (`_load_table_computed`) fill
       unsaved formulas through `fill_rows`; `worked_out` /
       `FORMULAS_WORKED_OUT_NOTE` say so; `FORMULAS_LEFT_OUT_NOTE` is only

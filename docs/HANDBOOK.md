@@ -2077,7 +2077,10 @@ works every formula out and saves each result in the file beside its formula.
 The file then reads correctly in any program (a preview, an email attachment,
 another tool), not only after Excel has opened it. Excel still works every
 formula out again itself when it opens the file, so its own answer always
-wins. After an edit, Jarvis reports what each formula it wrote comes to.
+wins. After an edit, Jarvis reports what each formula it wrote comes to. After
+writing a new workbook, it reports the totals and anything worth a look in
+what it just wrote, so a total that stops two rows short is caught in the same
+step and not after you open the file.
 
 **A map of the workbook.** Before Jarvis works on a workbook it now reads a
 map of it. For each sheet the map says:

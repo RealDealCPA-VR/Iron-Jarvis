@@ -178,13 +178,25 @@ class Grid:
             self._fwb = load_workbook(str(self._path), data_only=False, read_only=False)
         return self._fwb
 
+    @staticmethod
+    def _peek(ws: Any, row: int, col: int) -> Any:
+        """A cell's value WITHOUT creating the cell. Asking the library for a
+        cell that is not there makes one, so reading a far-away blank (=Z99999)
+        grew the sheet, and every whole-column range after it walked 99,999
+        rows."""
+        held = getattr(ws, "_cells", None)
+        if isinstance(held, dict):
+            cell = held.get((row, col))
+            return None if cell is None else cell.value
+        return ws.cell(row=row, column=col).value
+
     def saved(self, sheet: str, col: int, row: int) -> Any:
         """The value Excel saved in the cell (None for a formula never saved)."""
-        return self._sheet(self._wb, sheet).cell(row=row, column=col).value
+        return self._peek(self._sheet(self._wb, sheet), row, col)
 
     def formula(self, sheet: str, col: int, row: int) -> "str | None":
         """The cell's formula text, or None when it holds a plain value."""
-        v = self._sheet(self._formulas(), sheet).cell(row=row, column=col).value
+        v = self._peek(self._sheet(self._formulas(), sheet), row, col)
         return v if isinstance(v, str) and v.startswith("=") else None
 
     def max_row(self, sheet: str) -> int:

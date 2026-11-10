@@ -406,14 +406,6 @@ def test_a_workbook_too_large_to_work_out_says_so_everywhere(tmp_path, monkeypat
     _inventory(tmp_path / "inv.xlsx")
     monkeypatch.setattr(R, "MAX_CELLS", 5)  # the sheet states 5 x 4 = 20 cells
     assert R.cell_estimate(tmp_path / "inv.xlsx") >= 20
-
-    # a workbook written as a stream states no size: its XML's size is read instead
-    stream = Workbook(write_only=True)
-    sheet = stream.create_sheet("S")
-    for i in range(400):
-        sheet.append([i, i * 2, f"=A{i + 1}+B{i + 1}"])
-    stream.save(tmp_path / "stream.xlsx")
-    assert R.cell_estimate(tmp_path / "stream.xlsx") > 600, "1,200 cells, and no stated size"
     assert "too large" in R.too_large(tmp_path / "inv.xlsx")
     res = R.compute_missing(tmp_path / "inv.xlsx")
     assert res.computed == 0 and "too large" in res.why_not
@@ -428,3 +420,57 @@ def test_a_workbook_too_large_to_work_out_says_so_everywhere(tmp_path, monkeypat
     # the profile falls back to the quick view
     p = _run(ExcelProfileTool(), {"path": "inv.xlsx"}, tmp_path)
     assert p.ok and p.data["quick"] is True
+
+
+# ----------------------------------- a written workbook answers with its totals --
+
+
+def _write_tool():
+    from iron_jarvis.documents.tools import document_tools
+
+    return next(t for t in document_tools() if t.name == "write_document")
+
+
+def test_writing_a_workbook_answers_with_its_totals_and_what_is_worth_a_look(tmp_path):
+    rows = [["Item", "Qty", "Price", "Line"]] + [[f"I{i}", i, 10, f"=B{i + 1}*C{i + 1}"] for i in range(1, 8)]
+    rows += [["Total", "", "", "=SUM(D2:D6)"]]  # stops two rows short of D8
+    res = _run(_write_tool(), {"path": "inv.xlsx", "content": rows}, tmp_path)
+    assert res.ok, res.error
+    assert "formulas: 8, worked out and saved in the file" in res.output
+    assert "total Sheet!D9 (Total): =SUM(D2:D6) = 150.00" in res.output
+    assert "WORTH A LOOK: Sheet: D9 =SUM(D2:D6) stops short: it leaves out D7:D8" in res.output
+    assert res.data["workbook"]["formulas"] == 8 and res.data["workbook"]["totals"][0]["value"] == 150
+    assert load_workbook(tmp_path / "inv.xlsx", data_only=True).active["D9"].value == 150
+
+
+def test_a_workbook_with_no_formula_answers_exactly_as_before(tmp_path):
+    res = _run(_write_tool(), {"path": "plain.xlsx", "content": [["a", "b"], [1, 2]]}, tmp_path)
+    assert res.ok and "formulas:" not in res.output and "workbook" not in res.data
+    assert res.output.splitlines()[0].startswith("wrote ") and res.output.splitlines()[-1] == "qa lint: clean"
+
+
+def test_reading_a_far_blank_cell_does_not_grow_the_sheet(tmp_path):
+    from iron_jarvis.documents.excel_formula import Grid, evaluate_formula
+
+    grid = Grid(_inventory(tmp_path / "inv.xlsx"))
+    try:
+        before = grid.max_row("Inv")
+        assert evaluate_formula("=Z99999+1", grid, "Inv") == 1
+        assert grid.max_row("Inv") == before, "a blank that was read was not created"
+        assert evaluate_formula("=SUM(D:D)", grid, "Inv") == 84  # 20+15+7 and the total 42
+    finally:
+        grid.close()
+
+
+def test_a_workbook_that_states_no_size_is_measured_by_its_xml(tmp_path, monkeypatch):
+    """A workbook written as a stream states no size; an 800,000-cell one went
+    straight past the first guard. Its XML's size is the second reading."""
+    import openpyxl
+
+    stream = Workbook(write_only=True)
+    sheet = stream.create_sheet("S")
+    for i in range(400):
+        sheet.append([i, i * 2, f"=A{i + 1}+B{i + 1}"])
+    stream.save(tmp_path / "stream.xlsx")
+    monkeypatch.setattr(openpyxl, "load_workbook", lambda *a, **kw: (_ for _ in ()).throw(OSError("no size")))
+    assert R.cell_estimate(tmp_path / "stream.xlsx") > 600, "1,200 cells, read from the XML's size"

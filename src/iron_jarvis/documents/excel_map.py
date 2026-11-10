@@ -476,6 +476,42 @@ def workbook_map(path: "str | Path") -> dict[str, Any]:
         grid.close()
 
 
+def written_summary(path: "str | Path") -> "tuple[str, dict[str, Any]]":
+    """What a workbook just written comes to, for the tool that wrote it: its
+    totals with their values, and anything the map finds worth a look. A model
+    that wrote a SUM two rows short is told in the same answer, and it never
+    has to read the file back to learn a total. ``("", {})`` when the workbook
+    has no formula, is too large, or cannot be mapped. BLOCKING; never raises."""
+    try:
+        from .excel_recalc import has_formulas
+
+        if not has_formulas(path):
+            return "", {}
+        data = workbook_map(path)
+    except Exception:  # noqa: BLE001
+        return "", {}
+    count = int(data.get("formulas") or 0)
+    if not count:
+        return "", {}
+    lines = [f"formulas: {count}, worked out and saved in the file"]
+    totals: list[dict[str, Any]] = []
+    checks: list[str] = []
+    for s in data.get("sheets") or []:
+        for t in s.get("totals") or []:
+            totals.append({"sheet": s["sheet"], **t})
+        for c in s.get("checks") or []:
+            checks.append(f"{s['sheet']}: {c}")
+    for t in totals[:8]:
+        label = f" ({t['label']})" if t.get("label") else ""
+        value = "not worked out" if t.get("value") is None else _num(t["value"])
+        lines.append(f"total {t['sheet']}!{t['cell']}{label}: {t['formula']} = {value}")
+    if len(totals) > 8:
+        lines.append(f"(+{len(totals) - 8} more total(s); excel_profile lists them)")
+    for c in checks[:6]:
+        lines.append(f"WORTH A LOOK: {c}")
+    return "\n".join(lines), {"formulas": count, "totals": totals[:8], "checks": checks[:6]}
+
+
 def render(name: str, data: dict[str, Any]) -> str:
     """The map as compact text for a model: one headline per sheet (the line
     the old profile gave), then what is under it."""

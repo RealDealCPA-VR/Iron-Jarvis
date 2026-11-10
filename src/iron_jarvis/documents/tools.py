@@ -476,6 +476,15 @@ class WriteDocumentTool(Tool):
                 )
             else:
                 qa_line = "\nqa lint: clean"
+        # v1.465.0: a workbook's totals, and anything worth a look in what was
+        # just written, in the same answer (a workbook with no formula adds
+        # nothing and costs nothing).
+        sheet_line, sheet_data = "", {}
+        if out.suffix.lower() == ".xlsx":
+            from .excel_map import written_summary
+
+            text, sheet_data = await asyncio.to_thread(written_summary, out)
+            sheet_line = f"\n{text}" if text else ""
         # Absolute, for the same reason redact_pii reports absolutely: a
         # workspace-relative name IS a bare filename whenever the output lands
         # in the workspace root, and the model relays it to the user verbatim.
@@ -484,12 +493,14 @@ class WriteDocumentTool(Tool):
             ok=True,
             output=f"wrote {size} bytes to {_abs}"
             + ("".join(f"\nwarning: {w}" for w in warns))
+            + sheet_line
             + qa_line,
             data={
                 "path": rel,
                 "abs_path": _abs,
                 "bytes": size,
                 **({"warnings": warns} if warns else {}),
+                **({"workbook": sheet_data} if sheet_data else {}),
                 **({"lint": lint} if lint is not None else {}),
             },
         )
