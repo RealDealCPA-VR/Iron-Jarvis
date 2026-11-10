@@ -2083,6 +2083,13 @@ the result in Excel itself: the rules colour exactly the cells they should.
 If one step of a request cannot be made, nothing is saved and the file is as
 it was. The whole change is one Undo.
 
+**A formula that sends data out is never written for you.** A workbook can
+contain text that tells an AI to write a formula such as one that calls a web
+address with a cell's content in it. Opened in Excel, that formula would send
+the cell out, whatever the chat's own limits are. Jarvis does not write such
+a formula, into an open workbook or a saved one, and says why; you can type
+it in Excel yourself if you mean it. An ordinary link to a web page is fine.
+
 **What still needs the workbook open in Excel.** Inserting or deleting rows
 and columns, sorting, renaming a sheet, pivot tables and charts. Done on a
 saved file from outside Excel, these would leave formulas pointing at the

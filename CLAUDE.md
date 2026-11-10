@@ -16684,6 +16684,16 @@ does not need a bump, stop and bump it.
     rule is read through `DisplayFormat` cell by cell, the dropdowns through
     `Validation`, plus the name, table, note, widths, print setup and frozen
     heading.
+  - **A formula that would reach OUTSIDE the workbook is never written to
+    a saved file either.** The reviewer's rule for the open workbook
+    (`excel_worker.reaches_out`: WEBSERVICE / RTD / CALL…, a DDE link, a link
+    to a web address or a network share; text inside quotes is not a call, so
+    `=HYPERLINK("https://…")` is fine) is applied in
+    `excel_formula.for_file`, the ONE function every written formula passes
+    through (`excel_edit` formulas AND text values starting with "=",
+    feature formulas and operands, `write_document`, `excel_apply_spec`):
+    it raises `OutsideFormula` and nothing is saved. A new place that writes
+    a formula into a file must call `for_file`.
   - **Arming:** `autoselect.wants_excel_reconcile(text, picked)` only beside
     a spreadsheet tool the turn already has, and in
     `live_excel_companions`; armed under the ceiling in

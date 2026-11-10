@@ -123,7 +123,9 @@ def _conditional_format(wb: Any, step: dict, default: "str | None") -> str:
             return f"{v:.15g}"
         text = str(v).strip()
         if text.startswith("="):
-            return text[1:]
+            from .excel_formula import for_file
+
+            return for_file(text)[1:]  # refuses a formula that reaches outside
         try:
             return f"{float(text.replace(',', '')):.15g}"
         except ValueError:
@@ -442,7 +444,7 @@ def apply_features(wb: Any, default_sheet: "str | None", features: "list[dict]")
         op = str(step.get("op") or "").strip().lower()
         try:
             done.append(_STEPS[op](wb, step, default_sheet))
-        except ValueError as exc:
+        except ValueError as exc:  # an OutsideFormula too: it is a ValueError
             raise FeatureRefused(f"step {n} ({op}): {exc}") from None
         except KeyError as exc:
             raise FeatureRefused(f"step {n} ({op}): missing {exc}") from None

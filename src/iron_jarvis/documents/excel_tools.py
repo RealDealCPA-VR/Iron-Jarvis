@@ -217,7 +217,12 @@ def _apply_edits(path: Path, sheet: "str | None", edits: list[dict[str, Any]],
             target[cell] = for_file(text)
             written.append((target.title, cell.upper().replace("$", ""), text))
         elif "value" in e or not any(k in e for k in _FORMAT_KEYS):
-            target[cell] = e.get("value")
+            # A text value that starts with "=" IS a formula once it is in the
+            # file, so it takes the formula's way in (prefixes, and the
+            # refusal of a formula that would reach outside the workbook).
+            from .excel_formula import for_file as _for_file
+
+            target[cell] = _for_file(e.get("value"))
         # else: a formatting-only edit (it may name a range) changes no value
         _apply_cell_format(target, cell, e)
         applied += 1
@@ -500,9 +505,11 @@ class ExcelEditTool(Tool):
             )
         except Exception as exc:  # noqa: BLE001
             from .excel_features import FeatureRefused
+            from .excel_formula import OutsideFormula
 
-            if isinstance(exc, FeatureRefused):
-                # A step's own refusal (a bad range, an unknown sheet): raised
+            if isinstance(exc, (FeatureRefused, OutsideFormula)):
+                # A step's own refusal (a bad range, an unknown sheet, a
+                # formula that would reach outside the workbook): raised
                 # before the save, so the file is as it was.
                 return ToolResult(ok=False, error=f"{exc} Nothing was changed.")
             return ToolResult(ok=False, error=_open_error(exc, target))

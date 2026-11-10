@@ -1305,12 +1305,36 @@ _FOR_FILE_RX = re.compile(r'"(?:[^"]|"")*"|\'(?:[^\']|\'\')*\'|(?<![A-Za-z0-9_.]
 _PREFIX_RX = re.compile(r"_xlfn\.(?:_xlws\.)?", re.IGNORECASE)
 
 
+class OutsideFormula(ValueError):
+    """A formula that would make Excel reach OUTSIDE the workbook when the
+    file is opened (v1.469.0): =WEBSERVICE(...&A1) sends a cell to a web
+    address, a DDE link runs a program, a link to a network share reads it.
+    A workbook's text is someone else's words and a model may follow them,
+    so such a formula is never written from chat; the user types it in Excel
+    themselves. The rule is the open workbook's own
+    (``excel_worker.reaches_out``), so a saved file and an open one agree."""
+
+
+def outside_reason(formula: Any) -> str:
+    """Why *formula* would reach outside the workbook, or ""."""
+    from ..excel_worker import reaches_out
+
+    return reaches_out(formula) if isinstance(formula, str) else ""
+
+
 def for_file(formula: Any) -> Any:
     """*formula* as Excel must find it in a file: newer functions carry their
     prefix. Text inside quotes is never touched; a formula already prefixed is
-    left alone; anything that is not a formula is returned as it came."""
+    left alone; anything that is not a formula is returned as it came.
+
+    EVERY place that writes a formula into a file goes through here, so this
+    is also where a formula that would reach outside the workbook is refused
+    (:class:`OutsideFormula`)."""
     if not isinstance(formula, str) or not formula.startswith("="):
         return formula
+    why = outside_reason(formula)
+    if why:
+        raise OutsideFormula(f"that formula is not written from chat: {why}. The user can type it in Excel themselves.")
 
     def put(m: "re.Match[str]") -> str:
         name = m.group(1)
