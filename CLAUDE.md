@@ -16770,6 +16770,49 @@ does not need a bump, stop and bump it.
   - **Pins:** `tests/test_excel_reconcile_v1469.py`,
     `tests/test_excel_features_v1469.py`,
     `tests/test_excel_features_real_v1469.py`.
+  - **REVIEW (v1.467.0 to v1.469.0, an independent reviewer; 8 commits, each
+    defect red first, the Excel cases compared with its own hidden Excel).**
+    - **Matching:** `to_cents` reads a comma only as a thousands comma (a
+      decimal comma is NOT read and the row is named); "$ (12.00)" and
+      "- 12.00" are read; out of range never raises. A reference seen more
+      than once on a side pairs only inside the date window, in date order.
+      The tolerance never pairs opposite signs. `read_side` says: unreadable
+      amounts, rows with no date, a last row equal to the sum above it
+      (`last_row` leaves it out), a money-out column written in negatives.
+      `write_result` forces every cell to text and cleans sheet titles.
+      `excel_reconcile` is in `_FILE_CHANGING_TOOLS`, `STRICT_ASK_TOOLS` and
+      `_RESULT_FILE_TOOLS` (its saved file is a document of the turn; no
+      false "nothing was written" note).
+    - **Outside formulas:** `reaches_out` takes off `_xlfn.` first and reads
+      a single-quoted sheet name as one piece; `write_document` plain text
+      for an .xlsx goes through `for_file`.
+    - **Tracing:** `_typed` reads a what-if value as a typed cell would hold
+      it (date, percent, exponent, TRUE/FALSE; a formula refused). Goal seek
+      closes a side it cannot work out and searches the other, under
+      `DEADLINE_S`. Following cells uses `_CellIndex` and one deadline
+      (57,000 formulas: 115 s to 2.7 s); when it cannot follow to the end it
+      says "name the cells to watch". `how` reads the first 2,000 cells of a
+      range. `Grid.max_row`/`max_col` reach cells a what-if set below the
+      data (whole-column formulas). ARRAY FORMULAS: `Grid.array_formula`,
+      `array_filled`, `array_stale`; a cell resting on an array formula the
+      change reaches gets a problem line and NO figure (INDIRECT, OFFSET or a
+      table column counts as reached); goal seek refuses in words. With no
+      what-if in place the engine reads exactly as before (pinned).
+    - **Features:** refused before the save, because Excel would not open the
+      file: a name equal to a table's, a name or table called c, R, RC, R1C1,
+      a table whose heading holds a formula or that lies over the sheet's
+      filter or merged cells; a name differing only by case replaces the old
+      one. `_autofit_cells` walks only cells that exist. Any other error in a
+      step is the "Nothing was changed." refusal.
+    - **Dashboard:** `excelUseChosen()`; the stored key is "1", "0" or
+      absent, so Stop stays stopped in the window beside Excel.
+  - **OPEN (the owner's call):** a formula that links to ANOTHER WORKBOOK
+    on this PC (`='C:\...\[book.xlsx]S'!A1`) is written like any other
+    (pinned as ordinary in `test_excel_live_v1466`): linking workbooks is
+    everyday accounting, but with "Folders Jarvis may read" set it lets a
+    figure from outside those folders into the sheet. European number
+    formats are left out and said, not read. The Excel switch is per
+    window though its label says "in this chat".
   - **OPEN:** rows past 50,000 are not read; a group is offered only for
     rows of ONE day; `.csv` lists must be converted first; charts and pivot
     tables in a saved file are not built (openpyxl can draw simple charts,

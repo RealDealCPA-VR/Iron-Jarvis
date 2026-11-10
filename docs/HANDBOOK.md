@@ -2066,6 +2066,13 @@ is which.
   judge.
 - If the two lists use opposite signs (money out is negative in one and
   positive in the other) it says so rather than guess.
+- A reference that repeats (the same "ACH" every month) only pairs rows whose
+  dates are close, so a missing March is reported as March, not December.
+- An amount it cannot read for certain is not guessed. A number written with
+  a decimal comma (1.234,50) is left out and the answer names the row.
+- It says when a list's last row looks like a total line (and can leave it
+  out), when rows have no date, and when a money-out column is written in
+  negative numbers.
 - Ask for the result as a workbook and it writes a new file with Summary,
   Matched and the two left-over lists. It never changes either list, and
   never replaces an existing file.
@@ -2081,7 +2088,10 @@ lists and number or date limits, frozen headings, column widths, named
 ranges, tables, cell notes and print layout. These were checked by opening
 the result in Excel itself: the rules colour exactly the cells they should.
 If one step of a request cannot be made, nothing is saved and the file is as
-it was. The whole change is one Undo.
+it was. The whole change is one Undo. A step that would leave a file Excel
+refuses to open (a name that clashes with a table or reads like a cell, a
+table laid over merged cells or over the sheet's filter) is refused before
+anything is saved.
 
 **A formula that sends data out is never written for you.** A workbook can
 contain text that tells an AI to write a formula such as one that calls a web
@@ -2091,10 +2101,11 @@ a formula, into an open workbook or a saved one, and says why; you can type
 it in Excel yourself if you mean it. An ordinary link to a web page is fine.
 
 **What still needs the workbook open in Excel.** Inserting or deleting rows
-and columns, sorting, renaming a sheet, pivot tables and charts. Done on a
-saved file from outside Excel, these would leave formulas pointing at the
-wrong cells, so Jarvis says so and asks you to open the workbook, where
-Excel itself does the work correctly.
+and columns, sorting, filtering, renaming a sheet, pivot tables and charts.
+Done on a saved file from outside Excel, these would leave formulas pointing
+at the wrong cells, so Jarvis says so and asks you to open the workbook,
+where Excel itself does the work correctly. It does not try another way
+round.
 
 **Starter skills.** In the Accounting starter skills, the bank
 reconciliation review now uses the matching tool, and the variance analysis
@@ -2112,8 +2123,8 @@ shows one quiet line: "Excel is open: Budget.xlsx". Press **Use it in this
 chat** and it becomes "Working with Excel: Sales!B4:B9 in Budget.xlsx", the
 sheet and cells you have selected. From then on you can simply say "what is
 wrong here?", "fix this", "total these" and Jarvis reads the selection from
-Excel. **Stop** switches it off again. The switch lasts for that window until
-you close it.
+Excel. **Stop** switches it off again, and it stays off until you switch it
+on. The switch belongs to that window and lasts until you close it.
 
 **The window beside Excel.** In the desktop app, press **Open beside Excel**
 on that line (or choose Iron Jarvis > Open Chat Beside Excel in the menu). A
@@ -2164,14 +2175,19 @@ open in Excel.
   Jarvis searches for the value and says what the target comes to with it.
   Again nothing is changed. When a rounded figure on the way means no value
   lands on the goal exactly, it gives the closest value and says how far off
-  it is, where Excel's own Goal Seek simply gives up.
+  it is, where Excel's own Goal Seek simply gives up. The answer is given as
+  a round figure when a round figure reaches the goal.
 
 **How far to trust the figures.** These answers were checked against Excel
 itself: Excel was made to hold the same values for real and came to the same
 figures. Before it answers a what-if, Jarvis also checks that it works out
 today's figure the same as Excel saved it. If it does not, or the formula uses
-something Jarvis leaves to Excel (a link to another workbook, an array
-formula), it gives no figure for that cell and says why, rather than guess.
+something Jarvis leaves to Excel (a link to another workbook), it gives no
+figure for that cell and says why, rather than guess. The same goes for an
+array formula that your change reaches (Excel stores any formula that works on
+a whole range this way): the cells that rest on it get no figure, because
+Jarvis would otherwise repeat the old result. A what-if value can be a number,
+a percent, a date or TRUE/FALSE, read the way a typed cell would hold it.
 
 **Jump to the cell.** When Jarvis talks about a cell of a workbook that is
 open in Excel, the cell is a link, like Calc!B8. Click it and Excel comes
