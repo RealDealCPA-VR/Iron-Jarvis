@@ -7,6 +7,7 @@ inside a ``ToolContext`` scoped to a session's isolated workspace (§15).
 from __future__ import annotations
 
 import asyncio
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -427,11 +428,40 @@ def replay_safe(tool: Any) -> bool:
 
 def safe_path(workspace: Path, rel: str) -> Path:
     """Resolve ``rel`` under the workspace, enforcing filesystem=workspace_only (§17)."""
+    # v1.464.0: on Windows a ":" inside a file name is not a name at all. It
+    # names a hidden "stream" of the file before it: write_file on
+    # "Re: Q1 budget.txt" answered "wrote 17 bytes" and left an EMPTY file
+    # called "Re". Refused here, in words, for every tool that takes a path.
+    if os.name == "nt" and ":" in os.path.splitdrive(str(rel))[1]:
+        raise PermissionError(
+            f"the name '{rel}' has a colon (:) in it, which Windows cannot use in a "
+            "file or folder name; choose a name without one"
+        )
     root = workspace.resolve()
     target = (root / rel).resolve()
     if target != root and not target.is_relative_to(root):
         raise PermissionError(f"path '{rel}' escapes the session workspace")
     return target
+
+
+def _held_file(exc: PermissionError) -> "Path | None":
+    """The existing file a write was refused on, when its folder itself takes
+    new files (so the folder is not the problem). None when it cannot tell.
+    A writer's own hidden temp file (``.<name>.tmp-<pid>``) is never it."""
+    for raw in (getattr(exc, "filename2", None), getattr(exc, "filename", None)):
+        if not raw:
+            continue
+        try:
+            path = Path(str(raw))
+            if ".tmp-" in path.name or not path.is_file():
+                continue
+            from ..core.fs_policy import dir_writable
+
+            if dir_writable(path.parent):
+                return path
+        except Exception:  # noqa: BLE001 - cannot tell: keep the older sentence
+            continue
+    return None
 
 
 def unwritable_workspace_error(exc: PermissionError, workspace: Path) -> str:
@@ -449,6 +479,16 @@ def unwritable_workspace_error(exc: PermissionError, workspace: Path) -> str:
     """
     if getattr(exc, "errno", None) is None:
         return f"{type(exc).__name__}: {exc}"
+    # v1.464.0: the FILE being open in another program is the common case in
+    # an office (a workbook open in Excel), and the old sentence blamed the
+    # folder and told the user to pick another one. When the refused file
+    # exists and its folder does take new files, the file is what is held.
+    held = _held_file(exc)
+    if held is not None:
+        return (
+            f"cannot write {held.name}: it is open in another program (such as Excel "
+            "or Word) or is marked read-only. Close it there, then try again"
+        )
     return (
         f"cannot write in {workspace}: the folder this session is bound to is "
         "not writable — pick a folder you can save files in"

@@ -6377,14 +6377,22 @@ def attach_check(msgs: list, target: str, text: str, cap: "int | None") -> bool:
 
 
 def tool_message_text(content: Any, cap: "int | None") -> str:
-    """The tool result as the model reads it. ``cap`` None (every turn that
-    is not a harness turn): the old silent cut at :data:`TOOL_MESSAGE_CHARS`,
-    byte for byte. A harness turn's cap: whole up to it, and a cut is SAID —
-    a model reading a file that simply stops treats what it got as the whole
-    file. MIRROR NOTE (lock-step): both lanes call this at every tool message."""
+    """The tool result as the model reads it. Whole up to the cap, and a cut
+    is SAID — a model reading a file that simply stops treats what it got as
+    the whole file. ``cap`` None (every turn that is not a harness turn) is
+    :data:`TOOL_MESSAGE_CHARS`.
+
+    v1.464.0: a plain chat turn used to cut SILENTLY at 12,000 characters,
+    which also cut off the tool's own "this was shortened" note (the tools put
+    it last). Measured: a 1,000-row ledger read in chat reached the model as
+    its first 275 rows with no word that there was more, so a total or a
+    summary of "the file" was of a quarter of it. Now the start and the end
+    are kept and the cut is named, as in a coding session. A result that fits
+    is unchanged, byte for byte.
+    MIRROR NOTE (lock-step): both lanes call this at every tool message."""
     text = str(content)
     if cap is None:
-        return text[:TOOL_MESSAGE_CHARS]
+        cap = TOOL_MESSAGE_CHARS
     if len(text) <= cap:
         return text
     # Its START and its END are kept (a test run says why it failed on its

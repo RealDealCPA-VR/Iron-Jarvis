@@ -2095,6 +2095,38 @@ What Iron Jarvis does to keep this safe:
 - The only thing sent to GitHub is the address you typed. A private repository
   cannot be read.
 
+**Office files: six awkward cases that used to go wrong quietly (v1.464.0).**
+Each was found by running the real tools on ordinary but awkward files.
+
+- **A long file read in Chat is no longer cut without a word.** Past 12,000
+  characters Jarvis used to see only the start, with nothing to say there was
+  more. A 1,000-row ledger reached it as the first 275 rows, so a total or a
+  summary of "the file" covered a quarter of it. It now sees the start and the
+  end, with a note in between saying how much was left out, and it asks for
+  the rest in parts.
+- **Long numbers keep every digit in a spreadsheet.** A spreadsheet number
+  holds 15 digits. An 18-digit id or a 16-digit card number sent as text used
+  to be written as a number and came back rounded. More than 15 digits now
+  stays text, and so does a code like "-0042".
+- **A file name with a colon is refused in words.** Windows cannot use ":" in
+  a name. Saving "Re: Q1 budget.txt" used to answer "wrote 17 bytes" and leave
+  an empty file called "Re".
+- **Excel's "Unicode Text" files are read properly.** These (and files made
+  with PowerShell's ">") used to come back as letters with gaps between them.
+- **Text that only starts with "=" is text.** "=== see memo ===" used to be
+  stored as a formula and showed an error in Excel. A real formula such as
+  "=SUM(B2:B5)" is still a formula.
+- **A file open in another program says so.** When a workbook was open in
+  Excel, Jarvis used to say the folder was not writable and to pick another
+  folder. It now says the file is open in another program, or read-only, and
+  to close it there.
+
+Known and not yet fixed: after Jarvis edits a workbook's cells, totals that
+Excel had worked out are blank until the file is opened and saved in Excel
+again; and a question about a column of formulas Jarvis itself wrote can leave
+those rows out. Open the workbook in Excel once, or ask Jarvis to recompute the
+figures, before relying on a total from such a file.
+
 ## Reading web pages works on more sites; page screenshots work again (v1.463.0)
 
 **Reading a web page.** When Jarvis reads a page for you, it used to tell the

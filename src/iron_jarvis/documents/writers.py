@@ -705,6 +705,7 @@ def _write_xlsx(
         wb.save(str(tmp))
 
 
+_XLSX_FORMULA_RX = re.compile(r"=\s*[A-Za-z0-9_$(+\-\"'.@{\[]")
 _XLSX_INT_RX = re.compile(r"-?\d+")
 _XLSX_FLOAT_RX = re.compile(r"-?\d+\.\d+")
 _XLSX_DATE_RX = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -725,6 +726,15 @@ def _xlsx_coerce(v: Any) -> tuple[Any, str | None]:
         return v, None
     # A leading zero on a multi-digit integer means "identifier", keep as text.
     if len(s) > 1 and s[0] == "0" and s[1] != ".":
+        return v, None
+    # v1.464.0: the same after a minus sign ("-0042" is a code, not -42).
+    if len(s) > 2 and s[0] == "-" and s[1] == "0" and s[2] != ".":
+        return v, None
+    # v1.464.0: a spreadsheet number holds 15 digits. A longer one (a card or
+    # account number, an 18-digit id) written as a number comes back ROUNDED:
+    # "123456789012345678" became 1.234567890123457e+17, and the check said
+    # "clean". More than 15 digits stays the text that was sent.
+    if sum(ch.isdigit() for ch in s) > 15 and (_XLSX_INT_RX.fullmatch(s) or _XLSX_FLOAT_RX.fullmatch(s)):
         return v, None
     if _XLSX_INT_RX.fullmatch(s):
         try:
@@ -777,6 +787,12 @@ def _xlsx_fill(ws: Any, rows: Any) -> None:
             cell.value = coerced
             if fmt:
                 cell.number_format = fmt
+            # v1.464.0: text that only STARTS with "=" is not a formula
+            # ("=== see memo ===", "= total"). Stored as one, the cell shows
+            # an error in Excel. A real formula goes on to a name, a number, a
+            # bracket, a sign or a quote.
+            if isinstance(coerced, str) and coerced.startswith("=") and not _XLSX_FORMULA_RX.match(coerced):
+                cell.data_type = "s"
 
     if header:
         from openpyxl.styles import Font

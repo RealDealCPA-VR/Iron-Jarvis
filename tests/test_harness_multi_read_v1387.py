@@ -263,14 +263,20 @@ async def test_a_harness_turn_cuts_a_long_result_only_where_it_says_so(tmp_path,
     assert len(head) + len(note) + len(tail) == cap and abs(len(head) - 2 * len(tail)) <= 3
 
 
-async def test_plain_chat_keeps_its_old_cut_byte_for_byte(tmp_path, monkeypatch):
+async def test_plain_chat_says_when_it_cuts_a_long_result(tmp_path, monkeypatch):
+    """Moved on purpose in v1.464.0: plain chat used to cut at 12,000
+    characters SILENTLY (this test pinned that). It now keeps the start and
+    the end and names the cut, as a coding session does; a result that fits is
+    still unchanged (tests/test_office_edge_cases_v1464.py)."""
     platform = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "spec.md").write_text("s" * 20_000, encoding="utf-8")
     model = wire(platform, monkeypatch, [[call("read_file", "r1", path="spec.md")], "Done."])
     await stream(platform, body(ws, tools=["read_file"]), harness=None, session_id="chat")
-    assert model.tool_messages(1)["r1"] == "s" * 12_000
+    seen = model.tool_messages(1)["r1"]
+    assert len(seen) <= 12_000 and seen.startswith("s" * 1000) and seen.endswith("s" * 1000)
+    assert "8,000+ of 20,000 characters cut here" in seen
 
 
 def test_the_harness_cap_follows_the_window_within_its_bounds():
@@ -278,4 +284,6 @@ def test_the_harness_cap_follows_the_window_within_its_bounds():
     assert CT.harness_tool_message_chars(32_000) == 32_000
     assert CT.harness_tool_message_chars(1_000_000) == CT.HARNESS_TOOL_MESSAGE_MAX
     assert CT.tool_message_text("x" * 20, None) == "x" * 20
-    assert CT.tool_message_text("x" * 13_000, None) == "x" * 12_000
+    cut = CT.tool_message_text("x" * 13_000, None)
+    assert len(cut) <= 12_000 and "of 13,000 characters cut here" in cut
+    assert CT.tool_message_text("x" * 12_000, None) == "x" * 12_000

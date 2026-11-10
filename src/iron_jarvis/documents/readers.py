@@ -297,6 +297,16 @@ def _decode_bytes(data: bytes) -> str:
     """
     if not data:
         return ""
+    # 0. UTF-16 with its marker (v1.464.0). Excel's "Unicode Text" export and
+    #    Windows PowerShell's ">" both write it. Every byte of it is also valid
+    #    cp1252, so step 2 used to return it as letters with a NUL after each
+    #    one, and no error. The marker is unambiguous: UTF-8 text cannot start
+    #    with either pair of bytes.
+    if data[:2] in (bytes([0xFF, 0xFE]), bytes([0xFE, 0xFF])) and len(data) % 2 == 0:
+        try:
+            return data.decode("utf-16")
+        except UnicodeDecodeError:
+            pass
     # 1. UTF-8 (utf-8-sig also consumes a leading BOM). Strict so non-UTF-8
     #    bytes fall through to the legacy attempts instead of mojibake.
     try:
