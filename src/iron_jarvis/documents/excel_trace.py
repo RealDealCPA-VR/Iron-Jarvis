@@ -473,7 +473,14 @@ def what_if(grid: Grid, changes: "dict[str, Any]", watch: "list[str]", default_s
         # Nothing named: report the END results the changed cells lead to
         # (cells no other formula uses), not every cell on the way.
         deadline = time.monotonic() + DEADLINE_S
-        parsed, cut = _parsed_formulas(grid, deadline)
+        # The formulas are read with the new cells in place: a whole-column
+        # range (B:B) reaches as far as the sheet's last row, and a cell set
+        # BELOW the data must count as inside it.
+        grid.overrides = {(s.lower(), c, r): v for s, c, r, v in sets}
+        try:
+            parsed, cut = _parsed_formulas(grid, deadline)
+        finally:
+            grid.overrides = {}
         reached, late = _dependents_cells(parsed, [(s, c, r) for s, c, r, _v in sets], MAX_DEPTH, deadline)
         if cut or late:
             # Part of the workbook was not followed, so "the end results"

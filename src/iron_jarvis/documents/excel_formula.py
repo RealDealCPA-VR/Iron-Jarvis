@@ -207,10 +207,21 @@ class Grid:
         return v if isinstance(v, str) and v.startswith("=") else None
 
     def max_row(self, sheet: str) -> int:
-        return int(self._sheet(self._wb, sheet).max_row or 1)
+        last = int(self._sheet(self._wb, sheet).max_row or 1)
+        if self.overrides:
+            # A what-if may set a cell BELOW the data ("add an expense of 500"
+            # in the first empty row). A whole-column range (B:B) is read as
+            # far as this, so without the set cell =SUM(B:B) did not change.
+            name = self.canon(sheet).lower()
+            last = max([last] + [r for (s, _c, r) in self.overrides if s == name])
+        return last
 
     def max_col(self, sheet: str) -> int:
-        return int(self._sheet(self._wb, sheet).max_column or 1)
+        last = int(self._sheet(self._wb, sheet).max_column or 1)
+        if self.overrides:
+            name = self.canon(sheet).lower()
+            last = max([last] + [c for (s, c, _r) in self.overrides if s == name])
+        return last
 
     def defined(self, name: str) -> "tuple[str, str] | None":
         """``(sheet, "A1" or "A1:B9")`` a defined name points at, or None."""
