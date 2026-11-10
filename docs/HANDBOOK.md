@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.469.0 (2026-11-09).*
+holds itself to. Current as of v1.469.1 (2026-11-09).*
 
 ---
 
@@ -2132,6 +2132,31 @@ than a direct call.
 Stop now really stops code that is running: pressing Stop while a script (or
 a Python cell) runs ends its process at once. Its variables are gone and the
 next run says so.
+## Links to another workbook follow the folders Jarvis may read (v1.469.1)
+
+A formula can link to another workbook, for example a summary sheet that
+reads a figure from a client's own file. Jarvis writes such a link like any
+other formula. From this version there is one exception. If you have set
+**Folders Jarvis may read** (Settings › Permissions), Jarvis does not write a
+link to a workbook outside those folders. Excel would read that file by
+itself and put its figure into the sheet, so a note hidden in one client's
+workbook could otherwise ask for another client's numbers.
+
+- This holds for a workbook open in Excel and for a saved file.
+- A link that spells out its folder is judged by that folder. A link by file
+  name alone, to another workbook open in Excel, is judged by where Excel has
+  that workbook open from.
+- A link whose folder Jarvis cannot work out (a folder written in part, or a
+  saved file's own numbered link) is refused while the folders are limited.
+- The INDIRECT function builds its reference from text, so it could reach a
+  workbook without naming it in a way Jarvis can see. While the folders are
+  limited and a workbook from outside them is open in Excel, Jarvis does not
+  write a formula that uses INDIRECT into the open workbook. Close that
+  workbook, or type the formula yourself.
+- When a link is refused, nothing is changed and Jarvis names the file. You
+  can type the formula in Excel yourself.
+- If you have not limited the folders, nothing changes: links are written as
+  before. Iron Jarvis's own protected folders are never linked to.
 
 ## Matching two lists, and Excel's features in a saved workbook (v1.469.0)
 

@@ -16806,13 +16806,66 @@ does not need a bump, stop and bump it.
       step is the "Nothing was changed." refusal.
     - **Dashboard:** `excelUseChosen()`; the stored key is "1", "0" or
       absent, so Stop stays stopped in the window beside Excel.
-  - **OPEN (the owner's call):** a formula that links to ANOTHER WORKBOOK
-    on this PC (`='C:\...\[book.xlsx]S'!A1`) is written like any other
-    (pinned as ordinary in `test_excel_live_v1466`): linking workbooks is
-    everyday accounting, but with "Folders Jarvis may read" set it lets a
-    figure from outside those folders into the sheet. European number
-    formats are left out and said, not read. The Excel switch is per
-    window though its label says "in this chat".
+  - **v1.469.1 (the owner's decision 2026-11-10: "Yes, restrict it"): a
+    link to ANOTHER WORKBOOK is written only when Jarvis may read that
+    workbook.** Linking workbooks is everyday accounting, so a link is
+    still an ordinary formula and `reaches_out` says nothing about it
+    (the first reviewer's pin in `test_excel_live_v1466` stands). The
+    folder question is asked separately:
+    - `excel_worker.workbook_links(text)` only READS the links (pure,
+      linear, `MAX_LINKS` 50): `{dir, file, index}` for
+      `'C:\dir\[b.xlsx]S'!A1`, `[b.xlsx]S!A1`, `'C:\dir\b.xlsx'!Name`,
+      `'b.xlsx'!Name` and a saved file's own `[1]S!A1` (`index`). Text in
+      double quotes, a table column (`Table1[Amount]`) and a 3-D range
+      (`'Jan:Dec'!A1`) are not links.
+    - `excel_formula.link_reason(formula, open_books=None)` judges them
+      (BLOCKING when a link names a folder; never raises; a check that
+      fails is a refusal): a full folder through `fs_policy.fs_read_ok`
+      (the folder limits AND the protected folders); `//host` refused by
+      its text before anything is looked up (`LINK_NETWORK`); a relative
+      folder or `[n]` refused only while `fs_policy.read_limits_set()`
+      (`LINK_UNCHECKED`); a file name alone judged by where that workbook
+      is open from when `open_books` ({lower-cased name: path}) knows it,
+      else ordinary (a workbook beside the saved file).
+    - `for_file` raises `OutsideFormula` on it, so every formula written
+      to a saved file is covered (edits, features, `write_document`,
+      `excel_apply_spec`).
+    - `excel_live.link_refusal(ops)` runs in `ExcelLiveEditTool.execute`
+      after the plan and BEFORE the apply (the child has no config, so the
+      rule lives in the daemon): `formula_entries(ops)` reads every step
+      entry Excel could take as a formula (a field outside `_TEXT_FIELDS`
+      gets its "="; `MAX_STEP_ENTRIES` 5,000); steps with no link ask
+      Excel nothing more; a link by name costs ONE plain `look` (names and
+      places, no range); Excel silent under a limit is a refusal.
+    - INDIRECT builds its reference from TEXT (measured in the real Excel:
+      `=INDIRECT("[Jones.xlsx]Summary!B4")` and `=INDIRECT(E1)` both show an
+      open workbook's figure), so no reader of links can see where it
+      points. `excel_live.uses_indirect(entry)`: while
+      `read_limits_set()`, a step that calls INDIRECT costs one `look` and
+      is refused when ANY workbook is open in Excel from a place
+      `_read_refusal` refuses ("INDIRECT could read Jones.xlsx, open in
+      Excel from a folder Jarvis may not read"); Excel silent = refused.
+      With no limit set INDIRECT asks Excel nothing. Also measured: a link
+      with an allowed path whose file NAME matches a workbook open from
+      elsewhere does NOT bind to that workbook (Excel shows #REF!), so the
+      path check is enough for a link that names its folder.
+    - With no folder limit set and no protected folder named, behaviour is
+      exactly as before (pinned).
+    - Pins: `tests/test_excel_workbook_links_v14691.py` (28 mutations, 27
+      red; the survivor is a second cap), and against the real Excel
+      `tests/test_excel_workbook_links_real_v14691.py` (`IJ_LIVE_EXCEL=1`;
+      three workbooks open in the test's own hidden Excel).
+    - OPEN: under a limit a saved file's own `[1]` link is refused even
+      when the workbook it points at is readable (its target is not
+      looked up); a link by name in a SAVED file is not judged (Excel
+      binds it to a workbook beside the file, or to an open workbook of
+      that name); a junction inside a readable folder is followed, as for
+      every file tool; INDIRECT in a SAVED file is not judged (it reaches
+      only a workbook the user has open when they open the file); text
+      written into a cell that an INDIRECT ALREADY in the workbook reads is
+      not judged (a workbook's own formulas are the user's).
+  - **OPEN:** European number formats are left out and said, not read.
+    The Excel switch is per window though its label says "in this chat".
   - **OPEN:** rows past 50,000 are not read; a group is offered only for
     rows of ONE day; `.csv` lists must be converted first; charts and pivot
     tables in a saved file are not built (openpyxl can draw simple charts,

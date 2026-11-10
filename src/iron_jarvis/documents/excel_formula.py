@@ -1425,6 +1425,83 @@ def outside_reason(formula: Any) -> str:
     return reaches_out(formula) if isinstance(formula, str) else ""
 
 
+#: A LINK TO ANOTHER WORKBOOK (v1.469.1, the owner's decision 2026-11-10).
+#: Linking workbooks is everyday accounting, so a link is written like any
+#: other formula, EXCEPT when the workbook it names is in a folder Jarvis may
+#: not read: Excel would then read that file itself and put its figures in
+#: this sheet, past "Folders Jarvis may read". A note in a client's workbook
+#: must not be able to ask for that.
+LINK_NETWORK = "it links to a workbook on a network share"
+LINK_UNCHECKED = "it links to another workbook whose folder Jarvis cannot check against the folders it may read"
+_ABSOLUTE_DIR = re.compile(r"[A-Za-z]:[\\/]")
+
+
+def _link_unreadable(name: Any) -> str:
+    shown = " ".join(str(name or "").split())[:80] or "another workbook"
+    return f"it links to {shown}, a workbook in a folder Jarvis may not read"
+
+
+def link_reason(formula: Any, *, open_books: "dict[str, str] | None" = None) -> str:
+    """Why a link to another workbook in *formula* may not be written, or "".
+
+    - A link that names its folder in full is judged by that folder
+      (``fs_policy.fs_read_ok``: the folder limits and Iron Jarvis's own
+      protected folders). A network spelling is refused by its text, before
+      anything is looked up.
+    - A file name alone ([book.xlsx]Sheet!A1) is the workbook of that name
+      open in Excel, judged by where it is open from when *open_books*
+      ({lower-cased name: full path}, the live tool's) knows it; in a saved
+      file it is a workbook beside the file, which is ordinary.
+    - A link whose folder cannot be worked out here (a relative folder, or a
+      saved file's own link number, [1]Sheet!A1) is refused only while
+      reading is limited to listed folders.
+
+    With no folder limit set and no protected folder named, every link is
+    ordinary, exactly as before. BLOCKING when a link names a folder (the
+    folder check resolves the path); never raises."""
+    if not isinstance(formula, str):
+        return ""
+    from ..excel_worker import workbook_links
+
+    links = workbook_links(formula)
+    if not links:
+        return ""
+    from ..core import fs_policy
+
+    def readable(path: str) -> bool:
+        try:
+            return bool(fs_policy.fs_read_ok(path)[0])
+        except Exception:  # noqa: BLE001 - a check that fails is a refusal
+            return False
+
+    limited: "bool | None" = None
+    for link in links:
+        folder, name = str(link.get("dir") or ""), str(link.get("file") or "")
+        if folder.startswith(("\\\\", "//")) or name.startswith(("\\\\", "//")):
+            return LINK_NETWORK
+        if _ABSOLUTE_DIR.match(folder):
+            sep = "" if folder.endswith(("\\", "/")) else "\\"
+            if not readable(folder + sep + name):
+                return _link_unreadable(name)
+            continue
+        if folder or link.get("index"):
+            if limited is None:
+                try:
+                    limited = fs_policy.read_limits_set()
+                except Exception:  # noqa: BLE001
+                    limited = True
+            if limited:
+                return LINK_UNCHECKED
+            continue
+        # Judged as the open workbook itself is judged (excel_live): a saved
+        # file on this PC or a share Excel already has open; an unsaved Book1
+        # or a OneDrive address has no folder to judge.
+        where = str((open_books or {}).get(name.lower()) or "")
+        if where and "://" not in where and (_ABSOLUTE_DIR.match(where) or where.startswith("\\\\")) and not readable(where):
+            return _link_unreadable(name)
+    return ""
+
+
 def for_file(formula: Any) -> Any:
     """*formula* as Excel must find it in a file: newer functions carry their
     prefix. Text inside quotes is never touched; a formula already prefixed is
@@ -1432,10 +1509,11 @@ def for_file(formula: Any) -> Any:
 
     EVERY place that writes a formula into a file goes through here, so this
     is also where a formula that would reach outside the workbook is refused
-    (:class:`OutsideFormula`)."""
+    (:class:`OutsideFormula`), and a link to a workbook in a folder Jarvis may
+    not read (:func:`link_reason`)."""
     if not isinstance(formula, str) or not formula.startswith("="):
         return formula
-    why = outside_reason(formula)
+    why = outside_reason(formula) or link_reason(formula)
     if why:
         raise OutsideFormula(f"that formula is not written from chat: {why}. The user can type it in Excel themselves.")
 

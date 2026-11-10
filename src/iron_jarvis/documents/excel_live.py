@@ -242,6 +242,99 @@ def _read_refusal(path: str) -> str:
         return NOT_READABLE
 
 
+#: Step fields that hold plain text: only an entry that starts like a formula
+#: is read as one. Every other text field of a step may be a formula written
+#: without its "=" (formula, refers_to, source), as the child reads them.
+_TEXT_FIELDS = frozenset({"value", "values", "list", "text", "message", "prompt"})
+MAX_STEP_ENTRIES = 5000
+
+
+def formula_entries(ops: Any) -> "list[str]":
+    """Every entry of the steps that Excel could read as a formula, each
+    starting with "=". Bounded; pure."""
+    out: list[str] = []
+
+    def walk(node: Any, field: str) -> None:
+        if len(out) >= MAX_STEP_ENTRIES:
+            return
+        if isinstance(node, str):
+            if node[:1] in ("=", "+", "-", "@"):
+                out.append(node)
+            elif field not in _TEXT_FIELDS and node.strip():
+                out.append("=" + node)
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, str(k))
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                walk(v, field)
+
+    walk(ops, "")
+    return out
+
+
+_INDIRECT_RX = re.compile(r"(?i)(?<![A-Za-z0-9_.])INDIRECT\s*\(")
+_QUOTED_RX = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"")
+
+
+def uses_indirect(entry: str) -> bool:
+    """Whether a formula entry CALLS INDIRECT (the word inside quoted text is
+    not a call). Pure, linear."""
+    return bool(_INDIRECT_RX.search(_QUOTED_RX.sub('""', entry))) if "(" in entry else False
+
+
+async def link_refusal(ops: Any) -> str:
+    """Why a step's link to ANOTHER WORKBOOK may not be written into the open
+    workbook, or "" (v1.469.1): the workbook it names is in a folder Jarvis
+    may not read. A link by file name alone is the workbook of that name open
+    in Excel, so Excel is asked once where its workbooks are open from; steps
+    with no link ask nothing. While reading is limited to listed folders, a
+    step that calls INDIRECT is refused when a workbook is open in Excel from
+    a folder outside them (INDIRECT reaches it by text). Never raises."""
+    from ..excel_worker import workbook_links  # noqa: PLC0415 - pure reader, no Excel
+    from .excel_formula import LINK_UNCHECKED, link_reason  # noqa: PLC0415
+
+    try:
+        from ..core import fs_policy  # noqa: PLC0415
+
+        entries = formula_entries(ops)
+        linked = [e for e in entries if workbook_links(e)]
+        by_name = any(not ln.get("dir") and not ln.get("index") for e in linked for ln in workbook_links(e))
+        # INDIRECT builds its reference from TEXT, so no reader of links can
+        # see where it points: =INDIRECT("[Jones.xlsx]Summary!B4") reads a
+        # workbook that is open in Excel (measured). It is only a question
+        # while reading is limited to listed folders.
+        indirect = any(uses_indirect(e) for e in entries) and await asyncio.to_thread(fs_policy.read_limits_set)
+        if not linked and not indirect:
+            return ""
+        books: "dict[str, str] | None" = None
+        shown: "list[tuple[str, str]]" = []
+        if by_name or indirect:
+            out = await ask({"op": "look"}, LOOK_S)
+            if out.get("ok"):
+                shown = [(str(b.get("name") or ""), str(b.get("path") or ""))
+                         for b in out.get("workbooks") or [] if isinstance(b, dict)]
+                books = {n.lower(): p for n, p in shown}
+
+        def work() -> str:
+            if books is None and (indirect or (by_name and fs_policy.read_limits_set())):
+                return LINK_UNCHECKED  # Excel did not say where its workbooks are: not a pass
+            if indirect:
+                closed = [n for n, p in shown if _read_refusal(p)]
+                if closed:
+                    names = ", ".join(closed[:3]) + (" and others" if len(closed) > 3 else "")
+                    return f"INDIRECT could read {names}, open in Excel from a folder Jarvis may not read"
+            for e in linked:
+                why = link_reason(e, open_books=books)
+                if why:
+                    return why
+            return ""
+
+        return await asyncio.to_thread(work)
+    except Exception:  # noqa: BLE001 - a check that fails is a refusal, never a pass
+        return "it links to another workbook that Jarvis could not check"
+
+
 def snapshot(home: "str | Path", workbook: str) -> "tuple[Path | None, dict]":
     """A copy of the open workbook as it is now, for reading. BLOCKING.
     Returns (path, the child's answer); the caller removes the file."""
@@ -692,6 +785,9 @@ class ExcelLiveEditTool(Tool):
             return self._unchanged(ctx, bad)
         if not plan.get("ok"):
             return self._unchanged(ctx, str(plan.get("error") or NO_ANSWER))
+        linked = await link_refusal(ops)
+        if linked:
+            return self._unchanged(ctx, f"That formula is not written from chat: {linked}. The user can type it in Excel themselves.")
         name = str(plan.get("workbook") or "workbook")
         copy = ""
         if plan.get("destructive") or is_destructive(ops):
