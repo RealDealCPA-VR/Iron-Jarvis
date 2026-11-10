@@ -16639,6 +16639,56 @@ does not need a bump, stop and bump it.
     written from Excel's documented error codes, not driven; no panel inside
     Excel; agents and the POST lane cannot change a workbook.
 
+- **How a number is built, what-if, goal seek, and a cell the user can jump
+  to** (v1.467.0; step 3 of the live-Excel plan).
+  - **`documents/excel_trace.py`, tool `excel_trace`** (allow, READONLY,
+    untrusted content, on every built-in roster): modes `how` (precedents down
+    to typed-in inputs, `MAX_DEPTH` 6, `MAX_NODES` 120, a range shows its
+    first `MAX_RANGE_SHOWN` 4 cells), `affects` (dependents), `what_if`
+    (`set` {cell: value}, `watch` cells; with no watch, the END results the
+    changed cells lead to, at most `MAX_DEFAULT_WATCH` 12), `goal_seek`
+    (bracket outward, then bisection; `exact` False + a "NOT EXACT" line when
+    a rounded figure makes the target move in steps). `path` may be
+    `live:<name>` (the open workbook, through `excel_tools._read_target`).
+  - **The engine (`documents/excel_formula.Grid`)** gained `overrides`
+    ({(sheet lower-cased, col, row): value}), `fresh` (work every formula out
+    even when Excel saved a result: a saved result does not know about an
+    override), `canon()` and `reset()`. Both off = `get` exactly as before.
+    A what-if ALWAYS first works the baseline out with `fresh` and compares it
+    with what Excel saved; a cell where the two differ, or that cannot be
+    worked out, gets a `problem` and NO figure.
+  - **Checked against Excel:** `tests/test_excel_trace_real_v1467.py`
+    (`IJ_LIVE_EXCEL=1`; its own hidden Excel) sets the what-if values in the
+    real Excel and compares every watched cell to 1e-9, compares goal seek
+    with Excel's own `GoalSeek`, and drives the jump. A formula that names a
+    sheet which does not exist yet is saved by Excel as a link to ANOTHER
+    workbook (`[1]Costs!C2`): build sheets before the formulas that read them.
+  - **Arming** (`tools/autoselect`): `wants_excel_trace(text, picked)` only
+    beside a spreadsheet tool the turn already has (`_TRACE_CARRIERS`), and
+    `live_excel_companions(text)` (trace, `excel_query`) ride with
+    `excel_live_look`; each only while the ceiling has room
+    (`chat_turn._resolve_armed_tools`).
+  - **Jump to the cell.** A reply names a cell as a markdown link whose
+    address is only a fragment, `#excel/<workbook>/<sheet>/<cell>`
+    (`excel_live.cell_link` / `link_hint`, appended to a live look's, a live
+    edit's and a live trace's answer; `CELL_LINK_PREFIX` and `CELL_RX` are
+    twinned in `dashboard/lib/excelCellLink.ts`, pinned equal). The ONE
+    markdown renderer draws it as `components/ExcelCellLink.tsx`, a button
+    that posts `POST /excel/live/goto {workbook, sheet, cell}`
+    (`routes/documents.py`; `excel_live.clean_cell_target` refuses anything
+    that is not a workbook name, a sheet name and a cell before the child is
+    asked; 409 with the child's own words). The child's `goto` selects the
+    range and brings Excel forward; it refuses a hidden sheet, never opens a
+    file, and leaves the workbook's Saved flag alone (measured).
+    `excel_live_look` takes `show: true` for "take me there".
+  - **Pins:** `tests/test_excel_trace_v1467.py`,
+    `tests/test_excel_trace_real_v1467.py`,
+    `dashboard/__tests__/excel-cell-link-v1467.test.tsx`.
+  - **OPEN:** a what-if is Jarvis's engine, so a cell that uses a function
+    outside `SUPPORTED` gets no figure; data tables and scenarios are not
+    read; a model must write the link (a raw space in a name breaks it, so the
+    hint says %20); a closed file has no jump.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

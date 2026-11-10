@@ -18,6 +18,7 @@ from ..schemas import (
     BatchFolderBody,
     DocEnhanceBody,
     DocumentOpenBody,
+    ExcelGotoBody,
     DocWriteBody,
     FolderCheckBody,
     LiveDocCreate,
@@ -612,6 +613,24 @@ def register(app: FastAPI, d) -> None:
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=422, detail=f"could not open: {exc}")
         return {"ok": True, "app": _APP_LABEL.get(p.suffix.lower(), "the default app")}
+
+    @app.post("/excel/live/goto")
+    async def excel_live_goto(body: ExcelGotoBody) -> dict[str, Any]:
+        """Show one cell of a workbook that is OPEN in Excel (v1.467.0): the
+        press behind a cell link in a reply. It selects the cell and brings
+        Excel forward. It reads nothing and changes nothing in the workbook,
+        and it never opens a file: a workbook that is not open is refused in
+        words. The work is done by the short-lived Excel child, so a busy
+        Excel can never hold the daemon."""
+        from ...documents import excel_live as _xl
+
+        target = _xl.clean_cell_target(body.workbook, body.sheet, body.cell)
+        if target is None:
+            raise HTTPException(status_code=400, detail="That is not a cell Iron Jarvis can show in Excel.")
+        out = await _xl.goto(*target)
+        if not out.get("ok"):
+            raise HTTPException(status_code=409, detail=str(out.get("error") or _xl.NO_ANSWER))
+        return {"ok": True, "workbook": out.get("workbook"), "sheet": out.get("sheet"), "address": out.get("address")}
 
     @app.get("/documents/live")
     def list_livedocs() -> dict[str, Any]:

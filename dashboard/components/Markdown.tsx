@@ -31,6 +31,8 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markd
 import remarkGfm from "remark-gfm";
 import { API_BASE } from "@/lib/api";
 import { MediaGroup, ZoomableImage } from "@/components/MediaLightbox";
+import { ExcelCellLink } from "@/components/ExcelCellLink";
+import { parseExcelCellHref } from "@/lib/excelCellLink";
 import { isLocalMediaRef, localMediaSrc, localPathOf } from "@/lib/mediaLightbox";
 import { blankDraftFence, DraftCard, draftFromFence, fenceLang } from "@/components/chat/DraftCard";
 import { ChartCard } from "@/components/chat/ChartCard";
@@ -266,6 +268,10 @@ export function mediaUrlTransform(url: string, key: string): string {
 const LinkContext = createContext(false);
 
 function MarkdownLink({ children, href }: { children?: ReactNode; href?: string }) {
+  // v1.467.0: a cell of a workbook open in Excel ("#excel/<book>/<sheet>/<cell>")
+  // is a press that shows it there, never a page to open.
+  const cell = parseExcelCellHref(href);
+  if (cell) return <ExcelCellLink target={cell}>{children}</ExcelCellLink>;
   return (
     <a
       href={href}

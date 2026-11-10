@@ -83,6 +83,7 @@
     "excel_query",
     "excel_read",
     "excel_sheet_spec",
+    "excel_trace",
     "exit_plan_mode",
     "extract_pdf",
     "file_search",
@@ -303,6 +304,7 @@
     "excel_query": "query a workbook",
     "excel_read": "read a file",
     "excel_sheet_spec": "capture a sheet's layout",
+    "excel_trace": "trace how a number is built",
     "exit_plan_mode": "start working on this plan",
     "extract_pdf": "read a file",
     "file_search": "search your drives",
@@ -680,6 +682,10 @@
     "excel_sheet_spec": [
       "Captured a sheet's layout",
       "Capturing a sheet's layout"
+    ],
+    "excel_trace": [
+      "Traced how a number is built",
+      "Tracing how a number is built"
     ],
     "exit_plan_mode": [
       "Presented its plan for approval",
@@ -1177,6 +1183,7 @@
     "excel_query": "",
     "excel_read": "read",
     "excel_sheet_spec": "",
+    "excel_trace": "",
     "exit_plan_mode": "",
     "extract_pdf": "read",
     "file_search": "",

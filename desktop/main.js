@@ -3887,6 +3887,7 @@ const TOOL_WORDS_BUILTIN = {
   excel_query: "query a workbook",
   excel_read: "read a file",
   excel_sheet_spec: "capture a sheet's layout",
+  excel_trace: "trace how a number is built",
   exit_plan_mode: "start working on this plan",
   extract_pdf: "read a file",
   file_search: "search your drives",

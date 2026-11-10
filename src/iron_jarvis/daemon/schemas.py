@@ -741,6 +741,14 @@ class DocumentOpenBody(BaseModel):
     path: str
 
 
+class ExcelGotoBody(BaseModel):
+    """Show one cell of a workbook that is open in Excel (v1.467.0)."""
+
+    workbook: str = ""
+    sheet: str = ""
+    cell: str = ""
+
+
 class ChatShareBody(BaseModel):
     """Render a saved chat thread for sharing. ``mode`` full = the verbatim
     transcript; compact = a faithful one-shot LLM digest. Read-only — the

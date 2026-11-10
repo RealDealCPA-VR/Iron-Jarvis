@@ -1389,6 +1389,7 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
     dependency)."""
     from .calculate_tool import CalculateTool
     from .excel_live import excel_live_tools
+    from .excel_trace import ExcelTraceTool
     from .excel_tools import excel_tools
     from .office_tools import office_tools
     from .pdf_tools import pdf_page_tools
@@ -1404,6 +1405,7 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
         BatchDocumentsTool(router_resolver),
         *excel_tools(),
         *excel_live_tools(),  # v1.466.0: the workbook that is open in Excel
+        ExcelTraceTool(),  # v1.467.0: how a number is built, and what would change it
         CalculateTool(),  # v1.465.0: exact arithmetic for every stated figure
         *pdf_page_tools(),
         # C-03/C-07/C-09 — docx_edit, compare_documents, pdf_form_fields,

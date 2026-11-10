@@ -506,6 +506,8 @@ def op_goto(req: dict) -> dict:
     apps = _apps()
     app, wb = _find_book(apps, req.get("workbook"))
     ws = _sheet(wb, req.get("sheet"))
+    if int(ws.Visible) != -1:  # xlSheetVisible
+        raise Refusal(f"the sheet '{ws.Name}' is hidden in Excel, so there is nothing to show. Unhide it first.", "hidden_sheet")
     r1, c1, r2, c2 = _clip_to_used(ws, parse_range(req.get("cell") or req.get("range") or "A1"))
     wb.Activate()
     app.Goto(_rng(ws, r1, c1, r2, c2), True)

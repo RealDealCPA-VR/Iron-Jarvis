@@ -116,6 +116,8 @@ _DOCUMENT_TOOLS = [
     "excel_read", "excel_edit", "excel_profile", "excel_query",
     "excel_formula_check", "excel_sheet_spec", "excel_apply_spec",
     "excel_accounts_diff",
+    # v1.467.0: how a number is built, what uses it, what-if and goal seek.
+    "excel_trace",
     # v1.465.0: exact arithmetic. A figure in a memo or a summary is worked
     # out by the engine, never in the model's head.
     "calculate",

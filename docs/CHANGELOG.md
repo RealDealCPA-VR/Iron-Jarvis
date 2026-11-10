@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.467.0
+
+**How a number is built, what-if and goal seek.** Jarvis can now explain a figure in a spreadsheet, tell you what would change it, and take you to the cell.
+
 ## v1.466.0
 
 **Working in a workbook that is open in Excel.** Until now Jarvis worked on saved files, so a workbook had to be closed first.
@@ -77,7 +81,3 @@
 ## v1.449.0
 
 **Did it work? The app tells you, everywhere.** Every place that reports on work now gives the same, plain verdict.
-
-## v1.448.0
-
-**Chat configures the rest: models, tool servers, web services.** Three more things you can set up by asking, and four small honesty fixes.

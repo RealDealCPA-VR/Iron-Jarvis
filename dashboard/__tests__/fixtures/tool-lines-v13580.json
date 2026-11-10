@@ -296,6 +296,10 @@
       "ok": "captured a sheet's layout",
       "failed": "tried a sheet layout capture and it failed"
     },
+    "excel_trace": {
+      "ok": "traced how a number is built",
+      "failed": "tried a number trace and it failed"
+    },
     "exit_plan_mode": {
       "ok": "presented its plan for approval",
       "failed": "tried a plan for approval and it failed"

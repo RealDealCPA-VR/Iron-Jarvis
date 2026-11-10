@@ -369,6 +369,7 @@ def render_look(out: dict) -> str:
         if fl:
             lines.append("formulas:")
             lines.extend("  " + x for x in fl)
+        lines.append(link_hint(str(rng.get("workbook") or ""), str(rng.get("sheet") or ""), str(rng["address"]).split(":")[0]))
     return "\n".join(lines)
 
 
@@ -430,6 +431,7 @@ class ExcelLiveLookTool(Tool):
             "range": {"type": "string", "description": "A1:F40, 'selection' or 'used'"},
             "map": {"type": "boolean", "description": "Return the workbook map instead of cells"},
             "max_cells": {"type": "integer", "description": "Most cells to return (default 2000, at most 20000)"},
+            "show": {"type": "boolean", "description": "Also move Excel to this range so the user sees it selected. Only when the user asks to be shown or taken to it."},
         },
     }
     reversibility = Reversibility.READONLY
@@ -448,7 +450,18 @@ class ExcelLiveLookTool(Tool):
             bad = await asyncio.to_thread(_read_refusal, str(rng.get("path") or ""))
             if bad:
                 return ToolResult(ok=False, error=bad)
-        return ToolResult(ok=True, output=render_look(out), data={k: out[k] for k in ("excel_open", "workbooks", "active", "range", "protected_view") if k in out})
+        text = render_look(out)
+        data = {k: out[k] for k in ("excel_open", "workbooks", "active", "range", "protected_view") if k in out}
+        if args.get("show") and rng:
+            # v1.467.0: the user asked to be taken there. Selecting a range
+            # changes nothing in the workbook; a refusal is said, not hidden.
+            moved = await goto(str(rng.get("workbook") or ""), str(rng.get("sheet") or ""), str(rng.get("address") or "A1"))
+            if moved.get("ok"):
+                text += f"\nExcel now shows {moved.get('sheet')}!{moved.get('address')} selected."
+            else:
+                text += f"\nExcel was NOT moved to that range: {moved.get('error') or NO_ANSWER}"
+            data["shown"] = bool(moved.get("ok"))
+        return ToolResult(ok=True, output=text, data=data)
 
     async def _map(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         def work() -> ToolResult:
@@ -643,6 +656,9 @@ class ExcelLiveEditTool(Tool):
                          + (f" The workbook as it was before is kept as a copy at {out['copy']}." if out.get("copy") else ""))
         else:
             lines.append("The user can undo this whole call from the chat (Undo on the change line). " + CLEARS_CTRL_Z)
+        first = next(iter(out.get("changes") or []), None)
+        if first:
+            lines.append(link_hint(name, str(first.get("sheet") or ""), str(first.get("cell") or "")))
         card = {"title": "Excel changed", "key": f"excel:{name}", "label": name, "old": None,
                 "new": change_summary(out), "change_id": held["change_id"]}
         data = {
@@ -706,6 +722,44 @@ async def restore(undo: dict[str, Any], *, forgiving: bool = False) -> "tuple[st
 
 async def goto(workbook: str, sheet: str, cell: str) -> dict:
     return await ask({"op": "goto", "workbook": workbook, "sheet": sheet, "cell": cell}, LOOK_S)
+
+
+#: A CELL THE USER CAN JUMP TO (v1.467.0). A reply names a cell as a markdown
+#: link whose address is only a fragment, "#excel/<workbook>/<sheet>/<cell>"
+#: (each part percent-encoded). The chat draws it as a press that asks
+#: POST /excel/live/goto, which selects the cell in Excel and brings Excel
+#: forward. It reads and changes nothing. dashboard/lib/excelCellLink.ts is
+#: the twin of CELL_LINK_PREFIX and CELL_RX (pinned equal).
+CELL_LINK_PREFIX = "#excel/"
+CELL_RX = re.compile(r"^\$?[A-Za-z]{1,3}\$?[0-9]{1,7}(?::\$?[A-Za-z]{1,3}\$?[0-9]{1,7})?$")
+_SHEET_FORBIDDEN = set("/\\?*[]:")
+
+
+def cell_link(workbook: str, sheet: str, cell: str) -> str:
+    from urllib.parse import quote  # noqa: PLC0415
+
+    return CELL_LINK_PREFIX + "/".join(quote(str(x), safe="") for x in (workbook, sheet, cell))
+
+
+def link_hint(workbook: str, sheet: str = "", cell: str = "") -> str:
+    """One line for a tool's answer: how to write a cell so the user can
+    jump to it."""
+    sheet, cell = sheet or "Sheet1", (cell or "A1").replace("$", "")
+    return (
+        f"To let the user jump to a cell, write it as a link like [{sheet}!{cell}]({cell_link(workbook, sheet, cell)}) "
+        "(a space in a name is %20): clicking it shows that cell in Excel."
+    )
+
+
+def clean_cell_target(workbook: Any, sheet: Any, cell: Any) -> "tuple[str, str, str] | None":
+    """The three parts of a jump as the child may be asked for them, or None
+    when they are not a workbook name, a sheet name and a cell."""
+    wb, sh, ce = (str(x or "").strip() for x in (workbook, sheet, cell))
+    if len(wb) > 260 or len(sh) > 31 or not CELL_RX.match(ce):
+        return None
+    if any(ord(ch) < 32 for ch in wb + sh) or _SHEET_FORBIDDEN.intersection(sh):
+        return None
+    return wb, sh, ce.replace("$", "").upper()
 
 
 def excel_live_tools() -> "list[Tool]":

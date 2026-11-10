@@ -3435,6 +3435,51 @@ def wants_live_excel(text: str, excel_open: bool, has_files: bool = False) -> bo
     return bool(_SHEET_TALK_RX.search(msg) or _RANGE_REF_RX.search(msg))
 
 
+#: TRACING (v1.467.0): words that ask how a figure is built, what uses it,
+#: or what would change it. They arm ``excel_trace`` only beside a
+#: spreadsheet tool the turn already has (``_TRACE_CARRIERS``): on their own
+#: these are everyday words ("where does this error come from").
+_TRACE_CARRIERS = frozenset(
+    {"excel_read", "excel_profile", "excel_query", "excel_formula_check", "excel_edit", "excel_live_look",
+     "read_document"}
+)
+_TRACE_RX = re.compile(
+    r"(?i)\b(?:how\s+(?:is|was|are|were|did|do|does)\b[^.?!\n]{0,80}?\b(?:calculated|computed|worked\s+out|derived|built|arrived\s+at|come\s+up\s+with|get|got)"
+    r"|where\s+(?:does|do|did)\b[^.?!\n]{0,80}?\bcome\s+from"
+    r"|what\s+(?:feeds|drives|goes\s+into|makes\s+up|affects|depends\s+on|uses|is\s+behind)"
+    r"|trace|precedents?|dependents?|what[\s-]?if|goal[\s-]?seek|break[\s-]?even|sensitivity"
+    r"|what\s+(?:would|does|must|should|do)\b[^.?!\n]{0,80}?\b(?:need\s+to\s+be|have\s+to\s+be|come\s+to|become|happen)"
+    r"|if\s+(?:i|we|you)\s+(?:change|changed|raise|raised|lower|lowered|set|increase|increased|decrease|decreased|cut|double|doubled)"
+    r"|why\s+(?:is|does|do|are)\b[^.?!\n]{0,80}?(?:\#(?:REF|DIV|VALUE|N/A|NAME|NUM)|error|wrong|off|not\s+(?:match|add\s+up|tie))"
+    r")"
+)
+_QUERY_TALK_RX = re.compile(
+    r"(?i)\b(?:sum|total|totals|average|mean|count|how\s+(?:much|many)|breakdown|largest|smallest|top\s+\d+|"
+    r"by\s+(?:client|month|category|vendor|account|region|customer|rep|product))\b"
+)
+
+
+def wants_excel_trace(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
+    """True when the turn already has a spreadsheet tool and the message asks
+    how a figure is built or what would change it. Pure, linear."""
+    if not _TRACE_CARRIERS.intersection(picked):
+        return False
+    return bool(_TRACE_RX.search((text or "")[:4000]))
+
+
+def live_excel_companions(text: str) -> "list[str]":
+    """The read tools that go with ``excel_live_look`` for this message: they
+    read the open workbook through a ``live:`` path, so they must be armed to
+    be usable. Best first; the caller keeps to its ceiling."""
+    msg = (text or "")[:4000]
+    out = []
+    if _TRACE_RX.search(msg):
+        out.append("excel_trace")
+    if _QUERY_TALK_RX.search(msg):
+        out.append("excel_query")
+    return out
+
+
 def wants_calculator(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
     """True when the turn will state figures the model should not work out in
     its head (v1.465.0): it asks for arithmetic, or it reads or writes a

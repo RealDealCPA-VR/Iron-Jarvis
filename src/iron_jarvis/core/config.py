@@ -311,6 +311,7 @@ def default_permissions() -> dict[str, str]:
         # that cannot be put back asks every time (the tool's own check).
         "excel_live_look": "allow",
         "excel_live_edit": "ask",
+        "excel_trace": "allow",  # v1.467.0: reads and works out; changes nothing
         # Office capability tools (C-03/C-07/C-09): docx_edit and pdf_form_fill
         # write workspace-confined, TX-01 undoable files (a copy by default) —
         # the same three facts that put excel_edit here. compare_documents and

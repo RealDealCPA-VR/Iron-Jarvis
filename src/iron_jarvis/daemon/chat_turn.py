@@ -4682,6 +4682,24 @@ def _resolve_armed_tools(
 
         if wants_live_excel(last_user, excel_seen(), bool(getattr(body, "attachments", None))):
             auto.append("excel_live_look")
+    # v1.467.0: the read tools that reach the open workbook through a "live:"
+    # path (tracing, grouped totals) ride with the look, and tracing rides
+    # with any spreadsheet tool the turn already has. Each only while the
+    # ceiling has room, like the calculator.
+    if getattr(body, "auto_tools", False):
+        from ..tools.autoselect import live_excel_companions, wants_excel_trace
+
+        _extra = live_excel_companions(last_user) if "excel_live_look" in auto else []
+        if wants_excel_trace(last_user, explicit + auto) and "excel_trace" not in _extra:
+            _extra.append("excel_trace")
+        for _name in _extra:
+            if (
+                (_ceiling >= _MAX_ARMED_TOOLS or len(explicit) + len(auto) < _ceiling)
+                and _name not in explicit
+                and _name not in auto
+                and d.platform.registry.get(_name) is not None
+            ):
+                auto.append(_name)
     auto = [t for t in auto if _not_denied(t)]
     # THE BROWSER CAPABILITY FILTER (v1.236.0, plan 11.2), applied LAST — after
     # the explicit picks, after every fill pass, and after the drop signal has

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.466.0 (2026-11-09).*
+holds itself to. Current as of v1.467.0 (2026-11-09).*
 
 ---
 
@@ -2041,6 +2041,43 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## How a number is built, what-if and goal seek (v1.467.0)
+
+Jarvis can now explain a figure in a spreadsheet, tell you what would change
+it, and take you to the cell. It works on a saved workbook and on one that is
+open in Excel.
+
+**Four questions it answers.**
+
+- **How is this number built?** "How is the net profit in E14 calculated?"
+  Jarvis follows the formula down to the cells that were typed in, level by
+  level, and shows each cell with its heading, its value and its formula. A
+  long chain is cut and it says so.
+- **What uses this cell?** "What depends on the tax rate?" lists every formula
+  that reads the cell, and what reads those.
+- **What if?** "What would December's revenue be if growth were 8%?" Jarvis
+  works the answer out on the side and shows each figure before and after.
+  **Nothing in the workbook is changed.** You can change several cells at once.
+- **Goal seek.** "What does the price need to be for profit to reach 20,000?"
+  Jarvis searches for the value and says what the target comes to with it.
+  Again nothing is changed. When a rounded figure on the way means no value
+  lands on the goal exactly, it gives the closest value and says how far off
+  it is, where Excel's own Goal Seek simply gives up.
+
+**How far to trust the figures.** These answers were checked against Excel
+itself: Excel was made to hold the same values for real and came to the same
+figures. Before it answers a what-if, Jarvis also checks that it works out
+today's figure the same as Excel saved it. If it does not, or the formula uses
+something Jarvis leaves to Excel (a link to another workbook, an array
+formula), it gives no figure for that cell and says why, rather than guess.
+
+**Jump to the cell.** When Jarvis talks about a cell of a workbook that is
+open in Excel, the cell is a link, like Calc!B8. Click it and Excel comes
+forward with that cell selected. This only moves the selection: it changes
+nothing in the workbook. You can also ask "take me to it" or "show me that
+range". A hidden sheet, or a workbook that is no longer open, is said in words;
+Jarvis never opens a file to do this.
 
 ## Working in a workbook that is open in Excel (v1.466.0)
 

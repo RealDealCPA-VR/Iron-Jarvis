@@ -147,6 +147,13 @@ class Grid:
         self.failed: dict[str, str] = {}
         #: Names a caller defined (the calculator's labels), lower-cased.
         self.variables: dict[str, Any] = {}
+        #: WHAT IF (v1.467.0, documents/excel_trace.py). ``overrides`` maps
+        #: ``(sheet lower-cased, col, row)`` to a value used INSTEAD of the
+        #: cell; ``fresh`` makes every formula cell be worked out even when
+        #: Excel saved a result for it (a saved result does not know about an
+        #: override). Both off: ``get`` behaves exactly as before.
+        self.overrides: dict[tuple[str, int, int], Any] = {}
+        self.fresh = False
         if path is None:  # the calculator: no workbook behind the formula
             self._wb = None
             self.sheetnames: list[str] = []
@@ -226,12 +233,27 @@ class Grid:
             return None
         return None
 
+    def canon(self, sheet: str) -> str:
+        """The sheet's own name, whatever case it was written in."""
+        return str(self._sheet(self._wb, sheet).title)
+
+    def reset(self) -> None:
+        """Forget every worked-out value (after ``overrides`` changed)."""
+        self._memo.clear()
+        self._stack.clear()
+        self.failed.clear()
+        self._reads = 0
+
     # -- computed access ----------------------------------------------------
     def get(self, sheet: str, col: int, row: int) -> Any:
         self._reads += 1
         if self._reads > _MAX_READS:
             raise FormulaError("this formula reads too many cells to work out here")
-        v = self.saved(sheet, col, row)
+        if self.overrides:
+            held = self.overrides.get((self.canon(sheet).lower(), col, row), _NO_OVERRIDE)
+            if held is not _NO_OVERRIDE:
+                return _norm(held)
+        v = None if (self.fresh and self._is_formula(sheet, col, row)) else self.saved(sheet, col, row)
         if v is not None:
             if isinstance(v, str) and v.startswith("#") and v in _ERROR_CODES:
                 raise ExcelError(v, f"saved in {sheet}!{_col_letters(col)}{row}")
@@ -270,6 +292,12 @@ class Grid:
         self.computed += 1
         return value
 
+    def _is_formula(self, sheet: str, col: int, row: int) -> bool:
+        try:
+            return self.formula(sheet, col, row) is not None
+        except Exception:  # noqa: BLE001 - no formula view: read it as a value
+            return False
+
     def close(self) -> None:
         for wb in (self._wb, self._fwb):
             try:
@@ -280,6 +308,7 @@ class Grid:
 
 
 _ERROR_CODES = frozenset({"#N/A", "#REF!", "#DIV/0!", "#VALUE!", "#NAME?", "#NUM!", "#NULL!"})
+_NO_OVERRIDE = object()
 
 
 def _tokenize(src: str) -> list[tuple[str, str]]:
