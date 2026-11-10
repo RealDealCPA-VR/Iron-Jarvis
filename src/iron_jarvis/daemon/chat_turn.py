@@ -4651,8 +4651,12 @@ def _resolve_armed_tools(
     # head: a live client memo had a correct table and three wrong numbers in
     # its prose. Outside the cap for the settings tools' reason: the turns
     # that state the most figures are the ones whose six places are full.
+    # NEVER past a weak model's own tool budget, though: when the capability
+    # envelope narrowed the menu (`_ceiling` below the standing cap), it takes
+    # a place only if one is free (tests/test_chat_envelope_v1202.py).
     if (
         getattr(body, "auto_tools", False)
+        and (_ceiling >= _MAX_ARMED_TOOLS or len(explicit) + len(auto) < _ceiling)
         and "calculate" not in explicit
         and "calculate" not in auto
         and d.platform.registry.get("calculate") is not None

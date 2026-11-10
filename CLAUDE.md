@@ -16509,6 +16509,13 @@ does not need a bump, stop and bump it.
     outside the six-tool cap, in `chat_turn._resolve_armed_tools` beside the
     settings tools, when `autoselect.wants_calculator(text, picked)` says so
     (arithmetic asked outright, or a document tool picked AND a money word).
+    Past the six-tool cap, but NEVER past a weak model's own tool budget:
+    when the envelope narrowed `_ceiling` it takes a place only if one is
+    free (`test_chat_envelope_v1202` went red on GitHub when it did not).
+    `session_result` gained `ended_on_failed_change`, so the two recorded
+    receipt fixtures were regenerated (`IJ_REGEN_RECEIPT_SEAMS=1`,
+    `IJ_REGEN_RUN_WHERE_DISPATCHED=1`): a NEW key on `session_result` always
+    means regenerating both.
     It is NOT in `AUTO_SAFE_TOOLS` and no rule scores it:
     `select_auto_tools` is byte-identical (eight pins of its exact output
     went red when the calculator was first added inside it).

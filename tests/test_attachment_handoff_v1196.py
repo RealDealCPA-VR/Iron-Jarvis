@@ -793,7 +793,10 @@ def test_arming_is_gated_on_auto_tools_and_bounded(scene):
     body.tools = ["web_search", "web_fetch"]
     armed, _auto = _resolve_armed_tools(scene.d, body)
     assert armed[:2] == ["web_search", "web_fetch"], "explicit picks lost their slots"
-    assert len(armed) <= _MAX_ARMED_TOOLS
+    # v1.465.0 (moved on purpose): the calculator rides along OUTSIDE the cap,
+    # like the settings tools, on a turn about figures ("fee" here). Every
+    # other tool is still bounded by it.
+    assert len([t for t in armed if t != "calculate"]) <= _MAX_ARMED_TOOLS
 
 
 @pytest.mark.parametrize("question", [

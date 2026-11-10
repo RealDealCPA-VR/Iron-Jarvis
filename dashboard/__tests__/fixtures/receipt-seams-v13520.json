@@ -92,6 +92,7 @@
           "agent_type": "builder",
           "documents": [],
           "duration_s": 180.0,
+          "ended_on_failed_change": true,
           "errors": [
             {
               "error": "",
@@ -184,6 +185,7 @@
         "agent_type": "builder",
         "documents": [],
         "duration_s": 180.0,
+        "ended_on_failed_change": true,
         "errors": [
           {
             "error": "",
@@ -290,6 +292,7 @@
           "agent_type": "builder",
           "documents": [],
           "duration_s": 180.0,
+          "ended_on_failed_change": true,
           "errors": [
             {
               "error": "",
@@ -382,6 +385,7 @@
         "agent_type": "builder",
         "documents": [],
         "duration_s": 180.0,
+        "ended_on_failed_change": true,
         "errors": [
           {
             "error": "",
