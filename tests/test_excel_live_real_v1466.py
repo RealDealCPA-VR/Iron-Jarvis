@@ -907,3 +907,33 @@ def test_a_step_on_a_sheet_renamed_in_the_same_call_is_still_counted(book):
     out = ask({"op": "plan", "workbook": path, "ops": [{"op": "rename_sheet", "sheet": "Data", "to": "Ledger"},
                                                        {"op": "set", "sheet": "Ledger", "cell": "E2:E6", "value": 0}]})
     assert out["ok"] and out["overwrites"] == 5 and out["formulas_lost"] == 5, out
+
+
+def test_fixing_one_of_many_errors_is_not_reported_as_a_new_error(book, tmp_path):
+    """Only the first 40 error cells of a sheet were read: fix one of fifty
+    and the 41st old one was announced as an error the change had made."""
+    wb, path = book
+    wb.Worksheets("Data").Range("G1:G50").Formula = "=1/0"
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "G1", "value": 1}], tmp_path)
+    assert out["ok"] and out["new_errors"] == [], out["new_errors"]
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "H1", "formula": "=1/0"}], tmp_path)
+    assert out["new_errors"] == ["Data!H1"], "a real new error is still said"
+
+
+def test_a_formula_that_would_send_cells_outside_is_never_written(book, tmp_path):
+    """A workbook's own text can tell a model to write =WEBSERVICE(...&A1):
+    Excel itself would then send the cell out. (Refused in the check, so
+    nothing here reaches any address.)"""
+    wb, path = book
+    for step in (
+        {"op": "set", "sheet": "Data", "cell": "G1", "formula": '=WEBSERVICE("http://127.0.0.1:9/?d="&A2)'},
+        {"op": "set", "sheet": "Data", "cell": "G1", "value": "=cmd|' /C calc'!A0"},
+        {"op": "set", "sheet": "Data", "cell": "G1", "values": [["x", '=IMAGE("https://example.com/a.png")']]},
+        {"op": "name", "name": "Outside", "refers_to": "='\\\\host\\share\\[b.xlsx]S'!A1"},
+        {"op": "conditional_format", "sheet": "Data", "range": "A2:A6", "rule": "formula", "formula": '=LEN(WEBSERVICE("http://127.0.0.1:9"))>0'},
+    ):
+        out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "F1", "value": "first"}, step], tmp_path)
+        assert not out["ok"] and out["code"] == "reaches_out" and "type it in Excel" in out["error"], out
+    assert _v(wb, "Data", "G1") is None and _v(wb, "Data", "F1") is None and all(n.Name != "Outside" for n in wb.Names)
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "G1", "formula": '=HYPERLINK("https://example.com","site")'}], tmp_path)
+    assert out["ok"] and _v(wb, "Data", "G1") == "site", "a link the user has to click is an ordinary formula"

