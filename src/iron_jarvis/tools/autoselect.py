@@ -3635,6 +3635,13 @@ _SCRIPT_NOT_NEXT = frozenset({
 })
 #: A count this high of one thing is a job for a script ("these 12 workbooks").
 _SCRIPT_COUNT = 4
+#: With that many files attached, a word that points at them makes the
+#: message a request about all of them ("total these"). Attachments alone do
+#: not: "thanks!" with four files asks for nothing.
+_SCRIPT_POINTERS = frozenset({
+    "these", "those", "them", "they", "all", "each", "every", "both",
+    "attached", "attachments", "together", "combined", "across",
+}) | _SCRIPT_THINGS
 
 
 def wants_tool_script(
@@ -3642,15 +3649,15 @@ def wants_tool_script(
 ) -> bool:
     """True when the turn is the SAME read done many times (v1.470.0): the
     message speaks of each / every / all of some kind of thing, or names four
-    or more of them, or brings that many files, and the turn already has a
-    tool to read with (*picked* non-empty). Then `tool_script` rides along,
-    so the model can do the reads in one script instead of one call each.
-    One pass over the words: linear."""
+    or more of them, or brings that many files AND points at them ("total
+    these"), and the turn already has a tool to read with (*picked*
+    non-empty). Then `tool_script` rides along, so the model can do the reads
+    in one script instead of one call each. One pass over the words: linear."""
     if not picked:
         return False
-    if attachments >= _SCRIPT_COUNT:
-        return True
     words = _SCRIPT_WORD.findall((text or "")[:4000].lower())
+    if attachments >= _SCRIPT_COUNT and any(w in _SCRIPT_POINTERS for w in words):
+        return True
     for i, word in enumerate(words):
         ahead = words[i + 1: i + 1 + _SCRIPT_REACH]
         if word in _SCRIPT_MANY and any(w in _SCRIPT_THINGS for w in ahead):

@@ -500,9 +500,11 @@ def test_the_matcher_says_no_for_an_ordinary_request(text):
     assert not wants_tool_script(text, ["read_document"])
 
 
-def test_many_attached_files_count_too():
+def test_many_attached_files_count_when_the_message_points_at_them():
     assert wants_tool_script("total these", ["read_document"], attachments=4)
+    assert wants_tool_script("what do they add up to?", ["read_document"], attachments=5)
     assert not wants_tool_script("total these", ["read_document"], attachments=3)
+    assert not wants_tool_script("thanks!", ["read_document"], attachments=6)
 
 
 def test_the_matcher_is_linear_on_a_long_message():
@@ -525,6 +527,46 @@ def test_chat_arms_it_beside_a_reader_for_bulk_work_only(world):
     one = _armed(world.p, "read this workbook and list the totals", workspace_dir=str(world.ws))
     assert NAME not in one
     assert NAME not in _armed(world.p, "hello there")
+
+
+def test_attachments_alone_never_arm_it(world):
+    """Found by the GitHub suite on the first cut: four attached files armed
+    the script tool whatever the message said, so "thanks!" with four files
+    and three picks armed a SEVENTH tool (the armed list is the turn's
+    grant, held to the cap by tests/test_attachment_handoff_v1196.py)."""
+    files = [str(world.ws / n) for n in ("a.xlsx", "b.pdf", "c.png", "d.docx")]
+    body = ChatBody(
+        messages=[{"role": "user", "content": "thanks!"}],
+        auto_tools=True,
+        tools=["read_file", "grep", "list_files"],
+        attachments=files,
+    )
+    armed = list(CT._resolve_armed_tools(SimpleNamespace(platform=world.p), body)[0])
+    assert len(armed) <= CT._MAX_ARMED_TOOLS, armed
+    assert NAME not in armed
+    # The same files with a request about all of them do bring it.
+    asked = ChatBody(
+        messages=[{"role": "user", "content": "total these"}], auto_tools=True, attachments=files,
+    )
+    assert NAME in CT._resolve_armed_tools(SimpleNamespace(platform=world.p), asked)[0]
+
+
+def test_it_rides_in_its_own_place_when_the_readers_fill_the_cap(world):
+    """The requests it is for are the ones whose six places are already full
+    of readers. It is added beside them (it grants nothing new: a script
+    reaches only tools the list already holds), never in a reader's place."""
+    body = ChatBody(
+        messages=[{"role": "user", "content": "read every workbook in this folder and list the totals"}],
+        auto_tools=True, workspace_dir=str(world.ws),
+    )
+    sel = CT._resolve_armed_tools(SimpleNamespace(platform=world.p), body)
+    armed = list(sel[0])
+    assert NAME in armed
+    readers = [t for t in armed if t not in (NAME, "calculate")]
+    assert len(readers) == CT._MAX_ARMED_TOOLS, armed
+    # A weak model's narrowed menu is never widened for it.
+    capped = list(CT._resolve_armed_tools(SimpleNamespace(platform=world.p), body, max_tools=2)[0])
+    assert NAME not in capped and len(capped) <= 2, capped
 
 
 def test_chat_never_arms_it_over_the_users_never_run(world):

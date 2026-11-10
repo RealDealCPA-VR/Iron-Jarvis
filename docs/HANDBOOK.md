@@ -2087,7 +2087,8 @@ What you gain:
 
 When it is offered: with Auto tools on, when your message speaks of each,
 every or all of some kind of thing, names four or more of them, or brings
-four or more files, and the turn already has a tool that reads.
+four or more files and points at them ("total these"), and the turn already
+has a tool that reads.
 
 ### What a script can and cannot do
 

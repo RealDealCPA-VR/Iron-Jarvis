@@ -17039,10 +17039,16 @@ does not need a bump, stop and bump it.
     right after the ToolContext is built (lock-step); the worker stays up
     for the session (the registry's idle sweep reclaims it).
   - **Arming.** `chat_turn._resolve_armed_tools`, in its own place under
-    the ceiling like the calculator: Auto tools on, the turn holds a tool
+    the ceiling like the calculator (its requests are the ones whose six
+    places are full of readers, and it grants nothing new). Attachments
+    ALONE never arm it: the first cut did, and "thanks!" with four files
+    armed a seventh tool (`test_attachment_handoff_v1196`, caught by the
+    GitHub suite). Auto tools on, the turn
+    holds a tool
     the script could call, and `autoselect.wants_tool_script` (each / every
     / all / across + a kind of thing, a count of four or more, or four or
-    more attachments). Never over the user's deny.
+    more attachments with a word that points at them). Never over the
+    user's deny.
   - **Skills from chat.** `skills/trigger.wants_skill_create` (token-based,
     linear) → `chat_turn.settings_ask_tools` ask-arms `skill_create` (its
     own tier is ask: the ordinary card; stream lane only);

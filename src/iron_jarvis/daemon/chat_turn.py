@@ -4798,9 +4798,15 @@ def _resolve_armed_tools(
     # ("every workbook in this folder", twelve attached statements) and it
     # already has a tool that only reads, `tool_script` rides along so the
     # model can do the reads in ONE script: fewer model turns, and only what
-    # the script prints enters the context. In its own place and under the
-    # same ceiling as the calculator. The script runs isolated and may call
-    # only this turn's read-only tools (tools/tool_script.py).
+    # the script prints enters the context. The script runs isolated and may
+    # call only this turn's read-only tools (tools/tool_script.py).
+    # IN ITS OWN PLACE, like the calculator and under the same ceiling: the
+    # requests it is for ("every workbook in this folder") are the ones whose
+    # six places are already full of readers, and it grants nothing new (a
+    # script reaches only tools this list already holds). It rides only on a
+    # request that ASKS for many things: the first cut also armed it for any
+    # four attachments, so "thanks!" with four files armed a seventh tool
+    # (tests/test_attachment_handoff_v1196.py; the GitHub suite caught it).
     if (
         getattr(body, "auto_tools", False)
         and (_ceiling >= _MAX_ARMED_TOOLS or len(explicit) + len(auto) < _ceiling)
