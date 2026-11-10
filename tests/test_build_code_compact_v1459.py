@@ -26,6 +26,24 @@ from iron_jarvis.hosted import service as S
 from iron_jarvis.hosted.models import HostedSessionRecord
 
 
+@pytest.fixture(autouse=True)
+def _no_commands_left_by_an_earlier_test():
+    """v1.464.0: each tool's last-seen command list is kept in process memory
+    (``hosted.claude.LAST_COMMANDS``). An Antigravity test that ran earlier on
+    the same worker left its recorded list (which holds Antigravity's own
+    "compact") behind, and "no made-up compact row" then read that leftover as
+    a made-up row. The release gate went red on it the day new test files
+    changed which tests share a worker. Every test here starts with no list
+    and puts back what it found."""
+    from iron_jarvis.hosted import claude as C
+
+    kept = dict(C.LAST_COMMANDS)
+    C.LAST_COMMANDS.clear()
+    yield
+    C.LAST_COMMANDS.clear()
+    C.LAST_COMMANDS.update(kept)
+
+
 @pytest.fixture()
 def svc(tmp_path):
     app = create_app(str(tmp_path / "home"))
