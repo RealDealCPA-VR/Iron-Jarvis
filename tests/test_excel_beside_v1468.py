@@ -300,3 +300,13 @@ def test_main_opens_it_only_for_a_trusted_sender_and_never_touches_excel():
     assert "windowState.savePopoutBounds(userDataDir, windowState.BESIDE_KEY, win.getBounds());" in src,         "its rectangle is kept under its own key, never the chat pop-out's"
     pre = (_ROOT / "desktop" / "preload.js").read_text(encoding="utf-8")
     assert 'openBeside: () => ipcRenderer.invoke("excel:openBeside")' in pre and "beside: () => besideExcel" in pre
+
+
+def test_a_workbook_in_a_folder_jarvis_may_not_read_is_not_named_with_its_selection(client, monkeypatch):
+    """The reviewer's rule for a look holds for the line above the box too."""
+    client.state["answer"]["workbooks"][0]["path"] = r"C:\Private\Budget.xlsx"
+    client.state["answer"]["active"]["path"] = r"C:\Private\Budget.xlsx"
+    monkeypatch.setattr(L, "_read_refusal", lambda path: "not a folder Jarvis may read" if "Private" in path else "")
+    out = client.http.get("/excel/live/now").json()
+    assert out["open"] is False and "Data" not in str(out) and "B4" not in str(out)
+    assert "a folder that is not one Jarvis may read" in out["busy"]

