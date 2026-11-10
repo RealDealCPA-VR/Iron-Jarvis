@@ -2058,6 +2058,11 @@ workbook could otherwise ask for another client's numbers.
   that workbook open from.
 - A link whose folder Jarvis cannot work out (a folder written in part, or a
   saved file's own numbered link) is refused while the folders are limited.
+- The INDIRECT function builds its reference from text, so it could reach a
+  workbook without naming it in a way Jarvis can see. While the folders are
+  limited and a workbook from outside them is open in Excel, Jarvis does not
+  write a formula that uses INDIRECT into the open workbook. Close that
+  workbook, or type the formula yourself.
 - When a link is refused, nothing is changed and Jarvis names the file. You
   can type the formula in Excel yourself.
 - If you have not limited the folders, nothing changes: links are written as

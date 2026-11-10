@@ -144,6 +144,20 @@ def test_a_link_by_name_to_a_workbook_open_from_such_a_folder_is_refused(books, 
     assert _cell(books).Formula == "" and books.mine.Saved is True
 
 
+def test_indirect_cannot_reach_the_workbook_open_from_such_a_folder(books, the_child_may_run, monkeypatch, tmp_path):
+    """Without the rule, Excel shows 4242 here (measured)."""
+    if not _only_my_excel():
+        pytest.skip("another Excel is running on this PC")
+    monkeypatch.setenv(ENV, str(books.allowed))
+    res = _edit(books.path, '=INDIRECT("[Jones.xlsx]Summary!B4")', tmp_path / "home")
+    assert not res.ok and "INDIRECT could read Jones.xlsx" in res.error, res.error
+    assert _cell(books).Formula == "" and books.mine.Saved is True
+    monkeypatch.delenv(ENV)
+    res = _edit(books.path, '=INDIRECT("[Jones.xlsx]Summary!B4")', tmp_path / "home")
+    assert res.ok, res.error
+    assert _cell(books).Value == 4242, "with no folder limit INDIRECT works as before"
+
+
 def test_a_link_to_a_workbook_jarvis_may_read_is_written_and_shows_its_figure(books, the_child_may_run, monkeypatch, tmp_path):
     if not _only_my_excel():
         pytest.skip("another Excel is running on this PC")

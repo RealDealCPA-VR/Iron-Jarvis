@@ -404,6 +404,60 @@ def test_when_excel_does_not_say_where_its_workbooks_are_a_limit_refuses(monkeyp
     assert not res.ok and XF.LINK_UNCHECKED in res.error and "apply" not in fake.ops()
 
 
+def test_indirect_is_refused_while_a_workbook_jarvis_may_not_read_is_open(monkeypatch, tmp_path, folders):
+    """INDIRECT builds its reference from text, so no reader of links can see
+    where it points. Measured in the real Excel: =INDIRECT("[Jones.xlsx]
+    Summary!B4") shows the open workbook's figure."""
+    allowed, other = folders
+    _limit(monkeypatch, allowed)
+    mixed = {"Smith.xlsx": str(allowed / "Smith.xlsx"), "Jones.xlsx": str(other / "Jones.xlsx"), "Book1": ""}
+    for formula in ('=INDIRECT("[Jones.xlsx]Summary!B4")', "=indirect(E1)", "=SUM(A1, Indirect (E1))", "INDIRECT(E1)"):
+        res, fake = _live(monkeypatch, tmp_path, _set(formula=formula), books=mixed)
+        assert not res.ok and res.error.startswith(L.UNCHANGED_LEAD), formula
+        assert "INDIRECT could read Jones.xlsx, open in Excel from a folder Jarvis may not read" in res.error
+        assert fake.ops() == ["plan", "look"]
+    # every open workbook is one Jarvis may read: INDIRECT is ordinary
+    fine = {"Smith.xlsx": str(allowed / "Smith.xlsx"), "Partner.xlsx": str(allowed / "Partner.xlsx"), "Book1": ""}
+    res, fake = _live(monkeypatch, tmp_path, _set(formula="=INDIRECT(E1)"), books=fine)
+    assert res.ok and fake.ops() == ["plan", "look", "apply"]
+    # Excel did not say what is open: not a pass
+    res, fake = _live(monkeypatch, tmp_path, _set(formula="=INDIRECT(E1)"), books=fine, look_ok=False)
+    assert not res.ok and XF.LINK_UNCHECKED in res.error and "apply" not in fake.ops()
+
+
+def test_the_word_indirect_in_text_or_another_functions_name_is_not_a_call(monkeypatch, tmp_path, folders):
+    allowed, other = folders
+    _limit(monkeypatch, allowed)
+    mixed = {"Jones.xlsx": str(other / "Jones.xlsx")}
+    for formula in ('="see INDIRECT(E1)"', "=MYINDIRECT(E1)", "=A1+INDIRECTCOSTS", "=Indirect!A1"):
+        res, fake = _live(monkeypatch, tmp_path, _set(formula=formula), books=mixed)
+        assert res.ok and fake.ops() == ["plan", "apply"], formula
+    assert L.uses_indirect("=INDIRECT(A1)") and not L.uses_indirect("=A1") and not L.uses_indirect('="INDIRECT("')
+
+
+def test_with_no_folder_limit_indirect_asks_excel_nothing(monkeypatch, tmp_path, folders):
+    _, other = folders
+    res, fake = _live(monkeypatch, tmp_path, _set(formula='=INDIRECT("[Jones.xlsx]Summary!B4")'),
+                      books={"Jones.xlsx": str(other / "Jones.xlsx")})
+    assert res.ok and fake.ops() == ["plan", "apply"]
+
+
+def test_reading_for_indirect_is_linear():
+    code = (
+        "import time\n"
+        "from iron_jarvis.documents.excel_live import uses_indirect as u\n"
+        "bad = ['=' + 'INDIRECT ' * 14000, '=' + '\"' * 128000, '=' + \"'\" * 128000, '=' + '(' * 128000,\n"
+        "       '=' + 'INDIRECT' + ' ' * 127000 + 'x(']\n"
+        "t = time.perf_counter()\n"
+        "for b in bad:\n"
+        "    u(b)\n"
+        "print(round(time.perf_counter() - t, 2))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr[-600:]
+    assert float(out.stdout.strip()) < 20
+
+
 def test_with_no_limit_the_open_workbook_takes_a_link_as_before(monkeypatch, tmp_path, folders):
     _, other = folders
     res, fake = _live(monkeypatch, tmp_path, _set(formula=_link(other)))

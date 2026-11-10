@@ -273,33 +273,57 @@ def formula_entries(ops: Any) -> "list[str]":
     return out
 
 
+_INDIRECT_RX = re.compile(r"(?i)(?<![A-Za-z0-9_.])INDIRECT\s*\(")
+_QUOTED_RX = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"")
+
+
+def uses_indirect(entry: str) -> bool:
+    """Whether a formula entry CALLS INDIRECT (the word inside quoted text is
+    not a call). Pure, linear."""
+    return bool(_INDIRECT_RX.search(_QUOTED_RX.sub('""', entry))) if "(" in entry else False
+
+
 async def link_refusal(ops: Any) -> str:
     """Why a step's link to ANOTHER WORKBOOK may not be written into the open
     workbook, or "" (v1.469.1): the workbook it names is in a folder Jarvis
     may not read. A link by file name alone is the workbook of that name open
     in Excel, so Excel is asked once where its workbooks are open from; steps
-    with no link ask nothing. Never raises."""
+    with no link ask nothing. While reading is limited to listed folders, a
+    step that calls INDIRECT is refused when a workbook is open in Excel from
+    a folder outside them (INDIRECT reaches it by text). Never raises."""
     from ..excel_worker import workbook_links  # noqa: PLC0415 - pure reader, no Excel
     from .excel_formula import LINK_UNCHECKED, link_reason  # noqa: PLC0415
 
     try:
-        linked = [e for e in formula_entries(ops) if workbook_links(e)]
-        if not linked:
+        from ..core import fs_policy  # noqa: PLC0415
+
+        entries = formula_entries(ops)
+        linked = [e for e in entries if workbook_links(e)]
+        by_name = any(not ln.get("dir") and not ln.get("index") for e in linked for ln in workbook_links(e))
+        # INDIRECT builds its reference from TEXT, so no reader of links can
+        # see where it points: =INDIRECT("[Jones.xlsx]Summary!B4") reads a
+        # workbook that is open in Excel (measured). It is only a question
+        # while reading is limited to listed folders.
+        indirect = any(uses_indirect(e) for e in entries) and await asyncio.to_thread(fs_policy.read_limits_set)
+        if not linked and not indirect:
             return ""
         books: "dict[str, str] | None" = None
-        if any(not ln.get("dir") and not ln.get("index") for e in linked for ln in workbook_links(e)):
+        shown: "list[tuple[str, str]]" = []
+        if by_name or indirect:
             out = await ask({"op": "look"}, LOOK_S)
             if out.get("ok"):
-                books = {str(b.get("name") or "").lower(): str(b.get("path") or "")
-                         for b in out.get("workbooks") or [] if isinstance(b, dict)}
+                shown = [(str(b.get("name") or ""), str(b.get("path") or ""))
+                         for b in out.get("workbooks") or [] if isinstance(b, dict)]
+                books = {n.lower(): p for n, p in shown}
 
         def work() -> str:
-            from ..core import fs_policy  # noqa: PLC0415
-
-            if books is None and fs_policy.read_limits_set() and any(
-                not ln.get("dir") and not ln.get("index") for e in linked for ln in workbook_links(e)
-            ):
+            if books is None and (indirect or (by_name and fs_policy.read_limits_set())):
                 return LINK_UNCHECKED  # Excel did not say where its workbooks are: not a pass
+            if indirect:
+                closed = [n for n, p in shown if _read_refusal(p)]
+                if closed:
+                    names = ", ".join(closed[:3]) + (" and others" if len(closed) > 3 else "")
+                    return f"INDIRECT could read {names}, open in Excel from a folder Jarvis may not read"
             for e in linked:
                 why = link_reason(e, open_books=books)
                 if why:

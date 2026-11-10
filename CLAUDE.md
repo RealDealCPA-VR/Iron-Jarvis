@@ -16837,9 +16837,21 @@ does not need a bump, stop and bump it.
       gets its "="; `MAX_STEP_ENTRIES` 5,000); steps with no link ask
       Excel nothing more; a link by name costs ONE plain `look` (names and
       places, no range); Excel silent under a limit is a refusal.
+    - INDIRECT builds its reference from TEXT (measured in the real Excel:
+      `=INDIRECT("[Jones.xlsx]Summary!B4")` and `=INDIRECT(E1)` both show an
+      open workbook's figure), so no reader of links can see where it
+      points. `excel_live.uses_indirect(entry)`: while
+      `read_limits_set()`, a step that calls INDIRECT costs one `look` and
+      is refused when ANY workbook is open in Excel from a place
+      `_read_refusal` refuses ("INDIRECT could read Jones.xlsx, open in
+      Excel from a folder Jarvis may not read"); Excel silent = refused.
+      With no limit set INDIRECT asks Excel nothing. Also measured: a link
+      with an allowed path whose file NAME matches a workbook open from
+      elsewhere does NOT bind to that workbook (Excel shows #REF!), so the
+      path check is enough for a link that names its folder.
     - With no folder limit set and no protected folder named, behaviour is
       exactly as before (pinned).
-    - Pins: `tests/test_excel_workbook_links_v14691.py` (22 mutations, 21
+    - Pins: `tests/test_excel_workbook_links_v14691.py` (28 mutations, 27
       red; the survivor is a second cap), and against the real Excel
       `tests/test_excel_workbook_links_real_v14691.py` (`IJ_LIVE_EXCEL=1`;
       three workbooks open in the test's own hidden Excel).
@@ -16848,7 +16860,10 @@ does not need a bump, stop and bump it.
       looked up); a link by name in a SAVED file is not judged (Excel
       binds it to a workbook beside the file, or to an open workbook of
       that name); a junction inside a readable folder is followed, as for
-      every file tool.
+      every file tool; INDIRECT in a SAVED file is not judged (it reaches
+      only a workbook the user has open when they open the file); text
+      written into a cell that an INDIRECT ALREADY in the workbook reads is
+      not judged (a workbook's own formulas are the user's).
   - **OPEN:** European number formats are left out and said, not read.
     The Excel switch is per window though its label says "in this chat".
   - **OPEN:** rows past 50,000 are not read; a group is offered only for
