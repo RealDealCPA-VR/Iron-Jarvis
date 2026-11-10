@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.463.0 (2026-11-09).*
+holds itself to. Current as of v1.464.0 (2026-11-09).*
 
 ---
 
@@ -2041,6 +2041,59 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Starter skills you can load (v1.464.0)
+
+A skill is a set of instructions Jarvis follows for one kind of task, such as
+"review a bank reconciliation" or "write release notes". Iron Jarvis now comes
+with thirty starter skills in six bundles. They are on the **Templates** page,
+in the **Starter skills** card:
+
+| Bundle | What its five skills cover |
+|---|---|
+| Business | Meeting notes into actions, client email replies, procedures, decision memos, weekly status reports |
+| Accounting | Month-end close checklist, bank reconciliation review, expense categorising, variance analysis, client document requests |
+| Marketing | Campaign brief, content calendar, landing page copy, email campaigns, customer persona |
+| Coding | Bug report to fix, code review, tests first, safe refactoring, release notes |
+| Project management | Kickoff brief, work breakdown, risk register, status update, retrospective |
+| Social media | Post variations, weekly plan, replies to comments, repurposing long content, performance review |
+
+**Nothing is loaded until you press Load.** Open a bundle to read what each
+skill does and untick the ones you do not want, or press **Load all**. A loaded
+skill is an ordinary skill: it is listed on the Skills page (marked "Starter
+skill"), Jarvis can pick it up when a task fits, and you can run it yourself by
+typing `/` and its name in Chat.
+
+What loading will never do:
+
+- It never replaces a skill of your own with the same name. That skill is
+  skipped and named.
+- It never replaces a starter skill you changed after loading it, unless you
+  ask. The card says "Loaded, and you changed it".
+- **Remove** takes two presses and moves the bundle's skills to Iron Jarvis's
+  trash folder. A skill you changed is kept.
+
+**Load skills from GitHub.** The last row of the card loads skills someone else
+shared in a public GitHub repository. Paste the address of the repository (or
+of a folder in it) and press **Look**. Iron Jarvis lists the skills it found
+and shows a warning, because a skill is instructions Jarvis follows and these
+were written by someone else. Read them, untick what you do not want, then
+press Load twice.
+
+What Iron Jarvis does to keep this safe:
+
+- Only the instructions (the file named SKILL.md) are downloaded. A skill's
+  scripts and other files are not, and nothing from the repository is run. The
+  list says how many files were left behind.
+- What you looked at is what is loaded: the load reads the exact version the
+  list showed, even if the repository changed in between.
+- Each skill is checked before it is offered. One that reads as an attempt to
+  override Iron Jarvis's rules cannot be loaded.
+- A loaded skill is marked "From GitHub" on the Skills page and is checked
+  again every time it is about to be used.
+- It never replaces a skill you already have.
+- The only thing sent to GitHub is the address you typed. A private repository
+  cannot be read.
 
 ## Reading web pages works on more sites; page screenshots work again (v1.463.0)
 

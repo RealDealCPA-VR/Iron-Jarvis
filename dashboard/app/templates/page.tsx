@@ -38,6 +38,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo } from "@/lib/format";
 import { PageGrid } from "@/components/PageGrid";
+import { SkillBundles } from "@/components/templates/SkillBundles";
 // v1.316.0 (UX wave 4, agent-names-raw-lowercase): THE agent-name rule —
 // built-ins read as words, a custom agent keeps the name the user typed. The
 // workflow editor's own label map covers only its five agents, so "guide" or
@@ -353,6 +354,11 @@ export default function TemplatesPage() {
             </p>
           </div>
         </Card>
+      </Reveal>
+
+      {/* v1.464.0: starter skill bundles the user can choose to load. */}
+      <Reveal>
+        <SkillBundles />
       </Reveal>
 
       <Reveal>

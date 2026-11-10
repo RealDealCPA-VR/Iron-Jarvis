@@ -160,7 +160,9 @@ def _tokens(text: str) -> list[str]:
 #: Skill sources that are the user's own words (or ours) and are NOT scanned.
 TRUSTED_SKILL_SOURCES = frozenset({"builtin", "user"})
 #: ``created_by`` values that mean somebody other than the user wrote the file.
-SCANNED_CREATED_BY = frozenset({"agent", "proposal", "recording"})
+#: v1.464.0: "github" (somebody else's words, loaded by the user) is scanned
+#: every time; "starter" (ours) is not.
+SCANNED_CREATED_BY = frozenset({"agent", "proposal", "recording", "github"})
 
 
 def scans_skill(skill: Skill) -> bool:

@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.464.0
+
+**Starter skills you can load.** A skill is a set of instructions Jarvis follows for one kind of task, such as "review a bank reconciliation" or "write release notes".
+
 ## v1.463.0
 
 **Reading web pages works on more sites; page screenshots work again.** **Reading a web page.** When Jarvis reads a page for you, it used to tell the site it was the Chrome browser.
@@ -77,7 +81,3 @@
 ## v1.446.0
 
 **Nothing goes quiet on you.** The second group from the ease-of-use review: things that failed, waited or paused without telling you.
-
-## v1.445.0
-
-**Your first ten minutes, smoother.** An ease-of-use review (docs/EASE-OF-USE-REVIEW-2026-11-07.md) walked the app as a brand-new user.

@@ -1,0 +1,3 @@
+name = "Project management"
+blurb = "Run a project: kickoff, breaking work down, risks, status updates and lessons learned."
+order = 5

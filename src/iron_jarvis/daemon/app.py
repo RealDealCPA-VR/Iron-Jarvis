@@ -3830,6 +3830,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import skills_curator as _curator_routes
 
     _curator_routes.register(app, d)
+    # Starter skill bundles + skills from GitHub (v1.464.0): the Templates
+    # page's "Starter skills" card.
+    from .routes import skill_bundles as _skill_bundles_routes
+
+    _skill_bundles_routes.register(app, d)
     _routes.agents.register(app, d)
     _routes.reflex.register(app, d)
     _routes.triggers.register(app, d)

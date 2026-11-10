@@ -1,0 +1,3 @@
+name = "Coding"
+blurb = "Working in a code folder: fixing bugs, reviewing changes, tests, careful refactors and release notes."
+order = 4

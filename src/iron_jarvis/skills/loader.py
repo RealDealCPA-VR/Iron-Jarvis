@@ -28,7 +28,9 @@ SKILL_FILE = "SKILL.md"
 
 #: Who wrote a skill. "user" is the default and the only value a plain
 #: SKILL.md (no provenance keys) ever reads as.
-CREATED_BY_VALUES = ("user", "agent", "proposal", "recording")
+#: v1.464.0: "starter" (a starter bundle the user loaded: Iron Jarvis's own
+#: words) and "github" (loaded from a GitHub repository: somebody else's).
+CREATED_BY_VALUES = ("user", "agent", "proposal", "recording", "starter", "github")
 
 
 def slugify(name: str) -> str:
