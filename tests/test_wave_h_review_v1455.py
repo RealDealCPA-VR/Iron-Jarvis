@@ -70,7 +70,13 @@ def test_no_current_release_section_of_the_real_handbook_is_weighted_as_old():
             vers.append((tuple(int(g) for g in m.groups()), c))
     current = {v for v, _c in sorted(vers, reverse=True)[: corpus.CURRENT_RELEASES]}
     current_titles = {c for v, c in vers if v in current}
-    assert any(" › " in t for t in current_titles), "the case this pins is still in the Handbook"
+    # A title with " › " in it is the case that once broke (the heading path is
+    # split on " › "). It is pinned with made-up text in the test above; here
+    # the REAL Handbook must still hold such a release title somewhere, but
+    # not forever among the newest ones (v1.469.0: four new chapters moved it
+    # out of the newest twelve, and this line failed with nothing wrong).
+    assert any(" › " in c for _v, c in vers), "the case this pins is still in the Handbook"
+    assert current_titles, "the newest release chapters were found"
     secs = corpus.split_markdown("handbook", "The Handbook", text)
     corpus.mark_release_history(secs)
     checked = 0
