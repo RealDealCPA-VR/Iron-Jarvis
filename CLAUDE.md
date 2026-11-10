@@ -16624,8 +16624,54 @@ does not need a bump, stop and bump it.
     (`excel_tools._read_target` → `excel_live.live_path`: a copy under
     `excel-live/snap/<id>/<Workbook name>`, swept after ten minutes). The
     source's folder is checked against the folders Jarvis may read.
+  - **REVIEW (v1.466.0, an independent reviewer; 30+ defects, each pinned
+    in the real-Excel file or the stand-in file; 81 mutations, 73 red, 5 more
+    pinned after, 3 equivalent).** What the code now guarantees:
+    - **Undo puts back exactly what was there.** Values are written back as
+      what they WERE (text "00123" stays text, "1/2" is not a date; formats
+      and a date string's format restored; spilled formulas and `=UNIQUE()`
+      come back as written, never `=@...`; a range of several colours keeps
+      each cell's colour; a format the user changed afterwards is left).
+    - **Undo never hits another target.** A step's undo record is by the
+      cells as they are AFTER later steps of the same call moved them (set
+      B6 then delete row 2); with the original workbook closed, Undo by name
+      refuses a same-named workbook from another folder (`_find_book(...,
+      exact=True)`; never falls back from an unsaved Book1 to a saved one).
+    - **Rows hidden by a filter** (`FILTER_WORDS`, code `filtered`): a block
+      write, clear, sort or Undo across filter-hidden rows is REFUSED (Excel
+      skips hidden rows, so values land on the wrong rows). `clear_filter`
+      earlier in the same call lifts it (`Cx.unfiltered`).
+    - **A sort takes the whole table:** sorting part of a table's columns is
+      refused (`partial_sort`) unless the step says `"alone": true`. Undo of
+      a sort restores rows, fills and notes (found by halving, not cell by
+      cell); NOT validation rules, hyperlinks or row heights. Undo of
+      `filter` removes it and does not restore earlier criteria.
+    - **"Nothing was changed" is true:** a refused pivot no longer clears
+      the user's own pivot table; a refused `add_sheet` leaves no stray
+      sheet; a step refused on a protected sheet is not "half done".
+    - **A deletion is carded by its STEPS** (`is_destructive(args["ops"])`),
+      whatever Excel answered to the plan (busy, or a workbook Jarvis may not
+      read), and a rename followed by a deletion on the new name is seen.
+      `SpendCheck.irreversible` (tools/base.py, read by routes/chat.py and
+      agents/runtime.py) keeps "You can undo this" off such a card.
+    - **The change lands in the workbook the card named**
+      (`ExcelLiveEditTool._targets`: the plan's path is kept per call).
+    - **A workbook in a folder Jarvis may not read** is named and nothing
+      else (`hide_unreadable`: no sheets, tables or selection; a refused plan
+      quotes none of its headings; `look range=selection` for a workbook not
+      in front no longer returns another workbook's cells). `_read_refusal`
+      fails closed. OneDrive / SharePoint (https) paths are not judged.
+    - **A formula that makes Excel reach outside** is refused
+      (`excel_worker.reaches_out`: WEBSERVICE, RTD, IMAGE, CALL, REGISTER.ID,
+      SQL.REQUEST, a DDE link, a web address or network share outside
+      quotes; linear). v1.469.0 applies the same rule to saved files.
+    - **Arming** (`wants_live_excel`): "cell phone", "current range", "excel
+      at", an IRS worksheet and "make me a spreadsheet" arm nothing; "this
+      formula", "#REF!", "column C" do.
+    - AutoSave: the answer says Excel saves by itself within seconds (it had
+      said "has already saved").
   - **Kept data.** `<home>/excel-live/` (undo 30 days, copies 14 days, snap
-    10 minutes; `sweep`) is left out of backups. It holds client data.
+    10 minutes; `sweep`, which runs only on the next live call, so a copy can outlast its age until then) is left out of backups. It holds client data.
   - **Tests.** `tests/test_excel_live_v1466.py` (no Excel: the child is a
     stand-in); `tests/test_excel_live_real_v1466.py` (the REAL Excel, only
     with `IJ_LIVE_EXCEL=1`: run it on this PC after any change to the child).

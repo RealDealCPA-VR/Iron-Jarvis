@@ -502,3 +502,20 @@ def test_goal_seek_says_when_no_value_lands_on_the_goal(tmp_path):
     assert abs(res.data["reaches"] - 30000.5) <= 12
     smooth = _run(tmp_path, path="step.xlsx", mode="goal_seek", cell="P!A3", goal=30000, change="P!A2")
     assert smooth.data["exact"] is True and "NOT EXACT" not in smooth.output
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # the first live trial's own words: a cell is written Calc!B8 and a
+        # file Pricing.xlsx, and the patterns stopped at "!" and "."
+        r"In the workbook C:\work\Pricing.xlsx, how is the profit in Calc!B8 worked out?",
+        "And what would the profit be if the price were 31.99 instead?",
+        "what would the fixed costs (Inputs!B6) have to be for the profit in Calc!B8 to come to exactly 20,000?",
+        "why is Calc!B8 showing #REF! after the change?",
+        "where does the 4,620.90 in Summary!C4 come from?",
+    ],
+)
+def test_a_question_that_names_a_cell_or_a_file_still_arms_the_trace(text):
+    assert wants_excel_trace(text, ["excel_read"]) is True
+    assert wants_excel_trace(text, []) is False

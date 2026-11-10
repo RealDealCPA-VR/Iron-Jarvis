@@ -310,6 +310,9 @@ def test_the_same_name_twice_is_told_apart(tmp_path):
         "tie out the sub-ledger to the control account",
         "what is on the statement but missing from the books?",
         "do a bank rec for October",
+        # a file name has a "." in it, and the pattern stopped there
+        r"match C:\work\bank.xlsx against C:\work\gl.xlsx",
+        "compare the statement in bank.xlsx to the ledger gl.xlsx",
     ],
 )
 def test_matching_words_arm_it_only_beside_a_spreadsheet(text):

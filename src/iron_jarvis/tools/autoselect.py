@@ -3467,13 +3467,17 @@ _TRACE_CARRIERS = frozenset(
      "read_document"}
 )
 _TRACE_RX = re.compile(
-    r"(?i)\b(?:how\s+(?:is|was|are|were|did|do|does)\b[^.?!\n]{0,80}?\b(?:calculated|computed|worked\s+out|derived|built|arrived\s+at|come\s+up\s+with|get|got)"
-    r"|where\s+(?:does|do|did)\b[^.?!\n]{0,80}?\bcome\s+from"
+    # The gaps stop at a "?" or a new line only: a cell is written Calc!B8 and
+    # a file bank.xlsx, so a "!" or a "." is part of the very thing asked
+    # about (the first live trial never armed the tool for that reason).
+    r"(?i)\b(?:how\s+(?:is|was|are|were|did|do|does)\b[^?\n]{0,80}?\b(?:calculated|computed|worked\s+out|derived|built|arrived\s+at|come\s+up\s+with|get|got)"
+    r"|where\s+(?:does|do|did)\b[^?\n]{0,80}?\bcome\s+from"
     r"|what\s+(?:feeds|drives|goes\s+into|makes\s+up|affects|depends\s+on|uses|is\s+behind)"
     r"|trace|precedents?|dependents?|what[\s-]?if|goal[\s-]?seek|break[\s-]?even|sensitivity"
-    r"|what\s+(?:would|does|must|should|do)\b[^.?!\n]{0,80}?\b(?:need\s+to\s+be|have\s+to\s+be|come\s+to|become|happen)"
+    r"|what\s+(?:would|does|must|should|do|will)\b[^?\n]{0,80}?\b(?:need\s+to\s+be|have\s+to\s+be|come\s+to|become|happen)"
+    r"|what\s+(?:would|will)\b[^?\n]{0,80}?\bbe\b[^?\n]{0,40}?\bif\b"
     r"|if\s+(?:i|we|you)\s+(?:change|changed|raise|raised|lower|lowered|set|increase|increased|decrease|decreased|cut|double|doubled)"
-    r"|why\s+(?:is|does|do|are)\b[^.?!\n]{0,80}?(?:\#(?:REF|DIV|VALUE|N/A|NAME|NUM)|error|wrong|off|not\s+(?:match|add\s+up|tie))"
+    r"|why\s+(?:is|does|do|are)\b[^?\n]{0,80}?(?:\#(?:REF|DIV|VALUE|N/A|NAME|NUM)|error|wrong|off|not\s+(?:match|add\s+up|tie))"
     r")"
 )
 _QUERY_TALK_RX = re.compile(
@@ -3495,9 +3499,9 @@ def wants_excel_trace(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
 #: turn already has: "reconcile" is an everyday word too.
 _RECONCILE_RX = re.compile(
     r"(?i)\b(?:reconcil\w*|bank\s+rec\b|tie[\s-]?outs?\b|ties?\s+(?:out|to|back)\b|unmatched|outstanding\s+(?:cheques|checks|deposits|items)"
-    r"|(?:cheques|checks|deposits|items)\b[^.?!\n]{0,40}?\boutstanding\b"
-    r"|deposits\s+in\s+transit|match(?:es|ed|ing)?\b[^.?!\n]{0,60}?\b(?:against|to|with)\b"
-    r"|compare\b[^.?!\n]{0,60}?\b(?:statement|ledger|books|bank)\b[^.?!\n]{0,60}?\b(?:to|with|against)\b"
+    r"|(?:cheques|checks|deposits|items)\b[^?\n]{0,40}?\boutstanding\b"
+    r"|deposits\s+in\s+transit|match(?:es|ed|ing)?\b[^?\n]{0,80}?\b(?:against|to|with)\b"
+    r"|compare\b[^?\n]{0,80}?\b(?:statement|ledger|books|bank)\b[^?\n]{0,80}?\b(?:to|with|against)\b"
     r"|(?:missing|not)\s+(?:in|from|on)\s+the\s+(?:bank|books|ledger|statement))"
 )
 

@@ -729,7 +729,7 @@ class ExcelLiveEditTool(Tool):
         note_turn(ctx, True)
         lines = [f"Changed {name}, open in Excel ({change_summary(out)}). It is NOT saved: the user saves it in Excel."]
         if out.get("autosave"):
-            lines[0] = f"Changed {name}, open in Excel ({change_summary(out)}). AutoSave is on, so Excel has already saved this to its cloud copy."
+            lines[0] = f"Changed {name}, open in Excel ({change_summary(out)}). AutoSave is on, so Excel saves this to its cloud copy by itself within seconds."
         for n, s in enumerate(steps, start=1):
             lines.append(f"{n}. {s.get('summary') or s.get('op')}" + (f"  WARNING: {s['warning']}" if s.get("warning") else ""))
         changed = render_changes(out)

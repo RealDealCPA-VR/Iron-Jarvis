@@ -2227,14 +2227,35 @@ sheet prints.
 - **Undo.** The line "Excel changed ... Undo" under the reply puts the whole
   change back. A cell you changed yourself in the meantime is left alone and
   named. Excel's own Ctrl+Z history is cleared by any change made from outside
-  Excel, which is why Jarvis keeps its own Undo.
+  Excel, which is why Jarvis keeps its own Undo. Undo only works on the same
+  workbook, open from the same place: another workbook with the same name is
+  never touched. After a sort is undone, the rows, their colours and their
+  notes are back, but dropdown rules, links and row heights that moved with
+  the sort are not put back. Undoing a filter removes it; it does not bring
+  back a filter that was there before.
 - **Nothing is saved.** You save the workbook in Excel when you are happy with
-  it. If AutoSave is on, Excel saves by itself and Jarvis says so.
+  it. If AutoSave is on, Excel saves by itself within seconds and Jarvis says
+  so.
+- **Rows hidden by a filter.** While a filter hides rows, Excel skips them
+  when a block of cells is written, so the values would land on the wrong
+  rows. Jarvis refuses to write, clear or sort a block across hidden rows and
+  says so: clear the filter (or ask Jarvis to) and ask again.
+- **A sort takes the whole table.** Sorting only some columns of a table
+  would separate each row's cells from each other, so it is refused unless you
+  say you want just that part sorted.
+- **Text stays text.** A value such as 00123 or 1/2 is written as you gave it,
+  not turned into a number or a date.
+- **A formula that sends data out is never written.** A formula that would
+  make Excel call a web address, another program or a network share is not
+  written from chat; Jarvis says why, and you can type it yourself.
 
 **What stays private.** Jarvis talks to Excel on this PC only. What it reads
 from the workbook goes to the model that answers your chat, exactly like a file
 you attach, so a chat set to Local only keeps it on your own network. A
-workbook in a folder Jarvis may not read is not read.
+workbook in a folder Jarvis may not read is not read, and its sheets and
+selection are not listed. A workbook opened straight from OneDrive or
+SharePoint has a web address, not a folder, so that folder rule cannot be
+applied to it.
 
 **When it says no.** While you are typing in a cell, or a dialog box is open
 in Excel, Excel takes no requests: finish that and ask again. A workbook open

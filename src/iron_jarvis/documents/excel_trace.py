@@ -553,7 +553,11 @@ def _money(v: Any) -> str:
 class ExcelTraceTool(Tool):
     name = "excel_trace"
     description = (
-        "Explain or test a number in a workbook WITHOUT changing anything. path is a saved workbook, or "
+        "Explain or test a number in a workbook WITHOUT changing anything. USE THIS FIRST, instead of "
+        "reading the sheets and redoing the formulas yourself, whenever the user asks how a figure is "
+        "worked out, what a figure would be if an input changed, or what an input must be for a figure "
+        "to reach a target: it follows the workbook's own formulas, so its figures are the workbook's. "
+        "path is a saved workbook, or "
         "'live:<workbook name>' ('live:' alone for the one in front) for a workbook open in Excel. "
         "mode 'how' (default): the cells that feed 'cell', level by level, down to the typed-in inputs it "
         "rests on; use it to answer 'how is this calculated' and to find the cause of an error. "

@@ -279,7 +279,7 @@ async def test_new_errors_manual_calculation_and_autosave_are_said(excel, tmp_pa
     res = await L.ExcelLiveEditTool().execute(dict(EDIT), _ctx(tmp_path))
     assert "WARNING: these formulas show an error now and did not before: Data!E3, Data!E7" in res.output
     assert "calculation is set to manual" in res.output
-    assert "AutoSave is on, so Excel has already saved this" in res.output and "NOT saved" not in res.output
+    assert "AutoSave is on, so Excel saves this to its cloud copy by itself" in res.output and "NOT saved" not in res.output
 
 
 async def test_a_small_change_follows_the_ordinary_approval(excel, tmp_path):
