@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.469.1
+
+**Links to another workbook follow the folders Jarvis may read.** A formula can link to another workbook, for example a summary sheet that reads a figure from a client's own file.
+
 ## v1.469.0
 
 **Matching two lists, and Excel's features in a saved workbook.** **Matching two lists of transactions.** Ask Jarvis to reconcile a bank statement to the books, tie a sub-ledger out to its control account, or compare two exports, and it now does the matching in code instead of reading the rows.
@@ -77,7 +81,3 @@
 ## v1.452.0
 
 **Plain page names, and coding straight in your folder.** **Four pages have plain names**: Sentinels is now **Watchers**, Reflexes is **Rules**, Artifacts is **What agents made**, and Local fleet is **Model servers**.
-
-## v1.451.0
-
-**Settings, the automations pages and Help, today.** **Settings** keeps expert rows under a closed "More options" per group; it says how many of them you have changed.

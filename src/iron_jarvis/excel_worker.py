@@ -198,6 +198,69 @@ def reaches_out(text: Any) -> str:
     return ""
 
 
+_QUOTED_PIECE = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"")
+#: [book.xlsx]Sheet1!A1 written without quotes: a bracket group followed by a
+#: sheet name and "!". A table column (Table1[Amount], [@Amount]) is never
+#: followed by a sheet name, so it is not a link.
+_BARE_LINK = re.compile(r"\[([^\[\]'\"]{1,260})\](?=[\w.]{1,31}!)")
+_WORKBOOK_NAME = re.compile(r"(?i)\.(?:xl[a-z]{1,2}|csv|ods)\Z")
+_LINK_STOPS = frozenset(" \t\r\n(,;=+*&^<>!{}")
+MAX_LINKS = 50
+
+
+def _quoted_link(inner: str) -> "dict[str, Any] | None":
+    """The link a quoted name before "!" spells, or None for a plain sheet
+    name. A sheet name holds no [ ] \\ or /, so any of them means a file."""
+    i, j = inner.find("["), inner.rfind("]")
+    if 0 <= i < j:
+        folder, name = inner[:i], inner[i + 1:j]
+        return {"dir": folder, "file": name, "index": name.isdigit() and not folder}
+    cut = max(inner.rfind("\\"), inner.rfind("/"))
+    if cut >= 0:  # 'C:\dir\book.xlsx'!Total: a name defined in another workbook
+        return {"dir": inner[:cut + 1], "file": inner[cut + 1:], "index": False}
+    if _WORKBOOK_NAME.search(inner):  # 'book.xlsx'!Total
+        return {"dir": "", "file": inner, "index": False}
+    return None
+
+
+def workbook_links(text: Any) -> "list[dict[str, Any]]":
+    """The links to ANOTHER WORKBOOK a cell entry holds (v1.469.1), each
+    ``{"dir", "file", "index"}``: 'C:\\dir\\[book.xlsx]Sheet'!A1 (dir and
+    file), [book.xlsx]Sheet!A1 (a file name alone: a workbook open in Excel,
+    or one beside this file), 'C:\\dir\\book.xlsx'!Name, and the form a saved
+    file keeps ([1]Sheet!A1, ``index``: the workbook's own link number 1).
+    Text inside double quotes is not a link. Whether a link may be WRITTEN is
+    the caller's question (``excel_formula.link_reason``): this only reads.
+    Pure, linear, at most ``MAX_LINKS``."""
+    s = str(text or "")
+    if s[:1] not in ("=", "+", "-", "@"):
+        return []
+    out: "list[dict[str, Any]]" = []
+
+    def bare(seg: str) -> None:
+        for m in _BARE_LINK.finditer(seg):
+            if len(out) >= MAX_LINKS:
+                return
+            k = m.start()
+            j, low = k, max(0, k - 300)
+            while j > low and seg[j - 1] not in _LINK_STOPS:
+                j -= 1
+            folder = seg[j:k] if "\\" in seg[j:k] else ""
+            out.append({"dir": folder, "file": m.group(1), "index": m.group(1).isdigit() and not folder})
+
+    pos = 0
+    for m in _QUOTED_PIECE.finditer(s):
+        bare(s[pos:m.start()])
+        pos = m.end()
+        tok = m.group(0)
+        if tok[0] == "'" and s[pos:pos + 1] == "!" and len(out) < MAX_LINKS:
+            link = _quoted_link(tok[1:-1].replace("''", "'"))
+            if link:
+                out.append(link)
+    bare(s[pos:])
+    return out[:MAX_LINKS]
+
+
 def _stays_inside(*entries: Any) -> None:
     for e in entries:
         why = reaches_out(e) if isinstance(e, str) else ""

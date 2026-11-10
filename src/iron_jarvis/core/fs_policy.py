@@ -311,6 +311,12 @@ def _read_refusal(path: str | Path) -> str:
     return ""
 
 
+def read_limits_set() -> bool:
+    """Whether reading is confined to listed folders at all: the
+    installation's own limit, or the user's "Folders Jarvis may read"."""
+    return _env_roots() is not None or _setting_roots() is not None
+
+
 def is_protected_path(path: str | Path) -> bool:
     """True if *path* resolves inside any registered protected root (or is a key
     file by name), robust to Windows ``\\\\?\\`` device-prefix and case tricks."""
