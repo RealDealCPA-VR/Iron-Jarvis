@@ -7512,6 +7512,10 @@ _CHANGES_A_FILE_UNNAMED = frozenset(
         "browser_press_key",
         "browser_fill_form",
         "web_action",
+        # v1.466.0: a change made in a workbook open in Excel. The workbook is
+        # changed for real (the user saves it), so "I updated the workbook" is
+        # never answered with "nothing was written to disk".
+        "excel_live_edit",
     }
 )
 
@@ -11708,6 +11712,12 @@ async def run_chat_turn(
             reply += claimed_change_note(
                 reply, tools_used, config_cards, history=body.messages, custom_tools=_custom_ran,
             )
+            # v1.466.0: a turn that TRIED to change the workbook open in Excel
+            # and never did says so, whatever the reply claims. MIRROR NOTE
+            # (lock-step): routes/chat.py appends the same call.
+            from ..documents.excel_live import unchanged_note as _xl_unchanged
+
+            reply += _xl_unchanged(getattr(body, "turn_id", ""), tools_used)
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did ("I'm passing this to builder") gets the plain note.
         # MIRROR NOTE (lock-step): routes/chat.py appends the same helper.

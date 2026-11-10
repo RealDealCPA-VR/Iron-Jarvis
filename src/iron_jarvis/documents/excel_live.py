@@ -84,6 +84,10 @@ def _ask_worker(request: dict, timeout: float) -> dict:
     does not answer is an ordinary refusal, in words."""
     if sys.platform != "win32":
         return {"ok": False, "code": "not_windows", "error": NOT_WINDOWS}
+    import os  # noqa: PLC0415
+
+    if os.environ.get(OFF_ENV) == "off":
+        return {"ok": False, "code": "off", "error": "Working in an open Excel workbook is turned off here."}
     from ..core import procs  # noqa: PLC0415
 
     try:
@@ -130,6 +134,9 @@ def excel_running() -> bool:
     return found
 
 
+#: "off" = never start the child (the test suite: a test must not look into
+#: the developer's own Excel). The tests of the real Excel take it away.
+OFF_ENV = "IRONJARVIS_EXCEL_LIVE"
 #: Forces :func:`excel_seen` ("0" / "1"). The test suite sets "0": what a
 #: chat arms must not depend on whether the developer has Excel open.
 SEEN_ENV = "IRONJARVIS_EXCEL_SEEN"
@@ -352,7 +359,7 @@ def render_look(out: dict) -> str:
         rows = rng.get("rows") or []
         width = max((len(r) for r in rows), default=0)
         lines.append("")
-        lines.append(f"{rng['sheet']}!{rng['address']} of {rng['workbook']} (values as Excel shows them now):")
+        lines.append(f"{rng['sheet']}!{rng['address']} of {rng['workbook']} (the values Excel holds now; a cell's format may show them rounded):")
         lines.append("\t" + "\t".join(_col_letter(c1 + j) for j in range(width)))
         for i, row in enumerate(rows):
             lines.append(f"{r1 + i}\t" + "\t".join(_cell_text(v) for v in row))
@@ -469,7 +476,8 @@ _EDIT_HELP = (
     "changed cell, before and after, plus any formula that now shows an error. The steps in 'ops' are made "
     "in order and ALL OR NOTHING: if one fails, the ones before it are put back. The user can undo the whole "
     "call from the chat. Nothing is saved: the user saves. Look first (excel_live_look) so you know the "
-    "layout. Steps (each {op, ...}; 'sheet' defaults to the active sheet):\n"
+    "layout. Every step that works on a sheet must say which: give 'sheet' on the step, write the range as "
+    "Sheet!A1:D9, or give one 'sheet' for the whole call. Steps (each {op, ...}):\n"
     "set {cell, value | formula | values:[[row],[row]], number_format?, bold?, italic?, fill?, font_color?, "
     "align?, wrap?, border?, font_size?} - cell may be a range; one formula over a range fills down/across "
     "with references adjusted; with only formats it formats the range. Colours are hex like FFF2CC.\n"
@@ -484,7 +492,7 @@ _EDIT_HELP = (
     "chart {data: 'A1:C13', type: column|bar|line|pie|scatter|area|stacked_column|stacked_bar|line_markers|"
     "doughnut, title?, at?, name?}; chart_edit {name?, type?, title?, x_title?, y_title?, legend?}.\n"
     "pivot {source: 'Data!A1:F200', rows: [...], columns?: [...], values: [{field, func: sum|count|average|"
-    "max|min}], filters?: [...], dest_sheet?, dest_cell?, name?}; pivot_edit {sheet, name?, rows?, columns?, "
+    "max|min}], filters?: [...], dest_sheet? (leave out for a new sheet), dest_cell?, name?}; pivot_edit {sheet, name?, rows?, columns?, "
     "values?, filters?, show?: {field: [items to keep]}}; refresh.\n"
     "name {name, refers_to: 'Data!$B$2:$B$50'}; table {range, name?, style?}; note {cell, text}; "
     "print_setup {orientation?, fit_width?, fit_height?, print_area?, title_rows?, header?, footer?}.\n"
@@ -500,6 +508,7 @@ class ExcelLiveEditTool(Tool):
         "type": "object",
         "properties": {
             "workbook": {"type": "string", "description": "File name or full path of an open workbook (default: the one in front)"},
+            "sheet": {"type": "string", "description": "The sheet for every step that does not name its own"},
             "ops": {
                 "type": "array",
                 "description": "The steps, in order (at most 60)",
@@ -522,11 +531,12 @@ class ExcelLiveEditTool(Tool):
         self._plans: dict[str, tuple[float, dict]] = {}
 
     async def _plan(self, args: dict[str, Any]) -> dict:
-        key = json.dumps([args.get("workbook"), args.get("ops")], sort_keys=True, default=str)
+        key = json.dumps([args.get("workbook"), args.get("sheet"), args.get("ops")], sort_keys=True, default=str)
         held = self._plans.get(key)
         if held and time.monotonic() - held[0] < 20:
             return held[1]
-        out = await ask({"op": "plan", "workbook": args.get("workbook") or "", "ops": args.get("ops")}, PLAN_S)
+        out = await ask({"op": "plan", "workbook": args.get("workbook") or "", "sheet": args.get("sheet") or "",
+                         "ops": args.get("ops")}, PLAN_S)
         if len(self._plans) > 32:
             self._plans.clear()
         self._plans[key] = (time.monotonic(), out)
@@ -570,6 +580,14 @@ class ExcelLiveEditTool(Tool):
         words, ok = await restore(undo)
         return ToolResult(ok=ok, output=words if ok else "", error=None if ok else words)
 
+    @staticmethod
+    def _unchanged(ctx: ToolContext, why: str) -> ToolResult:
+        """A refusal that left the workbook exactly as it was, said FIRST: in
+        a live trial a model read "Excel refused it: ..." and told the user
+        the rows had been deleted."""
+        note_turn(ctx, False)
+        return ToolResult(ok=False, error=f"{UNCHANGED_LEAD} {why}")
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         held = self._pending.pop(id(args), None)
         if held is None:
@@ -581,10 +599,10 @@ class ExcelLiveEditTool(Tool):
         await asyncio.to_thread(sweep, ctx.config.home)
         plan = await self._plan(args)
         if not plan.get("ok"):
-            return ToolResult(ok=False, error=str(plan.get("error") or NO_ANSWER))
+            return self._unchanged(ctx, str(plan.get("error") or NO_ANSWER))
         bad = await asyncio.to_thread(_read_refusal, str(plan.get("path") or ""))
         if bad:
-            return ToolResult(ok=False, error=bad)
+            return self._unchanged(ctx, bad)
         name = str(plan.get("workbook") or "workbook")
         copy = ""
         if plan.get("destructive"):
@@ -594,13 +612,18 @@ class ExcelLiveEditTool(Tool):
                 copy += ".xlsx"
         self._plans.clear()
         out = await ask({"op": "apply", "workbook": plan.get("path") or args.get("workbook") or "", "ops": ops,
-                         "undo_path": held["undo_path"], "copy_path": copy}, APPLY_S)
+                         "sheet": args.get("sheet") or "", "undo_path": held["undo_path"], "copy_path": copy}, APPLY_S)
         if out.get("timed_out"):
             # The child was stopped part-way: put back what it had done.
             words, _ok = await restore({"pre_ref": held["undo_path"]}, forgiving=True)
+            note_turn(ctx, False)
             return ToolResult(ok=False, error=f"{NO_ANSWER} The change was stopped part-way. {words}")
         if not out.get("ok"):
-            return ToolResult(ok=False, error=str(out.get("error") or NO_ANSWER))
+            if out.get("partly"):
+                note_turn(ctx, True)  # something DID change and could not all be put back
+                return ToolResult(ok=False, error=str(out.get("error") or NO_ANSWER))
+            return self._unchanged(ctx, str(out.get("error") or NO_ANSWER))
+        note_turn(ctx, True)
         lines = [f"Changed {name}, open in Excel ({change_summary(out)}). It is NOT saved: the user saves it in Excel."]
         if out.get("autosave"):
             lines[0] = f"Changed {name}, open in Excel ({change_summary(out)}). AutoSave is on, so Excel has already saved this to its cloud copy."
@@ -615,9 +638,11 @@ class ExcelLiveEditTool(Tool):
                          + ". Look at them (excel_live_look) and fix or undo the change.")
         if str(out.get("calculation")) == "manual":
             lines.append("NOTE: this workbook's calculation is set to manual, so the values above may be stale until the user presses F9.")
-        if out.get("copy"):
-            lines.append(f"A copy of the workbook as it was before the deletion is kept at {out['copy']}.")
-        lines.append("The user can undo this whole call from the chat (Undo on the change line). " + CLEARS_CTRL_Z)
+        if out.get("destructive"):
+            lines.append("THE DELETION CANNOT BE UNDONE, from the chat or with Ctrl+Z. Do not tell the user it can."
+                         + (f" The workbook as it was before is kept as a copy at {out['copy']}." if out.get("copy") else ""))
+        else:
+            lines.append("The user can undo this whole call from the chat (Undo on the change line). " + CLEARS_CTRL_Z)
         card = {"title": "Excel changed", "key": f"excel:{name}", "label": name, "old": None,
                 "new": change_summary(out), "change_id": held["change_id"]}
         data = {
@@ -627,6 +652,36 @@ class ExcelLiveEditTool(Tool):
             "copy": out.get("copy") or "", "excel_change": card,
         }
         return ToolResult(ok=True, output="\n".join(lines), data=data)
+
+
+UNCHANGED_LEAD = "NOTHING WAS CHANGED in the workbook."
+#: What the reply is given when every change this turn tried in Excel failed.
+UNCHANGED_NOTE = "\n\n_Note: nothing was changed in the open workbook this turn._"
+_TURNS: "dict[str, bool]" = {}
+
+
+def note_turn(ctx: Any, changed: bool) -> None:
+    """Remember, per chat turn, whether a change reached Excel (bounded)."""
+    turn = str(getattr(ctx, "turn_id", "") or "")
+    if not turn:
+        return
+    _TURNS[turn] = bool(_TURNS.get(turn)) or changed
+    while len(_TURNS) > 256:
+        _TURNS.pop(next(iter(_TURNS)))
+
+
+def unchanged_note(turn_id: Any, tools_used: Any) -> str:
+    """The note for a reply whose turn TRIED to change the open workbook and
+    never did (refused by Excel, by the user, or by a check). Decided from
+    what ran, never from the reply's words. MIRROR NOTE (lock-step): both
+    chat lanes append this beside the other honesty notes. Never raises."""
+    try:
+        turn = str(turn_id or "")
+        if not turn or turn not in _TURNS or _TURNS[turn] or "excel_live_edit" in (tools_used or []):
+            return ""
+        return UNCHANGED_NOTE
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 async def restore(undo: dict[str, Any], *, forgiving: bool = False) -> "tuple[str, bool]":

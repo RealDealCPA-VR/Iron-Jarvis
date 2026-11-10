@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.466.0
+
+**Working in a workbook that is open in Excel.** Until now Jarvis worked on saved files, so a workbook had to be closed first.
+
 ## v1.465.0
 
 **Spreadsheets Jarvis understands and works out itself.** Jarvis used to read a workbook as a grid of cells and leave every formula to Excel.
@@ -77,7 +81,3 @@
 ## v1.448.0
 
 **Chat configures the rest: models, tool servers, web services.** Three more things you can set up by asking, and four small honesty fixes.
-
-## v1.447.0
-
-**Build › Code: more of each tool, and a calmer look.** **Antigravity.** **Your own Antigravity agents.** The agents `agy agents` lists appear in the mode menu after Antigravity's own modes.

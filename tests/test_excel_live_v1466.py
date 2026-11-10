@@ -304,8 +304,10 @@ async def test_a_step_that_cannot_be_undone_asks_every_time_and_keeps_a_copy(exc
     check = await tool.spend_check(dict(EDIT), _ctx(tmp_path))
     assert check.ask and check.once_only and not check.dont_ask_skips, "asked even under Don't ask"
     assert "delete rows 3:4 on Data" in check.words and "cannot be undone here" in check.words
-    excel.apply.update(destructive=excel.plan["destructive"])
-    await tool.execute(dict(EDIT), _ctx(tmp_path))
+    excel.apply.update(destructive=excel.plan["destructive"], copy="C:/kept/Budget.xlsx")
+    res = await tool.execute(dict(EDIT), _ctx(tmp_path))
+    assert "THE DELETION CANNOT BE UNDONE" in res.output and "C:/kept/Budget.xlsx" in res.output
+    assert "can undo this whole call" not in res.output, "a model repeated that line to the user after a delete"
     apply = next(r for r in excel.asked if r["op"] == "apply")
     copy = Path(apply["copy_path"])
     assert copy.parent == tmp_path / "excel-live" / "copies" and copy.name.endswith("Budget.xlsx")
@@ -382,6 +384,22 @@ def test_backups_leave_the_live_excel_folder_out(tmp_path):
     with tarfile.open(out) as tar:
         names = tar.getnames()
     assert any(n.endswith("config.toml") for n in names) and not any("excel-live" in n for n in names)
+
+
+def test_the_suite_never_starts_the_child(monkeypatch):
+    """No test may look into the developer's own Excel."""
+    from iron_jarvis.core import procs
+
+    monkeypatch.setattr(procs, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("the child was started")))
+    assert os.environ.get(L.OFF_ENV) == "off"
+    if os.name == "nt":
+        assert L._ask_worker({"op": "look"}, 1)["code"] == "off"
+    import importlib
+
+    doctor = importlib.import_module("iron_jarvis.onboarding.doctor")
+    doctor._LIVE_EXCEL_OK.clear()
+    row = doctor.check_live_excel()
+    assert row["name"] == "live_excel" and row["ok"] and row["level"] == "recommended"
 
 
 def test_the_child_is_never_started_off_windows(monkeypatch):
@@ -601,3 +619,74 @@ async def test_a_large_overwrite_is_carded_once_only_with_its_words(lane):
     card = out["cards"][0]
     assert "replaces 40 cells that hold data, 12 of them formulas replaced by plain values" in json.dumps(card)
     assert lane.excel.ops().count("apply") == 1
+
+
+def test_a_reply_about_the_changed_workbook_is_not_called_a_false_claim():
+    """The workbook WAS changed (in Excel, unsaved), so the "nothing was
+    written to disk" note stays away."""
+    reply = "I updated Budget.xlsx: the growth rate in B4 is now 8%, and I saved the change to the workbook."
+    assert CT._claimed_write_note(reply, ["excel_live_edit"]) == ""
+    assert CT._may_have_changed_files(["excel_live_edit"]) and not CT._may_have_changed_files(["excel_live_look"])
+
+
+# ------------------------------------------- what the first live trial showed --
+
+
+def test_a_range_written_with_its_sheet_is_read_and_two_sheets_are_refused():
+    assert W.split_sheet({"op": "sort", "range": "Sales!A1:D49"}) == {"op": "sort", "range": "A1:D49", "sheet": "Sales"}
+    assert W.split_sheet({"op": "chart", "data": "'My Sheet'!A1:B9", "sheet": "my sheet"})["data"] == "A1:B9"
+    assert W.split_sheet({"op": "set", "cell": "B4", "sheet": "Data"}) == {"op": "set", "cell": "B4", "sheet": "Data"}
+    assert W.split_sheet({"op": "name", "name": "T", "refers_to": "Data!$B$2"})["refers_to"] == "Data!$B$2"
+    with pytest.raises(W.Refusal, match="names the sheet 'Sales' but 'sheet' says 'Data'"):
+        W.split_sheet({"op": "sort", "range": "Sales!A1:D49", "sheet": "Data"})
+
+
+async def test_a_refusal_leads_with_nothing_was_changed(excel, tmp_path):
+    """A model told only "Excel refused it: ..." said the rows were deleted."""
+    excel.apply = {"ok": False, "code": "excel_refused", "unchanged": True,
+                   "error": "step 1 (delete_rows): Excel refused it: We can't make this change because it will affect a PivotTable."}
+    res = await L.ExcelLiveEditTool().execute(dict(EDIT), _ctx(tmp_path))
+    assert not res.ok and res.error.startswith("NOTHING WAS CHANGED in the workbook. step 1 (delete_rows)")
+    excel.apply = {"ok": False, "code": "partly_done", "partly": True, "error": "x The 2 step(s) before it were made and could not all be put back: y"}
+    res = await L.ExcelLiveEditTool().execute(dict(EDIT), _ctx(tmp_path))
+    assert not res.ok and "NOTHING WAS CHANGED" not in res.error, "never said when something did change"
+
+
+def test_the_note_is_decided_by_what_ran_never_by_the_replys_words():
+    L._TURNS.clear()
+    ctx = SimpleNamespace(turn_id="t-1")
+    assert L.unchanged_note("t-1", []) == "", "a turn that never tried says nothing"
+    L.note_turn(ctx, False)
+    assert L.unchanged_note("t-1", []) == L.UNCHANGED_NOTE
+    assert L.unchanged_note("t-1", ["excel_live_edit"]) == "" and L.unchanged_note("", []) == ""
+    L.note_turn(ctx, True)
+    L.note_turn(ctx, False)  # a later try failed, but a change DID land this turn
+    assert L.unchanged_note("t-1", []) == ""
+    L.note_turn(SimpleNamespace(turn_id=""), False)
+    assert "" not in L._TURNS
+
+
+async def test_a_reply_that_claims_a_change_excel_refused_gets_the_note_in_both_lanes(lane):
+    from iron_jarvis.daemon.chat_turn import run_chat_turn
+
+    look, edit = _calls()
+    lane.excel.apply = {"ok": False, "code": "excel_refused", "unchanged": True, "error": "step 1 (set): Excel refused it: the sheet is protected."}
+    lane.wire([look, edit, "Done! The growth rate is 8% now."])
+    out = await _stream(lane.platform, _body(turn_id="turn-stream-1"))
+    assert out["done"]["reply"].endswith(L.UNCHANGED_NOTE) and out["done"]["config_cards"] == []
+    lane.wire([look, edit, "All set."])
+    out = await _stream(lane.platform, _body(turn_id="turn-stream-2"), answer="deny")
+    assert out["done"]["reply"].endswith(L.UNCHANGED_NOTE) is False, "a declined card never reached the tool, so the tool has nothing to say"
+    lane.excel.apply = dict(FakeExcel().apply)
+    lane.wire([look, edit, "The growth rate is 8% now."])
+    out = await _stream(lane.platform, _body(turn_id="turn-stream-3"))
+    assert L.UNCHANGED_NOTE not in out["done"]["reply"]
+    # The POST lane arms no change tool, so it has nothing to note.
+    lane.wire([look, "B4 is 5%."])
+    post = await run_chat_turn(lane.platform, BUILTIN_PERSONAS, _body("what is in the selected cells?", turn_id="turn-post-1"))
+    assert L.UNCHANGED_NOTE not in post["reply"]
+
+
+def test_both_lanes_append_the_note():
+    for path in ("daemon/chat_turn.py", "daemon/routes/chat.py"):
+        assert "_xl_unchanged(getattr(body, \"turn_id\", \"\"), tools_used)" in _text(SRC / path), path

@@ -644,6 +644,51 @@ def check_browser_addon() -> dict:
     )
 
 
+_LIVE_EXCEL_OK: dict = {}
+
+
+def check_live_excel() -> dict:
+    """Jarvis can work in a workbook that is open in Excel (v1.466.0).
+
+    RECOMMENDED, and only where Excel is installed. It really asks the child
+    process (``documents/excel_live``) what is open: "the module imports" is
+    the claim a packaged build can satisfy while the Windows bridge is
+    missing (the pikepdf lesson). A good answer is remembered for the
+    process; it never starts Excel."""
+    import sys as _sys
+
+    name = "live_excel"
+    if _sys.platform != "win32":
+        return _result(name, True, "Working in an open Excel workbook is for Windows only.", level=RECOMMENDED)
+    try:
+        import winreg
+
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "Excel.Application"))
+    except OSError:
+        return _result(name, True, "Excel is not installed on this PC (it is only needed to work in an open workbook).", level=RECOMMENDED)
+    if _LIVE_EXCEL_OK.get("ok"):
+        return _result(name, True, _LIVE_EXCEL_OK["words"], level=RECOMMENDED)
+    import os as _os
+
+    from ..documents.excel_live import OFF_ENV, _ask_worker
+
+    if _os.environ.get(OFF_ENV) == "off":
+        return _result(name, True, "Working in an open Excel workbook is turned off here.", level=RECOMMENDED)
+
+    out = _ask_worker({"op": "look"}, 20)
+    if out.get("ok"):
+        words = "Jarvis can work in a workbook that is open in Excel."
+        _LIVE_EXCEL_OK.update(ok=True, words=words)
+        return _result(name, True, words, level=RECOMMENDED)
+    return _result(
+        name, False,
+        f"Jarvis cannot reach Excel on this PC ({out.get('error') or 'no answer'}).",
+        fix="Close any dialog box that is open in Excel and try again. If this is the packaged app and "
+        "it keeps failing, its Windows bridge is missing from the build.",
+        level=RECOMMENDED,
+    )
+
+
 def check_local_ocr() -> dict:
     """Scanned pages can be read ON THIS PC (C-05).
 
@@ -750,6 +795,7 @@ CHECKS = [
     check_agent_browser,
     check_pdf_classifier,
     check_local_ocr,
+    check_live_excel,
     check_legacy_office,
     check_guide_docs,
     check_browser_addon,

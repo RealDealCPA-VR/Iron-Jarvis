@@ -636,15 +636,20 @@ def _excel_never_seen_running():
     variable itself."""
     from iron_jarvis.documents import excel_live as _xl
 
-    old = os.environ.get(_xl.SEEN_ENV)
+    old = {k: os.environ.get(k) for k in (_xl.SEEN_ENV, _xl.OFF_ENV)}
     os.environ[_xl.SEEN_ENV] = "0"
+    # ...and nothing in the suite may look into the developer's own Excel: the
+    # child that talks to Excel is never started (the tests of the real Excel,
+    # tests/test_excel_live_real_v1466.py, take this away for themselves).
+    os.environ[_xl.OFF_ENV] = "off"
     try:
         yield
     finally:
-        if old is None:
-            os.environ.pop(_xl.SEEN_ENV, None)
-        else:
-            os.environ[_xl.SEEN_ENV] = old
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 @pytest.fixture(autouse=True, scope="session")

@@ -530,8 +530,9 @@ class _Deferred(Exception):
 class Cx:
     """One ``plan`` or ``apply`` in progress."""
 
-    def __init__(self, app: Any, wb: Any, *, planning: bool, undo_path: str = "") -> None:
+    def __init__(self, app: Any, wb: Any, *, planning: bool, undo_path: str = "", default_sheet: str = "") -> None:
         self.app, self.wb, self.planning, self.undo_path = app, wb, planning, undo_path
+        self.default_sheet = str(default_sheet or "").strip()
         self.steps: list[dict] = []
         self.changes: list[dict] = []
         self.changed_cells = 0
@@ -543,8 +544,15 @@ class Cx:
         self.i = 0
 
     def sheet(self, name: Any) -> Any:
-        if self.planning and str(name or "").strip().lower() in self.pending:
-            raise _Deferred(str(name).strip())
+        name = str(name or "").strip() or self.default_sheet
+        if not name:
+            # A CHANGE never lands on "whatever sheet happens to be in front":
+            # in a live trial a model that had just read Sales sorted the
+            # Assumptions sheet, because that was the active one.
+            names = ", ".join(str(s.Name) for s in self.wb.Worksheets)
+            raise Refusal(f"say which sheet in 'sheet' (this workbook's sheets: {names})", "bad_step")
+        if self.planning and name.lower() in self.pending:
+            raise _Deferred(name)
         ws = _sheet(self.wb, name)
         self.touched[str(ws.Name)] = None
         return ws
@@ -1042,7 +1050,7 @@ def h_freeze(cx: Cx, op: dict) -> dict:
     cell = str(op.get("cell") or "").strip()
     r, c = (0, 0) if not cell or cell.lower() == "none" else parse_range(cell)[:2]
     info = {"op": "freeze", "where": str(ws.Name),
-            "summary": f"unfreeze the panes on {ws.Name}" if not r else f"freeze the rows above and columns left of {a1(r, c)} on {ws.Name}"}
+            "summary": f"unfreeze the rows and columns on {ws.Name}" if not r else f"freeze the rows above and columns left of {a1(r, c)} on {ws.Name}"}
     if cx.planning:
         return info
     cx.wb.Activate()
@@ -1667,6 +1675,27 @@ def check_steps(ops: Any) -> "list[dict]":
     return ops
 
 
+_RANGE_KEYS = ("cell", "range", "data", "print_area", "columns")
+
+
+def split_sheet(op: dict) -> dict:
+    """``{"range": "Sales!A1:D49"}`` as ``{"sheet": "Sales", "range":
+    "A1:D49"}``: the way a range is usually written. A step that names two
+    different sheets is refused. Pure."""
+    out = dict(op)
+    for key in _RANGE_KEYS:
+        v = out.get(key)
+        if not isinstance(v, str) or "!" not in v:
+            continue
+        sheet, _, rest = v.rpartition("!")
+        sheet = sheet.strip().strip("'").replace("''", "'")
+        have = str(out.get("sheet") or "").strip()
+        if have and have.lower() != sheet.lower():
+            raise Refusal(f"'{key}' names the sheet '{sheet}' but 'sheet' says '{have}'", "bad_step")
+        out[key], out["sheet"] = rest, sheet
+    return out
+
+
 def _guard_book(wb: Any) -> None:
     if bool(wb.ReadOnly):
         raise Refusal(f"'{wb.Name}' is open read-only in Excel, so it cannot be changed.", "read_only")
@@ -1676,7 +1705,7 @@ def _run_steps(cx: Cx, ops: "list[dict]") -> None:
     for n, op in enumerate(ops, start=1):
         cx.i = n
         try:
-            info = OPS[str(op["op"])](cx, dict(op, op=str(op["op"])))
+            info = OPS[str(op["op"])](cx, split_sheet(dict(op, op=str(op["op"]))))
         except _Deferred as d:
             info = {"op": str(op["op"]), "where": str(d), "summary": f"{str(op['op']).replace('_', ' ')} on the new sheet '{d}'"}
         except Refusal as r:
@@ -1692,7 +1721,7 @@ def op_plan(req: dict) -> dict:
     ops = check_steps(req.get("ops"))
     app, wb = _find_book(_apps(), req.get("workbook"))
     _guard_book(wb)
-    cx = Cx(app, wb, planning=True)
+    cx = Cx(app, wb, planning=True, default_sheet=req.get("sheet") or "")
     _run_steps(cx, ops)
     return {
         "ok": True, "workbook": str(wb.Name), "path": str(wb.FullName), "steps": cx.steps,
@@ -1714,13 +1743,13 @@ def op_apply(req: dict) -> dict:
     _guard_book(wb)
     undo_path = str(req.get("undo_path") or "")
     # Everything is checked before anything is changed.
-    _run_steps(Cx(app, wb, planning=True), ops)
+    _run_steps(Cx(app, wb, planning=True, default_sheet=req.get("sheet") or ""), ops)
     copy = str(req.get("copy_path") or "")
     if copy and any(str(o.get("op")) in DESTRUCTIVE_OPS for o in ops):
         wb.SaveCopyAs(copy)  # what the workbook was, before a step that cannot be put back
     else:
         copy = ""
-    cx = Cx(app, wb, planning=False, undo_path=undo_path)
+    cx = Cx(app, wb, planning=False, undo_path=undo_path, default_sheet=req.get("sheet") or "")
     before_errors = {str(ws.Name): set(_error_cells(ws)) for ws in wb.Worksheets}
     if undo_path:
         with open(undo_path, "w", encoding="utf-8") as fh:
@@ -1735,8 +1764,8 @@ def op_apply(req: dict) -> dict:
         if rolled.get("left"):
             return {"ok": False, "code": "partly_done", "partly": True, "done_steps": done,
                     "error": f"{words} The {done} step(s) before it were made and could not all be put back: {'; '.join(rolled['left'])[:400]}"}
-        return {"ok": False, "code": getattr(exc, "code", "excel_refused"),
-                "error": f"{words} Nothing was changed: the {done} step(s) before it were put back."}
+        back = f" The {done} step(s) before it were put back." if done else ""
+        return {"ok": False, "code": getattr(exc, "code", "excel_refused"), "unchanged": True, "error": f"{words}{back}"}
     new_errors: list[str] = []
     for ws in wb.Worksheets:
         name = str(ws.Name)
@@ -1785,6 +1814,10 @@ def _undo_step(app: Any, wb: Any, step: dict, forgiving: bool) -> "tuple[int, li
     kind = inv.get("kind")
     left: list[str] = []
     if kind == "none":
+        if after is None:
+            # The step was written down and then Excel refused it: it never
+            # happened, so there is nothing to put back (and nothing lost).
+            return 0, []
         return 0, ([] if inv.get("harmless") else [f"{inv.get('what')}: that cannot be put back"])
     if kind == "sheet_renamed":
         for s in wb.Sheets:

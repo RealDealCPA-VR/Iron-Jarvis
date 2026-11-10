@@ -7725,6 +7725,12 @@ async def chat_stream(
                 reply += _chat_turn.claimed_change_note(
                     reply, tools_used, config_cards, history=body.messages, custom_tools=_custom_ran,
                 )
+                # v1.466.0: a turn that TRIED to change the workbook open in
+                # Excel and never did says so, whatever the reply claims.
+                # MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+                from ...documents.excel_live import unchanged_note as _xl_unchanged
+
+                reply += _xl_unchanged(getattr(body, "turn_id", ""), tools_used)
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did gets the plain note. MIRROR NOTE (lock-step): chat_turn.
         # Only an AGENT-shaped receiver counts (the roster's names, read off

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.465.0 (2026-11-09).*
+holds itself to. Current as of v1.466.0 (2026-11-09).*
 
 ---
 
@@ -2041,6 +2041,73 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Working in a workbook that is open in Excel (v1.466.0)
+
+Until now Jarvis worked on saved files, so a workbook had to be closed first.
+It can now work in the workbook you have open in Excel, as it is on screen,
+unsaved changes included. Excel itself does the calculating, so every function
+Excel has works, and the figures Jarvis reports are Excel's own.
+
+**How to use it.** Open the workbook in Excel and ask in Chat: "what is this
+workbook for, and does anything look wrong?", "change the growth rate to 8% and
+tell me December's revenue", "add a pivot table of Amount by Region", "sort
+this by Amount and colour anything over 5,000 green". Jarvis switches this on
+by itself when Excel is running and you talk about a spreadsheet, or when you
+say "the open workbook", "the selected cells" or "the cell I am on". A file you
+attach or name is still read as a file.
+
+**What it can see.** Which workbooks are open, their sheets, what you have
+selected, the cells of any range with their formulas, and a map of the whole
+workbook: what each sheet is for, formulas filled down, totals, and mistakes
+worth a look (a total that stops a row short, a typed number in a column of
+formulas, a number stored as text). The question tools you already have
+(grouping, filtering, checking a formula) can read the open workbook too.
+
+**What it can change.** Values, formulas and formatting; new and renamed
+sheets; inserted rows and columns; sorting and filters; column widths and
+frozen headings; colour rules; dropdown lists and number limits; charts (new,
+and changes to an existing one); pivot tables (new, and changes to an existing
+one, including which items show); named ranges; tables; cell notes; and how a
+sheet prints.
+
+**How a change is kept safe.**
+
+- **It asks first.** A change shows the usual card. "Allow for this chat" lets
+  later changes in that chat through.
+- **Replacing data is always shown first.** A change that replaces more than
+  ten cells that hold data, or replaces any formula with a plain value, shows a
+  card every time, even when changes are already allowed.
+- **A deletion asks every time.** Deleting rows, columns or a sheet cannot be
+  put back, so it always shows a card with Allow once only, and a copy of the
+  workbook as it was is kept first.
+- **All or nothing.** The steps of one request are made together. If one of
+  them fails, the ones before it are put back and Jarvis says nothing was
+  changed.
+- **Every change is listed.** Each changed cell is shown with what it held
+  before and after, and any formula that now shows an error is called out.
+- **Undo.** The line "Excel changed ... Undo" under the reply puts the whole
+  change back. A cell you changed yourself in the meantime is left alone and
+  named. Excel's own Ctrl+Z history is cleared by any change made from outside
+  Excel, which is why Jarvis keeps its own Undo.
+- **Nothing is saved.** You save the workbook in Excel when you are happy with
+  it. If AutoSave is on, Excel saves by itself and Jarvis says so.
+
+**What stays private.** Jarvis talks to Excel on this PC only. What it reads
+from the workbook goes to the model that answers your chat, exactly like a file
+you attach, so a chat set to Local only keeps it on your own network. A
+workbook in a folder Jarvis may not read is not read.
+
+**When it says no.** While you are typing in a cell, or a dialog box is open
+in Excel, Excel takes no requests: finish that and ask again. A workbook open
+in Protected View cannot be read or changed until you press Enable Editing. A
+read-only workbook cannot be changed.
+
+**Not offered.** Macros are not written or run. Excel must be the Windows
+desktop program; Excel in a browser is not reached. Agents working on their own
+(schedules, goals, rules) do not use this; it is for Chat, where you are
+present. To switch it off altogether, set the two tools "Look at Excel" and
+"Change the open workbook" to Never run in Settings › Permissions.
 
 ## Spreadsheets Jarvis understands and works out itself (v1.465.0)
 

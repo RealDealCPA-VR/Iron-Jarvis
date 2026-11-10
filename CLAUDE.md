@@ -16552,6 +16552,93 @@ does not need a bump, stop and bump it.
     `convert_document` xlsx → csv still blanks unsaved formulas; an agent
     run's own arithmetic depends on the model calling `calculate`.
 
+- **Live Excel: the workbook OPEN in Excel is reached through ONE short-lived
+  child; a change is all-or-nothing, listed, undoable, and never saved**
+  (v1.466.0; the owner: "edit a live excel file with parity to the claude excel
+  extension"; measured on Excel 16.0 build 20527 with a hidden Excel the tests
+  start themselves).
+  - **The child (`src/iron_jarvis/excel_worker.py`).** The ONLY module that
+    imports `pythoncom` / `win32com` (pinned). A COM call into Excel can wait
+    forever (a dialog box, a cell being typed in), so the v1.410.2 rule holds:
+    `documents/excel_live._ask_worker` starts `ironjarvis.exe excel-worker`
+    (fast path in `packaging/ironjarvis_entry.py`; hidden CLI subcommand;
+    source: `python -m iron_jarvis.excel_worker`) through `core/procs.run`,
+    one JSON request on stdin, one JSON answer, killed at its deadline.
+    pywin32 is a declared win32 dependency and a `hiddenimports` block in the
+    spec. It NEVER starts Excel (it attaches through the running object table:
+    `_apps()`, front-most first), never opens, saves or closes a workbook,
+    and touches only `DisplayAlerts`, in a `finally`, for a sheet delete.
+  - **Requests:** `look` (open workbooks, sheets, selection, a range's values
+    and formulas), `snapshot` (`SaveCopyAs` into a folder, named after the
+    workbook; the workbook's Saved flag and path are untouched, measured),
+    `plan` (checks every step, counts what it would overwrite, changes
+    nothing), `apply`, `restore`, `goto`. Excel's error values arrive as
+    negative integers (`ERROR_NAMES`); numbers as floats; dates through
+    `.Value` as datetimes.
+  - **`apply` is ALL OR NOTHING.** Every step is checked first (`planning`);
+    then each step writes what it is about to replace to the undo file
+    (`<home>/excel-live/undo/<change id>.jsonl`) BEFORE it runs and its
+    after-state after; a step that fails makes `_restore_file(forgiving=True)`
+    put the earlier ones back. A step written down and then refused by Excel
+    has no `after` row and is NOT "could not be put back" (a refused delete
+    read as half-done until the real-Excel test caught it). A child stopped
+    at its deadline is rolled back by the tool with a forgiving `restore`.
+  - **A step must say its sheet** (`Cx.sheet`): on the step, as
+    `Sheet!A1:D9` (`split_sheet`), or one `sheet` for the whole call. In the
+    first live trial a model that had just read Sales sorted the ACTIVE sheet.
+    A step may use a sheet an earlier step of the same call makes
+    (`_Deferred`, `Cx.pending`).
+  - **Undo** (`UNDO_KIND` "excel_live_restore"): `capture_undo` mints the
+    change id and the undo file's path (the pdf_tools `id(args)` hand-off);
+    `routes/undo.perform_undo` has its own branch (no tool permission asked,
+    like `record_restore`); `GET /config/changes/{id}` lists the kind; the
+    chat's change card is the existing one (`chat_turn.config_cards_from_result`
+    reads `data["excel_change"]`). `restore` puts a cell back only while it
+    still holds what the change left (`after`), names what it left alone, and
+    reverses structure by exact inverses (inserted lines only while empty; a
+    colour rule by count; a chart, table or pivot by name). Deleting rows,
+    columns or a sheet has NO inverse: a copy of the workbook is saved to
+    `excel-live/copies/` first and the tool's output says in capitals that it
+    cannot be undone (a model repeated "you can undo this" after a delete).
+  - **Cards.** `excel_live_look` allow (READONLY, untrusted content);
+    `excel_live_edit` ask (reversible, untrusted: its answer quotes cells).
+    `spend_check` asks the child for the plan (cached 20 s, so card + change
+    are one `plan` and one `apply`): a destructive step is once-only in every
+    posture; more than `OVERWRITE_CARD_CELLS` (10) data cells replaced, or any
+    formula replaced by a plain value, cards past a chat's grant
+    (`dont_ask_skips`); anything else follows the ordinary ask tier.
+  - **Arming.** `autoselect.wants_live_excel(text, excel_open, has_files)`:
+    the open workbook said outright, or spreadsheet talk while
+    `excel_live.excel_seen()` (a remembered process check, refreshed in the
+    background, never waits) and no file attached or named. `K1`, `W2`, `Q3`
+    are not cell references; only `cell B4` or a range with a colon counts.
+    `_resolve_armed_tools` arms the look in its own place under the ceiling
+    (both lanes); the STREAM lane alone ask-arms the edit. Neither is on a
+    roster (`_OFF_ROSTER_BY_DESIGN`).
+  - **Honesty.** A refusal that left the workbook untouched starts
+    `UNCHANGED_LEAD` ("NOTHING WAS CHANGED in the workbook."); both lanes
+    append `excel_live.unchanged_note(turn_id, tools_used)` when a turn tried
+    a change and none landed (decided from what ran, never from the reply);
+    `excel_live_edit` is in `_CHANGES_A_FILE_UNNAMED`.
+  - **File tools read the open workbook** through `path: "live:<name>"`
+    (`excel_tools._read_target` → `excel_live.live_path`: a copy under
+    `excel-live/snap/<id>/<Workbook name>`, swept after ten minutes). The
+    source's folder is checked against the folders Jarvis may read.
+  - **Kept data.** `<home>/excel-live/` (undo 30 days, copies 14 days, snap
+    10 minutes; `sweep`) is left out of backups. It holds client data.
+  - **Tests.** `tests/test_excel_live_v1466.py` (no Excel: the child is a
+    stand-in); `tests/test_excel_live_real_v1466.py` (the REAL Excel, only
+    with `IJ_LIVE_EXCEL=1`: run it on this PC after any change to the child).
+    conftest sets `IRONJARVIS_EXCEL_LIVE=off` and `IRONJARVIS_EXCEL_SEEN=0`:
+    no test may look into the developer's own Excel.
+  - **RELEASE CHECK:** `"<install>\resources\daemon\ironjarvis.exe"
+    excel-worker` fed `{"op": "look"}` on stdin must answer one JSON line
+    with `"ok": true`.
+  - **OPEN:** Excel's own Ctrl+Z after a change was not measured (assumed
+    cleared, and said so); typing-in-a-cell and Protected View refusals are
+    written from Excel's documented error codes, not driven; no panel inside
+    Excel; agents and the POST lane cannot change a workbook.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

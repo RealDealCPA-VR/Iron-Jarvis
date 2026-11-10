@@ -36,6 +36,19 @@ def ask(request: dict, timeout: float = 60) -> dict:
     return json.loads(r.stdout.decode("utf-8"))
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _the_child_may_run():
+    """The suite keeps the child off (conftest); these tests are what it is for."""
+    from iron_jarvis.documents import excel_live as L
+
+    old = os.environ.pop(L.OFF_ENV, None)
+    try:
+        yield
+    finally:
+        if old is not None:
+            os.environ[L.OFF_ENV] = old
+
+
 @pytest.fixture(scope="module")
 def excel(tmp_path_factory):
     import pythoncom
@@ -515,3 +528,25 @@ def test_a_file_tool_reads_the_open_workbook_through_a_live_path(book, tmp_path)
     assert "2,710" in res.output or "2710" in res.output, res.output  # East: 1000*2.5 + 210
     res = asyncio.run(ExcelReadTool().execute({"path": "live:", "sheet": "Data", "range": "A1:E3"}, ctx))
     assert res.ok and '["East", "Pens", 1000, 2.5, 2500]' in res.output, res.output  # the unsaved value, calculated
+
+
+def test_a_change_must_say_its_sheet_and_a_range_may_carry_it(book, tmp_path):
+    """The live trial: a model that had just read Sales sorted the sheet in
+    front instead, because a step with no sheet meant "the active one"."""
+    wb, path = book
+    out = _apply(path, [{"op": "sort", "range": "A1:E6", "by": ["Total"]}], tmp_path)
+    assert not out["ok"] and "say which sheet" in out["error"] and "Data, Notes" in out["error"]
+    assert [wb.Worksheets("Data").Range(f"A{r}").Value for r in (2, 3)] == ["East", "West"]
+    out = _apply(path, [{"op": "sort", "range": "Data!A1:E6", "by": [{"column": "Total", "order": "desc"}]}], tmp_path)
+    assert out["ok"] and _v(wb, "Data", "E2") == 210
+    out = _apply(path, [{"op": "set", "cell": "A1", "value": "x"}, {"op": "set", "cell": "A2", "value": "y"}], tmp_path, sheet="Notes")
+    assert out["ok"] and _v(wb, "Notes", "A2") == "y", "one sheet for the whole call"
+
+
+def test_a_step_excel_refuses_says_plainly_that_nothing_changed(book, tmp_path):
+    wb, path = book
+    made = _apply(path, [{"op": "pivot", "source": "Data!A1:E6", "rows": ["Region"], "values": ["Total"], "dest_sheet": "Data", "dest_cell": "H1"}], tmp_path)
+    assert made["ok"], made
+    out = _apply(path, [{"op": "delete_rows", "sheet": "Data", "at": 2, "count": 2}], tmp_path)
+    assert not out["ok"] and out.get("unchanged") and "PivotTable" in out["error"]
+    assert _v(wb, "Data", "A2") == "East", "the rows are still there"
