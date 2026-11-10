@@ -50,6 +50,14 @@ SHIM = (
 def state(tmp_path, monkeypatch):
     """A state home for kept answers; the switch on; nothing left behind."""
     monkeypatch.delenv(dl.ENV_SWITCH, raising=False)
+    # v1.465.0: a HANG DETECTOR, not a speed bar. The app's own 15 s connect
+    # limit is the runner's fact: on a loaded GitHub shard a real node start
+    # did not answer inside it, the load fell back to the launcher, and
+    # "a direct start has no launcher in its tree" read
+    # ['cmd.exe', 'python.exe', 'python.exe', 'node.exe'] (twice, with the
+    # retry). A test that wants the short limit sets its own (the fall-back
+    # tests below do).
+    monkeypatch.setenv("IRONJARVIS_MCP_CONNECT_TIMEOUT", "120")
     home = tmp_path / "home"
     dl.set_state_dir(home)
     yield home
