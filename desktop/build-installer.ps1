@@ -154,15 +154,31 @@ Write-Host "==> [4/4] Packaging the installer (electron-builder)..." -Foreground
 Push-Location $Desktop
 try {
     Invoke-Native "pnpm install (desktop)" { pnpm install }
+    # SIGNING (docs/SIGNING.md). All six values present -> a signed build
+    # through builder-signed.js. None present -> the unsigned build, as before.
+    # Only SOME present is a mistake and stops here: it must never quietly ship
+    # an unsigned installer from a setup that was meant to sign.
+    $SignNames = @("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET",
+                   "IJ_SIGN_ENDPOINT", "IJ_SIGN_ACCOUNT", "IJ_SIGN_PROFILE")
+    $SignMissing = @($SignNames | Where-Object { -not "$([Environment]::GetEnvironmentVariable($_))".Trim() })
+    $ConfigArgs = @()
+    if ($SignMissing.Count -eq 0) {
+        Write-Host "    signing: ON (Microsoft Artifact Signing)" -ForegroundColor Green
+        $ConfigArgs = @("--config", "builder-signed.js")
+    } elseif ($SignMissing.Count -lt $SignNames.Count) {
+        throw "signing is half set up; missing: $($SignMissing -join ', '). Add them, or remove all six for an unsigned build."
+    } else {
+        Write-Host "    signing: off (no signing values set) - the installer will be unsigned" -ForegroundColor Yellow
+    }
     try {
         if ($Publish) {
-            Invoke-Native "electron-builder (publish)" { pnpm exec electron-builder --win --publish always }
+            Invoke-Native "electron-builder (publish)" { pnpm exec electron-builder --win --publish always @ConfigArgs }
         } else {
             # NEVER publish without -Publish (v1.370.3): electron-builder's own
             # default publishes on CI when a tag is pushed and GH_TOKEN is set,
             # and the release workflow now builds the installer WHILE the tests
             # run — only its publish job, after every test passed, may upload.
-            Invoke-Native "electron-builder" { pnpm exec electron-builder --win --publish never }
+            Invoke-Native "electron-builder" { pnpm exec electron-builder --win --publish never @ConfigArgs }
         }
     } catch {
         if ("$_" -match "symbolic link" -or "$_" -match "winCodeSign") {

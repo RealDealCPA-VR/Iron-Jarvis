@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.470.1
+
+**The installer can be signed.** The Windows installer can now be signed as **RealDealCPA.Ai LLC**, through Microsoft Artifact Signing.
+
 ## v1.470.0
 
 **Scripts that call tools, and skills made from chat.** A **skill** and a **workflow** are two different things:
@@ -77,7 +81,3 @@
 ## v1.454.0
 
 **Skills, how Jarvis works on pages, and a pointer you can watch in the browser sidebar.** **Skills in the browser sidebar.** Type **/** in the sidebar's box and the same skills the chat's "/" menu offers are listed; type more to narrow them, use the arrows, and press **Enter** (or **Tab**) to pick one.
-
-## v1.453.0
-
-**Archiving a Build › Code session keeps a short summary of it.** **Archive is in each session's ⋯ menu** in Build › Code (the row in the list, and the session's own ⋯ at the top).

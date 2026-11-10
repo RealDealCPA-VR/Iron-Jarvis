@@ -201,4 +201,4 @@ jobs:
           node --check spotlight-preload.js
           node --check windowState.js
           node --check afterPack.js
-          node --check sign.js
+          node --check builder-signed.js

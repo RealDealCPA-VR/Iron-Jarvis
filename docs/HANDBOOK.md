@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.470.0 (2026-11-10).*
+holds itself to. Current as of v1.470.1 (2026-11-10).*
 
 ---
 
@@ -2041,6 +2041,30 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The installer can be signed (v1.470.1)
+
+The Windows installer can now be signed as **RealDealCPA.Ai LLC**, through
+Microsoft Artifact Signing. A signed installer shows that name as the
+publisher instead of "Unknown publisher".
+
+- **It switches on by itself** once the six signing values are saved as
+  GitHub secrets. Until then, releases are built unsigned, as before.
+- **Every program is signed:** the desktop app, the daemon and its helpers,
+  the uninstaller and the installer itself.
+- **A signed release is checked before it is published.** Windows must call
+  the installer, the app and the daemon validly signed by RealDealCPA.Ai LLC,
+  and the signed daemon must still start. Any miss stops the release.
+- **The release page tells the truth either way:** "Signed by RealDealCPA.Ai
+  LLC" for a signed build, the old "isn't code-signed yet" words otherwise.
+- **The Windows warning may not vanish at once.** Windows trusts a new
+  publisher more as more people install; the first downloads may still see
+  "Windows protected your PC", now with the publisher named.
+- **Copies already installed update normally.** After the first signed
+  release, an installed copy only accepts updates signed by the same name.
+
+`docs/SIGNING.md` has the setup, what to keep alive, and the one command to
+run after the first signed release.
 
 ## Scripts that call tools, and skills made from chat (v1.470.0)
 

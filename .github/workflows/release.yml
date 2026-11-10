@@ -196,7 +196,7 @@ jobs:
         if: matrix.part == 1
         shell: bash
         run: |
-          for f in desktop/main.js desktop/preload.js desktop/spotlight-preload.js desktop/windowState.js desktop/afterPack.js desktop/sign.js; do
+          for f in desktop/main.js desktop/preload.js desktop/spotlight-preload.js desktop/windowState.js desktop/afterPack.js desktop/builder-signed.js; do
             [ -f "$f" ] && node --check "$f"
           done
 
@@ -299,6 +299,8 @@ jobs:
     if: needs.plan.outputs.publish == 'true'
     runs-on: windows-latest
     timeout-minutes: 60 # ~9.5 min measured
+    outputs:
+      signed: ${{ steps.signature.outputs.signed }}
     steps:
       - uses: actions/checkout@v4
 
@@ -357,8 +359,77 @@ jobs:
       # NOT published from here: build-installer.ps1 without -Publish runs
       # electron-builder with `--publish never`.
       # -SkipDaemon: reuse the frozen daemon that the smoke step just built + verified.
+      #
+      # SIGNING (docs/SIGNING.md). With all six secrets set, build-installer.ps1
+      # builds through desktop/builder-signed.js and electron-builder signs the
+      # app's programs and the installer with Microsoft Artifact Signing. With
+      # none set the build is unsigned, as it always was. Only this step sees
+      # the secrets.
       - name: Build the installer (not published)
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          IJ_SIGN_ENDPOINT: ${{ secrets.IJ_SIGN_ENDPOINT }}
+          IJ_SIGN_ACCOUNT: ${{ secrets.IJ_SIGN_ACCOUNT }}
+          IJ_SIGN_PROFILE: ${{ secrets.IJ_SIGN_PROFILE }}
         run: powershell -ExecutionPolicy Bypass -File desktop/build-installer.ps1 -SkipDaemon
+
+      # A signed build is CHECKED, never assumed: Windows itself must call the
+      # installer, the app and the daemon validly signed by the expected
+      # publisher, with a timestamp (so the signature outlives the 3-day
+      # certificate), and the SIGNED daemon must still start. Once a signed
+      # release is out, installed copies refuse an unsigned update, so the
+      # repository variable IJ_REQUIRE_SIGNED=true makes an unsigned build fail
+      # here instead of reaching them.
+      - name: Check the installer's signature
+        id: signature
+        shell: pwsh
+        env:
+          SIGNING_ON: ${{ secrets.IJ_SIGN_ENDPOINT != '' }}
+          REQUIRE_SIGNED: ${{ vars.IJ_REQUIRE_SIGNED }}
+          PUBLISHER: RealDealCPA.Ai LLC
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rel = "desktop/release"
+          $installer = Get-ChildItem $rel -Filter "*Setup*.exe" | Select-Object -First 1
+          if (-not $installer) { throw "no installer in $rel" }
+          if ($env:SIGNING_ON -ne "true") {
+            if ($env:REQUIRE_SIGNED -eq "true") {
+              throw "IJ_REQUIRE_SIGNED is true but the signing secrets are not set: refusing to build an unsigned release (installed copies would refuse it)"
+            }
+            Write-Host "::notice::The installer is NOT signed (no signing secrets). See docs/SIGNING.md."
+            "signed=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $daemon = Join-Path $rel "win-unpacked/resources/daemon/ironjarvis.exe"
+          $files = @($installer.FullName, (Join-Path $rel "win-unpacked/Iron Jarvis.exe"), $daemon)
+          foreach ($f in $files) {
+            if (-not (Test-Path $f)) { throw "expected a signed file at $f" }
+            $sig = Get-AuthenticodeSignature -LiteralPath $f
+            if ($sig.Status -ne "Valid") { throw "$f is not validly signed: $($sig.Status) $($sig.StatusMessage)" }
+            $who = $sig.SignerCertificate.GetNameInfo("SimpleName", $false)
+            if ($who -ne $env:PUBLISHER) { throw "$f is signed by '$who', expected '$($env:PUBLISHER)'" }
+            if (-not $sig.TimeStamperCertificate) { throw "$f has no timestamp" }
+            Write-Host "signed by ${who}: $f"
+          }
+          $root = Join-Path $env:RUNNER_TEMP "ij-smoke-signed"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $p = Start-Process -FilePath $daemon -ArgumentList @("serve","--port","8798","--root",$root) -PassThru -WindowStyle Hidden
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Seconds 2
+              try {
+                $r = Invoke-RestMethod -Uri "http://127.0.0.1:8798/health" -TimeoutSec 3
+                if ($r.status -eq "ok") { Write-Host "signed daemon healthy: v$($r.version)"; $ok = $true; break }
+              } catch { }
+            }
+            if (-not $ok) { throw "the SIGNED daemon did not serve /health within 60s" }
+          } finally {
+            if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          }
+          "signed=true" >> $env:GITHUB_OUTPUT
 
       # electron-builder writes the files under productName ("Iron Jarvis Setup
       # X.exe", spaces), while latest.yml names the GitHub-safe
@@ -427,6 +498,16 @@ jobs:
     # gets it too. @VERSION@ is replaced in bash (`${RELEASE_NOTES//@VERSION@/$ver}`).
     # tests/test_release_notes_v13530.py pins both steps and the words.
     env:
+      INSTALLER_SIGNED: ${{ needs.windows-installer.outputs.signed }}
+      # The same notes for a SIGNED installer (the steps below switch to it).
+      RELEASE_NOTES_SIGNED: |
+        **Iron Jarvis @VERSION@ for Windows**
+
+        **Which file to download:** `Iron-Jarvis-Setup-@VERSION@.exe` in the Assets list below. Ignore the `.blockmap` and `latest.yml` files; the app's updater reads those.
+
+        **Signed by RealDealCPA.Ai LLC.** Windows shows that name as the publisher when you run the installer. A new release can still get a "Windows protected your PC" screen for a while; if it does, check that the publisher reads RealDealCPA.Ai LLC, then press **More info**, then **Run anyway**. [How it is signed](${{ github.server_url }}/${{ github.repository }}/blob/master/docs/SIGNING.md)
+
+        **Already using Iron Jarvis?** There is nothing to download: the app fetches each update by itself and installs it when you press **Restart to update**.
       RELEASE_NOTES: |
         **Iron Jarvis @VERSION@ for Windows**
 
@@ -501,6 +582,7 @@ jobs:
           # drafts, so the app's updater never sees an assetless "newest"
           # release (live-hit: rapid releases kept update checks landing inside
           # the upload window — "files are still uploading" for hours).
+          if [ "${INSTALLER_SIGNED:-}" = "true" ]; then RELEASE_NOTES="$RELEASE_NOTES_SIGNED"; fi
           notes="${RELEASE_NOTES//@VERSION@/$ver}"
           gh release view "v$ver" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
             gh release create "v$ver" --repo "$GITHUB_REPOSITORY" --draft --title "$ver" \
@@ -535,6 +617,7 @@ jobs:
           ver="${{ needs.plan.outputs.version }}"
           # The same notes again: a draft an earlier run created keeps its old
           # body otherwise (the create above is skipped when it exists).
+          if [ "${INSTALLER_SIGNED:-}" = "true" ]; then RELEASE_NOTES="$RELEASE_NOTES_SIGNED"; fi
           notes="${RELEASE_NOTES//@VERSION@/$ver}"
           gh release edit "v$ver" --repo "$GITHUB_REPOSITORY" --draft=false --latest --notes "$notes"
 

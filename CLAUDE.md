@@ -17082,6 +17082,32 @@ does not need a bump, stop and bump it.
     script answers in about 3 ms once the worker is up; the worker starts in
     0.15 s from source and about 1 s packaged, ahead of the first script.
 
+- **The installer is SIGNED when six secrets are set; a signed build is
+  checked by Windows before it is kept** (v1.470.1; Microsoft Artifact
+  Signing, publisher `RealDealCPA.Ai LLC`, account `ironjarvissign`, profile
+  `ironjarvis-public`; `docs/SIGNING.md`). `desktop/build-installer.ps1`:
+  all of AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET /
+  IJ_SIGN_ENDPOINT / IJ_SIGN_ACCOUNT / IJ_SIGN_PROFILE present → `--config
+  builder-signed.js` (package.json's own build block + `win.azureSignOptions`;
+  electron-builder 26 then installs the TrustedSigning PowerShell module and
+  signs every .exe and the installer); none → unsigned as before; some → the
+  build stops. NEVER put `azureSignOptions` or a `win.sign` key in
+  package.json itself (a bare `win.sign` once failed config validation and
+  shipped an empty release; and package.json alone must stay a working
+  unsigned build). release.yml's `Check the installer's signature` step
+  (`id: signature`, output `signed`) requires a Valid Authenticode signature
+  by the publisher with a timestamp on the installer, `Iron Jarvis.exe` and
+  the daemon, boots the SIGNED daemon, and feeds `INSTALLER_SIGNED` to the
+  publish job, which picks `RELEASE_NOTES_SIGNED`. Repo variable
+  `IJ_REQUIRE_SIGNED=true` (set it after the first signed release) fails an
+  unsigned build: a signed install refuses an unsigned update, because
+  electron-builder writes the publisher into app-update.yml. The owner types
+  the secrets into GitHub; never take the client secret through chat. README
+  and the Help page still say "isn't code-signed yet" until a signed release
+  is out. Pins: `tests/test_installer_signing_v14701.py`. OPEN: never run
+  against the real service until the secrets exist (dry run:
+  `gh workflow run release.yml --ref <branch> -f dry_run=true`).
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
