@@ -70,31 +70,62 @@ class Side:
     has_date: bool = False
     has_ref: bool = False
     not_worked_out: int = 0
+    #: (sheet row, what the cell held) for amounts that could not be read.
+    unread: "list[tuple[int, str]]" = field(default_factory=list)
+    #: Sheet rows whose date cell held no date that could be read.
+    undated: "list[int]" = field(default_factory=list)
+    #: The last row, when it equals the sum of every row above it.
+    total_row: "Txn | None" = None
+    #: Money out written in negative numbers: True when the whole column
+    #: is (read as money out), else the rows that were (read as written).
+    out_all_negative: bool = False
+    out_negative: "list[int]" = field(default_factory=list)
+
+
+#: Every kind of space a pasted or exported amount carries: an ordinary
+#: space, a no-break space, a figure space, a narrow no-break space.
+_SPACES = re.compile(r"[\s   ]+")
+_PLAIN_NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d{1,3})?")
+#: Commas are read ONLY as thousands commas: "1,234.50", never "1,23".
+_GROUPED_NUMBER = re.compile(r"[-+]?\d{1,3}(?:,\d{3})+(?:\.\d*)?")
+#: Past this an amount cannot be told to the cent (a number holds 15 digits).
+_MAX_AMOUNT = Decimal(10) ** 15
 
 
 def to_cents(v: Any) -> "int | None":
-    """A cell as whole cents, or None when it holds no amount. Rounded the
-    way Excel shows it (15 significant digits, half away from zero); text
-    like "1,234.50", "(45.00)" and "$12" is read as the number it spells."""
+    """A cell as whole cents, or None when it holds no amount that can be
+    read. Rounded the way Excel shows it (15 significant digits, half away
+    from zero); text like "1,234.50", "(45.00)", "$ (12.00)" and "15.00-" is
+    read as the number it spells.
+
+    A comma is a THOUSANDS comma or the text is not read: "1,23" and
+    "1.234,50" (a decimal comma) would otherwise come back as 123.00 and
+    1.23. A row left out is said; a wrong amount is not."""
     if v is None or isinstance(v, bool):
         return None
     if isinstance(v, (int, float)):
         text = f"{v:.15g}"
     else:
-        text = str(v).strip().replace(",", "").replace("$", "").replace(" ", "")
+        text = _SPACES.sub("", str(v)).replace("$", "")
         if not text:
             return None
         if text.startswith("(") and text.endswith(")"):
             text = "-" + text[1:-1]
         if text.endswith("-"):
             text = "-" + text[:-1]
+        if "," in text:
+            if not _GROUPED_NUMBER.fullmatch(text):
+                return None
+            text = text.replace(",", "")
+        elif not _PLAIN_NUMBER.fullmatch(text):
+            return None
     try:
         d = Decimal(text)
-    except (InvalidOperation, ValueError):
+        if not d.is_finite() or abs(d) > _MAX_AMOUNT:
+            return None
+        return int(d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) * 100)
+    except (InvalidOperation, ValueError, ArithmeticError):
         return None
-    if not d.is_finite():
-        return None
-    return int(d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) * 100)
 
 
 def money(cents: int) -> str:
@@ -193,23 +224,35 @@ def match(a: Side, b: Side, *, days: int = 5, tolerance_cents: int = 0) -> Resul
             out.setdefault(t.cents, []).append(t)
         return out
 
-    # 1. same amount, same reference
+    dated = a.has_date and b.has_date
+
+    # 1. same amount, same reference. A reference seen ONCE on each side is a
+    # cheque or invoice number: it matches whatever the dates (a cheque clears
+    # late). One that REPEATS ("ACH" every month) names no single row, so its
+    # rows pair only inside the date window, in date order; the first cut
+    # took the nearest unmatched row however far, so with March missing it
+    # paired March with April, April with May, and called December missing.
     if a.has_ref and b.has_ref:
-        by: dict[tuple[int, str], list[Txn]] = {}
-        for t in b.rows:
-            if t.ref:
-                by.setdefault((t.cents, t.ref), []).append(t)
-        for x in a.rows:
-            if not x.ref:
+        ka: dict[tuple[int, str], list[Txn]] = {}
+        kb: dict[tuple[int, str], list[Txn]] = {}
+        for rows, keyed in ((a.rows, ka), (b.rows, kb)):
+            for t in rows:
+                if t.ref:
+                    keyed.setdefault((t.cents, t.ref), []).append(t)
+        for key, xs in ka.items():
+            ys = kb.get(key)
+            if not ys:
                 continue
-            cands = [y for y in by.get((x.cents, x.ref), []) if y.row not in taken_b]
-            if not cands:
-                continue
-            cands.sort(key=lambda y: (_gap(x, y) if _gap(x, y) is not None else 10 ** 9, y.row))
-            take(x, cands[0], "reference")
+            if len(xs) == 1 and len(ys) == 1:
+                pairs = [(xs[0], ys[0])]
+            elif dated:
+                pairs = _walk(_by_date([t for t in xs if t.date]), _by_date([t for t in ys if t.date]), days)
+            else:
+                pairs = list(zip(xs, ys))
+            for x, y in pairs:
+                take(x, y, "reference")
 
     # 2. same amount, dates within the window  /  3. same amount, no dates
-    dated = a.has_date and b.has_date
     ba, bb = buckets(left(a.rows, taken_a)), buckets(left(b.rows, taken_b))
     for cents, xs in ba.items():
         ys = bb.get(cents)
@@ -240,6 +283,8 @@ def match(a: Side, b: Side, *, days: int = 5, tolerance_cents: int = 0) -> Resul
                 d = abs(x.cents - y.cents)
                 if d > tolerance_cents or d == 0:
                     continue
+                if (x.cents > 0 > y.cents) or (x.cents < 0 < y.cents):
+                    continue  # a deposit is never a withdrawal a few cents off
                 gap = _gap(x, y)
                 if dated and (gap is None or gap > days):
                     continue
@@ -325,6 +370,10 @@ def read_side(path: Path, spec: dict, name: str) -> Side:
     except ValueError as exc:
         raise ValueError(f"{name}, sheet {title}: {exc}") from None
     flip = -1 if spec.get("flip") else 1
+    try:
+        last_row = int(spec.get("last_row") or 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name}: 'last_row' is a row number") from None
     side = Side(name=name, sheet=title, truncated=truncated or len(rows) >= _SCAN_ROW_CAP,
                 has_date=idate is not None, has_ref=iref is not None,
                 not_worked_out=(len(recalc.failed) + recalc.skipped) if recalc is not None else 0)
@@ -332,20 +381,55 @@ def read_side(path: Path, spec: dict, name: str) -> Side:
     def cell(row: list, i: "int | None") -> Any:
         return row[i] if i is not None and i < len(row) else None
 
+    def amount(row: list, i: "int | None", n: int) -> "tuple[int | None, bool]":
+        """(cents, readable): an empty cell is readable and holds nothing."""
+        v = cell(row, i)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None, True
+        cents = to_cents(v)
+        if cents is None:
+            side.unread.append((first + n, str(v).strip()[:20]))
+        return cents, cents is not None
+
+    kept: list[tuple[int, list, "int | None", "int | None", "int | None"]] = []  # n, row, amount, in, out
     for n, row in enumerate(rows):
+        if last_row and first + n > last_row:
+            break
         if all(v in (None, "") for v in row):
             continue
         if ia is not None:
-            cents = to_cents(cell(row, ia))
+            cents, ok = amount(row, ia, n)
+            if cents is None:
+                side.no_amount += 1 if ok else 0
+                continue
+            kept.append((n, row, cents, None, None))
         else:
-            cin, cout = to_cents(cell(row, iin)), to_cents(cell(row, iout))
-            cents = None if cin is None and cout is None else (cin or 0) - (cout or 0)
+            (cin, ok_in), (cout, ok_out) = amount(row, iin, n), amount(row, iout, n)
+            if not (ok_in and ok_out):
+                continue  # half a row is not an amount: left out, and said
+            if cin is None and cout is None:
+                side.no_amount += 1
+                continue
+            kept.append((n, row, None, cin, cout))
+    # Money out written in negative numbers. When the WHOLE column is, that is
+    # how this list writes money out; a lone negative among positive ones is
+    # read as written (money coming back in). Either way it is said.
+    outs = [(n, cout) for n, _row, _c, _cin, cout in kept if cout]
+    side.out_all_negative = bool(outs) and all(c < 0 for _n, c in outs)
+    if not side.out_all_negative:
+        side.out_negative = [first + n for n, c in outs if c < 0]
+    for n, row, cents, cin, cout in kept:
         if cents is None:
-            side.no_amount += 1
-            continue
+            cents = (cin or 0) - (abs(cout) if side.out_all_negative and cout else (cout or 0))
         text = cell(row, itext)
-        side.rows.append(Txn(row=first + n, cents=flip * cents, date=as_date(cell(row, idate)),
+        date = as_date(cell(row, idate))
+        if idate is not None and date is None:
+            side.undated.append(first + n)
+        side.rows.append(Txn(row=first + n, cents=flip * cents, date=date,
                              ref=norm_ref(cell(row, iref)), text="" if text is None else str(text).strip()[:80]))
+    # A total line at the foot of the list would be counted as a transaction.
+    if len(side.rows) >= 3 and side.rows[-1].cents and side.rows[-1].cents == sum(t.cents for t in side.rows[:-1]):
+        side.total_row = side.rows[-1]
     return side
 
 
@@ -361,6 +445,12 @@ def _line(t: Txn) -> str:
     if t.text:
         bits.append(t.text)
     return "  " + " | ".join(bits)
+
+
+def _rows_words(rows: "list[int]", shown: int = 8) -> str:
+    head = ", ".join(str(r) for r in rows[:shown])
+    more = f", +{len(rows) - shown} more" if len(rows) > shown else ""
+    return f"row{'s' if len(rows) != 1 else ''} {head}{more}"
 
 
 def totals(a: Side, b: Side, res: Result) -> dict:
@@ -399,6 +489,24 @@ def render(a: Side, b: Side, res: Result, t: dict, *, days: int, tolerance_cents
     for side in (a, b):
         if side.no_amount:
             lines.append(f"NOTE: {side.no_amount} row(s) of {side.name} hold no amount and were left out.")
+        if side.unread:
+            shown = "; ".join(f'row {r}: "{v}"' for r, v in side.unread[:5])
+            more = f"; +{len(side.unread) - 5} more" if len(side.unread) > 5 else ""
+            lines.append(f"NOTE: {len(side.unread)} row(s) of {side.name} hold something in the amount column that could not "
+                         f"be read as an amount and were LEFT OUT ({shown}{more}). Until those cells are fixed the totals are short.")
+        if side.total_row is not None:
+            t_ = side.total_row
+            lines.append(f"NOTE: row {t_.row} of {side.name} ({money(t_.cents)}) equals the sum of all the rows above it. It looks "
+                         f"like a total line, and it was counted as a transaction here. If it is a total, ask again with "
+                         f"last_row: {t_.row - 1} for {side.name}.")
+        if side.out_all_negative:
+            lines.append(f"NOTE: every amount in the money out column of {side.name} is written as a negative number; each was read as money out.")
+        elif side.out_negative:
+            lines.append(f"NOTE: {len(side.out_negative)} row(s) of {side.name} hold a negative number in the money out column; each was read "
+                         f"as money coming back in ({_rows_words(side.out_negative)}).")
+        if side.undated and a.has_date and b.has_date:
+            lines.append(f"NOTE: {len(side.undated)} row(s) of {side.name} have no date that could be read, so they could not be "
+                         f"matched by date ({_rows_words(side.undated)}).")
         if side.truncated:
             lines.append(f"NOTE: only the first {MAX_ROWS:,} rows of {side.name} were read.")
         if side.not_worked_out:
@@ -422,6 +530,11 @@ def render(a: Side, b: Side, res: Result, t: dict, *, days: int, tolerance_cents
             one, many = (A, B) if side == "a" else (B, A)
             lines.append(f"  {one} row {x.row} {money(x.cents)} = {many} rows {', '.join(str(r.row) for r in rows)} on {rows[0].date}")
     return "\n".join(lines)
+
+
+def _sheet_title(text: str) -> str:
+    """*text* as a sheet may be named (none of [ ] : * ? / \\, 31 characters)."""
+    return re.sub(r"[\[\]:*?/\\]", "_", text).strip("'")[:31] or "Sheet"
 
 
 def write_result(path: Path, a: Side, b: Side, res: Result, t: dict) -> None:
@@ -465,12 +578,20 @@ def write_result(path: Path, a: Side, b: Side, res: Result, t: dict) -> None:
         m.append([x.a.row, x.a.date, x.a.cents / 100, x.a.ref, x.a.text, x.b.row, x.b.date, x.b.cents / 100, x.b.ref,
                   x.b.text, x.how, x.diff_cents / 100, x.days])
     money_fmt(m, ("C", "H", "L"))
-    for title, rows_ in ((f"Only in {a.name}"[:31], res.only_a), (f"Only in {b.name}"[:31], res.only_b)):
+    for title, rows_ in ((_sheet_title(f"Only in {a.name}"), res.only_a), (_sheet_title(f"Only in {b.name}"), res.only_b)):
         s = wb.create_sheet(title)
         s.append(["Row", "Date", "Amount", "Ref", "Description"])
         for x in rows_:
             s.append([x.row, x.date, x.cents / 100, x.ref, x.text])
         money_fmt(s, ("C",))
+    # Every word here came out of the two lists. Text that starts with "="
+    # (a description, a sheet's name) would be stored as a FORMULA and run
+    # when the result is opened in Excel; this file holds no formula at all.
+    for sheet in wb.worksheets:
+        for row in sheet.iter_rows():
+            for c in row:
+                if c.data_type == "f":
+                    c.data_type = "s"
     wb.save(str(path))
     wb.close()
 
@@ -490,6 +611,7 @@ _SIDE_SCHEMA = {
         "ref": {"type": "string", "description": "Reference column (cheque or invoice number)"},
         "description": {"type": "string", "description": "A text column to show beside each row"},
         "header_row": {"type": "integer", "description": "The row that holds the headings (default 1)"},
+        "last_row": {"type": "integer", "description": "The last row to read (to leave a total line out)"},
         "flip": {"type": "boolean", "description": "Turn this list's signs (when the two lists use opposite signs)"},
     },
     "required": ["path"],
@@ -505,7 +627,7 @@ class ExcelReconcileTool(Tool):
         "amount with dates within date_window_days, then (if tolerance is given) amounts that differ by "
         "no more than that. The answer gives the totals, what matched, every row left over on each side, "
         "and proves the left-over rows explain the whole difference. Each list is {path, sheet?, amount "
-        "| money_in + money_out, date?, ref?, description?, header_row?, flip?}; columns by heading or "
+        "| money_in + money_out, date?, ref?, description?, header_row?, last_row?, flip?}; columns by heading or "
         "letter. save_as writes the full result (Summary, Matched, Only in each) as a new .xlsx in the "
         "workspace. Nothing in either list is changed."
     )
