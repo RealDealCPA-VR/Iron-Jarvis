@@ -254,3 +254,125 @@ def test_an_ordinary_formula_with_a_web_address_in_its_text_is_still_written(boo
     assert res.ok, res.error
     ws = load_workbook(book)["Data"]
     assert ws["F1"].value == '=HYPERLINK("https://example.com","site")' and ws["F2"].value == "=B2*2"
+
+
+# --------------------------------------------------------------------------- #
+# the edit tool is OFFERED for these steps (the first live trial: it was not,
+# and the model reached for the shell)
+# --------------------------------------------------------------------------- #
+
+P = "C:/work/Pricing.xlsx"
+
+ARMS = [
+    f"In {P}: make Inputs!B4 a dropdown with the choices A, B and C; colour Calc!B8 light red when it is below zero; and freeze the top row of the Inputs sheet.",
+    f"In {P}, sort the Costs sheet by Per unit, largest first.",
+    "highlight the negative numbers in red in sales.xlsx",
+    "make the columns wider in report.xlsx",
+    "set the print area of the Summary sheet in q3.xlsx to landscape, one page wide",
+    "turn A1:D20 of data.xlsx into a table",
+    "add a pivot table to sales.xlsx",
+    "add a chart of sales by month to sales.xlsx",
+    "please filter budget.xlsx to the rows over 500",
+    "can you add a note to cell B4 of fees.xlsx saying checked",
+    "Thanks for that. Now add a data validation list to C2:C40 of intake.xlsx.",
+    "the totals look right.\nautofit the columns of ledger.xlsx",
+]
+
+ARMS_NOTHING = [
+    "how do I add a dropdown in Excel? I have budget.xlsx open",
+    "what does the chart in sales.xlsx show?",
+    "summarise the chart in sales.xlsx",
+    "summarise sales.xlsx but don't sort it",
+    "total the fees in fees.xlsx without sorting or filtering anything, never sort it",
+    "which filter is applied in budget.xlsx?",
+    "is there a pivot table in sales.xlsx?",
+    "read budget.xlsx and tell me the total",
+    "explain how conditional formatting works using report.xlsx",
+    "why is the print area of q3.xlsx wrong?",
+    "does data.xlsx have a named range?",
+    # a report ABOUT a change (the older guard's own rows caught the first cut)
+    "the instructions say to rename the sheet to Q1 in client_fees.xlsx",
+    "the memo lists:\n* clear the sheet\n* sort the spreadsheet by client\nwhat does client_fees.xlsx hold?",
+    "she wrote: please filter budget.xlsx to the rows over 500",
+    "I wonder if you could add a chart to sales.xlsx",
+]
+
+
+@pytest.mark.parametrize("text", ARMS)
+def test_a_feature_or_structure_request_on_a_saved_file_offers_the_edit_tool(text):
+    from iron_jarvis.tools.autoselect import select_auto_tools, wants_excel_features
+
+    picked = select_auto_tools(text)
+    assert "excel_edit" in picked or wants_excel_features(text, picked), picked
+
+
+@pytest.mark.parametrize("text", ARMS_NOTHING)
+def test_a_question_or_a_dont_never_offers_it(text):
+    from iron_jarvis.tools.autoselect import select_auto_tools, wants_excel_features
+
+    picked = select_auto_tools(text)
+    assert "excel_edit" not in picked
+    assert wants_excel_features(text, picked) is False
+
+
+def test_it_is_offered_only_beside_a_spreadsheet_read_tool_and_never_for_the_open_workbook():
+    from iron_jarvis.tools.autoselect import wants_excel_features
+
+    text = "sort the list by amount, largest first"
+    assert wants_excel_features(text, []) is False
+    assert wants_excel_features(text, ["web_search"]) is False
+    assert wants_excel_features(text, ["excel_read"]) is True
+    # the workbook open in Excel, no file named: the live tools do it
+    assert wants_excel_features(text, ["excel_read", "excel_live_look"]) is False
+    assert wants_excel_features("sort budget.xlsx by amount", ["excel_read", "excel_live_look"]) is True
+    # already offered: nothing to add
+    assert wants_excel_features(text, ["excel_read", "excel_edit"]) is False
+
+
+def test_the_feature_words_are_read_in_linear_time():
+    """128,000 characters of near-misses, in a child process with a deadline."""
+    import subprocess
+    import sys
+
+    code = (
+        "import time\n"
+        "from iron_jarvis.tools.autoselect import wants_excel_features as w\n"
+        "bad = ['colour ' * 20000, 'add ' * 30000, 'insert a ' * 14000, 'don\\'t ' * 20000, ' \\n' * 60000,\n"
+        "       'rename the ' * 11000, 'fit to ' * 18000, 'mark x ' * 18000]\n"
+        "t = time.perf_counter()\n"
+        "for b in bad:\n"
+        "    w(b[:128000], ['excel_read'])\n"
+        "print(round(time.perf_counter() - t, 2))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr[-600:]
+    assert float(out.stdout.strip()) < 20
+
+
+def test_the_tool_says_never_to_do_those_steps_another_way():
+    from iron_jarvis.documents.excel_tools import ExcelEditTool
+
+    d = " ".join(ExcelEditTool.description.split())
+    assert "need the workbook open in Excel" in d
+    assert "never do them another way" in d
+
+
+def test_the_chat_lane_arms_the_edit_tool_for_a_dropdown_request(tmp_path):
+    """Through the lanes' own arming function, with Auto tools on."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon import chat_turn
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.daemon.schemas import ChatBody
+
+    app = create_app(str(tmp_path / "ij"))
+    with TestClient(app):
+        d = app.state.d
+        for text, want in ((ARMS[0], True), (ARMS[1], True), (ARMS_NOTHING[0], False), (ARMS_NOTHING[3], False)):
+            body = ChatBody(messages=[{"role": "user", "content": text}], auto_tools=True)
+            armed, auto = chat_turn._resolve_armed_tools(d, body)
+            assert ("excel_edit" in armed) is want, (text, armed)
+        # Auto tools off: nothing is offered by itself
+        body = ChatBody(messages=[{"role": "user", "content": ARMS[0]}], auto_tools=False)
+        armed, auto = chat_turn._resolve_armed_tools(d, body)
+        assert "excel_edit" not in armed

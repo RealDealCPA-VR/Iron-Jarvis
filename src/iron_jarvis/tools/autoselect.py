@@ -3513,6 +3513,75 @@ def wants_excel_reconcile(text: str, picked: "list[str] | tuple[str, ...]") -> b
         return False
     return bool(_RECONCILE_RX.search((text or "")[:4000]))
 
+#: EXCEL'S OWN FEATURES IN A SAVED WORKBOOK (v1.469.0): a dropdown, a colour
+#: rule, a frozen heading, a column width, a name, a table, a note, the print
+#: layout, and the steps only Excel can do safely (sort, filter, insert or
+#: delete rows and columns, a pivot table, a chart). The first live trial
+#: asked for a dropdown and a sort in a saved file: ``excel_edit`` was not in
+#: the list, so the model reached for the shell, failed, and said it had to
+#: hand the work off. The "open it in Excel" answer lives in ``excel_edit``,
+#: so it must be offered for those steps too.
+_FEATURE_RX = re.compile(
+    r"(?i)\b(?:drop[\s-]?downs?|data\s+validation|pick[\s-]?lists?"
+    r"|conditional\s+format\w*|colou?r\s+(?:scale|rule)s?|highlight(?:s|ed|ing)?"
+    r"|(?:colou?r|shade|mark|flag)\b[^?\n]{0,60}?\b(?:when|if|where|below|above|over|under|negative|greater|less)\b"
+    r"|(?:un)?freeze|column\s+widths?|widen|auto[\s-]?fit|wider|narrower"
+    r"|named?\s+ranges?|name\s+the\s+range|(?:into|as)\s+an?\s+(?:excel\s+)?table"
+    r"|print\s+(?:area|set[\s-]?up|layout|titles?)|landscape|portrait|fit\s+(?:to|on)\s+(?:one\s+|a\s+)?pages?|page\s+breaks?"
+    r"|(?:add|put|leave|attach)\s+(?:a\s+|an\s+)?(?:note|comment)s?\b"
+    r"|(?:re-?)?sort|filter"
+    # a chart or a pivot table is a THING too ("summarise the chart"): only
+    # with a making verb in front
+    r"|(?:add|make|create|build|insert|draw|plot|put|give\s+me|set\s+up)\b[^?\n]{0,40}?\b(?:pivot(?:\s*table)?s?|charts?|graphs?)"
+    r"|pivot\s+(?:it|this|that|the|these|those)"
+    r"|(?:insert|delete|remove)\s+(?:a\s+|an\s+|the\s+|\d{1,4}\s+)?(?:(?:blank|empty|new)\s+)?(?:rows?|columns?|sheets?|tabs?)"
+    r"|rename\s+(?:the\s+)?(?:\w{1,30}\s+)?(?:sheet|tab))\b"
+)
+#: The sentence that holds the feature words must TELL, not ask how: "how do
+#: I add a dropdown in Excel?" is a question for words, and a plain "don't
+#: sort it" is an instruction not to act.
+_FEATURE_ASKS_HOW_RX = re.compile(
+    r"(?i)\A\W*(?:how\b|what\b|why\b|when\b|where\b|which\b|who\b|does\b|do\s+(?:i|we|you)\b|is\b|are\b|was\b|were\b"
+    r"|did\b|has\b|have\b|explain\b|tell\s+me\b|show\s+me\s+how\b|should\b|can\s+(?:excel|i|we|it)\b|could\s+(?:excel|i|we|it)\b"
+    r"|would\s+(?:excel|it)\b|will\s+(?:excel|it)\b)"
+)
+_FEATURE_NOT_RX = re.compile(r"(?i)\b(?:don'?t|do\s+not|never|without|no\s+need\s+to|instead\s+of)\s+(?:\w+\s+){0,3}\Z")
+_FEATURE_CARRIERS = frozenset({"excel_read", "excel_profile", "excel_query", "excel_formula_check", "read_document"})
+_SENTENCE_END_RX = re.compile(r"[?!\n]|\.(?=\s|\Z)")
+
+
+def wants_excel_features(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
+    """True when the turn already has a spreadsheet READ tool for a file and
+    the message tells Jarvis to add one of Excel's own features to it (or to
+    sort, filter, insert, pivot or chart: ``excel_edit`` is where the "open it
+    in Excel" answer comes from). Never for the workbook open in Excel with no
+    file named (the live tools do that), never for a how-to question or a
+    report about a change, never after "don't". Pure, linear."""
+    if "excel_edit" in picked or not _FEATURE_CARRIERS.intersection(picked):
+        return False
+    t = (text or "")[:4000]
+    if "excel_live_look" in picked and not _NAMES_A_FILE_RX.search(t):
+        return False
+    # A report ABOUT a change is not a request for one ("the instructions say
+    # to rename the sheet", "the memo lists: * sort the spreadsheet"): the same
+    # markers the imperative rules above use, over the whole text before the
+    # feature words (:func:`_position_allows`, test 1).
+    found = _ENQUIRY.search(t)
+    cut = found.start() if found else len(t) + 1
+    for m in _FEATURE_RX.finditer(t):
+        if m.start() >= cut:
+            break
+        start = 0
+        for e in _SENTENCE_END_RX.finditer(t, 0, m.start()):
+            start = e.end()
+        head = t[start:m.start()]
+        if _FEATURE_ASKS_HOW_RX.search(head + t[m.start():m.end()]):
+            continue
+        if _FEATURE_NOT_RX.search(head):
+            continue
+        return True
+    return False
+
 
 def live_excel_companions(text: str) -> "list[str]":
     """The read tools that go with ``excel_live_look`` for this message: they

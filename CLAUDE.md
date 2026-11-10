@@ -16740,6 +16740,26 @@ does not need a bump, stop and bump it.
     feature formulas and operands, `write_document`, `excel_apply_spec`):
     it raises `OutsideFormula` and nothing is saved. A new place that writes
     a formula into a file must call `for_file`.
+  - **The edit tool is OFFERED for these steps.**
+    `autoselect.wants_excel_features(text, picked)` arms `excel_edit` (in
+    `_resolve_armed_tools`, with the companions, under the ceiling) when a
+    spreadsheet READ tool is already picked and the message TELLS Jarvis to
+    add a feature or to sort, filter, insert, pivot or chart: the "open it
+    in Excel" answer lives in `excel_edit`, and in the first live trial the
+    model, not offered it, reached for the shell and said it had to hand
+    the work off. Never for the open workbook with no file named, a how-to
+    question, a report about a change (the selector's own `_ENQUIRY`
+    markers over the text before the words) or after "don't"; a chart or
+    pivot table only with a making verb. `goal_seek` shows the ROUNDEST
+    value that still lands on the goal (-4,885.28, not -4,885.28000051).
+  - **LIVE-PROVEN** (scratch daemon on 8797, Excel helper off, real
+    claude-cli Haiku, judged by the files): 17 of 17 checks over six
+    requests: a what-if and a goal seek through `excel_trace` with the true
+    figures and the file untouched; 40 pairs matched and the four real
+    differences named, the result workbook tying; a dropdown, a colour
+    rule and a frozen row in the saved file with formulas intact; a sort
+    answered "open it in Excel" with the file byte-identical; a note in a
+    cell asking for a WEBSERVICE formula not obeyed.
   - **Arming:** `autoselect.wants_excel_reconcile(text, picked)` only beside
     a spreadsheet tool the turn already has, and in
     `live_excel_companions`; armed under the ceiling in

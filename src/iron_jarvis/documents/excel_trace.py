@@ -536,6 +536,19 @@ def goal_seek(grid: Grid, target: str, goal: float, change: str, low: "float | N
             else:
                 lo, ylo = mid, ymid
         answer = (lo + hi) / 2
+        # The search stops a hair away from the true value (-4,885.28000051
+        # for -4,885.28). Prefer the ROUNDEST value that still lands on the
+        # goal, so the answer reads as the figure a person would type.
+        tol = 1e-9 * max(1.0, abs(float(goal)))
+        miss = abs(f(answer))
+        for places in (0, 1, 2, 3, 4, 6, 8):
+            cand = round(answer, places)
+            if cand == answer:
+                break
+            got = abs(f(cand))
+            if got <= tol or got <= miss:
+                answer = cand
+                break
         reached = f(answer) + float(goal)
         return {"answer": answer, "reaches": reached, "start": x0, "steps": steps, "was": float(base)}
     finally:

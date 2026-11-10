@@ -519,3 +519,28 @@ def test_goal_seek_says_when_no_value_lands_on_the_goal(tmp_path):
 def test_a_question_that_names_a_cell_or_a_file_still_arms_the_trace(text):
     assert wants_excel_trace(text, ["excel_read"]) is True
     assert wants_excel_trace(text, []) is False
+
+
+def test_goal_seek_gives_the_round_figure_when_one_lands_on_the_goal(tmp_path):
+    """The first live trial read "-4,885.28000051156" where the true value is
+    -4,885.28: the search stops a hair away, and the roundest value that still
+    lands on the goal is the one to show."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "P"
+    ws["A1"], ws["A2"], ws["A3"] = 1250, 41.5, 12114.72
+    ws["A4"] = "=A1*A2-A3-37000"
+    wb.save(tmp_path / "round.xlsx")
+    res = _run(tmp_path, path="round.xlsx", mode="goal_seek", cell="P!A4", goal=20000, change="P!A3")
+    assert res.ok, res.error
+    assert res.data["answer"] == -5125.0
+    assert res.data["exact"] is True and "NOT EXACT" not in res.output
+    assert "P!A3 must be -5,125 " in res.output
+    cents = _run(tmp_path, path="round.xlsx", mode="goal_seek", cell="P!A4", goal=2760.28, change="P!A3")
+    assert cents.data["answer"] == 12114.72 or abs(cents.data["answer"] - 12114.72) < 1e-9
+    assert "12,114.72 " in cents.output
+    # a value with no round form keeps its digits (1/3 is not rounded to 0.33)
+    ws["A4"] = "=A3*3"
+    wb.save(tmp_path / "third.xlsx")
+    third = _run(tmp_path, path="third.xlsx", mode="goal_seek", cell="P!A4", goal=1, change="P!A3")
+    assert abs(third.data["answer"] - 1 / 3) < 1e-9
