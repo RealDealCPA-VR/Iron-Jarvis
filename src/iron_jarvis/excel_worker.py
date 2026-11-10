@@ -181,7 +181,13 @@ def reaches_out(text: Any) -> str:
     s = str(text or "")
     if s[:1] not in ("=", "+", "-", "@"):
         return ""
-    bare = re.sub(r'"[^"]*"', '""', s)  # what is inside quotes is text, not a call
+    # What is inside double quotes is text, not a call. A sheet name in single
+    # quotes is read as one piece and kept: it may hold a double quote
+    # ('a"b'!A1) that must not open a "text" which swallows a real call, and
+    # it may itself be a link. A function may also carry the prefix a file
+    # stores it under (_xlfn.WEBSERVICE), which Excel reads as the function.
+    bare = re.sub(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"", lambda m: m.group(0) if m.group(0)[0] == "'" else '""', s)
+    bare = re.sub(r"(?i)_xlfn\.(?:_xlws\.)?", "", bare)
     m = _OUTSIDE_FUNCS.search(bare)
     if m:
         return f"{m.group(1).upper()}() makes Excel call outside the workbook"
