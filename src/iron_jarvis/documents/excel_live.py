@@ -635,14 +635,14 @@ class ExcelLiveEditTool(Tool):
             # A deletion is carded whatever Excel answered (it was busy for a
             # moment, or the workbook is one Jarvis may not read): the card
             # is decided by the steps. Anything else: execute says why.
-            return SpendCheck(ask=True, once_only=True, words=gone_words) if is_destructive(args["ops"]) else None
+            return SpendCheck(ask=True, once_only=True, irreversible=True, words=gone_words) if is_destructive(args["ops"]) else None
         name = str(out.get("workbook") or "the workbook")
         gone = [str(x) for x in out.get("destructive") or []]
         if gone or is_destructive(args["ops"]):
             if not gone:
-                return SpendCheck(ask=True, once_only=True, words=gone_words.replace("the workbook open in Excel", f"{name}, open in Excel"))
+                return SpendCheck(ask=True, once_only=True, irreversible=True, words=gone_words.replace("the workbook open in Excel", f"{name}, open in Excel"))
             return SpendCheck(
-                ask=True, once_only=True,
+                ask=True, once_only=True, irreversible=True,
                 words=(f"In {name}, open in Excel: {'; '.join(gone)[:300]}. This cannot be undone here; "
                        "a copy of the workbook as it is now is kept first."),
             )

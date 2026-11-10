@@ -843,6 +843,58 @@ async def test_a_write_excel_dropped_is_said_and_nothing_at_all_is_not_a_change(
     assert res.ok and "2. write 1 cell(s) at Data!H1" in res.output and "WARNING: no cell changed at Data!H1" in res.output
 
 
+async def test_the_card_for_a_deletion_never_says_it_can_be_undone(lane):
+    """The tool is undoable as a whole, so EVERY one of its cards said "You
+    can undo this", the card for deleting rows included (right beside "This
+    cannot be undone here")."""
+    look, edit = _calls()
+    lane.wire([look, edit, "Done."])
+    out = await _stream(lane.platform, _body())
+    assert out["cards"][0].get("reversible") is True, "an ordinary change can be undone, and its card says so"
+    lane.excel.plan.update(destructive=["delete rows 3:4 on Data (6 cell(s) hold something)"])
+    lane.excel.apply.update(destructive=["delete rows 3:4 on Data (6 cell(s) hold something)"])
+    gone = [ToolCall(id="e2", name="excel_live_edit", arguments=dict(DELETE))]
+    lane.wire([look, gone, "Done."])
+    out = await _stream(lane.platform, _body())
+    card = out["cards"][0]
+    assert card.get("reversible") is False and card.get("once_only") is True, card
+    lane.excel.plan.update(destructive=[], overwrites=40)
+    over = await L.ExcelLiveEditTool().spend_check(dict(EDIT), _ctx(Path(lane.platform.config.home)))
+    assert over.ask and not over.irreversible, "a large overwrite is carded too, and it CAN be undone"
+
+
+def test_a_number_kept_as_text_is_written_as_text():
+    """"00123" (an account number, a ZIP code) written as it stands is read
+    by Excel as the number 123; a long card-like number loses its last digits."""
+    assert W.to_cell_text("00123") == "'00123" and W.to_cell_text("02134") == "'02134"
+    assert W.to_cell_text("1234567890123456") == "'1234567890123456"
+    for plain in ("123", "0", "0.5", "2026-01-31", "50%", "abc", "=A1", "1,234"):
+        assert W.to_cell_text(plain) == plain
+    assert W.to_cell_text(None) == "" and W.to_cell_text(7) == 7 and W.to_cell_text(True) is True
+
+
+def test_a_sort_finds_the_rows_that_differ_without_asking_cell_by_cell(monkeypatch):
+    """Kept cell by cell, the colours of a 5,000-row table cost 25 seconds
+    each way on the real Excel and were then not put back at all (past the
+    bound). By halving, four highlighted rows cost a few dozen questions."""
+    special = {5, 50, 500, 4000}
+    asked = []
+    monkeypatch.setattr(W, "_rng", lambda ws, r1, c1, r2, c2: (r1, r2))
+
+    def read(rng, rows, cols, keys, per_cell=5000):
+        asked.append(rng)
+        seen = {("yellow" if r in special else "none") for r in range(rng[0], rng[1] + 1)}
+        return {keys[0]: {"all": seen.pop()} if len(seen) == 1 else {"lost": True}}
+
+    monkeypatch.setattr(W, "_read_formats", read)
+    runs = W._format_runs(None, 2, 1, 4999, "fill", [W.SORT_FORMAT_READS])
+    held = {2 + off: value for lo, hi, value in runs for off in range(lo, hi)}
+    assert held == {r: ("yellow" if r in special else "none") for r in range(2, 5001)}, "every row, exactly once"
+    assert len(asked) < 150, len(asked)
+    assert W._format_runs(None, 2, 1, 4999, "fill", [10]) is None, "past its budget it says so; it never guesses"
+    assert W._format_runs(None, 6, 1, 40, "fill", [5]) == [[0, 40, "none"]], "a column that is the same all the way down is one question"
+
+
 def test_a_copy_keeps_the_workbooks_own_ending():
     assert W.copy_name("ledger.csv") == "ledger.csv" and W.copy_name("Budget.xlsm") == "Budget.xlsm"
     assert W.copy_name("Book1") == "Book1.xlsx" and W.copy_name('a<b>:c?.xlsx') == "a_b_c_.xlsx"

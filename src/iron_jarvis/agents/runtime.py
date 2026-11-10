@@ -3491,6 +3491,11 @@ class AgentRuntime:
         # MIRROR NOTE (lock-step): the stream lane's `approval` frame carries
         # the same key from the same helper.
         _rev = reversible_flag(tool)
+        # v1.466.0 review: a call its own check calls irreversible (a
+        # live-Excel deletion) never says "You can undo this". MIRROR NOTE
+        # (lock-step): the stream lane's frame reads the same field.
+        if _rev and getattr(spend, "irreversible", False):
+            _rev = False
         if _rev is not None:
             requested["reversible"] = _rev
         if tc.name == PLAN_APPROVAL_TOOL:

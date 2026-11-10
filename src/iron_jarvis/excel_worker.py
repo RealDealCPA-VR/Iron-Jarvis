@@ -212,12 +212,20 @@ def copy_name(workbook_name: str) -> str:
 
 
 def to_cell_text(v: Any) -> Any:
-    """A value from the request as what is assigned to a cell."""
+    """A value from the request as what is assigned to a cell. Digits given
+    as TEXT that Excel would change by reading them as a number ("00123" would
+    become 123; sixteen digits or more lose their last ones) are written with
+    Excel's text mark, so an account number or a ZIP code stays what it was."""
     if v is None:
         return ""
+    if isinstance(v, str) and _KEPT_AS_TEXT.fullmatch(v.strip()):
+        return "'" + v.strip()
     if isinstance(v, (bool, int, float, str)):
         return v
     return str(v)
+
+
+_KEPT_AS_TEXT = re.compile(r"0\d+|\d{16,}")
 
 
 # ------------------------------------------------------------------ attaching --
@@ -778,7 +786,7 @@ def _formats_of(op: dict) -> dict:
     return {k: op[k] for k in FORMAT_KEYS if k in op and op[k] is not None}
 
 
-def _read_formats(rng: Any, rows: int, cols: int, keys: "list[str]") -> dict:
+def _read_formats(rng: Any, rows: int, cols: int, keys: "list[str]", per_cell: int = 5000) -> dict:
     """The current value of each format in *keys* over the range: one value
     when the whole range agrees, else a per-cell grid (bounded)."""
     out: dict[str, Any] = {}
@@ -821,7 +829,7 @@ def _read_formats(rng: Any, rows: int, cols: int, keys: "list[str]") -> dict:
         v = one(rng, key)
         if not mixed(v) or rows * cols == 1:
             out[key] = {"all": v}
-        elif rows * cols <= 5000 and key != "border":
+        elif rows * cols <= per_cell and key != "border":
             out[key] = {"cells": [[one(rng.Cells(i + 1, j + 1), key) for j in range(cols)] for i in range(rows)]}
         else:
             out[key] = {"lost": True}
@@ -911,12 +919,17 @@ def _restore_formats_checked(rng: Any, rows: int, cols: int, prior: dict, want: 
         if now == w:
             _restore_formats(rng, rows, cols, {key: held})
             continue
+        if now == held:
+            continue  # already what it was
         if "lost" in now or "lost" in w or "lost" in held:
             left_cells.update((i, j) for i in range(rows) for j in range(cols))
             continue
         for i in range(rows):
             for j in range(cols):
-                if _held_at(now, i, j) == _held_at(w, i, j):
+                cur = _held_at(now, i, j)
+                if cur == _held_at(held, i, j):
+                    continue  # already what it was
+                if cur == _held_at(w, i, j):
                     _write_format(rng.Cells(i + 1, j + 1), key, _held_at(held, i, j))
                 else:
                     left_cells.add((i, j))
@@ -952,6 +965,8 @@ def _count_overwrites(cx: Cx, before_f: list, new: "list[list[Any]] | None") -> 
             ns = "" if nv is None else (str(nv) if not isinstance(nv, bool) else str(nv).upper())
             if isinstance(nv, float) and nv == int(nv):
                 ns = str(int(nv))
+            if ns.startswith("'"):
+                ns = ns[1:]  # Excel's text mark is not part of what the cell holds
             if ns == bf:
                 continue
             over += 1
@@ -1263,6 +1278,32 @@ def _header_col(ws: Any, box: "tuple[int, int, int, int]", key: Any) -> int:
 
 #: What a sort carries along with each row besides its contents.
 SORT_FORMAT_KEYS = ["number_format", "bold", "italic", "font_size", "font_color", "fill", "align", "wrap", "border"]
+#: How many times one sort may ask Excel for a format while it works out
+#: which rows differ (each is a call into Excel); past it Undo says that some
+#: formatting was not put back.
+SORT_FORMAT_READS = 2500
+
+
+def _format_runs(ws: Any, first: int, col: int, rows: int, key: str, budget: "list[int]") -> "list[list[Any]] | None":
+    """One format down a column as runs ``[from, to, value]`` (row offsets,
+    ``to`` exclusive), found by halving wherever Excel says "mixed": a few
+    highlighted rows among thousands cost a few dozen questions, where asking
+    cell by cell took 25 seconds for 5,000 rows (measured). ``None`` when the
+    budget ran out."""
+    runs: list[list[Any]] = []
+    todo = [(0, rows)]
+    while todo:
+        lo, hi = todo.pop()
+        if budget[0] <= 0:
+            return None
+        budget[0] -= 1
+        held = _read_formats(_rng(ws, first + lo, col, first + hi - 1, col), hi - lo, 1, [key], per_cell=0)[key]
+        if "all" in held:
+            runs.append([lo, hi, held["all"]])
+        else:
+            mid = (lo + hi) // 2
+            todo += [(mid, hi), (lo, mid)]
+    return sorted(runs, key=lambda r: r[0])
 
 
 def _notes_in(rng: Any, limit: int = 2000) -> "list[list[Any]]":
@@ -1297,15 +1338,19 @@ def _moved_with_rows(ws: Any, box: "tuple[int, int, int, int]", header: bool) ->
         out["formats_lost"] = True
     else:
         held_cols: dict[str, dict] = {}
+        budget = [SORT_FORMAT_READS]
         for c in range(c1, c2 + 1):
-            held = {k: v for k, v in _read_formats(_rng(ws, first, c, r2, c), rows, 1, SORT_FORMAT_KEYS).items() if "all" not in v}
-            if any("lost" in v for v in held.values()):
-                out["formats_lost"] = True
-                held = {k: v for k, v in held.items() if "lost" not in v}
+            held: dict[str, Any] = {}
+            for key in SORT_FORMAT_KEYS:
+                runs = _format_runs(ws, first, c, rows, key, budget)
+                if runs is None:
+                    out["formats_lost"] = True
+                elif len(runs) > 1:  # one run = the same all the way down: a sort cannot change it
+                    held[key] = runs
             if held:
                 held_cols[str(c)] = held
         if held_cols:
-            out["col_formats"] = held_cols
+            out["col_runs"] = held_cols
     notes = _notes_in(_rng(ws, first, c1, r2, c2))
     if notes:
         out["notes"] = notes
@@ -1317,8 +1362,10 @@ def _put_moved_back(ws: Any, inv: dict) -> None:
     first = int(inv.get("first_row") or 0)
     if not first:
         return
-    for c, held in (inv.get("col_formats") or {}).items():
-        _restore_formats(_rng(ws, first, int(c), r2, int(c)), r2 - first + 1, 1, held)
+    for c, held in (inv.get("col_runs") or {}).items():
+        for key, runs in held.items():
+            for lo, hi, value in runs:
+                _write_format(_rng(ws, first + lo, int(c), first + hi - 1, int(c)), key, value)
     if inv.get("notes"):
         for row, col, _text in _notes_in(_rng(ws, first, c1, r2, c2)):
             ws.Cells(row, col).Comment.Delete()
@@ -2331,9 +2378,10 @@ def _undo_step(app: Any, wb: Any, step: dict, forgiving: bool) -> "tuple[int, li
             else:
                 for i in range(rows):
                     for j in range(cols):
-                        if now[i][j] == want[i][j]:
-                            if now[i][j] != prior[i][j]:
-                                _put_formula(ws.Cells(r1 + i, c1 + j), back[i][j])
+                        if now[i][j] == prior[i][j]:
+                            done += 1  # already what it was (an Undo stopped half way and pressed again)
+                        elif now[i][j] == want[i][j]:
+                            _put_formula(ws.Cells(r1 + i, c1 + j), back[i][j])
                             done += 1
                         else:
                             skipped.append(a1(r1 + i, c1 + j))
@@ -2346,7 +2394,7 @@ def _undo_step(app: Any, wb: Any, step: dict, forgiving: bool) -> "tuple[int, li
                 _put_moved_back(ws, inv)  # what a sort carried along with the rows
                 if inv.get("formats_lost"):
                     left.append(f"some formatting the sort moved on {ws.Name}!{inv['address']} could not be put back exactly")
-            elif inv.get("col_formats") or inv.get("notes") or inv.get("formats_lost"):
+            elif inv.get("col_runs") or inv.get("notes") or inv.get("formats_lost"):
                 left.append(f"the colours and notes the sort moved on {ws.Name}!{inv['address']} were left where they are")
         if "formats" in inv:
             changed = _restore_formats_checked(rng, rows, cols, inv["formats"], None if forgiving else (after or {}).get("formats"))

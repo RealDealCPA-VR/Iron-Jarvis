@@ -114,6 +114,11 @@ class SpendCheck:
     #: asked; an unattended door (a schedule, a goal, a rule, the phone…)
     #: refuses the call in words instead of parking it for a phone answer.
     attended_only: bool = False
+    #: v1.466.0 review: THIS call cannot be undone although its tool can (a
+    #: live-Excel change that deletes rows). The approval card's "You can undo
+    #: this" comes from the tool's own contract (``tools/reversible``), so a
+    #: deletion's card promised an Undo right beside "this cannot be undone".
+    irreversible: bool = False
 
 
 @dataclass
