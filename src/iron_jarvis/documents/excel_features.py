@@ -48,6 +48,14 @@ _RANGE_RX = re.compile(r"^\$?[A-Za-z]{1,3}\$?[0-9]{1,7}(?::\$?[A-Za-z]{1,3}\$?[0
 _COLS_RX = re.compile(r"^\$?([A-Za-z]{1,3})(?::\$?([A-Za-z]{1,3}))?$")
 _HEX_RX = re.compile(r"^[0-9A-Fa-f]{6}$")
 _NAME_RX = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,254}$")
+#: Names Excel reads as a cell in its other notation (R1C1, R, C, RC, R3C)
+#: or as a value. A workbook that carries one as a name or a table's name
+#: is a workbook Excel will not open (measured in the real Excel).
+_RC_RX = re.compile(r"^(?:r[0-9]*(?:c[0-9]*)?|c[0-9]*|true|false)$", re.IGNORECASE)
+
+
+def _usable_name(name: str) -> bool:
+    return bool(_NAME_RX.match(name)) and not _RANGE_RX.match(name) and not _RC_RX.match(name)
 
 
 def _hex(v: Any, what: str) -> str:
@@ -218,9 +226,21 @@ def _validation(wb: Any, step: dict, default: "str | None") -> str:
                 return f"DATE({d.year},{d.month},{d.day})"
             if isinstance(v, bool) or not isinstance(v, (int, float)):
                 raise ValueError(f"'{v}' is not a number")
+            if kind == "whole" and float(v) != int(v):
+                raise ValueError(f"'{v}' is not a whole number")
             return f"{v:.15g}"
 
+        def order(v: Any) -> Any:
+            if kind == "date":
+                from .excel_tools import _as_date
+
+                return _as_date(v)
+            return v
+
         if lo is not None and hi is not None:
+            lim(lo), lim(hi)  # each is checked before the two are compared
+            if order(lo) > order(hi):
+                raise ValueError(f"'min' is above 'max' ({lo} and {hi}), so nothing could ever be entered")
             dv = DataValidation(type=kind, operator="between", formula1=lim(lo), formula2=lim(hi), allow_blank=True)
             what = f"only {kind} values between {lo} and {hi}"
         elif lo is not None:
@@ -276,6 +296,20 @@ def _column_width(wb: Any, step: dict, default: "str | None") -> str:
     return f"columns {cols[0]}:{cols[-1]} of {ws.title} set {float(width):g} wide"
 
 
+def _autofit_cells(ws: Any, first: int, last: int, rows: int) -> Any:
+    """The cells a sheet HOLDS in columns first..last, rows 1..rows. Asking
+    the library for a row makes every cell of it, so one cell far to the
+    right (XFD3000) meant 16,384 new cells for each of 3,000 rows."""
+    held = getattr(ws, "_cells", None)
+    if isinstance(held, dict):
+        for (r, c), cell in list(held.items()):
+            if r <= rows and first <= c <= last:
+                yield cell
+        return
+    for row in ws.iter_rows(min_row=1, max_row=rows, min_col=first, max_col=last):
+        yield from row
+
+
 def _autofit(wb: Any, step: dict, default: "str | None") -> str:
     """Widths from what the cells hold (a saved file has no Excel to measure
     its fonts, so this is by character count, said as such)."""
@@ -283,18 +317,19 @@ def _autofit(wb: Any, step: dict, default: "str | None") -> str:
 
     ws = _sheet(wb, step.get("sheet") or default)
     cols = _columns(step) if step.get("columns") else [get_column_letter(i) for i in range(1, min(ws.max_column, 200) + 1)]
+    from openpyxl.utils import column_index_from_string
+
     longest: dict[str, int] = {c: 0 for c in cols}
-    wanted = set(cols)
-    for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 5000)):
-        for c in row:
-            letter = getattr(c, "column_letter", None)
-            if letter in wanted and c.value is not None:
-                text = str(c.value)
-                if isinstance(c.value, float):
-                    text = f"{c.value:,.2f}"
-                if isinstance(c.value, str) and c.value.startswith("="):
-                    text = "0" * 10
-                longest[letter] = max(longest[letter], max((len(p) for p in text.split("\n")), default=0))
+    first, last = column_index_from_string(cols[0]), column_index_from_string(cols[-1])
+    for c in _autofit_cells(ws, first, last, min(ws.max_row, 5000)):
+        letter = getattr(c, "column_letter", None)
+        if letter in longest and c.value is not None:
+            text = str(c.value)
+            if isinstance(c.value, float):
+                text = f"{c.value:,.2f}"
+            if isinstance(c.value, str) and c.value.startswith("="):
+                text = "0" * 10
+            longest[letter] = max(longest[letter], max((len(p) for p in text.split("\n")), default=0))
     for letter, n in longest.items():
         ws.column_dimensions[letter].width = float(min(60, max(8, n + 2)))
     return f"columns {cols[0]}:{cols[-1]} of {ws.title} sized to their contents (by the length of what they hold)"
@@ -304,8 +339,12 @@ def _name(wb: Any, step: dict, default: "str | None") -> str:
     from openpyxl.workbook.defined_name import DefinedName
 
     name = str(step.get("name") or "").strip()
-    if not _NAME_RX.match(name) or _RANGE_RX.match(name):
-        raise ValueError("'name' starts with a letter or underscore, has no spaces, and is not a cell address")
+    if not _usable_name(name):
+        raise ValueError("'name' starts with a letter or underscore, has no spaces, and is not a cell address (A1, R1C1, R or C)")
+    for sheet in wb.worksheets:
+        for t in sheet.tables.values():
+            if str(t.displayName).lower() == name.lower():
+                raise ValueError(f"this workbook already has a table called {t.displayName}; a name and a table cannot share one")
     raw = str(step.get("refers_to") or "").strip().lstrip("=")
     named, rng = _split_sheet(raw)
     rng = rng.replace("$", "").upper()
@@ -315,9 +354,12 @@ def _name(wb: Any, step: dict, default: "str | None") -> str:
     a, _, b = rng.partition(":")
     fixed = ":".join("$" + re.sub(r"(\d+)", r"$\1", part, count=1) for part in ((a, b) if b else (a,)))
     title = ws.title.replace("'", "''")
-    existed = name in wb.defined_names
-    if existed:
-        del wb.defined_names[name]
+    # Excel reads names without regard to case: "amounts" beside "Amounts"
+    # is two names in the file and ONE in Excel, which drops the other.
+    same = [k for k in list(wb.defined_names.keys()) if str(k).lower() == name.lower()]
+    existed = bool(same)
+    for k in same:
+        del wb.defined_names[k]
     wb.defined_names[name] = DefinedName(name, attr_text=f"'{title}'!{fixed}")
     return f"name {name} {'now' if existed else ''} means {ws.title}!{rng}".replace("  ", " ")
 
@@ -331,8 +373,10 @@ def _table(wb: Any, step: dict, default: "str | None") -> str:
     taken = {t.lower() for s in wb.worksheets for t in s.tables}
     name = str(step.get("name") or "").strip()
     if name:
-        if not _NAME_RX.match(name) or _RANGE_RX.match(name):
-            raise ValueError("a table's name starts with a letter or underscore and has no spaces")
+        if not _usable_name(name):
+            raise ValueError("a table's name starts with a letter or underscore, has no spaces, and is not a cell address (A1, R1C1, R or C)")
+        if any(str(k).lower() == name.lower() for k in wb.defined_names.keys()):
+            raise ValueError(f"this workbook already has a name called {name}; a table and a name cannot share one")
         if name.lower() in taken:
             raise ValueError(f"this workbook already has a table called {name}")
     else:
@@ -347,7 +391,22 @@ def _table(wb: Any, step: dict, default: "str | None") -> str:
         tc1, tr1, tc2, tr2 = range_boundaries(t.ref)
         if not (c2 < tc1 or tc2 < c1 or r2 < tr1 or tr2 < r1):
             raise ValueError(f"{rng} overlaps the table {t.displayName} ({t.ref})")
+    # Each of these leaves a workbook the real Excel refuses to open.
+    filtered = str(getattr(ws.auto_filter, "ref", "") or "")
+    if filtered:
+        fc1, fr1, fc2, fr2 = range_boundaries(filtered)
+        if not (c2 < fc1 or fc2 < c1 or r2 < fr1 or fr2 < r1):
+            raise ValueError(f"{ws.title} already has a filter on {filtered}; remove it in Excel first (a table brings its own), "
+                             "or open the workbook in Excel and ask again")
+    for merged in ws.merged_cells.ranges:
+        if not (c2 < merged.min_col or merged.max_col < c1 or r2 < merged.min_row or merged.max_row < r1):
+            raise ValueError(f"{rng} holds merged cells ({merged.coord}); a table cannot hold merged cells")
     heads = [ws.cell(row=r1, column=c).value for c in range(c1, c2 + 1)]
+    for c, h in zip(range(c1, c2 + 1), heads):
+        if isinstance(h, str) and h.startswith("="):
+            from openpyxl.utils import get_column_letter
+
+            raise ValueError(f"a table's headings are typed text, and {get_column_letter(c)}{r1} holds a formula")
     if any(h in (None, "") for h in heads) or len({str(h).lower() for h in heads}) != len(heads):
         raise ValueError("a table's first row must hold a different, non-empty heading in every column")
     for c in range(c1, c2 + 1):  # Excel wants a table's headings to be text
@@ -448,4 +507,6 @@ def apply_features(wb: Any, default_sheet: "str | None", features: "list[dict]")
             raise FeatureRefused(f"step {n} ({op}): {exc}") from None
         except KeyError as exc:
             raise FeatureRefused(f"step {n} ({op}): missing {exc}") from None
+        except Exception as exc:  # noqa: BLE001 - e.g. a note on the inside of a merged cell
+            raise FeatureRefused(f"step {n} ({op}) could not be made here ({type(exc).__name__}: {str(exc)[:160]}).") from None
     return done
