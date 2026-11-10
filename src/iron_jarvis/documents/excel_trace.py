@@ -27,6 +27,8 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from bisect import bisect_left, bisect_right
+from itertools import islice
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -45,6 +47,8 @@ MAX_WATCH = 40
 MAX_SET = 20
 DEADLINE_S = 25.0
 GOAL_STEPS = 80
+#: How many cells of a range "how" looks at to say what the range holds.
+MAX_RANGE_LOOKED = 2000
 
 _CELL_RX = re.compile(r"^\$?([A-Za-z]{1,3})\$?([0-9]{1,7})$")
 _REF_RX = re.compile(r"^(?:(?:'((?:[^']|'')+)'|([^!']+))!)?\$?([A-Za-z]{1,3})\$?([0-9]{1,7})$")
@@ -267,15 +271,19 @@ def how(grid: Grid, sheet: str, col: int, row: int, depth: int = 3) -> dict:
         if not budget.spend():
             return
         pad = "  " * level
-        cells = [(c, r) for r in range(ref.r1, ref.r2 + 1) for c in range(ref.c1, ref.c2 + 1)]
-        formulas = sum(1 for c, r in cells[:2000] if _formula(grid, ref.sheet, c, r) is not None)
-        kind = "all typed in" if formulas == 0 else ("all formulas" if formulas == min(len(cells), 2000) else f"{formulas} formulas, the rest typed in")
-        lines.append(f"{pad}{ref.label()}  [{ref.cells} cells, {kind}]")
+        # Only the first cells are looked at: listing EVERY cell of a range
+        # (B1:XFD3000 is 49 million) took 4.7 GB and most of a minute.
+        total = ref.cells
+        cells = list(islice(((c, r) for r in range(ref.r1, ref.r2 + 1) for c in range(ref.c1, ref.c2 + 1)), MAX_RANGE_LOOKED))
+        formulas = sum(1 for c, r in cells if _formula(grid, ref.sheet, c, r) is not None)
+        kind = "all typed in" if formulas == 0 else ("all formulas" if formulas == len(cells) else f"{formulas} formulas, the rest typed in")
+        scope = "" if total <= len(cells) else f" among the first {len(cells):,}"
+        lines.append(f"{pad}{ref.label()}  [{total} cells, {kind}{scope}]")
         at_edge = level + 1 >= depth
         for c, r in cells[:MAX_RANGE_SHOWN]:
             cell_line(ref.sheet, c, r, level + 1, quiet=at_edge)
-        if len(cells) > MAX_RANGE_SHOWN:
-            lines.append(f"{pad}  (+{len(cells) - MAX_RANGE_SHOWN} more cells in {ref.label()})")
+        if total > MAX_RANGE_SHOWN:
+            lines.append(f"{pad}  (+{total - MAX_RANGE_SHOWN} more cells in {ref.label()})")
         if at_edge and formulas:
             lines.append(f"{pad}  (these go deeper; ask about one of them, or with a larger depth)")
 
@@ -304,24 +312,78 @@ def _all_formulas(grid: Grid) -> "tuple[list[tuple[str, int, int, str]], bool]":
     return out, False
 
 
+class _CellIndex:
+    """Some cells, kept so that "does this range hold one of them" is a
+    lookup. The first cut asked every formula about every cell of a level:
+    with one input feeding 19,000 rows that was 115 seconds, and no limit."""
+
+    def __init__(self, cells: "list[tuple[str, int, int]]") -> None:
+        self._by: dict[str, dict[int, list[int]]] = {}
+        self.size = 0
+        for s, c, r in cells:
+            self._by.setdefault(s.lower(), {}).setdefault(c, []).append(r)
+            self.size += 1
+        for cols in self._by.values():
+            for rows in cols.values():
+                rows.sort()
+
+    def _columns(self, ref: Ref) -> "Any":
+        cols = self._by.get(ref.sheet.lower())
+        if not cols:
+            return ()
+        if ref.c2 - ref.c1 + 1 <= len(cols):
+            return ((c, cols[c]) for c in range(ref.c1, ref.c2 + 1) if c in cols)
+        return ((c, rows) for c, rows in cols.items() if ref.c1 <= c <= ref.c2)
+
+    def hit(self, ref: Ref) -> bool:
+        for _c, rows in self._columns(ref):
+            i = bisect_left(rows, ref.r1)
+            if i < len(rows) and rows[i] <= ref.r2:
+                return True
+        return False
+
+    def mark(self, ref: Ref, into: "set[tuple[str, int, int]]") -> None:
+        """Add every kept cell inside *ref* to *into* (sheet lower-cased)."""
+        sheet = ref.sheet.lower()
+        for c, rows in self._columns(ref):
+            for r in rows[bisect_left(rows, ref.r1):bisect_right(rows, ref.r2)]:
+                into.add((sheet, c, r))
+
+
+def _parsed_formulas(grid: Grid, deadline: float = float("inf")) -> "tuple[list[tuple[str, int, int, str, list[Ref]]], bool]":
+    """Every formula cell with the cells it reads (bounded), and whether the
+    list was cut (too many formulas, or out of time)."""
+    formulas, cut = _all_formulas(grid)
+    out = []
+    for n, (s, c, r, f) in enumerate(formulas):
+        if n % 512 == 0 and time.monotonic() > deadline:
+            return out, True
+        out.append((s, c, r, f, refs_of(f, s, grid)))
+    return out, cut
+
+
 def affects(grid: Grid, sheet: str, col: int, row: int, depth: int = 3) -> dict:
     """The cells whose formulas use one cell, level by level."""
     depth = max(1, min(int(depth or 3), MAX_DEPTH))
     sheet = grid.canon(sheet)
-    formulas, cut = _all_formulas(grid)
-    parsed = [(s, c, r, f, refs_of(f, s, grid)) for s, c, r, f in formulas]
+    deadline = time.monotonic() + DEADLINE_S
+    parsed, cut = _parsed_formulas(grid, deadline)
     lines: list[str] = []
     seen = {(sheet.lower(), col, row)}
     level_cells = [(sheet, col, row)]
     total = 0
-    deadline = time.monotonic() + DEADLINE_S
+    late = cut and time.monotonic() > deadline
     for level in range(1, depth + 1):
+        index = _CellIndex(level_cells)
         nxt: list[tuple[str, int, int]] = []
-        for s, c, r, f, refs in parsed:
+        for n, (s, c, r, f, refs) in enumerate(parsed):
+            if n % 256 == 0 and time.monotonic() > deadline:
+                late = True
+                break
             key = (s.lower(), c, r)
             if key in seen:
                 continue
-            if any(ref.holds(ts, tc, tr) for ref in refs for ts, tc, tr in level_cells):
+            if any(index.hit(ref) for ref in refs):
                 seen.add(key)
                 nxt.append((s, c, r))
                 total += 1
@@ -330,15 +392,12 @@ def affects(grid: Grid, sheet: str, col: int, row: int, depth: int = 3) -> dict:
                     label = _label_of(grid, s, c, r)
                     tag = f" ({label})" if label else ""
                     lines.append(f"{'  ' * (level - 1)}{s}!{_col_letters(c)}{r}{tag} = {show(value) if not why else 'not worked out'}  [{f}]")
-            if time.monotonic() > deadline:
-                cut = True
-                break
-        if not nxt or cut and time.monotonic() > deadline:
+        if not nxt or late:
             break
         level_cells = nxt
     if total > MAX_DEPENDENTS:
         lines.append(f"(+{total - MAX_DEPENDENTS} more cells)")
-    return {"lines": lines, "count": total, "cut": cut, "scanned": len(formulas)}
+    return {"lines": lines, "count": total, "cut": cut or late, "late": late, "scanned": len(parsed)}
 
 
 def _close(a: Any, b: Any) -> bool:
@@ -352,17 +411,45 @@ def _close(a: Any, b: Any) -> bool:
     return a == b
 
 
+_NUMBER_TEXT = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d{1,3})?")
+
+
 def _typed(v: Any) -> Any:
-    """A what-if value as a cell would hold it ("8%" is 0.08)."""
+    """A what-if value as a cell would hold it once typed: "8%" is 0.08,
+    "1e3" is 1000, "2025-06-01" is that DATE. Held as text, a date is larger
+    than every number to Excel's comparisons, so =IF(B1>DATE(2026,1,1),...)
+    came out the wrong way round. A formula is not a value."""
     if isinstance(v, str):
-        t = v.strip().replace(",", "").replace("$", "")
-        if re.fullmatch(r"[-+]?(?:\d+\.?\d*|\.\d+)%", t):
-            return float(t[:-1]) / 100.0
-        if re.fullmatch(r"[-+]?(?:\d+\.?\d*|\.\d+)", t):
-            return float(t)
+        t = v.strip()
+        if t.startswith("="):
+            raise ValueError(f"a what-if value is a number, a date or text, not a formula ('{t[:40]}'); work the value out and give that")
+        n = t.replace(",", "").replace("$", "")
+        if re.fullmatch(r"[-+]?(?:\d+\.?\d*|\.\d+)%", n):
+            return float(n[:-1]) / 100.0
+        if _NUMBER_TEXT.fullmatch(n):
+            return float(n)
         if t.upper() in ("TRUE", "FALSE"):
             return t.upper() == "TRUE"
+        from .excel_tools import _as_date
+
+        d = _as_date(t)
+        if d is not None:
+            return d
     return v
+
+
+def _date_cell(saved: Any, value: Any) -> bool:
+    """Whether a cell that holds *saved* shows *value* as a date."""
+    return hasattr(saved, "isoformat") and isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _as_shown(value: Any, as_date: bool) -> Any:
+    if as_date and isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return from_serial(float(value))
+        except Exception:  # noqa: BLE001 - not a day Excel can show
+            return value
+    return value
 
 
 def what_if(grid: Grid, changes: "dict[str, Any]", watch: "list[str]", default_sheet: str = "") -> dict:
@@ -381,17 +468,22 @@ def what_if(grid: Grid, changes: "dict[str, Any]", watch: "list[str]", default_s
         s, c, r = parse_cell(where, default_sheet)
         watched.append((grid.canon(s), c, r))
     more = 0
+    ends_known = True
     if not watched:
         # Nothing named: report the END results the changed cells lead to
         # (cells no other formula uses), not every cell on the way.
-        reached: list[tuple[str, int, int]] = []
-        for s, c, r, _v in sets:
-            for cell in _dependents_cells(grid, s, c, r, MAX_DEPTH):
-                if cell not in reached:
-                    reached.append(cell)
+        deadline = time.monotonic() + DEADLINE_S
+        parsed, cut = _parsed_formulas(grid, deadline)
+        reached, late = _dependents_cells(parsed, [(s, c, r) for s, c, r, _v in sets], MAX_DEPTH, deadline)
+        if cut or late:
+            # Part of the workbook was not followed, so "the end results"
+            # would be a guess: a cell can look like an end only because the
+            # formula that uses it was never read.
+            raise ValueError("this workbook is too large to follow everything those cells feed here; name the cells to watch in 'watch'")
         if not reached:
             raise ValueError("nothing uses those cells, so nothing would change; name the cells to watch in 'watch'")
-        ends = _end_results(grid, reached)
+        ends = _end_results(parsed, reached, deadline)
+        ends_known = bool(ends)
         watched = (ends or reached)[:MAX_DEFAULT_WATCH]
         more = len(reached) - len(watched)
     grid.fresh, grid.overrides = True, {}
@@ -402,6 +494,8 @@ def what_if(grid: Grid, changes: "dict[str, Any]", watch: "list[str]", default_s
         base, why = _value(grid, s, c, r)
         saved = grid.saved(s, c, r)
         row: dict[str, Any] = {"cell": name, "label": _label_of(grid, s, c, r), "formula": _formula(grid, s, c, r) or "", "now": base}
+        if _date_cell(saved, base):
+            row["is_date"] = True
         if why:
             row["problem"] = f"Jarvis cannot work this cell out ({why}), so it gives no what-if for it"
         elif saved is not None and not _close(base, saved):
@@ -411,6 +505,9 @@ def what_if(grid: Grid, changes: "dict[str, Any]", watch: "list[str]", default_s
     was = []
     for s, c, r, v in sets:
         now, _why = _value(grid, s, c, r)
+        now = _as_shown(now, _date_cell(grid.saved(s, c, r), now))  # a date cell reads as its date
+        # Dates go into the answer's data as text: the data is sent on as JSON.
+        now, v = (show(x) if hasattr(x, "isoformat") else x for x in (now, v))
         was.append({"cell": f"{s}!{_col_letters(c)}{r}", "label": _label_of(grid, s, c, r), "now": now, "to": v,
                     "formula": _formula(grid, s, c, r) or ""})
     grid.overrides = {(s.lower(), c, r): v for s, c, r, v in sets}
@@ -427,39 +524,50 @@ def what_if(grid: Grid, changes: "dict[str, Any]", watch: "list[str]", default_s
             row["change"] = float(new) - float(row["now"])
     grid.overrides, grid.fresh = {}, False
     grid.reset()
-    return {"set": was, "watch": rows, "more": more}
+    return {"set": was, "watch": rows, "more": more, "ends_known": ends_known}
 
 
-def _dependents_cells(grid: Grid, sheet: str, col: int, row: int, depth: int) -> "list[tuple[str, int, int]]":
-    formulas, _cut = _all_formulas(grid)
-    parsed = [(s, c, r, refs_of(f, s, grid)) for s, c, r, f in formulas]
-    seen = {(sheet.lower(), col, row)}
-    level = [(sheet, col, row)]
+def _dependents_cells(parsed: "list[tuple[str, int, int, str, list[Ref]]]", starts: "list[tuple[str, int, int]]",
+                      depth: int, deadline: float) -> "tuple[list[tuple[str, int, int]], bool]":
+    """Every cell that uses one of *starts*, directly or through other cells,
+    *depth* levels out; and whether it ran out of time first."""
+    seen = {(s.lower(), c, r) for s, c, r in starts}
+    level = list(starts)
     out: list[tuple[str, int, int]] = []
     for _ in range(depth):
+        index = _CellIndex(level)
         nxt = []
-        for s, c, r, refs in parsed:
+        for n, (s, c, r, _f, refs) in enumerate(parsed):
+            if n % 256 == 0 and time.monotonic() > deadline:
+                return out + nxt, True
             if (s.lower(), c, r) in seen:
                 continue
-            if any(ref.holds(ts, tc, tr) for ref in refs for ts, tc, tr in level):
+            if any(index.hit(ref) for ref in refs):
                 seen.add((s.lower(), c, r))
                 nxt.append((s, c, r))
         out.extend(nxt)
         if not nxt:
             break
         level = nxt
-    return out
+    return out, False
 
 
-def _end_results(grid: Grid, cells: "list[tuple[str, int, int]]") -> "list[tuple[str, int, int]]":
+def _end_results(parsed: "list[tuple[str, int, int, str, list[Ref]]]", cells: "list[tuple[str, int, int]]",
+                 deadline: float) -> "list[tuple[str, int, int]]":
     """Those of *cells* that no formula in the workbook uses: the figures a
-    chain of formulas ends in (bounded; [] when the workbook is too large to
-    tell cheaply)."""
-    formulas, cut = _all_formulas(grid)
-    if cut or len(formulas) > 8000 or len(cells) > 3000:
-        return []
-    refs = [ref for s, _c, _r, f in formulas for ref in refs_of(f, s, grid)]
-    return [cell for cell in cells if not any(ref.holds(*cell) for ref in refs)]
+    chain of formulas ends in ([] when that cannot be told in the time)."""
+    index = _CellIndex(cells)
+    used: set[tuple[str, int, int]] = set()
+    for n, (_s, _c, _r, _f, refs) in enumerate(parsed):
+        if n % 64 == 0 and time.monotonic() > deadline:
+            return []
+        for ref in refs:
+            index.mark(ref, used)
+    return [cell for cell in cells if (cell[0].lower(), cell[1], cell[2]) not in used]
+
+
+class _TooLong(ValueError):
+    """The search ran past its time limit."""
 
 
 def goal_seek(grid: Grid, target: str, goal: float, change: str, low: "float | None" = None,
@@ -486,7 +594,11 @@ def goal_seek(grid: Grid, target: str, goal: float, change: str, low: "float | N
         if not isinstance(start, (int, float)) or isinstance(start, bool) or not isinstance(base, (int, float)):
             raise ValueError("both the cell to change and the target must hold numbers")
 
+        deadline = time.monotonic() + DEADLINE_S
+
         def f(x: float) -> float:
+            if time.monotonic() > deadline:
+                raise _TooLong("this search takes too long here; give 'low' and 'high' close to the answer, or use Excel's own Goal Seek")
             grid.overrides = {(cs.lower(), cc, cr): x}
             grid.reset()
             v, w = _value(grid, ts, tc, tr)
@@ -502,23 +614,49 @@ def goal_seek(grid: Grid, target: str, goal: float, change: str, low: "float | N
         steps = 0
         if lo is None or hi is None:
             # Look outward from the present value for two points either side of the goal.
+            # A side where the target cannot be worked out (a square root of
+            # a negative, a division by zero) is closed; the other side goes
+            # on. The first cut stopped the whole search at the first such
+            # value, though the answer was the other way.
             span = max(abs(x0), 1.0)
             lo, hi = x0, x0
             ylo = yhi = y0
+            open_lo = open_hi = True
+            closed: list[str] = []
+
+            def at(x: float) -> "float | None":
+                try:
+                    return f(x)
+                except _TooLong:
+                    raise
+                except ValueError as exc:
+                    closed.append(str(exc))
+                    return None
+
+            found = False
             for k in range(1, 40):
-                steps += 2
-                lo_try, hi_try = x0 - span * (2 ** k) / 4, x0 + span * (2 ** k) / 4
-                ylo, yhi = f(lo_try), f(hi_try)
-                if ylo * y0 <= 0:
-                    lo, hi = lo_try, x0
-                    yhi = y0
+                step = span * (2 ** k) / 4
+                if open_lo:
+                    steps += 1
+                    got = at(x0 - step)
+                    if got is None:
+                        open_lo = False
+                    elif got * y0 <= 0:
+                        lo, hi, ylo, yhi, found = x0 - step, x0, got, y0, True
+                        break
+                if open_hi:
+                    steps += 1
+                    got = at(x0 + step)
+                    if got is None:
+                        open_hi = False
+                    elif got * y0 <= 0:
+                        lo, hi, ylo, yhi, found = x0, x0 + step, y0, got, True
+                        break
+                if not open_lo and not open_hi:
                     break
-                if yhi * y0 <= 0:
-                    lo, hi = x0, hi_try
-                    ylo = y0
-                    break
-            else:
-                raise ValueError("no value of that cell reaches the goal (tried far above and below its present value)")
+            if not found:
+                why_not = f" ({closed[0]})" if closed else ""
+                raise ValueError("no value of that cell reaches the goal (tried far above and below its present value)" + why_not)
         else:
             lo, hi = float(lo), float(hi)
             ylo, yhi = f(lo), f(hi)
@@ -658,7 +796,9 @@ def _run(grid: Grid, path: Path, mode: str, args: dict[str, Any]) -> ToolResult:
         if not got["count"]:
             head = f"No formula in {name} uses {where}."
         lines = [head] + got["lines"]
-        if got["cut"]:
+        if got.get("late"):
+            lines.append("(cut: this workbook took too long to follow to the end, so the list is not complete)")
+        elif got["cut"]:
             lines.append(f"(cut: only the first {got['scanned']:,} formulas were read)")
         return ToolResult(ok=True, output="\n".join(lines), data={"cell": where, "count": got["count"], "cut": got["cut"]})
     if mode == "what_if":
@@ -678,10 +818,16 @@ def _run(grid: Grid, path: Path, mode: str, args: dict[str, Any]) -> ToolResult:
             if "problem" in row:
                 lines.append(f"  {row['cell']}{tag}: {row['problem']}")
                 continue
-            delta = f"  (change {row['change']:+,.2f})" if "change" in row else ""
-            lines.append(f"  {row['cell']}{tag}: {show(row['now'])} -> {show(row['then'])}{delta}")
+            is_date = bool(row.get("is_date"))
+            delta = ""
+            if "change" in row:
+                delta = f"  (change {row['change']:+,.0f} day(s))" if is_date else f"  (change {row['change']:+,.2f})"
+            lines.append(f"  {row['cell']}{tag}: {show(_as_shown(row['now'], is_date))} -> {show(_as_shown(row['then'], is_date))}{delta}")
         if got.get("more"):
-            lines.append(f"  (+{got['more']} more cells change on the way to these; name cells in 'watch' to see them)")
+            if got.get("ends_known", True):
+                lines.append(f"  (+{got['more']} more cells change on the way to these; name cells in 'watch' to see them)")
+            else:
+                lines.append(f"  (+{got['more']} more cells use the changed cells; name cells in 'watch' to see them)")
         return ToolResult(ok=True, output="\n".join(lines), data=got)
     if mode == "goal_seek":
         if args.get("goal") is None or not args.get("change") or not args.get("cell"):
