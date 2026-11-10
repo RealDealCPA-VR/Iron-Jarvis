@@ -132,6 +132,7 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   delegate_remote: { did: "Handed work to another computer", noun: "hand-off to another computer", nouns: "hand-offs to another computer" },
   excel_accounts_diff: { did: "Compared a workbook's accounts", noun: "account compare" },
   excel_formula_check: { did: "Checked a formula", noun: "formula check" },
+  calculate: { did: "Worked out the figures", noun: "calculation" },
   excel_sheet_spec: { did: "Captured a sheet's layout", noun: "sheet layout capture" },
   goal_add: { did: "Added a goal", noun: "goal addition" },
   goal_delete: { did: "Dropped a goal", noun: "goal removal" },

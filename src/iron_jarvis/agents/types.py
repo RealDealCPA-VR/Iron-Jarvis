@@ -116,6 +116,9 @@ _DOCUMENT_TOOLS = [
     "excel_read", "excel_edit", "excel_profile", "excel_query",
     "excel_formula_check", "excel_sheet_spec", "excel_apply_spec",
     "excel_accounts_diff",
+    # v1.465.0: exact arithmetic. A figure in a memo or a summary is worked
+    # out by the engine, never in the model's head.
+    "calculate",
     # Confirmed redaction: scan → the user approves → targeted removal.
     "redact_scan", "redact_pii",
     # Page-level PDF work (v1.138.0): merge/split/rotate/reorder into NEW

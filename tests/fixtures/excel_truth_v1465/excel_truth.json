@@ -1,0 +1,1596 @@
+{
+  "books.xlsx": {
+    "Inputs!B6": {
+      "kind": "number",
+      "value": "1498.8763128818807",
+      "formula": "=PMT(B4/12,B5*12,-B3)"
+    },
+    "Sales!F2": {
+      "kind": "number",
+      "value": "375",
+      "formula": "=D2*E2"
+    },
+    "Sales!G2": {
+      "kind": "number",
+      "value": "27.19",
+      "formula": "=ROUND(F2*TaxRate,2)"
+    },
+    "Sales!H2": {
+      "kind": "number",
+      "value": "402.19",
+      "formula": "=F2+G2"
+    },
+    "Sales!F3": {
+      "kind": "number",
+      "value": "550",
+      "formula": "=D3*E3"
+    },
+    "Sales!G3": {
+      "kind": "number",
+      "value": "39.88",
+      "formula": "=ROUND(F3*TaxRate,2)"
+    },
+    "Sales!H3": {
+      "kind": "number",
+      "value": "589.88",
+      "formula": "=F3+G3"
+    },
+    "Sales!F4": {
+      "kind": "number",
+      "value": "750",
+      "formula": "=D4*E4"
+    },
+    "Sales!G4": {
+      "kind": "number",
+      "value": "54.38",
+      "formula": "=ROUND(F4*TaxRate,2)"
+    },
+    "Sales!H4": {
+      "kind": "number",
+      "value": "804.38",
+      "formula": "=F4+G4"
+    },
+    "Sales!F5": {
+      "kind": "number",
+      "value": "975",
+      "formula": "=D5*E5"
+    },
+    "Sales!G5": {
+      "kind": "number",
+      "value": "70.69",
+      "formula": "=ROUND(F5*TaxRate,2)"
+    },
+    "Sales!H5": {
+      "kind": "number",
+      "value": "1045.69",
+      "formula": "=F5+G5"
+    },
+    "Sales!F6": {
+      "kind": "number",
+      "value": "700",
+      "formula": "=D6*E6"
+    },
+    "Sales!G6": {
+      "kind": "number",
+      "value": "50.75",
+      "formula": "=ROUND(F6*TaxRate,2)"
+    },
+    "Sales!H6": {
+      "kind": "number",
+      "value": "750.75",
+      "formula": "=F6+G6"
+    },
+    "Sales!F7": {
+      "kind": "number",
+      "value": "112.5",
+      "formula": "=D7*E7"
+    },
+    "Sales!G7": {
+      "kind": "number",
+      "value": "8.16",
+      "formula": "=ROUND(F7*TaxRate,2)"
+    },
+    "Sales!H7": {
+      "kind": "number",
+      "value": "120.66",
+      "formula": "=F7+G7"
+    },
+    "Sales!F8": {
+      "kind": "number",
+      "value": "250",
+      "formula": "=D8*E8"
+    },
+    "Sales!G8": {
+      "kind": "number",
+      "value": "18.13",
+      "formula": "=ROUND(F8*TaxRate,2)"
+    },
+    "Sales!H8": {
+      "kind": "number",
+      "value": "268.13",
+      "formula": "=F8+G8"
+    },
+    "Sales!F9": {
+      "kind": "number",
+      "value": "412.5",
+      "formula": "=D9*E9"
+    },
+    "Sales!G9": {
+      "kind": "number",
+      "value": "29.91",
+      "formula": "=ROUND(F9*TaxRate,2)"
+    },
+    "Sales!H9": {
+      "kind": "number",
+      "value": "442.41",
+      "formula": "=F9+G9"
+    },
+    "Sales!F10": {
+      "kind": "number",
+      "value": "600",
+      "formula": "=D10*E10"
+    },
+    "Sales!G10": {
+      "kind": "number",
+      "value": "43.5",
+      "formula": "=ROUND(F10*TaxRate,2)"
+    },
+    "Sales!H10": {
+      "kind": "number",
+      "value": "643.5",
+      "formula": "=F10+G10"
+    },
+    "Sales!F11": {
+      "kind": "number",
+      "value": "812.5",
+      "formula": "=D11*E11"
+    },
+    "Sales!G11": {
+      "kind": "number",
+      "value": "58.91",
+      "formula": "=ROUND(F11*TaxRate,2)"
+    },
+    "Sales!H11": {
+      "kind": "number",
+      "value": "871.41",
+      "formula": "=F11+G11"
+    },
+    "Sales!F12": {
+      "kind": "number",
+      "value": "600",
+      "formula": "=D12*E12"
+    },
+    "Sales!G12": {
+      "kind": "number",
+      "value": "43.5",
+      "formula": "=ROUND(F12*TaxRate,2)"
+    },
+    "Sales!H12": {
+      "kind": "number",
+      "value": "643.5",
+      "formula": "=F12+G12"
+    },
+    "Sales!F13": {
+      "kind": "number",
+      "value": "787.5",
+      "formula": "=D13*E13"
+    },
+    "Sales!G13": {
+      "kind": "number",
+      "value": "57.09",
+      "formula": "=ROUND(F13*TaxRate,2)"
+    },
+    "Sales!H13": {
+      "kind": "number",
+      "value": "844.59",
+      "formula": "=F13+G13"
+    },
+    "Sales!F14": {
+      "kind": "number",
+      "value": "125",
+      "formula": "=D14*E14"
+    },
+    "Sales!G14": {
+      "kind": "number",
+      "value": "9.06",
+      "formula": "=ROUND(F14*TaxRate,2)"
+    },
+    "Sales!H14": {
+      "kind": "number",
+      "value": "134.06",
+      "formula": "=F14+G14"
+    },
+    "Sales!F15": {
+      "kind": "number",
+      "value": "275",
+      "formula": "=D15*E15"
+    },
+    "Sales!G15": {
+      "kind": "number",
+      "value": "19.94",
+      "formula": "=ROUND(F15*TaxRate,2)"
+    },
+    "Sales!H15": {
+      "kind": "number",
+      "value": "294.94",
+      "formula": "=F15+G15"
+    },
+    "Sales!F16": {
+      "kind": "number",
+      "value": "450",
+      "formula": "=D16*E16"
+    },
+    "Sales!G16": {
+      "kind": "number",
+      "value": "32.63",
+      "formula": "=ROUND(F16*TaxRate,2)"
+    },
+    "Sales!H16": {
+      "kind": "number",
+      "value": "482.63",
+      "formula": "=F16+G16"
+    },
+    "Sales!G17": {
+      "kind": "number",
+      "value": "87",
+      "formula": "=ROUND(F17*TaxRate,2)"
+    },
+    "Sales!H17": {
+      "kind": "number",
+      "value": "1287",
+      "formula": "=F17+G17"
+    },
+    "Sales!F18": {
+      "kind": "number",
+      "value": "500",
+      "formula": "=D18*E18"
+    },
+    "Sales!G18": {
+      "kind": "number",
+      "value": "36.25",
+      "formula": "=ROUND(F18*TaxRate,2)"
+    },
+    "Sales!H18": {
+      "kind": "number",
+      "value": "536.25",
+      "formula": "=F18+G18"
+    },
+    "Sales!F19": {
+      "kind": "number",
+      "value": "675",
+      "formula": "=D19*E19"
+    },
+    "Sales!G19": {
+      "kind": "number",
+      "value": "48.94",
+      "formula": "=ROUND(F19*TaxRate,2)"
+    },
+    "Sales!H19": {
+      "kind": "number",
+      "value": "723.94",
+      "formula": "=F19+G19"
+    },
+    "Sales!F20": {
+      "kind": "number",
+      "value": "875",
+      "formula": "=D20*E20"
+    },
+    "Sales!G20": {
+      "kind": "number",
+      "value": "63.44",
+      "formula": "=ROUND(F20*TaxRate,2)"
+    },
+    "Sales!H20": {
+      "kind": "number",
+      "value": "938.44",
+      "formula": "=F20+G20"
+    },
+    "Sales!F21": {
+      "kind": "number",
+      "value": "137.5",
+      "formula": "=D21*E21"
+    },
+    "Sales!G21": {
+      "kind": "number",
+      "value": "9.97",
+      "formula": "=ROUND(F21*TaxRate,2)"
+    },
+    "Sales!H21": {
+      "kind": "number",
+      "value": "147.47",
+      "formula": "=F21+G21"
+    },
+    "Sales!F22": {
+      "kind": "number",
+      "value": "300",
+      "formula": "=D22*E22"
+    },
+    "Sales!G22": {
+      "kind": "number",
+      "value": "21.75",
+      "formula": "=ROUND(F22*TaxRate,2)"
+    },
+    "Sales!H22": {
+      "kind": "number",
+      "value": "321.75",
+      "formula": "=F22+G22"
+    },
+    "Sales!F23": {
+      "kind": "number",
+      "value": "487.5",
+      "formula": "=D23*E23"
+    },
+    "Sales!G23": {
+      "kind": "number",
+      "value": "21.75",
+      "formula": "=ROUND(F22*TaxRate,2)"
+    },
+    "Sales!H23": {
+      "kind": "number",
+      "value": "509.25",
+      "formula": "=F23+G23"
+    },
+    "Sales!F24": {
+      "kind": "number",
+      "value": "400",
+      "formula": "=D24*E24"
+    },
+    "Sales!G24": {
+      "kind": "number",
+      "value": "29",
+      "formula": "=ROUND(F24*TaxRate,2)"
+    },
+    "Sales!H24": {
+      "kind": "number",
+      "value": "429",
+      "formula": "=F24+G24"
+    },
+    "Sales!F25": {
+      "kind": "number",
+      "value": "562.5",
+      "formula": "=D25*E25"
+    },
+    "Sales!G25": {
+      "kind": "number",
+      "value": "40.78",
+      "formula": "=ROUND(F25*TaxRate,2)"
+    },
+    "Sales!H25": {
+      "kind": "number",
+      "value": "603.28",
+      "formula": "=F25+G25"
+    },
+    "Sales!F26": {
+      "kind": "number",
+      "value": "750",
+      "formula": "=D26*E26"
+    },
+    "Sales!G26": {
+      "kind": "number",
+      "value": "54.38",
+      "formula": "=ROUND(F26*TaxRate,2)"
+    },
+    "Sales!H26": {
+      "kind": "number",
+      "value": "804.38",
+      "formula": "=F26+G26"
+    },
+    "Sales!F27": {
+      "kind": "number",
+      "value": "962.5",
+      "formula": "=D27*E27"
+    },
+    "Sales!G27": {
+      "kind": "number",
+      "value": "69.78",
+      "formula": "=ROUND(F27*TaxRate,2)"
+    },
+    "Sales!H27": {
+      "kind": "number",
+      "value": "1032.28",
+      "formula": "=F27+G27"
+    },
+    "Sales!F28": {
+      "kind": "number",
+      "value": "150",
+      "formula": "=D28*E28"
+    },
+    "Sales!G28": {
+      "kind": "number",
+      "value": "10.88",
+      "formula": "=ROUND(F28*TaxRate,2)"
+    },
+    "Sales!H28": {
+      "kind": "number",
+      "value": "160.88",
+      "formula": "=F28+G28"
+    },
+    "Sales!F29": {
+      "kind": "number",
+      "value": "325",
+      "formula": "=D29*E29"
+    },
+    "Sales!G29": {
+      "kind": "number",
+      "value": "23.56",
+      "formula": "=ROUND(F29*TaxRate,2)"
+    },
+    "Sales!H29": {
+      "kind": "number",
+      "value": "348.56",
+      "formula": "=F29+G29"
+    },
+    "Sales!F30": {
+      "kind": "number",
+      "value": "412.5",
+      "formula": "=D30*E30"
+    },
+    "Sales!G30": {
+      "kind": "number",
+      "value": "29.91",
+      "formula": "=ROUND(F30*TaxRate,2)"
+    },
+    "Sales!H30": {
+      "kind": "number",
+      "value": "442.41",
+      "formula": "=F30+G30"
+    },
+    "Sales!F31": {
+      "kind": "number",
+      "value": "450",
+      "formula": "=D31*E31"
+    },
+    "Sales!G31": {
+      "kind": "number",
+      "value": "32.63",
+      "formula": "=ROUND(F31*TaxRate,2)"
+    },
+    "Sales!H31": {
+      "kind": "number",
+      "value": "482.63",
+      "formula": "=F31+G31"
+    },
+    "Sales!F32": {
+      "kind": "number",
+      "value": "625",
+      "formula": "=D32*E32"
+    },
+    "Sales!G32": {
+      "kind": "number",
+      "value": "45.31",
+      "formula": "=ROUND(F32*TaxRate,2)"
+    },
+    "Sales!H32": {
+      "kind": "number",
+      "value": "670.31",
+      "formula": "=F32+G32"
+    },
+    "Sales!F33": {
+      "kind": "number",
+      "value": "825",
+      "formula": "=D33*E33"
+    },
+    "Sales!G33": {
+      "kind": "number",
+      "value": "59.81",
+      "formula": "=ROUND(F33*TaxRate,2)"
+    },
+    "Sales!H33": {
+      "kind": "number",
+      "value": "884.81",
+      "formula": "=F33+G33"
+    },
+    "Sales!F34": {
+      "kind": "number",
+      "value": "1050",
+      "formula": "=D34*E34"
+    },
+    "Sales!G34": {
+      "kind": "number",
+      "value": "76.13",
+      "formula": "=ROUND(F34*TaxRate,2)"
+    },
+    "Sales!H34": {
+      "kind": "number",
+      "value": "1126.13",
+      "formula": "=F34+G34"
+    },
+    "Sales!F35": {
+      "kind": "number",
+      "value": "162.5",
+      "formula": "=D35*E35"
+    },
+    "Sales!G35": {
+      "kind": "number",
+      "value": "11.78",
+      "formula": "=ROUND(F35*TaxRate,2)"
+    },
+    "Sales!H35": {
+      "kind": "number",
+      "value": "174.28",
+      "formula": "=F35+G35"
+    },
+    "Sales!F36": {
+      "kind": "number",
+      "value": "200",
+      "formula": "=D36*E36"
+    },
+    "Sales!G36": {
+      "kind": "number",
+      "value": "14.5",
+      "formula": "=ROUND(F36*TaxRate,2)"
+    },
+    "Sales!H36": {
+      "kind": "number",
+      "value": "214.5",
+      "formula": "=F36+G36"
+    },
+    "Sales!F37": {
+      "kind": "number",
+      "value": "337.5",
+      "formula": "=D37*E37"
+    },
+    "Sales!G37": {
+      "kind": "number",
+      "value": "24.47",
+      "formula": "=ROUND(F37*TaxRate,2)"
+    },
+    "Sales!H37": {
+      "kind": "number",
+      "value": "361.97",
+      "formula": "=F37+G37"
+    },
+    "Sales!F38": {
+      "kind": "number",
+      "value": "500",
+      "formula": "=D38*E38"
+    },
+    "Sales!G38": {
+      "kind": "number",
+      "value": "36.25",
+      "formula": "=ROUND(F38*TaxRate,2)"
+    },
+    "Sales!H38": {
+      "kind": "number",
+      "value": "536.25",
+      "formula": "=F38+G38"
+    },
+    "Sales!F39": {
+      "kind": "number",
+      "value": "687.5",
+      "formula": "=D39*E39"
+    },
+    "Sales!G39": {
+      "kind": "number",
+      "value": "49.84",
+      "formula": "=ROUND(F39*TaxRate,2)"
+    },
+    "Sales!H39": {
+      "kind": "number",
+      "value": "737.34",
+      "formula": "=F39+G39"
+    },
+    "Sales!F40": {
+      "kind": "number",
+      "value": "900",
+      "formula": "=D40*E40"
+    },
+    "Sales!G40": {
+      "kind": "number",
+      "value": "65.25",
+      "formula": "=ROUND(F40*TaxRate,2)"
+    },
+    "Sales!H40": {
+      "kind": "number",
+      "value": "965.25",
+      "formula": "=F40+G40"
+    },
+    "Sales!F41": {
+      "kind": "number",
+      "value": "1137.5",
+      "formula": "=D41*E41"
+    },
+    "Sales!G41": {
+      "kind": "number",
+      "value": "82.47",
+      "formula": "=ROUND(F41*TaxRate,2)"
+    },
+    "Sales!H41": {
+      "kind": "number",
+      "value": "1219.97",
+      "formula": "=F41+G41"
+    },
+    "Sales!F43": {
+      "kind": "number",
+      "value": "20350",
+      "formula": "=SUM(F2:F39)"
+    },
+    "Sales!G43": {
+      "kind": "number",
+      "value": "1609.5500000000002",
+      "formula": "=SUM(G2:G41)"
+    },
+    "Sales!H43": {
+      "kind": "number",
+      "value": "23997.050000000007",
+      "formula": "=SUM(H2:H41)"
+    },
+    "P&L!B2": {
+      "kind": "number",
+      "value": "20350",
+      "formula": "=Sales!F43"
+    },
+    "P&L!B6": {
+      "kind": "number",
+      "value": "-17986.515754582568",
+      "formula": "=-Inputs!B6*12"
+    },
+    "P&L!B8": {
+      "kind": "number",
+      "value": "-28737.015754582568",
+      "formula": "=SUM(B2:B6)"
+    },
+    "P&L!B9": {
+      "kind": "number",
+      "value": "-1.4121383663185536",
+      "formula": "=IFERROR(B8/B2,0)"
+    },
+    "P&L!B10": {
+      "kind": "text",
+      "value": "Castle",
+      "formula": "=INDEX(Sales!B2:B41,MATCH(MAX(Sales!H2:H41),Sales!H2:H41,0))"
+    },
+    "P&L!B11": {
+      "kind": "number",
+      "value": "10512.5",
+      "formula": "=SUMIFS(Sales!F2:F41,Sales!C2:C41,\"East\")"
+    },
+    "P&L!B12": {
+      "kind": "number",
+      "value": "20",
+      "formula": "=COUNTIF(Sales!F2:F41,\">500\")"
+    },
+    "P&L!B13": {
+      "kind": "number",
+      "value": "162.5",
+      "formula": "=VLOOKUP(\"Acme\",Sales!B2:E41,4,FALSE)"
+    },
+    "Calc!A2": {
+      "kind": "error",
+      "value": "#DIV/0!",
+      "formula": "=1/0"
+    }
+  },
+  "cov.xlsx": {
+    "F!A1": {
+      "kind": "number",
+      "value": "32",
+      "formula": "=SUM(D!C2:C8)"
+    },
+    "F!A2": {
+      "kind": "number",
+      "value": "32",
+      "formula": "=SUM(D!C2:C9)"
+    },
+    "F!A3": {
+      "kind": "number",
+      "value": "32",
+      "formula": "=SUM(D!C:C)"
+    },
+    "F!A4": {
+      "kind": "number",
+      "value": "153.2864285714286",
+      "formula": "=AVERAGE(D!D2:D8)"
+    },
+    "F!A5": {
+      "kind": "number",
+      "value": "-45.5",
+      "formula": "=MIN(D!D2:D8)"
+    },
+    "F!A6": {
+      "kind": "number",
+      "value": "1000",
+      "formula": "=MAX(D!D2:D8)"
+    },
+    "F!A7": {
+      "kind": "number",
+      "value": "7",
+      "formula": "=COUNT(D!C2:C9)"
+    },
+    "F!A8": {
+      "kind": "number",
+      "value": "6",
+      "formula": "=COUNTA(D!F2:F8)"
+    },
+    "F!A9": {
+      "kind": "number",
+      "value": "1",
+      "formula": "=COUNTBLANK(D!F2:F8)"
+    },
+    "F!A10": {
+      "kind": "number",
+      "value": "3.335",
+      "formula": "=MEDIAN(D!D2:D8)"
+    },
+    "F!A11": {
+      "kind": "number",
+      "value": "0",
+      "formula": "=PRODUCT(D!C2:C3,2)"
+    },
+    "F!A12": {
+      "kind": "number",
+      "value": "99.99",
+      "formula": "=LARGE(D!D2:D8,2)"
+    },
+    "F!A13": {
+      "kind": "number",
+      "value": "0.005",
+      "formula": "=SMALL(D!D2:D8,2)"
+    },
+    "F!A14": {
+      "kind": "number",
+      "value": "3",
+      "formula": "=ROUND(2.5,0)"
+    },
+    "F!A15": {
+      "kind": "number",
+      "value": "4",
+      "formula": "=ROUND(3.5,0)"
+    },
+    "F!A16": {
+      "kind": "number",
+      "value": "-3",
+      "formula": "=ROUND(-2.5,0)"
+    },
+    "F!A17": {
+      "kind": "number",
+      "value": "2.68",
+      "formula": "=ROUND(2.675,2)"
+    },
+    "F!A18": {
+      "kind": "number",
+      "value": "1.01",
+      "formula": "=ROUND(1.005,2)"
+    },
+    "F!A19": {
+      "kind": "number",
+      "value": "3.34",
+      "formula": "=ROUND(D!D4,2)"
+    },
+    "F!A20": {
+      "kind": "number",
+      "value": "1200",
+      "formula": "=ROUND(1234.5678,-2)"
+    },
+    "F!A21": {
+      "kind": "number",
+      "value": "2.13",
+      "formula": "=ROUNDUP(2.121,2)"
+    },
+    "F!A22": {
+      "kind": "number",
+      "value": "2.12",
+      "formula": "=ROUNDDOWN(2.129,2)"
+    },
+    "F!A23": {
+      "kind": "number",
+      "value": "-2.13",
+      "formula": "=ROUNDUP(-2.121,2)"
+    },
+    "F!A24": {
+      "kind": "number",
+      "value": "-2",
+      "formula": "=TRUNC(-2.9)"
+    },
+    "F!A25": {
+      "kind": "number",
+      "value": "2.98",
+      "formula": "=TRUNC(2.987,2)"
+    },
+    "F!A26": {
+      "kind": "number",
+      "value": "-3",
+      "formula": "=INT(-2.5)"
+    },
+    "F!A27": {
+      "kind": "number",
+      "value": "2",
+      "formula": "=INT(2.5)"
+    },
+    "F!A28": {
+      "kind": "number",
+      "value": "2",
+      "formula": "=MOD(-7,3)"
+    },
+    "F!A29": {
+      "kind": "number",
+      "value": "-2",
+      "formula": "=MOD(7,-3)"
+    },
+    "F!A30": {
+      "kind": "number",
+      "value": "1.5",
+      "formula": "=MOD(7.5,2)"
+    },
+    "F!A31": {
+      "kind": "number",
+      "value": "3.2",
+      "formula": "=ABS(-3.2)"
+    },
+    "F!A32": {
+      "kind": "number",
+      "value": "-1",
+      "formula": "=SIGN(-4)"
+    },
+    "F!A33": {
+      "kind": "number",
+      "value": "1.4142135623730951",
+      "formula": "=SQRT(2)"
+    },
+    "F!A34": {
+      "kind": "number",
+      "value": "1024",
+      "formula": "=POWER(2,10)"
+    },
+    "F!A35": {
+      "kind": "number",
+      "value": "1.4142135623730951",
+      "formula": "=2^0.5"
+    },
+    "F!A36": {
+      "kind": "number",
+      "value": "4",
+      "formula": "=-2^2"
+    },
+    "F!A37": {
+      "kind": "number",
+      "value": "64",
+      "formula": "=2^3^2"
+    },
+    "F!A38": {
+      "kind": "number",
+      "value": "20",
+      "formula": "=10%*200"
+    },
+    "F!A39": {
+      "kind": "number",
+      "value": "6.5",
+      "formula": "=1+2*3-4/8"
+    },
+    "F!A40": {
+      "kind": "number",
+      "value": "2.5",
+      "formula": "=CEILING(2.1,0.5)"
+    },
+    "F!A41": {
+      "kind": "number",
+      "value": "2.5",
+      "formula": "=FLOOR(2.9,0.5)"
+    },
+    "F!A42": {
+      "kind": "number",
+      "value": "-3",
+      "formula": "=CEILING(-2.1,-1)"
+    },
+    "F!A43": {
+      "kind": "number",
+      "value": "6",
+      "formula": "=FLOOR(7,3)"
+    },
+    "F!A44": {
+      "kind": "text",
+      "value": "big",
+      "formula": "=IF(D!C2>3,\"big\",\"small\")"
+    },
+    "F!A45": {
+      "kind": "number",
+      "value": "2",
+      "formula": "=IF(D!C3,1,2)"
+    },
+    "F!A46": {
+      "kind": "text",
+      "value": "blank",
+      "formula": "=IF(D!F4=\"\",\"blank\",\"text\")"
+    },
+    "F!A47": {
+      "kind": "bool",
+      "value": false,
+      "formula": "=IF(1>2,1)"
+    },
+    "F!A48": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=AND(D!C2>1,D!C4>1)"
+    },
+    "F!A49": {
+      "kind": "bool",
+      "value": false,
+      "formula": "=OR(D!C3>1,D!C4>100)"
+    },
+    "F!A50": {
+      "kind": "bool",
+      "value": false,
+      "formula": "=NOT(D!C2>1)"
+    },
+    "F!A51": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=AND(TRUE,1,5)"
+    },
+    "F!A52": {
+      "kind": "text",
+      "value": "none",
+      "formula": "=IFERROR(1/0,\"none\")"
+    },
+    "F!A53": {
+      "kind": "number",
+      "value": "-1",
+      "formula": "=IFERROR(D!C2/D!C3,-1)"
+    },
+    "F!A54": {
+      "kind": "text",
+      "value": "missing",
+      "formula": "=IFNA(VLOOKUP(\"Zed\",D!A2:D8,4,FALSE),\"missing\")"
+    },
+    "F!A55": {
+      "kind": "number",
+      "value": "22",
+      "formula": "=SUMIF(D!B2:B8,\"East\",D!C2:C8)"
+    },
+    "F!A56": {
+      "kind": "number",
+      "value": "27",
+      "formula": "=SUMIF(D!C2:C8,\">3\")"
+    },
+    "F!A57": {
+      "kind": "number",
+      "value": "16",
+      "formula": "=SUMIF(D!A2:A8,\"*e\",D!C2:C8)"
+    },
+    "F!A58": {
+      "kind": "number",
+      "value": "1000",
+      "formula": "=SUMIF(D!A2:A8,\"?une\",D!D2:D8)"
+    },
+    "F!A59": {
+      "kind": "number",
+      "value": "10",
+      "formula": "=SUMIF(D!B2:B8,\"<>East\",D!C2:C8)"
+    },
+    "F!A60": {
+      "kind": "number",
+      "value": "12.5",
+      "formula": "=SUMIF(D!C2:C8,4,D!D2:D8)"
+    },
+    "F!A61": {
+      "kind": "number",
+      "value": "3.34",
+      "formula": "=SUMIFS(D!D2:D8,D!B2:B8,\"East\",D!C2:C8,\">=5\")"
+    },
+    "F!A62": {
+      "kind": "number",
+      "value": "3",
+      "formula": "=COUNTIF(D!B2:B8,\"west\")"
+    },
+    "F!A63": {
+      "kind": "number",
+      "value": "1",
+      "formula": "=COUNTIF(D!D2:D8,\"<0\")"
+    },
+    "F!A64": {
+      "kind": "number",
+      "value": "2",
+      "formula": "=COUNTIFS(D!B2:B8,\"East\",D!C2:C8,\">4\")"
+    },
+    "F!A65": {
+      "kind": "number",
+      "value": "351.49666666666667",
+      "formula": "=AVERAGEIF(D!B2:B8,\"West\",D!D2:D8)"
+    },
+    "F!A66": {
+      "kind": "number",
+      "value": "1.67",
+      "formula": "=AVERAGEIFS(D!D2:D8,D!B2:B8,\"East\",D!C2:C8,\">4\")"
+    },
+    "F!A67": {
+      "kind": "number",
+      "value": "12.5",
+      "formula": "=MAXIFS(D!D2:D8,D!B2:B8,\"East\")"
+    },
+    "F!A68": {
+      "kind": "number",
+      "value": "-45.5",
+      "formula": "=MINIFS(D!D2:D8,D!B2:B8,\"West\")"
+    },
+    "F!A69": {
+      "kind": "number",
+      "value": "1950.2749999999996",
+      "formula": "=SUMPRODUCT(D!C2:C8,D!D2:D8)"
+    },
+    "F!A70": {
+      "kind": "number",
+      "value": "32",
+      "formula": "=SUBTOTAL(9,D!C2:C8)"
+    },
+    "F!A71": {
+      "kind": "number",
+      "value": "153.2864285714286",
+      "formula": "=SUBTOTAL(1,D!D2:D8)"
+    },
+    "F!A72": {
+      "kind": "number",
+      "value": "32",
+      "formula": "=SUBTOTAL(109,D!C2:C8)"
+    },
+    "F!A73": {
+      "kind": "number",
+      "value": "1000",
+      "formula": "=VLOOKUP(\"Dune\",D!A2:D8,4,FALSE)"
+    },
+    "F!A74": {
+      "kind": "text",
+      "value": "West",
+      "formula": "=VLOOKUP(\"dune\",D!A2:D8,2,FALSE)"
+    },
+    "F!A75": {
+      "kind": "number",
+      "value": "0.22",
+      "formula": "=VLOOKUP(50000,D!J2:K5,2)"
+    },
+    "F!A76": {
+      "kind": "number",
+      "value": "0.22",
+      "formula": "=VLOOKUP(50000,D!J2:K5,2,TRUE)"
+    },
+    "F!A77": {
+      "kind": "number",
+      "value": "0.1",
+      "formula": "=VLOOKUP(10999.99,D!J2:K5,2)"
+    },
+    "F!A78": {
+      "kind": "number",
+      "value": "0",
+      "formula": "=HLOOKUP(\"Qty\",D!A1:F8,3,FALSE)"
+    },
+    "F!A79": {
+      "kind": "text",
+      "value": "Castle",
+      "formula": "=INDEX(D!A2:D8,3,1)"
+    },
+    "F!A80": {
+      "kind": "number",
+      "value": "1000",
+      "formula": "=INDEX(D!D2:D8,4)"
+    },
+    "F!A81": {
+      "kind": "number",
+      "value": "3",
+      "formula": "=MATCH(\"Castle\",D!A2:A8,0)"
+    },
+    "F!A82": {
+      "kind": "number",
+      "value": "3",
+      "formula": "=MATCH(50000,D!J2:J5,1)"
+    },
+    "F!A83": {
+      "kind": "number",
+      "value": "2.675",
+      "formula": "=INDEX(D!D2:D8,MATCH(\"Fjord\",D!A2:A8,0))"
+    },
+    "F!A84": {
+      "kind": "number",
+      "value": "-45.5",
+      "formula": "=XLOOKUP(\"Grove\",D!A2:A8,D!D2:D8)"
+    },
+    "F!A85": {
+      "kind": "text",
+      "value": "none",
+      "formula": "=XLOOKUP(\"Nobody\",D!A2:A8,D!D2:D8,\"none\")"
+    },
+    "F!A86": {
+      "kind": "number",
+      "value": "2",
+      "formula": "=MATCH(\"B*\",D!A2:A8,0)"
+    },
+    "F!A87": {
+      "kind": "text",
+      "value": "Acme East",
+      "formula": "=D!A2&\" \"&D!B2"
+    },
+    "F!A88": {
+      "kind": "text",
+      "value": "Acme-4",
+      "formula": "=CONCATENATE(D!A2,\"-\",D!C2)"
+    },
+    "F!A89": {
+      "kind": "text",
+      "value": "Acme412.5",
+      "formula": "=CONCAT(D!A2,D!C2,D!D2)"
+    },
+    "F!A90": {
+      "kind": "text",
+      "value": "Bel",
+      "formula": "=LEFT(D!A3,3)"
+    },
+    "F!A91": {
+      "kind": "text",
+      "value": "ont",
+      "formula": "=RIGHT(D!A3,3)"
+    },
+    "F!A92": {
+      "kind": "text",
+      "value": "verg",
+      "formula": "=MID(D!A6,2,4)"
+    },
+    "F!A93": {
+      "kind": "number",
+      "value": "8",
+      "formula": "=LEN(D!F5)"
+    },
+    "F!A94": {
+      "kind": "text",
+      "value": "padded",
+      "formula": "=TRIM(D!F5)"
+    },
+    "F!A95": {
+      "kind": "text",
+      "value": "Beta two",
+      "formula": "=TRIM(D!F3)"
+    },
+    "F!A96": {
+      "kind": "text",
+      "value": "MIXED CASE",
+      "formula": "=UPPER(D!F7)"
+    },
+    "F!A97": {
+      "kind": "text",
+      "value": "mixed case",
+      "formula": "=LOWER(D!F7)"
+    },
+    "F!A98": {
+      "kind": "text",
+      "value": "Mixed Case",
+      "formula": "=PROPER(D!F7)"
+    },
+    "F!A99": {
+      "kind": "number",
+      "value": "1234.5",
+      "formula": "=VALUE(\"1,234.5\")"
+    },
+    "F!A100": {
+      "kind": "text",
+      "value": "1,234.50",
+      "formula": "=TEXT(1234.5,\"#,##0.00\")"
+    },
+    "F!A101": {
+      "kind": "text",
+      "value": "25.6%",
+      "formula": "=TEXT(0.256,\"0.0%\")"
+    },
+    "F!A102": {
+      "kind": "text",
+      "value": "1235",
+      "formula": "=TEXT(1234.567,\"0\")"
+    },
+    "F!A103": {
+      "kind": "text",
+      "value": "2026-01-31",
+      "formula": "=TEXT(D!E2,\"yyyy-mm-dd\")"
+    },
+    "F!A104": {
+      "kind": "text",
+      "value": "January 31, 2026",
+      "formula": "=TEXT(D!E2,\"mmmm d, yyyy\")"
+    },
+    "F!A105": {
+      "kind": "text",
+      "value": "-$1,234.50",
+      "formula": "=TEXT(-1234.5,\"$#,##0.00\")"
+    },
+    "F!A106": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=1=1"
+    },
+    "F!A107": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=\"a\"=\"A\""
+    },
+    "F!A108": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=\"a\"<\"b\""
+    },
+    "F!A109": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=1<>2"
+    },
+    "F!A110": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=D!C3=0"
+    },
+    "F!A111": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=ISBLANK(D!D9)"
+    },
+    "F!A112": {
+      "kind": "bool",
+      "value": false,
+      "formula": "=ISNUMBER(D!C9)"
+    },
+    "F!A113": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=ISTEXT(D!C9)"
+    },
+    "F!A114": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=ISNUMBER(D!C2)"
+    },
+    "F!A115": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=ISERROR(1/0)"
+    },
+    "F!A116": {
+      "kind": "bool",
+      "value": false,
+      "formula": "=ISERROR(D!C2)"
+    },
+    "F!A117": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=ISNA(MATCH(\"zz\",D!A2:A8,0))"
+    },
+    "F!A118": {
+      "kind": "bool",
+      "value": false,
+      "formula": "=ISNA(1/0)"
+    },
+    "F!A119": {
+      "kind": "bool",
+      "value": true,
+      "formula": "=ISERROR(VLOOKUP(\"zz\",D!A2:D8,2,FALSE))"
+    },
+    "F!A120": {
+      "kind": "text",
+      "value": "yes",
+      "formula": "=IF(ISNA(MATCH(\"Dune\",D!A2:A8,0)),\"no\",\"yes\")"
+    },
+    "F!A121": {
+      "kind": "number",
+      "value": "46335",
+      "formula": "=DATE(2026,11,9)"
+    },
+    "F!A122": {
+      "kind": "number",
+      "value": "46419",
+      "formula": "=DATE(2026,14,1)"
+    },
+    "F!A123": {
+      "kind": "number",
+      "value": "46022",
+      "formula": "=DATE(2026,1,0)"
+    },
+    "F!A124": {
+      "kind": "number",
+      "value": "2026",
+      "formula": "=YEAR(D!E2)"
+    },
+    "F!A125": {
+      "kind": "number",
+      "value": "1",
+      "formula": "=MONTH(D!E2)"
+    },
+    "F!A126": {
+      "kind": "number",
+      "value": "31",
+      "formula": "=DAY(D!E2)"
+    },
+    "F!A127": {
+      "kind": "number",
+      "value": "46081",
+      "formula": "=EOMONTH(D!E2,1)"
+    },
+    "F!A128": {
+      "kind": "number",
+      "value": "45716",
+      "formula": "=EOMONTH(D!E6,12)"
+    },
+    "F!A129": {
+      "kind": "number",
+      "value": "46081",
+      "formula": "=EDATE(D!E2,1)"
+    },
+    "F!A130": {
+      "kind": "number",
+      "value": "45716",
+      "formula": "=EDATE(D!E6,12)"
+    },
+    "F!A131": {
+      "kind": "number",
+      "value": "45991",
+      "formula": "=EDATE(D!E2,-2)"
+    },
+    "F!A132": {
+      "kind": "number",
+      "value": "28",
+      "formula": "=D!E3-D!E2"
+    },
+    "F!A133": {
+      "kind": "number",
+      "value": "28",
+      "formula": "=DAYS(D!E3,D!E2)"
+    },
+    "F!A134": {
+      "kind": "number",
+      "value": "46083",
+      "formula": "=D!E2+30"
+    },
+    "F!A135": {
+      "kind": "number",
+      "value": "1498.8763128818807",
+      "formula": "=PMT(0.06/12,360,-250000)"
+    },
+    "F!A136": {
+      "kind": "number",
+      "value": "100",
+      "formula": "=PMT(0,12,-1200)"
+    },
+    "F!A137": {
+      "kind": "number",
+      "value": "302.64083451634593",
+      "formula": "=PMT(0.05/12,60,-20000,5000,1)"
+    },
+    "F!A138": {
+      "kind": "number",
+      "value": "29449.960945095852",
+      "formula": "=FV(0.04/12,120,-200)"
+    },
+    "F!A139": {
+      "kind": "number",
+      "value": "31038.960163997774",
+      "formula": "=FV(0.04/12,120,-200,-1000,1)"
+    },
+    "F!A140": {
+      "kind": "number",
+      "value": "19999.75238077671",
+      "formula": "=PV(0.05/12,60,-377.42)"
+    },
+    "F!A141": {
+      "kind": "number",
+      "value": "8028.691555955193",
+      "formula": "=PV(0.05,10,-1000,-500)"
+    },
+    "F!A142": {
+      "kind": "number",
+      "value": "1307.2877535687421",
+      "formula": "=NPV(0.1,D!M3:M5)+D!M2"
+    },
+    "F!A143": {
+      "kind": "number",
+      "value": "1645.055612946685",
+      "formula": "=NPV(0.08,D!M2:M5)"
+    },
+    "F!A144": {
+      "kind": "number",
+      "value": "0.16340560068898924",
+      "formula": "=IRR(D!M2:M5)"
+    },
+    "F!A145": {
+      "kind": "number",
+      "value": "8000",
+      "formula": "=SLN(48000,8000,5)"
+    },
+    "F!A146": {
+      "kind": "number",
+      "value": "10666.666666666666",
+      "formula": "=SYD(48000,8000,5,2)"
+    },
+    "F!A147": {
+      "kind": "number",
+      "value": "19200",
+      "formula": "=DDB(48000,8000,5,1)"
+    },
+    "F!A148": {
+      "kind": "number",
+      "value": "6912",
+      "formula": "=DDB(48000,8000,5,3)"
+    },
+    "F!A149": {
+      "kind": "number",
+      "value": "0",
+      "formula": "=DDB(48000,8000,5,5)"
+    },
+    "F!A150": {
+      "kind": "number",
+      "value": "0.9062499999999999",
+      "formula": "=D!D2*Rate"
+    },
+    "F!A151": {
+      "kind": "number",
+      "value": "1073.005",
+      "formula": "=SUM(Prices)"
+    },
+    "F!A152": {
+      "kind": "number",
+      "value": "77.79",
+      "formula": "=ROUND(SUM(Prices)*Rate,2)"
+    },
+    "F!A153": {
+      "kind": "error",
+      "value": "#DIV/0!",
+      "formula": "=1/0"
+    },
+    "F!A154": {
+      "kind": "error",
+      "value": "#VALUE!",
+      "formula": "=D!C9+1"
+    },
+    "F!A155": {
+      "kind": "number",
+      "value": "0.30000000000000004",
+      "formula": "=0.1+0.2"
+    },
+    "F!A156": {
+      "kind": "number",
+      "value": "0.3333333333333333",
+      "formula": "=1/3"
+    },
+    "F!A157": {
+      "kind": "number",
+      "value": "4",
+      "formula": "=-2^2"
+    },
+    "F!A158": {
+      "kind": "number",
+      "value": "0.5",
+      "formula": "=2^-1"
+    },
+    "F!A159": {
+      "kind": "number",
+      "value": "16",
+      "formula": "=-D!C2^2"
+    },
+    "F!A160": {
+      "kind": "number",
+      "value": "18",
+      "formula": "=2*-3^2"
+    },
+    "F!A161": {
+      "kind": "number",
+      "value": "54.38",
+      "formula": "=ROUND(750*0.0725,2)"
+    },
+    "F!A162": {
+      "kind": "number",
+      "value": "115",
+      "formula": "=ROUND(1.15*100,0)"
+    },
+    "F!A163": {
+      "kind": "number",
+      "value": "2.8",
+      "formula": "=ROUND(2.5*1.1,1)"
+    },
+    "F!A164": {
+      "kind": "number",
+      "value": "0.29",
+      "formula": "=ROUND(0.285,2)"
+    },
+    "F!A165": {
+      "kind": "number",
+      "value": "-0.13",
+      "formula": "=ROUND(-0.125,2)"
+    },
+    "F!A166": {
+      "kind": "number",
+      "value": "1230",
+      "formula": "=ROUND(1234.5,-1)"
+    },
+    "F!A167": {
+      "kind": "number",
+      "value": "5.56",
+      "formula": "=ROUND(5.555,2)"
+    },
+    "F!A168": {
+      "kind": "number",
+      "value": "0.3",
+      "formula": "=ROUNDUP(0.1+0.2,1)"
+    },
+    "F!A169": {
+      "kind": "number",
+      "value": "3",
+      "formula": "=INT(0.1*3*10)"
+    },
+    "F!A170": {
+      "kind": "number",
+      "value": "820",
+      "formula": "=TRUNC(8.2*100)"
+    },
+    "F!A171": {
+      "kind": "number",
+      "value": "0.30000000000000004",
+      "formula": "=CEILING(0.3,0.1)"
+    },
+    "F!A172": {
+      "kind": "number",
+      "value": "0.30000000000000004",
+      "formula": "=FLOOR(0.3,0.1)"
+    },
+    "F!A173": {
+      "kind": "number",
+      "value": "0.09999999999999998",
+      "formula": "=MOD(0.3,0.1)"
+    },
+    "F!A174": {
+      "kind": "text",
+      "value": "54.38",
+      "formula": "=TEXT(54.375,\"0.00\")"
+    },
+    "F!A175": {
+      "kind": "text",
+      "value": "12.5%",
+      "formula": "=TEXT(0.125,\"0.0%\")"
+    },
+    "F!A176": {
+      "kind": "text",
+      "value": "3",
+      "formula": "=TEXT(2.5,\"0\")"
+    },
+    "F!A177": {
+      "kind": "text",
+      "value": "1,234,568",
+      "formula": "=TEXT(1234567.891,\"#,##0\")"
+    },
+    "F!A178": {
+      "kind": "number",
+      "value": "1",
+      "formula": "=IF(0.1+0.2=0.3,1,0)"
+    },
+    "F!A179": {
+      "kind": "number",
+      "value": "0",
+      "formula": "=(0.1+0.2)-0.3"
+    },
+    "F!A180": {
+      "kind": "number",
+      "value": "0",
+      "formula": "=1-0.9-0.1"
+    },
+    "F!A181": {
+      "kind": "number",
+      "value": "0",
+      "formula": "=SUM(0.1,0.2,-0.3)"
+    },
+    "F!A182": {
+      "kind": "number",
+      "value": "1.2100000000000002",
+      "formula": "=1.1*1.1"
+    },
+    "F!A183": {
+      "kind": "number",
+      "value": "4.571428571428571",
+      "formula": "=SUM(D!C2:C8)/COUNT(D!C2:C8)"
+    },
+    "F!A184": {
+      "kind": "number",
+      "value": "79",
+      "formula": "=(D!D5-D!D2)/D!D2"
+    },
+    "F!A185": {
+      "kind": "number",
+      "value": "45.5",
+      "formula": "=D!D8*-1"
+    },
+    "F!A186": {
+      "kind": "number",
+      "value": "5",
+      "formula": "=D!Z99+5"
+    }
+  }
+}

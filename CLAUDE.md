@@ -16414,6 +16414,124 @@ does not need a bump, stop and bump it.
     - Two failures heard after their turn's end can send two lines.
     - The local-only and cooldown refusals still say "press Retry".
 
+- **Spreadsheets are WORKED OUT by Iron Jarvis, checked against Excel
+  itself; results are kept IN the file; every stated figure has a
+  calculator** (v1.465.0; the owner: "expertly handle excel spread sheets …
+  full formulas, placement of data, overall spreadsheet context, mathematical
+  accuracy, formatting and purpose").
+  - **The engine (`documents/excel_formula.py`, rebuilt, same public API:
+    `FormulaError`, `Grid`, `evaluate_formula`).**
+    - The parser builds THUNKS, so `IF`/`IFERROR`/`IFNA`/`AND`/`OR`/
+      `ISERROR`/`ISNA` (`_LAZY`) work out only what they take.
+    - `Grid.get` answers the saved value, else COMPUTES the cell's formula
+      (memo, `_stack` circle check → "circular reference at X", `_MAX_DEPTH`,
+      a per-formula read budget `_reads` the caller resets). `Grid.saved` is
+      the value Excel saved and nothing else: `excel_formula_check` compares
+      against THAT, never against the engine's own answer.
+    - `SUPPORTED` (80 functions). Defined names, whole columns (`A:A`,
+      bounded by the sheet's rows), sheet names matched without case.
+      `ExcelError(code)` is an Excel error VALUE a formula produced.
+    - `Grid(None)` is the calculator's grid (`variables`, no cells).
+  - **THE GROUND TRUTH IS EXCEL.** `tests/fixtures/excel_truth_v1465/`
+    holds `cov.xlsx` (every function), `books.xlsx` (a small business
+    workbook with six planted mistakes) and `excel_truth.json`: what the
+    real Excel on the owner's PC answered for all 318 formula cells (hidden,
+    read-only, through COM). `tests/test_excel_engine_v1465.py` replays it;
+    a pin fails when a `SUPPORTED` function is not in it. The first run
+    found three faults, each now a rule:
+    - Excel keeps 15 significant digits: `excel_round` rounds
+      `f"{v:.15g}"` half AWAY from zero (750*7.25% → 54.38, never
+      Python's 54.37), and `_rank` compares numbers at 15 digits
+      (`0.1+0.2=0.3` is TRUE).
+    - A leading minus binds tighter than `^` and `^` is left to right
+      (`=-2^2` is 4, `=2^3^2` is 64): `_multiplicative` → `_power` →
+      `_unary` → `_percent`.
+    - A newer function written plainly opens in Excel as `#NAME?`.
+      `for_file()` adds the file's prefix (`_PREFIXED`: `_xlfn.` /
+      `_xlfn._xlws.`), never inside quotes; `for_reading()` removes it.
+      EVERY place that writes a formula calls `for_file`: `excel_edit`,
+      `writers._xlsx_fill` and the plain-rows branch, `excel_apply_spec`. A
+      NEW function added to `SUPPORTED` that Excel 2007 lacks needs a
+      `_PREFIXED` row and a fixture row answered by Excel.
+  - **Results kept in the file (`documents/excel_recalc.py`).**
+    `compute_missing(path, sheets)` works out every formula cell with no
+    saved result (bounded: `MAX_FILE_BYTES`, `MAX_FORMULAS`, `DEADLINE_S`;
+    `Recalc.values` shows a date cell as an ISO date; `failed` names each
+    cell and why; never raises). `store_results(path)` then writes each
+    result into the sheet XML beside its `<f>` (regex over what the library
+    writes; `t="str"` / `t="b"`), into a copy named
+    `.recalc-<pid>-<name>` (the library opens a file by its extension),
+    reads the copy back (`_stored_reads_back`) and only then `os.replace`s.
+    It touches ONLY a workbook whose `xl/workbook.xml` says
+    `fullCalcOnLoad="1"` (what openpyxl writes), so Excel recalculates
+    everything on open and a stored number can never mask Excel's own.
+    Called after `excel_edit`, `write_document` (.xlsx,
+    `writers._xlsx_store_results`) and `excel_apply_spec`. An error result
+    is never stored.
+  - **Tools (`documents/excel_tools.py`).**
+    - `excel_edit` returns `results [{sheet, cell, formula, value|error}]`
+      and one output line per formula it wrote; takes formatting keys
+      (`_FORMAT_KEYS`: number_format, bold, italic, fill, font_color, align,
+      wrap; a formatting-only edit may name a range and writes NO value).
+    - `excel_read` (values) and `excel_query` (`_load_table_computed`) fill
+      unsaved formulas through `fill_rows`; `worked_out` /
+      `FORMULAS_WORKED_OUT_NOTE` say so; `FORMULAS_LEFT_OUT_NOTE` is only
+      for cells the engine could not work out.
+    - `excel_query`: groups ranked by ABSOLUTE size, the cut said with its
+      sum, "Total of all N group(s)", `groups_total`, limit ≤ 200; dates
+      compared as dates (`_as_date`); `_fmt_num` never rounds a difference
+      away.
+    - `excel_profile` returns `documents/excel_map.workbook_map` (header
+      row, column kinds and formats, `formula_pattern` groups, totals with
+      values, `uses_sheets`, names, hidden sheets, `looks_like` from the
+      sheet's own words, and `checks`: typed number in a formula column,
+      pattern break, SUM stopping short, typed total ≠ the block above,
+      numbers stored as text, formulas that come to an error). The first
+      line per sheet is the old headline. A map that raises falls back to
+      the quick profile (`data.quick`).
+  - **`calculate` (`documents/calculate_tool.py`):** allow tier, READONLY,
+    no file. Expressions in order (≤ 40); a one-word label becomes a NAME
+    for later ones (never a cell-like label). On every built-in agent's
+    roster (`agents/types.py`). In chat it is armed in its OWN place,
+    outside the six-tool cap, in `chat_turn._resolve_armed_tools` beside the
+    settings tools, when `autoselect.wants_calculator(text, picked)` says so
+    (arithmetic asked outright, or a document tool picked AND a money word).
+    It is NOT in `AUTO_SAFE_TOOLS` and no rule scores it:
+    `select_auto_tools` is byte-identical (eight pins of its exact output
+    went red when the calculator was first added inside it).
+  - **Also in this release.** `writers.UNWRITABLE_FORMATS` (.xls, .doc,
+    .rtf, …) are refused with nothing written. Rows written to a PDF are a
+    table (`_table_rows`), a tab is four spaces, and `_undrawable` replaces
+    a character the font lacks with "?" and warns. A coding helper
+    (`HELPER_ORIGIN`) is `completed_with_failures` only when
+    `session_result["ended_on_failed_change"]` (its LAST non-read-only call
+    failed; `Orchestrator._settle_finished_run`); replayed read-only on the
+    owner's ledger: 53 labelled, 5 kept. Every other origin keeps the old
+    rule. `core/model_cwd.remap(raw, workspace)`: an absolute path inside
+    claude-cli's scratch cwd (`<temp>/ironjarvis-claude-cwd*`, which the CLI
+    tells its model is the working directory) is read as the same relative
+    path in the workspace, in `tools/base.safe_path` and the three
+    `_resolve_read_path`s (documents, excel, images); pure text, a path
+    with `..` is left alone.
+  - **LIVE-PROVEN** (scratch daemon on 8797, real claude-cli Haiku, judged by
+    the files): a client memo with 12 of 12 money figures right (3 were wrong
+    on v1.464.0); a review that found all six planted mistakes with the right
+    cells once `excel_profile` was armed (without it, one wrong cell); a
+    model-built workbook whose 39 stored results all equalled real Excel's.
+  - **Pins:** `tests/test_excel_engine_v1465.py`,
+    `tests/test_excel_tools_v1465.py`, `tests/test_office_fixes_v1465.py`;
+    moved on purpose: `test_excel_formula_skills` (VLOOKUP and whole columns
+    work now), `test_office_edge_cases_v1464` (the total is the true 42; an
+    edit keeps results in the file), both tool-word fixtures.
+  - **To refresh the Excel fixture** (needs Excel): build the workbooks,
+    run a PowerShell COM script that opens each read-only in its own hidden
+    Excel, `CalculateFull()`, and dumps every formula cell's `Value2` to
+    JSON; close only the Excel it started.
+  - **OPEN:** array formulas, INDIRECT, OFFSET and links to other
+    workbooks are named and left for Excel; `TEXT` knows a few formats;
+    `convert_document` xlsx → csv still blanks unsaved formulas; an agent
+    run's own arithmetic depends on the model calling `calculate`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

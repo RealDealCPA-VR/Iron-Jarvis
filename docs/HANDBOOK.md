@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.464.0 (2026-11-09).*
+holds itself to. Current as of v1.465.0 (2026-11-09).*
 
 ---
 
@@ -2042,6 +2042,125 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Spreadsheets Jarvis understands and works out itself (v1.465.0)
+
+Jarvis used to read a workbook as a grid of cells and leave every formula to
+Excel. It now works formulas out itself, understands how a workbook is built,
+and checks its own arithmetic.
+
+**Formulas are worked out, the way Excel does it.** A formula's result is
+normally filled in by Excel when a person opens and saves the file. A workbook
+that a program wrote has formulas with no results, so a total read as blank.
+Jarvis now works those out: sums, averages, conditional sums and counts
+(SUMIF, SUMIFS, COUNTIF), lookups (VLOOKUP, INDEX and MATCH, XLOOKUP), IF and
+IFERROR, rounding, dates (EOMONTH, EDATE), text, loan and investment functions
+(PMT, FV, PV, NPV, IRR) and depreciation (SLN, SYD, DDB), across sheets and
+through named ranges. About 80 functions in all.
+
+The answers were checked against Excel itself: 318 formulas in two test
+workbooks, opened in the real Excel on this PC, and every one matches. That
+check found three differences, all fixed:
+
+- **Rounding.** Excel rounds a half away from zero and reads a number at 15
+  digits. 750 times 7.25% rounded to two places is 54.38 in Excel; ordinary
+  computer arithmetic says 54.37.
+- **Order of a minus sign and a power.** In Excel `=-2^2` is 4.
+- **Newer functions.** A formula with XLOOKUP, IFNA, MAXIFS, MINIFS, CONCAT or
+  DAYS that Jarvis wrote into a workbook used to open in Excel as `#NAME?`.
+  It is now stored the way Excel expects.
+
+When a formula uses something Jarvis cannot work out, it says which cell and
+why. It never guesses a number.
+
+**Results are saved in the file.** When Jarvis writes or edits a workbook, it
+works every formula out and saves each result in the file beside its formula.
+The file then reads correctly in any program (a preview, an email attachment,
+another tool), not only after Excel has opened it. Excel still works every
+formula out again itself when it opens the file, so its own answer always
+wins. After an edit, Jarvis reports what each formula it wrote comes to.
+
+**A map of the workbook.** Before Jarvis works on a workbook it now reads a
+map of it. For each sheet the map says:
+
+- what the sheet looks like (an income statement, a budget, an invoice, a
+  list of sales) and how it is laid out;
+- where the header row is, what each column holds, and how it is formatted;
+- which formulas are filled down a column, and the totals with what they come
+  to;
+- which other sheets it reads from, named ranges, and hidden sheets.
+
+The map also lists anything **worth a look**, the things a careful reviewer
+would stop at:
+
+- a typed number in a column of formulas;
+- a formula that does not follow the rest of its column;
+- a SUM that stops short of the last rows;
+- a typed total that does not equal the numbers above it;
+- numbers stored as text, which sums skip;
+- a formula that comes to an error.
+
+These are prompts to check, not verdicts. A statement with subtotals can have
+a typed total for a good reason.
+
+**Formatting.** When Jarvis edits a workbook it can now set number formats
+(money, percent, dates), bold and italic, fill and text colour, alignment and
+wrapping, on one cell or a range.
+
+**Questions about a sheet.** Three things that went wrong quietly are fixed:
+
+- A breakdown by vendor or client listed only the first 20 groups and said
+  nothing about the rest. The largest negative group (a refund) was the first
+  to be dropped. It now ranks groups by size, says how many it left out and
+  what they add up to, and always gives the total of all groups.
+- A filter on a date ("on or after 1 March") matched nothing. Dates now match,
+  typed either as 2026-03-01 or 3/1/2026.
+- A small figure such as 0.004 was reported as 0.00. It keeps its digits.
+
+**A calculator for every figure Jarvis states.** A language model adds badly.
+In a test, a client memo had a correct table and three wrong numbers in its
+sentences, because the sentences were worked out "in its head". Jarvis now has
+a calculator that uses the same engine as the spreadsheet tools, and it is
+switched on by itself when a message asks for arithmetic or when Jarvis reads
+or writes a document about money. It is told to use it for every figure it
+did not copy from a source.
+
+**PDFs made from a table.** Rows written to a PDF used to run together: an
+invoice number 1042 beside an amount 500 printed as "1042500". They are now a
+real table. A character the PDF's font cannot draw (Chinese, Japanese, Korean,
+Arabic, emoji) used to vanish; it is now shown as "?" and Jarvis says so and
+suggests a Word document instead.
+
+**Old file formats are refused, not faked.** Asking Jarvis to save as .xls,
+.doc or .rtf used to write a few bytes of text under that name and report
+success. Excel and Word could not open the result. Jarvis now says it cannot
+write that format, names the one to use (.xlsx, .docx, .pptx), and writes
+nothing.
+
+**The "Part failed" label on a coding helper.** A helper was marked "Part
+failed" whenever any command along the way ended with an error, such as a
+test that failed before the fix. On this PC 53 of 70 helper runs carried the
+label and only 5 of them ended on a failed step. A helper now reads "Part
+failed" only when its last change failed.
+
+**"This folder" means your work folder.** With Claude Code answering, Jarvis
+sometimes looked for a file you named in a hidden scratch folder first, failed,
+and then went looking for the right place. A file named that way is now read
+from your work folder straight away.
+
+**How this was checked.** Besides the 318 formulas compared with Excel, three
+real requests were run on a test copy of the app with a real model and judged
+by the files they produced. A client memo from an expenses workbook: all 12
+money figures in it were right (the same request had 3 wrong figures before).
+A review of a workbook with six planted mistakes: all six found, each with the
+right cell. A new workbook with 39 formulas: opened in Excel afterwards, and
+every result saved in the file equalled Excel's own.
+
+What is still not done: Jarvis does not work out array formulas, INDIRECT,
+OFFSET, or links to other workbooks; those cells are named and left for Excel.
+It does not create charts from a description or pivot tables. Saving a
+workbook from Jarvis can still simplify unusual content (some charts and
+macros).
+
 ## Starter skills you can load (v1.464.0)
 
 A skill is a set of instructions Jarvis follows for one kind of task, such as
@@ -2128,7 +2247,8 @@ Each was found by running the real tools on ordinary but awkward files.
   true 42). It now adds a warning that says how many cells were left out and
   that the answer is incomplete, and an edit of a workbook with formulas says
   the same before anyone asks. The fix on your side is unchanged: open the
-  workbook in Excel and save it.
+  workbook in Excel and save it. (Since v1.465.0 Jarvis works these results
+  out itself; the warning is only for a formula it cannot work out.)
 
 ## Reading web pages works on more sites; page screenshots work again (v1.463.0)
 

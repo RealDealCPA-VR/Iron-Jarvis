@@ -44,6 +44,7 @@
     "build_folder_show",
     "build_team_clear",
     "build_team_set",
+    "calculate",
     "capability_propose",
     "change_undo",
     "changes_list",
@@ -261,6 +262,7 @@
     "build_folder_show": "look up a folder's coding settings",
     "build_team_clear": "stop using a coding team in a folder",
     "build_team_set": "set a folder's coding team",
+    "calculate": "work out the figures",
     "capability_propose": "suggest a new ability for Iron Jarvis",
     "change_undo": "undo one of its changes",
     "changes_list": "list its recent changes",
@@ -546,6 +548,10 @@
     "build_team_set": [
       "Set a folder's coding team",
       "Setting a folder's coding team"
+    ],
+    "calculate": [
+      "Worked out the figures",
+      "Working out the figures"
     ],
     "capability_propose": [
       "Suggested a new ability for Iron Jarvis",
@@ -1120,6 +1126,7 @@
     "build_folder_show": "",
     "build_team_clear": "",
     "build_team_set": "",
+    "calculate": "",
     "capability_propose": "",
     "change_undo": "",
     "changes_list": "",

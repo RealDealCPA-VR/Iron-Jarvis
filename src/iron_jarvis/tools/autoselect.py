@@ -3362,6 +3362,56 @@ def select_auto_tools(
     return [name for name, _ in ranked[:cap]]
 
 
+# THE CALCULATOR RIDES ALONG, IT NEVER COMPETES (v1.465.0). `calculate` is not
+# scored by the rules above and is not a member of AUTO_SAFE_TOOLS, so
+# :func:`select_auto_tools` is exactly what it was. The chat lanes add it in a
+# place of its own, outside the tool cap (`chat_turn._resolve_armed_tools`,
+# beside the settings tools), when :func:`wants_calculator` says the turn will
+# state figures; every built-in agent has it on its roster.
+
+#: Tools whose turn states figures: a document being written or read.
+_FIGURE_CARRIERS = frozenset({
+    "write_document", "docx_edit", "read_document", "excel_query", "excel_read",
+    "excel_edit", "excel_profile", "excel_apply_spec",
+})
+
+#: A request for arithmetic itself.
+_ARITHMETIC_RX = re.compile(
+    r"\b(?:calculat\w+|comput(?:e|es|ed|ing)|add(?:ed|ing)?\s+up|tot(?:al)?\s+up)\b"
+    r"|\d\s?%\s+of\b|\bpercent(?:age)?\s+of\b"
+    r"|\d\s?(?:[+*/\u00d7\u00f7]|plus|minus|times|divided\s+by)\s?\$?\d"
+    r"|\d\s[-x]\s\$?\d",
+    re.IGNORECASE,
+)
+
+#: Everyday verbs that mean arithmetic only beside a number or a money word
+#: ("work out the tax", never "work out the kids' schedule").
+_LOOSE_ARITHMETIC_RX = re.compile(r"\b(?:work(?:ed|ing)?\s+out|sum\s+up|tally|figure\s+out)\b", re.IGNORECASE)
+
+#: Money and measurement words: what a document about figures is about.
+_FIGURE_WORD_RX = re.compile(
+    r"\b(?:totals?|subtotals?|sums?|amounts?|expenses?|costs?|invoices?|budgets?|"
+    r"revenues?|sales|profits?|loss(?:es)?|tax(?:es)?|payroll|balances?|fees?|"
+    r"prices?|pricing|percent(?:age)?s?|margins?|interest|depreciation|"
+    r"reimbursements?|refunds?|payments?|figures|numbers|averages?|variances?|"
+    r"forecasts?|estimates?|quotes?|p&l|cash\s+flow)\b|\$\s?\d|\d\s?%",
+    re.IGNORECASE,
+)
+
+
+def wants_calculator(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
+    """True when the turn will state figures the model should not work out in
+    its head (v1.465.0): it asks for arithmetic, or it reads or writes a
+    document and the message is about money or measurements. Pure, linear."""
+    msg = (text or "")[:4000]
+    if _ARITHMETIC_RX.search(msg):
+        return True
+    about_figures = bool(_FIGURE_WORD_RX.search(msg))
+    if about_figures and _LOOSE_ARITHMETIC_RX.search(msg):
+        return True
+    return about_figures and bool(_FIGURE_CARRIERS.intersection(picked))
+
+
 #: ASK-TIER candidates (v1.187.0): tools worth SHOWING the model in an
 #: interactive chat even though every call must be approved by the user first.
 #: Deliberately not merged into AUTO_SAFE_TOOLS — that set is the auto-ALLOW

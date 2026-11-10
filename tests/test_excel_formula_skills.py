@@ -82,10 +82,13 @@ def test_evaluator_core(tmp_path):
         assert evaluate_formula("=PL!B2", grid, "Notes") == 5000
         assert evaluate_formula("=Z99+5", grid, "PL") == 5  # blank cell = 0
         assert evaluate_formula("=SUM(A1:B5)", grid, "PL") == 1000  # labels skipped
-        with pytest.raises(FormulaError, match="VLOOKUP"):
-            evaluate_formula("=VLOOKUP(A1,B1:C5,2)", grid, "PL")
-        with pytest.raises(FormulaError, match="named ranges"):
-            evaluate_formula("=SUM(B:B)", grid, "PL")  # whole-column unsupported
+        # v1.465.0 (moved on purpose): lookups and whole columns are worked
+        # out now. A function outside the engine is still refused by name.
+        assert evaluate_formula('=VLOOKUP("Rent",A1:B5,2,FALSE)', grid, "PL") == -500
+        # B:B = the four amounts, the literal total and the formula total.
+        assert evaluate_formula("=SUM(B:B)", grid, "PL") == 3000
+        with pytest.raises(FormulaError, match="INDIRECT"):
+            evaluate_formula('=INDIRECT("B2")', grid, "PL")
         with pytest.raises(FormulaError, match="division by zero"):
             evaluate_formula("=1/0", grid, "PL")
     finally:
@@ -123,7 +126,7 @@ async def test_formula_check_validates_against_the_sheet(tmp_path):
     assert "no cached value" in res.output
     # Unsupported function → honest refusal, not a wrong number.
     res = await check.execute(
-        {"path": "pl.xlsx", "sheet": "PL", "formula": "=XLOOKUP(1,A:A,B:B)"},
+        {"path": "pl.xlsx", "sheet": "PL", "formula": '=INDIRECT("B2")'},
         _ctx(ws),
     )
     assert not res.ok and "not supported" in res.error

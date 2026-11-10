@@ -4644,6 +4644,23 @@ def _resolve_armed_tools(
         for t in settings_tools_for(last_user, auto_tools=bool(getattr(body, "auto_tools", False)))
         if t not in explicit and t not in auto and d.platform.registry.get(t)
     ]
+    # THE CALCULATOR, IN ITS OWN PLACE TOO (v1.465.0). A turn that reads or
+    # writes a document about money, or that asks for arithmetic outright,
+    # gets `calculate` (exact arithmetic, no file, nothing read or written) so
+    # a figure in the reply is worked out by the engine and not in the model's
+    # head: a live client memo had a correct table and three wrong numbers in
+    # its prose. Outside the cap for the settings tools' reason: the turns
+    # that state the most figures are the ones whose six places are full.
+    if (
+        getattr(body, "auto_tools", False)
+        and "calculate" not in explicit
+        and "calculate" not in auto
+        and d.platform.registry.get("calculate") is not None
+    ):
+        from ..tools.autoselect import wants_calculator
+
+        if wants_calculator(last_user, explicit + auto):
+            auto.append("calculate")
     auto = [t for t in auto if _not_denied(t)]
     # THE BROWSER CAPABILITY FILTER (v1.236.0, plan 11.2), applied LAST — after
     # the explicit picks, after every fill pass, and after the drop signal has

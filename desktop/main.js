@@ -3846,6 +3846,7 @@ const TOOL_WORDS_BUILTIN = {
   build_folder_show: "look up a folder's coding settings",
   build_team_clear: "stop using a coding team in a folder",
   build_team_set: "set a folder's coding team",
+  calculate: "work out the figures",
   capability_propose: "suggest a new ability for Iron Jarvis",
   change_undo: "undo one of its changes",
   changes_list: "list its recent changes",

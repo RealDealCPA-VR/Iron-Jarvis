@@ -41,8 +41,12 @@ _MAX_OUTPUT = 16_000
 
 
 def _resolve_read_path(raw: str, ctx: ToolContext) -> Path:
-    """Absolute paths are used as-is; relative paths resolve under the workspace."""
-    p = Path(raw)
+    """Absolute paths are used as-is; relative paths resolve under the workspace.
+    A path inside the model's own scratch folder is read as the same name in
+    the workspace (v1.465.0, core/model_cwd)."""
+    from ..core.model_cwd import remap
+
+    p = Path(remap(raw, ctx.workspace))
     if p.is_absolute():
         return p
     return (Path(ctx.workspace) / raw)
@@ -1372,6 +1376,7 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
     the same scan was readable or silent depending on which tool the model
     picked). Without it the tools behave exactly as before (no platform
     dependency)."""
+    from .calculate_tool import CalculateTool
     from .excel_tools import excel_tools
     from .office_tools import office_tools
     from .pdf_tools import pdf_page_tools
@@ -1386,6 +1391,7 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
         RedactPiiTool(router_resolver),
         BatchDocumentsTool(router_resolver),
         *excel_tools(),
+        CalculateTool(),  # v1.465.0: exact arithmetic for every stated figure
         *pdf_page_tools(),
         # C-03/C-07/C-09 — docx_edit, compare_documents, pdf_form_fields,
         # pdf_form_fill. A tool that is not in THIS list is registered nowhere,

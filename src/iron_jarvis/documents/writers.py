@@ -106,6 +106,15 @@ def write_document(
 
     suffix = ("." + kind.lstrip(".")).lower() if kind else p.suffix.lower()
 
+    # v1.465.0: a format this app cannot write is REFUSED. It used to fall to
+    # the plain-text writer: "books.xls" became eight bytes of tab text that
+    # Excel will not open, and the tool said it was written.
+    if suffix in UNWRITABLE_FORMATS:
+        raise ValueError(
+            f"cannot write a {suffix} file: {UNWRITABLE_FORMATS[suffix]}. "
+            "Nothing was written."
+        )
+
     if options and suffix not in (".docx", ".xlsx"):
         # Honest, not fatal: the write proceeds exactly as without options.
         _warn(warnings, f"beauty options are honored for .docx/.xlsx only — ignored for {suffix or 'this format'}")
@@ -114,10 +123,11 @@ def write_document(
         _write_docx(p, content, options=options, warnings=warnings)
     elif suffix == ".xlsx":
         _write_xlsx(p, content, options=options, warnings=warnings)
+        _xlsx_store_results(p, warnings)
     elif suffix == ".pptx":
         _write_pptx(p, content)
     elif suffix == ".pdf":
-        _write_pdf(p, content)
+        _write_pdf(p, content, warnings=warnings)
     elif suffix == ".csv":
         _write_csv(p, content)
     elif suffix in (".html", ".htm"):
@@ -129,6 +139,22 @@ def write_document(
     else:
         _write_text(p, content)
     return p
+
+
+#: Office formats this app reads or knows but cannot WRITE, with the format
+#: to use instead (v1.465.0). A name ending in one of these is refused.
+UNWRITABLE_FORMATS: dict[str, str] = {
+    ".xls": "this is the old Excel format, which Iron Jarvis cannot write; save it as .xlsx",
+    ".xlsm": "a workbook with macros cannot be created here; save it as .xlsx",
+    ".xlsb": "this Excel format cannot be written here; save it as .xlsx",
+    ".ods": "this spreadsheet format cannot be written here; save it as .xlsx",
+    ".doc": "this is the old Word format, which Iron Jarvis cannot write; save it as .docx",
+    ".docm": "a document with macros cannot be created here; save it as .docx",
+    ".rtf": "this format cannot be written here; save it as .docx",
+    ".odt": "this document format cannot be written here; save it as .docx",
+    ".ppt": "this is the old PowerPoint format, which Iron Jarvis cannot write; save it as .pptx",
+    ".odp": "this presentation format cannot be written here; save it as .pptx",
+}
 
 
 # --- atomic write --------------------------------------------------------------
@@ -690,11 +716,13 @@ def _write_xlsx(
     else:
         ws = wb.active
         if isinstance(content, (list, tuple)):
+            from .excel_formula import for_file
+
             for row in content:
                 if isinstance(row, (list, tuple)):
-                    ws.append([("" if c is None else c) for c in row])
+                    ws.append([("" if c is None else for_file(c)) for c in row])
                 else:
-                    ws.append([row])
+                    ws.append([for_file(row)])
         else:
             for line in _as_lines(content):
                 ws.append([line])
@@ -703,6 +731,28 @@ def _write_xlsx(
             xlsx_apply_beauty(ws, theme, opts, warnings)
     with _atomic(p) as tmp:
         wb.save(str(tmp))
+
+
+def _xlsx_store_results(p: Path, warnings: "list[str] | None") -> None:
+    """Work out the formulas of a workbook just written and keep each result
+    in the file (v1.465.0), so a total reads as a number in every program and
+    not only after Excel opened the file. What could not be worked out is a
+    warning; a failure here never fails the write."""
+    try:
+        from .excel_recalc import compute_missing, store_results  # noqa: F401
+
+        res = store_results(p)
+    except Exception:  # noqa: BLE001
+        return
+    if res.failed or res.skipped:
+        n = len(res.failed) + res.skipped
+        detail = f": {res.problems()}" if res.failed else ""
+        _warn(
+            warnings,
+            f"{n} formula cell(s) could not be worked out here{detail}. They read as "
+            "blank until the workbook is opened and saved in Excel; do not report a "
+            "figure that depends on them.",
+        )
 
 
 _XLSX_FORMULA_RX = re.compile(r"=\s*[A-Za-z0-9_$(+\-\"'.@{\[]")
@@ -791,8 +841,16 @@ def _xlsx_fill(ws: Any, rows: Any) -> None:
             # ("=== see memo ===", "= total"). Stored as one, the cell shows
             # an error in Excel. A real formula goes on to a name, a number, a
             # bracket, a sign or a quote.
-            if isinstance(coerced, str) and coerced.startswith("=") and not _XLSX_FORMULA_RX.match(coerced):
-                cell.data_type = "s"
+            if isinstance(coerced, str) and coerced.startswith("="):
+                if not _XLSX_FORMULA_RX.match(coerced):
+                    cell.data_type = "s"
+                else:
+                    # v1.465.0: newer functions (XLOOKUP, IFNA, MAXIFS, CONCAT…)
+                    # carry the prefix Excel stores them with; written
+                    # plainly they open as #NAME?.
+                    from .excel_formula import for_file
+
+                    cell.value = for_file(coerced)
 
     if header:
         from openpyxl.styles import Font
@@ -1264,7 +1322,57 @@ def _prebreak(pdf: Any, text: str, max_w: float) -> str:
     return " ".join(out)
 
 
-def _write_pdf(p: Path, content: Any) -> None:
+def _table_rows(content: Any) -> "list[tuple[str, list[list[str]]]] | None":
+    """Rows handed to a PDF as ``[(title, rows)]`` tables, or None when the
+    content is not rows. A list of lists is one table; a ``{sheet: rows}``
+    dict is one table per sheet."""
+
+    def rows_of(value: Any) -> "list[list[str]] | None":
+        if not isinstance(value, (list, tuple)) or not value:
+            return None
+        if not all(isinstance(r, (list, tuple)) for r in value):
+            return None
+        return [["" if c is None else str(c) for c in r] for r in value if len(r)]
+
+    if isinstance(content, dict):
+        out = []
+        for name, value in content.items():
+            rows = rows_of(value)
+            if rows is None:
+                return None
+            if rows:
+                out.append((str(name), rows))
+        return out or None
+    rows = rows_of(content)
+    return [("", rows)] if rows else None
+
+
+def _undrawable(pdf: Any, text: str) -> tuple[str, int]:
+    """``(text the PDF font can draw, how many characters it could not)``.
+
+    The bundled font has no Chinese, Japanese, Korean, Arabic or emoji glyphs.
+    Such a character used to be dropped with no word (``Client 张伟 owes 500``
+    became ``Client  owes 500``). Each is replaced with ``?`` and counted so
+    the write can say so. Cannot tell (no glyph table) means nothing changes."""
+    try:
+        font = pdf.fonts.get("djsans")
+        cmap = getattr(font, "cmap", None)
+        if not cmap:
+            return text, 0
+    except Exception:  # noqa: BLE001
+        return text, 0
+    out: list[str] = []
+    missing = 0
+    for ch in text:
+        if ch in "\n\r\t" or ord(ch) < 32 or ord(ch) in cmap:
+            out.append(ch)
+        else:
+            out.append("?")
+            missing += 1
+    return "".join(out), missing
+
+
+def _write_pdf(p: Path, content: Any, warnings: "list[str] | None" = None) -> None:
     """Compose a PDF in memory, then write atomically.
 
     Building in memory (``pdf.output()`` -> bytes) means a layout failure never
@@ -1275,13 +1383,22 @@ def _write_pdf(p: Path, content: Any) -> None:
     from fpdf.errors import FPDFException
 
     data: bytes | None = None
+    notes: list[int] = []
     for scale, plain in ((1.0, False), (0.7, False), (0.5, True)):
         try:
-            pdf = _compose_pdf(content, scale, plain)
+            notes.clear()
+            pdf = _compose_pdf(content, scale, plain, missing=notes)
             data = bytes(pdf.output())
             break
         except FPDFException:
             continue
+    if sum(notes) > 0:
+        _warn(
+            warnings,
+            f"{sum(notes)} character(s) are in a script this PDF's font cannot draw "
+            "(for example Chinese, Japanese, Korean, Arabic or emoji) and were replaced "
+            "with ?. Save as .docx to keep them.",
+        )
     if data is None:  # last resort: a minimal but valid one-page document
         pdf = _compose_pdf(" ", 0.5, True)
         data = bytes(pdf.output())
@@ -1289,12 +1406,34 @@ def _write_pdf(p: Path, content: Any) -> None:
         Path(tmp).write_bytes(data)
 
 
-def _compose_pdf(content: Any, scale: float, plain: bool) -> Any:
+def _compose_pdf(content: Any, scale: float, plain: bool,
+                 missing: "list[int] | None" = None) -> Any:
     from fpdf import FPDF
 
     pdf = FPDF()
-    sans, mono, clean = _pdf_fonts(pdf)
+    sans, mono, base_clean = _pdf_fonts(pdf)
+
+    def clean(text: str) -> str:
+        # A tab has no glyph: "Invoice\t500" was drawn as "Invoice500". Four
+        # spaces keep columns apart wherever text reaches the page.
+        drawn, lost = _undrawable(pdf, base_clean(str(text)).replace("\t", "    "))
+        if lost and missing is not None:
+            missing.append(lost)
+        return drawn
+
     pdf.add_page()
+    # v1.465.0: rows (a list of lists, or {sheet: rows}) are drawn as a real
+    # table. They used to be joined with tabs, which the font cannot draw, so
+    # "1042 | 500" reached the page as "1042500".
+    tables = None if plain else _table_rows(content)
+    if tables:
+        for title, rows in tables:
+            if title:
+                pdf.set_font(sans, "B", max(8, int(13 * scale)))
+                pdf.multi_cell(0, 8 * scale, clean(title))
+                pdf.ln(1)
+            _pdf_table(pdf, rows, [], sans, clean, scale)
+        return pdf
     if plain or not isinstance(content, str):
         pdf.set_font(sans, size=max(6, int(12 * scale)))
         text = clean(_as_text(content))

@@ -78,6 +78,9 @@ def _resolve_read_path(raw: str, ctx: ToolContext) -> "tuple[Path | None, str | 
 
     Returns ``(path, None)`` or ``(None, error)``.
     """
+    from ..core.model_cwd import remap
+
+    raw = remap(raw, ctx.workspace)  # v1.465.0: the model's scratch folder
     p = Path(raw)
     if p.is_absolute():
         allowed, reason = fs_read_ok(p)

@@ -415,6 +415,10 @@ def session_result(
             revertable = 0
             already_reverted = 0
             mutating_failed = 0
+            # v1.465.0: whether the LAST call that changes something failed
+            # (None = the run made no such call). A coding helper's verdict
+            # reads this: see Orchestrator._settle_finished_run.
+            last_change_ok: "bool | None" = None
 
             for inv in invocations:
                 # An undo is itself a ledger row; counting it as work the agent
@@ -423,6 +427,8 @@ def session_result(
                     continue
                 name = inv.tool or "(unknown)"
                 used[name] = used.get(name, 0) + 1
+                if (inv.reversibility or "").lower() != Reversibility.READONLY.value:
+                    last_change_ok = bool(inv.ok)
                 if not inv.ok:
                     failed[name] = failed.get(name, 0) + 1
                     # A failed READ is a detour; a failed WRITE (or a denied
@@ -507,6 +513,7 @@ def session_result(
             out["revertable"] = revertable
             out["reverted"] = already_reverted
             out["tools_failed_mutating"] = mutating_failed
+            out["ended_on_failed_change"] = last_change_ok is False
             # The stored verdict wins (it was derived at finalize with the
             # status the run actually ended in); a row from before the column
             # existed gets the same derivation live, so an old card is not

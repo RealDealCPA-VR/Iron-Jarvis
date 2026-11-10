@@ -20,6 +20,7 @@ Honesty & safety:
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,9 @@ _MAX_CELLS = 4000  # structured-read cap: keeps a huge sheet from flooding conte
 
 
 def _resolve_read_path(raw: str, ctx: ToolContext) -> Path:
-    p = Path(raw)
+    from ..core.model_cwd import remap
+
+    p = Path(remap(raw, ctx.workspace))  # v1.465.0: the model's scratch folder
     return p if p.is_absolute() else Path(ctx.workspace) / raw
 
 
@@ -93,6 +96,28 @@ def _read_workbook(path: Path, sheet: "str | None", cell_range: "str | None",
             out["truncated"] = True
             break
     out["rows"] = rows
+    if not include_formulas and any(v is None for r in rows for v in r):
+        # v1.465.0: a formula no program saved a result for read as a blank
+        # (null), which a model then reported as "no total". It is worked out.
+        wb.close()
+        if uncached_formulas(path, ws.title):
+            from .excel_recalc import fill_rows
+
+            res = fill_rows(path, ws.title, rows, first_row=min_row, first_col=min_col)
+            if res.filled:
+                out["worked_out"] = res.filled
+                out["worked_out_note"] = (
+                    "these formula cells had no saved result; Iron Jarvis worked them out"
+                )
+            # Only the cells this read asked for are named.
+            inside = {}
+            for where, why in res.failed.items():
+                col, row = _cell_cr(where.rsplit("!", 1)[-1])
+                if min_row <= row <= max_row and min_col <= col <= max_col:
+                    inside[where] = why
+            if inside:
+                out["not_worked_out"] = dict(list(inside.items())[:20])
+                out["not_worked_out_count"] = len(inside)
     return out
 
 
@@ -104,7 +129,9 @@ class ExcelReadTool(Tool):
         "Read an Excel workbook as STRUCTURE, not text: with only a path you "
         "get the sheet list + dimensions; add `sheet` and/or `range` (e.g. "
         "'A1:D20') for cell values as rows. Set include_formulas=true to see "
-        "formulas instead of computed values. Any policy-allowed path."
+        "formulas instead of computed values. A formula with no saved result is "
+        "worked out for you (`worked_out`); one that cannot be is named in "
+        "`not_worked_out` and reads as null. Any policy-allowed path."
     )
     input_schema = {
         "type": "object",
@@ -158,6 +185,7 @@ def _apply_edits(path: Path, sheet: "str | None", edits: list[dict[str, Any]],
         if name not in wb.sheetnames:
             wb.create_sheet(title=name)
     applied = 0
+    written: list[tuple[str, str, str]] = []  # (sheet, cell, formula)
     for e in edits:
         target = wb[str(e.get("sheet"))] if e.get("sheet") else (
             wb[sheet] if sheet else wb.active
@@ -166,12 +194,84 @@ def _apply_edits(path: Path, sheet: "str | None", edits: list[dict[str, Any]],
         if not cell:
             raise ValueError("every edit needs a cell (e.g. 'B2')")
         if "formula" in e:
-            target[cell] = str(e["formula"])
-        else:
+            text = str(e["formula"]).strip()
+            if text and not text.startswith("="):
+                text = "=" + text
+            from .excel_formula import for_file
+
+            target[cell] = for_file(text)
+            written.append((target.title, cell.upper().replace("$", ""), text))
+        elif "value" in e or not any(k in e for k in _FORMAT_KEYS):
             target[cell] = e.get("value")
+        # else: a formatting-only edit (it may name a range) changes no value
+        _apply_cell_format(target, cell, e)
         applied += 1
     wb.save(str(path))
-    return {"applied": applied, "sheets": wb.sheetnames, "formulas": _count_formulas(wb)}
+    formulas = _count_formulas(wb)
+    sheets = list(wb.sheetnames)
+    wb.close()
+    out: dict[str, Any] = {"applied": applied, "sheets": sheets, "formulas": formulas}
+    if formulas:
+        # v1.465.0: saving from here drops every result Excel had worked out.
+        # They are worked out again and saved in the file, and each formula
+        # this edit wrote is answered with what it comes to.
+        from .excel_recalc import store_results, summary_note
+
+        res = store_results(path)
+        results = []
+        for title, cell, text in written:
+            col, row = _cell_cr(cell)
+            key = (title, row, col)
+            entry: dict[str, Any] = {"sheet": title, "cell": cell, "formula": text}
+            if key in res.values:
+                entry["value"] = res.values[key]
+            else:
+                entry["error"] = res.failed.get(f"{title}!{cell}", "could not be worked out here")
+            results.append(entry)
+        out["results"] = results
+        out["recalc"] = {"worked_out": res.computed, "saved_in_file": res.stored,
+                         "not_worked_out": len(res.failed) + res.skipped}
+        out["note"] = summary_note(res, stored=True)
+    return out
+
+
+_FORMAT_KEYS = ("number_format", "bold", "italic", "fill", "font_color", "align", "wrap")
+
+
+def _apply_cell_format(ws: Any, cell: str, edit: dict[str, Any]) -> None:
+    """Formatting an edit asked for (v1.465.0). A range ("A1:D1") is allowed
+    for formatting-only edits; an unknown value is ignored, never an error."""
+    if not any(k in edit for k in _FORMAT_KEYS):
+        return
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    target = ws[cell]
+    cells = [c for row in target for c in row] if isinstance(target, tuple) else [target]
+    for c in cells[:20_000]:
+        if edit.get("number_format"):
+            c.number_format = str(edit["number_format"])
+        if "bold" in edit or "italic" in edit or edit.get("font_color"):
+            f = c.font
+            color = str(edit["font_color"]).lstrip("#").upper() if edit.get("font_color") else None
+            c.font = Font(
+                name=f.name, size=f.size,
+                bold=bool(edit["bold"]) if "bold" in edit else f.bold,
+                italic=bool(edit["italic"]) if "italic" in edit else f.italic,
+                underline=f.underline, strike=f.strike,
+                color=("FF" + color if color and len(color) == 6 else f.color),
+            )
+        if edit.get("fill"):
+            color = str(edit["fill"]).lstrip("#").upper()
+            if re.fullmatch(r"[0-9A-F]{6}", color):
+                c.fill = PatternFill("solid", fgColor="FF" + color)
+        if edit.get("align") or "wrap" in edit:
+            a = c.alignment
+            horiz = str(edit.get("align") or "").lower()
+            c.alignment = Alignment(
+                horizontal=horiz if horiz in ("left", "center", "right") else a.horizontal,
+                vertical=a.vertical,
+                wrap_text=bool(edit["wrap"]) if "wrap" in edit else a.wrap_text,
+            )
 
 
 #: Said after an edit of a workbook that holds formulas (v1.464.0). Saving a
@@ -187,10 +287,16 @@ FORMULAS_UNSAVED_NOTE = (
 
 #: Said by a query that met formula cells with no saved result (v1.464.0).
 FORMULAS_LEFT_OUT_NOTE = (
-    "\nWARNING: {n} cell(s) on this sheet hold a formula with no saved result (the "
-    "workbook was written or edited by a program and not saved by Excel since). "
-    "They were LEFT OUT, so this answer is incomplete. Open and save the workbook "
-    "in Excel, or work the figure out from the input columns."
+    "\nWARNING: {n} cell(s) on this sheet hold a formula that has no saved result "
+    "and that Iron Jarvis could not work out. They were LEFT OUT, so this answer "
+    "is incomplete. Open and save the workbook in Excel, or work the figure out "
+    "from the input columns."
+)
+
+#: Said by a query that worked formula results out itself (v1.465.0).
+FORMULAS_WORKED_OUT_NOTE = (
+    "\nNote: {n} formula cell(s) on this sheet had no saved result; Iron Jarvis "
+    "worked them out and included them."
 )
 
 
@@ -246,9 +352,14 @@ class ExcelEditTool(Tool):
     description = (
         "Edit an EXISTING Excel workbook IN PLACE inside the workspace: set "
         "cell values and formulas ({cell:'B2', value:…} or {cell:'C3', "
-        "formula:'=SUM(A1:A10)'}, optional per-edit sheet), and add sheets. "
-        "Untouched cells keep their formatting/formulas. Undoable. Note: "
-        "exotic content (some charts, macros) may be simplified by the "
+        "formula:'=SUM(A1:A10)'}, optional per-edit sheet), format cells "
+        "(number_format like '#,##0.00' or '0.0%' or 'yyyy-mm-dd', bold, "
+        "italic, fill and font_color as hex, align, wrap; a formatting-only "
+        "edit may name a range like 'A1:D1'), and add sheets. Every formula "
+        "you write is WORKED OUT and its result is returned and saved in the "
+        "file: read the results and report those numbers, never your own "
+        "arithmetic. Untouched cells keep their formatting/formulas. Undoable. "
+        "Note: exotic content (some charts, macros) may be simplified by the "
         "editor — mention it when the workbook looks complex."
     )
     input_schema = {
@@ -265,6 +376,13 @@ class ExcelEditTool(Tool):
                         "value": {},
                         "formula": {"type": "string"},
                         "sheet": {"type": "string"},
+                        "number_format": {"type": "string"},
+                        "bold": {"type": "boolean"},
+                        "italic": {"type": "boolean"},
+                        "fill": {"type": "string", "description": "Hex colour, e.g. FFF2CC"},
+                        "font_color": {"type": "string", "description": "Hex colour"},
+                        "align": {"type": "string", "enum": ["left", "center", "right"]},
+                        "wrap": {"type": "boolean"},
                     },
                     "required": ["cell"],
                 },
@@ -331,13 +449,20 @@ class ExcelEditTool(Tool):
         # workspace-relative name IS a bare filename when the workbook sits in
         # the workspace root, and the model relays it to the user verbatim.
         _abs = str(target.resolve())
+        lines = [
+            f"applied {result['applied']} edit(s) to {rel} "
+            f"(sheets: {', '.join(result['sheets'])})",
+            f"Saved to: {_abs}",
+        ]
+        for r in (result.get("results") or [])[:40]:
+            shown = (_shown(r["value"]) if "value" in r
+                     else f"NOT WORKED OUT ({r['error']})")
+            lines.append(f"{r['sheet']}!{r['cell']} {r['formula']} = {shown}")
+        if result.get("note"):
+            lines.append(result["note"])
         return ToolResult(
             ok=True,
-            output=f"applied {result['applied']} edit(s) to {rel} "
-                   f"(sheets: {', '.join(result['sheets'])})"
-                   f"\nSaved to: {_abs}"
-                   + (("\n" + FORMULAS_UNSAVED_NOTE.format(n=result["formulas"]))
-                      if result.get("formulas") else ""),
+            output="\n".join(lines),
             data={"path": rel, "abs_path": _abs, **result},
         )
 
@@ -378,6 +503,29 @@ def _load_table(path: Path, sheet: "str | None") -> tuple[str, list[str], list[l
     return title, headers, rows, truncated
 
 
+def _shown(v: Any) -> str:
+    """A worked-out result as it is reported back."""
+    if isinstance(v, bool):
+        return "TRUE" if v else "FALSE"
+    if isinstance(v, (int, float)):
+        return _fmt_num(float(v))
+    return repr(v) if isinstance(v, str) else str(v)
+
+
+def _load_table_computed(path: Path, sheet: "str | None") -> tuple[Any, ...]:
+    """:func:`_load_table`, with formula cells nobody saved a result for worked
+    out (v1.465.0). Returns ``(title, headers, rows, truncated, recalc)``;
+    ``recalc`` is None when every formula already had its result."""
+    title, headers, rows, truncated = _load_table(path, sheet)
+    if not uncached_formulas(path, title):
+        return title, headers, rows, truncated, None
+    from .excel_recalc import fill_rows
+
+    matrix = [list(headers)] + rows
+    res = fill_rows(path, title, matrix, first_row=1, first_col=1)
+    return title, headers, matrix[1:], truncated, res
+
+
 def _col_index(column: str, headers: list[str]) -> int:
     """Resolve a column by HEADER NAME (case-insensitive) or Excel letter."""
     want = (column or "").strip()
@@ -409,11 +557,52 @@ def _as_number(v: Any) -> "float | None":
 _WHERE_OPS = ("eq", "ne", "contains", "gt", "lt", "ge", "le")
 
 
+def _as_date(v: Any) -> "Any | None":
+    """A calendar date from a cell or a typed value, or None (v1.465.0).
+
+    A date cell arrives as a ``datetime``; a filter value arrives as text
+    ("2026-02-01", "2/1/2026"). Compared as text they never matched: every
+    date filter answered 0 rows."""
+    import datetime as _dt
+
+    if isinstance(v, _dt.datetime):
+        return v.date()
+    if isinstance(v, _dt.date):
+        return v
+    if not isinstance(v, str):
+        return None
+    text = v.strip()
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return _dt.datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _fmt_num(v: float) -> str:
+    """A figure as it is reported: two decimals, unless that would round a
+    real difference away (0.0419 was reported as 0.04, 0.004 as 0.00). Then
+    up to six decimals, trailing zeros dropped."""
+    if round(v, 2) == round(v, 10):
+        return f"{v:,.2f}"
+    text = f"{v:,.6f}".rstrip("0")
+    return text + "0" if text.endswith(".") else text
+
+
 def _row_matches(row: list[Any], cond: dict[str, Any], headers: list[str]) -> bool:
     idx = _col_index(str(cond.get("column", "")), headers)
     cell = row[idx] if idx < len(row) else None
     op = str(cond.get("op", "eq")).lower()
     want = cond.get("value")
+    import datetime as _dt
+
+    if isinstance(cell, (_dt.date, _dt.datetime)) and op != "contains":
+        da, db = _as_date(cell), _as_date(want)
+        if da is None or db is None:
+            return False
+        return {"eq": da == db, "ne": da != db, "gt": da > db, "lt": da < db,
+                "ge": da >= db, "le": da <= db}.get(op, False)
     if op in ("gt", "lt", "ge", "le"):
         a, b = _as_number(cell), _as_number(want)
         if a is None or b is None:
@@ -434,10 +623,16 @@ class ExcelProfileTool(Tool):
     reversibility = Reversibility.READONLY
     returns_untrusted_content = True  # sheet text can carry planted instructions
     description = (
-        "Orient in an Excel workbook CHEAPLY: every sheet's name, row/column "
-        "counts, headers, and one sample row — a compact map, not a data dump. "
-        "Call this FIRST, then excel_query for figures. Any policy-allowed "
-        "path (local, network share, or tailnet folder)."
+        "UNDERSTAND an Excel workbook before you touch it: for every sheet, "
+        "what it looks like (an income statement, a budget, a data table), "
+        "where its header row is, what each column holds and how it is "
+        "formatted, how its formulas are filled down, its totals and what "
+        "they come to, which sheets it reads from, named ranges, hidden "
+        "sheets, and anything WORTH A LOOK (a typed number in a column of "
+        "formulas, a SUM that stops short, a typed total that does not equal "
+        "the cells above it, numbers stored as text). A compact map, not a "
+        "data dump. Call this FIRST, then excel_query for figures. Any "
+        "policy-allowed path (local, network share, or tailnet folder)."
     )
     input_schema = {
         "type": "object",
@@ -473,11 +668,24 @@ class ExcelProfileTool(Tool):
             wb.close()
             return {"sheets": sheets}
 
+        # v1.465.0: the full map first (structure, formulas, totals, checks).
+        # A workbook too large or too odd for it gets the quick profile below,
+        # exactly as before, and says that is what it is.
+        try:
+            from .excel_map import render, workbook_map
+
+            mapped = await asyncio.to_thread(workbook_map, path)
+        except Exception:  # noqa: BLE001 - the quick profile is the fallback
+            mapped = None
+        if mapped is not None:
+            return ToolResult(ok=True, output=render(path.name, mapped), data=mapped)
         try:
             data = await asyncio.to_thread(_profile)
         except Exception as exc:  # noqa: BLE001 — real files must not crash the runtime
             return ToolResult(ok=False, error=_open_error(exc, path))
-        lines = [f"{path.name} — {len(data['sheets'])} sheet(s)"]
+        data["quick"] = True
+        lines = [f"{path.name} — {len(data['sheets'])} sheet(s) (quick view: sizes and "
+                 "headers only)"]
         for s in data["sheets"]:
             heads = ", ".join(h for h in s["headers"] if h) or "(no header row)"
             lines.append(f"- {s['sheet']}: {s['rows']}x{s['cols']} | headers: {heads}")
@@ -537,12 +745,15 @@ class ExcelQueryTool(Tool):
         if path.suffix.lower() not in (".xlsx", ".xlsm"):
             return ToolResult(ok=False, error=f"not an Excel workbook: {path.name}")
         op = str(args.get("op", "")).lower()
-        limit = max(1, min(int(args.get("limit") or 20), 50))
+        limit = max(1, min(int(args.get("limit") or 20), 200))
         try:
-            title, headers, rows, truncated = await asyncio.to_thread(
-                _load_table, path, args.get("sheet")
+            title, headers, rows, truncated, recalc = await asyncio.to_thread(
+                _load_table_computed, path, args.get("sheet")
             )
-            missing = await asyncio.to_thread(uncached_formulas, path, args.get("sheet"))
+            # v1.465.0: formulas with no saved result are worked out before
+            # anything is added up; only the ones that could not be are missing.
+            missing = (len(recalc.failed) + recalc.skipped) if recalc else 0
+            worked = recalc.computed if recalc else 0
             conds = [c for c in (args.get("where") or []) if isinstance(c, dict)]
             if conds:
                 rows = [r for r in rows if all(_row_matches(r, c, headers) for c in conds)]
@@ -555,6 +766,8 @@ class ExcelQueryTool(Tool):
                 )
                 note = f" (showing {len(shown)} of {len(rows)} matching rows)"
                 out = f"{title}: {len(rows)} matching row(s){note}\n{head}\n{body}"
+                if worked:
+                    out += FORMULAS_WORKED_OUT_NOTE.format(n=worked)
                 if missing:
                     out += FORMULAS_LEFT_OUT_NOTE.format(n=missing)
                 return ToolResult(ok=True, output=out, data={
@@ -576,24 +789,50 @@ class ExcelQueryTool(Tool):
                         n = _as_number(r[ci] if ci < len(r) else None)
                         if n is not None:
                             groups.setdefault(key, []).append(n)
+                # v1.465.0: every group is counted even when only some are
+                # listed. The list used to stop at 20 with no word, ranked so
+                # that the most NEGATIVE group (a refund) was the first to go.
+                # Groups are now ranked by size either way, the cut is said,
+                # and the total of ALL groups is always given.
                 if agg == "count":
-                    ranked = sorted(counts.items(), key=lambda kv: -kv[1])[:limit]
+                    everything = sorted(counts.items(), key=lambda kv: -kv[1])
+                    ranked = everything[:limit]
                     result = [{"group": k, "count": v} for k, v in ranked]
                     body = "\n".join(f"- {k}: {v}" for k, v in ranked)
+                    rest = everything[limit:]
+                    tail = (f"\n(+{len(rest)} more group(s) not listed, {sum(v for _, v in rest)} row(s))"
+                            if rest else "")
+                    tail += f"\nAll {len(everything)} group(s): {sum(counts.values())} row(s)"
+                    all_groups = len(everything)
                 else:
                     scored = {
                         k: (sum(v) if agg == "sum" else sum(v) / len(v))
                         for k, v in groups.items() if v
                     }
-                    ranked2 = sorted(scored.items(), key=lambda kv: -kv[1])[:limit]
+                    everything2 = sorted(scored.items(), key=lambda kv: -abs(kv[1]))
+                    ranked2 = everything2[:limit]
                     result = [{"group": k, agg: v, "count": counts.get(k, 0)}
                               for k, v in ranked2]
-                    body = "\n".join(f"- {k}: {v:,.2f}" for k, v in ranked2)
-                out = f"{title}: {agg} by {args.get('group_by')} ({len(rows)} rows)\n{body}"
+                    body = "\n".join(f"- {k}: {_fmt_num(v)}" for k, v in ranked2)
+                    rest2 = everything2[limit:]
+                    tail = ""
+                    if rest2 and agg == "sum":
+                        tail = (f"\n(+{len(rest2)} more group(s) not listed, together "
+                                f"{_fmt_num(sum(v for _, v in rest2))})")
+                    elif rest2:
+                        tail = f"\n(+{len(rest2)} more group(s) not listed)"
+                    if agg == "sum":
+                        tail += (f"\nTotal of all {len(everything2)} group(s): "
+                                 f"{_fmt_num(sum(scored.values()))}")
+                    all_groups = len(everything2)
+                out = f"{title}: {agg} by {args.get('group_by')} ({len(rows)} rows)\n{body}{tail}"
+                if worked:
+                    out += FORMULAS_WORKED_OUT_NOTE.format(n=worked)
                 if missing:
                     out += FORMULAS_LEFT_OUT_NOTE.format(n=missing)
                 return ToolResult(ok=True, output=out, data={
                     "sheet": title, "groups": result, "rows_scanned": len(rows),
+                    "groups_total": all_groups,
                     "scan_truncated": truncated,
                 })
 
@@ -609,6 +848,7 @@ class ExcelQueryTool(Tool):
                     ok=False,
                     error=f"column {args.get('column')!r} has no numeric values"
                           f" in the {len(rows)} row(s) considered"
+                          + (FORMULAS_WORKED_OUT_NOTE.format(n=worked) if worked else "")
                           + (FORMULAS_LEFT_OUT_NOTE.format(n=missing) if missing else ""),
                 )
             elif op == "sum":
@@ -625,9 +865,11 @@ class ExcelQueryTool(Tool):
             extra = f", {skipped} non-numeric skipped" if skipped > 0 else ""
             trunc = " [scan capped — figures cover the first 50k rows]" if truncated else ""
             out = (
-                f"{title}: {op.upper()} of {args.get('column')} = {value:,.2f} "
+                f"{title}: {op.upper()} of {args.get('column')} = {_fmt_num(value)} "
                 f"({len(rows)} row(s) considered{extra}){trunc}"
             )
+            if worked:
+                out += FORMULAS_WORKED_OUT_NOTE.format(n=worked)
             if missing:
                 out += FORMULAS_LEFT_OUT_NOTE.format(n=missing)
             return ToolResult(ok=True, output=out, data={
@@ -706,7 +948,9 @@ class ExcelFormulaCheckTool(Tool):
                     if not (isinstance(raw, str) and raw.startswith("=")):
                         raise FormulaError(f"cell {cell} holds no formula (value: {raw!r})")
                     formula = raw
-                    cached = grid.get(sheet, *_cell_cr(cell))
+                    # The value Excel SAVED, never the engine's own answer: a
+                    # formula checked against itself always matches.
+                    cached = grid.saved(sheet, *_cell_cr(cell))
                 computed = evaluate_formula(formula, grid, sheet)
                 out: dict[str, Any] = {
                     "formula": formula, "sheet": sheet, "computed": computed,
@@ -974,7 +1218,9 @@ class ExcelApplySpecTool(Tool):
                 if not isinstance(entry, dict):
                     continue
                 if isinstance(entry.get("formula"), str):
-                    ws[ref] = entry["formula"]
+                    from .excel_formula import for_file
+
+                    ws[ref] = for_file(entry["formula"])
                     applied["formulas"] += 1
                     formula_cells.append(ref)
                 styled = False
@@ -1023,6 +1269,11 @@ class ExcelApplySpecTool(Tool):
                     warnings.append(f"unknown theme {beauty['theme']!r}")
                 xlsx_apply_beauty(ws, theme, beauty, warnings)
             wb.save(str(target))
+            wb.close()
+            if formula_cells:
+                from .excel_recalc import store_results
+
+                store_results(target)  # v1.465.0: results kept in the file
 
             # VALIDATE: compute every written formula against the saved target.
             tol = float(args.get("tolerance") or 0.01)

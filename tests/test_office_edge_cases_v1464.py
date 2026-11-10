@@ -216,9 +216,19 @@ def test_a_total_over_formulas_with_no_saved_result_says_it_is_incomplete(tmp_pa
     _workbook(book, [["Item", "Qty", "Price", "Line"], ["A", 2, 10, "=B2*C2"], ["B", 3, 5, "=B3*C3"], ["C", 1, 7, 7]])
     assert uncached_formulas(book, None) == 2
     res = asyncio.run(ExcelQueryTool().execute({"path": "inv.xlsx", "op": "sum", "column": "Line"}, _ctx(tmp_path)))
-    # The figure is what it could add up (7 of a true 42), and it SAYS so.
-    assert res.ok is True and "SUM of Line = 7.00" in res.output
-    assert "WARNING: 2 cell(s) on this sheet hold a formula with no saved result" in res.output
+    # v1.465.0 (moved on purpose): the two formulas are WORKED OUT, so the
+    # figure is the true 42 (v1.464.0 could only say 7 and warn).
+    assert res.ok is True and "SUM of Line = 42.00" in res.output
+    assert "2 formula cell(s) on this sheet had no saved result; Iron Jarvis worked them out" in res.output
+    assert "incomplete" not in res.output
+
+    # A formula the engine cannot work out is still LEFT OUT, and said.
+    odd = tmp_path / "odd.xlsx"
+    _workbook(odd, [["Item", "Line"], ["A", 20], ["B", '=INDIRECT("B2")'], ["C", "=B2*2"]])
+    res = asyncio.run(ExcelQueryTool().execute({"path": "odd.xlsx", "op": "sum", "column": "Line"}, _ctx(tmp_path)))
+    assert res.ok is True and "SUM of Line = 60.00" in res.output
+    assert "1 formula cell(s) on this sheet had no saved result; Iron Jarvis worked them out" in res.output
+    assert "WARNING: 1 cell(s) on this sheet hold a formula" in res.output
     assert "this answer is incomplete" in res.output
 
 
@@ -241,8 +251,13 @@ def test_an_edit_of_a_workbook_with_formulas_says_their_results_are_now_blank(tm
     res = asyncio.run(ExcelEditTool().execute(
         {"path": "pl.xlsx", "edits": [{"cell": "A1", "value": "Line item"}]}, _ctx(tmp_path)))
     assert res.ok is True, res.error
-    assert "this workbook has 1 formula cell(s)" in res.output
-    assert "until the workbook is opened and saved in Excel" in res.output
+    # v1.465.0 (moved on purpose): the result is worked out and kept IN the
+    # file, so it is not blank for the next reader.
+    assert "Worked out 1 formula result(s) and saved them in the file" in res.output
+    import openpyxl
+
+    assert openpyxl.load_workbook(book, data_only=True)["Inv"]["B3"].value == 500
+    assert openpyxl.load_workbook(book)["Inv"]["B3"].value == "=SUM(B2:B2)"
 
     plain = tmp_path / "plain.xlsx"
     _workbook(plain, [["Item", "Amount"], ["Rent", 500]])

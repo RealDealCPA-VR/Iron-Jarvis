@@ -301,6 +301,7 @@ def default_permissions() -> dict[str, str]:
         "excel_profile": "allow",
         "excel_query": "allow",
         "excel_formula_check": "allow",
+        "calculate": "allow",  # v1.465.0: arithmetic only; reads and writes nothing
         "excel_accounts_diff": "allow",
         "excel_sheet_spec": "allow",
         "excel_edit": "allow",

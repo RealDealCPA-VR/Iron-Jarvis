@@ -632,6 +632,16 @@ def normalize_max_steps(value: Any) -> int | None:
     return min(steps, SESSION_MAX_STEPS_MAX)
 
 
+def _is_coding_helper(session: Any) -> bool:
+    """True for a helper run a coding session started (v1.465.0)."""
+    try:
+        from ..harness.helpers import HELPER_ORIGIN
+
+        return str(getattr(session, "origin", "") or "") == HELPER_ORIGIN
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class Orchestrator:
     def __init__(self, platform) -> None:
         self.p = platform
@@ -1920,6 +1930,17 @@ class Orchestrator:
             return [], None
         tools = [str(t.get("tool") or "") for t in result.get("tools_used") or []]
         outcome = derive_outcome(result, status)
+        # v1.465.0: A CODING HELPER IS "PART FAILED" ONLY WHEN IT ENDED ON A
+        # FAILED CHANGE. A helper works by running commands, and a command
+        # that exits with an error (a test that fails before the fix, a search
+        # that finds nothing) is a failed mutating call to the ledger. Measured
+        # on the owner's runs: 57 of 68 helper runs carried the amber label and
+        # 4 of them ended on a failed step, so the label said nothing. Whether
+        # the WORK is good is the finish check's and the reviewer's verdict;
+        # this label now means "its last change did not land".
+        if outcome == OUTCOME_WITH_FAILURES and _is_coding_helper(session):
+            if not result.get("ended_on_failed_change"):
+                outcome = OUTCOME_COMPLETED
         if kept is not None:
             # Readiness 0j.5 item 17: the files a run that did not finish
             # wrote, read off the same ledger card (never a second read).

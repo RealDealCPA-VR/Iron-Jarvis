@@ -437,6 +437,11 @@ def safe_path(workspace: Path, rel: str) -> Path:
             f"the name '{rel}' has a colon (:) in it, which Windows cannot use in a "
             "file or folder name; choose a name without one"
         )
+    # v1.465.0: a path inside the model's own scratch folder means the same
+    # name in the work folder (core/model_cwd).
+    from ..core.model_cwd import remap
+
+    rel = remap(rel, workspace)
     root = workspace.resolve()
     target = (root / rel).resolve()
     if target != root and not target.is_relative_to(root):

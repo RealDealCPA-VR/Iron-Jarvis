@@ -517,6 +517,7 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "delegate_remote": ("handed work to another computer", "hand-off to another computer"),
     "excel_accounts_diff": ("compared a workbook's accounts", "account compare"),
     "excel_formula_check": ("checked a formula", "formula check"),
+    "calculate": ("worked out the figures", "calculation"),
     "excel_sheet_spec": ("captured a sheet's layout", "sheet layout capture"),
     "goal_add": ("added a goal", "goal addition"),
     "goal_delete": ("dropped a goal", "goal removal"),

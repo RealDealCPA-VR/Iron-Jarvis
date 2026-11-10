@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.465.0
+
+**Spreadsheets Jarvis understands and works out itself.** Jarvis used to read a workbook as a grid of cells and leave every formula to Excel.
+
 ## v1.464.0
 
 **Starter skills you can load.** A skill is a set of instructions Jarvis follows for one kind of task, such as "review a bank reconciliation" or "write release notes".
@@ -77,7 +81,3 @@
 ## v1.447.0
 
 **Build › Code: more of each tool, and a calmer look.** **Antigravity.** **Your own Antigravity agents.** The agents `agy agents` lists appear in the mode menu after Antigravity's own modes.
-
-## v1.446.0
-
-**Nothing goes quiet on you.** The second group from the ease-of-use review: things that failed, waited or paused without telling you.

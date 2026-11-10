@@ -160,6 +160,10 @@
       "ok": "set a folder's coding team",
       "failed": "tried a folder team and it failed"
     },
+    "calculate": {
+      "ok": "worked out the figures",
+      "failed": "tried a calculation and it failed"
+    },
     "capability_propose": {
       "ok": "suggested a new ability for Iron Jarvis",
       "failed": "tried an ability suggestion and it failed"
