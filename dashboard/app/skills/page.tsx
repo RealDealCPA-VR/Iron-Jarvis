@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Sparkles, BookOpen, Plus, Save, RefreshCw, Play, Copy, Check, Cpu, Pin, Archive, Search } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
@@ -351,6 +352,15 @@ export default function SkillsPage() {
           }
         />
       </Reveal>
+      {/* v1.464.0: where the ready-made skills are. */}
+      <p className="text-sm text-zinc-400" data-testid="skills-starter-pointer">
+        New here? Load ready-made skills for business, accounting, marketing, coding, project
+        management and social media from{" "}
+        <Link href="/templates" className="text-accent-soft underline-offset-2 hover:underline">
+          Starter skills on the Templates page
+        </Link>
+        .
+      </p>
       {offline && (
         <Reveal>
           <OfflineHint />

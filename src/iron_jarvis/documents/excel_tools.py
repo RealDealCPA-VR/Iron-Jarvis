@@ -171,7 +171,73 @@ def _apply_edits(path: Path, sheet: "str | None", edits: list[dict[str, Any]],
             target[cell] = e.get("value")
         applied += 1
     wb.save(str(path))
-    return {"applied": applied, "sheets": wb.sheetnames}
+    return {"applied": applied, "sheets": wb.sheetnames, "formulas": _count_formulas(wb)}
+
+
+#: Said after an edit of a workbook that holds formulas (v1.464.0). Saving a
+#: workbook from here drops every result Excel had worked out; until Excel
+#: opens and saves it again a total reads as blank, and a later question about
+#: it would be answered from nothing.
+FORMULAS_UNSAVED_NOTE = (
+    "Note: this workbook has {n} formula cell(s). Their results are worked out by "
+    "Excel, so they read as blank until the workbook is opened and saved in Excel. "
+    "Do not report a total from those cells before then; work it out from the "
+    "input cells instead."
+)
+
+#: Said by a query that met formula cells with no saved result (v1.464.0).
+FORMULAS_LEFT_OUT_NOTE = (
+    "\nWARNING: {n} cell(s) on this sheet hold a formula with no saved result (the "
+    "workbook was written or edited by a program and not saved by Excel since). "
+    "They were LEFT OUT, so this answer is incomplete. Open and save the workbook "
+    "in Excel, or work the figure out from the input columns."
+)
+
+
+def _count_formulas(wb: Any, limit: int = 200_000) -> int:
+    """How many cells of an open workbook hold a formula. Bounded; never raises."""
+    count = seen = 0
+    try:
+        for ws in wb.worksheets:
+            for row in ws.iter_rows():
+                for cell in row:
+                    seen += 1
+                    if cell.data_type == "f":
+                        count += 1
+                if seen > limit:
+                    return count
+    except Exception:  # noqa: BLE001 - a note must never fail the edit
+        return count
+    return count
+
+
+def uncached_formulas(path: Path, sheet: "str | None", max_rows: int = 50_000) -> int:
+    """How many cells of one sheet hold a formula whose result was never saved.
+
+    BLOCKING (two read-only passes over the sheet, walked row by row in step).
+    Never raises: cannot tell is 0."""
+    try:
+        from openpyxl import load_workbook
+
+        values = load_workbook(str(path), data_only=True, read_only=True)
+        formulas = load_workbook(str(path), data_only=False, read_only=True)
+        try:
+            vs = values[sheet] if sheet else values.active
+            fs = formulas[vs.title]
+            count = 0
+            pairs = zip(vs.iter_rows(values_only=True), fs.iter_rows(values_only=True))
+            for i, (vrow, frow) in enumerate(pairs):
+                if i >= max_rows:
+                    break
+                for v, f in zip(vrow, frow):
+                    if v is None and isinstance(f, str) and f.startswith("="):
+                        count += 1
+            return count
+        finally:
+            values.close()
+            formulas.close()
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 class ExcelEditTool(Tool):
@@ -269,7 +335,9 @@ class ExcelEditTool(Tool):
             ok=True,
             output=f"applied {result['applied']} edit(s) to {rel} "
                    f"(sheets: {', '.join(result['sheets'])})"
-                   f"\nSaved to: {_abs}",
+                   f"\nSaved to: {_abs}"
+                   + (("\n" + FORMULAS_UNSAVED_NOTE.format(n=result["formulas"]))
+                      if result.get("formulas") else ""),
             data={"path": rel, "abs_path": _abs, **result},
         )
 
@@ -474,6 +542,7 @@ class ExcelQueryTool(Tool):
             title, headers, rows, truncated = await asyncio.to_thread(
                 _load_table, path, args.get("sheet")
             )
+            missing = await asyncio.to_thread(uncached_formulas, path, args.get("sheet"))
             conds = [c for c in (args.get("where") or []) if isinstance(c, dict)]
             if conds:
                 rows = [r for r in rows if all(_row_matches(r, c, headers) for c in conds)]
@@ -486,6 +555,8 @@ class ExcelQueryTool(Tool):
                 )
                 note = f" (showing {len(shown)} of {len(rows)} matching rows)"
                 out = f"{title}: {len(rows)} matching row(s){note}\n{head}\n{body}"
+                if missing:
+                    out += FORMULAS_LEFT_OUT_NOTE.format(n=missing)
                 return ToolResult(ok=True, output=out, data={
                     "sheet": title, "matches": len(rows), "headers": headers,
                     "rows": [[_cell_str(v) for v in r] for r in shown],
@@ -519,6 +590,8 @@ class ExcelQueryTool(Tool):
                               for k, v in ranked2]
                     body = "\n".join(f"- {k}: {v:,.2f}" for k, v in ranked2)
                 out = f"{title}: {agg} by {args.get('group_by')} ({len(rows)} rows)\n{body}"
+                if missing:
+                    out += FORMULAS_LEFT_OUT_NOTE.format(n=missing)
                 return ToolResult(ok=True, output=out, data={
                     "sheet": title, "groups": result, "rows_scanned": len(rows),
                     "scan_truncated": truncated,
@@ -535,7 +608,8 @@ class ExcelQueryTool(Tool):
                 return ToolResult(
                     ok=False,
                     error=f"column {args.get('column')!r} has no numeric values"
-                          f" in the {len(rows)} row(s) considered",
+                          f" in the {len(rows)} row(s) considered"
+                          + (FORMULAS_LEFT_OUT_NOTE.format(n=missing) if missing else ""),
                 )
             elif op == "sum":
                 value = sum(nums)
@@ -554,6 +628,8 @@ class ExcelQueryTool(Tool):
                 f"{title}: {op.upper()} of {args.get('column')} = {value:,.2f} "
                 f"({len(rows)} row(s) considered{extra}){trunc}"
             )
+            if missing:
+                out += FORMULAS_LEFT_OUT_NOTE.format(n=missing)
             return ToolResult(ok=True, output=out, data={
                 "sheet": title, "op": op, "column": args.get("column"),
                 "value": value, "rows_considered": len(rows),

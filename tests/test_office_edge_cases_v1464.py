@@ -194,3 +194,58 @@ def test_a_file_open_in_another_program_is_named_not_the_folder(tmp_path):
     assert "not writable" in unwritable_workspace_error(plain, tmp_path)
     # The path-check's own refusal keeps its own words.
     assert unwritable_workspace_error(PermissionError("path 'x' escapes"), tmp_path) == "PermissionError: path 'x' escapes"
+
+
+# ------------------- 7. formula results a program never saved are said ------
+
+
+def _workbook(path, rows, formulas_cached=False):
+    openpyxl = pytest.importorskip("openpyxl")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Inv"
+    for r in rows:
+        ws.append(r)
+    wb.save(path)
+
+
+def test_a_total_over_formulas_with_no_saved_result_says_it_is_incomplete(tmp_path):
+    from iron_jarvis.documents.excel_tools import ExcelQueryTool, uncached_formulas
+
+    book = tmp_path / "inv.xlsx"
+    _workbook(book, [["Item", "Qty", "Price", "Line"], ["A", 2, 10, "=B2*C2"], ["B", 3, 5, "=B3*C3"], ["C", 1, 7, 7]])
+    assert uncached_formulas(book, None) == 2
+    res = asyncio.run(ExcelQueryTool().execute({"path": "inv.xlsx", "op": "sum", "column": "Line"}, _ctx(tmp_path)))
+    # The figure is what it could add up (7 of a true 42), and it SAYS so.
+    assert res.ok is True and "SUM of Line = 7.00" in res.output
+    assert "WARNING: 2 cell(s) on this sheet hold a formula with no saved result" in res.output
+    assert "this answer is incomplete" in res.output
+
+
+def test_a_sheet_of_plain_numbers_gets_no_warning(tmp_path):
+    from iron_jarvis.documents.excel_tools import ExcelQueryTool, uncached_formulas
+
+    book = tmp_path / "plain.xlsx"
+    _workbook(book, [["Item", "Line"], ["A", 20], ["B", 15]])
+    assert uncached_formulas(book, None) == 0
+    assert uncached_formulas(tmp_path / "missing.xlsx", None) == 0
+    res = asyncio.run(ExcelQueryTool().execute({"path": "plain.xlsx", "op": "sum", "column": "Line"}, _ctx(tmp_path)))
+    assert res.output == "Inv: SUM of Line = 35.00 (2 row(s) considered)"
+
+
+def test_an_edit_of_a_workbook_with_formulas_says_their_results_are_now_blank(tmp_path):
+    from iron_jarvis.documents.excel_tools import ExcelEditTool
+
+    book = tmp_path / "pl.xlsx"
+    _workbook(book, [["Item", "Amount"], ["Rent", 500], ["Total", "=SUM(B2:B2)"]])
+    res = asyncio.run(ExcelEditTool().execute(
+        {"path": "pl.xlsx", "edits": [{"cell": "A1", "value": "Line item"}]}, _ctx(tmp_path)))
+    assert res.ok is True, res.error
+    assert "this workbook has 1 formula cell(s)" in res.output
+    assert "until the workbook is opened and saved in Excel" in res.output
+
+    plain = tmp_path / "plain.xlsx"
+    _workbook(plain, [["Item", "Amount"], ["Rent", 500]])
+    res2 = asyncio.run(ExcelEditTool().execute(
+        {"path": "plain.xlsx", "edits": [{"cell": "A1", "value": "Line item"}]}, _ctx(tmp_path)))
+    assert res2.ok is True and "formula" not in res2.output

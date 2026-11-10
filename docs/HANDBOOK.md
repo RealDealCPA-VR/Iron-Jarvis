@@ -2095,7 +2095,7 @@ What Iron Jarvis does to keep this safe:
 - The only thing sent to GitHub is the address you typed. A private repository
   cannot be read.
 
-**Office files: six awkward cases that used to go wrong quietly (v1.464.0).**
+**Office files: seven awkward cases that used to go wrong quietly (v1.464.0).**
 Each was found by running the real tools on ordinary but awkward files.
 
 - **A long file read in Chat is no longer cut without a word.** Past 12,000
@@ -2121,11 +2121,14 @@ Each was found by running the real tools on ordinary but awkward files.
   folder. It now says the file is open in another program, or read-only, and
   to close it there.
 
-Known and not yet fixed: after Jarvis edits a workbook's cells, totals that
-Excel had worked out are blank until the file is opened and saved in Excel
-again; and a question about a column of formulas Jarvis itself wrote can leave
-those rows out. Open the workbook in Excel once, or ask Jarvis to recompute the
-figures, before relying on a total from such a file.
+- **Formula results nobody saved are said out loud.** A formula's result is
+  worked out by Excel. When Jarvis writes or edits a workbook, those results
+  are blank until the workbook is opened and saved in Excel. Jarvis used to
+  add up such a column and report the partial figure as the total (7 for a
+  true 42). It now adds a warning that says how many cells were left out and
+  that the answer is incomplete, and an edit of a workbook with formulas says
+  the same before anyone asks. The fix on your side is unchanged: open the
+  workbook in Excel and save it.
 
 ## Reading web pages works on more sites; page screenshots work again (v1.463.0)
 
