@@ -856,12 +856,18 @@ NOT_OFFERED: tuple[NotOffered, ...] = (
         # Review: "of its own" — no built-in tool controls the desktop (the
         # real registry is pinned for it), but an app the user connected may
         # offer such tools, and a flat "cannot" would make the model refuse a
-        # tool it holds.
+        # tool it holds. v1.466.0: the same goes for the workbook open in
+        # Excel, which Jarvis reaches through Excel itself (excel_live_look /
+        # excel_live_edit): "type the totals in the Excel app" matches the
+        # desktop rules, so the line must say that way in, or the model would
+        # refuse a tool it holds.
         "Iron Jarvis has no way of its own to control the Windows desktop: it cannot move the mouse, type "
         "on the keyboard, watch the screen, or click and type in desktop programs (only an app the user "
         "connected could, through its own tools in your list). It works in a web browser (through its "
         "browser add-on or its own browser), with the user's files (it can read and write documents such as "
-        "Word and Excel files), and through connected apps' own tools; the user can paste a screenshot into "
+        "Word and Excel files), in a workbook that is open in Excel (it reads and changes cells through Excel "
+        "itself when the tools for the open workbook are in your list, never by clicking or typing in Excel's "
+        "window), and through connected apps' own tools; the user can paste a screenshot into "
         "the chat for it to read. Say so plainly; never pretend to act on the desktop.",
     ),
     NotOffered(

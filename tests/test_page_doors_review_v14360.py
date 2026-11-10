@@ -154,6 +154,10 @@ WEB_ONLY = {
     "page_click", "page_screenshot", "page_type",
     "web_look", "computer_use_status",
 }
+#: v1.466.0: the one tool that "looks" at a desktop program. It reads the
+#: workbook open in Excel through Excel itself (no mouse, no keyboard, no
+#: screen), and the desktop line says that way in.
+EXCEL_ITSELF = {"excel_live_look"}
 
 
 def test_no_built_in_tool_controls_the_desktop(tmp_path):
@@ -168,13 +172,19 @@ def test_no_built_in_tool_controls_the_desktop(tmp_path):
     }
     # Anti-vacuity: the net catches the web tools that are really there.
     assert {"browser_click", "page_type", "web_look"} <= sounds_like
-    assert sounds_like <= WEB_ONLY, sounds_like - WEB_ONLY
+    assert sounds_like <= WEB_ONLY | EXCEL_ITSELF, sounds_like - WEB_ONLY - EXCEL_ITSELF
+    assert EXCEL_ITSELF <= names
     line = _line("desktop_control")
     # …and the line never claims more than that: an app the user connected
     # could, so "of its own", and the screenshot way in is said.
     assert "no way of its own" in line
     assert "an app the user connected" in line
     assert "paste a screenshot" in line
+    # v1.466.0: the workbook open in Excel is reached through Excel itself,
+    # and only when the turn holds the tools for it.
+    assert "a workbook that is open in Excel" in line and "through Excel itself" in line
+    assert "when the tools for the open workbook are in your list" in line
+    assert "never by clicking or typing in Excel's window" in line
 
 
 def test_the_local_model_line_names_the_place_that_offers_the_starter_model():
