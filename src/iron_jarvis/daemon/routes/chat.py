@@ -6477,6 +6477,12 @@ async def chat_stream(
                             # the runtime's `approval.requested` carries the
                             # same key from the same helper.
                             _rev = _reversible_flag(_t)
+                            # v1.466.0 review: a call its own check calls
+                            # irreversible (a live-Excel deletion) never
+                            # says "You can undo this". MIRROR NOTE
+                            # (lock-step): the runtime reads the same field.
+                            if _rev and getattr(_sc, "irreversible", False):
+                                _rev = False
                             if _rev is not None:
                                 _frame["reversible"] = _rev
                             if _sc is not None:

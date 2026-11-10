@@ -865,12 +865,53 @@ def test_undo_of_a_recolour_gives_each_cell_its_own_colour_back(book, tmp_path):
     ws = wb.Worksheets("Data")
     ws.Range("A2").Interior.Color = 255
     ws.Range("A3").Interior.Color = 65280
+    ws.Range("A4").Interior.Color = 16711680  # every cell filled: only the COLOURS differ
     out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "A2:A4", "fill": "FFF2CC"}], tmp_path)
     assert out["ok"], out
     back = ask({"op": "restore", "undo_path": out["_undo"]})
     assert back["ok"] and not back["left"], back
-    assert [int(ws.Range(c).Interior.Color) for c in ("A2", "A3")] == [255, 65280]
-    assert ws.Range("A4").Interior.ColorIndex == -4142
+    assert [int(ws.Range(c).Interior.Color) for c in ("A2", "A3", "A4")] == [255, 65280, 16711680]
+
+
+def test_a_step_excel_refuses_when_it_runs_puts_back_the_steps_before_it(book, tmp_path):
+    """Refused by Excel while the batch RUNS (a formula it cannot read is not
+    seen by the check), after two steps were already made."""
+    wb, path = book
+    out = _apply(path, [
+        {"op": "set", "sheet": "Data", "cell": "C2", "value": 99},
+        {"op": "add_sheet", "name": "Extra"},
+        {"op": "set", "sheet": "Data", "cell": "G1", "formula": "=SUM(((("},
+    ], tmp_path)
+    assert not out["ok"] and out.get("unchanged") and "step 3" in out["error"] and "2 step(s) before it were put back" in out["error"], out
+    assert _v(wb, "Data", "C2") == 10 and [s.Name for s in wb.Worksheets] == ["Data", "Notes"]
+
+
+def test_a_workbook_open_read_only_is_never_changed(excel, book, tmp_path):
+    wb, path = book
+    copy = tmp_path / "Read Only.xlsx"
+    wb.SaveCopyAs(str(copy))
+    ro = excel.Workbooks.Open(str(copy), None, True)
+    try:
+        step = [{"op": "set", "sheet": "Data", "cell": "A2", "value": "changed"}]
+        assert ask({"op": "plan", "workbook": str(copy), "ops": step})["code"] == "read_only"
+        out = _apply(str(copy), step, tmp_path)
+        assert not out["ok"] and out["code"] == "read_only" and ro.Worksheets("Data").Range("A2").Value == "East"
+    finally:
+        ro.Close(False)
+
+
+def test_an_account_number_is_written_as_text_and_undo_twice_is_still_true(book, tmp_path):
+    wb, path = book
+    out = _apply(path, [{"op": "set", "sheet": "Data", "cell": "G2:G3", "values": [["00123"], ["1234567890123456"]]},
+                        {"op": "set", "sheet": "Data", "cell": "C2", "value": 99}], tmp_path)
+    assert out["ok"] and _v(wb, "Data", "G2") == "00123" and _v(wb, "Data", "G3") == "1234567890123456"
+    wb.Worksheets("Data").Range("C3").Value = 5  # one cell of the range is the user's now... (not part of the change)
+    back = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert back["ok"] and not back["left"] and _v(wb, "Data", "G2") is None and _v(wb, "Data", "C2") == 10
+    # Undo pressed again (after "Excel is busy" stopped it half way, say): what
+    # is already back is not called "changed again since".
+    again = ask({"op": "restore", "undo_path": out["_undo"]})
+    assert again["ok"] and not again["left"], again
 
 
 def test_a_step_refused_on_a_protected_sheet_is_not_called_half_done(book, tmp_path):

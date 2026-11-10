@@ -212,12 +212,20 @@ def copy_name(workbook_name: str) -> str:
 
 
 def to_cell_text(v: Any) -> Any:
-    """A value from the request as what is assigned to a cell."""
+    """A value from the request as what is assigned to a cell. Digits given
+    as TEXT that Excel would change by reading them as a number ("00123" would
+    become 123; sixteen digits or more lose their last ones) are written with
+    Excel's text mark, so an account number or a ZIP code stays what it was."""
     if v is None:
         return ""
+    if isinstance(v, str) and _KEPT_AS_TEXT.fullmatch(v.strip()):
+        return "'" + v.strip()
     if isinstance(v, (bool, int, float, str)):
         return v
     return str(v)
+
+
+_KEPT_AS_TEXT = re.compile(r"0\d+|\d{16,}")
 
 
 # ------------------------------------------------------------------ attaching --
@@ -909,12 +917,17 @@ def _restore_formats_checked(rng: Any, rows: int, cols: int, prior: dict, want: 
         if now == w:
             _restore_formats(rng, rows, cols, {key: held})
             continue
+        if now == held:
+            continue  # already what it was
         if "lost" in now or "lost" in w or "lost" in held:
             left_cells.update((i, j) for i in range(rows) for j in range(cols))
             continue
         for i in range(rows):
             for j in range(cols):
-                if _held_at(now, i, j) == _held_at(w, i, j):
+                cur = _held_at(now, i, j)
+                if cur == _held_at(held, i, j):
+                    continue  # already what it was
+                if cur == _held_at(w, i, j):
                     _write_format(rng.Cells(i + 1, j + 1), key, _held_at(held, i, j))
                 else:
                     left_cells.add((i, j))
@@ -950,6 +963,8 @@ def _count_overwrites(cx: Cx, before_f: list, new: "list[list[Any]] | None") -> 
             ns = "" if nv is None else (str(nv) if not isinstance(nv, bool) else str(nv).upper())
             if isinstance(nv, float) and nv == int(nv):
                 ns = str(int(nv))
+            if ns.startswith("'"):
+                ns = ns[1:]  # Excel's text mark is not part of what the cell holds
             if ns == bf:
                 continue
             over += 1
@@ -2329,9 +2344,10 @@ def _undo_step(app: Any, wb: Any, step: dict, forgiving: bool) -> "tuple[int, li
             else:
                 for i in range(rows):
                     for j in range(cols):
-                        if now[i][j] == want[i][j]:
-                            if now[i][j] != prior[i][j]:
-                                _put_formula(ws.Cells(r1 + i, c1 + j), back[i][j])
+                        if now[i][j] == prior[i][j]:
+                            done += 1  # already what it was (an Undo stopped half way and pressed again)
+                        elif now[i][j] == want[i][j]:
+                            _put_formula(ws.Cells(r1 + i, c1 + j), back[i][j])
                             done += 1
                         else:
                             skipped.append(a1(r1 + i, c1 + j))
