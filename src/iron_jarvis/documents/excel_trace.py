@@ -96,6 +96,8 @@ def parse_cell(text: Any, default_sheet: str = "") -> "tuple[str, int, int]":
 def refs_of(formula: str, sheet: str, grid: Grid) -> "list[Ref]":
     """The cells and ranges a formula reads, in the order written, each once.
     A defined name is followed to what it points at. Never raises."""
+    if formula.startswith("{") and formula.endswith("}"):
+        formula = formula[1:-1]  # an array formula, as shown
     try:
         tokens = _tokenize(formula[1:] if formula.startswith("=") else formula)
     except FormulaError:
@@ -194,6 +196,30 @@ def _formula(grid: Grid, sheet: str, col: int, row: int) -> "str | None":
         return None
 
 
+def _array(grid: Grid, sheet: str, col: int, row: int) -> "tuple[int, int, str] | None":
+    """``(anchor col, anchor row, text)`` when an ARRAY formula holds or
+    fills the cell. Such a cell is a formula's result, never a typed-in
+    value, though :func:`_formula` answers None for it."""
+    try:
+        return grid.array_formula(sheet, col, row)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _shown_formula(grid: Grid, sheet: str, col: int, row: int) -> str:
+    """The cell's formula as the answer shows it ("" for a typed-in cell):
+    an array formula in braces, the way Excel shows one."""
+    f = _formula(grid, sheet, col, row)
+    if f is not None:
+        return f
+    arr = _array(grid, sheet, col, row)
+    if arr is None:
+        return ""
+    if (arr[0], arr[1]) == (col, row):
+        return "{" + arr[2] + "}"
+    return f"filled by the array formula in {sheet}!{_col_letters(arr[0])}{arr[1]}"
+
+
 def _label_of(grid: Grid, sheet: str, col: int, row: int) -> str:
     """The words beside a cell that say what it is: the nearest text to its
     left on the row, else above it in the column (bounded)."""
@@ -246,13 +272,25 @@ def how(grid: Grid, sheet: str, col: int, row: int, depth: int = 3) -> dict:
         label = _label_of(grid, s, c, r)
         tag = f" ({label})" if label else ""
         pad = "  " * level
-        if f is None:
+        arr = _array(grid, s, c, r) if f is None else None
+        if f is None and arr is None:
             lines.append(f"{pad}{name}{tag} = {show(value)}  [typed in]")
             inputs.setdefault(name, f"{show(value)}{tag}")
             return
         shown = show(value) if not why else f"not worked out ({why})"
-        lines.append(f"{pad}{name}{tag} = {shown}  [{f}]")
         key = (s.lower(), c, r)
+        if arr is not None and (arr[0], arr[1]) != (c, r):
+            # A cell an array formula fills: its value comes from that formula.
+            lines.append(f"{pad}{name}{tag} = {shown}  [filled by the array formula in {s}!{_col_letters(arr[0])}{arr[1]}]")
+            if key not in seen and level < depth:
+                seen.add(key)
+                cell_line(s, arr[0], arr[1], level + 1, quiet)
+            return
+        if arr is not None:
+            f = arr[2]
+            lines.append(f"{pad}{name}{tag} = {shown}  [{{{f}}}, an array formula]")
+        else:
+            lines.append(f"{pad}{name}{tag} = {shown}  [{f}]")
         if key in seen:
             lines.append(f"{pad}  (shown above)")
             return
@@ -275,7 +313,7 @@ def how(grid: Grid, sheet: str, col: int, row: int, depth: int = 3) -> dict:
         # (B1:XFD3000 is 49 million) took 4.7 GB and most of a minute.
         total = ref.cells
         cells = list(islice(((c, r) for r in range(ref.r1, ref.r2 + 1) for c in range(ref.c1, ref.c2 + 1)), MAX_RANGE_LOOKED))
-        formulas = sum(1 for c, r in cells if _formula(grid, ref.sheet, c, r) is not None)
+        formulas = sum(1 for c, r in cells if _shown_formula(grid, ref.sheet, c, r))
         kind = "all typed in" if formulas == 0 else ("all formulas" if formulas == len(cells) else f"{formulas} formulas, the rest typed in")
         scope = "" if total <= len(cells) else f" among the first {len(cells):,}"
         lines.append(f"{pad}{ref.label()}  [{total} cells, {kind}{scope}]")
@@ -305,11 +343,89 @@ def _all_formulas(grid: Grid) -> "tuple[list[tuple[str, int, int, str]], bool]":
             continue
         for (r, c), cell in held.items():
             v = cell.value
-            if isinstance(v, str) and v.startswith("="):
-                out.append((name, c, r, v))
-                if len(out) >= MAX_FORMULAS_SCANNED:
-                    return out, True
+            if isinstance(v, str):
+                if not v.startswith("="):
+                    continue
+            elif getattr(v, "ref", None) is not None:
+                # An array formula (the library hands it over as an object).
+                # Listed in braces, the way Excel shows one.
+                arr = _array(grid, name, c, r)
+                if arr is None or (arr[0], arr[1]) != (c, r):
+                    continue
+                v = "{" + arr[2] + "}"
+            else:
+                continue
+            out.append((name, c, r, v))
+            if len(out) >= MAX_FORMULAS_SCANNED:
+                return out, True
     return out, False
+
+
+def _spills(grid: Grid, parsed: "list[tuple[str, int, int, str, list[Ref]]]") -> "dict[tuple[str, int, int], list[tuple[str, int, int]]]":
+    """For each array formula that fills other cells: those cells. A formula
+    that reads one of them rests on the array formula."""
+    out: dict[tuple[str, int, int], list[tuple[str, int, int]]] = {}
+    for s, c, r, f, _refs in parsed:
+        if f.startswith("{"):
+            try:
+                filled = grid.array_filled(s, c, r)
+            except Exception:  # noqa: BLE001
+                filled = []
+            if filled:
+                out[(s.lower(), c, r)] = [(s, fc, fr) for fc, fr in filled]
+    return out
+
+
+_UNSEEN_READS_RX = re.compile(r"(?i)\b(?:INDIRECT|OFFSET)\s*\(|\[")
+
+
+def _reads_unseen(grid: Grid, formula: str) -> bool:
+    """Whether a formula may read cells its text does not name (INDIRECT,
+    OFFSET, a table column, a name that is not a plain range, or text the
+    tokenizer cannot read). What such a formula rests on is not known."""
+    body = formula[1:-1] if formula.startswith("{") else formula
+    if _UNSEEN_READS_RX.search(body):
+        return True
+    try:
+        tokens = _tokenize(body[1:] if body.startswith("=") else body)
+    except FormulaError:
+        return True
+    for kind, val in tokens:
+        if kind == "ident" and val.upper() not in ("TRUE", "FALSE"):
+            try:
+                if grid.defined(val) is None:
+                    return True
+            except Exception:  # noqa: BLE001
+                return True
+    return False
+
+
+#: How long a what-if spends finding the array formulas a change reaches.
+ARRAY_REACH_S = 10.0
+
+
+def _stale_arrays(grid: Grid, parsed: "list[tuple[str, int, int, str, list[Ref]]]", cut: bool,
+                  starts: "list[tuple[str, int, int]]") -> "set[tuple[str, int, int]] | None":
+    """The cells a change to *starts* reaches, followed to the end, plus the
+    cells the array formulas among them fill (see ``Grid.array_stale``). None
+    when that cannot be told: then no array formula's saved result is used."""
+    if cut:
+        return None
+    deadline = time.monotonic() + ARRAY_REACH_S
+    spill = _spills(grid, parsed)
+    unknown = []
+    for n, (s, c, r, f, _refs) in enumerate(parsed):
+        if n % 512 == 0 and time.monotonic() > deadline:
+            return None
+        if _reads_unseen(grid, f):
+            unknown.append((s, c, r))  # may rest on the changed cells: treat as changed
+    reached, late = _dependents_cells(parsed, list(starts) + unknown, 10**9, deadline, spill)
+    if late:
+        return None
+    stale = {(s.lower(), c, r) for s, c, r in list(reached) + unknown}
+    for key in list(stale):
+        stale.update((s.lower(), c, r) for s, c, r in spill.get(key, ()))
+    return stale
 
 
 class _CellIndex:
@@ -368,9 +484,13 @@ def affects(grid: Grid, sheet: str, col: int, row: int, depth: int = 3) -> dict:
     sheet = grid.canon(sheet)
     deadline = time.monotonic() + DEADLINE_S
     parsed, cut = _parsed_formulas(grid, deadline)
+    spill = _spills(grid, parsed)
     lines: list[str] = []
     seen = {(sheet.lower(), col, row)}
     level_cells = [(sheet, col, row)]
+    arr = _array(grid, sheet, col, row)
+    if arr is not None and (arr[0], arr[1]) == (col, row):
+        level_cells = _with_filled(level_cells, spill)  # what uses the cells this array formula fills uses it
     total = 0
     late = cut and time.monotonic() > deadline
     for level in range(1, depth + 1):
@@ -394,7 +514,7 @@ def affects(grid: Grid, sheet: str, col: int, row: int, depth: int = 3) -> dict:
                     lines.append(f"{'  ' * (level - 1)}{s}!{_col_letters(c)}{r}{tag} = {show(value) if not why else 'not worked out'}  [{f}]")
         if not nxt or late:
             break
-        level_cells = nxt
+        level_cells = _with_filled(nxt, spill)
     if total > MAX_DEPENDENTS:
         lines.append(f"(+{total - MAX_DEPENDENTS} more cells)")
     return {"lines": lines, "count": total, "cut": cut or late, "late": late, "scanned": len(parsed)}
@@ -462,26 +582,40 @@ def what_if(grid: Grid, changes: "dict[str, Any]", watch: "list[str]", default_s
     sets = []
     for where, value in changes.items():
         s, c, r = parse_cell(where, default_sheet)
-        sets.append((grid.canon(s), c, r, _typed(value)))
+        s = grid.canon(s)
+        arr = _array(grid, s, c, r)
+        if arr is not None and ((arr[0], arr[1]) != (c, r) or grid.array_filled(s, c, r)):
+            raise ValueError(f"{s}!{_col_letters(c)}{r} is one of the cells an array formula fills; "
+                             "a what-if cannot replace part of that formula. Set a typed-in cell instead")
+        sets.append((s, c, r, _typed(value)))
     watched = []
     for where in watch:
         s, c, r = parse_cell(where, default_sheet)
         watched.append((grid.canon(s), c, r))
     more = 0
     ends_known = True
-    if not watched:
-        # Nothing named: report the END results the changed cells lead to
-        # (cells no other formula uses), not every cell on the way.
-        deadline = time.monotonic() + DEADLINE_S
+    starts = [(s, c, r) for s, c, r, _v in sets]
+    deadline = time.monotonic() + DEADLINE_S
+    read: "list[Any]" = []
+
+    def formulas() -> "tuple[list, bool]":
         # The formulas are read with the new cells in place: a whole-column
         # range (B:B) reaches as far as the sheet's last row, and a cell set
         # BELOW the data must count as inside it.
-        grid.overrides = {(s.lower(), c, r): v for s, c, r, v in sets}
-        try:
-            parsed, cut = _parsed_formulas(grid, deadline)
-        finally:
-            grid.overrides = {}
-        reached, late = _dependents_cells(parsed, [(s, c, r) for s, c, r, _v in sets], MAX_DEPTH, deadline)
+        if not read:
+            grid.overrides = {(s.lower(), c, r): v for s, c, r, v in sets}
+            try:
+                read.append(_parsed_formulas(grid, deadline))
+            finally:
+                grid.overrides = {}
+        return read[0]
+
+    if not watched:
+        # Nothing named: report the END results the changed cells lead to
+        # (cells no other formula uses), not every cell on the way.
+        parsed, cut = formulas()
+        spill = _spills(grid, parsed)
+        reached, late = _dependents_cells(parsed, starts, MAX_DEPTH, deadline, spill)
         if cut or late:
             # Part of the workbook was not followed, so "the end results"
             # would be a guess: a cell can look like an end only because the
@@ -489,10 +623,18 @@ def what_if(grid: Grid, changes: "dict[str, Any]", watch: "list[str]", default_s
             raise ValueError("this workbook is too large to follow everything those cells feed here; name the cells to watch in 'watch'")
         if not reached:
             raise ValueError("nothing uses those cells, so nothing would change; name the cells to watch in 'watch'")
-        ends = _end_results(parsed, reached, deadline)
+        ends = _end_results(parsed, reached, deadline, spill)
         ends_known = bool(ends)
         watched = (ends or reached)[:MAX_DEFAULT_WATCH]
         more = len(reached) - len(watched)
+    # ARRAY FORMULAS are not worked out: the result Excel saved is used, and
+    # only for an array formula the change cannot reach. (The first cut used
+    # the saved result always: with A2 changed, {=SUM(A1:A3*B1:B3)} stayed 140
+    # where Excel says 200, and so did every cell behind it, with no warning.)
+    stale: "set[tuple[str, int, int]] | None" = set()
+    if _has_arrays(grid):
+        stale = _stale_arrays(grid, *formulas(), starts)
+    grid.array_stale = stale
     grid.fresh, grid.overrides = True, {}
     grid.reset()
     rows = []
@@ -500,7 +642,7 @@ def what_if(grid: Grid, changes: "dict[str, Any]", watch: "list[str]", default_s
         name = f"{s}!{_col_letters(c)}{r}"
         base, why = _value(grid, s, c, r)
         saved = grid.saved(s, c, r)
-        row: dict[str, Any] = {"cell": name, "label": _label_of(grid, s, c, r), "formula": _formula(grid, s, c, r) or "", "now": base}
+        row: dict[str, Any] = {"cell": name, "label": _label_of(grid, s, c, r), "formula": _shown_formula(grid, s, c, r), "now": base}
         if _date_cell(saved, base):
             row["is_date"] = True
         if why:
@@ -516,7 +658,7 @@ def what_if(grid: Grid, changes: "dict[str, Any]", watch: "list[str]", default_s
         # Dates go into the answer's data as text: the data is sent on as JSON.
         now, v = (show(x) if hasattr(x, "isoformat") else x for x in (now, v))
         was.append({"cell": f"{s}!{_col_letters(c)}{r}", "label": _label_of(grid, s, c, r), "now": now, "to": v,
-                    "formula": _formula(grid, s, c, r) or ""})
+                    "formula": _shown_formula(grid, s, c, r)})
     grid.overrides = {(s.lower(), c, r): v for s, c, r, v in sets}
     grid.reset()
     for row, (s, c, r) in zip(rows, watched):
@@ -529,17 +671,37 @@ def what_if(grid: Grid, changes: "dict[str, Any]", watch: "list[str]", default_s
         row["then"] = new
         if isinstance(new, (int, float)) and isinstance(row["now"], (int, float)) and not isinstance(new, bool):
             row["change"] = float(new) - float(row["now"])
-    grid.overrides, grid.fresh = {}, False
+    grid.overrides, grid.fresh, grid.array_stale = {}, False, None
     grid.reset()
     return {"set": was, "watch": rows, "more": more, "ends_known": ends_known}
 
 
+def _has_arrays(grid: Grid) -> bool:
+    try:
+        return bool(grid.has_arrays())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _with_filled(cells: "list[tuple[str, int, int]]", spill: "dict | None") -> "list[tuple[str, int, int]]":
+    """*cells* plus the cells the array formulas among them fill: a formula
+    that reads a filled cell (H2 under H1 =A1:A2*2) rests on that formula."""
+    if not spill:
+        return cells
+    out = list(cells)
+    for s, c, r in cells:
+        out.extend(spill.get((s.lower(), c, r), ()))
+    return out
+
+
 def _dependents_cells(parsed: "list[tuple[str, int, int, str, list[Ref]]]", starts: "list[tuple[str, int, int]]",
-                      depth: int, deadline: float) -> "tuple[list[tuple[str, int, int]], bool]":
+                      depth: int, deadline: float, spill: "dict | None" = None) -> "tuple[list[tuple[str, int, int]], bool]":
     """Every cell that uses one of *starts*, directly or through other cells,
-    *depth* levels out; and whether it ran out of time first."""
+    *depth* levels out; and whether it ran out of time first. *spill* (see
+    :func:`_spills`) lets the walk pass through the cells an array formula
+    fills."""
     seen = {(s.lower(), c, r) for s, c, r in starts}
-    level = list(starts)
+    level = _with_filled(list(starts), spill)
     out: list[tuple[str, int, int]] = []
     for _ in range(depth):
         index = _CellIndex(level)
@@ -555,22 +717,30 @@ def _dependents_cells(parsed: "list[tuple[str, int, int, str, list[Ref]]]", star
         out.extend(nxt)
         if not nxt:
             break
-        level = nxt
+        level = _with_filled(nxt, spill)
     return out, False
 
 
 def _end_results(parsed: "list[tuple[str, int, int, str, list[Ref]]]", cells: "list[tuple[str, int, int]]",
-                 deadline: float) -> "list[tuple[str, int, int]]":
+                 deadline: float, spill: "dict | None" = None) -> "list[tuple[str, int, int]]":
     """Those of *cells* that no formula in the workbook uses: the figures a
-    chain of formulas ends in ([] when that cannot be told in the time)."""
-    index = _CellIndex(cells)
+    chain of formulas ends in ([] when that cannot be told in the time). An
+    array formula is used when a cell it fills is."""
+    index = _CellIndex(_with_filled(cells, spill))
     used: set[tuple[str, int, int]] = set()
     for n, (_s, _c, _r, _f, refs) in enumerate(parsed):
         if n % 64 == 0 and time.monotonic() > deadline:
             return []
         for ref in refs:
             index.mark(ref, used)
-    return [cell for cell in cells if (cell[0].lower(), cell[1], cell[2]) not in used]
+
+    def is_used(cell: "tuple[str, int, int]") -> bool:
+        key = (cell[0].lower(), cell[1], cell[2])
+        if key in used:
+            return True
+        return any((s.lower(), c, r) in used for s, c, r in (spill or {}).get(key, ()))
+
+    return [cell for cell in cells if not is_used(cell)]
 
 
 class _TooLong(ValueError):
@@ -584,10 +754,26 @@ def goal_seek(grid: Grid, target: str, goal: float, change: str, low: "float | N
     ts, tc, tr = parse_cell(target, default_sheet)
     cs, cc, cr = parse_cell(change, default_sheet)
     ts, cs = grid.canon(ts), grid.canon(cs)
+    if _array(grid, ts, tc, tr) is not None:
+        raise ValueError(f"{ts}!{_col_letters(tc)}{tr} holds an array formula, which Jarvis does not work out, "
+                         "so it cannot search for a value here; use Excel's own Goal Seek")
     if _formula(grid, ts, tc, tr) is None:
         raise ValueError(f"{ts}!{_col_letters(tc)}{tr} is typed in, not a formula, so no input can change it")
     if _formula(grid, cs, cc, cr) is not None:
         raise ValueError(f"{cs}!{_col_letters(cc)}{cr} is a formula; choose a typed-in cell to change")
+    if _array(grid, cs, cc, cr) is not None:
+        raise ValueError(f"{cs}!{_col_letters(cc)}{cr} holds or is filled by an array formula; choose a typed-in cell to change")
+    # An array formula the change reaches is not worked out, so a target that
+    # rests on one is refused below, in words (see Grid.array_stale).
+    stale: "set[tuple[str, int, int]] | None" = set()
+    if _has_arrays(grid):
+        grid.overrides = {(cs.lower(), cc, cr): grid.saved(cs, cc, cr)}
+        try:
+            parsed, cut = _parsed_formulas(grid, time.monotonic() + DEADLINE_S)
+        finally:
+            grid.overrides = {}
+        stale = _stale_arrays(grid, parsed, cut, [(cs, cc, cr)])
+    grid.array_stale = stale
     grid.fresh, grid.overrides = True, {}
     grid.reset()
     start, why = _value(grid, cs, cc, cr)
@@ -684,7 +870,7 @@ def goal_seek(grid: Grid, target: str, goal: float, change: str, low: "float | N
         reached = f(answer) + float(goal)
         return {"answer": answer, "reaches": reached, "start": x0, "steps": steps, "was": float(base)}
     finally:
-        grid.overrides, grid.fresh = {}, False
+        grid.overrides, grid.fresh, grid.array_stale = {}, False, None
         grid.reset()
 
 
