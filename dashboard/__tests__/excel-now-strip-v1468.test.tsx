@@ -103,7 +103,8 @@ describe("the line above the message box", () => {
     fireEvent.click(screen.getByTestId("excel-now-stop"));
     expect(screen.getByTestId("excel-now-strip")).toHaveAttribute("data-on", "false");
     expect(excelNowForSend()).toBeNull();
-    expect(window.sessionStorage.getItem(EXCEL_USE_KEY)).toBeNull();
+    // v1.469.0 review: a Stop is kept ("0"), so it holds in the window beside Excel.
+    expect(window.sessionStorage.getItem(EXCEL_USE_KEY)).toBe("0");
   });
 
   it("keeps the switch for this window, and stops sending when Excel closes", async () => {
