@@ -44,6 +44,22 @@ if (POPOUT_PATH) {
   });
 }
 
+// v1.468.0: is THIS window the narrow chat window beside Excel? main.js says
+// so ("excel:beside") after it places the window and after every page load;
+// the page's "Working with Excel" line then starts switched on.
+let besideExcel = false;
+const besideExcelListeners = new Set();
+ipcRenderer.on("excel:beside", (_event, beside) => {
+  besideExcel = beside === true;
+  for (const cb of besideExcelListeners) {
+    try {
+      cb(besideExcel);
+    } catch {
+      /* a listener's fault is its own */
+    }
+  }
+});
+
 (function injectToken() {
   const token = readTokenArg();
   if (!token) return; // no token configured => daemon runs auth-disabled
@@ -144,6 +160,16 @@ contextBridge.exposeInMainWorld("ironjarvis", {
     // v1.361.0 (lane 11A): read at the moment a ping is decided (a function,
     // so it is never a copy taken when the bridge was exposed).
     speaks: () => popoutSpeaks,
+  },
+  // v1.468.0: the chat window beside Excel (main.js openBesideExcel).
+  excel: {
+    openBeside: () => ipcRenderer.invoke("excel:openBeside"),
+    beside: () => besideExcel,
+    onBeside: (cb) => {
+      if (typeof cb !== "function") return () => {};
+      besideExcelListeners.add(cb);
+      return () => besideExcelListeners.delete(cb);
+    },
   },
   // v1.456.0: the Text size setting (90-150 %), applied as the window's zoom.
   // `onChanged` hears a size the View menu's keys or Ctrl + wheel chose, so

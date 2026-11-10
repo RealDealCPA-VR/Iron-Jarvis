@@ -3489,6 +3489,17 @@ function installSpotlightIpc() {
     if (!isTrustedDashboardSender(event)) return null;
     return openPopout(rawPath);
   });
+  // v1.468.0: the chat window beside Excel. Sender-checked like every
+  // window-opening call; refused = null.
+  ipcMain.handle("excel:openBeside", (event) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    return openBesideExcel(BrowserWindow.fromWebContents(event.sender));
+  });
+  ipcMain.handle("excel:isBeside", (event) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    const win = BrowserWindow.fromWebContents(event.sender);
+    return !!(win && besideExcelWins.has(win));
+  });
   ipcMain.handle("popout:list", (event) => {
     if (!isTrustedDashboardSender(event)) return null;
     return popoutPaths();
@@ -5880,6 +5891,12 @@ function buildMenu() {
           ...(hotkeyState.window ? { accelerator: hotkeyState.window } : {}),
           click: () => showMainWindow(),
         },
+        {
+          // v1.468.0: a narrow chat window that stays on top at the edge of
+          // the screen, for working beside a workbook.
+          label: "Open Chat Beside Excel",
+          click: () => openBesideExcel(mainWin),
+        },
         { type: "separator" },
         {
           label: "Keep running in background when window is closed",
@@ -7072,7 +7089,13 @@ function openPopout(rawPath) {
     saveTimer = setTimeout(() => {
       saveTimer = null;
       if (userDataDir && !win.isDestroyed() && win.isVisible()) {
-        windowState.savePopoutBounds(userDataDir, route, win.getBounds());
+        // v1.468.0: the narrow window beside Excel keeps its own rectangle;
+        // saved under the route it would replace the chat pop-out's.
+        if (besideExcelWins.has(win)) {
+          windowState.savePopoutBounds(userDataDir, windowState.BESIDE_KEY, win.getBounds());
+        } else {
+          windowState.savePopoutBounds(userDataDir, route, win.getBounds());
+        }
       }
     }, 600);
   };
@@ -7087,6 +7110,54 @@ function openPopout(rawPath) {
   win.webContents.on("did-finish-load", () => announcePopoutSpeaker());
   win.loadURL(popoutUrl(route));
   return { ok: true, path: route, reused: false, secondary: !!placed.secondary };
+}
+
+// THE CHAT BESIDE EXCEL (v1.468.0). The chat's pop-out window, made narrow,
+// kept on top and put at the right edge of the screen the press came from
+// (or where the user last left it), so it sits beside the workbook like a
+// panel. It is the ordinary /chat pop-out: the same page, the same guards.
+// Excel itself is never moved or resized. The page is told ("excel:beside")
+// so its "Working with Excel" line starts switched on.
+const besideExcelWins = new WeakSet();
+
+function tellBesideExcel(win) {
+  try {
+    if (!win.isDestroyed()) win.webContents.send("excel:beside", besideExcelWins.has(win));
+  } catch {
+    /* the window is closing */
+  }
+}
+
+function openBesideExcel(fromWin) {
+  const opened = openPopout("/chat");
+  const win = opened && opened.ok ? livePopout("/chat") : null;
+  if (!win) return { ok: false };
+  const first = !besideExcelWins.has(win);
+  besideExcelWins.add(win);
+  let point = null;
+  try {
+    const src = fromWin && !fromWin.isDestroyed() ? fromWin.getBounds() : null;
+    if (src) point = { x: src.x + Math.round(src.width / 2), y: src.y + Math.round(src.height / 2) };
+  } catch {
+    point = null;
+  }
+  const saved = userDataDir ? windowState.loadBesideBounds(userDataDir) : null;
+  const placed = windowState.besidePlacement(saved, screen.getAllDisplays(), point);
+  try {
+    if (win.isMaximized()) win.unmaximize();
+    win.setMinimumSize(windowState.BESIDE_MIN_WIDTH, windowState.BESIDE_MIN_HEIGHT);
+    if (Number.isFinite(placed.x) && Number.isFinite(placed.y)) win.setBounds(placed);
+    else win.setSize(placed.width, placed.height);
+    win.setAlwaysOnTop(true, "floating");
+  } catch (e) {
+    desktopLog("warn", `[beside-excel] could not place the window: ${e && e.message}`);
+  }
+  if (first) win.webContents.on("did-finish-load", () => tellBesideExcel(win));
+  tellBesideExcel(win);
+  if (win.isMinimized()) win.restore();
+  if (!win.isVisible()) win.show();
+  win.focus();
+  return { ok: true };
 }
 
 function popoutUrl(route) {

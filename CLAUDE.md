@@ -16639,6 +16639,68 @@ does not need a bump, stop and bump it.
     written from Excel's documented error codes, not driven; no panel inside
     Excel; agents and the POST lane cannot change a workbook.
 
+- **Jarvis beside Excel: the chat knows what is in front in Excel, by the
+  user's own switch; a narrow chat window stays beside the workbook**
+  (v1.468.0; step 4 of the live-Excel plan).
+  - **NAMES ONLY, and nothing to a model without the switch.**
+    `GET /excel/live/now` (`excel_live.now()`) answers `{open, workbook,
+    sheet, selection, cell, unsaved, others}` from ONE plain `look` (no range,
+    so no cell content is read); Excel not running answers `{open: false}`
+    with NO child started (`excel_running`), a busy Excel `{open: false,
+    busy}`. `/health` carries `excel_open` (`excel_seen()`, never waits).
+  - **Dashboard.** `components/chat/ExcelNowStrip.tsx` (mounted above the
+    composer beside `LocalOnlyOffer`) reads only while `/health` says
+    `excel_open` (a health mock without the key = no request, no line, so the
+    other chat-page tests are untouched), on mount, on window focus /
+    `visibilitychange` (at most every `EXCEL_NOW_MIN_GAP_MS` 2.5 s) and on
+    its refresh press; NEVER on a timer (each read starts one child).
+    `lib/excelNow.ts` is a module store the PAGE NEVER SUBSCRIBES TO
+    (the composer-store rule): `excelNowForSend()` is read in the body build
+    right after `page_context` and returns the three names only while the
+    switch (`sessionStorage` `ij.excel.use`, per window) is on AND the last
+    read showed a workbook. Tests reset it with `resetExcelNowForTests()`.
+  - **Daemon.** `ChatBody.excel_now` (`schemas.ExcelNow`, cut to bounds).
+    `chat_turn.excel_now_of(body)` is the ONE reading (no workbook = none; a
+    selection that is not a cell range dropped). `_excel_now_section` rides
+    `_page_context_section` (so BOTH lanes get it with no lane edit;
+    `wants_page_section` counts it): heading `# Excel, right now`, each name
+    through `_page_context_value` (a flagged workbook or sheet name is
+    withheld), and words that name NO tool. `_resolve_armed_tools` arms
+    `excel_live_look` (and its companions) for such a turn whatever the
+    words and whatever Auto tools says, still under the ceiling and the
+    user's deny; `routes/chat.py` ask-arms `excel_live_edit` beside it OUTSIDE
+    the Auto-tools branch (stream lane only; the first cut offered no change
+    tool with Auto tools off).
+  - **The window beside Excel (`desktop/main.js` `openBesideExcel`).** It is
+    the ORDINARY `/chat` pop-out (`openPopout("/chat")`, every guard that
+    has), then made narrow, `setAlwaysOnTop(true)`, placed by the pure
+    `windowState.besidePlacement(saved, displays, point)` (the saved
+    rectangle while still on a display, else the right edge, full height, of
+    the screen the press came from) and remembered under
+    `windowState.BESIDE_KEY`, never the route's key (`besideExcelWins`).
+    IPC `excel:openBeside` (sender-checked); the page is told
+    `excel:beside` after placement and after every load; preload
+    `ironjarvis.excel {openBeside, beside, onBeside}`; the strip starts the
+    switch ON in that window. Excel itself is never moved or resized. Menu:
+    Iron Jarvis > Open Chat Beside Excel. main.js logs through `desktopLog`,
+    never `console.warn` (pinned), and `openPopout` must keep its exact
+    `savePopoutBounds(userDataDir, route, …)` line (pinned).
+  - **NOT BUILT, the owner's call: a task pane inside Excel.** Office loads
+    an add-in only from an HTTPS address whose certificate Windows trusts;
+    for a localhost app that means installing a root certificate and
+    registering the add-in with Office (a trusted catalog or a registry
+    key): security settings Iron Jarvis does not change by itself.
+  - **Pins:** `tests/test_excel_beside_v1468.py`,
+    `dashboard/__tests__/excel-now-{strip,page}-v1468.test.tsx`, the
+    names-only case in `tests/test_excel_trace_real_v1467.py` (10 mutations,
+    all red).
+  - **OPEN:** the beside window was not driven in the packaged desktop app
+    (its placement rule and IPC are pinned under node and by source); its
+    first place is remembered, so a later press from another screen opens
+    where it was left; the selection sent with a message is the one at the
+    last read (the block tells the model to read it again); Chat › Code and
+    the Build pane chat have no Excel line.
+
 - **How a number is built, what-if, goal seek, and a cell the user can jump
   to** (v1.467.0; step 3 of the live-Excel plan).
   - **`documents/excel_trace.py`, tool `excel_trace`** (allow, READONLY,

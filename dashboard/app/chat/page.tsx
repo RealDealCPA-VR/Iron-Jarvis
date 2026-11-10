@@ -205,6 +205,8 @@ import { DoorsStrip, decodeDoors, type Door } from "@/components/chat/DoorsStrip
 import { startCodingFromDoor } from "@/lib/codingStart";
 import { startMissionFromDoor } from "@/lib/missionStart";
 import { LocalOnlyOffer } from "@/components/chat/LocalOnlyOffer";
+import { ExcelNowStrip } from "@/components/chat/ExcelNowStrip";
+import { excelNowForSend } from "@/lib/excelNow";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
 import { ReplyRating, type ReplyRatingValue } from "@/components/chat/ReplyRating";
 import { ConfigCards } from "@/components/chat/ConfigCards";
@@ -956,6 +958,7 @@ type ChatRequestBody = {
   resources?: { pack: string; uri: string; name?: string }[]; // v1.324.0: "@" → from your apps
   mcp_cards?: boolean; // v1.324.0: this page draws the apps' question/model-request cards
   page_context?: { title: string; path: string; text: string }; // v1.325.0: "Ask Jarvis about this page"
+  excel_now?: { workbook: string; sheet: string; selection: string }; // v1.468.0: "Use Excel in this chat"
   thread_refs?: string[]; // v1.328.0: "@" → saved chats read as reference material (≤ 3 ids)
   local_only?: boolean; // v1.332.0: this chat is "local only" (sent every turn)
   account?: string; // v1.424.0 (D6): the Iron-Proxy account this chat runs on
@@ -9105,6 +9108,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // read from the message, so a Try again sends it again.
     const turnPage = asked?.role === "user" ? asked.pageContext : undefined;
     if (turnPage?.text.trim()) body.page_context = turnPage;
+    // v1.468.0: what is in front in Excel, only while the user switched
+    // "Use it in this chat" on (read from the strip's store at send time).
+    const excelNow = excelNowForSend();
+    if (excelNow) body.excel_now = excelNow;
     // v1.328.0: the saved chats this question pointed at with "@" — read
     // from the message too, and the same body goes to both lanes.
     const turnRefs = chatRefIds(asked?.role === "user" ? asked.chatRefs : undefined);
@@ -14295,6 +14302,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         chat that is not Local only, with a model on this PC or the
                         user's network connected — ONE quiet offer, once
                         (lib/localOnlyOffer). Its press is the chip's own toggle. */}
+                    {/* v1.468.0: what is in front in Excel, and the switch that
+                        lets this chat use it. Nothing while Excel is not open. */}
+                    <ExcelNowStrip />
                     <LocalOnlyOffer
                       attachedCount={attachments.length}
                       localOnly={localOnly}

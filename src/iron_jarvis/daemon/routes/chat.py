@@ -4721,6 +4721,18 @@ async def chat_stream(
                 and d.platform.registry.get("shell") is not None
             ):
                 ask_armed.append("shell")
+        # USE EXCEL IN THIS CHAT (v1.468.0): the user's own switch armed the
+        # look whatever Auto tools says (chat_turn._resolve_armed_tools), so
+        # the change tool is offered beside it here too: VISIBLE, never
+        # granted, exactly as in the Auto-tools branch above.
+        if (
+            _chat_turn.excel_now_of(body) is not None
+            and "excel_live_look" in armed
+            and "excel_live_edit" not in armed
+            and "excel_live_edit" not in ask_armed
+            and d.platform.registry.get("excel_live_edit") is not None
+        ):
+            ask_armed.append("excel_live_edit")
         # NO MEDIA SERVICE, KEY UP FRONT (v1.353.0, G40): a sentence that
         # ask-armed `generate_media` on an install with no media service gets
         # `app_connect` in its place — its pixio branch answers with the

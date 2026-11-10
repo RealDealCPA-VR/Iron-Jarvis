@@ -724,6 +724,31 @@ async def goto(workbook: str, sheet: str, cell: str) -> dict:
     return await ask({"op": "goto", "workbook": workbook, "sheet": sheet, "cell": cell}, LOOK_S)
 
 
+async def now() -> dict:
+    """What is in front in Excel: ``{open, workbook, sheet, selection, cell,
+    unsaved}``, names only. Never raises; Excel not running (or no workbook
+    open, or Excel busy) is ``{"open": False}``, with ``busy`` words when
+    Excel is there but taking no requests."""
+    if not await asyncio.to_thread(excel_running):
+        return {"open": False}
+    out = await ask({"op": "look"}, LOOK_S)
+    if not out.get("ok"):
+        return {"open": False, "busy": str(out.get("error") or NO_ANSWER)[:300]}
+    act = out.get("active") or {}
+    if not out.get("excel_open") or not act.get("workbook"):
+        return {"open": False}
+    book = next((b for b in out.get("workbooks") or [] if b.get("name") == act.get("workbook")), {})
+    return {
+        "open": True,
+        "workbook": str(act.get("workbook") or "")[:260],
+        "sheet": str(act.get("sheet") or "")[:31],
+        "selection": str(act.get("selection") or "")[:60],
+        "cell": str(act.get("cell") or "")[:20],
+        "unsaved": not book.get("saved", True),
+        "others": max(0, len(out.get("workbooks") or []) - 1),
+    }
+
+
 #: A CELL THE USER CAN JUMP TO (v1.467.0). A reply names a cell as a markdown
 #: link whose address is only a fragment, "#excel/<workbook>/<sheet>/<cell>"
 #: (each part percent-encoded). The chat draws it as a press that asks

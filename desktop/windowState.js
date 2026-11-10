@@ -242,7 +242,47 @@ function popoutPlacement(saved, displays, mainBounds, offset) {
   return { x, y, width, height, secondary: !!other };
 }
 
+// THE WINDOW BESIDE EXCEL (v1.468.0): a narrow chat window at the right edge
+// of a screen, the full height of its work area. The saved rectangle is used
+// while it is still on a connected display (the user moved it: it stays
+// where they put it); otherwise the right edge of the screen that holds
+// `point` (the window the press came from), else of the first screen. Pure.
+const BESIDE_WIDTH = 440;
+const BESIDE_MIN_WIDTH = 380;
+const BESIDE_MIN_HEIGHT = 420;
+const BESIDE_KEY = "/chat#beside-excel";
+
+function loadBesideBounds(userDataDir) {
+  const b = readPopoutState(userDataDir)[BESIDE_KEY];
+  if (
+    !b ||
+    ![b.x, b.y, b.width, b.height].every(Number.isFinite) ||
+    b.width < BESIDE_MIN_WIDTH ||
+    b.height < BESIDE_MIN_HEIGHT
+  ) {
+    return null;
+  }
+  return { x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) };
+}
+
+function besidePlacement(saved, displays, point) {
+  const list = usableDisplays(displays);
+  if (saved && isVisibleOnDisplay(saved, list)) {
+    return { x: saved.x, y: saved.y, width: saved.width, height: saved.height };
+  }
+  if (list.length === 0) return { width: BESIDE_WIDTH, height: 820 };
+  const target = (point ? list.find((d) => contains(d.workArea, point)) : null) || list[0];
+  const wa = target.workArea;
+  const width = Math.max(BESIDE_MIN_WIDTH, Math.min(BESIDE_WIDTH, Math.floor(wa.width / 2)));
+  return { x: wa.x + wa.width - width, y: wa.y, width, height: wa.height };
+}
+
 module.exports = {
+  BESIDE_KEY,
+  BESIDE_MIN_WIDTH,
+  BESIDE_MIN_HEIGHT,
+  loadBesideBounds,
+  besidePlacement,
   DEFAULT_BOUNDS,
   MIN_WIDTH,
   MIN_HEIGHT,

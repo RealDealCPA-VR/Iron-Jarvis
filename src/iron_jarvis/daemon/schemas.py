@@ -387,6 +387,39 @@ POINTED_TEXT_CHARS = 300
 POINTED_CSS_CHARS = 300
 
 
+EXCEL_NOW_NAME_CHARS = 120
+EXCEL_NOW_SELECTION_CHARS = 60
+
+
+class ExcelNow(BaseModel):
+    """What the user has in front of them in Excel (v1.468.0): the workbook,
+    the sheet and the selected range, as the chat's "Working with Excel"
+    line showed them when the message was sent. NAMES ONLY, never a cell's
+    content. The page sends it only while the user has switched "use Excel
+    in this chat" on. BOTH lanes arm the look at the open workbook for that
+    turn and say these three names to the model, scanned, as data
+    (``chat_turn._excel_now_section``). Every field is cut to its bound."""
+
+    workbook: str = ""
+    sheet: str = ""
+    selection: str = ""
+
+    @field_validator("workbook", "sheet", "selection", mode="before")
+    @classmethod
+    def _none_is_empty(cls, v: Any) -> Any:
+        return "" if v is None else str(v)
+
+    @field_validator("workbook", "sheet")
+    @classmethod
+    def _cut_name(cls, v: str) -> str:
+        return v[:EXCEL_NOW_NAME_CHARS]
+
+    @field_validator("selection")
+    @classmethod
+    def _cut_selection(cls, v: str) -> str:
+        return v[:EXCEL_NOW_SELECTION_CHARS]
+
+
 class PointedElement(BaseModel):
     """The element the user pointed at in the browser sidebar ("Point at it",
     v1.400.9): they clicked it in the page, the add-on's picker read what a
@@ -612,6 +645,10 @@ class ChatBody(BaseModel):
     #: attachments seam (the page context's helper), scanned and fenced as
     #: untrusted data. Only the sidebar sends it today. No receipt field.
     pointed: PointedElement | None = None
+    #: v1.468.0: what the user has in front of them in Excel, sent only while
+    #: they switched "use Excel in this chat" on (names only). BOTH lanes arm
+    #: the look at the open workbook and say the names as data. No receipt.
+    excel_now: ExcelNow | None = None
     #: v1.326.0: saved chats the user pointed to with "@" (thread ids). BOTH
     #: lanes read at most 3 of them (``chat_refs.read_thread_refs``) at the
     #: attachments seam as fenced reference material; extras, unknown ids and

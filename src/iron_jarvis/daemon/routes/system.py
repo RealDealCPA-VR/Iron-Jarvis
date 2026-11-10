@@ -386,6 +386,14 @@ def register(app: FastAPI, d) -> None:
     except Exception:  # noqa: BLE001 — a missing notice never stops the app
         pass
 
+    def _excel_open() -> bool:
+        try:
+            from ...documents.excel_live import excel_seen
+
+            return bool(excel_seen())
+        except Exception:  # noqa: BLE001 - a status read never fails on this
+            return False
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         # The ACTIVE project (context spine) rides along so the UI can show
@@ -432,6 +440,10 @@ def register(app: FastAPI, d) -> None:
             # (daemon/background_counts.py). Running now lists them; the orb
             # reads this so it never says "Idle" beside that list.
             "background": _background_running(d),
+            # v1.468.0: whether Excel is running on this PC (a remembered
+            # process check that never waits). The chat reads it to decide
+            # whether to ask what is in front in Excel at all.
+            "excel_open": _excel_open(),
         }
 
     @app.get("/system/activity")

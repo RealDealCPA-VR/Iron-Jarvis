@@ -614,6 +614,18 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=422, detail=f"could not open: {exc}")
         return {"ok": True, "app": _APP_LABEL.get(p.suffix.lower(), "the default app")}
 
+    @app.get("/excel/live/now")
+    async def excel_live_now() -> dict[str, Any]:
+        """What is in front in Excel right now (v1.468.0): the workbook, the
+        sheet and the selected range. NAMES ONLY, never a cell's content, and
+        nothing here reaches a model: the chat's "Working with Excel" line
+        shows it to the user, and only a chat the user switched on sends the
+        three names with a message. Excel not running answers at once with
+        no child started."""
+        from ...documents import excel_live as _xl
+
+        return await _xl.now()
+
     @app.post("/excel/live/goto")
     async def excel_live_goto(body: ExcelGotoBody) -> dict[str, Any]:
         """Show one cell of a workbook that is OPEN in Excel (v1.467.0): the

@@ -209,3 +209,22 @@ def test_a_jump_selects_the_cell_and_changes_nothing(model, the_child_may_run):
     assert wb.ActiveSheet.Name == "Calc", "a refused jump leaves Excel where it was"
     out = asyncio.run(L.goto(str(path.with_name("Other.xlsx")), "Calc", "B8"))
     assert out["ok"] is False and "Other.xlsx" in out["error"], "a workbook that is not open is never opened"
+
+
+def test_what_is_in_front_gives_names_only(model, the_child_may_run):
+    """v1.468.0: the chat's "Working with Excel" line. Only run when this
+    test's own Excel is the only one (the answer names the workbook in
+    front, and a developer's own workbook is none of a test's business)."""
+    import psutil
+
+    from iron_jarvis.documents import excel_live as L
+
+    if sum(1 for p in psutil.process_iter(["name"]) if str(p.info.get("name") or "").lower() == "excel.exe") != 1:
+        pytest.skip("another Excel is running on this PC")
+    wb, _path = model
+    wb.Worksheets("Calc").Activate()
+    wb.Worksheets("Calc").Range("B4:B6").Select()
+    L._RUNNING = (0.0, False)  # forget the remembered process check
+    out = asyncio.run(L.now())
+    assert out == {"open": True, "workbook": "Pricing.xlsx", "sheet": "Calc", "selection": "B4:B6",
+                   "cell": "B4", "unsaved": False, "others": 0}, out

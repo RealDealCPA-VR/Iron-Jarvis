@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.467.0 (2026-11-09).*
+holds itself to. Current as of v1.468.0 (2026-11-09).*
 
 ---
 
@@ -2041,6 +2041,47 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Jarvis beside Excel (v1.468.0)
+
+Jarvis can now sit beside your workbook and know what you have selected, the
+way a panel inside Excel would.
+
+**The line above the message box.** While Excel is open with a workbook, Chat
+shows one quiet line: "Excel is open: Budget.xlsx". Press **Use it in this
+chat** and it becomes "Working with Excel: Sales!B4:B9 in Budget.xlsx", the
+sheet and cells you have selected. From then on you can simply say "what is
+wrong here?", "fix this", "total these" and Jarvis reads the selection from
+Excel. **Stop** switches it off again. The switch lasts for that window until
+you close it.
+
+**The window beside Excel.** In the desktop app, press **Open beside Excel**
+on that line (or choose Iron Jarvis > Open Chat Beside Excel in the menu). A
+narrow chat window opens at the right edge of the screen and stays on top, so
+it is there while you work in the workbook. In that window the Excel switch
+starts on. Move it where you like: it opens there next time. Jarvis does not
+move or resize Excel; drag Excel's edge if you want the two side by side
+without overlap.
+
+**What is read, and when.**
+
+- The line shows names only: the workbook, the sheet and the selected range.
+  No cell content is read to draw it, and none of it goes to a model.
+- It is read when you come back to the Jarvis window, and when you press the
+  small refresh button. Nothing runs on a timer.
+- Only when the switch is on does a message carry those three names, and
+  only then may Jarvis look at the open workbook for that message whatever
+  your words say. What it reads from the workbook goes to the model that
+  answers, exactly like a file you attach, so a chat set to Local only keeps
+  it on your own network.
+- A change to the workbook still shows its card first, as before.
+
+**Why not a panel inside Excel itself?** Excel only loads a side panel from a
+secure web address with a certificate Windows trusts. For an app that runs
+only on your own PC, that means installing a certificate into Windows as a
+trusted authority and registering an add-in with Office, both of which change
+this PC's security settings. Iron Jarvis does not do that by itself. The
+window beside Excel gives the same working arrangement without it.
 
 ## How a number is built, what-if and goal seek (v1.467.0)
 

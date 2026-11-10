@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.468.0
+
+**Jarvis beside Excel.** Jarvis can now sit beside your workbook and know what you have selected, the way a panel inside Excel would.
+
 ## v1.467.0
 
 **How a number is built, what-if and goal seek.** Jarvis can now explain a figure in a spreadsheet, tell you what would change it, and take you to the cell.
@@ -77,7 +81,3 @@
 ## v1.450.0
 
 **The first run, and every connection, in plain words.** **No Claude Code or Codex yet?** The connect door offers "Install Claude Code for me" / "Install Codex for me": a Build terminal opens and runs the vendor's own installer where you can watch it.
-
-## v1.449.0
-
-**Did it work? The app tells you, everywhere.** Every place that reports on work now gives the same, plain verdict.
