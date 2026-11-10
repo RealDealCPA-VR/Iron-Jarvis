@@ -373,3 +373,58 @@ def test_a_clean_table_draws_no_notes(tmp_path):
 ])
 def test_a_formula_filled_down_is_one_pattern(formula, row, col, want):
     assert formula_pattern(formula, row, col) == want
+
+
+# ----------------------------------------------------- large workbooks stay fast --
+
+
+def test_a_workbook_with_no_formula_is_never_loaded_to_look_for_one(tmp_path, monkeypatch):
+    """Measured before this guard: a 100,000-row sheet of plain numbers cost a
+    16-second load after every write, to learn there was nothing to work out."""
+    import iron_jarvis.documents.excel_formula as EF
+
+    wb = Workbook()
+    wb.active.append(["Item", "Amount"])
+    wb.active.append(["Rent", 500])
+    wb.save(tmp_path / "plain.xlsx")
+    assert R.has_formulas(tmp_path / "plain.xlsx") is False
+    assert R.has_formulas(_inventory(tmp_path / "inv.xlsx")) is True
+    assert R.has_formulas(tmp_path / "missing.xlsx") is True, "cannot tell is never 'none'"
+
+    def boom(*a, **kw):
+        raise AssertionError("the workbook was loaded")
+
+    monkeypatch.setattr(EF.Grid, "__init__", boom)
+    res = R.store_results(tmp_path / "plain.xlsx")
+    assert (res.found, res.stored, res.why_not) == (0, 0, "")
+    from iron_jarvis.documents.excel_tools import uncached_formulas
+
+    assert uncached_formulas(tmp_path / "plain.xlsx", None) == 0
+
+
+def test_a_workbook_too_large_to_work_out_says_so_everywhere(tmp_path, monkeypatch):
+    _inventory(tmp_path / "inv.xlsx")
+    monkeypatch.setattr(R, "MAX_CELLS", 5)  # the sheet states 5 x 4 = 20 cells
+    assert R.cell_estimate(tmp_path / "inv.xlsx") >= 20
+
+    # a workbook written as a stream states no size: its XML's size is read instead
+    stream = Workbook(write_only=True)
+    sheet = stream.create_sheet("S")
+    for i in range(400):
+        sheet.append([i, i * 2, f"=A{i + 1}+B{i + 1}"])
+    stream.save(tmp_path / "stream.xlsx")
+    assert R.cell_estimate(tmp_path / "stream.xlsx") > 600, "1,200 cells, and no stated size"
+    assert "too large" in R.too_large(tmp_path / "inv.xlsx")
+    res = R.compute_missing(tmp_path / "inv.xlsx")
+    assert res.computed == 0 and "too large" in res.why_not
+    assert "its formulas were not worked out (the workbook is too large" in R.summary_note(res, stored=True)
+    # a question over it leaves the unsaved formulas out, and says how many
+    q = _run(ExcelQueryTool(), {"path": "inv.xlsx", "op": "sum", "column": "Line"}, tmp_path)
+    assert not q.ok and "no numeric values" in q.error, "every Line cell is an unsaved formula"
+    assert "WARNING: 4 cell(s) on this sheet hold a formula" in q.error
+    # an edit says its results were not worked out
+    e = _run(ExcelEditTool(), {"path": "inv.xlsx", "edits": [{"cell": "E1", "formula": "=1+1"}]}, tmp_path)
+    assert e.ok and "NOT WORKED OUT" in e.output and "its formulas were not worked out" in e.output
+    # the profile falls back to the quick view
+    p = _run(ExcelProfileTool(), {"path": "inv.xlsx"}, tmp_path)
+    assert p.ok and p.data["quick"] is True

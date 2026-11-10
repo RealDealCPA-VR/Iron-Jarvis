@@ -325,6 +325,11 @@ def uncached_formulas(path: Path, sheet: "str | None", max_rows: int = 50_000) -
     try:
         from openpyxl import load_workbook
 
+        from .excel_recalc import has_formulas
+
+        if not has_formulas(path):
+            return 0  # v1.465.0: no formula anywhere, so neither pass is paid
+
         values = load_workbook(str(path), data_only=True, read_only=True)
         formulas = load_workbook(str(path), data_only=False, read_only=True)
         try:
@@ -523,6 +528,9 @@ def _load_table_computed(path: Path, sheet: "str | None") -> tuple[Any, ...]:
 
     matrix = [list(headers)] + rows
     res = fill_rows(path, title, matrix, first_row=1, first_col=1)
+    if res.why_not and not res.computed:
+        # Too large to work out: every unsaved formula is LEFT OUT, and said.
+        res.skipped = uncached_formulas(path, title)
     return title, headers, matrix[1:], truncated, res
 
 

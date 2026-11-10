@@ -2157,6 +2157,8 @@ every result saved in the file equalled Excel's own.
 
 What is still not done: Jarvis does not work out array formulas, INDIRECT,
 OFFSET, or links to other workbooks; those cells are named and left for Excel.
+A very large workbook (more than about 400,000 cells, or 12 MB) is not worked
+out or mapped in full; Jarvis says so and gives the quick view instead.
 It does not create charts from a description or pivot tables. Saving a
 workbook from Jarvis can still simplify unusual content (some charts and
 macros).

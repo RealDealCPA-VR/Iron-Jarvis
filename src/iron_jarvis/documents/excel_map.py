@@ -34,7 +34,7 @@ from .excel_formula import (
     _tokenize,
     for_reading,
 )
-from .excel_recalc import MAX_FILE_BYTES, tidy
+from .excel_recalc import tidy, too_large
 
 #: Rows and columns of each sheet that are studied.
 MAX_ROWS = 5_000
@@ -440,7 +440,7 @@ def _sheet_map(ws: Any, grid: Grid, deadline: float) -> dict[str, Any]:
 def workbook_map(path: "str | Path") -> dict[str, Any]:
     """The map of one workbook. Raises only what opening the file raises."""
     p = Path(path)
-    if p.stat().st_size > MAX_FILE_BYTES:
+    if too_large(p):
         raise ValueError("the workbook is too large to map in full")
     grid = Grid(p)
     try:

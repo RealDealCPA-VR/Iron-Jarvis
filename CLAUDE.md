@@ -16457,7 +16457,14 @@ does not need a bump, stop and bump it.
     `compute_missing(path, sheets)` works out every formula cell with no
     saved result (bounded: `MAX_FILE_BYTES`, `MAX_FORMULAS`, `DEADLINE_S`;
     `Recalc.values` shows a date cell as an ISO date; `failed` names each
-    cell and why; never raises). `store_results(path)` then writes each
+    cell and why; never raises). `has_formulas(path)` scans the sheets' XML
+    for a formula tag FIRST (a 100,000-row sheet of plain numbers cost a 16 s
+    load after every write to learn there was nothing to do; 0.08 s now), and
+    `too_large` refuses a whole load past `MAX_FILE_BYTES` (12 MB) or
+    `MAX_CELLS` (400,000; `cell_estimate` = the larger of the sheets' stated
+    size and their XML bytes / 40, because a workbook written as a stream
+    states no size). A new whole-workbook load (`Grid(path)`) goes behind
+    both. `store_results(path)` then writes each
     result into the sheet XML beside its `<f>` (regex over what the library
     writes; `t="str"` / `t="b"`), into a copy named
     `.recalc-<pid>-<name>` (the library opens a file by its extension),

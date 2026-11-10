@@ -35,7 +35,10 @@ from typing import Any
 from .excel_formula import ExcelError, FormulaError, Grid, _col_letters, from_serial, to_serial
 
 #: A workbook larger than this is not recalculated (it is loaded whole, twice).
-MAX_FILE_BYTES = 40 * 1024 * 1024
+MAX_FILE_BYTES = 12 * 1024 * 1024
+#: ...nor one with more cells than this (measured: 800,000 cells took 16 s to
+#: load before a single formula was looked at).
+MAX_CELLS = 400_000
 #: At most this many formula cells are worked out in one pass.
 MAX_FORMULAS = 100_000
 #: Wall-clock bound for one pass.
@@ -91,6 +94,71 @@ def _is_date_format(fmt: Any) -> bool:
         return False
 
 
+def has_formulas(path: "str | Path") -> bool:
+    """True when any sheet of the workbook holds a formula. CHEAP: it scans the
+    sheets' XML for a formula tag without loading the workbook (a 100,000-row
+    sheet of plain numbers used to cost a 16-second load to learn there was
+    nothing to work out). Cannot tell is True."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            for item in z.infolist():
+                if not item.filename.startswith("xl/worksheets/") or not item.filename.endswith(".xml"):
+                    continue
+                with z.open(item) as fh:
+                    tail = b""
+                    while True:
+                        chunk = fh.read(1 << 20)
+                        if not chunk:
+                            break
+                        block = tail + chunk
+                        if b"<f>" in block or b"<f " in block or b"<f/>" in block:
+                            return True
+                        tail = block[-3:]
+        return False
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def cell_estimate(path: "str | Path") -> int:
+    """About how many cells the workbook holds; no cell is read. The larger of
+    two cheap readings: each sheet's own stated size, and the size of the
+    sheets' XML (a workbook written as a stream states no size at all, and one
+    such 800,000-cell file went straight past the first reading; measured,
+    a cell takes about 45 bytes). 0 when it cannot tell."""
+    stated = by_size = 0
+    try:
+        with zipfile.ZipFile(path) as z:
+            by_size = sum(i.file_size for i in z.infolist()
+                          if i.filename.startswith("xl/worksheets/") and i.filename.endswith(".xml")) // 40
+    except Exception:  # noqa: BLE001
+        by_size = 0
+    if by_size > MAX_CELLS:
+        return by_size  # already too large: the second reading is not paid for
+    try:
+        from openpyxl import load_workbook
+
+        wb = load_workbook(str(path), read_only=True)
+        try:
+            stated = sum(int(ws.max_row or 0) * int(ws.max_column or 0) for ws in wb.worksheets)
+        finally:
+            wb.close()
+    except Exception:  # noqa: BLE001
+        stated = 0
+    return max(stated, by_size)
+
+
+def too_large(path: "str | Path") -> str:
+    """Why this workbook is not loaded whole, or "" when it may be."""
+    try:
+        if Path(path).stat().st_size > MAX_FILE_BYTES:
+            return "the workbook is too large to recalculate here"
+    except OSError as exc:
+        return f"the workbook could not be read ({type(exc).__name__})"
+    if cell_estimate(path) > MAX_CELLS:
+        return "the workbook is too large to recalculate here"
+    return ""
+
+
 def compute_missing(
     path: "str | Path",
     sheets: "list[str] | None" = None,
@@ -101,12 +169,10 @@ def compute_missing(
     """Work out every formula cell of *path* that has no saved result."""
     out = Recalc()
     p = Path(path)
-    try:
-        if p.stat().st_size > MAX_FILE_BYTES:
-            out.why_not = "the workbook is too large to recalculate here"
-            return out
-    except OSError as exc:
-        out.why_not = f"the workbook could not be read ({type(exc).__name__})"
+    if not has_formulas(p):
+        return out  # nothing to work out, and the workbook was never loaded
+    out.why_not = too_large(p)
+    if out.why_not:
         return out
     grid: "Grid | None" = None
     try:
@@ -371,6 +437,10 @@ def summary_note(res: Recalc, *, stored: bool) -> str:
             "read as blank until the workbook is opened and saved in Excel, so do not "
             "report a figure that depends on them."
         )
-    elif res.why_not and res.found == 0:
-        pass
+    elif res.why_not and not res.computed:
+        lines.append(
+            f"WARNING: its formulas were not worked out ({res.why_not}). They read as "
+            "blank until the workbook is opened and saved in Excel, so do not report a "
+            "figure that depends on them."
+        )
     return "\n".join(lines)
