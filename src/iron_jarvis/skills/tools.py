@@ -194,6 +194,12 @@ class SkillCreateTool(Tool):
                 "created_by": "agent",
                 "created_session": str(getattr(ctx, "session_id", "") or ""),
             }
+            # v1.470.0: a skill made in CHAT was asked for by the user and
+            # approved on a card, so it is pinned: the curator's sweep never
+            # archives it for sitting unused. It stays "agent"-made (a model
+            # wrote the words), so it is still scanned before a model reads it.
+            if provenance["created_session"] == "chat":
+                provenance["pinned"] = True
         try:
             path = save_skill(
                 skills_root,

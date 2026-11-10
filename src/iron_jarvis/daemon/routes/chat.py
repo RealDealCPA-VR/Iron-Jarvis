@@ -4868,6 +4868,12 @@ async def chat_stream(
             # NOTE (lock-step): non-stream copy in daemon/chat_turn.py.
             project_id=(pid if resolved_proj is not None else None),
         )
+        # v1.470.0: start the isolated script worker now when `tool_script`
+        # is offered, so the model's first script does not wait for a
+        # process. Returns at once. MIRROR NOTE (lock-step): chat_turn.
+        from ...tools.tool_script import prewarm as _prewarm_script
+
+        _prewarm_script(d.platform, armed, ctx)
         # THE AGENT'S BRIEF (v1.262.0): only on a turn that can actually act in
         # the browser — a brief that says "you can click" beside no click tool
         # is a lie. MIRROR NOTE (lock-step): chat_turn's Tools seam.
@@ -4886,6 +4892,11 @@ async def chat_stream(
         _pref = preference_block({*armed, *ask_armed})
         if _pref:
             system += "\n\n" + _pref
+        # v1.470.0: the skill brief, only beside `skill_create`. MIRROR NOTE
+        # (lock-step): chat_turn's Tools seam.
+        _skill_brief = _chat_turn.skill_block({*armed, *ask_armed})
+        if _skill_brief:
+            system += "\n\n" + _skill_brief
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]

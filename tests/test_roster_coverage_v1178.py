@@ -157,6 +157,10 @@ def test_default_registry_serves_the_file_core_including_rename(platform):
 # is covered. (A bare test platform has none, but a fixture that registered one
 # would otherwise report a phantom orphan.)
 _OFF_ROSTER_BY_DESIGN = {
+    # TOOL SCRIPTS (v1.470.0): offered by chat beside a turn's read-only
+    # tools (chat_turn._resolve_armed_tools); a custom agent can list it by
+    # name. No built-in roster carries it yet.
+    "tool_script",
     # LIVE EXCEL (v1.466.0): reached from CHAT, where a person is present.
     # They act on whatever workbook is open on the user's screen, outside any
     # run's work folder, so no agent roster carries them.

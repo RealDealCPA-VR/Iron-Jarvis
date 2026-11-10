@@ -3611,6 +3611,61 @@ def wants_calculator(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
     return about_figures and bool(_FIGURE_CARRIERS.intersection(picked))
 
 
+_SCRIPT_WORD = re.compile(r"[a-z0-9']+")
+#: "each client", "every workbook", "all of the invoices", "across the files".
+_SCRIPT_MANY = frozenset({"each", "every", "all", "across", "batch", "bulk"})
+#: The things an office job has many of.
+_SCRIPT_THINGS = frozenset({
+    "files", "file", "documents", "document", "docs", "pdfs", "pdf", "workbooks",
+    "workbook", "spreadsheets", "spreadsheet", "sheets", "sheet", "tabs", "tab",
+    "folders", "folder", "invoices", "invoice", "statements", "statement",
+    "returns", "return", "reports", "report", "clients", "client", "customers",
+    "customer", "vendors", "vendor", "accounts", "account", "pages", "page",
+    "receipts", "receipt", "contracts", "contract", "emails", "email",
+    "records", "record", "transactions", "transaction", "bills", "bill",
+    "payments", "payment", "entries", "entry", "items", "item", "months",
+    "month", "quarters", "quarter", "years", "year", "companies", "company",
+})
+#: How far after "every" the thing may sit ("every one of the client files").
+_SCRIPT_REACH = 5
+#: "every day I get more email" is about time, not about many things.
+_SCRIPT_NOT_NEXT = frozenset({
+    "day", "week", "time", "morning", "night", "evening", "once", "now",
+    "so", "good", "right", "set", "done", "fine", "day's", "the", "along",
+})
+#: A count this high of one thing is a job for a script ("these 12 workbooks").
+_SCRIPT_COUNT = 4
+
+
+def wants_tool_script(
+    text: str, picked: "list[str] | tuple[str, ...]", attachments: int = 0
+) -> bool:
+    """True when the turn is the SAME read done many times (v1.470.0): the
+    message speaks of each / every / all of some kind of thing, or names four
+    or more of them, or brings that many files, and the turn already has a
+    tool to read with (*picked* non-empty). Then `tool_script` rides along,
+    so the model can do the reads in one script instead of one call each.
+    One pass over the words: linear."""
+    if not picked:
+        return False
+    if attachments >= _SCRIPT_COUNT:
+        return True
+    words = _SCRIPT_WORD.findall((text or "")[:4000].lower())
+    for i, word in enumerate(words):
+        ahead = words[i + 1: i + 1 + _SCRIPT_REACH]
+        if word in _SCRIPT_MANY and any(w in _SCRIPT_THINGS for w in ahead):
+            # "all the …" / "all of the …" are fine; a time word right after
+            # the quantifier is not a list of things.
+            nxt = ahead[0] if ahead else ""
+            if nxt in _SCRIPT_NOT_NEXT and nxt != "the":
+                continue
+            return True
+        if word.isdigit() and len(word) < 6 and int(word) >= _SCRIPT_COUNT:
+            if any(w in _SCRIPT_THINGS for w in ahead[:3]):
+                return True
+    return False
+
+
 #: ASK-TIER candidates (v1.187.0): tools worth SHOWING the model in an
 #: interactive chat even though every call must be approved by the user first.
 #: Deliberately not merged into AUTO_SAFE_TOOLS — that set is the auto-ALLOW

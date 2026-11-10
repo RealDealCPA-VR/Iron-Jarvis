@@ -4340,6 +4340,13 @@ def settings_ask_tools(
         if settings_ask(text).writers:
             names += list(ASK_CONFIG_TOOLS)
         names += record_tools_for(text, workflow_names=workflow_names)
+        # v1.470.0: "create a skill for …" offers `skill_create` (its own tier
+        # is ask, so it shows the ordinary card). Chat used to offer only the
+        # workflow exit, and a request for a skill came back as a workflow.
+        from ..skills.trigger import wants_skill_create
+
+        if wants_skill_create(text):
+            names.append("skill_create")
         for t in names:
             if t in taken or t in out or reg.get(t) is None:
                 continue
@@ -4787,6 +4794,33 @@ def _resolve_armed_tools(
                 and d.platform.registry.get(_name) is not None
             ):
                 auto.append(_name)
+    # TOOL SCRIPTS (v1.470.0): when the turn is the same read done many times
+    # ("every workbook in this folder", twelve attached statements) and it
+    # already has a tool that only reads, `tool_script` rides along so the
+    # model can do the reads in ONE script: fewer model turns, and only what
+    # the script prints enters the context. In its own place and under the
+    # same ceiling as the calculator. The script runs isolated and may call
+    # only this turn's read-only tools (tools/tool_script.py).
+    if (
+        getattr(body, "auto_tools", False)
+        and (_ceiling >= _MAX_ARMED_TOOLS or len(explicit) + len(auto) < _ceiling)
+        and "tool_script" not in explicit
+        and "tool_script" not in auto
+        and d.platform.registry.get("tool_script") is not None
+    ):
+        from ..tools.autoselect import wants_tool_script
+
+        _script = d.platform.registry.get("tool_script")
+        _fixed = getattr(_script, "_fixed_refusal", None)
+
+        def _only_reads(name: str) -> bool:
+            # The script tool's own rule for what a script may reach.
+            tool = d.platform.registry.get(name)
+            return tool is not None and callable(_fixed) and not _fixed(name, tool)
+
+        _readers = [t for t in explicit + auto if _only_reads(t)]
+        if wants_tool_script(last_user, _readers, len(body.attachments or [])):
+            auto.append("tool_script")
     auto = [t for t in auto if _not_denied(t)]
     # THE BROWSER CAPABILITY FILTER (v1.236.0, plan 11.2), applied LAST — after
     # the explicit picks, after every fill pass, and after the drop signal has
@@ -5861,6 +5895,32 @@ def preference_block(armed_names) -> str:
     except TypeError:
         return ""
     return PREFERENCE_BLOCK if "remember_preference" in armed else ""
+
+
+#: v1.470.0: what a turn is told when ``skill_create`` is armed. A request
+#: for a skill used to be answered with the workflow exit (the only "make a
+#: reusable thing" tool chat had), so the brief says which is which.
+SKILL_BLOCK = (
+    "# Saving a skill\n"
+    "The user asked for a skill. In Iron Jarvis a SKILL is written know-how: "
+    "how to approach a kind of task, what to ask and check, how to word the "
+    "result. Later chats and agents load it. A WORKFLOW is a list of steps "
+    "the app runs. Write the skill and save it with skill_create (a short "
+    "name, a one-line description, full markdown instructions); the user "
+    "approves it on a card. Do not answer a request for a skill with "
+    "workflow_draft."
+)
+
+
+def skill_block(armed_names) -> str:
+    """The skill brief when ``skill_create`` is armed, else ``""`` (a brief
+    beside no tool is a lie — the v1.262.0 rule). MIRROR NOTE (lock-step):
+    both lanes append it at their Tools seam, after the memory brief."""
+    try:
+        armed = {str(n) for n in (armed_names or ())}
+    except TypeError:
+        return ""
+    return SKILL_BLOCK if "skill_create" in armed else ""
 
 
 def browser_agent_block(armed_names) -> str:
@@ -7404,6 +7464,9 @@ _FILE_WRITING_TOOLS = frozenset(
 STRICT_ASK_TOOLS = (
     _FILE_WRITING_TOOLS
     | {"pdf_arrange", "pdf_split", "rename_file", "edit_file"}
+    # v1.470.0: under "Ask before every action" a tool script shows its code
+    # on a card first: the reads it makes are made without further cards.
+    | {"tool_script"}
     # v1.364.0 (IJ harness Phase 1 review): the new editors are edit_file's
     # tier (allow), so without them here the "ask before file edits" posture
     # let a patch, a multi-edit or a notebook edit change files uncarded.
@@ -10589,6 +10652,12 @@ async def run_chat_turn(
             # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
             project_id=(pid if resolved_proj is not None else None),
         )
+        # v1.470.0 — lock-step with the stream lane: start the isolated script
+        # worker now when `tool_script` is offered, so the model's first
+        # script does not wait for a process. Returns at once.
+        from ..tools.tool_script import prewarm as _prewarm_script
+
+        _prewarm_script(d.platform, armed, ctx)
         # THE AGENT'S BRIEF (v1.262.0) — lock-step with the stream lane: only
         # on a turn that can actually act in the browser.
         if _is_browser_agent_turn(armed):
@@ -10604,6 +10673,10 @@ async def run_chat_turn(
         _pref = preference_block(armed)
         if _pref:
             system += "\n\n" + _pref
+        # v1.470.0 — lock-step with the stream lane: the skill brief.
+        _skill_brief = skill_block(armed)
+        if _skill_brief:
+            system += "\n\n" + _skill_brief
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]

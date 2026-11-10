@@ -16931,6 +16931,98 @@ does not need a bump, stop and bump it.
     read; a model must write the link (a raw space in a name breaks it, so the
     hint says %20); a closed file has no jump.
 
+- **A tool script runs ISOLATED and reaches a tool only through the
+  registry's gate; chat makes a skill when asked for one** (v1.470.0; the
+  owner: "programmatic tool calls … in an isolated environment for
+  protection, but … zero notice on performance", and "i asked IJ to create a
+  skill for tax advisement and it created a workflow").
+  - **`tool_script` (`tools/tool_script.py`).** The model writes one Python
+    script; `tools.call(name, **args)` / `tools.<name>(**args)` inside it
+    call the turn's tools; only what it prints comes back. Allow tier,
+    READONLY, untrusted content, in `STRICT_ASK_TOOLS`, on no built-in
+    roster (`_OFF_ROSTER_BY_DESIGN`), not in the harness's `CODING_TOOLS`.
+  - **The gate.** `ToolRegistry.invoke` sets `registry.CallScope`
+    (`current_call_scope()`: perms, overrides, session_allow, roster,
+    deadline, grants) around every `tool.execute`. The script tool passes
+    each nested call back through `invoke` with exactly that scope, after
+    its own `_refusal`: the tool must be on the turn's roster
+    (`allowed_names`; a caller that named none offers NO tool), only read
+    (`Reversibility.READONLY`, or one of `EXTRA_READERS`), not be in
+    `NOT_FROM_A_SCRIPT` (ask_user, exit_plan_mode, consult, config_secret,
+    plan_update, the page tools, view_image…), not be `deadline_exempt` or
+    quarantined, resolve to ALLOW (`perms.mode_for(perm_key, overrides)`; an
+    ask-armed tool is refused), have no `spend_check` that asks, and, under
+    Local only, not reach outside. A refusal is a `ToolError` sentence in
+    the script and NO ledger row. A NEW read tool that shows the user
+    something or starts a model goes in `NOT_FROM_A_SCRIPT`.
+  - **The worker (`repl/worker.py`, `ENV_ISOLATED`).** The same stdlib-only
+    worker as `repl`, in a namespace of its own (`namespace_key(...,
+    isolated=True)`, key suffix `#tools`). Its audit hook also refuses every
+    `socket.*` event, `urllib.Request` and friends, process and registry
+    events; writes only in the private scratch dir; reads only the working
+    folder, the scratch dir and the runtime's own folders (`_runtime_roots`,
+    added in the child); the working folder is taken off `sys.path` (a
+    client's `statistics.py` must never be imported). Its environment is
+    `session.isolated_env` = `sandbox.native.build_env()` (no secret by name
+    or value) minus PYTHONPATH/PYTHONSTARTUP/PYTHONHOME.
+  - **The Job.** Spawned through `core.procs.spawn(breakaway_ok=False)`;
+    after its first answer (`ReplSession._seal`) `procs.restrict` sets
+    ActiveProcessLimit = the members it has now (a venv launcher + the
+    interpreter = 2), a 2 GiB process memory limit and every UI restriction.
+    Those are OS-enforced; the network and file rules are the hook's
+    (a guardrail, not a sandbox — say so in any doc).
+  - **The bridge.** child → parent `{"id", "call": {"n", "tool", "args"}}`,
+    parent → child `{"reply": n, "ok", "output", "data", "error"}`, on the
+    worker's private pipes. `ReplSession._exchange` answers a call by
+    running the caller's coroutine on the loop
+    (`run_coroutine_threadsafe`, in a copy of the call's context, so Local
+    only, the hold and the account pin apply). Time waiting on a tool is
+    added back to the script's deadline; `MAX_TOOL_CALLS` 300 a script.
+  - **STOP KILLS (also the plain `repl`).** A cancel during `execute`
+    (`_stop_now`) kills the child at once, cancels the tool call in flight
+    and reaps in a background task. Before, a cancelled cell kept running
+    with the session lock released.
+  - **No noticeable cost.** Both chat lanes call `tool_script.prewarm`
+    right after the ToolContext is built (lock-step); the worker stays up
+    for the session (the registry's idle sweep reclaims it).
+  - **Arming.** `chat_turn._resolve_armed_tools`, in its own place under
+    the ceiling like the calculator: Auto tools on, the turn holds a tool
+    the script could call, and `autoselect.wants_tool_script` (each / every
+    / all / across + a kind of thing, a count of four or more, or four or
+    more attachments). Never over the user's deny.
+  - **Skills from chat.** `skills/trigger.wants_skill_create` (token-based,
+    linear) → `chat_turn.settings_ask_tools` ask-arms `skill_create` (its
+    own tier is ask: the ordinary card; stream lane only);
+    `chat_turn.skill_block(armed)` rides the Tools seam of BOTH lanes only
+    beside the tool; a skill made under session "chat" is saved `pinned`
+    and stays `created_by: agent` (scanned before use).
+  - **Adding a built-in tool** still means: a permission row
+    (`core/config.py`), `mission._RUN_TOOL_WORDS` + `lib/runWords.ts`,
+    `scripts/gen_tool_words.py`, the two recorded fixtures
+    (`IJ_REGEN_TOOL_LINES=1`, `IJ_REGEN_TOOL_WORDS_EVERYWHERE=1`) and the
+    roster test's list. `ASK_WORDS` is pinned equal to two other tables: do
+    not add to it alone.
+  - **RELEASE CHECK (frozen build):** run
+    `"<install>\resources\daemon\ironjarvis.exe" repl-worker` with
+    `IRONJARVIS_REPL_ISOLATED=1`, `IRONJARVIS_REPL_WRITE_ROOTS` and
+    `IRONJARVIS_REPL_READ_ROOTS` set to a scratch folder, and feed it
+    `{"id":"1","code":"import statistics"}`: one JSON line with
+    `"ok": true` must come back (the runtime's own folders are readable).
+  - **Pins:** `tests/test_tool_script_v1470.py`,
+    `tests/test_skill_from_chat_v1470.py`.
+  - **OPEN:** Chat › Code, Build › Code and the built-in agents do not use
+    scripts; nested tool results are scanned for planted instructions only
+    when the script prints them (the script's own output is fenced); a
+    script cannot ask for approval mid-run, so a mixed read-and-write job is
+    still several direct calls; not driven with a real model. The
+    PACKAGED worker was driven from a source daemon (sealed, 2 Job members,
+    numpy and openpyxl imported under the read rule, every block held), not
+    through the installed app.
+  - **Measured** (this PC, real registry and worker): a call from a script
+    costs about 0.2 ms more than the same call made directly; an empty
+    script answers in about 3 ms once the worker is up; the worker starts in
+    0.15 s from source and about 1 s packaged, ahead of the first script.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

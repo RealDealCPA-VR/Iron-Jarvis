@@ -696,6 +696,10 @@
       "ok": "listed the custom tools",
       "failed": "tried a tool listing and it failed"
     },
+    "tool_script": {
+      "ok": "ran a script over its tools",
+      "failed": "tried a tool script and it failed"
+    },
     "web_action": {
       "ok": "acted on a web page",
       "failed": "tried a web page action and it failed"

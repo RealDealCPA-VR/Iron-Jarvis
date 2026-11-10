@@ -4014,6 +4014,7 @@ const TOOL_WORDS_BUILTIN = {
   tool_create: "make a new tool",
   tool_delete: "remove a custom tool",
   tool_list: "list the custom tools",
+  tool_script: "run a script over its tools",
   view_image: "read a file",
   web_action: "act on a web page",
   web_extract: "read part of a web page",

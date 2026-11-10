@@ -431,6 +431,14 @@ def _isolate_protocol_streams() -> tuple[IO[str] | None, IO[str] | None]:
 ENV_WRITE_ROOTS = "IRONJARVIS_REPL_WRITE_ROOTS"
 ENV_READ_ROOTS = "IRONJARVIS_REPL_READ_ROOTS"
 ENV_DENY_ROOTS = "IRONJARVIS_REPL_DENY_ROOTS"
+#: "1" = the ISOLATED worker a tool script runs in (v1.470.0, the `tool_script`
+#: tool). On top of the rules above it has no network, starts and signals no
+#: other program, changes no registry key, and reads only the roots it was
+#: handed plus the Python runtime's own folders. What it may write is the
+#: private scratch folder alone (the parent hands it that as the one write
+#: root). Everything it does for the user it does by calling a tool through
+#: the bridge (:class:`_Tools`), where the app's own gates apply.
+ENV_ISOLATED = "IRONJARVIS_REPL_ISOLATED"
 
 #: Audit events that create, modify, move or delete something at a path. Each
 #: entry maps the event name to the indices of its path-bearing arguments —
@@ -471,6 +479,25 @@ _SPAWN_EVENTS = frozenset({
 #: FFI reaches the filesystem through the C library, raising no audit event at
 #: all, so leaving it open would make the write rule advisory.
 _FFI_EVENTS = frozenset({"ctypes.dlopen", "ctypes.dlsym", "ctypes.dlsym/handle"})
+
+#: ISOLATED worker only: anything that opens a network connection or looks a
+#: name up. Every `socket.*` event is refused too (see the hook) except
+#: `socket.gethostname`, which reaches nothing.
+_NETWORK_EVENTS = frozenset({
+    "urllib.Request", "http.client.connect", "ftplib.connect", "smtplib.connect",
+    "imaplib.open", "poplib.connect", "nntplib.connect", "telnetlib.Telnet.open",
+    "webbrowser.open",
+})
+
+#: ISOLATED worker only: other ways to start, stop or reconfigure something
+#: outside this process.
+_OUTSIDE_EVENTS = frozenset({
+    "os.startfile", "os.kill", "os.killpg", "os.fork", "os.forkpty",
+    "_winapi.CreateProcess", "signal.pthread_kill",
+    "winreg.CreateKey", "winreg.DeleteKey", "winreg.DeleteValue",
+    "winreg.SetValue", "winreg.SaveKey", "winreg.LoadKey",
+    "winreg.EnableReflectionKey", "winreg.DisableReflectionKey",
+})
 
 #: Key files refused BY NAME, independent of directory containment — the same
 #: belt-and-braces layer `core/fs_policy._PROTECTED_NAME_PREFIXES` carries, and
@@ -513,6 +540,34 @@ _FFI_BLOCKED = (
     "calls reach the filesystem without passing this session's folder check, so "
     "allowing them would make that check meaningless. Do this in pure Python, "
     "or use the `shell` tool."
+)
+
+
+_NETWORK_BLOCKED = (
+    "iron-jarvis tool script: BLOCKED — the network. A tool script runs in an "
+    "isolated process that cannot open a connection or look up a name. Reach "
+    "the outside through a tool instead: tools.call(\"web_fetch\", url=...) "
+    "when that tool is one of this turn's."
+)
+
+_OUTSIDE_BLOCKED = (
+    "iron-jarvis tool script: BLOCKED — starting, stopping or reconfiguring "
+    "something outside this script. A tool script only computes and calls "
+    "tools: tools.call(name, ...)."
+)
+
+_ISOLATED_WRITE_BLOCKED = (
+    "iron-jarvis tool script: BLOCKED — writing a file.\n"
+    "  tried to write : {target}\n"
+    "A tool script can only write temporary files in its own scratch folder "
+    "({roots}). To give the user a file, print what it should hold and save "
+    "it with a file tool (write_document, write_file) after the script."
+)
+
+_ISOLATED_READ_BLOCKED = (
+    "iron-jarvis tool script: BLOCKED — reading {target}: a tool script reads "
+    "files only inside the turn's working folder. Read anything else through "
+    "a tool: tools.call(\"read_document\", path=...)."
 )
 
 
@@ -571,6 +626,7 @@ def _install_audit_hook(
     read_roots: tuple[str, ...],
     deny_roots: tuple[str, ...],
     shown: str = "",
+    isolated: bool = False,
 ) -> None:
     """Arm the hook. The roots are closed over, so the environment stops mattering.
 
@@ -581,6 +637,7 @@ def _install_audit_hook(
     conversation, in the one message whose entire job is to say where to write.
     """
     shown = shown or " ; ".join(write_roots)
+    write_blocked = _ISOLATED_WRITE_BLOCKED if isolated else _WRITE_BLOCKED
 
     def refuse(message: str) -> None:
         raise PermissionError(message)
@@ -600,14 +657,16 @@ def _install_audit_hook(
             # allowed when it would be a read: fail-closed on the side that
             # changes the disk, fail-open on the side that only looks.
             if writing:
-                refuse(_WRITE_BLOCKED.format(target=target, roots=shown))
+                refuse(write_blocked.format(target=target, roots=shown))
             return
         for root in deny_roots:
             if _within(canonical, root):
                 refuse(_PROTECTED_BLOCKED.format(target=target))
         if writing:
             if write_roots and not any(_within(canonical, r) for r in write_roots):
-                refuse(_WRITE_BLOCKED.format(target=target, roots=shown))
+                refuse(write_blocked.format(target=target, roots=shown))
+        elif isolated and read_roots and not any(_within(canonical, r) for r in read_roots):
+            refuse(_ISOLATED_READ_BLOCKED.format(target=target))
         elif read_roots and not any(_within(canonical, r) for r in read_roots):
             # v1.356.0 integrate (G81): plain words, never the variable's name.
             refuse(
@@ -640,9 +699,16 @@ def _install_audit_hook(
                     check(_as_path(args[index]), writing=False)
             return
         if event in _SPAWN_EVENTS:
-            refuse(_SPAWN_BLOCKED)
+            refuse(_OUTSIDE_BLOCKED if isolated else _SPAWN_BLOCKED)
         elif event in _FFI_EVENTS:
             refuse(_FFI_BLOCKED)
+        elif isolated:
+            if event in _NETWORK_EVENTS or (
+                event.startswith("socket.") and event != "socket.gethostname"
+            ):
+                refuse(_NETWORK_BLOCKED)
+            elif event in _OUTSIDE_EVENTS:
+                refuse(_OUTSIDE_BLOCKED)
 
     sys.addaudithook(hook)
 
@@ -672,8 +738,23 @@ def install_confinement() -> bool:
     write_roots = _roots_from_env(ENV_WRITE_ROOTS)
     read_roots = _roots_from_env(ENV_READ_ROOTS)
     deny_roots = _roots_from_env(ENV_DENY_ROOTS)
+    isolated = os.environ.get(ENV_ISOLATED, "") == "1"
     if not (write_roots or read_roots or deny_roots):
         return False
+    if isolated:
+        # The working folder is the user's (often a client's): a file there
+        # named like a library must never be imported in its place, so the
+        # folder comes off the import path before any script runs.
+        try:
+            here = _canonical(os.getcwd())
+            sys.path[:] = [p for p in sys.path if p and _canonical(p) != here]
+        except Exception:  # pragma: no cover - keep the path as it is
+            pass
+        # Reads are limited to the roots handed over, so the runtime's own
+        # folders are added here (the parent cannot know a frozen build's):
+        # without them a later `import statistics` would be refused.
+        if read_roots:
+            read_roots = tuple(dict.fromkeys(read_roots + _runtime_roots()))
     # Import ctypes BEFORE arming the hook. On Windows `ctypes/__init__.py`
     # evaluates `windll.kernel32.GetLastError` at import time, so a blanket FFI
     # refusal does not merely stop a cell loading a DLL — it makes `import
@@ -692,8 +773,29 @@ def install_confinement() -> bool:
         for part in os.environ.get(ENV_WRITE_ROOTS, "").split(os.pathsep)
         if part.strip()
     )
-    _install_audit_hook(write_roots, read_roots, deny_roots, shown)
+    _install_audit_hook(write_roots, read_roots, deny_roots, shown, isolated)
     return True
+
+
+def _runtime_roots() -> tuple[str, ...]:
+    """The folders (and zip files) this interpreter imports from, canonical.
+
+    Read access to them is what lets an isolated script `import` the standard
+    library after the hook is armed. Nothing of the user's lives there."""
+    raw = [
+        sys.prefix, sys.base_prefix, sys.exec_prefix, sys.base_exec_prefix,
+        getattr(sys, "_MEIPASS", ""), os.path.dirname(sys.executable or ""),
+        *sys.path,
+    ]
+    roots: list[str] = []
+    for part in raw:
+        if not part:
+            continue
+        try:
+            roots.append(_canonical(part))
+        except Exception:  # pragma: no cover - unresolvable entry, skip it
+            continue
+    return tuple(dict.fromkeys(roots))
 
 
 def _safe_repr(value: Any) -> str:
@@ -770,6 +872,126 @@ def _format_user_traceback(exc: BaseException) -> str:
     return "".join(traceback.format_exception(type(exc), exc, tb))
 
 
+class ToolError(Exception):
+    """A tool the script called did not run, or failed. The message is the
+    app's own sentence (a refusal says why and what to do instead)."""
+
+
+class ToolValue(dict):
+    """What `tools.call` returns: ``{"output": str, "data": ...}``, with
+    ``.output`` / ``.data`` for reading. The same shape a `_store_as` value
+    has, so a script and a later cell read results one way."""
+
+    @property
+    def output(self) -> str:
+        return str(self.get("output") or "")
+
+    @property
+    def data(self) -> Any:
+        return self.get("data")
+
+    def __str__(self) -> str:
+        return self.output
+
+
+class _Tools:
+    """The `tools` object a tool script sees (v1.470.0).
+
+    ``tools.call("read_document", path="a.pdf")`` — or the short form
+    ``tools.read_document(path="a.pdf")`` — sends the call to the app over the
+    worker's own private pipe and waits for the answer. THE APP DECIDES: it
+    runs the call through the same registry gate as a call the model makes
+    itself, and refuses anything this turn was not given or that would need
+    the user's approval. A refusal or a failed tool raises :class:`ToolError`.
+
+    PROTOCOL (parent side: ``repl/session.py``)
+        child  -> parent  {"id": <request id>, "call": {"n": int, "tool": str,
+                           "args": {...}}}
+        parent -> child   {"reply": int, "ok": bool, "output": str,
+                           "data": any, "error": str}
+    One call at a time (a lock), and only while a request that brought a tool
+    list is running: a thread that outlives its script cannot call anything.
+    """
+
+    def __init__(self) -> None:
+        self._source: IO[str] | None = None
+        self._sink: IO[str] | None = None
+        self._lock = threading.Lock()
+        self._request = ""
+        self._names: tuple[str, ...] = ()
+        self._count = 0
+
+    def _attach(self, source: IO[str] | None, sink: IO[str] | None) -> None:
+        self._source, self._sink = source, sink
+
+    def _begin(self, request_id: str, names: Any) -> None:
+        with self._lock:
+            self._request = request_id
+            self._names = tuple(str(n) for n in names) if isinstance(names, (list, tuple)) else ()
+            self._count = 0
+
+    def _end(self) -> None:
+        with self._lock:
+            self._request = ""
+            self._names = ()
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """The tools this script may call."""
+        return self._names
+
+    def call(self, tool: str, /, **args: Any) -> ToolValue:
+        name = str(tool or "").strip()
+        with self._lock:
+            if not self._request or self._source is None or self._sink is None:
+                raise ToolError("no tool script is running, so no tool can be called")
+            if not name:
+                raise ToolError("tools.call needs a tool name")
+            self._count += 1
+            n = self._count
+            try:
+                line = json.dumps(
+                    {"id": self._request, "call": {"n": n, "tool": name, "args": args}},
+                    ensure_ascii=True,
+                )
+            except (TypeError, ValueError) as exc:
+                raise ToolError(
+                    f"the arguments for {name} must be plain values (text, numbers, "
+                    f"lists, dicts): {exc}"
+                ) from None
+            try:
+                self._sink.write(line + "\n")
+                self._sink.flush()
+            except OSError:
+                raise ToolError("the app is no longer listening") from None
+            while True:
+                answer = self._source.readline()
+                if not answer:
+                    raise ToolError("the app closed the connection before it answered")
+                try:
+                    msg = json.loads(answer)
+                except Exception:  # noqa: BLE001 — not ours; keep waiting
+                    continue
+                if isinstance(msg, dict) and msg.get("reply") == n:
+                    break
+        if not msg.get("ok"):
+            raise ToolError(str(msg.get("error") or f"{name} failed"))
+        return ToolValue(output=str(msg.get("output") or ""), data=msg.get("data"))
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+
+        def _call(**args: Any) -> ToolValue:
+            return self.call(name, **args)
+
+        _call.__name__ = name
+        return _call
+
+    def __repr__(self) -> str:
+        return f"<tools: {', '.join(self._names) or 'none'}>"
+
+
 class Session:
     """One persistent namespace. Construct once per worker process.
 
@@ -788,6 +1010,10 @@ class Session:
         }
         self._cell = 0
         self._remembered: deque[str] = deque()
+        #: The bridge to the app's tools (v1.470.0). `serve` attaches the
+        #: private pipes; a request that brings a tool list binds it as
+        #: `tools` for that script.
+        self.tools = _Tools()
 
     def _remember_source(self, code: str, filename: str) -> None:
         """Register this cell's source and evict the oldest past the cap."""
@@ -796,12 +1022,30 @@ class Session:
         while len(self._remembered) > MAX_REMEMBERED_CELLS:
             linecache.cache.pop(self._remembered.popleft(), None)
 
-    def execute(self, code: str) -> dict[str, Any]:
+    def execute(
+        self, code: str, *, request_id: str = "", tools: Any = None
+    ) -> dict[str, Any]:
         """Run `code` in the session namespace; return the response body.
 
         The returned dict has every protocol field except `id`, which belongs
         to the request and is attached by `handle_request`.
+
+        ``tools`` (a list of names) makes this a TOOL SCRIPT: `tools` and
+        `ToolError` are bound in the namespace and the script may call those
+        tools through the bridge until it ends.
         """
+        scripted = isinstance(tools, (list, tuple))
+        if scripted:
+            self.globals["tools"] = self.tools
+            self.globals["ToolError"] = ToolError
+            self.tools._begin(request_id, tools)
+        try:
+            return self._execute(code)
+        finally:
+            if scripted:
+                self.tools._end()
+
+    def _execute(self, code: str) -> dict[str, Any]:
         self._cell += 1
         filename = _cell_filename(self._cell)
         try:
@@ -909,7 +1153,11 @@ def handle_request(session: Session, line: str) -> dict[str, Any]:
         return _failure(
             request_id, f"malformed request: 'code' must be a string ({kind})"
         )
-    response = session.execute(code)
+    tools = payload.get("tools")
+    if isinstance(tools, list):
+        response = session.execute(code, request_id=request_id, tools=tools)
+    else:
+        response = session.execute(code)
     response["id"] = request_id
     return response
 
@@ -931,6 +1179,9 @@ def serve(
     source = sys.stdin if stdin is None else stdin
     sink = sys.stdout if stdout is None else stdout
     state = Session() if session is None else session
+    bridge = getattr(state, "tools", None)
+    if bridge is not None:
+        bridge._attach(source, sink)
     while True:
         line = source.readline()
         if not line:

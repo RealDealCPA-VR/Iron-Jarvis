@@ -171,6 +171,35 @@ def tool_deadline_expired() -> bool:
     return cm is not None and cm.expired()
 
 
+@dataclasses.dataclass(frozen=True)
+class CallScope:
+    """What the caller of ``ToolRegistry.invoke`` handed it for the call now
+    executing (v1.470.0): the permission engine, this run's overrides and
+    grants, and the ROSTER (``allowed_names``).
+
+    A tool that runs OTHER tools on the model's behalf (``tool_script``)
+    reads it through :func:`current_call_scope` and passes every nested call
+    back through ``invoke`` with exactly these, so a call a script makes is
+    judged as the same call made by the model itself would be — never by a
+    second, looser rule. Set only while ``tool.execute`` runs."""
+
+    perms: Any
+    agent_overrides: "dict[str, str] | None"
+    session_allow: "frozenset[str] | None"
+    allowed_names: "frozenset[str] | None"
+    deadline_s: "float | None"
+    grants: Any = None
+    scopes: Any = None
+
+
+_CALL_SCOPE: "ContextVar[CallScope | None]" = ContextVar("tool_call_scope", default=None)
+
+
+def current_call_scope() -> "CallScope | None":
+    """The :class:`CallScope` of the tool call now executing, else None."""
+    return _CALL_SCOPE.get()
+
+
 #: Tools whose output is routinely LARGE enough to be worth keeping out of the
 #: context window — the only ones that advertise ``_store_as`` (v1.159.0).
 #:
@@ -938,9 +967,25 @@ class ToolRegistry:
                 # The scope is visible to the tool (`tool_deadline_expired`),
                 # so a cancel it catches can say whether it was THIS deadline.
                 _scope = _DEADLINE_SCOPE.set(cm)
+                # v1.470.0: what this caller handed over, for a tool that
+                # runs other tools (`current_call_scope`).
+                _call = _CALL_SCOPE.set(CallScope(
+                    perms=perms,
+                    agent_overrides=agent_overrides,
+                    session_allow=(
+                        frozenset(session_allow) if session_allow is not None else None
+                    ),
+                    allowed_names=(
+                        frozenset(allowed_names) if allowed_names is not None else None
+                    ),
+                    deadline_s=deadline_s,
+                    grants=grants,
+                    scopes=scopes,
+                ))
                 try:
                     result = await tool.execute(args, ctx)
                 finally:
+                    _CALL_SCOPE.reset(_call)
                     _DEADLINE_SCOPE.reset(_scope)
         except TimeoutError as exc:
             if cm.expired():

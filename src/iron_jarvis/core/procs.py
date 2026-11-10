@@ -703,6 +703,89 @@ def adopt(pid: int, *, background: bool | None = None) -> "_Job | None":
     return job
 
 
+_JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
+_JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100
+_JOB_OBJECT_BASIC_UI_RESTRICTIONS = 4  # JOBOBJECTINFOCLASS
+#: Every JOB_OBJECT_UILIMIT_* bit: no clipboard (read or write), no handles
+#: to windows outside the job, no desktop switch, no display or system
+#: settings, no global atoms, no log-off or shutdown.
+_JOB_OBJECT_UILIMIT_ALL = 0x000000FF
+
+
+def restrict(
+    proc: Any,
+    *,
+    no_new_processes: bool = True,
+    memory_bytes: int = 0,
+    no_desktop: bool = True,
+) -> dict[str, bool]:
+    """Tighten the Job of a child :func:`spawn` started, AFTER it is up
+    (v1.470.0, the isolated tool-script worker). Windows enforces these, not
+    the child: they hold even against code that defeats the child's own
+    checks.
+
+    * ``no_new_processes`` — the job may hold no more processes than it holds
+      now, so nothing inside can start another program. Set once the child
+      has answered: a launcher (a virtual environment's ``python.exe``) has by
+      then started the interpreter it stands in for, and both are counted.
+    * ``memory_bytes`` — a ceiling on each member's committed memory (0 =
+      none); past it an allocation fails inside the child.
+    * ``no_desktop`` — no clipboard, no windows of other programs, no display
+      or system settings.
+
+    Returns which of the three took. All False off Windows, for a child with
+    no job (a test double, a job that could not be made) or when the kernel
+    refuses: the caller says so and relies on the child's own checks."""
+    done = {"no_new_processes": False, "memory": False, "no_desktop": False}
+    k = _kernel()
+    job = _job_of(proc)
+    if k is None or job is None or job.closed:
+        return done
+    try:
+        with job._lock:
+            if job.closed:
+                return done
+            info = k.EXTENDED()
+            ok = k.k32.QueryInformationJobObject(
+                job.handle, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                k.ctypes.byref(info), k.ctypes.sizeof(info), None,
+            )
+            if ok:
+                flags = int(info.BasicLimitInformation.LimitFlags)
+                want_procs = want_mem = False
+                if no_new_processes:
+                    buf = k.PIDS()
+                    counted = k.k32.QueryInformationJobObject(
+                        job.handle, _JOB_OBJECT_BASIC_PROCESS_ID_LIST,
+                        k.ctypes.byref(buf), k.ctypes.sizeof(buf), None,
+                    )
+                    members = int(buf.NumberOfAssignedProcesses) if counted else 0
+                    if members > 0:
+                        flags |= _JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                        info.BasicLimitInformation.ActiveProcessLimit = members
+                        want_procs = True
+                if memory_bytes > 0:
+                    flags |= _JOB_OBJECT_LIMIT_PROCESS_MEMORY
+                    info.ProcessMemoryLimit = int(memory_bytes)
+                    want_mem = True
+                info.BasicLimitInformation.LimitFlags = flags
+                if (want_procs or want_mem) and k.k32.SetInformationJobObject(
+                    job.handle, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                    k.ctypes.byref(info), k.ctypes.sizeof(info),
+                ):
+                    done["no_new_processes"] = want_procs
+                    done["memory"] = want_mem
+            if no_desktop:
+                ui = k.w.DWORD(_JOB_OBJECT_UILIMIT_ALL)
+                done["no_desktop"] = bool(k.k32.SetInformationJobObject(
+                    job.handle, _JOB_OBJECT_BASIC_UI_RESTRICTIONS,
+                    k.ctypes.byref(ui), k.ctypes.sizeof(ui),
+                ))
+    except Exception:  # noqa: BLE001 — never raises into the spawn path
+        return done
+    return done
+
+
 def spawn(
     argv: Sequence[str] | str,
     *,

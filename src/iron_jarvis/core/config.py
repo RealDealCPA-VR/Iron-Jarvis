@@ -112,6 +112,11 @@ def default_permissions() -> dict[str, str]:
         # namespace alive for the whole session, so consent to one call
         # is not consent to what accumulates. Also on the deny floor.
         "repl": "ask",
+        # v1.470.0: a script that calls the turn's READ-ONLY tools itself. It
+        # runs isolated (no network, no other program, no file writes) and can
+        # reach a tool only through the registry's own gate, so it runs
+        # without asking; set it to Ask or Never here to change that.
+        "tool_script": "allow",
         "git_status": "deny",  # no agent git tool yet — fail-closed
         "git_diff": "deny",
         "git_commit": "ask",

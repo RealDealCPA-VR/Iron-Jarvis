@@ -2042,6 +2042,97 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Scripts that call tools, and skills made from chat (v1.470.0)
+
+### Ask chat for a skill and you get a skill
+
+A **skill** and a **workflow** are two different things:
+
+- A **skill** is written know-how: how to approach a kind of task, what to
+  ask, what to check, how to word the result. Chats and agents load it when
+  the task fits, and you can run one with `/`.
+- A **workflow** is a list of steps the app runs, by hand or on a trigger.
+
+Until now chat could only offer the workflow card, so "create a skill for tax
+advisement" came back as a workflow. Now, when you ask chat to make or save a
+skill ("create a skill for…", "save this as a skill", "turn that into a
+reusable skill"), Jarvis writes the skill and shows the usual approval card
+before it is saved. After you allow it, the skill is on the Skills page.
+
+- A skill made this way is **pinned**, so the skill clean-up never archives
+  it for sitting unused.
+- It is still marked as written by a model, so it is checked for planted
+  instructions before any model reads it.
+- A question ("how do I make a skill?") is answered, not acted on.
+- This works on the chat page. The phone and other places that cannot show a
+  card do not make skills.
+
+### One script instead of many tool calls
+
+When a job is the same read done many times ("total the deposits in every
+statement in this folder", twelve attached workbooks), Jarvis can now write
+one short script that calls its tools itself. Before, each file was its own
+round trip: the model asked, the tool answered, the whole result went into
+the conversation, and the model asked for the next file.
+
+What you gain:
+
+- **Fewer steps.** Forty files is one script, not forty turns. On your own
+  model servers this is where most of the time goes.
+- **More room in the conversation.** The rows stay inside the script. The
+  model sees only what the script prints, for example a count and a total.
+- **Less of your data sent to the model.** Rows the script filters out never
+  reach it.
+- **Exact arithmetic.** Sums and filters are done by code.
+
+When it is offered: with Auto tools on, when your message speaks of each,
+every or all of some kind of thing, names four or more of them, or brings
+four or more files, and the turn already has a tool that reads.
+
+### What a script can and cannot do
+
+The script runs in its own isolated process:
+
+- no network and no other programs;
+- no file writes (only private temporary files);
+- it reads files only in the turn's working folder;
+- none of your keys or tokens are in its environment.
+
+So the only way a script does anything is by calling a tool, and each call
+goes through the same permission check and the same activity log as a call
+the model makes directly. On top of that, a script may call only a tool that:
+
+- is one of that turn's tools;
+- only reads;
+- would run without asking you.
+
+Anything that changes a file, sends something, costs money or needs your
+approval is refused inside the script, and the model is told to call it
+directly, where you see the card. A script is never a way around a card. In a
+Local only chat a script cannot use the web tools or your connected apps.
+
+Honest limits:
+
+- Windows itself enforces "no other programs", a memory limit and "no
+  clipboard" on the script's process. The network and file rules are checks
+  inside that process. They stop a careless or misled model. They are not a
+  barrier against code written to break out.
+- One script may make at most 300 tool calls.
+- Under **Ask before every action**, the script is shown on a card first.
+- To turn scripts off, set **tool_script** to **Never run** in Settings ›
+  Permissions. To see each one first, set it to **Ask**.
+- Coding sessions (Chat › Code) and the built-in agents do not use scripts
+  yet. A custom agent can, if you add `tool_script` to its tools.
+
+No waiting you would notice: the script's process is started in the
+background as soon as the tool is offered for a message and stays up for the
+session. A tool call from a script takes under a thousandth of a second more
+than a direct call.
+
+Stop now really stops code that is running: pressing Stop while a script (or
+a Python cell) runs ends its process at once. Its variables are gone and the
+next run says so.
+
 ## Matching two lists, and Excel's features in a saved workbook (v1.469.0)
 
 **Matching two lists of transactions.** Ask Jarvis to reconcile a bank

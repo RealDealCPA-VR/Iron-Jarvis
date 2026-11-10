@@ -199,6 +199,7 @@
     "tool_create",
     "tool_delete",
     "tool_list",
+    "tool_script",
     "view_image",
     "web_action",
     "web_extract",
@@ -421,6 +422,7 @@
     "tool_create": "make a new tool",
     "tool_delete": "remove a custom tool",
     "tool_list": "list the custom tools",
+    "tool_script": "run a script over its tools",
     "view_image": "read a file",
     "web_action": "act on a web page",
     "web_extract": "read part of a web page",
@@ -1037,6 +1039,10 @@
       "Listed the custom tools",
       "Listing the custom tools"
     ],
+    "tool_script": [
+      "Ran a script over its tools",
+      "Running a script over its tools"
+    ],
     "web_action": [
       "Acted on a web page",
       "Acting on a web page"
@@ -1305,6 +1311,7 @@
     "tool_create": "",
     "tool_delete": "",
     "tool_list": "",
+    "tool_script": "",
     "view_image": "read",
     "web_action": "",
     "web_extract": "",

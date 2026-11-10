@@ -1120,6 +1120,11 @@ def build_platform(
         repl_registry = ReplRegistry()
         registry.register(ReplTool(repl_registry))
         registry.attach_repl(repl_registry)
+        # v1.470.0: `tool_script` — one script that calls the turn's read-only
+        # tools itself, in the registry's ISOLATED worker (tools/tool_script).
+        from .tools.tool_script import ToolScriptTool
+
+        registry.register(ToolScriptTool(repl_registry, registry))
     except Exception:  # noqa: BLE001 — never let an optimisation break boot
         repl_registry = None
 

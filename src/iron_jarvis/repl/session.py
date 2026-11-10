@@ -35,6 +35,7 @@ Three things this module exists to get right:
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import math
 import os
@@ -56,6 +57,7 @@ from . import worker
 __all__ = [
     "DEFAULT_TIMEOUT_S",
     "confinement_env",
+    "isolated_env",
     "IDLE_TTL_S",
     "MAX_SESSIONS",
     "ReplRegistry",
@@ -85,6 +87,27 @@ _MAX_FIELD_CHARS = 100_000
 
 # Lines of the child's real stderr kept for diagnosing a crash.
 _STDERR_TAIL_LINES = 40
+
+#: v1.470.0 — the ISOLATED worker a tool script runs in (see
+#: :func:`isolated_env` and ``worker.ENV_ISOLATED``).
+#: How long a new isolated worker may take to answer its first request.
+ISOLATED_START_TIMEOUT_S = 30.0
+#: Committed memory one isolated worker may hold (Windows enforces it).
+ISOLATED_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
+#: Tool calls one script may make. A bound, not a budget: a loop over a
+#: folder of client files fits many times over; a runaway loop does not.
+MAX_TOOL_CALLS = 300
+#: Characters of one tool's output handed to the script. It stays in the
+#: script's memory and never reaches the model unless printed, so the bound
+#: is generous; past it the text is cut and the cut is said.
+MAX_TOOL_OUTPUT_CHARS = 4_000_000
+
+_TOOLS_OFF_ERROR = "This Python session cannot call tools."
+_TOOL_LIMIT_ERROR = (
+    f"This script has already made {MAX_TOOL_CALLS} tool calls, the most one "
+    "script may make. Finish with what it has, or split the work in two scripts."
+)
+_STOPPED_ERROR = "The script was stopped, so the tool was not run."
 
 _CLOSED_ERROR = (
     "This Python session was closed (it was disposed, or reclaimed after sitting "
@@ -134,6 +157,50 @@ def confinement_env(workspace: Path, scratch: Path | None = None) -> dict[str, s
     return {k: v for k, v in env.items() if v}
 
 
+def isolated_env(workspace: Path, scratch: Path) -> dict[str, str]:
+    """The WHOLE environment of an isolated tool-script worker (v1.470.0).
+
+    Unlike :func:`confinement_env` (a few variables laid over the daemon's own
+    environment), this is everything the child gets:
+
+    * no secret — the daemon's environment with every key, token, vendor
+      variable and this app's own internals (its install token among them)
+      removed by NAME and by VALUE (``sandbox.native.build_env``, the rule a
+      coding session's commands already run under);
+    * writes → the private scratch folder ONLY. A script gives the user a
+      file by handing its content to a file tool, which asks and is undoable;
+    * reads → the turn's working folder and the scratch folder (the worker
+      adds its own runtime folders). Anything else is read through a tool,
+      which applies the app's own file policy and is on the ledger;
+    * denied → the protected secrets/key roots, as everywhere;
+    * ``worker.ENV_ISOLATED`` — no network, no other program, no registry
+      change (enforced in the child; the parent adds a Windows Job that holds
+      "no other program" and the memory ceiling even if the child's own
+      checks are defeated — ``core.procs.restrict``).
+    """
+    from ..core.fs_policy import protected_roots
+    from ..sandbox.native import build_env
+
+    env = build_env()
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # The user's own PYTHONPATH / PYTHONSTARTUP would import code of theirs
+    # (or of whoever set it) into a process meant to hold only the script.
+    for name in [k for k in env if k.upper() in ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME")]:
+        env.pop(name, None)
+    env["TMPDIR"] = env["TEMP"] = env["TMP"] = str(scratch)
+    env[worker.ENV_ISOLATED] = "1"
+    env[worker.ENV_WRITE_ROOTS] = str(scratch)
+    env[worker.ENV_READ_ROOTS] = os.pathsep.join(
+        [str(Path(workspace).resolve()), str(scratch)]
+    )
+    deny = os.pathsep.join(str(p) for p in protected_roots())
+    if deny:
+        env[worker.ENV_DENY_ROOTS] = deny
+    return env
+
+
 def worker_command() -> list[str]:
     """The argv that launches a REPL worker child.
 
@@ -178,9 +245,23 @@ class ReplSession:
         workspace: str | os.PathLike[str],
         *,
         command: Iterable[str] | None = None,
+        isolated: bool = False,
     ) -> None:
         self.session_id = session_id
         self.workspace = Path(workspace)
+        #: v1.470.0: an isolated tool-script worker (:func:`isolated_env`).
+        self.isolated = bool(isolated)
+        #: What Windows itself enforces on this child (``procs.restrict``);
+        #: all False until an isolated child is up, and off Windows.
+        self.sealed: dict[str, bool] = {}
+        #: Seconds this session's scripts have spent waiting on tool calls.
+        #: The script's own time limit does not count them.
+        self._tool_seconds = 0.0
+        #: The tool call in flight (a concurrent future), so a Stop reaches it.
+        self._inflight: Any = None
+        self._stopped = threading.Event()
+        #: Kills handed to the background after a Stop (held so they finish).
+        self._reaps: set[Any] = set()
         #: argv for the child. Overridable so tests (and future sandboxing)
         #: can launch something other than the default worker.
         self.command: list[str] = list(command) if command else worker_command()
@@ -264,13 +345,8 @@ class ReplSession:
         # import from the user's project folder drops a `__pycache__` into it.
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         self._scratch = Path(tempfile.mkdtemp(prefix="ij-repl-"))
-        env.update(confinement_env(self.workspace, self._scratch))
-        kwargs: dict[str, Any] = {}
-        if sys.platform == "win32":
-            # Never flash a console window out of the packaged desktop app.
-            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        proc = subprocess.Popen(  # noqa: S603 - argv is ours, never user text
-            self.command,
+        self.sealed = {}
+        pipes: dict[str, Any] = dict(
             cwd=str(self.workspace),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -279,9 +355,31 @@ class ReplSession:
             encoding="utf-8",
             errors="replace",
             bufsize=1,
-            env=env,
-            **kwargs,
         )
+        if self.isolated:
+            # v1.470.0: its own environment (no secret in it) and its own
+            # kill-on-close Job that lets no member leave, created suspended
+            # and assigned before it runs (``core.procs.spawn``).
+            from ..core import procs
+
+            proc = procs.spawn(
+                self.command,
+                breakaway_ok=False,
+                env=isolated_env(self.workspace, self._scratch),
+                **pipes,
+            )
+        else:
+            env.update(confinement_env(self.workspace, self._scratch))
+            kwargs: dict[str, Any] = {}
+            if sys.platform == "win32":
+                # Never flash a console window out of the packaged desktop app.
+                kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            proc = subprocess.Popen(  # noqa: S603 - argv is ours, never user text
+                self.command,
+                env=env,
+                **pipes,
+                **kwargs,
+            )
         out: queue.Queue[str | None] = queue.Queue()
         self._stderr_tail = deque(maxlen=_STDERR_TAIL_LINES)
         threading.Thread(
@@ -299,6 +397,25 @@ class ReplSession:
         self._proc = proc
         self._out = out
         self._spawned_once = True
+        if self.isolated:
+            self._seal()
+
+    def _seal(self) -> None:
+        """Wait for a new isolated child to answer, then have Windows hold it.
+
+        BLOCKING — worker thread only. The first exchange proves the
+        interpreter is up (a virtual environment's launcher has started the
+        real one by then), so "no more processes than now" can be set without
+        stopping the child's own start. Raises when the child never answers:
+        a tool script must not run in a worker that is not what it claims."""
+        outcome = self._exchange(uuid.uuid4().hex, "pass", ISOLATED_START_TIMEOUT_S)
+        if outcome.get("status") != "ok" or not (outcome.get("msg") or {}).get("ok"):
+            note = self._stderr_note()
+            self._kill()
+            raise RuntimeError("the isolated worker did not start." + note)
+        from ..core import procs
+
+        self.sealed = procs.restrict(self._proc, memory_bytes=ISOLATED_MEMORY_BYTES)
 
     @staticmethod
     def _pump_stdout(stream: Any, out: queue.Queue[str | None]) -> None:
@@ -335,7 +452,57 @@ class ReplSession:
             # directory per failed spawn.
             self._discard_scratch()
             return
+        self._end_process(proc)
+        # The scratch dir belongs to the child that just died. Removed AFTER the
+        # kill, never before: deleting it out from under a live interpreter is
+        # how a cell fails with a bewildering "temp file vanished".
+        self._discard_scratch()
+
+    @staticmethod
+    def _hard_kill(proc: Any) -> None:
+        """End the child NOW, without waiting. Fast enough for the loop: one
+        or two system calls. A child with a Job (the isolated worker) dies
+        with every member of it."""
         try:
+            from ..core import procs
+
+            if procs._job_of(proc) is not None:
+                procs.kill_tree(proc)
+            elif proc.poll() is None:
+                proc.kill()
+        except Exception:  # noqa: BLE001 — already gone
+            pass
+
+    def _abandon(self) -> tuple[Any, Path | None]:
+        """Stop path (v1.470.0): detach the child and kill it at once, on the
+        caller's thread, and hand back what is left to reap in the background
+        (:meth:`_reap`). After this the session holds no child: the next run
+        starts a fresh one and says so."""
+        proc, self._proc, self._out = self._proc, None, None
+        scratch, self._scratch = self._scratch, None
+        if proc is not None:
+            self._hard_kill(proc)
+        return proc, scratch
+
+    def _reap(self, proc: Any, scratch: Path | None) -> None:
+        """Finish what :meth:`_abandon` began. BLOCKING — worker thread only."""
+        if proc is not None:
+            self._end_process(proc)
+        if scratch is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    @staticmethod
+    def _end_process(proc: Any) -> None:
+        """Terminate, kill, reap, close the pipes, release the Job. BLOCKING."""
+        try:
+            from ..core import procs
+
+            jobbed = procs._job_of(proc) is not None
+        except Exception:  # noqa: BLE001
+            procs, jobbed = None, False  # type: ignore[assignment]
+        try:
+            if jobbed:
+                procs.kill_tree(proc)
             if proc.poll() is None:
                 proc.terminate()
                 try:
@@ -354,10 +521,11 @@ class ReplSession:
                     stream.close()
             except Exception:  # pragma: no cover
                 pass
-        # The scratch dir belongs to the child that just died. Removed AFTER the
-        # kill, never before: deleting it out from under a live interpreter is
-        # how a cell fails with a bewildering "temp file vanished".
-        self._discard_scratch()
+        if jobbed:
+            try:
+                procs.release(proc)
+            except Exception:  # pragma: no cover
+                pass
 
     def _discard_scratch(self) -> None:
         """Remove this child's private temp dir, if it has one. Never raises."""
@@ -373,7 +541,35 @@ class ReplSession:
 
     # ------------------------------------------------------------- exchange
 
-    def _exchange(self, req_id: str, code: str, timeout: float) -> dict[str, Any]:
+    def _answer_call(self, call: dict[str, Any], count: int, handler: Any) -> dict[str, Any]:
+        """One tool call a script made, answered. Worker thread; never raises."""
+        if handler is None:
+            return {"ok": False, "error": _TOOLS_OFF_ERROR}
+        if self._stopped.is_set():
+            return {"ok": False, "error": _STOPPED_ERROR}
+        if count > MAX_TOOL_CALLS:
+            return {"ok": False, "error": _TOOL_LIMIT_ERROR}
+        name = str(call.get("tool") or "")
+        args = call.get("args")
+        try:
+            reply = handler(name, args if isinstance(args, dict) else {})
+            if isinstance(reply, dict):
+                return dict(reply)
+            return {"ok": False, "error": f"{name} gave no usable answer"}
+        except Exception as exc:  # noqa: BLE001 — the script gets a sentence
+            return {
+                "ok": False,
+                "error": f"{name} could not be run ({type(exc).__name__}: {exc})",
+            }
+
+    def _exchange(
+        self,
+        req_id: str,
+        code: str,
+        timeout: float,
+        tools: "list[str] | None" = None,
+        handler: Any = None,
+    ) -> dict[str, Any]:
         """One request/response round trip. BLOCKING — worker thread only.
 
         Returns an internal envelope: ``{"status": "ok"|"timeout"|"dead", ...}``.
@@ -384,7 +580,12 @@ class ReplSession:
         proc, out = self._proc, self._out
         if proc is None or out is None or proc.stdin is None:
             return {"status": "dead", "detail": "the worker was not running"}
-        line = json.dumps({"id": req_id, "code": code}, ensure_ascii=False) + "\n"
+        request: dict[str, Any] = {"id": req_id, "code": code}
+        if tools is not None:
+            # A TOOL SCRIPT (v1.470.0): the child binds `tools` for this one
+            # request and may send {"id", "call"} lines before its response.
+            request["tools"] = list(tools)
+        line = json.dumps(request, ensure_ascii=False) + "\n"
         try:
             proc.stdin.write(line)
             proc.stdin.flush()
@@ -392,6 +593,7 @@ class ReplSession:
             return {"status": "dead", "detail": f"could not reach the worker ({exc})"}
 
         deadline = time.monotonic() + timeout
+        calls = 0
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -413,12 +615,50 @@ class ReplSession:
                 continue
             if not isinstance(msg, dict) or msg.get("id") != req_id:
                 continue
+            call = msg.get("call")
+            if isinstance(call, dict):
+                # The script is waiting on a tool. The time the tool takes is
+                # the tool's (its own deadline bounds it), not the script's:
+                # the script's clock stops until the answer is written back.
+                started = time.monotonic()
+                calls += 1
+                reply = self._answer_call(call, calls, handler)
+                reply["reply"] = call.get("n")
+                try:
+                    proc.stdin.write(
+                        json.dumps(reply, ensure_ascii=False, default=str) + "\n"
+                    )
+                    proc.stdin.flush()
+                except Exception as exc:
+                    return {
+                        "status": "dead",
+                        "detail": f"could not reach the worker ({exc})",
+                    }
+                waited = time.monotonic() - started
+                deadline += waited
+                self._tool_seconds += waited
+                continue
             return {"status": "ok", "msg": msg}
 
     # -------------------------------------------------------------- execute
 
-    async def execute(self, code: str, timeout: float = DEFAULT_TIMEOUT_S) -> dict[str, Any]:
+    async def execute(
+        self,
+        code: str,
+        timeout: float = DEFAULT_TIMEOUT_S,
+        *,
+        tools: "list[str] | None" = None,
+        on_tool_call: Any = None,
+    ) -> dict[str, Any]:
         """Run ``code`` in this session's namespace. Never raises.
+
+        ``tools`` + ``on_tool_call`` (v1.470.0) make it a TOOL SCRIPT: the
+        code may call those tools, and each call is answered by awaiting
+        ``on_tool_call(name, args)`` ON THE EVENT LOOP (it returns
+        ``{"ok", "output", "data", "error"}``). The caller's coroutine is
+        where every gate lives; this class only carries the call across.
+        A cancel (the user's Stop, the tool deadline) kills the child and
+        cancels the call in flight, then re-raises.
 
         Every blocking step (spawn, write, read, kill) is offloaded with
         ``asyncio.to_thread``, so the daemon's single event loop keeps serving
@@ -444,7 +684,7 @@ class ReplSession:
         async with self._lock:
             self.last_used = time.monotonic()
             try:
-                payload = await self._execute_locked(code, timeout)
+                payload = await self._execute_locked(code, timeout, tools, on_tool_call)
             except Exception as exc:  # last line of defence: never raise
                 self._state_lost = True
                 await asyncio.to_thread(self._kill)
@@ -459,7 +699,57 @@ class ReplSession:
             self.last_used = time.monotonic()
             return payload
 
-    async def _execute_locked(self, code: str, timeout: float) -> dict[str, Any]:
+    def _stop_now(self) -> None:
+        """A cancel landed while code was running (v1.470.0). On the loop,
+        and nothing here waits: the child is killed at once (so a script
+        stops calling tools and a runaway cell stops spinning), the tool call
+        in flight is cancelled, and the slow half of the kill goes to a
+        background task. The namespace is gone and the next run says so."""
+        self._stopped.set()
+        inflight = self._inflight
+        if inflight is not None:
+            try:
+                inflight.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+        self._state_lost = True
+        proc, scratch = self._abandon()
+        try:
+            task = asyncio.get_running_loop().create_task(
+                asyncio.to_thread(self._reap, proc, scratch)
+            )
+            self._reaps.add(task)
+            task.add_done_callback(self._reaps.discard)
+        except Exception:  # noqa: BLE001 — no loop: the kill already landed
+            pass
+
+    async def warm(self) -> bool:
+        """Start the child now, so the first run does not wait for it
+        (v1.470.0). Does nothing when one is up, when a run holds the session
+        or after disposal. Returns whether a child is up. Never raises."""
+        if self._closed or self._lock.locked():
+            return self.alive
+        async with self._lock:
+            if self._closed or self.alive:
+                return self.alive
+            try:
+                await asyncio.to_thread(self._kill)
+                await asyncio.to_thread(self._spawn)
+            except Exception:  # noqa: BLE001 — the first run reports it
+                return False
+            if self._closed:
+                await asyncio.to_thread(self._kill)
+                return False
+            self.last_used = time.monotonic()
+            return True
+
+    async def _execute_locked(
+        self,
+        code: str,
+        timeout: float,
+        tools: "list[str] | None" = None,
+        on_tool_call: Any = None,
+    ) -> dict[str, Any]:
         # A disposed session is DEAD, not dormant. Respawning here is how a
         # child ends up owned by nobody: `ReplRegistry.execute` hands the
         # session out under the registry lock and then runs outside it (and
@@ -496,13 +786,51 @@ class ReplSession:
         self.executions += 1
         req_id = uuid.uuid4().hex
 
+        handler = None
+        if tools is not None and on_tool_call is not None:
+            loop = asyncio.get_running_loop()
+
+            def handler(name: str, args: dict[str, Any]) -> Any:
+                # Worker thread. The coroutine runs on the loop, in a copy of
+                # THIS call's context (Local only, the held model, the
+                # account, the turn), so the gate it runs is the turn's own.
+                future = asyncio.run_coroutine_threadsafe(on_tool_call(name, args), loop)
+                self._inflight = future
+                try:
+                    return future.result()
+                except concurrent.futures.CancelledError:
+                    return {"ok": False, "error": _STOPPED_ERROR}
+                finally:
+                    self._inflight = None
+
+        self._stopped.clear()
+        granted = self._tool_seconds
+        work = asyncio.ensure_future(
+            asyncio.to_thread(self._exchange, req_id, code, timeout, tools, handler)
+        )
+        # A thread left behind by a timeout still ends (the kill below closes
+        # its pipe); its late result must not be reported as never retrieved.
+        work.add_done_callback(lambda f: f.cancelled() or f.exception())
+        budget = timeout + _EXCHANGE_GRACE_S
         try:
-            outcome = await asyncio.wait_for(
-                asyncio.to_thread(self._exchange, req_id, code, timeout),
-                timeout=timeout + _EXCHANGE_GRACE_S,
-            )
-        except TimeoutError:  # asyncio.TimeoutError is this, since 3.11
-            outcome = {"status": "timeout"}
+            while True:
+                done, _ = await asyncio.wait({work}, timeout=budget)
+                if done:
+                    outcome = work.result()
+                    break
+                # Time a script spent waiting on tools is not its own: while a
+                # call is in flight, or one finished since the last look, the
+                # safety net waits on.
+                extra = self._tool_seconds - granted
+                if extra > 0 or self._inflight is not None:
+                    granted = self._tool_seconds
+                    budget = max(extra, 1.0)
+                    continue
+                outcome = {"status": "timeout"}
+                break
+        except asyncio.CancelledError:
+            self._stop_now()
+            raise
 
         status = outcome.get("status")
 
@@ -569,7 +897,9 @@ class ReplSession:
         self._state_lost = self._spawned_once
 
 
-def namespace_key(session_id: str, workspace: str | os.PathLike[str]) -> str:
+def namespace_key(
+    session_id: str, workspace: str | os.PathLike[str], isolated: bool = False
+) -> str:
     """The registry key: one namespace per (session, FOLDER) pair.
 
     Keying on ``session_id`` alone was wrong in a way confinement turned from
@@ -590,7 +920,9 @@ def namespace_key(session_id: str, workspace: str | os.PathLike[str]) -> str:
         folder = os.path.normcase(os.path.realpath(os.fspath(workspace)))
     except Exception:  # pragma: no cover - unresolvable, key on the raw text
         folder = os.path.normcase(str(workspace))
-    return f"{session_id}@{folder}"
+    # v1.470.0: a tool script's isolated worker is a namespace of its own —
+    # never the `repl` tool's, which has the network and the working folder.
+    return f"{session_id}@{folder}" + ("#tools" if isolated else "")
 
 
 class ReplRegistry:
@@ -669,10 +1001,10 @@ class ReplRegistry:
         ]
 
     async def _acquire(
-        self, session_id: str, workspace: str | os.PathLike[str]
+        self, session_id: str, workspace: str | os.PathLike[str], isolated: bool = False
     ) -> tuple[ReplSession | None, str]:
         """Return (session, error). Exactly one of the two is meaningful."""
-        key = namespace_key(session_id, workspace)
+        key = namespace_key(session_id, workspace, isolated)
         async with self._lock:
             existing = self._sessions.get(key)
             if existing is not None:
@@ -687,7 +1019,9 @@ class ReplRegistry:
                     f"started, because spawning processes without a limit is how a "
                     f"machine ends up unusable."
                 )
-            session = ReplSession(session_id, workspace, command=self._command)
+            session = ReplSession(
+                session_id, workspace, command=self._command, isolated=isolated
+            )
             self._sessions[key] = session
             return session, ""
 
@@ -698,9 +1032,16 @@ class ReplRegistry:
         *,
         workspace: str | os.PathLike[str],
         timeout: float = DEFAULT_TIMEOUT_S,
+        isolated: bool = False,
+        tools: "list[str] | None" = None,
+        on_tool_call: Any = None,
     ) -> dict[str, Any]:
-        """Run ``code`` in ``session_id``'s namespace, creating it if needed."""
-        session, error = await self._acquire(session_id, workspace)
+        """Run ``code`` in ``session_id``'s namespace, creating it if needed.
+
+        ``isolated`` picks the session's isolated worker (a namespace of its
+        own); ``tools`` + ``on_tool_call`` make the run a tool script
+        (:meth:`ReplSession.execute`)."""
+        session, error = await self._acquire(session_id, workspace, isolated)
         if session is None:
             return {
                 "session_id": session_id,
@@ -713,7 +1054,27 @@ class ReplRegistry:
                 "restarted": False,
                 "note": "",
             }
-        return await session.execute(code, timeout)
+        if tools is None:
+            return await session.execute(code, timeout)
+        return await session.execute(
+            code, timeout, tools=tools, on_tool_call=on_tool_call
+        )
+
+    async def warm(
+        self,
+        session_id: str,
+        workspace: str | os.PathLike[str],
+        *,
+        isolated: bool = True,
+    ) -> bool:
+        """Start ``session_id``'s worker ahead of its first run (v1.470.0),
+        so a tool script the model is about to write does not wait for a
+        process to start. Returns whether one is up. Never raises."""
+        try:
+            session, _ = await self._acquire(session_id, workspace, isolated)
+            return False if session is None else await session.warm()
+        except Exception:  # noqa: BLE001 — warming is a courtesy
+            return False
 
     async def _sweep_locked(self, *, spare_held: bool = False) -> list[str]:
         now = time.monotonic()
