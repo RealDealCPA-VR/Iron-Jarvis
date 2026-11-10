@@ -4662,6 +4662,18 @@ async def chat_stream(
             ask_armed += await asyncio.to_thread(
                 _settings_and_records, _last_user_text(body.messages), list(armed), list(ask_armed),
             )
+            # LIVE EXCEL (v1.466.0): when this turn can LOOK at the workbook
+            # open in Excel, it can also ask to change it. VISIBLE, never
+            # granted: a call shows the ordinary card (and the tool's own
+            # check cards a deletion or a large overwrite every time). THIS
+            # LANE ONLY: the POST lane can show no card.
+            if (
+                "excel_live_look" in armed
+                and "excel_live_edit" not in armed
+                and "excel_live_edit" not in ask_armed
+                and d.platform.registry.get("excel_live_edit") is not None
+            ):
+                ask_armed.append("excel_live_edit")
             # APPS BY NAME (v1.354.0, G39): a named app that is connected with
             # tools loaded has them ASK-armed (visible, never granted; the
             # `mcp_call` key cards each call), before the ceiling and the

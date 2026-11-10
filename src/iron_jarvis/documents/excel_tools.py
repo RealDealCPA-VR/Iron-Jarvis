@@ -38,6 +38,22 @@ def _resolve_read_path(raw: str, ctx: ToolContext) -> Path:
     return p if p.is_absolute() else Path(ctx.workspace) / raw
 
 
+async def _read_target(raw: str, ctx: ToolContext) -> "tuple[Path, bool, str]":
+    """The workbook a read tool was pointed at, and whether it may be read.
+
+    ``live:<workbook name>`` (v1.466.0) is a workbook OPEN in Excel: the tool
+    reads a fresh copy of it as it is on screen (``documents/excel_live``),
+    whose source was already checked against the folders Jarvis may read."""
+    if raw.strip().lower().startswith("live:"):
+        from .excel_live import live_path
+
+        got, why = await live_path(raw.strip(), ctx)
+        return (Path(got), True, "") if got else (Path(raw), False, why)
+    path = _resolve_read_path(raw, ctx)
+    ok, reason = fs_read_ok(str(path))
+    return path, ok, reason
+
+
 def _open_error(exc: Exception, path: Path) -> str:
     """An honest message for a workbook openpyxl could not open.
 
@@ -145,8 +161,7 @@ class ExcelReadTool(Tool):
     }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        path = _resolve_read_path(str(args.get("path", "")), ctx)
-        ok, reason = fs_read_ok(str(path))
+        path, ok, reason = await _read_target(str(args.get("path", "")), ctx)
         if not ok:
             return ToolResult(ok=False, error=f"read denied: {reason}")
         if path.suffix.lower() not in (".xlsx", ".xlsm", ".xls"):
@@ -649,8 +664,7 @@ class ExcelProfileTool(Tool):
     }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        path = _resolve_read_path(str(args.get("path", "")), ctx)
-        ok, reason = fs_read_ok(str(path))
+        path, ok, reason = await _read_target(str(args.get("path", "")), ctx)
         if not ok:
             return ToolResult(ok=False, error=f"read denied: {reason}")
         if path.suffix.lower() not in (".xlsx", ".xlsm"):
@@ -746,8 +760,7 @@ class ExcelQueryTool(Tool):
     }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        path = _resolve_read_path(str(args.get("path", "")), ctx)
-        ok, reason = fs_read_ok(str(path))
+        path, ok, reason = await _read_target(str(args.get("path", "")), ctx)
         if not ok:
             return ToolResult(ok=False, error=f"read denied: {reason}")
         if path.suffix.lower() not in (".xlsx", ".xlsm"):
@@ -931,8 +944,7 @@ class ExcelFormulaCheckTool(Tool):
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from .excel_formula import FormulaError, Grid, evaluate_formula
 
-        path = _resolve_read_path(str(args.get("path", "")), ctx)
-        ok, reason = fs_read_ok(str(path))
+        path, ok, reason = await _read_target(str(args.get("path", "")), ctx)
         if not ok:
             return ToolResult(ok=False, error=f"read denied: {reason}")
         if path.suffix.lower() not in (".xlsx", ".xlsm"):
@@ -1052,8 +1064,7 @@ class ExcelSheetSpecTool(Tool):
     _MAX_SPEC_CELLS = 400
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        path = _resolve_read_path(str(args.get("path", "")), ctx)
-        ok, reason = fs_read_ok(str(path))
+        path, ok, reason = await _read_target(str(args.get("path", "")), ctx)
         if not ok:
             return ToolResult(ok=False, error=f"read denied: {reason}")
         if path.suffix.lower() not in (".xlsx", ".xlsm"):

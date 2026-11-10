@@ -276,6 +276,14 @@
       "ok": "checked a formula",
       "failed": "tried a formula check and it failed"
     },
+    "excel_live_edit": {
+      "ok": "changed the workbook open in Excel",
+      "failed": "tried a change in Excel and it failed"
+    },
+    "excel_live_look": {
+      "ok": "looked at the workbook open in Excel",
+      "failed": "tried a look at Excel and it failed"
+    },
     "excel_profile": {
       "ok": "read 1 file",
       "failed": "tried a file read and it failed"

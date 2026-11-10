@@ -113,6 +113,20 @@ def ocr_worker() -> None:
     ocr_main()
 
 
+@app.command("excel-worker", hidden=True)
+def excel_worker() -> None:
+    """Answer ONE live-Excel request on stdin/stdout (v1.466.0, internal).
+
+    ``documents/excel_live`` starts this as a short-lived child and kills it
+    at its deadline: a call into Excel can wait forever (a dialog box is
+    open, a cell is being typed in). The frozen exe serves it from
+    ``packaging/ironjarvis_entry._fast_path`` without importing this CLI;
+    keep the two identical (same module, same ``main()``)."""
+    from ..excel_worker import main as excel_main
+
+    excel_main()
+
+
 @app.command("repl-worker", hidden=True)
 def repl_worker() -> None:
     """Run the session-namespace worker on stdin/stdout (v1.159.0, internal).

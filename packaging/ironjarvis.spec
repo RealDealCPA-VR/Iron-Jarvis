@@ -168,6 +168,17 @@ if sys.platform == "win32":
     _collect("winrt")
     hiddenimports += collect_submodules("winrt")
 
+# pywin32 (v1.466.0) -- the bridge iron_jarvis/excel_worker.py uses to reach an
+# Excel the user has open. Imported lazily inside the worker's functions, so
+# the analysis cannot see it. Native (pythoncom/pywintypes DLLs): its absence
+# is survivable (the live-Excel tools say the bridge is missing), which is why
+# the doctor has a "live_excel" check.
+if sys.platform == "win32":
+    hiddenimports += [
+        "pythoncom", "pywintypes", "win32com", "win32com.client", "win32com.client.dynamic",
+        "win32com.client.gencache", "win32timezone", "win32gui", "win32process", "win32api",
+    ]
+
 # --- markitdown: structure-preserving PDF/office -> Markdown -----------------
 # Lazily imported inside iron_jarvis.documents.pdf_markdown (only when a PDF is
 # ingested into memory), so the daemon still BOOTS without any of these. But

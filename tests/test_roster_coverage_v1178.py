@@ -157,6 +157,10 @@ def test_default_registry_serves_the_file_core_including_rename(platform):
 # is covered. (A bare test platform has none, but a fixture that registered one
 # would otherwise report a phantom orphan.)
 _OFF_ROSTER_BY_DESIGN = {
+    # LIVE EXCEL (v1.466.0): reached from CHAT, where a person is present.
+    # They act on whatever workbook is open on the user's screen, outside any
+    # run's work folder, so no agent roster carries them.
+    "excel_live_look", "excel_live_edit",
     # Reached through `with_worklist`, not through a roster — asserted in §3.
     "worklist_add", "worklist_next", "worklist_done", "worklist_status",
     # YOUR BROWSER (v1.235.0) — reached from CHAT and, from Ship 4, from an

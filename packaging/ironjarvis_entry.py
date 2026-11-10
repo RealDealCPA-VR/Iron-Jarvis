@@ -26,6 +26,8 @@ import sys
 INERT_MCP_SUBCOMMAND = "claude-inert-mcp"
 #: v1.410.2: the Windows OCR child (iron_jarvis/ocr_worker.py).
 OCR_WORKER_SUBCOMMAND = "ocr-worker"
+#: v1.466.0: the live-Excel child (iron_jarvis/excel_worker.py).
+EXCEL_WORKER_SUBCOMMAND = "excel-worker"
 
 #: v1.333.0: the two other self-re-exec children take the same door. Through
 #: the Typer app each one imported the whole daemon (platform, orchestrator,
@@ -60,6 +62,12 @@ def _fast_path(argv: list[str]) -> int | None:
         from iron_jarvis.ocr_worker import main as ocr_main
 
         return ocr_main()
+    if argv == [EXCEL_WORKER_SUBCOMMAND]:
+        # v1.466.0: every question to an open Excel is one short-lived child
+        # (a call into another program can wait forever).
+        from iron_jarvis.excel_worker import main as excel_main
+
+        return excel_main()
     if argv == [REPL_WORKER_SUBCOMMAND]:
         from iron_jarvis.repl.worker import main as worker_main
 

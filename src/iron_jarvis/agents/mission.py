@@ -300,6 +300,7 @@ ASK_WORDS: dict[str, str] = {
     "channel_alerts": "choose which alerts a destination gets",
     "write_document": "create a document",
     "excel_edit": "edit a workbook",
+    "excel_live_edit": "change a workbook that is open in Excel",
     "generate_media": "make an image, video or sound",
     # v1.364.0 (IJ harness Phase 1): the two that ask (a program that keeps
     # running, typing into it) and the resource read a local-only turn cards.
@@ -518,6 +519,8 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "excel_accounts_diff": ("compared a workbook's accounts", "account compare"),
     "excel_formula_check": ("checked a formula", "formula check"),
     "calculate": ("worked out the figures", "calculation"),
+    "excel_live_look": ("looked at the workbook open in Excel", "look at Excel"),
+    "excel_live_edit": ("changed the workbook open in Excel", "change in Excel"),
     "excel_sheet_spec": ("captured a sheet's layout", "sheet layout capture"),
     "goal_add": ("added a goal", "goal addition"),
     "goal_delete": ("dropped a goal", "goal removal"),

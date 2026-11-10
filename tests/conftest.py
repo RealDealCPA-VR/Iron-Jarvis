@@ -628,6 +628,26 @@ def _fresh_antigravity_agents():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _excel_never_seen_running():
+    """v1.466.0: a chat arms the live-Excel tools when Excel is running on the
+    PC. What a test arms must not depend on whether the developer has Excel
+    open, so the answer is forced to "not running" for the session (and for a
+    daemon a test starts in another process). A test of that rule sets the
+    variable itself."""
+    from iron_jarvis.documents import excel_live as _xl
+
+    old = os.environ.get(_xl.SEEN_ENV)
+    os.environ[_xl.SEEN_ENV] = "0"
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(_xl.SEEN_ENV, None)
+        else:
+            os.environ[_xl.SEEN_ENV] = old
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_grok_home():
     """v1.416.0: the Code view reads Grok's own saved sessions, model list and
     sign-in file from its home (``hosted.grok.default_home``). A test must

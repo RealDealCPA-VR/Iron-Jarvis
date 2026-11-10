@@ -392,6 +392,12 @@
       "desktop": "edit a workbook"
     },
     {
+      "tool": "excel_live_edit",
+      "kind": "table",
+      "card": "change a workbook that is open in Excel",
+      "desktop": "change a workbook that is open in Excel"
+    },
+    {
       "tool": "generate_media",
       "kind": "table",
       "card": "make an image, video or sound",

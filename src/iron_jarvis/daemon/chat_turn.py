@@ -4665,6 +4665,23 @@ def _resolve_armed_tools(
 
         if wants_calculator(last_user, explicit + auto):
             auto.append("calculate")
+    # LIVE EXCEL (v1.466.0): the READ tool for a workbook the user has open in
+    # Excel, in its own place like the calculator and under the same ceiling.
+    # `excel_seen()` never waits (a remembered answer, refreshed in the
+    # background). The tool that CHANGES the open workbook is ask-armed by the
+    # stream lane only (routes/chat.py), beside this one.
+    if (
+        getattr(body, "auto_tools", False)
+        and (_ceiling >= _MAX_ARMED_TOOLS or len(explicit) + len(auto) < _ceiling)
+        and "excel_live_look" not in explicit
+        and "excel_live_look" not in auto
+        and d.platform.registry.get("excel_live_look") is not None
+    ):
+        from ..documents.excel_live import excel_seen
+        from ..tools.autoselect import wants_live_excel
+
+        if wants_live_excel(last_user, excel_seen(), bool(getattr(body, "attachments", None))):
+            auto.append("excel_live_look")
     auto = [t for t in auto if _not_denied(t)]
     # THE BROWSER CAPABILITY FILTER (v1.236.0, plan 11.2), applied LAST — after
     # the explicit picks, after every fill pass, and after the drop signal has
@@ -5673,6 +5690,13 @@ def config_cards_from_result(name: str, result: Any) -> list[dict[str, Any]]:
         if isinstance(rc, dict) and rc.get("key") and rc.get("change_id"):
             out.append(
                 {"kind": "change", "restart": False, **{k: rc.get(k) for k in ("title", "key", "label", "old", "new", "change_id")}}
+            )
+        # v1.466.0: a change made in a workbook open in Excel ("Excel changed
+        # Budget.xlsx 12 cells on Data [Undo]"); the same card, the same Undo.
+        xc = data.get("excel_change") if name == "excel_live_edit" else None
+        if isinstance(xc, dict) and xc.get("key") and xc.get("change_id"):
+            out.append(
+                {"kind": "change", "restart": False, **{k: xc.get(k) for k in ("title", "key", "label", "old", "new", "change_id")}}
             )
         reqs = data.get("secret_requests") if name in RECORD_CARD_TOOLS else None
         for r in reqs if isinstance(reqs, list) else []:

@@ -133,6 +133,8 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   excel_accounts_diff: { did: "Compared a workbook's accounts", noun: "account compare" },
   excel_formula_check: { did: "Checked a formula", noun: "formula check" },
   calculate: { did: "Worked out the figures", noun: "calculation" },
+  excel_live_look: { did: "Looked at the workbook open in Excel", noun: "look at Excel", nouns: "looks at Excel" },
+  excel_live_edit: { did: "Changed the workbook open in Excel", noun: "change in Excel", nouns: "changes in Excel" },
   excel_sheet_spec: { did: "Captured a sheet's layout", noun: "sheet layout capture" },
   goal_add: { did: "Added a goal", noun: "goal addition" },
   goal_delete: { did: "Dropped a goal", noun: "goal removal" },

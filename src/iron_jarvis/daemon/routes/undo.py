@@ -245,6 +245,16 @@ async def perform_undo(d, action_id: str) -> dict[str, Any]:
             )
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=f"undo failed: {exc}")
+    elif journal_kind == "excel_live_restore":
+        # v1.466.0: a change made in a workbook open in Excel. Like a record
+        # restore, no tool permission is asked: an Undo puts back what the
+        # user had, and it leaves alone any cell changed again since.
+        from ...documents import excel_live as _live
+
+        _words, _ok = await _live.restore(desc)
+        if not _ok:
+            raise HTTPException(status_code=409, detail=_words)
+        result_output = _words
     else:
         # 4) Tool-backed revert: same tool, same PermissionEngine + fs policy.
         tool = platform.registry.get(tool_name)

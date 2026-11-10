@@ -3399,6 +3399,42 @@ _FIGURE_WORD_RX = re.compile(
 )
 
 
+#: LIVE EXCEL (v1.466.0). Words that mean "the workbook I have open", said
+#: outright: these arm ``excel_live_look`` whether or not Excel is running
+#: (the tool then says Excel is not open).
+_LIVE_EXCEL_RX = re.compile(
+    r"(?i)\b(?:"
+    r"(?:open|active|current|selected|highlighted)\s+(?:excel\s+)?(?:workbook|spreadsheet|worksheet|sheet|cells?|range)"
+    r"|(?:workbook|spreadsheet|worksheet|sheet|file)\s+(?:i|we)(?:\s+have|'ve\s+got|\s+got)\s+open"
+    r"|(?:workbook|spreadsheet|worksheet|sheet|file)\s+(?:that\s+is|that's|which\s+is|i\s+have)\s+open\s+in\s+excel"
+    r"|open\s+in\s+excel|in\s+my\s+(?:open\s+)?excel|live\s+excel|excel\s+(?:window|right\s+now)"
+    r"|(?:cells?|range|rows?|columns?)\s+i(?:'ve|\s+have)?\s+(?:selected|highlighted)"
+    r"|(?:cell|sheet|tab)\s+i(?:'m|\s+am)\s+on"
+    r")\b"
+)
+#: Spreadsheet talk that means the open workbook only WHILE Excel is running
+#: and the message brings no file of its own.
+_SHEET_TALK_RX = re.compile(
+    r"(?i)\b(?:excel|workbook|spreadsheet|worksheet|pivot\s*table|this\s+(?:sheet|tab|cell|column|row)"
+    r"|my\s+selection|(?:cell|range)\s+\$?[a-z]{1,3}\$?\d{1,7})\b"
+)
+_RANGE_REF_RX = re.compile(r"\b[A-Z]{1,3}[1-9]\d{0,6}:[A-Z]{1,3}[1-9]\d{0,6}\b")
+_NAMES_A_FILE_RX = re.compile(r"(?i)\.(?:xlsx|xlsm|xls|csv)\b")
+
+
+def wants_live_excel(text: str, excel_open: bool, has_files: bool = False) -> bool:
+    """True when the message is about a workbook the user has OPEN in Excel
+    (v1.466.0): it says so outright, or Excel is running, the message talks
+    about a spreadsheet and it brings no file of its own (an attached or
+    named file is what a file tool reads). Pure, linear."""
+    msg = (text or "")[:4000]
+    if _LIVE_EXCEL_RX.search(msg):
+        return True
+    if not excel_open or has_files or _NAMES_A_FILE_RX.search(msg):
+        return False
+    return bool(_SHEET_TALK_RX.search(msg) or _RANGE_REF_RX.search(msg))
+
+
 def wants_calculator(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
     """True when the turn will state figures the model should not work out in
     its head (v1.465.0): it asks for arithmetic, or it reads or writes a

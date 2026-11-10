@@ -77,6 +77,8 @@
     "excel_apply_spec",
     "excel_edit",
     "excel_formula_check",
+    "excel_live_edit",
+    "excel_live_look",
     "excel_profile",
     "excel_query",
     "excel_read",
@@ -295,6 +297,8 @@
     "excel_apply_spec": "change a file",
     "excel_edit": "edit a workbook",
     "excel_formula_check": "check a formula",
+    "excel_live_edit": "change a workbook that is open in Excel",
+    "excel_live_look": "look at the workbook open in Excel",
     "excel_profile": "read a file",
     "excel_query": "query a workbook",
     "excel_read": "read a file",
@@ -660,6 +664,14 @@
     "excel_formula_check": [
       "Checked a formula",
       "Checking a formula"
+    ],
+    "excel_live_edit": [
+      "Changed the workbook open in Excel",
+      "Changing the workbook open in Excel"
+    ],
+    "excel_live_look": [
+      "Looked at the workbook open in Excel",
+      "Looking at the workbook open in Excel"
     ],
     "excel_query": [
       "Queried a workbook",
@@ -1159,6 +1171,8 @@
     "excel_apply_spec": "change",
     "excel_edit": "change",
     "excel_formula_check": "",
+    "excel_live_edit": "",
+    "excel_live_look": "",
     "excel_profile": "read",
     "excel_query": "",
     "excel_read": "read",

@@ -31,6 +31,7 @@ dependencies = [
     "pillow>=11", # imported directly in documents/readers.py (image metadata)
     "playwright>=1.60.0",
     "pywinpty>=3.0.5 ; sys_platform == 'win32'",
+    "pywin32>=306 ; sys_platform == 'win32'",
     "paramiko>=3.4", # SSH/SFTP for the remote long-term-memory source (§21)
     "markitdown[pdf]>=0.1.6",
     "mammoth>=1.12.0",

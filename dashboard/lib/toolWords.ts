@@ -104,6 +104,7 @@ const WORDS: Record<string, string> = {
   // repeats them (tests/test_receipt_seams_v13520 pins it equal).
   write_document: "create a document",
   excel_edit: "edit a workbook",
+  excel_live_edit: "change a workbook that is open in Excel",
   generate_media: "make an image, video or sound",
   // v1.364.0 (IJ harness Phase 1): the two that ask (a long-running program
   // and typing into it), and an app's resource read, which a local-only turn

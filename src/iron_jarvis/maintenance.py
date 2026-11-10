@@ -94,6 +94,9 @@ def create_backup(
     # v1.428.0: an app installed from Iron Jarvis's own lock in a dev or test
     # home (connectors/locked_pack.py) — a program, rebuilt from the lock.
     packages_dir = (home / "mcp-packages").resolve()
+    # v1.466.0: undo records, before-copies and reading copies of workbooks
+    # open in Excel (documents/excel_live.py): transient, swept by age.
+    excel_live_dir = (home / "excel-live").resolve()
     # v1.424.0 (D4): Iron Jarvis's plugin folder for the owner's Claude Code
     # setup on other accounts, in a dev or test home: COPIES of the owner's own
     # skills/commands/agents (v1.424.0 review: never junctions), remade at the
@@ -131,6 +134,7 @@ def create_backup(
                     or trash_dir in rp.parents
                     or backgrounds_dir in rp.parents
                     or packages_dir in rp.parents
+                    or excel_live_dir in rp.parents
                 ):
                     continue  # skip regenerable media library (dwarfs the real state)
                 if snapshot is not None and rp == snapshot.resolve():

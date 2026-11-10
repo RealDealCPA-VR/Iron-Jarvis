@@ -306,6 +306,11 @@ def default_permissions() -> dict[str, str]:
         "excel_sheet_spec": "allow",
         "excel_edit": "allow",
         "excel_apply_spec": "allow",
+        # v1.466.0, live Excel: looking is a read; a change to a workbook that
+        # is open in Excel asks (it is outside the work folder), and a step
+        # that cannot be put back asks every time (the tool's own check).
+        "excel_live_look": "allow",
+        "excel_live_edit": "ask",
         # Office capability tools (C-03/C-07/C-09): docx_edit and pdf_form_fill
         # write workspace-confined, TX-01 undoable files (a copy by default) —
         # the same three facts that put excel_edit here. compare_documents and
