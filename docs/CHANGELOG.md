@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.470.0
+
+**Scripts that call tools, and skills made from chat.** A **skill** and a **workflow** are two different things:
+
 ## v1.469.1
 
 **Links to another workbook follow the folders Jarvis may read.** A formula can link to another workbook, for example a summary sheet that reads a figure from a client's own file.
@@ -77,7 +81,3 @@
 ## v1.453.0
 
 **Archiving a Build › Code session keeps a short summary of it.** **Archive is in each session's ⋯ menu** in Build › Code (the row in the list, and the session's own ⋯ at the top).
-
-## v1.452.0
-
-**Plain page names, and coding straight in your folder.** **Four pages have plain names**: Sentinels is now **Watchers**, Reflexes is **Rules**, Artifacts is **What agents made**, and Local fleet is **Model servers**.
