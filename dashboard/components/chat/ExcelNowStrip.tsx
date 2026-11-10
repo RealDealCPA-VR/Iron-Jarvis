@@ -27,6 +27,7 @@ import {
   EXCEL_USE_TITLE,
   excelNowWords,
   excelShellBridge,
+  excelUseChosen,
   excelUseOn,
   noteExcelNow,
   setExcelUse,
@@ -68,8 +69,12 @@ export function ExcelNowStrip() {
     if (!shell) return;
     const take = (b: boolean) => {
       setBeside(b);
-      if (b) {
-        // The window opened to sit beside Excel is for Excel: on from the start.
+      if (b && !excelUseChosen()) {
+        // The window opened to sit beside Excel is for Excel: on from the
+        // start. Only while this window never chose: the app says "beside"
+        // again after every page load, and this line is drawn anew whenever
+        // the user comes back to the chat, so a Stop the user pressed must
+        // hold or their workbook's names go out again without a press.
         setExcelUse(true);
         setOn(true);
       }

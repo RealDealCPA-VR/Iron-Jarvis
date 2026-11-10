@@ -5410,6 +5410,14 @@ _FILE_EDIT_TOOLS: frozenset[str] = frozenset(
 #: ``POST /chat/changes`` still answers for it from the journal.
 _MULTI_FILE_EDIT_TOOLS: frozenset[str] = frozenset({"apply_patch"})
 
+#: Tools that READ, and write a result file only when asked to (v1.469.0
+#: review): ``excel_reconcile`` names its ``save_as`` workbook in
+#: ``data.path`` and nothing when none was asked for. The file belongs under
+#: the reply like any document the turn made. Kept out of
+#: ``_DOC_WRITING_TOOLS`` for the reason ``_FILE_EDIT_TOOLS`` is: matching two
+#: lists is not an office-writing turn.
+_RESULT_FILE_TOOLS: frozenset[str] = frozenset({"excel_reconcile"})
+
 
 def _reports_document(name: str) -> bool:
     """Does this tool name a file the turn's ``documents`` should list? The
@@ -5420,6 +5428,7 @@ def _reports_document(name: str) -> bool:
         name in _DOC_WRITING_TOOLS
         or name in _FILE_EDIT_TOOLS
         or name in _MULTI_FILE_EDIT_TOOLS
+        or name in _RESULT_FILE_TOOLS
     )
 
 
@@ -7404,6 +7413,9 @@ STRICT_ASK_TOOLS = (
     # in the agent's browser can change what the dev server stores, so "Ask
     # first" cards them; opening and reading a page only look.
     | {"page_click", "page_type"}
+    # v1.469.0 review: matching two lists can WRITE a file (its `save_as`
+    # result workbook), so "Ask before every action" asks before it too.
+    | {"excel_reconcile"}
 )
 
 #: Every tool whose SUCCESS changes a file on disk (v1.351.0, G06) — the set
@@ -7435,6 +7447,10 @@ _FILE_CHANGING_TOOLS = _FILE_WRITING_TOOLS | frozenset(
         "multi_edit",
         "apply_patch",
         "notebook_edit",
+        # v1.469.0 review: with `save_as` it writes the result workbook. A
+        # reply that said where it was saved got "nothing was written to disk
+        # ... that file does not exist" beside a file that existed.
+        "excel_reconcile",
     }
 )
 

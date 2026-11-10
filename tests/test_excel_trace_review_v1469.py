@@ -89,6 +89,29 @@ def test_a_formula_is_not_a_what_if_value(dates, value):
     assert not res.ok and "not a formula" in res.error
 
 
+def test_a_value_set_below_the_data_is_seen_by_a_whole_column_formula(tmp_path):
+    """"What if we add an expense of 500?" set in the first empty row. A
+    whole-column range was read only as far as the sheet's last used row, so
+    =SUM(B:B) answered 600 -> 600, and with nothing to watch the tool said
+    "nothing uses those cells". Excel gives 1,100 (and counts four)."""
+    path = _save(tmp_path, "c.xlsx", {
+        "B1": "Amount", "A2": "rent", "B2": 100, "A3": "power", "B3": 200, "A4": "water", "B4": 300,
+        "D1": "=SUM(B:B)", "D2": '=SUMIF(A:A,"new",B:B)', "D3": "=COUNT(B:B)",
+    }, title="Costs")
+    res = _run(path, mode="what_if", set={"Costs!B10": 500, "Costs!A10": "new"}, watch=["Costs!D1", "Costs!D2", "Costs!D3"])
+    assert res.ok, res.error
+    rows = {r["cell"]: (r["now"], r.get("then")) for r in res.data["watch"]}
+    assert rows == {"Costs!D1": (600, 1100), "Costs!D2": (0, 500), "Costs!D3": (3, 4)}
+    res = _run(path, mode="what_if", set={"Costs!B10": 500})
+    assert res.ok, res.error
+    assert {r["cell"]: r.get("then") for r in res.data["watch"]} == {"Costs!D1": 1100, "Costs!D2": 0, "Costs!D3": 4}
+    grid = Grid(path)
+    try:
+        assert grid.max_row("Costs") == 4, "with no what-if the sheet ends where it ends"
+    finally:
+        grid.close()
+
+
 # ----------------------------------------------------------------- goal seek --
 
 
@@ -242,5 +265,44 @@ def test_how_never_lists_every_cell_of_a_huge_range(tmp_path):
         assert "(+4914896 more cells in W!B1:XFD300)" in text
         small = "\n".join(T.how(grid, "W", 6, 1)["lines"])
         assert "W!A1:A399  [399 cells, all typed in]" in small
+    finally:
+        grid.close()
+
+
+# ------------------------------------- the first cut's promises with no pin --
+
+
+def test_how_stops_at_its_node_limit_on_a_wide_tree(tmp_path):
+    """Six cells feed each cell, six levels down: 55,987 cells in all. (The
+    first cut's own test was a narrow chain, which the depth alone bounds;
+    with the node limit taken out it still passed.)"""
+    cells: dict = {}
+    for level in range(1, 8):
+        for col in "ABCDEF":
+            if level == 7:
+                cells[f"{col}{level}"] = level
+            else:
+                cells[f"{col}{level}"] = "=" + "+".join(f"{c}{level + 1}" for c in "ABCDEF")
+    path = _save(tmp_path, "tree.xlsx", cells, title="S")
+    grid = Grid(path)
+    try:
+        got = T.how(grid, "S", 1, 1, depth=6)
+        assert got["cut"] is True
+        assert len(got["lines"]) <= 3 * T.MAX_NODES
+    finally:
+        grid.close()
+    res = _run(path, mode="how", cell="S!A1", depth=6)
+    assert res.ok and "(cut: the chain is larger than one answer shows" in res.output
+
+
+def test_a_what_if_and_a_goal_seek_leave_the_grid_as_they_found_it(dates):
+    grid = Grid(dates)
+    try:
+        before = grid.get("In", 2, 2)
+        T.what_if(grid, {"In!B1": "2025-06-01"}, ["In!B2"])
+        assert grid.overrides == {} and grid.fresh is False
+        assert grid.get("In", 2, 2) == before, "the next read is the workbook's own figure again"
+        T.goal_seek(grid, "In!B3", 100, "In!B1")
+        assert grid.overrides == {} and grid.fresh is False
     finally:
         grid.close()

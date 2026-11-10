@@ -74,15 +74,22 @@ export function excelNowWords(now: ExcelNow): string {
 // ------------------------------------------------------------------ store --
 let current: ExcelNow = NOT_OPEN;
 let on = false;
+let chosen = false;
 let loaded = false;
 
+// The key holds "1" (on), "0" (the user pressed Stop in this window) or
+// nothing (this window never chose). "0" is kept so that a Stop HOLDS: the
+// window beside Excel starts on only while it never chose.
 function loadOn(): void {
   if (loaded) return;
   loaded = true;
   try {
-    on = window.sessionStorage.getItem(EXCEL_USE_KEY) === "1";
+    const kept = window.sessionStorage.getItem(EXCEL_USE_KEY);
+    on = kept === "1";
+    chosen = kept === "1" || kept === "0";
   } catch {
     on = false;
+    chosen = false;
   }
 }
 
@@ -91,12 +98,18 @@ export function excelUseOn(): boolean {
   return on;
 }
 
+/** Whether this window's switch was ever set, on or off. */
+export function excelUseChosen(): boolean {
+  loadOn();
+  return chosen;
+}
+
 export function setExcelUse(next: boolean): void {
   loaded = true;
   on = next;
+  chosen = true;
   try {
-    if (next) window.sessionStorage.setItem(EXCEL_USE_KEY, "1");
-    else window.sessionStorage.removeItem(EXCEL_USE_KEY);
+    window.sessionStorage.setItem(EXCEL_USE_KEY, next ? "1" : "0");
   } catch {
     /* a private window: the choice lasts while the page does */
   }
@@ -118,6 +131,7 @@ export function excelNowForSend(): { workbook: string; sheet: string; selection:
 export function resetExcelNowForTests(): void {
   current = NOT_OPEN;
   on = false;
+  chosen = false;
   loaded = false;
 }
 

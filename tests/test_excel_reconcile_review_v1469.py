@@ -208,3 +208,22 @@ def test_a_list_name_no_sheet_can_carry_still_writes_the_result(tmp_path):
     names = load_workbook(tmp_path / "res.xlsx").sheetnames
     assert len(names) == 4 and names[:2] == ["Summary", "Matched"]
     assert not any(ch in n for n in names for ch in "[]:*?/\\")
+
+
+# ------------------------------------- the first cut's promise with no pin --
+
+
+def test_the_proof_line_is_a_comparison_not_a_claim():
+    """"It ties" is printed from difference == explained. With the words
+    printed whatever the numbers said, every test of the first cut passed;
+    this breaks the result on purpose (a row lost from the left-over list)."""
+    a = _side("Bank", [(100, D(2026, 1, 1)), (250, D(2026, 1, 2)), (999, D(2026, 1, 3))])
+    b = _side("Books", [(100, D(2026, 1, 1))])
+    res = R.match(a, b)
+    good = R.render(a, b, res, R.totals(a, b, res), days=5, tolerance_cents=0)
+    assert good.count("It ties.") == 1 and "DOES NOT TIE" not in good
+    lost = res.only_a.pop()
+    t = R.totals(a, b, res)
+    assert t["difference"] != t["explained"]
+    bad = R.render(a, b, res, t, days=5, tolerance_cents=0)
+    assert "It ties." not in bad and f"IT DOES NOT TIE: {R.money(lost.cents)} is unexplained." in bad

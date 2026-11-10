@@ -154,6 +154,16 @@ class Grid:
         #: override). Both off: ``get`` behaves exactly as before.
         self.overrides: dict[tuple[str, int, int], Any] = {}
         self.fresh = False
+        #: ARRAY FORMULAS under a what-if (v1.469.0 review). The engine does
+        #: not work an array formula out: it uses the result Excel saved. Once
+        #: ``overrides`` are in place that result may be OLD, so a cell an
+        #: array formula holds or fills is refused (a FormulaError) unless the
+        #: caller has shown the change cannot reach it. ``array_stale`` is the
+        #: set of ``(sheet lower-cased, col, row)`` the change reaches; None
+        #: means "not known", and then every such cell is refused.
+        self.array_stale: "set[tuple[str, int, int]] | None" = None
+        self._arrays: dict[str, dict[tuple[int, int], tuple[int, int, str]]] = {}
+        self._array_fills: dict[str, dict[tuple[int, int], list[tuple[int, int]]]] = {}
         if path is None:  # the calculator: no workbook behind the formula
             self._wb = None
             self.sheetnames: list[str] = []
@@ -207,10 +217,21 @@ class Grid:
         return v if isinstance(v, str) and v.startswith("=") else None
 
     def max_row(self, sheet: str) -> int:
-        return int(self._sheet(self._wb, sheet).max_row or 1)
+        last = int(self._sheet(self._wb, sheet).max_row or 1)
+        if self.overrides:
+            # A what-if may set a cell BELOW the data ("add an expense of 500"
+            # in the first empty row). A whole-column range (B:B) is read as
+            # far as this, so without the set cell =SUM(B:B) did not change.
+            name = self.canon(sheet).lower()
+            last = max([last] + [r for (s, _c, r) in self.overrides if s == name])
+        return last
 
     def max_col(self, sheet: str) -> int:
-        return int(self._sheet(self._wb, sheet).max_column or 1)
+        last = int(self._sheet(self._wb, sheet).max_column or 1)
+        if self.overrides:
+            name = self.canon(sheet).lower()
+            last = max([last] + [c for (s, c, _r) in self.overrides if s == name])
+        return last
 
     def defined(self, name: str) -> "tuple[str, str] | None":
         """``(sheet, "A1" or "A1:B9")`` a defined name points at, or None."""
@@ -237,6 +258,74 @@ class Grid:
         """The sheet's own name, whatever case it was written in."""
         return str(self._sheet(self._wb, sheet).title)
 
+    #: An array formula's range is noted this many cells far (a whole-column
+    #: spill is not walked to its end).
+    _ARRAY_CELLS_NOTED = 5000
+
+    def _array_cells(self, sheet: str) -> "dict[tuple[int, int], tuple[int, int, str]]":
+        """``(col, row) -> (anchor col, anchor row, formula text)`` for every
+        cell of *sheet* that an ARRAY formula holds or fills (a data table
+        too). The library hands such a cell over as an object, never as
+        "=..." text, so :meth:`formula` answers None for it. Read once per
+        sheet; never raises."""
+        if self._wb is None:
+            return {}
+        title = self.canon(sheet)
+        got = self._arrays.get(title)
+        if got is not None:
+            return got
+        got = {}
+        fills: dict[tuple[int, int], list[tuple[int, int]]] = {}
+        try:
+            from openpyxl.utils.cell import range_boundaries
+
+            held = getattr(self._sheet(self._formulas(), title), "_cells", None)
+            for (r, c), cell in list(held.items()) if isinstance(held, dict) else []:
+                v = cell.value
+                ref = getattr(v, "ref", None)
+                if isinstance(v, str) or ref is None:
+                    continue
+                text = getattr(v, "text", None)
+                text = text if isinstance(text, str) and text else "(a data table)"
+                if not text.startswith(("=", "(")):
+                    text = "=" + text
+                try:
+                    c1, r1, c2, r2 = range_boundaries(str(ref))
+                    if None in (c1, r1, c2, r2):
+                        raise ValueError(ref)
+                except Exception:  # noqa: BLE001 - an odd range: the cell itself
+                    c1, r1, c2, r2 = c, r, c, r
+                noted = 0
+                others = fills.setdefault((c, r), [])
+                for rr in range(r1, r2 + 1):
+                    for cc in range(c1, c2 + 1):
+                        got[(cc, rr)] = (c, r, text)
+                        if (cc, rr) != (c, r):
+                            others.append((cc, rr))
+                        noted += 1
+                    if noted >= self._ARRAY_CELLS_NOTED:
+                        break
+                got[(c, r)] = (c, r, text)
+        except Exception:  # noqa: BLE001 - no formula view: no array cells known
+            got, fills = {}, {}
+        self._arrays[title] = got
+        self._array_fills[title] = fills
+        return got
+
+    def array_formula(self, sheet: str, col: int, row: int) -> "tuple[int, int, str] | None":
+        """``(anchor col, anchor row, text)`` when an array formula holds or
+        fills this cell, else None."""
+        return self._array_cells(sheet).get((col, row))
+
+    def array_filled(self, sheet: str, col: int, row: int) -> "list[tuple[int, int]]":
+        """The OTHER cells the array formula in this cell fills."""
+        self._array_cells(sheet)
+        return list(self._array_fills.get(self.canon(sheet), {}).get((col, row), ()))
+
+    def has_arrays(self) -> bool:
+        """Whether any sheet holds an array formula. BLOCKING on first use."""
+        return any(self._array_cells(name) for name in self.sheetnames)
+
     def reset(self) -> None:
         """Forget every worked-out value (after ``overrides`` changed)."""
         self._memo.clear()
@@ -253,6 +342,20 @@ class Grid:
             held = self.overrides.get((self.canon(sheet).lower(), col, row), _NO_OVERRIDE)
             if held is not _NO_OVERRIDE:
                 return _norm(held)
+            if self.fresh and (self.array_stale is None or self.array_stale):
+                # An array formula is not worked out here, and the result
+                # Excel saved for it does not know about the new values.
+                arr = self.array_formula(sheet, col, row)
+                if arr is not None and (
+                    self.array_stale is None or (self.canon(sheet).lower(), col, row) in self.array_stale
+                ):
+                    here = f"{self.canon(sheet)}!{_col_letters(col)}{row}"
+                    if (arr[0], arr[1]) == (col, row):
+                        raise FormulaError(f"{here} holds an array formula, which Jarvis does not work out")
+                    raise FormulaError(
+                        f"{here} is filled by the array formula in {self.canon(sheet)}!{_col_letters(arr[0])}{arr[1]}, "
+                        "which Jarvis does not work out"
+                    )
         v = None if (self.fresh and self._is_formula(sheet, col, row)) else self.saved(sheet, col, row)
         if v is not None:
             if isinstance(v, str) and v.startswith("#") and v in _ERROR_CODES:
