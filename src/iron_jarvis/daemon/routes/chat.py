@@ -3340,6 +3340,11 @@ def register(app: FastAPI, d) -> None:
             logs.link_later(turn_id, tid)
             await asyncio.to_thread(_durable.link_record, d.platform.engine, turn_id, tid)
             linked = "later"
+        # v1.471.0: the first turn's script worker becomes the chat's, so the
+        # variables a script kept are there for the next message.
+        from ...tools.tool_script import adopt_turn_worker
+
+        await adopt_turn_worker(d.platform, turn_id, tid)
         # v1.428.0: a new chat's first turn that read a mailbox kept on the
         # user's own models holds the chat it was saved as Local only.
         from ...providers.egress import hold_local_only, link_turn_holds

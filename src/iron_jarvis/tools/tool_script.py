@@ -51,6 +51,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from ..core import progress
 from .base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
 
 log = logging.getLogger("iron_jarvis.tools.tool_script")
@@ -61,6 +62,11 @@ NAME = "tool_script"
 #: tool's, bounded by the tool's deadline).
 DEFAULT_TIMEOUT_S = 60.0
 MAX_TIMEOUT_S = 300.0
+#: The most a whole script may take, its tool calls included (v1.471.0).
+#: The registry no longer cuts a script at ONE call's deadline
+#: (``Tool.bounds_itself``): forty slow reads, each inside that deadline,
+#: were stopped at minute ten. Each call still has that deadline.
+MAX_TOTAL_S = 3600.0
 
 #: Tool names listed in the footer and the result data.
 _MAX_LISTED = 12
@@ -127,6 +133,9 @@ class ToolScriptTool(Tool):
     reversibility = Reversibility.READONLY
     risk_class = RiskClass.READ
     returns_untrusted_content = True  # it prints what the tools it called read
+    # Each call it makes has the per-call deadline; the script has its own
+    # overall bound (MAX_TOTAL_S) instead of one call's.
+    bounds_itself = True
     description = (
         "Run ONE short Python script that calls this turn's read-only tools "
         "itself, so many calls take one step and their results never fill "
@@ -303,6 +312,9 @@ class ToolScriptTool(Tool):
                 refused.setdefault(name or "(no name)", why)
                 return {"ok": False, "error": f"{why}."}
             made[name] = made.get(name, 0) + 1
+            # A script that keeps calling tools is working, not stalled (a
+            # coding session's stall watch hears this; a no-op elsewhere).
+            progress.touch()
             result = await self._registry.invoke(
                 name,
                 call_args,
@@ -330,17 +342,30 @@ class ToolScriptTool(Tool):
         session_id, once = worker_key(ctx)
         workspace = Path(getattr(ctx, "workspace", ".") or ".")
         try:
-            payload = await self._repl.execute(
-                session_id,
-                code,
-                workspace=workspace,
-                timeout=timeout,
-                isolated=True,
-                tools=names,
-                on_tool_call=on_call,
-            )
+            async with asyncio.timeout(MAX_TOTAL_S) as bound:
+                payload = await self._repl.execute(
+                    session_id,
+                    code,
+                    workspace=workspace,
+                    timeout=timeout,
+                    isolated=True,
+                    tools=names,
+                    on_tool_call=on_call,
+                )
         except asyncio.CancelledError:
             raise
+        except TimeoutError:
+            if not bound.expired():
+                raise
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"the script was still running after {MAX_TOTAL_S / 60:g} minutes "
+                    "with its tool calls, so it was stopped and its variables are "
+                    "gone. Do the work in smaller scripts."
+                ),
+                data={"tool_calls": dict(made), "refused": sorted(refused)},
+            )
         except Exception as exc:  # noqa: BLE001 — never crash the agent loop
             return ToolResult(
                 ok=False, error=f"the script could not be run: {type(exc).__name__}: {exc}"
@@ -413,6 +438,22 @@ class ToolScriptTool(Tool):
                 data=data,
             )
         return ToolResult(ok=True, output=body, data=data)
+
+
+async def adopt_turn_worker(platform: Any, turn_id: str, thread_id: str) -> int:
+    """A new chat was saved: its first message's script worker (keyed by the
+    TURN, :func:`worker_key`) becomes the chat's, so its variables are there
+    for the next message (v1.471.0; they were silently gone). Called by the
+    link route. Returns how many workers moved. Never raises."""
+    try:
+        repl = getattr(platform, "repl", None)
+        turn, thread = str(turn_id or "").strip(), str(thread_id or "").strip()
+        if repl is None or not hasattr(repl, "rekey") or not turn or not thread:
+            return 0
+        return int(await repl.rekey(f"chat:{turn}", f"chat:{thread}"))
+    except Exception:  # noqa: BLE001 — the next message just starts fresh
+        log.debug("tool_script: could not hand turn %s's worker to its chat", turn_id, exc_info=True)
+        return 0
 
 
 #: Warm-up tasks in flight (held so they are not collected mid-start).

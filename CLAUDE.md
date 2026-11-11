@@ -17081,6 +17081,71 @@ does not need a bump, stop and bump it.
     costs about 0.2 ms more than the same call made directly; an empty
     script answers in about 3 ms once the worker is up; the worker starts in
     0.15 s from source and about 1 s packaged, ahead of the first script.
+  - **LIVE (v1.471.0):** a scratch daemon answered by the real Claude Code
+    (Haiku): two scripts ran isolated, called `read_document` inside, and the
+    total was right; "create a skill for tax advisement" brought the
+    `skill_create` card. Haiku's script printed raw rows, not only the total.
+
+- **Every tool call's three ledger rows are PLAIN INSERTS of the ORM's own
+  rows; the two chat matchers are measured on labelled sets; a script never
+  dies of an answer the pipe cannot encode** (v1.471.0; the owner's goal: more
+  than 5% better efficiency, accuracy and stability, nothing on screen
+  changed). Numbers below were measured old-against-new, interleaved, on this
+  PC.
+  - **SPEED (`core/db.row_values`).** The intent (`_write_intent`), the
+    finished row (`_record`) and the event (`persist_event`) are
+    `engine.begin()` + `table.insert()` of `row_values(model, **given)` —
+    every column, the caller's value or the model's own default/factory (a
+    missing required one raises `KeyError`). `_record` writes the finished
+    row, ONE `DELETE` of the intent (never load-then-delete) and the undo row
+    in ONE transaction: all or nothing, as the ORM's one commit was. Never for
+    a table with ORM listeners (`WebhookRecord`: a plain insert does not fire
+    them). Direct call 1.78 → 1.05 ms, call from a script 2.02 → 1.25 ms
+    (large data 4.06 → 3.20). `row_values` passes every text through
+    `storable_text`: an unpaired surrogate (a Windows file name can hold one)
+    becomes "?" — before, `registry.invoke` RAISED (UnicodeEncodeError from
+    SQLite) and the call was never recorded, for direct calls too.
+  - **ACCURACY (`skills/trigger.py`, `autoselect.wants_tool_script`).**
+    Labelled sets in `tests/fixtures/matchers_v1471`: A (75 + 60) guided the
+    change, B (50 + 50) was held out and then used for its error classes, C
+    (40 + 40) was written after the last change and NEVER tuned against. On
+    C: skill 72.5% → 95.0%, script 57.5% → 97.5%. The skill reading follows
+    the noun phrase: the word after "skill(s)" must carry a request on
+    (`_FOLLOWERS`), the words before must reach a determiner and then a
+    making verb without a `_BREAK` word (possessive, preposition, joining
+    word) or an "-ing" verb; "need/want/like" ask only with "I/we" before
+    them; "as / into / in a skill" after a making verb asks; "can we …?" and
+    "let's" are requests. The script reading: "all" and a count need a PLURAL
+    thing; a number after a locator (`_SCRIPT_LOCATORS`: page, line, box,
+    section, row…) or a year (1900-2100) is no count; "after/at/in/above all"
+    is an idiom unless a noun phrase follows; "which of these files", "how
+    many of the statements", "one by one", "loop through" and number words
+    count; pages are not things. A change to either matcher keeps sets A and
+    B whole and lists set C's misses exactly
+    (`test_the_held_out_set_c`) — a new rule needs a NEW labelled set, not a
+    tweak until C passes.
+  - **STABILITY.** 14 fault scenarios, old 8 → new 14. `session._reply_line`
+    sends every answer as ASCII JSON, makes refused data plain (`_plain`:
+    keys as text, a loop as `"<loop>"`), else a sentence — a tuple key, a dict
+    containing itself or a surrogate KILLED the worker mid-script ("could not
+    reach the worker") and lost every variable. `Tool.bounds_itself` (only
+    `tool_script`): the registry does not arm the per-call deadline for it,
+    because each nested call already has it and a script of forty slow reads
+    was stopped at minute ten; the script bounds itself (`MAX_TOTAL_S` 3600)
+    and calls `progress.touch()` per nested call (a coding session's stall
+    watch hears it). NOT `deadline_exempt`, which also takes a tool out of
+    Build's Stop race (`stall.run_step`). A new chat's first-message worker
+    (keyed `chat:<turn>`) is handed to the chat by `POST
+    /chat/turns/{id}/thread` (`tool_script.adopt_turn_worker` →
+    `ReplRegistry.rekey`, isolated namespaces only; a chat that already has
+    one keeps its own).
+  - **Pins:** `tests/test_tool_script_hardening_v1471.py` (15 mutations, all
+    red).
+  - **OPEN:** set C's three misses ("save this workflow as a skill instead",
+    "Create a Google Assistant skill", and "trial balances", not a known
+    thing); a
+    whole script may now run an hour (Stop still ends it); a pending link
+    after a restart loses the first message's variables (as before).
 
 - **The installer is SIGNED when six secrets are set; a signed build is
   checked by Windows before it is kept** (v1.470.1; Microsoft Artifact

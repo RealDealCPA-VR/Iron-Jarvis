@@ -238,6 +238,13 @@ class Tool(ABC):
     #: reaches it through the parent). ``ToolRegistry.invoke`` reads this — the
     #: one place — so every lane (agent runtime, both chat lanes) obeys it.
     deadline_exempt: bool = False
+    #: BOUNDS ITSELF (v1.471.0). True only for a tool that runs OTHER tools
+    #: one after another (``tool_script``): each of its calls gets the
+    #: per-call deadline in full, so cutting the whole tool at one call's
+    #: deadline stopped a script that read forty slow PDFs at minute ten. The
+    #: tool keeps its own overall bound. Unlike :attr:`deadline_exempt` it
+    #: changes nothing else (a Build session's Stop still races it).
+    bounds_itself: bool = False
     #: PACK-TOOL QUARANTINE (v1.299.0). True for an external (MCP) tool that
     #: can write or destroy and APPEARED LATER than the pack it belongs to —
     #: or changed shape — so the user never knowingly installed it. A

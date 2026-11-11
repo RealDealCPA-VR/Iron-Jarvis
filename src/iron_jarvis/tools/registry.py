@@ -20,7 +20,9 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterable
 
-from ..core.db import dumps, session_scope
+from sqlalchemy import delete as sa_delete
+
+from ..core.db import dumps, row_values, session_scope
 from ..core.events import EventType
 from ..core.ids import new_id
 from ..core.fs_policy import fs_read_ok
@@ -962,6 +964,9 @@ class ToolRegistry:
                 deadline_s is not None
                 and deadline_s > 0
                 and not getattr(tool, "deadline_exempt", False)
+                # v1.471.0: a tool that runs other tools, each under this
+                # deadline, keeps its own overall bound (`Tool.bounds_itself`).
+                and not getattr(tool, "bounds_itself", False)
             )
             async with asyncio.timeout(float(deadline_s) if armed else None) as cm:
                 # The scope is visible to the tool (`tool_deadline_expired`),
@@ -1169,7 +1174,10 @@ class ToolRegistry:
                 safe_args = tool.redact_args(args)
             except Exception:  # noqa: BLE001 — an unredactable call records no args
                 safe_args = {}
-            row = ToolIntent(
+            # A plain insert of the row the ORM would write (v1.471.0,
+            # `core.db.row_values`): this runs before EVERY tool call.
+            values = row_values(
+                ToolIntent,
                 id=inv_id,
                 session_id=ctx.session_id,
                 agent_run_id=ctx.agent_run_id,
@@ -1180,9 +1188,8 @@ class ToolRegistry:
                 replay_safe=replay_safe(tool),
                 grant_id=str(grant_id or ""),
             )
-            with session_scope(ctx.engine) as db:
-                db.add(row)
-                db.commit()
+            with ctx.engine.begin() as conn:
+                conn.execute(ToolIntent.__table__.insert(), values)
 
         # ITS OWN WORKERS, and a BOUND. On the shared default executor the
         # write queued behind every other offloaded job, so under load a tool
@@ -1747,7 +1754,10 @@ class ToolRegistry:
             except Exception:  # noqa: BLE001 — never fail the recording
                 return desc
             return {**desc, "pre_inline": json.dumps(meta)}
-        record = ToolInvocation(
+        # The row as the ORM would write it, inserted plainly (v1.471.0,
+        # `core.db.row_values`): this runs after EVERY tool call.
+        record = row_values(
+            ToolInvocation,
             id=inv_id,
             session_id=ctx.session_id,
             agent_run_id=ctx.agent_run_id,
@@ -1755,7 +1765,7 @@ class ToolRegistry:
             args_json=dumps(safe_args),
             verdict=mode,
             ok=ok,
-            output=output[:4000],
+            output=output[:4000],  # row_values makes it storable (v1.471.0)
             reversibility=reversibility,
             confinement=confinement,
             grant_id=str(grant_id or ""),
@@ -1768,101 +1778,102 @@ class ToolRegistry:
                 str(getattr(ctx, "shell_syntax", "") or "") if name in _COMMAND_TOOLS else ""
             ),
         )
-        with session_scope(ctx.engine) as db:
-            db.add(record)
-            if clears_intent:
-                intent = db.get(ToolIntent, inv_id)
-                if intent is not None:
-                    db.delete(intent)
-            if undo:
-                # The inverse descriptor (from Tool.capture_undo) is a small,
-                # redaction-safe dict; the big pre-image itself is already a blob
-                # ref or a small inline value inside it.
-                stamped = _stamp_workspace(undo)
-                db.add(
-                    UndoJournal(
-                        action_id=inv_id,
-                        session_id=ctx.session_id,
-                        agent_run_id=ctx.agent_run_id,
-                        tool=name,
-                        kind=str(stamped.get("kind") or ""),
-                        reversible=bool(stamped.get("reversible", True)),
-                        pre_ref=stamped.get("pre_ref"),
-                        pre_inline=stamped.get("pre_inline"),
-                        pre_sha256=stamped.get("pre_sha256"),
-                        post_sha256=stamped.get("post_sha256"),
-                    )
-                )
-            # Post-hoc creations (v1.157.0, reshaped v1.166.0). action_id is the
-            # table's PRIMARY KEY (== the ToolInvocation id), so this invocation
-            # owns AT MOST ONE journal row:
-            #   - a capture_undo descriptor (`undo`) already holds the slot and is
-            #     strictly better information (it saw the pre-image), so when one
-            #     exists the created_paths are NOT journaled again — the old
-            #     unconditional loop made every reversible tool with created_paths
-            #     IntegrityError, rolling back the ToolInvocation + event while
-            #     the file stayed on disk (an invisible write).
-            #   - multiple created paths collapse into ONE `files_delete` envelope
-            #     row (pre_inline {"paths": [...]}) instead of N same-key rows.
-            # Best-effort — a journal problem must never turn a successful tool
-            # call into a failure.
-            #
-            # NEVER for a REVERSIBLE tool (v1.167.0): for those, `undo is None`
-            # means the capture FAILED (disk full, blob-store permission error —
-            # exactly the fragile moments), and the registry's contract is that
-            # a failed capture degrades to NO undo. Journaling the write as
-            # "file_delete" ("created → unlink on undo") would fabricate an
-            # inverse: undoing an OVERWRITE would then delete the user's only
-            # remaining copy instead of refusing.
-            if (
-                undo is None
-                and created_paths
-                and reversibility != Reversibility.REVERSIBLE.value
-            ):
-                rels: list[str] = []
-                for raw_path in created_paths:
-                    try:
-                        rels.append(
-                            str(
-                                Path(raw_path).resolve().relative_to(
-                                    Path(ctx.workspace).resolve()
-                                )
-                            ).replace("\\", "/")
-                        )
-                    except Exception:  # noqa: BLE001 — outside the workspace: skip
-                        continue
-                desc = None
+        journal: "dict[str, Any] | None" = None
+        if undo:
+            # The inverse descriptor (from Tool.capture_undo) is a small,
+            # redaction-safe dict; the big pre-image itself is already a blob
+            # ref or a small inline value inside it.
+            stamped = _stamp_workspace(undo)
+            journal = row_values(
+                UndoJournal,
+                action_id=inv_id,
+                session_id=ctx.session_id,
+                agent_run_id=ctx.agent_run_id,
+                tool=name,
+                kind=str(stamped.get("kind") or ""),
+                reversible=bool(stamped.get("reversible", True)),
+                pre_ref=stamped.get("pre_ref"),
+                pre_inline=stamped.get("pre_inline"),
+                pre_sha256=stamped.get("pre_sha256"),
+                post_sha256=stamped.get("post_sha256"),
+            )
+        # Post-hoc creations (v1.157.0, reshaped v1.166.0). action_id is the
+        # table's PRIMARY KEY (== the ToolInvocation id), so this invocation
+        # owns AT MOST ONE journal row:
+        #   - a capture_undo descriptor (`undo`) already holds the slot and is
+        #     strictly better information (it saw the pre-image), so when one
+        #     exists the created_paths are NOT journaled again — the old
+        #     unconditional loop made every reversible tool with created_paths
+        #     IntegrityError, rolling back the ToolInvocation + event while
+        #     the file stayed on disk (an invisible write).
+        #   - multiple created paths collapse into ONE `files_delete` envelope
+        #     row (pre_inline {"paths": [...]}) instead of N same-key rows.
+        # Best-effort — a journal problem must never turn a successful tool
+        # call into a failure.
+        #
+        # NEVER for a REVERSIBLE tool (v1.167.0): for those, `undo is None`
+        # means the capture FAILED (disk full, blob-store permission error —
+        # exactly the fragile moments), and the registry's contract is that
+        # a failed capture degrades to NO undo. Journaling the write as
+        # "file_delete" ("created → unlink on undo") would fabricate an
+        # inverse: undoing an OVERWRITE would then delete the user's only
+        # remaining copy instead of refusing.
+        if (
+            undo is None
+            and created_paths
+            and reversibility != Reversibility.REVERSIBLE.value
+        ):
+            rels: list[str] = []
+            for raw_path in created_paths:
                 try:
-                    if len(rels) == 1:
-                        desc = make_file_descriptor(
-                            ctx.config.home, kind="file_delete", path=rels[0], mode="raw"
-                        )
-                    elif rels:
-                        desc = {
-                            "kind": "files_delete",
-                            "reversible": True,
-                            "pre_ref": None,
-                            "pre_inline": dumps({"paths": rels, "mode": "raw"}),
-                            "pre_sha256": None,
-                            "post_sha256": None,
-                        }
-                except Exception:  # noqa: BLE001
-                    desc = None
-                if desc is not None:
-                    desc = _stamp_workspace(desc)
-                    db.add(
-                        UndoJournal(
-                            action_id=inv_id,
-                            session_id=ctx.session_id,
-                            agent_run_id=ctx.agent_run_id,
-                            tool=name,
-                            kind=str(desc.get("kind") or ""),
-                            reversible=True,
-                            pre_ref=desc.get("pre_ref"),
-                            pre_inline=desc.get("pre_inline"),
-                            pre_sha256=desc.get("pre_sha256"),
-                            post_sha256=desc.get("post_sha256"),
-                        )
+                    rels.append(
+                        str(
+                            Path(raw_path).resolve().relative_to(
+                                Path(ctx.workspace).resolve()
+                            )
+                        ).replace("\\", "/")
                     )
-            db.commit()
+                except Exception:  # noqa: BLE001 — outside the workspace: skip
+                    continue
+            desc = None
+            try:
+                if len(rels) == 1:
+                    desc = make_file_descriptor(
+                        ctx.config.home, kind="file_delete", path=rels[0], mode="raw"
+                    )
+                elif rels:
+                    desc = {
+                        "kind": "files_delete",
+                        "reversible": True,
+                        "pre_ref": None,
+                        "pre_inline": dumps({"paths": rels, "mode": "raw"}),
+                        "pre_sha256": None,
+                        "post_sha256": None,
+                    }
+            except Exception:  # noqa: BLE001
+                desc = None
+            if desc is not None:
+                desc = _stamp_workspace(desc)
+                journal = row_values(
+                    UndoJournal,
+                    action_id=inv_id,
+                    session_id=ctx.session_id,
+                    agent_run_id=ctx.agent_run_id,
+                    tool=name,
+                    kind=str(desc.get("kind") or ""),
+                    reversible=True,
+                    pre_ref=desc.get("pre_ref"),
+                    pre_inline=desc.get("pre_inline"),
+                    pre_sha256=desc.get("pre_sha256"),
+                    post_sha256=desc.get("post_sha256"),
+                )
+        # ONE transaction: the finished row, the intent it replaces (one
+        # DELETE, never load-then-delete) and its journal row land together
+        # or not at all, exactly as the ORM session's one commit did.
+        with ctx.engine.begin() as conn:
+            conn.execute(ToolInvocation.__table__.insert(), record)
+            if clears_intent:
+                conn.execute(sa_delete(ToolIntent).where(ToolIntent.id == inv_id))
+            if journal is not None:
+                conn.execute(UndoJournal.__table__.insert(), journal)
         return inv_id

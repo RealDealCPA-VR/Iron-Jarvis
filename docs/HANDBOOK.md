@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.470.2 (2026-11-10).*
+holds itself to. Current as of v1.471.0 (2026-11-10).*
 
 ---
 
@@ -2041,6 +2041,39 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Faster tool calls, better reading of requests, sturdier scripts (v1.471.0)
+
+Nothing on screen changes. Underneath:
+
+- **Every tool call is quicker to record.** Each call writes three rows to
+  the activity record (that it started, that it finished, and its event).
+  They are now written directly, with exactly the same contents, instead of
+  through a slower layer. Measured on this PC: a tool call went from 1.78 ms
+  to 1.05 ms of overhead, and a call made from a script from 2.02 ms to
+  1.25 ms. The record still lands whole or not at all.
+- **Chat reads two kinds of request more accurately.** "Create a skill
+  for…", "save this as a skill", "package these steps into a skill" and
+  "create skills for…" now bring the skill card, while "practice my piano
+  skill", "a skill-based pay plan" or "my staff need better research skills"
+  no longer do. For the script tool, "page 5", "line 12", "box 14", a year
+  ("the 2023 return") or "after all" no longer read as many files, while
+  "which of these files…", "how many of the statements…" and "the six
+  spreadsheets" do. On a test set written after the change and never tuned
+  against, the skill reading went from 72.5% to 95.0% right and the
+  many-files reading from 57.5% to 97.5%.
+- **A script keeps going where it used to break.**
+  - A tool answer with unusual data (a broken character, data that contains
+    itself) no longer ends the script's worker and loses its variables.
+  - A script that makes many slow calls is no longer stopped at the time
+    one call is allowed. Each call keeps that limit; a whole script may run
+    for up to an hour, and Stop still ends it at once.
+  - In a new chat, what a script kept in its first message is still there
+    in the second.
+- **A file name with a broken character no longer breaks a tool call.**
+  Windows allows such names. A tool that listed or read one used to fail
+  before its call was recorded; the call is now recorded, with the
+  character shown as "?".
 
 ## The installer is signed (v1.470.2)
 

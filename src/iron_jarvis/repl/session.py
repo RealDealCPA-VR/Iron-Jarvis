@@ -625,9 +625,7 @@ class ReplSession:
                 reply = self._answer_call(call, calls, handler)
                 reply["reply"] = call.get("n")
                 try:
-                    proc.stdin.write(
-                        json.dumps(reply, ensure_ascii=False, default=str) + "\n"
-                    )
+                    proc.stdin.write(_reply_line(reply))
                     proc.stdin.flush()
                 except Exception as exc:
                     return {
@@ -897,6 +895,59 @@ class ReplSession:
         self._state_lost = self._spawned_once
 
 
+#: How deep :func:`_plain` follows nested data before it stops.
+_PLAIN_DEPTH = 64
+
+
+def _plain(value: Any, depth: int = 0, seen: "set[int] | None" = None) -> Any:
+    """*value* as plain JSON values: keys as text, tuples and sets as lists, a
+    container met again inside itself as ``"<loop>"``, anything else as its
+    text. For a tool answer :func:`json.dumps` refused."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if depth >= _PLAIN_DEPTH:
+        return "<too deep>"
+    seen = set() if seen is None else seen
+    if id(value) in seen:
+        return "<loop>"
+    if isinstance(value, dict):
+        seen.add(id(value))
+        try:
+            return {str(k): _plain(v, depth + 1, seen) for k, v in value.items()}
+        finally:
+            seen.discard(id(value))
+    if isinstance(value, (list, tuple, set, frozenset)):
+        seen.add(id(value))
+        try:
+            return [_plain(v, depth + 1, seen) for v in value]
+        finally:
+            seen.discard(id(value))
+    return str(value)
+
+
+def _reply_line(reply: dict[str, Any]) -> str:
+    """One answer to a script's tool call as a protocol line (v1.471.0).
+
+    ASCII JSON, so no character can fail the pipe's encoding (a lone
+    surrogate in a tool's text used to). Data the encoder refuses (a tuple
+    key, a dict that contains itself) is made plain; if even that fails, the
+    script gets a sentence instead of the data. Before, any of these killed
+    the worker mid-script ("could not reach the worker") and lost every
+    variable. Never raises."""
+    try:
+        return json.dumps(reply, ensure_ascii=True, default=str) + "\n"
+    except (TypeError, ValueError, RecursionError):
+        pass
+    try:
+        return json.dumps(_plain(reply), ensure_ascii=True, default=str) + "\n"
+    except Exception:  # noqa: BLE001 — the last word is a plain refusal
+        return json.dumps({
+            "reply": reply.get("reply") if isinstance(reply, dict) else None,
+            "ok": False,
+            "error": "the tool answered, but its answer could not be passed to the script",
+        }, ensure_ascii=True) + "\n"
+
+
 def namespace_key(
     session_id: str, workspace: str | os.PathLike[str], isolated: bool = False
 ) -> str:
@@ -1126,6 +1177,31 @@ class ReplRegistry:
         for session in sessions:
             await session.dispose()
         return bool(sessions)
+
+    async def rekey(self, old: str, new: str) -> int:
+        """Hand every ISOLATED namespace of session *old* to session *new*
+        (v1.471.0) and return how many moved. A new chat's first message runs
+        its scripts under the turn's id (the chat has no id yet); once the
+        chat is saved, its later messages run under the chat's id, and the
+        first message's variables were silently gone. A namespace *new*
+        already has is kept (the old one is left to the idle sweep). The
+        process, its variables and a script still running are untouched:
+        only the name it is found by changes."""
+        if not old or not new or old == new:
+            return 0
+        moved = 0
+        async with self._lock:
+            for key, session in list(self._sessions.items()):
+                if session.session_id != old or not session.isolated:
+                    continue
+                target = namespace_key(new, session.workspace, True)
+                if target in self._sessions:
+                    continue
+                self._sessions.pop(key, None)
+                session.session_id = new
+                self._sessions[target] = session
+                moved += 1
+        return moved
 
     async def dispose_all(self) -> None:
         """Kill every child. Safe to call at daemon shutdown."""

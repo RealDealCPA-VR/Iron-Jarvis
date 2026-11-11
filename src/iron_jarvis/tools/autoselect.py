@@ -3614,27 +3614,68 @@ def wants_calculator(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
 _SCRIPT_WORD = re.compile(r"[a-z0-9']+")
 #: "each client", "every workbook", "all of the invoices", "across the files".
 _SCRIPT_MANY = frozenset({"each", "every", "all", "across", "batch", "bulk"})
-#: The things an office job has many of.
+#: The things an office job has many of. Pages are not among them since
+#: v1.471.0: the pages of one document are ONE read ("it is 10 pages").
 _SCRIPT_THINGS = frozenset({
     "files", "file", "documents", "document", "docs", "pdfs", "pdf", "workbooks",
     "workbook", "spreadsheets", "spreadsheet", "sheets", "sheet", "tabs", "tab",
     "folders", "folder", "invoices", "invoice", "statements", "statement",
     "returns", "return", "reports", "report", "clients", "client", "customers",
-    "customer", "vendors", "vendor", "accounts", "account", "pages", "page",
+    "customer", "vendors", "vendor", "accounts", "account",
     "receipts", "receipt", "contracts", "contract", "emails", "email",
     "records", "record", "transactions", "transaction", "bills", "bill",
     "payments", "payment", "entries", "entry", "items", "item", "months",
     "month", "quarters", "quarter", "years", "year", "companies", "company",
+    # v1.471.0: the file kinds and forms an office has dozens of ("every
+    # CSV", "all 30 K-1s" = "k" + "1s", "the W-2s" = "w" + "2s").
+    "csv", "csvs", "xlsx", "scans", "scan", "images", "photos", "forms",
+    "letters", "exports", "1s", "2s", "1099s", "1040s", "w2s", "k1s",
+    # One of a form: "each W-2" reads "each" + "w" + "2", "every K-1" "k" + "1".
+    "form", "w", "k", "1099", "1040",
 })
+#: The plural things: "all" and a count need MANY of something ("after all,
+#: the statement is due" is one statement).
+_SCRIPT_PLURAL = frozenset(w for w in _SCRIPT_THINGS if w.endswith("s"))
 #: How far after "every" the thing may sit ("every one of the client files").
 _SCRIPT_REACH = 5
 #: "every day I get more email" is about time, not about many things.
 _SCRIPT_NOT_NEXT = frozenset({
     "day", "week", "time", "morning", "night", "evening", "once", "now",
     "so", "good", "right", "set", "done", "fine", "day's", "the", "along",
+    "month", "quarter", "year", "hour", "minute", "honesty",
+})
+#: "after all", "not at all", "above all", "in all honesty": "all" after one
+#: of these is an idiom, unless a noun phrase follows ("look at all the
+#: 1099s", "in all of the workbooks").
+_SCRIPT_ALL_AFTER = frozenset({"after", "in", "at", "above"})
+#: What opens a noun phrase after "all".
+_SCRIPT_ALL_OPENS = frozenset({
+    "the", "of", "these", "those", "my", "our", "your", "their", "his", "her",
+    "its", "this", "client", "attached",
 })
 #: A count this high of one thing is a job for a script ("these 12 workbooks").
 _SCRIPT_COUNT = 4
+#: Counts said in words ("the six spreadsheets", "all twelve months").
+_SCRIPT_NUMBER_WORDS = {
+    "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "hundred": 100, "dozen": 12, "dozens": 24, "hundreds": 200,
+}
+#: A number after one of these points INTO one thing ("page 5", "line 12",
+#: "box 14", "section 7", "Q4 2024"); it does not count things.
+_SCRIPT_LOCATORS = frozenset({
+    "page", "pages", "line", "lines", "box", "boxes", "section", "sections",
+    "item", "step", "row", "rows", "column", "columns", "form", "schedule",
+    "part", "chapter", "no", "number", "q1", "q2", "q3", "q4", "fy", "year",
+    "version", "v", "rule", "exhibit", "note", "table", "figure",
+    "paragraph", "article", "clause", "from", "since", "until", "in",
+    "of", "at", "by", "is", "was", "are", "were", "on",
+})
+#: "which of these files", "how many of the statements".
+_SCRIPT_OVER = frozenset({"which", "many"})
+
 #: With that many files attached, a word that points at them makes the
 #: message a request about all of them ("total these"). Attachments alone do
 #: not: "thanks!" with four files asks for nothing.
@@ -3642,6 +3683,15 @@ _SCRIPT_POINTERS = frozenset({
     "these", "those", "them", "they", "all", "each", "every", "both",
     "attached", "attachments", "together", "combined", "across",
 }) | _SCRIPT_THINGS
+
+
+def _script_count(word: str) -> int:
+    """The count a word says, or 0. A year names a time, not a count ("the
+    2023 return")."""
+    if word.isdigit() and len(word) < 6:
+        n = int(word)
+        return 0 if (len(word) == 4 and 1900 <= n <= 2100) else n
+    return _SCRIPT_NUMBER_WORDS.get(word, 0)
 
 
 def wants_tool_script(
@@ -3652,7 +3702,14 @@ def wants_tool_script(
     or more of them, or brings that many files AND points at them ("total
     these"), and the turn already has a tool to read with (*picked*
     non-empty). Then `tool_script` rides along, so the model can do the reads
-    in one script instead of one call each. One pass over the words: linear."""
+    in one script instead of one call each. One pass over the words: linear.
+
+    v1.471.0 (measured on a labelled set written first, 68.3% right before):
+    "all" and a count need a PLURAL thing; a number after "page", "line",
+    "box", "section"… or a year is not a count; "after all", "in all
+    honesty", "all of a sudden" are not quantifiers; "which of these files",
+    "how many of the statements", "go through the statements one by one"
+    and counts in words ("the six spreadsheets") are."""
     if not picked:
         return False
     words = _SCRIPT_WORD.findall((text or "")[:4000].lower())
@@ -3660,15 +3717,41 @@ def wants_tool_script(
         return True
     for i, word in enumerate(words):
         ahead = words[i + 1: i + 1 + _SCRIPT_REACH]
-        if word in _SCRIPT_MANY and any(w in _SCRIPT_THINGS for w in ahead):
-            # "all the …" / "all of the …" are fine; a time word right after
-            # the quantifier is not a list of things.
-            nxt = ahead[0] if ahead else ""
+        nxt = ahead[0] if ahead else ""
+        prev = words[i - 1] if i else ""
+        if word in _SCRIPT_MANY:
+            if word == "all":
+                # "after all", "in all honesty", "all right", "all of a sudden".
+                if nxt == "of" and ahead[1:2] == ["a"]:
+                    continue
+                if prev in _SCRIPT_ALL_AFTER and not (
+                    nxt in _SCRIPT_ALL_OPENS or nxt in _SCRIPT_THINGS or _script_count(nxt)
+                ):
+                    continue
+                if nxt in _SCRIPT_NOT_NEXT and nxt != "the":
+                    continue
+                if any(w in _SCRIPT_PLURAL for w in ahead):
+                    return True
+                continue
             if nxt in _SCRIPT_NOT_NEXT and nxt != "the":
                 continue
-            return True
-        if word.isdigit() and len(word) < 6 and int(word) >= _SCRIPT_COUNT:
-            if any(w in _SCRIPT_THINGS for w in ahead[:3]):
+            things = _SCRIPT_PLURAL if word == "across" else _SCRIPT_THINGS
+            if any(w in things for w in ahead):
+                return True
+            continue
+        if word in _SCRIPT_OVER and nxt == "of" and any(w in _SCRIPT_PLURAL for w in ahead[1:4]):
+            # "which of these files", "how many of the statements".
+            if word == "which" or prev == "how":
+                return True
+        if word == "one" and nxt == "by" and ahead[1:2] == ["one"]:
+            # "go through the statements one by one".
+            if any(w in _SCRIPT_PLURAL for w in words[max(0, i - 8): i]):
+                return True
+        if word in ("loop", "iterate") and nxt in ("through", "over"):
+            if any(w in _SCRIPT_THINGS for w in ahead[1:]):
+                return True
+        if _script_count(word) >= _SCRIPT_COUNT and prev not in _SCRIPT_LOCATORS:
+            if any(w in _SCRIPT_PLURAL for w in ahead[:3]):
                 return True
     return False
 
