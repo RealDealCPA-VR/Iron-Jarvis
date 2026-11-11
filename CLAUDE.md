@@ -17524,3 +17524,40 @@ suggest-don't-act for anything autonomous, everything reviewable.
   State at this release: Linux 28 failed of ~28,700, Mac ~50 with one shard
   hanging; no Linux or Mac download is published and release.yml builds
   Windows only.
+
+- **Linux and Mac, round two: four real faults, each invisible on Windows**
+  (v1.472.2; trial runs on `trial/platforms`, never merged). (1)
+  `core/procs._is_window_program` answered True for "unknown", and OFF
+  WINDOWS everything is unknown, so `hosted/process.kill_left` spared every
+  stray program; it answers False when `os.name != "nt"`. (2)
+  `sandbox/native.NO_STALE_BYTECODE` (`PYTHONDONTWRITEBYTECODE=1`) is in BOTH
+  `scrubbed_env()` and `build_env()`: Python reuses a `.pyc` whose source has
+  the same whole-second time and size, so run-tests / edit `X = 1` → `X = 2`
+  / run-tests inside one second read the OLD code (the finish check said
+  "1 != 2" right after the fix on GitHub's Linux runner; the v1.386.0 lesson,
+  now closed in the product). `test_finish_shell_writes_v1387` moved on
+  purpose: no `__pycache__` whatever the daemon's own setting. (3)
+  `hosted/programs._listening` returns None when `psutil.net_connections`
+  raises AccessDenied (macOS without root) and `read_one` then asks the tool's
+  OWN members one by one (`_listening_of`); before, every read on a Mac was
+  "cannot tell" and the idle reaper never stopped a Build › Code tool. (4)
+  `terminals/backend.PosixPtyBackend.kill` never calls `waitpid(pid, 0)`: on
+  macOS a killed shell cannot finish exiting while its output is unread on the
+  master side, so `_reap` polls WNOHANG for `_REAP_WAIT_S` (3 s) while
+  dropping waiting output, then closes the master fd (`_closed`; `write`
+  becomes a no-op) and polls once more. A test double of `os` for that
+  backend needs `WNOHANG`. Also: `_case_only_rename` folds case with
+  `casefold()` off Windows (`normcase` is the identity on macOS, so a
+  capitalization fix was refused as "already exists";
+  `_denotes_a_different_file` still confirms one on-disk entry),
+  `records_build._POSIX_PATH` makes a bare POSIX path `folderish`, the pack
+  failure classifier reads a launcher's name by either slash, and
+  `tests/windows_only.py` gained `NOT_ON_MAC` (the release gate's script uses
+  GNU `grep -P`). Test lessons: a trap SCRIPT needs `chmod(0o755)` off
+  Windows; never assert a short digit string is absent from serialized events
+  (a time stamp contained "4111"); a venv `python.exe` on Windows is a
+  launcher whose CHILD is the real process. State at this release: Linux 8
+  failed of ~28,800 (finish replays, bench machine assumptions, launch
+  recipe, command-shell ask, two timing), Mac 17 (bench tasks that start a web
+  server, the Iron-Proxy bundle start, `Cmd` vs `Ctrl` in a hotkey pin,
+  `/private/var` temp spelling), nothing hanging.

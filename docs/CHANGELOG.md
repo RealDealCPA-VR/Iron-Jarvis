@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.472.2
+
+**Test results you can trust after a quick fix.** **A test run right after an edit always reads the new code.** Python keeps a compiled copy of each file and reuses it when the file's time (to the second) and size have not changed.
+
 ## v1.472.1
 
 **First steps toward Linux and Mac.** Iron Jarvis is still a Windows app, and nothing changes on Windows except two small things:
@@ -77,7 +81,3 @@
 ## v1.459.0
 
 **Six small fixes.** **Compact in Build › Code for Pi, OpenCode and Grok.** The Session tab's Context drop-down now has "Compact session" for these too (it said they "compact by itself").
-
-## v1.458.0
-
-**Record a task in the browser, and Jarvis keeps it as a skill.** **Do a task once; Jarvis can do it again.** In the browser sidebar, press the round **Record** button (beside "Point at it"), then do the task in the tab you are looking at: open pages, click, type, choose from lists, press Enter.

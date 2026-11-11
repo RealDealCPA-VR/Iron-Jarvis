@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.472.1 (2026-11-10).*
+holds itself to. Current as of v1.472.2 (2026-11-10).*
 
 ---
 
@@ -2041,6 +2041,24 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Test results you can trust after a quick fix (v1.472.2)
+
+- **A test run right after an edit always reads the new code.** Python keeps
+  a compiled copy of each file and reuses it when the file's time (to the
+  second) and size have not changed. An agent that fixed a file and ran the
+  tests again within the same second could be told they still failed.
+  Commands Iron Jarvis runs no longer write those compiled copies, so your
+  Python projects stop getting `__pycache__` folders from Jarvis's own
+  commands. Commands you run yourself are unchanged.
+- **Linux- and Mac-style folder paths are understood in more phrasings**, such
+  as "use Codex for /home/sam/shop" with no word like "folder" in it.
+
+More groundwork for Linux and Mac, none of it visible on Windows: stopping a
+coding tool ends the programs it left running; idle coding tools are stopped
+on a Mac; closing a terminal can no longer hang there; and fixing a file
+name's capital letters works on a Mac. There is still no Linux or Mac
+download.
 
 ## First steps toward Linux and Mac (v1.472.1)
 
