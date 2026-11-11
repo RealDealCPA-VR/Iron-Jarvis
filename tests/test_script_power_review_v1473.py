@@ -1396,3 +1396,11 @@ def test_the_reference_pattern_stays_linear_on_a_pathological_text():
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0 and out.stdout.startswith("ok"), out.stdout + out.stderr
+
+
+def test_the_tool_says_every_figure_is_worked_out_in_the_script(world):
+    """Seen live: a script printed 16 file totals, and the model then added
+    a grand total in its head and wrote a wrong one into the Word file."""
+    said = world.p.registry.get(NAME).description
+    assert "EVERY FIGURE COMES FROM THE SCRIPT" in said
+    assert "grand total" in said and "Never add or combine its results yourself" in said
