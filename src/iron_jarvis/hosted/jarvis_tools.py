@@ -91,10 +91,17 @@ def session_of(pane_id: str) -> str:
 
 
 def normalise(raw: Any) -> dict[str, bool]:
-    """Five boxes, all real bools (the pane's own reader)."""
+    """The pane's five boxes plus Build › Code's own ``handoff`` (v1.474.0,
+    ``hosted/handoff``), all real bools. A Build terminal never has
+    ``handoff`` (its reader keeps the five)."""
+    from ..browser.panetokens import capability_enabled
     from ..terminals.session import normalise_pane_capabilities
+    from .handoff import HANDOFF
 
-    return normalise_pane_capabilities(raw if isinstance(raw, dict) else {})
+    values = raw if isinstance(raw, dict) else {}
+    out = normalise_pane_capabilities(values)
+    out[HANDOFF] = capability_enabled(values.get(HANDOFF))
+    return out
 
 
 def load(raw_json: str) -> dict[str, bool]:

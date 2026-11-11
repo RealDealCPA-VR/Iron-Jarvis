@@ -618,6 +618,9 @@ export interface CodeSession {
    *  Iron Jarvis tools (Antigravity 1.5.2) — the chip is hidden. Absent =
    *  it takes them (or an older Iron Jarvis, which never says). */
   jarvisToolsTaken?: false;
+  /** v1.474.0: this session is a helper another session's coding tool
+   *  started (that session's id); "" for a session the user started. */
+  handedFrom: string;
   /** v1.441.0: the row's "Branch" — the tool can branch a conversation and
    *  this session has one. Absent from an older Iron Jarvis (no Branch). */
   canBranch?: boolean;
@@ -634,9 +637,24 @@ export interface KeptProgram {
 export interface JarvisTools {
   memory: boolean;
   browser: boolean;
+  /** v1.474.0: Hand off — the coding tool may start another coding tool on a
+   *  piece of its work (`hosted/handoff`). Never offered in a helper session. */
+  handoff: boolean;
 }
 
-export const JARVIS_TOOL_KEYS: readonly (keyof JarvisTools)[] = ["memory", "browser"];
+export const JARVIS_TOOL_KEYS: readonly (keyof JarvisTools)[] = ["memory", "browser", "handoff"];
+
+/** Each box's name. */
+export const JARVIS_TOOL_LABELS: Record<keyof JarvisTools, string> = {
+  memory: "Memory",
+  browser: "Browser",
+  handoff: "Hand off",
+};
+
+/** v1.474.0: the boxes a session offers (a helper never hands off again). */
+export function jarvisToolKeysFor(s: Pick<CodeSession, "handedFrom">): (keyof JarvisTools)[] {
+  return JARVIS_TOOL_KEYS.filter((k) => k !== "handoff" || !s.handedFrom);
+}
 
 /** Who sees what the coding tool reads (the privacy line on the boxes). */
 export function toolVendor(tool: string): string {
@@ -651,7 +669,7 @@ export function toolVendor(tool: string): string {
 
 /** The chip's words: which of Iron Jarvis's tools are on. */
 export function jarvisToolsWords(t: JarvisTools | null | undefined): string {
-  const on = JARVIS_TOOL_KEYS.filter((k) => t?.[k]).map((k) => (k === "memory" ? "Memory" : "Browser"));
+  const on = JARVIS_TOOL_KEYS.filter((k) => t?.[k]).map((k) => JARVIS_TOOL_LABELS[k]);
   return on.length ? `Iron Jarvis tools: ${on.join(", ")}` : "Iron Jarvis tools: off";
 }
 
@@ -659,6 +677,9 @@ export function jarvisToolsWords(t: JarvisTools | null | undefined): string {
 export function jarvisToolHint(key: keyof JarvisTools, toolName: string, tool: string): string {
   if (key === "memory") {
     return `${toolName} may search and read your memory and your memory profile (read-only). What it reads goes to ${toolVendor(tool)} with the conversation.`;
+  }
+  if (key === "handoff") {
+    return `${toolName} may start another coding tool you have here (Codex, Claude Code, Pi…) on part of the work, in this folder. The work it hands over goes to that tool's own service. Each helper is its own session you can open; it asks you before anything its own rules ask about, and never gets Full access.`;
   }
   return `${toolName} may use your browser through Iron Jarvis. Every click, typing or page change asks you first.`;
 }
@@ -805,12 +826,14 @@ export function decodeCodeSession(raw: unknown): CodeSession | null {
     stoppedNote: str(r.stopped_note, 2_000),
     noFolder: r.no_folder === true,
     workRoot: r.no_folder === true ? str(r.work_root, 1_000) : "",
+    handedFrom: str(r.handed_from, 200).trim(),
     ...(r.jarvis_tools === false ? { jarvisToolsTaken: false as const } : {}),
     ...(obj(r.capabilities)
       ? {
           jarvisTools: {
             memory: obj(r.capabilities)!.memory === true,
             browser: obj(r.capabilities)!.browser === true,
+            handoff: obj(r.capabilities)!.handoff === true,
           },
         }
       : {}),
@@ -1380,6 +1403,49 @@ export interface CodeSessionView {
    *  settings that Pi skips here (it can only ask in its terminal), or this
    *  session already loads them; null = nothing to say. */
   piFolder: PiFolder | null;
+  /** v1.474.0: the helpers this session's coding tool started. */
+  helpers: CodeHelper[];
+  /** v1.474.0: for a helper, the session that started it. */
+  handedFrom: { id: string; title: string; label: string } | null;
+}
+
+/** v1.474.0 (Hand off): one helper session another session's tool started. */
+export interface CodeHelper {
+  id: string;
+  title: string;
+  label: string;
+  state: "working" | "waiting" | "done" | "failed" | "stopped" | "idle";
+}
+
+const HELPER_STATES = new Set(["working", "waiting", "done", "failed", "stopped", "idle"]);
+
+/** How a helper stands, in words (statusWords' vocabulary). */
+export function helperStateWords(state: CodeHelper["state"]): string {
+  return {
+    working: "Working",
+    waiting: "Waiting for you",
+    done: "Done",
+    failed: "Failed",
+    stopped: "Stopped",
+    idle: "Not started",
+  }[state];
+}
+
+export function decodeHelpers(raw: unknown): CodeHelper[] {
+  const out: CodeHelper[] = [];
+  for (const h of Array.isArray(raw) ? raw.slice(0, 20) : []) {
+    const ho = obj(h);
+    const id = ho ? str(ho.id, 200).trim() : "";
+    if (!ho || !id || out.some((x) => x.id === id)) continue;
+    const state = str(ho.state, 20);
+    out.push({
+      id,
+      title: str(ho.title, 300).trim(),
+      label: str(ho.label, 60).trim(),
+      state: (HELPER_STATES.has(state) ? state : "idle") as CodeHelper["state"],
+    });
+  }
+  return out;
 }
 
 /** v1.431.0: what the daemon says about a Pi folder's own resources
@@ -1454,6 +1520,12 @@ export function decodeCodeSessionView(raw: unknown): CodeSessionView | null {
     commands: decodeCommands(r.commands),
     keepsLast: r.keeps_last === true,
     piFolder: piFolderOf(r) ?? null,
+    helpers: decodeHelpers(r.helpers),
+    handedFrom: (() => {
+      const h = obj(r.handed_from);
+      const id = h ? str(h.id, 200).trim() : "";
+      return h && id ? { id, title: str(h.title, 300).trim(), label: str(h.label, 60).trim() } : null;
+    })(),
   };
 }
 

@@ -73,6 +73,25 @@ def list_rows(engine: Any, *, archived: bool = False, folder: str = "") -> list[
     return rows
 
 
+def helpers_of(engine: Any, parent: str) -> list[HostedSessionRecord]:
+    """v1.474.0: the helpers ``parent``'s coding tool started (not archived),
+    newest first."""
+    ensure_table(engine)
+    if not parent:
+        return []
+    with session_scope(engine) as db:
+        stmt = (
+            select(HostedSessionRecord)
+            .where(HostedSessionRecord.handed_from == parent)  # type: ignore[arg-type]
+            .where(HostedSessionRecord.archived_at == None)  # noqa: E711
+            .order_by(HostedSessionRecord.updated_at.desc(), literal_column("rowid").desc())  # type: ignore[attr-defined]
+        )
+        rows = list(db.exec(stmt))
+        for r in rows:
+            db.expunge(r)
+    return rows
+
+
 def update(engine: Any, sid: str, **fields: Any) -> HostedSessionRecord | None:
     """Set ``fields`` on the row and bump ``updated_at`` (unless one is
     given). None when the row is gone."""
@@ -165,6 +184,9 @@ def _view(row: HostedSessionRecord, acc: Any) -> dict[str, Any]:
         # v1.431.0: a Pi session the user told to load its folder's own Pi
         # extensions, skills and settings (``pi --approve``).
         "load_folder_resources": bool(getattr(row, "load_folder_resources", False)),
+        # v1.474.0: a helper another session's coding tool started
+        # (``hosted/handoff``); "" for a session the user started.
+        "handed_from": str(getattr(row, "handed_from", "") or ""),
         "source": "app",
     }
 

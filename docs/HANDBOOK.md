@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.473.0 (2026-11-11).*
+holds itself to. Current as of v1.475.0 (2026-11-11).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Skills that get used, one approval for many changes, faster scripts (v1.473.0)
+## Skills that get used, one approval for many changes, faster scripts (v1.475.0)
 
 ### A skill you saved is used without typing "/"
 
@@ -2264,7 +2264,7 @@ may only call tools that read.
 With a real model (Claude Haiku on the owner's Claude plan), on a scratch copy
 of the app with made-up statements, one run each:
 
-| Task | v1.472.1 | v1.473.0 |
+| Task | v1.472.1 | v1.475.0 |
 |---|---|---|
 | Add up 16 statements | 34.2 s, 5 approval cards | 17.5 s, no cards |
 | 640 payments into a workbook | 141.1 s, 22,646 tokens written by the model | 39.0 s, 2,346 tokens |
@@ -2336,6 +2336,74 @@ each has a test that fails on the old code:
 - **The installed desktop app was not driven.** The packaged program that
   the installer carries was built from this version and given the same
   requests; the installer and its window were not.
+
+## A coding tool can hand work to another one (v1.474.0)
+
+In Build › Code, the coding tool you are working with can now start another
+coding tool you have on this PC on a piece of the work. For example, Claude
+Code can hand the tests to Codex while it works on the code, and read what
+Codex did when it is done.
+
+- **Off until you turn it on.** Open the session's **Iron Jarvis tools** and
+  tick **Hand off**. It is for that session only. Untick it and the next
+  hand-off is refused.
+- **Each helper is its own session.** It works in the same folder, is named
+  "Helper: …" in the session list, and the session that started it lists its
+  helpers with how each one stands ("Working", "Waiting for you", "Done") and
+  an **Open** button. A helper says which session it is helping.
+- **A helper asks you itself.** Its approval cards are its own: they appear in
+  its session and in the bell. A helper never gets Full access. It works in
+  the same mode as the session that started it when its tool offers that mode,
+  and in its tool's own default otherwise.
+- **No chains.** A helper cannot hand work on to another tool.
+- **Your account groups hold.** A helper of the same tool uses the same
+  account. A helper of another tool uses an account from the same account
+  group as the session that started it, so work and personal accounts never
+  mix. If no account in that group can take the work, nothing is handed over
+  and the tool is told why.
+- **Emergency stop covers helpers.** While it is on, no work is handed over,
+  and turning it on stops helpers that are working.
+- **At most three at a time.** A session can have three helpers working at
+  once.
+- **Stop stops them too.** Pressing Stop on the session's reply, archiving it
+  or deleting it stops its working helpers. What a helper already changed
+  stays.
+- **What comes back is read, not obeyed.** The helper's final words and the
+  files its edits named go back to the coding tool that started it, marked as
+  information, never as instructions.
+- **Where the words go.** The task is read by the helper tool's own model
+  (Anthropic for Claude Code, OpenAI for Codex, and so on), and what the
+  helper wrote is read by the starting tool's model.
+
+Your coding tool may ask before its first hand-off call, as it does for any
+tool server. Choosing its "allow for this session" answer saves asking again.
+
+## Long coding sessions open fast and stay smooth (v1.473.0)
+
+A long Build › Code session now draws only its newest messages, about 120 rows.
+Above them, one quiet line says how many earlier messages there are, with
+**Show earlier**. Each press draws another set and keeps your place on the
+page. Once everything Iron Jarvis holds is drawn, **Load earlier** brings older
+history as before. A short session looks exactly as it did.
+
+While a long reply streams and you are at the bottom, the view keeps to one
+set of rows. If you have scrolled up to read, it leaves you where you are.
+
+A reply's **Copy** still copies the whole reply, including parts above the
+drawn rows. Its text is put together only when you press Copy.
+
+Measured on the same PC with a streamed 46-second reply:
+
+| Session | Before (v1.472.0) | Now |
+|---|---|---|
+| 250 turns: page work during the reply | 42 s | 7.8 s |
+| 250 turns: opening it | 0.76 s | 0.33 s |
+| 600 turns: typical frame | 40 ms | 13 ms (the screen's own pace) |
+| 600 turns: frames slower than 50 ms | 421 | 0 |
+| 600 turns: opening it | 1.7 s | 0.36 s |
+
+One thing to know: the browser's Find (Ctrl+F) only finds words in the rows
+that are drawn. Press **Show earlier** to search further back.
 
 ## A Linux preview is attached to each release (v1.472.3)
 

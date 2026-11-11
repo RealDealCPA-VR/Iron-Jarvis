@@ -155,6 +155,7 @@ nothing saved, nothing changed):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -324,6 +325,22 @@ def mcp_tool_approval(p: dict[str, Any]) -> dict[str, Any] | None:
     return {"server": str(p.get("serverName") or ""), "tool": found.group(1) if found else "",
             "args": args if isinstance(args, dict) else {}, "can_session": offers,
             "title": str(meta.get("tool_title") or "")}
+
+
+def _mcp_step_title(server: Any, tool: Any, args: Any) -> str:
+    """A step row's title for an MCP call: Iron Jarvis's own tools in words
+    (v1.474.0, the card's words — ``words.mcp_call_title``); any other
+    server's as "Use <server> › <tool>", as before."""
+    from .jarvis_tools import SERVER_NAME
+
+    if server == SERVER_NAME and tool:
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                args = {}
+        return W.mcp_call_title(server, str(tool), args if isinstance(args, dict) else {})
+    return f"Use {server or 'an app'} › {tool or 'a tool'}"
 
 
 def _mcp_input(args: Any) -> str:
@@ -1435,7 +1452,7 @@ class CodexDriver(Driver):
         if t == "mcpToolCall":
             name = f"{item.get('server') or ''}.{item.get('tool') or ''}"
             ev = make("tool", item=iid, kind="mcp", name=clip(name, 120),
-                      title=f"Use {item.get('server') or 'an app'} › {item.get('tool') or 'a tool'}",
+                      title=_mcp_step_title(item.get("server"), item.get("tool"), item.get("arguments")),
                       input=clip(_mcp_input(item.get("arguments")), INPUT_CHARS), status=status)
             if status != "running":
                 with_full(ev, input_text=_mcp_input(item.get("arguments")), output_text=_mcp_output(item))

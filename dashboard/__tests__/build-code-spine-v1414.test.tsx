@@ -107,7 +107,7 @@ describe("running work is seen everywhere", () => {
 describe("the Iron Jarvis tools boxes", () => {
   it("are off until ticked and say what they give and who sees it", () => {
     const s = session();
-    expect(s.jarvisTools).toEqual({ memory: false, browser: false });
+    expect(s.jarvisTools).toEqual({ memory: false, browser: false, handoff: false });
     render(<JarvisToolsChip session={s} toolName="Codex" onChanged={() => {}} onInfo={() => {}} />);
     const chip = screen.getByTestId("code-jarvis-tools");
     expect(chip.textContent).toBe("Iron Jarvis tools: off");
@@ -132,12 +132,12 @@ describe("the Iron Jarvis tools boxes", () => {
     fireEvent.click(screen.getByTestId("code-jarvis-tool-memory"));
     await waitFor(() => expect(changed).toHaveBeenCalled());
     expect(H.patches).toEqual([{ path, body: { capabilities: { memory: true } } }]);
-    expect(changed.mock.calls[0][0].jarvisTools).toEqual({ memory: true, browser: false });
+    expect(changed.mock.calls[0][0].jarvisTools).toEqual({ memory: true, browser: false, handoff: false });
     expect(info).toHaveBeenCalledWith("The change to Iron Jarvis's tools applies from your next message.");
   });
 
   it("names what is on", () => {
-    expect(jarvisToolsWords({ memory: true, browser: true })).toBe("Iron Jarvis tools: Memory, Browser");
+    expect(jarvisToolsWords({ memory: true, browser: true, handoff: false })).toBe("Iron Jarvis tools: Memory, Browser");
   });
 
   it("a conversation found on disk (no boxes yet) shows no chip", () => {

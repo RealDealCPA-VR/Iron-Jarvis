@@ -153,15 +153,23 @@ class CapabilityTools:
 #: capability -> what it unlocks over MCP. Browser keeps its family PREFIX (so
 #: Ship 3's fourteenth tool needed no edit here and Phase 2's fifteenth will need
 #: none); Memory is an exact-name set, and the module docstring says why.
+#: v1.474.0: Build › Code's ``handoff`` box (``hosted/handoff``) — a coding
+#: tool starts another coding tool on a piece of its work. Only a Code
+#: session's grant can hold it (a Build terminal's boxes never do).
+CAPABILITY_HANDOFF = "handoff"
+from ..hosted.handoff import TOOL_NAMES as _HANDOFF_TOOLS  # noqa: E402 — no cycle: it imports tools.base only
+
 CAPABILITY_TOOLS: dict[str, CapabilityTools] = {
     CAPABILITY_BROWSER: CapabilityTools(prefix="browser_"),
     CAPABILITY_MEMORY: CapabilityTools(names=MEMORY_READ_TOOLS),
+    CAPABILITY_HANDOFF: CapabilityTools(names=_HANDOFF_TOOLS),
 }
 
 #: How each enforced capability is named in a sentence to a harness.
 _CAPABILITY_LABELS: dict[str, str] = {
     CAPABILITY_BROWSER: "Browser",
     CAPABILITY_MEMORY: "Memory",
+    CAPABILITY_HANDOFF: "Hand off",
 }
 
 #: The methods this server answers. Anything else is ``METHOD_NOT_FOUND`` with
@@ -247,7 +255,9 @@ MCP_MEMORY_UNTRUSTED_LINE = (
 MCP_SCOPE_LINE = (
     "Jarvis exposes Browser tools and Memory's read-only tools ("
     + ", ".join(sorted(MEMORY_READ_TOOLS))
-    + ") over MCP in this version; Memory never includes writing to memory. "
+    + ") over MCP in this version, and to a Build › Code session whose Hand off box is "
+    "on, the hand-off tools (" + ", ".join(sorted(_HANDOFF_TOOLS)) + "); Memory never "
+    "includes writing to memory. "
     "Files, Shell and Extensions are recorded on the pane but are not yet "
     "enforced here, so no tools for them are offered."
 )
@@ -349,8 +359,9 @@ def capability_refused_message(tool_name: str, pane_id: str = "") -> str:
                 f"include {label}. Tick it in Build and start the coding tool again."
             )
     return (
-        f"{tool_name} is not served over MCP by Iron Jarvis: only Browser tools "
-        "and Memory's read-only tools are, and no pane Capability unlocks this one."
+        f"{tool_name} is not served over MCP by Iron Jarvis: only Browser tools, "
+        "Memory's read-only tools and Build › Code's hand-off tools are, and no "
+        "Capability unlocks this one."
     )
 
 

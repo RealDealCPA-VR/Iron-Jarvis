@@ -145,11 +145,30 @@ export function replyCopyTexts(items: readonly ConvItem[]): Map<string, string> 
   return out;
 }
 
+/** v1.473.0: the rows that end a reply and so carry its Copy press — the
+ *  same walk as `replyCopyTexts`, without joining any text (that ran over
+ *  every past reply on every streamed frame; the text is now joined only
+ *  when Copy is pressed). */
+export function replyEndKeys(items: readonly ConvItem[]): Set<string> {
+  const out = new Set<string>();
+  let lastKey = "";
+  for (const it of items) {
+    if (it.kind === "user" && !it.carry) {
+      if (lastKey) out.add(lastKey);
+      lastKey = "";
+      continue;
+    }
+    if (it.kind === "text" && it.done && it.text.trim()) lastKey = it.key;
+  }
+  if (lastKey) out.add(lastKey);
+  return out;
+}
+
 /** v1.439.0: a quiet copy icon under a finished reply — shown on hover and
  *  keyboard focus, always on a touch screen. It copies the reply's text as
  *  plain text through the app's own copy path (copyPlain: the desktop
  *  bridge first, then the browser's clipboard) and says "Copied". */
-function ReplyCopy({ text }: { text: string }) {
+function ReplyCopy({ getText }: { getText: () => string }) {
   const [said, setSaid] = useState<"" | "copied" | "failed">("");
   const timer = useRef<number | null>(null);
   useEffect(
@@ -162,7 +181,7 @@ function ReplyCopy({ text }: { text: string }) {
     let outcome: "copied" | "unavailable" = "unavailable";
     try {
       const { copyPlain } = await import("@/components/settings/MaintenanceTools");
-      outcome = await copyPlain(text);
+      outcome = await copyPlain(getText());
     } catch {
       outcome = "unavailable";
     }
@@ -490,7 +509,7 @@ const Item = memo(function Item({
   toolName,
   facts,
   onExpand,
-  copyText = "",
+  copy,
   actions,
 }: {
   item: ConvItem;
@@ -499,8 +518,9 @@ const Item = memo(function Item({
   toolName: string;
   facts?: ReceiptFacts;
   onExpand?: ExpandStep;
-  /** v1.441.0 (review D4): the whole reply this row ends ("" = no Copy here). */
-  copyText?: string;
+  /** v1.441.0 (review D4): the whole reply this row ends (absent = no Copy
+   *  here). v1.473.0: joined only when Copy is pressed. */
+  copy?: (key: string) => string;
   /** v1.441.0: only on a user message the tool can branch or rewind from. */
   actions?: MessageActions;
 }) {
@@ -550,7 +570,7 @@ const Item = memo(function Item({
           <div data-testid="code-text" data-done={item.done ? "true" : "false"} className={HARNESS_REPLY_PROSE}>
             {item.done ? <MemoMarkdown content={item.text} /> : <LiveReplyText content={item.text} />}
           </div>
-          {item.done && copyText ? <ReplyCopy text={copyText} /> : null}
+          {item.done && copy ? <ReplyCopy getText={() => copy(item.key)} /> : null}
         </div>
       );
     case "thinking":
@@ -750,6 +770,7 @@ const Item = memo(function Item({
 
 export const CodeConversation = memo(function CodeConversation({
   items,
+  from = 0,
   folder,
   tool = "",
   onContinueOn,
@@ -769,6 +790,9 @@ export const CodeConversation = memo(function CodeConversation({
   messageActions,
 }: {
   items: readonly ConvItem[];
+  /** v1.473.0: the first row drawn (earlier rows wait behind "Show
+   *  earlier"). Copy and the newest failure are still read off every row. */
+  from?: number;
   folder: string;
   /** The session's coding tool (the Sign in press names it). */
   tool?: string;
@@ -797,7 +821,11 @@ export const CodeConversation = memo(function CodeConversation({
   messageActions?: MessageActions | null;
 }) {
   const facts = useMemo(() => ({ model, account, where: codeReceiptWhere(tool) }), [model, account, tool]);
-  const copies = useMemo(() => replyCopyTexts(items), [items]);
+  const ends = useMemo(() => replyEndKeys(items), [items]);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const copyFor = useCallback((key: string) => replyCopyTexts(itemsRef.current).get(key) ?? "", []);
+  const start = Math.max(0, Math.min(from, items.length));
   let lastError = -1;
   items.forEach((it, i) => {
     if (it.kind === "error") lastError = i;
@@ -806,7 +834,9 @@ export const CodeConversation = memo(function CodeConversation({
   const newest = lastError >= 0 && !items.slice(lastError + 1).some((it) => it.kind === "user" || it.kind === "text");
   return (
     <div data-testid="code-conversation" className="grid gap-3">
-      {items.map((item, i) => (
+      {items.slice(start).map((item, j) => {
+        const i = start + j;
+        return (
         <Item
           key={item.key}
           item={item}
@@ -820,14 +850,15 @@ export const CodeConversation = memo(function CodeConversation({
           toolName={toolLabel(tool)}
           facts={facts}
           onExpand={onExpand}
-          copyText={copies.get(item.key) ?? ""}
+          copy={ends.has(item.key) ? copyFor : undefined}
           actions={
             messageActions && item.kind === "user" && !item.carry && item.at && messageActions.facts.at.has(item.at)
               ? messageActions
               : undefined
           }
         />
-      ))}
+        );
+      })}
     </div>
   );
 });

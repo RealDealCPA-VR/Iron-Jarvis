@@ -177,6 +177,8 @@ import {
   toolLabel,
   type CodeEvent,
   type CodeSession,
+  type CodeSessionView,
+  type CodeHelper,
   type CodingTool,
   type ConvItem,
   type DiskSession,
@@ -208,6 +210,7 @@ import {
   type OlderInfo,
   type QueuedMessage,
 } from "@/lib/buildAppHistory";
+import { REWINDOW_AT, SHOW_EARLIER, hiddenMessages, hiddenWords, windowStart } from "@/lib/codeWindow";
 
 /** The wire's own paths (the daemon's names; never shown). */
 const API = "/build/app";
@@ -237,6 +240,7 @@ import { ModeChip } from "@/components/buildCode/ModeChip";
 import { decodeCarry, type CarryFacts } from "@/lib/buildCodeCarry";
 import { LOOKING_BEAT_MS, noteLooking, stopLooking } from "@/lib/buildWatching";
 import { JarvisToolsChip, ProfileShareOffer } from "@/components/buildCode/JarvisTools";
+import { HelperLines } from "@/components/buildCode/HelperLines";
 // v1.426.0 (Wave 6 lane B, E5): a folder's defaults for new sessions.
 import { FolderDefaultsButton, FolderDefaultsPanel } from "@/components/folders/FolderDefaultsPanel";
 import { toolDefaultsWords, type ToolDefaults } from "@/lib/folderDefaults";
@@ -346,6 +350,7 @@ function SessionPane({
   exportSource,
   onBranched,
   initialDraft = null,
+  onOpenSession,
 }: {
   sessionId: string;
   tools: readonly CodingTool[];
@@ -369,8 +374,15 @@ function SessionPane({
   /** v1.441.0: a branch just made from another session — its message's words
    *  go in this box and the daemon's line says what was done. */
   initialDraft?: { text: string; note: string } | null;
+  /** v1.474.0: open another Code session (a helper, or the one that started
+   *  this helper). */
+  onOpenSession?: (id: string) => void;
 }) {
   const [session, setSession] = useState<CodeSession | null>(null);
+  /** v1.474.0 (Hand off): this session's helpers, and the session a helper
+   *  belongs to. */
+  const [helpers, setHelpers] = useState<CodeHelper[]>([]);
+  const [handedFrom, setHandedFrom] = useState<CodeSessionView["handedFrom"]>(null);
   const [events, setEvents] = useState<CodeEvent[]>([]);
   const [extra, setExtra] = useState<CodeEvent[]>([]);
   const [running, setRunning] = useState(false);
@@ -592,6 +604,8 @@ function SessionPane({
         if (view.commands) setViewCommands(view.commands);
         setKeepsLast(view.keepsLast);
         setPiFolder(view.piFolder);
+        setHelpers(view.helpers);
+        setHandedFrom(view.handedFrom);
         setBranch((prev) => keepSameBranch(prev, decodeBranch(raw)));
         // v1.422.0 (B3, B5): what carries on by itself, and what is offered.
         setCarryFacts(decodeCarry(raw));
@@ -848,6 +862,52 @@ function SessionPane({
     setJump(false);
     pinToBottom(sentinelRef.current);
   }, []);
+
+  // v1.473.0: only the newest rows are drawn (lib/codeWindow); a long
+  // session's earlier rows wait behind "Show earlier". The first row drawn is
+  // decided once a session's rows are there, kept while the reader reads
+  // (rows that stream in are added below it), and cut back to one window when
+  // the drawn part has grown long and the reader is at the bottom.
+  const [drawn, setDrawn] = useState<{ session: string; from: number } | null>(null);
+  const convItemsRef = useRef(conv.items);
+  convItemsRef.current = conv.items;
+  const drawFrom = drawn && drawn.session === sessionId
+    ? Math.min(drawn.from, conv.items.length)
+    : windowStart(conv.items);
+  const drawnRef = useRef(drawn);
+  drawnRef.current = drawn;
+  const rowsSeenRef = useRef(0);
+  useEffect(() => {
+    if (!conv.items.length) return;
+    if (!drawn || drawn.session !== sessionId) setDrawn({ session: sessionId, from: windowStart(conv.items) });
+  }, [conv.items, sessionId, drawn]);
+  useEffect(() => {
+    // Only rows that ARRIVED cut the drawn part back (never a "Show
+    // earlier" press), and only for a reader at the bottom.
+    const grew = conv.items.length > rowsSeenRef.current;
+    rowsSeenRef.current = conv.items.length;
+    const d = drawnRef.current;
+    if (!grew || !d || d.session !== sessionId || !atBottomRef.current) return;
+    if (conv.items.length - d.from > REWINDOW_AT) {
+      setDrawn({ session: sessionId, from: windowStart(conv.items) });
+      nextFrame(() => pinToBottom(sentinelRef.current));
+    }
+  }, [conv.items, sessionId]);
+  const foldedMessages = useMemo(() => hiddenMessages(conv.items, drawFrom), [conv.items, drawFrom]);
+  /** Draw the window before the first row drawn; the reader stays where
+   *  they were (the rows grow above them). */
+  const showEarlier = useCallback(() => {
+    const el = scrollRef.current;
+    const fromBottom = el ? el.scrollHeight - el.scrollTop : 0;
+    setDrawn((d) => ({
+      session: sessionId,
+      from: windowStart(convItemsRef.current, d && d.session === sessionId ? d.from : 0),
+    }));
+    nextFrame(() => {
+      const box = scrollRef.current;
+      if (box) box.scrollTop = Math.max(0, box.scrollHeight - fromBottom);
+    });
+  }, [sessionId]);
 
   /** v1.412.0: a note for the reply that is running (Enter while it works):
    *  through the tool's own way of taking one. No reply running after all
@@ -1689,7 +1749,19 @@ function SessionPane({
             />
             {/* v1.418.0 (C4.6): what is older than this read, said — and one
                 press loads the page before it. */}
-            {older.earlier > 0 ? (
+            {drawFrom > 0 ? (
+              <div data-testid="code-folded" className="mb-3 flex items-center justify-center gap-2 text-[12px] text-zinc-500">
+                <span data-testid="code-folded-count">{hiddenWords(foldedMessages)}</span>
+                <button
+                  type="button"
+                  data-testid="code-show-earlier"
+                  onClick={showEarlier}
+                  className="rounded-lg px-2 py-0.5 text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
+                >
+                  {SHOW_EARLIER}
+                </button>
+              </div>
+            ) : older.earlier > 0 ? (
               <div data-testid="code-earlier" className="mb-3 flex items-center justify-center gap-2 text-[12px] text-zinc-500">
                 <span data-testid="code-earlier-count">{earlierStepsWords(older.earlier)}</span>
                 {older.cursor ? (
@@ -1724,6 +1796,7 @@ function SessionPane({
             ) : (
               <CodeConversation
                 items={conv.items}
+                from={drawFrom}
                 folder={session.folder}
                 tool={session.tool}
                 onContinueOn={continueOn}
@@ -1810,6 +1883,9 @@ function SessionPane({
               {info}
             </p>
           ) : null}
+          {/* v1.474.0 (Hand off): the helpers this session's tool started,
+              or, in a helper, the session that started it. */}
+          <HelperLines helpers={helpers} handedFrom={handedFrom} onOpen={onOpenSession} />
           {/* v1.431.0: the folder's own Pi extensions, skills or settings —
               Pi skips them here (it asks only in its terminal); nothing
               loads without this press, and it is for this session only. */}
@@ -3000,6 +3076,7 @@ export function BuildCodeView({
             onFirstSent={clearFirst}
             exportSource={exportRef}
             onBranched={branched}
+            onOpenSession={open}
             initialDraft={draftFor && draftFor.id === openId ? draftFor : null}
           />
         )}

@@ -17224,6 +17224,76 @@ does not need a bump, stop and bump it.
   times for 8 streamed frames), `tests/test_build_app_live_merge_v1472.py`
   (7 mutations, all red).
 
+- **A long Build › Code session draws its newest rows only** (v1.473.0;
+  second wave of the t3code comparison). `lib/codeWindow.ts`:
+  `windowStart(items, end, size)` = `ROW_WINDOW` (120) rows before `end`,
+  moved back to the start of a message (a `user` row that is not a carry)
+  within `SNAP_ROWS` (40); nothing folded below `MIN_HIDDEN` (30).
+  `BuildCodeView` keeps `drawn {session, from}`: set on a session's first
+  rows; cut back to `windowStart` only when the items GREW, the reader is at
+  the bottom and more than `REWINDOW_AT` (240) rows are drawn (never after a
+  Show earlier press); "Show earlier" (`code-show-earlier`) draws one more
+  window and keeps the scroll position; the daemon's "Load earlier" shows
+  only once `from` is 0. `CodeConversation` takes `from` and draws
+  `items.slice(from)`; the last error and each reply's Copy are still
+  computed over ALL items, and Copy's text is joined only when pressed
+  (`replyEndKeys` marks the rows `replyCopyTexts` keys; `copyFor` reads the
+  items through a ref). This REPLACED the planned separate store for live
+  words: with ~120 rows drawn, a streamed frame costs 13 ms at 600 turns
+  (measured; 0 long tasks), and a hand-off between two stores risks lost or
+  doubled words. Known: browser Find sees drawn rows only. Bench: a stand-in
+  server that answers the Code view's routes with a 250/600-turn history and
+  streams 3,001 pieces — a stream that SENDS NOTHING while it waits is cut
+  by the page's 60 s stall bound, so it sends the turn so far at once and a
+  keep-alive every 10 s, as the daemon does. Pins:
+  `dashboard/__tests__/build-code-window-v1473.test.tsx`, the v1.473.0
+  describe in `build-app-view-v1409` (8 mutations, all red; one HUNG — a
+  mutation that draws every row of a 600-turn session in jsdom runs for hours,
+  so a mutation harness must bound each run).
+- **A Build › Code session's coding tool can hand a piece of work to another
+  coding tool** (v1.474.0, "Hand off"; third wave of the t3code comparison:
+  its orchestrator `delegate_task`, built our way). `hosted/handoff.py`: the
+  `handoff` box (Build › Code ONLY: `jarvis_tools.normalise` = the pane's five
+  + `handoff`; a terminal's reader keeps five) unlocks four MCP tools through
+  `mcpserver/server.CAPABILITY_TOOLS["handoff"]` (an exact-name set):
+  `code_handoff_start` (answers at once with the helper's id),
+  `code_handoff_check` (waits ≤ `CHECK_WAIT_MAX_S` 25 s — every CLI caps one
+  MCP call; Codex's is about a minute), `code_handoff_stop`,
+  `code_handoff_list`; permission rows allow (the box + the CLI's own MCP card
+  are the consent); on no roster (`_OFF_ROSTER_BY_DESIGN`). The caller is
+  `parent_of(ctx)` = `mcp:code:<sid>`; anything else is refused. A HELPER is a
+  real Build › Code session of the chosen tool in the SAME folder
+  (`HostedSessionRecord.handed_from`, nullable, reconciler-added;
+  `store.helpers_of`), titled "Helper: …"; it takes the parent's mode only when
+  `check_mode(..., confirm=False)` accepts it (never Full access); the same
+  tool keeps the parent's account, another tool gets `helper_account` — an
+  account of the SAME account group (`build_accounts.group_of`, `usable_now`,
+  cached reads) or a refusal, never another group; a helper can never hand
+  off again (PATCH refuses the box, the tool refuses); at most `MAX_RUNNING`
+  (3) working, counted under a per-session lock (`_start_lock`; parallel
+  calls); a helper whose first piece never started is deleted. Emergency stop
+  refuses starts and `carry_on.stop_unattended_turns` stops helper turns
+  (`svc.handoff_turns`, memory only). The user's Stop on the parent's reply,
+  archive and delete stop running helpers (`stop_helpers_soon`). What comes
+  back (`summarize`: the turn's own finished text, the paths its finished
+  edits/writes named, steps, error) goes out in ONE `wrap_untrusted` fence,
+  `promptguard.defang`ed first. Views: the parent's carries `helpers`
+  [{id, title, label, state}], a helper's `handed_from` {id, title, label}
+  (dashboard `HelperLines`, `decodeHelpers`, `jarvisToolKeysFor` hides the box
+  in a helper). Cards: `words.JARVIS_TOOL_TITLES` names the four tools in
+  words for Claude Code and Codex alike. LIVE-PROVEN (scratch daemon, real
+  claude 2.1.x haiku, Auto edits): the parent called start, a Claude Code
+  helper wrote the file, one check brought the report back. A scratch daemon
+  must be started with `IJ_DAEMON_PORT=<its port>` or coding tools are handed
+  the 8787 address (`platform.own_mcp_url`). OPEN: each CLI's own MCP call
+  limit was not measured for Pi, OpenCode, Grok, Antigravity; the helper list
+  is read when the parent's view is read (no live push); a helper cut off by
+  a restart reads "done" in the list (check reads the turn's own stop).
+  Pins: `tests/test_code_handoff{,_review,_rules}_v1474.py`,
+  `dashboard/__tests__/code-handoff-v1474.test.tsx` (18 + 5 mutations, all
+  red); moved on purpose: `test_build_app_spine_v1414`, `build-code-spine-v1414`
+  (a sixth box), `test_roster_coverage_v1178`, the tool-word tables.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
@@ -17593,7 +17663,10 @@ suggest-don't-act for anything autonomous, everything reviewable.
 
 - **A script may call many tools at once, hand a value to a file tool, and
   plan a batch; what it read stays where it was read; a saved skill is
-  offered by its words; chat can rename** (v1.473.0; the owner: "build and
+  offered by its words; chat can rename** (v1.475.0, BUILT AS v1.473.0:
+  master released its own v1.473.0 and v1.474.0 meanwhile, so the code
+  comments and the test files of this work keep the lane tag v1473 /
+  "v1.473.0"; the owner: "build and
   fix all the things mentioned … no regressions and dramatic improvements to
   performance", after six gaps and four ideas named against v1.471.1).
   - **`tools.map(tool, items, arg="", **common)`** (`repl/worker.py` `_Tools`,

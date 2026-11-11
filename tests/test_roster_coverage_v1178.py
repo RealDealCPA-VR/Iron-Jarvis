@@ -172,6 +172,10 @@ _OFF_ROSTER_BY_DESIGN = {
     # They act on whatever workbook is open on the user's screen, outside any
     # run's work folder, so no agent roster carries them.
     "excel_live_look", "excel_live_edit",
+    # HAND OFF (v1.474.0): served ONLY over a Build › Code session's own MCP
+    # link while its "Hand off" box is ticked (mcpserver CAPABILITY_TOOLS);
+    # an agent run is never a Code session, so no roster carries them.
+    "code_handoff_start", "code_handoff_check", "code_handoff_stop", "code_handoff_list",
     # Reached through `with_worklist`, not through a roster — asserted in §3.
     "worklist_add", "worklist_next", "worklist_done", "worklist_status",
     # YOUR BROWSER (v1.235.0) — reached from CHAT and, from Ship 4, from an
