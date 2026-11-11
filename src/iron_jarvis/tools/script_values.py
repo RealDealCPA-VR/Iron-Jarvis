@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -330,6 +331,74 @@ def _left_out(typed: Any, name: str) -> bool:
     # reference itself typed there ('_from_script={"content": "rows"}').
     # Neither is content: both only point at the kept value.
     return ARG in typed or typed.strip().strip("`'\"{}<>$()").strip() == name
+
+
+#: The WHOLE of a typed argument that is nothing but a reference written
+#: out as text: ``_from_script={"content": "rows"}``, ``{"_from_script":
+#: {...}}``, with or without quotes or backticks round it. No nested repeat
+#: and one bounded run inside the braces, so linear on any text (pinned in a
+#: child process with a deadline).
+_REFERENCE_TEXT_RX = re.compile(
+    r"""[`'"({\s]*_from_script[`'"\s]*[=:]\s*\{([^{}]{0,160})\}[`'")}\s.;,]*"""
+)
+_REFERENCE_PAIR_RX = re.compile(
+    r"""["']?([A-Za-z_]\w{0,40})["']?\s*:\s*["']([^"']{1,80})["']"""
+)
+
+
+def misplaced_reference(tool: str, args: Any, ctx: Any) -> str:
+    """A sentence refusing a call whose CONTENT argument holds nothing but a
+    reference to a kept value, written out as text; "" for every other call.
+
+    Seen live on the packaged app (v1.473.0): a script kept 640 rows, and
+    the model then called ``write_document(path=..., content='_from_script=
+    {"content": "payment_rows"}')`` with no ``_from_script`` argument. The
+    workbook held that one line of text, the self-check read "clean", and
+    the reply said "640 rows". The reference is a separate ARGUMENT; typed
+    into the content it is just text.
+
+    REFUSED, not guessed at: turning the text into the argument here would
+    run a kept value no approval card had named or pinned. The refusal
+    spells the call out, so the model's next call is the right one.
+
+    Narrow on purpose, so no other write changes: only a tool that can take
+    a kept value, only an argument that can be filled, only when the WHOLE
+    text is the reference, and only while a script of this chat or run has
+    kept something. A file that should really hold such a line can still be
+    written everywhere else. Sync and cheap; never raises."""
+    try:
+        if not isinstance(args, dict) or ARG in args:
+            return ""
+        fillable = FROM_SCRIPT_ARGS.get(tool)
+        if not fillable:
+            return ""
+        for arg in sorted(fillable):
+            typed = args.get(arg)
+            if not isinstance(typed, str) or ARG not in typed:
+                continue
+            found = _REFERENCE_TEXT_RX.fullmatch(typed.strip())
+            if found is None:
+                continue
+            # (A caller with no chat and no run gets a key of its own each
+            # time, so nothing is ever kept under it.)
+            have = SHELF.names(_key_for(ctx)[0])
+            if not have:
+                return ""
+            pair = _REFERENCE_PAIR_RX.search(found.group(1))
+            target = pair.group(1) if pair and pair.group(1) in fillable else arg
+            name = pair.group(2).strip() if pair else ""
+            if name not in have:
+                name = have[0] if len(have) == 1 else (name or "<name>")
+            return (
+                f"NOTHING WAS CHANGED. `{arg}` holds the words of a reference, not "
+                f"the kept value itself. `{ARG}` is a separate argument of the "
+                f"call, beside the others. Make the call again with the arguments "
+                f'{{..., "{ARG}": {{"{target}": "{name}"}}}} and leave `{arg}` out'
+                + (f". Kept now: {', '.join(have)}" if name not in have else "")
+            )
+    except Exception:  # noqa: BLE001 — a check never fails a call
+        return ""
+    return ""
 
 
 def _refs(tool: str, args: dict[str, Any]) -> "tuple[dict[str, str], str]":

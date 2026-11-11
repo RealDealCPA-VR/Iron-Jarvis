@@ -842,6 +842,18 @@ class ToolRegistry:
             # when it built this call's approval card. A value kept anew
             # since then is refused: the approval covers what was shown.
             run_args, args, fill_error = fill_from_script(name, args, ctx, kept_pins)
+        elif isinstance(args, dict):
+            # THE REFERENCE TYPED AS THE CONTENT (v1.473.0, seen live on the
+            # packaged app): `content='_from_script={"content": "rows"}'`
+            # with no `_from_script` argument wrote that line of text into a
+            # workbook under a reply that said "640 rows". Refused through
+            # the same failed-result path as any argument error, with the
+            # right call spelled out. Only for a tool that can take a kept
+            # value, and only while this chat or run has one kept.
+            from .script_values import FROM_SCRIPT_ARGS as _fillable, misplaced_reference
+
+            if name in _fillable:
+                fill_error = misplaced_reference(name, args, ctx)
 
         # A caller that already asked a human and was refused passes the answer
         # in (v1.155.0). It goes through the SAME record-and-publish path as any

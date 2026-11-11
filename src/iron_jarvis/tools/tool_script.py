@@ -264,6 +264,12 @@ def _cpu_s() -> float:
     return time.process_time()
 
 
+def _wall_s() -> float:
+    """The clock a call's length is read from. A seam: a test says how long
+    a call took, so "quick" never depends on how loaded the PC is."""
+    return time.perf_counter()
+
+
 def _linked_chat(turn_id: str) -> str:
     """The saved chat a turn was linked to ("" when not yet, or unknown)."""
     if not turn_id:
@@ -659,9 +665,9 @@ class ToolScriptTool(Tool):
             ]
             while side_by_side and items[side_by_side[0]]["tool"] not in waits:
                 at = side_by_side.pop(0)
-                began, worked = time.perf_counter(), _cpu_s()
+                began, worked = _wall_s(), _cpu_s()
                 results[at] = await safely(items[at]["tool"], items[at]["args"])
-                took = time.perf_counter() - began
+                took = _wall_s() - began
                 if took >= MAP_QUICK_S and _cpu_s() - worked < took * MAP_WAIT_SHARE:
                     waits.add(items[at]["tool"])
             if len(side_by_side) > 1:
@@ -903,10 +909,15 @@ class ToolScriptTool(Tool):
         if ok and kept:
             lines = "\n".join(f"- {name}: {what}" for name, what in list(kept.items())[:_MAX_LISTED])
             if file_tools:
+                first = next(iter(kept))
                 how = (
                     "To put one in a file WITHOUT retyping it, call the file tool "
                     f"yourself and name it: {file_tools[0]}(..., "
-                    '_from_script={"<argument>": "<name>"}).'
+                    '_from_script={"<argument>": "<name>"}). `_from_script` is a '
+                    "SEPARATE argument of that call (an object), never text inside "
+                    "the argument it fills: for a new file the arguments are "
+                    f'{{"path": "<file name>", "_from_script": {{"content": "{first}"}}}} '
+                    "and no `content`."
                 )
             else:
                 how = NO_FILE_TOOL_LINE

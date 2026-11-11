@@ -1251,3 +1251,148 @@ def test_reading_a_csv_says_its_cells_are_separated_by_commas(world):
     (world.ws / "n.txt").write_text("a\tb\nc\td\n", encoding="utf-8")
     r = _invoke(world, "read_document", {"path": "n.txt"}, allowed=("read_document",))
     assert r.ok and "separated by commas" not in r.output
+
+
+# --------------------------------------------------------------------------- #
+# The reference typed AS the content is refused (found live on the packaged
+# app: content='_from_script={"content": "payment_rows"}' wrote that line of
+# text into a workbook under a reply that said "640 rows")
+# --------------------------------------------------------------------------- #
+
+MISPLACED = [
+    '_from_script={"content": "payment_rows"}',
+    '{"_from_script": {"content": "payment_rows"}}',
+    "`_from_script={'content': 'payment_rows'}`",
+    '_from_script: {"content": "payment_rows"}',
+    '  _from_script = {"content": "payment_rows"}  \n',
+]
+
+
+def _keep_rows(world):
+    from tests.test_script_power_v1473 import WRITERS
+
+    r = _run(world, "tools.keep('payment_rows', [['Date', 'Amount'], ['2026-01-01', '260.39']])\nprint('ok')\n",
+             allowed=WRITERS)
+    assert r.ok, r.error
+    return WRITERS
+
+
+@pytest.mark.parametrize("typed", MISPLACED)
+def test_a_reference_typed_as_the_content_is_refused_and_nothing_is_written(world, typed):
+    writers = _keep_rows(world)
+    w = _invoke(world, "write_document", {"path": "payments.xlsx", "content": typed}, allowed=writers)
+    assert not w.ok
+    said = w.error or w.output
+    assert "NOTHING WAS CHANGED" in said, said
+    # the call it should have been, spelled out with the real name
+    assert '"_from_script": {"content": "payment_rows"}' in said and "leave `content` out" in said, said
+    assert not (world.ws / "payments.xlsx").exists()
+
+
+def test_the_call_it_names_then_writes_the_kept_rows(world):
+    import openpyxl
+
+    writers = _keep_rows(world)
+    w = _invoke(world, "write_document",
+                {"path": "payments.xlsx", "_from_script": {"content": "payment_rows"}}, allowed=writers)
+    assert w.ok, w.error
+    ws = openpyxl.load_workbook(world.ws / "payments.xlsx").active
+    assert [c.value for c in ws[1]] == ["Date", "Amount"] and ws["B2"].value == 260.39
+
+
+def test_a_text_file_is_guarded_the_same_way(world):
+    writers = _keep_rows(world)
+    w = _invoke(world, "write_file",
+                {"path": "rows.txt", "content": '_from_script={"content": "payment_rows"}'}, allowed=writers)
+    assert not w.ok and "NOTHING WAS CHANGED" in (w.error or w.output)
+    assert not (world.ws / "rows.txt").exists()
+
+
+def test_a_wrong_name_is_answered_with_what_is_kept(world):
+    writers = _keep_rows(world)
+    # one value kept: the answer names it
+    w = _invoke(world, "write_document",
+                {"path": "p.xlsx", "content": '_from_script={"content": "rows"}'}, allowed=writers)
+    assert not w.ok and '{"content": "payment_rows"}' in (w.error or w.output)
+    # two kept, a name that is neither: the answer lists them
+    r = _run(world, "tools.keep('totals', [['a', 1]])\nprint('ok')\n", allowed=writers)
+    assert r.ok, r.error
+    w = _invoke(world, "write_document",
+                {"path": "p.xlsx", "content": '_from_script={"content": "rows"}'}, allowed=writers)
+    said = w.error or w.output
+    assert not w.ok and "Kept now:" in said and "payment_rows" in said and "totals" in said, said
+    # an argument name the tool cannot fill is answered with the one it can
+    w = _invoke(world, "write_document",
+                {"path": "p.xlsx", "content": '_from_script={"path": "totals"}'}, allowed=writers)
+    assert not w.ok and '"_from_script": {"content": "totals"}' in (w.error or w.output)
+    assert not (world.ws / "p.xlsx").exists()
+
+
+def test_ordinary_text_is_written_as_typed(world):
+    from tests.test_script_power_v1473 import WRITERS
+
+    line = '_from_script={"content": "payment_rows"}'
+    # No script of this chat kept anything: the line is the user's text.
+    w = _invoke(world, "write_file", {"path": "note.txt", "content": line}, allowed=WRITERS)
+    assert w.ok, w.error
+    assert (world.ws / "note.txt").read_text(encoding="utf-8").strip() == line
+
+    writers = _keep_rows(world)
+    # A sentence that MENTIONS the reference is content, kept value or not.
+    for name, text in (
+        ("how.txt", 'Pass _from_script={"content": "payment_rows"} as its own argument.'),
+        ("two.txt", line + "\nand a second line"),
+        ("plain.txt", "payment_rows"),
+    ):
+        w = _invoke(world, "write_file", {"path": name, "content": text}, allowed=writers)
+        assert w.ok, (name, w.error)
+        assert (world.ws / name).read_text(encoding="utf-8").strip() == text
+
+
+def test_the_check_reads_only_calls_it_is_for(world):
+    writers = _keep_rows(world)
+    ctx = world.ctx
+    line = '_from_script={"content": "payment_rows"}'
+    assert SV.misplaced_reference("write_document", {"path": "a.xlsx", "content": line}, ctx)
+    # a tool that takes no kept value, an argument that cannot be filled,
+    # a call that already carries the reference, typed rows: nothing to say
+    assert SV.misplaced_reference("read_file", {"path": line}, ctx) == ""
+    assert SV.misplaced_reference("write_document", {"path": line, "content": "x"}, ctx) == ""
+    assert SV.misplaced_reference(
+        "write_document", {"content": line, "_from_script": {"content": "payment_rows"}}, ctx) == ""
+    assert SV.misplaced_reference("write_document", {"content": [["a", 1]]}, ctx) == ""
+    assert SV.misplaced_reference("write_document", None, ctx) == ""
+    assert writers
+
+
+def test_the_hint_a_script_leaves_says_the_reference_is_its_own_argument(world):
+    from iron_jarvis.daemon.chat_turn import KEPT_FILE_NOTE
+    from tests.test_script_power_v1473 import WRITERS
+
+    r = _run(world, "tools.keep('payment_rows', [['a', 1]])\nprint('ok')\n", allowed=WRITERS)
+    assert r.ok, r.error
+    assert "SEPARATE argument" in r.output, r.output
+    assert '{"path": "<file name>", "_from_script": {"content": "payment_rows"}}' in r.output
+    assert "SEPARATE argument" in KEPT_FILE_NOTE and "leave `content` out" in KEPT_FILE_NOTE
+
+
+def test_the_reference_pattern_stays_linear_on_a_pathological_text():
+    import subprocess
+    import sys
+
+    code = (
+        "import time\n"
+        "from iron_jarvis.tools import script_values as SV\n"
+        "class C: pass\n"
+        "SV._key_for = lambda ctx: ('k', False)\n"
+        "SV.SHELF.put('k', 'rows', '[[1]]')\n"
+        "texts = ['(' * 2_000_000 + '_from_script', '_from_script' + '{' * 2_000_000,\n"
+        "         '_from_script={' + 'a' * 2_000_000, ' ' * 2_000_000 + '_from_script=',\n"
+        "         '_from_script={\"content\": \"rows\"}' + '}' * 2_000_000 + 'x']\n"
+        "t = time.perf_counter()\n"
+        "for x in texts:\n"
+        "    assert SV.misplaced_reference('write_document', {'content': x}, C()) == ''\n"
+        "print('ok', round(time.perf_counter() - t, 2))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0 and out.stdout.startswith("ok"), out.stdout + out.stderr

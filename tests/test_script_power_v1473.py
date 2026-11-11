@@ -57,6 +57,10 @@ class _Echo(Tool):
         #: How many calls were running when each call began (itself included).
         self.live_at_start: list[int] = []
         self.fail: set[str] = set()
+        #: A clock this tool moves (``_Wall``): each call adds its own delay
+        #: when it ends, or ``quick_s`` when it has none.
+        self.wall: "_Wall | None" = None
+        self.quick_s = 0.0
 
     async def execute(self, args, ctx):
         q = str(args.get("q"))
@@ -68,11 +72,35 @@ class _Echo(Tool):
             delay = self.delay_for.get(q, self.delay)
             if delay:
                 await asyncio.sleep(delay)
+            if self.wall is not None:
+                self.wall.now += delay or self.quick_s
             if q in self.fail:
                 return ToolResult(ok=False, error=f"cannot read {q}")
             return ToolResult(ok=True, output=f"read:{q}", data={"q": q})
         finally:
             self.live -= 1
+
+
+class _Wall:
+    """The clock a call's length is read from, moved only by the stand-in
+    tool: a call takes exactly what it SAYS it took, however busy the PC
+    is. (Read off the real clock, a quick call took 50 ms on a loaded PC
+    once, and "quick calls run in order" failed with nothing wrong.)"""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _said_times(world, monkeypatch, quick_s: float = 0.01) -> None:
+    """Calls of the stand-in tool take what they say: their own delay, or
+    *quick_s* (well under ``MAP_QUICK_S``) when they have none."""
+    assert quick_s < TS.MAP_QUICK_S
+    wall = _Wall()
+    world.echo.wall, world.echo.quick_s = wall, quick_s
+    monkeypatch.setattr(TS, "_wall_s", wall)
 
 
 class _Slow(_Echo):
@@ -196,6 +224,7 @@ def test_quick_calls_run_in_order_never_side_by_side(world, monkeypatch):
     """Measured: four quick reads at once were slower than four in a row."""
     monkeypatch.setattr(TS, "MAP_TOGETHER", TS.MAP_TOGETHER | {"echo_read"})
     monkeypatch.setattr(TS, "_cpu_s", lambda: 0.0)
+    _said_times(world, monkeypatch)  # each call says it took 0.01 s
     r = _run(world, (
         "rs = tools.map('echo_read', [{'q': str(i)} for i in range(40)])\n"
         "print(len(rs))"
@@ -224,6 +253,7 @@ def test_calls_that_compute_are_never_run_side_by_side(world, monkeypatch):
 def test_one_waiting_call_is_enough_and_the_rest_of_the_script_keeps_it(world, monkeypatch):
     monkeypatch.setattr(TS, "MAP_TOGETHER", TS.MAP_TOGETHER | {"echo_read"})
     monkeypatch.setattr(TS, "_cpu_s", lambda: 0.0)
+    _said_times(world, monkeypatch)
     world.echo.delay = 0.12
     world.echo.delay_for = {"0": 0.0, "1": 0.0}  # two quick ones first
     r = _run(world, (
