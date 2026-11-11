@@ -17524,3 +17524,139 @@ suggest-don't-act for anything autonomous, everything reviewable.
   State at this release: Linux 28 failed of ~28,700, Mac ~50 with one shard
   hanging; no Linux or Mac download is published and release.yml builds
   Windows only.
+
+- **A script may call many tools at once, hand a value to a file tool, and
+  plan a batch; what it read stays where it was read; a saved skill is
+  offered by its words; chat can rename** (v1.473.0; the owner: "build and
+  fix all the things mentioned … no regressions and dramatic improvements to
+  performance", after six gaps and four ideas named against v1.471.1).
+  - **`tools.map(tool, items, arg="", **common)`** (`repl/worker.py` `_Tools`,
+    `repl/session.py` `_answer_batch`, `tools/tool_script.py` `on_batch`).
+    One pipe message per `MAP_CHUNK` (32) calls: `{"call": {"n", "batch":
+    [...]}}`; every item still goes through `registry.invoke` (own gate, own
+    ledger row); a failed or refused item is a failed RESULT (`.ok`,
+    `.error`, `.args`), never an exception; past `MAX_TOOL_CALLS` the rest
+    answer the limit sentence.
+    - SIDE BY SIDE ONLY WHEN A CALL WAITS (measured, see `on_batch`): 24
+      reads waiting 0.2 s each 5.17 s → 1.53 s; four QUICK reads together
+      were slower than in a row (ledger rows queue: 200 files 0.47 s vs
+      0.38 s) and twelve cold workbooks / PDFs were 0.9x (parsing is one
+      core's work). So calls of a `MAP_TOGETHER` tool run in order until one
+      takes `MAP_QUICK_S` (0.05) or longer AND this process spent less than
+      `MAP_WAIT_SHARE` of it on its own processor (`_cpu_s`, the test seam);
+      from then that tool runs `MAP_PARALLEL` (4) at a time for the rest of
+      the script. Real parallel document reads need reader PROCESSES: not
+      built.
+  - **WHAT A SCRIPT READ STAYS WHERE IT WAS READ.** `ReplSession.
+    script_origins` (reset when a child is spawned; read through
+    `ReplRegistry.peek`): `"local"` (a tool read, or the child's own file
+    read: the audit hook sets `worker._LOCAL_READ` for a read or listing
+    inside the working folder and every later pipe message carries
+    `"local": 1`), `"pack:<server>"`, `"outside:<name>"`. The public web
+    readers (`_WEB_READERS`) are origin "web" and never noted.
+    `ToolScriptTool._carry_refusal`: a tool that reaches outside
+    (`egress.INTERNET_TOOLS` / `reaches_outside`) is refused when the worker
+    holds private data from any origin but that tool's own. Across scripts
+    of one worker. A failed call notes nothing.
+  - **`tools.keep(name, value)` + `_from_script`** (`tools/script_values.py`:
+    `SHELF`, keyed by `worker_key(ctx)[0]`, bounded, 6 h; `adopt_turn_worker`
+    rekeys it with the worker). A DIRECT call names a kept value for a
+    CONTENT argument only (`FROM_SCRIPT_ARGS`; never a path).
+    `registry.invoke` fills it after `_store_as`: TWO argument sets:
+    `run_args` (value in place: shape check, `capture_undo`, `execute`) and
+    `args` (reference + sha + masked summary: the permission decision, the
+    grant hash and EVERY ledger row). `registry.specs()` shows the argument
+    (and drops the filled arguments from the advertised `required`) only
+    when `tool_script` is among the listed tools (`_spec_for_scripts`;
+    `add_script_tool` for a caller that arms it part way). `_left_out`: an
+    empty typed value, the kept NAME typed there, or the reference written
+    there all count as left out (the last two seen live); real content typed
+    beside a reference is refused. A caller with no chat and no turn
+    (`worker_key` once) is told it cannot keep. Cards: `chat_turn.card_args`
+    (both `routes/chat.py` sites) shows `preview_args`; `can_always` is
+    false for a call carrying `_from_script`.
+  - **`tools.plan(tool, **args)` + `apply_changes`** (`tools/apply_changes.
+    py`; ask tier, REVERSIBLE, `STRICT_ASK_TOOLS`, `_FILE_CHANGING_TOOLS`).
+    The plan is kept as `changes` when the script ENDS WELL
+    (`_Tools._flush_plan`; refused at hand-over by `plan_problem` and when
+    `apply_changes` is not one of the turn's tools). `BATCH_TOOLS` =
+    reversible file tools only. `execute`: every change pre-checked
+    (`_step_problem`: deny, quarantine, reversibility, the step's own
+    `spend_check`) → a refusal starts "NOTHING WAS CHANGED."; then each
+    change through `registry.invoke` with `session_allow` for exactly the
+    tools listed; stops after `STOP_AFTER_FAILURES` (5) in a row and says
+    what was and was not done. Card: `{changes: [one line each], total}`
+    (`shown_changes`, never the arguments), drawn by `lib/approvalPreview`
+    `BATCH_TOOL` (kind "batch", unit change/changes) from ONE fixture
+    (`dashboard/__tests__/fixtures/script-cards-v1473.json`,
+    `IJ_REGEN_SCRIPT_CARDS=1`). STREAM LANE ONLY: ask-armed when
+    `tool_script` and a batch tool are armed. Not for agent runs (their file
+    tools already run without a card).
+  - **A rename request offers `rename_file`** (`tools/file_requests.
+    wants_file_rename`, armed in its own place in `_resolve_armed_tools`
+    like the calculator; `select_auto_tools` unchanged, pinned). Measured on
+    v1.472.1 with a real model: the request ran out of steps on shell
+    commands and renamed nothing.
+  - **Saved scripts** (`skills/saved_scripts.py`): `skill_create(script=)` /
+    `skill_update(script=)` write `<home>/skills/<slug>/scripts/main.py`
+    (checked with `ast.parse` first; atomic; links refused);
+    `tool_script(saved="<skill>", params={...})` runs it through the SAME
+    gate (no more power than a fresh script).
+  - **`skill_update`** (`skills/tools.py`; ask, `LOW_TRUST_DENY`): the
+    user's OWN skills only; description / instructions / append / script;
+    the version before in `<skill>/.history/<stamp>-SKILL.md`
+    (`SKILL_HISTORY_KEEP` 20). Ask-armed in the stream lane by
+    `skills/trigger.wants_skill_edit(text, own names)`; brief
+    `SKILL_EDIT_BLOCK`.
+  - **SKILLS OFFERED IN PLAIN CHAT** (`skills/offer.py`): `fitting_skills`
+    → `_resolve_armed_tools` arms `skill_load` in its own place (Auto tools
+    on, no "/" skill, under the ceiling, not denied) and sets
+    `ArmedSelection.skills`; both lanes add `skills_offer_block` at the
+    Tools seam only beside `skill_load` (lock-step). THREE KINDS: own
+    (`is_own`: under `<home>/skills`, by text, no disk) fits on one telling
+    word; other (another program's folder, or bundled) needs its NAME (two
+    name words, or one plus a description word, or one that at most `_RARE`
+    skills use); vendor (`is_vendor`: a licence file, a `plugins` or
+    `.system` folder, or `_VENDOR_NAMES`; one look per folder, cached) is
+    never offered. `_stem` takes one plural/verb ending off (never the
+    first-five-letters cut: "state" must not find "statement"). MEASURED on
+    the owner's PC (43 skills, none own): 4 of 45 everyday messages offered
+    (the first cut: 11 of 40), 11 of 16 fitting messages found, 1.6 ms a
+    message. A new vendor skill with no licence marker goes on
+    `_VENDOR_NAMES`.
+  - **THE SCRIPT TOOL BY BEHAVIOUR**: `chat_turn.offer_script_tool` (both
+    lanes at the end of a tool round, MIRROR NOTE; plain chat only) adds
+    `tool_script` after `SCRIPT_OFFER_AFTER` (4) successful calls of one
+    script-callable tool, in place (armed, granted, specs rebuilt, the
+    round's last tool message gets `SCRIPT_OFFER_NOTE`); never with Auto
+    tools off, over a deny, past a weak model's budget or a surface's
+    ceiling, or twice. Agent runs: `AgentRuntime` arms it at the start when
+    the task matches `wants_tool_script` and `_offer_script_tool` adds it
+    mid-run (`_script_armable`; never a Build helper or a read-only
+    reviewer).
+  - **LIVE** (scratch daemon on 8797, Claude Haiku through claude-cli,
+    made-up statements, ONE run each; v1.472.1 from a detached copy of
+    master run with `PYTHONPATH`): add up 16 statements 34.2 s / 5 shell
+    cards → 17.5 s / none; 640 rows into a workbook 141.1 s / 22,646 output
+    tokens → 39.0 s / 2,346; rename 16 files FAILED (out of rounds) →
+    11.7 s, one card; a skill made in chat was loaded by itself; a skill
+    changed from chat kept its version before.
+  - **TESTING TRAPS FOUND:** an inline Bash heredoc turns `\\n` into a
+    newline before Python reads it (three patches silently did not apply):
+    write a patch script with the Write tool. `time.process_time()` under a
+    loaded runner is not a test's fact: patch `tool_script._cpu_s`.
+  - **OPEN:** the owner's own model server (GLM) was NOT tried (its gateway
+    needs a key); one cloud model, single runs; local document reads are
+    not parallel (reader processes not built); the skill match is by words
+    (misses "deduct a truck" for a skill that never says "deduct"); another
+    program's skill text goes to whichever model answers when loaded; no
+    script tool in coding sessions; `apply_changes` is chat-page only; the
+    model still reaches for `shell` to list a folder when `list_files` was
+    not offered (older); not driven in the packaged app.
+  - **Pins:** `tests/test_script_power_v1473.py` (tool level),
+    `tests/test_script_power_lanes_v1473.py` (real stream / POST lanes and
+    agent runs, scripted model), `tests/test_script_power_matchers_v1473.py`
+    (both-ways tables, linear pins), `dashboard/__tests__/script-cards-v1473.
+    test.tsx` (42 mutations, all red). Moved on purpose:
+    `test_skill_from_chat_v1470` (the brief gained `SKILL_FINDABLE_LINE`),
+    the roster / permission / tool-word tables and both word fixtures.

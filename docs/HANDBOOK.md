@@ -2042,6 +2042,131 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Skills that get used, one approval for many changes, faster scripts (v1.473.0)
+
+### A skill you saved is used without typing "/"
+
+A skill used to reach a chat only when you picked it with "/". A skill nobody
+remembered to pick did nothing.
+
+Now, when your message fits a skill, Jarvis is shown that skill's name and its
+one-line description, and can read the skill before it answers. You see it as
+a step in the reply ("Loaded a skill"). Nothing is chosen for the model: it is
+the short list a person would glance at.
+
+Which skills are offered:
+
+- **Skills you made in Iron Jarvis** (on the Skills page, in chat, by
+  recording a task) are offered when one telling word of your message is in
+  the skill's name or description.
+- **Skills you keep in another program's folder** (Claude Code, Codex) are
+  offered only when your message uses the skill's name.
+- **Skills that came with another program** (its own PDF, Word or browser
+  skills) are never offered this way. They are written for that program's
+  tools, and Iron Jarvis has its own tools for the same work. You can still
+  pick one with "/".
+
+A message that fits no skill changes nothing. With **Auto tools** off, or with
+"load a skill" set to *Never run*, no skill is offered.
+
+It matches by words, so it can miss. "Can my client deduct a new truck?" does
+not find a skill called "tax advisement" unless the skill's description says
+"deduct". When you make a skill in chat, Jarvis now writes the description
+with the kinds of request it is for.
+
+Measured on the owner's PC (43 skills from other programs): of 45 everyday
+messages, 4 were offered a skill; the first version of this rule offered one
+on 11 of 40, most of them wrong. Of 16 messages written to fit a skill, 11
+were offered the right one.
+
+### Change a skill from chat
+
+"Update my month-end skill to also confirm payroll is paid" now shows a card
+with the change. After you allow it, the skill is changed and the version
+before is kept in the skill's own folder (the last 20). This works for your
+own skills only, on the chat page.
+
+### One approval for many changes
+
+Renaming forty statements used to be forty steps, or one long command with no
+Undo. Now Jarvis can plan the changes and ask once:
+
+- The card lists **every** change, one line each ("Rename statement_01.csv to
+  2026-01-statement.csv"). One **Allow** covers exactly that list.
+- Each change is still its own entry in Activity with its own **Undo**.
+- If any change in the list is not allowed (a protected file, a tool you set
+  to *Never run*), **nothing** is changed and the answer says why.
+- A batch can hold file changes that can be undone: rename or move, write,
+  edit, Word, PDF and Excel edits, redaction. It cannot send anything, delete
+  for good, or run a command.
+
+Chat now also offers the rename tool when you ask to rename or move files.
+Before, chat had only the command line for that.
+
+### Results go to the file without being typed again
+
+When a script has worked out the rows for a workbook, the model used to print
+them and type every one again into the file. That was slow, and it was the one
+step where a figure could change on its way to the file.
+
+Now the script keeps the rows, and the model's file call just names them.
+The card shows what they are ("641 rows, up to 4 columns; first row: File
+Name, Date, Payee, Amount"). What is written is exactly what the script
+computed. Such a card is never offered as "Always": the same name can hold
+different data next time.
+
+### Scripts in more places, and offered when they would help
+
+- **Offered by what is happening, not only by your wording.** After four reads
+  of the same kind in one reply, the script tool joins the reply so the rest
+  can be one step.
+- **Agent runs have it too**: schedules, goals, workflow steps, missions and
+  tasks handed over from chat. Coding sessions do not need it (they have a
+  command line).
+- **Several calls in one step.** A script can now make many calls at once.
+  They run side by side only when the calls wait on something outside (web
+  pages, scans); reading workbooks or PDFs on this PC runs one after another,
+  because side by side was measured no faster.
+- **One bad file does not stop the rest.** Each call reports its own result.
+- **Save a script with a skill.** A script that worked can be saved with the
+  skill, and run again by the skill's name.
+
+### What a script read stays on this PC
+
+Once a script has read your files or data, that script cannot call a tool that
+reaches outside this PC (a web search, a web page). Before, one script could
+read a client file and look something up on the web in the same loop, with no
+card between the two. The model can still make such a call directly, one at a
+time, where you see it and where the usual cards apply.
+
+### Measured
+
+With a real model (Claude Haiku on the owner's Claude plan), on a scratch copy
+of the app with made-up statements, one run each:
+
+| Task | v1.472.1 | v1.473.0 |
+|---|---|---|
+| Add up 16 statements | 34.2 s, 5 approval cards | 17.5 s, no cards |
+| 640 payments into a workbook | 141.1 s, 22,646 tokens written by the model | 39.0 s, 2,346 tokens |
+| Rename 16 files | did not finish: nothing renamed | 11.7 s, one card listing all 16 |
+| Use a skill without "/" | not possible | loaded by itself |
+| Change a skill from chat | not possible | one card, version before kept |
+
+Without a model: 24 reads that each wait 0.2 s took 5.2 s one at a time and
+1.5 s in one step. Reading 12 workbooks or 12 PDFs took the same time either
+way.
+
+### What this does not do
+
+- **Your own model server was not tried.** Its gateway needs a key the
+  developer session did not have. The numbers above are one cloud model.
+- **Reading many files on this PC is not faster side by side.** The saving
+  there is in steps and in what the model has to write, not in the reading.
+- **The batch card is on the chat page only.** The phone, and agent runs,
+  make changes one at a time as before.
+- **A skill from another program's folder is sent to whichever model answers
+  the chat** when Jarvis loads it, the same as when you pick it with "/".
+
 ## First steps toward Linux and Mac (v1.472.1)
 
 Iron Jarvis is still a Windows app, and nothing changes on Windows except two
