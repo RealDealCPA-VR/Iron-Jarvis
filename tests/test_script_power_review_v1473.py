@@ -1229,3 +1229,25 @@ def test_a_workbook_of_unsplit_lines_is_flagged_when_it_is_written(world):
     ):
         w = _invoke(world, "write_document", {"path": name, "content": rows}, allowed=WRITERS)
         assert w.ok and "xlsx-unsplit-rows" not in w.output, (name, w.output)
+
+
+def test_reading_a_csv_says_its_cells_are_separated_by_commas(world):
+    """The reader shows a CSV's cells with tabs between them. Twice in live
+    runs the model took the file for tab-separated and split on tabs."""
+    from iron_jarvis.documents.tools import CSV_SHOWN_NOTE
+
+    (world.ws / "s.csv").write_text("Date,Payee,Amount\n2026-01-01,Vendor 42,260.39\n", encoding="utf-8")
+    r = _invoke(world, "read_document", {"path": "s.csv"}, allowed=("read_document",))
+    assert r.ok, r.error
+    assert r.output.startswith("[" + CSV_SHOWN_NOTE + "]"), r.output[:160]
+    assert "separated by commas" in r.output and "Date\tPayee\tAmount" in r.output
+    assert r.data.get("note") == CSV_SHOWN_NOTE
+
+    # One column: no tab is shown, so there is nothing to say.
+    (world.ws / "one.csv").write_text("Name\nSmith\nJones\n", encoding="utf-8")
+    r = _invoke(world, "read_document", {"path": "one.csv"}, allowed=("read_document",))
+    assert r.ok and "separated by commas" not in r.output and "note" not in r.data
+    # Another kind of file with tabs in it: its tabs are its own.
+    (world.ws / "n.txt").write_text("a\tb\nc\td\n", encoding="utf-8")
+    r = _invoke(world, "read_document", {"path": "n.txt"}, allowed=("read_document",))
+    assert r.ok and "separated by commas" not in r.output

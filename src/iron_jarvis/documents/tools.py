@@ -239,6 +239,13 @@ class ListFolderTool(Tool):
         )
 
 
+#: Said above a CSV file's text (v1.473.0): the cells are SHOWN with tabs.
+CSV_SHOWN_NOTE = (
+    "a CSV file: its cells are shown here with tabs between them; in the file "
+    "itself they are separated by commas"
+)
+
+
 class ReadDocumentTool(Tool):
     name = "read_document"
     reversibility = Reversibility.READONLY  # extraction has no side effect
@@ -298,6 +305,12 @@ class ReadDocumentTool(Tool):
             path, text, self._router_resolver, ctx,
             page_range=args.get("page_range"),
         )
+        if not note and path.suffix.lower() == ".csv" and chr(9) in text:
+            # v1.473.0: the reader shows a CSV's cells with TABS between them.
+            # Seen live twice: the model took the file for tab-separated,
+            # split each line on tabs in its script, and wrote a workbook
+            # with every line in one column.
+            note = CSV_SHOWN_NOTE
         out, truncated = _truncate(text)
         if note:
             out = f"[{note}]\n{out}" if out.strip() else f"[{note}]"
