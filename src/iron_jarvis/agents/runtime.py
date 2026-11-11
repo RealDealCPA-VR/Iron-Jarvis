@@ -3537,6 +3537,10 @@ class AgentRuntime:
                 and spend is None
                 # v1.350.0: never on a plan — the next plan is a different one.
                 and tc.name != PLAN_APPROVAL_TOOL
+                # v1.473.0 review: nor for a call fed by a script's kept
+                # value — the next value under that name is different data
+                # (MIRROR NOTE: the stream lane's card says the same).
+                and "_from_script" not in (tc.arguments or {})
             ),
         }
         # CAN IT BE UNDONE (v1.352.0, G25): the tool's own undo contract, so

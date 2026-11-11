@@ -2781,7 +2781,18 @@ def spend_not_asked_invoke_kwargs(check: Any) -> dict[str, Any]:
     approval; …`` (the registry formats ``f"{label}: {reason}"``)."""
     if check is None or not bool(getattr(check, "ask", False)):
         return {}
-    words = str(getattr(check, "words", "") or "").strip() or "this call would spend money"
+    words = str(getattr(check, "words", "") or "").strip()
+    if not words and getattr(check, "once_only", False):
+        # v1.473.0 review: a call that is asked about every time and carries
+        # no sentence of its own (a batch of file changes) is not a spend.
+        try:
+            from ..core import auto_approve as _aa
+
+            why = _aa.ONCE_REASON_WHY.get(str(getattr(check, "reason", "") or ""), "")
+        except Exception:  # noqa: BLE001 — wording only
+            why = ""
+        words = "this call needs an approval of its own every time" + (f" ({why})" if why else "")
+    words = words or "this call would spend money"
     # v1.375.0: a once-only verdict (a commit / push on a Build session's own
     # branch, harness/git_guard) is not about money — no "free" way round it.
     tail = ONCE_NOT_ASKED_TAIL if getattr(check, "once_only", False) else SPEND_NOT_ASKED_TAIL
@@ -3159,7 +3170,8 @@ def card_args(tool: Any, args: Any, ctx: Any) -> Any:
     try:
         safe = tool.redact_args(args) if tool is not None else args
     except Exception:  # noqa: BLE001 — a display must never fail the turn
-        safe = args
+        # ...and must never show what the tool meant to hide: names only.
+        safe = {str(k): "(not shown)" for k in args} if isinstance(args, dict) else {}
     try:
         from ..tools import script_values as _sv
 

@@ -479,6 +479,9 @@ _COPY_EVENTS: dict[str, tuple[int, int]] = {
 _READ_EVENTS: dict[str, tuple[int, ...]] = {
     "os.listdir": (0,),
     "os.scandir": (0,),
+    # v1.473.0 review: changing into a folder reaches it (a network folder
+    # is connected to), and makes every later relative path mean that place.
+    "os.chdir": (0,),
 }
 
 #: Spawning a process escapes every rule above, because the child inherits the
@@ -509,7 +512,9 @@ _OUTSIDE_EVENTS = frozenset({
     # a pipe, a junction, another process) with no `open` event at all.
     "_winapi.CreateFile", "_winapi.CreateNamedPipe", "_winapi.CreateJunction",
     "_winapi.OpenProcess", "_winapi.TerminateProcess",
-    "winreg.ConnectRegistry",
+    "os.add_dll_directory",
+    # Windows' own query service: every running program and its command line.
+    "_wmi.exec_query",
     "winreg.CreateKey", "winreg.DeleteKey", "winreg.DeleteValue",
     "winreg.SetValue", "winreg.SaveKey", "winreg.LoadKey",
     "winreg.EnableReflectionKey", "winreg.DisableReflectionKey",
@@ -584,9 +589,54 @@ _SQLITE_BLOCKED = (
     "a tool of this turn, or an export of the table to CSV."
 )
 
+#: ISOLATED worker only (v1.473.0 review). The worker's environment is
+#: scrubbed of keys and tokens, but the user's own environment variables are
+#: kept in the registry (HKCU\\Environment), and so is much else that is
+#: private to this PC. Every registry call is refused; the standard library
+#: treats that like a missing key (`PermissionError` is an `OSError`).
+_REGISTRY_BLOCKED = (
+    "iron-jarvis tool script: BLOCKED — the Windows registry. A tool script "
+    "computes and calls this turn's tools; it does not read this PC's settings."
+)
+
+#: ISOLATED worker only (v1.473.0 review): a path spelled as a place on
+#: ANOTHER computer. Opening it, or even asking whether it exists, makes
+#: Windows connect to that computer (and offer it the user's sign-in), with
+#: whatever the script put in the path. Judged from the TEXT, before anything
+#: touches the path.
+_SHARE_BLOCKED = (
+    "iron-jarvis tool script: BLOCKED — {target} is on another computer. A "
+    "tool script reads files only inside the turn's working folder."
+)
+
 #: ISOLATED worker only: Tcl (tkinter) has its own `open`, `socket` and
 #: `exec`, none of which raises an event.
 _NO_IMPORT = frozenset({"tkinter", "_tkinter"})
+
+#: ISOLATED worker only (v1.473.0 review): WHAT A TOOL SCRIPT MAY IMPORT.
+#: Python's standard library, and these few libraries, each pure Python
+#: (every file they touch goes through `open`, which the hook sees).
+#:
+#: An allow-list, because the other direction cannot be kept true: any
+#: library with native code can open a file or a connection with no audit
+#: event at all. Found in this app's own bundle: lxml (reads and writes any
+#: file and fetches a web address by itself), pdf_inspector (reads any PDF),
+#: pywin32 (the whole Windows API: files, registry, the clipboard, Excel),
+#: PIL's screen and clipboard grab. Each was a way round "what a script read
+#: stays where it was read" in three lines of script.
+_SCRIPT_MODULES = frozenset({
+    "openpyxl", "et_xmlfile", "defusedxml",   # workbooks, read through open()
+    "dateutil", "six",                        # dates
+    "tzdata",                                 # zoneinfo's data on Windows
+})
+_STDLIB = frozenset(getattr(sys, "stdlib_module_names", ()) or ())
+
+_IMPORT_BLOCKED = (
+    "iron-jarvis tool script: BLOCKED — importing {name}. A tool script may "
+    "import Python's standard library (and openpyxl, dateutil). Read and "
+    "convert files with this turn's tools instead: "
+    "tools.call(\"read_document\", path=...)."
+)
 
 _ISOLATED_WRITE_BLOCKED = (
     "iron-jarvis tool script: BLOCKED — writing a file.\n"
@@ -628,6 +678,86 @@ def _canonical(path: str) -> str:
 def _within(target: str, root: str) -> bool:
     """Containment, on already-canonical strings."""
     return target == root or target.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _network_spelled(path: str) -> bool:
+    """Is *path* spelled as a network or device location (``\\\\host\\share``,
+    ``//host/share``, ``\\\\?\\UNC\\…``, ``\\\\.\\pipe\\…``)? Text only: nothing is
+    resolved. A local drive behind a long-path prefix (``\\\\?\\C:\\…``) is not."""
+    text = str(path).strip().replace("/", "\\")
+    if not text.startswith("\\\\"):
+        return False
+    rest = text[2:]
+    if (
+        rest[:2] in ("?\\", ".\\") and len(rest) >= 4 and rest[2].isalpha() and rest[3] == ":"
+        and (len(rest) == 4 or rest[4] == "\\")
+    ):
+        return False
+    return True
+
+
+def _spelled_under(path: str, roots: tuple[str, ...]) -> bool:
+    """Is a network-spelled *path* textually inside one of *roots* (the
+    folders this worker was handed, canonical)? True only for a working
+    folder that itself lives on a share."""
+    text = str(path).strip().replace("/", "\\").lower()
+    if text.startswith("\\\\?\\unc\\"):
+        text = "\\\\" + text[8:]
+    for root in roots:
+        low = root.replace("/", "\\").lower().rstrip("\\")
+        if low.startswith("\\\\") and (text == low or text.startswith(low + "\\")):
+            return True
+    return False
+
+
+#: The path calls that raise NO audit event, by module. Each still makes
+#: Windows reach the place the path names.
+_UNAUDITED: dict[str, tuple[str, ...]] = {
+    "os": ("stat", "lstat", "access", "readlink"),
+    "nt": (
+        "stat", "lstat", "access", "readlink", "_path_exists", "_path_isdir",
+        "_path_isfile", "_path_islink", "_path_isdevdrive", "_getfinalpathname",
+        "_getvolumepathname", "_getdiskusage",
+    ),
+    "ntpath": (
+        "exists", "isdir", "isfile", "islink", "isdevdrive", "_getfinalpathname",
+        "_getvolumepathname", "_nt_readlink",
+    ),
+}
+
+
+def _guard_unaudited(roots: tuple[str, ...]) -> None:
+    """ISOLATED worker: refuse a network path in the calls no audit event
+    covers (``os.stat``, ``os.path.exists`` …). Each is replaced by a thin
+    wrapper that reads the path's TEXT and otherwise calls the real one.
+    A guardrail like the hook itself: the real function is still reachable
+    by code that goes looking for it."""
+    import importlib
+
+    def guard(real: Any) -> Any:
+        def guarded(path: Any = None, *args: Any, **kwargs: Any) -> Any:
+            text = _as_path(path)
+            if text is not None and _network_spelled(text) and not _spelled_under(text, roots):
+                raise PermissionError(_SHARE_BLOCKED.format(target=text))
+            return real(path, *args, **kwargs)
+
+        guarded.__name__ = getattr(real, "__name__", "guarded")
+        guarded.__doc__ = getattr(real, "__doc__", None)
+        guarded._ij_guarded = True  # type: ignore[attr-defined]
+        return guarded
+
+    for module_name, names in _UNAUDITED.items():
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:  # pragma: no cover - not this platform
+            continue
+        for name in names:
+            real = getattr(module, name, None)
+            if callable(real) and not getattr(real, "_ij_guarded", False):
+                try:
+                    setattr(module, name, guard(real))
+                except Exception:  # pragma: no cover - a read-only module
+                    pass
 
 
 def _as_path(value: Any) -> str | None:
@@ -678,9 +808,14 @@ def _install_audit_hook(
     def refuse(message: str) -> None:
         raise PermissionError(message)
 
+    every_root = tuple(dict.fromkeys(write_roots + read_roots))
+
     def check(target: str | None, *, writing: bool) -> None:
         if target is None:
             return
+        if isolated and _network_spelled(target) and not _spelled_under(target, every_root):
+            # BEFORE anything resolves it: resolving is itself the connection.
+            refuse(_SHARE_BLOCKED.format(target=target))
         if os.path.basename(target.replace("\\", "/")).startswith(_PROTECTED_NAMES):
             # Checked on the RAW name, before any resolution, so a path that
             # `realpath` mangles (see `_canonical`) cannot slip past on a
@@ -759,10 +894,29 @@ def _install_audit_hook(
                 refuse(_OUTSIDE_BLOCKED)
             elif event.startswith("sqlite3."):
                 refuse(_SQLITE_BLOCKED)
-            elif event == "import" and args and str(args[0]).split(".")[0] in _NO_IMPORT:
-                refuse(_OUTSIDE_BLOCKED)
+            elif event.startswith("winreg."):
+                refuse(_REGISTRY_BLOCKED)
+            elif event == "import" and args:
+                name = str(args[0])
+                top = name.partition(".")[0]
+                if top in _NO_IMPORT:
+                    refuse(_OUTSIDE_BLOCKED)
+                # A NATIVE module being loaded from a file (the event then
+                # carries the file): every native module of the standard
+                # library has a one-word name, so a dotted one is somebody
+                # else's code loaded under a borrowed name ("json.etree").
+                native = len(args) > 1 and args[1] is not None
+                if _STDLIB and (
+                    (top not in _STDLIB and top not in _SCRIPT_MODULES)
+                    or (native and ("." in name or top not in _STDLIB))
+                ):
+                    # An ImportError, so a library's own "use it if it is
+                    # there" (openpyxl and lxml) falls back as it always does.
+                    raise ImportError(_IMPORT_BLOCKED.format(name=name[:80]))
 
     sys.addaudithook(hook)
+    if isolated and os.name == "nt":
+        _guard_unaudited(every_root)
 
 
 def _roots_from_env(name: str) -> tuple[str, ...]:

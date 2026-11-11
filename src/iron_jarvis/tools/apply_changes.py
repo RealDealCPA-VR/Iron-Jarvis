@@ -77,9 +77,15 @@ BATCH_REASON = "batch"
 
 #: The arguments of a batch tool that name a file it writes, moves or makes.
 _PATH_KEYS: tuple[str, ...] = (
-    "path", "new_path", "file_path", "output", "output_path", "out", "save_as",
-    "dest", "destination", "target",
+    "path", "new_path", "file_path", "output", "output_path", "out", "out_dir",
+    "output_dir", "save_as", "dest", "destination", "target",
 )
+
+#: Arguments a batch never carries: each changes a file in a way one line of
+#: the card cannot make plain (a PDF locked with a password the model chose).
+_NOT_IN_A_BATCH: dict[str, tuple[str, ...]] = {
+    "pdf_arrange": ("encrypt_password",),
+}
 
 _LINE_CHARS = 160
 #: Lines of the batch shown on a card and kept on the ledger row.
@@ -125,12 +131,23 @@ def describe_change(change: Any) -> str:
     tool = str(change.get("tool") or "")
     args = change.get("args") if isinstance(change.get("args"), dict) else {}
     verb = _VERBS.get(tool, tool or "Change")
+
+    def end(value: Any, room: int = 70) -> str:
+        # The END of a path is the file's name: a long folder in front must
+        # never push the other end of a rename off the card (v1.473.0 review).
+        text = " ".join(str(value or "").split())
+        return text if len(text) <= room else "…" + text[-(room - 1):]
+
     path = args.get("path") or args.get("file_path") or ""
-    line = f"{verb} {path}".strip()
+    line = f"{verb} {end(path)}".strip()
     if tool == "rename_file" and args.get("new_path"):
-        line += f" to {args.get('new_path')}"
-    elif args.get("output"):
-        line += f" (saved as {args.get('output')})"
+        line += f" to {end(args.get('new_path'))}"
+    else:
+        where = args.get("output") or args.get("output_path")
+        if where:
+            line += f" (saved as {end(where, 60)})"
+        elif args.get("out_dir"):
+            line += f" (into {end(args.get('out_dir'), 60)})"
     return _one_line(line)
 
 
@@ -203,6 +220,12 @@ def plan_problem(changes: Any, allowed: Any, registry: Any) -> str:
             return f"change {at} uses `{tool}`, which does not exist"
         if "_from_script" in (change.get("args") or {}):
             return f"change {at} carries `_from_script`; give the change its values"
+        held_back = [k for k in _NOT_IN_A_BATCH.get(tool, ()) if (change.get("args") or {}).get(k)]
+        if held_back:
+            return (
+                f"change {at} sets `{held_back[0]}`, which a batch does not carry. "
+                f"Make that one change directly with `{tool}`"
+            )
         if tool == "rename_file" and (change.get("args") or {}).get("overwrite"):
             # v1.473.0 review: the card line would read "Rename a to b" and
             # say nothing of the file at b that is replaced, and that file is

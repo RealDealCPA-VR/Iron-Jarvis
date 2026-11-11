@@ -166,6 +166,12 @@ _RESTARTED_NOTE = (
 _MEMORY_BASE_READERS: frozenset[str] = frozenset({"ltm_search", "brain_search", "brain_read"})
 _MEMORY_ORIGIN = "outside:memory base"
 
+#: `web_extract` reads the page the browser has OPEN (v1.473.0 review): it
+#: may be a signed-in page of the user's, so what it returns is private and
+#: must not ride a later web call the way a public page may.
+_BROWSER_PAGE_READERS: frozenset[str] = frozenset({"web_extract"})
+_BROWSER_PAGE_ORIGIN = "outside:browser page"
+
 #: The tool that reads ONE connected app's resource (`server` names the app).
 _RESOURCE_READER = "mcp_read_resource"
 
@@ -243,6 +249,8 @@ def _origin_words(origin: str) -> str:
         return "files or data on this PC"
     if origin == _MEMORY_ORIGIN:
         return "your memory base"
+    if origin == _BROWSER_PAGE_ORIGIN:
+        return "a page open in the browser"
     if origin.startswith("pack:"):
         return f"the app {origin[5:]}"
     if origin.startswith("outside:"):
@@ -254,6 +262,18 @@ def _cpu_s() -> float:
     """Seconds of processor time this process has used (every thread). A
     seam: a test says "this call computed" or "this call waited" with it."""
     return time.process_time()
+
+
+def _linked_chat(turn_id: str) -> str:
+    """The saved chat a turn was linked to ("" when not yet, or unknown)."""
+    if not turn_id:
+        return ""
+    try:
+        from ..providers.egress import linked_thread
+
+        return str(linked_thread(turn_id) or "")
+    except Exception:  # noqa: BLE001 — the turn's own key then
+        return ""
 
 
 def worker_key(ctx: Any) -> tuple[str, bool]:
@@ -269,7 +289,15 @@ def worker_key(ctx: Any) -> tuple[str, bool]:
     sid = str(getattr(ctx, "session_id", "") or "")
     if sid != "chat":
         return sid, False
-    own = str(getattr(ctx, "thread_id", "") or "") or str(getattr(ctx, "turn_id", "") or "")
+    own = str(getattr(ctx, "thread_id", "") or "")
+    if not own:
+        turn = str(getattr(ctx, "turn_id", "") or "")
+        # A NEW chat's first message: once the page has linked the turn to
+        # its saved chat, the chat's name is the key (v1.473.0 review). The
+        # link usually lands BEFORE the first script runs; keyed by the turn
+        # all the same, that script's variables and kept values sat under a
+        # name the chat's next message never looked at.
+        own = _linked_chat(turn) or turn
     if own:
         return f"chat:{own}", False
     import uuid
@@ -313,7 +341,8 @@ class ToolScriptTool(Tool):
         "\"totals.xlsx\", _from_script={\"content\": \"totals\"}).\n"
         "The script runs isolated: no network, no other programs, no file "
         "writes, files read only in the working folder (reach everything "
-        "else through a tool). Once it has read this PC's files or data it "
+        "else through a tool), and it imports only Python's standard "
+        "library (plus openpyxl and dateutil). Once it has read this PC's files or data it "
         "cannot call a tool that reaches outside this PC. Variables persist "
         "between scripts. `saved` runs a skill's saved script instead of "
         "`code`, with `params`."
@@ -747,6 +776,8 @@ class ToolScriptTool(Tool):
         from, and whether calling it reaches outside this PC (the app's own
         Local only definition, ``egress``). Fail-closed: a tool that cannot
         be judged counts as reaching outside."""
+        if name in _BROWSER_PAGE_READERS:
+            return _BROWSER_PAGE_ORIGIN, True
         if name in _WEB_READERS:
             return "web", True
         if name in _MEMORY_BASE_READERS:
