@@ -190,16 +190,44 @@ def idle_limit(live: Any, now: float, base: float) -> float:
 # --------------------------------------------------------------------------- #
 # Reading the tree (BLOCKING)
 # --------------------------------------------------------------------------- #
-def _listening(psutil: Any) -> dict[int, set[int]]:
-    """pid -> the TCP ports it listens on (one system-wide read)."""
+def _listening(psutil: Any) -> "dict[int, set[int]] | None":
+    """pid -> the TCP ports it listens on (one system-wide read).
+
+    ``None`` = this system does not let an ordinary user read every program's
+    sockets (macOS answers AccessDenied without root). The caller then asks
+    each program of the tool's own tree by itself (:func:`_listening_of`),
+    which macOS allows for the user's own programs. Before this, every read
+    on a Mac failed, each session read "cannot tell", and the idle stop never
+    stopped anything."""
     out: dict[int, set[int]] = {}
-    for c in psutil.net_connections(kind="tcp"):
+    try:
+        found = psutil.net_connections(kind="tcp")
+    except psutil.AccessDenied:
+        return None
+    for c in found:
         if c.status != psutil.CONN_LISTEN or not c.pid:
             continue
         port = getattr(c.laddr, "port", None) if c.laddr else None
         if port:
             out.setdefault(int(c.pid), set()).add(int(port))
     return out
+
+
+def _listening_of(psutil: Any, pid: int) -> set[int]:
+    """The TCP ports ONE program listens on (empty when it has none, is gone
+    or cannot be read)."""
+    try:
+        p = psutil.Process(pid)
+        read = getattr(p, "net_connections", None) or p.connections
+        found = read(kind="tcp")
+    except (psutil.Error, OSError):
+        return set()
+    ports: set[int] = set()
+    for c in found:
+        port = getattr(c.laddr, "port", None) if c.laddr else None
+        if c.status == psutil.CONN_LISTEN and port:
+            ports.add(int(port))
+    return ports
 
 
 def _members(root: int, job: Any) -> set[int]:
@@ -264,7 +292,8 @@ def _command(psutil: Any, p: Any) -> str:
     return clip(_shown_command(words), COMMAND_CHARS) or "a program"
 
 
-def read_one(root: int | None, job: Any, started: float | None, listening: dict[int, set[int]]) -> Reading:
+def read_one(root: int | None, job: Any, started: float | None,
+             listening: "dict[int, set[int]] | None") -> Reading:
     """BLOCKING: the listening programs the tool rooted at ``root`` started
     at or after ``started`` (its first step), oldest first."""
     if not root or not started:
@@ -272,7 +301,11 @@ def read_one(root: int | None, job: Any, started: float | None, listening: dict[
     import psutil
 
     programs: list[Program] = []
-    for pid in sorted(_members(int(root), job) & set(listening)):
+    members = _members(int(root), job)
+    if listening is None:
+        # No system-wide read here (macOS): ask the tool's own programs.
+        listening = {pid: ports for pid in members if (ports := _listening_of(psutil, pid))}
+    for pid in sorted(members & set(listening)):
         try:
             p = psutil.Process(pid)
             made = p.create_time()
