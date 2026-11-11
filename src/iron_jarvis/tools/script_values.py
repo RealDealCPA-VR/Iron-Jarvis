@@ -61,6 +61,8 @@ MAX_KEYS = 48
 TTL_S = 6 * 3600.0
 
 _SUMMARY_CHARS = 200
+#: A typed value longer than this is content, never a pointer at a kept one.
+_POINTER_CHARS = 200
 
 
 def describe(value: Any) -> str:
@@ -228,6 +230,22 @@ def has_refs(args: Any) -> bool:
     return isinstance(args, dict) and ARG in args
 
 
+def _left_out(typed: Any, name: str) -> bool:
+    """Did the model leave the argument to the reference? Yes when it typed
+    nothing, and yes when what it typed only POINTS at the kept value: its
+    name, or the reference written out (both seen with a real model,
+    v1.473.0; refusing them cost the turn a round each time). Anything else
+    typed is real content, and giving both is refused."""
+    if typed in (None, "", [], {}):
+        return True
+    if not isinstance(typed, str) or len(typed) > _POINTER_CHARS:
+        return False
+    # Seen live, twice: the kept NAME typed there ("payment_rows"), and the
+    # reference itself typed there ('_from_script={"content": "rows"}').
+    # Neither is content: both only point at the kept value.
+    return ARG in typed or typed.strip().strip("`'\"{}<>$()").strip() == name
+
+
 def _refs(tool: str, args: dict[str, Any]) -> "tuple[dict[str, str], str]":
     """The ``{argument: kept name}`` a call asks for, or a sentence saying
     why it cannot be filled."""
@@ -251,10 +269,10 @@ def _refs(tool: str, args: dict[str, Any]) -> "tuple[dict[str, str], str]":
                 f"`{tool}` takes a kept value only for: {', '.join(sorted(allowed))} "
                 f"(not `{arg}`). Type `{arg}` yourself"
             )
-        if args.get(arg) not in (None, "", [], {}):
-            return {}, f"`{arg}` was given twice: typed, and in `{ARG}`. Give it once"
         if not name:
             return {}, f"`{ARG}` names no kept value for `{arg}`"
+        if not _left_out(args.get(arg), name):
+            return {}, f"`{arg}` was given twice: typed, and in `{ARG}`. Give it once"
         out[arg] = name
     return out, ""
 

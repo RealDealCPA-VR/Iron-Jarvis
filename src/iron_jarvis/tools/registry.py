@@ -676,8 +676,9 @@ class ToolRegistry:
                             "Optional. Take an argument from a value a tool "
                             "script kept with tools.keep(name, value), instead "
                             "of typing it: {\"<argument>\": \"<kept name>\"}. "
-                            "Leave that argument itself out. Arguments that "
-                            "can be taken this way: "
+                            "Leave that argument itself OUT of the call (do "
+                            "not put the name or anything else in it). "
+                            "Arguments that can be taken this way: "
                             + ", ".join(sorted(fillable)) + "."
                         ),
                     }

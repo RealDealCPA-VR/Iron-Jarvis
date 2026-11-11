@@ -539,6 +539,29 @@ def test_typed_twice_is_refused_and_an_empty_typed_value_is_the_reference(world)
     assert (world.ws / "a.txt").read_text(encoding="utf-8") == "kept text"
 
 
+@pytest.mark.parametrize("typed", ["t", " t ", "`t`", "{t}", '"t"', "$t", '_from_script={"content": "t"}'])
+def test_typing_only_a_pointer_at_the_kept_value_is_the_reference(world, typed):
+    """Seen with a real model, twice: the kept value's NAME typed in the
+    argument beside the reference, and the reference itself typed there.
+    Neither is content; the kept value is what is written."""
+    assert _run(world, "tools.keep('t', 'kept text')", allowed=WRITERS).ok
+    w = _invoke(world, "write_file",
+                {"path": "n.txt", "content": typed, "_from_script": {"content": "t"}},
+                allowed=WRITERS)
+    assert w.ok, w.error
+    assert (world.ws / "n.txt").read_text(encoding="utf-8") == "kept text"
+
+
+def test_real_content_typed_beside_a_reference_is_still_refused(world):
+    assert _run(world, "tools.keep('t', 'kept text')", allowed=WRITERS).ok
+    for typed in ["the totals are below", "t and more", "x" * 500 + "_from_script"]:
+        w = _invoke(world, "write_file",
+                    {"path": "r.txt", "content": typed, "_from_script": {"content": "t"}},
+                    allowed=WRITERS)
+        assert not w.ok and "given twice" in w.error, typed
+    assert not (world.ws / "r.txt").exists()
+
+
 def test_a_kept_value_belongs_to_its_own_chat(world):
     assert _run(world, "tools.keep('mine', 'private rows')", allowed=WRITERS).ok
     other = ToolContext(
