@@ -595,9 +595,67 @@ def _records_to_rows(records: Any) -> list[list[Any]]:
     return [[str(h) for h in header]] + [[rec.get(h, "") for h in header] for rec in records]
 
 
+#: The keys ONE table is handed under: ``{"header": [...], "rows": [...]}``.
+_TABLE_HEAD_KEYS = ("header", "headers", "columns")
+_TABLE_ROW_KEYS = ("rows", "data")
+
+
+def _one_table(value: Any, also: "tuple[str, ...]" = ()) -> "list[list[Any]] | None":
+    """``{"header": [...], "rows": [[...], ...]}`` → ``[header, *rows]``
+    (v1.473.0), else ``None``.
+
+    The shape a script naturally keeps for a table. Seen live on the packaged
+    app: the model's script kept exactly this, the workbook writer did not
+    know it, and all 640 rows were written as ONE cell of text while the
+    reply said "640 rows". Both keys are needed (rows alone keeps its older
+    reading, a sheet named "rows"), the header must be a flat list, the rows
+    a list of rows or of records, and no other key may be present (*also*
+    names the ones a caller tolerates), so an object that only happens to
+    hold a "rows" key is not taken for a table."""
+    if not isinstance(value, dict):
+        return None
+    head_key = next((k for k in _TABLE_HEAD_KEYS if k in value), None)
+    rows_key = next((k for k in _TABLE_ROW_KEYS if k in value), None)
+    if head_key is None or rows_key is None:
+        return None
+    if set(value) - {head_key, rows_key} - set(also):
+        return None
+    head, rows = value[head_key], value[rows_key]
+    if not isinstance(head, (list, tuple)) or any(isinstance(h, (list, tuple, dict)) for h in head):
+        return None
+    if not isinstance(rows, (list, tuple)):
+        return None
+    if rows and _is_records(rows):
+        if any(h in rows[0] for h in head):
+            return [list(head)] + [[rec.get(h, "") for h in head] for rec in rows]
+        return _records_to_rows(rows)
+    if not all(isinstance(r, (list, tuple)) for r in rows):
+        return None
+    return [list(head)] + [list(r) for r in rows]
+
+
+def _not_a_table(content: Any, what: str) -> ValueError:
+    """The refusal for content a workbook or CSV cannot hold as rows
+    (v1.473.0). It used to be written as its own text into ONE cell, which
+    reads as a finished file and is not one."""
+    if isinstance(content, dict):
+        keys = ", ".join(str(k)[:30] for k in list(content)[:6]) or "none"
+        got = f"an object with the keys: {keys}"
+    else:
+        got = f"a {type(content).__name__}"
+    return ValueError(
+        f"nothing was written: the content for {what} must be rows "
+        '([["Name", "Amount"], ["a", 1]]), {"header": [...], "rows": [...]}, '
+        '{"sheets": {"Name": rows}}, or text. It was ' + got
+    )
+
+
 def _sheet_rows(v: Any) -> Any:
     if _is_records(v):
         return _records_to_rows(v)
+    one = _one_table(v, also=("charts",))
+    if one is not None:
+        return {"rows": one, **({"charts": v["charts"]} if "charts" in v else {})}
     if isinstance(v, dict) and _is_records(v.get("rows")):
         return {**v, "rows": _records_to_rows(v["rows"])}
     return v
@@ -656,6 +714,9 @@ def _spreadsheet_content(content: Any) -> tuple[Any, bool]:
         from ..core.jsonish import loads_lenient
 
         parsed = loads_lenient(value, want=(list, dict))
+        one = _one_table(parsed)
+        if one is not None:
+            return one, True
         if _is_table(parsed) or (
             isinstance(parsed, dict)
             and (isinstance(parsed.get("sheets"), dict) or (parsed and all(_is_sheet(v) for v in parsed.values())))
@@ -666,6 +727,9 @@ def _spreadsheet_content(content: Any) -> tuple[Any, bool]:
             return (md, True) if md else (content, False)
     if _is_records(value):
         return _records_to_rows(value), True
+    one = _one_table(value)
+    if one is not None:
+        return one, True
     if isinstance(value, dict) and not isinstance(value.get("sheets"), dict):
         if value and all(_is_sheet(v) for v in value.values()):
             return {"sheets": {k: _sheet_rows(v) for k, v in value.items()}}, True
@@ -723,6 +787,9 @@ def _write_xlsx(
                     ws.append([("" if c is None else for_file(c)) for c in row])
                 else:
                     ws.append([for_file(row)])
+        elif isinstance(content, dict):
+            # An object that is not rows, sheets or a table (v1.473.0).
+            raise _not_a_table(content, "a workbook")
         else:
             from .excel_formula import for_file
 
@@ -1569,6 +1636,8 @@ def _write_csv(p: Path, content: Any) -> None:
             stacked.append([str(name)])
             stacked.extend(rows if isinstance(rows, (list, tuple)) else [[rows]])
         content = stacked
+    if isinstance(content, dict):
+        raise _not_a_table(content, "a CSV file")
     with _atomic(p) as tmp:
         with open(tmp, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)

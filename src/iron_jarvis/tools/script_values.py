@@ -413,13 +413,36 @@ def fill_from_script(
                 "sees what it will write"
             )
         try:
-            run[arg] = json.loads(kept.text)
+            run[arg] = _shaped(tool, arg, json.loads(kept.text), bare)
         except (ValueError, RecursionError):
             return bare, bare, f"the kept value `{name}` could not be read back"
         noted[arg] = {"name": name, "sha": kept.sha, "what": kept.summary}
     record = dict(bare)
     record[ARG] = noted
     return run, record, ""
+
+
+def _shaped(tool: str, arg: str, value: Any, call: "dict[str, Any]") -> Any:
+    """A kept value in the shape its tool writes best.
+
+    ONE case: rows a script kept, written to a WORKBOOK. A script that read
+    CSV files holds every cell as text, and rows handed to the workbook
+    writer as a plain list keep text as text: the amounts could not be added
+    up in Excel (measured live: every Amount cell was text). Handed over as a
+    named sheet they get what a sheet gets: clean numbers and ISO dates as
+    values, a bold frozen header (the writer's own careful rule: a leading
+    zero or more than 15 digits stays text). Any other value, tool or file
+    type is passed as it was kept."""
+    if tool != "write_document" or arg != "content":
+        return value
+    kind = str(call.get("kind") or "").strip().lower().lstrip(".")
+    path = str(call.get("path") or "").strip().lower()
+    if (kind or path.rpartition(".")[2]) != "xlsx":
+        return value
+    if isinstance(value, list) and value and all(isinstance(r, (list, dict)) for r in value):
+        if all(isinstance(r, list) for r in value) or all(isinstance(r, dict) for r in value):
+            return {"sheets": {"Sheet1": value}}
+    return value
 
 
 def preview_args(tool: str, args: Any, ctx: Any) -> Any:

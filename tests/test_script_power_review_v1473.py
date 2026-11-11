@@ -1023,3 +1023,141 @@ def test_the_registry_refuses_a_call_whose_kept_value_is_not_the_pinned_one(worl
 from iron_jarvis.repl import worker as _W  # noqa: E402
 
 W_SQLITE = _W._SQLITE_BLOCKED
+
+
+# --------------------------------------------------------------------------- #
+# A kept table lands in a workbook AS a table (found live on the packaged app:
+# the script kept {"header": [...], "rows": [...]}, the writer did not know
+# the shape, and 640 rows were written as ONE cell under a reply that said
+# "640 rows")
+# --------------------------------------------------------------------------- #
+
+TABLE = {
+    "header": ["File", "Date", "Amount", "Code"],
+    "rows": [
+        ["a.csv", "2026-01-02", "260.39", "00123"],
+        ["b.csv", "2026-01-03", "12", "1234567890123456"],
+    ],
+}
+
+
+def _cells(path):
+    import openpyxl
+
+    return [[c.value for c in row] for row in openpyxl.load_workbook(path).active.iter_rows()]
+
+
+def test_header_and_rows_is_written_as_a_table_never_as_one_cell(tmp_path):
+    import csv
+    import datetime
+
+    from iron_jarvis.documents import writers as W
+
+    for name, content in (("a.xlsx", TABLE), ("b.xlsx", json.dumps(TABLE))):
+        W.write_document(tmp_path / name, content)
+        got = _cells(tmp_path / name)
+        assert got[0] == TABLE["header"], (name, got[0])
+        assert len(got) == 3 and all(len(r) == 4 for r in got), (name, got)
+        # numbers and dates are values; a code with a leading zero and a
+        # number longer than a spreadsheet holds stay the text they were
+        assert got[1][1] == datetime.datetime(2026, 1, 2) and got[1][2] == 260.39
+        assert got[1][3] == "00123" and got[2][3] == "1234567890123456"
+
+    W.write_document(tmp_path / "c.xlsx", {"columns": ["n", "v"], "data": [{"v": 1, "n": "x"}, {"n": "y", "v": 2}]})
+    assert _cells(tmp_path / "c.xlsx") == [["n", "v"], ["x", 1], ["y", 2]]
+
+    W.write_document(tmp_path / "d.csv", TABLE)
+    with open(tmp_path / "d.csv", newline="", encoding="utf-8") as fh:
+        rows = list(csv.reader(fh))
+    assert rows[0] == TABLE["header"] and rows[1] == TABLE["rows"][0]
+
+    # the same shape as one sheet of several keeps its header too
+    W.write_document(tmp_path / "e.xlsx", {"sheets": {"Pay": TABLE, "Other": [["k", "v"], ["a", 1]]}})
+    import openpyxl
+
+    book = openpyxl.load_workbook(tmp_path / "e.xlsx")
+    assert book.sheetnames == ["Pay", "Other"]
+    assert [c.value for c in book["Pay"][1]] == TABLE["header"]
+    assert book["Pay"].max_row == 3
+
+
+def test_an_object_that_is_no_table_is_refused_and_nothing_is_written(tmp_path):
+    from iron_jarvis.documents import writers as W
+
+    not_tables = (
+        {"totals": {"a": 1}},
+        {"header": ["a"], "values": [1]},
+        {"header": "a,b", "rows": [[1, 2]]},
+        {"header": ["a"], "rows": [[1]], "something_else": 1},
+        {"header": ["a"], "rows": ["flat", "list"]},
+    )
+    for bad in not_tables:
+        for name in ("x.xlsx", "x.csv"):
+            with pytest.raises(ValueError, match="nothing was written"):
+                W.write_document(tmp_path / name, bad)
+            assert not (tmp_path / name).exists(), (bad, name)
+
+    # What was read before is read the same way now.
+    W.write_document(tmp_path / "rows.xlsx", {"rows": [["a", 1], ["b", 2]]})
+    import openpyxl
+
+    assert openpyxl.load_workbook(tmp_path / "rows.xlsx").sheetnames == ["rows"]
+    W.write_document(tmp_path / "text.xlsx", "one line\nsecond line")
+    assert _cells(tmp_path / "text.xlsx") == [["one line"], ["second line"]]
+    W.write_document(tmp_path / "list.xlsx", [["a", "260.39"], ["b", "12"]])
+    assert _cells(tmp_path / "list.xlsx") == [["a", "260.39"], ["b", "12"]], "typed rows keep text as text"
+
+
+def test_the_tool_says_nothing_was_written_for_such_an_object(world):
+    from tests.test_script_power_v1473 import WRITERS
+
+    kept = _run(world, 'tools.keep("odd", {"totals": {"a": 1}})\nprint("ok")\n', allowed=WRITERS)
+    assert kept.ok, kept.error
+    w = _invoke(world, "write_document", {"path": "odd.xlsx", "_from_script": {"content": "odd"}},
+                allowed=WRITERS)
+    assert not w.ok and "nothing was written" in (w.error or ""), w.error
+    assert not (world.ws / "odd.xlsx").exists()
+
+
+def test_rows_a_script_read_as_text_land_as_numbers_and_dates(world):
+    """A script that read CSV files holds every cell as text. In the
+    workbook the amounts must add up."""
+    import datetime
+
+    from tests.test_script_power_v1473 import WRITERS
+
+    code = (
+        'rows = [["File", "Date", "Amount", "Zip", "Account"],\n'
+        '        ["a.csv", "2026-01-02", "260.39", "02134", "4111111111111111"],\n'
+        '        ["b.csv", "2026-01-03", "1200", "90210", "12"]]\n'
+        'tools.keep("rows", rows)\n'
+        'tools.keep("table", {"header": rows[0], "rows": rows[1:]})\n'
+        'print("ok")\n'
+    )
+    assert _run(world, code, allowed=WRITERS).ok
+    for name, kept in (("list.xlsx", "rows"), ("table.xlsx", "table")):
+        w = _invoke(world, "write_document", {"path": name, "_from_script": {"content": kept}},
+                    allowed=WRITERS)
+        assert w.ok, w.error
+        got = _cells(world.ws / name)
+        assert got[0] == ["File", "Date", "Amount", "Zip", "Account"], (name, got[0])
+        assert got[1][1] == datetime.datetime(2026, 1, 2), (name, got[1])
+        assert got[1][2] == 260.39 and got[2][2] == 1200
+        assert sum(r[2] for r in got[1:]) == pytest.approx(1460.39)
+        # never mangled: a leading zero, and more digits than a sheet holds
+        assert got[1][3] == "02134" and got[1][4] == "4111111111111111"
+
+    # A CSV has no cell types: the rows go in as they were kept, with no
+    # sheet name line in front.
+    w = _invoke(world, "write_document", {"path": "rows.csv", "_from_script": {"content": "rows"}},
+                allowed=WRITERS)
+    assert w.ok, w.error
+    first = (world.ws / "rows.csv").read_text(encoding="utf-8").splitlines()[0]
+    assert first == "File,Date,Amount,Zip,Account"
+    # And what the ledger holds is still the reference, never the rows.
+    assert SV._shaped("write_file", "content", [["a"]], {"path": "x.xlsx"}) == [["a"]]
+    assert SV._shaped("write_document", "content", [["a"]], {"path": "x.docx"}) == [["a"]]
+    assert SV._shaped("write_document", "content", ["a", "b"], {"path": "x.xlsx"}) == ["a", "b"]
+    assert SV._shaped("write_document", "content", [["a"]], {"path": "x.bin", "kind": "xlsx"}) == {
+        "sheets": {"Sheet1": [["a"]]}
+    }

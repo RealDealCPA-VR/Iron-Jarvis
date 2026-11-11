@@ -111,6 +111,27 @@ def _iron_proxy_service_per_test():
         _svc._set_current(before)
 
 
+@pytest.fixture(autouse=True)
+def _turn_links_do_not_cross_tests():
+    """v1.473.0: which saved chat a turn was linked to is PROCESS memory
+    (``providers.egress._TURN_THREADS``). A new chat's first script is keyed
+    by that link since v1.473.0, so a link one test left behind ("turn-new"
+    in ``test_chat_lanes_v13510``) decided where a LATER test's script ran
+    on the same worker: ``test_tool_script_hardening_v1471`` failed in a wide
+    run and passed alone. Each test starts with the links it had before and
+    leaves none behind (the v1.367.0 rule for a process-global)."""
+    from iron_jarvis.providers import egress as _egress
+
+    with _egress._HOLD_LOCK:
+        before = dict(_egress._TURN_THREADS)
+    try:
+        yield
+    finally:
+        with _egress._HOLD_LOCK:
+            _egress._TURN_THREADS.clear()
+            _egress._TURN_THREADS.update(before)
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _no_real_claude_model_discovery():
     """v1.300.0: never run the REAL ``claude`` picker handshake from the suite.

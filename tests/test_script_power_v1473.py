@@ -29,7 +29,6 @@ from iron_jarvis.core.models import ToolInvocation, UndoJournal
 from iron_jarvis.daemon import chat_turn as CT
 from iron_jarvis.platform import build_platform
 from iron_jarvis.repl import session as S
-from iron_jarvis.repl import worker as W
 from iron_jarvis.skills import saved_scripts as SS
 from iron_jarvis.tools import apply_changes as AC
 from iron_jarvis.tools import script_values as SV
