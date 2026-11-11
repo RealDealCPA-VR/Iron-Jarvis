@@ -317,10 +317,25 @@ async def _start_locked(svc: Any, parent: str, prow: Any, *, tool: str, task: st
         if crow is None:
             raise Refused("The helper session could not be kept.", 500)
     text = PREFACE.format(parent=W.label(prow.harness)) + task
-    turn = await svc.start_turn(crow.id, text, f"handoff-{uuid.uuid4().hex[:12]}")
+    try:
+        turn = await svc.start_turn(crow.id, text, f"handoff-{uuid.uuid4().hex[:12]}")
+    except BaseException:
+        if not helper:
+            # Review: a helper whose first piece never started is taken back,
+            # never left in the list as one that is "not started".
+            await asyncio.shield(_forget_helper(svc, crow.id))
+        raise
     svc.handoff_turns[crow.id] = turn.id
     return {"helper": crow.id, "tool": crow.harness, "label": W.label(crow.harness),
             "title": crow.title, "mode": crow.mode, "state": "working"}
+
+
+async def _forget_helper(svc: Any, sid: str) -> None:
+    """Remove a helper session made for a piece that never started. Never raises."""
+    try:
+        await svc.delete(sid)
+    except Exception:  # noqa: BLE001 — the start's own refusal is the answer
+        log.warning("could not remove a helper session that never started", exc_info=True)
 
 
 async def _turn_events(svc: Any, sid: str, turn_id: str) -> list[dict[str, Any]]:

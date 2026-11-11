@@ -12,6 +12,8 @@ import asyncio
 import pytest
 
 from iron_jarvis.hosted import handoff as HO
+from iron_jarvis.hosted import service as S
+from iron_jarvis.hosted import store
 from tests._build_app_helpers_v1409 import stop_all
 from tests.test_code_handoff_v1474 import _ctx, _setup, _tool
 
@@ -59,6 +61,23 @@ async def test_more_work_for_an_idle_helper_still_counts_against_the_limit(tmp_p
         monkeypatch.setattr(HO, "_running", lambda s, sid: sid in busy)
         more = await _tool(app, HO.TOOL_START).execute({"task": "more", "helper": idle}, ctx)
         assert not more.ok and "already working" in more.error
+    finally:
+        monkeypatch.undo()
+        await stop_all(app)
+
+
+@pytest.mark.asyncio
+async def test_a_helper_whose_first_piece_never_started_is_not_left_behind(tmp_path, monkeypatch):
+    app, svc, parent, work = await _setup(tmp_path, monkeypatch)
+    try:
+        async def refuse(*a, **k):
+            raise S.Refused("The coding tool could not take the message.", 409)
+
+        monkeypatch.setattr(svc, "start_turn", refuse)
+        r = await _tool(app, HO.TOOL_START).execute({"task": "x"}, _ctx(app, parent, work))
+        assert not r.ok and "could not take" in r.error
+        assert store.helpers_of(app.state.platform.engine, parent) == []
+        assert [row for row in store.list_rows(app.state.platform.engine) if row.id != parent] == []
     finally:
         monkeypatch.undo()
         await stop_all(app)
