@@ -2042,6 +2042,30 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Long coding sessions stream smoothly (v1.472.0)
+
+Nothing on screen changes. Build › Code used to do work on every streamed word
+that grew with the length of the whole session, so a long session got slower
+the longer it ran. Now each word costs only its own work:
+
+- **Only what arrived is added.** The conversation was rebuilt from every
+  step of the session about once a frame while a reply streamed. Now each
+  frame adds only what came in since the last one.
+- **Only the end of the reply is formatted again.** A reply still being
+  written was formatted from its first word on every frame. Now only the part
+  after its last finished paragraph is formatted again. The chat page already
+  worked this way.
+- **The side panes stay put.** Changes, Usage, Files and Session no longer
+  redraw for every streamed word.
+- **Words travel together.** Iron Jarvis sends the words that come in within
+  about 40 milliseconds as one message, instead of one message per word.
+  Before it sends them, it checks the joined words again for keys, so a key
+  split across two pieces is caught.
+
+What did NOT change: the conversation still draws every row (rows you have
+already seen are not drawn again), and the session is still read again on its
+usual schedule.
+
 ## Three more requests read right (v1.471.1)
 
 Nothing on screen changes. Chat now reads three kinds of request it got

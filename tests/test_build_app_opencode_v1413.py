@@ -37,6 +37,11 @@ from iron_jarvis.hosted import store
 from iron_jarvis.hosted import words as W
 from tests._build_app_helpers_v1409 import FAKE, client, frames, new_session, sent, starts, stop_all, until
 
+async def _one_event_at_a_time(_q, first):
+    """v1.472.0: what a live viewer got before pieces were merged."""
+    return [first], False
+
+
 FIX_OC = Path(__file__).parent / "fixtures" / "build_app_v1413"
 GOLDEN = Path(__file__).parents[1] / "dashboard" / "__tests__" / "fixtures" / "build-app-events-v1413.json"
 MODEL = "opencode/glm-5.3-flash-free"
@@ -139,6 +144,10 @@ async def run_oc(tmp_path: Path, monkeypatch, name: str) -> tuple[list[dict], st
 # THE CONTRACT
 # --------------------------------------------------------------------------- #
 async def test_the_golden_file_is_what_the_real_daemon_sends_for_opencode(tmp_path, monkeypatch):
+    # v1.472.0: the golden records each event as the tool sent it; a live
+    # viewer's merging (timed, tests/test_build_app_live_merge_v1472.py) is
+    # turned off here so the recording does not depend on timing.
+    monkeypatch.setattr(S, "_gather_live", _one_event_at_a_time)
     got = {}
     for name in SCENARIOS:
         evs, _sid, work, _log = await run_oc(tmp_path, monkeypatch, name)

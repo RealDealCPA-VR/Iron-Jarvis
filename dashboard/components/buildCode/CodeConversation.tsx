@@ -29,7 +29,9 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { MemoMarkdown } from "@/components/Markdown";
+import { Markdown, MemoMarkdown } from "@/components/Markdown";
+import { MediaGroup } from "@/components/MediaLightbox";
+import { settledSplit } from "@/lib/streamSplit";
 import { StepDetailPanel, WorkRow } from "@/components/chat/WorkLine";
 import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { PlanChecklist } from "@/components/chat/PlanChecklist";
@@ -463,6 +465,22 @@ interface ReceiptFacts {
   where?: string;
 }
 
+/** v1.472.0: a reply still being written. Everything before its last blank
+ *  line outside a code fence is settled and parsed once (MemoMarkdown); only
+ *  the tail is parsed again as words arrive — the whole reply used to be
+ *  parsed again on every frame. The chat's StreamingText and the mission
+ *  report's LiveMarkdown split the same way (lib/streamSplit). One picture
+ *  group for both parts, so the lightbox walks the whole reply. */
+function LiveReplyText({ content }: { content: string }) {
+  const cut = settledSplit(content);
+  return (
+    <MediaGroup>
+      {cut > 0 && <MemoMarkdown content={content.slice(0, cut)} />}
+      <Markdown content={cut > 0 ? content.slice(cut) : content} />
+    </MediaGroup>
+  );
+}
+
 // A row draws again only when ITS item changed (the fold keeps unchanged
 // items' objects — lib/buildApp reuseItems) or its press did.
 const Item = memo(function Item({
@@ -530,7 +548,7 @@ const Item = memo(function Item({
       return (
         <div className="group/reply">
           <div data-testid="code-text" data-done={item.done ? "true" : "false"} className={HARNESS_REPLY_PROSE}>
-            <MemoMarkdown content={item.text} />
+            {item.done ? <MemoMarkdown content={item.text} /> : <LiveReplyText content={item.text} />}
           </div>
           {item.done && copyText ? <ReplyCopy text={copyText} /> : null}
         </div>

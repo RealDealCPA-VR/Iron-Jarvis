@@ -17196,6 +17196,34 @@ does not need a bump, stop and bump it.
   Try a workflow change with `gh workflow run release.yml --ref <branch> -f
   dry_run=true` (it signs for real, publishes nothing).
 
+- **A streamed word in Build › Code costs only its own work** (v1.472.0;
+  first wave of the t3code comparison, 2026-11-11). `lib/buildApp.ts`
+  `foldConversationFrom(memo, events, extra)` RESUMES the fold
+  (`FoldState`, `foldStep`, `foldResult`; `foldConversation` is the same
+  steps over a whole list): it folds only events after the ones `memo`
+  holds, and folds whole when the list is not the old list plus more (a
+  read again, earlier steps loaded, the echo that replaces the optimistic
+  question) or when a helper's own helper became known after its events
+  (`FoldShared.broken`; a whole fold reads every step's helper first).
+  Child (helper) folds share `parentOf` and their rows are cached per
+  helper version. `applyEvents` copies the list ONCE per frame. A text item
+  not yet done renders `LiveReplyText` (`lib/streamSplit.settledSplit`:
+  the settled part through MemoMarkdown, the tail through Markdown, one
+  MediaGroup). `CodePanes` is `memo` and gets ONE event (the newest with
+  files, the same array while it does not change) and a stable send.
+  Daemon: `HostedTurn.follow` → `_gather_live` merges a live viewer's
+  pieces the replay's way (`coalesce_into`, masked again) for up to
+  `LIVE_MERGE_S` (0.04) after a streamed piece; any other event is sent
+  with what is already queued. NOT done (why): virtualizing the list or
+  `content-visibility` (paint containment would clip and re-anchor the
+  rows' menus and fixed popovers); the timed re-reads (fallbacks, not the
+  streaming path). Pins: `dashboard/__tests__/build-code-speed-v1472.test.tsx`
+  (event-by-event == whole fold after every event of all six tools'
+  recordings; one fold, each event once), `build-code-live-text-v1472.test.tsx`
+  (parse counts), the v1.472.0 case in `build-app-view-v1409` (panes draw 0
+  times for 8 streamed frames), `tests/test_build_app_live_merge_v1472.py`
+  (7 mutations, all red).
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

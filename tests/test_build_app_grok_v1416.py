@@ -36,6 +36,11 @@ from iron_jarvis.hosted import words as W
 from iron_jarvis.hosted.driver import Ask, AskRefused
 from tests._build_app_helpers_v1409 import FAKE, client, frames, new_session, sent, starts, stop_all, until
 
+async def _one_event_at_a_time(_q, first):
+    """v1.472.0: what a live viewer got before pieces were merged."""
+    return [first], False
+
+
 FIX = Path(__file__).parent / "fixtures" / "build_app_v1416"
 GOLDEN = Path(__file__).parents[1] / "dashboard" / "__tests__" / "fixtures" / "build-app-events-v1416.json"
 MODEL = "grok-4.5"
@@ -140,6 +145,10 @@ async def run_grok(tmp_path: Path, monkeypatch, name: str):
 # THE CONTRACT
 # --------------------------------------------------------------------------- #
 async def test_the_golden_file_is_what_the_real_daemon_sends_for_grok(tmp_path, monkeypatch):
+    # v1.472.0: the golden records each event as the tool sent it; a live
+    # viewer's merging (timed, tests/test_build_app_live_merge_v1472.py) is
+    # turned off here so the recording does not depend on timing.
+    monkeypatch.setattr(S, "_gather_live", _one_event_at_a_time)
     got = {}
     for name in SCENARIOS:
         evs, _sid, work, _log, _r = await run_grok(tmp_path, monkeypatch, name)

@@ -18,7 +18,7 @@
  * works and the window is on screen (useVisibleInterval).
  */
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   AtSign,
   FileDiff,
@@ -158,7 +158,11 @@ function usePaneRead<T>(
   return { data, error, again };
 }
 
-export function CodePanes({
+/** v1.472.0: how many times the panes drew (pinned: a streamed word does
+ *  not draw them again). */
+export const codePanesDraws = { count: 0 };
+
+export const CodePanes = memo(function CodePanes({
   session,
   tools,
   events,
@@ -175,6 +179,7 @@ export function CodePanes({
    *  `/compact`, from the Context drop-down). */
   onSend?: (text: string) => void;
 }) {
+  codePanesDraws.count += 1;
   const [tab, setTab] = useState<CodePaneTab>("changes");
   const baseId = useId();
   useEffect(() => setTab(readTab()), []);
@@ -282,7 +287,7 @@ export function CodePanes({
       </div>
     </div>
   );
-}
+});
 
 // ── Changes ─────────────────────────────────────────────────────────────────
 

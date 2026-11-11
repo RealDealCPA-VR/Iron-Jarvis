@@ -166,6 +166,10 @@ DEFAULT_EVENTS = 2000
 #: text; past it only the non-delta events are kept (``text_done`` still
 #: carries every answer whole).
 MAX_TURN_CHARS = 8_000_000
+#: v1.472.0: a live viewer's streamed pieces are merged for this long before
+#: they are sent (one message instead of one per piece). Under a frame at
+#: 25 a second, so nothing looks later; a word is never held longer.
+LIVE_MERGE_S = 0.04
 #: The interrupt route answers within this (the harness is told; the turn
 #: ends when it says so, or when its process goes).
 INTERRUPT_WAIT_S = 5.0
@@ -959,9 +963,51 @@ class HostedTurn:
                 ev = await q.get()
                 if ev is None:
                     return
-                yield sse(ev["type"], ev)
+                batch, ended = await _gather_live(q, ev)
+                yield "".join(sse(e["type"], e) for e in batch)
+                if ended:
+                    return
         finally:
             self._followers.discard(q)
+
+
+def _is_piece(ev: dict[str, Any]) -> bool:
+    return ev.get("type") in ("text", "thinking") and "delta" in ev
+
+
+async def _gather_live(q: asyncio.Queue, first: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+    """v1.472.0: ``first`` and what follows it, merged the replay's way
+    (:func:`.events.coalesce_into`: pieces of one item joined and masked
+    again, a step's partial update replaced by the newer one). A streamed
+    piece waits up to :data:`LIVE_MERGE_S` for more; anything else is sent
+    with whatever is already queued. Returns the batch and whether the turn
+    ended (its ``None`` was taken off the queue)."""
+    batch: list[dict[str, Any]] = []
+    coalesce_into(batch, first)
+    if _is_piece(first):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + LIVE_MERGE_S
+        while True:
+            left = deadline - loop.time()
+            if left <= 0:
+                break
+            try:
+                nxt = await asyncio.wait_for(q.get(), left)
+            except TimeoutError:
+                break
+            if nxt is None:
+                return batch, True
+            coalesce_into(batch, nxt)
+            if not _is_piece(nxt):
+                break
+    while True:
+        try:
+            nxt = q.get_nowait()
+        except asyncio.QueueEmpty:
+            return batch, False
+        if nxt is None:
+            return batch, True
+        coalesce_into(batch, nxt)
 
 
 class LiveSession:

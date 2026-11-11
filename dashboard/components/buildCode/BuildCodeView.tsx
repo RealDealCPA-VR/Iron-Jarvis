@@ -142,7 +142,8 @@ import {
   decodeTryChoices,
   effortsFor,
   decodeCodingTools,
-  foldConversation,
+  foldConversationFrom,
+  type FoldMemo,
   groupByFolder,
   keepsLastOf,
   piFolderOf,
@@ -260,19 +261,22 @@ function pinToBottom(sentinel: Element | null): void {
 /** Merge events that arrived into the list: the tool's echo of a question
  *  takes the place of the one drawn when it was sent; an ask settled twice
  *  (the stream's line and the page's own) is drawn once. */
-function applyEvents(prev: CodeEvent[], arrived: readonly CodeEvent[], optimistic: { current: CodeEvent | null }): CodeEvent[] {
-  let out = prev;
+export function applyEvents(prev: CodeEvent[], arrived: readonly CodeEvent[], optimistic: { current: CodeEvent | null }): CodeEvent[] {
+  // v1.472.0: ONE copy of the list per frame (it was copied once per event
+  // that arrived, so a burst of streamed words cost the list's length each).
+  if (!arrived.length) return prev;
+  const out = prev.slice();
   for (const ev of arrived) {
     if (ev.type === "resolved" && out.some((e) => e.type === "resolved" && e.requestId === ev.requestId)) continue;
     if (ev.type === "user" && optimistic.current) {
       const i = out.indexOf(optimistic.current);
       optimistic.current = null;
       if (i >= 0) {
-        out = [...out.slice(0, i), ev, ...out.slice(i + 1)];
+        out[i] = ev;
         continue;
       }
     }
-    out = [...out, ev];
+    out.push(ev);
   }
   return out;
 }
@@ -496,8 +500,14 @@ function SessionPane({
       if (exportSource.current === src) exportSource.current = null;
     };
   }, [exportSource, sessionId, exportReady]);
+  // v1.472.0: only the events that arrived since the last frame are folded
+  // (lib/buildApp foldConversationFrom); a list that is not the old one plus
+  // more folds whole.
+  const foldMemoRef = useRef<FoldMemo | null>(null);
   const conv = useMemo(() => {
-    const c = foldConversation(allEvents, extra);
+    const folded = foldConversationFrom(foldMemoRef.current, allEvents, extra);
+    foldMemoRef.current = folded.memo;
+    const c = folded.conversation;
     const items = reuseItems(prevItemsRef.current, c.items);
     prevItemsRef.current = items;
     return { ...c, items };
@@ -1089,6 +1099,26 @@ function SessionPane({
   }, [session, follow, onChanged, att, queueIt]);
   const sendRef = useRef<typeof send | null>(null);
   sendRef.current = send;
+  // v1.472.0: the panes read only the newest message with files from the
+  // conversation, so they are handed that one event (the same list while it
+  // does not change) and a send that never changes: a streamed word no
+  // longer draws the panes again.
+  const sendFromPanes = useCallback((t: string) => void sendRef.current?.(t), []);
+  const paneEventsRef = useRef<readonly CodeEvent[]>([]);
+  const paneEvents = useMemo(() => {
+    let found: CodeEvent | null = null;
+    for (let i = allEvents.length - 1; i >= 0; i -= 1) {
+      const e = allEvents[i];
+      if ((e.type === "user" || (e.type === "steer" && e.state === "sent")) && e.files.length) {
+        found = e;
+        break;
+      }
+    }
+    const prev = paneEventsRef.current;
+    const next: readonly CodeEvent[] = found ? (prev[0] === found ? prev : [found]) : prev.length ? [] : prev;
+    paneEventsRef.current = next;
+    return next;
+  }, [allEvents]);
 
   // v1.412.0: the start composer's words go as the first message, once.
   const firstRef = useRef<string | null>(firstMessage);
@@ -2093,9 +2123,9 @@ function SessionPane({
         <CodePanes
           session={session}
           tools={tools}
-          events={allEvents}
+          events={paneEvents}
           running={running}
-          onSend={(t) => void sendRef.current?.(t)}
+          onSend={sendFromPanes}
         />
       </aside>
       </div>

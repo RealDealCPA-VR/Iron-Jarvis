@@ -125,6 +125,7 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
 
 import { BuildCodeView, FULL_ARM_GUARD_MS, FULL_DISARM_MS } from "@/components/buildCode/BuildCodeView";
 import { codeRowDraws } from "@/components/buildCode/CodeConversation";
+import { codePanesDraws } from "@/components/buildCode/CodePanes";
 import {
   firstMessageTitle,
   accountStatusWords,
@@ -1222,6 +1223,29 @@ describe("review: drawing only what changed (the v1.250.0 rule)", () => {
     // drew again.
     expect(codeRowDraws.items - before.items).toBeLessThanOrEqual(2);
     expect(codeRowDraws.tools - before.tools).toBe(0);
+  });
+});
+
+describe("v1.472.0: a streamed word does only its own work", () => {
+  it("words over many frames redraw the growing reply only, never the panes or other rows", async () => {
+    waitingOnEdit();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
+    fireEvent.click(within(card).getByTestId("code-ask-allow"));
+    await waitFor(() => expect(screen.queryByTestId("code-ask")).toBeNull());
+    await pause(40);
+    expect(screen.getByTestId("code-panes")).toBeTruthy();
+    const before = { ...codeRowDraws, panes: codePanesDraws.count };
+    // Each word in a frame of its own (a pause longer than a frame between).
+    for (let i = 0; i < 8; i += 1) {
+      act(() => H.lastWatch?.onFrame?.("text", { type: "text", item: "m-live", delta: `word${i} `, turn: "turn-1" }));
+      await pause(40);
+    }
+    await waitFor(() => expect(screen.getAllByTestId("code-text").at(-1)?.textContent).toContain("word7"));
+    expect(codePanesDraws.count - before.panes).toBe(0);
+    expect(codeRowDraws.tools - before.tools).toBe(0);
+    // The growing reply, once per frame, and nothing else.
+    expect(codeRowDraws.items - before.items).toBeLessThanOrEqual(8);
   });
 });
 

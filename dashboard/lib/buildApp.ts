@@ -1618,6 +1618,386 @@ export interface Conversation {
   settled: boolean;
 }
 
+/** What the fold of one level (the conversation, or one helper's rows)
+ *  shares with the levels inside it. */
+interface FoldShared {
+  /** Each step's helper (a helper's helper folds inside its own row). */
+  parentOf: Map<string, string>;
+  /** True while folding event by event: `parentOf` is learned as tool
+   *  events arrive (a whole fold reads it from every event first). */
+  learn: boolean;
+  /** Helpers looked up before any event named THEIR helper. */
+  missed: Set<string>;
+  /** A step's helper became known after an earlier event was placed without
+   *  it: folding event by event no longer matches a whole fold. */
+  broken: boolean;
+}
+
+/** What the fold of one level holds between events. v1.472.0: kept, so a
+ *  stream adds only the events that arrived (`foldConversationFrom`)
+ *  instead of folding the whole session again on every frame. */
+export interface FoldState {
+  root: string;
+  shared: FoldShared;
+  items: ConvItem[];
+  children: Map<string, FoldState>;
+  /** The last children rows made for each helper (made again only when
+   *  that helper's own events changed). */
+  childCache: Map<string, { version: number; row: ConvItem; out: ConvItem }>;
+  /** Events this level was given (its own and its helpers'). */
+  version: number;
+  thinkOpen: number | null;
+  thinkStart: string;
+  textAt: Map<string, number>;
+  thinkAt: Map<string, number>;
+  toolAt: Map<string, number>;
+  steerAt: Map<string, number>;
+  planAt: number | null;
+  asks: Map<string, OpenAsk>;
+  askTitle: Map<string, string>;
+  askWasQuestion: Set<string>;
+  resolved: Set<string>;
+  toolSessionId: string;
+  settled: boolean;
+  n: number;
+  // v1.417.0 (C4.9): what the current turn did, for its receipt.
+  model: string;
+  turnAt: string;
+  usageAt: number | null;
+  turnSteps: Set<string>;
+  turnFiles: Set<string>;
+  // v1.449.0: the steps that failed (and never landed afterwards).
+  turnFailed: Set<string>;
+  // (review) the turn's last moment of WORK: a turn the daemon's restart cut
+  // off gets its error and done only when Iron Jarvis starts again
+  // (service.reconcile_at_boot), hours later — such a turn is timed to its
+  // last step, never to the next start. The app's own words (a notice, an
+  // error) are not work.
+  workAt: string;
+}
+
+function newFold(root: string, shared: FoldShared): FoldState {
+  return {
+    root,
+    shared,
+    items: [],
+    children: new Map(),
+    childCache: new Map(),
+    version: 0,
+    thinkOpen: null,
+    thinkStart: "",
+    textAt: new Map(),
+    thinkAt: new Map(),
+    toolAt: new Map(),
+    steerAt: new Map(),
+    planAt: null,
+    asks: new Map(),
+    askTitle: new Map(),
+    askWasQuestion: new Set(),
+    resolved: new Set(),
+    toolSessionId: "",
+    settled: true,
+    n: 0,
+    model: "",
+    turnAt: "",
+    usageAt: null,
+    turnSteps: new Set(),
+    turnFiles: new Set(),
+    turnFailed: new Set(),
+    workAt: "",
+  };
+}
+
+/** The helper of this level that `parent` sits under (null = not this
+ *  level's). */
+function ownChild(s: FoldState, parent: string): string | null {
+  let p = parent;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const known = s.shared.parentOf.get(p);
+    if (known === undefined) s.shared.missed.add(p);
+    const up = known ?? "";
+    if (up === s.root) return p;
+    if (!up) return s.root ? null : p;
+    p = up;
+  }
+  return null;
+}
+
+/** Fold one event into `s`. */
+function foldStep(s: FoldState, ev: CodeEvent): void {
+  s.version += 1;
+  const sh = s.shared;
+  if (sh.learn && ev.type === "tool" && ev.parent) {
+    const had = sh.parentOf.get(ev.item);
+    if (had !== ev.parent) {
+      // A whole fold reads every step's helper first: one learned after it
+      // was needed (or changed) means event-by-event no longer matches it.
+      if (had !== undefined || sh.missed.has(ev.item)) sh.broken = true;
+      sh.parentOf.set(ev.item, ev.parent);
+    }
+  }
+  const key = (p: string) => `${p}-${s.n++}`;
+  if (s.turnAt && ev.type !== "user" && ev.type !== "done" && ev.type !== "error" && ev.type !== "notice"
+    // v1.427.2: a step closed "did not finish" is the app's own row too.
+    && !(ev.type === "tool" && ev.status === "stopped")
+    && Number.isFinite(Date.parse(ev.at))) {
+    s.workAt = ev.at;
+  }
+  // v1.418.0 (C4.3): anything said after a thinking item ends it.
+  if (s.thinkOpen !== null
+    && !(ev.type === "thinking" && (ev.parent ?? "") === s.root && s.thinkAt.get(ev.item) === s.thinkOpen)) {
+    const it = s.items[s.thinkOpen] as Extract<ConvItem, { kind: "thinking" }>;
+    s.items[s.thinkOpen] = { ...it, seconds: secondsBetween(s.thinkStart, ev.at) };
+    s.thinkOpen = null;
+  }
+  // v1.418.0 (C4.2): a helper's own events go into its row.
+  const parent = (ev.type === "tool" || ev.type === "text" || ev.type === "text_done" || ev.type === "thinking")
+    ? ev.parent ?? ""
+    : "";
+  if (parent && parent !== s.root) {
+    const top = ownChild(s, parent);
+    if (top === null) return;
+    if (!s.toolAt.has(top)) {
+      // Its own step was trimmed (or has not arrived): a row to hold it.
+      s.toolAt.set(top, s.items.length);
+      s.items.push({
+        kind: "tool",
+        key: key("x"),
+        tool: { type: "tool", at: ev.at, item: top, kind: "task", name: "", title: "", input: "", status: "running",
+                output: "", path: "", line: null, diff: "" },
+      });
+    }
+    let child = s.children.get(top);
+    if (!child) {
+      child = newFold(top, sh);
+      s.children.set(top, child);
+    }
+    foldStep(child, ev);
+    if (ev.type === "tool" && (ev.kind === "edit" || ev.kind === "write") && ev.status === "done" && ev.path && s.turnAt) {
+      s.turnFiles.add(ev.path);
+    }
+    return;
+  }
+  switch (ev.type) {
+    case "session":
+      if (ev.harnessSessionId) s.toolSessionId = ev.harnessSessionId;
+      if (ev.model) s.model = ev.model;
+      break;
+    case "user":
+      s.items.push({ kind: "user", key: key("u"), text: ev.text, files: ev.files, at: ev.at, ...(ev.carry ? { carry: ev.carry } : {}) });
+      s.planAt = null;
+      s.settled = false;
+      s.turnAt = ev.at;
+      s.workAt = "";
+      s.usageAt = null;
+      s.turnSteps.clear();
+      s.turnFiles.clear();
+      s.turnFailed.clear();
+      break;
+    case "text": {
+      const i = s.textAt.get(ev.item);
+      if (i === undefined) {
+        s.textAt.set(ev.item, s.items.length);
+        s.items.push({ kind: "text", key: key("t"), text: ev.delta, done: false });
+      } else {
+        const it = s.items[i] as Extract<ConvItem, { kind: "text" }>;
+        if (!it.done) s.items[i] = { ...it, text: it.text + ev.delta };
+      }
+      break;
+    }
+    case "text_done": {
+      const i = s.textAt.get(ev.item);
+      if (i === undefined) {
+        s.textAt.set(ev.item, s.items.length);
+        s.items.push({ kind: "text", key: key("t"), text: ev.text, done: true });
+      } else {
+        const it = s.items[i] as Extract<ConvItem, { kind: "text" }>;
+        s.items[i] = { ...it, text: ev.text || it.text, done: true };
+      }
+      break;
+    }
+    case "thinking": {
+      const i = s.thinkAt.get(ev.item);
+      if (i === undefined) {
+        s.thinkAt.set(ev.item, s.items.length);
+        s.thinkOpen = s.items.length;
+        s.thinkStart = ev.at;
+        s.items.push({ kind: "thinking", key: key("k"), text: ev.delta, live: false, seconds: null });
+      } else {
+        const it = s.items[i] as Extract<ConvItem, { kind: "thinking" }>;
+        s.items[i] = { ...it, text: it.text + ev.delta };
+      }
+      break;
+    }
+    case "tool": {
+      if (ev.kind !== "todo") s.turnSteps.add(ev.item);
+      if (ev.kind !== "todo" && ev.status === "failed") s.turnFailed.add(ev.item);
+      else if (ev.status === "done") s.turnFailed.delete(ev.item);
+      const i = s.toolAt.get(ev.item);
+      if ((ev.kind === "edit" || ev.kind === "write") && ev.status === "done") {
+        // (review) the step's END may name no path: the one it began with.
+        const p = ev.path || (i === undefined ? "" : (s.items[i] as Extract<ConvItem, { kind: "tool" }>).tool.path);
+        if (p) s.turnFiles.add(p);
+      }
+      if (i === undefined) {
+        s.toolAt.set(ev.item, s.items.length);
+        s.items.push({ kind: "tool", key: key("x"), tool: ev });
+      } else {
+        const prev = (s.items[i] as Extract<ConvItem, { kind: "tool" }>).tool;
+        s.items[i] = {
+          kind: "tool",
+          key: s.items[i].key,
+          tool: {
+            ...ev,
+            name: ev.name || prev.name,
+            title: ev.title || prev.title,
+            input: ev.input || prev.input,
+            output: ev.output || prev.output,
+            path: ev.path || prev.path,
+            line: ev.line ?? prev.line,
+            diff: ev.diff || prev.diff,
+          },
+        };
+      }
+      break;
+    }
+    case "plan":
+      if (s.planAt === null) {
+        s.planAt = s.items.length;
+        s.items.push({ kind: "plan", key: key("p"), steps: ev.steps });
+      } else {
+        s.items[s.planAt] = { kind: "plan", key: s.items[s.planAt].key, steps: ev.steps };
+      }
+      break;
+    case "approval":
+    case "question":
+      if (!s.resolved.has(ev.requestId)) s.asks.set(ev.requestId, ev);
+      s.askTitle.set(ev.requestId, ev.type === "approval" ? ev.title : ev.questions[0]?.question ?? "");
+      if (ev.type === "question") s.askWasQuestion.add(ev.requestId);
+      break;
+    case "resolved":
+      s.resolved.add(ev.requestId);
+      s.asks.delete(ev.requestId);
+      s.items.push({
+        kind: "resolved",
+        key: key("r"),
+        requestId: ev.requestId,
+        decision: ev.decision,
+        about: s.askTitle.get(ev.requestId) ?? "",
+        question: s.askWasQuestion.has(ev.requestId),
+      });
+      break;
+    case "notice":
+      s.items.push({ kind: "notice", key: key("n"), text: ev.text });
+      break;
+    case "error":
+      s.items.push({
+        kind: "error",
+        key: key("e"),
+        title: ev.title,
+        fix: ev.fix,
+        technical: ev.technical,
+        fixKind: ev.fixKind,
+        account: ev.account,
+      });
+      break;
+    case "usage":
+      s.usageAt = s.items.length;
+      s.items.push({
+        kind: "usage",
+        key: key("g"),
+        input: ev.input,
+        output: ev.output,
+        costUsd: ev.costUsd,
+        listPrice: ev.listPrice,
+        costReportedBy: ev.costReportedBy,
+      });
+      break;
+    case "steer": {
+      const i = s.steerAt.get(ev.id);
+      if (i === undefined) {
+        s.steerAt.set(ev.id, s.items.length);
+        s.items.push({ kind: "steer", key: key("s"), id: ev.id, text: ev.text, files: ev.files, state: ev.state, how: ev.how });
+      } else {
+        const it = s.items[i] as Extract<ConvItem, { kind: "steer" }>;
+        s.items[i] = { ...it, state: ev.state, text: it.text || ev.text, files: it.files.length ? it.files : ev.files, how: it.how || ev.how };
+      }
+      break;
+    }
+    case "done": {
+      // v1.417.0 (C4.9): the turn's receipt; its usage line folds into it.
+      let usage: TurnReceipt["usage"] = null;
+      if (s.usageAt !== null) {
+        const u = s.items[s.usageAt] as Extract<ConvItem, { kind: "usage" }>;
+        usage = { input: u.input, output: u.output, costUsd: u.costUsd, listPrice: u.listPrice, costReportedBy: u.costReportedBy };
+        s.items[s.usageAt] = { ...u, folded: true };
+      }
+      const receipt: TurnReceipt = {
+        model: s.model,
+        // (review) a turn that was stopped (or cut off by a restart) is
+        // timed to its last step: its done may be written much later.
+        seconds: !s.turnAt
+          ? null
+          : ev.stop === "interrupted"
+            ? s.workAt ? secondsBetween(s.turnAt, s.workAt) : null
+            : ev.at ? secondsBetween(s.turnAt, ev.at) : null,
+        actions: s.turnSteps.size,
+        failed: s.turnFailed.size,
+        files: s.turnFiles.size,
+        usage,
+      };
+      const worth = !!(receipt.model || receipt.seconds !== null || receipt.actions || receipt.files || receipt.usage);
+      s.items.push({ kind: "done", key: key("d"), stop: ev.stop, result: ev.result, receipt: worth ? receipt : null });
+      s.usageAt = null;
+      s.turnSteps.clear();
+      s.turnFiles.clear();
+      s.turnFailed.clear();
+      s.turnAt = "";
+      s.workAt = "";
+      // A turn that ended asks nothing any more.
+      s.asks.clear();
+      s.settled = true;
+      break;
+    }
+  }
+}
+
+/** What `s` draws now (`s` itself is not changed: more events may follow). */
+function foldResult(s: FoldState, extra: readonly CodeEvent[]): Conversation {
+  const items = s.items.slice();
+  // v1.418.0 (C4.3): a thinking item nothing has followed yet is live while
+  // the turn runs and it is the newest thing said.
+  if (s.thinkOpen !== null && !s.settled && s.thinkOpen === items.length - 1) {
+    const it = items[s.thinkOpen] as Extract<ConvItem, { kind: "thinking" }>;
+    items[s.thinkOpen] = { ...it, live: true };
+  }
+  // v1.418.0 (C4.2): each helper step gets what ran inside it (made again
+  // only when that helper's events or its own row changed).
+  for (const [top, child] of s.children) {
+    const i = s.toolAt.get(top);
+    if (i === undefined) continue;
+    const row = items[i];
+    const cached = s.childCache.get(top);
+    if (cached && cached.version === child.version && cached.row === row) {
+      items[i] = cached.out;
+      continue;
+    }
+    const children = foldResult(child, []).items;
+    const out = children.length ? { ...(row as Extract<ConvItem, { kind: "tool" }>), children } : row;
+    s.childCache.set(top, { version: child.version, row, out });
+    items[i] = out;
+  }
+  const asks = new Map(s.asks);
+  if (!s.settled) {
+    for (const p of extra) {
+      if (p.type !== "approval" && p.type !== "question") continue;
+      if (s.resolved.has(p.requestId) || asks.has(p.requestId)) continue;
+      asks.set(p.requestId, p);
+    }
+  }
+  return { items, asks: [...asks.values()], toolSessionId: s.toolSessionId, settled: s.settled };
+}
+
 /** Fold the event list into what the screen draws. Text and thinking are
  *  joined per `item`; a tool's later events update its one row; one plan per
  *  turn, at the place it first appeared, showing its newest steps. An ask
@@ -1634,298 +2014,56 @@ export function foldConversation(
   extra: readonly CodeEvent[] = [],
   root = "",
 ): Conversation {
-  const items: ConvItem[] = [];
-  // v1.418.0 (C4.2): each step's helper, to find the helper of `root` an
-  // event belongs to (a helper's helper folds inside its own row).
-  const parentOf = new Map<string, string>();
+  const shared: FoldShared = { parentOf: new Map(), learn: false, missed: new Set(), broken: false };
   for (const ev of events) {
-    if (ev.type === "tool" && ev.parent) parentOf.set(ev.item, ev.parent);
+    if (ev.type === "tool" && ev.parent) shared.parentOf.set(ev.item, ev.parent);
   }
-  const childEvents = new Map<string, CodeEvent[]>();
-  const ownChild = (parent: string): string | null => {
-    let p = parent;
-    for (let depth = 0; depth < 8; depth += 1) {
-      const up = parentOf.get(p) ?? "";
-      if (up === root) return p;
-      if (!up) return root ? null : p;
-      p = up;
+  const s = newFold(root, shared);
+  for (const ev of events) foldStep(s, ev);
+  return foldResult(s, extra);
+}
+
+/** v1.472.0: a fold that can take more events (`foldConversationFrom`). */
+export interface FoldMemo {
+  events: readonly CodeEvent[];
+  state: FoldState;
+}
+
+/** `foldConversation(events, extra)`, folding only what came after the
+ *  events `memo` already holds — the answer is the same (pinned against a
+ *  whole fold, event by event). A list that is not the old one plus more (a
+ *  session read again, earlier steps loaded, the echo of a question that
+ *  replaced the one drawn when it was sent), or a helper whose own helper
+ *  became known late, folds whole. */
+export function foldConversationFrom(
+  memo: FoldMemo | null,
+  events: readonly CodeEvent[],
+  extra: readonly CodeEvent[] = [],
+): { conversation: Conversation; memo: FoldMemo | null } {
+  let state: FoldState | null = null;
+  if (memo && events.length >= memo.events.length) {
+    const old = memo.events;
+    let same = true;
+    for (let i = 0; i < old.length; i += 1) {
+      if (events[i] !== old[i]) {
+        same = false;
+        break;
+      }
     }
-    return null;
-  };
-  // v1.418.0 (C4.3): the thinking item still going, and when it began.
-  let thinkOpen: number | null = null;
-  let thinkStart = "";
-  const textAt = new Map<string, number>();
-  const thinkAt = new Map<string, number>();
-  const toolAt = new Map<string, number>();
-  const steerAt = new Map<string, number>();
-  let planAt: number | null = null;
-  const asks = new Map<string, OpenAsk>();
-  const askTitle = new Map<string, string>();
-  const askWasQuestion = new Set<string>();
-  const resolved = new Set<string>();
-  let toolSessionId = "";
-  let settled = true;
-  let n = 0;
-  const key = (p: string) => `${p}-${n++}`;
-  // v1.417.0 (C4.9): what the current turn did, for its receipt.
-  let model = "";
-  let turnAt = "";
-  let usageAt: number | null = null;
-  const turnSteps = new Set<string>();
-  const turnFiles = new Set<string>();
-  // v1.449.0: the steps that failed (and never landed afterwards).
-  const turnFailed = new Set<string>();
-  // (review) the turn's last moment of WORK: a turn the daemon's restart cut
-  // off gets its error and done only when Iron Jarvis starts again
-  // (service.reconcile_at_boot), hours later — such a turn is timed to its
-  // last step, never to the next start. The app's own words (a notice, an
-  // error) are not work.
-  let workAt = "";
-  for (const ev of events) {
-    if (turnAt && ev.type !== "user" && ev.type !== "done" && ev.type !== "error" && ev.type !== "notice"
-      // v1.427.2: a step closed "did not finish" is the app's own row too.
-      && !(ev.type === "tool" && ev.status === "stopped")
-      && Number.isFinite(Date.parse(ev.at))) {
-      workAt = ev.at;
-    }
-    // v1.418.0 (C4.3): anything said after a thinking item ends it.
-    if (thinkOpen !== null
-      && !(ev.type === "thinking" && (ev.parent ?? "") === root && thinkAt.get(ev.item) === thinkOpen)) {
-      const it = items[thinkOpen] as Extract<ConvItem, { kind: "thinking" }>;
-      items[thinkOpen] = { ...it, seconds: secondsBetween(thinkStart, ev.at) };
-      thinkOpen = null;
-    }
-    // v1.418.0 (C4.2): a helper's own events go into its row.
-    const parent = (ev.type === "tool" || ev.type === "text" || ev.type === "text_done" || ev.type === "thinking")
-      ? ev.parent ?? ""
-      : "";
-    if (parent && parent !== root) {
-      const top = ownChild(parent);
-      if (top === null) continue;
-      if (!toolAt.has(top)) {
-        // Its own step was trimmed (or has not arrived): a row to hold it.
-        toolAt.set(top, items.length);
-        items.push({
-          kind: "tool",
-          key: key("x"),
-          tool: { type: "tool", at: ev.at, item: top, kind: "task", name: "", title: "", input: "", status: "running",
-                  output: "", path: "", line: null, diff: "" },
-        });
-      }
-      const list = childEvents.get(top) ?? [];
-      list.push(ev);
-      childEvents.set(top, list);
-      if (ev.type === "tool" && (ev.kind === "edit" || ev.kind === "write") && ev.status === "done" && ev.path && turnAt) {
-        turnFiles.add(ev.path);
-      }
-      continue;
-    }
-    switch (ev.type) {
-      case "session":
-        if (ev.harnessSessionId) toolSessionId = ev.harnessSessionId;
-        if (ev.model) model = ev.model;
-        break;
-      case "user":
-        items.push({ kind: "user", key: key("u"), text: ev.text, files: ev.files, at: ev.at, ...(ev.carry ? { carry: ev.carry } : {}) });
-        planAt = null;
-        settled = false;
-        turnAt = ev.at;
-        workAt = "";
-        usageAt = null;
-        turnSteps.clear();
-        turnFiles.clear();
-        turnFailed.clear();
-        break;
-      case "text": {
-        const i = textAt.get(ev.item);
-        if (i === undefined) {
-          textAt.set(ev.item, items.length);
-          items.push({ kind: "text", key: key("t"), text: ev.delta, done: false });
-        } else {
-          const it = items[i] as Extract<ConvItem, { kind: "text" }>;
-          if (!it.done) items[i] = { ...it, text: it.text + ev.delta };
-        }
-        break;
-      }
-      case "text_done": {
-        const i = textAt.get(ev.item);
-        if (i === undefined) {
-          textAt.set(ev.item, items.length);
-          items.push({ kind: "text", key: key("t"), text: ev.text, done: true });
-        } else {
-          const it = items[i] as Extract<ConvItem, { kind: "text" }>;
-          items[i] = { ...it, text: ev.text || it.text, done: true };
-        }
-        break;
-      }
-      case "thinking": {
-        const i = thinkAt.get(ev.item);
-        if (i === undefined) {
-          thinkAt.set(ev.item, items.length);
-          thinkOpen = items.length;
-          thinkStart = ev.at;
-          items.push({ kind: "thinking", key: key("k"), text: ev.delta, live: false, seconds: null });
-        } else {
-          const it = items[i] as Extract<ConvItem, { kind: "thinking" }>;
-          items[i] = { ...it, text: it.text + ev.delta };
-        }
-        break;
-      }
-      case "tool": {
-        if (ev.kind !== "todo") turnSteps.add(ev.item);
-        if (ev.kind !== "todo" && ev.status === "failed") turnFailed.add(ev.item);
-        else if (ev.status === "done") turnFailed.delete(ev.item);
-        const i = toolAt.get(ev.item);
-        if ((ev.kind === "edit" || ev.kind === "write") && ev.status === "done") {
-          // (review) the step's END may name no path: the one it began with.
-          const p = ev.path || (i === undefined ? "" : (items[i] as Extract<ConvItem, { kind: "tool" }>).tool.path);
-          if (p) turnFiles.add(p);
-        }
-        if (i === undefined) {
-          toolAt.set(ev.item, items.length);
-          items.push({ kind: "tool", key: key("x"), tool: ev });
-        } else {
-          const prev = (items[i] as Extract<ConvItem, { kind: "tool" }>).tool;
-          items[i] = {
-            kind: "tool",
-            key: items[i].key,
-            tool: {
-              ...ev,
-              name: ev.name || prev.name,
-              title: ev.title || prev.title,
-              input: ev.input || prev.input,
-              output: ev.output || prev.output,
-              path: ev.path || prev.path,
-              line: ev.line ?? prev.line,
-              diff: ev.diff || prev.diff,
-            },
-          };
-        }
-        break;
-      }
-      case "plan":
-        if (planAt === null) {
-          planAt = items.length;
-          items.push({ kind: "plan", key: key("p"), steps: ev.steps });
-        } else {
-          items[planAt] = { kind: "plan", key: items[planAt].key, steps: ev.steps };
-        }
-        break;
-      case "approval":
-      case "question":
-        if (!resolved.has(ev.requestId)) asks.set(ev.requestId, ev);
-        askTitle.set(ev.requestId, ev.type === "approval" ? ev.title : ev.questions[0]?.question ?? "");
-        if (ev.type === "question") askWasQuestion.add(ev.requestId);
-        break;
-      case "resolved":
-        resolved.add(ev.requestId);
-        asks.delete(ev.requestId);
-        items.push({
-          kind: "resolved",
-          key: key("r"),
-          requestId: ev.requestId,
-          decision: ev.decision,
-          about: askTitle.get(ev.requestId) ?? "",
-          question: askWasQuestion.has(ev.requestId),
-        });
-        break;
-      case "notice":
-        items.push({ kind: "notice", key: key("n"), text: ev.text });
-        break;
-      case "error":
-        items.push({
-          kind: "error",
-          key: key("e"),
-          title: ev.title,
-          fix: ev.fix,
-          technical: ev.technical,
-          fixKind: ev.fixKind,
-          account: ev.account,
-        });
-        break;
-      case "usage":
-        usageAt = items.length;
-        items.push({
-          kind: "usage",
-          key: key("g"),
-          input: ev.input,
-          output: ev.output,
-          costUsd: ev.costUsd,
-          listPrice: ev.listPrice,
-          costReportedBy: ev.costReportedBy,
-        });
-        break;
-      case "steer": {
-        const i = steerAt.get(ev.id);
-        if (i === undefined) {
-          steerAt.set(ev.id, items.length);
-          items.push({ kind: "steer", key: key("s"), id: ev.id, text: ev.text, files: ev.files, state: ev.state, how: ev.how });
-        } else {
-          const it = items[i] as Extract<ConvItem, { kind: "steer" }>;
-          items[i] = { ...it, state: ev.state, text: it.text || ev.text, files: it.files.length ? it.files : ev.files, how: it.how || ev.how };
-        }
-        break;
-      }
-      case "done": {
-        // v1.417.0 (C4.9): the turn's receipt; its usage line folds into it.
-        let usage: TurnReceipt["usage"] = null;
-        if (usageAt !== null) {
-          const u = items[usageAt] as Extract<ConvItem, { kind: "usage" }>;
-          usage = { input: u.input, output: u.output, costUsd: u.costUsd, listPrice: u.listPrice, costReportedBy: u.costReportedBy };
-          items[usageAt] = { ...u, folded: true };
-        }
-        const receipt: TurnReceipt = {
-          model,
-          // (review) a turn that was stopped (or cut off by a restart) is
-          // timed to its last step: its done may be written much later.
-          seconds: !turnAt
-            ? null
-            : ev.stop === "interrupted"
-              ? workAt ? secondsBetween(turnAt, workAt) : null
-              : ev.at ? secondsBetween(turnAt, ev.at) : null,
-          actions: turnSteps.size,
-          failed: turnFailed.size,
-          files: turnFiles.size,
-          usage,
-        };
-        const worth = !!(receipt.model || receipt.seconds !== null || receipt.actions || receipt.files || receipt.usage);
-        items.push({ kind: "done", key: key("d"), stop: ev.stop, result: ev.result, receipt: worth ? receipt : null });
-        usageAt = null;
-        turnSteps.clear();
-        turnFiles.clear();
-        turnFailed.clear();
-        turnAt = "";
-        workAt = "";
-        // A turn that ended asks nothing any more.
-        asks.clear();
-        settled = true;
-        break;
-      }
+    if (same) {
+      state = memo.state;
+      for (let i = old.length; i < events.length; i += 1) foldStep(state, events[i]);
+      if (state.shared.broken) state = null;
     }
   }
-  // v1.418.0 (C4.3): a thinking item nothing has followed yet is live while
-  // the turn runs and it is the newest thing said.
-  if (thinkOpen !== null && !settled && thinkOpen === items.length - 1) {
-    const it = items[thinkOpen] as Extract<ConvItem, { kind: "thinking" }>;
-    items[thinkOpen] = { ...it, live: true };
+  if (!state) {
+    state = newFold("", { parentOf: new Map(), learn: true, missed: new Set(), broken: false });
+    for (const ev of events) foldStep(state, ev);
+    // A helper's helper became known after its events were placed: the
+    // whole fold (which reads every step's helper first), nothing kept.
+    if (state.shared.broken) return { conversation: foldConversation(events, extra), memo: null };
   }
-  // v1.418.0 (C4.2): each helper step gets what ran inside it.
-  for (const [top, evs] of childEvents) {
-    const i = toolAt.get(top);
-    if (i === undefined) continue;
-    const row = items[i] as Extract<ConvItem, { kind: "tool" }>;
-    const children = foldConversation(evs, [], top).items;
-    if (children.length) items[i] = { ...row, children };
-  }
-  if (!settled) {
-    for (const p of extra) {
-      if (p.type !== "approval" && p.type !== "question") continue;
-      if (resolved.has(p.requestId) || asks.has(p.requestId)) continue;
-      asks.set(p.requestId, p);
-    }
-  }
-  return { items, asks: [...asks.values()], toolSessionId, settled };
+  return { conversation: foldResult(state, extra), memo: { events, state } };
 }
 
 /** v1.418.0 (C4.2): what a helper step's folded row says before it opens —

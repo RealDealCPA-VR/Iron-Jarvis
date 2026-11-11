@@ -74,6 +74,12 @@ async def test_a_cut_left_before_the_first_carry_pass_is_offered_and_the_marker_
     _log(home, row.id, _graceful())  # the update to this version cut it
     S.reconcile_cut_turns(home)
     assert not CO.since_path(home).exists(), "no daemon that carries replies on has run here"
+    # v1.472.0: the marker is written by the first carry pass, a moment AFTER
+    # the cut. On the real clock both could land in the same 15.6 ms tick and
+    # the cut then read as new (about 1 run in 2, older than this version):
+    # step the marker's clock past the cut, as the sibling test below does.
+    cut_at = CO._parse(CO.read_cut(home, row.id)["cut_at"])
+    monkeypatch.setattr(CO, "CLOCK", lambda: cut_at + timedelta(seconds=1))
     svc = S.service_for(app.state.platform)
     drivers = fake_tool(svc, monkeypatch)
     assert await CO.carry_on_after_restart(svc) == [], "a cut from before this version carried on by itself"

@@ -46,6 +46,11 @@ from tests._build_app_pi_helpers_v1411 import (
     use_fake_pi,
 )
 
+async def _one_event_at_a_time(_q, first):
+    """v1.472.0: what a live viewer got before pieces were merged."""
+    return [first], False
+
+
 GOLDEN = Path(__file__).parents[1] / "dashboard" / "__tests__" / "fixtures" / "build-app-events-v1411.json"
 
 #: scenario -> (fixture, what the user does)
@@ -112,6 +117,10 @@ async def _turn(c, sid: str, text: str = "do it", turn_id: str = "t1", **extra):
 # THE CONTRACT
 # --------------------------------------------------------------------------- #
 async def test_the_golden_file_is_what_the_real_daemon_sends_for_pi(tmp_path, monkeypatch):
+    # v1.472.0: the golden records each event as the tool sent it; a live
+    # viewer's merging (timed, tests/test_build_app_live_merge_v1472.py) is
+    # turned off here so the recording does not depend on timing.
+    monkeypatch.setattr(S, "_gather_live", _one_event_at_a_time)
     got = {}
     for name, (fixture, actions) in SCENARIOS.items():
         evs, _app, _sid, work = await run_pi(tmp_path, monkeypatch, fixture, actions, name=name)
