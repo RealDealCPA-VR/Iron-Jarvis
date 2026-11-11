@@ -247,9 +247,7 @@ async def _owned(svc: Any, parent: str, helper: str) -> Any:
 async def start(svc: Any, parent: str, *, tool: str = "", task: str = "", title: str = "",
                 helper: str = "") -> dict[str, Any]:
     """Start a helper on ``task`` (or hand more to an existing ``helper``)."""
-    from . import store
-    from . import words as W
-    from .service import Refused, check_mode, default_mode, first_message_title
+    from .service import Refused
 
     prow = await _parent_row(svc, parent)
     task = str(task or "").strip()
@@ -259,15 +257,41 @@ async def start(svc: Any, parent: str, *, tool: str = "", task: str = "", title:
         raise Refused(TASK_TOO_LONG.format(n=len(task), max=TASK_CHARS), 400)
     if not (prow.folder or "").strip():
         raise Refused(NO_FOLDER, 400)
+    # Review: ONE start at a time per session, from the count to the piece's
+    # start. A coding tool can send several calls at once, and each one used
+    # to count the working helpers before any of them had begun.
+    async with _start_lock(svc, parent):
+        return await _start_locked(svc, parent, prow, tool=tool, task=task, title=title, helper=helper)
+
+
+def _start_lock(svc: Any, parent: str) -> asyncio.Lock:
+    locks = getattr(svc, "_handoff_start_locks", None)
+    if locks is None:
+        locks = {}
+        svc._handoff_start_locks = locks
+    lock = locks.get(parent)
+    if lock is None:
+        lock = locks[parent] = asyncio.Lock()
+    return lock
+
+
+async def _start_locked(svc: Any, parent: str, prow: Any, *, tool: str, task: str, title: str,
+                        helper: str) -> dict[str, Any]:
+    from . import store
+    from . import words as W
+    from .service import Refused, check_mode, default_mode, first_message_title
+
     helpers = await asyncio.to_thread(_helper_rows, svc, parent)
     working = sum(1 for r in helpers if _running(svc, r.id))
     if helper:
         crow = await _owned(svc, parent, helper)
         if _running(svc, crow.id):
             raise Refused(STILL_WORKING, 409)
-    else:
-        if working >= MAX_RUNNING:
-            raise Refused(TOO_MANY.format(n=working, max=MAX_RUNNING), 409)
+    # Review: more work for an idle helper makes it work again, so it counts
+    # against the limit like a new one.
+    if working >= MAX_RUNNING:
+        raise Refused(TOO_MANY.format(n=working, max=MAX_RUNNING), 409)
+    if not helper:
         ready = await _available(svc)
         want = tool_id(tool) or (prow.harness if not str(tool or "").strip() else "")
         if not want:
