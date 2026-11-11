@@ -2048,9 +2048,10 @@ Nothing on screen changes. Chat now reads three kinds of request it got
 wrong in v1.471.0: "save this as a skill instead" brings the skill card;
 "create a Google Assistant skill" (or Siri, Alexa) does not; and trial
 balances, ledgers, schedules, memos and budgets count as documents when you
-ask about all of them. On a new set of 80 test messages written after the
-change and never used to tune it, chat read 100% of the skill requests and
-97.5% of the many-files requests right (v1.470.2 read 75% and 72.5%).
+ask about all of them, and "each contract's terms" is about each contract.
+On a new set of 60 test messages written after the change and never used to
+tune it, chat read every request right (v1.470.2 read 83% of the skill
+requests and 73% of the many-files requests right).
 
 ## Faster tool calls, better reading of requests, sturdier scripts (v1.471.0)
 

@@ -367,7 +367,7 @@ def test_script_requests_sets_a_and_b(row):
 #: guided a change and must stay whole. Set D was written AFTER that change
 #: and never tuned against: its misses are listed so a change shows.
 SET_D_SKILL_MISSES: set[str] = set()
-SET_D_SCRIPT_MISSES = {"summarize each contract's renewal terms"}
+SET_D_SCRIPT_MISSES: set[str] = set()
 
 
 @pytest.mark.parametrize("text, expected", _rows_of("c", "skill"))
@@ -380,8 +380,12 @@ def test_script_requests_set_c(row):
     assert _script_row(row) is row[1]
 
 
-def test_the_held_out_set_d():
-    d = _set("d")
+@pytest.mark.parametrize("name", ["d", "e"])
+def test_the_held_out_sets(name):
+    """Set D guided the possessive rule ("each contract's renewal terms"),
+    so it must stay whole; set E was written after that rule and never tuned
+    against."""
+    d = _set(name)
     skill_wrong = {r[0] for r in d["skill"] if wants_skill_create(r[0]) is not r[1]}
     script_wrong = {r[0] for r in d["script"] if _script_row(r) is not r[1]}
     assert skill_wrong == SET_D_SKILL_MISSES

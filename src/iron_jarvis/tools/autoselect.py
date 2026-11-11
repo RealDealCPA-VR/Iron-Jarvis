@@ -3714,7 +3714,12 @@ def wants_tool_script(
     and counts in words ("the six spreadsheets") are."""
     if not picked:
         return False
-    words = _SCRIPT_WORD.findall((text or "")[:4000].lower())
+    # A possessive names the thing too: "each contract's renewal terms" is
+    # about each CONTRACT (v1.471.1).
+    words = [
+        w[:-2] if w.endswith("'s") and w[:-2] in _SCRIPT_THINGS else w
+        for w in _SCRIPT_WORD.findall((text or "")[:4000].lower())
+    ]
     if attachments >= _SCRIPT_COUNT and any(w in _SCRIPT_POINTERS for w in words):
         return True
     for i, word in enumerate(words):

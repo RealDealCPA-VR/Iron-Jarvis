@@ -17147,8 +17147,10 @@ does not need a bump, stop and bump it.
     balances, ledgers, schedules, memos, budgets are things). Set C now
     guided a change and is pinned whole; NEW held-out set D (40 + 40),
     written after the change: skill 100%, script 97.5% (v1.470.2: 75.0% and
-    72.5%). Its one miss, "summarize each contract's renewal terms" (a
-    possessive "'s" thing), is listed in `SET_D_SCRIPT_MISSES`. A screen
+    72.5%). Its one miss ("summarize each contract's renewal terms") became
+    a rule too: a possessive of a thing names the thing. NEW held-out set E
+    (30 + 30), written after that: both 100% (v1.470.2: 83.3% and 73.3%).
+    Sets D and E are pinned whole. A screen
     comparison (six e2e screenshots, v1.470.2 against v1.471.0, plus a
     new-against-new CONTROL) found only run-to-run noise: the random
     suggestion chips, the settle position and the drifting glow on desktop,
