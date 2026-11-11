@@ -262,6 +262,13 @@ class ReplSession:
         self._stopped = threading.Event()
         #: Kills handed to the background after a Stop (held so they finish).
         self._reaps: set[Any] = set()
+        #: v1.473.0: where the PRIVATE data this child's scripts have read
+        #: came from ("local" = this PC's files and stores, "pack:<name>" =
+        #: a connected app). ``tools/tool_script.py`` reads and fills it to
+        #: stop a script carrying one place's data to another; it is emptied
+        #: with every new child, because the variables that held the data die
+        #: with the old one.
+        self.script_origins: set[str] = set()
         #: argv for the child. Overridable so tests (and future sandboxing)
         #: can launch something other than the default worker.
         self.command: list[str] = list(command) if command else worker_command()
@@ -346,6 +353,7 @@ class ReplSession:
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         self._scratch = Path(tempfile.mkdtemp(prefix="ij-repl-"))
         self.sealed = {}
+        self.script_origins = set()  # a new child holds nothing yet
         pipes: dict[str, Any] = dict(
             cwd=str(self.workspace),
             stdin=subprocess.PIPE,
@@ -562,6 +570,66 @@ class ReplSession:
                 "error": f"{name} could not be run ({type(exc).__name__}: {exc})",
             }
 
+    def _answer_batch(
+        self, batch: list[Any], already: int, batch_handler: Any
+    ) -> dict[str, Any]:
+        """`tools.map`: several calls in one message (v1.473.0), answered as
+        one list in the same order. Worker thread; never raises. A call past
+        the script's limit, or one that is not a call at all, gets its own
+        failed result: the rest still run."""
+        if batch_handler is None:
+            return {"ok": False, "error": _TOOLS_OFF_ERROR}
+        if self._stopped.is_set():
+            return {"ok": False, "error": _STOPPED_ERROR}
+        results: list[Any] = [None] * len(batch)
+        run: list[dict[str, Any]] = []
+        slots: list[int] = []
+        for i, item in enumerate(batch):
+            if not isinstance(item, dict) or not str(item.get("tool") or "").strip():
+                results[i] = {"ok": False, "error": "this item names no tool"}
+            elif already + len(run) + 1 > MAX_TOOL_CALLS:
+                results[i] = {"ok": False, "error": _TOOL_LIMIT_ERROR}
+            else:
+                args = item.get("args")
+                run.append({
+                    "tool": str(item.get("tool")).strip(),
+                    "args": args if isinstance(args, dict) else {},
+                })
+                slots.append(i)
+        if run:
+            try:
+                answers = batch_handler(run)
+            except Exception as exc:  # noqa: BLE001 — every item gets a sentence
+                answers = [
+                    {"ok": False, "error": f"could not be run ({type(exc).__name__}: {exc})"}
+                ] * len(run)
+            answers = answers if isinstance(answers, list) else []
+            for at, slot in enumerate(slots):
+                one = answers[at] if at < len(answers) else None
+                results[slot] = (
+                    dict(one) if isinstance(one, dict)
+                    else {"ok": False, "error": "gave no usable answer"}
+                )
+        return {"ok": True, "results": results}
+
+    def _answer_keep(self, keep: dict[str, Any], keep_handler: Any) -> dict[str, Any]:
+        """`tools.keep` / `tools.plan` (v1.473.0): the script hands the app a
+        value to hold. Worker thread; never raises."""
+        if keep_handler is None:
+            return {"ok": False, "error": _TOOLS_OFF_ERROR}
+        try:
+            reply = keep_handler(
+                str(keep.get("name") or ""), keep.get("json"), bool(keep.get("plan"))
+            )
+            if isinstance(reply, dict):
+                return dict(reply)
+            return {"ok": False, "error": "the value could not be kept"}
+        except Exception as exc:  # noqa: BLE001 — the script gets a sentence
+            return {
+                "ok": False,
+                "error": f"the value could not be kept ({type(exc).__name__}: {exc})",
+            }
+
     def _exchange(
         self,
         req_id: str,
@@ -569,6 +637,9 @@ class ReplSession:
         timeout: float,
         tools: "list[str] | None" = None,
         handler: Any = None,
+        batch_handler: Any = None,
+        keep_handler: Any = None,
+        variables: "dict[str, Any] | None" = None,
     ) -> dict[str, Any]:
         """One request/response round trip. BLOCKING — worker thread only.
 
@@ -585,6 +656,9 @@ class ReplSession:
             # A TOOL SCRIPT (v1.470.0): the child binds `tools` for this one
             # request and may send {"id", "call"} lines before its response.
             request["tools"] = list(tools)
+            if variables:
+                # v1.473.0: a saved script's parameters, bound before it runs.
+                request["vars"] = dict(variables)
         line = json.dumps(request, ensure_ascii=False) + "\n"
         try:
             proc.stdin.write(line)
@@ -621,8 +695,19 @@ class ReplSession:
                 # the tool's (its own deadline bounds it), not the script's:
                 # the script's clock stops until the answer is written back.
                 started = time.monotonic()
-                calls += 1
-                reply = self._answer_call(call, calls, handler)
+                if call.get("local"):
+                    # The child read the working folder itself (its own word,
+                    # ``worker._LOCAL_READ``): private data is in the script.
+                    self.script_origins.add("local")
+                batch, keep = call.get("batch"), call.get("keep")
+                if isinstance(batch, list):
+                    reply = self._answer_batch(batch, calls, batch_handler)
+                    calls += len(batch)
+                elif isinstance(keep, dict):
+                    reply = self._answer_keep(keep, keep_handler)
+                else:
+                    calls += 1
+                    reply = self._answer_call(call, calls, handler)
                 reply["reply"] = call.get("n")
                 try:
                     proc.stdin.write(_reply_line(reply))
@@ -647,8 +732,18 @@ class ReplSession:
         *,
         tools: "list[str] | None" = None,
         on_tool_call: Any = None,
+        on_tool_batch: Any = None,
+        on_keep: Any = None,
+        variables: "dict[str, Any] | None" = None,
     ) -> dict[str, Any]:
         """Run ``code`` in this session's namespace. Never raises.
+
+        v1.473.0: ``on_tool_batch(items)`` answers a `tools.map` (a coroutine
+        on the loop, a list of results in order; without it the items run one
+        after another through ``on_tool_call``); ``on_keep(name, json_text,
+        plan)`` answers `tools.keep` (a plain function, called on the worker
+        thread); ``variables`` are bound in the namespace before the code
+        runs (a saved script's ``params``).
 
         ``tools`` + ``on_tool_call`` (v1.470.0) make it a TOOL SCRIPT: the
         code may call those tools, and each call is answered by awaiting
@@ -682,7 +777,10 @@ class ReplSession:
         async with self._lock:
             self.last_used = time.monotonic()
             try:
-                payload = await self._execute_locked(code, timeout, tools, on_tool_call)
+                payload = await self._execute_locked(
+                    code, timeout, tools, on_tool_call,
+                    on_tool_batch=on_tool_batch, on_keep=on_keep, variables=variables,
+                )
             except Exception as exc:  # last line of defence: never raise
                 self._state_lost = True
                 await asyncio.to_thread(self._kill)
@@ -747,6 +845,10 @@ class ReplSession:
         timeout: float,
         tools: "list[str] | None" = None,
         on_tool_call: Any = None,
+        *,
+        on_tool_batch: Any = None,
+        on_keep: Any = None,
+        variables: "dict[str, Any] | None" = None,
     ) -> dict[str, Any]:
         # A disposed session is DEAD, not dormant. Respawning here is how a
         # child ends up owned by nobody: `ReplRegistry.execute` hands the
@@ -801,10 +903,33 @@ class ReplSession:
                 finally:
                     self._inflight = None
 
+        batch_handler = None
+        if handler is not None:
+            async def _one_by_one(items: list[dict[str, Any]]) -> list[Any]:
+                # No batch runner was given: the items still run, in order.
+                return [await on_tool_call(i["tool"], i["args"]) for i in items]
+
+            run_batch = on_tool_batch if on_tool_batch is not None else _one_by_one
+
+            def batch_handler(items: list[dict[str, Any]]) -> Any:
+                # Worker thread, like `handler`: ONE future for the whole
+                # batch, so a Stop cancels every call of it.
+                future = asyncio.run_coroutine_threadsafe(run_batch(items), loop)
+                self._inflight = future
+                try:
+                    return future.result()
+                except concurrent.futures.CancelledError:
+                    return [{"ok": False, "error": _STOPPED_ERROR}] * len(items)
+                finally:
+                    self._inflight = None
+
         self._stopped.clear()
         granted = self._tool_seconds
         work = asyncio.ensure_future(
-            asyncio.to_thread(self._exchange, req_id, code, timeout, tools, handler)
+            asyncio.to_thread(
+                self._exchange, req_id, code, timeout, tools, handler,
+                batch_handler, on_keep if handler is not None else None, variables,
+            )
         )
         # A thread left behind by a timeout still ends (the kill below closes
         # its pipe); its late result must not be reported as never retrieved.
@@ -1086,6 +1211,9 @@ class ReplRegistry:
         isolated: bool = False,
         tools: "list[str] | None" = None,
         on_tool_call: Any = None,
+        on_tool_batch: Any = None,
+        on_keep: Any = None,
+        variables: "dict[str, Any] | None" = None,
     ) -> dict[str, Any]:
         """Run ``code`` in ``session_id``'s namespace, creating it if needed.
 
@@ -1107,9 +1235,24 @@ class ReplRegistry:
             }
         if tools is None:
             return await session.execute(code, timeout)
+        extra: dict[str, Any] = {}
+        if on_tool_batch is not None:
+            extra["on_tool_batch"] = on_tool_batch
+        if on_keep is not None:
+            extra["on_keep"] = on_keep
+        if variables:
+            extra["variables"] = variables
         return await session.execute(
-            code, timeout, tools=tools, on_tool_call=on_tool_call
+            code, timeout, tools=tools, on_tool_call=on_tool_call, **extra
         )
+
+    def peek(
+        self, session_id: str, workspace: str | os.PathLike[str], isolated: bool = True
+    ) -> ReplSession | None:
+        """The namespace of exactly this (session, folder), or None. Creates
+        nothing (v1.473.0: the script tool reads what a worker's scripts have
+        read so far off it)."""
+        return self._sessions.get(namespace_key(session_id, workspace, isolated))
 
     async def warm(
         self,

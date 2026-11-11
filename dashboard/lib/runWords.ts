@@ -176,6 +176,9 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   sentinel_delete: { did: "Removed a watcher", noun: "watcher removal" },
   sentinel_update: { did: "Switched a watcher on or off", noun: "watcher switch", nouns: "watcher switches" },
   skill_create: { did: "Saved a new skill", noun: "skill save" },
+  // v1.473.0 (agents/mission.py _RUN_TOOL_WORDS is the twin).
+  skill_update: { did: "Changed a skill", noun: "skill change" },
+  apply_changes: { did: "Made a batch of file changes", noun: "batch of file changes", nouns: "batches of file changes" },
   tool_create: { did: "Made a new tool", noun: "tool creation" },
   tool_delete: { did: "Removed a custom tool", noun: "tool removal" },
   tool_list: { did: "Listed the custom tools", noun: "tool listing" },

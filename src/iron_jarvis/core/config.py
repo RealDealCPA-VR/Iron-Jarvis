@@ -339,6 +339,11 @@ def default_permissions() -> dict[str, str]:
         "code_run": "ask",
         # Skills inject into future prompts, so creating one asks first.
         "skill_create": "ask",
+        # v1.473.0: so does changing one.
+        "skill_update": "ask",
+        # v1.473.0: many file changes after ONE approval. The card lists every
+        # change; each still runs through its own tool's gate and Undo.
+        "apply_changes": "ask",
         # Self-correcting learning loop.
         "remember_preference": "allow",
         # Calm UI redesign S3/S4: chat's settings tools. The TIER of a change

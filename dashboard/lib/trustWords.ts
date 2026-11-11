@@ -134,6 +134,7 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
     tools: [
       "create_agent",
       "skill_create",
+      "skill_update",
       "capability_propose",
       "tool_create",
       "tool_delete",

@@ -37,6 +37,34 @@ Anything else is refused inside the script with a sentence that says to call
 it directly, where the user can be asked. A script is never a way around an
 approval card.
 
+WHAT A SCRIPT HAS READ STAYS WHERE IT WAS READ (v1.473.0). A script could
+read a client's files and call `web_fetch` in the same loop, up to 300 times,
+with nobody looking at any one call. So the app keeps, per worker, WHERE the
+private data its scripts hold came from ("this PC", or one connected app),
+and a call to a tool that reaches outside this PC is refused once the worker
+holds data from anywhere else. Public web pages are not private: fetching
+first and reading files after is fine; so is a loop over one app's own data.
+The record lives on the worker's session (``ReplSession.script_origins``) and
+is emptied when the worker is replaced, because the variables go with it. The
+child reports its own direct file reads; the tool reads are the app's record.
+
+MORE THAN ONE CALL AT A TIME (v1.473.0). ``tools.map(name, items)`` sends its
+calls together; the ones that are safe to run side by side
+(:data:`MAP_TOGETHER`, the chat lanes' own list) run :data:`MAP_PARALLEL` at
+a time, the rest one after another. Each still goes through the same gate and
+gets its own ledger row; a failed item is a failed RESULT, never an exception
+that stops the rest.
+
+RESULTS GO TO A FILE WITHOUT BEING RETYPED (v1.473.0). ``tools.keep(name,
+value)`` hands a value to the app (``tools/script_values.py``); the model
+then calls the file tool itself and names the value (``_from_script``).
+``tools.plan(tool, ...)`` notes a CHANGE for later: nothing runs, the list is
+kept as ``changes``, and ``apply_changes`` runs it after ONE approval.
+
+A SAVED SCRIPT (v1.473.0). ``saved="<skill name>"`` runs the script a skill
+was saved with (``skills/saved_scripts.py``) instead of new code, with
+``params`` bound as a dict. Same worker, same gate, same rules.
+
 NO COST THE USER NOTICES. The worker is started ahead of time, the moment the
 tool is offered for a turn (:func:`prewarm`), and stays up for the session; a
 call crosses one local pipe (well under a millisecond, measured) and then
@@ -71,6 +99,23 @@ MAX_TOTAL_S = 3600.0
 #: Tool names listed in the footer and the result data.
 _MAX_LISTED = 12
 
+#: How many of a `tools.map`'s calls run at the same time.
+MAP_PARALLEL = 4
+
+#: The tools whose calls may run side by side inside a `tools.map`: the chat
+#: lanes' own list of readers that are safe together
+#: (``chat_turn.CONCURRENT_READ_TOOLS``; a test holds this a subset of it).
+#: Any other tool in a map runs one call after another.
+MAP_TOGETHER: frozenset[str] = frozenset({
+    "web_search", "web_fetch", "read_document", "read_file", "list_files",
+    "file_search", "memory_search", "memory_read", "ltm_search", "recall",
+    "guide_search", "guide_read", "app_search", "app_status", "grep", "glob",
+})
+
+#: Public web content: reaching it is "outside", what comes back is not
+#: private.
+_WEB_READERS: frozenset[str] = frozenset({"web_search", "web_fetch", "web_extract"})
+
 #: Tools that only read but do not declare ``Reversibility.READONLY`` (their
 #: class predates the field, or keeps the fail-safe default). Named one by
 #: one: each was read before it joined, and each changes nothing. The web
@@ -102,6 +147,16 @@ _RESTARTED_NOTE = (
     "[the script's worker was started again before this ran, so variables "
     "from earlier scripts are GONE. Re-create anything you still need.]"
 )
+
+
+def _origin_words(origin: str) -> str:
+    if origin == "local":
+        return "files or data on this PC"
+    if origin.startswith("pack:"):
+        return f"the app {origin[5:]}"
+    if origin.startswith("outside:"):
+        return f"`{origin[8:]}`"
+    return origin
 
 
 def worker_key(ctx: Any) -> tuple[str, bool]:
@@ -144,16 +199,26 @@ class ToolScriptTool(Tool):
         "joined or added up before you look at them.\n"
         "In the script: `r = tools.call(\"read_document\", path=p)` (or "
         "`tools.read_document(path=p)`) gives `r.output` (the text) and "
-        "`r.data`. A tool that is refused or fails raises `ToolError`, so "
-        "wrap a loop's call in try/except and report what failed. "
+        "`r.data`; a refused or failed call raises `ToolError`.\n"
+        "ONE TOOL, MANY TIMES: `rs = tools.map(\"read_document\", "
+        "[{\"path\": p} for p in paths])` runs the calls several at a time "
+        "and returns one result each, in order. A failed call does not stop "
+        "the rest: check `r.ok`, read `r.error`. "
         "`tools.names` lists what the script may call: tools that only read. "
         "A tool that changes a file, sends something or needs the user's "
         "approval must be called directly, not from a script.\n"
         "ONLY WHAT THE SCRIPT print()s COMES BACK. Print the answer (a "
         "count, a total, the rows that matter), never the raw results.\n"
+        "A RESULT FOR A FILE: do not print it and type it again. "
+        "`tools.keep(\"totals\", rows)` in the script, then call the file "
+        "tool yourself with `_from_script`, e.g. write_document(path="
+        "\"totals.xlsx\", _from_script={\"content\": \"totals\"}).\n"
         "The script runs isolated: no network, no other programs, no file "
         "writes, files read only in the working folder (reach everything "
-        "else through a tool). Variables persist between scripts."
+        "else through a tool). Once it has read this PC's files or data it "
+        "cannot call a tool that reaches outside this PC. Variables persist "
+        "between scripts. `saved` runs a skill's saved script instead of "
+        "`code`, with `params`."
     )
     input_schema = {
         "type": "object",
@@ -173,9 +238,31 @@ class ToolScriptTool(Tool):
                     f"{MAX_TIMEOUT_S:g})."
                 ),
             },
+            "saved": {
+                "type": "string",
+                "description": (
+                    "Instead of `code`: the name of a skill that was saved "
+                    "with a script. Its script runs."
+                ),
+            },
+            "params": {
+                "type": "object",
+                "description": "With `saved`: values the saved script reads as `params`.",
+            },
         },
-        "required": ["code"],
+        "required": [],
     }
+
+    #: What the description gains when `apply_changes` is one of the turn's
+    #: tools too (``ToolRegistry.specs`` adds it): a sentence about a tool the
+    #: model cannot call would send it into a refusal.
+    PLAN_SENTENCE = (
+        "\nTO CHANGE MANY FILES: a script changes nothing, but it can plan. "
+        "`tools.plan(\"rename_file\", path=p, new_path=n)` for each change, "
+        "print a short summary, then call `apply_changes` yourself with "
+        "_from_script={\"changes\": \"changes\"}: the user approves all of "
+        "it once and each change can be undone."
+    )
 
     def __init__(self, repl_registry: Any, tool_registry: Any) -> None:
         self._repl = repl_registry
@@ -282,8 +369,23 @@ class ToolScriptTool(Tool):
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         code = str(args.get("code") or "")
+        saved = str(args.get("saved") or "").strip()
+        variables: "dict[str, Any] | None" = None
+        if saved:
+            if code.strip():
+                return ToolResult(
+                    ok=False, error="give `code` or `saved`, not both"
+                )
+            from ..skills.saved_scripts import read_script
+
+            home = getattr(getattr(ctx, "config", None), "home", None)
+            code, problem = await asyncio.to_thread(read_script, home, saved)
+            if problem:
+                return ToolResult(ok=False, error=problem)
+            params = args.get("params")
+            variables = {"params": params if isinstance(params, dict) else {}}
         if not code.strip():
-            return ToolResult(ok=False, error="code is required")
+            return ToolResult(ok=False, error="code is required (or `saved`: a skill's saved script)")
         try:
             timeout = float(args.get("timeout_s") or DEFAULT_TIMEOUT_S)
         except (TypeError, ValueError):
@@ -301,13 +403,34 @@ class ToolScriptTool(Tool):
         names = self.callable_names(scope)
         made: dict[str, int] = {}
         refused: dict[str, str] = {}
+        kept: dict[str, str] = {}
+        planned: dict[str, Any] = {}
+        session_id, once = worker_key(ctx)
+        workspace = Path(getattr(ctx, "workspace", ".") or ".")
+        own_origins: set[str] = set()
+
+        def origins() -> "set[str]":
+            # Where the private data THIS WORKER's scripts hold came from. On
+            # the worker's own session, so it lasts exactly as long as the
+            # variables do; a registry double without `peek` gets this run's.
+            peek = getattr(self._repl, "peek", None)
+            try:
+                live = peek(session_id, workspace, True) if callable(peek) else None
+            except Exception:  # noqa: BLE001
+                live = None
+            got = getattr(live, "script_origins", None)
+            return got if isinstance(got, set) else own_origins
 
         async def on_call(name: str, call_args: dict[str, Any]) -> dict[str, Any]:
             name = str(name or "").strip()
             call_args = {
-                str(k): v for k, v in (call_args or {}).items() if str(k) != "_store_as"
+                str(k): v
+                for k, v in (call_args or {}).items()
+                if str(k) not in ("_store_as", "_from_script")
             }
             why = await self._refusal(name, call_args, scope, ctx)
+            if not why:
+                why = self._carry_refusal(name, origins())
             if why:
                 refused.setdefault(name or "(no name)", why)
                 return {"ok": False, "error": f"{why}."}
@@ -329,6 +452,11 @@ class ToolScriptTool(Tool):
             )
             if not result.ok:
                 return {"ok": False, "error": str(result.error or f"{name} failed")}
+            # The script now holds what this call read (public web pages are
+            # not private, so they are not noted).
+            origin = self._origin(name)[0]
+            if origin != "web":
+                origins().add(origin)
             output = str(result.output or "")
             if len(output) > MAX_TOOL_OUTPUT_CHARS:
                 dropped = len(output) - MAX_TOOL_OUTPUT_CHARS
@@ -339,8 +467,83 @@ class ToolScriptTool(Tool):
                 )
             return {"ok": True, "output": output, "data": result.data}
 
-        session_id, once = worker_key(ctx)
-        workspace = Path(getattr(ctx, "workspace", ".") or ".")
+        async def safely(name: str, call_args: dict[str, Any]) -> dict[str, Any]:
+            try:
+                return await on_call(name, call_args)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — one item, one sentence
+                return {"ok": False, "error": f"{name} could not be run ({type(exc).__name__}: {exc})"}
+
+        async def on_batch(items: "list[dict[str, Any]]") -> "list[dict[str, Any]]":
+            # `tools.map`: the calls that are safe together run MAP_PARALLEL
+            # at a time; anything else waits its turn. Results keep the
+            # script's order whatever order the calls finished in.
+            results: "list[dict[str, Any] | None]" = [None] * len(items)
+            gate = asyncio.Semaphore(MAP_PARALLEL)
+
+            async def together(at: int) -> None:
+                async with gate:
+                    results[at] = await safely(items[at]["tool"], items[at]["args"])
+
+            side_by_side = [
+                at for at, item in enumerate(items) if item["tool"] in MAP_TOGETHER
+            ]
+            if len(side_by_side) > 1:
+                await asyncio.gather(*(together(at) for at in side_by_side))
+            for at, item in enumerate(items):
+                if results[at] is None:
+                    results[at] = await safely(item["tool"], item["args"])
+            return [r if r is not None else {"ok": False, "error": "not run"} for r in results]
+
+        def on_keep(name: str, text: Any, plan: bool) -> dict[str, Any]:
+            # `tools.keep` / `tools.plan`. On the worker's thread: the shelf
+            # is thread-safe and nothing here awaits.
+            from . import script_values
+
+            if once:
+                return {
+                    "ok": False,
+                    "error": "a value can only be kept inside a chat or a run",
+                }
+            if plan:
+                from .apply_changes import NAME as APPLY, plan_problem
+
+                allowed = getattr(scope, "allowed_names", None) or frozenset()
+                if APPLY not in allowed:
+                    return {
+                        "ok": False,
+                        "error": (
+                            "changes cannot be applied in this turn (`apply_changes` "
+                            "is not one of its tools). Make each change yourself, "
+                            "with the tool for it"
+                        ),
+                    }
+                try:
+                    import json as _json
+
+                    changes = _json.loads(text) if isinstance(text, str) else None
+                except (ValueError, RecursionError):
+                    changes = None
+                problem = plan_problem(changes, allowed, self._registry)
+                if problem:
+                    return {"ok": False, "error": problem}
+                planned["count"] = len(changes or [])
+                counts: dict[str, int] = {}
+                for change in changes or []:
+                    counts[str(change.get("tool"))] = counts.get(str(change.get("tool")), 0) + 1
+                planned["tools"] = counts
+            try:
+                summary = script_values.SHELF.put(session_id, name, str(text or ""), plan=plan)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            if not plan:
+                kept[name] = summary
+            return {"ok": True, "output": f"kept `{name}`: {summary}"}
+
+        hooks: dict[str, Any] = {"on_tool_batch": on_batch, "on_keep": on_keep}
+        if variables is not None:
+            hooks["variables"] = variables
         try:
             async with asyncio.timeout(MAX_TOTAL_S) as bound:
                 payload = await self._repl.execute(
@@ -351,6 +554,7 @@ class ToolScriptTool(Tool):
                     isolated=True,
                     tools=names,
                     on_tool_call=on_call,
+                    **hooks,
                 )
         except asyncio.CancelledError:
             raise
@@ -382,11 +586,62 @@ class ToolScriptTool(Tool):
                     pass
         if not isinstance(payload, dict):
             return ToolResult(ok=False, error="the script worker gave no usable answer")
-        return self._shape(payload, made, refused)
+        allowed = getattr(scope, "allowed_names", None) or frozenset()
+        return self._shape(
+            payload, made, refused,
+            kept=kept, planned=planned,
+            file_tools=sorted(t for t in _fillable() if t in allowed and t != "apply_changes"),
+        )
+
+    # -- what a script has read stays where it was read ------------------------
+
+    def _origin(self, name: str) -> "tuple[str, bool]":
+        """``(origin, outside)`` for a tool: where the data it returns comes
+        from, and whether calling it reaches outside this PC (the app's own
+        Local only definition, ``egress``). Fail-closed: a tool that cannot
+        be judged counts as reaching outside."""
+        if name in _WEB_READERS:
+            return "web", True
+        try:
+            from ..providers import egress
+
+            tool = self._registry.get(name)
+            outside = name in egress.INTERNET_TOOLS or bool(
+                egress.reaches_outside(tool, self._registry)
+            )
+        except Exception:  # noqa: BLE001
+            outside = True
+        if name.startswith("mcp__") and name.count("__") >= 2:
+            return "pack:" + name.split("__", 2)[1], outside
+        return (f"outside:{name}" if outside else "local"), outside
+
+    def _carry_refusal(self, name: str, held: "set[str]") -> str:
+        """Why *name* is not called given what this worker's scripts already
+        hold (*held*), or "". A tool that reaches outside is refused once the
+        worker holds private data from anywhere but that tool's own place."""
+        if not held:
+            return ""
+        origin, outside = self._origin(name)
+        if not outside:
+            return ""
+        others = sorted(o for o in held if o != origin)
+        if not others:
+            return ""
+        return (
+            f"this script has already read {_origin_words(others[0])}, and "
+            f"`{name}` reaches outside this PC, so it cannot be called from "
+            "the same script. Call it directly, one call at a time"
+        )
 
     @staticmethod
     def _shape(
-        payload: dict[str, Any], made: dict[str, int], refused: dict[str, str]
+        payload: dict[str, Any],
+        made: dict[str, int],
+        refused: dict[str, str],
+        *,
+        kept: "dict[str, str] | None" = None,
+        planned: "dict[str, Any] | None" = None,
+        file_tools: "list[str] | None" = None,
     ) -> ToolResult:
         ok = bool(payload.get("ok"))
         stdout = str(payload.get("stdout") or "")
@@ -422,6 +677,26 @@ class ToolScriptTool(Tool):
         if refused:
             lines = "\n".join(f"- {why}" for why in list(refused.values())[:_MAX_LISTED])
             parts.append("[not run from the script]\n" + lines)
+        if ok and kept:
+            lines = "\n".join(f"- {name}: {what}" for name, what in list(kept.items())[:_MAX_LISTED])
+            if file_tools:
+                how = (
+                    "To put one in a file WITHOUT retyping it, call the file tool "
+                    f"yourself and name it: {file_tools[0]}(..., "
+                    '_from_script={"<argument>": "<name>"}).'
+                )
+            else:
+                how = "No file tool is one of this turn's tools, so nothing can take them yet."
+            parts.append("[kept for a file tool]\n" + lines + "\n" + how)
+        if ok and planned and planned.get("count"):
+            ranked = sorted((planned.get("tools") or {}).items(), key=lambda kv: (-kv[1], kv[0]))
+            listed = ", ".join(f"{n} x{c}" for n, c in ranked[:_MAX_LISTED])
+            parts.append(
+                f"[planned {planned['count']} change{'s' if planned['count'] != 1 else ''}, "
+                f"kept as `changes`: {listed}. NOTHING HAS RUN. To run them, call "
+                'apply_changes yourself with _from_script={"changes": "changes"}: '
+                "the user approves all of it once.]"
+            )
         body = "\n".join(p for p in parts if p).strip()
         data: dict[str, Any] = {
             "truncated": truncated,
@@ -429,6 +704,10 @@ class ToolScriptTool(Tool):
             "tool_calls": dict(made),
             "refused": sorted(refused),
         }
+        if kept:
+            data["kept"] = sorted(kept)
+        if planned and planned.get("count"):
+            data["planned"] = int(planned["count"])
         if not ok:
             tail = error or stderr or "the script raised, but no traceback was captured"
             return ToolResult(
@@ -440,6 +719,12 @@ class ToolScriptTool(Tool):
         return ToolResult(ok=True, output=body, data=data)
 
 
+def _fillable() -> "frozenset[str]":
+    from .script_values import FROM_SCRIPT_ARGS
+
+    return frozenset(FROM_SCRIPT_ARGS)
+
+
 async def adopt_turn_worker(platform: Any, turn_id: str, thread_id: str) -> int:
     """A new chat was saved: its first message's script worker (keyed by the
     TURN, :func:`worker_key`) becomes the chat's, so its variables are there
@@ -448,7 +733,16 @@ async def adopt_turn_worker(platform: Any, turn_id: str, thread_id: str) -> int:
     try:
         repl = getattr(platform, "repl", None)
         turn, thread = str(turn_id or "").strip(), str(thread_id or "").strip()
-        if repl is None or not hasattr(repl, "rekey") or not turn or not thread:
+        if not turn or not thread:
+            return 0
+        # What the first message's scripts KEPT follows the worker (v1.473.0).
+        try:
+            from .script_values import SHELF
+
+            SHELF.rekey(f"chat:{turn}", f"chat:{thread}")
+        except Exception:  # noqa: BLE001
+            pass
+        if repl is None or not hasattr(repl, "rekey"):
             return 0
         return int(await repl.rekey(f"chat:{turn}", f"chat:{thread}"))
     except Exception:  # noqa: BLE001 — the next message just starts fresh

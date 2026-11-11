@@ -1127,6 +1127,14 @@ def build_platform(
         registry.register(ToolScriptTool(repl_registry, registry))
     except Exception:  # noqa: BLE001 — never let an optimisation break boot
         repl_registry = None
+    # v1.473.0: `apply_changes` — many file changes after ONE approval, each
+    # through the registry's own gate with its own Undo (tools/apply_changes).
+    try:
+        from .tools.apply_changes import ApplyChangesTool
+
+        registry.register(ApplyChangesTool(registry))
+    except Exception:  # noqa: BLE001 — a missing batch tool must not stop boot
+        _log.debug("apply_changes not registered", exc_info=True)
 
     # v1.97.0: close the loop — agents can now FIND and REUSE what they already
     # wrote instead of re-deriving it. search/load are read-only ("allow");

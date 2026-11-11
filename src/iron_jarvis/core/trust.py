@@ -109,6 +109,8 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         "create_agent",
         "remember_preference",
         "skill_create",
+        # v1.473.0: changing a skill is as lasting as making one.
+        "skill_update",
         "assign_work",
         "schedule_create",
         "workflow_create",

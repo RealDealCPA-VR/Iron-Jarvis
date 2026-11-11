@@ -127,6 +127,7 @@ import io
 import json
 import linecache
 import os
+import re
 import sys
 import threading
 import traceback
@@ -627,8 +628,12 @@ def _install_audit_hook(
     deny_roots: tuple[str, ...],
     shown: str = "",
     isolated: bool = False,
+    private_roots: tuple[str, ...] = (),
 ) -> None:
     """Arm the hook. The roots are closed over, so the environment stops mattering.
+
+    ``private_roots`` (v1.473.0, isolated worker only): the turn's working
+    folder. A read or a listing inside it raises :data:`_LOCAL_READ`.
 
     ``shown`` is the writable roots AS THE PARENT SPELLED THEM, used only in
     refusal messages. The comparison roots are ``normcase``-folded, which on
@@ -667,6 +672,11 @@ def _install_audit_hook(
                 refuse(write_blocked.format(target=target, roots=shown))
         elif isolated and read_roots and not any(_within(canonical, r) for r in read_roots):
             refuse(_ISOLATED_READ_BLOCKED.format(target=target))
+        elif isolated:
+            # An allowed read. One inside the working folder is the user's
+            # own data: from here on this worker says so with every call.
+            if private_roots and any(_within(canonical, r) for r in private_roots):
+                _LOCAL_READ[0] = True
         elif read_roots and not any(_within(canonical, r) for r in read_roots):
             # v1.356.0 integrate (G81): plain words, never the variable's name.
             refuse(
@@ -741,6 +751,10 @@ def install_confinement() -> bool:
     isolated = os.environ.get(ENV_ISOLATED, "") == "1"
     if not (write_roots or read_roots or deny_roots):
         return False
+    # The working folder alone (the scratch folder holds only what this
+    # worker wrote): what the parent handed over to read, minus where it may
+    # write. Taken BEFORE the runtime's own folders join the read list.
+    private_roots = tuple(r for r in read_roots if r not in write_roots) if isolated else ()
     if isolated:
         # The working folder is the user's (often a client's): a file there
         # named like a library must never be imported in its place, so the
@@ -773,7 +787,7 @@ def install_confinement() -> bool:
         for part in os.environ.get(ENV_WRITE_ROOTS, "").split(os.pathsep)
         if part.strip()
     )
-    _install_audit_hook(write_roots, read_roots, deny_roots, shown, isolated)
+    _install_audit_hook(write_roots, read_roots, deny_roots, shown, isolated, private_roots)
     return True
 
 
@@ -880,7 +894,11 @@ class ToolError(Exception):
 class ToolValue(dict):
     """What `tools.call` returns: ``{"output": str, "data": ...}``, with
     ``.output`` / ``.data`` for reading. The same shape a `_store_as` value
-    has, so a script and a later cell read results one way."""
+    has, so a script and a later cell read results one way.
+
+    One of `tools.map`'s results also says whether ITS call worked: ``.ok``,
+    ``.error`` (the app's sentence when it did not) and ``.args`` (what that
+    call was given). `tools.call` raises instead, so there ``.ok`` is True."""
 
     @property
     def output(self) -> str:
@@ -890,8 +908,67 @@ class ToolValue(dict):
     def data(self) -> Any:
         return self.get("data")
 
+    @property
+    def ok(self) -> bool:
+        return bool(self.get("ok", True))
+
+    @property
+    def error(self) -> str:
+        return str(self.get("error") or "")
+
+    @property
+    def args(self) -> Any:
+        return self.get("args")
+
     def __str__(self) -> str:
         return self.output
+
+
+#: Set once this ISOLATED worker has read a file or listed a folder of the
+#: turn's working folder itself (v1.473.0). Every tool call it sends from
+#: then on says so, and the app stops such a script reaching outside this PC
+#: (``tools/tool_script.py``): client files read here must not leave through
+#: an internet tool. Raised by the audit hook, read by :class:`_Tools`; a
+#: guardrail like the hook itself, the app's own record of TOOL reads is the
+#: half a script cannot touch.
+_LOCAL_READ = [False]
+
+#: `tools.map` sends its calls in pieces of this many, so one answer line
+#: stays a sensible size and a Stop lands between pieces.
+MAP_CHUNK = 32
+
+#: The most characters (as JSON) `tools.keep` hands the app in one value.
+MAX_KEEP_CHARS = 8_000_000
+
+#: The name `tools.plan` keeps a script's planned changes under.
+PLAN_NAME = "changes"
+
+_KEEP_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
+
+
+def _keep_default(value: Any) -> Any:
+    """What `tools.keep` makes of a value JSON has no word for. A number
+    stays a number: a Decimal that has to be retyped as text is the mistake
+    this whole path exists to avoid."""
+    import datetime as _dt
+    import decimal as _decimal
+
+    if isinstance(value, _decimal.Decimal):
+        if not value.is_finite():
+            raise ValueError("a number that is not finite (NaN or infinity)")
+        whole = value.to_integral_value()
+        return int(whole) if value == whole and abs(whole) < 10**15 else float(value)
+    if isinstance(value, (_dt.datetime, _dt.date, _dt.time)):
+        return value.isoformat()
+    if isinstance(value, (set, frozenset, tuple)):
+        return list(value)
+    if isinstance(value, os.PathLike):
+        return os.fspath(value)
+    for method in ("tolist", "item"):  # numpy arrays and numbers
+        convert = getattr(value, method, None)
+        if callable(convert):
+            return convert()
+    raise TypeError(f"a {type(value).__name__} cannot be kept")
 
 
 class _Tools:
@@ -911,6 +988,18 @@ class _Tools:
                            "data": any, "error": str}
     One call at a time (a lock), and only while a request that brought a tool
     list is running: a thread that outlives its script cannot call anything.
+
+    v1.473.0, three more things a script can send, each one line and one
+    answer like a call:
+        {"call": {"n", "batch": [{"tool", "args"}, ...]}}   `tools.map`: the
+            app runs them (several at once where that is safe) and answers
+            {"reply": n, "ok": true, "results": [{"ok","output","data",
+            "error"}, ...]} in the same order;
+        {"call": {"n", "keep": {"name", "json", "plan"?}}}   `tools.keep` /
+            `tools.plan`: the app holds the value so a file tool can take it
+            WITHOUT the model retyping it;
+    and every message carries ``"local": 1`` once this worker has read the
+    working folder itself (:data:`_LOCAL_READ`).
     """
 
     def __init__(self) -> None:
@@ -920,6 +1009,7 @@ class _Tools:
         self._request = ""
         self._names: tuple[str, ...] = ()
         self._count = 0
+        self._planned: list[dict[str, Any]] = []
 
     def _attach(self, source: IO[str] | None, sink: IO[str] | None) -> None:
         self._source, self._sink = source, sink
@@ -929,34 +1019,35 @@ class _Tools:
             self._request = request_id
             self._names = tuple(str(n) for n in names) if isinstance(names, (list, tuple)) else ()
             self._count = 0
+            self._planned = []
 
     def _end(self) -> None:
         with self._lock:
             self._request = ""
             self._names = ()
+            self._planned = []
 
     @property
     def names(self) -> tuple[str, ...]:
         """The tools this script may call."""
         return self._names
 
-    def call(self, tool: str, /, **args: Any) -> ToolValue:
-        name = str(tool or "").strip()
+    def _send(self, body: dict[str, Any], what: str) -> dict[str, Any]:
+        """One message to the app and its answer. Raises :class:`ToolError`
+        when nothing can be sent or the app has gone."""
         with self._lock:
             if not self._request or self._source is None or self._sink is None:
                 raise ToolError("no tool script is running, so no tool can be called")
-            if not name:
-                raise ToolError("tools.call needs a tool name")
             self._count += 1
             n = self._count
+            message = dict(body, n=n)
+            if _LOCAL_READ[0]:
+                message["local"] = 1
             try:
-                line = json.dumps(
-                    {"id": self._request, "call": {"n": n, "tool": name, "args": args}},
-                    ensure_ascii=True,
-                )
+                line = json.dumps({"id": self._request, "call": message}, ensure_ascii=True)
             except (TypeError, ValueError) as exc:
                 raise ToolError(
-                    f"the arguments for {name} must be plain values (text, numbers, "
+                    f"the arguments for {what} must be plain values (text, numbers, "
                     f"lists, dicts): {exc}"
                 ) from None
             try:
@@ -973,10 +1064,126 @@ class _Tools:
                 except Exception:  # noqa: BLE001 — not ours; keep waiting
                     continue
                 if isinstance(msg, dict) and msg.get("reply") == n:
-                    break
+                    return msg
+
+    def call(self, tool: str, /, **args: Any) -> ToolValue:
+        name = str(tool or "").strip()
+        if not name:
+            raise ToolError("tools.call needs a tool name")
+        msg = self._send({"tool": name, "args": args}, name)
         if not msg.get("ok"):
             raise ToolError(str(msg.get("error") or f"{name} failed"))
         return ToolValue(output=str(msg.get("output") or ""), data=msg.get("data"))
+
+    def map(self, tool: str, items: Any, /, arg: str = "", **common: Any) -> list[ToolValue]:
+        """The same tool once per item, several at a time: ``tools.map(
+        "read_document", [{"path": p} for p in paths])``, or ``tools.map(
+        "read_document", paths, arg="path")``. Returns one result per item,
+        in order. A call that fails does NOT stop the others and does not
+        raise: check ``r.ok`` and read ``r.error``."""
+        name = str(tool or "").strip()
+        if not name:
+            raise ToolError("tools.map needs a tool name")
+        if isinstance(items, (str, bytes, dict)) or not hasattr(items, "__iter__"):
+            raise ToolError(
+                "tools.map needs a LIST of items: [{'path': p} for p in paths], "
+                "or a list of values with arg='path'"
+            )
+        rows: list[dict[str, Any]] = []
+        for item in items:
+            if isinstance(item, dict):
+                rows.append({**common, **{str(k): v for k, v in item.items()}})
+            elif arg:
+                rows.append({**common, str(arg): item})
+            else:
+                raise ToolError(
+                    "tools.map: each item must be a dict of that call's arguments "
+                    "({'path': p}), or pass arg='path' with a list of values"
+                )
+        out: list[ToolValue] = []
+        for start in range(0, len(rows), MAP_CHUNK):
+            piece = rows[start:start + MAP_CHUNK]
+            msg = self._send({"batch": [{"tool": name, "args": a} for a in piece]}, name)
+            if not msg.get("ok"):
+                raise ToolError(str(msg.get("error") or f"{name} failed"))
+            answers = msg.get("results")
+            answers = answers if isinstance(answers, list) else []
+            for i, args in enumerate(piece):
+                one = answers[i] if i < len(answers) and isinstance(answers[i], dict) else {}
+                worked = bool(one.get("ok"))
+                out.append(ToolValue(
+                    ok=worked,
+                    output=str(one.get("output") or "") if worked else "",
+                    data=one.get("data") if worked else None,
+                    error="" if worked else str(one.get("error") or f"{name} gave no answer"),
+                    args=args,
+                ))
+        return out
+
+    def keep(self, name: str, value: Any, /) -> str:
+        """Hand *value* to the app under *name*, so a file tool can take it
+        WITHOUT you retyping it: after the script, call the tool directly
+        with ``_from_script: {"rows": "<name>"}``. Plain data only (lists,
+        dicts, text, numbers; dates become ISO text)."""
+        return self._keep(name, value, plan=False)
+
+    def _keep(self, name: Any, value: Any, *, plan: bool) -> str:
+        label = str(name or "").strip()
+        if not _KEEP_NAME.match(label):
+            raise ToolError(
+                "tools.keep needs a short plain name (letters, digits, _), "
+                "like tools.keep('totals', rows)"
+            )
+        try:
+            text = json.dumps(value, default=_keep_default, allow_nan=False, ensure_ascii=True)
+        except (TypeError, ValueError, RecursionError, OverflowError) as exc:
+            raise ToolError(
+                f"tools.keep('{label}', ...): the value must be plain data (lists, "
+                f"dicts, text, finite numbers): {exc}"
+            ) from None
+        if len(text) > MAX_KEEP_CHARS:
+            raise ToolError(
+                f"tools.keep('{label}', ...): that is {len(text):,} characters; the "
+                f"most one kept value may hold is {MAX_KEEP_CHARS:,}. Keep less "
+                "(the rows that matter), or keep it in parts"
+            )
+        body: dict[str, Any] = {"keep": {"name": label, "json": text}}
+        if plan:
+            body["keep"]["plan"] = 1
+        msg = self._send(body, "tools.keep")
+        if not msg.get("ok"):
+            raise ToolError(str(msg.get("error") or f"'{label}' could not be kept"))
+        return str(msg.get("output") or f"kept '{label}'")
+
+    def plan(self, tool: str, /, **args: Any) -> int:
+        """Note ONE change for later instead of making it now: ``tools.plan(
+        "rename_file", path=p, new_name=n)``. NOTHING runs. When the script
+        ends the list is kept as ``changes``; then call `apply_changes`
+        directly with ``_from_script: {"changes": "changes"}`` and the user
+        approves all of it once. Returns how many changes are planned."""
+        name = str(tool or "").strip()
+        if not name:
+            raise ToolError("tools.plan needs a tool name")
+        try:
+            json.dumps(args, default=_keep_default, allow_nan=False)
+        except (TypeError, ValueError, RecursionError, OverflowError) as exc:
+            raise ToolError(
+                f"tools.plan('{name}', ...): the arguments must be plain values: {exc}"
+            ) from None
+        with self._lock:
+            if not self._request:
+                raise ToolError("no tool script is running, so nothing can be planned")
+            self._planned.append({"tool": name, "args": args})
+            return len(self._planned)
+
+    def _flush_plan(self) -> str:
+        """Keep what `tools.plan` collected (called once, when the script
+        ends well). "" when nothing was planned."""
+        with self._lock:
+            planned, self._planned = self._planned, []
+        if not planned:
+            return ""
+        return self._keep(PLAN_NAME, planned, plan=True)
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -1023,7 +1230,12 @@ class Session:
             linecache.cache.pop(self._remembered.popleft(), None)
 
     def execute(
-        self, code: str, *, request_id: str = "", tools: Any = None
+        self,
+        code: str,
+        *,
+        request_id: str = "",
+        tools: Any = None,
+        variables: Any = None,
     ) -> dict[str, Any]:
         """Run `code` in the session namespace; return the response body.
 
@@ -1033,14 +1245,30 @@ class Session:
         ``tools`` (a list of names) makes this a TOOL SCRIPT: `tools` and
         `ToolError` are bound in the namespace and the script may call those
         tools through the bridge until it ends.
+
+        ``variables`` (v1.473.0, a dict of plain names) are bound in the
+        namespace before the code runs: a SAVED script's ``params``.
         """
         scripted = isinstance(tools, (list, tuple))
         if scripted:
             self.globals["tools"] = self.tools
             self.globals["ToolError"] = ToolError
             self.tools._begin(request_id, tools)
+        if isinstance(variables, dict):
+            for key, value in variables.items():
+                if isinstance(key, str) and _KEEP_NAME.match(key) and not key.startswith("__"):
+                    self.globals[key] = value
         try:
-            return self._execute(code)
+            response = self._execute(code)
+            if scripted and response.get("ok"):
+                # What `tools.plan` collected is handed over only when the
+                # script ended well: half a plan is not a plan.
+                try:
+                    self.tools._flush_plan()
+                except ToolError as exc:
+                    response["ok"] = False
+                    response["error"] = f"ToolError: {exc}\n"
+            return response
         finally:
             if scripted:
                 self.tools._end()
@@ -1154,8 +1382,14 @@ def handle_request(session: Session, line: str) -> dict[str, Any]:
             request_id, f"malformed request: 'code' must be a string ({kind})"
         )
     tools = payload.get("tools")
+    variables = payload.get("vars")
     if isinstance(tools, list):
-        response = session.execute(code, request_id=request_id, tools=tools)
+        if isinstance(variables, dict):
+            response = session.execute(
+                code, request_id=request_id, tools=tools, variables=variables
+            )
+        else:
+            response = session.execute(code, request_id=request_id, tools=tools)
     else:
         response = session.execute(code)
     response["id"] = request_id

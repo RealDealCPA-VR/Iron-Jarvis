@@ -562,6 +562,9 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "sentinel_delete": ("removed a watcher", "watcher removal"),
     "sentinel_update": ("switched a watcher on or off", "watcher switch"),
     "skill_create": ("saved a new skill", "skill save"),
+    # v1.473.0. Twins: lib/runWords.ts AGENT_TOOLS.
+    "skill_update": ("changed a skill", "skill change"),
+    "apply_changes": ("made a batch of file changes", "batch of file changes"),
     "tool_create": ("made a new tool", "tool creation"),
     "tool_delete": ("removed a custom tool", "tool removal"),
     "tool_list": ("listed the custom tools", "tool listing"),

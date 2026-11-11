@@ -620,7 +620,57 @@ class ToolRegistry:
         # can see it and choose to delete it. Grounded in a live task where a
         # dead `rename_real_file` was advertised forever and failed 22/22.
         tools = [t for t in tools if not self._unavailable_custom(t)]
+        # A TURN THAT HAS THE SCRIPT TOOL (v1.473.0): its file tools say they
+        # can take a value a script kept (`_from_script`), and the script
+        # tool's own description names `apply_changes` only when that tool is
+        # in this list too. A listing with no script tool is untouched.
+        names = {t.name for t in tools}
+        if allowed is not None and "tool_script" in names:
+            batch = "apply_changes" in names
+            return [self._spec_for_scripts(t, batch) for t in tools]
         return [self._spec_with_store_as(t) for t in tools]
+
+    def _spec_for_scripts(self, tool: Tool, batch: bool) -> dict[str, Any]:
+        """A tool's spec for a turn that has `tool_script` (v1.473.0).
+
+        A file tool that can take a kept value (``script_values.
+        FROM_SCRIPT_ARGS``) gains the ``_from_script`` argument, and the
+        arguments it can be filled from stop being REQUIRED in what the model
+        is shown: a schema that still demanded ``content`` would make the
+        model type the rows again beside the reference. The registry checks
+        the real requirement after it has filled the value in."""
+        spec = self._spec_with_store_as(tool)
+        try:
+            from .script_values import ARG, FROM_SCRIPT_ARGS
+
+            fillable = FROM_SCRIPT_ARGS.get(tool.name)
+            if fillable:
+                spec = copy.deepcopy(spec)
+                params = spec.get("parameters") or spec.get("input_schema") or {}
+                props = params.get("properties")
+                if isinstance(props, dict) and ARG not in props:
+                    props[ARG] = {
+                        "type": "object",
+                        "description": (
+                            "Optional. Take an argument from a value a tool "
+                            "script kept with tools.keep(name, value), instead "
+                            "of typing it: {\"<argument>\": \"<kept name>\"}. "
+                            "Leave that argument itself out. Arguments that "
+                            "can be taken this way: "
+                            + ", ".join(sorted(fillable)) + "."
+                        ),
+                    }
+                    required = params.get("required")
+                    if isinstance(required, list):
+                        params["required"] = [r for r in required if r not in fillable]
+            elif batch and tool.name == "tool_script":
+                spec = copy.deepcopy(spec)
+                spec["description"] = str(spec.get("description") or "") + str(
+                    getattr(tool, "PLAN_SENTENCE", "")
+                )
+        except Exception:  # noqa: BLE001 — a spec we cannot extend still works
+            return self._spec_with_store_as(tool)
+        return spec
 
     def _unavailable_custom(self, tool: Tool) -> bool:
         """True only for a CUSTOM tool that reports its program missing.
@@ -748,6 +798,25 @@ class ToolRegistry:
             args = dict(args)
             store_as = str(args.pop("_store_as") or "").strip()
 
+        # A VALUE A SCRIPT KEPT (v1.473.0, tools/script_values.py): a direct
+        # call may name it instead of typing it (`_from_script: {"content":
+        # "totals"}`), so 400 rows a script worked out reach the file exactly
+        # as computed. From here on there are TWO argument sets:
+        #   `run_args` — what the TOOL is given (the value in place): the
+        #                shape check, the undo capture and `execute`;
+        #   `args`     — what is JUDGED and RECORDED: the reference, with the
+        #                value's fingerprint and one-line summary. Permission
+        #                (and an exact standing grant) is decided on this, so
+        #                a grant never covers different data under one name,
+        #                and a ledger row never holds the rows themselves.
+        # A call without the argument is untouched: both names are one dict.
+        run_args = args
+        fill_error = ""
+        if isinstance(args, dict) and "_from_script" in args:
+            from .script_values import fill_from_script
+
+            run_args, args, fill_error = fill_from_script(name, args, ctx)
+
         # A caller that already asked a human and was refused passes the answer
         # in (v1.155.0). It goes through the SAME record-and-publish path as any
         # other denial, so the execution ledger — which `agents/outcome` derives
@@ -851,7 +920,7 @@ class ToolRegistry:
         # and BEFORE the read cache / undo capture / execute, through the SAME
         # `_record` + TOOL_EXECUTED path as any failure, so it is ledgered and
         # the next step can fix the call. `_store_as` was stripped above.
-        shape_error = self._argument_shape_error(tool, args)
+        shape_error = fill_error or self._argument_shape_error(tool, run_args)
         if shape_error:
             inv_id = await asyncio.to_thread(
                 self._record,
@@ -924,7 +993,7 @@ class ToolRegistry:
         undo_desc: dict[str, Any] | None = None
         if reversibility == Reversibility.REVERSIBLE:
             try:
-                undo_desc = await tool.capture_undo(args, ctx)
+                undo_desc = await tool.capture_undo(run_args, ctx)
             except Exception:  # noqa: BLE001 — capture never blocks the tool
                 undo_desc = None
 
@@ -988,7 +1057,7 @@ class ToolRegistry:
                     scopes=scopes,
                 ))
                 try:
-                    result = await tool.execute(args, ctx)
+                    result = await tool.execute(run_args, ctx)
                 finally:
                     _CALL_SCOPE.reset(_call)
                     _DEADLINE_SCOPE.reset(_scope)

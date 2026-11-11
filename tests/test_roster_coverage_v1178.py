@@ -158,9 +158,16 @@ def test_default_registry_serves_the_file_core_including_rename(platform):
 # would otherwise report a phantom orphan.)
 _OFF_ROSTER_BY_DESIGN = {
     # TOOL SCRIPTS (v1.470.0): offered by chat beside a turn's read-only
-    # tools (chat_turn._resolve_armed_tools); a custom agent can list it by
-    # name. No built-in roster carries it yet.
+    # tools (chat_turn._resolve_armed_tools) and, since v1.473.0, armed for
+    # an agent run at the runtime seam; a custom agent can list it by name.
+    # No built-in roster carries it.
     "tool_script",
+    # v1.473.0: many file changes after ONE approval card. Chat's stream lane
+    # ask-arms it beside the script tool; a run has no card for a whole list.
+    "apply_changes",
+    # v1.473.0: chat changes a skill when asked (its card); agents may make
+    # one on some rosters but none changes the user's.
+    "skill_update",
     # LIVE EXCEL (v1.466.0): reached from CHAT, where a person is present.
     # They act on whatever workbook is open on the user's screen, outside any
     # run's work folder, so no agent roster carries them.
