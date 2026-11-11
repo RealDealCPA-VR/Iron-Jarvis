@@ -182,7 +182,13 @@ async def test_exit_plan_mode_cards_once_only_even_on_auto_approve_and_allow_swi
     assert view["mode"] == "act" and view["plan"]["text"] == plan_text
     # The approved plan is part of the conversation (the lane's reply is only
     # the last round's "Ready."), so the transcript shows it...
-    reply = [m for m in messages_of(app, sid) if m["role"] == "assistant"][-1]
+    # THE PLAN TURN'S reply, by its turn id (v1.471.1): the act turn starts by
+    # itself the moment the plan turn ends, and on a slow runner its own reply
+    # ("Done.") was already the LAST assistant line here (passed only on retry).
+    reply = [
+        m for m in messages_of(app, sid)
+        if m["role"] == "assistant" and m.get("turnId") == "bp-exit"
+    ][-1]
     assert reply["content"] == plan_text + "\n\nReady."
     # ...and the NEXT turn — act mode — reads it in its history. v1.402.0
     # (moved on purpose): that turn is no longer the user's next message —

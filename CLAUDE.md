@@ -17150,7 +17150,12 @@ does not need a bump, stop and bump it.
     72.5%). Its one miss ("summarize each contract's renewal terms") became
     a rule too: a possessive of a thing names the thing. NEW held-out set E
     (30 + 30), written after that: both 100% (v1.470.2: 83.3% and 73.3%).
-    Sets D and E are pinned whole. A screen
+    Sets D and E are pinned whole. SAME RELEASE (test-only): v1.471.1's
+    Tests run passed `test_build_plan_ask_v1367::test_exit_plan_mode_cards_
+    once_only…` only on retry — it read the LAST assistant line, and the act
+    turn that starts by itself after an approved plan can already have
+    answered; it now reads the plan turn's line by `turnId` (a 2 s pause
+    before the read reproduced CI's failure on the old shape). A screen
     comparison (six e2e screenshots, v1.470.2 against v1.471.0, plus a
     new-against-new CONTROL) found only run-to-run noise: the random
     suggestion chips, the settle position and the drifting glow on desktop,
