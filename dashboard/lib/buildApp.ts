@@ -679,7 +679,7 @@ export function jarvisToolHint(key: keyof JarvisTools, toolName: string, tool: s
     return `${toolName} may search and read your memory and your memory profile (read-only). What it reads goes to ${toolVendor(tool)} with the conversation.`;
   }
   if (key === "handoff") {
-    return `${toolName} may start another coding tool you have here (Codex, Claude Code, Pi…) on part of the work, in this folder. Each helper is its own session you can open; it asks you itself before what its rules say to ask about, and never gets Full access.`;
+    return `${toolName} may start another coding tool you have here (Codex, Claude Code, Pi…) on part of the work, in this folder. The work it hands over goes to that tool's own service. Each helper is its own session you can open; it asks you before anything its own rules ask about, and never gets Full access.`;
   }
   return `${toolName} may use your browser through Iron Jarvis. Every click, typing or page change asks you first.`;
 }

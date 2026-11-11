@@ -68,6 +68,13 @@ describe("the Hand off box", () => {
     expect(h).toMatch(/never gets Full access/);
     expect(h).toMatch(/its own session/);
   });
+
+  it("the hint says the handed-over work goes to the other tool's own service (review)", () => {
+    // Like Memory's line: the box says who sees the words BEFORE it is ticked.
+    const h = jarvisToolHint("handoff", "Pi", "pi");
+    expect(h).toMatch(/goes to that tool's own service/);
+    expect(h).not.toMatch(/before what its rules/);
+  });
 });
 
 describe("helpers in the session view", () => {
