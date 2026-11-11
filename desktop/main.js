@@ -71,7 +71,9 @@ const IS_PACKAGED = app.isPackaged;
 const REPO_ROOT = path.join(__dirname, "..");
 const DASHBOARD_DIR = path.join(REPO_ROOT, "dashboard");
 const RES_DIR = process.resourcesPath || REPO_ROOT;
-const DAEMON_EXE = path.join(RES_DIR, "daemon", "ironjarvis.exe");
+// The frozen daemon is "ironjarvis.exe" on Windows and "ironjarvis" on Linux
+// and macOS (PyInstaller names it for the system it is built on).
+const DAEMON_EXE = path.join(RES_DIR, "daemon", process.platform === "win32" ? "ironjarvis.exe" : "ironjarvis");
 const DASHBOARD_SERVER = path.join(RES_DIR, "dashboard", "server.js");
 // THE BROWSER ADD-ON (v1.239.0), in BOTH layouts, in one declaration — the same
 // shape DAEMON_EXE and DASHBOARD_SERVER use above, and at the same scope FOR A
