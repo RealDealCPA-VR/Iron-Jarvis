@@ -4,8 +4,8 @@ Iron Jarvis is signed with **Microsoft Artifact Signing** (the service that
 used to be called Azure Trusted Signing), as **RealDealCPA.Ai LLC**. Windows
 shows that name as the publisher when someone runs the installer.
 
-Signing switches on by itself when six values are saved as GitHub secrets.
-Until then, releases are built unsigned, exactly as before.
+The first signed release was v1.470.1 (2026-11-10). Every release since is
+signed, and a build that comes out unsigned fails instead of being published.
 
 ## What is set up in Azure
 
@@ -55,20 +55,16 @@ To try it without publishing anything:
 gh workflow run release.yml --ref <branch> -f dry_run=true
 ```
 
-## After the first signed release: two things to do
+## The lock against unsigned releases
 
-1. **Lock it.** Run this once, so a build that comes out unsigned fails
-   instead of being published:
+A signed copy of the app only accepts updates signed by the same publisher,
+so an unsigned release would be refused by every installed copy. The
+repository variable `IJ_REQUIRE_SIGNED` is set to `true`: with it, a build
+that has no signing secrets fails before anything is published. To see it:
 
-   ```bash
-   gh variable set IJ_REQUIRE_SIGNED --body true
-   ```
-
-   This matters because a signed copy of the app only accepts updates signed
-   by the same publisher. An unsigned release would be refused by every
-   installed copy.
-2. **Update the words** in `README.md` and the Help page's "Windows
-   SmartScreen on install" entry, which still say the app isn't signed.
+```bash
+gh variable list
+```
 
 ## What to keep alive
 

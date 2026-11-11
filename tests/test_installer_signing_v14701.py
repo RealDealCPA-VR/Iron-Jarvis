@@ -264,3 +264,11 @@ def test_the_signing_page_names_the_secrets_and_the_lock():
         assert f"`{name}`" in doc, name
     assert "IJ_REQUIRE_SIGNED" in doc
     assert PUBLISHER in doc
+
+
+def test_the_readme_and_help_page_say_the_installer_is_signed():
+    # v1.470.2: v1.470.1 was the first signed release.
+    for path in (ROOT / "README.md", ROOT / "dashboard" / "app" / "help" / "page.tsx"):
+        text = _text(path)
+        assert PUBLISHER in text, path
+        assert "code-signed yet" not in text, path

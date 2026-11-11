@@ -640,9 +640,10 @@ const TROUBLE: { symptom: string; fix: ReactNode }[] = [
     symptom: "Windows SmartScreen on install",
     fix: (
       <>
-        Windows shows &ldquo;Windows protected your PC&rdquo; because the app isn&apos;t
-        code-signed yet — click <Kbd>More info</Kbd> then <Kbd>Run anyway</Kbd>. This happens
-        once per download, not every launch.
+        The installer is signed by RealDealCPA.Ai LLC. Windows may still show &ldquo;Windows
+        protected your PC&rdquo; on a new release. Check that the publisher reads RealDealCPA.Ai
+        LLC, then click <Kbd>More info</Kbd> then <Kbd>Run anyway</Kbd>. This happens once per
+        download, not every launch.
       </>
     ),
   },

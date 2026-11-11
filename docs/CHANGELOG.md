@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.470.2
+
+**The installer is signed.** Since v1.470.1 the Windows installer is signed as **RealDealCPA.Ai LLC**.
+
 ## v1.470.1
 
 **The installer can be signed.** The Windows installer can now be signed as **RealDealCPA.Ai LLC**, through Microsoft Artifact Signing.
@@ -77,7 +81,3 @@
 ## v1.455.0
 
 **One word for each thing, and "did it work?" answered to the end.** **One word for each thing.** A server for models you run is a **model server** everywhere (it was "endpoint" or "node").
-
-## v1.454.0
-
-**Skills, how Jarvis works on pages, and a pointer you can watch in the browser sidebar.** **Skills in the browser sidebar.** Type **/** in the sidebar's box and the same skills the chat's "/" menu offers are listed; type more to narrow them, use the arrows, and press **Enter** (or **Tab**) to pick one.

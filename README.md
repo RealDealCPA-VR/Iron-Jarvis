@@ -113,7 +113,7 @@ A daily driver has to be light. Measured on our own daily-driver PC:
 ### 🪟 Windows desktop app (recommended, no dependencies)
 
 1. **Download** `Iron-Jarvis-Setup-<version>.exe` from the **[latest release](https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest)**. Ignore the `.blockmap` and `latest.yml` files; the updater uses those.
-2. **Install.** The app isn't code-signed yet ([why](docs/SIGNING.md)), so SmartScreen shows *"Windows protected your PC"*. Click **More info → Run anyway**.
+2. **Install.** The installer is signed by **RealDealCPA.Ai LLC** ([how](docs/SIGNING.md)). Windows may still show *"Windows protected your PC"* on a new release; if it does, check that the publisher reads RealDealCPA.Ai LLC, then click **More info → Run anyway**.
 3. **Connect a model.** If you're signed in to Claude Code or Codex, or Ollama is running with a model downloaded, the empty chat offers it as one press. It never picks one for you. You can also **Sign in** to Claude Code or Codex from inside the app, paste an API key (Anthropic, OpenAI, xAI, OpenRouter, Google AI Studio), or point it at a local Ollama / vLLM / LM Studio / OpenAI-compatible server under **Settings → Connections**. Until you choose, a **Demo replies** strip says replies come from the built-in demo model.
 
 Iron Jarvis inherits your subscription through the logged-in CLI. It never performs an account login itself and never sees that credential.

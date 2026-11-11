@@ -17102,11 +17102,15 @@ does not need a bump, stop and bump it.
   `IJ_REQUIRE_SIGNED=true` (set it after the first signed release) fails an
   unsigned build: a signed install refuses an unsigned update, because
   electron-builder writes the publisher into app-update.yml. The owner types
-  the secrets into GitHub; never take the client secret through chat. README
-  and the Help page still say "isn't code-signed yet" until a signed release
-  is out. Pins: `tests/test_installer_signing_v14701.py`. OPEN: never run
-  against the real service until the secrets exist (dry run:
-  `gh workflow run release.yml --ref <branch> -f dry_run=true`).
+  the secrets into GitHub; never take the client secret through chat.
+  v1.470.1 was the FIRST SIGNED RELEASE (2026-11-10; the published installer
+  read Valid, signer RealDealCPA.Ai LLC, issuer Microsoft ID Verified CS,
+  timestamped) and `IJ_REQUIRE_SIGNED` is now `true`: EVERY release from here
+  must sign, so a lapsed Azure subscription or an expired client secret fails
+  the release at the installer job. v1.470.2: README and the Help page say
+  the installer is signed. Pins: `tests/test_installer_signing_v14701.py`.
+  Try a workflow change with `gh workflow run release.yml --ref <branch> -f
+  dry_run=true` (it signs for real, publishes nothing).
 
 ## Map (where things live)
 

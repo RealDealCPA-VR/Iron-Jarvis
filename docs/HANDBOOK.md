@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.470.1 (2026-11-10).*
+holds itself to. Current as of v1.470.2 (2026-11-10).*
 
 ---
 
@@ -2041,6 +2041,14 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The installer is signed (v1.470.2)
+
+Since v1.470.1 the Windows installer is signed as **RealDealCPA.Ai LLC**.
+The README and the Help page's "Windows SmartScreen on install" entry now say
+so: check that the publisher reads RealDealCPA.Ai LLC, then press **More
+info** and **Run anyway** if Windows still shows its warning on a new
+release. A release that comes out unsigned can no longer be published.
 
 ## The installer can be signed (v1.470.1)
 
