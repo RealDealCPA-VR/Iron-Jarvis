@@ -125,6 +125,7 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
 
 import { BuildCodeView, FULL_ARM_GUARD_MS, FULL_DISARM_MS } from "@/components/buildCode/BuildCodeView";
 import { codeRowDraws } from "@/components/buildCode/CodeConversation";
+import { ROW_WINDOW, SNAP_ROWS } from "@/lib/codeWindow";
 import { codePanesDraws } from "@/components/buildCode/CodePanes";
 import {
   firstMessageTitle,
@@ -1077,6 +1078,96 @@ function settledSession(over: Record<string, unknown> = {}, events: Record<strin
   seed([sess("a1", over)]);
   openSession("a1", { session: sess("a1", over), events, running: null, pending: [] });
 }
+
+describe("v1.473.0: a long session draws its newest rows; Show earlier draws more", () => {
+  function longEvents(turns: number): Record<string, unknown>[] {
+    const out: Record<string, unknown>[] = [];
+    for (let t = 0; t < turns; t += 1) {
+      const at = `2026-11-11T${String(9 + Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}:00Z`;
+      out.push({ type: "user", at, text: `question ${t}`, turn: `t${t}` });
+      out.push({ type: "tool", at, item: `r${t}`, kind: "read", name: "Read", title: `Read file ${t}`, status: "done", turn: `t${t}` });
+      out.push({ type: "text_done", at, item: `m${t}`, text: `answer ${t}`, turn: `t${t}` });
+      out.push({ type: "done", at, stop: "completed", turn: `t${t}` });
+    }
+    return out;
+  }
+
+  it("draws about one window, the newest message last; each press draws another window", async () => {
+    seed([sess("a1")]);
+    openSession("a1", { session: sess("a1"), events: longEvents(200), running: null, pending: [], older: "s9", events_total: 1300 });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-show-earlier", {}, { timeout: 10_000 });
+    const drawn = () => screen.getAllByTestId("code-user").length;
+    const first = drawn();
+    expect(first).toBeGreaterThan(20);
+    expect(first).toBeLessThan(60);
+    expect(screen.getAllByTestId("code-user").at(-1)?.textContent).toContain("question 199");
+    expect(screen.getByTestId("code-folded-count").textContent).toBe(`${200 - first} earlier messages`);
+    // The daemon's own "Load earlier" waits until every row held is drawn.
+    expect(screen.queryByTestId("code-load-earlier")).toBeNull();
+    // Press the button as it is NOW (the page may still be drawing its first
+    // reads, which can replace the node a press found a moment earlier), and
+    // only until the press has taken effect.
+    await waitFor(() => {
+      if (drawn() === first) fireEvent.click(screen.getByTestId("code-show-earlier"));
+      expect(drawn()).toBeGreaterThan(first);
+    });
+    for (let i = 0; i < 20 && screen.queryByTestId("code-show-earlier"); i += 1) {
+      fireEvent.click(screen.getByTestId("code-show-earlier"));
+      await act(() => Promise.resolve());
+    }
+    await waitFor(() => expect(drawn()).toBe(200));
+    expect(screen.getByTestId("code-load-earlier")).toBeTruthy();
+  });
+
+  it("rows that stream in past two windows are cut back to one for a reader at the bottom", async () => {
+    // A reply running from the start (no card: answering one re-reads the
+    // session, which would replace the rows this test streams in).
+    const question = { type: "user", at: "2026-11-11T10:00:00Z", text: "go", turn: "turn-1" };
+    seed([sess("a1")]);
+    openSession("a1", { session: sess("a1"), events: [question], running: "turn-1", pending: [] });
+    H.scripts = [frames([question])];
+    holdStreams();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await waitFor(() => expect(H.lastWatch?.onFrame).toBeTruthy(), { timeout: 10_000 });
+    await screen.findByTestId("code-user", {}, { timeout: 10_000 });
+    expect(screen.queryByTestId("code-show-earlier")).toBeNull();
+    for (let b = 0; b < 3; b += 1) {
+      act(() => {
+        for (let i = 0; i < 100; i += 1) {
+          const item = `s${b}-${i}`;
+          H.lastWatch?.onFrame?.("tool", { type: "tool", item, kind: "read", name: "Read", title: `Read ${item}`, status: "done", turn: "turn-1" });
+        }
+      });
+      await pause(40);
+    }
+    await waitFor(() => expect(screen.getByTestId("code-show-earlier")).toBeTruthy());
+    expect(screen.getAllByTestId("code-tool").length).toBeLessThanOrEqual(ROW_WINDOW + SNAP_ROWS);
+    expect(screen.getByText("Read s2-99")).toBeTruthy();
+    // A reply starts (one new row), then the reader asks for earlier rows...
+    act(() => H.lastWatch?.onFrame?.("text", { type: "text", item: "m-live", delta: "Working ", turn: "turn-1" }));
+    await pause(40);
+    fireEvent.click(screen.getByTestId("code-show-earlier"));
+    fireEvent.click(screen.getByTestId("code-show-earlier"));
+    await waitFor(() => expect(screen.getAllByTestId("code-tool").length).toBeGreaterThan(2 * ROW_WINDOW));
+    const shown = screen.getAllByTestId("code-tool").length;
+    // ...and the reply goes on: words that add no row never cut it back.
+    for (let i = 0; i < 3; i += 1) {
+      act(() => H.lastWatch?.onFrame?.("text", { type: "text", item: "m-live", delta: `on${i} `, turn: "turn-1" }));
+      await pause(40);
+    }
+    await waitFor(() => expect(screen.getAllByTestId("code-text").at(-1)?.textContent).toContain("on2"));
+    expect(screen.getAllByTestId("code-tool")).toHaveLength(shown);
+  });
+
+  it("a short session folds nothing", async () => {
+    seed([sess("a1")]);
+    openSession("a1", { session: sess("a1"), events: longEvents(20), running: null, pending: [] });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await waitFor(() => expect(screen.getAllByTestId("code-user")).toHaveLength(20), { timeout: 10_000 });
+    expect(screen.queryByTestId("code-show-earlier")).toBeNull();
+  });
+});
 
 describe("review: the '/' and '@' menus answer the arrow keys", () => {
   it("'/' then ArrowDown then Enter inserts the SECOND command", async () => {
