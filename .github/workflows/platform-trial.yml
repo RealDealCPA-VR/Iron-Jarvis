@@ -1,0 +1,271 @@
+name: Platform trial
+
+# A TRIAL, never part of a release: runs the offline Python suite, a daemon
+# start, the daemon freeze and an unpacked desktop build on Linux and macOS to
+# list what is Windows-only today. It runs only on a push to the branch
+# trial/platforms, publishes nothing, and every job may fail.
+
+on:
+  push:
+    branches: ["trial/platforms"]
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - name: Sync Python deps
+        run: uv sync --extra dev
+      - name: Run this shard
+        env:
+          # GitHub's Linux machines have Docker running, which makes the shell
+          # tool run commands in a container. The Windows gate has no Docker;
+          # point at a dead port so both judge the same code path.
+          DOCKER_HOST: tcp://127.0.0.1:9
+        run: |
+          files="$(uv run python scripts/ci_shards.py --shards 6 --index ${{ matrix.shard }})"
+          set +e
+          uv run pytest ${{ (matrix.os == 'macos-latest' && matrix.shard == 5) && '-v' || '-q' }} --no-header -n auto -p no:cacheprovider --timeout 120 -rfE $files > pytest-out.txt 2>&1
+          code=$?
+          set -e
+          tail -1 pytest-out.txt
+          echo "${{ matrix.os }} shard ${{ matrix.shard }}: $(tail -1 pytest-out.txt)" >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pytest-${{ matrix.os }}-${{ matrix.shard }}
+          path: pytest-out.txt
+
+  daemon:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --extra dev
+      - name: The daemon starts from source and answers /health
+        run: |
+          uv run ironjarvis serve --root "$RUNNER_TEMP/ij-home" --port 8797 > serve.log 2>&1 &
+          ok=""
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8797/health > health.json; then ok=1; break; fi
+            sleep 1
+          done
+          tail -40 serve.log
+          test -n "$ok"
+          head -c 600 health.json
+      - name: Freeze the daemon (PyInstaller)
+        if: always()
+        run: |
+          uv pip install pyinstaller
+          uv run python -m PyInstaller packaging/ironjarvis.spec --noconfirm --distpath packaging/dist --workpath packaging/build > freeze.log 2>&1 || { tail -60 freeze.log; exit 1; }
+          tail -5 freeze.log
+          ls packaging/dist/ironjarvis | head -20
+      - name: The frozen daemon starts and answers /health
+        if: always()
+        run: |
+          ./packaging/dist/ironjarvis/ironjarvis serve --root "$RUNNER_TEMP/ij-frozen" --port 8796 > frozen.log 2>&1 &
+          ok=""
+          for i in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:8796/health > /dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          tail -40 frozen.log
+          test -n "$ok"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: daemon-${{ matrix.os }}
+          path: |
+            serve.log
+            freeze.log
+            frozen.log
+
+  desktop:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            flag: --linux
+          - os: macos-latest
+            flag: --mac
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Install desktop deps
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+      - name: An unpacked desktop build (no installer, unsigned)
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: pnpm exec electron-builder ${{ matrix.flag }} --dir --publish never
+
+  linux-app:
+    # The whole Linux app, the way the Windows installer is assembled: frozen
+    # daemon + built dashboard + add-on + desktop shell, as an AppImage. Then
+    # it is started on a virtual screen and must answer on its own port.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Freeze the daemon
+        run: |
+          uv sync --extra dev
+          uv pip install pyinstaller
+          uv run python -m PyInstaller packaging/ironjarvis.spec --noconfirm --distpath packaging/dist --workpath packaging/build > freeze.log 2>&1 || { tail -60 freeze.log; exit 1; }
+          ls -la packaging/dist/ironjarvis | head
+      - name: Build the dashboard
+        working-directory: dashboard
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          mkdir -p .next/standalone/.next
+          cp -r .next/static .next/standalone/.next/static
+          if [ -d public ]; then cp -r public .next/standalone/public; fi
+      - name: Build the browser add-on
+        working-directory: extensions/chrome
+        run: |
+          pnpm install --frozen-lockfile
+          node scripts/build.mjs
+      - name: Voice model
+        working-directory: desktop
+        run: |
+          mkdir -p resources && cd resources
+          curl -sSL -o vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q vosk.zip && mv vosk-model-small-en-us-0.15 vosk-model && rm vosk.zip
+      - name: Package the AppImage
+        working-directory: desktop
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec electron-builder --linux AppImage --publish never -c.linux.category=Office -c.linux.icon=assets/icon.png
+          ls -la release
+      - name: The packaged app starts and its daemon answers
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb libfuse2 > /dev/null
+          app="$(ls desktop/release/*.AppImage | head -1)"
+          chmod +x "$app"
+          xvfb-run -a "$app" --no-sandbox > app.log 2>&1 &
+          ok=""
+          for i in $(seq 1 120); do
+            if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8787/health | grep -qE "200|401"; then ok=1; break; fi
+            sleep 1
+          done
+          tail -60 app.log
+          ls -la ~/.config/"Iron Jarvis" 2>/dev/null | head -20 || true
+          find ~/.config/"Iron Jarvis" -name "*.log" -exec sh -c 'echo "== $1"; tail -30 "$1"' _ {} \; 2>/dev/null || true
+          test -n "$ok"
+          curl -s -o /dev/null -w "dashboard: %{http_code}\n" http://127.0.0.1:8788/ || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-app
+          path: |
+            app.log
+            freeze.log
+            desktop/release/*.AppImage
+
+  probe:
+    # The tests still failing on Linux, alone and with full detail.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --extra dev
+      - name: Run them
+        env:
+          DOCKER_HOST: tcp://127.0.0.1:9
+        run: |
+          set +e
+          uv run pytest -vv --no-header -n 4 -p no:cacheprovider --timeout 120 --tb=long -rfE \
+            tests/test_box_pack_v1460.py tests/test_build_accounts_v1302.py tests/test_build_command_shell_ask_v1381.py \
+            tests/test_chat_remember_connectors.py tests/test_finish_replay_v1386.py tests/test_finish_shell_writes_v1387.py \
+            tests/test_git_read_review_v14210.py tests/test_harness_bench_frontier_v1383.py tests/test_harness_bench_isolation_v1383.py \
+            tests/test_launch_recipes_v1238.py tests/test_one_approval_turn_v1417.py tests/test_records_build_v14380.py \
+            tests/test_team_review_finish_v1401.py > probe.txt 2>&1
+          tail -3 probe.txt
+          which python python3 git; echo "PATH=$PATH"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe
+          path: probe.txt
+
+  mac-probe:
+    # The Mac hang and the Mac-only failures, alone and with full detail.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --extra dev
+      - name: The two tests that never finish (stacks after 45 s)
+        run: |
+          set +e
+          uv run pytest -vv --no-header -p no:cacheprovider -p no:xdist -o faulthandler_timeout=45 --timeout 100 --timeout-method=thread \
+            "tests/test_creative_studio.py::test_tail_reports_mode_fields" \
+            "tests/test_studio_stale_marker_v1192.py::test_studio_say_still_accepts_a_genuinely_running_turn" > hang.txt 2>&1
+          tail -150 hang.txt
+      - name: The Mac-only failures
+        if: always()
+        run: |
+          set +e
+          uv run pytest -vv --no-header -n 3 -p no:cacheprovider --timeout 120 --tb=long -rfE \
+            tests/test_build_app_background_tasks_v1417.py tests/test_build_app_pool_v1409.py tests/test_build_app_start_v1412.py \
+            tests/test_build_app_pi_v1411.py tests/test_iron_proxy_routes_v1301.py tests/test_iron_proxy_signin_v13033.py \
+            tests/test_harness_bench_v1363.py tests/test_case_rename_offload_v1192.py tests/test_build_app_answers_v1417.py \
+            tests/test_build_app_spine_review_v1414.py tests/test_build_app_start_review_v1412.py > macprobe.txt 2>&1
+          tail -3 macprobe.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-probe
+          path: |
+            hang.txt
+            macprobe.txt
