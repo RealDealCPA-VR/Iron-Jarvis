@@ -77,9 +77,29 @@ export type PreviewPart =
   | { type: "content"; lines: string[] }
   | { type: "command"; command: string }
   | { type: "code"; code: string }
-  | { type: "plan"; steps: string[]; more: number; label?: string };
+  | {
+      type: "plan";
+      steps: string[];
+      more: number;
+      label?: string;
+      /** What one line is called: ["step", "steps"] unless said. */
+      unit?: [string, string];
+    };
 
-export type PreviewKind = "edit" | "write" | "command" | "code" | "plan" | "form" | "args";
+export type PreviewKind =
+  | "edit"
+  | "write"
+  | "command"
+  | "code"
+  | "plan"
+  | "form"
+  | "batch"
+  | "args";
+
+/** v1.473.0: many file changes after one approval (`apply_changes`). The
+ *  daemon sends `{changes: [one line each], total}` (never the arguments
+ *  themselves), and the card lists every line. */
+export const BATCH_TOOL = "apply_changes";
 
 /** v1.400.9: the browser's one-card form tool, by EXACT name. */
 export const FORM_TOOL = "browser_fill_form";
@@ -420,6 +440,24 @@ export function approvalPreview(tool: string, args: Record<string, unknown>): Ap
         label: "form",
       });
       kind = "form";
+    } else if (name === BATCH_TOOL && Array.isArray(args.changes) && args.changes.length > 0) {
+      // v1.473.0: a batch of file changes. One Allow covers the whole list,
+      // so the whole list is what the card shows (the daemon wrote each
+      // line; a number beyond the lines it sent is said as "more").
+      const lines = (args.changes as unknown[]).map(exampleValue);
+      const total =
+        typeof args.total === "number" && Number.isFinite(args.total) && args.total > lines.length
+          ? Math.floor(args.total)
+          : lines.length;
+      special.set("changes", {
+        type: "plan",
+        steps: lines,
+        more: total - lines.length,
+        label: "batch",
+        unit: ["change", "changes"],
+      });
+      consumed.add("total");
+      kind = "batch";
     } else if (name === PLAN_TOOL) {
       // v1.350.0: the plan the agent asks to follow, as a numbered list.
       const steps = planSteps(args.steps);

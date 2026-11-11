@@ -48,6 +48,10 @@
       "ok": "switched an app on or off",
       "failed": "tried an app switch and it failed"
     },
+    "apply_changes": {
+      "ok": "made a batch of file changes",
+      "failed": "tried a batch of file changes and it failed"
+    },
     "apply_patch": {
       "ok": "applied a patch",
       "failed": "tried a patch and it failed"
@@ -675,6 +679,10 @@
     "skill_search": {
       "ok": "looked for a skill",
       "failed": "tried a skill search and it failed"
+    },
+    "skill_update": {
+      "ok": "changed a skill",
+      "failed": "tried a skill change and it failed"
     },
     "some_new_tool": {
       "ok": "used some new tool",

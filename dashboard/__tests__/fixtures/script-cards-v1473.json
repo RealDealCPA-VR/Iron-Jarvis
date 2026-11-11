@@ -1,0 +1,23 @@
+{
+  "batch": {
+    "args": {
+      "changes": [
+        "Rename f0.txt to statement-0.txt",
+        "Rename f1.txt to statement-1.txt",
+        "Rename f2.txt to statement-2.txt",
+        "Rename f3.txt to statement-3.txt"
+      ],
+      "total": 4
+    },
+    "can_always": false,
+    "tool": "apply_changes"
+  },
+  "kept": {
+    "args": {
+      "content": "(from the script's `totals`: 4 rows, up to 2 columns; first row: [\"Name\", \"Amount\"])",
+      "path": "totals.xlsx"
+    },
+    "can_always": false,
+    "tool": "write_document"
+  }
+}

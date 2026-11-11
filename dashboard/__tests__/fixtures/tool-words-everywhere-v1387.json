@@ -13,6 +13,7 @@
     "app_search",
     "app_status",
     "app_switch",
+    "apply_changes",
     "apply_patch",
     "ask_user",
     "assign_work",
@@ -195,6 +196,7 @@
     "skill_create",
     "skill_load",
     "skill_search",
+    "skill_update",
     "spawn_agent",
     "tool_create",
     "tool_delete",
@@ -236,6 +238,7 @@
     "app_search": "search your Iron Jarvis setup",
     "app_status": "check your Iron Jarvis setup",
     "app_switch": "turn an app on or off",
+    "apply_changes": "make a batch of file changes",
     "apply_patch": "change files with a patch",
     "ask_user": "ask you a question",
     "assign_work": "queue a task for a teammate",
@@ -418,6 +421,7 @@
     "skill_create": "save a new skill",
     "skill_load": "load a skill",
     "skill_search": "look for a skill",
+    "skill_update": "change a skill",
     "spawn_agent": "start a helper agent",
     "tool_create": "make a new tool",
     "tool_delete": "remove a custom tool",
@@ -494,6 +498,10 @@
     "app_switch": [
       "Switched an app on or off",
       "Switching an app on or off"
+    ],
+    "apply_changes": [
+      "Made a batch of file changes",
+      "Making a batch of file changes"
     ],
     "apply_patch": [
       "Applied a patch",
@@ -1023,6 +1031,10 @@
       "Looked for a skill",
       "Looking for a skill"
     ],
+    "skill_update": [
+      "Changed a skill",
+      "Changing a skill"
+    ],
     "spawn_agent": [
       "Started a helper agent",
       "Starting a helper agent"
@@ -1125,6 +1137,7 @@
     "app_search": "",
     "app_status": "",
     "app_switch": "",
+    "apply_changes": "",
     "apply_patch": "",
     "ask_user": "",
     "assign_work": "",
@@ -1307,6 +1320,7 @@
     "skill_create": "",
     "skill_load": "",
     "skill_search": "",
+    "skill_update": "",
     "spawn_agent": "",
     "tool_create": "",
     "tool_delete": "",

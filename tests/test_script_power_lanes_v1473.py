@@ -315,6 +315,42 @@ async def test_the_batch_tool_is_not_offered_without_the_script_tool_or_in_the_p
     assert "tools.plan" not in model.specs[0]["tool_script"]["description"]
 
 
+FIXTURE = Path(__file__).resolve().parents[1] / "dashboard" / "__tests__" / "fixtures" / "script-cards-v1473.json"
+
+
+@pytest.mark.asyncio
+async def test_the_cards_the_dashboard_draws_are_what_the_daemon_sends(desk):
+    """ONE fixture both suites read: the two cards exactly as the stream lane
+    sends them (regenerate with IJ_REGEN_SCRIPT_CARDS=1 after an intended
+    change; `dashboard/__tests__/script-cards-v1473.test.tsx` draws them)."""
+    import os
+
+    app, ws = desk
+    _, batch_cards, _ = await _stream(app, _body(ws, "go", tools=["tool_script", "rename_file"]), _batch_model())
+    kept_model = Model([
+        _call(1, "tool_script", code=KEEP),
+        _call(2, "write_document", path="totals.xlsx", _from_script={"content": "totals"}),
+        "Saved.",
+    ])
+    _, kept_cards, _ = await _stream(
+        app,
+        _body(ws, "go", tools=["tool_script", "write_document"], auto_tools=False, approval_mode="always_ask"),
+        kept_model,
+    )
+    kept = [c for c in kept_cards if c.get("tool") == "write_document"]
+    assert len(batch_cards) == 1 and len(kept) == 1
+
+    def card(c: dict) -> dict:
+        return {"tool": c["tool"], "args": c["args"], "can_always": c.get("can_always")}
+
+    want = {"batch": card(batch_cards[0]), "kept": card(kept[0])}
+    text = json.dumps(want, indent=2, sort_keys=True) + chr(10)
+    if os.environ.get("IJ_REGEN_SCRIPT_CARDS") == "1":
+        FIXTURE.write_bytes(text.encode("utf-8"))
+    stored = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    assert stored == want, "regenerate with IJ_REGEN_SCRIPT_CARDS=1 after an intended change"
+
+
 # --------------------------------------------------------------------------- #
 # A skill that fits the message is named to the model
 # --------------------------------------------------------------------------- #

@@ -245,14 +245,16 @@ function PlanSteps({ part }: { part: Extract<PreviewPart, { type: "plan" }> }) {
   const shown = open || !capped ? part.steps : part.steps.slice(0, PREVIEW_LINES);
   // v1.400.9: the same numbered list carries a form's steps; it says which.
   const word = part.label ?? "plan";
+  // v1.473.0: and a batch's changes, counted as changes.
+  const [one, many] = part.unit ?? ["step", "steps"];
   return (
     <div data-testid="approval-plan" data-list={word} className="space-y-1">
       <p className="text-[11px] text-zinc-400">
-        <span className="text-zinc-500">{word}:</span> {n === 1 ? "1 step" : `${n} steps`}
+        <span className="text-zinc-500">{word}:</span> {n === 1 ? `1 ${one}` : `${n} ${many}`}
       </p>
       <ol
         id={id}
-        aria-label={n === 1 ? `The ${word}, 1 step` : `The ${word}, ${n} steps`}
+        aria-label={n === 1 ? `The ${word}, 1 ${one}` : `The ${word}, ${n} ${many}`}
         className="list-decimal space-y-0.5 pl-6 text-[12px] leading-relaxed text-zinc-300 marker:text-zinc-500"
       >
         {shown.map((goal, i) => (
@@ -263,7 +265,7 @@ function PlanSteps({ part }: { part: Extract<PreviewPart, { type: "plan" }> }) {
       </ol>
       {part.more > 0 && (open || !capped) ? (
         <p data-testid="approval-plan-more" className="pl-6 text-[11px] text-zinc-500">
-          …and {part.more === 1 ? "1 more step" : `${part.more} more steps`}
+          …and {part.more === 1 ? `1 more ${one}` : `${part.more} more ${many}`}
         </p>
       ) : null}
       {capped && (
@@ -271,8 +273,8 @@ function PlanSteps({ part }: { part: Extract<PreviewPart, { type: "plan" }> }) {
           open={open}
           onToggle={() => setOpen((v) => !v)}
           controls={id}
-          closedLabel={`Show all ${part.steps.length} steps`}
-          openLabel="Show fewer steps"
+          closedLabel={`Show all ${part.steps.length} ${many}`}
+          openLabel={`Show fewer ${many}`}
           testId="approval-plan-toggle"
         />
       )}
