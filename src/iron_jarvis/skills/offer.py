@@ -13,17 +13,33 @@ message are NAMED to the model (name + one-line description) and
 and follow it. Nothing is injected whole and nothing is chosen for the model:
 it is the list a person would glance at.
 
-HOW A SKILL FITS (deterministic, one pass, no model call):
+HOW A SKILL FITS (deterministic, one pass, no model call). Three kinds:
 
-* the user's OWN skills (made on the Skills page, in chat, by a recording or
-  an approved proposal) fit when ONE telling word of the message is in the
-  skill's name, description or when-to-use line;
-* every other skill (bundled, or another program's) needs more: a telling
-  word of its NAME, or three of its description.
+* OWN: a skill made in Iron Jarvis (the Skills page, chat, a recording, an
+  approved proposal). It fits when ONE telling word of the message is in its
+  name, description or when-to-use line. The user made it here to be used
+  here.
+* OTHER: a skill the user keeps in another program's folder (Claude Code,
+  Codex and so on), or one bundled with Iron Jarvis. It needs its NAME in the
+  message: two telling words of the name, or one together with a word of its
+  description, or one that hardly any other skill here uses.
+* VENDOR: a skill that SHIPPED with another program (it carries a licence
+  file, sits in a plugin or a system folder, or is on :data:`_VENDOR_NAMES`).
+  Never offered here: it is written for that program's own tools ("use the
+  docs connector", "run pypdf in the sandbox") and Iron Jarvis has tools of
+  its own for the same work. The user can still pick one with "/".
+
+MEASURED on the owner's PC (43 skills, none made in Iron Jarvis, 2026-11-11):
+the first cut (first five letters of a word; a name word OR three description
+words for every skill) offered a skill on 11 of 40 everyday messages, most of
+them wrong ("summarize this document" offered a meeting-transcript skill,
+"rename every pdf" a vendor's PDF skill). The table that holds this rule is
+``tests/test_script_power_matchers_v1473.py``.
 
 A "telling" word is not a common one (:data:`_COMMON`) and not one that most
-skills here use. Words match by their first five letters, so "deduct" finds
-"deductions".
+skills here use. Words match after their ending is taken off
+(:func:`_stem`): "deduct" finds "deductions", "invoice" finds "invoices";
+"state" does not find "statement".
 
 A message that fits nothing adds nothing: the prompt and the tool list are
 exactly what they were.
@@ -31,6 +47,7 @@ exactly what they were.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any, Iterable
@@ -41,10 +58,29 @@ OFFER_MAX = 3
 _MAX_CHARS = 4000
 #: A description is cut here in the offer.
 _DESC_CHARS = 200
-#: Letters two words must share at the front to count as the same word.
-_STEM = 5
+#: A single name word is enough for an OTHER skill when at most this many
+#: skills here use that word at all.
+_RARE = 2
 
 _WORD = re.compile(r"[a-z][a-z0-9]{2,}")
+
+#: Endings taken off a word before two words are compared (longest first).
+_ENDINGS = ("ions", "ings", "ion", "ing", "ers", "er", "ed", "es", "s")
+
+#: Skills that ship with another program and carry no licence file to tell
+#: them by. Hand-kept: a name missing here only means that skill is judged by
+#: the OTHER rule (its name must be in the message).
+_VENDOR_NAMES = frozenset({
+    "docs", "docx", "pdf", "pptx", "xlsx", "google-workspace", "morning",
+    "deep-research", "import-memory", "consolidate-memory", "explain-usage",
+    "setup-claude", "built-in-browser", "chrome-browser", "computer-use",
+    "skill-creator", "skill-installer", "imagegen", "openai-docs",
+    "review-agent", "dataviz", "artifact-design", "artifact-diagramming",
+    "artifact-capabilities",
+})
+#: Folder names that mark a vendor's own skills.
+_VENDOR_PARTS = frozenset({".system", "plugins"})
+_LICENCE_FILES = ("LICENSE.txt", "LICENSE", "LICENSE.md", "LICENCE.txt", "LICENCE")
 
 #: Words that say nothing about WHICH skill fits.
 _COMMON = frozenset("""
@@ -70,6 +106,7 @@ questions request requests result results skill skills example examples
 review reviews report reports make update change open save run start today
 tomorrow yesterday week month year day time name names number numbers page
 pages note notes plan plans
+build call convert draft generate produce prepare read turn try tried wanted
 """.split())
 
 
@@ -78,22 +115,73 @@ def _words(text: str) -> list[str]:
 
 
 def _stem(word: str) -> str:
-    return word[:_STEM] if len(word) > _STEM else word
+    """*word* without a plural or verb ending, so "invoices", "invoiced" and
+    "invoice" are one word. One ending only, and never down to two letters."""
+    for ending in _ENDINGS:
+        if word.endswith(ending) and len(word) - len(ending) >= 3:
+            word = word[: -len(ending)]
+            break
+    if len(word) > 4 and word.endswith("e"):
+        word = word[:-1]
+    return word
 
 
 def _telling(text: str) -> "set[str]":
     return {_stem(w) for w in _words(text) if w not in _COMMON}
 
 
+def _norm(path: Any) -> str:
+    """A path as text for a prefix test. No disk access (the skills folder
+    may be a slow place, and this runs for every skill on every message)."""
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
 def is_own(skill: Any, home: Any) -> bool:
     """A skill of the user's own: it lives in ``<home>/skills`` (made on the
     Skills page, in chat, by a recording or an approved proposal)."""
     try:
-        if home is None:
+        if home is None or not getattr(skill, "dir", None):
             return False
-        root = Path(home) / "skills"
-        return Path(getattr(skill, "dir", "")).resolve().is_relative_to(root.resolve())
-    except (OSError, ValueError):
+        root = _norm(Path(home) / "skills")
+        own = _norm(skill.dir)
+        return own == root or own.startswith(root + os.sep)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+#: ``{skill folder: shipped with another program}``, kept for the process:
+#: the answer needs one look at the folder.
+_VENDOR_SEEN: "dict[str, bool]" = {}
+
+
+def is_vendor(skill: Any) -> bool:
+    """A skill that SHIPPED with another program, as against one the user
+    wrote or installed for themselves. Never raises; "cannot tell" is False
+    (the skill is then judged by the stricter OTHER rule, never offered
+    freely)."""
+    try:
+        if str(getattr(skill, "source", "") or "") in ("builtin", "user"):
+            return False
+        if str(getattr(skill, "name", "") or "").strip().lower() in _VENDOR_NAMES:
+            return True
+        folder = getattr(skill, "dir", None)
+        if not folder:
+            return False
+        key = _norm(folder)
+        seen = _VENDOR_SEEN.get(key)
+        if seen is None:
+            parts = {p.lower() for p in Path(key).parts}
+            seen = bool(parts & _VENDOR_PARTS)
+            if not seen:
+                try:
+                    seen = any((Path(folder) / name).is_file() for name in _LICENCE_FILES)
+                except OSError:
+                    seen = False
+            if len(_VENDOR_SEEN) > 4096:
+                _VENDOR_SEEN.clear()
+            _VENDOR_SEEN[key] = seen
+        return seen
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -130,21 +218,29 @@ def fitting_skills(registry: Any, text: str, home: Any = None, k: int = OFFER_MA
                 seen[word] = seen.get(word, 0) + 1
         # A word most skills here use tells them apart no better than "the".
         crowd = max(3, len(skills) // 3)
-        scored: list[tuple[int, str, Any]] = []
+        scored: list[tuple[int, int, str, Any]] = []
         for skill, name, body in parts:
             name_hits = {w for w in said & name if seen.get(w, 0) <= crowd}
             body_hits = {w for w in (said & body) - name_hits if seen.get(w, 0) <= crowd}
+            if not (name_hits or body_hits):
+                continue
             own = is_own(skill, home)
             if own:
-                fits = bool(name_hits or body_hits)
+                fits = True
+            elif is_vendor(skill):
+                fits = False
             else:
-                fits = bool(name_hits) or len(body_hits) >= 3
+                fits = len(name_hits) >= 2 or (
+                    len(name_hits) == 1
+                    and (bool(body_hits) or seen.get(next(iter(name_hits)), 0) <= _RARE)
+                )
             if not fits:
                 continue
-            score = 3 * len(name_hits) + len(body_hits) + (2 if own else 0)
-            scored.append((-score, str(skill.name), skill))
-        scored.sort(key=lambda row: (row[0], row[1]))
-        return [skill for _, _, skill in scored[: max(1, int(k))]]
+            score = 3 * len(name_hits) + len(body_hits)
+            # The user's own skills lead, then the better match, then the name.
+            scored.append((0 if own else 1, -score, str(skill.name), skill))
+        scored.sort(key=lambda row: row[:3])
+        return [row[3] for row in scored[: max(1, int(k))]]
     except Exception:  # noqa: BLE001 — a matcher fault offers nothing
         return []
 

@@ -219,9 +219,11 @@ _EDIT_FOLLOWERS = _FOLLOWERS | frozenset({
     "by", "it", "should", "must", "always", "never", "because", "since",
     "when", "if",
 })
-#: Letters two words must share at the front to count as one (as the offer
-#: does: "advisement" finds "advice" only by its first letters).
-_STEM = 5
+#: Letters two words must share at the front to count as one here: the
+#: user says "my tax advice skill" for a skill named "tax-advisement". Loose
+#: on purpose, and safe: the words must also name one of the user's OWN
+#: skills and follow a verb that asks for a change.
+_STEM = 4
 
 
 def _stem(word: str) -> str:
