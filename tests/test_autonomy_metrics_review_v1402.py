@@ -506,7 +506,9 @@ def test_the_sidebars_risk_card_is_counted_as_a_once_only_safety_card():
     asked, answered = sent[0][1], sent[1][1]
     assert asked["once_only"] is True and asked["reason"] == "browser_risk" and asked["turn_id"] == "panel_t1"
     assert answered["decision"] == "once" and answered["actor"] == "app"
-    assert "4111" not in json.dumps(sent) and "Card number" not in json.dumps(sent)
+    # The typed text whole: a bare "4111" also matched the event's own time
+    # stamp ("at": 1794411121.597) and failed a correct run on 2026-11-11.
+    assert "4111 1111" not in json.dumps(sent) and "Card number" not in json.dumps(sent)
 
 
 # --------------------------------------------------------------------------- #
