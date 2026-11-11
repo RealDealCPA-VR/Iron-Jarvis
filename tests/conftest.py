@@ -18,9 +18,14 @@ def pytest_collection_modifyitems(config, items):
     from tests.windows_only import is_windows_only
 
     skip = pytest.mark.skip(reason="about a Windows-only thing (tests/windows_only.py)")
+    from tests.windows_only import is_not_on_mac
+
+    no_mac = pytest.mark.skip(reason="cannot run on macOS (tests/windows_only.py NOT_ON_MAC)")
     for item in items:
         if is_windows_only(item.nodeid):
             item.add_marker(skip)
+        elif sys.platform == "darwin" and is_not_on_mac(item.nodeid):
+            item.add_marker(no_mac)
 
 
 @pytest.fixture(autouse=True, scope="session")

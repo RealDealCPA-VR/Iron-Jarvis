@@ -341,6 +341,12 @@ async def test_a_night_card_goes_to_the_phone_at_once_and_a_phone_approve_runs_t
     while asyncio.get_running_loop().time() < end and not ch.sent:
         await asyncio.sleep(0.02)
     assert len(ch.sent) == 1, "the night card never reached the phone"
+    # The phone hears the question a moment before the app records it as
+    # answerable; an "approve" in between reads as a new chat (GitHub's
+    # Linux machine, 2026-11-11). Wait for the record, as v1.427.5 did.
+    from tests.test_build_phone_ask_v1392 import _answerable
+
+    await _answerable(app)
     res = await app.state.inbound_poller._handle(
         "tg", ch, InboundMessage(sender_id="777", text="approve", update_id=1, reply_to="777"),
     )

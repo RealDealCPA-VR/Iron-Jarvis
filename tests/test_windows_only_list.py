@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.windows_only import WINDOWS_ONLY, is_windows_only
+from tests.windows_only import NOT_ON_MAC, WINDOWS_ONLY, is_not_on_mac, is_windows_only
 
 TESTS = Path(__file__).parent
 
@@ -26,11 +26,11 @@ def _test_names(path: Path) -> set[str]:
     }
 
 
-@pytest.mark.parametrize("file", sorted(WINDOWS_ONLY))
+@pytest.mark.parametrize("file", sorted({**WINDOWS_ONLY, **NOT_ON_MAC}))
 def test_every_listed_test_exists(file):
     path = TESTS / file
     assert path.is_file(), f"{file} is listed but is not a test file"
-    names = WINDOWS_ONLY[file]
+    names = {**WINDOWS_ONLY, **NOT_ON_MAC}[file]
     if "*" in names:
         return
     missing = sorted(set(names) - _test_names(path))
@@ -64,3 +64,9 @@ def test_on_windows_nothing_is_skipped_by_the_list(pytestconfig):
     item = _Item()
     c.pytest_collection_modifyitems(pytestconfig, [item])
     assert item.marks == []
+
+
+def test_the_mac_list_reads_a_node_id():
+    file = "test_release_gate_v13703.py"
+    assert is_not_on_mac(f"tests/{file}::{NOT_ON_MAC[file][0]}")
+    assert not is_windows_only(f"tests/{file}::{NOT_ON_MAC[file][0]}")

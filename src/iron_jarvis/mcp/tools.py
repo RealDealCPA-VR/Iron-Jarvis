@@ -895,7 +895,9 @@ def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict
     # before the crash branch for the same reason as the 404 above.
     broken = _broken_package_in(raw)
     if broken is not None:
-        command_word = Path(command).name.lower() if command else ""
+        # The last part by EITHER slash: off Windows, Path() reads a Windows
+        # path ("C:\Program Files\nodejs\npx.cmd") as one long name.
+        command_word = str(command).replace("\\", "/").rsplit("/", 1)[-1].lower() if command else ""
         published = command_word in _PUBLISHED_LAUNCHERS
         return {
             "reason": (
