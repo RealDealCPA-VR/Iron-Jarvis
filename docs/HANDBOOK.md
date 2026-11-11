@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.475.0 (2026-11-11).*
+holds itself to. Current as of v1.476.0 (2026-11-11).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Skills that get used, one approval for many changes, faster scripts (v1.475.0)
+## Skills that get used, one approval for many changes, faster scripts (v1.476.0)
 
 ### A skill you saved is used without typing "/"
 
@@ -2264,7 +2264,7 @@ may only call tools that read.
 With a real model (Claude Haiku on the owner's Claude plan), on a scratch copy
 of the app with made-up statements, one run each:
 
-| Task | v1.472.1 | v1.475.0 |
+| Task | v1.472.1 | v1.476.0 |
 |---|---|---|
 | Add up 16 statements | 34.2 s, 5 approval cards | 17.5 s, no cards |
 | 640 payments into a workbook | 141.1 s, 22,646 tokens written by the model | 39.0 s, 2,346 tokens |
@@ -2336,6 +2336,39 @@ each has a test that fails on the old code:
 - **The installed desktop app was not driven.** The packaged program that
   the installer carries was built from this version and given the same
   requests; the installer and its window were not.
+
+## One chip for the coding tool, model and effort (v1.475.0)
+
+In Build › Code, the coding tool, its model and its effort are now one chip
+under the box: "Claude Code · Opus 5.5 · High". Press it (or Ctrl+Shift+M)
+and one panel opens:
+
+- **Left: the coding tools** on this PC. One that cannot start right now is
+  greyed, with the reason under it, and a Sign in press when signing in is
+  what it needs.
+- **Middle: the tool's models**, grouped as the tool groups them, with a
+  search box. Type a few letters to narrow the list.
+- **Right: the effort levels** of the model you picked. Only the levels that
+  model takes are shown, and "Default" first sends none.
+
+Picking a model moves straight to its effort levels, so tool, model and
+effort are one short trip. The keyboard does it all: the search box has the
+cursor, the arrow keys move, Enter picks, Esc or Tab closes.
+
+- **In a running session** the tool cannot change (start a new session for
+  another tool); the chip still changes its model and effort.
+- **A new session starts from what that tool last started with** on this PC:
+  its model and effort. A folder that has its own defaults for that tool
+  still wins, and a model the tool no longer offers is not used.
+- **A model the tool no longer lists** stays named on the chip and in the
+  list, marked "not in the list". It is never swapped for another one
+  without telling you.
+- **The list is read again** when you open the panel, at most once a minute,
+  so a model a tool has just added shows up.
+- **A change in a conversation leaves one quiet line** in it, such as "Model
+  changed: Sonnet 5.5 → Opus 5.5, from your next message", so the
+  conversation shows where the model changed. Nothing is written before the
+  conversation's first message.
 
 ## A coding tool can hand work to another one (v1.474.0)
 

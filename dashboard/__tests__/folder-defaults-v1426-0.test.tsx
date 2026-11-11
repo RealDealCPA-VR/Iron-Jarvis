@@ -110,6 +110,7 @@ import {
   toolDefaultsWords,
   codeDefaultsWords,
 } from "@/lib/folderDefaults";
+import { START, chooseEffort, chooseModel, chosen } from "./helpers/modelPicker";
 
 const FOLDER = "C:\\work\\shop";
 const DEFAULTS_PATH = `/build/folders/defaults?folder=${encodeURIComponent(FOLDER)}`;
@@ -293,8 +294,8 @@ describe("Build › Code's start composer", () => {
     const started: string[] = [];
     render(<StartComposer tools={TOOLS} toolsError={null} startFolder={FOLDER} onStarted={(s) => started.push(s.id)} />);
     await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Codex"));
-    await waitFor(() => expect((screen.getByTestId("code-start-model") as HTMLSelectElement).value).toBe("gpt-6-astra"));
-    expect((screen.getByTestId("code-start-effort") as HTMLSelectElement).value).toBe("medium");
+    await waitFor(() => expect(chosen(START).model).toBe("gpt-6-astra"));
+    expect(chosen(START).effort).toBe("medium");
     expect(screen.getByTestId("code-start-folder-defaults-words").textContent).toBe(
       "New sessions in shop start with: Codex · GPT-6 Astra · medium effort · Ask first.",
     );
@@ -319,7 +320,7 @@ describe("Build › Code's start composer", () => {
     await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code"));
     await act(() => new Promise((r) => setTimeout(r, 30)));
     expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code");
-    expect((screen.getByTestId("code-start-model") as HTMLSelectElement).value).toBe("");
+    expect(chosen(START).model).toBe("");
   });
 
   it("a model or effort picked before the folder's defaults arrive still wins; an untouched mode follows", async () => {
@@ -331,8 +332,8 @@ describe("Build › Code's start composer", () => {
     render(<StartComposer tools={TOOLS} toolsError={null} startFolder={FOLDER} onStarted={() => {}} />);
     await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code"));
     await act(async () => {}); // v1.431.0: the tool's reset step runs first (see build-code-start-v1412)
-    fireEvent.change(screen.getByTestId("code-start-model"), { target: { value: "claude-opus-5-5" } });
-    fireEvent.change(screen.getByTestId("code-start-effort"), { target: { value: "low" } });
+    await chooseModel(START, "claude-opus-5-5");
+    chooseEffort(START, "low");
     await act(async () => {
       answer({
         folder: FOLDER,
@@ -340,8 +341,8 @@ describe("Build › Code's start composer", () => {
       });
     });
     await screen.findByTestId("code-start-folder-defaults-words");
-    expect((screen.getByTestId("code-start-model") as HTMLSelectElement).value).toBe("claude-opus-5-5");
-    expect((screen.getByTestId("code-start-effort") as HTMLSelectElement).value).toBe("low");
+    expect(chosen(START).model).toBe("claude-opus-5-5");
+    expect(chosen(START).effort).toBe("low");
     fireEvent.change(screen.getByTestId("code-start-box"), { target: { value: "go" } });
     fireEvent.click(screen.getByTestId("code-start-send"));
     await waitFor(() => expect(api.posts).toHaveLength(1));
@@ -354,7 +355,7 @@ describe("Build › Code's start composer", () => {
     window.localStorage.setItem("ij.code.lastTool", "claude-code");
     render(<StartComposer tools={TOOLS} toolsError={null} startFolder={FOLDER} onStarted={() => {}} />);
     await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code"));
-    fireEvent.change(screen.getByTestId("code-start-model"), { target: { value: "claude-opus-5-5" } });
+    await chooseModel(START, "claude-opus-5-5");
     fireEvent.click(await screen.findByTestId("code-start-save-defaults"));
     await waitFor(() => expect(api.puts).toHaveLength(1));
     expect(api.puts[0].body).toEqual({
@@ -522,5 +523,87 @@ describe("the folder heading's defaults panel", () => {
       view: "tool",
       defaults: { harness: "claude-code", model: "claude-opus-5-5", effort: "high" },
     });
+  });
+});
+
+/* v1.475.0: with no folder default for the tool, a new session opens on what
+ * that tool last started with on this PC; a folder's own default still wins. */
+describe("Build › Code's start box remembers each tool's last pick", () => {
+  it("opens on the tool's last model and effort, and a start remembers the new pick", async () => {
+    window.localStorage.setItem("ij.code.lastTool", "claude-code");
+    window.localStorage.setItem("ij.code.lastPick.claude-code", JSON.stringify({ model: "claude-opus-5-5", effort: "high" }));
+    render(<StartComposer tools={TOOLS} toolsError={null} startFolder={null} onStarted={() => {}} />);
+    await waitFor(() => expect(chosen(START).model).toBe("claude-opus-5-5"));
+    expect(chosen(START).effort).toBe("high");
+    expect(screen.getByTestId("code-start-tool").textContent).toBe("Claude Code · Opus 5.5 · High");
+    chooseEffort(START, "low");
+    fireEvent.change(screen.getByTestId("code-start-box"), { target: { value: "go" } });
+    fireEvent.click(screen.getByTestId("code-start-send"));
+    await waitFor(() => expect(api.posts).toHaveLength(1));
+    expect(api.posts[0].body).toMatchObject({ harness: "claude-code", model: "claude-opus-5-5", effort: "low" });
+    expect(JSON.parse(window.localStorage.getItem("ij.code.lastPick.claude-code") || "{}")).toEqual({
+      model: "claude-opus-5-5",
+      effort: "low",
+    });
+  });
+
+  it("a folder's own default for the tool wins over the last pick", async () => {
+    window.localStorage.setItem("ij.code.lastTool", "codex");
+    window.localStorage.setItem("ij.code.lastPick.codex", JSON.stringify({ model: "gpt-6-astra", effort: "high" }));
+    api.gets[DEFAULTS_PATH] = { folder: FOLDER, defaults: { tool: { harness: "codex", model: "", effort: "low" } } };
+    render(<StartComposer tools={TOOLS} toolsError={null} startFolder={FOLDER} onStarted={() => {}} />);
+    await screen.findByTestId("code-start-folder-defaults-words");
+    await waitFor(() => expect(chosen(START).effort).toBe("low"));
+    expect(chosen(START).model).toBe("");
+  });
+
+  it("another tool's last pick is not used for this one", async () => {
+    window.localStorage.setItem("ij.code.lastTool", "claude-code");
+    window.localStorage.setItem("ij.code.lastPick.codex", JSON.stringify({ model: "gpt-6-astra", effort: "high" }));
+    render(<StartComposer tools={TOOLS} toolsError={null} startFolder={null} onStarted={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code"));
+    await act(async () => {});
+    expect(chosen(START)).toMatchObject({ model: "", effort: "" });
+  });
+});
+
+describe("Build › Code's start box: a model picked with its tool", () => {
+  it("picking another tool's model straight from the panel keeps the model (the tool's reset does not wipe it)", async () => {
+    window.localStorage.setItem("ij.code.lastTool", "claude-code");
+    render(<StartComposer tools={TOOLS} toolsError={null} startFolder={null} onStarted={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code"));
+    await act(async () => {});
+    fireEvent.click(screen.getByTestId("code-start-tool"));
+    // Browse Codex in the panel without leaving Claude Code yet: press Codex,
+    // then its model, as one trip.
+    fireEvent.click(screen.getByTestId("code-start-tool-codex"));
+    fireEvent.click(screen.getByTestId("code-start-model-gpt-6-astra"));
+    await act(async () => {});
+    expect(chosen(START)).toMatchObject({ tool: "codex", model: "gpt-6-astra" });
+    fireEvent.change(screen.getByTestId("code-start-box"), { target: { value: "go" } });
+    fireEvent.click(screen.getByTestId("code-start-send"));
+    await waitFor(() => expect(api.posts).toHaveLength(1));
+    expect(api.posts[0].body).toMatchObject({ harness: "codex", model: "gpt-6-astra" });
+  });
+});
+
+/* v1.475.0 review: opening the picker reads the tools' list again (new
+ * objects for the same tools); that must not wipe what the box holds. */
+describe("Build › Code's start box: the tools' list read again", () => {
+  it("keeps the mode, model and effort chosen so far", async () => {
+    window.localStorage.setItem("ij.code.lastTool", "claude-code");
+    const { rerender } = render(<StartComposer tools={TOOLS} toolsError={null} startFolder={null} onStarted={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code"));
+    await act(async () => {});
+    await chooseModel(START, "claude-opus-5-5");
+    chooseEffort(START, "low");
+    fireEvent.click(screen.getByTestId("code-start-mode-button"));
+    fireEvent.click(screen.getByTestId("code-start-mode-option-edits"));
+    expect(screen.getByTestId("code-start-mode-button").textContent).toContain("Auto edits");
+    const again = TOOLS.map((t) => ({ ...t, models: t.models.map((m) => ({ ...m })) }));
+    rerender(<StartComposer tools={again} toolsError={null} startFolder={null} onStarted={() => {}} />);
+    await act(async () => {});
+    expect(chosen(START)).toMatchObject({ tool: "claude-code", model: "claude-opus-5-5", effort: "low" });
+    expect(screen.getByTestId("code-start-mode-button").textContent).toContain("Auto edits");
   });
 });

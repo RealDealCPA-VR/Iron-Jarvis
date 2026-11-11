@@ -697,3 +697,49 @@ OPENCODE_RULES_DECIDE_PLAN = (
     "Your OpenCode config sets a permission rule for every tool, so that rule decides in this "
     "session; Plan still changes no file."
 )
+
+
+def _model_words(harness: str, rows: Any, model: str) -> str:
+    """A model's name the way the picker shows it (its row's label; the
+    tool's default by name; else the id)."""
+    if not model:
+        return f"{label(harness)}'s default"
+    want = model
+    if harness == "claude-code" and model.lower() in ("opus", "sonnet", "haiku", "fable"):
+        # Claude Code's own short name: the ONE listed model of that family
+        # (the picker's rule, dashboard ModelPicker.aliasTarget).
+        fam = f"claude-{model.lower()}-"
+        hits = [r for r in rows or [] if isinstance(r, dict) and str(r.get("id", "")).lower().startswith(fam)]
+        if len(hits) == 1:
+            want = hits[0].get("id")
+    for r in rows or []:
+        if isinstance(r, dict) and r.get("id") == want and r.get("label"):
+            return str(r["label"])
+    return model
+
+
+def _effort_words(effort: str) -> str:
+    return effort[:1].upper() + effort[1:] if effort else "Default"
+
+
+def model_change_words(harness: str, rows: Any, old_model: str, new_model: str,
+                       old_effort: str, new_effort: str, when: str = "",
+                       effort_when: str | None = None) -> str:
+    """v1.475.0: the conversation's one line for a model or effort change.
+    ``when`` is the model change's ``applied`` word ("now" | "next" | ""),
+    ``effort_when`` the effort's (default: the same as ``when``)."""
+    effort_when = when if effort_when is None else effort_when
+    model = old_model != new_model
+    effort = old_effort != new_effort
+    if not (model or effort):
+        return ""
+    m = (f"Model changed: {_model_words(harness, rows, old_model)} → "
+         f"{_model_words(harness, rows, new_model)}")
+    e = f"{_effort_words(old_effort)} → {_effort_words(new_effort)}"
+    nxt = ", from your next message"
+    if model and effort and (when == "next") != (effort_when == "next"):
+        # They apply at different times: each says its own.
+        return (f"{m}{nxt if when == 'next' else ''}. "
+                f"Effort changed: {e}{nxt if effort_when == 'next' else ''}.")
+    parts = ([m] if model else []) + ([f"{'effort' if model else 'Effort changed'}: {e}"] if effort else [])
+    return "; ".join(parts) + (nxt if (when if model else effort_when) == "next" else "") + "."

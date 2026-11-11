@@ -2186,8 +2186,11 @@ class HostedService:
             q.hold()
             self._persist_queue(q)
 
-    async def patch(self, sid: str, body: dict[str, Any]) -> dict[str, Any]:
+    async def patch(self, sid: str, body: dict[str, Any], *, say_change: bool = True) -> dict[str, Any]:
+        """``say_change=False``: the caller writes its own line for a model or
+        effort change (a typed ``/model`` or ``/effort``), so none here."""
         row = await self._row(sid)
+        before_model, before_effort = row.model or "", row.effort or ""
         fields: dict[str, Any] = {}
         applied: dict[str, str] = {}
         live = self.live.get(sid)
@@ -2339,6 +2342,8 @@ class HostedService:
             applied["load_folder_resources"] = "next"
         if fields:
             row = await asyncio.to_thread(store.update, self.engine, sid, **fields)
+            if say_change:
+                await self._say_model_change(row, before_model, before_effort, applied)
         if tell_title and live is not None and live.running and live.driver is not None:
             self._renames.pop(sid, None)
             self._tell_rename(live.driver, tell_title)
@@ -2352,6 +2357,28 @@ class HostedService:
         if row.harness == PI:
             out["pi_folder"] = await asyncio.to_thread(self._pi_folder_view, row)
         return out
+
+    async def _say_model_change(self, row: Any, before_model: str, before_effort: str,
+                                applied: dict[str, str]) -> None:
+        """v1.475.0: a model or effort change in a conversation leaves ONE
+        quiet line in it ("Model changed: Sonnet 5.5 → Opus 5.5, from your
+        next message"), in the session's own log so every window and a
+        reload show it. Nothing before the conversation's first message.
+        Never raises."""
+        try:
+            model, effort = row.model or "", row.effort or ""
+            if (model, effort) == (before_model, before_effort):
+                return
+            live = self.live.get(row.id)
+            if not (row.harness_session_id or (live is not None and live.turn is not None)):
+                return
+            rows = await asyncio.to_thread(self._models, row.harness)
+            text = W.model_change_words(row.harness, rows, before_model, model, before_effort, effort,
+                                        applied.get("model") or "", applied.get("effort") or "")
+            if text:
+                self._emit(self._live(row), make("notice", text=text))
+        except Exception:  # noqa: BLE001 — a change is never refused over its line
+            log.debug("could not say a Code session's model change", exc_info=True)
 
     def _tell_rename(self, driver: Driver, title: str) -> None:
         """v1.439.0: best effort, in the background (``Driver.rename``)."""
@@ -3458,7 +3485,8 @@ class HostedService:
         if quiet:
             drv.say_model_switch = False
         try:
-            out = await self.patch(live.sid, {"model": value} if name == "model" else {"effort": value})
+            out = await self.patch(live.sid, {"model": value} if name == "model" else {"effort": value},
+                                   say_change=False)
         except Refused as r:
             self._emit(live, W.error(r.sentence, "", ""))
             await self._end_turn(live, "failed")
@@ -3498,7 +3526,8 @@ class HostedService:
             await self._end_turn(live, "completed")
             return
         try:
-            out = await self.patch(live.sid, {"model": args} if name == "model" else {"effort": args})
+            out = await self.patch(live.sid, {"model": args} if name == "model" else {"effort": args},
+                                   say_change=False)
         except Refused as r:
             self._emit(live, W.error(r.sentence, "", ""))
             await self._end_turn(live, "failed")

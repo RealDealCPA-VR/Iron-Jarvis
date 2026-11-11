@@ -166,14 +166,25 @@ for (const size of [
     expect(await widest(page)).toBeLessThanOrEqual(1);
     await page.getByTestId("code-start-account-p_home").click();
     await expect(page.getByTestId("code-start-account")).toContainText("Personal");
-    // Its effort levels are listed; the chips still fit.
-    await expect(page.getByTestId("code-start-effort")).toBeVisible();
+    // The chips still fit.
     await page.waitForTimeout(200);
     expect(await outside(page, '[data-testid="code-start-chips"] > *, [data-testid="code-start-row"] > *')).toEqual([]);
     expect(await widest(page)).toBeLessThanOrEqual(1);
-    // v1.412.0 review: a model that takes no effort hides the chip.
-    await page.getByTestId("code-start-model").selectOption("claude-fable-5-1");
-    await expect(page.getByTestId("code-start-effort")).toHaveCount(0);
+    // v1.475.0 (moved on purpose): ONE picker. Its panel fits the window at
+    // this width; the model's effort levels are listed; a model that takes
+    // no effort lists none.
+    await page.getByTestId("code-start-tool").click();
+    await expect(page.getByTestId("code-start-tool-menu")).toBeVisible();
+    // The search box takes the cursor (it must be placed first: a box hidden
+    // for its measuring pass cannot take focus — found in a real browser).
+    await expect(page.getByTestId("code-start-model-search")).toBeFocused();
+    await page.waitForTimeout(200);
+    expect(await outside(page, '[data-testid="code-start-tool-menu"]')).toEqual([]);
+    expect(await widest(page)).toBeLessThanOrEqual(1);
+    await expect(page.getByTestId("code-start-effort-default")).toBeVisible();
+    await page.getByTestId("code-start-model-claude-fable-5-1").click();
+    await page.getByTestId("code-start-tool").click();
+    await expect(page.getByTestId("code-start-no-efforts")).toBeVisible();
   });
 }
 

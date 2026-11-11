@@ -105,6 +105,7 @@ import {
   type CodeEvent,
 } from "@/lib/buildApp";
 import { codeViewOfferFor } from "@/lib/buildCodeOffer";
+import { SESSION, effortButtons, effortLevels, modelRowsShown } from "./helpers/modelPicker";
 
 /* ---- the contract fixture (the REAL daemon's words for Pi) -------------- */
 
@@ -435,21 +436,21 @@ describe("the review's fixes", () => {
     H.gets["/build/app/sessions/p1"] = { session: chosen, events: [], running: false, pending: [], keeps_last: true };
     render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-session");
-    const model = (await screen.findByTestId("code-model-chip")) as HTMLSelectElement;
+    // v1.475.0 (moved on purpose): one chip, one panel.
+    const model = await screen.findByTestId("code-model-chip");
     await waitFor(() => expect(model.getAttribute("title")).toBe(KEEPS_LAST_TITLE));
-    expect(Array.from(model.options).map((o) => o.value)).not.toContain("");
-    const effort = screen.getByTestId("code-effort-chip") as HTMLSelectElement;
-    expect(Array.from(effort.options).map((o) => o.value)).not.toContain("");
-    expect(effort.getAttribute("title")).toBe(KEEPS_LAST_TITLE);
+    expect(modelRowsShown(SESSION).map((r) => r.id)).not.toContain("");
+    expect(effortLevels(SESSION)).not.toContain("");
   });
 
   it("with no choice saved, the first row says the conversation's last model, not the default", async () => {
     seed([sess("p1")]);
     H.gets["/build/app/sessions/p1"] = { session: sess("p1"), events: [], running: false, pending: [], keeps_last: true };
     render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
-    const model = (await screen.findByTestId("code-model-chip")) as HTMLSelectElement;
-    await waitFor(() => expect(model.options[0].textContent).toBe("Pi · its last model"));
-    expect((screen.getByTestId("code-effort-chip") as HTMLSelectElement).options[0].textContent).toBe("Its last effort");
+    const model = await screen.findByTestId("code-model-chip");
+    await waitFor(() => expect(model.textContent).toBe("Pi · Its last model"));
+    expect(modelRowsShown(SESSION)[0].label).toBe("Its last model");
+    expect(effortButtons(SESSION)[0].textContent).toBe("Its last effort");
   });
 
   it("a conversation with no messages yet still offers Pi's default", async () => {
@@ -457,9 +458,11 @@ describe("the review's fixes", () => {
     seed([chosen]);
     H.gets["/build/app/sessions/p1"] = { session: chosen, events: [], running: false, pending: [], keeps_last: false };
     render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
-    const model = (await screen.findByTestId("code-model-chip")) as HTMLSelectElement;
-    await waitFor(() => expect(model.options[0].textContent).toBe("Pi · default model"));
-    expect(model.options[0].value).toBe("");
-    expect(model.getAttribute("title")).toBeNull();
+    const model = await screen.findByTestId("code-model-chip");
+    await screen.findByTestId("code-session");
+    const first = modelRowsShown(SESSION)[0];
+    expect(first.id).toBe("");
+    expect(first.label).toBe("Default model");
+    expect(model.getAttribute("title")).not.toBe(KEEPS_LAST_TITLE);
   });
 });

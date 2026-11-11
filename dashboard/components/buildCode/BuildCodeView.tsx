@@ -219,6 +219,9 @@ const TOOLS = `${API}/harnesses`;
 /** v1.429.0: how often (and how many times) the tool list is read again while
  *  a tool's model list is still being read (Pi answers in about a second). */
 export const TOOLS_REREAD_MS = 2_000;
+/** v1.475.0: opening the model picker reads the tools' lists again, at most
+ *  this often (the page's first read counts). */
+export const PICKER_REREAD_MS = 60_000;
 export const TOOLS_REREAD_TRIES = 5;
 
 /** How often the list is read again while it is on screen. */
@@ -236,6 +239,7 @@ export const CODE_WAIT_REREAD_MS = 15_000;
 // v1.412.0: the mode chip lives in its own file (the start composer uses it
 // too); its two-press timings are re-exported here, where tests read them.
 export { FULL_ARM_GUARD_MS, FULL_DISARM_MS, ModeChip } from "@/components/buildCode/ModeChip";
+import { ModelPicker } from "@/components/buildCode/ModelPicker";
 import { ModeChip } from "@/components/buildCode/ModeChip";
 import { decodeCarry, type CarryFacts } from "@/lib/buildCodeCarry";
 import { LOOKING_BEAT_MS, noteLooking, stopLooking } from "@/lib/buildWatching";
@@ -351,6 +355,7 @@ function SessionPane({
   onBranched,
   initialDraft = null,
   onOpenSession,
+  onPickerOpen,
 }: {
   sessionId: string;
   tools: readonly CodingTool[];
@@ -377,6 +382,8 @@ function SessionPane({
   /** v1.474.0: open another Code session (a helper, or the one that started
    *  this helper). */
   onOpenSession?: (id: string) => void;
+  /** v1.475.0: the model picker opened (the page may read the lists again). */
+  onPickerOpen?: () => void;
 }) {
   const [session, setSession] = useState<CodeSession | null>(null);
   /** v1.474.0 (Hand off): this session's helpers, and the session a helper
@@ -1275,8 +1282,12 @@ function SessionPane({
       setInfo(null);
       try {
         const raw = await patch<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}`, patchIn);
+        // v1.475.0: a model or effort change in a conversation is said by the
+        // daemon's own line in it (read again below), so no second note here.
+        const onlyModel = Object.keys(patchIn).every((k) => k === "model" || k === "effort");
+        const saidInConversation = onlyModel && !!session.toolSessionId && !running;
         const later = appliedNextWords(raw);
-        if (later) setInfo(later);
+        if (later && !saidInConversation) setInfo(later);
         const keeps = keepsLastOf(raw);
         if (keeps !== null) setKeepsLast(keeps);
         const folder = piFolderOf(raw);
@@ -1285,6 +1296,12 @@ function SessionPane({
         if (next) {
           setSession(next);
           onChanged(next);
+          // v1.475.0: a model or effort change in a conversation leaves a
+          // line in it (the daemon writes it): read the conversation again to
+          // show it. While a reply runs the line comes with its stream.
+          if (("model" in patchIn || "effort" in patchIn) && next.toolSessionId && !running) {
+            void load({ follow: false });
+          }
         } else {
           void load({ follow: false });
         }
@@ -1292,7 +1309,7 @@ function SessionPane({
         setNote(errorWords(e, "That change did not save."));
       }
     },
-    [session, onChanged, load],
+    [session, onChanged, load, running],
   );
 
   /** The account hit its limit: carry on with the same conversation on the
@@ -1644,6 +1661,13 @@ function SessionPane({
   const accountName = accountWords(session, tools);
   // v1.418.0 (C4.8): which chip changes wait for the reply to end.
   const modelLive = modelWhileRunning(session.tool, toolName, running);
+  // v1.475.0 review: while the tools' list is not read (still loading, could
+  // not be read, or the tool is no longer installed) the chip still names
+  // the session's tool and model, from the session itself.
+  // (A plain value: this is past the pane's early return, so no hook here.)
+  const pickerTools = tool
+    ? [tool]
+    : decodeCodingTools({ harnesses: [{ id: session.tool, label: toolName, installed: true, signed_in: true, models: [] }] });
   const effortLive = effortWhileRunning(session.tool, toolName, running, tool?.effortLive === true);
   return (
     <SessionEditorProvider folder={session.folder}>
@@ -2034,73 +2058,33 @@ function SessionPane({
             <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
               <AttachButton onPick={(picked) => void att.add(picked)} />
               <span className="sr-only">Coding tool: {toolName}</span>
-              <select
-                aria-label={`${toolName} model`}
-                data-testid="code-model-chip"
-                value={session.model}
+              {/* v1.475.0: one chip for the model and its effort; the tool is
+                  fixed once a session exists. v1.418.0 (C4.8) still holds: the
+                  model stays open while a reply runs; only going back to the
+                  default (a new start) waits. A conversation that keeps its last
+                  model offers no way back to the default. */}
+              <ModelPicker
+                tools={pickerTools}
+                value={{ tool: session.tool, model: session.model, effort: session.effort }}
+                onChange={(field, next) => {
+                  if (field === "model") void change({ model: next });
+                  else if (field === "effort") void change({ effort: next });
+                }}
+                lockTool
+                testId="code-pick"
+                chipTestId="code-model-chip"
+                defaultModelRow={!keepsLast || !session.model}
+                defaultModelLabel={(t) => defaultModelWords(t, keepsLast)}
+                defaultModelHeld={modelLive.defaultHeld ? modelLive.title || "Not while a reply runs" : undefined}
+                keptModelLabel={oneMillionLabel(session.model, tool?.models ?? []) || undefined}
+                defaultEffortRow={!keepsLast || !session.effort}
+                defaultEffortLabel={defaultEffortWords(keepsLast)}
+                defaultEffortHeld={effortLive.defaultHeld ? effortLive.title || "Not while a reply runs" : undefined}
+                effortHeld={effortLive.held ? effortLive.title || "Not while a reply runs" : undefined}
                 title={keepsLast ? keepsLastTitle(session.tool) : modelLive.title || undefined}
-                onChange={(e) => void change({ model: e.target.value })}
-                className={CHIP_SELECT}
-              >
-                {/* A conversation that keeps its last model offers no way
-                    back to the default (Pi would restore the last one).
-                    v1.418.0 (C4.8): the chip stays open while a reply runs
-                    (the tool switches live, or from the next message); only
-                    going back to the default — a new start — waits. */}
-                {!keepsLast || !session.model ? (
-                  <option value="" disabled={modelLive.defaultHeld && session.model !== ""} title={modelLive.title || undefined}>
-                    {defaultModelWords(toolName, keepsLast)}
-                  </option>
-                ) : null}
-                {/* v1.429.0: grouped by provider, as Pi's own picker sorts them. */}
-                {modelGroups(tool?.models ?? []).map(({ group, models: list }) =>
-                  group ? (
-                    <optgroup key={group} label={group}>
-                      {list.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ) : (
-                    list.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {toolName} · {m.label}
-                      </option>
-                    ))
-                  ),
-                )}
-                {session.model && !(tool?.models ?? []).some((m) => m.id === session.model) ? (
-                  <option value={session.model}>
-                    {toolName} · {oneMillionLabel(session.model, tool?.models ?? []) || session.model}
-                  </option>
-                ) : null}
-              </select>
-              {tool && (effortsFor(tool, session.model).length || session.effort) ? (
-                <select
-                  aria-label="Effort"
-                  data-testid="code-effort-chip"
-                  value={session.effort}
-                  disabled={effortLive.held}
-                  title={keepsLast ? keepsLastTitle(session.tool) : effortLive.title || undefined}
-                  onChange={(e) => void change({ effort: e.target.value })}
-                  className={CHIP_SELECT}
-                >
-                  {!keepsLast || !session.effort ? (
-                    <option value="" disabled={effortLive.defaultHeld && session.effort !== ""}>
-                      {defaultEffortWords(keepsLast)}
-                    </option>
-                  ) : null}
-                  {/* v1.412.0 review: the levels THIS model takes (the
-                      daemon's per-model list, else the tool's); a kept
-                      effort the model no longer lists stays visible. */}
-                  {[...effortsFor(tool, session.model), ...(session.effort && !effortsFor(tool, session.model).includes(session.effort) ? [session.effort] : [])].map((x) => (
-                    <option key={x} value={x}>
-                      {x.charAt(0).toUpperCase() + x.slice(1)} effort
-                    </option>
-                  ))}
-                </select>
-              ) : null}
+                onOpen={onPickerOpen}
+                shortcut
+              />
               <ModeChip
                 tool={tool}
                 value={session.mode}
@@ -2379,6 +2363,12 @@ export function BuildCodeView({
         if (!st.gone) setToolsError(errorWords(e, "The coding tools could not be looked for."));
       });
   }, []);
+  const pickerReadAt = useRef(Date.now());
+  const refreshTools = useCallback(() => {
+    if (Date.now() - pickerReadAt.current < PICKER_REREAD_MS) return;
+    pickerReadAt.current = Date.now();
+    readTools();
+  }, [readTools]);
   const rereadModels = useCallback(() => {
     const st = toolsReadRef.current;
     if (st.timer) clearTimeout(st.timer);
@@ -3053,6 +3043,7 @@ export function BuildCodeView({
             toolsError={toolsError}
             modelsGaveUp={modelsGaveUp}
             onRereadModels={rereadModels}
+            onPickerOpen={refreshTools}
             startFolder={creating ? newOn.folder : null}
             workRoot={workRoot}
             startAt={openSessionFolder ?? startFolder}
@@ -3067,6 +3058,7 @@ export function BuildCodeView({
             key={openId}
             sessionId={openId}
             tools={tools ?? []}
+            onPickerOpen={refreshTools}
             onChanged={noteOpen}
             onOpenedTerminal={onOpenedTerminal}
             onArchived={archived}

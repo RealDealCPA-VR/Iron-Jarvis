@@ -1547,9 +1547,11 @@ export function keepsLastTitle(tool: string): string {
     : KEEPS_LAST_TITLE;
 }
 
-/** The first row of the model chip. */
-export function defaultModelWords(toolName: string, keepsLast: boolean): string {
-  return keepsLast ? `${toolName} · its last model` : `${toolName} · default model`;
+/** The "no model chosen" row of a session's model picker (v1.475.0: the
+ *  panel is already about one tool, so it does not repeat the tool's name). */
+export function defaultModelWords(tool: CodingTool | null, keepsLast: boolean): string {
+  if (keepsLast) return "Its last model";
+  return tool?.defaultName ? `Default (${tool.defaultName})` : "Default model";
 }
 
 /** The first row of the effort chip. */

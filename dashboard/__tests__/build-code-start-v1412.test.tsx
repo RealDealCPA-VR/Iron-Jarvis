@@ -72,6 +72,7 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
 
 import { BuildCodeView } from "@/components/buildCode/BuildCodeView";
 import { LAST_ACCOUNT_KEY, LAST_TOOL_KEY } from "@/components/buildCode/StartComposer";
+import { START, chooseEffort, chooseModel, closePicker, effortLevels, openPicker } from "./helpers/modelPicker";
 
 const MODES = [
   { id: "ask", label: "Ask first", dangerous: false },
@@ -190,8 +191,11 @@ async function ready(tool = "Claude Code") {
 }
 
 function pickTool(id: string) {
-  fireEvent.click(screen.getByTestId("code-start-tool"));
+  // v1.475.0: one picker for tool, model and effort; it stays open after a
+  // tool (the model comes next), so it is opened only when closed.
+  openPicker(START);
   fireEvent.click(screen.getByTestId(`code-start-tool-${id}`));
+  closePicker(START);
 }
 
 function type(words: string) {
@@ -216,7 +220,9 @@ describe("the composer is there at once", () => {
     // (moved on purpose); the folder stays under the card.
     const row = screen.getByTestId("code-start-row");
     expect(within(row).getByTestId("code-start-mode-button").textContent).toContain("Ask first");
-    expect(within(row).getByTestId("code-start-model")).toBeInTheDocument();
+    // v1.475.0 (moved on purpose): ONE chip holds the tool, model and effort.
+    expect(within(row).getByTestId("code-start-tool")).toBeInTheDocument();
+    expect(within(row).queryByTestId("code-start-model")).toBeNull();
     expect(within(row).getByTestId("code-start-send")).toBeInTheDocument();
     expect(within(screen.getByTestId("code-start-composer")).getByTestId("code-start-row")).toBeTruthy();
     // Nothing typed: Send waits.
@@ -265,8 +271,8 @@ describe("Send makes the session and sends the words, in one press", () => {
   it("the chosen model and effort ride the make", async () => {
     willMake("n3");
     await ready();
-    fireEvent.change(screen.getByTestId("code-start-model"), { target: { value: "claude-opus-5-5" } });
-    fireEvent.change(screen.getByTestId("code-start-effort"), { target: { value: "high" } });
+    await chooseModel(START, "claude-opus-5-5");
+    chooseEffort(START, "high");
     type("go");
     fireEvent.click(screen.getByTestId("code-start-send"));
     await screen.findByTestId("code-session");
@@ -327,10 +333,9 @@ describe("the tool and its account", () => {
 describe("effort only where the tool lists levels", () => {
   it("Claude Code lists them; Codex lists none", async () => {
     await ready();
-    const effort = screen.getByTestId("code-start-effort") as HTMLSelectElement;
-    expect(Array.from(effort.options).map((o) => o.value)).toEqual(["", "low", "medium", "high", "xhigh"]);
+    expect(effortLevels(START)).toEqual(["", "low", "medium", "high", "xhigh"]);
     pickTool("codex");
-    expect(screen.queryByTestId("code-start-effort")).toBeNull();
+    expect(effortLevels(START)).toEqual([]);
   });
 });
 

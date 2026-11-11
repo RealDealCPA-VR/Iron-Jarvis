@@ -2,9 +2,13 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
-## v1.475.0
+## v1.476.0
 
 **Skills that get used, one approval for many changes, faster scripts.** A skill used to reach a chat only when you picked it with "/".
+
+## v1.475.0
+
+**One chip for the coding tool, model and effort.** In Build › Code, the coding tool, its model and its effort are now one chip under the box: "Claude Code · Opus 5.5 · High".
 
 ## v1.474.0
 
@@ -77,7 +81,3 @@
 ## v1.464.0
 
 **Starter skills you can load.** A skill is a set of instructions Jarvis follows for one kind of task, such as "review a bank reconciliation" or "write release notes".
-
-## v1.463.0
-
-**Reading web pages works on more sites; page screenshots work again.** **Reading a web page.** When Jarvis reads a page for you, it used to tell the site it was the Chrome browser.

@@ -71,6 +71,7 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
 
 import { BuildCodeView } from "@/components/buildCode/BuildCodeView";
 import { LAST_ACCOUNT_KEY, LAST_TOOL_KEY } from "@/components/buildCode/StartComposer";
+import { SESSION, START, chooseEffort, chooseModel, chosen, effortLevels } from "./helpers/modelPicker";
 
 const MODES = [{ id: "ask", label: "Ask first", dangerous: false }];
 const CLAUDE_LEVELS = ["low", "medium", "high", "xhigh", "max"];
@@ -209,18 +210,18 @@ describe("the effort chip follows the model", () => {
     window.localStorage.setItem(LAST_ACCOUNT_KEY + "claude-code", "p_work");
     willMake("n2");
     await ready();
-    const levels = () =>
-      Array.from((screen.getByTestId("code-start-effort") as HTMLSelectElement).options).map((o) => o.value);
+    // v1.475.0: through the one picker (moved on purpose).
+    const levels = () => effortLevels(START);
     expect(levels()).toEqual(["", ...CLAUDE_LEVELS]);
-    fireEvent.change(screen.getByTestId("code-start-effort"), { target: { value: "max" } });
-    fireEvent.change(screen.getByTestId("code-start-model"), { target: { value: "claude-haiku-4-5" } });
+    chooseEffort(START, "max");
+    await chooseModel(START, "claude-haiku-4-5");
     expect(levels()).toEqual(["", "low", "medium", "high"]);
-    expect((screen.getByTestId("code-start-effort") as HTMLSelectElement).value).toBe("");
+    await waitFor(() => expect(chosen(START).effort).toBe(""));
     // Dropped for good: back on a model that takes "max", it is not chosen.
-    fireEvent.change(screen.getByTestId("code-start-model"), { target: { value: "" } });
-    expect((screen.getByTestId("code-start-effort") as HTMLSelectElement).value).toBe("");
-    fireEvent.change(screen.getByTestId("code-start-model"), { target: { value: "claude-fable-5-1" } });
-    expect(screen.queryByTestId("code-start-effort")).toBeNull();
+    await chooseModel(START, "");
+    expect(chosen(START).effort).toBe("");
+    await chooseModel(START, "claude-fable-5-1");
+    expect(levels()).toEqual([]);
     type("go");
     fireEvent.click(screen.getByTestId("code-start-send"));
     await screen.findByTestId("code-session");
@@ -235,7 +236,7 @@ describe("the effort chip follows the model", () => {
     render(<BuildCodeView initialSession="s1" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-session");
     await screen.findByTestId("code-model-chip");
-    expect(screen.queryByTestId("code-effort-chip")).toBeNull();
+    expect(effortLevels(SESSION)).toEqual([]);
   });
 });
 
