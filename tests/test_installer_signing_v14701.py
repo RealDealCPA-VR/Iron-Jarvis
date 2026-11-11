@@ -66,6 +66,22 @@ def _node_config(env_extra: dict[str, str]) -> subprocess.CompletedProcess:
 # ------------------------------------------------------- builder-signed.js
 
 
+def test_the_signed_config_exports_nothing_but_build_settings():
+    # electron-builder refuses a config with ANY property it does not know,
+    # non-enumerable ones included (the first signed dry run died on one).
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    env = {**os.environ, **FAKE}
+    out = subprocess.run(
+        [node, "-e", "process.stdout.write(JSON.stringify(Object.getOwnPropertyNames(require('./builder-signed.js'))))"],
+        cwd=DESKTOP, env=env, capture_output=True, timeout=60,
+    )
+    assert out.returncode == 0, out.stderr.decode("utf-8", "replace")
+    base = json.loads(_text(DESKTOP / "package.json"))["build"]
+    assert sorted(json.loads(out.stdout.decode("utf-8"))) == sorted(base)
+
+
 def test_the_signed_config_is_the_normal_build_plus_the_signing_settings():
     out = _node_config(FAKE)
     assert out.returncode == 0, out.stderr.decode("utf-8", "replace")

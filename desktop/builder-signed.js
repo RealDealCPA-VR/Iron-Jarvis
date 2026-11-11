@@ -68,11 +68,6 @@ function signedConfig(env, base) {
   };
 }
 
-const config = signedConfig(process.env, require("./package.json").build);
-
-module.exports = config;
-// For the tests (electron-builder ignores unknown non-enumerable members).
-Object.defineProperty(module.exports, "__test", {
-  enumerable: false,
-  value: { PUBLISHER, REQUIRED, missing, signedConfig },
-});
+// electron-builder checks EVERY property of this object against its schema,
+// hidden ones too, so nothing but build settings may be exported here.
+module.exports = signedConfig(process.env, require("./package.json").build);
