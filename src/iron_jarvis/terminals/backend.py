@@ -270,6 +270,7 @@ class PosixPtyBackend:
         self._pid: int | None = None
         self._fd: int | None = None
         self._exit_code: int | None = None
+        self._closed = False
 
     def start(
         self,
@@ -302,6 +303,8 @@ class PosixPtyBackend:
 
     def write(self, data: str | bytes) -> None:
         if self._fd is None:
+            if self._closed:
+                return  # killed and closed: nothing to type into
             raise RuntimeError("backend not started")
         if isinstance(data, str):
             data = data.encode("utf-8")
@@ -398,10 +401,23 @@ class PosixPtyBackend:
                 os.kill(pid, signal.SIGKILL)
         except OSError:
             pass
-        try:  # reap so we don't leak a zombie
-            os.waitpid(pid, 0)
-        except OSError:
-            pass
+        # Reap so we don't leak a zombie — but NEVER wait without a bound.
+        # On macOS a killed shell cannot finish exiting while output it wrote
+        # is still unread on this side of the terminal, so a plain
+        # ``waitpid(pid, 0)`` waited for ever (both Creative Studio tests hung
+        # there in the 2026-11-11 Mac trial, and closing a terminal would have
+        # hung the app the same way). Read and drop what is waiting while we
+        # wait; if the shell is still not gone, close our side of the
+        # terminal, which lets it go, and wait a little more.
+        if not self._reap(pid, _REAP_WAIT_S):
+            fd, self._fd = self._fd, None
+            self._closed = True
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            self._reap(pid, _REAP_WAIT_S)
         # The pid is FREED by that reap and the OS may hand it to an unrelated
         # process — and `kill()` is called twice for real on every session (the
         # manager kills a closed pane, `purge_dead` RETAINS the dead session and
@@ -414,9 +430,34 @@ class PosixPtyBackend:
         # method never set.
         self._pid = None
 
+    def _reap(self, pid: int, wait_s: float) -> bool:
+        """Wait up to ``wait_s`` for ``pid`` to be gone, dropping any output
+        waiting on the terminal meanwhile. True once it is reaped (or is not
+        ours to reap)."""
+        import time as _time
+
+        end = _time.monotonic() + wait_s
+        while True:
+            try:
+                got, _status = os.waitpid(pid, os.WNOHANG)
+            except OSError:
+                return True
+            if got:
+                return True
+            if _time.monotonic() >= end:
+                return False
+            for _ in range(64):
+                if not self.read_nonblocking():
+                    break
+            _time.sleep(0.02)
+
     @property
     def exit_code(self) -> int | None:
         return self._exit_code
+
+
+#: How long ``PosixPtyBackend.kill`` waits for a killed shell, twice at most.
+_REAP_WAIT_S = 3.0
 
 
 # --------------------------------------------------------------------------- #
