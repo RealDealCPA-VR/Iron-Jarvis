@@ -117,7 +117,9 @@ def test_the_brief_rides_only_beside_the_tool():
     assert CT.skill_block(["read_file"]) == ""
     assert CT.skill_block(None) == ""
     block = CT.skill_block({"skill_create", "read_file"})
-    assert block == CT.SKILL_BLOCK
+    # v1.473.0 (moved on purpose): the brief also says how a skill is found
+    # again by later chats, and that a script that worked can be saved with it.
+    assert block == CT.SKILL_BLOCK + CT.SKILL_FINDABLE_LINE
     assert "skill_create" in block and "workflow_draft" in block
     assert "\n" in block and "\\n" not in block
 

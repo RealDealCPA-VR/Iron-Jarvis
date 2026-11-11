@@ -630,6 +630,27 @@ class ToolRegistry:
             return [self._spec_for_scripts(t, batch) for t in tools]
         return [self._spec_with_store_as(t) for t in tools]
 
+    def add_script_tool(self, specs: list) -> list:
+        """*specs* with `tool_script` added, for a caller that arms it PART
+        WAY THROUGH a run (v1.473.0, the agent runtime): the script tool's
+        own spec joins, and each file tool that can take a kept value is
+        swapped for the version that says so. Every other spec — including
+        one the caller rewrote — is handed back as it is. The same list when
+        there is no script tool or it is already there."""
+        tool = self._tools.get("tool_script")
+        names = {str(s.get("name") or "") for s in specs if isinstance(s, dict)}
+        if tool is None or "tool_script" in names:
+            return specs
+        from .script_values import FROM_SCRIPT_ARGS
+
+        out: list = []
+        for spec in specs:
+            name = str(spec.get("name") or "") if isinstance(spec, dict) else ""
+            fillable = self._tools.get(name) if name in FROM_SCRIPT_ARGS else None
+            out.append(self._spec_for_scripts(fillable, False) if fillable is not None else spec)
+        out.append(self._spec_for_scripts(tool, "apply_changes" in names))
+        return out
+
     def _spec_for_scripts(self, tool: Tool, batch: bool) -> dict[str, Any]:
         """A tool's spec for a turn that has `tool_script` (v1.473.0).
 

@@ -4529,6 +4529,9 @@ async def chat_stream(
     # no media service is connected; read by the Tools line. MIRROR NOTE
     # (lock-step): chat_turn.run_chat_turn keeps the same flag.
     _media_unready = False
+    # v1.473.0: the skills this message fits (set by the arming branch).
+    _skills_offered: list[str] = []
+    _arm_ceiling: "int | None" = None
     if text_only_pick:
         armed, auto_armed, ask_armed = [], [], []
         tool_specs = []
@@ -4569,6 +4572,9 @@ async def chat_stream(
         # MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
         _selection = await _prep.take("arming")
         armed, auto_armed = _selection
+        # v1.473.0: the skills this message fits (for the Tools seam below).
+        _skills_offered = list(getattr(_selection, "skills", ()) or ())
+        _arm_ceiling = getattr(_selection, "ceiling", None)
         # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed —
         # the gate is the MEASURED drop signal, and the number printed is
         # the ceiling that actually bit (lock-step twin of chat_turn's
@@ -4680,6 +4686,20 @@ async def chat_stream(
                 and d.platform.registry.get("excel_live_edit") is not None
             ):
                 ask_armed.append("excel_live_edit")
+            # A BATCH OF CHANGES (v1.473.0): a turn that has the script tool
+            # AND a file tool a batch may hold (rename, write, edit…) can ask
+            # to make many changes at once. VISIBLE, never granted: ONE card
+            # lists every change. THIS LANE ONLY (the POST lane shows no card).
+            from ...tools.apply_changes import BATCH_TOOLS as _BATCH_TOOLS
+
+            if (
+                "tool_script" in armed
+                and "apply_changes" not in armed
+                and "apply_changes" not in ask_armed
+                and d.platform.registry.get("apply_changes") is not None
+                and any(t in _BATCH_TOOLS for t in (*armed, *ask_armed))
+            ):
+                ask_armed.append("apply_changes")
             # APPS BY NAME (v1.354.0, G39): a named app that is connected with
             # tools loaded has them ASK-armed (visible, never granted; the
             # `mcp_call` key cards each call), before the ceiling and the
@@ -4903,6 +4923,16 @@ async def chat_stream(
         _skill_brief = _chat_turn.skill_block({*armed, *ask_armed})
         if _skill_brief:
             system += "\n\n" + _skill_brief
+        # v1.473.0: the skills this message fits, named only beside
+        # `skill_load` (off the loop: a skill that is not the user's own is
+        # scanned). MIRROR NOTE (lock-step): chat_turn's Tools seam.
+        if _skills_offered:
+            _skills_fit = await asyncio.to_thread(
+                _chat_turn.skills_offer_block, d.platform, _skills_offered,
+                {*armed, *ask_armed},
+            )
+            if _skills_fit:
+                system += "\n\n" + _skills_fit
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]
@@ -5942,8 +5972,11 @@ async def chat_stream(
                 # ("rename_real_file × 8"). `_round_answers` is per round:
                 # 'once' covers exactly this batch, never a later round.
                 def _redacted(_c):
-                    _ct = d.platform.registry.get(_c.name)
-                    return _ct.redact_args(_c.arguments) if _ct is not None else _c.arguments
+                    # v1.473.0: `card_args` — a value a script kept is shown
+                    # as what it IS, a batch as its list of changes.
+                    return _chat_turn.card_args(
+                        d.platform.registry.get(_c.name), _c.arguments, ctx
+                    )
 
                 # ONE APPROVAL PER TAB (v1.266.0). An acting browser call whose
                 # tab the user has already allowed ("Allow for this tab") gets
@@ -6281,9 +6314,7 @@ async def chat_stream(
                     # REDACT args before they cross the wire — a planted secret
                     # (secrets/computeruse tools redact) never streams to the
                     # browser; same guard the DB-persist path uses.
-                    safe_args = (
-                        _t.redact_args(tc.arguments) if _t is not None else tc.arguments
-                    )
+                    safe_args = _chat_turn.card_args(_t, tc.arguments, ctx)
                     _plan: dict[str, Any] = {
                         "t": _t, "safe_args": safe_args, "refused": "",
                         "carded": False, "card_deny": "", "grant_extra": set(),
@@ -6486,7 +6517,11 @@ async def chat_stream(
                                 # the next quote is a different spend.
                                 "can_always": _can_always(
                                     d.platform, _grant_scopes, _trust_state, tc.name
-                                ) and not _local_ask and not _spend_card and not _once_only,
+                                ) and not _local_ask and not _spend_card and not _once_only
+                                # v1.473.0: nor for a call fed by a script's
+                                # kept value — the next value under the same
+                                # name is different data.
+                                and "_from_script" not in (tc.arguments or {}),
                                 # 0 = no expiry (v1.247.0): the turn waits
                                 # for the person it asked. v1.398.0: a night
                                 # task's card waits the night's card wait,
@@ -7420,6 +7455,19 @@ async def chat_stream(
                                                images=_chat_turn.tool_result_images(result, ran)))
                         if msgs[-1].images:
                             _chat_turn.trim_tool_images(msgs)
+                # THE SCRIPT TOOL, OFFERED BY WHAT THE MODEL IS DOING
+                # (v1.473.0): after the fourth successful call of one reading
+                # tool it joins the turn for the next round. Plain chat only
+                # (a coding session has its shell). MIRROR NOTE (lock-step):
+                # chat_turn.run_chat_turn.
+                if _harness is None and not text_only_pick:
+                    _chat_turn.offer_script_tool(
+                        d, body, tools_used=tools_used, armed=armed,
+                        auto_armed=auto_armed, ask_armed=ask_armed,
+                        tool_specs=tool_specs, overrides=overrides,
+                        armed_grant=armed_grant, msgs=msgs, ctx=ctx,
+                        tool_ceiling=tool_ceiling, ceiling=_arm_ceiling,
+                    )
                 if _finish_round:
                     # The finish check's tests ran (or were refused / declined
                     # on their card): its ONE note goes to the model now, and

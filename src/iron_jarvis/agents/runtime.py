@@ -1488,6 +1488,10 @@ class AgentRuntime:
         #: (``ToolContext.shell_syntax``). Absent = the platform's own shell.
         #: Dropped when the run ends.
         self._shell_syntax: dict[str, str] = {}
+        #: v1.473.0: whether a run may be given `tool_script` part way
+        #: through (decided once at its start: not a helper, not a reviewer,
+        #: room in a weak model's tool budget).
+        self._script_armable: dict[str, bool] = {}
 
     # ------------------------------------------------------------------ #
     # TRUST (v1.298.0) — the posture a call runs under, and how it lowers
@@ -2060,6 +2064,7 @@ class AgentRuntime:
             self._run_grants.pop(session.id, None)
             self._tainted.pop(session.id, None)
             self._shell_syntax.pop(session.id, None)  # v1.421.0 (A1)
+            self._script_armable.pop(session.id, None)  # v1.473.0
             # …and so are its cached file reads (D8): nothing reads them again.
             forget = getattr(getattr(self.p, "registry", None), "forget_session", None)
             if callable(forget) and session.id != "chat":
@@ -2419,6 +2424,38 @@ class AgentRuntime:
         if (notebook_slug and "notebook" not in armed_names and not _review_only
                 and self.p.registry.get("notebook") is not None):
             armed_names.append("notebook")
+        # TOOL SCRIPTS IN A RUN (v1.473.0). Chat alone had them; a scheduled
+        # run that reads forty statements made forty model round trips. When
+        # the task asks for the same read many times (the matcher chat uses)
+        # and the run holds a tool a script may call, `tool_script` rides
+        # along: allow tier, isolated, and every call a script makes goes
+        # through the registry with THIS run's roster and rules. Never past a
+        # weak model's tool budget, never for a coding session's helper (it
+        # has a shell) or a read-only reviewer. The loop below adds it later
+        # too, once the model has made the same read four times.
+        self._script_armable[session.id] = False
+        if (
+            not _review_only
+            and str(getattr(session, "origin", "") or "") != _HELPER_ORIGIN
+            and self.p.registry.get("tool_script") is not None
+        ):
+            _script_cap = env_profile.max_tools()
+            _script_room = _script_cap is None or len(armed_names) < _script_cap
+            self._script_armable[session.id] = _script_room
+            if _script_room and "tool_script" not in armed_names:
+                try:
+                    from ..tools.autoselect import wants_tool_script
+
+                    _script_tool = self.p.registry.get("tool_script")
+                    _readers = [
+                        t for t in armed_names
+                        if self.p.registry.get(t) is not None
+                        and not _script_tool._fixed_refusal(t, self.p.registry.get(t))
+                    ]
+                    if wants_tool_script(session.task or "", _readers, 0):
+                        armed_names.append("tool_script")
+                except Exception:  # noqa: BLE001 — an offer never fails a run
+                    pass
         tool_specs = self.p.registry.specs(armed_names)
         # v1.377.0 (IJ harness part 2 Phase 6): a HELPER of a Build session
         # runs its commands with the user's own PATH and home folder
@@ -3843,6 +3880,36 @@ class AgentRuntime:
         else:
             self._waiting_depth[run.id] = depth
 
+    def _offer_script_tool(self, session: Session, tool_specs: list, state: dict, messages: list) -> bool:
+        """Add `tool_script` to a run that keeps making the same read
+        (v1.473.0). Returns whether it was added. Never raises."""
+        try:
+            if not self._script_armable.get(session.id):
+                return False
+            names = {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)}
+            registry = self.p.registry
+            script = registry.get("tool_script")
+            if script is None or "tool_script" in names:
+                return False
+            from ..daemon.chat_turn import SCRIPT_OFFER_AFTER, SCRIPT_OFFER_NOTE
+
+            best, most = "", 0
+            for name, n in (state.get("script_reads") or {}).items():
+                if n >= SCRIPT_OFFER_AFTER and n > most and name in names:
+                    if not script._fixed_refusal(name, registry.get(name)):
+                        best, most = name, n
+            if not best:
+                return False
+            tool_specs[:] = registry.add_script_tool(list(tool_specs))
+            note = SCRIPT_OFFER_NOTE.format(tool=best, n=most)
+            for message in reversed(messages):
+                if getattr(message, "role", "") == "tool":
+                    message.content = str(message.content or "") + note
+                    break
+            return True
+        except Exception:  # noqa: BLE001 — an offer never fails a run
+            return False
+
     async def perceive_act(
         self,
         run: AgentRun,
@@ -4735,6 +4802,15 @@ class AgentRuntime:
                         content=content,
                     )
                 )
+                if call_ok:
+                    _reads = _bstate.setdefault("script_reads", {})
+                    _reads[tc.name] = _reads.get(tc.name, 0) + 1
+            # THE SCRIPT TOOL, OFFERED BY WHAT THE MODEL IS DOING (v1.473.0,
+            # the chat lanes' rule — `chat_turn.offer_script_tool`): after the
+            # fourth successful call of one reading tool it joins the run for
+            # the next step, and the step's last result says so. In place:
+            # the caller's list is the one every later step reads.
+            self._offer_script_tool(session, tool_specs, _bstate, messages)
             await asyncio.to_thread(self._save, run)  # v1.226.0: off the loop
             if transcript:
                 await _transcript.save(self.p.engine, run.id, session.id, messages)

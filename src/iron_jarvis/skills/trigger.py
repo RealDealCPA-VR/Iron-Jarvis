@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["wants_skill_create"]
+__all__ = ["wants_skill_create", "wants_skill_edit"]
 
 #: Only this much of a message is read (the rest of the arming reads the same).
 _MAX_CHARS = 4000
@@ -188,6 +188,123 @@ def wants_skill_create(text: str) -> bool:
         # A question about making one is answered, not acted on ("how do I
         # make a skill?"); "can we save this as a skill?" asks Jarvis to.
         # Judged last: it reads the whole message.
+        if _LETS.match(raw):
+            return True
+        from ..settings.records import is_question
+
+        return not is_question(raw)
+    except Exception:  # noqa: BLE001 — a matcher fault arms nothing
+        return False
+
+
+# --------------------------------------------------------------------------- #
+# "Change my tax skill" (v1.473.0)
+# --------------------------------------------------------------------------- #
+
+#: Verbs that ask for a thing that exists to be changed.
+_EDIT = frozenset({
+    "change", "update", "edit", "improve", "fix", "revise", "rewrite",
+    "modify", "tweak", "adjust", "extend", "expand", "amend", "correct",
+    "shorten", "rework", "refine", "tighten",
+})
+#: "add a step TO the tax skill" / "remove the old rule FROM the tax skill".
+_ADD = frozenset({"add", "include", "put", "append", "insert", "note"})
+_REMOVE = frozenset({"remove", "delete", "drop", "take", "cut", "strike"})
+#: What may open the phrase that names the skill.
+_EDIT_DET = frozenset({"my", "our", "the", "that", "this"})
+#: Small words that may sit between the verb and the phrase.
+_SOFT = frozenset({"please", "also", "just", "now", "then"})
+#: Words after "skill" that carry a change request on.
+_EDIT_FOLLOWERS = _FOLLOWERS | frozenset({
+    "by", "it", "should", "must", "always", "never", "because", "since",
+    "when", "if",
+})
+#: Letters two words must share at the front to count as one (as the offer
+#: does: "advisement" finds "advice" only by its first letters).
+_STEM = 5
+
+
+def _stem(word: str) -> str:
+    return word[:_STEM] if len(word) > _STEM else word
+
+
+def _edit_in(words: list[str], own: "list[set[str]]") -> bool:
+    for i, word in enumerate(words):
+        if word != "skill":
+            continue
+        nxt = words[i + 1] if i + 1 < len(words) else ""
+        if nxt and nxt not in _EDIT_FOLLOWERS:
+            continue
+        # Back over the phrase that names the skill, to its first word.
+        det = -1
+        for j in range(i - 1, max(-1, i - 1 - _PHRASE - 1), -1):
+            w = words[j]
+            if w in _EDIT_DET:
+                det = j
+                break
+            if w in _MAKE or w in _EDIT or w in _ADD or w in _REMOVE:
+                break
+        if det < 0:
+            continue
+        phrase = words[det + 1: i]
+        if any(w.endswith("'s") or w in _OTHER_ASSISTANTS or w in _ELSEWHERE for w in phrase):
+            continue
+        named = bool(phrase) and any(
+            all(_stem(p) in tokens for p in phrase) for tokens in own
+        )
+        # "my piano skill" is the user's own ability unless a skill of
+        # theirs is called that.
+        if words[det] in ("my", "our") and not named:
+            continue
+        if phrase and not named and len(phrase) > 2:
+            continue
+        before = words[:det]
+        if not before:
+            continue
+        last = before[-1]
+        if last in ("to", "in", "into") and any(w in _ADD for w in before[-9:-1]):
+            return True
+        if last == "from" and any(w in _REMOVE for w in before[-9:-1]):
+            return True
+        k = len(before) - 1
+        while k >= 0 and before[k] in _SOFT:
+            k -= 1
+        if k >= 0 and before[k] in _EDIT:
+            return True
+        # "make the tax skill also check state rules"
+        if (
+            k >= 0 and before[k] in ("make", "have")
+            and len(words) - i - 1 >= 2
+            and (named or not phrase)
+        ):
+            return True
+    return False
+
+
+def wants_skill_edit(text: str, own_names: "list[str] | tuple[str, ...]" = ()) -> bool:
+    """True when *text* asks for a skill the user HAS to be changed.
+
+    "update my tax skill to cover state returns", "add a step to the close
+    skill", "change that skill so it asks for the year first". *own_names*
+    are the user's own skills: "my <words> skill" counts only when those
+    words name one of them ("improve my negotiation skill" is the user's
+    own ability). Not a question about skills, not the plural ("improve my
+    Excel skills"), not another noun ("the skill gap"), not another
+    product's ("edit the Alexa skill"). Token-based: linear. Never raises."""
+    try:
+        raw = str(text or "")[:_MAX_CHARS]
+        if "skill" not in raw.lower():
+            return False
+        own = [
+            {_stem(w) for w in _WORD.findall(str(name).lower().replace("-", " ").replace("_", " "))}
+            for name in (own_names or ())
+        ]
+        asked = any(
+            _edit_in(_WORD.findall(sentence), own)
+            for sentence in _SENTENCE.split(raw.lower())
+        )
+        if not asked:
+            return False
         if _LETS.match(raw):
             return True
         from ..settings.records import is_question

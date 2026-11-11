@@ -3049,6 +3049,138 @@ def redacted_args(registry, name: str, args: object) -> object:
         return args
 
 
+#: After this many successful calls of ONE reading tool in a reply, the
+#: script tool joins the turn (v1.473.0).
+SCRIPT_OFFER_AFTER = 4
+
+#: What the model reads when it does, on the round's last tool result.
+SCRIPT_OFFER_NOTE = (
+    "\n\n(You have now called `{tool}` {n} times in this reply. `tool_script` "
+    "is now one of your tools: ONE script can make the remaining calls "
+    "(tools.map runs several at a time) and print only what you need, "
+    "instead of one call per item.)"
+)
+
+
+def offer_script_tool(
+    d: Any,
+    body: Any,
+    *,
+    tools_used: list,
+    armed: list,
+    auto_armed: list,
+    ask_armed: Any,
+    tool_specs: list,
+    overrides: dict,
+    armed_grant: set,
+    msgs: list,
+    ctx: Any,
+    tool_ceiling: Any = None,
+    ceiling: "int | None" = None,
+) -> bool:
+    """THE SCRIPT TOOL, OFFERED BY WHAT THE MODEL IS DOING (v1.473.0).
+
+    ``wants_tool_script`` reads the user's WORDS, and words vary: a message
+    it does not recognise left the model reading forty files one call at a
+    time. This reads the turn instead. Once the model has made
+    :data:`SCRIPT_OFFER_AFTER` successful calls of one tool a script may
+    call, ``tool_script`` joins the turn for the NEXT round — armed and
+    granted exactly as the arming pass would have (it is allow tier and
+    reaches only tools the turn already holds) — and the round's last tool
+    result says so. Everything is changed IN PLACE, because the round loop
+    reads these same lists each round. Returns whether it was added.
+
+    Never: without Auto tools, over the user's deny, past a weak model's
+    tool budget (``ceiling``), outside a surface's own ceiling
+    (``tool_ceiling``), or twice. Both lanes call it at the end of a tool
+    round — MIRROR NOTE (lock-step). Never raises."""
+    try:
+        if "tool_script" in armed or "tool_script" in (ask_armed or ()):
+            return False
+        if not getattr(body, "auto_tools", False):
+            return False
+        registry = d.platform.registry
+        script = registry.get("tool_script")
+        fixed = getattr(script, "_fixed_refusal", None)
+        if script is None or not callable(fixed):
+            return False
+        if tool_ceiling is not None and "tool_script" not in tool_ceiling:
+            return False
+        if ceiling is not None and ceiling < _MAX_ARMED_TOOLS and len(armed) >= ceiling:
+            return False
+        counts: dict[str, int] = {}
+        for name in tools_used:
+            counts[str(name)] = counts.get(str(name), 0) + 1
+        best = ""
+        for name, n in counts.items():
+            if n < SCRIPT_OFFER_AFTER or name not in armed or n <= counts.get(best, 0):
+                continue
+            if not fixed(name, registry.get(name)):
+                best = name
+        if not best:
+            return False
+        perms = getattr(d.platform, "permissions", None)
+        key = script.perm_key()
+        if perms is not None and getattr(perms.mode_for(key), "value", "deny") == "deny":
+            return False
+        known = {*armed, *(ask_armed or ())}
+        extras = [
+            s for s in tool_specs
+            if isinstance(s, dict) and str(s.get("name") or "") not in known
+        ]
+        armed.append("tool_script")
+        auto_armed.append("tool_script")
+        overrides["tool_script"] = "allow"
+        overrides[key] = "allow"
+        armed_grant.add("tool_script")
+        armed_grant.add(key)
+        tool_specs[:] = registry.specs([*armed, *(ask_armed or ())]) + extras
+        note = SCRIPT_OFFER_NOTE.format(tool=best, n=counts[best])
+        for message in reversed(msgs):
+            if getattr(message, "role", "") == "tool":
+                message.content = str(message.content or "") + note
+                break
+        from ..tools.tool_script import prewarm
+
+        prewarm(d.platform, armed, ctx)
+        return True
+    except Exception:  # noqa: BLE001 — an offer never fails a turn
+        log.debug("script offer failed", exc_info=True)
+        return False
+
+
+def card_args(tool: Any, args: Any, ctx: Any) -> Any:
+    """What an approval card and a step row SHOW for a call (v1.473.0): the
+    tool's own redacted arguments, and for a call that names a value a tool
+    script kept (``_from_script``) what that value IS, in one line, so the
+    user approves the rows and not a variable name. A batch of changes is
+    shown as its list, one line per change. Sync and cheap (the value is
+    already held by the app); never raises."""
+    try:
+        safe = tool.redact_args(args) if tool is not None else args
+    except Exception:  # noqa: BLE001 — a display must never fail the turn
+        safe = args
+    try:
+        from ..tools import script_values as _sv
+
+        if not _sv.has_refs(args) or not isinstance(safe, dict):
+            return safe
+        if getattr(tool, "name", "") == "apply_changes":
+            kept = _sv.kept_changes(args, ctx)
+            if kept is not None:
+                from ..tools.apply_changes import shown_changes
+
+                return {
+                    **{k: v for k, v in safe.items() if k != _sv.ARG},
+                    **shown_changes(kept),
+                }
+        if _sv.ARG not in safe:
+            safe = {**safe, _sv.ARG: args.get(_sv.ARG)}
+        return _sv.preview_args(getattr(tool, "name", ""), safe, ctx)
+    except Exception:  # noqa: BLE001
+        return safe
+
+
 def _unfenced(text: str) -> str:
     """*text* with the chat lane's untrusted fence (``_fence_tool_output`` →
     ``wrap_untrusted``) removed, so the runtime fences a carried output ONCE.
@@ -4284,6 +4416,9 @@ class ArmedSelection(tuple):
         self = tuple.__new__(cls, (armed, auto))
         self.dropped = dropped
         self.ceiling = ceiling
+        #: v1.473.0: names of the skills this message fits (``skills/offer``),
+        #: set by the arming pass; [] when none, or `skill_load` is not armed.
+        self.skills = []
         return self
 
 
@@ -4343,10 +4478,21 @@ def settings_ask_tools(
         # v1.470.0: "create a skill for …" offers `skill_create` (its own tier
         # is ask, so it shows the ordinary card). Chat used to offer only the
         # workflow exit, and a request for a skill came back as a workflow.
-        from ..skills.trigger import wants_skill_create
+        from ..skills.trigger import wants_skill_create, wants_skill_edit
 
         if wants_skill_create(text):
             names.append("skill_create")
+        # v1.473.0: "change my tax skill" offers `skill_update` the same way
+        # (ask tier: the ordinary card). Chat could only make a new skill.
+        from ..skills.offer import own_skill_names
+
+        if wants_skill_edit(
+            text,
+            own_skill_names(
+                getattr(d.platform, "skills", None), getattr(d.platform.config, "home", None)
+            ),
+        ):
+            names.append("skill_update")
         for t in names:
             if t in taken or t in out or reg.get(t) is None:
                 continue
@@ -4827,6 +4973,35 @@ def _resolve_armed_tools(
         _readers = [t for t in explicit + auto if _only_reads(t)]
         if wants_tool_script(last_user, _readers, len(body.attachments or [])):
             auto.append("tool_script")
+    # SKILLS THAT FIT THIS MESSAGE (v1.473.0): a skill the user saved was
+    # only ever used when they picked it with "/". When the message's own
+    # words fit a skill (skills/offer.py: deterministic, no model call),
+    # `skill_load` rides along in its own place under the ceiling, and the
+    # lanes name those skills at the Tools seam (`skills_offer_block`). A "/"
+    # pick already brought its skill whole, so it offers nothing more. A
+    # message that fits no skill changes nothing.
+    _skills_fit: list[str] = []
+    if (
+        getattr(body, "auto_tools", False)
+        and not skill_name
+        and (_ceiling >= _MAX_ARMED_TOOLS or len(explicit) + len(auto) < _ceiling)
+        and d.platform.registry.get("skill_load") is not None
+        and _not_denied("skill_load")
+    ):
+        try:
+            from ..skills.offer import fitting_skills
+
+            _skills_fit = [
+                s.name
+                for s in fitting_skills(
+                    getattr(d.platform, "skills", None), last_user,
+                    getattr(d.platform.config, "home", None),
+                )
+            ]
+        except Exception:  # noqa: BLE001 — a matcher fault offers nothing
+            _skills_fit = []
+        if _skills_fit and "skill_load" not in explicit and "skill_load" not in auto:
+            auto.append("skill_load")
     auto = [t for t in auto if _not_denied(t)]
     # THE BROWSER CAPABILITY FILTER (v1.236.0, plan 11.2), applied LAST — after
     # the explicit picks, after every fill pass, and after the drop signal has
@@ -4846,7 +5021,10 @@ def _resolve_armed_tools(
         # reported as auto-armed and refused when called.
         kept = set(armed)
         auto = [name for name in auto if name in kept]
-    return ArmedSelection(armed, auto, dropped, _ceiling)
+    selection = ArmedSelection(armed, auto, dropped, _ceiling)
+    # v1.473.0: the skills this message fits, for the lanes' Tools seam.
+    selection.skills = _skills_fit if "skill_load" in armed else []
+    return selection
 
 
 #: The prefix every Browser tool's name carries. One string, because
@@ -5917,6 +6095,25 @@ SKILL_BLOCK = (
     "workflow_draft."
 )
 
+#: v1.473.0: the brief beside `skill_update`.
+SKILL_EDIT_BLOCK = (
+    "# Changing a skill\n"
+    "The user asked to change a skill they already have. Use skill_update "
+    "with the skill's name and only what changes: `append` adds to its "
+    "instructions, `instructions` replaces them, `description` and `script` "
+    "replace those. If you cannot tell which skill they mean, ask. The user "
+    "approves the change on a card, and the version before is kept."
+)
+
+#: v1.473.0: what the skill brief gains so a skill made in chat is FOUND by
+#: later chats (``skills/offer.py`` matches a message against these words).
+SKILL_FINDABLE_LINE = (
+    " Write the description so it names the kinds of request the skill is "
+    "for: later chats are offered a skill when a message's words match its "
+    "name or description. If a tool script did the work, pass its code as "
+    "`script` so the same code runs next time."
+)
+
 
 def skill_block(armed_names) -> str:
     """The skill brief when ``skill_create`` is armed, else ``""`` (a brief
@@ -5926,7 +6123,32 @@ def skill_block(armed_names) -> str:
         armed = {str(n) for n in (armed_names or ())}
     except TypeError:
         return ""
-    return SKILL_BLOCK if "skill_create" in armed else ""
+    parts: list[str] = []
+    if "skill_create" in armed:
+        parts.append(SKILL_BLOCK + SKILL_FINDABLE_LINE)
+    if "skill_update" in armed:
+        parts.append(SKILL_EDIT_BLOCK)
+    return "\n\n".join(parts)
+
+
+def skills_offer_block(platform: Any, names: Any, armed_names: Any) -> str:
+    """The "skills that may fit" lines for a turn (v1.473.0), or "". Only
+    beside ``skill_load`` (a list of skills next to no way to read one is a
+    lie — the v1.262.0 rule) and only for the names the arming pass found
+    (``ArmedSelection.skills``). BLOCKING (a skill that is not the user's
+    own is scanned): both lanes call it off the loop, MIRROR NOTE."""
+    try:
+        if not names or "skill_load" not in {str(n) for n in (armed_names or ())}:
+            return ""
+        registry = getattr(platform, "skills", None)
+        if registry is None:
+            return ""
+        from ..skills.offer import offer_block
+
+        return offer_block([s for s in (registry.get(str(n)) for n in names) if s is not None])
+    except Exception:  # noqa: BLE001 — an offer never fails a turn
+        log.debug("skills offer block failed", exc_info=True)
+        return ""
 
 
 def browser_agent_block(armed_names) -> str:
@@ -7485,6 +7707,9 @@ STRICT_ASK_TOOLS = (
     # v1.469.0 review: matching two lists can WRITE a file (its `save_as`
     # result workbook), so "Ask before every action" asks before it too.
     | {"excel_reconcile"}
+    # v1.473.0: a batch of file changes (its own tier is ask already; named
+    # here so the strict posture's list is the whole list).
+    | {"apply_changes"}
 )
 
 #: Every tool whose SUCCESS changes a file on disk (v1.351.0, G06) — the set
@@ -7520,6 +7745,9 @@ _FILE_CHANGING_TOOLS = _FILE_WRITING_TOOLS | frozenset(
         # reply that said where it was saved got "nothing was written to disk
         # ... that file does not exist" beside a file that existed.
         "excel_reconcile",
+        # v1.473.0: a batch of file changes names the files it changed
+        # (`created_paths`), so a reply about them is never accused.
+        "apply_changes",
     }
 )
 
@@ -7697,6 +7925,8 @@ _CHANGES_A_FILE_UNNAMED = frozenset(
         "notebook",
         "create_agent",
         "skill_create",
+        # v1.473.0: changing a skill rewrites its SKILL.md.
+        "skill_update",
         "browser_click",
         "browser_type",
         "browser_press_key",
@@ -10494,6 +10724,9 @@ async def run_chat_turn(
     # explicit "+" pick of generate_media can set it; nothing is swapped here.
     # MIRROR NOTE (lock-step): routes/chat.py keeps the same flag.
     _media_unready = False
+    # v1.473.0: the skills this message fits (set by the arming branch).
+    _skills_offered: list[str] = []
+    _arm_ceiling: "int | None" = None
     if text_only_pick:
         armed, auto_armed = [], []
         tool_specs = []
@@ -10527,6 +10760,9 @@ async def run_chat_turn(
         # see the reasoning there. MIRROR NOTE (lock-step): routes/chat.py.
         _selection = await _prep.take("arming")
         armed, auto_armed = _selection
+        # v1.473.0 — lock-step: the skills this message fits.
+        _skills_offered = list(getattr(_selection, "skills", ()) or ())
+        _arm_ceiling = getattr(_selection, "ceiling", None)
         # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed (the
         # runtime's arm_for_task rule; both failure shapes were empirically
         # reproduced in the Wave-B review): a plain "hello" under a cap drops
@@ -10683,6 +10919,14 @@ async def run_chat_turn(
         _skill_brief = skill_block(armed)
         if _skill_brief:
             system += "\n\n" + _skill_brief
+        # v1.473.0 — lock-step with the stream lane: the skills this message
+        # fits, named only beside `skill_load`.
+        if _skills_offered:
+            _skills_fit = await asyncio.to_thread(
+                skills_offer_block, d.platform, _skills_offered, armed
+            )
+            if _skills_fit:
+                system += "\n\n" + _skills_fit
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]
@@ -11689,6 +11933,17 @@ async def run_chat_turn(
                                            images=tool_result_images(result, ran)))
                     if msgs[-1].images:
                         trim_tool_images(msgs)
+            # THE SCRIPT TOOL, OFFERED BY WHAT THE MODEL IS DOING (v1.473.0):
+            # after the fourth successful call of one reading tool it joins
+            # the turn for the next round. Plain chat only (a coding session
+            # has its shell). MIRROR NOTE (lock-step): routes/chat.py.
+            if _harness is None and not text_only_pick:
+                offer_script_tool(
+                    d, body, tools_used=tools_used, armed=armed,
+                    auto_armed=auto_armed, ask_armed=(), tool_specs=tool_specs,
+                    overrides=overrides, armed_grant=armed_grant, msgs=msgs,
+                    ctx=ctx, ceiling=_arm_ceiling,
+                )
             if _finish_round:
                 # The finish check's tests ran (or were refused): its ONE note
                 # goes to the model now; the next round is its answer.
