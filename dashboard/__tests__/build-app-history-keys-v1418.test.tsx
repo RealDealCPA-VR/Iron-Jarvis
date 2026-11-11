@@ -106,6 +106,7 @@ import {
   wordsBack,
 } from "@/lib/buildAppHistory";
 import { decodeCodingTools } from "@/lib/buildApp";
+import { SESSION, effortButtons, modelRowsShown } from "./helpers/modelPicker";
 
 const MODES = [
   { id: "ask", label: "Ask first", dangerous: false },
@@ -453,18 +454,27 @@ describe("keys (C4.8)", () => {
     working();
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-working");
-    const model = screen.getByTestId("code-model-chip") as HTMLSelectElement;
-    expect(model.disabled).toBe(false);
-    expect((model.options[0] as HTMLOptionElement).disabled).toBe(true);
-    const effort = screen.getByTestId("code-effort-chip") as HTMLSelectElement;
-    expect(effort.disabled).toBe(true);
-    expect(effort.title).toContain("starts again");
+    // v1.475.0 (moved on purpose): one chip; the model column stays open
+    // except going back to the default; every effort row waits, and says why.
+    expect((screen.getByTestId("code-model-chip") as HTMLButtonElement).disabled).toBe(false);
+    const rows = modelRowsShown(SESSION);
+    expect(rows[0].id).toBe("");
+    expect(rows[0].disabled).toBe(true);
+    expect(rows.slice(1).every((r) => !r.disabled)).toBe(true);
+    const efforts = effortButtons(SESSION);
+    expect(efforts.length).toBeGreaterThan(0);
+    expect(efforts.every((b) => b.disabled)).toBe(true);
+    expect(efforts[0].title).toContain("starts again");
   });
 
   it("Pi's effort stays open while it works (it changes live)", async () => {
     working("p1", { harness: "pi", mode: "own", model: "", effort: "high" });
     render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-working");
-    expect((screen.getByTestId("code-effort-chip") as HTMLSelectElement).disabled).toBe(false);
+    // The levels change live; only going back to the default waits (as the
+    // old select's first option did).
+    const levels = effortButtons(SESSION).filter((b) => b.dataset.testid !== "code-pick-effort-default");
+    expect(levels.length).toBeGreaterThan(0);
+    expect(levels.some((b) => b.disabled)).toBe(false);
   });
 });

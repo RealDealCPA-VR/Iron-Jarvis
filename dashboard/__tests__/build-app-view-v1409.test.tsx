@@ -123,7 +123,7 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
   ),
 }));
 
-import { BuildCodeView, FULL_ARM_GUARD_MS, FULL_DISARM_MS } from "@/components/buildCode/BuildCodeView";
+import { PICKER_REREAD_MS, BuildCodeView, FULL_ARM_GUARD_MS, FULL_DISARM_MS } from "@/components/buildCode/BuildCodeView";
 import { codeRowDraws } from "@/components/buildCode/CodeConversation";
 import { ROW_WINDOW, SNAP_ROWS } from "@/lib/codeWindow";
 import { codePanesDraws } from "@/components/buildCode/CodePanes";
@@ -138,6 +138,7 @@ import {
   foldConversation,
   type CodeEvent,
 } from "@/lib/buildApp";
+import { SESSION, chooseEffort, chooseModel, chosen } from "./helpers/modelPicker";
 
 /* ---- the contract fixture ---------------------------------------------- */
 
@@ -648,6 +649,32 @@ describe("the composer", () => {
     openSession("a1", { session: sess("a1", over), events: SC.claude_deny, running: false, pending: [] });
   }
 
+  it("v1.475.0: opening the model picker reads the tools' lists again, at most once a minute", async () => {
+    settled();
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+      await screen.findByTestId("code-session");
+      const reads = () => H.getLog.filter((p) => p === "/build/app/harnesses").length;
+      const first = reads();
+      expect(first).toBeGreaterThan(0);
+      // Opened right after the page's own read: nothing more.
+      fireEvent.click(screen.getByTestId("code-model-chip"));
+      expect(screen.getByTestId("code-pick-tool-menu")).toBeInTheDocument();
+      fireEvent.keyDown(screen.getByTestId("code-pick-tool-menu"), { key: "Escape" });
+      expect(reads()).toBe(first);
+      // A minute on: one read, and not another on the next opening.
+      now += PICKER_REREAD_MS + 1;
+      fireEvent.click(screen.getByTestId("code-model-chip"));
+      fireEvent.keyDown(screen.getByTestId("code-pick-tool-menu"), { key: "Escape" });
+      fireEvent.click(screen.getByTestId("code-model-chip"));
+      expect(reads()).toBe(first + 1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("Full access on the mode chip takes two presses and is sent with confirm: true; an ordinary mode is one press", async () => {
     settled();
     H.postReply["PATCH /build/app/sessions/a1"] = sess("a1", { mode: "edits" });
@@ -672,10 +699,10 @@ describe("the composer", () => {
     settled({ account: "prof_work", model: "claude-opus-5-5" });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-session");
-    const model = screen.getByTestId("code-model-chip") as HTMLSelectElement;
-    expect(model.selectedOptions[0].textContent).toBe("Claude Code · Opus 5.5");
+    // v1.475.0 (moved on purpose): one chip names the tool, model and effort.
+    expect(screen.getByTestId("code-model-chip").textContent).toBe("Claude Code · Opus 5.5");
     expect(screen.getByTestId("code-account-chip").textContent).toBe("Work");
-    fireEvent.change(screen.getByTestId("code-effort-chip"), { target: { value: "high" } });
+    chooseEffort(SESSION, "high");
     await waitFor(() => expect(H.patches[0]?.body).toEqual({ effort: "high" }));
   });
 
@@ -886,9 +913,45 @@ describe("what the real daemon sends", () => {
     H.postReply["PATCH /build/app/sessions/a1"] = { session: sess("a1", { effort: "high" }), applied: { effort: "next" } };
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-session");
-    fireEvent.change(screen.getByTestId("code-effort-chip"), { target: { value: "high" } });
+    chooseEffort(SESSION, "high");
     expect((await screen.findByTestId("code-info")).textContent).toBe("The effort applies from your next message.");
-    expect((screen.getByTestId("code-effort-chip") as HTMLSelectElement).value).toBe("high");
+    expect(chosen(SESSION).effort).toBe("high");
+  });
+
+  it("v1.475.0: a model change in a conversation shows the daemon's line at once (the conversation is read again)", async () => {
+    const before = sess("a1", { harness_session_id: "h-1", model: "claude-sonnet-5-5" });
+    seed([before]);
+    openSession("a1", { session: before, events: SC.claude_deny, running: null, pending: [] });
+    const after = sess("a1", { harness_session_id: "h-1", model: "claude-opus-5-5" });
+    H.postReply["PATCH /build/app/sessions/a1"] = { session: after, applied: { model: "next" } };
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    // What the real daemon answers after the change: the row and its line.
+    openSession("a1", {
+      session: after,
+      events: [...SC.claude_deny, { type: "notice", at: "2026-10-29T09:10:00Z", text: "Model changed: Sonnet 5.5 → Opus 5.5, from your next message." }],
+      running: null,
+      pending: [],
+    });
+    const reads = H.getLog.filter((p) => p === "/build/app/sessions/a1").length;
+    await chooseModel(SESSION, "claude-opus-5-5");
+    await waitFor(() => expect(screen.getByTestId("code-session").textContent).toContain("Model changed: Sonnet 5.5 → Opus 5.5"));
+    expect(H.getLog.filter((p) => p === "/build/app/sessions/a1").length).toBe(reads + 1);
+    // Said once: the page's own passing note does not repeat it.
+    expect(screen.queryByTestId("code-info")).toBeNull();
+  });
+
+  it("v1.475.0: before the conversation's first message nothing is read again", async () => {
+    seed([sess("a1")]);
+    openSession("a1", { session: sess("a1"), events: [], running: null, pending: [] });
+    H.postReply["PATCH /build/app/sessions/a1"] = { session: sess("a1", { model: "claude-opus-5-5" }), applied: {} };
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    const reads = H.getLog.filter((p) => p === "/build/app/sessions/a1").length;
+    await chooseModel(SESSION, "claude-opus-5-5");
+    await waitFor(() => expect(H.patches).toHaveLength(1));
+    await act(async () => {});
+    expect(H.getLog.filter((p) => p === "/build/app/sessions/a1").length).toBe(reads);
   });
 
   it("a change applied now says nothing more", async () => {

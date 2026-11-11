@@ -17406,6 +17406,47 @@ does not need a bump, stop and bump it.
   markdown.py (the shared block parser), tools (read/write/extract_pdf/
   convert_document). `tools/images.py` — view_image (vision via the router),
   image_convert/resize/info (Pillow). `tools/pixio.py` — generative media.
+- **Build › Code's tool, model and effort are ONE picker** (v1.475.0; the
+  user, after the t3code comparison: "a similar flow in the build > code
+  area"). `components/buildCode/ModelPicker.tsx`: a chip "Tool · Model ·
+  Effort" (`pickerWords`; a "" model reads the page's `defaultModelLabel`)
+  opening one panel — the tools (`toolUnavailable` greys one with its reason;
+  `toolExtra` is the page's Sign in press), the tool's models
+  (`modelRows`: the default first when offered, `modelGroups` groups, a kept
+  model the tool no longer lists marked "not in the list"; a search box
+  `matchesModel` over name, id and group) and the model's OWN levels
+  (`effortRows` = `effortsFor`, "Default" first, a kept level kept). Picking
+  a model focuses its levels (a model with none closes the panel); Enter in
+  the search picks the highlighted row; Ctrl/Cmd+Shift+M
+  (`isPickerShortcut`, both places pass `shortcut`). Test ids from the
+  `testId` prefix (`<p>-tool-menu`, `<p>-tool-<id>`, `<p>-tool-why-<id>`,
+  `<p>-model-<id|default>`, `<p>-effort-<level|default>`,
+  `<p>-model-search`); the chip carries `data-tool/-model/-effort`. The
+  start box: prefix "code-start" (chip `code-start-tool`, opens DOWN like its
+  account menu), `closeAfterTool` = `asksForAccount` (the account question
+  comes next); a new session starts from the folder's own default for the
+  tool, else `lastPick(tool)` (`LAST_PICK_KEY` + tool, written at a
+  successful start; a model the tool no longer offers takes its effort with
+  it), else the tool's default. The session: prefix "code-pick", chip
+  `code-model-chip`, `lockTool`; keepsLast hides the default rows,
+  `modelWhileRunning`/`effortWhileRunning` hold rows with their reason
+  (`defaultModelHeld`, `defaultEffortHeld`, `effortHeld`);
+  `defaultModelWords(tool, keepsLast)` no longer repeats the tool's name.
+  Opening either re-reads `/build/app/harnesses` at most every
+  `PICKER_REREAD_MS` (60 s; the page's first read counts). DAEMON:
+  `HostedService._say_model_change` emits ONE `notice` ("Model changed:
+  Sonnet 5.5 → Opus 5.5; effort: Default → High, from your next message",
+  `words.model_change_words`) after a PATCH that changed the model or effort
+  of a session that has a conversation (`harness_session_id` or a live
+  turn); never raises. TEST HELPER `__tests__/helpers/modelPicker.ts`
+  (`START`, `SESSION`, `chooseModel`, `chooseEffort`, `chosen`,
+  `effortLevels`, `modelRowsShown`, `groupsShown`, `effortButtons`): NEVER
+  call one inside `waitFor` — opening the panel changes the page, so waitFor
+  re-runs it forever (a test hung that way). Pins:
+  `dashboard/__tests__/model-picker-v1475.test.tsx`, the v1.475.0 cases in
+  `folder-defaults-v1426-0` and `build-app-view-v1409`,
+  `tests/test_build_app_model_change_v1475.py`; moved on purpose: the eight
+  files that set the model or effort through the old selects.
 - **A Store program is never asked into the pane job, and starts one at a
   time; a frozen loop says where it is stuck** (v1.407.1, a USER BUG on
   v1.407.0: Build stuck at "Attaching to sessions…", then "Iron Jarvis isn't

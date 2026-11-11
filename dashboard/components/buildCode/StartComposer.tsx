@@ -56,6 +56,7 @@ import { CODING_SESSIONS_PLACE } from "@/lib/buildWords";
 import { FolderChip } from "@/components/folders/FolderChip";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { ModeChip } from "@/components/buildCode/ModeChip";
+import { ModelPicker } from "@/components/buildCode/ModelPicker";
 import { useFolderDefaults } from "@/components/folders/FolderDefaultsPanel";
 import {
   SAVE_DEFAULTS_LABEL,
@@ -81,7 +82,6 @@ import {
   decodeCodeSession,
   effortsFor,
   modeLabel,
-  modelGroups,
   ownSignInWords,
   toolChoiceWords,
   toolLabel,
@@ -208,6 +208,28 @@ function NoToolHelp({ tools }: { tools: readonly CodingTool[] }) {
 /** Remembered on this PC: the tool last started, and per tool its account. */
 export const LAST_TOOL_KEY = "ij.code.lastTool";
 export const LAST_ACCOUNT_KEY = "ij.code.lastAccount.";
+/** v1.475.0: per tool, the model and effort last started with (JSON). */
+export const LAST_PICK_KEY = "ij.code.lastPick.";
+
+/** The model and effort a tool last started with, while the tool still
+ *  offers them ("" for what it no longer offers). */
+export function lastPick(tool: CodingTool | null): { model: string; effort: string } {
+  if (!tool) return { model: "", effort: "" };
+  let raw: unknown = null;
+  try {
+    raw = JSON.parse(readKept(LAST_PICK_KEY + tool.id) || "null");
+  } catch {
+    raw = null;
+  }
+  const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const saved = typeof o.model === "string" ? o.model : "";
+  // A model the tool no longer offers takes its effort with it (the level
+  // was chosen for that model).
+  if (saved && !tool.models.some((x) => x.id === saved)) return { model: "", effort: "" };
+  const e = typeof o.effort === "string" && effortsFor(tool, saved).includes(o.effort) ? o.effort : "";
+  const m = saved;
+  return { model: m, effort: e };
+}
 
 function readKept(key: string): string {
   try {
@@ -269,8 +291,6 @@ export function noUsableAccount(tool: CodingTool | null): string | null {
 
 const CHIP_BTN =
   "inline-flex h-7 max-w-[14rem] items-center gap-1.5 rounded-lg px-2 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50";
-const CHIP_SELECT =
-  "h-7 max-w-[12rem] cursor-pointer truncate rounded-lg border-0 bg-transparent px-1.5 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50";
 const MENU = "absolute left-0 top-full z-30 mt-1 w-72 max-w-[calc(100vw-2rem)] rounded-xl bg-ink-800 p-1 shadow-card";
 const MENU_ROW =
   "flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors enabled:hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50";
@@ -328,6 +348,7 @@ export function StartComposer({
   toolsError,
   modelsGaveUp = false,
   onRereadModels,
+  onPickerOpen,
   startFolder = null,
   startAt = null,
   workRoot = "",
@@ -340,6 +361,8 @@ export function StartComposer({
    *  out and it is still being read — say "couldn't read", with Try again. */
   modelsGaveUp?: boolean;
   onRereadModels?: () => void;
+  /** v1.475.0: the model picker opened (the page may read the lists again). */
+  onPickerOpen?: () => void;
   /** The folder this start is on (a folder heading's "+"); null = none. */
   startFolder?: string | null;
   /** Where Choose… opens when no folder is chosen (the folder in front, else
@@ -355,7 +378,6 @@ export function StartComposer({
   const [folder, setFolder] = useState<string | null>(startFolder);
   const [folderProblem, setFolderProblem] = useState<string | null>(null);
   const [toolId, setToolId] = useState("");
-  const [toolOpen, setToolOpen] = useState(false);
   const [account, setAccount] = useState("");
   const [accountOpen, setAccountOpen] = useState(false);
   const [mode, setMode] = useState<{ id: string; confirm: boolean }>({ id: "", confirm: false });
@@ -371,9 +393,7 @@ export function StartComposer({
   const att = useHarnessAttachments();
   // A start held for an upload runs this render's `start` when it settles.
   const startRef = useRef<() => Promise<void>>(async () => undefined);
-  const toolMenuRef = useRef<HTMLDivElement | null>(null);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
-  const toolShift = useInsideWindow(toolMenuRef, toolOpen);
   const accountShift = useInsideWindow(accountMenuRef, accountOpen);
   // v1.426.0 (E5): the folder's defaults for new sessions — a chip the user
   // touched wins; an untouched one shows the folder's value.
@@ -425,10 +445,14 @@ export function StartComposer({
       const m = d?.mode ? tool.modes.find((x) => x.id === d.mode && !x.dangerous) : null;
       setMode({ id: m ? m.id : (tool.modes[0]?.id ?? ""), confirm: false });
     }
-    const m2 = d?.model && tool.models.some((x) => x.id === d.model) ? d.model : "";
+    // v1.475.0: the folder's own choice for this tool, else what this tool
+    // last started with on this PC, else the tool's own default.
+    const last = d ? null : lastPick(tool);
+    const m2 = d ? (d.model && tool.models.some((x) => x.id === d.model) ? d.model : "") : last!.model;
     if (!touched.current.model) setModel(m2);
     if (!touched.current.effort) {
-      setEffort(d?.effort && effortsFor(tool, touched.current.model ? model : m2).includes(d.effort) ? d.effort : "");
+      const want = d ? (d.effort ?? "") : last!.effort;
+      setEffort(want && effortsFor(tool, touched.current.model ? model : m2).includes(want) ? want : "");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, toolDefaults]);
@@ -471,7 +495,6 @@ export function StartComposer({
       );
 
   function chooseTool(id: string) {
-    setToolOpen(false);
     touched.current.tool = true;
     if (id === toolId) return;
     setToolId(id);
@@ -510,6 +533,7 @@ export function StartComposer({
       const made = decodeCodeSession(raw);
       if (!made) throw new Error("The session could not be made.");
       keep(LAST_TOOL_KEY, tool.id);
+      keep(LAST_PICK_KEY + tool.id, JSON.stringify({ model, effort: effort && efforts.includes(effort) ? effort : "" }));
       if (account) keep(LAST_ACCOUNT_KEY + tool.id, account);
       onStarted(made, words, files);
     } catch (e) {
@@ -644,77 +668,43 @@ export function StartComposer({
           <div data-testid="code-start-row" className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-2">
               <AttachButton onPick={(picked) => void att.add(picked)} disabled={busy} />
 
-            <div className="relative">
-              <button
-                type="button"
-                data-testid="code-start-tool"
-                aria-haspopup="menu"
-                aria-expanded={toolOpen}
-                disabled={busy || !tools || tools.length === 0}
-                onClick={() => {
-                  setToolOpen((v) => !v);
-                  setAccountOpen(false);
+            <div>
+              <ModelPicker
+                tools={tools}
+                value={{ tool: toolId, model, effort }}
+                onChange={(field, next) => {
+                  if (field === "tool") chooseTool(next);
+                  else if (field === "model") {
+                    touched.current.model = true;
+                    setModel(next);
+                  } else {
+                    touched.current.effort = true;
+                    setEffort(next);
+                  }
                 }}
-                title="The coding tool this session runs"
-                className={CHIP_BTN}
-              >
-                <Code2 size={13} aria-hidden="true" className="shrink-0" />
-                <span className="truncate">{toolWords}</span>
-                <ChevronDown size={12} aria-hidden="true" className="shrink-0" />
-              </button>
+                closeAfterTool={(t) => asksForAccount(t)}
+                disabled={busy}
+                testId="code-start"
+                emptyLabel={toolWords}
+                defaultEffortLabel="Default effort"
+                invalid={["tool", "model", "effort"].includes(chipProblem?.field ?? "")}
+                onOpen={() => {
+                  setAccountOpen(false);
+                  onPickerOpen?.();
+                }}
+                shortcut
+                toolExtra={(t) => {
+                  // v1.445.0: a signed-out tool with the app's one-press Sign
+                  // in offers it right under its row.
+                  const press = toolSignedOut(t) ? toolSignInProvider(t.id) : "";
+                  return press ? (
+                    <div data-testid={`code-start-tool-signin-${t.id}`} className="pb-1.5 pl-8 pr-2 text-[12px] text-zinc-500">
+                      <CliSignInPress provider={press} variant="inline" testIdPrefix="code-start-menu" />
+                    </div>
+                  ) : null;
+                }}
+              />
               <ChipProblem field="tool" problem={chipProblem} />
-              {toolOpen && tools ? (
-                <div
-                  ref={toolMenuRef}
-                  role="menu"
-                  data-testid="code-start-tool-menu"
-                  style={toolShift ? { transform: `translateX(${toolShift}px)` } : undefined}
-                  className={MENU}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      setToolOpen(false);
-                    }
-                  }}
-                >
-                  {tools.map((t) => {
-                    const why = toolUnavailable(t);
-                    // v1.445.0: a signed-out tool with the app's one-press Sign
-                    // in offers it right under its row (outside the row's own
-                    // button: a button never holds another).
-                    const press = why && toolSignedOut(t) ? toolSignInProvider(t.id) : "";
-                    return (
-                      <div key={t.id} role="none">
-                        <button
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={t.id === toolId}
-                          data-testid={`code-start-tool-${t.id}`}
-                          data-available={why ? "false" : "true"}
-                          disabled={!!why}
-                          onClick={() => chooseTool(t.id)}
-                          className={`${MENU_ROW} ${t.id === toolId ? "text-zinc-100" : "text-zinc-300"}`}
-                        >
-                          <span className="mt-0.5 w-3.5 shrink-0">{t.id === toolId ? <Check size={13} aria-hidden="true" /> : null}</span>
-                          <span className="min-w-0">
-                            <span className="block">{t.label}</span>
-                            {why ? (
-                              <span data-testid={`code-start-tool-why-${t.id}`} className="block text-[12px] text-zinc-500">
-                                {why}
-                              </span>
-                            ) : null}
-                          </span>
-                        </button>
-                        {press ? (
-                          <div data-testid={`code-start-tool-signin-${t.id}`} className="pb-1.5 pl-8 pr-2 text-[12px] text-zinc-500">
-                            <CliSignInPress provider={press} variant="inline" testIdPrefix="code-start-menu" />
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
             </div>
 
             {showAccount ? (
@@ -727,7 +717,6 @@ export function StartComposer({
                   disabled={busy || !!noAccount}
                   onClick={() => {
                     setAccountOpen((v) => !v);
-                    setToolOpen(false);
                   }}
                   title={noAccount ?? `The ${tool?.label ?? ""} account this session runs on`}
                   className={CHIP_BTN}
@@ -799,65 +788,6 @@ export function StartComposer({
 
 
             <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
-              {tool && tool.models.length ? (
-                <select
-                  aria-label={`${tool.label} model`}
-                  data-testid="code-start-model"
-                  value={model}
-                  disabled={busy}
-                  onChange={(e) => {
-                    touched.current.model = true;
-                    setModel(e.target.value);
-                  }}
-                  aria-invalid={chipProblem?.field === "model" || undefined}
-                  className={CHIP_SELECT}
-                >
-                  {tool.models.some((m) => m.id === "") ? null : (
-                    <option value="">
-                      {tool.label}&apos;s default{tool.defaultName ? ` (${tool.defaultName})` : ""}
-                    </option>
-                  )}
-                  {/* v1.429.0: grouped by provider, as Pi's own picker sorts them. */}
-                  {modelGroups(tool.models).map(({ group, models: list }) =>
-                    group ? (
-                      <optgroup key={group} label={group}>
-                        {list.map((m) => (
-                          <option key={m.id || "default"} value={m.id}>
-                            {m.label}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ) : (
-                      list.map((m) => (
-                        <option key={m.id || "default"} value={m.id}>
-                          {m.label}
-                        </option>
-                      ))
-                    ),
-                  )}
-                </select>
-              ) : null}
-              {tool && efforts.length ? (
-                <select
-                  aria-label="Effort"
-                  data-testid="code-start-effort"
-                  value={effort}
-                  disabled={busy}
-                  onChange={(e) => {
-                    touched.current.effort = true;
-                    setEffort(e.target.value);
-                  }}
-                  aria-invalid={chipProblem?.field === "effort" || undefined}
-                  className={CHIP_SELECT}
-                >
-                  <option value="">Default effort</option>
-                  {efforts.map((x) => (
-                    <option key={x} value={x}>
-                      {x.charAt(0).toUpperCase() + x.slice(1)} effort
-                    </option>
-                  ))}
-                </select>
-              ) : null}
               <button
                 type="button"
                 data-testid="code-start-send"

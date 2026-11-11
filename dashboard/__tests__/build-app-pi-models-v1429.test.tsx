@@ -75,6 +75,7 @@ import {
   modelGroups,
   slashMenuRows,
 } from "@/lib/buildApp";
+import { SESSION, START, chooseModel, effortLevels, groupsShown, modelRowsShown } from "./helpers/modelPicker";
 
 const REAL = join(process.cwd(), "__tests__", "fixtures", "build-app-pi-models-v1429.json");
 const PI = (JSON.parse(readFileSync(REAL, "utf8")) as { pi: Record<string, unknown> }).pi;
@@ -164,28 +165,25 @@ async function startStage() {
 describe("starting a Pi session", () => {
   it("the model menu groups Pi's models by provider and names Pi's default", async () => {
     await startStage();
-    const pick = screen.getByTestId("code-start-model") as HTMLSelectElement;
-    const groups = Array.from(pick.querySelectorAll("optgroup")).map((g) => [
-      g.label,
-      Array.from(g.querySelectorAll("option")).map((o) => o.textContent),
-    ]);
-    expect(groups).toEqual([
+    // v1.475.0 (moved on purpose): the one picker's model column.
+    expect(groupsShown(START)).toEqual([
       ["standin-a", ["Think Big", "Plain Model"]],
       ["standin-b", ["Think Small"]],
     ]);
-    expect(pick.options[0].value).toBe("");
-    expect(pick.options[0].textContent).toBe("Pi's default (Think Big)");
+    const first = modelRowsShown(START)[0];
+    expect(first.id).toBe("");
+    expect(first.label).toBe("Default (Think Big)");
+    expect(screen.getByTestId("code-start-tool").textContent).toBe("Pi · Default (Think Big)");
   });
 
   it("the effort menu offers only what the chosen model takes, and hides for one that takes none", async () => {
     await startStage();
-    const levels = () =>
-      Array.from((screen.getByTestId("code-start-effort") as HTMLSelectElement).options).map((o) => o.value);
+    const levels = () => effortLevels(START);
     expect(levels()).toEqual(["", "off", "minimal", "low", "medium", "high", "xhigh"]);
-    fireEvent.change(screen.getByTestId("code-start-model"), { target: { value: "standin-b/think-small" } });
-    await waitFor(() => expect(levels()).toEqual(["", "low", "medium", "high"]));
-    fireEvent.change(screen.getByTestId("code-start-model"), { target: { value: "standin-a/plain" } });
-    await waitFor(() => expect(screen.queryByTestId("code-start-effort")).toBeNull());
+    await chooseModel(START, "standin-b/think-small");
+    expect(levels()).toEqual(["", "low", "medium", "high"]);
+    await chooseModel(START, "standin-a/plain");
+    expect(levels()).toEqual([]);
   });
 
   it("says when Pi has no model it can use yet", async () => {
@@ -206,11 +204,11 @@ describe("starting a Pi session", () => {
       };
       await startStage();
       expect(screen.getByTestId("code-start-models-note").textContent).toBe("Reading Pi's model list…");
-      await waitFor(() => expect(screen.getByTestId("code-start-model").querySelectorAll("optgroup").length).toBe(2), {
+      await waitFor(() => expect(screen.queryByTestId("code-start-models-note")).toBeNull(), {
         timeout: TOOLS_REREAD_MS + 3000,
       });
+      expect(groupsShown(START).length).toBe(2);
       expect(reads).toBe(2);
-      expect(screen.queryByTestId("code-start-models-note")).toBeNull();
       // The list came: nothing is read again.
       await new Promise((r) => setTimeout(r, TOOLS_REREAD_MS + 500));
       expect(reads).toBe(2);
@@ -305,7 +303,6 @@ describe("Pi's `/` menu in a session", () => {
 
   it("the model chip in a session is grouped by provider too", async () => {
     await inSession();
-    const chip = screen.getByTestId("code-model-chip") as HTMLSelectElement;
-    expect(Array.from(chip.querySelectorAll("optgroup")).map((g) => g.label)).toEqual(["standin-a", "standin-b"]);
+    expect(groupsShown(SESSION).map((g) => g[0])).toEqual(["standin-a", "standin-b"]);
   });
 });

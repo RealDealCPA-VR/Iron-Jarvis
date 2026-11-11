@@ -123,6 +123,7 @@ import {
   toolDefaultsWords,
   codeDefaultsWords,
 } from "@/lib/folderDefaults";
+import { START, chosen } from "./helpers/modelPicker";
 
 const FOLDER = "C:\\work\\shop";
 const DEFAULTS_PATH = `/build/folders/defaults?folder=${encodeURIComponent(FOLDER)}`;
@@ -309,7 +310,7 @@ describe("Build › Code: the words never claim a default the chips do not use",
         "New sessions in shop start with: Claude Code · claude-gone-1. claude-gone-1 is not offered by Claude Code right now, so its default model does.",
       ),
     );
-    expect((screen.getByTestId("code-start-model") as HTMLSelectElement).value).toBe("");
+    expect(chosen(START).model).toBe("");
   });
 });
 

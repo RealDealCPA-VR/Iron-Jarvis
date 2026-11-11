@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.475.0
+
+**One chip for the coding tool, model and effort.** In Build › Code, the coding tool, its model and its effort are now one chip under the box: "Claude Code · Opus 5.5 · High".
+
 ## v1.474.0
 
 **A coding tool can hand work to another one.** In Build › Code, the coding tool you are working with can now start another coding tool you have on this PC on a piece of the work.
@@ -77,7 +81,3 @@
 ## v1.463.0
 
 **Reading web pages works on more sites; page screenshots work again.** **Reading a web page.** When Jarvis reads a page for you, it used to tell the site it was the Chrome browser.
-
-## v1.462.0
-
-**A missing file says where it really is.** When an agent or a coding session's helper asks to read or edit a file that is not there, the refusal now also says where a file of that name is in the same folder: "no such file: apps/shared/src/tokens.ts.
