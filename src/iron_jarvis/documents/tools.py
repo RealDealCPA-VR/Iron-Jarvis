@@ -201,7 +201,10 @@ class ListFolderTool(Tool):
                         break
                     try:
                         st = p.stat()
-                        out.append((p.name, p.is_dir(), st.st_size, st.st_mtime))
+                        is_dir = p.is_dir()
+                        # A folder's own size is 0 on Windows and one disk block
+                        # (4,096) on Linux and macOS, which sorted it above the files.
+                        out.append((p.name, is_dir, 0 if is_dir else st.st_size, st.st_mtime))
                     except OSError:
                         continue
             except OSError as exc:

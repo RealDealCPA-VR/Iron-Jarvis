@@ -10,6 +10,19 @@ from iron_jarvis.agents.orchestrator import Orchestrator
 from iron_jarvis.platform import build_platform
 
 
+def pytest_collection_modifyitems(config, items):
+    """Off Windows, skip the tests ``tests/windows_only.py`` lists (each is
+    about a Windows thing). On Windows nothing changes."""
+    if os.name == "nt":
+        return
+    from tests.windows_only import is_windows_only
+
+    skip = pytest.mark.skip(reason="about a Windows-only thing (tests/windows_only.py)")
+    for item in items:
+        if is_windows_only(item.nodeid):
+            item.add_marker(skip)
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _local_ocr_off_by_default():
     """Keep the offline suite on the VISION-path OCR it was written against (C-05).

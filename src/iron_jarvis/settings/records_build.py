@@ -1366,7 +1366,7 @@ _CODE_THING = re.compile(
     r"\b(?:readme|tests?|test\s+suite|bugs?|code|codebase|repo(?:sitory)?|branch|refactor(?:ing)?|lint(?:ing)?"
     r"|typos?|docs?|documentation|dependenc(?:y|ies)|migrations?|functions?|modules?|build|ci|pull\s+request"
     r"|pr|changelog|types?|logging|api|endpoints?|scripts?|components?|styles?)\b"
-    r"|[a-z]:[\\/]|\b[\w-]{1,60}\.(?:py|ts|tsx|js|jsx|md|json|toml|yaml|yml|css|html|go|rs|java|cs|cpp|rb)\b",
+    r"|[a-z]:[\\/]|(?<![\w/])(?:~/|/[\w.-]+/)|\b[\w-]{1,60}\.(?:py|ts|tsx|js|jsx|md|json|toml|yaml|yml|css|html|go|rs|java|cs|cpp|rb)\b",
     re.IGNORECASE,
 )
 _QUEUE_VERB = re.compile(r"(?:queue(?:\s+up)?|enqueue|line\s+up)\b", re.IGNORECASE)
@@ -1509,7 +1509,10 @@ def _night_request(c: str) -> bool:
 #: "this repo", "the folder", a full path — the folder a change is about.
 _FOLDER_REF = (
     r"(?:(?:this|the|my|that|our)\s+(?:repo(?:sitory)?|folder|codebase|project\s+folder|checkout|workspace)"
-    r"|[a-z]:[\\/][^\s,;]{0,240})"
+    r"|[a-z]:[\\/][^\s,;]{0,240}"
+    # A Linux or macOS path: "~/work/shop", "/home/sam/shop" (two slashes at
+    # least, so a "/command" or "and/or" is never a folder).
+    r"|(?:~/|/[^\s,;/]+/)[^\s,;]{0,240})"
 )
 #: v1.448.0 (Wave A, A1): the folder NAMED — "the ClosePilot folder", "my
 #: shop repo", "the Johnson project" (one or two words between the determiner

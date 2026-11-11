@@ -11,6 +11,7 @@ import contextlib
 import inspect
 import json
 import logging
+import os
 import re as _re
 import threading
 import time
@@ -970,7 +971,7 @@ _DOC_SUFFIX = r"(?:docx|xlsx|xlsm|pptx|pdf|csv|md|html|txt)"
 #: Absolute Windows/UNC paths ending in a document suffix (no spaces — the
 #: wrapped patterns below catch spaced paths exactly as written).
 _ABS_DOC_RX = _re.compile(
-    rf"(?:[A-Za-z]:\\|\\\\)[^\s\"'`|<>*?]+?\.{_DOC_SUFFIX}\b", _re.IGNORECASE
+    rf"(?:[A-Za-z]:\\|\\\\|(?<![\w/.])/(?=[^\s/]+/))[^\s\"'`|<>*?]+?\.{_DOC_SUFFIX}\b", _re.IGNORECASE
 )
 #: Filenames as replies actually format them: `wrapped in backticks`,
 #: **bolded**, or a bare token without spaces.
@@ -978,7 +979,7 @@ _TICK_DOC_RX = _re.compile(rf"`([^`\n]+?\.{_DOC_SUFFIX})`", _re.IGNORECASE)
 _BOLD_DOC_RX = _re.compile(rf"\*\*([^*\n]+?\.{_DOC_SUFFIX})\*\*", _re.IGNORECASE)
 _NAME_DOC_RX = _re.compile(rf"[\w][\w()\-.]{{0,80}}\.{_DOC_SUFFIX}\b", _re.IGNORECASE)
 #: Folder mentions ("at `C:\Users\VR\`") a bare filename can be joined to.
-_FOLDER_RX = _re.compile(r"(?:[A-Za-z]:\\|\\\\)[^\s\"'`|<>*?]*[\\/]")
+_FOLDER_RX = _re.compile(r"(?:[A-Za-z]:\\|\\\\|(?<![\w/.])/(?=[^\s/]+/))[^\s\"'`|<>*?]*[\\/]")
 
 
 def _derive_thread_documents(msgs: list, setup: dict) -> list[str]:
@@ -999,7 +1000,7 @@ def _derive_thread_documents(msgs: list, setup: dict) -> list[str]:
         folders = _FOLDER_RX.findall(content)
         ws = str(setup.get("workspace_dir") or "").strip()
         if ws:
-            folders.append(ws if ws.endswith(("\\", "/")) else ws + "\\")
+            folders.append(ws if ws.endswith(("\\", "/")) else ws + os.sep)
         candidates: list[str] = list(_ABS_DOC_RX.findall(content))
         for name in (
             _TICK_DOC_RX.findall(content)

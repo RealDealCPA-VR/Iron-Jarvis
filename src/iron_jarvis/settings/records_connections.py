@@ -1751,14 +1751,18 @@ _ACCOUNT_WORDS = re.compile(r"\b(?:accounts?|logins?|subscriptions?)\b", re.IGNO
 _ACCOUNT_GROUPS = re.compile(r"\baccount\s+groups?\b|\bgroups?\s+(?:of|for)\s+(?:my\s+)?accounts\b", re.IGNORECASE)
 
 #: A memory base (Notion / a notes folder) as Jarvis's memory.
-_MEMORY_PLACE = r"(?:notion|obsidian|(?:my\s+)?(?:notes?\s+)?(?:vault|folder)|[a-z]:\\[^\s]{1,120})"
+_MEMORY_PLACE = (
+    r"(?:\b(?:notion|obsidian|(?:my\s+)?(?:notes?\s+)?(?:vault|folder)|[a-z]:\\[^\s]{1,120})"
+    # A Linux or macOS folder: "~/notes", "/home/sam/notes".
+    r"|(?<=\s)(?:~/|/[^\s/]+/)[^\s]{0,160})"
+)
 _AS_MEMORY = (
     r"\bas\s+(?:your|my|the|a|jarvis'?s?)?\s*(?:long[\s-]term\s+|durable\s+|permanent\s+|second\s+|main\s+)?"
     r"(?:memory|memories|brain|memory\s+base|knowledge\s+base)\b"
 )
 _MEMORY_RULES = (
     re.compile(
-        r"\b(?:use|make|set\s+up|add|connect|keep|treat|point)\b[^.?!\n]{0,40}?\b" + _MEMORY_PLACE
+        r"\b(?:use|make|set\s+up|add|connect|keep|treat|point)\b[^.?!\n]{0,40}?" + _MEMORY_PLACE
         + r"[^.?!\n]{0,60}?" + _AS_MEMORY,
         re.IGNORECASE,
     ),
@@ -1783,7 +1787,7 @@ _MEMORY_RULES = (
         r"(?:memory|memories|brain|memory\s+base|knowledge\s+base)\b"
         r"\s+(?:at|to|on|in|into|toward|towards|inside)\s+"
         r"(?:(?:my|the|our|your|this|that|an?)\s+)?(?:[\w'’.-]+\s+){0,3}?"
-        r"(?:obsidian|notion|vault|folder|wiki|[a-z]:\\)",
+        r"(?:obsidian|notion|vault|folder|wiki|[a-z]:\\|~/|/[\w.-]+/)",
         re.IGNORECASE,
     ),
 )
