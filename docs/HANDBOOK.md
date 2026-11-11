@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.472.0 (2026-11-10).*
+holds itself to. Current as of v1.472.1 (2026-11-10).*
 
 ---
 
@@ -2041,6 +2041,21 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## First steps toward Linux and Mac (v1.472.1)
+
+Iron Jarvis is still a Windows app, and nothing changes on Windows except two
+small things:
+
+- **Folder paths written the Linux or Mac way are understood in chat.** "Use
+  Codex for /home/sam/shop" or "add my notes folder at ~/notes as memory" now
+  reach the same tools a Windows path does.
+- **A folder never sorts above the files in it** when Jarvis lists a folder,
+  biggest first.
+
+Behind the scenes, the app's own tests now run on Linux and Mac as a trial,
+and a complete Linux build was made and started for the first time. There is
+no Linux or Mac download yet.
 
 ## Long coding sessions stream smoothly (v1.472.0)
 

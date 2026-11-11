@@ -17497,3 +17497,30 @@ documents all tag into, so every agent call carries "what the user is working
 on". Prefer features that CONNECT existing surfaces over new standalone
 surfaces. Never trade trust for magic: honest errors beat fabricated output,
 suggest-don't-act for anything autonomous, everything reviewable.
+
+- **First steps off Windows: the suite runs on Linux and Mac as a TRIAL, and
+  tests about Windows-only things are LISTED, not scattered** (v1.472.1).
+  `tests/windows_only.py` `WINDOWS_ONLY` (file → test names; `"*"` = the whole
+  file) is skipped off Windows by `conftest.pytest_collection_modifyitems`;
+  on Windows nothing changes (`tests/test_windows_only_list.py` pins that
+  every listed name exists). A test goes there ONLY when the thing it checks
+  does not exist off Windows; a real Linux gap stays red. Two test-setup
+  faults that hid behind ~370 Linux failures: `test_build_git_v1375.
+  _path_without_gh` dropped gh's whole folder from PATH, which on Linux is
+  `/usr/bin` and took git with it (now a shadow folder of links without gh);
+  and `fs_policy._PROTECTED_ROOTS` is process-wide and grew with every test
+  platform until the session child's ONE environment variable passed Linux's
+  128 KB per-string limit ("Argument list too long") — conftest's
+  `_protected_roots_per_test` restores it after each test. Product: POSIX
+  paths (`~/x`, `/a/b`, two slashes at least so "/command" and "and/or" never
+  match) in `records_build._FOLDER_REF` / `_CODE_THING`,
+  `records_connections._MEMORY_PLACE` and the old-chat document recovery in
+  `routes/chat.py`; `list_folder` gives a folder size 0 (4,096 on Linux
+  sorted it first); `desktop/main.js` `DAEMON_EXE` is `ironjarvis` off
+  Windows. The trial workflow lives ONLY on the throwaway branch
+  `trial/platforms` (`platform-trial.yml`: suite on ubuntu + macos with
+  `DOCKER_HOST=tcp://127.0.0.1:9` because GitHub's Linux runners have Docker
+  up, daemon freeze, and `linux-app` = a full AppImage started under xvfb).
+  State at this release: Linux 28 failed of ~28,700, Mac ~50 with one shard
+  hanging; no Linux or Mac download is published and release.yml builds
+  Windows only.
