@@ -361,23 +361,47 @@ def test_script_requests_sets_a_and_b(row):
     assert _script_row(row) is row[1]
 
 
-#: Set C was written after the last change and never tuned against. These are
-#: its misses at v1.471.0, listed so a change in either direction shows.
-SET_C_SKILL_MISSES = {
-    "save this workflow as a skill instead",
-    "Create a Google Assistant skill",
-}
-SET_C_SCRIPT_MISSES = {"List the account balances in all of the trial balances"}
+#: v1.471.1: set C's three misses at v1.471.0 were fixed as general rules
+#: ("instead" closes a request, a voice assistant's name makes it that
+#: product's skill, an accountant's working papers are things), so set C now
+#: guided a change and must stay whole. Set D was written AFTER that change
+#: and never tuned against: its misses are listed so a change shows.
+SET_D_SKILL_MISSES: set[str] = set()
+SET_D_SCRIPT_MISSES = {"summarize each contract's renewal terms"}
 
 
-def test_the_held_out_set_c():
-    c = _set("c")
-    skill_wrong = {r[0] for r in c["skill"] if wants_skill_create(r[0]) is not r[1]}
-    script_wrong = {r[0] for r in c["script"] if _script_row(r) is not r[1]}
-    assert skill_wrong == SET_C_SKILL_MISSES
-    assert script_wrong == SET_C_SCRIPT_MISSES
-    assert 1 - len(skill_wrong) / len(c["skill"]) >= 0.95
-    assert 1 - len(script_wrong) / len(c["script"]) >= 0.95
+@pytest.mark.parametrize("text, expected", _rows_of("c", "skill"))
+def test_skill_requests_set_c(text, expected):
+    assert wants_skill_create(text) is expected
+
+
+@pytest.mark.parametrize("row", [list(r) for r in _set("c")["script"]], ids=lambda r: r[0][:60])
+def test_script_requests_set_c(row):
+    assert _script_row(row) is row[1]
+
+
+def test_the_held_out_set_d():
+    d = _set("d")
+    skill_wrong = {r[0] for r in d["skill"] if wants_skill_create(r[0]) is not r[1]}
+    script_wrong = {r[0] for r in d["script"] if _script_row(r) is not r[1]}
+    assert skill_wrong == SET_D_SKILL_MISSES
+    assert script_wrong == SET_D_SCRIPT_MISSES
+    assert 1 - len(skill_wrong) / len(d["skill"]) >= 0.95
+    assert 1 - len(script_wrong) / len(d["script"]) >= 0.95
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("save this workflow as a skill instead", True),
+    ("Create a Google Assistant skill", False),
+    ("Make a Siri skill for timers", False),
+    ("create a skill that searches Google for IRS notices", True),
+    ("List the account balances in all of the trial balances", "script"),
+])
+def test_the_v14711_rules(text, expected):
+    if expected == "script":
+        assert wants_tool_script(text, ["read_document"])
+    else:
+        assert wants_skill_create(text) is expected
 
 
 @pytest.mark.parametrize("text", [

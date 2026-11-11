@@ -3630,6 +3630,8 @@ _SCRIPT_THINGS = frozenset({
     # CSV", "all 30 K-1s" = "k" + "1s", "the W-2s" = "w" + "2s").
     "csv", "csvs", "xlsx", "scans", "scan", "images", "photos", "forms",
     "letters", "exports", "1s", "2s", "1099s", "1040s", "w2s", "k1s",
+    # v1.471.1: an accountant's working papers ("all of the trial balances").
+    "balances", "ledgers", "schedules", "memos", "budgets",
     # One of a form: "each W-2" reads "each" + "w" + "2", "every K-1" "k" + "1".
     "form", "w", "k", "1099", "1040",
 })

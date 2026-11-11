@@ -17141,6 +17141,18 @@ does not need a bump, stop and bump it.
     one keeps its own).
   - **Pins:** `tests/test_tool_script_hardening_v1471.py` (15 mutations, all
     red).
+  - **v1.471.1:** set C's three misses fixed as general rules ("instead",
+    "too", "also"… close a request; `_OTHER_ASSISTANTS` — google, siri,
+    cortana… — inside the skill's own noun phrase makes it that product's;
+    balances, ledgers, schedules, memos, budgets are things). Set C now
+    guided a change and is pinned whole; NEW held-out set D (40 + 40),
+    written after the change: skill 100%, script 97.5% (v1.470.2: 75.0% and
+    72.5%). Its one miss, "summarize each contract's renewal terms" (a
+    possessive "'s" thing), is listed in `SET_D_SCRIPT_MISSES`. A screen
+    comparison (six e2e screenshots, v1.470.2 against v1.471.0, plus a
+    new-against-new CONTROL) found only run-to-run noise: the random
+    suggestion chips, the settle position and the drifting glow on desktop,
+    and the version number; the phone screens are pixel-identical.
   - **OPEN:** set C's three misses ("save this workflow as a skill instead",
     "Create a Google Assistant skill", and "trial balances", not a known
     thing); a

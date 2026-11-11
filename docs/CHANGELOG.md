@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.471.1
+
+**Three more requests read right.** Nothing on screen changes.
+
 ## v1.471.0
 
 **Faster tool calls, better reading of requests, sturdier scripts.** Nothing on screen changes.
@@ -77,7 +81,3 @@
 ## v1.456.0
 
 **Text size.** **Make everything in the app bigger or smaller.** Settings › Appearance › **Text size**: Smaller (90%), Normal (100%), Large (110%), Larger (125%) or Largest (150%).
-
-## v1.455.1
-
-**Long replies from your own model server, and a phone alert that names the chat.** **Your own model server may go quiet for up to 10 minutes.** While a model on your own server writes a big step, like a whole workbook, the server can send nothing until the step is finished.

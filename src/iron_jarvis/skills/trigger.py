@@ -60,6 +60,8 @@ _DET = frozenset({"a", "an", "one", "another", "the"})
 _FOLLOWERS = frozenset({
     "for", "that", "which", "to", "called", "named", "so", "out", "from",
     "about", "and", "with", "i", "we", "you", "please", "here", "now", "like",
+    # v1.471.1: words that close a request ("save it as a skill instead").
+    "instead", "too", "also", "again", "later", "then", "first",
 })
 #: Words a request does not cross on its way back from "skill" to the verb.
 _BREAK = frozenset({
@@ -90,6 +92,10 @@ _NOT_A_SKILL_AFTER = frozenset({
 _ELSEWHERE = frozenset({
     "alexa", "resume", "cv", "linkedin", "character", "game", "profile",
 })
+#: A voice assistant's name in the skill's own noun phrase makes it that
+#: product's skill ("a Google Assistant skill"). Read only BEFORE "skill": "a
+#: skill that searches Google" is ours.
+_OTHER_ASSISTANTS = frozenset({"google", "assistant", "siri", "cortana", "bixby", "echo"})
 #: How many words back from the determiner the verb may sit ("make the tax
 #: advisement thing a skill").
 _BACK = 6
@@ -146,6 +152,8 @@ def _asks_in(words: list[str]) -> bool:
             if word != "skills":
                 continue
             det = i  # plural: "create skills for payroll"
+        if any(w in _OTHER_ASSISTANTS for w in words[det + 1: i]):
+            continue
         # "save this as a skill", "remember how to do this as a skill".
         if det > 0 and words[det - 1] in _AS and any(
             w in _MAKE and w not in _WEAK for w in words[: det - 1]

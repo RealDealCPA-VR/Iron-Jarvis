@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.471.0 (2026-11-10).*
+holds itself to. Current as of v1.471.1 (2026-11-10).*
 
 ---
 
@@ -2041,6 +2041,16 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Three more requests read right (v1.471.1)
+
+Nothing on screen changes. Chat now reads three kinds of request it got
+wrong in v1.471.0: "save this as a skill instead" brings the skill card;
+"create a Google Assistant skill" (or Siri, Alexa) does not; and trial
+balances, ledgers, schedules, memos and budgets count as documents when you
+ask about all of them. On a new set of 80 test messages written after the
+change and never used to tune it, chat read 100% of the skill requests and
+97.5% of the many-files requests right (v1.470.2 read 75% and 72.5%).
 
 ## Faster tool calls, better reading of requests, sturdier scripts (v1.471.0)
 
