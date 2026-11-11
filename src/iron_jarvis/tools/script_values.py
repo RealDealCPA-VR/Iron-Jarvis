@@ -65,11 +65,37 @@ _SUMMARY_CHARS = 200
 _POINTER_CHARS = 200
 
 
+def _head(item: Any, depth: int = 0) -> str:
+    """The start of *item* as JSON, without writing all of it out: a first
+    row that is one 8 MB cell must not cost 8 MB of text to show 80
+    characters."""
+    if isinstance(item, str):
+        return json.dumps(item[:400], ensure_ascii=False)
+    if isinstance(item, (list, tuple, dict)) and depth >= 4:
+        return "…"
+    if isinstance(item, (list, tuple)):
+        return (
+            "[" + ", ".join(_head(x, depth + 1) for x in list(item)[:12])
+            + ("…" if len(item) > 12 else "") + "]"
+        )
+    if isinstance(item, dict):
+        pairs = list(item.items())[:8]
+        return (
+            "{" + ", ".join(
+                f"{json.dumps(str(k)[:80], ensure_ascii=False)}: {_head(v, depth + 1)}" for k, v in pairs
+            )
+            + ("…" if len(item) > 8 else "") + "}"
+        )
+    return json.dumps(item, ensure_ascii=False, default=str)[:400]
+
+
 def describe(value: Any) -> str:
     """One short line saying what a kept value is: its shape and its first
     item, cut. For the script's footer and a card's preview."""
     def cut(text: str, n: int = 80) -> str:
-        text = " ".join(str(text).split())
+        # Bounded first (v1.473.0 review): one kept string of 8 MB was
+        # split and masked whole to show 80 characters of it (0.8 s).
+        text = " ".join(str(text)[: max(2_000, n * 8)].split())
         try:
             # A summary is shown on cards and kept on ledger rows: a key or a
             # token in the first row must not ride along.
@@ -87,15 +113,11 @@ def describe(value: Any) -> str:
         if isinstance(first, (list, tuple)):
             widest = max((len(r) for r in value if isinstance(r, (list, tuple))), default=0)
             return (
-                f"{len(value):,} rows, up to {widest} columns; first row: "
-                + cut(json.dumps(first, ensure_ascii=False, default=str))
+                f"{len(value):,} rows, up to {widest} columns; first row: " + cut(_head(first))
             )
         if isinstance(first, dict):
-            return (
-                f"{len(value):,} items; first: "
-                + cut(json.dumps(first, ensure_ascii=False, default=str))
-            )
-        return f"a list of {len(value):,}; first: " + cut(json.dumps(first, ensure_ascii=False, default=str))
+            return f"{len(value):,} items; first: " + cut(_head(first))
+        return f"a list of {len(value):,}; first: " + cut(_head(first))
     if isinstance(value, dict):
         keys = list(value)
         return f"{len(keys):,} named entries: " + cut(", ".join(str(k) for k in keys), 100)
@@ -284,11 +306,42 @@ def _refs(tool: str, args: dict[str, Any]) -> "tuple[dict[str, str], str]":
     return out, ""
 
 
+def pins_for(tool: str, args: Any, ctx: Any) -> "dict[str, str] | None":
+    """``{argument: fingerprint}`` of each kept value a call names, AS IT IS
+    NOW ("" = not kept yet); None for a call with no reference.
+
+    WHAT THE CARD SHOWED IS WHAT RUNS (v1.473.0 review). A lane builds every
+    approval card of a round BEFORE any call of the round runs, so a script
+    in the same round (or one still running while the user reads the card)
+    could keep a different value under the same name after the card showed
+    the first one: the user approved one list and another one ran. The lane
+    takes these fingerprints where it builds the card and hands them to
+    ``ToolRegistry.invoke(kept_pins=...)``; :func:`fill_from_script` then
+    refuses the call when a value is no longer the one that was shown.
+    Sync and cheap; never raises."""
+    if not has_refs(args):
+        return None
+    out: dict[str, str] = {}
+    try:
+        spec = args.get(ARG)
+        key, _ = _key_for(ctx)
+        for arg, name in (spec.items() if isinstance(spec, dict) else ()):
+            kept = SHELF.get(key, str(name or "").strip())
+            out[str(arg)] = kept.sha if kept is not None else ""
+    except Exception:  # noqa: BLE001 — cannot read: nothing matches ("" pins)
+        return {str(a): "" for a in (args.get(ARG) or {})} if isinstance(args.get(ARG), dict) else {}
+    return out
+
+
 def fill_from_script(
-    tool: str, args: dict[str, Any], ctx: Any
+    tool: str, args: dict[str, Any], ctx: Any, pins: "dict[str, str] | None" = None
 ) -> "tuple[dict[str, Any], dict[str, Any], str]":
     """``(run_args, record_args, error)`` for a call that carries
     :data:`ARG`.
+
+    *pins* (:func:`pins_for`, taken when the approval card was built): a
+    kept value whose fingerprint is no longer the pinned one is REFUSED, so
+    an approval never covers a value the card did not show.
 
     *run_args* is what the tool is given: the kept values in place.
     *record_args* is what is checked for permission and written to the
@@ -319,6 +372,13 @@ def fill_from_script(
                 f"no script here kept a value named `{name}`. In a tool script "
                 f"call tools.keep(\"{name}\", value) first"
                 + (f". Kept now: {', '.join(have)}" if have else "")
+            )
+        if pins is not None and pins.get(arg, "") != kept.sha:
+            return bare, bare, (
+                f"NOTHING WAS CHANGED. The kept value `{name}` is not the one "
+                "the approval showed (a script kept a new one after the user "
+                "was asked). Make this call again, by itself, so the user "
+                "sees what it will write"
             )
         try:
             run[arg] = json.loads(kept.text)

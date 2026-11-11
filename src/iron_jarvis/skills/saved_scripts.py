@@ -70,17 +70,31 @@ def check_code(code: Any) -> str:
     return ""
 
 
+#: The note's first and last words. :func:`without_run_note` removes ONLY a
+#: block that starts and ends with them, so they are written once, here.
+_NOTE_FIRST = "This skill has a saved script that does its reading and adding up."
+_NOTE_LAST = "with `_from_script`."
+
+#: Iron Jarvis's own note, exactly: the heading alone on its line, then the
+#: note's first sentence, through its last words. Bounded, so it is read in
+#: one pass.
+_NOTE_RX = re.compile(
+    r"(?m)^" + re.escape(NOTE_HEAD) + r"[ \t]*\r?\n" + re.escape(_NOTE_FIRST)
+    + r"[\s\S]{0,1500}?" + re.escape(_NOTE_LAST) + r"[ \t]*(?:\r?\n)?"
+)
+
+
 def run_note(name: str) -> str:
     """The block a skill's instructions carry when it has a script."""
     return (
         f"{NOTE_HEAD}\n"
-        "This skill has a saved script that does its reading and adding up. "
+        f"{_NOTE_FIRST} "
         "Run it with the `tool_script` tool instead of writing new code:\n\n"
         f'    tool_script(saved="{name}", params={{...}})\n\n'
         "`params` is a dict the script reads (say which folder, which month). "
         "The script only reads and prints; to put its result in a file, it "
         "keeps the value with tools.keep(...) and you call the file tool "
-        "with `_from_script`."
+        f"{_NOTE_LAST}"
     )
 
 
@@ -91,9 +105,21 @@ def with_run_note(instructions: str, name: str) -> str:
 
 
 def without_run_note(instructions: str) -> str:
+    """*instructions* without Iron Jarvis's own run note, and nothing else.
+
+    v1.473.0 review: this used to cut the text at the first place the
+    characters "## Saved script" appeared, anywhere. A skill of the user's
+    own with a heading such as "### Saved script library" lost everything
+    from that heading on, on ANY update (even one that changed only the
+    description). Only the exact note (:data:`_NOTE_RX`) is removed now;
+    whatever the user wrote, before it or after it, stays."""
     text = str(instructions or "")
-    at = text.find(NOTE_HEAD)
-    return text[:at].rstrip() + ("\n" if at > 0 else "") if at >= 0 else text
+    if NOTE_HEAD not in text:
+        return text
+    out = _NOTE_RX.sub("", text)
+    if out == text:
+        return text
+    return (out.rstrip() + "\n") if out.strip() else ""
 
 
 def write_script(skills_root: Any, name: str, code: str) -> Path:

@@ -399,17 +399,25 @@ def test_a_new_worker_starts_clean(world):
     assert world.web.urls == ["https://example.com/a"]
 
 
-def test_a_failed_local_read_holds_nothing(world):
+def test_a_failed_local_read_counts_as_a_read(world):
+    """Moved on purpose by the review: this pinned "a failed read holds
+    nothing". A tool's failure often QUOTES what it found (a workbook's
+    sheet names, "did you mean Jane Client (SSN …)"), and the script holds
+    those words, so the call counts like one that worked."""
     world.echo.fail = {"missing"}
     r = _run(world, (
         "try:\n"
         "    tools.call('echo_read', q='missing')\n"
         "except ToolError:\n"
         "    pass\n"
-        "print(tools.call('web_fetch', url='https://example.com/a').output)"
+        "try:\n"
+        "    tools.call('web_fetch', url='https://example.com/a')\n"
+        "    print('SENT')\n"
+        "except ToolError as e:\n"
+        "    print('REFUSED', e)\n"
     ))
-    assert r.ok, r.error
-    assert world.web.urls == ["https://example.com/a"]
+    assert "REFUSED" in r.output and "SENT" not in r.output, r.output
+    assert world.web.urls == []
 
 
 def test_a_map_of_internet_calls_is_refused_item_by_item_after_a_local_read(world):

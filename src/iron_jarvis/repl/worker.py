@@ -495,6 +495,11 @@ _NETWORK_EVENTS = frozenset({
 _OUTSIDE_EVENTS = frozenset({
     "os.startfile", "os.kill", "os.killpg", "os.fork", "os.forkpty",
     "_winapi.CreateProcess", "signal.pthread_kill",
+    # v1.473.0 review: Windows' own file and process calls open a file (or
+    # a pipe, a junction, another process) with no `open` event at all.
+    "_winapi.CreateFile", "_winapi.CreateNamedPipe", "_winapi.CreateJunction",
+    "_winapi.OpenProcess", "_winapi.TerminateProcess",
+    "winreg.ConnectRegistry",
     "winreg.CreateKey", "winreg.DeleteKey", "winreg.DeleteValue",
     "winreg.SetValue", "winreg.SaveKey", "winreg.LoadKey",
     "winreg.EnableReflectionKey", "winreg.DisableReflectionKey",
@@ -556,6 +561,22 @@ _OUTSIDE_BLOCKED = (
     "something outside this script. A tool script only computes and calls "
     "tools: tools.call(name, ...)."
 )
+
+#: ISOLATED worker only (v1.473.0 review). SQLite opens its files itself: no
+#: `open` event, so a database read was invisible to the rule "what a script
+#: read stays where it was read", a database anywhere on the disk could be
+#: read, and one could be written into the working folder. A connection in
+#: memory is no better: `ATTACH DATABASE '<any path>'` raises no event either.
+_SQLITE_BLOCKED = (
+    "iron-jarvis tool script: BLOCKED — opening a SQLite database. A tool "
+    "script reads files with open() and this turn's tools; SQLite opens "
+    "files in a way the app cannot see or limit. Read the data another way: "
+    "a tool of this turn, or an export of the table to CSV."
+)
+
+#: ISOLATED worker only: Tcl (tkinter) has its own `open`, `socket` and
+#: `exec`, none of which raises an event.
+_NO_IMPORT = frozenset({"tkinter", "_tkinter"})
 
 _ISOLATED_WRITE_BLOCKED = (
     "iron-jarvis tool script: BLOCKED — writing a file.\n"
@@ -718,6 +739,10 @@ def _install_audit_hook(
             ):
                 refuse(_NETWORK_BLOCKED)
             elif event in _OUTSIDE_EVENTS:
+                refuse(_OUTSIDE_BLOCKED)
+            elif event.startswith("sqlite3."):
+                refuse(_SQLITE_BLOCKED)
+            elif event == "import" and args and str(args[0]).split(".")[0] in _NO_IMPORT:
                 refuse(_OUTSIDE_BLOCKED)
 
     sys.addaudithook(hook)

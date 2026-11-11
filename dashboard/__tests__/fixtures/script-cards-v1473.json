@@ -10,7 +10,9 @@
       "total": 4
     },
     "can_always": false,
-    "tool": "apply_changes"
+    "once_only": true,
+    "tool": "apply_changes",
+    "why": "it makes several file changes at once, so each batch is asked about on its own"
   },
   "kept": {
     "args": {
@@ -18,6 +20,8 @@
       "path": "totals.xlsx"
     },
     "can_always": false,
-    "tool": "write_document"
+    "once_only": false,
+    "tool": "write_document",
+    "why": "you chose to approve every action"
   }
 }

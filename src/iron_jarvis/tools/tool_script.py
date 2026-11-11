@@ -79,6 +79,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -159,9 +160,89 @@ _RESTARTED_NOTE = (
 )
 
 
+#: Readers of a MEMORY BASE (v1.473.0 review). A base can be a notes folder
+#: on this PC or live off it (Notion, a memory server): the QUERY goes there,
+#: so with a base that is not local these reach outside like any app's tool.
+_MEMORY_BASE_READERS: frozenset[str] = frozenset({"ltm_search", "brain_search", "brain_read"})
+_MEMORY_ORIGIN = "outside:memory base"
+
+#: The tool that reads ONE connected app's resource (`server` names the app).
+_RESOURCE_READER = "mcp_read_resource"
+
+#: Argument names that carry a file or folder path.
+_PATH_KEY = re.compile(
+    r"(?i)(?:^|_)(?:path|paths|file|files|folder|folders|dir|dirs|directory|root|roots|cwd|"
+    r"source|src|workbook|document|input|output)(?:_|$)"
+)
+#: `\\host\share` written with backslashes, wherever it appears. The host
+#: must read as a host name or an address (a search pattern such as
+#: `\\d+\.\d+` starts with two backslashes too).
+_UNC = re.compile(r"^\\\\[A-Za-z0-9][A-Za-z0-9._@-]{0,253}\\[^\\/\s]")
+
+
+def network_path(value: Any, key: str = "") -> bool:
+    """Is *value* spelled as a place on ANOTHER computer (``\\\\host\\share``,
+    ``//host/share`` in a path argument, ``\\\\?\\UNC\\…``, a device path)?
+    Read from the TEXT only: nothing is resolved or opened (opening is the
+    harm: Windows connects to the host and offers it the user's sign-in)."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if len(text) < 3:
+        return False
+    backslashed = text.replace("/", "\\")
+    if not backslashed.startswith("\\\\"):
+        return False
+    if re.match(r"^\\\\[?.]\\[A-Za-z]:(\\|$)", backslashed):
+        return False  # a local drive behind a long-path prefix
+    if key and _PATH_KEY.search(key):
+        return True
+    return bool(_UNC.match(text)) or backslashed.lower().startswith("\\\\?\\unc\\")
+
+
+def _network_path_in(args: Any, workspace: Any) -> str:
+    """The first network path a call's arguments carry, cut for a sentence;
+    "" for none. A path inside the turn's own working folder is not one (a
+    firm whose client folders live on a share works there all day)."""
+    try:
+        home = str(workspace or "").replace("/", "\\").rstrip("\\").lower()
+    except Exception:  # noqa: BLE001
+        home = ""
+    on_share = home.startswith("\\\\")
+    seen = 0
+
+    def walk(value: Any, key: str, depth: int) -> str:
+        nonlocal seen
+        if seen > 400 or depth > 3:
+            return ""
+        if isinstance(value, str):
+            seen += 1
+            if not network_path(value, key):
+                return ""
+            spelled = value.strip().replace("/", "\\").lower()
+            if on_share and (spelled == home or spelled.startswith(home + "\\")):
+                return ""
+            return value.strip()[:80]
+        if isinstance(value, dict):
+            for k, v in list(value.items())[:60]:
+                found = walk(v, str(k), depth + 1)
+                if found:
+                    return found
+        elif isinstance(value, (list, tuple)):
+            for v in list(value)[:200]:
+                found = walk(v, key, depth + 1)
+                if found:
+                    return found
+        return ""
+
+    return walk(args, "", 0)
+
+
 def _origin_words(origin: str) -> str:
     if origin == "local":
         return "files or data on this PC"
+    if origin == _MEMORY_ORIGIN:
+        return "your memory base"
     if origin.startswith("pack:"):
         return f"the app {origin[5:]}"
     if origin.startswith("outside:"):
@@ -425,18 +506,37 @@ class ToolScriptTool(Tool):
         session_id, once = worker_key(ctx)
         workspace = Path(getattr(ctx, "workspace", ".") or ".")
         own_origins: set[str] = set()
+        # THE WORKER THIS SCRIPT RUNS IN, held as an object (v1.473.0
+        # review). It used to be looked up by NAME on every call, and a new
+        # chat's worker is RENAMED the moment the chat is saved
+        # (`adopt_turn_worker`): a link landing while the first script ran
+        # made the lookup miss, the record of what the script had read fell
+        # back to an empty set, and the outside call the rule exists to
+        # refuse went through.
+        worker: list[Any] = []
+
+        def on_session(live: Any) -> None:
+            worker[:] = [live]
 
         def origins() -> "set[str]":
             # Where the private data THIS WORKER's scripts hold came from. On
             # the worker's own session, so it lasts exactly as long as the
-            # variables do; a registry double without `peek` gets this run's.
-            peek = getattr(self._repl, "peek", None)
-            try:
-                live = peek(session_id, workspace, True) if callable(peek) else None
-            except Exception:  # noqa: BLE001
-                live = None
+            # variables do; a registry double that hands no session over gets
+            # this run's own set.
+            live = worker[0] if worker else None
+            if live is None:
+                peek = getattr(self._repl, "peek", None)
+                try:
+                    live = peek(session_id, workspace, True) if callable(peek) else None
+                except Exception:  # noqa: BLE001
+                    live = None
             got = getattr(live, "script_origins", None)
             return got if isinstance(got, set) else own_origins
+
+        def key_now() -> str:
+            # The worker's name NOW (the chat's, once the chat was saved).
+            live = worker[0] if worker else None
+            return str(getattr(live, "session_id", "") or session_id)
 
         async def on_call(name: str, call_args: dict[str, Any]) -> dict[str, Any]:
             name = str(name or "").strip()
@@ -447,7 +547,7 @@ class ToolScriptTool(Tool):
             }
             why = await self._refusal(name, call_args, scope, ctx)
             if not why:
-                why = self._carry_refusal(name, origins())
+                why = self._carry_refusal(name, origins(), call_args, workspace)
             if why:
                 refused.setdefault(name or "(no name)", why)
                 return {"ok": False, "error": f"{why}."}
@@ -467,13 +567,16 @@ class ToolScriptTool(Tool):
                 grants=scope.grants,
                 scopes=scope.scopes,
             )
-            if not result.ok:
-                return {"ok": False, "error": str(result.error or f"{name} failed")}
             # The script now holds what this call read (public web pages are
-            # not private, so they are not noted).
-            origin = self._origin(name)[0]
+            # not private, so they are not noted). A call that FAILED counts
+            # too (v1.473.0 review): a tool's refusal often quotes what it
+            # found ("no customer 'jane'. Did you mean: Jane Client (SSN …)",
+            # a workbook's sheet names), and the script holds those words.
+            origin = self._origin(name, call_args)[0]
             if origin != "web":
                 origins().add(origin)
+            if not result.ok:
+                return {"ok": False, "error": str(result.error or f"{name} failed")}
             output = str(result.output or "")
             if len(output) > MAX_TOOL_OUTPUT_CHARS:
                 dropped = len(output) - MAX_TOOL_OUTPUT_CHARS
@@ -574,14 +677,18 @@ class ToolScriptTool(Tool):
                     counts[str(change.get("tool"))] = counts.get(str(change.get("tool")), 0) + 1
                 planned["tools"] = counts
             try:
-                summary = script_values.SHELF.put(session_id, name, str(text or ""), plan=plan)
+                # Under the worker's name NOW: a chat saved while its first
+                # script ran is found by the chat's name from then on.
+                summary = script_values.SHELF.put(key_now(), name, str(text or ""), plan=plan)
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
             if not plan:
                 kept[name] = summary
             return {"ok": True, "output": f"kept `{name}`: {summary}"}
 
-        hooks: dict[str, Any] = {"on_tool_batch": on_batch, "on_keep": on_keep}
+        hooks: dict[str, Any] = {
+            "on_tool_batch": on_batch, "on_keep": on_keep, "on_session": on_session,
+        }
         if variables is not None:
             hooks["variables"] = variables
         try:
@@ -635,13 +742,21 @@ class ToolScriptTool(Tool):
 
     # -- what a script has read stays where it was read ------------------------
 
-    def _origin(self, name: str) -> "tuple[str, bool]":
+    def _origin(self, name: str, args: Any = None) -> "tuple[str, bool]":
         """``(origin, outside)`` for a tool: where the data it returns comes
         from, and whether calling it reaches outside this PC (the app's own
         Local only definition, ``egress``). Fail-closed: a tool that cannot
         be judged counts as reaching outside."""
         if name in _WEB_READERS:
             return "web", True
+        if name in _MEMORY_BASE_READERS:
+            # The query goes wherever the memory base lives.
+            return ("local", False) if self._memory_bases_local() else (_MEMORY_ORIGIN, True)
+        if name == _RESOURCE_READER:
+            # One place per connected app, like that app's own tools: what
+            # one app's resource said must not ride a read of another's.
+            server = str((args or {}).get("server") or "").strip() if isinstance(args, dict) else ""
+            return (f"pack:{server}" if server else f"outside:{name}"), True
         try:
             from ..providers import egress
 
@@ -655,13 +770,40 @@ class ToolScriptTool(Tool):
             return "pack:" + name.split("__", 2)[1], outside
         return (f"outside:{name}" if outside else "local"), outside
 
-    def _carry_refusal(self, name: str, held: "set[str]") -> str:
+    def _memory_bases_local(self) -> bool:
+        """Does every memory base live on this PC (a notes folder)? Cannot
+        tell = no (fail-closed)."""
+        try:
+            from ..providers import egress
+
+            manager = getattr(self._registry.get("ltm_search"), "manager", None)
+            if manager is None:
+                return False
+            return all(egress.ltm_connector_is_local(c) for c in list(manager.connectors()))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _carry_refusal(
+        self, name: str, held: "set[str]", args: Any = None, workspace: Any = None
+    ) -> str:
         """Why *name* is not called given what this worker's scripts already
         hold (*held*), or "". A tool that reaches outside is refused once the
-        worker holds private data from anywhere but that tool's own place."""
+        worker holds private data from anywhere but that tool's own place.
+
+        v1.473.0 review: so is ANY call whose arguments name a place on
+        another computer (``\\\\host\\share\\…``). The file readers count as
+        local, but opening such a path makes Windows connect to that host:
+        a script holding this PC's data could put it in the PATH."""
         if not held:
             return ""
-        origin, outside = self._origin(name)
+        share = _network_path_in(args, workspace) if args else ""
+        if share:
+            return (
+                f"this script has already read {_origin_words(sorted(held)[0])}, and "
+                f"`{share}` is on another computer, so `{name}` cannot open it from "
+                "the same script. Call the tool directly, one call at a time"
+            )
+        origin, outside = self._origin(name, args)
         if not outside:
             return ""
         others = sorted(o for o in held if o != origin)

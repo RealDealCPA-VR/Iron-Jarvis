@@ -165,6 +165,9 @@ ONCE_REASON_WHY: dict[str, str] = {
     "guarded": "it edits a file that controls Git or Iron Jarvis itself",
     "page": "it acts on a page in a way that may send or delete something",
     "memory": "it changes your memory base",
+    # v1.473.0 review: `apply_changes`. One approval covers exactly the
+    # changes its card listed, so the next batch is asked about again.
+    "batch": "it makes several file changes at once, so each batch is asked about on its own",
 }
 MAX_WHY_CHARS = 400
 
@@ -1013,6 +1016,42 @@ def guarded_edit(name: Any, args: Any, workspace: Any) -> "tuple[str, str] | Non
         return None
     except Exception:  # noqa: BLE001 — cannot read ⇒ the old path (the tool's own checks)
         log.debug("guarded edit: could not read %s", name, exc_info=True)
+        return None
+
+
+#: The tool that moves a file (``tools/builtins.RenameFileTool``).
+MOVE_TOOL = "rename_file"
+
+
+def guarded_move(args: Any, workspace: Any) -> "tuple[str, str] | None":
+    """``(kind, words)`` when a ``rename_file`` call moves a file ONTO, or
+    AWAY FROM, a sensitive file inside the folder, else None (v1.473.0
+    review).
+
+    The guard above reads the file EDIT tools only. A rename was not one of
+    them, and chat now offers ``rename_file`` for a rename request: a file
+    already in the folder (a document a client sent) could be moved onto
+    ``.git/hooks/pre-commit`` or ``.git/config`` with no card, where the same
+    bytes written with ``write_file`` get the once-only safety card. Moving
+    such a file away changes what Git or Iron Jarvis does just as much.
+    Blocking (resolve): call off the event loop. Never raises."""
+    try:
+        if not isinstance(args, dict) or not workspace:
+            return None
+        ws = Path(workspace)
+        for key, verb in (("new_path", "Move a file onto"), ("path", "Move")):
+            value = args.get(key)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            kind = sensitive_kind(value, ws)
+            if kind:
+                shown = value.strip().replace("\\", "/")
+                if len(shown) > 120:
+                    shown = "…" + shown[-119:]
+                return kind, f"{verb} {shown}: {GUARD_WHY[kind]}"
+        return None
+    except Exception:  # noqa: BLE001 — cannot read ⇒ the old path (the tool's own checks)
+        log.debug("guarded move: could not read the call", exc_info=True)
         return None
 
 

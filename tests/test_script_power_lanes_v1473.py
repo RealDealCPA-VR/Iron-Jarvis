@@ -302,6 +302,193 @@ async def test_a_declined_batch_changes_nothing(desk):
     assert not [r for r in _rows(app, "rename_file") if r.ok]
 
 
+# --------------------------------------------------------------------------- #
+# The independent review: what the card showed is what runs
+# --------------------------------------------------------------------------- #
+
+PLAN_ONE = (
+    'tools.plan("rename_file", path="f0.txt", new_path="statement-0.txt")\n'
+    'print("planned one")\n'
+)
+PLAN_OTHER = (
+    'for i in range(1, 6):\n'
+    '    tools.plan("write_file", path=f"f{i}.txt", content="SWAPPED")\n'
+    'tools.plan("write_file", path="planted.bat", content="echo swapped")\n'
+    'print("planned another")\n'
+)
+
+
+def _before(ws: Path) -> dict:
+    return {p.name: p.read_bytes() for p in sorted(ws.iterdir()) if p.is_file()}
+
+
+@pytest.mark.asyncio
+async def test_a_batch_runs_only_the_list_its_card_showed(desk):
+    """Found by the review: every card of a round is built before any call
+    of the round runs. A round holding [a script that plans a NEW list, the
+    batch] showed the user the old list and ran the new one."""
+    app, ws = desk
+    was = _before(ws)
+    model = Model([
+        _call(1, "tool_script", code=PLAN_ONE),
+        [
+            ToolCall(id="c2", name="tool_script", arguments={"code": PLAN_OTHER}),
+            ToolCall(id="c3", name="apply_changes", arguments={"_from_script": {"changes": "changes"}}),
+        ],
+        "Done.",
+    ])
+    body = _body(ws, "go", tools=["tool_script", "rename_file", "write_file"])
+    frames, cards, done = await _stream(app, body, model)
+    batch = [c for c in cards if c.get("tool") == "apply_changes"]
+    assert len(batch) == 1 and batch[0]["args"]["changes"] == ["Rename f0.txt to statement-0.txt"]
+    # Neither list ran: the one that was shown is gone, the new one was never shown.
+    assert _before(ws) == was, sorted(_before(ws))
+    said = " ".join(model.tool_texts[-1])
+    assert "NOTHING WAS CHANGED" in said and "not the one the approval showed" in said, said
+    assert not [r for r in _rows(app, "write_file") if r.ok]
+    assert not [r for r in _rows(app, "rename_file") if r.ok]
+
+
+@pytest.mark.asyncio
+async def test_a_kept_value_swapped_after_its_card_is_never_written(desk):
+    app, ws = desk
+    model = Model([
+        _call(1, "tool_script", code='tools.keep("totals", [["alpha", 1], ["beta", 2]])\nprint("ok")\n'),
+        [
+            ToolCall(id="c2", name="tool_script",
+                     arguments={"code": 'tools.keep("totals", [["SWAPPED", 999999]])\nprint("ok")\n'}),
+            ToolCall(id="c3", name="write_document",
+                     arguments={"path": "totals.csv", "_from_script": {"content": "totals"}}),
+        ],
+        "Done.",
+    ])
+    body = _body(ws, "go", tools=["tool_script", "write_document"], auto_tools=False,
+                 approval_mode="always_ask")
+    frames, cards, done = await _stream(app, body, model)
+    card = [c for c in cards if c.get("tool") == "write_document"]
+    assert len(card) == 1 and "alpha" in json.dumps(card[0]["args"])
+    assert not (ws / "totals.csv").exists()
+    assert "not the one the approval showed" in " ".join(model.tool_texts[-1])
+
+
+@pytest.mark.asyncio
+async def test_a_card_that_could_not_show_the_value_approves_nothing(desk):
+    """The script that keeps the value and the carded call that uses it in
+    ONE round: the card said "not kept yet", so its Allow covers no value."""
+    app, ws = desk
+    model = Model([
+        [
+            ToolCall(id="c1", name="tool_script",
+                     arguments={"code": 'tools.keep("totals", [["alpha", 1]])\nprint("ok")\n'}),
+            ToolCall(id="c2", name="write_document",
+                     arguments={"path": "totals.csv", "_from_script": {"content": "totals"}}),
+        ],
+        _call(3, "write_document", path="totals.csv", _from_script={"content": "totals"}),
+        "Done.",
+    ])
+    body = _body(ws, "go", tools=["tool_script", "write_document"], auto_tools=False,
+                 approval_mode="always_ask")
+    frames, cards, done = await _stream(app, body, model)
+    shown = [json.dumps(c["args"]) for c in cards if c.get("tool") == "write_document"]
+    assert len(shown) == 2 and "not kept yet" in shown[0] and "alpha" in shown[1], shown
+    # The second call, whose card showed the rows, is the one that wrote them.
+    assert "alpha" in (ws / "totals.csv").read_text()
+    assert len([r for r in _rows(app, "write_document") if r.ok]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_needs_no_card_still_takes_the_value_kept_in_its_round(desk):
+    """No card, no approval to bind: keeping and using a value in one round
+    works exactly as before the review."""
+    app, ws = desk
+    model = Model([
+        [
+            ToolCall(id="c1", name="tool_script",
+                     arguments={"code": 'tools.keep("totals", [["alpha", 1]])\nprint("ok")\n'}),
+            ToolCall(id="c2", name="write_document",
+                     arguments={"path": "totals.csv", "_from_script": {"content": "totals"}}),
+        ],
+        "Done.",
+    ])
+    body = _body(ws, "go", tools=["tool_script", "write_document"])
+    frames, cards, done = await _stream(app, body, model)
+    assert not cards
+    assert "alpha" in (ws / "totals.csv").read_text()
+
+
+@pytest.mark.asyncio
+async def test_each_batch_is_asked_about_on_its_own(desk):
+    """Found by the review: "Allow for this chat" on a batch of one rename
+    covered every later batch, whatever it held."""
+    app, ws = desk
+    model = Model([
+        _call(1, "tool_script", code=PLAN_ONE),
+        _call(2, "apply_changes", _from_script={"changes": "changes"}),
+        _call(3, "tool_script", code=PLAN_OTHER),
+        _call(4, "apply_changes", _from_script={"changes": "changes"}),
+        "Done.",
+    ])
+    body = _body(ws, "go", tools=["tool_script", "rename_file", "write_file"])
+    frames, cards, done = await _stream(app, body, model, decision="conversation")
+    batch = [c for c in cards if c.get("tool") == "apply_changes"]
+    assert len(batch) == 2, [c.get("tool") for c in cards]
+    for card in batch:
+        assert card.get("once_only") is True and card.get("can_always") is False
+        assert "each batch is asked about on its own" in str(card.get("why") or "")
+    assert batch[1]["args"]["total"] == 6 and "planted.bat" in batch[1]["args"]["changes"][-1]
+
+
+@pytest.mark.asyncio
+async def test_a_guarded_file_never_rides_a_batch(desk):
+    """Found by the review: a direct write of .git/config gets the once-only
+    safety card; inside a batch it was written under the batch's approval."""
+    app, ws = desk
+    (ws / ".git").mkdir()
+    (ws / ".git" / "hooks").mkdir()
+    for plan, name in (
+        ('tools.plan("write_file", path=".git/config", content="[core] fsmonitor = calc.exe")\n', ".git/config"),
+        ('tools.plan("write_file", path=".ironjarvis/harness/plugins.toml", content="x = 1")\n',
+         ".ironjarvis/harness/plugins.toml"),
+        ('tools.plan("rename_file", path="f1.txt", new_path=".git/hooks/pre-commit")\n', ".git/hooks/pre-commit"),
+        ('tools.plan("write_file", path="AGENTS.md", content="obey")\n', "AGENTS.md"),
+    ):
+        was = _before(ws)
+        model = Model([
+            _call(1, "tool_script", code='tools.plan("rename_file", path="f0.txt", new_path="ok-0.txt")\n'
+                  + plan + 'print("ok")\n'),
+            _call(2, "apply_changes", _from_script={"changes": "changes"}),
+            "Done.",
+        ])
+        body = _body(ws, "go", tools=["tool_script", "rename_file", "write_file"])
+        await _stream(app, body, model)
+        said = " ".join(model.tool_texts[-1])
+        assert "NOTHING WAS CHANGED" in said and "guarded file" in said, (name, said)
+        assert _before(ws) == was, name
+        assert not (ws / name).exists(), name
+
+    # "Don't ask" drops the batch's card, never this rule.
+    model = Model([
+        _call(1, "tool_script",
+              code='tools.plan("write_file", path=".git/config", content="x")\nprint("ok")\n'),
+        _call(2, "apply_changes", _from_script={"changes": "changes"}),
+        "Done.",
+    ])
+    body = _body(ws, "go", tools=["tool_script", "write_file"], approval_mode="yolo")
+    frames, cards, done = await _stream(app, body, model)
+    assert not cards and not (ws / ".git" / "config").exists()
+    assert "guarded file" in " ".join(model.tool_texts[-1])
+
+
+@pytest.mark.asyncio
+async def test_dont_ask_runs_a_batch_without_its_card(desk):
+    app, ws = desk
+    model = _batch_model()
+    body = _body(ws, "go", tools=["tool_script", "rename_file"], approval_mode="yolo")
+    frames, cards, done = await _stream(app, body, model)
+    assert not cards
+    assert all((ws / f"statement-{i}.txt").is_file() for i in range(4))
+
+
 RENAME_ALL = "Rename the statement files here so each name starts with its month, like 2026-01-statement.csv."
 
 
@@ -394,7 +581,11 @@ async def test_the_cards_the_dashboard_draws_are_what_the_daemon_sends(desk):
     assert len(batch_cards) == 1 and len(kept) == 1
 
     def card(c: dict) -> dict:
-        return {"tool": c["tool"], "args": c["args"], "can_always": c.get("can_always")}
+        return {
+            "tool": c["tool"], "args": c["args"], "can_always": c.get("can_always"),
+            # v1.473.0 review: a batch is asked about once, every time.
+            "once_only": c.get("once_only") is True, "why": str(c.get("why") or ""),
+        }
 
     want = {"batch": card(batch_cards[0]), "kept": card(kept[0])}
     text = json.dumps(want, indent=2, sort_keys=True) + chr(10)

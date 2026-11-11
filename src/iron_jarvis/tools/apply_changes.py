@@ -29,15 +29,29 @@ was changed" is always true of a refusal.
 The batch's approval covers exactly the changes it listed: the grant for the
 step tools is made for this one call and passed to ``invoke`` as
 ``session_allow``, never recorded anywhere.
+
+ONE BATCH, ONE APPROVAL (v1.473.0 review). The card is asked ONCE, EVERY TIME
+(:meth:`ApplyChangesTool.spend_check`: Allow once and Deny only). With an
+ordinary card, "Allow for this chat" on a batch of one rename covered every
+LATER batch, whatever it held: forty overwrites nobody saw. Only "Don't ask"
+(the user's own posture) runs a batch without its card.
+
+GUARDED FILES NEVER RIDE A BATCH. A change whose path (the file written, or
+either end of a rename) is one of Git's, Iron Jarvis's or a coding agent's own
+files (``core/auto_approve.sensitive_kind``: ``.git/**``, ``.ironjarvis/**``,
+``.claude/**``, an AGENTS.md…) refuses the whole batch, in every posture:
+made directly, that change gets its own once-only safety card.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 from ..core import progress
-from .base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
+from .base import Reversibility, RiskClass, SpendCheck, Tool, ToolContext, ToolResult
 
 log = logging.getLogger("iron_jarvis.tools.apply_changes")
 
@@ -57,6 +71,15 @@ BATCH_TOOLS: frozenset[str] = frozenset({
     "docx_edit", "pdf_form_fill", "pdf_split", "pdf_arrange",
     "excel_edit", "excel_apply_spec", "redact_pii",
 })
+
+#: Why the batch card asks every time (``core/auto_approve.ONCE_REASON_WHY``).
+BATCH_REASON = "batch"
+
+#: The arguments of a batch tool that name a file it writes, moves or makes.
+_PATH_KEYS: tuple[str, ...] = (
+    "path", "new_path", "file_path", "output", "output_path", "out", "save_as",
+    "dest", "destination", "target",
+)
 
 _LINE_CHARS = 160
 #: Lines of the batch shown on a card and kept on the ledger row.
@@ -79,10 +102,14 @@ _VERBS: dict[str, str] = {
 
 
 def _one_line(text: Any, limit: int = _LINE_CHARS) -> str:
+    # Bounded BEFORE it is masked (v1.473.0 review): this runs on the event
+    # loop for every line of a card, and a plan whose 200 paths were 39,000
+    # characters each took 0.9 s there (the mask read every character).
+    text = str(text)[: max(2_000, limit * 8)]
     try:
         from ..detections.redact import mask
 
-        text = mask(str(text))
+        text = mask(text)
     except Exception:  # noqa: BLE001 — wording only
         text = str(text)
     text = " ".join(text.split())
@@ -105,6 +132,28 @@ def describe_change(change: Any) -> str:
     elif args.get("output"):
         line += f" (saved as {args.get('output')})"
     return _one_line(line)
+
+
+def guarded_target(change: Any, workspace: Any) -> str:
+    """The first file of this change that steers Git, Iron Jarvis or a coding
+    agent, as ``<path>: <why>``; "" for none. BLOCKING (the path is resolved):
+    call off the event loop. Raises when a path cannot be read (the caller
+    fails closed)."""
+    from ..core import auto_approve as _auto
+
+    args = change.get("args") if isinstance(change, dict) else None
+    if not isinstance(args, dict) or not workspace:
+        return ""
+    folder = Path(workspace)
+    for key in _PATH_KEYS:
+        value = args.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        kind = _auto.sensitive_kind(value, folder)
+        if kind:
+            shown = _one_line(value.strip().replace("\\", "/"), 120)
+            return f"{shown}: {_auto.GUARD_WHY.get(kind, _auto.GUARD_WHY['unknown'])}"
+    return ""
 
 
 def shown_changes(changes: Any) -> dict[str, Any]:
@@ -201,6 +250,12 @@ class ApplyChangesTool(Tool):
             shown.update(shown_changes(args["changes"]))
         return shown
 
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> "SpendCheck | None":
+        """ASKED ONCE, EVERY TIME: Allow once and Deny only, no grant of any
+        width covers the next batch (it holds different changes). "Don't
+        ask" drops it, as it drops Ask first's own guard."""
+        return SpendCheck(ask=True, once_only=True, reason=BATCH_REASON, dont_ask_skips=True)
+
     async def _step_problem(
         self, at: int, change: dict[str, Any], scope: Any, ctx: ToolContext
     ) -> str:
@@ -227,6 +282,18 @@ class ApplyChangesTool(Tool):
                 return (
                     f"change {at} ({describe_change(change)}) needs an approval "
                     f"of its own. Make that one change directly with `{name}`"
+                )
+            # Ask first's guard for Git's and Iron Jarvis's own files lives
+            # OUTSIDE the tools (`tools/base.spend_checks_for`), so the step
+            # tool's own check above never sees it: read the paths here.
+            guarded = await asyncio.to_thread(
+                guarded_target, change, getattr(ctx, "workspace", None)
+            )
+            if guarded:
+                return (
+                    f"change {at} touches a guarded file ({guarded}), so it "
+                    f"needs an approval of its own. Make that one change "
+                    f"directly with `{name}`"
                 )
         except Exception as exc:  # noqa: BLE001 — cannot tell: do not run it
             log.debug("apply_changes check failed for %s", name, exc_info=True)

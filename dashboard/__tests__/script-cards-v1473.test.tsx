@@ -31,7 +31,13 @@ import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { approvalPreview, BATCH_TOOL, PREVIEW_LINES } from "@/lib/approvalPreview";
 import { toolWords } from "@/lib/toolWords";
 
-type Card = { tool: string; args: Record<string, unknown>; can_always: boolean | null };
+type Card = {
+  tool: string;
+  args: Record<string, unknown>;
+  can_always: boolean | null;
+  once_only?: boolean;
+  why?: string;
+};
 const FIXTURE: { batch: Card; kept: Card } = JSON.parse(
   readFileSync(join(__dirname, "fixtures", "script-cards-v1473.json"), "utf8").replace(/\r\n/g, "\n"),
 );
@@ -42,7 +48,15 @@ afterEach(() => {
 });
 
 function approval(card: Card, id = "ap1") {
-  return { id, callId: "c1", tool: card.tool, args: card.args, canAlways: card.can_always === true };
+  return {
+    id,
+    callId: "c1",
+    tool: card.tool,
+    args: card.args,
+    canAlways: card.can_always === true,
+    onceOnly: card.once_only === true,
+    ...(card.why ? { why: card.why } : {}),
+  };
 }
 
 describe("a batch of file changes", () => {
@@ -85,6 +99,19 @@ describe("a batch of file changes", () => {
     expect(screen.getByRole("button", { name: "Allow once" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Always/ })).toBeNull();
+  });
+
+  it("a batch is asked about once, every time: no wider answer is offered", () => {
+    // The review: "Allow for this chat" on one batch covered every later
+    // batch, whatever it held. The daemon marks the card once-only.
+    expect(FIXTURE.batch.once_only).toBe(true);
+    expect(FIXTURE.batch.why).toContain("each batch is asked about on its own");
+    render(<ApprovalCard approval={approval(FIXTURE.batch)} onConversation={() => {}} />);
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /for this chat/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Always/ })).toBeNull();
+    expect(screen.getByTestId("approval-why").textContent).toContain("each batch is asked about on its own");
   });
 
   it("one change is one change", () => {

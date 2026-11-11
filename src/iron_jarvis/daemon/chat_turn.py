@@ -3181,6 +3181,23 @@ def card_args(tool: Any, args: Any, ctx: Any) -> Any:
         return safe
 
 
+def kept_pins_for(name: Any, args: Any, ctx: Any) -> "dict[str, str] | None":
+    """The fingerprints of the kept values a call names, taken where its
+    approval card is built (``script_values.pins_for``); None for a call
+    with no ``_from_script``. Fail-closed: when they cannot be read the
+    call gets pins that match nothing, so a carded call is refused rather
+    than run on a value its card may not have shown."""
+    if not (isinstance(args, dict) and "_from_script" in args):
+        return None
+    try:
+        from ..tools.script_values import pins_for
+
+        pins = pins_for(str(name or ""), args, ctx)
+        return pins if pins is not None else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _unfenced(text: str) -> str:
     """*text* with the chat lane's untrusted fence (``_fence_tool_output`` →
     ``wrap_untrusted``) removed, so the runtime fences a carried output ONCE.

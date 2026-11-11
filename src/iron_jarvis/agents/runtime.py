@@ -4597,6 +4597,20 @@ class AgentRuntime:
                     and self._effective_trust(session) == TRUST_LOW
                 ):
                     _args = {**_args, "_isolate": True}
+                # A VALUE A SCRIPT KEPT (v1.473.0 review): its fingerprint is
+                # taken HERE, before any pause, and the registry refuses the
+                # call when the value is a different one by the time it runs
+                # (a script of the same step kept a new one while the user
+                # was being asked). MIRROR NOTE: the stream lane pins where
+                # it builds the card.
+                _pins = None
+                if isinstance(_args, dict) and "_from_script" in _args:
+                    try:
+                        from ..tools.script_values import pins_for
+
+                        _pins = pins_for(tc.name, _args, ctx) or {}
+                    except Exception:  # noqa: BLE001 — cannot read: match nothing
+                        _pins = {}
                 # An UNARMED name never asks the user (v1.227.0): carding a
                 # tool the run may not call, then refusing it, would make the
                 # user's Allow a lie. The registry refuses it as "not armed".
@@ -4674,6 +4688,7 @@ class AgentRuntime:
                     # THE DEADLINE (v1.228.0, RT6): a wedged tool becomes a
                     # recorded failed result and the run goes on; 0 = none.
                     deadline_s=_tool_deadline(self.p.config),
+                    **({"kept_pins": _pins} if _pins is not None else {}),
                     # STANDING GRANTS (v1.299.0): the store + this run's
                     # scopes, so the registry's own gate lifts a covered
                     # ask and records the grant id. Only when both exist.

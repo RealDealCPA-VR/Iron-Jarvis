@@ -6318,6 +6318,12 @@ async def chat_stream(
                     _plan: dict[str, Any] = {
                         "t": _t, "safe_args": safe_args, "refused": "",
                         "carded": False, "card_deny": "", "grant_extra": set(),
+                        # v1.473.0 review: the fingerprints of the kept
+                        # values this call names, taken HERE, where its card
+                        # is built. A carded call runs only while they still
+                        # match (`_registry_invoke`): a script later in this
+                        # round cannot swap what the user was shown.
+                        "kept_pins": _chat_turn.kept_pins_for(tc.name, tc.arguments, ctx),
                     }
                     _plans.append(_plan)
                     # MID-TURN APPROVAL (v1.187.0). The two halves of this
@@ -7060,6 +7066,14 @@ async def chat_stream(
                         allowed_names=_turn_tools,
                         # v1.246.0 — lock-step with chat_turn.
                         deadline_s=chat_tool_deadline(d.platform),
+                        # v1.473.0 review: a CARDED call that names a kept
+                        # value runs only on the value its card showed.
+                        # Passed only then (invoke doubles take no kwarg).
+                        **(
+                            {"kept_pins": _p["kept_pins"]}
+                            if _p.get("carded") and _p.get("kept_pins") is not None
+                            else {}
+                        ),
                         # STANDING GRANTS (v1.299.0) — lock-step with
                         # chat_turn: the store + scopes, only when a
                         # store exists, so the registry's gate lifts a

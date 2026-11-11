@@ -753,6 +753,7 @@ class ToolRegistry:
         deadline_s: float | None = None,
         grants: "Any | None" = None,
         scopes: "list[tuple[str, str]] | None" = None,
+        kept_pins: "dict[str, str] | None" = None,
     ) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
@@ -837,7 +838,10 @@ class ToolRegistry:
         if isinstance(args, dict) and "_from_script" in args:
             from .script_values import fill_from_script
 
-            run_args, args, fill_error = fill_from_script(name, args, ctx)
+            # `kept_pins` (v1.473.0 review): the fingerprints a lane took
+            # when it built this call's approval card. A value kept anew
+            # since then is refused: the approval covers what was shown.
+            run_args, args, fill_error = fill_from_script(name, args, ctx, kept_pins)
 
         # A caller that already asked a human and was refused passes the answer
         # in (v1.155.0). It goes through the SAME record-and-publish path as any

@@ -1214,13 +1214,22 @@ class ReplRegistry:
         on_tool_batch: Any = None,
         on_keep: Any = None,
         variables: "dict[str, Any] | None" = None,
+        on_session: Any = None,
     ) -> dict[str, Any]:
         """Run ``code`` in ``session_id``'s namespace, creating it if needed.
 
         ``isolated`` picks the session's isolated worker (a namespace of its
         own); ``tools`` + ``on_tool_call`` make the run a tool script
-        (:meth:`ReplSession.execute`)."""
+        (:meth:`ReplSession.execute`). ``on_session(session)`` (v1.473.0
+        review) hands the caller the session OBJECT before the code runs, so
+        it need not look it up by a name that :meth:`rekey` may change while
+        the code is running."""
         session, error = await self._acquire(session_id, workspace, isolated)
+        if session is not None and on_session is not None:
+            try:
+                on_session(session)
+            except Exception:  # noqa: BLE001 — a courtesy to the caller
+                pass
         if session is None:
             return {
                 "session_id": session_id,

@@ -338,7 +338,13 @@ def guarded_edit_check(name: str, args: Any, workspace: Any) -> "SpendCheck | No
     every other call. Blocking (resolves the path): call off the event loop."""
     from ..core import auto_approve as _auto
 
-    hit = _auto.guarded_edit(name, args, workspace)
+    # v1.473.0 review: a RENAME onto (or away from) one of those files is
+    # asked about the same way (`guarded_move`).
+    hit = (
+        _auto.guarded_move(args, workspace)
+        if name == _auto.MOVE_TOOL
+        else _auto.guarded_edit(name, args, workspace)
+    )
     if hit is None:
         return None
     _kind, words = hit
@@ -350,7 +356,8 @@ def guarded_edit_check(name: str, args: Any, workspace: Any) -> "SpendCheck | No
 
 #: The tools the guard reads (the file edit tools — ``core/auto_approve``).
 GUARDED_EDIT_TOOLS: frozenset[str] = frozenset(
-    {"write_file", "edit_file", "multi_edit", "notebook_edit", "write_document", "apply_patch"}
+    {"write_file", "edit_file", "multi_edit", "notebook_edit", "write_document", "apply_patch",
+     "rename_file"}
 )
 
 
