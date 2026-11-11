@@ -586,3 +586,24 @@ describe("Build › Code's start box: a model picked with its tool", () => {
     expect(api.posts[0].body).toMatchObject({ harness: "codex", model: "gpt-6-astra" });
   });
 });
+
+/* v1.475.0 review: opening the picker reads the tools' list again (new
+ * objects for the same tools); that must not wipe what the box holds. */
+describe("Build › Code's start box: the tools' list read again", () => {
+  it("keeps the mode, model and effort chosen so far", async () => {
+    window.localStorage.setItem("ij.code.lastTool", "claude-code");
+    const { rerender } = render(<StartComposer tools={TOOLS} toolsError={null} startFolder={null} onStarted={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code"));
+    await act(async () => {});
+    await chooseModel(START, "claude-opus-5-5");
+    chooseEffort(START, "low");
+    fireEvent.click(screen.getByTestId("code-start-mode-button"));
+    fireEvent.click(screen.getByTestId("code-start-mode-option-edits"));
+    expect(screen.getByTestId("code-start-mode-button").textContent).toContain("Auto edits");
+    const again = TOOLS.map((t) => ({ ...t, models: t.models.map((m) => ({ ...m })) }));
+    rerender(<StartComposer tools={again} toolsError={null} startFolder={null} onStarted={() => {}} />);
+    await act(async () => {});
+    expect(chosen(START)).toMatchObject({ tool: "claude-code", model: "claude-opus-5-5", effort: "low" });
+    expect(screen.getByTestId("code-start-mode-button").textContent).toContain("Auto edits");
+  });
+});

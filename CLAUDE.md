@@ -17446,7 +17446,17 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/model-picker-v1475.test.tsx`, the v1.475.0 cases in
   `folder-defaults-v1426-0` and `build-app-view-v1409`,
   `tests/test_build_app_model_change_v1475.py`; moved on purpose: the eight
-  files that set the model or effort through the old selects.
+  files that set the model or effort through the old selects. REVIEW (each
+  red first): the start box's tool reset is keyed on `tool?.id` (reading the
+  list again on opening made new objects and wiped the account, mode and
+  model); a session's chip names its tool and model from the session while
+  the list is not read (`pickerTools`, a plain value: it sits past the pane's
+  early return, so no hook); a model picked in a session shows its own
+  levels at once but they wait ("Changing the model…") until the daemon's
+  answer makes it the chosen one (`pending`); Tab closes the panel (it is
+  portaled to the end of the page); the shortcut opens nothing with no tools;
+  the daemon line says the model's and the effort's own timing when they
+  differ (`effort_when`).
 - **A Store program is never asked into the pane job, and starts one at a
   time; a frozen loop says where it is stuck** (v1.407.1, a USER BUG on
   v1.407.0: Build stuck at "Attaching to sessions…", then "Iron Jarvis isn't

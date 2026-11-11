@@ -723,17 +723,23 @@ def _effort_words(effort: str) -> str:
 
 
 def model_change_words(harness: str, rows: Any, old_model: str, new_model: str,
-                       old_effort: str, new_effort: str, when: str = "") -> str:
+                       old_effort: str, new_effort: str, when: str = "",
+                       effort_when: str | None = None) -> str:
     """v1.475.0: the conversation's one line for a model or effort change.
-    ``when`` is the change's ``applied`` word ("now" | "next" | "")."""
-    parts = []
-    if old_model != new_model:
-        parts.append(f"Model changed: {_model_words(harness, rows, old_model)} → "
-                     f"{_model_words(harness, rows, new_model)}")
-    if old_effort != new_effort:
-        head = "effort" if parts else "Effort changed"
-        parts.append(f"{head}: {_effort_words(old_effort)} → {_effort_words(new_effort)}")
-    if not parts:
+    ``when`` is the model change's ``applied`` word ("now" | "next" | ""),
+    ``effort_when`` the effort's (default: the same as ``when``)."""
+    effort_when = when if effort_when is None else effort_when
+    model = old_model != new_model
+    effort = old_effort != new_effort
+    if not (model or effort):
         return ""
-    tail = ", from your next message" if when == "next" else ""
-    return "; ".join(parts) + tail + "."
+    m = (f"Model changed: {_model_words(harness, rows, old_model)} → "
+         f"{_model_words(harness, rows, new_model)}")
+    e = f"{_effort_words(old_effort)} → {_effort_words(new_effort)}"
+    nxt = ", from your next message"
+    if model and effort and (when == "next") != (effort_when == "next"):
+        # They apply at different times: each says its own.
+        return (f"{m}{nxt if when == 'next' else ''}. "
+                f"Effort changed: {e}{nxt if effort_when == 'next' else ''}.")
+    parts = ([m] if model else []) + ([f"{'effort' if model else 'Effort changed'}: {e}"] if effort else [])
+    return "; ".join(parts) + (nxt if (when if model else effort_when) == "next" else "") + "."

@@ -2058,7 +2058,7 @@ and one panel opens:
 
 Picking a model moves straight to its effort levels, so tool, model and
 effort are one short trip. The keyboard does it all: the search box has the
-cursor, the arrow keys move, Enter picks, Esc closes.
+cursor, the arrow keys move, Enter picks, Esc or Tab closes.
 
 - **In a running session** the tool cannot change (start a new session for
   another tool); the chip still changes its model and effort.

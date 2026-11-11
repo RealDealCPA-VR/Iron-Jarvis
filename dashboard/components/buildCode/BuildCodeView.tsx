@@ -1661,6 +1661,13 @@ function SessionPane({
   const accountName = accountWords(session, tools);
   // v1.418.0 (C4.8): which chip changes wait for the reply to end.
   const modelLive = modelWhileRunning(session.tool, toolName, running);
+  // v1.475.0 review: while the tools' list is not read (still loading, could
+  // not be read, or the tool is no longer installed) the chip still names
+  // the session's tool and model, from the session itself.
+  // (A plain value: this is past the pane's early return, so no hook here.)
+  const pickerTools = tool
+    ? [tool]
+    : decodeCodingTools({ harnesses: [{ id: session.tool, label: toolName, installed: true, signed_in: true, models: [] }] });
   const effortLive = effortWhileRunning(session.tool, toolName, running, tool?.effortLive === true);
   return (
     <SessionEditorProvider folder={session.folder}>
@@ -2057,7 +2064,7 @@ function SessionPane({
                   default (a new start) waits. A conversation that keeps its last
                   model offers no way back to the default. */}
               <ModelPicker
-                tools={tool ? [tool] : []}
+                tools={pickerTools}
                 value={{ tool: session.tool, model: session.model, effort: session.effort }}
                 onChange={(field, next) => {
                   if (field === "model") void change({ model: next });

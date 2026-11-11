@@ -941,6 +941,20 @@ describe("what the real daemon sends", () => {
     expect(screen.queryByTestId("code-info")).toBeNull();
   });
 
+  it("v1.475.0 review: while the tools' list cannot be read, the chip still names the session's tool and model", async () => {
+    const s1 = sess("a1", { model: "claude-opus-5-5", effort: "high" });
+    seed([s1]);
+    openSession("a1", { session: s1, events: SC.claude_deny, running: null, pending: [] });
+    delete H.gets["/build/app/harnesses"];
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    const chip = screen.getByTestId("code-model-chip") as HTMLButtonElement;
+    expect(chip.textContent).toContain("claude-opus-5-5");
+    expect(chip.textContent).toContain("High");
+    expect(chip.textContent).not.toContain("Choose a coding tool");
+    expect(chip.disabled).toBe(false);
+  });
+
   it("v1.475.0: before the conversation's first message nothing is read again", async () => {
     seed([sess("a1")]);
     openSession("a1", { session: sess("a1"), events: [], running: null, pending: [] });

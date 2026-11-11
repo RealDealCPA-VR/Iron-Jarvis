@@ -47,6 +47,10 @@ def test_the_words_name_both_sides_and_when():
     assert W.model_change_words("claude-code", rows, "sonnet", "opus", "", "high", "next") == \
         "Model changed: Sonnet 5.5 → Opus 5.5; effort: Default → High, from your next message."
     assert W.model_change_words("claude-code", rows, "opus", "opus", "high", "high", "now") == ""
+    # Applied at different times: each part says its own (the review's case).
+    assert W.model_change_words("claude-code", rows, "sonnet", "opus", "high", "low", "now", "next") ==         "Model changed: Sonnet 5.5 → Opus 5.5. Effort changed: High → Low, from your next message."
+    assert W.model_change_words("claude-code", rows, "sonnet", "opus", "high", "low", "next", "next") ==         "Model changed: Sonnet 5.5 → Opus 5.5; effort: High → Low, from your next message."
+    assert W.model_change_words("claude-code", rows, "opus", "opus", "high", "low", "", "next") ==         "Effort changed: High → Low, from your next message."
     # Claude Code's own short name reads as the one listed model of its family.
     named = [{"id": "claude-haiku-5-5", "label": "Haiku 5.5"}, {"id": "claude-sonnet-5-5", "label": "Sonnet 5.5"}]
     assert W.model_change_words("claude-code", named, "haiku", "claude-sonnet-5-5", "", "", "") ==         "Model changed: Haiku 5.5 → Sonnet 5.5."

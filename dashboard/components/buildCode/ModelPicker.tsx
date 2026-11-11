@@ -239,8 +239,16 @@ export function ModelPicker({
   const shownId = lockTool ? value.tool : browse || value.tool;
   const shown = useMemo(() => tools?.find((t) => t.id === shownId) ?? null, [tools, shownId]);
   const isCurrent = !!shown && shown.id === value.tool;
+  // v1.475.0 review: a model picked here but not yet applied by the page (a
+  // session's change goes to the daemon first). Its rows show and its levels
+  // wait until it is the chosen model; then they can be picked.
+  const [pending, setPending] = useState<string | null>(null);
+  useEffect(() => {
+    setPending(null);
+  }, [value.model, value.tool]);
+  const waitingForModel = pending !== null && pending !== value.model;
   // The model as the list knows it (Claude Code's short name → its row).
-  const current = aliasTarget(tool, value.model) ?? value.model;
+  const current = aliasTarget(tool, waitingForModel ? pending : value.model) ?? (waitingForModel ? pending : value.model);
 
   const allRows = useMemo(
     () =>
@@ -267,6 +275,7 @@ export function ModelPicker({
 
   const close = useCallback((focusChip = true) => {
     setOpen(false);
+    setPending(null);
     if (focusChip) chipRef.current?.focus({ preventScroll: true });
   }, []);
 
@@ -325,7 +334,7 @@ export function ModelPicker({
   }, [open]);
 
   useEffect(() => {
-    if (!shortcut || disabled) return;
+    if (!shortcut || disabled || !tools?.length) return;
     const onKey = (e: KeyboardEvent) => {
       if (!isPickerShortcut(e)) return;
       e.preventDefault();
@@ -334,7 +343,7 @@ export function ModelPicker({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [shortcut, disabled, open, openPanel, close]);
+  }, [shortcut, disabled, tools, open, openPanel, close]);
 
   function defaultHeld(r: ModelRow): boolean {
     return r.id === "" && !!defaultModelHeld && value.model !== "";
@@ -342,7 +351,10 @@ export function ModelPicker({
 
   function pickModel(m: string) {
     if (shown && shown.id !== value.tool) onChange("tool", shown.id);
-    if (m !== current || !isCurrent) onChange("model", m);
+    if (m !== current || !isCurrent) {
+      if (lockTool && m !== value.model) setPending(m);
+      onChange("model", m);
+    }
     const next = shown ? effortRows(shown, m, { defaultRow: defaultEffortRow }) : [];
     if (next.length && !effortHeld) {
       requestAnimationFrame(() => effortRef.current?.querySelector<HTMLButtonElement>("button:not([disabled])")?.focus());
@@ -453,6 +465,11 @@ export function ModelPicker({
             if (e.key === "Escape") {
               e.preventDefault();
               e.stopPropagation();
+              close();
+            } else if (e.key === "Tab") {
+              // The panel lives at the end of the page: Tab leaves it and
+              // goes back to the chip (arrows move inside it).
+              e.preventDefault();
               close();
             }
           }}
@@ -576,7 +593,7 @@ export function ModelPicker({
                 </p>
               ) : (
                 levels.map((x) => {
-                  const held = !!effortHeld || (x === "" && !!defaultEffortHeld && value.effort !== "");
+                  const held = waitingForModel || !!effortHeld || (x === "" && !!defaultEffortHeld && value.effort !== "");
                   return (
                     <button
                       key={x || "default"}
@@ -585,7 +602,7 @@ export function ModelPicker({
                       aria-checked={value.effort === x}
                       data-testid={`${testId}-effort-${x || "default"}`}
                       disabled={held}
-                      title={effortHeld || (held ? defaultEffortHeld : undefined)}
+                      title={waitingForModel ? "Changing the model…" : effortHeld || (held ? defaultEffortHeld : undefined)}
                       onClick={() => {
                         if (x !== value.effort) onChange("effort", x);
                         close();
@@ -601,7 +618,7 @@ export function ModelPicker({
             </div>
           </div>
           <p className="px-2.5 pb-1 pt-1.5 text-[11px] text-zinc-600">
-            {PICKER_SHORTCUT_WORDS} opens this · arrows move · Enter picks · Esc closes
+            {PICKER_SHORTCUT_WORDS} opens this · arrows move · Enter picks · Esc or Tab closes
           </p>
         </div>,
           document.body,

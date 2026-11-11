@@ -433,7 +433,11 @@ export function StartComposer({
     setEffort("");
     setChipProblem(null);
     touched.current = { ...touched.current, mode: false, model: false, effort: false };
-  }, [tool]);
+    // v1.475.0 review: keyed on the tool's ID — reading the list again (the
+    // picker re-reads it when opened) makes new objects for the same tool,
+    // and must never wipe the account, mode and model chosen so far.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool?.id]);
   // v1.426.0 (E5): then the folder's own mode, model and effort for THAT tool
   // (declared after the reset above, so it wins in the same commit) — each
   // only while untouched and only when the tool offers it (Full access never

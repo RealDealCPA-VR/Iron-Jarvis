@@ -2371,7 +2371,7 @@ class HostedService:
                 return
             rows = await asyncio.to_thread(self._models, row.harness)
             text = W.model_change_words(row.harness, rows, before_model, model, before_effort, effort,
-                                        applied.get("model") or applied.get("effort") or "")
+                                        applied.get("model") or "", applied.get("effort") or "")
             if text:
                 self._emit(self._live(row), make("notice", text=text))
         except Exception:  # noqa: BLE001 — a change is never refused over its line

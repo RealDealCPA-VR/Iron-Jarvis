@@ -252,3 +252,50 @@ describe("Claude Code's own short names", () => {
     expect(value().model).toBe("sonnet");
   });
 });
+
+/* v1.475.0 review fixes. */
+describe("a session's model change goes to the daemon first", () => {
+  function Slow({ applied }: { applied: { current: (m: string) => void } }) {
+    // The value only changes when the test says the daemon answered.
+    const [v, setV] = useState<PickerChoice>({ tool: "claude-code", model: "claude-sonnet-5-5", effort: "" });
+    const asked = React.useRef("");
+    applied.current = (m) => setV((cur) => ({ ...cur, model: m }));
+    return (
+      <>
+        <ModelPicker tools={TOOLS} value={v} lockTool testId="p" onChange={(f, n) => { if (f === "model") asked.current = n; }} />
+        <output data-testid="asked">{asked.current}</output>
+      </>
+    );
+  }
+
+  it("the new model's levels show at once but wait until it is applied", async () => {
+    const applied = { current: (_m: string) => {} };
+    render(<Slow applied={applied} />);
+    fireEvent.click(screen.getByTestId("p-tool"));
+    fireEvent.click(screen.getByTestId("p-model-claude-opus-5-5"));
+    await frame();
+    // Opus's levels (medium is Opus's, not Sonnet's), all waiting.
+    const medium = screen.getByTestId("p-effort-medium") as HTMLButtonElement;
+    expect(medium.disabled).toBe(true);
+    expect(medium.title).toBe("Changing the model…");
+    expect(screen.getByTestId("p-model-claude-opus-5-5").getAttribute("aria-selected")).toBe("true");
+    act(() => applied.current("claude-opus-5-5"));
+    expect((screen.getByTestId("p-effort-medium") as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe("leaving the panel", () => {
+  it("Tab closes it and the cursor goes back to the chip", () => {
+    render(<Harness start={{ tool: "claude-code", model: "", effort: "" }} />);
+    fireEvent.click(screen.getByTestId("p-tool"));
+    fireEvent.keyDown(screen.getByTestId("p-model-search"), { key: "Tab" });
+    expect(screen.queryByTestId("p-tool-menu")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("p-tool"));
+  });
+
+  it("with no tools listed the shortcut opens nothing", () => {
+    render(<ModelPicker tools={[]} value={{ tool: "", model: "", effort: "" }} onChange={() => {}} testId="p" shortcut />);
+    fireEvent.keyDown(window, { key: "M", ctrlKey: true, shiftKey: true });
+    expect(screen.queryByTestId("p-tool-menu")).toBeNull();
+  });
+});
