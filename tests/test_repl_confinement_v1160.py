@@ -205,6 +205,9 @@ def test_the_refusal_names_the_path_and_the_allowed_folder(
         "import os; os.mkdir({t!r})",
         "import os; os.rename({src!r}, {t!r})",
         "import shutil; shutil.copyfile({src!r}, {t!r})",
+        # v1.473.0 review: on Python 3.12 for Windows `copy2` copies with
+        # Windows' own CopyFile2 — no `open`, no `shutil.copyfile` event.
+        "import shutil; shutil.copy2({src!r}, {t!r})",
         "import shutil; shutil.move({src!r}, {t!r})",
         "open({t!r}, 'a').write('x')",
         "open({t!r}, 'xb').write(b'x')",

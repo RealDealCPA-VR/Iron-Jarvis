@@ -1203,6 +1203,30 @@ def _rename_via_temp(src: Path, dst: Path) -> None:
         raise
 
 
+def _keep_replaced(home: Any, dst: Path) -> str:
+    """MOVE the file a rename is about to replace into the app's trash and
+    return where it went (v1.473.0 review). BLOCKING. Raises ``OSError``.
+
+    ``overwrite=true`` used to replace the file outright: the rename's Undo
+    moves the renamed file back, and what the replaced file held was in no
+    journal and no trash. On a folder of client documents that is the one
+    copy, gone. The app's rule for a destructive change is to MOVE, never to
+    delete, so the file goes to ``<home>/trash/<stamp>/replaced-by-rename/``
+    and the result says where."""
+    import shutil as _shutil
+    import time as _time
+
+    folder = Path(home) / "trash" / _time.strftime("%Y%m%d-%H%M%S") / "replaced-by-rename"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / dst.name
+    n = 1
+    while target.exists():
+        target = folder / f"{dst.stem} ({n}){dst.suffix}"
+        n += 1
+    _shutil.move(str(dst), str(target))
+    return str(target)
+
+
 class RenameFileTool(Tool):
     """Rename or move ONE file inside the workspace (v1.177.2).
 
@@ -1399,21 +1423,57 @@ class RenameFileTool(Tool):
                         "detail), or pass overwrite=true if replacing it is intended."
                     ),
                 )
+        # THE FILE BEING REPLACED IS KEPT (v1.473.0 review): moved to the
+        # app's trash before the rename, never destroyed (`_keep_replaced`).
+        kept = ""
+        home = getattr(getattr(ctx, "config", None), "home", None)
+        if (
+            not case_only
+            and args.get("overwrite")
+            and home
+            and await asyncio.to_thread(dst.is_file)
+        ):
+            try:
+                kept = await asyncio.to_thread(_keep_replaced, home, dst)
+            except OSError as exc:
+                return ToolResult(
+                    ok=False,
+                    error=(
+                        f"nothing was changed: '{dst.name}' could not be kept before "
+                        f"it was replaced ({exc})"
+                    ),
+                )
         try:
             if case_only:
                 await asyncio.to_thread(_rename_via_temp, src, dst)
             else:
                 await asyncio.to_thread(src.replace, dst)
         except OSError as exc:
+            if kept:
+                # The rename did not happen: put the kept file back.
+                try:
+                    await asyncio.to_thread(Path(kept).replace, dst)
+                except OSError:
+                    return ToolResult(
+                        ok=False,
+                        error=(
+                            f"could not rename: {exc}. The file that was at "
+                            f"{dst} is kept at {kept}"
+                        ),
+                    )
             return ToolResult(ok=False, error=f"could not rename: {exc}")
         # ABSOLUTE paths (the v1.153.2 rule): a workspace-relative answer is a
         # bare filename whenever the file sits in the workspace root, and the
         # user then looks for it next to the original.
-        return ToolResult(
-            ok=True,
-            output=f"renamed:\n  from: {src}\n  to:   {dst}",
-            data={"from": str(src), "to": str(dst), "abs_path": str(dst)},
-        )
+        output = f"renamed:\n  from: {src}\n  to:   {dst}"
+        data = {"from": str(src), "to": str(dst), "abs_path": str(dst)}
+        if kept:
+            output += (
+                f"\n  the file that was there before was replaced; it is kept at: {kept}"
+                "\n  (Undo moves the renamed file back; it does not put the replaced one back.)"
+            )
+            data["replaced_kept"] = kept
+        return ToolResult(ok=True, output=output, data=data)
 
 
 class ListFilesTool(Tool):

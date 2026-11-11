@@ -203,6 +203,16 @@ def plan_problem(changes: Any, allowed: Any, registry: Any) -> str:
             return f"change {at} uses `{tool}`, which does not exist"
         if "_from_script" in (change.get("args") or {}):
             return f"change {at} carries `_from_script`; give the change its values"
+        if tool == "rename_file" and (change.get("args") or {}).get("overwrite"):
+            # v1.473.0 review: the card line would read "Rename a to b" and
+            # say nothing of the file at b that is replaced, and that file is
+            # not something this change's Undo brings back.
+            return (
+                f"change {at} would replace a file that is already there "
+                "(overwrite). A batch never replaces a file by renaming: pick "
+                "a name that is free, or make that one change directly with "
+                "`rename_file`"
+            )
     return ""
 
 
@@ -212,6 +222,12 @@ class ApplyChangesTool(Tool):
     # Every change it makes writes its own Undo entry.
     reversibility = Reversibility.REVERSIBLE
     risk_class = RiskClass.PAGE_ACTION
+    # ITS RESULT IS DATA (v1.473.0 review). It repeats each change's paths,
+    # and a script may have taken those from a document ("rename each file
+    # to the name its first line gives"). A script's own printed output is
+    # fenced and scanned; without this the same text came back through the
+    # batch as plain, trusted tool output.
+    returns_untrusted_content = True
     description = (
         "Make MANY file changes after ONE approval: renames, writes and edits "
         "the user sees as one list. Give `changes` as a list of {\"tool\", "

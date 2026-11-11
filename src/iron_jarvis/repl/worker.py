@@ -464,6 +464,16 @@ _WRITE_EVENTS: dict[str, tuple[int, ...]] = {
     "shutil.unpack_archive": (1,),
 }
 
+#: COPIES (v1.473.0 review). On Python 3.12 for Windows `shutil.copy2`,
+#: `copytree` and a `move` across drives copy with Windows' own CopyFile2: no
+#: `open` event and no `shutil.copyfile` event, only this one. Each entry is
+#: (the argument that is READ, the argument that is WRITTEN). Without it a
+#: script copied a client file into its scratch folder and read it there
+#: unseen, read any file on the disk the same way, and wrote anywhere.
+_COPY_EVENTS: dict[str, tuple[int, int]] = {
+    "_winapi.CopyFile2": (0, 1),
+}
+
 #: Read-ish events worth checking against the protected roots. `open` is
 #: handled separately because only it can be either direction.
 _READ_EVENTS: dict[str, tuple[int, ...]] = {
@@ -728,6 +738,13 @@ def _install_audit_hook(
             for index in _READ_EVENTS[event]:
                 if index < len(args):
                     check(_as_path(args[index]), writing=False)
+            return
+        if event in _COPY_EVENTS:
+            read_at, write_at = _COPY_EVENTS[event]
+            if read_at < len(args):
+                check(_as_path(args[read_at]), writing=False)
+            if write_at < len(args):
+                check(_as_path(args[write_at]), writing=True)
             return
         if event in _SPAWN_EVENTS:
             refuse(_OUTSIDE_BLOCKED if isolated else _SPAWN_BLOCKED)
