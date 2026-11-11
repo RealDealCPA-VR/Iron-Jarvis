@@ -51,8 +51,12 @@ class _Echo(Tool):
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.delay = 0.0
+        #: A delay of its own for chosen inputs (else ``delay``).
+        self.delay_for: dict[str, float] = {}
         self.live = 0
         self.most_live = 0
+        #: How many calls were running when each call began (itself included).
+        self.live_at_start: list[int] = []
         self.fail: set[str] = set()
 
     async def execute(self, args, ctx):
@@ -60,9 +64,11 @@ class _Echo(Tool):
         self.calls.append(q)
         self.live += 1
         self.most_live = max(self.most_live, self.live)
+        self.live_at_start.append(self.live)
         try:
-            if self.delay:
-                await asyncio.sleep(self.delay)
+            delay = self.delay_for.get(q, self.delay)
+            if delay:
+                await asyncio.sleep(delay)
             if q in self.fail:
                 return ToolResult(ok=False, error=f"cannot read {q}")
             return ToolResult(ok=True, output=f"read:{q}", data={"q": q})
@@ -173,6 +179,7 @@ def test_map_runs_safe_readers_side_by_side_and_others_one_at_a_time(world, monk
     # `echo_read` joins the run-together list for this test; `slow_read`
     # (the same code under another name) does not.
     monkeypatch.setattr(TS, "MAP_TOGETHER", TS.MAP_TOGETHER | {"echo_read"})
+    monkeypatch.setattr(TS, "_cpu_s", lambda: 0.0)  # these calls WAIT
     world.echo.delay = world.slow.delay = 0.15
     r = _run(world, (
         "a = tools.map('echo_read', [{'q': str(i)} for i in range(8)])\n"
@@ -182,6 +189,55 @@ def test_map_runs_safe_readers_side_by_side_and_others_one_at_a_time(world, monk
     assert r.ok, r.error
     assert world.echo.most_live == TS.MAP_PARALLEL  # never more, and it got there
     assert world.slow.most_live == 1
+    # The first call runs alone: it is how the script learns the calls wait.
+    assert world.echo.live_at_start[0] == 1
+
+
+def test_quick_calls_run_in_order_never_side_by_side(world, monkeypatch):
+    """Measured: four quick reads at once were slower than four in a row."""
+    monkeypatch.setattr(TS, "MAP_TOGETHER", TS.MAP_TOGETHER | {"echo_read"})
+    monkeypatch.setattr(TS, "_cpu_s", lambda: 0.0)
+    r = _run(world, (
+        "rs = tools.map('echo_read', [{'q': str(i)} for i in range(40)])\n"
+        "print(len(rs))"
+    ))
+    assert r.ok, r.error
+    assert world.echo.most_live == 1
+    assert world.echo.calls == [str(i) for i in range(40)], "in the script's order"
+
+
+def test_calls_that_compute_are_never_run_side_by_side(world, monkeypatch):
+    """Measured: twelve cold workbooks were 0.9x four at a time (parsing is
+    one core's work). A slow call counts as waiting only when this process
+    was NOT the one working: here every second that passes is counted as
+    this process's own work."""
+    monkeypatch.setattr(TS, "MAP_TOGETHER", TS.MAP_TOGETHER | {"echo_read"})
+    monkeypatch.setattr(TS, "_cpu_s", time.perf_counter)
+    world.echo.delay = 0.08
+    r = _run(world, (
+        "rs = tools.map('echo_read', [{'q': str(i)} for i in range(6)])\n"
+        "print(len(rs))"
+    ))
+    assert r.ok, r.error
+    assert world.echo.most_live == 1
+
+
+def test_one_waiting_call_is_enough_and_the_rest_of_the_script_keeps_it(world, monkeypatch):
+    monkeypatch.setattr(TS, "MAP_TOGETHER", TS.MAP_TOGETHER | {"echo_read"})
+    monkeypatch.setattr(TS, "_cpu_s", lambda: 0.0)
+    world.echo.delay = 0.12
+    world.echo.delay_for = {"0": 0.0, "1": 0.0}  # two quick ones first
+    r = _run(world, (
+        "a = tools.map('echo_read', [{'q': str(i)} for i in range(8)])\n"
+        "b = tools.map('echo_read', [{'q': 'b%d' % i} for i in range(5)])\n"
+        "print(len(a), len(b))"
+    ))
+    assert r.ok, r.error
+    # 0 and 1 were quick, 2 waited (alone), 3..7 ran together.
+    assert world.echo.live_at_start[:3] == [1, 1, 1]
+    assert world.echo.most_live == TS.MAP_PARALLEL
+    # The second map did not learn again: its first calls began together.
+    assert max(world.echo.live_at_start[8:12]) >= 2
 
 
 def test_a_failed_item_does_not_stop_the_rest_and_does_not_raise(world):
@@ -228,12 +284,14 @@ def test_map_refuses_what_is_not_a_list_of_calls(world):
 
 def test_a_stop_during_a_map_cancels_every_call_of_it(world, monkeypatch):
     monkeypatch.setattr(TS, "MAP_TOGETHER", TS.MAP_TOGETHER | {"echo_read"})
+    monkeypatch.setattr(TS, "_cpu_s", lambda: 0.0)
     world.echo.delay = 30.0
+    world.echo.delay_for = {"0": 0.1}  # the first shows the calls wait
 
     async def go():
         task = asyncio.ensure_future(world.p.registry.invoke(
             NAME,
-            {"code": "tools.map('echo_read', [{'q': str(i)} for i in range(4)])"},
+            {"code": "tools.map('echo_read', [{'q': str(i)} for i in range(5)])"},
             world.ctx, world.p.permissions, allowed_names=set(READERS),
         ))
         for _ in range(200):

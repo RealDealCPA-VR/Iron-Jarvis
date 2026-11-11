@@ -49,11 +49,14 @@ is emptied when the worker is replaced, because the variables go with it. The
 child reports its own direct file reads; the tool reads are the app's record.
 
 MORE THAN ONE CALL AT A TIME (v1.473.0). ``tools.map(name, items)`` sends its
-calls together; the ones that are safe to run side by side
+calls together. The ones that are safe to run side by side
 (:data:`MAP_TOGETHER`, the chat lanes' own list) run :data:`MAP_PARALLEL` at
-a time, the rest one after another. Each still goes through the same gate and
-gets its own ledger row; a failed item is a failed RESULT, never an exception
-that stops the rest.
+a time ONCE A CALL HAS BEEN SEEN TO WAIT (a web page, a scan read in its own
+process); calls that are quick, or that compute in this process (parsing a
+workbook or a PDF), run one after another, because side by side they were
+measured no faster or slower (see ``on_batch``). Each still goes through the
+same gate and gets its own ledger row; a failed item is a failed RESULT,
+never an exception that stops the rest.
 
 RESULTS GO TO A FILE WITHOUT BEING RETYPED (v1.473.0). ``tools.keep(name,
 value)`` hands a value to the app (``tools/script_values.py``); the model
@@ -76,6 +79,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +105,12 @@ _MAX_LISTED = 12
 
 #: How many of a `tools.map`'s calls run at the same time.
 MAP_PARALLEL = 4
+#: A call quicker than this gains nothing from running beside others (see
+#: ``on_batch``): `tools.map` runs such calls in order.
+MAP_QUICK_S = 0.05
+#: A call WAITED (and is worth running beside others) when this process spent
+#: less than this share of the call's time on its own processor.
+MAP_WAIT_SHARE = 0.5
 
 #: The tools whose calls may run side by side inside a `tools.map`: the chat
 #: lanes' own list of readers that are safe together
@@ -159,6 +169,12 @@ def _origin_words(origin: str) -> str:
     return origin
 
 
+def _cpu_s() -> float:
+    """Seconds of processor time this process has used (every thread). A
+    seam: a test says "this call computed" or "this call waited" with it."""
+    return time.process_time()
+
+
 def worker_key(ctx: Any) -> tuple[str, bool]:
     """``(key, once)``: which isolated worker a call's script runs in.
 
@@ -201,7 +217,8 @@ class ToolScriptTool(Tool):
         "`tools.read_document(path=p)`) gives `r.output` (the text) and "
         "`r.data`; a refused or failed call raises `ToolError`.\n"
         "ONE TOOL, MANY TIMES: `rs = tools.map(\"read_document\", "
-        "[{\"path\": p} for p in paths])` runs the calls several at a time "
+        "[{\"path\": p} for p in paths])` makes every call in one step "
+        "(several at a time when the calls wait, such as web pages) "
         "and returns one result each, in order. A failed call does not stop "
         "the rest: check `r.ok`, read `r.error`. "
         "`tools.names` lists what the script may call: tools that only read. "
@@ -475,10 +492,26 @@ class ToolScriptTool(Tool):
             except Exception as exc:  # noqa: BLE001 — one item, one sentence
                 return {"ok": False, "error": f"{name} could not be run ({type(exc).__name__}: {exc})"}
 
+        # Tools whose calls WAIT (a page, a scan, a big file): only those are
+        # worth running side by side. Learned per script, from the calls.
+        waits: "set[str]" = set()
+
         async def on_batch(items: "list[dict[str, Any]]") -> "list[dict[str, Any]]":
             # `tools.map`: the calls that are safe together run MAP_PARALLEL
             # at a time; anything else waits its turn. Results keep the
             # script's order whatever order the calls finished in.
+            #
+            # SIDE BY SIDE ONLY WHEN A CALL WAITS (measured, v1.473.0).
+            # Reads that each WAIT 0.2 s (a page, a scan in its own process)
+            # are 3.9x faster four at a time. Reads that COMPUTE are not:
+            # four quick ones together were slower than four in a row (their
+            # ledger rows queue behind one another: 200 small files, 0.47 s
+            # against 0.38 s), and twelve cold workbooks or PDFs were 0.9x
+            # (parsing is one core's work in this process, whatever the
+            # thread count). So the calls run in order until one both takes
+            # MAP_QUICK_S or longer AND spends less than half of that on this
+            # process's own processor; from then on that tool's calls run
+            # together, for the rest of the script.
             results: "list[dict[str, Any] | None]" = [None] * len(items)
             gate = asyncio.Semaphore(MAP_PARALLEL)
 
@@ -489,6 +522,13 @@ class ToolScriptTool(Tool):
             side_by_side = [
                 at for at, item in enumerate(items) if item["tool"] in MAP_TOGETHER
             ]
+            while side_by_side and items[side_by_side[0]]["tool"] not in waits:
+                at = side_by_side.pop(0)
+                began, worked = time.perf_counter(), _cpu_s()
+                results[at] = await safely(items[at]["tool"], items[at]["args"])
+                took = time.perf_counter() - began
+                if took >= MAP_QUICK_S and _cpu_s() - worked < took * MAP_WAIT_SHARE:
+                    waits.add(items[at]["tool"])
             if len(side_by_side) > 1:
                 await asyncio.gather(*(together(at) for at in side_by_side))
             for at, item in enumerate(items):

@@ -3057,7 +3057,7 @@ SCRIPT_OFFER_AFTER = 4
 SCRIPT_OFFER_NOTE = (
     "\n\n(You have now called `{tool}` {n} times in this reply. `tool_script` "
     "is now one of your tools: ONE script can make the remaining calls "
-    "(tools.map runs several at a time) and print only what you need, "
+    "(tools.map makes them all in one step) and print only what you need, "
     "instead of one call per item.)"
 )
 
