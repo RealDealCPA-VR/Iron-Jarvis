@@ -1,0 +1,201 @@
+name: Linux preview
+
+# Builds the Linux app (one AppImage file) for a version that is ALREADY
+# published, and attaches it to that release as a PREVIEW.
+#
+# IT IS ITS OWN WORKFLOW ON PURPOSE (the owner's condition, 2026-11-11: "as long
+# as it doesn't affect my use of the app on my Windows machines in any way"):
+#   * release.yml is not changed by a byte. This runs AFTER a Release run has
+#     finished, so nothing here can delay, block or fail the Windows installer.
+#   * It only ADDS one file to the release. It never touches the installer, its
+#     blockmap, `latest.yml` or the `updates` branch, which are everything the
+#     Windows app and the Stable channel read (scripts/promote_stable.py wants
+#     exactly those three files and ignores any other).
+#   * It never replaces a file: an AppImage already on the release is left
+#     alone (no --clobber).
+#   * A failure here leaves the release exactly as the Release run made it.
+#
+# The Linux app does NOT update itself: a newer one is downloaded by hand.
+# Nobody has used it on a real Linux PC yet, so the file is named "preview".
+#
+# Try it without attaching anything:
+#   gh workflow run linux-preview.yml -f version=X.Y.Z -f dry_run=true
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "A published version, like 1.472.2"
+        required: true
+      dry_run:
+        description: "Build and start it, attach nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      build: ${{ steps.gate.outputs.build }}
+      version: ${{ steps.gate.outputs.version }}
+      attach: ${{ steps.gate.outputs.attach }}
+    steps:
+      - name: Gate - which published version, if any?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          ASKED: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          say() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
+          say build false; say attach false; say version ""
+          if [ "$EVENT" = "workflow_run" ]; then
+            if [ "$RUN_CONCLUSION" != "success" ]; then
+              echo "the Release run did not succeed - nothing to build"; exit 0
+            fi
+            ver="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName' | sed 's/^v//')"
+            attach=true
+          else
+            ver="$(printf '%s' "$ASKED" | sed 's/^v//')"
+            if [ "$DRY_RUN" = "false" ]; then attach=true; else attach=false; fi
+          fi
+          if ! printf '%s' "$ver" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "no published version to build for ('$ver')"; exit 0
+          fi
+          rel="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$ver" 2>/dev/null || true)"
+          if [ -z "$rel" ] || [ "$(printf '%s' "$rel" | jq -r '.draft')" != "false" ]; then
+            echo "v$ver is not a published release - nothing to build"; exit 0
+          fi
+          if [ "$EVENT" = "workflow_run" ]; then
+            # Only the version THAT Release run published: its tag must sit on
+            # the commit the run built.
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/v$ver" -q .sha 2>/dev/null || true)"
+            if [ "$sha" != "$RUN_SHA" ]; then
+              echo "the newest release (v$ver) is not from this Release run - nothing to build"; exit 0
+            fi
+          fi
+          if printf '%s' "$rel" | jq -e '.assets[] | select(.name | endswith(".AppImage"))' > /dev/null; then
+            echo "v$ver already has a Linux file - leaving it"; exit 0
+          fi
+          say build true; say version "$ver"; say attach "$attach"
+          echo "building the Linux preview for v$ver (attach=$attach)"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.plan.outputs.version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Freeze the daemon
+        run: |
+          uv sync --extra dev
+          uv pip install pyinstaller
+          uv run python -m PyInstaller packaging/ironjarvis.spec --noconfirm --distpath packaging/dist --workpath packaging/build > freeze.log 2>&1 || { tail -60 freeze.log; exit 1; }
+          test -x packaging/dist/ironjarvis/ironjarvis
+      - name: Build the dashboard
+        working-directory: dashboard
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          mkdir -p .next/standalone/.next
+          cp -r .next/static .next/standalone/.next/static
+          if [ -d public ]; then cp -r public .next/standalone/public; fi
+      - name: Build the browser add-on
+        working-directory: extensions/chrome
+        run: |
+          pnpm install --frozen-lockfile
+          node scripts/build.mjs
+      - name: Voice model
+        working-directory: desktop
+        run: |
+          mkdir -p resources && cd resources
+          curl -fsSL --retry 3 -o vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q vosk.zip && mv vosk-model-small-en-us-0.15 vosk-model && rm vosk.zip
+          test -d vosk-model/am
+      - name: Package the AppImage
+        working-directory: desktop
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec electron-builder --linux AppImage --publish never -c.linux.category=Office -c.linux.icon=assets/icon.png
+          made="$(ls release/*.AppImage | head -1)"
+          mv "$made" "release/Iron-Jarvis-$VERSION-linux-preview.AppImage"
+          ls -la release/*.AppImage
+      - name: The packaged app starts and its daemon answers
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          for try in 1 2 3; do
+            sudo apt-get update -qq && sudo apt-get install -y -qq xvfb > /dev/null && break
+            echo "apt try $try failed"; sleep 20
+          done
+          app="desktop/release/Iron-Jarvis-$VERSION-linux-preview.AppImage"
+          chmod +x "$app"
+          xvfb-run -a "$app" --appimage-extract-and-run --no-sandbox > app.log 2>&1 &
+          ok=""
+          for i in $(seq 1 120); do
+            if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8787/health | grep -qE "200|401"; then ok=1; break; fi
+            sleep 1
+          done
+          tail -40 app.log || true
+          test -n "$ok"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-preview
+          path: desktop/release/*.AppImage
+          retention-days: 7
+
+  attach:
+    needs: [plan, build]
+    if: needs.plan.outputs.attach == 'true'
+    permissions:
+      contents: write # one new file on an existing release, and a line in its notes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-preview
+          path: out
+      - name: Attach it to the release (never replacing anything)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          file="out/Iron-Jarvis-$VERSION-linux-preview.AppImage"
+          test -s "$file"
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -q '\.AppImage$'; then
+            echo "v$VERSION already has a Linux file - leaving it"; exit 0
+          fi
+          gh release upload "v$VERSION" "$file" --repo "$GITHUB_REPOSITORY"
+          body="$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json body -q .body)"
+          if ! printf '%s' "$body" | grep -q "linux-preview.AppImage"; then
+            printf '%s\n\n%s\n' "$body" "**Linux (preview):** \`Iron-Jarvis-$VERSION-linux-preview.AppImage\` is an early build for Linux. Mark it as a program and run it. It does not update itself, and it has not been tried on many PCs yet. Windows users: take the \`.exe\` above." > notes.md
+            gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
+          fi

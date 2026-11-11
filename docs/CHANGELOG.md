@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.472.3
+
+**A Linux preview is attached to each release.** Nothing changes in the Windows app.
+
 ## v1.472.2
 
 **Test results you can trust after a quick fix.** **A test run right after an edit always reads the new code.** Python keeps a compiled copy of each file and reuses it when the file's time (to the second) and size have not changed.
@@ -77,7 +81,3 @@
 ## v1.460.0
 
 **Box starts again, and a broken extension says so.** Connecting Box saved its keys, but the extension never started: its row read "Didn't start: the extension's server exited (exit code 1)" with an `ImportError` underneath.
-
-## v1.459.0
-
-**Six small fixes.** **Compact in Build › Code for Pi, OpenCode and Grok.** The Session tab's Context drop-down now has "Compact session" for these too (it said they "compact by itself").

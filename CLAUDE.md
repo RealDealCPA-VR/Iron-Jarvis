@@ -17561,3 +17561,32 @@ suggest-don't-act for anything autonomous, everything reviewable.
   recipe, command-shell ask, two timing), Mac 17 (bench tasks that start a web
   server, the Iron-Proxy bundle start, `Cmd` vs `Ctrl` in a hotkey pin,
   `/private/var` temp spelling), nothing hanging.
+
+- **The Linux preview is its OWN workflow, after the release, and can only
+  ADD one file** (v1.472.3; the owner's condition: "as long as it doesn't
+  affect my use of the app on my Windows machines in any way").
+  `.github/workflows/linux-preview.yml` runs on `workflow_run` of "Release"
+  (completed) or by hand (`gh workflow run linux-preview.yml -f version=X.Y.Z
+  -f dry_run=true`). `plan` builds only when the Release run SUCCEEDED, the
+  newest published release's tag sits on that run's commit, and the release
+  has no `.AppImage` yet; `build` checks out the TAG, freezes the daemon,
+  builds the dashboard, add-on and voice model, packages
+  `Iron-Jarvis-<ver>-linux-preview.AppImage` (`electron-builder --linux
+  AppImage --publish never -c.linux.category=Office -c.linux.icon=…`: the
+  Linux settings ride the command line, `desktop/package.json` is unchanged)
+  and starts it under xvfb with `--appimage-extract-and-run` until `/health`
+  answers; `attach` (the ONLY job with `contents: write`) uploads that one
+  file with no `--clobber` and appends one line to the release notes.
+  release.yml IS NOT CHANGED: do not move this build into it or into
+  `publish`'s `needs` — a Linux failure must never hold the Windows
+  installer. It never writes the installer, its blockmap, `latest.yml` or the
+  `updates` branch (all the Windows app and `scripts/promote_stable.py`
+  read). No Linux auto-update: no `latest-linux.yml` is published. A release
+  published by `GITHUB_TOKEN` fires no `release` event, which is why the
+  trigger is `workflow_run`; a NEW workflow file cannot be dispatched from a
+  branch (it must be on master), so its build half was tried through a
+  throwaway `push`-triggered copy on `trial/linux-preview`. Pin:
+  `tests/test_linux_preview_workflow_v14723.py`. OPEN: the `attach` job was
+  first exercised by v1.472.3's own release; nobody has used the AppImage on
+  a real Linux PC; no Mac build (needs the owner's Apple Developer membership
+  as the LLC, a Developer ID certificate and notarization).

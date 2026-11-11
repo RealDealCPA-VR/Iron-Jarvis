@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.472.2 (2026-11-10).*
+holds itself to. Current as of v1.472.3 (2026-11-10).*
 
 ---
 
@@ -2041,6 +2041,28 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A Linux preview is attached to each release (v1.472.3)
+
+Nothing changes in the Windows app.
+
+From this release on, a few minutes after a new version is published, a Linux
+build of Iron Jarvis is added to the same release page:
+`Iron-Jarvis-<version>-linux-preview.AppImage`. It is one file: mark it as a
+program and run it.
+
+It is a **preview**:
+
+- It does not update itself. To get a newer one, download it again.
+- It starts on a test machine, but it has not been used on many real PCs yet.
+- Windows-only features are not there: working in a workbook open in Excel,
+  reading scanned pages with Windows' own text reader, and the Windows
+  terminal handling.
+
+The Linux build runs only after the Windows installer is already out, and it
+can only add its one file. It cannot hold up, change or replace the Windows
+installer or the files the Windows app checks for updates. There is no Mac
+build yet.
 
 ## Test results you can trust after a quick fix (v1.472.2)
 
