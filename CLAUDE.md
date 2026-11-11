@@ -17601,7 +17601,16 @@ suggest-don't-act for anything autonomous, everything reviewable.
     `skill_update(script=)` write `<home>/skills/<slug>/scripts/main.py`
     (checked with `ast.parse` first; atomic; links refused);
     `tool_script(saved="<skill>", params={...})` runs it through the SAME
-    gate (no more power than a fresh script).
+    gate (no more power than a fresh script). A TURN THAT BRINGS SUCH A
+    SKILL BRINGS WHAT ITS SCRIPT NEEDS (else the note "run it with
+    tool_script(saved=…)" names a tool the turn lacks): in
+    `_resolve_armed_tools`, for the "/" pick or the offered skills,
+    `saved_scripts.script_tools(home, name)` (the names the code calls, read
+    with two bounded regexes) → `tool_script` plus each named tool that is in
+    `AUTO_SAFE_TOOLS` AND script-callable, under the ceiling and the deny
+    filter; an agent run arms `tool_script` when one of its skills
+    (`default_skills`, the definition's) has a saved script
+    (`any_saved_script`, off the loop) and reaches only its own roster.
   - **`skill_update`** (`skills/tools.py`; ask, `LOW_TRUST_DENY`): the
     user's OWN skills only; description / instructions / append / script;
     the version before in `<skill>/.history/<stamp>-SKILL.md`

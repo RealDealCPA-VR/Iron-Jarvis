@@ -2129,7 +2129,10 @@ different data next time.
   because side by side was measured no faster.
 - **One bad file does not stop the rest.** Each call reports its own result.
 - **Save a script with a skill.** A script that worked can be saved with the
-  skill, and run again by the skill's name.
+  skill, and run again by the skill's name. A later chat, or a scheduled run,
+  that uses that skill is given the script tool and the reading tools the
+  script needs, so the saved script can really run. A saved script never
+  brings a tool that changes something or asks first.
 
 ### What a script read stays on this PC
 
