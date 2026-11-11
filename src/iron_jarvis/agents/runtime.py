@@ -2456,6 +2456,24 @@ class AgentRuntime:
                         armed_names.append("tool_script")
                 except Exception:  # noqa: BLE001 — an offer never fails a run
                     pass
+            # A SKILL WITH A SAVED SCRIPT rides this run (a schedule's skill,
+            # the agent's own, a default one): its note says "run it with
+            # tool_script(saved=…)", so the run needs the tool. The script
+            # reaches only the tools this run's roster already holds.
+            if _script_room and "tool_script" not in armed_names:
+                try:
+                    from ..skills.saved_scripts import any_saved_script
+
+                    _run_skills = [
+                        *(getattr(self.p.config, "default_skills", None) or []),
+                        *(getattr(agent_def, "skills", None) or []),
+                    ]
+                    if _run_skills and await asyncio.to_thread(
+                        any_saved_script, getattr(self.p.config, "home", None), _run_skills
+                    ):
+                        armed_names.append("tool_script")
+                except Exception:  # noqa: BLE001
+                    pass
         tool_specs = self.p.registry.specs(armed_names)
         # v1.377.0 (IJ harness part 2 Phase 6): a HELPER of a Build session
         # runs its commands with the user's own PATH and home folder

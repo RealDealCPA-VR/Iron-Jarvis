@@ -5030,6 +5030,46 @@ def _resolve_armed_tools(
             _skills_fit = []
         if _skills_fit and "skill_load" not in explicit and "skill_load" not in auto:
             auto.append("skill_load")
+    # A SKILL WITH A SAVED SCRIPT (v1.473.0). Its note says "run it with
+    # tool_script(saved=…)", so a turn that brings such a skill (picked with
+    # "/", or offered because the message fits) is given the script tool and
+    # the read-only tools the script calls; without them the saved script
+    # could not run ("shipping the mechanism is not shipping the feature").
+    # Only names the selector itself may arm (`AUTO_SAFE_TOOLS`) that a
+    # script may call: a saved script never widens what a turn can do.
+    _with_scripts = [skill_name] if skill_name else list(_skills_fit)
+    if (
+        getattr(body, "auto_tools", False)
+        and _with_scripts
+        and d.platform.registry.get("tool_script") is not None
+    ):
+        try:
+            from ..skills.saved_scripts import script_tools
+            from ..tools.autoselect import AUTO_SAFE_TOOLS
+
+            _script_tool = d.platform.registry.get("tool_script")
+            _callable = getattr(_script_tool, "_fixed_refusal", None)
+            for _skill in _with_scripts[:3]:
+                _calls = script_tools(getattr(d.platform.config, "home", None), _skill)
+                if _calls is None:
+                    continue
+                for _name in ["tool_script", *_calls]:
+                    if _name in explicit or _name in auto:
+                        continue
+                    if not (_ceiling >= _MAX_ARMED_TOOLS or len(explicit) + len(auto) < _ceiling):
+                        break
+                    _tool = d.platform.registry.get(_name)
+                    if _tool is None:
+                        continue
+                    if _name != "tool_script" and (
+                        _name not in AUTO_SAFE_TOOLS
+                        or not callable(_callable)
+                        or _callable(_name, _tool)
+                    ):
+                        continue
+                    auto.append(_name)
+        except Exception:  # noqa: BLE001 — a saved script never breaks arming
+            pass
     auto = [t for t in auto if _not_denied(t)]
     # THE BROWSER CAPABILITY FILTER (v1.236.0, plan 11.2), applied LAST — after
     # the explicit picks, after every fill pass, and after the drop signal has

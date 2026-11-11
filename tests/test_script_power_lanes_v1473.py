@@ -479,6 +479,89 @@ async def test_no_skill_is_offered_with_auto_tools_off_or_over_a_deny(desk):
 
 
 # --------------------------------------------------------------------------- #
+# A skill with a saved script brings what the script needs
+# --------------------------------------------------------------------------- #
+
+SAVED = (
+    'names = [f"f{i}.txt" for i in range(params.get("count", 3))]\n'
+    'rs = tools.map("read_file", [{"path": n} for n in names])\n'
+    'print("READ", sum(1 for r in rs if r.ok))\n'
+)
+USE_SAVED = "run my folder census for this folder"
+
+
+async def _census_skill(app, ws):
+    await _make_skill(
+        app, ws, name="folder-census",
+        description="Folder census: counts and reads the text files in a folder.",
+        instructions="Count the files and say how many were read.",
+        script=SAVED,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_skill_with_a_saved_script_brings_the_script_tool_and_its_readers(desk):
+    """The skill's note says "run it with tool_script(saved=…)". A later chat
+    whose words do not ask for a script must still be able to run it."""
+    app, ws = desk
+    await _census_skill(app, ws)
+    model = Model([
+        _call(1, "skill_load", name="folder-census"),
+        _call(2, "tool_script", saved="folder-census", params={"count": 4}),
+        "Four files read.",
+    ])
+    frames, cards, done = await _stream(app, _body(ws, USE_SAVED), model)
+    for tool in ("skill_load", "tool_script", "read_file"):
+        assert tool in model.offered[0], (tool, model.offered[0])
+    assert not cards
+    assert any("READ 4" in t for t in model.tool_texts[-1]), model.tool_texts[-1]
+
+    post = Model(["ok"])
+    await _post(app, _body(ws, USE_SAVED), post)
+    assert "tool_script" in post.offered[0] and "read_file" in post.offered[0]
+
+
+@pytest.mark.asyncio
+async def test_a_slash_pick_of_such_a_skill_brings_them_too(desk):
+    app, ws = desk
+    await _census_skill(app, ws)
+    model = Model(["ok"])
+    await _stream(app, _body(ws, "go", skill="folder-census"), model)
+    assert "tool_script" in model.offered[0] and "read_file" in model.offered[0]
+
+
+@pytest.mark.asyncio
+async def test_a_saved_script_never_widens_what_a_turn_may_do(desk):
+    """A saved script that names a tool which changes something, or one that
+    asks first, brings neither: only readers the chat arms by itself."""
+    app, ws = desk
+    before = Model(["ok"])
+    await _stream(app, _body(ws, "run my grabby census of invoices"), before)
+    await _make_skill(
+        app, ws, name="grabby",
+        description="Grabby census of invoices in a folder.",
+        instructions="x",
+        script='tools.call("write_file", path="x.txt", content="a")\ntools.web_fetch(url="https://example.com")\ntools.call("read_file", path="f0.txt")\ntools.call("skill_create", name="x")\n',
+    )
+    model = Model(["ok"])
+    await _stream(app, _body(ws, "run my grabby census of invoices"), model)
+    gained = set(model.offered[0]) - set(before.offered[0])
+    assert {"tool_script", "read_file", "skill_load"} <= gained | set(before.offered[0])
+    # Only the script tool, the skill reader and readers the chat arms by
+    # itself: never the writer or the skill maker the script names.
+    assert gained <= {"tool_script", "read_file", "skill_load", "web_fetch"}, gained
+    assert "write_file" not in model.offered[0] and "skill_create" not in model.offered[0]
+
+    off = Model(["ok"])
+    await _stream(app, _body(ws, "run my grabby census of invoices", auto_tools=False), off)
+    assert "tool_script" not in off.offered[0]
+    app.state.platform.permissions._base["tool_script"] = "deny"
+    denied = Model(["ok"])
+    await _stream(app, _body(ws, "run my grabby census of invoices"), denied)
+    assert "tool_script" not in denied.offered[0]
+
+
+# --------------------------------------------------------------------------- #
 # "Change my tax skill" from chat
 # --------------------------------------------------------------------------- #
 
@@ -697,6 +780,42 @@ def test_an_ordinary_run_gets_it_only_after_the_fourth_read(tmp_path):
     assert at == CT.SCRIPT_OFFER_AFTER, offered
     assert NOTE_MARK in texts[at][-1]
     assert ("tool_script", True) in rows
+
+
+def test_a_run_that_carries_a_skill_with_a_saved_script_has_the_script_tool(tmp_path):
+    """A schedule's skill (or an agent's own) with a saved script: the run
+    must be able to run it, whatever the task's words are."""
+    from iron_jarvis.skills import saved_scripts as SS
+
+    p0 = build_platform(str(tmp_path / "home"))
+    home = Path(p0.config.home)
+    skill_dir = home / "skills" / "folder-census"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: folder-census\ndescription: census\n---\nCount the files.\n", encoding="utf-8"
+    )
+    SS.write_script(home / "skills", "folder-census", SAVED)
+    assert SS.any_saved_script(home, ["folder-census"]) and not SS.any_saved_script(home, ["nope"])
+    assert SS.script_tools(home, "folder-census") == ["read_file"]
+    assert SS.script_tools(home, "nope") is None
+    p0.config.default_skills = ["folder-census"]
+
+    seen: list[list[str]] = []
+
+    class Scripted(MockLLMAdapter):
+        async def complete(self, *, system, messages, tools, **kw):
+            seen.append(_names(tools))
+            return LLMResponse(text="done", finish_reason="stop")
+
+    p0.providers.register("mock", lambda model=None: Scripted())
+    orch = Orchestrator(p0)
+
+    async def go():
+        s = await orch.create_session("say hello", provider="mock", model="mock-1")
+        return await orch.run_session(s.id)
+
+    asyncio.run(go())
+    assert seen and "tool_script" in seen[0], seen
 
 
 def test_a_run_that_reads_once_is_exactly_as_before(tmp_path):

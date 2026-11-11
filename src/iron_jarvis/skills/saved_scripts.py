@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +122,52 @@ def write_script(skills_root: Any, name: str, code: str) -> Path:
         except OSError:
             pass
     return path
+
+
+#: `tools.call("read_document", …)` / `tools.map("read_document", …)` and
+#: `tools.read_document(…)`. Bounded, so a long script is read in one pass.
+_CALLED = re.compile(r"""\btools\.(?:call|map)\(\s*["']([A-Za-z_][A-Za-z0-9_:.-]{0,80})["']""")
+_CALLED_AS_NAME = re.compile(r"\btools\.([a-z_][a-z0-9_]{0,80})\(")
+#: The script object's own methods (not tools).
+_NOT_TOOLS = frozenset({"call", "map", "keep", "plan", "names"})
+#: The most tool names one script is read for.
+MAX_SCRIPT_TOOLS = 12
+
+
+def script_tools(home: Any, name: str) -> "list[str] | None":
+    """The tools the saved script of the skill *name* calls, by name, in the
+    order they first appear; ``None`` when that skill has no saved script
+    (or it cannot be read). BLOCKING (a small file read).
+
+    WHY: the skill's note says "run it with tool_script(saved=…)". A later
+    chat that brings the skill must therefore be given the script tool AND
+    the read-only tools the script calls, or the saved script cannot run
+    (``chat_turn._resolve_armed_tools``). The names are only a wish list:
+    the caller arms a name only when it is one of its own safe readers."""
+    code, error = read_script(home, name)
+    if error or not code:
+        return None
+    found: list[str] = []
+    for match in _CALLED.finditer(code):
+        if match.group(1) not in found:
+            found.append(match.group(1))
+    for match in _CALLED_AS_NAME.finditer(code):
+        word = match.group(1)
+        if word not in _NOT_TOOLS and word not in found:
+            found.append(word)
+    return found[:MAX_SCRIPT_TOOLS]
+
+
+def any_saved_script(home: Any, names: Any) -> bool:
+    """Does any of these skills have a saved script? BLOCKING (file checks).
+    Never raises."""
+    try:
+        if home is None:
+            return False
+        root = Path(home) / "skills"
+        return any(has_script(root / slugify(str(n))) for n in (names or ()) if str(n).strip())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def read_script(home: Any, name: str) -> "tuple[str, str]":
