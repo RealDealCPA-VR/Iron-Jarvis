@@ -1505,6 +1505,10 @@ def _night_request(c: str) -> bool:
     return m is not None and (listed or "night" in c.lower())
 
 
+#: A Linux or macOS path anywhere in a message: "~/x" or "/a/b" (two slashes
+#: at least; never the tail of a word, a web address or "and/or").
+_POSIX_PATH = re.compile(r"(?<![\w/:.])(?:~/|/[\w.-]+/)")
+
 # --- a folder's defaults and team
 #: "this repo", "the folder", a full path — the folder a change is about.
 _FOLDER_REF = (
@@ -1640,7 +1644,9 @@ def build_tools_for(text: str) -> list[str]:
         folderish = any(
             w in low for w in ("repo", "folder", "codebase", "checkout", "workspace", ":\\", ":/", "team", "default", "session", "writes",
                 "reviews", "review")
-        )
+            # A Linux or macOS path names a folder with none of the words above
+            # ("use Codex for /home/sam/shop").
+        ) or _POSIX_PATH.search(t) is not None
         if not (nightish or folderish):
             return out
         # "Have it…" / "Have my coding sessions…" (v1.448.0) at the head of a

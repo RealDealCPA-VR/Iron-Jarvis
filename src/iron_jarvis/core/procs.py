@@ -440,7 +440,13 @@ def _is_window_program(pid: int) -> bool:
     notepad``: the program exists before its window does, and a sweep that
     judged by the window alone would kill it in that gap. Read from the
     image's PE header (no new dependency); unknown reads as a window program,
-    because sparing a console helper costs less than killing a user's app."""
+    because sparing a console helper costs less than killing a user's app.
+
+    Off Windows there is no such header to read and no window list either, so
+    nothing is spared: "unknown" used to answer True there, and a stop on
+    Linux or macOS then ended no program at all."""
+    if os.name != "nt":
+        return False
     k = _kernel()
     if k is None:
         return True

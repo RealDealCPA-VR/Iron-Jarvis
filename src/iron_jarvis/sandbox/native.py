@@ -244,6 +244,15 @@ def child_env(base: dict[str, str] | None) -> dict[str, str]:
     return env
 
 
+#: Python commands Iron Jarvis runs never write ``.pyc`` files. Python trusts a
+#: ``.pyc`` whose source has the same whole-second time and the same SIZE, so
+#: an agent that runs the tests, changes ``X = 1`` to ``X = 2`` and runs them
+#: again inside one second got the OLD code and a false failure (seen on
+#: GitHub's Linux machines, 2026-11-11: the finish check read "1 != 2" right
+#: after the fix). With nothing written there is nothing stale to read.
+NO_STALE_BYTECODE: dict[str, str] = {"PYTHONDONTWRITEBYTECODE": "1"}
+
+
 def scrubbed_env() -> dict[str, str]:
     """Minimal environment for ``modify_env == 'deny'`` (§17).
 
@@ -265,6 +274,7 @@ def scrubbed_env() -> dict[str, str]:
         base_path = "/usr/bin:/bin"
     py_dir = str(Path(sys.executable).parent) if sys.executable else ""
     env["PATH"] = (py_dir + os.pathsep + base_path) if py_dir else base_path
+    env.update(NO_STALE_BYTECODE)
     return env
 
 
@@ -578,6 +588,7 @@ def build_env(base: "dict[str, str] | None" = None) -> dict[str, str]:
     for name in [k for k in env if k.upper() == "PATH"]:
         env[name] = _user_path(env[name])
     env["GIT_TERMINAL_PROMPT"] = "0"
+    env.update(NO_STALE_BYTECODE)
     return env
 
 

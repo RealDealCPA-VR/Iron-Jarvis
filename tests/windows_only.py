@@ -66,6 +66,10 @@ WINDOWS_ONLY: dict[str, tuple[str, ...]] = {
         "test_the_edit_tool_writes_a_link_jarvis_may_read_and_refuses_one_it_may_not",
         "test_the_users_own_setting_limits_links_too",
     ),
+    # A path typed in other capitals is the same file only on Windows.
+    "test_browser_downloads_v14430.py": ("test_find_by_id_path_or_unique_name",),
+    "test_build_accounts_v1302.py": ("test_an_adopted_default_home_sets_no_home_var_in_a_pane",),
+    "test_build_app_parity_v1439.py": ("test_opencodes_commands_are_kept_per_folder",),
     # kernel32 and Windows OCR.
     "test_freeze_trace_v14091.py": (
         "test_a_healthy_process_writes_no_dump",

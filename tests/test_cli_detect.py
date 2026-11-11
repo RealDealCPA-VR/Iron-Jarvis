@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from iron_jarvis.providers import cli_detect
@@ -18,7 +19,7 @@ def _fake_grok_home(tmp_path: Path, monkeypatch, *, auth=True, cache=True,
     home = tmp_path / ".grok"
     (home / "bin").mkdir(parents=True)
     # a fake binary so detection considers Grok "installed"
-    binpath = home / "bin" / ("grok.exe")
+    binpath = home / "bin" / ("grok.exe" if os.name == "nt" else "grok")
     binpath.write_text("stub")
 
     monkeypatch.setenv("GROK_HOME", str(home))
@@ -83,7 +84,7 @@ def test_grok_cache_enumerated_and_available(tmp_path, monkeypatch):
     assert build.source == "cli"
     assert build.base_url == "https://cli-chat-proxy.grok.com/v1"
     assert build.context_window == 512000
-    assert build.exec_path and build.exec_path.endswith("grok.exe")
+    assert build.exec_path and build.exec_path.endswith("grok.exe" if os.name == "nt" else "grok")
 
 
 def test_grok_unavailable_when_auth_missing(tmp_path, monkeypatch):
