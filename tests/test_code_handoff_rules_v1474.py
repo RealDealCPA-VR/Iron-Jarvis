@@ -187,3 +187,14 @@ def test_a_coding_tools_card_names_the_hand_off_in_plain_words():
         "Check on a helper coding tool")
     # Another server's tool keeps its own name.
     assert tool_title("mcp__github__create_issue", {}) == "Use github › create_issue"
+
+
+def test_codexs_step_rows_name_the_hand_off_in_plain_words():
+    from iron_jarvis.hosted.codex import _mcp_step_title
+
+    # Found in the live trial: Codex's steps read "Use iron-jarvis-code › …".
+    assert _mcp_step_title("iron-jarvis-code", "code_handoff_start", '{"task": "Make claude.txt"}') == (
+        'Hand work to another coding tool: "Make claude.txt"')
+    assert _mcp_step_title("iron-jarvis-code", "code_handoff_check", {"helper": "app_1"}) == (
+        "Check on a helper coding tool")
+    assert _mcp_step_title("github", "create_issue", {}) == "Use github › create_issue"
