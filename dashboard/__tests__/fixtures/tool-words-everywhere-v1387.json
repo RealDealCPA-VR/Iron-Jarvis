@@ -53,6 +53,10 @@
     "channel_remove",
     "channel_toggle",
     "chat_local_only",
+    "code_handoff_check",
+    "code_handoff_list",
+    "code_handoff_start",
+    "code_handoff_stop",
     "code_load",
     "code_run",
     "code_search",
@@ -276,6 +280,10 @@
     "channel_remove": "remove a notification destination",
     "channel_toggle": "turn a channel's two-way messages on or off",
     "chat_local_only": "change Local only for this chat",
+    "code_handoff_check": "check on a helper coding tool",
+    "code_handoff_list": "list the coding tools that can help",
+    "code_handoff_start": "hand work to another coding tool",
+    "code_handoff_stop": "stop a helper coding tool",
     "code_load": "open a saved script",
     "code_run": "run a saved script",
     "code_search": "search its saved scripts",
@@ -594,6 +602,22 @@
     "chat_local_only": [
       "Changed Local only for this chat",
       "Changing Local only for this chat"
+    ],
+    "code_handoff_check": [
+      "Checked on a helper coding tool",
+      "Checking on a helper coding tool"
+    ],
+    "code_handoff_list": [
+      "Listed the coding tools that can help",
+      "Listing the coding tools that can help"
+    ],
+    "code_handoff_start": [
+      "Handed work to another coding tool",
+      "Handing work to another coding tool"
+    ],
+    "code_handoff_stop": [
+      "Stopped a helper coding tool",
+      "Stopping a helper coding tool"
     ],
     "code_load": [
       "Opened a saved script",
@@ -1165,6 +1189,10 @@
     "channel_remove": "",
     "channel_toggle": "",
     "chat_local_only": "",
+    "code_handoff_check": "",
+    "code_handoff_list": "",
+    "code_handoff_start": "",
+    "code_handoff_stop": "",
     "code_load": "",
     "code_run": "",
     "code_search": "",

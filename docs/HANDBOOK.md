@@ -2042,6 +2042,40 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## A coding tool can hand work to another one (v1.474.0)
+
+In Build › Code, the coding tool you are working with can now start another
+coding tool you have on this PC on a piece of the work. For example, Claude
+Code can hand the tests to Codex while it works on the code, and read what
+Codex did when it is done.
+
+- **Off until you turn it on.** Open the session's **Iron Jarvis tools** and
+  tick **Hand off**. It is for that session only. Untick it and the next
+  hand-off is refused.
+- **Each helper is its own session.** It works in the same folder, is named
+  "Helper: …" in the session list, and the session that started it lists its
+  helpers with how each one stands ("Working", "Waiting for you", "Done") and
+  an **Open** button. A helper says which session it is helping.
+- **A helper asks you itself.** Its approval cards are its own: they appear in
+  its session and in the bell. A helper never gets Full access. It works in
+  the same mode as the session that started it when its tool offers that mode,
+  and in its tool's own default otherwise.
+- **No chains.** A helper cannot hand work on to another tool.
+- **At most three at a time.** A session can have three helpers working at
+  once.
+- **Stop stops them too.** Pressing Stop on the session's reply, archiving it
+  or deleting it stops its working helpers. What a helper already changed
+  stays.
+- **What comes back is read, not obeyed.** The helper's final words and the
+  files its edits named go back to the coding tool that started it, marked as
+  information, never as instructions.
+- **Where the words go.** The task is read by the helper tool's own model
+  (Anthropic for Claude Code, OpenAI for Codex, and so on), and what the
+  helper wrote is read by the starting tool's model.
+
+Your coding tool may ask before its first hand-off call, as it does for any
+tool server. Choosing its "allow for this session" answer saves asking again.
+
 ## Long coding sessions open fast and stay smooth (v1.473.0)
 
 A long Build › Code session now draws only its newest messages, about 120 rows.

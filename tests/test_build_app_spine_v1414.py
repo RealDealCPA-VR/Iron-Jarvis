@@ -278,7 +278,9 @@ async def test_a_new_session_has_every_box_off_and_gets_no_connection(app, work,
     use_fake(monkeypatch, "claude_modes", log)
     async with client(app) as c:
         s = await new_session(c, work)
-        assert s["capabilities"] == {k: False for k in ("files", "shell", "browser", "extensions", "memory")}
+        # v1.474.0: plus Build › Code's own Hand off box (off too).
+        assert s["capabilities"] == {k: False for k in ("files", "shell", "browser", "extensions", "memory",
+                                                          "handoff")}
         await _say(c, s["id"])
     start = starts(log)[0]
     assert "--mcp-config" not in start["argv"]

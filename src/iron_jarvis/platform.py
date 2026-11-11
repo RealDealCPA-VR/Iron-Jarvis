@@ -1577,6 +1577,14 @@ def build_platform(
 
     for tool in brain_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # HAND OFF (v1.474.0): a Build › Code session's coding tool starts another
+    # coding tool on a piece of its work. Served ONLY over that session's MCP
+    # link while its "Hand off" box is ticked (mcpserver CAPABILITY_TOOLS);
+    # on no roster and never armed in chat.
+    from .hosted.handoff import handoff_tools
+
+    for tool in handoff_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
 
     # Memory Fabric: ONE federated recall over every store (files, notes, memory
     # graph, project knowledge, lessons, past sessions), sharing the same

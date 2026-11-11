@@ -465,6 +465,11 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "consult": ("asked a teammate for advice", "request for advice"),
     "delegate": ("handed work to a teammate", "hand-off"),
     "spawn_agent": ("started a helper agent", "helper agent start"),
+    # v1.474.0 (Hand off): a Build › Code session's tool and its helper.
+    "code_handoff_start": ("handed work to another coding tool", "hand-off to another coding tool"),
+    "code_handoff_check": ("checked on a helper coding tool", "helper check"),
+    "code_handoff_stop": ("stopped a helper coding tool", "helper stop"),
+    "code_handoff_list": ("listed the coding tools that can help", "helper listing"),
     "message_agent": ("messaged a teammate", "message to a teammate"),
     "blackboard_post": ("posted a note for the team", "team note"),
     "blackboard_read": ("read the team's notes", "team notes read"),

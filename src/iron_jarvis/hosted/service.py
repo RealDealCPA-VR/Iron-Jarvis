@@ -112,6 +112,7 @@ from . import hostlink as HL  # v1.422.0: the code host
 from . import open_steps as OS  # v1.427.2: a step runs only while its tool does
 from . import archive_summary as AS  # v1.453.0: the summary kept at archive time
 from . import events as EV
+from . import handoff as HO  # v1.474.0: Hand off
 
 log = logging.getLogger(__name__)
 
@@ -1237,6 +1238,10 @@ class HostedService:
         #: running — told to the tool once, right after its next start
         #: (memory only: a restart of Iron Jarvis in between forgets it).
         self._renames: dict[str, str] = {}
+        #: v1.474.0 (Hand off): each helper session's current piece of work
+        #: (its turn id), and the background stops of a session's helpers.
+        self.handoff_turns: dict[str, str] = {}
+        self._handoff_tasks: set[asyncio.Task] = set()
 
     # -- helpers -----------------------------------------------------------------
     def _lock(self) -> asyncio.Lock:
@@ -1964,6 +1969,19 @@ class HostedService:
         facts = await asyncio.to_thread(AS.summary_facts, self.home, row.id)
         if facts is not None:
             out["archive_summary"] = facts
+        # v1.474.0 (Hand off): the helpers this session's tool started, and
+        # for a helper, the session that started it. Absent when none.
+        try:
+            helpers = await HO.helpers_view(self, row.id)
+            if helpers:
+                out["helpers"] = helpers
+            parent = str(getattr(row, "handed_from", "") or "")
+            if parent:
+                prow = await asyncio.to_thread(store.get, self.engine, parent)
+                out["handed_from"] = {"id": parent, "title": (prow.title if prow is not None else ""),
+                                      "label": W.label(prow.harness) if prow is not None else ""}
+        except Exception:  # noqa: BLE001 — a view never fails over this
+            log.warning("could not read a Code-view session's helpers", exc_info=True)
         # v1.418.0 (C4.6): "Load earlier" reads the page before this cursor.
         out["older"] = got["older"]
         # v1.418.0 (C4.8): the messages waiting behind the reply.
@@ -2279,6 +2297,9 @@ class HostedService:
             # needed at all (the first box on, the last one off) reaches the
             # tool with a new process before the next message.
             before = JT.load(getattr(row, "capabilities_json", "") or "")
+            if (getattr(row, "handed_from", "") or "") and                     JT.normalise({HO.HANDOFF: body["capabilities"].get(HO.HANDOFF)})[HO.HANDOFF]:
+                # v1.474.0: a helper can never hand off again (no chain).
+                raise Refused(HO.HELPER_CANNOT_BOX, 400)
             merged = dict(before)
             for key, value in body["capabilities"].items():
                 if key in merged:
@@ -2366,6 +2387,7 @@ class HostedService:
         if live.running and (live.keeps_working(now) or live.working_alone or live.replying_alone(now)):
             raise Refused(W.ARCHIVE_BACKGROUND.format(label=W.label(row.harness)))
         self._claim(live, "being archived")
+        HO.stop_helpers_soon(self, sid)  # v1.474.0: its helpers stop with it
         summary: dict[str, Any] | None = None
         summary_error = ""
         try:
@@ -2415,6 +2437,7 @@ class HostedService:
         row = await self._row(sid)
         live = self._live(row)
         self._claim(live, "being deleted")
+        HO.stop_helpers_soon(self, sid)  # v1.474.0: its helpers stop with it
         try:
             await self._stop_process(live, why="deleted")
             self.live.pop(sid, None)
@@ -3741,6 +3764,9 @@ class HostedService:
         live = self.live.get(sid)
         if live is None or live.turn is None or not live.turn.running:
             return {"ok": True, "running": False}
+        # v1.474.0 (Hand off): the user's Stop stops this session's running
+        # helpers too (in the background; a Stop never waits on them).
+        HO.stop_helpers_soon(self, sid)
         # v1.422.0 review: the Stop is KEPT before the tool is told — if the app
         # goes before the tool confirms it, the reply is never read as one a
         # restart cut off (never carried on by itself). Never fails a Stop.

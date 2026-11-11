@@ -65,3 +65,7 @@ class HostedSessionRecord(SQLModel, table=True):
     #: The Build terminal "Open in terminal" started on this conversation;
     #: the row takes no message while that terminal's CLI still runs.
     terminal_id: str = ""
+    #: v1.474.0 (Hand off): the Code session whose coding tool started this
+    #: one as a helper (``hosted/handoff``). "" = a session the user started.
+    #: A helper can never hand off again. NULL on older rows = "".
+    handed_from: str | None = Field(default="")

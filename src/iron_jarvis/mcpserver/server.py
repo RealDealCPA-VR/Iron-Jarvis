@@ -153,15 +153,23 @@ class CapabilityTools:
 #: capability -> what it unlocks over MCP. Browser keeps its family PREFIX (so
 #: Ship 3's fourteenth tool needed no edit here and Phase 2's fifteenth will need
 #: none); Memory is an exact-name set, and the module docstring says why.
+#: v1.474.0: Build › Code's ``handoff`` box (``hosted/handoff``) — a coding
+#: tool starts another coding tool on a piece of its work. Only a Code
+#: session's grant can hold it (a Build terminal's boxes never do).
+CAPABILITY_HANDOFF = "handoff"
+from ..hosted.handoff import TOOL_NAMES as _HANDOFF_TOOLS  # noqa: E402 — no cycle: it imports tools.base only
+
 CAPABILITY_TOOLS: dict[str, CapabilityTools] = {
     CAPABILITY_BROWSER: CapabilityTools(prefix="browser_"),
     CAPABILITY_MEMORY: CapabilityTools(names=MEMORY_READ_TOOLS),
+    CAPABILITY_HANDOFF: CapabilityTools(names=_HANDOFF_TOOLS),
 }
 
 #: How each enforced capability is named in a sentence to a harness.
 _CAPABILITY_LABELS: dict[str, str] = {
     CAPABILITY_BROWSER: "Browser",
     CAPABILITY_MEMORY: "Memory",
+    CAPABILITY_HANDOFF: "Hand off",
 }
 
 #: The methods this server answers. Anything else is ``METHOD_NOT_FOUND`` with

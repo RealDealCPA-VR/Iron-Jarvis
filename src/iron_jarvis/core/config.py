@@ -180,6 +180,14 @@ def default_permissions() -> dict[str, str]:
         # change, cards through the tool's own spend_check (Allow once).
         "brain_search": "allow",
         "brain_read": "allow",
+        # v1.474.0 (Hand off): reached only over a Build › Code session's own
+        # MCP link and only while the user ticked its "Hand off" box (that is
+        # the consent; each coding tool also asks before an MCP call under its
+        # own rules). A helper asks the user itself for its own work.
+        "code_handoff_start": "allow",
+        "code_handoff_check": "allow",
+        "code_handoff_stop": "allow",
+        "code_handoff_list": "allow",
         "brain_save": "allow",
         "brain_change": "ask",
         # Memory housekeeping (v1.143.0): FILE a suggest-only cleanup proposal.

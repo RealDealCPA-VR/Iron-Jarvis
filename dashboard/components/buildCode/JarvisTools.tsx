@@ -5,7 +5,9 @@
  *
  * `JarvisToolsChip` — the session's "Iron Jarvis tools" boxes: Memory and
  * Browser, the two Capabilities Iron Jarvis serves to a coding tool (the
- * same two a Build terminal's Capabilities give it). ALL OFF until the user
+ * same two a Build terminal's Capabilities give it), and (v1.474.0) Hand off,
+ * Build › Code's own: the tool may start another coding tool on a piece of
+ * its work (never offered in a helper session). ALL OFF until the user
  * ticks one; a ticked box hands the REAL Claude Code / Codex / Pi / OpenCode
  * Iron Jarvis's own MCP connection for this session (the daemon's
  * `hosted/jarvis_tools`). Each box says what it gives and who sees it BEFORE
@@ -21,7 +23,8 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { get, patch, put } from "@/lib/api";
 import {
-  JARVIS_TOOL_KEYS,
+  JARVIS_TOOL_LABELS,
+  jarvisToolKeysFor,
   appliedNextWords,
   decodeCodeSession,
   jarvisToolHint,
@@ -53,7 +56,8 @@ export function JarvisToolsChip({
   const [error, setError] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const id = useId();
-  const tools: JarvisTools = session.jarvisTools ?? { memory: false, browser: false };
+  const tools: JarvisTools = session.jarvisTools ?? { memory: false, browser: false, handoff: false };
+  const keys = jarvisToolKeysFor(session);
 
   useEffect(() => {
     if (!open) return;
@@ -94,7 +98,7 @@ export function JarvisToolsChip({
 
   // A conversation found on disk (not started here) has no boxes yet.
   if (!session.jarvisTools) return null;
-  const on = JARVIS_TOOL_KEYS.some((k) => tools[k]);
+  const on = keys.some((k) => tools[k]);
   return (
     <div className="relative" ref={boxRef}>
       <button
@@ -124,7 +128,7 @@ export function JarvisToolsChip({
             Let {toolName} use Iron Jarvis&apos;s own tools in this session. Off until you tick one.
           </p>
           <ul className="space-y-2">
-            {JARVIS_TOOL_KEYS.map((key) => (
+            {keys.map((key) => (
               <li key={key}>
                 <label className="flex cursor-pointer items-start gap-2 text-[13px] text-zinc-200">
                   <input
@@ -136,7 +140,7 @@ export function JarvisToolsChip({
                     className="mt-0.5"
                   />
                   <span>
-                    <span className="block">{key === "memory" ? "Memory" : "Browser"}</span>
+                    <span className="block">{JARVIS_TOOL_LABELS[key]}</span>
                     <span className="block text-[12px] text-zinc-500">
                       {jarvisToolHint(key, toolName, session.tool)}
                     </span>

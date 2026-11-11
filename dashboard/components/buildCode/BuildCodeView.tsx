@@ -177,6 +177,8 @@ import {
   toolLabel,
   type CodeEvent,
   type CodeSession,
+  type CodeSessionView,
+  type CodeHelper,
   type CodingTool,
   type ConvItem,
   type DiskSession,
@@ -238,6 +240,7 @@ import { ModeChip } from "@/components/buildCode/ModeChip";
 import { decodeCarry, type CarryFacts } from "@/lib/buildCodeCarry";
 import { LOOKING_BEAT_MS, noteLooking, stopLooking } from "@/lib/buildWatching";
 import { JarvisToolsChip, ProfileShareOffer } from "@/components/buildCode/JarvisTools";
+import { HelperLines } from "@/components/buildCode/HelperLines";
 // v1.426.0 (Wave 6 lane B, E5): a folder's defaults for new sessions.
 import { FolderDefaultsButton, FolderDefaultsPanel } from "@/components/folders/FolderDefaultsPanel";
 import { toolDefaultsWords, type ToolDefaults } from "@/lib/folderDefaults";
@@ -347,6 +350,7 @@ function SessionPane({
   exportSource,
   onBranched,
   initialDraft = null,
+  onOpenSession,
 }: {
   sessionId: string;
   tools: readonly CodingTool[];
@@ -370,8 +374,15 @@ function SessionPane({
   /** v1.441.0: a branch just made from another session — its message's words
    *  go in this box and the daemon's line says what was done. */
   initialDraft?: { text: string; note: string } | null;
+  /** v1.474.0: open another Code session (a helper, or the one that started
+   *  this helper). */
+  onOpenSession?: (id: string) => void;
 }) {
   const [session, setSession] = useState<CodeSession | null>(null);
+  /** v1.474.0 (Hand off): this session's helpers, and the session a helper
+   *  belongs to. */
+  const [helpers, setHelpers] = useState<CodeHelper[]>([]);
+  const [handedFrom, setHandedFrom] = useState<CodeSessionView["handedFrom"]>(null);
   const [events, setEvents] = useState<CodeEvent[]>([]);
   const [extra, setExtra] = useState<CodeEvent[]>([]);
   const [running, setRunning] = useState(false);
@@ -593,6 +604,8 @@ function SessionPane({
         if (view.commands) setViewCommands(view.commands);
         setKeepsLast(view.keepsLast);
         setPiFolder(view.piFolder);
+        setHelpers(view.helpers);
+        setHandedFrom(view.handedFrom);
         setBranch((prev) => keepSameBranch(prev, decodeBranch(raw)));
         // v1.422.0 (B3, B5): what carries on by itself, and what is offered.
         setCarryFacts(decodeCarry(raw));
@@ -1870,6 +1883,9 @@ function SessionPane({
               {info}
             </p>
           ) : null}
+          {/* v1.474.0 (Hand off): the helpers this session's tool started,
+              or, in a helper, the session that started it. */}
+          <HelperLines helpers={helpers} handedFrom={handedFrom} onOpen={onOpenSession} />
           {/* v1.431.0: the folder's own Pi extensions, skills or settings —
               Pi skips them here (it asks only in its terminal); nothing
               loads without this press, and it is for this session only. */}
@@ -3060,6 +3076,7 @@ export function BuildCodeView({
             onFirstSent={clearFirst}
             exportSource={exportRef}
             onBranched={branched}
+            onOpenSession={open}
             initialDraft={draftFor && draftFor.id === openId ? draftFor : null}
           />
         )}
