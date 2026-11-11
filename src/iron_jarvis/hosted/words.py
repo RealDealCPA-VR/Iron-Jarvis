@@ -435,6 +435,11 @@ JARVIS_TOOL_TITLES: dict[str, tuple[str, str]] = {
     "ltm_search": ('Search your memory bases for "{q}"', "Search your memory bases"),
     "brain_search": ('Search your memory base for "{q}"', "Search your memory base"),
     "brain_read": ("Read a note from your memory base", "Read a note from your memory base"),
+    # v1.474.0 (Hand off): ``{q}`` is the piece of work (``task``).
+    "code_handoff_start": ('Hand work to another coding tool: "{q}"', "Hand work to another coding tool"),
+    "code_handoff_check": ("Check on a helper coding tool", "Check on a helper coding tool"),
+    "code_handoff_stop": ("Stop a helper coding tool", "Stop a helper coding tool"),
+    "code_handoff_list": ("List the coding tools that can help", "List the coding tools that can help"),
 }
 #: How many of a call's arguments a card lists (the rest are counted).
 MCP_ARG_LINES = 12
@@ -455,7 +460,8 @@ def mcp_call_title(server: str, tool: str, args: Any) -> str:
     tool = str(tool or "")
     if server == SERVER_NAME and tool in JARVIS_TOOL_TITLES:
         with_q, plain = JARVIS_TOOL_TITLES[tool]
-        q = one_line((args or {}).get("query") if isinstance(args, dict) else "", 80)
+        a = args if isinstance(args, dict) else {}
+        q = one_line(a.get("query") or a.get("task") or "", 80)
         return with_q.format(q=q) if q else plain
     if server == SERVER_NAME:
         return f"Use Iron Jarvis › {tool}" if tool else "Use an Iron Jarvis tool"

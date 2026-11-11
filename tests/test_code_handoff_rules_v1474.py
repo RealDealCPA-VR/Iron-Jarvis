@@ -175,3 +175,15 @@ async def test_a_start_makes_the_helper_on_the_account_the_group_rule_chose(tmp_
         assert made[0]["account"] == "from-the-group-rule"
     finally:
         await stop_all(app)
+
+
+def test_a_coding_tools_card_names_the_hand_off_in_plain_words():
+    from iron_jarvis.hosted.claude import tool_title
+    from iron_jarvis.hosted.words import mcp_call_title
+
+    assert tool_title("mcp__iron-jarvis-code__code_handoff_start", {"task": "Add tests for cart.py"}) == (
+        'Hand work to another coding tool: "Add tests for cart.py"')
+    assert mcp_call_title("iron-jarvis-code", "code_handoff_check", {"helper": "app_1"}) == (
+        "Check on a helper coding tool")
+    # Another server's tool keeps its own name.
+    assert tool_title("mcp__github__create_issue", {}) == "Use github › create_issue"

@@ -387,6 +387,13 @@ def tool_title(name: str, inp: dict[str, Any]) -> str:
         url = one_line(inp.get("url"), 90)
         return f"Fetch {url}" if url else "Fetch a web page"
     if kind == "mcp":
+        parts = name.split("__")
+        from .jarvis_tools import SERVER_NAME
+
+        if len(parts) >= 3 and parts[1] == SERVER_NAME:
+            # v1.474.0: Iron Jarvis's own tools in plain words (Codex's cards
+            # already were: ``words.mcp_call_title``).
+            return W.mcp_call_title(parts[1], "__".join(parts[2:]), inp)
         return f"Use {_mcp_name(name)}"
     if kind == "task":
         what = one_line(inp.get("description"), 90)
