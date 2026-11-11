@@ -4887,6 +4887,34 @@ def _resolve_armed_tools(
 
         if wants_calculator(last_user, explicit + auto):
             auto.append("calculate")
+    # RENAMING OR MOVING THE USER'S FILES, IN ITS OWN PLACE (v1.473.0). Chat
+    # never offered `rename_file` (no rule arms it), so a request to rename a
+    # folder of statements left the model the shell: no Undo, and measured on
+    # v1.472.1 with a real model it ran out of steps and renamed nothing.
+    # `rename_file` is allow tier and reversible (journaled, like the write
+    # tools chat already arms), confined to the turn's folder. Its own small
+    # matcher (tools/file_requests.py): `select_auto_tools` is unchanged.
+    # With the script tool in the same turn, the stream lane then offers
+    # `apply_changes` (many renames after ONE approval).
+    if (
+        getattr(body, "auto_tools", False)
+        and (_ceiling >= _MAX_ARMED_TOOLS or len(explicit) + len(auto) < _ceiling)
+        and "rename_file" not in explicit
+        and "rename_file" not in auto
+        and d.platform.registry.get("rename_file") is not None
+    ):
+        from ..tools.file_requests import wants_file_rename
+
+        if wants_file_rename(last_user):
+            auto.append("rename_file")
+            # The model has to see the names it renames.
+            if (
+                "list_files" not in explicit
+                and "list_files" not in auto
+                and (_ceiling >= _MAX_ARMED_TOOLS or len(explicit) + len(auto) < _ceiling)
+                and d.platform.registry.get("list_files") is not None
+            ):
+                auto.append("list_files")
     # LIVE EXCEL (v1.466.0): the READ tool for a workbook the user has open in
     # Excel, in its own place like the calculator and under the same ceiling.
     # `excel_seen()` never waits (a remembered answer, refreshed in the

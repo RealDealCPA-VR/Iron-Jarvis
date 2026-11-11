@@ -21,6 +21,7 @@ import pytest
 from iron_jarvis.skills import offer as O
 from iron_jarvis.skills.loader import Skill
 from iron_jarvis.skills.trigger import wants_skill_edit
+from iron_jarvis.tools.file_requests import wants_file_rename
 
 # --------------------------------------------------------------------------- #
 # A made-up PC: skills of every kind
@@ -292,6 +293,72 @@ def test_my_words_skill_counts_only_for_a_skill_the_user_has():
     assert not wants_skill_edit("update my piano skill", OWN)
 
 
+# --------------------------------------------------------------------------- #
+# "Rename these files"
+# --------------------------------------------------------------------------- #
+
+RENAMES = [
+    "Rename the statement files here so each name starts with its month, like 2026-01-statement.csv.",
+    "rename every pdf in this folder by its date",
+    "rename these files",
+    "please rename all of my scanned client invoices to start with the client name",
+    "Can you rename the photos by the date they were taken?",
+    "rename report.docx to final-report.docx",
+    "I want to rename the downloads so they sort by date",
+    "Then rename the receipts.",
+    "let's rename the workbooks to match the client codes",
+    "move the 2025 statements into a folder called archive",
+    "move these pdfs to Clients/Smith",
+]
+
+NOT_RENAMES = [
+    "",
+    "how do I rename a file?",                 # a question about renaming
+    "why did you rename the files?",
+    "did you rename the statements?",
+    "don't rename the files",                  # told not to
+    "do not rename any pdf",
+    "the files were renamed last week",        # a report
+    "I moved the statements yesterday",
+    "rename the sheet in this file to Q1",     # another tool's thing
+    "rename this chat to Smith 2025",
+    "rename the Intercom project",
+    "rename column B to Amount",
+    "rename the tab",
+    "rename the variable to total",
+    "rename it",
+    "move the meeting to Friday",              # not a file
+    "move on to the next file",
+    "move forward with the pdf",
+    "can you move the call?",
+    "we should move money to savings",
+    "move the invoice date to the top of the document",  # a part OF a file
+    "move the files",                          # no place named
+    "summarize the statement files",
+    "what does rename_file do?",
+]
+
+
+@pytest.mark.parametrize("text", RENAMES)
+def test_a_request_to_rename_or_move_files_is_read_as_one(text):
+    assert wants_file_rename(text)
+
+
+@pytest.mark.parametrize("text", NOT_RENAMES)
+def test_everything_else_is_not_a_rename(text):
+    assert not wants_file_rename(text)
+
+
+def test_the_selector_itself_never_offers_rename_file():
+    """It is armed in its own place (`chat_turn._resolve_armed_tools`), so
+    `select_auto_tools` answers exactly what it did before."""
+    from iron_jarvis.tools import autoselect as A
+
+    assert "rename_file" not in A.AUTO_SAFE_TOOLS
+    for text in RENAMES:
+        assert "rename_file" not in A.select_auto_tools(text)
+
+
 def test_both_matchers_stay_linear_on_a_pathological_message():
     code = (
         "from types import SimpleNamespace as NS\n"
@@ -303,6 +370,10 @@ def test_both_matchers_stay_linear_on_a_pathological_message():
         "reg = NS(list=lambda: [NS(name='tax-%d' % i, description='deductions ' * 50, dir='x', source='user') for i in range(300)])\n"
         "O.fitting_skills(reg, 'deductions ' * 60000, 'h')\n"
         "O.fitting_skills(reg, 'a' * 500000, 'h')\n"
+        "from iron_jarvis.tools.file_requests import wants_file_rename as r\n"
+        "r('rename ' * 60000 + 'fil')\n"
+        "r('move the ' * 40000)\n"
+        "r('rename all of ' * 30000 + 'files')\n"
         "print('done')\n"
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)

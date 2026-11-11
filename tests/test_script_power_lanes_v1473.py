@@ -302,6 +302,59 @@ async def test_a_declined_batch_changes_nothing(desk):
     assert not [r for r in _rows(app, "rename_file") if r.ok]
 
 
+RENAME_ALL = "Rename the statement files here so each name starts with its month, like 2026-01-statement.csv."
+
+
+@pytest.mark.asyncio
+async def test_a_rename_request_is_offered_the_rename_tool_and_the_batch(desk):
+    """Chat never offered `rename_file`, so a request like this one left the
+    model the shell (no Undo). Now the words alone bring the rename tool, the
+    script tool (many files) and, in the lane that can show a card, the
+    batch."""
+    app, ws = desk
+    model = Model([
+        _call(1, "tool_script", code=PLAN),
+        _call(2, "apply_changes", _from_script={"changes": "changes"}),
+        "Renamed.",
+    ])
+    frames, cards, done = await _stream(app, _body(ws, RENAME_ALL), model)
+    for tool in ("rename_file", "list_files", "tool_script", "apply_changes"):
+        assert tool in model.offered[0], (tool, model.offered[0])
+    assert [c.get("tool") for c in cards] == ["apply_changes"]
+    assert all((ws / f"statement-{i}.txt").is_file() for i in range(4))
+
+    post = Model(["ok"])
+    await _post(app, _body(ws, RENAME_ALL), post)
+    assert "rename_file" in post.offered[0]
+    assert "apply_changes" not in post.offered[0]
+
+
+@pytest.mark.asyncio
+async def test_one_rename_runs_with_its_undo_and_no_card(desk):
+    app, ws = desk
+    model = Model([_call(1, "rename_file", path="f0.txt", new_path="first.txt"), "Done."])
+    frames, cards, done = await _stream(app, _body(ws, "rename these files: f0.txt becomes first.txt"), model)
+    assert not cards
+    assert (ws / "first.txt").is_file() and not (ws / "f0.txt").exists()
+    with session_scope(app.state.platform.engine) as db:
+        assert db.exec(select(UndoJournal)).all(), "a rename can be taken back"
+
+
+@pytest.mark.asyncio
+async def test_no_rename_tool_for_a_question_or_with_auto_tools_off(desk):
+    app, ws = desk
+    q = Model(["ok"])
+    await _stream(app, _body(ws, "how do I rename a file?"), q)
+    assert "rename_file" not in q.offered[0]
+    off = Model(["ok"])
+    await _stream(app, _body(ws, RENAME_ALL, auto_tools=False), off)
+    assert "rename_file" not in off.offered[0]
+    app.state.platform.permissions._base["rename_file"] = "deny"
+    denied = Model(["ok"])
+    await _stream(app, _body(ws, RENAME_ALL), denied)
+    assert "rename_file" not in denied.offered[0]
+
+
 @pytest.mark.asyncio
 async def test_the_batch_tool_is_not_offered_without_the_script_tool_or_in_the_post_lane(desk):
     app, ws = desk
