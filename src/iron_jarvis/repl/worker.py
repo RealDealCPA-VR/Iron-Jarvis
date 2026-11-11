@@ -634,7 +634,9 @@ _STDLIB = frozenset(getattr(sys, "stdlib_module_names", ()) or ())
 _IMPORT_BLOCKED = (
     "iron-jarvis tool script: BLOCKED — importing {name}. A tool script "
     "imports Python's standard library only. Read and convert files with "
-    "this turn's tools instead: tools.call(\"read_document\", path=...)."
+    "this turn's tools instead: tools.call(\"read_document\", path=...). "
+    "For tables and sums use csv, json, statistics, decimal and datetime, "
+    "here in the script: do not move this work to the command line."
 )
 
 _ISOLATED_WRITE_BLOCKED = (

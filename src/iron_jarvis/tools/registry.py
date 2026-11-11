@@ -1194,6 +1194,27 @@ class ToolRegistry:
             result.data, dict
         ) else None
         confinement = str(confinement) if isinstance(confinement, str) and confinement else None
+        # FIGURES (v1.473.0, tools/script_values.py). The figures a computing
+        # tool produced are remembered for this chat or run; a file tool
+        # whose TYPED content holds several of them and a money figure that
+        # is none of them says so in its answer (seen live twice: sixteen
+        # right totals from a script, and a grand total the model had added
+        # in its head, wrong). The file is written either way. Before the
+        # ledger, so the row holds the answer the model was given.
+        if result.ok and isinstance(args, dict):
+            try:
+                from . import script_values as _sv
+
+                if name in _sv.FIGURE_SOURCES:
+                    _sv.note_figures(ctx, result.output)
+                elif name in _sv.FROM_SCRIPT_ARGS:
+                    _check = _sv.typed_figures_note(name, args, ctx)
+                    if _check:
+                        result = dataclasses.replace(
+                            result, output=(str(result.output or "") + "\n" + _check).strip()
+                        )
+            except Exception:  # noqa: BLE001 — a check never fails a call
+                _log.debug("figures check failed", exc_info=True)
         # THE TERMINAL LEDGER SURVIVES A LATE CANCEL (v1.237.0, Ship 3).
         # The `except asyncio.CancelledError` branch above covers a cancel that
         # arrives DURING `execute`. This is the other window, and Ship 3 is what

@@ -3169,8 +3169,6 @@ KEPT_FILE_NOTE = (
     "`write_document` is now one of your tools. To put a kept result in a "
     "file WITHOUT retyping it, call it yourself and name the result: "
     'write_document(path="<file name>", _from_script={"content": "<name>"}). '
-    "`_from_script` is a SEPARATE argument (an object), never text inside "
-    "`content`; leave `content` out. "
     "Rows become a table in .xlsx or .csv; it also writes .docx, .pdf, .md "
     "and .txt."
 )

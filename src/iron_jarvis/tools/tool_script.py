@@ -352,7 +352,8 @@ class ToolScriptTool(Tool):
         "The script runs isolated: no network, no other programs, no file "
         "writes, files read only in the working folder (reach everything "
         "else through a tool), and only Python's standard library to "
-        "import. Once it has read this PC's files or data it "
+        "import (csv, json, statistics, decimal, datetime; no pandas, no "
+        "numpy). Once it has read this PC's files or data it "
         "cannot call a tool that reaches outside this PC. Variables persist "
         "between scripts. `saved` runs a skill's saved script instead of "
         "`code`, with `params`."
@@ -913,15 +914,15 @@ class ToolScriptTool(Tool):
         if ok and kept:
             lines = "\n".join(f"- {name}: {what}" for name, what in list(kept.items())[:_MAX_LISTED])
             if file_tools:
-                first = next(iter(kept))
+                # SHORT ON PURPOSE (measured, six live runs of one request):
+                # a longer hint that spelled the arguments out and said "no
+                # `content`" made the model add a placeholder `content` in 4
+                # of 6 runs. A reference typed INTO the content is caught by
+                # its own refusal (`script_values.misplaced_reference`).
                 how = (
                     "To put one in a file WITHOUT retyping it, call the file tool "
                     f"yourself and name it: {file_tools[0]}(..., "
-                    '_from_script={"<argument>": "<name>"}). `_from_script` is a '
-                    "SEPARATE argument of that call (an object), never text inside "
-                    "the argument it fills: for a new file the arguments are "
-                    f'{{"path": "<file name>", "_from_script": {{"content": "{first}"}}}} '
-                    "and no `content`."
+                    '_from_script={"<argument>": "<name>"}).'
                 )
             else:
                 how = NO_FILE_TOOL_LINE

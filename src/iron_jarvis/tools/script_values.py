@@ -31,6 +31,7 @@ own calls.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -181,6 +182,9 @@ class Shelf:
         #: Keys whose NEWEST script kept a value while its turn had no tool
         #: that could take one (:meth:`note_unplaced`).
         self._unplaced: "set[str]" = set()
+        #: ``key -> sorted figures`` the computing tools produced there
+        #: (:func:`note_figures`).
+        self._figures: "OrderedDict[str, list[float]]" = OrderedDict()
 
     # -- writing ---------------------------------------------------------------
 
@@ -241,6 +245,24 @@ class Shelf:
 
     # -- a kept value with nowhere to go ----------------------------------------
 
+    def add_figures(self, key: str, values: "list[float]") -> None:
+        """Figures a computing tool produced under *key*, kept sorted. Bounded:
+        the new ones always fit, older ones while there is room."""
+        with self._lock:
+            merged = {abs(float(v)) for v in values[:MAX_FIGURES]}
+            for old in self._figures.get(key) or ():
+                if len(merged) >= MAX_FIGURES:
+                    break
+                merged.add(old)
+            self._figures[key] = sorted(merged)
+            self._figures.move_to_end(key)
+            while len(self._figures) > MAX_KEYS:
+                self._figures.popitem(last=False)
+
+    def figures(self, key: str) -> "list[float]":
+        with self._lock:
+            return list(self._figures.get(key) or ())
+
     def note_unplaced(self, key: str) -> None:
         """A script kept a value for a file and no tool of its turn can take
         one. The chat lanes read this ONCE (:meth:`take_unplaced`) and bring
@@ -268,6 +290,9 @@ class Shelf:
         if not old or not new or old == new:
             return 0
         with self._lock:
+            moved_figures = self._figures.pop(old, None)
+            if moved_figures:
+                self._figures[new] = sorted({*moved_figures, *(self._figures.get(new) or ())})[:MAX_FIGURES]
             names = self._keys.pop(old, None)
             if old in self._unplaced:
                 self._unplaced.discard(old)
@@ -288,6 +313,7 @@ class Shelf:
     def drop(self, key: str) -> None:
         with self._lock:
             self._unplaced.discard(key)
+            self._figures.pop(key, None)
             names = self._keys.pop(key, None)
             if names:
                 self._chars -= sum(len(v.text) for v in names.values())
@@ -296,6 +322,7 @@ class Shelf:
         with self._lock:
             self._keys.clear()
             self._unplaced.clear()
+            self._figures.clear()
             self._chars = 0
 
     @property
@@ -317,20 +344,90 @@ def has_refs(args: Any) -> bool:
     return isinstance(args, dict) and ARG in args
 
 
-def _left_out(typed: Any, name: str) -> bool:
+#: What a model types into an argument it believes it has to fill, beside the
+#: reference (seen live: 'test', 'Placeholder', 'placeholder', '{{ rows }}').
+#: Never content. Kept SHORT on purpose: a word that could be a real one-word
+#: file ("merged", a title) is not here and is still refused.
+_PLACEHOLDERS = frozenset({
+    "test", "placeholder", "todo", "tbd", "none", "null", "n/a",
+    "content", "data", "rows", "row", "value", "values", "...", "\u2026",
+})
+
+_UNKNOWN = object()
+
+
+def _first_row(value: Any) -> "list[Any] | None":
+    """The heading row of a kept table, in whichever shape it was kept."""
+    if isinstance(value, dict):
+        for key in ("header", "headers", "columns"):
+            if isinstance(value.get(key), list):
+                return list(value[key])
+        sheets = value.get("sheets")
+        if isinstance(sheets, dict) and sheets:
+            return _first_row(next(iter(sheets.values())))
+        return None
+    if isinstance(value, list) and value:
+        first = value[0]
+        if isinstance(first, (list, tuple)):
+            return list(first)
+        if isinstance(first, dict):
+            return list(first)
+    return None
+
+
+def _repeats_first_row(typed: Any, value: Any) -> bool:
+    """Is *typed* nothing but the heading row the kept table already starts
+    with (typed as rows, or as the text of a list)? Then it adds nothing."""
+    row = _first_row(value)
+    if not row:
+        return False
+    if isinstance(typed, str):
+        try:
+            typed = ast.literal_eval(typed)
+        except (ValueError, SyntaxError, MemoryError, RecursionError):
+            try:
+                typed = json.loads(typed)
+            except (ValueError, RecursionError):
+                return False
+    if isinstance(typed, (list, tuple)) and len(typed) == 1 and isinstance(typed[0], (list, tuple)):
+        typed = typed[0]
+    if not isinstance(typed, (list, tuple)) or not typed:
+        return False
+    if len(typed) != len(row) or any(isinstance(c, (list, tuple, dict)) for c in typed):
+        return False
+    return [str(c).strip().lower() for c in typed] == [str(c).strip().lower() for c in row]
+
+
+def _left_out(typed: Any, name: str, kept: Any = _UNKNOWN) -> bool:
     """Did the model leave the argument to the reference? Yes when it typed
-    nothing, and yes when what it typed only POINTS at the kept value: its
-    name, or the reference written out (both seen with a real model,
-    v1.473.0; refusing them cost the turn a round each time). Anything else
-    typed is real content, and giving both is refused."""
+    nothing, and yes when what it typed is not content: the kept value's
+    name or the reference written out, a placeholder, the name inside a
+    structure, or the heading row the kept table (*kept*) already starts
+    with. All seen with a real model (v1.473.0): of twelve "given twice"
+    refusals, ten were one of these, and each refusal cost the reply a step.
+    Anything else typed is real content, and giving both is refused: the two
+    are never joined."""
     if typed in (None, "", [], {}):
         return True
+    if isinstance(typed, (list, tuple)):
+        return kept is not _UNKNOWN and _repeats_first_row(typed, kept)
     if not isinstance(typed, str) or len(typed) > _POINTER_CHARS:
         return False
-    # Seen live, twice: the kept NAME typed there ("payment_rows"), and the
-    # reference itself typed there ('_from_script={"content": "rows"}').
-    # Neither is content: both only point at the kept value.
-    return ARG in typed or typed.strip().strip("`'\"{}<>$()").strip() == name
+    text = typed.strip()
+    if not text:
+        return True
+    bare = text.strip("`'\"{}<>$()[] ").strip()
+    # The kept NAME typed there ("payment_rows"), or the reference itself
+    # ('_from_script={"content": "rows"}'): both only point at the value.
+    if ARG in text or bare == name:
+        return True
+    if bare.lower() in _PLACEHOLDERS:
+        return True
+    # A structure that names the kept value where the rows should be:
+    # "{'sheets': {'Statements': {'rows': 'excel_data'}}}".
+    if text[:1] in "{[" and re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", text):
+        return True
+    return kept is not _UNKNOWN and _repeats_first_row(text, kept)
 
 
 #: The WHOLE of a typed argument that is nothing but a reference written
@@ -401,6 +498,143 @@ def misplaced_reference(tool: str, args: Any, ctx: Any) -> str:
     return ""
 
 
+# --------------------------------------------------------------------------- #
+# Figures the model typed beside a script's own (v1.473.0)
+# --------------------------------------------------------------------------- #
+#
+# THE PROBLEM, seen live twice on the packaged app. A script printed sixteen
+# file totals. The model typed them into a Word document correctly, and added
+# a "Grand Total" it had worked out in its head: 793,542.46 one time,
+# 792,345.26 the next (the true figure was 793,184.46). Telling the model
+# "work out every figure in the script" did not stop it.
+#
+# WHAT IS DONE. The app remembers the figures the computing tools PRODUCED in
+# this chat or run (a tool script's printed output, a `calculate` answer).
+# When a file tool is then given TYPED content that holds at least
+# :data:`FIGURES_MIN_MATCHED` of those figures (so the file is plainly built
+# from them) AND a money figure that is none of them, the tool's answer names
+# that figure and says to work it out properly. The file is still written:
+# this is a check the model reads, never a refusal (a figure the user gave is
+# legitimate, and the app cannot tell).
+#
+# A figure in the file matches a produced one when it is that number rounded
+# to the places the file shows (54453.149999999994 is "54,453.15", and
+# "54,453"). Only figures that look like money are ever named: thousands
+# commas, or exactly two decimals. Dates, ids, counts, versions and
+# percentages are not figures here.
+
+#: The tools whose answers are computed figures.
+FIGURE_SOURCES = frozenset({"tool_script", "calculate"})
+
+MAX_FIGURES = 20_000
+FIGURES_MIN_MATCHED = 3
+_FIGURES_LISTED = 5
+_FIGURE_SCAN_CHARS = 200_000
+
+#: One number as people write it: 1,234.50 / 1234.5 / 12345. Never part of a
+#: word, an id (statement_01), a date (2026-01-31, 01/31/2026), a time, a
+#: version (1.473.0), a percentage, or a list written without spaces. A token
+#: can only START after something that is not a digit, letter, dot or comma,
+#: so a long run of digits or of comma groups is read once: linear (pinned in
+#: a child process).
+_FIGURE_RX = re.compile(
+    r"(?<![\w.,])(?<!\d[\-/:])"
+    r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+|\d{4,})"
+    r"(?![\w%]|[.\-/:]\d|,\d)"
+)
+
+
+def figures_in(text: Any) -> "list[tuple[str, float, int]]":
+    """``(as written, value, decimal places)`` of each number in *text*
+    (bounded: the head and the tail of a very long text)."""
+    if not isinstance(text, str) or not text:
+        return []
+    if len(text) > _FIGURE_SCAN_CHARS:
+        half = _FIGURE_SCAN_CHARS // 2
+        text = text[:half] + "\n" + text[-half:]
+    out: list[tuple[str, float, int]] = []
+    for found in _FIGURE_RX.finditer(text):
+        token = found.group(1)
+        try:
+            value = float(token.replace(",", ""))
+        except ValueError:
+            continue
+        places = len(token.rpartition(".")[2]) if "." in token else 0
+        out.append((token, value, places))
+        if len(out) >= MAX_FIGURES:
+            break
+    return out
+
+
+def _typed_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, default=str)[: _FIGURE_SCAN_CHARS * 2]
+    except (TypeError, ValueError, RecursionError):
+        return ""
+
+
+def note_figures(ctx: Any, output: Any) -> None:
+    """Remember the figures a computing tool just produced (its *output*),
+    for this chat or run. Never raises."""
+    try:
+        key, once = _key_for(ctx)
+        if once:
+            return
+        values = [v for _t, v, _p in figures_in(output if isinstance(output, str) else "")]
+        if values:
+            SHELF.add_figures(key, values)
+    except Exception:  # noqa: BLE001 — bookkeeping never fails a call
+        return
+
+
+def typed_figures_note(tool: str, args: Any, ctx: Any) -> str:
+    """The sentence a file tool's answer gains when its TYPED content holds
+    figures the computing tools produced and a money figure that is none of
+    them; "" otherwise (and for content taken from a kept value, which is
+    exact by construction). Sync and cheap; never raises."""
+    try:
+        fillable = FROM_SCRIPT_ARGS.get(tool)
+        if not fillable or not isinstance(args, dict):
+            return ""
+        key, once = _key_for(ctx)
+        produced = [] if once else SHELF.figures(key)
+        if not produced:
+            return ""
+        text = "\n".join(_typed_text(args.get(a)) for a in sorted(fillable) if args.get(a))
+        if not text:
+            return ""
+        import bisect
+
+        matched = 0
+        other: list[str] = []
+        for token, value, places in figures_in(text):
+            tolerance = 0.5 * 10 ** (-min(places, 6)) + 1e-9
+            at = bisect.bisect_left(produced, value)
+            near = [produced[i] for i in (at - 1, at) if 0 <= i < len(produced)]
+            if any(abs(p - value) <= tolerance for p in near):
+                matched += 1
+            elif ("," in token or places == 2) and token not in other:
+                other.append(token)
+        if matched < FIGURES_MIN_MATCHED or not other:
+            return ""
+        shown = ", ".join(other[:_FIGURES_LISTED])
+        more = len(other) - _FIGURES_LISTED
+        one = len(other) == 1
+        return (
+            f"[check the figures] {matched} of the figures in this file are ones a "
+            f"script or the calculator produced. {'This one is' if one else 'These are'} "
+            f"not: {shown}" + (f" and {more} more" if more > 0 else "") + ". "
+            f"If you worked {'it' if one else 'them'} out yourself (a total, a "
+            "difference, an average), do not trust it: work it out in a tool "
+            "script or with `calculate`, then write the file again with the "
+            f"result. A figure the user gave you can stay as it is."
+        )
+    except Exception:  # noqa: BLE001 — a check never fails a call
+        return ""
+
+
 def _refs(tool: str, args: dict[str, Any]) -> "tuple[dict[str, str], str]":
     """The ``{argument: kept name}`` a call asks for, or a sentence saying
     why it cannot be filled."""
@@ -426,15 +660,6 @@ def _refs(tool: str, args: dict[str, Any]) -> "tuple[dict[str, str], str]":
             )
         if not name:
             return {}, f"`{ARG}` names no kept value for `{arg}`"
-        if not _left_out(args.get(arg), name):
-            # Seen live: a header row typed in `content` beside kept rows. The
-            # two are not joined (which comes first is a guess), so say how
-            # to give it once without losing either part.
-            return {}, (
-                f"`{arg}` was given twice: typed, and in `{ARG}`. Give it once: "
-                f"leave `{arg}` out and put ALL of it in the kept value (a "
-                "header row too), or type all of it and drop the reference"
-            )
         out[arg] = name
     return out, ""
 
@@ -489,6 +714,7 @@ def fill_from_script(
         return bare, bare, problem
     # A model that was shown the argument as optional may still send it
     # empty beside the reference: the reference is what was meant.
+    sent = bare  # as the model sent it: what a "given twice" refusal records
     bare = {k: v for k, v in bare.items() if k not in refs}
     key, once = _key_for(ctx)
     if once:
@@ -514,9 +740,19 @@ def fill_from_script(
                 "sees what it will write"
             )
         try:
-            run[arg] = _shaped(tool, arg, json.loads(kept.text), bare)
+            value = json.loads(kept.text)
         except (ValueError, RecursionError):
             return bare, bare, f"the kept value `{name}` could not be read back"
+        if not _left_out(args.get(arg), name, value):
+            # Seen live: a heading row typed in `content` beside kept rows
+            # that had none. The two are not joined (which comes first is a
+            # guess), so say how to give it once without losing either part.
+            return sent, sent, (
+                f"`{arg}` was given twice: typed, and in `{ARG}`. Give it once: "
+                f"leave `{arg}` out and put ALL of it in the kept value (a "
+                "header row too), or type all of it and drop the reference"
+            )
+        run[arg] = _shaped(tool, arg, value, bare)
         noted[arg] = {"name": name, "sha": kept.sha, "what": kept.summary}
     record = dict(bare)
     record[ARG] = noted

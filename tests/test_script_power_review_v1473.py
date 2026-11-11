@@ -1365,15 +1365,31 @@ def test_the_check_reads_only_calls_it_is_for(world):
     assert writers
 
 
-def test_the_hint_a_script_leaves_says_the_reference_is_its_own_argument(world):
+def test_the_hint_a_script_leaves_stays_short(world):
+    """Measured on six live runs of one request: a longer hint that spelled
+    the arguments out and said "no `content`" made the model add a
+    placeholder `content` beside the reference in 4 of 6 (each refused, a
+    step lost). The hint names the argument once and says nothing more."""
     from iron_jarvis.daemon.chat_turn import KEPT_FILE_NOTE
     from tests.test_script_power_v1473 import WRITERS
 
     r = _run(world, "tools.keep('payment_rows', [['a', 1]])\nprint('ok')\n", allowed=WRITERS)
     assert r.ok, r.error
-    assert "SEPARATE argument" in r.output, r.output
-    assert '{"path": "<file name>", "_from_script": {"content": "payment_rows"}}' in r.output
-    assert "SEPARATE argument" in KEPT_FILE_NOTE and "leave `content` out" in KEPT_FILE_NOTE
+    hint = [line for line in r.output.splitlines() if "WITHOUT retyping" in line]
+    assert len(hint) == 1 and hint[0].endswith('_from_script={"<argument>": "<name>"}).'), r.output
+    assert "`content`" not in hint[0] and "SEPARATE" not in r.output
+    assert "leave `content` out" not in KEPT_FILE_NOTE and "SEPARATE" not in KEPT_FILE_NOTE
+
+
+def test_a_refused_import_says_what_to_use_in_the_same_script(world):
+    """Seen live: a script imported pandas, was refused, and the model moved
+    the work to the command line (seven commands, no file)."""
+    r = _run(world, "try:\n    import pandas\nexcept ImportError as e:\n    print('SAID', e)\n")
+    assert r.ok, r.error
+    assert "standard library only" in r.output and "csv" in r.output and "statistics" in r.output
+    assert "do not move this work to the command line" in r.output
+    words = world.p.registry.get(NAME).description
+    assert "no pandas" in words and "csv" in words and "openpyxl" not in words
 
 
 def test_the_reference_pattern_stays_linear_on_a_pathological_text():
@@ -1404,3 +1420,278 @@ def test_the_tool_says_every_figure_is_worked_out_in_the_script(world):
     said = world.p.registry.get(NAME).description
     assert "EVERY FIGURE COMES FROM THE SCRIPT" in said
     assert "grand total" in said and "Never add or combine its results yourself" in said
+
+
+# --------------------------------------------------------------------------- #
+# A figure the model TYPED beside a script's own figures is named (found live
+# twice on the packaged app: sixteen right totals from a script, and a grand
+# total the model had added in its head, wrong both times)
+# --------------------------------------------------------------------------- #
+
+FILE_TOTALS = [
+    ("statement_01.csv", 54453.149999999994),
+    ("statement_02.csv", 40267.59),
+    ("statement_03.csv", 55136.92999999999),
+    ("statement_04.csv", 50225.12000000001),
+    ("statement_05.csv", 49453.0),
+    ("statement_06.csv", 46561.02),
+]
+CHECK = "[check the figures]"
+
+
+def _script_prints_totals(world):
+    from tests.test_script_power_v1473 import WRITERS
+
+    r = _run(world, f"for name, v in {FILE_TOTALS!r}:\n    print(f'{{name}}: {{v}}')\n", allowed=WRITERS)
+    assert r.ok, r.error
+    return WRITERS + ("calculate",)
+
+
+def _totals_table(fmt: str = ",.2f", extra: str = "") -> str:
+    lines = ["# Statement totals", "", "| File | Total |", "|---|---|"]
+    lines += [f"| {name} | {value:{fmt}} |" for name, value in FILE_TOTALS]
+    return "\n".join(lines) + "\n" + extra
+
+
+def test_numbers_are_read_as_people_write_them():
+    text = (
+        "statement_01.csv: 54453.149999999994\nstatement_05.csv: 49453.0\n"
+        "on 2026-01-31 at 12:30:45.50, v1.473.0, 45.50% of 16 files, 1,234.50 and "
+        "$793,542.46 (12,345) list 1,2,3 x1.5 01/31/2026 3.14\n"
+    )
+    assert [t for t, _v, _p in SV.figures_in(text)] == [
+        "54453.149999999994", "49453.0", "1,234.50", "793,542.46", "12,345", "3.14",
+    ]
+    assert SV.figures_in("") == [] and SV.figures_in(None) == []
+    token, value, places = SV.figures_in("Total: $1,234.50.")[0]
+    assert (token, value, places) == ("1,234.50", 1234.5, 2)
+
+
+def test_a_typed_total_the_script_never_produced_is_named(world):
+    from tests.test_script_power_v1473 import _rows
+
+    tools = _script_prints_totals(world)
+    w = _invoke(world, "write_document",
+                {"path": "totals.docx", "content": _totals_table(extra="\n**Grand Total: 296,456.26**\n")},
+                allowed=tools)
+    assert w.ok, w.error
+    assert (world.ws / "totals.docx").exists(), "the file is written either way"
+    assert CHECK in w.output and "296,456.26" in w.output, w.output
+    assert "6 of the figures" in w.output and "This one is not" in w.output
+    assert "tool script" in w.output and "`calculate`" in w.output
+    # the ledger row holds the answer the model was given
+    assert CHECK in (_rows(world, "write_document")[-1].output or "")
+
+
+def test_a_file_of_the_scripts_own_figures_says_nothing(world):
+    tools = _script_prints_totals(world)
+    for name, fmt in (("cents.docx", ",.2f"), ("whole.docx", ",.0f"), ("plain.docx", ".2f"), ("one.docx", ",.1f")):
+        w = _invoke(world, "write_document", {"path": name, "content": _totals_table(fmt)}, allowed=tools)
+        assert w.ok and CHECK not in w.output, (name, w.output)
+    # The same figures to the cent AND rounded, side by side: a rounding of a
+    # produced figure is that figure, never "another" one.
+    both = _totals_table() + "".join(f"| {name} rounded | {value:,.0f} | {value:,.1f} |" + chr(10) for name, value in FILE_TOTALS)
+    w = _invoke(world, "write_document", {"path": "both.docx", "content": both}, allowed=tools)
+    assert w.ok and CHECK not in w.output, w.output
+
+
+def test_a_figure_one_cent_off_is_not_the_scripts_figure(world):
+    tools = _script_prints_totals(world)
+    table = _totals_table().replace("54,453.15", "54,453.16")
+    w = _invoke(world, "write_document", {"path": "off.docx", "content": table}, allowed=tools)
+    assert w.ok and CHECK in w.output and "54,453.16" in w.output, w.output
+    assert "5 of the figures" in w.output
+
+
+def test_a_total_the_calculator_produced_is_not_named(world):
+    tools = _script_prints_totals(world)
+    c = _invoke(world, "calculate", {"expression": " + ".join(f"{v:.2f}" for _n, v in FILE_TOTALS)}, allowed=tools)
+    assert c.ok, c.error
+    total = sum(round(v, 2) for _n, v in FILE_TOTALS)
+    w = _invoke(world, "write_document",
+                {"path": "sum.docx", "content": _totals_table(extra=f"\nGrand total: {total:,.2f}\n")},
+                allowed=tools)
+    assert w.ok and CHECK not in w.output, w.output
+    # ...and a different one still is
+    w = _invoke(world, "write_document",
+                {"path": "sum2.docx", "content": _totals_table(extra=f"\nGrand total: {total + 358:,.2f}\n")},
+                allowed=tools)
+    assert w.ok and CHECK in w.output
+
+
+def test_only_money_figures_are_named_and_only_in_a_file_built_from_the_script(world):
+    tools = _script_prints_totals(world)
+    # dates, counts, ids, versions and percentages are not figures
+    extra = "\nAs of 2026-01-31: 16 files, 45.50% done, ref 00123456, v1.473.0, page 3 of 12.\n"
+    w = _invoke(world, "write_document", {"path": "notes.docx", "content": _totals_table(extra=extra)}, allowed=tools)
+    assert w.ok and CHECK not in w.output, w.output
+    # two of the script's figures are not enough to call the file the script's
+    few = "Budget 12,500.00. Paid 54,453.15 and 40,267.59.\n"
+    w = _invoke(world, "write_file", {"path": "few.txt", "content": few}, allowed=tools)
+    assert w.ok and CHECK not in w.output, w.output
+    # three are, in a plain text file too
+    three = "Budget 12,500.00. Paid 54,453.15, 40,267.59 and 55,136.93.\n"
+    w = _invoke(world, "write_file", {"path": "three.txt", "content": three}, allowed=tools)
+    assert w.ok and CHECK in w.output and "12,500.00" in w.output, w.output
+
+
+def test_several_other_figures_are_listed_and_counted(world):
+    tools = _script_prints_totals(world)
+    extra = "\n" + " ".join(f"{1000 + i:,}.25" for i in range(8)) + "\n"
+    w = _invoke(world, "write_document", {"path": "many.docx", "content": _totals_table(extra=extra)}, allowed=tools)
+    assert w.ok and CHECK in w.output
+    assert "These are not: 1,000.25, 1,001.25, 1,002.25, 1,003.25, 1,004.25 and 3 more" in w.output, w.output
+
+
+def test_content_taken_from_the_script_is_never_checked(world):
+    tools = _script_prints_totals(world)
+    r = _run(world, "tools.keep('rows', [['File', 'Total'], ['a', 54453.15], ['b', 40267.59], "
+                    "['c', 55136.93], ['Grand', 999999.99]])\nprint('kept')\n", allowed=tools)
+    assert r.ok, r.error
+    w = _invoke(world, "write_document", {"path": "kept.xlsx", "_from_script": {"content": "rows"}}, allowed=tools)
+    assert w.ok and CHECK not in w.output, w.output
+
+
+def test_another_chat_has_no_figures_to_check_against(world):
+    tools = _script_prints_totals(world)
+    other = ToolContext(
+        workspace=world.ws, session_id="chat", agent_run_id="chat", thread_id="chat_two",
+        config=world.p.config, event_bus=world.p.event_bus, engine=world.p.engine,
+    )
+    content = _totals_table(extra="\nGrand Total: 296,456.26\n")
+
+    async def go():
+        return await world.p.registry.invoke(
+            "write_document", {"path": "other.docx", "content": content}, other, world.p.permissions,
+            allowed_names=set(tools),
+        )
+
+    w = asyncio.run(go())
+    assert w.ok and CHECK not in w.output
+    # the chat's own figures move with it when a new chat is saved
+    assert SV.SHELF.figures("chat:chat_one")
+    SV.SHELF.rekey("chat:chat_one", "chat:moved")
+    assert SV.SHELF.figures("chat:moved") and not SV.SHELF.figures("chat:chat_one")
+    SV.SHELF.drop("chat:moved")
+    assert not SV.SHELF.figures("chat:moved")
+
+
+def test_the_figures_kept_are_bounded():
+    shelf = SV.Shelf()
+    shelf.add_figures("k", [float(i) for i in range(SV.MAX_FIGURES + 500)])
+    assert len(shelf.figures("k")) == SV.MAX_FIGURES
+    shelf.add_figures("k", [0.5, 1.5])
+    kept = shelf.figures("k")
+    assert len(kept) == SV.MAX_FIGURES and 0.5 in kept and 1.5 in kept, "the new ones always fit"
+    assert kept == sorted(kept)
+    for i in range(SV.MAX_KEYS + 3):
+        shelf.add_figures(f"key{i}", [1.0])
+    assert not shelf.figures("k") and shelf.figures(f"key{SV.MAX_KEYS + 2}")
+
+
+def test_reading_numbers_stays_linear_on_a_pathological_text():
+    import subprocess
+    import sys
+
+    code = (
+        "import time\n"
+        "from iron_jarvis.tools import script_values as SV\n"
+        "SV._FIGURE_SCAN_CHARS = 10**9\n"
+        "texts = ['1' * 2_000_000 + 'x', '1,111' + ',111' * 500_000 + ',1', '1.1' * 700_000,\n"
+        "         '1,' * 1_000_000, '9' * 1_000_000 + '.', ('12,345.67 ' * 150_000)]\n"
+        "t = time.perf_counter()\n"
+        "for x in texts:\n"
+        "    SV.figures_in(x)\n"
+        "print('ok', round(time.perf_counter() - t, 2))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0 and out.stdout.startswith("ok"), out.stdout + out.stderr
+
+
+# --------------------------------------------------------------------------- #
+# What a model types BESIDE a reference is rarely content (measured: twelve
+# live "given twice" refusals; ten were a placeholder, the kept name inside a
+# structure, or the heading row the kept rows already start with)
+# --------------------------------------------------------------------------- #
+
+KEPT_ROWS = [["Date", "Payee", "Amount"], ["2026-01-01", "Vendor 42", "260.39"]]
+
+
+def _keep_table(world, value=None):
+    from tests.test_script_power_v1473 import WRITERS
+
+    r = _run(world, f"tools.keep('merged_data', {(value or KEPT_ROWS)!r})\nprint('ok')\n", allowed=WRITERS)
+    assert r.ok, r.error
+    return WRITERS
+
+
+@pytest.mark.parametrize("typed", [
+    "test", "Placeholder", "placeholder", "{{ rows }}", "<content>", "...", " TODO ",
+    "{'sheets': {'Statements': {'rows': 'merged_data'}}}",
+    '{"rows": "merged_data"}',
+    '{\n  "rows": "merged_data"\n}',
+    "[['Date', 'Payee', 'Amount']]",
+    '[["date", "payee", "amount"]]',
+    "['Date', 'Payee', 'Amount']",
+    [["Date", "Payee", "Amount"]],
+    ["Date", "Payee", "Amount"],
+    "   ",
+])
+def test_a_placeholder_or_a_repeated_heading_beside_a_reference_is_not_content(world, typed):
+    import openpyxl
+
+    writers = _keep_table(world)
+    w = _invoke(world, "write_document",
+                {"path": "m.xlsx", "content": typed, "_from_script": {"content": "merged_data"}},
+                allowed=writers)
+    assert w.ok, (typed, w.error)
+    ws = openpyxl.load_workbook(world.ws / "m.xlsx").active
+    assert [c.value for c in ws[1]] == ["Date", "Payee", "Amount"] and ws.max_row == 2
+    assert ws["C2"].value == 260.39, "the kept rows are what is written"
+
+
+@pytest.mark.parametrize("typed", [
+    "Merged Statement",                      # a title: could be meant
+    "merged",                                # a word that could be a file's text
+    "[['File', 'Date', 'Payee', 'Amount']]",  # a heading the kept rows do not have
+    "[['Date', 'Payee']]",                   # part of it
+    "[['Date', 'Vendor', 'Total']]",         # as many cells, other words
+    [["Date", "Payee", "Amount"], ["2026-02-02", "Other", "1.00"]],  # real rows
+    "Totals:\nsee below",                    # real text
+    "the merged_data is below",              # the name inside a sentence
+    "x" * 300,
+])
+def test_anything_else_typed_beside_a_reference_is_still_refused(world, typed):
+    writers = _keep_table(world)
+    w = _invoke(world, "write_document",
+                {"path": "r.xlsx", "content": typed, "_from_script": {"content": "merged_data"}},
+                allowed=writers)
+    assert not w.ok and "given twice" in w.error, (typed, w.output)
+    assert not (world.ws / "r.xlsx").exists()
+    # The refusal's ledger row keeps what was typed (it is how the twelve
+    # live cases behind this rule were read).
+    from tests.test_script_power_v1473 import _rows
+
+    row = _rows(world, "write_document")[-1]
+    assert row.ok is False and '"content"' in (row.args_json or ""), row.args_json
+
+
+def test_a_heading_typed_beside_rows_that_have_none_is_refused(world):
+    """The kept rows start with data: a typed heading row is real content,
+    and dropping it would write a table with no heading."""
+    writers = _keep_table(world, [["2026-01-01", "Vendor 42", "260.39"], ["2026-01-02", "Vendor 46", "2420.68"]])
+    w = _invoke(world, "write_document",
+                {"path": "h.xlsx", "content": "[['Date', 'Payee', 'Amount']]",
+                 "_from_script": {"content": "merged_data"}}, allowed=writers)
+    assert not w.ok and "given twice" in w.error and "header row too" in w.error
+
+
+def test_the_heading_of_a_kept_table_is_found_in_each_shape_it_is_kept_in():
+    assert SV._first_row(KEPT_ROWS) == ["Date", "Payee", "Amount"]
+    assert SV._first_row([{"Date": "x", "Amount": 1}]) == ["Date", "Amount"]
+    assert SV._first_row({"header": ["A", "B"], "rows": [[1, 2]]}) == ["A", "B"]
+    assert SV._first_row({"sheets": {"One": [["A", "B"], [1, 2]]}}) == ["A", "B"]
+    assert SV._first_row("text") is None and SV._first_row([]) is None and SV._first_row({"x": 1}) is None
+    assert SV._repeats_first_row("[['A', 'B']]", {"header": ["a", "b"], "rows": []})
+    assert not SV._repeats_first_row("[['A', 'B']]", "kept text")
+    assert not SV._repeats_first_row("not a list", KEPT_ROWS)
