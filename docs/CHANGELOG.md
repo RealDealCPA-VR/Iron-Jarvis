@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.472.0
+
+**Long coding sessions stream smoothly.** Nothing on screen changes.
+
 ## v1.471.1
 
 **Three more requests read right.** Nothing on screen changes.
@@ -77,7 +81,3 @@
 ## v1.457.0
 
 **A tidier start box in Build › Code.** Build › Code's start box now looks like Chat › Code's: the coding tool, its mode, the model and the effort sit inside the box on its bottom row, beside the paperclip and Send.
-
-## v1.456.0
-
-**Text size.** **Make everything in the app bigger or smaller.** Settings › Appearance › **Text size**: Smaller (90%), Normal (100%), Large (110%), Larger (125%) or Largest (150%).
