@@ -17250,6 +17250,49 @@ does not need a bump, stop and bump it.
   describe in `build-app-view-v1409` (8 mutations, all red; one HUNG — a
   mutation that draws every row of a 600-turn session in jsdom runs for hours,
   so a mutation harness must bound each run).
+- **A Build › Code session's coding tool can hand a piece of work to another
+  coding tool** (v1.474.0, "Hand off"; third wave of the t3code comparison:
+  its orchestrator `delegate_task`, built our way). `hosted/handoff.py`: the
+  `handoff` box (Build › Code ONLY: `jarvis_tools.normalise` = the pane's five
+  + `handoff`; a terminal's reader keeps five) unlocks four MCP tools through
+  `mcpserver/server.CAPABILITY_TOOLS["handoff"]` (an exact-name set):
+  `code_handoff_start` (answers at once with the helper's id),
+  `code_handoff_check` (waits ≤ `CHECK_WAIT_MAX_S` 25 s — every CLI caps one
+  MCP call; Codex's is about a minute), `code_handoff_stop`,
+  `code_handoff_list`; permission rows allow (the box + the CLI's own MCP card
+  are the consent); on no roster (`_OFF_ROSTER_BY_DESIGN`). The caller is
+  `parent_of(ctx)` = `mcp:code:<sid>`; anything else is refused. A HELPER is a
+  real Build › Code session of the chosen tool in the SAME folder
+  (`HostedSessionRecord.handed_from`, nullable, reconciler-added;
+  `store.helpers_of`), titled "Helper: …"; it takes the parent's mode only when
+  `check_mode(..., confirm=False)` accepts it (never Full access); the same
+  tool keeps the parent's account, another tool gets `helper_account` — an
+  account of the SAME account group (`build_accounts.group_of`, `usable_now`,
+  cached reads) or a refusal, never another group; a helper can never hand
+  off again (PATCH refuses the box, the tool refuses); at most `MAX_RUNNING`
+  (3) working, counted under a per-session lock (`_start_lock`; parallel
+  calls); a helper whose first piece never started is deleted. Emergency stop
+  refuses starts and `carry_on.stop_unattended_turns` stops helper turns
+  (`svc.handoff_turns`, memory only). The user's Stop on the parent's reply,
+  archive and delete stop running helpers (`stop_helpers_soon`). What comes
+  back (`summarize`: the turn's own finished text, the paths its finished
+  edits/writes named, steps, error) goes out in ONE `wrap_untrusted` fence,
+  `promptguard.defang`ed first. Views: the parent's carries `helpers`
+  [{id, title, label, state}], a helper's `handed_from` {id, title, label}
+  (dashboard `HelperLines`, `decodeHelpers`, `jarvisToolKeysFor` hides the box
+  in a helper). Cards: `words.JARVIS_TOOL_TITLES` names the four tools in
+  words for Claude Code and Codex alike. LIVE-PROVEN (scratch daemon, real
+  claude 2.1.x haiku, Auto edits): the parent called start, a Claude Code
+  helper wrote the file, one check brought the report back. A scratch daemon
+  must be started with `IJ_DAEMON_PORT=<its port>` or coding tools are handed
+  the 8787 address (`platform.own_mcp_url`). OPEN: each CLI's own MCP call
+  limit was not measured for Pi, OpenCode, Grok, Antigravity; the helper list
+  is read when the parent's view is read (no live push); a helper cut off by
+  a restart reads "done" in the list (check reads the turn's own stop).
+  Pins: `tests/test_code_handoff{,_review,_rules}_v1474.py`,
+  `dashboard/__tests__/code-handoff-v1474.test.tsx` (18 + 5 mutations, all
+  red); moved on purpose: `test_build_app_spine_v1414`, `build-code-spine-v1414`
+  (a sixth box), `test_roster_coverage_v1178`, the tool-word tables.
 
 ## Map (where things live)
 
