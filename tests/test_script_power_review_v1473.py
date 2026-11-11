@@ -1161,3 +1161,71 @@ def test_rows_a_script_read_as_text_land_as_numbers_and_dates(world):
     assert SV._shaped("write_document", "content", [["a"]], {"path": "x.bin", "kind": "xlsx"}) == {
         "sheets": {"Sheet1": [["a"]]}
     }
+
+
+# --------------------------------------------------------------------------- #
+# Lines that were never split into columns are SAID (found live on the
+# packaged app: 641 rows of "2026-01-01,Vendor 42,260.39" in one column under
+# a reply that said "3 columns")
+# --------------------------------------------------------------------------- #
+
+LINES = ["Date,Payee,Amount", "2026-01-01,Vendor 42,260.39", "2026-01-02,Vendor 46,2420.68"]
+
+
+def test_unsplit_lines_are_told_from_ordinary_text():
+    from iron_jarvis.documents.lint import unsplit_lines
+
+    assert unsplit_lines(LINES) == ("comma", 2)
+    assert unsplit_lines(["a\tb", "c\td", "e\tf"]) == ("tab", 1)
+    assert unsplit_lines(["a;b;c", "d;e;f", "", None, "g;h;i"]) == ("semicolon", 2)
+    # not lines of a table:
+    assert unsplit_lines(["Hello, world", "Just one sentence here.", "And, a third, one"]) is None
+    assert unsplit_lines(["Smith", "Jones", "Lee"]) is None
+    assert unsplit_lines(["a,b", "c,d"]) is None, "two lines prove nothing"
+    assert unsplit_lines([1, 2, 3]) is None
+    assert unsplit_lines(["a,b", "c,d", "e,f", 7]) is None, "a number among them: not lines of text"
+    # a comma in every line is not enough: the COUNT must be the same
+    assert unsplit_lines(["Hello, world", "One, two, three", "And, a third"]) is None
+    assert unsplit_lines([]) is None
+
+
+def test_a_kept_value_of_unsplit_lines_says_so_where_it_is_kept(world):
+    from tests.test_script_power_v1473 import WRITERS
+
+    assert "ONE cell each" in SV.describe([[x] for x in LINES])
+    assert "2 commas" in SV.describe([[x] for x in LINES])
+    assert "text lines" in SV.describe(LINES) and "2 commas" in SV.describe(LINES)
+    # ordinary values read as before
+    assert SV.describe([["Smith"], ["Jones"], ["Lee"]]) == '3 rows, up to 1 columns; first row: ["Smith"]'
+    assert SV.describe(["a", "b", "c"]) == 'a list of 3; first: "a"'
+
+    r = _run(world, f"tools.keep('rows', [[x] for x in {LINES!r}])\nprint('ok')\n", allowed=WRITERS)
+    assert r.ok and "not split into columns" in r.output, r.output
+
+
+def test_a_workbook_of_unsplit_lines_is_flagged_when_it_is_written(world):
+    from iron_jarvis.documents.lint import lint_document
+    from tests.test_script_power_v1473 import WRITERS
+
+    w = _invoke(world, "write_document", {"path": "merged.xlsx", "content": [[x] for x in LINES]},
+                allowed=WRITERS)
+    assert w.ok, w.error
+    assert "xlsx-unsplit-rows" in w.output and "never split into columns" in w.output, w.output
+    found = [f for f in lint_document(world.ws / "merged.xlsx")["findings"] if f["code"] == "xlsx-unsplit-rows"]
+    assert len(found) == 1 and found[0]["severity"] == "warning"
+
+    # The same rows split into cells are clean.
+    w = _invoke(world, "write_document",
+                {"path": "split.xlsx", "content": [x.split(",") for x in LINES]}, allowed=WRITERS)
+    assert w.ok and "xlsx-unsplit-rows" not in w.output
+    # One column of names, of numbers, or of sentences is not flagged.
+    for name, rows in (
+        ("names.xlsx", [["Smith"], ["Jones"], ["Lee"]]),
+        ("nums.xlsx", [[1], [2], [3]]),
+        ("prose.xlsx", [["Hello, world"], ["One sentence."], ["And, a third, one"]]),
+        ("commas.xlsx", [["Hello, world"], ["One, two, three"], ["And, a third"]]),
+        ("mixed.xlsx", [["a,b"], ["c,d"], ["e,f"], [7]]),
+        ("two.xlsx", [["a,b", "x"], ["c,d", "y"], ["e,f", "z"]]),
+    ):
+        w = _invoke(world, "write_document", {"path": name, "content": rows}, allowed=WRITERS)
+        assert w.ok and "xlsx-unsplit-rows" not in w.output, (name, w.output)

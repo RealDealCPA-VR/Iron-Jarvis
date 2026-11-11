@@ -89,6 +89,21 @@ def _head(item: Any, depth: int = 0) -> str:
     return json.dumps(item, ensure_ascii=False, default=str)[:400]
 
 
+def _unsplit(cells: Any) -> str:
+    """"2 commas" when *cells* are text lines that each hold the same number
+    of one delimiter (``documents.lint.unsplit_lines``), else ""."""
+    try:
+        from ..documents.lint import unsplit_lines
+
+        found = unsplit_lines(cells)
+    except Exception:  # noqa: BLE001 — wording only
+        return ""
+    if not found:
+        return ""
+    word, n = found
+    return f"{n} {word}{'s' if n != 1 else ''}"
+
+
 def describe(value: Any) -> str:
     """One short line saying what a kept value is: its shape and its first
     item, cut. For the script's footer and a card's preview."""
@@ -112,11 +127,28 @@ def describe(value: Any) -> str:
         first = value[0]
         if isinstance(first, (list, tuple)):
             widest = max((len(r) for r in value if isinstance(r, (list, tuple))), default=0)
+            if widest == 1:
+                # Lines that were never split into columns: said HERE, where
+                # the script's author and the card's reader both see it,
+                # before any file is written.
+                found = _unsplit(r[0] if isinstance(r, (list, tuple)) and r else None for r in value)
+                if found:
+                    return (
+                        f"{len(value):,} rows of ONE cell each, every cell holding {found} "
+                        "(lines not split into columns?); first row: " + cut(_head(first))
+                    )
             return (
                 f"{len(value):,} rows, up to {widest} columns; first row: " + cut(_head(first))
             )
         if isinstance(first, dict):
             return f"{len(value):,} items; first: " + cut(_head(first))
+        if isinstance(first, str):
+            found = _unsplit(value)
+            if found:
+                return (
+                    f"a list of {len(value):,} text lines, every line holding {found} "
+                    "(not split into columns?); first: " + cut(_head(first))
+                )
         return f"a list of {len(value):,}; first: " + cut(_head(first))
     if isinstance(value, dict):
         keys = list(value)

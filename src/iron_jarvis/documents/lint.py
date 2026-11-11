@@ -85,6 +85,44 @@ def _finding(code: str, where: str, detail: str, severity: str) -> dict[str, str
     return {"code": code, "where": where, "detail": detail, "severity": severity}
 
 
+#: What separates the cells of a line of text that was never split.
+_DELIMITERS = ((",", "comma"), (chr(9), "tab"), (";", "semicolon"), ("|", "bar"))
+_UNSPLIT_MIN_LINES = 3
+_UNSPLIT_SCAN = 2000
+
+
+def unsplit_lines(cells: Any) -> "tuple[str, int] | None":
+    """``(delimiter word, how many per line)`` when *cells* (one value per
+    row) are text lines that EACH hold the same number, one or more, of one
+    delimiter: the lines of a CSV that were never split into columns
+    (v1.473.0). ``None`` otherwise.
+
+    Seen live on the packaged app: a script read sixteen CSV files, split
+    each line on tabs (the files use commas), kept 641 rows of one cell
+    each, and the workbook was one column of "2026-01-01,Vendor 42,260.39"
+    under a reply that said "3 columns". Needs three lines or more, every
+    non-blank cell text, and the SAME count in every line, so a column of
+    ordinary sentences or of names is not taken for one. Bounded; pure."""
+    lines: list[str] = []
+    for cell in cells:
+        if cell is None:
+            continue
+        if not isinstance(cell, str):
+            return None
+        if not cell.strip():
+            continue
+        lines.append(cell)
+        if len(lines) >= _UNSPLIT_SCAN:
+            break
+    if len(lines) < _UNSPLIT_MIN_LINES:
+        return None
+    for mark, word in _DELIMITERS:
+        n = lines[0].count(mark)
+        if n >= 1 and all(line.count(mark) == n for line in lines):
+            return word, n
+    return None
+
+
 def _result(findings: list[dict[str, str]]) -> dict[str, Any]:
     return {
         "findings": findings,
@@ -353,6 +391,26 @@ def _sheet_findings(ws: Any, wb: Any, findings: list[dict[str, str]]) -> None:
         )
         _chart_findings(ws, wb, findings)
         return
+
+    # 1b. Lines that were never split into columns (v1.473.0): everything in
+    #     column A, and every cell holds the same number of commas (or tabs,
+    #     semicolons, bars). A warning, not an error: one column of text can
+    #     be what was wanted; the count per line is what gives it away.
+    if all(all(_blank(v) for v in row[1:]) for row in vals):
+        unsplit = unsplit_lines(row[0] if row else None for row in vals)
+        if unsplit:
+            word, n = unsplit
+            findings.append(
+                _finding(
+                    "xlsx-unsplit-rows",
+                    f"sheet {title!r}",
+                    f"all {len(vals):,} rows are in column A and each holds {n} "
+                    f"{word}{'s' if n != 1 else ''}: these look like lines that were "
+                    "never split into columns. Split each line into its cells and "
+                    "write the file again",
+                    "warning",
+                )
+            )
 
     # Header detection mirrors the writer's own heuristic (_xlsx_fill): a
     # first row that is entirely non-formula strings reads as a header row —
