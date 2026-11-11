@@ -597,6 +597,12 @@ def test_a_line_is_bounded_before_it_is_masked(monkeypatch):
     assert len(line) <= 160 and line.startswith("Rename …xxx") and line.endswith(" to n")
     assert seen and max(seen) <= 2_000, seen
 
+    # The line builder itself is bounded too (a guarded file's own path is
+    # shown through it without being shortened first).
+    seen.clear()
+    assert len(AC._one_line("p/" + "y" * 500_000, 120)) <= 120
+    assert seen and max(seen) <= 2_000, seen
+
     seen.clear()
     summary = SV.describe("A" * 7_900_000)
     assert summary.startswith("text, 7,900,000 characters")
@@ -835,7 +841,7 @@ def test_the_read_a_native_library_made_possible_is_gone(world, tmp_path):
         "except ImportError as e:\n"
         '    print("NO LXML", e)\n'
     ))
-    assert world.web.urls == [] and "NO LXML" in r.output and "standard library" in r.output, r.output
+    assert world.web.urls == [] and "NO LXML" in r.output and "standard library only" in r.output, r.output
 
 
 def test_a_script_still_reads_a_workbook_and_dates_with_the_allowed_libraries(world):
@@ -864,8 +870,20 @@ def test_a_script_still_reads_a_workbook_and_dates_with_the_allowed_libraries(wo
 
 
 def test_the_tool_says_what_a_script_may_import(world):
+    """The description names the standard library and NO other library:
+    naming openpyxl there led a real model to save the workbook from inside
+    the script (refused: a script writes nothing) instead of keeping the
+    rows for the file tool. The refusal of a write says the right path."""
     words = world.p.registry.get(NAME).description
-    assert "standard library" in words and "openpyxl" in words
+    assert "standard library" in words and "openpyxl" not in words
+    r = _run(world, (
+        "try:\n"
+        '    open("made.xlsx", "wb").write(b"x")\n'
+        "except PermissionError as e:\n"
+        '    print("SAID", e)\n'
+    ))
+    assert "tools.keep" in r.output and "_from_script" in r.output, r.output
+    assert not (world.ws / "made.xlsx").exists()
 
 
 # --------------------------------------------------------------------------- #
@@ -966,6 +984,40 @@ def test_an_agent_runs_ask_for_a_kept_value_is_never_an_always(tmp_path):
     for module in (R, C):
         text = Path(module.__file__).read_text(encoding="utf-8").replace("\r\n", "\n")
         assert '"_from_script" not in (tc.arguments or {})' in text, module.__name__
+    # ...and both take the kept values' fingerprints before they ask, and
+    # hand them to the registry with the call (the stream lane's half is
+    # driven end to end in the lanes file; the runtime's is read here).
+    runtime = Path(R.__file__).read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert "_pins = pins_for(tc.name, _args, ctx) or {}" in runtime
+    assert '**({"kept_pins": _pins} if _pins is not None else {}),' in runtime
+
+
+def test_the_registry_refuses_a_call_whose_kept_value_is_not_the_pinned_one(world):
+    """The one check both lanes rely on, at the registry."""
+    from tests.test_script_power_v1473 import WRITERS
+
+    SV.SHELF.put("chat:chat_one", "totals", json.dumps([["alpha", 1]]))
+    args = {"path": "totals.csv", "_from_script": {"content": "totals"}}
+    shown = SV.pins_for("write_document", args, world.ctx)
+    assert shown and set(shown) == {"content"} and shown["content"]
+    SV.SHELF.put("chat:chat_one", "totals", json.dumps([["SWAPPED", 2]]))
+
+    async def go(pins):
+        return await world.p.registry.invoke(
+            "write_document", dict(args), world.ctx, world.p.permissions,
+            allowed_names=set(WRITERS), session_allow={"write_document"}, kept_pins=pins,
+        )
+
+    refused = asyncio.run(go(shown))
+    assert not refused.ok and "not the one the approval showed" in refused.error
+    assert not (world.ws / "totals.csv").exists()
+    # A card that showed "not kept yet" (an empty fingerprint) approves nothing.
+    assert not asyncio.run(go({"content": ""})).ok
+    assert not asyncio.run(go({})).ok
+    # The value as it is now, pinned as it is now, is written.
+    ok = asyncio.run(go(SV.pins_for("write_document", args, world.ctx)))
+    assert ok.ok and "SWAPPED" in (world.ws / "totals.csv").read_text()
+    assert SV.pins_for("write_document", {"path": "x"}, world.ctx) is None
 
 
 from iron_jarvis.repl import worker as _W  # noqa: E402

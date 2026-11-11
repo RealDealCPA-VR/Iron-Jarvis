@@ -359,6 +359,145 @@ def test_the_selector_itself_never_offers_rename_file():
         assert "rename_file" not in A.select_auto_tools(text)
 
 
+# --------------------------------------------------------------------------- #
+# "Put these into one workbook": a new file asked for with a gathering verb
+# --------------------------------------------------------------------------- #
+
+NEW_FILE = [
+    "Every statement_NN.csv in this folder lists payments. Put every payment row from all of them "
+    "into one workbook called payments-check.xlsx, with a first column saying which file it came "
+    "from. Then tell me how many rows it has.",
+    "Merge the statement CSV files in this folder into one Excel file named merged.xlsx.",
+    "Combine these CSVs into combined.xlsx",
+    "Collect every invoice number from the PDFs in this folder into a spreadsheet",
+    "Merge the statements into one Excel file",
+    "For each statement_NN.csv here, work out the total of the Amount column. Put the 16 totals in "
+    "a Word document called totals-summary.docx, one line per file.",
+    "Put all the rows into one workbook called all.xlsx",
+    "Add up the amounts and put them in a spreadsheet",
+    "Can you put these into one workbook?",
+    "Please gather the vendor names into a new spreadsheet",
+    "I need you to compile the totals into a single document",
+    "List every vendor in a new spreadsheet",
+    "Copy the totals to a text file",
+    "For each file, add up the amounts, then put the totals into one workbook",
+    "1. Merge the three lists into one csv file\n2. Tell me the count",
+    "Consolidate the client lists into master.xlsx",
+    "could you please summarize the findings in a Word doc",
+    "Pull the invoice dates into a spreadsheet",
+]
+
+NOT_A_NEW_FILE = [
+    "What is in statement_01.csv?",
+    "How many rows does payments.xlsx have?",
+    "How do I merge files into one workbook?",
+    "Why would I put these into a spreadsheet?",
+    "They merged the lists and put them into one workbook",
+    "The accountant put the lists into one workbook last year",
+    "The memo says to merge these into one workbook",
+    "Don't put these into a spreadsheet",
+    "Do not merge the statements into one Excel file",
+    # a file that already exists is another tool's
+    "Put this in the workbook",
+    "Add this row to my spreadsheet",
+    "Put the totals into the document I sent",
+    "Merge this into budget.pptx",
+    "Look in a file for the total",
+    "Find the errors in a spreadsheet",
+    "I put the totals into a spreadsheet yesterday",
+    "She asked whether we could combine these into one workbook",
+    "Is it possible to merge these into one Excel file?",
+    "Thanks!",
+    "put the kettle on",
+    "Summarize statement_01.csv",
+    "the client wants me to put everything into a spreadsheet",
+    "When you merge two lists into a spreadsheet, what happens to duplicates?",
+    # someone else's instruction, quoted: only the report markers refuse these
+    "The memo says: put these into one workbook",
+    "From: Bob Smith\nSubject: totals\n\nPut the totals into one workbook.",
+    "Should I put these into a spreadsheet?",
+    "Can I merge these into one workbook?",
+    "Please don't put these into a spreadsheet",
+    "Read them, and never merge them into one workbook",
+]
+
+
+@pytest.mark.parametrize("text", NEW_FILE)
+def test_a_request_to_put_things_into_a_new_file_is_recognised(text):
+    from iron_jarvis.tools.autoselect import wants_new_file
+
+    assert wants_new_file(text, []) is True
+    assert wants_new_file(text, ["read_document", "excel_read", "file_search"]) is True
+
+
+@pytest.mark.parametrize("text", NOT_A_NEW_FILE)
+def test_everything_else_is_left_alone(text):
+    from iron_jarvis.tools.autoselect import wants_new_file
+
+    assert wants_new_file(text, []) is False
+
+
+def test_a_tool_the_selector_already_picked_for_the_file_wins():
+    """"Merge these pdfs into one file" is the PDF tool's, and a turn that
+    already has the writer needs no second arming."""
+    from iron_jarvis.tools import autoselect as A
+
+    text = "Merge these pdfs into one file"
+    picked = A.select_auto_tools(text)
+    assert "pdf_arrange" in picked
+    assert A.wants_new_file(text, picked) is False
+    assert A.wants_new_file(NEW_FILE[1], ["write_document"]) is False
+    assert A.wants_new_file(NEW_FILE[1], ["excel_edit"]) is False
+
+
+COMBINES_MANY = [
+    "Merge the statement CSV files in this folder into one Excel file named merged.xlsx.",
+    "Combine these CSVs into combined.xlsx",
+    "Merge the statements into one Excel file",
+    "consolidate the client workbooks",
+    "Stack the monthly exports on top of each other",
+    "compile the vendor invoices into a list",
+]
+
+COMBINES_ONE = [
+    "Merge this sheet into the workbook",
+    "combine the two paragraphs",
+    "merge my calendar with hers",
+    "append a row to the workbook",
+    "compile the report",
+    "stack overflow says to use a list",
+]
+
+
+@pytest.mark.parametrize("text", COMBINES_MANY)
+def test_putting_many_things_together_brings_the_script_tool(text):
+    """Said with "merge" there was no "every" or "all", so the script tool
+    stayed out and a real model merged sixteen files from the command line."""
+    from iron_jarvis.tools.autoselect import wants_tool_script
+
+    assert wants_tool_script(text, ["read_document"]) is True
+    assert wants_tool_script(text, []) is False, "nothing to read with"
+
+
+@pytest.mark.parametrize("text", COMBINES_ONE)
+def test_one_thing_is_not_many(text):
+    from iron_jarvis.tools.autoselect import wants_tool_script
+
+    assert wants_tool_script(text, ["read_document"]) is False
+
+
+def test_the_new_file_rule_lives_outside_the_selector():
+    """`select_auto_tools` is unchanged by it (its exact output is pinned
+    all over the suite): the rule is asked for separately, once."""
+    import inspect
+
+    from iron_jarvis.daemon import chat_turn
+    from iron_jarvis.tools import autoselect as A
+
+    assert "wants_new_file" not in inspect.getsource(A.select_auto_tools)
+    assert inspect.getsource(chat_turn._resolve_armed_tools).count("wants_new_file(last_user, explicit + auto)") == 1
+
+
 def test_both_matchers_stay_linear_on_a_pathological_message():
     code = (
         "from types import SimpleNamespace as NS\n"
@@ -374,6 +513,11 @@ def test_both_matchers_stay_linear_on_a_pathological_message():
         "r('rename ' * 60000 + 'fil')\n"
         "r('move the ' * 40000)\n"
         "r('rename all of ' * 30000 + 'files')\n"
+        "from iron_jarvis.tools.autoselect import wants_new_file as n\n"
+        "n(('put ' * 1000 + 'merge , and then ' * 300 + ' ' * 3000 + 'into a') * 40, [])\n"
+        "n(('merge x into ' + 'a' * 300 + ' ') * 4000, [])\n"
+        "n(', ' * 200000 + 'put it into a spreadsheet', [])\n"
+        "n('put it into a ' * 60000, [])\n"
         "print('done')\n"
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)

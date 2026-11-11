@@ -3583,6 +3583,87 @@ def wants_excel_features(text: str, picked: "list[str] | tuple[str, ...]") -> bo
     return False
 
 
+#: PUTTING THINGS INTO A NEW FILE (v1.473.0). The creation rule above reads a
+#: MAKING verb ("make a workbook", "save the totals to totals.xlsx"). The same
+#: request said with a gathering verb named no tool that makes a file:
+#: "put every payment row into one workbook called payments-check.xlsx",
+#: "merge the statements into one Excel file", "collect the invoice numbers
+#: into a spreadsheet", "put the totals in a Word document". Measured with a
+#: real model on v1.473.0's first build: with no file tool in the turn it wrote
+#: the workbook from the command line (a card per try, no Undo) and ran out
+#: of steps with nothing saved. IN ITS OWN PLACE (``chat_turn.
+#: _resolve_armed_tools``), like the calculator: no rule of this module scores
+#: it, so ``select_auto_tools`` is byte-identical.
+#:
+#: Three shapes, each a gathering verb and then where it goes:
+#:   * into / to / onto ONE or A (new) workbook, spreadsheet, document, file…
+#:     — an INDEFINITE one: "the workbook" and "my spreadsheet" are files that
+#:     already exist, and other tools own those;
+#:   * IN a (new) one, only after a verb that takes a place (put, enter, list…);
+#:   * a combining verb INTO a file's name ("combine these into all.xlsx").
+#: Every scan is bounded (one sentence, 200 characters), so it is linear.
+_NEW_FILE_KIND = (
+    r"(?:excel\s+(?:file|workbook|spreadsheet|sheet)|word\s+(?:document|doc|file)"
+    r"|(?:pdf|csv|text|markdown)\s+file|workbook|spreadsheet|worksheet|document|pdf|csv|file)"
+)
+_NEW_FILE_ONE = r"(?:a|an|one)\s+(?:(?:new|single|separate|fresh|combined|master|summary|blank)\s+){0,2}"
+_NEW_FILE_RX = re.compile(
+    r"(?i)\b(?:"
+    r"(?:put|place|merge|combine|collect|gather|compile|consolidate|copy|dump|pull|stack|join"
+    r"|tabulate|record|enter|store|list|summari[sz]e|total|roll\s+up|extract|paste)\b"
+    r"[^.?!\n]{0,200}?\b(?:into|onto|to)\s+" + _NEW_FILE_ONE + _NEW_FILE_KIND + r"\b"
+    r"|(?:put|place|enter|record|store|dump|paste|list|summari[sz]e|tabulate)\b"
+    r"[^.?!\n]{0,200}?\bin\s+" + _NEW_FILE_ONE + _NEW_FILE_KIND + r"\b"
+    r"|(?:merge|combine|consolidate|compile|collect|gather|stack|join)\b"
+    r"[^.?!\n]{0,200}?\binto\s+[\"'“]?[\w-][\w.-]{0,80}\.(?:xlsx|csv|docx|pdf|md|txt)\b"
+    r")"
+)
+#: Where the gathering verb may stand: at the start of its sentence, after a
+#: polite lead-in ("please", "can you", "I need you to")…
+_NEW_FILE_LEAD_RX = re.compile(
+    r"(?i)\A\W*(?:(?:please|kindly|then|and|now|also|next|just|ok(?:ay)?|so|finally|first|second|third|jarvis|hey|hi)\W+){0,4}"
+    r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+|kindly\s+|also\s+|then\s+|just\s+){0,2}"
+    r"|i\s+(?:need|want)\s+(?:you\s+)?to\s+|i(?:['’]d|\s+would)\s+like\s+(?:you\s+)?to\s+"
+    r"|let['’]?s\s+|you\s+(?:can|should|may)\s+)?\Z"
+)
+#: …or after "and" / "then" / a comma in a sentence that has no subject of its
+#: own before it ("add up the amounts and put them in a spreadsheet"; never
+#: "they merged the lists and put them into one workbook").
+_NEW_FILE_JOINED_RX = re.compile(r"(?i)(?:\b(?:and|then)|[,;:])\s*(?:then\s+|also\s+|please\s+){0,2}\Z")
+_NEW_FILE_SUBJECT_RX = re.compile(r"(?i)\b(?:i|we|they|he|she|it|you|who|someone|somebody|everyone|nobody)\b")
+
+
+def wants_new_file(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
+    """True when the message TELLS Jarvis to put things into a new file and
+    the turn has no tool that makes or changes one. Never when the selector
+    already picked such a tool (it understood the request: "merge these pdfs
+    into one file" is ``pdf_arrange``'s), never for a question or a report
+    about a change (the selector's own markers over the text before the
+    words: "the memo says: put these into one workbook", a pasted email),
+    never after "don't", never for a sentence about someone else doing it.
+    Pure, linear."""
+    if _CHANGE_TOOLS.intersection(picked):
+        return False
+    t = (text or "")[:4000]
+    found = _ENQUIRY.search(t)
+    cut = found.start() if found else len(t) + 1
+    for m in _NEW_FILE_RX.finditer(t):
+        if m.start() >= cut:
+            break
+        start = 0
+        for e in _SENTENCE_END_RX.finditer(t, 0, m.start()):
+            start = e.end()
+        head = t[start:m.start()]
+        # WHERE THE VERB STANDS decides it. A question ("how do I merge…",
+        # "can I put…") and a "don't" never pass these two tests, so there is
+        # no separate check for either.
+        if _NEW_FILE_LEAD_RX.search(head):
+            return True
+        if _NEW_FILE_JOINED_RX.search(head) and not _NEW_FILE_SUBJECT_RX.search(head):
+            return True
+    return False
+
+
 def live_excel_companions(text: str) -> "list[str]":
     """The read tools that go with ``excel_live_look`` for this message: they
     read the open workbook through a ``live:`` path, so they must be armed to
@@ -3760,7 +3841,19 @@ def wants_tool_script(
         if _script_count(word) >= _SCRIPT_COUNT and prev not in _SCRIPT_LOCATORS:
             if any(w in _SCRIPT_PLURAL for w in ahead[:3]):
                 return True
+        if word in _SCRIPT_COMBINE and any(w in _SCRIPT_PLURAL for w in ahead):
+            # "merge the statement files", "combine these CSVs": putting MANY
+            # things together reads each of them (v1.473.0). Measured with a
+            # real model: without the script tool it reached for the command
+            # line and pandas, five cards for one workbook.
+            return True
     return False
+
+
+#: Verbs that put MANY things together (:func:`wants_tool_script`).
+_SCRIPT_COMBINE = frozenset({
+    "merge", "combine", "consolidate", "compile", "collate", "stack", "append",
+})
 
 
 #: ASK-TIER candidates (v1.187.0): tools worth SHOWING the model in an

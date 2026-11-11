@@ -341,8 +341,8 @@ class ToolScriptTool(Tool):
         "\"totals.xlsx\", _from_script={\"content\": \"totals\"}).\n"
         "The script runs isolated: no network, no other programs, no file "
         "writes, files read only in the working folder (reach everything "
-        "else through a tool), and it imports only Python's standard "
-        "library (plus openpyxl and dateutil). Once it has read this PC's files or data it "
+        "else through a tool), and only Python's standard library to "
+        "import. Once it has read this PC's files or data it "
         "cannot call a tool that reaches outside this PC. Variables persist "
         "between scripts. `saved` runs a skill's saved script instead of "
         "`code`, with `params`."
@@ -523,6 +523,7 @@ class ToolScriptTool(Tool):
         if self._repl is None:
             return ToolResult(ok=False, error="tool scripts are not available in this build")
 
+        from . import script_values
         from .registry import current_call_scope
         from ..repl.session import MAX_TOOL_OUTPUT_CHARS
 
@@ -535,6 +536,8 @@ class ToolScriptTool(Tool):
         session_id, once = worker_key(ctx)
         workspace = Path(getattr(ctx, "workspace", ".") or ".")
         own_origins: set[str] = set()
+        # "A kept value with nowhere to go" is about the NEWEST script only.
+        script_values.SHELF.take_unplaced(session_id)
         # THE WORKER THIS SCRIPT RUNS IN, held as an object (v1.473.0
         # review). It used to be looked up by NAME on every call, and a new
         # chat's worker is RENAMED the moment the chat is saved
@@ -763,10 +766,17 @@ class ToolScriptTool(Tool):
         if not isinstance(payload, dict):
             return ToolResult(ok=False, error="the script worker gave no usable answer")
         allowed = getattr(scope, "allowed_names", None) or frozenset()
+        file_tools = sorted(t for t in _fillable() if t in allowed and t != "apply_changes")
+        if kept and not file_tools and bool(payload.get("ok")):
+            # Nothing in this turn can take what the script kept. The chat
+            # lanes read this and bring the file tool in for the next step
+            # (chat_turn.offer_file_tool): which tools a turn starts with
+            # follows the user's WORDS, and "put them in one workbook" must
+            # not leave the rows with nowhere to go.
+            script_values.SHELF.note_unplaced(key_now())
         return self._shape(
             payload, made, refused,
-            kept=kept, planned=planned,
-            file_tools=sorted(t for t in _fillable() if t in allowed and t != "apply_changes"),
+            kept=kept, planned=planned, file_tools=file_tools,
         )
 
     # -- what a script has read stays where it was read ------------------------
@@ -899,7 +909,7 @@ class ToolScriptTool(Tool):
                     '_from_script={"<argument>": "<name>"}).'
                 )
             else:
-                how = "No file tool is one of this turn's tools, so nothing can take them yet."
+                how = NO_FILE_TOOL_LINE
             parts.append("[kept for a file tool]\n" + lines + "\n" + how)
         if ok and planned and planned.get("count"):
             ranked = sorted((planned.get("tools") or {}).items(), key=lambda kv: (-kv[1], kv[0]))
@@ -930,6 +940,12 @@ class ToolScriptTool(Tool):
                 data=data,
             )
         return ToolResult(ok=True, output=body, data=data)
+
+
+#: What a script is told when it kept a value and the turn holds no tool
+#: that can take one. The chat lanes replace this line when they bring the
+#: file tool in (``chat_turn.offer_file_tool``).
+NO_FILE_TOOL_LINE = "No file tool is one of this turn's tools, so nothing can take them yet."
 
 
 def _fillable() -> "frozenset[str]":

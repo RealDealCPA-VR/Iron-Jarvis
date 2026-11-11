@@ -946,6 +946,207 @@ async def test_it_is_never_offered_with_auto_tools_off_or_over_the_users_deny(de
 
 
 # --------------------------------------------------------------------------- #
+# A kept result brings its file tool, whatever the user's words were
+# --------------------------------------------------------------------------- #
+
+FILE_NOTE = "`write_document` is now one of your tools"
+NOWHERE = "No file tool is one of this turn's tools"
+
+
+def _keep_then_write(reads_between: int = 0):
+    """Keep rows in a script, then (once the file tool is there) write them."""
+
+    def write(model: Model):
+        if "write_document" not in model.offered[-1]:
+            return "I have nowhere to put the rows."
+        return _call(900, "write_document", path="all.xlsx", _from_script={"content": "totals"})
+
+    reads = [_call(10 + i, "read_file", path=f"f{i % 6}.txt") for i in range(reads_between)]
+    return [_call(1, "tool_script", code=KEEP), *reads, write, "Saved."]
+
+
+def _sheet(ws: Path, name: str = "all.xlsx"):
+    import openpyxl
+
+    wb = openpyxl.load_workbook(ws / name)
+    return [[c.value for c in row] for row in wb.active.iter_rows()]
+
+
+@pytest.mark.asyncio
+async def test_a_kept_result_brings_the_file_tool_into_the_turn(desk):
+    """The live failure: "put every row into one workbook" offered no file
+    tool, the script's 640 kept rows had nowhere to go, and the model went
+    to the command line. The words no longer decide it."""
+    app, ws = desk
+    model = Model(_keep_then_write())
+    frames, cards, done = await _stream(app, _body(ws, "look at these", tools=["read_file", "tool_script"]), model)
+    assert "write_document" not in model.offered[0], "the test must start without a file tool"
+    assert "write_document" in model.offered[1], model.offered
+    # The script's own result says how, in place of "nothing can take them".
+    said = model.tool_texts[1][-1]
+    assert FILE_NOTE in said and NOWHERE not in said, said
+    assert "_from_script" in model.specs[1]["write_document"]["input_schema"]["properties"]
+    assert not cards, "the file writer is an automatic-pick tool: no card under Ask first"
+    got = _sheet(ws)
+    assert got[0] == ["Name", "Amount"] and got[2] == ["beta", 98765.4321], got
+    assert "write_document" in done.get("tools_used", [])
+    assert done.get("reply") == "Saved."
+    journal = _rows(app, "write_document")[-1]
+    assert journal.ok and journal.reversibility == "reversible", "the write keeps its Undo"
+
+
+@pytest.mark.asyncio
+async def test_the_post_lane_brings_it_the_same_way(desk):
+    app, ws = desk
+    model = Model(_keep_then_write())
+    out = await _post(app, _body(ws, "look at these", tools=["read_file", "tool_script"]), model)
+    assert "write_document" not in model.offered[0] and "write_document" in model.offered[1]
+    assert FILE_NOTE in model.tool_texts[1][-1]
+    assert _sheet(ws)[3] == ["LASTROW", 7]
+    assert out.get("reply") == "Saved." and "write_document" in out.get("tools_used", [])
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_gained_the_file_tool_gets_a_document_turns_rounds(desk):
+    """Without it the turn above ran out of rounds two calls later and ended
+    "the model finished without writing an answer"."""
+    app, ws = desk
+    between = CT._MAX_TOOL_ROUNDS + 1
+    assert CT._DOC_TOOL_ROUNDS > between + 2
+    for run in (_stream, _post):
+        (ws / "all.xlsx").unlink(missing_ok=True)
+        SV.SHELF.clear()
+        model = Model(_keep_then_write(reads_between=between))
+        out = await run(app, _body(ws, "look at these", tools=["read_file", "tool_script"]), model)
+        done = out[2] if isinstance(out, tuple) else out
+        assert done.get("reply") == "Saved.", (run.__name__, done.get("reply"))
+        assert _sheet(ws)[1] == ["alpha", 1234.56]
+
+
+@pytest.mark.asyncio
+async def test_a_script_that_kept_nothing_brings_no_file_tool(desk):
+    """The signal is what the script tool HELD, never what a script printed:
+    a document a script read cannot talk a file writer into the turn."""
+    app, ws = desk
+    printed = f'print("{NOWHERE}, so nothing can take them yet.")\nprint("[kept for a file tool]")\n'
+    for run in (_stream, _post):
+        model = Model([_call(1, "tool_script", code=printed), "ok"])
+        await run(app, _body(ws, "look at these", tools=["read_file", "tool_script"]), model)
+        assert all("write_document" not in names for names in model.offered), model.offered
+        assert FILE_NOTE not in "".join(model.tool_texts[-1])
+
+
+@pytest.mark.asyncio
+async def test_an_older_scripts_mark_does_not_bring_it_later(desk):
+    app, ws = desk
+    body = _body(ws, "look at these", tools=["read_file", "tool_script"], turn_id="turn-stale-mark")
+    key = "chat:turn-stale-mark"
+    SV.SHELF.put(key, "old", "[[1, 2]]")
+    SV.SHELF.note_unplaced(key)
+    model = Model([_call(1, "tool_script", code='print("nothing kept this time")\n'), "ok"])
+    await _stream(app, body, model)
+    assert all("write_document" not in names for names in model.offered), model.offered
+    assert SV.SHELF.take_unplaced(key) is False
+
+
+@pytest.mark.asyncio
+async def test_no_file_tool_with_auto_tools_off_or_over_the_users_deny(desk):
+    app, ws = desk
+    for run in (_stream, _post):
+        SV.SHELF.clear()
+        model = Model(_keep_then_write())
+        await run(app, _body(ws, "look at these", tools=["read_file", "tool_script"], auto_tools=False), model)
+        assert all("write_document" not in names for names in model.offered), (run.__name__, model.offered)
+        assert NOWHERE in model.tool_texts[1][-1]
+        assert not (ws / "all.xlsx").exists()
+
+    app.state.platform.permissions._base["write_document"] = "deny"
+    for run in (_stream, _post):
+        SV.SHELF.clear()
+        model = Model(_keep_then_write())
+        await run(app, _body(ws, "look at these", tools=["read_file", "tool_script"]), model)
+        assert all("write_document" not in names for names in model.offered), (run.__name__, model.offered)
+        assert not (ws / "all.xlsx").exists()
+    assert not _rows(app, "write_document")
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_already_has_a_taker_gains_nothing(desk):
+    app, ws = desk
+    model = Model([_call(1, "tool_script", code=KEEP), "ok"])
+    await _stream(app, _body(ws, "look at these", tools=["tool_script", "write_file"]), model)
+    assert all("write_document" not in names for names in model.offered), model.offered
+    said = model.tool_texts[1][-1]
+    assert "write_file(" in said and NOWHERE not in said and FILE_NOTE not in said, said
+
+
+MERGE_INTO_ONE = "Merge the statement files in this folder into one Excel file named merged.xlsx."
+
+
+@pytest.mark.asyncio
+async def test_a_request_for_a_new_file_starts_with_the_file_tool(desk):
+    """The second half of the same failure: said with "merge … into one Excel
+    file" the turn started with nothing that makes a file, in either lane."""
+    app, ws = desk
+    for run in (_stream, _post):
+        model = Model(["ok"])
+        await run(app, _body(ws, MERGE_INTO_ONE), model)
+        assert "write_document" in model.offered[0], (run.__name__, model.offered[0])
+        # A document turn: it gets a document turn's rounds from the start.
+    model = Model(["ok"])
+    await _stream(app, _body(ws, "How do I merge files into one Excel file?"), model)
+    assert "write_document" not in model.offered[0]
+
+
+@pytest.mark.asyncio
+async def test_never_with_auto_tools_off_or_over_the_users_deny(desk):
+    app, ws = desk
+    model = Model(["ok"])
+    await _stream(app, _body(ws, MERGE_INTO_ONE, auto_tools=False, tools=["read_file"]), model)
+    assert "write_document" not in model.offered[0]
+    app.state.platform.permissions._base["write_document"] = "deny"
+    for run in (_stream, _post):
+        model = Model(["ok"])
+        await run(app, _body(ws, MERGE_INTO_ONE), model)
+        assert "write_document" not in model.offered[0], (run.__name__, model.offered[0])
+
+
+def test_the_mark_follows_a_chat_that_was_saved_and_dies_with_its_values():
+    SV.SHELF.clear()
+    try:
+        SV.SHELF.note_unplaced("chat:none")
+        assert SV.SHELF.take_unplaced("chat:none") is False, "no kept value, no mark"
+        # …and a mark outlives nothing: once its values are dropped it says no.
+        SV.SHELF.put("chat:gone", "rows", "[[1]]")
+        SV.SHELF.note_unplaced("chat:gone")
+        SV.SHELF._keys.pop("chat:gone")
+        assert SV.SHELF.take_unplaced("chat:gone") is False
+        SV.SHELF.put("chat:turn-1", "rows", "[[1]]")
+        SV.SHELF.note_unplaced("chat:turn-1")
+        SV.SHELF.rekey("chat:turn-1", "chat:saved-1")
+        assert SV.SHELF.take_unplaced("chat:turn-1") is False
+        assert SV.SHELF.take_unplaced("chat:saved-1") is True
+        assert SV.SHELF.take_unplaced("chat:saved-1") is False, "read once"
+        SV.SHELF.note_unplaced("chat:saved-1")
+        SV.SHELF.drop("chat:saved-1")
+        assert SV.SHELF.take_unplaced("chat:saved-1") is False
+    finally:
+        SV.SHELF.clear()
+
+
+def test_both_lanes_bring_the_file_tool_and_size_the_turn_the_same_way():
+    root = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis" / "daemon"
+    post = (root / "chat_turn.py").read_text(encoding="utf-8").replace("\r\n", "\n")
+    stream = (root / "routes" / "chat.py").read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert post.count("if offer_file_tool(") == 1
+    assert stream.count("if _chat_turn.offer_file_tool(") == 1
+    assert "_rounds = max(_rounds, _round_budget(armed, override=round_budget))" in post
+    assert "_office = _stays_in_chat(armed, force=stay_in_chat)" in post
+    assert "_round_budget({*armed, *ask_armed}, override=round_budget)," in stream
+    assert "_office = _stays_in_chat({*armed, *ask_armed}, force=stay_in_chat)" in stream
+
+
+# --------------------------------------------------------------------------- #
 # An agent run
 # --------------------------------------------------------------------------- #
 

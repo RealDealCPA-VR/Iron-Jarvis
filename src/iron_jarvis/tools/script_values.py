@@ -145,6 +145,9 @@ class Shelf:
         self._lock = threading.Lock()
         self._keys: "OrderedDict[str, OrderedDict[str, _Kept]]" = OrderedDict()
         self._chars = 0
+        #: Keys whose NEWEST script kept a value while its turn had no tool
+        #: that could take one (:meth:`note_unplaced`).
+        self._unplaced: "set[str]" = set()
 
     # -- writing ---------------------------------------------------------------
 
@@ -203,6 +206,29 @@ class Shelf:
         with self._lock:
             return list(self._keys.get(key) or ())
 
+    # -- a kept value with nowhere to go ----------------------------------------
+
+    def note_unplaced(self, key: str) -> None:
+        """A script kept a value for a file and no tool of its turn can take
+        one. The chat lanes read this ONCE (:meth:`take_unplaced`) and bring
+        the file tool into the turn (``chat_turn.offer_file_tool``). Set by
+        the script TOOL from what it held, never from a script's output."""
+        if not key:
+            return
+        with self._lock:
+            if len(self._unplaced) >= MAX_KEYS:
+                self._unplaced.clear()
+            self._unplaced.add(key)
+
+    def take_unplaced(self, key: str) -> bool:
+        """Whether *key*'s newest script kept a value nothing could take.
+        Reading it forgets it. A mark whose values are gone says no."""
+        with self._lock:
+            if key not in self._unplaced:
+                return False
+            self._unplaced.discard(key)
+            return key in self._keys
+
     def rekey(self, old: str, new: str) -> int:
         """A new chat was saved: what its first message kept (held by the
         TURN's key) is the chat's from now on."""
@@ -210,6 +236,10 @@ class Shelf:
             return 0
         with self._lock:
             names = self._keys.pop(old, None)
+            if old in self._unplaced:
+                self._unplaced.discard(old)
+                if names:
+                    self._unplaced.add(new)
             if not names:
                 return 0
             target = self._keys.setdefault(new, OrderedDict())
@@ -224,6 +254,7 @@ class Shelf:
 
     def drop(self, key: str) -> None:
         with self._lock:
+            self._unplaced.discard(key)
             names = self._keys.pop(key, None)
             if names:
                 self._chars -= sum(len(v.text) for v in names.values())
@@ -231,6 +262,7 @@ class Shelf:
     def clear(self) -> None:
         with self._lock:
             self._keys.clear()
+            self._unplaced.clear()
             self._chars = 0
 
     @property

@@ -2093,15 +2093,34 @@ Undo. Now Jarvis can plan the changes and ask once:
 
 - The card lists **every** change, one line each ("Rename statement_01.csv to
   2026-01-statement.csv"). One **Allow** covers exactly that list.
+- **Each batch is asked about on its own.** The card offers *Allow once* and
+  *Deny* only. There is no "Allow for this chat", because the next batch holds
+  different changes. With approvals set to *Don't ask*, a batch runs without
+  its card.
+- **What runs is what the card showed.** If the list changes after the card
+  was shown, nothing runs and Jarvis has to ask again.
 - Each change is still its own entry in Activity with its own **Undo**.
 - If any change in the list is not allowed (a protected file, a tool you set
   to *Never run*), **nothing** is changed and the answer says why.
 - A batch can hold file changes that can be undone: rename or move, write,
   edit, Word, PDF and Excel edits, redaction. It cannot send anything, delete
   for good, or run a command.
+- A batch never changes one of Git's, Iron Jarvis's or a coding tool's own
+  files (`.git`, `.ironjarvis`, `.claude`, an `AGENTS.md`), never replaces a
+  file by renaming another file over it, and never puts a password on a PDF.
+  Each of those is made as a single change, with its own card.
 
 Chat now also offers the rename tool when you ask to rename or move files.
 Before, chat had only the command line for that.
+
+Two rules for a rename, in chat and in agent runs:
+
+- **A rename onto, or away from, one of Git's or Iron Jarvis's own files asks
+  every time**, the same as writing that file does.
+- **A file replaced by a rename is kept.** When a rename is told to replace a
+  file that is already there, the replaced file is moved to Iron Jarvis's
+  trash folder first, and the answer says where it is. Undo moves the renamed
+  file back; it does not put the replaced file back for you.
 
 ### Results go to the file without being typed again
 
@@ -2142,6 +2161,30 @@ read a client file and look something up on the web in the same loop, with no
 card between the two. The model can still make such a call directly, one at a
 time, where you see it and where the usual cards apply.
 
+What counts as "read", and what counts as "outside":
+
+- A call that **failed** counts as a read. A tool's error often quotes what it
+  found.
+- A **memory base that is not on this PC** (Notion, a memory server) is
+  outside. A notes folder on this PC is not.
+- Each **connected app** is its own place: what one app said cannot be sent to
+  another app from the same script.
+- The **page open in the browser** is private, like a file.
+- A **path on another computer** (`\\server\share\...`) is outside, unless
+  the folder you are working in is itself on that share.
+
+A script is also limited in what it can do by itself:
+
+- It imports Python's own standard library, plus `openpyxl` and `dateutil`.
+  Other libraries are refused. Several of them can open files and the
+  internet by themselves, where the app cannot see it.
+- It cannot open a SQLite database, read the Windows registry, or ask Windows
+  about a path on another computer.
+
+This is a guard against a careless or misled model. It is not a locked room:
+code that sets out to break it can still find a way, which is why a script
+may only call tools that read.
+
 ### Measured
 
 With a real model (Claude Haiku on the owner's Claude plan), on a scratch copy
@@ -2159,6 +2202,29 @@ Without a model: 24 reads that each wait 0.2 s took 5.2 s one at a time and
 1.5 s in one step. Reading 12 workbooks or 12 PDFs took the same time either
 way.
 
+### Checked by a second reviewer before release
+
+A separate reviewer, who had not written any of it, attacked the change and
+wrote a test for each thing it broke. It found 15 defects. All are fixed, and
+each has a test that fails on the old code:
+
+- A card could show one list and a different list could run (a script in the
+  same step changed it after the card was built).
+- "Allow for this chat" on one batch covered every later batch.
+- A batch, and a rename, could write Git's and Iron Jarvis's own files with no
+  safety card.
+- A script could get round "what a script read stays on this PC" six ways:
+  SQLite, a file copy, a failed call, a chat being saved while the script
+  ran, a path on another computer, and third-party libraries that open files
+  and the internet by themselves.
+- A script could read the Windows registry, where your own environment
+  settings are kept.
+- Changing a skill from chat could drop part of the skill's text.
+- A rename told to replace a file destroyed the replaced file.
+- Text a script took from a document came back through a batch's result as
+  trusted text.
+- Building a card could hold the whole app up for most of a second.
+
 ### What this does not do
 
 - **Your own model server was not tried.** Its gateway needs a key the
@@ -2167,6 +2233,10 @@ way.
   there is in steps and in what the model has to write, not in the reading.
 - **The batch card is on the chat page only.** The phone, and agent runs,
   make changes one at a time as before.
+- **In an agent run, an approval for a call that uses a script's result shows
+  the result's name, not a summary of it.** The chat page shows the summary.
+- **A script that imported another library before this version will be
+  refused that import.** It is told to use the app's own reading tools.
 - **A skill from another program's folder is sent to whichever model answers
   the chat** when Jarvis loads it, the same as when you pick it with "/".
 

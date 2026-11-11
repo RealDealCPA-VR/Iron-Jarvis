@@ -3160,6 +3160,124 @@ def offer_script_tool(
         return False
 
 
+#: The file tool that joins a turn when a script kept a result for a file
+#: and the turn holds no tool that can take one (v1.473.0).
+KEPT_FILE_TOOL = "write_document"
+
+#: What the model reads when it does, in place of "nothing can take them".
+KEPT_FILE_NOTE = (
+    "`write_document` is now one of your tools. To put a kept result in a "
+    "file WITHOUT retyping it, call it yourself and name the result: "
+    'write_document(path="<file name>", _from_script={"content": "<name>"}). '
+    "Rows become a table in .xlsx or .csv; it also writes .docx, .pdf, .md "
+    "and .txt."
+)
+
+
+def offer_file_tool(
+    d: Any,
+    body: Any,
+    *,
+    tools_used: list,
+    armed: list,
+    auto_armed: list,
+    ask_armed: Any,
+    tool_specs: list,
+    overrides: dict,
+    armed_grant: set,
+    msgs: list,
+    ctx: Any,
+    tool_ceiling: Any = None,
+    ceiling: "int | None" = None,
+) -> bool:
+    """A KEPT RESULT BRINGS ITS FILE TOOL (v1.473.0).
+
+    Which tools a turn starts with follows the user's WORDS
+    (``select_auto_tools``): "save the totals to totals.xlsx" offered the
+    file writer, "put every row into one workbook called x.xlsx" did not.
+    In a live run the model's script then kept 640 rows, was told nothing
+    could take them, and reached for the command line. This reads what
+    happened instead: when the turn's newest script kept a value and no
+    tool of the turn can take one (``Shelf.take_unplaced``, set by the
+    script tool itself), ``write_document`` joins the turn for the NEXT
+    round — armed and granted exactly as the arming pass arms it for a
+    message that asks for a file (it is an automatic-pick tool, it writes
+    only inside the working folder, and its write has an Undo) — and the
+    script's own result says how to use it. Changed IN PLACE, like
+    :func:`offer_script_tool`. Returns whether it was added; the lanes then
+    size the turn's rounds for a document turn.
+
+    Never: without Auto tools, over the user's deny, past a weak model's
+    tool budget (``ceiling``), outside a surface's own ceiling
+    (``tool_ceiling``), or for a script that did not run in this reply (a
+    turn that already holds a tool for the value never sets the mark). An approval
+    posture that asks before file writes still asks (the card is decided
+    per call, not here). Both lanes call it at the end of a tool round —
+    MIRROR NOTE (lock-step). Never raises."""
+    try:
+        if "tool_script" not in tools_used:
+            return False
+        from ..tools import script_values
+        from ..tools.tool_script import NO_FILE_TOOL_LINE
+
+        key, _once = script_values._key_for(ctx)
+        # Read (and forget) the mark first: it is about this script only.
+        if not script_values.SHELF.take_unplaced(key):
+            return False
+        if not getattr(body, "auto_tools", False):
+            return False
+        # (No look at the turn's tools here: the script tool sets the mark
+        # only when none of them can take a kept value.)
+        known = {*armed, *(ask_armed or ())}
+        registry = d.platform.registry
+        tool = registry.get(KEPT_FILE_TOOL)
+        if tool is None:
+            return False
+        if tool_ceiling is not None and KEPT_FILE_TOOL not in tool_ceiling:
+            return False
+        if ceiling is not None and ceiling < _MAX_ARMED_TOOLS and len(armed) >= ceiling:
+            return False
+        perms = getattr(d.platform, "permissions", None)
+        pkey = tool.perm_key()
+        if perms is not None:
+            for name in {KEPT_FILE_TOOL, pkey}:
+                if getattr(perms.mode_for(name), "value", "deny") == "deny":
+                    return False
+        if str(overrides.get(KEPT_FILE_TOOL) or overrides.get(pkey) or "") in ("deny", "ask"):
+            # A rule of this turn (low trust, a folder rule) already speaks
+            # for the tool: it is not armed over it.
+            return False
+        extras = [
+            s for s in tool_specs
+            if isinstance(s, dict) and str(s.get("name") or "") not in known
+        ]
+        armed.append(KEPT_FILE_TOOL)
+        auto_armed.append(KEPT_FILE_TOOL)
+        overrides[KEPT_FILE_TOOL] = "allow"
+        overrides[pkey] = "allow"
+        armed_grant.add(KEPT_FILE_TOOL)
+        armed_grant.add(pkey)
+        tool_specs[:] = registry.specs([*armed, *(ask_armed or ())]) + extras
+        said = False
+        for message in reversed(msgs):
+            if getattr(message, "role", "") != "tool":
+                break
+            content = str(message.content or "")
+            if NO_FILE_TOOL_LINE in content:
+                message.content = content.replace(NO_FILE_TOOL_LINE, KEPT_FILE_NOTE)
+                said = True
+                break
+        if not said:
+            for message in reversed(msgs):
+                if getattr(message, "role", "") == "tool":
+                    message.content = str(message.content or "") + "\n\n(" + KEPT_FILE_NOTE + ")"
+                    break
+        return True
+    except Exception:  # noqa: BLE001 — an offer never fails a turn
+        log.debug("file tool offer failed", exc_info=True)
+        return False
+
+
 def card_args(tool: Any, args: Any, ctx: Any) -> Any:
     """What an approval card and a step row SHOW for a call (v1.473.0): the
     tool's own redacted arguments, and for a call that names a value a tool
@@ -4916,6 +5034,29 @@ def _resolve_armed_tools(
 
         if wants_calculator(last_user, explicit + auto):
             auto.append("calculate")
+    # A NEW FILE THE MESSAGE ASKS FOR, IN ITS OWN PLACE (v1.473.0). "Save the
+    # totals to totals.xlsx" armed `write_document`; "put every payment row
+    # into one workbook called payments-check.xlsx" and "merge the statements
+    # into one Excel file" armed nothing that makes a file, and a real model
+    # then wrote the workbook from the command line (cards, no Undo) and ran
+    # out of steps with nothing saved. `write_document` is the tool the
+    # creation rule already arms for the same request said with "make" or
+    # "save": allow tier, journaled, confined to the turn's folder. Its own
+    # matcher (`autoselect.wants_new_file`), so `select_auto_tools` is
+    # unchanged; never when the selector already picked a tool that makes or
+    # changes a file. A turn that still starts without it gets it when a
+    # script keeps a result for a file (`offer_file_tool`).
+    if (
+        getattr(body, "auto_tools", False)
+        and (_ceiling >= _MAX_ARMED_TOOLS or len(explicit) + len(auto) < _ceiling)
+        and "write_document" not in explicit
+        and "write_document" not in auto
+        and d.platform.registry.get("write_document") is not None
+    ):
+        from ..tools.autoselect import wants_new_file
+
+        if wants_new_file(last_user, explicit + auto):
+            auto.append("write_document")
     # RENAMING OR MOVING THE USER'S FILES, IN ITS OWN PLACE (v1.473.0). Chat
     # never offered `rename_file` (no rule arms it), so a request to rename a
     # folder of statements left the model the shell: no Undo, and measured on
@@ -12041,6 +12182,18 @@ async def run_chat_turn(
                     overrides=overrides, armed_grant=armed_grant, msgs=msgs,
                     ctx=ctx, ceiling=_arm_ceiling,
                 )
+                # A KEPT RESULT BRINGS ITS FILE TOOL (v1.473.0): the turn is
+                # a document turn from here, so it gets a document turn's
+                # rounds and ends in chat. MIRROR NOTE (lock-step):
+                # routes/chat.py.
+                if offer_file_tool(
+                    d, body, tools_used=tools_used, armed=armed,
+                    auto_armed=auto_armed, ask_armed=(), tool_specs=tool_specs,
+                    overrides=overrides, armed_grant=armed_grant, msgs=msgs,
+                    ctx=ctx, ceiling=_arm_ceiling,
+                ):
+                    _rounds = max(_rounds, _round_budget(armed, override=round_budget))
+                    _office = _stays_in_chat(armed, force=stay_in_chat)
             if _finish_round:
                 # The finish check's tests ran (or were refused): its ONE note
                 # goes to the model now; the next round is its answer.

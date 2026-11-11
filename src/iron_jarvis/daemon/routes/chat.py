@@ -7482,6 +7482,22 @@ async def chat_stream(
                         armed_grant=armed_grant, msgs=msgs, ctx=ctx,
                         tool_ceiling=tool_ceiling, ceiling=_arm_ceiling,
                     )
+                    # A KEPT RESULT BRINGS ITS FILE TOOL (v1.473.0): the turn
+                    # is a document turn from here, so it gets a document
+                    # turn's rounds and ends in chat. MIRROR NOTE
+                    # (lock-step): chat_turn.run_chat_turn.
+                    if _chat_turn.offer_file_tool(
+                        d, body, tools_used=tools_used, armed=armed,
+                        auto_armed=auto_armed, ask_armed=ask_armed,
+                        tool_specs=tool_specs, overrides=overrides,
+                        armed_grant=armed_grant, msgs=msgs, ctx=ctx,
+                        tool_ceiling=tool_ceiling, ceiling=_arm_ceiling,
+                    ):
+                        _rounds = max(
+                            _rounds,
+                            _round_budget({*armed, *ask_armed}, override=round_budget),
+                        )
+                        _office = _stays_in_chat({*armed, *ask_armed}, force=stay_in_chat)
                 if _finish_round:
                     # The finish check's tests ran (or were refused / declined
                     # on their card): its ONE note goes to the model now, and

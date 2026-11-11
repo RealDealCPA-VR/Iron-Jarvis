@@ -632,18 +632,18 @@ _SCRIPT_MODULES = frozenset({
 _STDLIB = frozenset(getattr(sys, "stdlib_module_names", ()) or ())
 
 _IMPORT_BLOCKED = (
-    "iron-jarvis tool script: BLOCKED — importing {name}. A tool script may "
-    "import Python's standard library (and openpyxl, dateutil). Read and "
-    "convert files with this turn's tools instead: "
-    "tools.call(\"read_document\", path=...)."
+    "iron-jarvis tool script: BLOCKED — importing {name}. A tool script "
+    "imports Python's standard library only. Read and convert files with "
+    "this turn's tools instead: tools.call(\"read_document\", path=...)."
 )
 
 _ISOLATED_WRITE_BLOCKED = (
     "iron-jarvis tool script: BLOCKED — writing a file.\n"
     "  tried to write : {target}\n"
     "A tool script can only write temporary files in its own scratch folder "
-    "({roots}). To give the user a file, print what it should hold and save "
-    "it with a file tool (write_document, write_file) after the script."
+    "({roots}). To give the user a file, keep what it should hold with "
+    "tools.keep(\"name\", rows) and then call the file tool yourself, after "
+    "the script: write_document(path=..., _from_script={{\"content\": \"name\"}})."
 )
 
 _ISOLATED_READ_BLOCKED = (
