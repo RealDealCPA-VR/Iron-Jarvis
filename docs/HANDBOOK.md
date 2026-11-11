@@ -2134,11 +2134,82 @@ Name, Date, Payee, Amount"). What is written is exactly what the script
 computed. Such a card is never offered as "Always": the same name can hold
 different data next time.
 
+**A request for a new file gets the file tool, however you word it.** "Save
+the totals to totals.xlsx" always gave Jarvis the tool that writes a file.
+"Put every payment into one workbook called payments-check.xlsx", "merge the
+statements into one Excel file" and "put the totals in a Word document" did
+not. In tests of this version with a real model, Jarvis then tried the command
+line, asked for approval up to five times, and twice saved nothing. Two fixes:
+
+- Jarvis now reads those requests too: a gathering word (put, merge, combine,
+  collect, compile, list and the like) and then "into a" or "into one"
+  workbook, spreadsheet, document or file, or "into" a file's name. "The
+  workbook" and "my spreadsheet" are files you already have, and are left to
+  the tools that edit them.
+- If a reply still starts without the file tool and a script keeps a result
+  for a file, the file tool joins the reply at that point, and the reply gets
+  the longer step limit a document reply has.
+
+Neither happens with **Auto tools** off, or with "write a document" set to
+*Never run*.
+
+**A table a script kept is written as a table, with real numbers.**
+
+- A script that read CSV files holds every cell as text. Written to a
+  workbook, clean numbers and dates (2026-01-02) now become values you can
+  add up in Excel. A code with a leading zero (02134) and a number longer
+  than 15 digits (a card or account number) stay text, so nothing is rounded
+  or shortened.
+- A table kept as "header" plus "rows" is now read as a table. In a test on
+  the packaged app a script kept its table that way, and all 640 rows went
+  into one cell while the reply said "640 rows".
+- Content that cannot be read as rows is refused, and no file is written.
+  Before, it was written into one cell as text, which looks like a finished
+  file and is not one.
+- Lines that were never split into columns are now said. In the same test a
+  script split each line on tabs (the files use commas), and the workbook
+  was one column of "2026-01-01,Vendor 42,260.39" under a reply that said
+  "3 columns". Now the script's own result says "641 rows of ONE cell each,
+  every cell holding 2 commas", and a workbook written that way gets a
+  warning that tells Jarvis to split the lines and write the file again. One
+  column of names, numbers or ordinary sentences is not flagged.
+- Reading a CSV file now says that its cells are separated by commas. Jarvis
+  shows the cells with tabs between them, and that is what misled the model.
+- The words that point at a kept result are never written as the file. In
+  another test Jarvis put those words into the workbook instead of the 640
+  rows they point at, and the reply said "640 rows". That call is now
+  refused, nothing is written, and Jarvis is told the call to make instead.
+- A stand-in typed beside a kept result is ignored. Jarvis often names the
+  kept result and also types a word such as "test", or repeats the heading
+  row. That used to be refused, which cost a step in about one reply in
+  three. Now the kept result is written. Real text typed beside a kept
+  result is still refused, because the two are never joined by guesswork.
+
+**A total Jarvis adds in its head is caught.** In two tests Jarvis typed
+sixteen right totals from a script into a Word file and added a grand total
+of its own, wrong both times. Telling it not to did not stop it. Now Iron
+Jarvis remembers the figures a script or the calculator produced in the
+chat. When a file holds at least three of those figures and another money
+figure beside them, the file tool's answer names that figure and tells
+Jarvis to work it out with a script or the calculator and write the file
+again. A figure you gave Jarvis yourself is left as it is, and so are dates,
+counts and percentages.
+
+You are told too. If the file still holds such a figure when the reply
+ends, a note under the reply names the file and the figure: "totals.docx
+holds a figure Jarvis typed itself: 792,184.46. No script or calculator
+worked it out, so check it before you rely on it." In tests where Jarvis
+was told to add sixteen totals up by hand, it once checked its total with
+the calculator after the warning, and once ignored the warning and answered
+"Done" over a wrong total. The note is there for the second case.
+
 ### Scripts in more places, and offered when they would help
 
 - **Offered by what is happening, not only by your wording.** After four reads
   of the same kind in one reply, the script tool joins the reply so the rest
   can be one step.
+- **"Merge", "combine" and "consolidate" many files** now bring the script
+  tool, the way "every" and "all" did.
 - **Agent runs have it too**: schedules, goals, workflow steps, missions and
   tasks handed over from chat. Coding sessions do not need it (they have a
   command line).
@@ -2177,7 +2248,10 @@ A script is also limited in what it can do by itself:
 
 - It imports Python's own standard library, plus `openpyxl` and `dateutil`.
   Other libraries are refused. Several of them can open files and the
-  internet by themselves, where the app cannot see it.
+  internet by themselves, where the app cannot see it. A refused import now
+  names the built-in modules to use instead. In one test Jarvis tried
+  pandas, was refused, and then spent seven command-line steps without
+  making the file.
 - It cannot open a SQLite database, read the Windows registry, or ask Windows
   about a path on another computer.
 
@@ -2198,9 +2272,21 @@ of the app with made-up statements, one run each:
 | Use a skill without "/" | not possible | loaded by itself |
 | Change a skill from chat | not possible | one card, version before kept |
 
+Three more requests, each worded without "make" or "save", were run on this
+version before and after the fix described above (same model, one run each;
+every workbook was checked row by row against the 16 statements):
+
+| Request | Before the fix | After |
+|---|---|---|
+| "Put every payment row … into one workbook called payments-check.xlsx" | no file, 2 approval cards | 34.9 s, no cards, 640 rows right |
+| "Merge the statement CSV files … into one Excel file named merged.xlsx" | no file, 2 approval cards | 22.5 s, no cards, 640 rows right |
+| "Put the 16 totals in a Word document called totals-summary.docx" | no file, 3 approval cards | 13.1 s, no cards |
+
 Without a model: 24 reads that each wait 0.2 s took 5.2 s one at a time and
 1.5 s in one step. Reading 12 workbooks or 12 PDFs took the same time either
 way.
+
+The same three requests were then run on the packaged program (the one the installer carries), built from this version: 21.7 s, 22.3 s and 13.9 s, with no approval cards. Both workbooks matched the 16 statements row by row (640 rows, with dates and amounts as real values), and all 16 totals in the Word file were right. A fourth request told Jarvis to add the sixteen totals up by hand: the file tool named the typed total, Jarvis checked it with the calculator and wrote the file again with the right figure (27.9 s). Earlier passes on the packaged program are how the last five fixes in this section were found.
 
 ### Checked by a second reviewer before release
 
@@ -2239,6 +2325,17 @@ each has a test that fails on the old code:
   refused that import.** It is told to use the app's own reading tools.
 - **A skill from another program's folder is sent to whichever model answers
   the chat** when Jarvis loads it, the same as when you pick it with "/".
+- **The figure check does not stop the file.** A file with a figure that no
+  script or calculator produced is still written; Jarvis is warned and you
+  get the note. It reads only files that hold at least three produced
+  figures, and only money figures (thousands commas, or two decimals). A
+  figure Jarvis says in its reply, and not in a file, is not checked. In an
+  agent run (a schedule, a mission) only the model is warned: the run's
+  summary does not carry the note. For a total that matters, ask for it by
+  name ("and a grand total"), so the script computes it.
+- **The installed desktop app was not driven.** The packaged program that
+  the installer carries was built from this version and given the same
+  requests; the installer and its window were not.
 
 ## A Linux preview is attached to each release (v1.472.3)
 

@@ -17614,8 +17614,8 @@ suggest-don't-act for anything autonomous, everything reviewable.
       the script. Real parallel document reads need reader PROCESSES: not
       built.
   - **WHAT A SCRIPT READ STAYS WHERE IT WAS READ.** `ReplSession.
-    script_origins` (reset when a child is spawned; read through
-    `ReplRegistry.peek`): `"local"` (a tool read, or the child's own file
+    script_origins` (reset when a child is spawned; held on the worker
+    OBJECT the script runs in, see REVIEW): `"local"` (a tool read, or the child's own file
     read: the audit hook sets `worker._LOCAL_READ` for a read or listing
     inside the working folder and every later pipe message carries
     `"local": 1`), `"pack:<server>"`, `"outside:<name>"`. The public web
@@ -17623,7 +17623,9 @@ suggest-don't-act for anything autonomous, everything reviewable.
     `ToolScriptTool._carry_refusal`: a tool that reaches outside
     (`egress.INTERNET_TOOLS` / `reaches_outside`) is refused when the worker
     holds private data from any origin but that tool's own. Across scripts
-    of one worker. A failed call notes nothing.
+    of one worker. A FAILED call counts as a read too (an error often quotes
+    what it found; `test_a_failed_local_read_counts_as_a_read`, moved on
+    purpose).
   - **`tools.keep(name, value)` + `_from_script`** (`tools/script_values.py`:
     `SHELF`, keyed by `worker_key(ctx)[0]`, bounded, 6 h; `adopt_turn_worker`
     rekeys it with the worker). A DIRECT call names a kept value for a
@@ -17709,17 +17711,222 @@ suggest-don't-act for anything autonomous, everything reviewable.
     the task matches `wants_tool_script` and `_offer_script_tool` adds it
     mid-run (`_script_armable`; never a Build helper or a read-only
     reviewer).
+  - **A NEW FILE, HOWEVER IT IS WORDED** (found by the last live runs: three
+    requests worded without "make"/"save" wrote nothing or needed five shell
+    cards, because no file-writing tool was in the turn).
+    - `autoselect.wants_new_file(text, picked)`, armed in its OWN place in
+      `_resolve_armed_tools` (so `select_auto_tools` is byte-identical,
+      pinned): a gathering verb, then into/to/onto A or ONE (new) workbook /
+      spreadsheet / document / file, or IN one after a verb that takes a
+      place, or a combining verb INTO a file's name. Only in a request
+      position (`_NEW_FILE_LEAD_RX`, or after and/then/a comma with no
+      subject before it), before any `_ENQUIRY` marker, never after "don't",
+      never when the selector already picked a `_CHANGE_TOOLS` member
+      ("merge these pdfs into one file" is `pdf_arrange`'s). "The workbook" /
+      "my spreadsheet" (a file that exists) never match.
+    - `chat_turn.offer_file_tool` (both lanes, right after
+      `offer_script_tool`, MIRROR NOTE): when the reply's newest script kept a
+      value and no tool of the turn can take one, `write_document` joins for
+      the next round (armed + granted like the arming pass; never with Auto
+      tools off, over a deny, past a weak model's budget or a surface's
+      ceiling) and the lanes resize `_rounds` / `_office` for a document
+      turn. THE SIGNAL IS STRUCTURED: `script_values.Shelf.note_unplaced(key)`
+      is set by the script TOOL (kept, ok, no taker in `allowed_names`),
+      cleared when the next script of that worker starts, read once by
+      `take_unplaced`, follows `rekey`. Never read a script's printed words
+      for it (a document a script read could then arm a writer). The script's
+      result line `tool_script.NO_FILE_TOOL_LINE` is replaced by
+      `KEPT_FILE_NOTE`.
+    - `wants_tool_script` also answers yes for a combining verb
+      (`_SCRIPT_COMBINE`: merge, combine, consolidate, compile, collate,
+      stack, append) followed by a PLURAL thing.
+    - `tool_script`'s description names NO library (naming openpyxl led a
+      real model to `wb.save(...)` inside the script); the worker's refused
+      write says `tools.keep(...)` + `_from_script`. A script may still
+      import openpyxl and dateutil (`_SCRIPT_MODULES`).
+    - Not in agent runs: a run's roster is its contract.
+  - **A KEPT TABLE IN A WORKBOOK** (found on the PACKAGED run: the script
+    kept `{"header": [...], "rows": [...]}`, the writer wrote that object's
+    text into ONE cell, and the reply said "640 rows").
+    `documents/writers._one_table` reads header|headers|columns +
+    rows|data (both keys, a flat header, rows or records, no other key;
+    `charts` allowed for a sheet inside `sheets`) in `_spreadsheet_content`
+    (an object or its JSON text) and `_sheet_rows`. A dict that is not rows,
+    sheets or a table raises `_not_a_table` in `_write_xlsx` / `_write_csv`
+    BEFORE anything is written ("nothing was written: …"); `{"rows": …}`
+    alone keeps its old reading (a sheet named "rows"), text and typed rows
+    are unchanged. `script_values._shaped`: rows a script kept (a list of
+    rows or of records) reach an .xlsx as `{"sheets": {"Sheet1": rows}}`, so
+    `_xlsx_fill` makes clean numbers and ISO dates values (a leading zero or
+    more than 15 digits stays text); a CSV, any other file type and any
+    other tool get the value as kept.
+  - **LINES NEVER SPLIT INTO COLUMNS** (the same packaged run, second
+    request: the model split each CSV line on tabs, because `read_document`
+    SHOWS a CSV's cells with tabs, and `merged.xlsx` was one column of
+    "2026-01-01,Vendor 42,260.39" under a reply that said "3 columns").
+    `documents/lint.unsplit_lines(cells)` (three or more text lines, every
+    non-blank cell text, the SAME count, one or more, of comma / tab /
+    semicolon / bar in every line; bounded at 2,000 lines; pure) feeds the
+    warning `xlsx-unsplit-rows` (only when every row has only column A
+    filled) and `script_values.describe` ("N rows of ONE cell each, every
+    cell holding 2 commas (lines not split into columns?)"), so the script's
+    own result says it BEFORE a file is written. One column of names,
+    numbers or ordinary sentences is not flagged (different counts per
+    line). `documents/tools.CSV_SHOWN_NOTE` leads a `read_document` of a
+    .csv whose shown text holds a tab ("its cells are shown here with tabs
+    between them; in the file itself they are separated by commas"); never
+    for a one-column CSV or another file type; an OCR or other note wins.
+  - **THE REFERENCE TYPED AS THE CONTENT** (a later packaged run: the model
+    called `write_document(content='_from_script={"content":
+    "payment_rows"}')` with NO `_from_script` argument; the workbook held
+    that one line, its self-check read "clean", the reply said "640 rows").
+    `script_values.misplaced_reference(tool, args, ctx)`, asked by
+    `registry.invoke` in the `elif` beside the `_from_script` branch (the
+    failed-result path of any argument error): "NOTHING WAS CHANGED. … Make
+    the call again with the arguments {..., "_from_script": {"content":
+    "<name>"}} and leave `content` out". REFUSED, never lifted into the
+    argument: a lifted reference would run a kept value that no card had
+    named or pinned (the lanes build cards from the model's own arguments).
+    Narrow, so no other write changes: only `FROM_SCRIPT_ARGS` tools and
+    their fillable arguments, only when the WHOLE text is the reference
+    (`_REFERENCE_TEXT_RX`: linear, pinned in a child process), only while
+    this chat or run has a value kept (else the text is written as typed).
+    A wrong name is answered with the kept one, or "Kept now: …".
+  - **TYPED BESIDE A REFERENCE IS RARELY CONTENT** (measured: twelve live
+    "given twice" refusals; ten were a placeholder — 'test', 'Placeholder',
+    '{{ rows }}' —, the kept name inside a structure, or the heading row
+    the kept rows already start with; each refusal cost a step, in about one
+    reply in three). `script_values._left_out(typed, name, kept)` counts
+    those as left to the reference: `_PLACEHOLDERS` (short ON PURPOSE: a
+    word that could be a one-word file, like "merged" or a title, is still
+    refused), the name as a whole word inside text that starts with `{` or
+    `[`, `_repeats_first_row` (typed as rows or as a list's text; the same
+    cells, case-blind, as `_first_row(kept)` in each kept shape). The check
+    moved from `_refs` into `fill_from_script`, after the kept value is
+    parsed (it needs the heading); a "given twice" refusal records the
+    arguments AS SENT (`sent`), so the ledger still shows what was typed.
+    THE HINT A SCRIPT LEAVES STAYS SHORT (pinned): a longer one that spelled
+    the arguments out and said "no `content`" made the model add a
+    placeholder `content` in 4 of 6 live runs (2 of 6 with the short hint, 1
+    of 6 after this rule).
+  - **FIGURES THE MODEL TYPED BESIDE A SCRIPT'S OWN** (seen live twice on the
+    packaged app: sixteen right totals from a script, and a "Grand Total"
+    the model had added in its head — 793,542.46, then 792,345.26; the
+    truth was 793,184.46; a description sentence, "EVERY FIGURE COMES FROM
+    THE SCRIPT", did not stop it). `registry.invoke`, after a successful
+    call and BEFORE the ledger row: a `script_values.FIGURE_SOURCES` tool
+    (`tool_script`, `calculate`) has its output's numbers remembered for the
+    chat or run (`note_figures` → `Shelf.add_figures`: sorted, `MAX_FIGURES`
+    20,000 a key, `MAX_KEYS` keys, moved by `rekey`, forgotten by `drop`);
+    a `FROM_SCRIPT_ARGS` tool's TYPED content is read by
+    `typed_figures_note`: at least `FIGURES_MIN_MATCHED` (3) of its numbers
+    are produced ones (a figure matches a produced one rounded to the places
+    the file shows: bisect, half a unit of the last place) AND a money-like
+    number (thousands commas or exactly two decimals) is none of them → the
+    answer gains "[check the figures] N of the figures … This one is not: …
+    work it out in a tool script or with `calculate`, then write the file
+    again … A figure the user gave you can stay". NEVER a refusal: the file
+    is written (the app cannot tell a user's figure from an invented one).
+    `figures_in` / `_FIGURE_RX`: a number never starts inside a word, an id,
+    a date, a time, a version or a comma list, and never ends in `%`; linear
+    (a token can only start after a non-digit, non-letter, non-dot,
+    non-comma; pinned in a child process). Content taken from a kept value
+    is not read (exact by construction). THE USER IS TOLD TOO: the check
+    marks the file (`Shelf.note_unchecked(key, path, figures)`; a later write
+    of the same `path` with nothing to check, typed or from a kept value,
+    clears it; `MAX_UNCHECKED_FILES` 8 a key, `UNCHECKED_TTL_S` 1800), and
+    BOTH chat lanes append `script_values.unchecked_figures_note(ctx)` right
+    after `_xl_unchanged`, outside the demo/else branch, only when a tool
+    ran (MIRROR NOTE; `take_unchecked` forgets, so it is said once):
+    "_Note: totals.docx holds a figure Jarvis typed itself: 792,184.46. No
+    script or calculator worked it out, so check it before you rely on it._"
+    LIVE (told to add 16 totals in its head): on the source build the model
+    was shown the check, verified with `calculate` and answered; on the
+    packaged build it IGNORED the check and answered "Done" over a wrong
+    total (792,184.46 for 793,184.46) — which is why the user's note
+    exists. A figure the user gave was flagged and left alone, no extra
+    step.
+  - **A REFUSED IMPORT SAYS WHAT TO USE** (one live run: `import pandas`
+    refused, and the model moved the work to the command line — seven
+    commands, no file): `worker._IMPORT_BLOCKED` names csv, json,
+    statistics, decimal and datetime "here in the script", and the tool's
+    description says "no pandas, no numpy".
+  - **A CALL'S LENGTH HAS A SEAM:** `tool_script._wall_s` (beside `_cpu_s`).
+    The "quick calls run in order" pins read a clock the stand-in tool moves
+    (`_Wall`, `_said_times` in `tests/test_script_power_v1473.py`): read off
+    the real clock, a quick call took 50 ms on a loaded PC once and the pin
+    failed with nothing wrong (reproduced with an 80 ms sleep in the serial
+    phase: the old shape red, the new green).
+  - **TEST ORDER:** `tests/conftest.py` `_turn_links_do_not_cross_tests`
+    restores `egress._TURN_THREADS` after every test: a new chat's first
+    script is keyed by the linked chat now, so a link another test left
+    ("turn-new" in `test_chat_lanes_v13510`) decided where a later test's
+    script ran (red in a wide run, green alone; proven by removing the
+    restore).
+  - **REVIEW (an independent reviewer; 15 defects, each pinned red first in
+    `tests/test_script_power_review_v1473.py` and the lanes file).**
+    - WHAT THE CARD SHOWED IS WHAT RUNS: `script_values.pins_for` takes each
+      kept value's `sha` where the card is built; `registry.invoke(
+      kept_pins=)` → `fill_from_script(..., pins)` refuses a value changed
+      since ("NOTHING WAS CHANGED. The kept value … is not the one the
+      approval showed"). Stream lane: `_plan["kept_pins"]`, passed only for a
+      carded call; runtime: `pins_for(...) or {}`; `chat_turn.kept_pins_for`
+      fails closed. A raising `redact_args` shows `(not shown)` per key.
+    - A BATCH: `SpendCheck(ask, once_only, reason="batch", dont_ask_skips)`
+      (asked every time, no wider answer; `ONCE_REASON_WHY["batch"]`; the POST
+      lane refuses "needs an approval of its own every time"); never a
+      guarded file (`guarded_target`, every path key incl. `out_dir`), never
+      `rename_file` with `overwrite`, never `pdf_arrange` with
+      `encrypt_password` (`_NOT_IN_A_BATCH`); `returns_untrusted_content`;
+      a card line keeps the END of each path.
+    - RENAMES: `auto_approve.guarded_move` (onto or away from a guarded file:
+      its own once-only card; `rename_file` is in `GUARDED_EDIT_TOOLS`); a
+      file REPLACED by a rename is moved to `<home>/trash/<stamp>/
+      replaced-by-rename/` first (`builtins._keep_replaced`; refused if it
+      cannot be kept; Undo does not put it back).
+    - WHAT COUNTS AS READ / OUTSIDE (`tool_script._origin`, `_carry_refusal`):
+      the worker is held as an OBJECT (`on_session`; a chat saved mid-script
+      renamed the worker and lost the record); a new chat's first script is
+      keyed by the linked chat (`_linked_chat`); memory bases off this PC
+      (`_MEMORY_ORIGIN`), each app's resources (`pack:<server>`), the open
+      browser page (`web_extract`) are their own places; a call whose
+      arguments name a path on another computer is refused
+      (`network_path`, judged by its text).
+    - THE WORKER (`repl/worker.py`, isolated only): imports are an ALLOW-LIST
+      (`_STDLIB` + `_SCRIPT_MODULES`; a native module under a borrowed dotted
+      name is refused; `tkinter` never); SQLite, the registry, `_winapi`
+      file/pipe/process calls, WMI and `os.add_dll_directory` refused;
+      `_winapi.CopyFile2` checked as the read and the write it is
+      (`shutil.copy2` was unseen); `os.stat` / `exists` / `lstat` and the
+      `nt._path_*` family are wrapped (`_guard_unaudited`: they raise no audit
+      event) so a network-spelled path is refused BY ITS TEXT; `check()`
+      refuses one before `_canonical`. The reviewer's 742-call spelling sweep
+      touches the share 0 times.
+    - `saved_scripts.without_run_note` removes only Iron Jarvis's own note
+      (it cut a skill's text at any look-alike heading).
+    - Cost on the loop: card text is cut BEFORE it is masked (881 ms → 47 ms,
+      837 ms → 9 ms).
   - **LIVE** (scratch daemon on 8797, Claude Haiku through claude-cli,
     made-up statements, ONE run each; v1.472.1 from a detached copy of
     master run with `PYTHONPATH`): add up 16 statements 34.2 s / 5 shell
     cards → 17.5 s / none; 640 rows into a workbook 141.1 s / 22,646 output
     tokens → 39.0 s / 2,346; rename 16 files FAILED (out of rounds) →
     11.7 s, one card; a skill made in chat was loaded by itself; a skill
-    changed from chat kept its version before.
+    changed from chat kept its version before. AFTER THE REVIEW (source
+    daemon on 8813): "put every payment row … into one workbook called …"
+    34.9 s, "merge the statement CSV files … into one Excel file named …"
+    22.5 s, "put the 16 totals in a Word document called …" 13.1 s — each no
+    cards, no failed call, every workbook equal to its 16 sources row by row
+    (before the file-tool fix: no file, 2-3 shell cards each).
+    ON THE PACKAGED DAEMON (scratch root, port 8811, built with `packaging/build_daemon.ps1`; each earlier pass found a defect fixed above: the header + rows object in one cell, lines never split, the reference typed as the content, a head-added grand total written into a .docx twice, `import pandas` then seven shell calls and no file). Final pass: 21.7 s / 22.3 s / 13.9 s, no cards, no failed call, both workbooks equal to the sources row by row with real dates and numbers, 16 of 16 totals; the forced head-sum request: check shown, `calculate`, the file written again with the right total (27.9 s). The guard probe passed on every build (stdlib and openpyxl ok; lxml, win32api, PIL, SQLite, the registry, a stat on another computer, a copy and the web after a local read all refused; `tools.map` ok).
   - **TESTING TRAPS FOUND:** an inline Bash heredoc turns `\\n` into a
-    newline before Python reads it (three patches silently did not apply):
-    write a patch script with the Write tool. `time.process_time()` under a
-    loaded runner is not a test's fact: patch `tool_script._cpu_s`.
+    newline before Python reads it (three patches silently did not apply,
+    and three more in the review round): write a patch script with the Write
+    tool, or use Edit after a Read. `time.process_time()` under a loaded
+    runner is not a test's fact: patch `tool_script._cpu_s`. The `import`
+    audit event does not fire for `importlib.import_module` of a pure
+    package: an import pin tries both spellings. A live run that "worked
+    before" proves one wording: run at least three wordings of a request.
   - **OPEN:** the owner's own model server (GLM) was NOT tried (its gateway
     needs a key); one cloud model, single runs; local document reads are
     not parallel (reader processes not built); the skill match is by words
@@ -17727,11 +17934,27 @@ suggest-don't-act for anything autonomous, everything reviewable.
     program's skill text goes to whichever model answers when loaded; no
     script tool in coding sessions; `apply_changes` is chat-page only; the
     model still reaches for `shell` to list a folder when `list_files` was
-    not offered (older); not driven in the packaged app.
+    not offered (older); an agent run's card for a call that uses a kept
+    value shows the value's name, not its summary; a script's audit hook is a
+    guard against a careless or misled model, not a sandbox;
+    `wants_new_file` misses requests with a marker word before them ("I
+    asked … Put them into a spreadsheet") and names with no extension; the
+    installer / desktop app was not driven (the packaged DAEMON was); the
+    figures check is a note, not a gate (the file is written), sees only
+    files with three or more produced figures, and never a figure said in
+    the REPLY; an AGENT RUN gets the model's note only (no line in the run's
+    summary); the mark is keyed by `path` as the call spelled it (the same
+    file rewritten under another spelling keeps its mark); a model that
+    REWRITES the file after the warning was not seen live; "given twice"
+    still costs a step in about one reply in six (a title-like word typed
+    beside the reference).
   - **Pins:** `tests/test_script_power_v1473.py` (tool level),
     `tests/test_script_power_lanes_v1473.py` (real stream / POST lanes and
     agent runs, scripted model), `tests/test_script_power_matchers_v1473.py`
-    (both-ways tables, linear pins), `dashboard/__tests__/script-cards-v1473.
-    test.tsx` (42 mutations, all red). Moved on purpose:
+    (both-ways tables, linear pins), `tests/test_script_power_review_v1473.
+    py` (the review's defects), `dashboard/__tests__/script-cards-v1473.
+    test.tsx` (180 mutations, all red). Moved on purpose:
     `test_skill_from_chat_v1470` (the brief gained `SKILL_FINDABLE_LINE`),
-    the roster / permission / tool-word tables and both word fixtures.
+    `test_repl_confinement_v1160` (`shutil.copy2` joined the routes out of
+    the folder), the roster / permission / tool-word tables and both word
+    fixtures.
