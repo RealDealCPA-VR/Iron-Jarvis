@@ -30,6 +30,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import sys
 import threading
 from pathlib import Path
@@ -115,12 +116,38 @@ def snapshot(repo: Path) -> dict:
     }
 
 
+_GH_NAMES = ("gh", "gh.exe", "gh.cmd", "gh.bat")
+_SHADOWS: dict[str, str] = {}
+
+
+def _shadow_without_gh(folder: str) -> str:
+    """A folder of links to everything in *folder* except ``gh``.
+
+    On Linux and macOS ``gh`` sits in the same folder as ``git`` and ``sh``
+    (``/usr/bin``, Homebrew's ``bin``), so dropping the whole folder from PATH
+    took git away with it. Made once per folder per test process."""
+    made = _SHADOWS.get(folder)
+    if made is None:
+        made = tempfile.mkdtemp(prefix="ij-no-gh-")
+        for name in os.listdir(folder):
+            if name in _GH_NAMES:
+                continue
+            try:
+                os.symlink(os.path.join(folder, name), os.path.join(made, name))
+            except OSError:
+                pass
+        _SHADOWS[folder] = made
+    return made
+
+
 def _path_without_gh() -> str:
     keep = []
     for d in os.environ.get("PATH", "").split(os.pathsep):
         if not d:
             continue
-        if any(os.path.exists(os.path.join(d, n)) for n in ("gh", "gh.exe", "gh.cmd", "gh.bat")):
+        if any(os.path.exists(os.path.join(d, n)) for n in _GH_NAMES):
+            if os.name != "nt":
+                keep.append(_shadow_without_gh(d))
             continue
         keep.append(d)
     return os.pathsep.join(keep)

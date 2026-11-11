@@ -57,6 +57,26 @@ def _never_the_users_iron_proxy():
 
 
 @pytest.fixture(autouse=True)
+def _protected_roots_per_test():
+    """``fs_policy._PROTECTED_ROOTS`` is process-wide and every platform a test
+    builds adds about nine folders to it. Over one worker's run the list grew
+    without end, and the Python session child gets it as ONE environment
+    variable: on Linux a single variable past 128 KB refuses the start
+    ("Argument list too long"), which failed about 120 tests in the first
+    Linux trial (2026-11-10). The app builds one platform, so only the suite
+    met it. Each test leaves the list as it found it (folders registered by a
+    wider-scoped fixture were there before the test and stay)."""
+    from iron_jarvis.core import fs_policy as _fs
+
+    before = set(_fs._PROTECTED_ROOTS)
+    try:
+        yield
+    finally:
+        _fs._PROTECTED_ROOTS.clear()
+        _fs._PROTECTED_ROOTS.update(before)
+
+
+@pytest.fixture(autouse=True)
 def _iron_proxy_service_per_test():
     """v1.367.0: ``iron_proxy.service._CURRENT`` is the process's live service
     (the last platform built registers itself). A test that switched it on
