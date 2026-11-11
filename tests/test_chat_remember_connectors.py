@@ -15,6 +15,7 @@ manager; MCP tools are fakes registered straight on the registry.
 
 from __future__ import annotations
 
+import os
 from fastapi.testclient import TestClient
 
 from iron_jarvis.daemon.app import create_app
@@ -151,7 +152,7 @@ def test_thread_derives_documents_from_pre_v191_transcripts(tmp_path):
     client = _client(tmp_path)
     real = tmp_path / "Application_Testing_Letter.docx"
     real.write_bytes(b"PK\x03\x04fake")
-    folder = str(tmp_path) + "\\"
+    folder = str(tmp_path) + os.sep
     msgs = [
         {"role": "user", "content": "write me a letter in word about testing"},
         {"role": "assistant",

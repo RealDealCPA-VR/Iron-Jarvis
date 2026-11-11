@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.472.1 (2026-11-10).*
+holds itself to. Current as of v1.472.3 (2026-11-10).*
 
 ---
 
@@ -2239,6 +2239,46 @@ each has a test that fails on the old code:
   refused that import.** It is told to use the app's own reading tools.
 - **A skill from another program's folder is sent to whichever model answers
   the chat** when Jarvis loads it, the same as when you pick it with "/".
+
+## A Linux preview is attached to each release (v1.472.3)
+
+Nothing changes in the Windows app.
+
+From this release on, a few minutes after a new version is published, a Linux
+build of Iron Jarvis is added to the same release page:
+`Iron-Jarvis-<version>-linux-preview.AppImage`. It is one file: mark it as a
+program and run it.
+
+It is a **preview**:
+
+- It does not update itself. To get a newer one, download it again.
+- It starts on a test machine, but it has not been used on many real PCs yet.
+- Windows-only features are not there: working in a workbook open in Excel,
+  reading scanned pages with Windows' own text reader, and the Windows
+  terminal handling.
+
+The Linux build runs only after the Windows installer is already out, and it
+can only add its one file. It cannot hold up, change or replace the Windows
+installer or the files the Windows app checks for updates. There is no Mac
+build yet.
+
+## Test results you can trust after a quick fix (v1.472.2)
+
+- **A test run right after an edit always reads the new code.** Python keeps
+  a compiled copy of each file and reuses it when the file's time (to the
+  second) and size have not changed. An agent that fixed a file and ran the
+  tests again within the same second could be told they still failed.
+  Commands Iron Jarvis runs no longer write those compiled copies, so your
+  Python projects stop getting `__pycache__` folders from Jarvis's own
+  commands. Commands you run yourself are unchanged.
+- **Linux- and Mac-style folder paths are understood in more phrasings**, such
+  as "use Codex for /home/sam/shop" with no word like "folder" in it.
+
+More groundwork for Linux and Mac, none of it visible on Windows: stopping a
+coding tool ends the programs it left running; idle coding tools are stopped
+on a Mac; closing a terminal can no longer hang there; and fixing a file
+name's capital letters works on a Mac. There is still no Linux or Mac
+download.
 
 ## First steps toward Linux and Mac (v1.472.1)
 

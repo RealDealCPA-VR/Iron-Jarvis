@@ -244,6 +244,9 @@ class _FakeOs:
     EXIST on win32, where this suite runs.
     """
 
+    # v1.472.2: the reap never waits without a bound, so it asks WNOHANG.
+    WNOHANG = 1
+
     def __init__(self, pgid_of, daemon_pgid: int = 1000) -> None:
         self._pgid_of = pgid_of
         self._daemon_pgid = daemon_pgid
@@ -292,7 +295,7 @@ def test_posix_kill_signals_the_whole_group_not_just_the_shell(monkeypatch, sigk
     _posix_backend().kill()
     assert ("killpg", 4242, sigkill) in fake.calls
     assert not any(c[0] == "kill" for c in fake.calls)  # group covers the shell
-    assert ("waitpid", 4242, 0) in fake.calls  # still reaped
+    assert ("waitpid", 4242, 1) in fake.calls  # still reaped
 
 
 def test_posix_second_kill_issues_no_signal_at_all(monkeypatch, sigkill):
@@ -473,5 +476,5 @@ def test_posix_kill_snapshots_the_pid_against_the_concurrent_drain_thread(
 
     b.kill()  # must not raise TypeError
     assert ("killpg", 4242, sigkill) in fake.calls
-    assert ("waitpid", 4242, 0) in fake.calls
+    assert ("waitpid", 4242, 1) in fake.calls
     assert b._pid is None

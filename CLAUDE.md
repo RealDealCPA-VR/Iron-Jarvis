@@ -17525,6 +17525,72 @@ suggest-don't-act for anything autonomous, everything reviewable.
   hanging; no Linux or Mac download is published and release.yml builds
   Windows only.
 
+- **Linux and Mac, round two: four real faults, each invisible on Windows**
+  (v1.472.2; trial runs on `trial/platforms`, never merged). (1)
+  `core/procs._is_window_program` answered True for "unknown", and OFF
+  WINDOWS everything is unknown, so `hosted/process.kill_left` spared every
+  stray program; it answers False when `os.name != "nt"`. (2)
+  `sandbox/native.NO_STALE_BYTECODE` (`PYTHONDONTWRITEBYTECODE=1`) is in BOTH
+  `scrubbed_env()` and `build_env()`: Python reuses a `.pyc` whose source has
+  the same whole-second time and size, so run-tests / edit `X = 1` → `X = 2`
+  / run-tests inside one second read the OLD code (the finish check said
+  "1 != 2" right after the fix on GitHub's Linux runner; the v1.386.0 lesson,
+  now closed in the product). `test_finish_shell_writes_v1387` moved on
+  purpose: no `__pycache__` whatever the daemon's own setting. (3)
+  `hosted/programs._listening` returns None when `psutil.net_connections`
+  raises AccessDenied (macOS without root) and `read_one` then asks the tool's
+  OWN members one by one (`_listening_of`); before, every read on a Mac was
+  "cannot tell" and the idle reaper never stopped a Build › Code tool. (4)
+  `terminals/backend.PosixPtyBackend.kill` never calls `waitpid(pid, 0)`: on
+  macOS a killed shell cannot finish exiting while its output is unread on the
+  master side, so `_reap` polls WNOHANG for `_REAP_WAIT_S` (3 s) while
+  dropping waiting output, then closes the master fd (`_closed`; `write`
+  becomes a no-op) and polls once more. A test double of `os` for that
+  backend needs `WNOHANG`. Also: `_case_only_rename` folds case with
+  `casefold()` off Windows (`normcase` is the identity on macOS, so a
+  capitalization fix was refused as "already exists";
+  `_denotes_a_different_file` still confirms one on-disk entry),
+  `records_build._POSIX_PATH` makes a bare POSIX path `folderish`, the pack
+  failure classifier reads a launcher's name by either slash, and
+  `tests/windows_only.py` gained `NOT_ON_MAC` (the release gate's script uses
+  GNU `grep -P`). Test lessons: a trap SCRIPT needs `chmod(0o755)` off
+  Windows; never assert a short digit string is absent from serialized events
+  (a time stamp contained "4111"); a venv `python.exe` on Windows is a
+  launcher whose CHILD is the real process. State at this release: Linux 8
+  failed of ~28,800 (finish replays, bench machine assumptions, launch
+  recipe, command-shell ask, two timing), Mac 17 (bench tasks that start a web
+  server, the Iron-Proxy bundle start, `Cmd` vs `Ctrl` in a hotkey pin,
+  `/private/var` temp spelling), nothing hanging.
+
+- **The Linux preview is its OWN workflow, after the release, and can only
+  ADD one file** (v1.472.3; the owner's condition: "as long as it doesn't
+  affect my use of the app on my Windows machines in any way").
+  `.github/workflows/linux-preview.yml` runs on `workflow_run` of "Release"
+  (completed) or by hand (`gh workflow run linux-preview.yml -f version=X.Y.Z
+  -f dry_run=true`). `plan` builds only when the Release run SUCCEEDED, the
+  newest published release's tag sits on that run's commit, and the release
+  has no `.AppImage` yet; `build` checks out the TAG, freezes the daemon,
+  builds the dashboard, add-on and voice model, packages
+  `Iron-Jarvis-<ver>-linux-preview.AppImage` (`electron-builder --linux
+  AppImage --publish never -c.linux.category=Office -c.linux.icon=…`: the
+  Linux settings ride the command line, `desktop/package.json` is unchanged)
+  and starts it under xvfb with `--appimage-extract-and-run` until `/health`
+  answers; `attach` (the ONLY job with `contents: write`) uploads that one
+  file with no `--clobber` and appends one line to the release notes.
+  release.yml IS NOT CHANGED: do not move this build into it or into
+  `publish`'s `needs` — a Linux failure must never hold the Windows
+  installer. It never writes the installer, its blockmap, `latest.yml` or the
+  `updates` branch (all the Windows app and `scripts/promote_stable.py`
+  read). No Linux auto-update: no `latest-linux.yml` is published. A release
+  published by `GITHUB_TOKEN` fires no `release` event, which is why the
+  trigger is `workflow_run`; a NEW workflow file cannot be dispatched from a
+  branch (it must be on master), so its build half was tried through a
+  throwaway `push`-triggered copy on `trial/linux-preview`. Pin:
+  `tests/test_linux_preview_workflow_v14723.py`. OPEN: the `attach` job was
+  first exercised by v1.472.3's own release; nobody has used the AppImage on
+  a real Linux PC; no Mac build (needs the owner's Apple Developer membership
+  as the LLC, a Developer ID certificate and notarization).
+
 - **A script may call many tools at once, hand a value to a file tool, and
   plan a batch; what it read stays where it was read; a saved skill is
   offered by its words; chat can rename** (v1.473.0; the owner: "build and

@@ -253,7 +253,9 @@ async def test_a_reply_that_read_and_ran_its_tests_changed_nothing(tmp_path, lan
     platform, new_model, new_done = await run("home-new", old=False)
     # The test run really left its caches in the folder.
     assert (ws / ".pytest_cache").is_dir()
-    assert (ws / "__pycache__").is_dir() is (bytecode == "on")
+    # v1.472.2 (moved on purpose): a command Iron Jarvis runs writes no
+    # bytecode whatever the daemon's own setting (native.NO_STALE_BYTECODE).
+    assert not (ws / "__pycache__").exists()
     _old, old_model, old_done = await run("home-old", old=True)
     assert "1 passed" in str(new_model.calls[-1]["messages"][-1].content)
     assert _calls_seen(new_model) == _calls_seen(old_model)

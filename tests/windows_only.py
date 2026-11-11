@@ -66,6 +66,10 @@ WINDOWS_ONLY: dict[str, tuple[str, ...]] = {
         "test_the_edit_tool_writes_a_link_jarvis_may_read_and_refuses_one_it_may_not",
         "test_the_users_own_setting_limits_links_too",
     ),
+    # A path typed in other capitals is the same file only on Windows.
+    "test_browser_downloads_v14430.py": ("test_find_by_id_path_or_unique_name",),
+    "test_build_accounts_v1302.py": ("test_an_adopted_default_home_sets_no_home_var_in_a_pane",),
+    "test_build_app_parity_v1439.py": ("test_opencodes_commands_are_kept_per_folder",),
     # kernel32 and Windows OCR.
     "test_freeze_trace_v14091.py": (
         "test_a_healthy_process_writes_no_dump",
@@ -88,6 +92,34 @@ WINDOWS_ONLY: dict[str, tuple[str, ...]] = {
         "test_the_team_tasks_did_not_change",
     ),
 }
+
+
+#: Tests that cannot run on macOS only: the release gate's own shell script
+#: uses GNU grep's ``-P``, which macOS's grep lacks. It runs on GitHub's Linux
+#: and Windows machines, never on a Mac.
+NOT_ON_MAC: dict[str, tuple[str, ...]] = {
+    "test_release_gate_v13703.py": (
+        "test_gate_a_dry_run_on_a_branch_builds_and_tests_but_is_marked_dry",
+        "test_gate_a_tag_must_name_the_version_the_code_carries",
+        "test_gate_another_branch_never_publishes_for_real",
+        "test_gate_master_with_a_published_version_skips",
+        "test_gate_master_with_an_unreleased_version_publishes",
+    ),
+}
+
+
+def _listed(table: dict[str, tuple[str, ...]], nodeid: str) -> bool:
+    path, _, rest = nodeid.partition("::")
+    names = table.get(path.replace("\\", "/").rsplit("/", 1)[-1])
+    if not names:
+        return False
+    if "*" in names:
+        return True
+    return rest.split("[", 1)[0].rsplit("::", 1)[-1] in names
+
+
+def is_not_on_mac(nodeid: str) -> bool:
+    return _listed(NOT_ON_MAC, nodeid)
 
 
 def is_windows_only(nodeid: str) -> bool:

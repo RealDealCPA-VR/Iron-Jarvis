@@ -182,6 +182,7 @@ async def test_the_repos_own_pretty_format_runs_no_signature_program(tmp_path, f
     _signed_commit(repo, armour)
     evil = tmp_path / "evil-sign.sh"
     evil.write_text(f"#!/bin/sh\necho sign >> {marker.as_posix()}\nexit 1\n")
+    evil.chmod(0o755)  # Linux and macOS run a script only when it is marked runnable
     allowed = tmp_path / "allowed-signers"
     allowed.write_bytes(b"")
     for key, value in ((program_key, evil.as_posix()), ("gpg.ssh.allowedSignersFile", allowed.as_posix()),
@@ -213,6 +214,7 @@ async def test_grep_runs_no_pager_from_a_cluster(tmp_path):
     repo = _repo(tmp_path)
     evil = tmp_path / "pager.sh"
     evil.write_text(f"#!/bin/sh\necho pager >> {marker.as_posix()}\n")
+    evil.chmod(0o755)  # Linux and macOS run a script only when it is marked runnable
     _git(repo, "--no-pager", "grep", "-nO" + evil.as_posix(), "X")
     assert marker.exists(), "the control did not run the trap: the test would be vacuous"
     marker.unlink()

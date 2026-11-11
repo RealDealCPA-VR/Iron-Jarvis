@@ -1135,10 +1135,16 @@ def _case_only_rename(src: Path, dst: Path) -> bool:
     taken and such a rename stays an ordinary one. Pure string work — no I/O,
     so it is safe to call on the event loop.
     """
-    return (
-        str(src) != str(dst)
-        and os.path.normcase(str(src)) == os.path.normcase(str(dst))
-    )
+    if str(src) == str(dst):
+        return False
+    if os.path.normcase(str(src)) == os.path.normcase(str(dst)):
+        return True
+    # macOS folds case too, but ``normcase`` only does so on Windows: there a
+    # capitalization fix was refused as "already exists". The caller still
+    # confirms the two names are ONE entry on disk
+    # (``_denotes_a_different_file``), so on a case-sensitive disk (Linux)
+    # two real files are never treated as one.
+    return os.name != "nt" and str(src).casefold() == str(dst).casefold()
 
 
 def _denotes_a_different_file(src: Path, dst: Path) -> bool:
