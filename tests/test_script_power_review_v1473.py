@@ -1695,3 +1695,19 @@ def test_the_heading_of_a_kept_table_is_found_in_each_shape_it_is_kept_in():
     assert SV._repeats_first_row("[['A', 'B']]", {"header": ["a", "b"], "rows": []})
     assert not SV._repeats_first_row("[['A', 'B']]", "kept text")
     assert not SV._repeats_first_row("not a list", KEPT_ROWS)
+
+
+def test_a_file_written_again_from_the_scripts_own_rows_has_nothing_left_to_check(world):
+    """The mark a wrong typed total leaves is for the file as it IS: written
+    again from a kept value (exact by construction), nothing is left."""
+    tools = _script_prints_totals(world)
+    w = _invoke(world, "write_document",
+                {"path": "t.docx", "content": _totals_table(extra="Grand Total: 296,456.26")}, allowed=tools)
+    assert w.ok and CHECK in w.output
+    assert list(SV.SHELF._unchecked.get("chat:chat_one") or {}) == ["t.docx"]
+    r = _run(world, "tools.keep('doc', '# Totals' + chr(10) + 'a.csv: 54,453.15')" + chr(10) + "print('kept')" + chr(10),
+             allowed=tools)
+    assert r.ok, r.error
+    w = _invoke(world, "write_document", {"path": "t.docx", "_from_script": {"content": "doc"}}, allowed=tools)
+    assert w.ok and CHECK not in w.output, w.output
+    assert not SV.SHELF.take_unchecked("chat:chat_one")

@@ -7844,6 +7844,14 @@ async def chat_stream(
                 from ...documents.excel_live import unchanged_note as _xl_unchanged
 
                 reply += _xl_unchanged(getattr(body, "turn_id", ""), tools_used)
+        # v1.473.0: a file this turn wrote that STILL holds a figure no
+        # script or calculator worked out is named for the user, whatever
+        # the reply says. MIRROR NOTE (lock-step): chat_turn.run_chat_turn
+        # appends the same.
+        if tools_used:
+            from ...tools.script_values import unchecked_figures_note
+
+            reply += unchecked_figures_note(ctx)
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did gets the plain note. MIRROR NOTE (lock-step): chat_turn.
         # Only an AGENT-shaped receiver counts (the roster's names, read off

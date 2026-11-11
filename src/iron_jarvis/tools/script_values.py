@@ -185,6 +185,8 @@ class Shelf:
         #: ``key -> sorted figures`` the computing tools produced there
         #: (:func:`note_figures`).
         self._figures: "OrderedDict[str, list[float]]" = OrderedDict()
+        #: ``key -> path -> (figures, when)``: see :meth:`note_unchecked`.
+        self._unchecked: "OrderedDict[str, OrderedDict[str, tuple[list[str], float]]]" = OrderedDict()
 
     # -- writing ---------------------------------------------------------------
 
@@ -263,6 +265,35 @@ class Shelf:
         with self._lock:
             return list(self._figures.get(key) or ())
 
+    def note_unchecked(self, key: str, path: str, figures: "list[str]") -> None:
+        """*path* was just written holding *figures* that nobody worked out."""
+        if not key or not path:
+            return
+        with self._lock:
+            files = self._unchecked.setdefault(key, OrderedDict())
+            files[path] = (list(figures), time.monotonic())
+            files.move_to_end(path)
+            while len(files) > MAX_UNCHECKED_FILES:
+                files.popitem(last=False)
+            self._unchecked.move_to_end(key)
+            while len(self._unchecked) > MAX_KEYS:
+                self._unchecked.popitem(last=False)
+
+    def clear_unchecked(self, key: str, path: str) -> None:
+        """*path* was written again with nothing left to check."""
+        with self._lock:
+            files = self._unchecked.get(key)
+            if files and files.pop(path, None) is not None and not files:
+                self._unchecked.pop(key, None)
+
+    def take_unchecked(self, key: str) -> "dict[str, list[str]]":
+        """The files of *key* that still hold such a figure. Reading forgets
+        them: a reply says it once."""
+        with self._lock:
+            files = self._unchecked.pop(key, None) or {}
+            fresh = time.monotonic() - UNCHECKED_TTL_S
+            return {p: list(figs) for p, (figs, at) in files.items() if at >= fresh}
+
     def note_unplaced(self, key: str) -> None:
         """A script kept a value for a file and no tool of its turn can take
         one. The chat lanes read this ONCE (:meth:`take_unplaced`) and bring
@@ -290,6 +321,9 @@ class Shelf:
         if not old or not new or old == new:
             return 0
         with self._lock:
+            waiting = self._unchecked.pop(old, None)
+            if waiting:
+                self._unchecked.setdefault(new, OrderedDict()).update(waiting)
             moved_figures = self._figures.pop(old, None)
             if moved_figures:
                 self._figures[new] = sorted({*moved_figures, *(self._figures.get(new) or ())})[:MAX_FIGURES]
@@ -314,6 +348,7 @@ class Shelf:
         with self._lock:
             self._unplaced.discard(key)
             self._figures.pop(key, None)
+            self._unchecked.pop(key, None)
             names = self._keys.pop(key, None)
             if names:
                 self._chars -= sum(len(v.text) for v in names.values())
@@ -323,6 +358,7 @@ class Shelf:
             self._keys.clear()
             self._unplaced.clear()
             self._figures.clear()
+            self._unchecked.clear()
             self._chars = 0
 
     @property
@@ -528,6 +564,10 @@ FIGURE_SOURCES = frozenset({"tool_script", "calculate"})
 
 MAX_FIGURES = 20_000
 FIGURES_MIN_MATCHED = 3
+#: Files whose newest write still holds a figure nobody worked out, per chat
+#: or run, until the reply says so (:func:`unchecked_figures_note`).
+MAX_UNCHECKED_FILES = 8
+UNCHECKED_TTL_S = 1800.0
 _FIGURES_LISTED = 5
 _FIGURE_SCAN_CHARS = 200_000
 
@@ -599,11 +639,15 @@ def typed_figures_note(tool: str, args: Any, ctx: Any) -> str:
         if not fillable or not isinstance(args, dict):
             return ""
         key, once = _key_for(ctx)
-        produced = [] if once else SHELF.figures(key)
-        if not produced:
+        if once:
             return ""
+        path = str(args.get("path") or "").strip()
+        produced = SHELF.figures(key)
         text = "\n".join(_typed_text(args.get(a)) for a in sorted(fillable) if args.get(a))
-        if not text:
+        if not produced or not text:
+            # Written from a kept value, or nothing was produced here: the
+            # file holds nothing left to check (an earlier mark is cleared).
+            SHELF.clear_unchecked(key, path)
             return ""
         import bisect
 
@@ -618,7 +662,9 @@ def typed_figures_note(tool: str, args: Any, ctx: Any) -> str:
             elif ("," in token or places == 2) and token not in other:
                 other.append(token)
         if matched < FIGURES_MIN_MATCHED or not other:
+            SHELF.clear_unchecked(key, path)
             return ""
+        SHELF.note_unchecked(key, path, other)
         shown = ", ".join(other[:_FIGURES_LISTED])
         more = len(other) - _FIGURES_LISTED
         one = len(other) == 1
@@ -632,6 +678,37 @@ def typed_figures_note(tool: str, args: Any, ctx: Any) -> str:
             f"result. A figure the user gave you can stay as it is."
         )
     except Exception:  # noqa: BLE001 — a check never fails a call
+        return ""
+
+
+def unchecked_figures_note(ctx: Any) -> str:
+    """What the USER reads under a reply whose turn left a file holding a
+    figure nobody worked out: the file's name and the figure. "" when there
+    is none (a file written again without it is not named).
+
+    Decided from what ran, never from the reply's words. The model was told
+    the same thing in the file tool's answer and may have ignored it (seen
+    live: it answered "Done" over a wrong grand total). Never raises."""
+    try:
+        if ctx is None:
+            return ""
+        key, once = _key_for(ctx)
+        files = {} if once else SHELF.take_unchecked(key)
+        if not files:
+            return ""
+        parts = []
+        for path, figures in list(files.items())[:3]:
+            name = path.replace("\\", "/").rstrip("/").rpartition("/")[2] or path
+            shown = ", ".join(figures[:3]) + (f" and {len(figures) - 3} more" if len(figures) > 3 else "")
+            one = len(figures) == 1
+            parts.append(
+                f"{name} holds {'a figure' if one else 'figures'} Jarvis typed itself: {shown}. "
+                f"No script or calculator worked {'it' if one else 'them'} out, so check "
+                f"{'it' if one else 'them'} before you rely on {'it' if one else 'them'}"
+            )
+        more = len(files) - 3
+        return "\n\n_Note: " + ". ".join(parts) + (f". {more} more files too" if more > 0 else "") + "._"
+    except Exception:  # noqa: BLE001 — a note never fails a reply
         return ""
 
 

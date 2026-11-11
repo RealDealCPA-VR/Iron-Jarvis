@@ -1261,3 +1261,119 @@ def test_a_run_that_reads_once_is_exactly_as_before(tmp_path):
     )
     assert all("tool_script" not in names for names in offered)
     assert not any(NOTE_MARK in t for round_texts in texts for t in round_texts)
+
+
+# --------------------------------------------------------------------------- #
+# The USER is told when a file still holds a figure nobody worked out (seen on
+# the packaged app: the file tool named a wrong grand total, and the model
+# answered "Done" over it)
+# --------------------------------------------------------------------------- #
+
+SIX_TOTALS = [("a.csv", 54453.15), ("b.csv", 40267.59), ("c.csv", 55136.93),
+              ("d.csv", 50225.12), ("e.csv", 49453.0), ("f.csv", 46561.02)]
+PRINT_TOTALS = f"for name, v in {SIX_TOTALS!r}:\n    print(f'{{name}}: {{v}}')\n"
+USER_NOTE = "holds a figure Jarvis typed itself: 296,456.26"
+
+
+def _typed_table(extra: str = "") -> str:
+    return "# Totals\n\n" + "".join(f"- {n}: {v:,.2f}\n" for n, v in SIX_TOTALS) + extra
+
+
+def _wrong_total_steps(*then):
+    return [
+        _call(1, "tool_script", code=PRINT_TOTALS),
+        _call(2, "write_document", path="totals.docx", content=_typed_table("\nGrand total: 296,456.26\n")),
+        *then,
+        "Done.",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_total_left_in_a_file_is_said_under_the_reply(desk):
+    app, ws = desk
+    model = Model(_wrong_total_steps())
+    _frames, _cards, done = await _stream(app, _body(ws, "look at these", tools=["tool_script", "write_document"]), model)
+    reply = done.get("reply") or ""
+    assert reply.startswith("Done."), reply
+    assert "_Note: totals.docx " + USER_NOTE in reply, reply
+    assert "check it before you rely on it" in reply
+    # ...and the model was told first, in the file tool's own answer
+    assert "[check the figures]" in model.tool_texts[2][-1], model.tool_texts[2]
+    assert (ws / "totals.docx").exists(), "the file is written either way"
+
+
+@pytest.mark.asyncio
+async def test_the_post_lane_says_it_too(desk):
+    app, ws = desk
+    out = await _post(app, _body(ws, "look at these", tools=["tool_script", "write_document"]),
+                      Model(_wrong_total_steps()))
+    assert "_Note: totals.docx " + USER_NOTE in (out.get("reply") or ""), out.get("reply")
+
+
+@pytest.mark.asyncio
+async def test_a_file_written_again_without_the_figure_is_not_named(desk):
+    app, ws = desk
+    fixed = _call(3, "write_document", path="totals.docx", content=_typed_table())
+    _frames, _cards, done = await _stream(
+        app, _body(ws, "look at these", tools=["tool_script", "write_document"]), Model(_wrong_total_steps(fixed)))
+    assert done.get("reply") == "Done.", done.get("reply")
+
+
+@pytest.mark.asyncio
+async def test_a_total_worked_out_by_the_calculator_is_not_named(desk):
+    app, ws = desk
+    total = sum(v for _n, v in SIX_TOTALS)
+    steps = [
+        _call(1, "tool_script", code=PRINT_TOTALS),
+        _call(2, "calculate", expression=" + ".join(f"{v:.2f}" for _n, v in SIX_TOTALS)),
+        _call(3, "write_document", path="totals.docx", content=_typed_table(f"\nGrand total: {total:,.2f}\n")),
+        "Done.",
+    ]
+    _frames, _cards, done = await _stream(
+        app, _body(ws, "look at these", tools=["tool_script", "write_document", "calculate"]), Model(steps))
+    assert done.get("reply") == "Done.", done.get("reply")
+
+
+def test_the_note_is_said_once_and_only_for_its_own_chat():
+    from types import SimpleNamespace
+
+    SV.SHELF.clear()
+    ctx = SimpleNamespace(session_id="chat", thread_id="chat_one", turn_id="t1")
+    other = SimpleNamespace(session_id="chat", thread_id="chat_two", turn_id="t2")
+    SV.SHELF.note_unchecked("chat:chat_one", r"C:\work\totals.docx", ["1,234.50"])
+    assert SV.unchecked_figures_note(other) == "" and SV.unchecked_figures_note(None) == ""
+    said = SV.unchecked_figures_note(ctx)
+    assert said.startswith("\n\n_Note: totals.docx holds a figure Jarvis typed itself: 1,234.50.") and said.endswith("._")
+    assert SV.unchecked_figures_note(ctx) == "", "said once"
+    # several figures, several files, and a mark that is too old to say
+    SV.SHELF.note_unchecked("chat:chat_one", "a.docx", ["1.25", "2.25", "3.25", "4.25"])
+    SV.SHELF.note_unchecked("chat:chat_one", "b.docx", ["9.99"])
+    said = SV.unchecked_figures_note(ctx)
+    assert "a.docx holds figures Jarvis typed itself: 1.25, 2.25, 3.25 and 1 more" in said and "b.docx holds a figure" in said
+    SV.SHELF.note_unchecked("chat:chat_one", "old.docx", ["9.99"])
+    SV.SHELF._unchecked["chat:chat_one"]["old.docx"] = (["9.99"], -1e9)
+    assert SV.unchecked_figures_note(ctx) == ""
+    # a saved chat takes its mark with it; a dropped one forgets it
+    SV.SHELF.note_unchecked("chat:turn-x", "m.docx", ["5.55"])
+    SV.SHELF.rekey("chat:turn-x", "chat:chat_one")
+    assert "m.docx" in SV.unchecked_figures_note(ctx)
+    SV.SHELF.note_unchecked("chat:chat_one", "n.docx", ["5.55"])
+    SV.SHELF.drop("chat:chat_one")
+    assert SV.unchecked_figures_note(ctx) == ""
+    for i in range(SV.MAX_UNCHECKED_FILES + 4):
+        SV.SHELF.note_unchecked("chat:chat_one", f"f{i}.docx", ["1.11"])
+    assert len(SV.SHELF.take_unchecked("chat:chat_one")) == SV.MAX_UNCHECKED_FILES
+    SV.SHELF.clear()
+
+
+def test_both_lanes_say_it_at_the_same_place():
+    import inspect
+
+    from iron_jarvis.daemon import chat_turn as CT
+    from iron_jarvis.daemon.routes import chat as RC
+
+    for module in (CT, RC):
+        text = inspect.getsource(module)
+        assert text.count("unchecked_figures_note(ctx)") == 1, module.__name__
+        at = text.index("unchecked_figures_note(ctx)")
+        assert text.rindex("_xl_unchanged(", 0, at) > text.rindex("claimed_change_note(", 0, at)

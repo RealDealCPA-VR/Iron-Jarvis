@@ -12423,6 +12423,16 @@ async def run_chat_turn(
             from ..documents.excel_live import unchanged_note as _xl_unchanged
 
             reply += _xl_unchanged(getattr(body, "turn_id", ""), tools_used)
+        # v1.473.0: a file this turn wrote that STILL holds a figure no
+        # script or calculator worked out is named for the user, whatever
+        # the reply says (the model was told in the file tool's answer and
+        # may have ignored it: seen live, "Done" over a wrong grand total).
+        # From what ran; a file written again without the figure is not
+        # named. MIRROR NOTE (lock-step): routes/chat.py appends the same.
+        if tools_used:
+            from ..tools.script_values import unchecked_figures_note
+
+            reply += unchecked_figures_note(ctx)
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did ("I'm passing this to builder") gets the plain note.
         # MIRROR NOTE (lock-step): routes/chat.py appends the same helper.
