@@ -272,7 +272,14 @@ def _refs(tool: str, args: dict[str, Any]) -> "tuple[dict[str, str], str]":
         if not name:
             return {}, f"`{ARG}` names no kept value for `{arg}`"
         if not _left_out(args.get(arg), name):
-            return {}, f"`{arg}` was given twice: typed, and in `{ARG}`. Give it once"
+            # Seen live: a header row typed in `content` beside kept rows. The
+            # two are not joined (which comes first is a guess), so say how
+            # to give it once without losing either part.
+            return {}, (
+                f"`{arg}` was given twice: typed, and in `{ARG}`. Give it once: "
+                f"leave `{arg}` out and put ALL of it in the kept value (a "
+                "header row too), or type all of it and drop the reference"
+            )
         out[arg] = name
     return out, ""
 
