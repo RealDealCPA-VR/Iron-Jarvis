@@ -362,7 +362,11 @@ eval(fnSource("spawnChild"));
 eval(fnSource("killChild"));
 (async () => {
   const child = spawnChild("daemon", process.execPath, ["-e", "console.log('hello from child'); setInterval(()=>{},1000)"], process.cwd(), {}, false);
-  await new Promise((r) => setTimeout(r, 700));
+  // v1.473.0: wait for the child's own line (a fixed 700 ms lost it on a
+  // loaded runner, where Node took longer to start and print), then kill.
+  for (let i = 0; i < 400 && !(fileLines.daemon || []).some((l) => !l.startsWith("[main]") && l.includes("hello from child")); i += 1) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
   const killed = new Promise((r) => child.on("close", r));
   killChild(child, "daemon", "watchdog");
   await killed;
