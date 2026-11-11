@@ -255,7 +255,9 @@ MCP_MEMORY_UNTRUSTED_LINE = (
 MCP_SCOPE_LINE = (
     "Jarvis exposes Browser tools and Memory's read-only tools ("
     + ", ".join(sorted(MEMORY_READ_TOOLS))
-    + ") over MCP in this version; Memory never includes writing to memory. "
+    + ") over MCP in this version, and to a Build › Code session whose Hand off box is "
+    "on, the hand-off tools (" + ", ".join(sorted(_HANDOFF_TOOLS)) + "); Memory never "
+    "includes writing to memory. "
     "Files, Shell and Extensions are recorded on the pane but are not yet "
     "enforced here, so no tools for them are offered."
 )
@@ -357,8 +359,9 @@ def capability_refused_message(tool_name: str, pane_id: str = "") -> str:
                 f"include {label}. Tick it in Build and start the coding tool again."
             )
     return (
-        f"{tool_name} is not served over MCP by Iron Jarvis: only Browser tools "
-        "and Memory's read-only tools are, and no pane Capability unlocks this one."
+        f"{tool_name} is not served over MCP by Iron Jarvis: only Browser tools, "
+        "Memory's read-only tools and Build › Code's hand-off tools are, and no "
+        "Capability unlocks this one."
     )
 
 

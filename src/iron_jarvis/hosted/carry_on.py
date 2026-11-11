@@ -1223,7 +1223,11 @@ def stop_unattended_turns(platform: Any) -> list[str]:
         try:
             turn = live.turn
             carry = getattr(turn, "carry", None) if turn is not None else None
-            if turn is None or not turn.running or not isinstance(carry, dict) or carry.get("pressed"):
+            # v1.474.0 (Hand off): a helper's piece is work a coding tool
+            # started, not the user — Emergency stop stops it too.
+            helper = turn is not None and turn.id in set((getattr(svc, "handoff_turns", None) or {}).values())
+            if turn is None or not turn.running or (
+                    not helper and (not isinstance(carry, dict) or carry.get("pressed"))):
                 continue
             task = turn.task
             if task is None:

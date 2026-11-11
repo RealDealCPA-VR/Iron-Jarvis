@@ -2061,6 +2061,13 @@ Codex did when it is done.
   the same mode as the session that started it when its tool offers that mode,
   and in its tool's own default otherwise.
 - **No chains.** A helper cannot hand work on to another tool.
+- **Your account groups hold.** A helper of the same tool uses the same
+  account. A helper of another tool uses an account from the same account
+  group as the session that started it, so work and personal accounts never
+  mix. If no account in that group can take the work, nothing is handed over
+  and the tool is told why.
+- **Emergency stop covers helpers.** While it is on, no work is handed over,
+  and turning it on stops helpers that are working.
 - **At most three at a time.** A session can have three helpers working at
   once.
 - **Stop stops them too.** Pressing Stop on the session's reply, archiving it

@@ -86,6 +86,15 @@ TASK_TOO_LONG = "That task is {n:,} characters; a hand-off takes at most {max:,}
 UNKNOWN_TOOL = "{tool} is not a coding tool Iron Jarvis can start. Choose one of: {choices}."
 NOT_INSTALLED = "{label} is not installed on this PC, so it cannot take the work. Choose one of: {choices}."
 SIGNED_OUT = "{label} is not signed in on this PC, so it cannot take the work. Choose one of: {choices}."
+EMERGENCY_STOP = (
+    "Emergency stop is on, so no work is handed to another coding tool. "
+    "The user can turn it off on the Autonomy page."
+)
+NO_GROUP_ACCOUNT = (
+    "No {label} account in your “{group}” account group can take the work now, so nothing "
+    "was handed over. A helper stays in the same group as this session's account."
+)
+GROUP_NOT_READ = "Your accounts are not listed yet, so nothing was handed over. Try again in a moment."
 STILL_WORKING = (
     "The helper is still working on the last piece. Check on it, or stop it, before handing it more."
 )
@@ -299,6 +308,8 @@ async def _start_locked(svc: Any, parent: str, prow: Any, *, tool: str, task: st
     # against the limit like a new one.
     if working >= MAX_RUNNING:
         raise Refused(TOO_MANY.format(n=working, max=MAX_RUNNING), 409)
+    if emergency_stop_on(svc):
+        raise Refused(EMERGENCY_STOP, 409)
     if not helper:
         ready = await _available(svc)
         want = tool_id(tool) or (prow.harness if not str(tool or "").strip() else "")
@@ -318,8 +329,9 @@ async def _start_locked(svc: Any, parent: str, prow: Any, *, tool: str, task: st
         made = await svc.create({
             "harness": want, "folder": prow.folder, "mode": mode,
             "title": f"Helper: {name}"[:120],
-            # The same tool keeps the same account; another tool its own default.
-            "account": prow.account if want == prow.harness else "",
+            # The same tool keeps the same account; another tool an account
+            # of the same group (never across work and personal).
+            "account": await asyncio.to_thread(helper_account, svc, prow, want),
         })
         crow = await asyncio.to_thread(store.update, svc.engine, made["id"], handed_from=parent)
         if crow is None:
@@ -336,6 +348,49 @@ async def _start_locked(svc: Any, parent: str, prow: Any, *, tool: str, task: st
     svc.handoff_turns[crow.id] = turn.id
     return {"helper": crow.id, "tool": crow.harness, "label": W.label(crow.harness),
             "title": crow.title, "mode": crow.mode, "state": "working"}
+
+
+def emergency_stop_on(svc: Any) -> bool:
+    """A helper is work a coding tool started, not the user: Emergency stop
+    refuses new ones (and ``carry_on.stop_unattended_turns`` stops running
+    ones)."""
+    cfg = getattr(getattr(svc, "platform", None), "config", None)
+    return getattr(cfg, "autonomy_kill_switch", False) is True
+
+
+def helper_account(svc: Any, prow: Any, want: str) -> str:
+    """BLOCKING (cached reads only): the account a helper of ``want`` runs on.
+
+    * The same tool: the starting session's own account.
+    * A tool that signs in by itself (Pi, OpenCode, Antigravity), or a
+      starting session on this PC's own login or on an account in no group:
+      "" (the tool's usual choice).
+    * Otherwise the first account of ``want``'s vendor IN THE SAME account
+      group that can take work now (``build_accounts.usable_now``), in
+      Iron-Proxy's order; none is a refusal in words — never an account of
+      another group (the user's work and personal accounts never mix)."""
+    from ..harness import build_accounts as BA
+    from . import words as W
+    from .service import Refused
+
+    if want == prow.harness:
+        return str(prow.account or "")
+    own = str(prow.account or "").strip()
+    vendor = BA.VENDOR_OF_PROXY.get(W.PROXY.get(want) or "", "")
+    if not own or not vendor:
+        return ""
+    groups = getattr(getattr(svc.platform, "config", None), "account_groups", None)
+    group = BA.group_of(groups, own)
+    if group is None:
+        return ""
+    name, ids = group
+    snap = BA.snapshot(getattr(svc.platform, "iron_proxy", None))
+    if snap is None:
+        raise Refused(GROUP_NOT_READ, 409)
+    for row in BA.vendor_rows(snap, vendor):
+        if row["id"] in ids and BA.usable_now(row, BA._state_of(snap, row["id"])):
+            return row["id"]
+    raise Refused(NO_GROUP_ACCOUNT.format(label=W.label(want), group=name), 409)
 
 
 async def _forget_helper(svc: Any, sid: str) -> None:
