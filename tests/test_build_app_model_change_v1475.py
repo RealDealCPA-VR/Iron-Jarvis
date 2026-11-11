@@ -99,3 +99,17 @@ async def test_a_failing_line_never_refuses_the_change(app, work, monkeypatch):
         r = await c.patch(f"/build/app/sessions/{row.id}", json={"effort": "low"})
         assert r.status_code == 200, r.text
         assert (await c.get(f"/build/app/sessions/{row.id}")).json()["session"]["effort"] == "low"
+
+
+async def test_a_typed_model_change_writes_its_own_line_and_no_second_one(app, work):
+    # The typed /model and /effort paths say the change themselves.
+    row = store.create(app.state.platform.engine, harness="codex", folder=str(work), title="t", account="",
+                       account_json="", model="", effort="", mode="ask", harness_session_id="thread-1")
+    from iron_jarvis.hosted.service import service_for
+
+    svc = service_for(app.state.platform)
+    await svc.patch(row.id, {"effort": "high"}, say_change=False)
+    async with client(app) as c:
+        view = (await c.get(f"/build/app/sessions/{row.id}")).json()
+    assert [n for n in _notices(view) if "changed" in n] == []
+    assert view["session"]["effort"] == "high"
