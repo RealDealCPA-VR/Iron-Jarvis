@@ -196,6 +196,22 @@
       "ok": "changed Local only for this chat",
       "failed": "tried a Local only change and it failed"
     },
+    "code_handoff_check": {
+      "ok": "checked on a helper coding tool",
+      "failed": "tried a helper check and it failed"
+    },
+    "code_handoff_list": {
+      "ok": "listed the coding tools that can help",
+      "failed": "tried a helper listing and it failed"
+    },
+    "code_handoff_start": {
+      "ok": "handed work to another coding tool",
+      "failed": "tried a hand-off to another coding tool and it failed"
+    },
+    "code_handoff_stop": {
+      "ok": "stopped a helper coding tool",
+      "failed": "tried a helper stop and it failed"
+    },
     "code_load": {
       "ok": "opened a saved script",
       "failed": "tried a script read and it failed"
