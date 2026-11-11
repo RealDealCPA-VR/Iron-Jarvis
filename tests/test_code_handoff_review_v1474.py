@@ -115,3 +115,35 @@ def test_a_helper_cannot_close_the_fence_from_inside():
                            "last_step": "", "files": [], "files_more": 0, "error": "", "reply": escape})
     assert out.count(_FENCE_BOTTOM) == 1, out
     assert out.rstrip().endswith(_FENCE_BOTTOM)
+
+
+class _Turn:
+    def __init__(self, status: str) -> None:
+        self.status = status
+        self.running = status == "running"
+
+
+class _Row:
+    def __init__(self, last_error: str = "") -> None:
+        self.id = "h1"
+        self.last_error = last_error
+        self.harness_session_id = "x"
+
+
+class _Svc:
+    def __init__(self, status: str) -> None:
+        self.live = {}
+        self.handoff_turns = {"h1": "t1"}
+        self.turns = {"t1": _Turn(status)}
+
+
+def test_a_piece_stopped_at_its_step_limit_reads_as_stopped():
+    """``max_turns`` used to pass through raw, and the page read an unknown
+    state as "Not started"."""
+    assert HO.helper_state(_Svc("max_turns"), _Row()) == "stopped"
+
+
+def test_a_finished_piece_is_done_even_when_an_earlier_piece_failed():
+    """``check`` reads the helper's row BEFORE it waits; a stale error from
+    an earlier piece must not make a finished one read as failed."""
+    assert HO.helper_state(_Svc("done"), _Row(last_error="the earlier piece failed")) == "done"

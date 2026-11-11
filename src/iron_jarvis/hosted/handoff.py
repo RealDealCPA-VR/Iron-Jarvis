@@ -189,13 +189,21 @@ def helper_state(svc: Any, row: Any) -> str:
     live = svc.live.get(row.id)
     if live is not None and live.turn is not None and live.turn.running:
         return "waiting" if live.asks else "working"
-    if (row.last_error or "").strip():
-        return "failed"
+    # Review: the piece's own turn, when it is still known, is the answer —
+    # before the row's error, which ``check`` read before it waited and may
+    # be an earlier piece's. Every stop maps onto a state the page knows.
     turn_id = svc.handoff_turns.get(row.id)
     turn = svc.turns.get(turn_id) if turn_id else None
-    if turn is not None:
-        return {"completed": "done", "interrupted": "stopped"}.get(turn.status, turn.status)
+    if turn is not None and not turn.running:
+        return _TURN_STATES.get(turn.status, "failed")
+    if (row.last_error or "").strip():
+        return "failed"
     return "done" if (row.harness_session_id or "") else "idle"
+
+
+#: A finished turn's status (``HostedTurn.end``) as a helper state.
+_TURN_STATES = {"done": "done", "completed": "done", "interrupted": "stopped",
+                "max_turns": "stopped", "failed": "failed"}
 
 
 async def helpers_view(svc: Any, parent: str) -> list[dict[str, Any]]:
