@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.472.3 (2026-11-10).*
+holds itself to. Current as of v1.473.0 (2026-11-10).*
 
 ---
 
@@ -2041,6 +2041,33 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Long coding sessions open fast and stay smooth (v1.473.0)
+
+A long Build › Code session now draws only its newest messages, about 120 rows.
+Above them, one quiet line says how many earlier messages there are, with
+**Show earlier**. Each press draws another set and keeps your place on the
+page. Once everything Iron Jarvis holds is drawn, **Load earlier** brings older
+history as before. A short session looks exactly as it did.
+
+While a long reply streams and you are at the bottom, the view keeps to one
+set of rows. If you have scrolled up to read, it leaves you where you are.
+
+A reply's **Copy** still copies the whole reply, including parts above the
+drawn rows. Its text is put together only when you press Copy.
+
+Measured on the same PC with a streamed 46-second reply:
+
+| Session | Before (v1.472.0) | Now |
+|---|---|---|
+| 250 turns: page work during the reply | 42 s | 7.8 s |
+| 250 turns: opening it | 0.76 s | 0.33 s |
+| 600 turns: typical frame | 40 ms | 13 ms (the screen's own pace) |
+| 600 turns: frames slower than 50 ms | 421 | 0 |
+| 600 turns: opening it | 1.7 s | 0.36 s |
+
+One thing to know: the browser's Find (Ctrl+F) only finds words in the rows
+that are drawn. Press **Show earlier** to search further back.
 
 ## A Linux preview is attached to each release (v1.472.3)
 

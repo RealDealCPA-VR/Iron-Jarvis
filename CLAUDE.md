@@ -17224,6 +17224,33 @@ does not need a bump, stop and bump it.
   times for 8 streamed frames), `tests/test_build_app_live_merge_v1472.py`
   (7 mutations, all red).
 
+- **A long Build › Code session draws its newest rows only** (v1.473.0;
+  second wave of the t3code comparison). `lib/codeWindow.ts`:
+  `windowStart(items, end, size)` = `ROW_WINDOW` (120) rows before `end`,
+  moved back to the start of a message (a `user` row that is not a carry)
+  within `SNAP_ROWS` (40); nothing folded below `MIN_HIDDEN` (30).
+  `BuildCodeView` keeps `drawn {session, from}`: set on a session's first
+  rows; cut back to `windowStart` only when the items GREW, the reader is at
+  the bottom and more than `REWINDOW_AT` (240) rows are drawn (never after a
+  Show earlier press); "Show earlier" (`code-show-earlier`) draws one more
+  window and keeps the scroll position; the daemon's "Load earlier" shows
+  only once `from` is 0. `CodeConversation` takes `from` and draws
+  `items.slice(from)`; the last error and each reply's Copy are still
+  computed over ALL items, and Copy's text is joined only when pressed
+  (`replyEndKeys` marks the rows `replyCopyTexts` keys; `copyFor` reads the
+  items through a ref). This REPLACED the planned separate store for live
+  words: with ~120 rows drawn, a streamed frame costs 13 ms at 600 turns
+  (measured; 0 long tasks), and a hand-off between two stores risks lost or
+  doubled words. Known: browser Find sees drawn rows only. Bench: a stand-in
+  server that answers the Code view's routes with a 250/600-turn history and
+  streams 3,001 pieces — a stream that SENDS NOTHING while it waits is cut
+  by the page's 60 s stall bound, so it sends the turn so far at once and a
+  keep-alive every 10 s, as the daemon does. Pins:
+  `dashboard/__tests__/build-code-window-v1473.test.tsx`, the v1.473.0
+  describe in `build-app-view-v1409` (8 mutations, all red; one HUNG — a
+  mutation that draws every row of a 600-turn session in jsdom runs for hours,
+  so a mutation harness must bound each run).
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
