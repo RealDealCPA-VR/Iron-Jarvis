@@ -13066,7 +13066,7 @@ does not need a bump, stop and bump it.
   again on every frame).
 
 - **An ended task is worded by what it WAS; a foreground command's end says
-  nothing** (v1.477.1, a USER REPORT: a wall of grey "A helper finished: cd
+  nothing** (v1.477.2, a USER REPORT: a wall of grey "A helper finished: cd
   "C:/…" && grep …" lines buried the one line that mattered). `words.
   SYS_TASK_DONE` said "A helper …" for EVERY `task_notification`. READ from
   the 2.1.322 program on this PC (read-only): the notification carries NO
@@ -17357,6 +17357,28 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/code-handoff-v1474.test.tsx` (18 + 5 mutations, all
   red); moved on purpose: `test_build_app_spine_v1414`, `build-code-spine-v1414`
   (a sixth box), `test_roster_coverage_v1178`, the tool-word tables.
+
+- **A chat turn's safety notice names its chat; a `/chat?thread=` link
+  works while Chat is open** (v1.477.1, a USER BUG: the bell's "Blocked 1
+  suspicious passage" row went nowhere). Every chat turn's session id is
+  "chat", so `context.blocked` / `trust.lowered` named no chat and the row
+  linked bare `/chat`; and the chat page read `?thread=` only at mount
+  (Next keeps page state on a query-only change), so ANY same-page chat link
+  did nothing. Now `promptguard.turn_keys()` (from `core/turn_ref`, only
+  while the turn runs) adds `turn_id`/`thread_id` to both events
+  (`publish_blocked`, `chat_turn._taint_chat_turn`); outside a turn the
+  payload is unchanged; the dedupe key includes the thread, so the same
+  source blocked in two chats is announced for each. The bell's chat rows go
+  to `chatEventHref` (`/chat?thread=<id>`, else `/activity`, never bare
+  `/chat`) and say the kinds in words (`blockedCategoryWords`, keyed by
+  `computeruse/safety.py`'s categories). `lib/chatThreadLink`
+  (`CHAT_THREAD_EVENT`, `announceChatThreadLink`) is called by the bell's
+  click capture (AFTER the pinned build/chat-view line) and Ctrl K; the chat
+  page opens the thread on that event, on `popstate` and on the Navigation
+  API's `currententrychange`, strips `?thread` and ignores a repeat within
+  3 s. Pins: `tests/test_bell_safety_row_names_chat_v14771.py`,
+  `dashboard/__tests__/bell-safety-row-opens-chat-v1477-1.test.tsx` (8
+  mutations, all red); moved on purpose: `trust-posture-v1298`.
 
 ## Map (where things live)
 

@@ -327,7 +327,7 @@ def scan_context(text: Any, *, source: str, cap: int | None = CONTEXT_CAP, stric
 #: ``PUBLISHED_MAX`` are forgotten, so at worst a long-gone session could be
 #: announced once more).
 PUBLISHED_MAX = 4096
-_PUBLISHED: "OrderedDict[tuple[str, str], None]" = OrderedDict()
+_PUBLISHED: "OrderedDict[tuple[str, ...], None]" = OrderedDict()
 _PUBLISH_LOCK = threading.Lock()
 _TASKS: set[Any] = set()
 
@@ -339,6 +339,18 @@ def _event_type() -> str:
         return str(getattr(EventType, "CONTEXT_BLOCKED", "context.blocked"))
     except Exception:  # noqa: BLE001
         return "context.blocked"
+
+
+def turn_keys() -> dict[str, str]:
+    """``{"turn_id", "thread_id"}`` of the chat turn running now, only the
+    keys that hold a value (core/turn_ref); ``{}`` outside one. Never raises."""
+    try:
+        from . import turn_ref
+
+        keys = turn_ref.event_keys()
+    except Exception:  # noqa: BLE001
+        return {}
+    return {k: str(keys[k]) for k in ("turn_id", "thread_id") if keys.get(k)}
 
 
 def publish_blocked(event_bus: Any, session_id: str | None, result: ScanResult) -> bool:
@@ -357,11 +369,18 @@ def publish_blocked(event_bus: Any, session_id: str | None, result: ScanResult) 
     try:
         if event_bus is None or not result.blocked:
             return False
+        # v1.477.1 (a USER BUG): every chat turn's session id is "chat", so the
+        # bell could not say WHICH chat (its row linked bare /chat and went
+        # nowhere). Inside a daemon-owned chat turn the event names the chat;
+        # elsewhere it is exactly what it was.
+        turn = turn_keys()
+        thread = turn.get("thread_id", "")
         key = (str(session_id or ""), str(result.source or ""))
+        dedupe = key if not thread else (key[0], key[1], thread)
         with _PUBLISH_LOCK:
-            if key in _PUBLISHED:
+            if dedupe in _PUBLISHED:
                 return False
-            _PUBLISHED[key] = None
+            _PUBLISHED[dedupe] = None
             while len(_PUBLISHED) > PUBLISHED_MAX:
                 _PUBLISHED.popitem(last=False)
         payload = {
@@ -369,6 +388,7 @@ def publish_blocked(event_bus: Any, session_id: str | None, result: ScanResult) 
             "source": key[1],
             "count": len(result.blocked),
             "categories": sorted({str(b.get("category") or "") for b in result.blocked}),
+            **turn,
         }
         try:
             outcome = event_bus.publish(_event_type(), payload, session_id=session_id or None)

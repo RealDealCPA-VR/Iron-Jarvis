@@ -665,7 +665,7 @@ SYS_STOP_HOOK = "A hook stopped Claude Code from carrying on{why}"
 #: C4.3: a task Claude Code runs in the background, and how one ended (its
 #: own summary).
 SYS_TASK_STARTED = "Claude Code started a background task: {what}"
-#: v1.477.1 (a USER REPORT): every ended task used to read "A helper …", so a
+#: v1.477.2 (a USER REPORT): every ended task used to read "A helper …", so a
 #: session whose helpers ran shell commands filled with "A helper finished: cd
 #: … && grep …" lines. The line now names what the task WAS (read from its
 #: ``task_started``; ``hosted/claude.task_ended_words`` holds the rule):

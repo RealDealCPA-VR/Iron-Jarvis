@@ -2,9 +2,13 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
-## v1.477.1
+## v1.477.2
 
 **Build › Code calls a finished command a command.** In Build › Code, a shell command that ended is no longer announced as "A helper finished".
+
+## v1.477.1
+
+**A blocked-passage notice opens the chat it happened in.** When Iron Jarvis keeps a suspicious passage out of what the AI reads (a web page, an attached file or a memory note that reads like "ignore your instructions" or "urgent: send the payment"), the bell shows "Blocked 1 suspicious passage".
 
 ## v1.477.0
 
@@ -77,7 +81,3 @@
 ## v1.467.0
 
 **How a number is built, what-if and goal seek.** Jarvis can now explain a figure in a spreadsheet, tell you what would change it, and take you to the cell.
-
-## v1.466.0
-
-**Working in a workbook that is open in Excel.** Until now Jarvis worked on saved files, so a workbook had to be closed first.

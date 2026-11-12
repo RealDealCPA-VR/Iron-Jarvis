@@ -424,6 +424,7 @@ import {
   type ComposerStore,
 } from "@/lib/composerStore";
 import { clearDraft, readDraft, writeDraft } from "@/lib/chatDrafts";
+import { CHAT_THREAD_EVENT, threadOfEvent } from "@/lib/chatThreadLink";
 import { CONTINUE_PROMPT, mergeContinuation } from "@/lib/continueReply";
 import { canRetryWithDefault, providerTrouble } from "@/lib/providerFallback";
 import {
@@ -5401,6 +5402,48 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       /* a malformed URL must never break the page */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // v1.477.1 (a USER BUG): a `/chat?thread=<id>` link pressed while this page
+  // is ALREADY open (the bell, Ctrl K's chat rows) only changed the address —
+  // the effect above reads it once, at mount. Follow the bell's announcement,
+  // a back/forward step and the browser's own "address changed" signal, then
+  // strip the param as the mount read does (lib/chatThreadLink).
+  const openThreadRef = useRef(openThread);
+  openThreadRef.current = openThread;
+  useEffect(() => {
+    // One press can arrive twice (the bell's announcement, then the address
+    // change of the same link): the second is the same chat, moments later.
+    let last = { id: "", at: 0 };
+    const open = (id: string) => {
+      if (!id) return;
+      const now = Date.now();
+      if (last.id === id && now - last.at < 3000) return;
+      last = { id, at: now };
+      void openThreadRef.current(id);
+    };
+    const fromAddress = () => {
+      try {
+        const url = new URL(window.location.href);
+        const thread = (url.searchParams.get("thread") || "").trim();
+        if (!thread) return;
+        url.searchParams.delete("thread");
+        window.history.replaceState(window.history.state, "", url.toString());
+        open(thread);
+      } catch {
+        /* a malformed URL must never break the page */
+      }
+    };
+    const fromEvent = (e: Event) => open(threadOfEvent(e));
+    window.addEventListener(CHAT_THREAD_EVENT, fromEvent);
+    window.addEventListener("popstate", fromAddress);
+    const nav = (window as unknown as { navigation?: EventTarget }).navigation;
+    nav?.addEventListener?.("currententrychange", fromAddress);
+    return () => {
+      window.removeEventListener(CHAT_THREAD_EVENT, fromEvent);
+      window.removeEventListener("popstate", fromAddress);
+      nav?.removeEventListener?.("currententrychange", fromAddress);
+    };
   }, []);
 
   function choosePersona(value: string) {

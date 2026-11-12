@@ -521,7 +521,7 @@ def _first_words(text: Any, cap: int = 300) -> str:
 
 
 def task_ended_words(obj: dict[str, Any], *, task_type: str | None = None, background: bool | None = None) -> str:
-    """v1.477.1 (a USER REPORT): the line for a task Claude Code says has
+    """v1.477.2 (a USER REPORT): the line for a task Claude Code says has
     ended (``task_notification``), named by what the task WAS. Every one used
     to read "A helper finished: …", so a session whose helpers ran shell
     commands filled with "A helper finished: cd … && grep …" — a wall of
@@ -584,7 +584,7 @@ def system_notice(obj: dict[str, Any], *, task_type: str | None = None, backgrou
     bookkeeping). ``init``, ``compact_boundary``, ``api_retry`` and the
     ``compacting`` status are the driver's own (they need its state).
     ``task_type`` / ``background`` are what the driver knows about the task a
-    ``task_notification`` ends (v1.477.1, :func:`task_ended_words`).
+    ``task_notification`` ends (v1.477.2, :func:`task_ended_words`).
 
     READ from claude 2.1.316's own bundle (read-only): ``hook_response``
     {hook_name, hook_event, output, stdout, stderr, exit_code?, outcome:
@@ -888,7 +888,7 @@ class ClaudeDriver(Driver):
         #: (``task_started`` / ``background_tasks_changed`` ``description``),
         #: for the Session tab's list. task_id -> description.
         self._task_titles: dict[str, str] = {}
-        #: v1.477.1: where each open task runs, as Claude Code said — True in
+        #: v1.477.2: where each open task runs, as Claude Code said — True in
         #: the background, False in the foreground (a command that has run for
         #: two seconds is tracked as a task too). task_id -> bool; a task with
         #: no entry never had its place said (a task kept by an older
@@ -1249,7 +1249,7 @@ class ClaudeDriver(Driver):
     effort_live = True
 
     def _note_task_place(self, tid: str, backgrounded: Any) -> None:
-        """v1.477.1: keep where an open task runs — only when Claude Code SAID
+        """v1.477.2: keep where an open task runs — only when Claude Code SAID
         (a real true / false; a missing key leaves it not known)."""
         if isinstance(backgrounded, bool) and tid in self._tasks:
             self._task_place[tid] = backgrounded
@@ -1634,7 +1634,7 @@ class ClaudeDriver(Driver):
             if text:
                 self.emit(make("notice", text=text))
         elif sub == "task_updated":
-            # v1.477.1: a command sent to the background after it started
+            # v1.477.2: a command sent to the background after it started
             # (READ from the 2.1.322 program: ``patch.is_backgrounded``). Only
             # the place is taken; the update itself says nothing, as before.
             patch = obj.get("patch")
@@ -1642,7 +1642,7 @@ class ClaudeDriver(Driver):
                 self._note_task_place(str(obj.get("task_id") or ""), patch.get("is_backgrounded"))
         elif sub == "task_notification":
             tid = str(obj.get("task_id") or "")
-            # v1.477.1: what the task WAS is read before it is forgotten — the
+            # v1.477.2: what the task WAS is read before it is forgotten — the
             # notification itself does not say (``task_ended_words``).
             task_type = self._tasks.pop(tid, None)
             background = self._task_place.pop(tid, None)
@@ -1664,7 +1664,7 @@ class ClaudeDriver(Driver):
             # task after a change; READ from 2.1.316's schema). Only the titles
             # are taken: the count stays the task_started .. task_notification
             # bookends (v1.417.0), which also hold the foreground tasks.
-            # v1.477.1: and being on this list says the task is in the
+            # v1.477.2: and being on this list says the task is in the
             # background.
             for t in (obj.get("tasks") or [])[:BACKGROUND_WORK_MAX]:
                 if isinstance(t, dict) and str(t.get("task_id") or "") in self._tasks:

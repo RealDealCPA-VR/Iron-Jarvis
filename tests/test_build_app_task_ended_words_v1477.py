@@ -1,4 +1,4 @@
-"""v1.477.1 (a USER REPORT, a screenshot of a wall of grey lines): Build › Code
+"""v1.477.2 (a USER REPORT, a screenshot of a wall of grey lines): Build › Code
 called EVERY task Claude Code said had ended "a helper" — "A helper finished:
 cd "C:/…" && grep …". Those were not helpers finishing. They were shell
 COMMANDS, and the text after the colon was the command line.

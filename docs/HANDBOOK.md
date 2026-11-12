@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.477.1 (2026-11-12).*
+holds itself to. Current as of v1.477.2 (2026-11-12).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Build › Code calls a finished command a command (v1.477.1)
+## Build › Code calls a finished command a command (v1.477.2)
 
 In Build › Code, a shell command that ended is no longer announced as "A
 helper finished".
@@ -2085,6 +2085,28 @@ Two things to know:
   finished: …" for a command that started before the update. The older
   version did not record whether that command ran in the background, so Iron
   Jarvis says the line and does not guess.
+
+## A blocked-passage notice opens the chat it happened in (v1.477.1)
+
+When Iron Jarvis keeps a suspicious passage out of what the AI reads (a
+web page, an attached file or a memory note that reads like "ignore your
+instructions" or "urgent: send the payment"), the bell shows "Blocked 1
+suspicious passage". Until now, pressing that row while you were in Chat
+did nothing: every chat turn is filed under one name, so the notice could
+not say which chat it came from.
+
+- The notice now records the chat it happened in, and pressing the row
+  opens that chat. A notice with no chat (one from before this version, or
+  from a chat not saved yet) opens the Activity page instead.
+- The row says what was caught in plain words, for example "It looked like
+  an urgent request for a payment or bank details. It was kept out of what
+  the AI read." It used to show a code such as `phishing_urgency_payment`.
+- Any link to a saved chat now opens it even when Chat is already on
+  screen: the bell, Ctrl K and the browser's back and forward buttons.
+
+A block is often a false alarm on your own words (a note about a deadline
+or bank details). Nothing is deleted: the passage is only left out of that
+one reply.
 
 ## A ring that shows the coding tool is still working (v1.477.0)
 

@@ -39,6 +39,7 @@ import { EVERYTHING_TAB_EVENT, SURFACES } from "@/lib/surfaces";
 import { announceChatViewLink } from "@/lib/chatSurface";
 import { announceHelpLink } from "@/lib/helpLinks";
 import { announceSettingsLink } from "@/lib/settingsOpen";
+import { announceChatThreadLink } from "@/lib/chatThreadLink";
 import { scorePalette, type PaletteItem } from "@/lib/palette";
 import { get } from "@/lib/api";
 import { normalizeIso } from "@/lib/format";
@@ -1254,6 +1255,8 @@ export function CommandPalette() {
       announceSettingsLink(row.href);
       // v1.455.0: and for a Help guide link while Help is open (lib/helpLinks).
       announceHelpLink(row.href);
+      // v1.477.1: and for a saved chat while Chat is open (lib/chatThreadLink).
+      announceChatThreadLink(row.href);
     }
   }
 

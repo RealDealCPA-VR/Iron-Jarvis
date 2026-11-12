@@ -173,7 +173,7 @@ def test_the_system_messages_worth_a_line_are_said_in_claudes_words():
                           "Hook PostToolUse:Bash (PostToolUse) failed: 2 warnings"),
         "stop_hook_summary": ({"preventedContinuation": True, "stopReason": "Tests first."},
                               "A hook stopped Claude Code from carrying on: Tests first."),
-        # v1.477.1 (moved on purpose): told nothing about the task, the line
+        # v1.477.2 (moved on purpose): told nothing about the task, the line
         # no longer guesses "A helper" (tests/test_build_app_task_ended_words_v1477.py).
         "task_notification": ({"status": "completed", "summary": "created", "tool_use_id": "T"},
                               "A task finished: created"),
