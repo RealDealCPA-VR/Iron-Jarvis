@@ -18097,3 +18097,49 @@ suggest-don't-act for anything autonomous, everything reviewable.
     error, the new one passes, and ten sibling Connections tests pass under
     the same delay. A request the mock has recorded is not a line the page
     has drawn.
+
+- **Build › Code's "working" sign: ONE ring in a slot that is always there; the
+  light hops in steps, never turns smoothly** (v1.477.0; the owner: the plain line
+  "5 helpers are still working in the background…" was too easy to miss).
+  `components/buildCode/WorkingSign.tsx` draws, `lib/workingSign.ts` decides
+  (pure). States, in `backgroundWorkWords`' own order: `reply` (a reply the
+  user started; steps aside for a card), `helpers` (one segment per helper,
+  the working count in the middle, finished ones first, thin and steady; past
+  `RING_SLOTS_MAX` 12 the ring shares 12 out and the number stays exact), `own`
+  (the tool's own reply), `commands` (a STILL ring + the old sentence; a dev
+  server is not work for the user). "N finished" is `noteHelpers`: the drops in
+  `background_helpers` between two reads of the session, kept in the component
+  (a pane is mounted per session), started again when no helper is left. It is
+  what THIS WINDOW saw, never more than really ended; no daemon change.
+  - THE OLD IDS LIVE INSIDE IT: `code-working` (the reply state's `<p>`) and
+    `code-background` (`role="status"`, the unchanged `backgroundWorkWords`
+    sentence: `sr-only` beside the short words, visible for `commands`). The
+    v1417 pins are green and unmoved. The short words are `aria-hidden`.
+  - THE SLOT (`code-sign-slot`) is always rendered, `h-8`, so nothing moves
+    when the sign comes or goes (it adds ~30 px above the message box in every
+    session). `sticky -bottom-2`: Chromium measures a sticky box's `bottom`
+    from INSIDE the scroll box's padding (the transcript's `py-4`), so
+    `-bottom-2` is 8 px above the transcript's edge; `bottom-2` pushed the sign
+    14 px up onto the last line (measured; the e2e holds the 8 px both ways).
+    `pointer-events-none` on the slot, `-auto` on the sign. `floating` (the
+    pane's new `away` state, set in `onScroll`) adds the pill; `compact`
+    (`jump`) drops the second words, and the first under `sm`.
+  - MOTION (`globals.css` `.wsign-hop` / `.wsign-tick`): `steps()` only, one
+    new frame per hop (`BEAT_BACKGROUND_MS` 900, `BEAT_REPLY_MS` 600), transform
+    and opacity only; `--wsign-m` / `--wsign-sweep` / `--wsign-beat` are set
+    inline (`steps(var(--wsign-m))` works in Chromium). Off under
+    `prefers-reduced-motion` and forced colours (the stylesheet), and while the
+    window is hidden or the setting is read in script (`data-motion="off"`, the
+    classes are not even added). MEASURED (headless Edge, 1440 x 900, 3 rounds x 20 s,
+    `SystemInfo.getProcessInfo`): standing still 1.56% of one core (graphics
+    process) / 1.29% (page); as shipped 1.90% / 1.61%; the same light turning
+    smoothly 23.37% / 3.52%. Do not put a smooth timing function
+    back (a unit test reads the stylesheet for it).
+  - Pins: `dashboard/__tests__/build-code-working-sign.test.tsx` (20 tests; 20 mutations, all red),
+    e2e `dashboard/e2e/build-code-working-sign.spec.ts` (1900 / 1280 / 390 px,
+    dark and light: rests 8 px under the last row, nothing moves when it goes,
+    the light is seen only at its step places, scrolled-up pill, reduce motion,
+    a made theme's variables; `IJ_SIGN_OUT=<folder>` writes pictures,
+    `IJ_SIGN_MEASURE=1` runs the cost measurement). OPEN: Chat › Code keeps its
+    own "Working for…" line; `hosted/claude.py` still words an ended background
+    COMMAND as "A helper finished: <command>" (the wall of such lines).
