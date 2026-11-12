@@ -29,6 +29,10 @@ class TurnDeliverables:
         self.steps = StepLog()
         self.nudged = False
         self.warned = False
+        #: The user declined (or the permission table refused) a call in this
+        #: reply: their answer stands, and the model is never asked to try
+        #: again. Set by both lanes.
+        self.declined = False
 
     @classmethod
     async def start(cls, messages: Any, ws_resolved: "tuple[Path, bool] | None") -> "TurnDeliverables | None":
@@ -53,7 +57,7 @@ class TurnDeliverables:
         """ONCE, when only :data:`RESERVE_ROUNDS` steps are left and a
         required file is still missing: what is missing (a user-role note)."""
         left = rounds - round_index
-        if self.warned or round_index == 0 or left > RESERVE_ROUNDS or left < 2:
+        if self.declined or self.warned or round_index == 0 or left > RESERVE_ROUNDS or left < 2:
             return ""
         self.warned = True
         return await asyncio.to_thread(missing_now, self.scope, left)
@@ -61,7 +65,7 @@ class TurnDeliverables:
     async def end_note(self, round_index: int, rounds: int) -> str:
         """ONCE, when the model ends on words with a step left: the files still
         missing, for one more try. "" = let the reply end."""
-        if self.nudged or rounds - round_index < 2:
+        if self.declined or self.nudged or rounds - round_index < 2:
             return ""
         self.nudged = True
         return await asyncio.to_thread(missing_now, self.scope, None)

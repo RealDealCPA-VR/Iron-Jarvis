@@ -28,7 +28,13 @@ CLOSING_QUESTION = "closing_question"
 #: — a coding session's turn (both chat lanes) or an agent run's step.
 TEXT_TOOL_CALL = "text_tool_call"
 
-NUDGE_KINDS = (PLAN_RUN, STEP_LIMIT_CONTINUE, ROUNDS_EXTENDED, CLOSING_QUESTION, TEXT_TOOL_CALL)
+#: v1.480.0 (capability search): a chat reply about to end on words was asked
+#: once whether it should look up what Iron Jarvis can do first, and DID
+#: (``chat_turn.LOOK_FIRST_NOTE``); a reply that was kept is not counted.
+LOOK_FIRST = "look_first"
+
+NUDGE_KINDS = (PLAN_RUN, STEP_LIMIT_CONTINUE, ROUNDS_EXTENDED, CLOSING_QUESTION, TEXT_TOOL_CALL,
+               LOOK_FIRST)
 
 
 async def note_nudge(bus: Any, kind: str, *, session_id: "str | None" = None, **facts: Any) -> None:
@@ -47,5 +53,5 @@ async def note_nudge(bus: Any, kind: str, *, session_id: "str | None" = None, **
         log.debug("autonomy nudge event failed", exc_info=True)
 
 
-__all__ = ["CLOSING_QUESTION", "NUDGE_KINDS", "PLAN_RUN", "ROUNDS_EXTENDED", "STEP_LIMIT_CONTINUE",
-           "TEXT_TOOL_CALL", "note_nudge"]
+__all__ = ["CLOSING_QUESTION", "LOOK_FIRST", "NUDGE_KINDS", "PLAN_RUN", "ROUNDS_EXTENDED",
+           "STEP_LIMIT_CONTINUE", "TEXT_TOOL_CALL", "note_nudge"]

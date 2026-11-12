@@ -304,6 +304,8 @@ class _Reading:
     write_dirs: list[str] = field(default_factory=list)
     read_only: list[str] = field(default_factory=list)
     leads: set = field(default_factory=set)
+    #: A required file came from a Deliverables / Outputs list.
+    listed: bool = False
 
 
 def _segment(line: str, start: int) -> str:
@@ -385,6 +387,7 @@ def _read_sentence(reading: _Reading, text: str, section: str, *, first_of_item:
         and not _NEGATED_RX.search(text[: files[0].start])
     ):
         reading.deliverables.append(files[0].text)
+        reading.listed = True
     for tok in _verb_outputs(text, files):
         reading.deliverables.append(tok.text)
 
@@ -521,7 +524,13 @@ def scope_for_text(text: str, workspace: Path) -> "TaskScope | None":
     if not text or not workspace:
         return None
     reading = _read(text[:MAX_TEXT_CHARS])
-    if not reading.deliverables and not reading.write_dirs:
+    # A TASK, not a one-line request: a Deliverables list, two or more
+    # required files, or a write rule. "write new.txt" alone is an ordinary
+    # request, and the turn stays exactly as it always was.
+    if not (
+        reading.listed or len(set(reading.deliverables)) >= 2
+        or reading.write_dirs or (reading.deliverables and reading.read_only)
+    ):
         return None
     workspace = Path(workspace)
     root = workspace

@@ -44,7 +44,7 @@ through the real chat lanes and the real ``registry.invoke``):
 5. BOUNDED: at most :data:`MAX_JOINED_PER_LOOKUP` tools per lookup and
    :data:`MAX_JOINING_LOOKUPS` lookups per reply.
 6. NOTHING IS SILENT: the lookup's own result says which tools joined, which
-   ask first, and which did not join and why.
+   show the user an approval card when called, and which did not join and why.
 
 The tool leaves what it found for its own turn (:data:`FOUND`, keyed by the
 turn's id; a turn with no id gets answers only). Both lanes call
@@ -278,6 +278,17 @@ NO_MORE_NOTE = (
 LOOK_AGAIN = (
     "If the user's request needs a tool, look once more with other English words "
     "for it; otherwise tell the user what Iron Jarvis can do and where."
+)
+
+#: How a joined tool that asks is described to the model (v1.480.0). The old
+#: words, "asks the user first", were read as an INSTRUCTION: in 15 replies
+#: of the Phase 2 live run the right tool had joined and the model wrote
+#: "Would you like me to…?" instead of calling it. The card IS the question.
+CARD_WORDS = "shows the user an approval card when you call it"
+CALL_IT_NOTE = (
+    "If you have what the call needs, call it now: the card is how the user "
+    "confirms, so do not ask again in words. Ask in words only for a detail the "
+    "call needs and you do not have."
 )
 
 WHY_NEVER = "a lookup does not bring this tool"
@@ -534,12 +545,14 @@ def _note(joined: list[str], asks: list[str], skipped: dict[str, str], capped: b
     parts: list[str] = []
     if joined:
         shown = ", ".join(
-            f"`{n}`" + (" (asks the user first)" if n in asks else "") for n in joined
+            f"`{n}`" + (f" ({CARD_WORDS})" if n in asks else "") for n in joined
         )
         parts.append(
             f"Now among your tools in this reply: {shown}. Call the one that fits "
             "what the user asked for."
         )
+        if asks:
+            parts.append(CALL_IT_NOTE)
     for name, why in skipped.items():
         parts.append(f"`{name}` did not join: {why}.")
     if capped:

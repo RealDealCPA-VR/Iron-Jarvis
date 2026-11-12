@@ -349,6 +349,19 @@ SETTINGS: tuple[SettingDef, ...] = (
       "everything Iron Jarvis can do and tell you what it found: the tool, the setting, "
       "the page, or that it is not offered. The lookup only reads; it changes nothing.",
       tier="allow", aliases=("capability search", "capability lookup")),
+    # v1.480.0: the look-first check. Its own switch because it costs one
+    # more model call on every reply that ends without a tool. The label is
+    # NOT a plain sentence, for the reason above.
+    S("capability_look_first", "Feature lookup check", "models", "bool",
+      "Needs Feature lookup. When a reply is about to end and Jarvis has looked nothing "
+      "up and changed nothing, it is asked once whether it should look your request up "
+      "first, so it does not answer \"done\" or \"I can't\" for something Iron Jarvis "
+      "has a tool for. It finds more of what you ask for, and every such reply finishes "
+      "a few seconds later (about 3.5 seconds on a Claude plan), ordinary questions "
+      "included.",
+      # No everyday alias: "look first check" matched "look first, check the
+      # invoice…" and armed the settings tools (found in review).
+      tier="allow", aliases=("capability lookup check",)),
     # v1.435.0 (chat-first plan, Wave 3 group I, D3): the starting point for a
     # NEW chat's Local only switch (the chat page reads it). Turning it off is
     # ask-floor: it widens what new chats may send off this network.

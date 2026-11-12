@@ -139,16 +139,25 @@ def test_ordinary_messages_name_no_task(task, text):
     ("Please write `OUTPUT/FINAL_REPORT.md` when you are done.", ["OUTPUT/FINAL_REPORT.md"]),
     ("## Outputs\n- `results/a.xlsx`\n- `results/b.md`", ["results/a.xlsx", "results/b.md"]),
 ])
-def test_files_to_produce_are_read(task, text, want):
-    scope = S.scope_for_text(text, task)
-    assert scope is not None, text
-    assert [d.text for d in scope.deliverables] == want
+def test_files_to_produce_are_read(text, want):
+    assert S._read(text).deliverables == want, text
+
+
+@pytest.mark.parametrize("text", [
+    "write new.txt",
+    "save the totals as totals.csv",
+    "Please write `OUTPUT/FINAL_REPORT.md` when you are done.",
+])
+def test_a_one_file_request_is_not_a_task(task, text):
+    """One file with no list and no rule is an ordinary request: the turn
+    stays exactly as it always was (no checklist, no note, no rules)."""
+    assert S.scope_for_text(text, task) is None, text
 
 
 def test_one_output_folder_is_the_write_rule_when_none_is_said(task):
     scope = S.scope_for_text("## Outputs\n- `results/a.xlsx`\n- `results/b.md`", task)
     assert scope.write_roots == (task / "results",) and scope.rule == "output folder"
-    plain = S.scope_for_text("save the totals as totals.csv", task)
+    plain = S.scope_for_text("save the totals as totals.csv and write notes.md", task)
     assert plain.write_roots == () and not plain.enforced, "no rule said: writes are unchanged"
 
 
@@ -192,8 +201,22 @@ def test_writes_outside_the_output_folder_are_refused_and_scratch_is_not(task):
 
 
 def test_a_task_with_no_write_rule_refuses_nothing(task):
-    scope = S.scope_for_text("save the totals as totals.csv", task)
+    scope = S.scope_for_text("save the totals as totals.csv and write notes.md", task)
+    assert scope is not None and not scope.enforced
     assert S.write_refusal("write_file", {"path": "anywhere/else.md"}, task, scope) == ""
+
+
+@pytest.mark.asyncio
+async def test_a_declined_write_is_never_asked_for_again(task):
+    from iron_jarvis.deliverables.turn import TurnDeliverables
+
+    dv = await TurnDeliverables.start([{"role": "user", "content": TASK}], (task, True))
+    assert dv is not None
+    dv.declined = True
+    assert await dv.end_note(1, 10) == "", "the user's no stands"
+    assert await dv.reserve_note(8, 10) == ""
+    dv.declined = False
+    assert "NOT DONE" in await dv.end_note(1, 10)
 
 
 # --------------------------------------------------------------------------- #
@@ -420,3 +443,21 @@ async def test_a_chat_with_no_task_is_unchanged(desk):
     assert "Deliverables check" not in out["reply"]
     assert (task / "INPUT" / "notes.md").exists(), "an ordinary chat writes where it always did"
     assert "This task's required files" not in model.systems[0]
+
+
+@pytest.mark.asyncio
+async def test_a_declined_card_is_never_asked_for_again_in_the_stream_lane(desk):
+    """The user said no to writing a required file: the reply ends on the
+    model's account of that, and the model is not asked to try again."""
+    app, task = desk
+    model = Model([
+        _call(1, "write_file", path="OUTPUT/change_log.md", content="# log"),
+        "You declined the change log, so it is not written.",
+        "SHOULD NOT BE ASKED",
+    ])
+    body = _body(task, tools=["write_file"], approval="always_ask", turn="turn-acc-deny")
+    _frames, cards, done = await _stream(app, body, model, decision="deny")
+    assert [c.get("tool") for c in cards] == ["write_file"]
+    assert model.steps == ["SHOULD NOT BE ASKED"], "the declined write was asked for again"
+    assert "The task is NOT complete" in done["reply"], "the note still tells the truth"
+    assert not (task / "OUTPUT" / "change_log.md").exists()

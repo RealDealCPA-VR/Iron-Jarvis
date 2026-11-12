@@ -120,7 +120,7 @@ async def test_a_script_runs_a_looked_up_web_tool_with_no_card(desk, web_tool):
         app, _body(ws, "hello there", tools=["tool_script"]), model, decision="deny",
     )
     assert web_tool in model.offered[1], "the control: the lookup brought it"
-    assert f"`{web_tool}` (asks the user first)" in model.tool_texts[1][-1], "the control: it was to ask first"
+    assert f"`{web_tool}` ({J.CARD_WORDS})" in model.tool_texts[1][-1], "the control: it was to ask first"
     assert cards or not seen, (
         f"{web_tool}, found by a lookup and said to ask first, ran from a script with no card: {seen}"
     )
@@ -608,7 +608,7 @@ async def test_the_list_and_the_note_agree_on_whether_a_tool_asks(desk):
     model = Model([_call(1, NAME, query="write a file"), "ok"])
     await _stream(app, _body(ws, "hello there", workspace_dir=""), model)
     said = model.tool_texts[1][-1]
-    assert "`write_file` (asks the user first)" in said, "the control: it joined as ask first"
+    assert f"`write_file` ({J.CARD_WORDS})" in said, "the control: it joined as ask first"
     assert "tool write_file. It runs without asking" not in said, "the same result also says it runs without asking"
 
 

@@ -293,7 +293,7 @@ def test_the_answer_says_each_kind_its_own_way(platform):
     assert got.ok and CT_TOOL.HOW_TO_USE in got.output
     row = next(m for m in got.data["matches"] if m["id"] == "agent_create")
     assert row["kind"] == "tool" and row["mode"] == "ask" and row["changes"] is True
-    assert "tool agent_create. It asks the user first." in got.output
+    assert "tool agent_create. " + CT_TOOL.ASKS_LINE in got.output
 
     got = _run(platform, query="text size")
     row = next(m for m in got.data["matches"] if m["id"] == "device.text_size")
@@ -318,7 +318,7 @@ def test_a_tool_that_runs_without_asking_says_whether_it_changes_anything(platfo
     # v1.479.0 (Phase 2, moved on purpose): a tool that changes something and
     # that a lookup can bring says what happens THEN, so the list and the
     # note under it agree. One a lookup never brings keeps the table's word.
-    assert writes.endswith("tool write_document. It asks the user first when a lookup brings it."), writes
+    assert writes.endswith("tool write_document. " + CT_TOOL.ASKS_WHEN_FOUND_LINE), writes
     assert CT_TOOL._how_it_runs("allow", True) == "It runs without asking and changes something."
 
 
@@ -341,7 +341,7 @@ async def test_the_lookup_runs_off_the_event_loop(platform, monkeypatch):
 def test_the_answer_reads_the_permission_table_as_it_is_now(tmp_path):
     app = create_app(str(tmp_path / "home"))
     p = app.state.platform
-    assert "It asks the user first." in CT_TOOL.answer(p, "make a new agent")[0]
+    assert CT_TOOL.ASKS_LINE in CT_TOOL.answer(p, "make a new agent")[0]
     p.permissions._base["agent_create"] = "deny"
     text, data = CT_TOOL.answer(p, "make a new agent")
     assert "tool agent_create. The user has set it to Never run." in text

@@ -4,7 +4,11 @@
 
 ## v1.481.0
 
-**A task's required files are checked before the reply ends.** When you give Jarvis a task in a chat that has a working folder, and your message lists the files the task must produce (a "Deliverables" or "Success criteria" list, or "write `OUTPUT/report.md`"), Jarvis now checks the work itself instead of trusting the model's last words.
+**A task's required files are checked before the reply ends.** When you give Jarvis a task in a chat that has a working folder, and your message lists the files the task must produce (a "Deliverables" or "Success criteria" list, two or more files to write, or a rule such as "create files only in `OUTPUT/`"), Jarvis now checks the work itself instead of trusting the model's last words.
+
+## v1.480.0
+
+**Jarvis looks it up before it says "done" or "I can't".** This is the third step of the feature lookup (v1.478.0, v1.479.0).
 
 ## v1.479.0
 
@@ -77,7 +81,3 @@
 ## v1.470.0
 
 **Scripts that call tools, and skills made from chat.** A **skill** and a **workflow** are two different things:
-
-## v1.469.1
-
-**Links to another workbook follow the folders Jarvis may read.** A formula can link to another workbook, for example a summary sheet that reads a figure from a client's own file.

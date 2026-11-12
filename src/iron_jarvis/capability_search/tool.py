@@ -92,16 +92,22 @@ def _mode(platform: Any, tool_name: str) -> str:
         return ""
 
 
+#: v1.480.0: "It asks the user first" was read by a real model as "ask the
+#: user in words first" (see ``join.CARD_WORDS``). The card is the question.
+ASKS_LINE = "Calling it shows the user an approval card first."
+ASKS_WHEN_FOUND_LINE = "Calling it shows the user an approval card first when a lookup brings it."
+
+
 def _how_it_runs(mode: str, changes: bool, asks_found: bool = False) -> str:
     if mode == "deny":
         return "The user has set it to Never run."
     if mode == "ask":
-        return "It asks the user first."
+        return ASKS_LINE
     if mode == "allow" and asks_found:
         # The same words the join's note uses: a tool that changes something
         # or reaches outside this PC asks when a LOOKUP brings it, whatever
         # its own tier is.
-        return "It asks the user first when a lookup brings it."
+        return ASKS_WHEN_FOUND_LINE
     if mode == "allow":
         return "It runs without asking and changes something." if changes else "It only reads."
     return ""
@@ -154,7 +160,8 @@ def entry_line(platform: Any, entry: _index.Capability) -> tuple[str, dict[str, 
             ), row
         line = (
             f"{head}: changed with tool {entry.tool}"
-            f"{' (it asks the user first)' if mode == 'ask' else ''}, read with config_list, "
+            f"{' (calling it shows the user an approval card first)' if mode == 'ask' else ''}, "
+            "read with config_list, "
             f"or by hand at {entry.href}."
         )
         if entry.protected:
@@ -225,8 +232,8 @@ class FindCapabilityTool(Tool):
         "It returns the closest matching tools, settings and pages, and says so "
         "when Iron Jarvis does not offer the thing. A fitting tool it finds may "
         "join your tools for the rest of this reply (the result says which, and "
-        "which ask the user first). The lookup itself is read-only: it changes "
-        "nothing."
+        "which show the user an approval card when you call them). The lookup "
+        "itself is read-only: it changes nothing."
     )
     input_schema = {
         "type": "object",

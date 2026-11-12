@@ -6467,7 +6467,16 @@ CAPABILITY_BLOCK = (
     "Before you tell the user you cannot do something, or that you have no access "
     "to something (earlier chats, a setting, the web, a file), call "
     "`find_capability` with a few English words for it. A tool it finds may "
-    "join this reply: its result says which, and which ask the user first."
+    "join this reply: its result says which, and which show the user an approval "
+    "card when you call them.\n"
+    "Words alone change nothing in Iron Jarvis. When the user asks for something to "
+    "be done, set up, changed, saved, remembered, scheduled, watched or sent, a "
+    "reply that says \"done\", \"got it\", \"I will\" or \"I'll remember\" does "
+    "nothing unless a tool call did it. If none of your tools does it, look it up "
+    "first, then call the tool it finds.\n"
+    "A request about how things look, sound or behave, or about what is kept, "
+    "allowed or done automatically, may be about Iron Jarvis itself and not about "
+    "a file of the user's. Look it up before you ask the user which they mean."
 )
 
 
@@ -6483,6 +6492,244 @@ def capability_block(armed_names, config: Any = None) -> str:
         return CAPABILITY_BLOCK if "find_capability" in {str(n) for n in (armed_names or ())} else ""
     except TypeError:
         return ""
+
+
+# --------------------------------------------------------------------------- #
+# LOOK IT UP BEFORE THE REPLY ENDS (v1.480.0, capability search)
+# --------------------------------------------------------------------------- #
+#: The Phase 2 live run (135 real requests, Claude Haiku): the model looked
+#: something up in 57 replies. In 34 of the others it ended on WORDS with no
+#: tool call at all ("Got it, I'll remember that", "I'll set up a recurring
+#: task", generic how-to text, "I can't"), and in 17 more it only read files.
+#: The app cannot decide by itself when a lookup is due: its own word match
+#: of the user's message found "something" for 99 of 99 look-alike messages
+#: that ask for nothing. Only the model can tell a request from a question,
+#: so the lane ASKS it once, before a reply that called nothing but readers
+#: is sent: look it up, or keep the reply.
+#:
+#: ONE bounded completion with the reply's own tools (the same list, so the
+#: provider's prompt cache holds). It is acted on ONLY when the model
+#: answers with `find_capability` calls and nothing else: then the reply is
+#: taken back (`reset`) and the round goes on with the lookup, behind every
+#: rule of the join. Any other answer, a failure, a refusal or a timeout
+#: keeps the reply exactly as it was written. Billed like any call.
+LOOK_FIRST_TIMEOUT_S = 20.0
+#: Rounds a lookup still needs after the check: the lookup (this round), the
+#: tool it found, the answer.
+LOOK_FIRST_ROUNDS_NEEDED = 3
+
+LOOK_FIRST_NOTE = (
+    "(From Iron Jarvis, not from the user. Your reply above is not final yet, "
+    "and in this reply you have not looked up what Iron Jarvis can do.\n"
+    "Check it against one rule: words alone change nothing. If the user asked "
+    "for something to be done, set up, changed, saved, remembered, scheduled, "
+    "watched, sent or connected, or asked whether Iron Jarvis can do something, "
+    "and no tool call of yours did it, call `find_capability` now with a few "
+    "English words for what they asked. A reply that says it is done, that you "
+    "will do it or remember it, that it cannot be done, or that tells the user "
+    "how to do it by hand, is not true until you have looked.\n"
+    "The request may be about Iron Jarvis itself (how it looks, sounds or "
+    "behaves, what it keeps, allows or does by itself) and not about a file of "
+    "the user's: if your reply asks the user which they mean, look first.\n"
+    "If your reply above only answers a question, writes or explains "
+    "something, or asks the user for a detail that no lookup could give, "
+    "answer with the single word KEEP and it stands exactly as it is. If you "
+    "look something up, the reply above is thrown away: write the whole reply "
+    "again after.)"
+)
+
+
+def look_first_kept_word(text: Any) -> bool:
+    """Is *text* nothing but the check's own word? After a lookup that
+    followed the check, a model can answer "KEEP" once more instead of
+    writing its reply again; that word is never sent to the user (the lane
+    sends the reply the model had written before the check)."""
+    try:
+        return str(text or "").strip().strip(".!\"'`*_ ").upper() == "KEEP"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _look_first_question(msgs: Any, head: int) -> str:
+    """The user's own message of this turn (``msgs[:head]`` ends on it)."""
+    try:
+        for message in reversed(list(msgs[: max(0, int(head))])):
+            if getattr(message, "role", "") == "user":
+                return str(getattr(message, "content", "") or "")
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def _look_first_has_words(text: str) -> bool:
+    """Has the user's message a word to look up? The lookup index reads a-z
+    and digits only (its entries are English), so its tokenizer finds nothing
+    in a message written in another script (Cyrillic, Greek, Chinese,
+    Arabic…) and such a user was never asked (v1.480.0 review). The model
+    looks up in English whatever the user wrote, so a letter of any other
+    script counts as a word here; "?!", an emoji or an English message of
+    filler words alone still does not."""
+    from ..capability_search import index as _ci
+
+    return bool(_ci.tokens(text)) or any(ch.isalpha() and not ch.isascii() for ch in text)
+
+
+def look_first_wanted(
+    d: Any,
+    body: Any,
+    *,
+    armed: Any,
+    msgs: Any,
+    head: int,
+    reply: str,
+    round_index: int,
+    rounds: int,
+    trust_state: Any,
+    demo: bool = False,
+    truncated: bool = False,
+) -> bool:
+    """Is this reply, about to end on words, asked ONCE to look first?
+
+    Every condition is a fact of the turn, never a reading of its words (the
+    app's own word match cannot tell a request from a look-alike): BOTH
+    settings are on (Feature lookup, and Feature lookup check: the check is
+    one more model call on every reply that ends without a tool, so it has
+    its own switch, off by default) and the lookup is among the reply's
+    tools; Auto tools is on
+    and the reply is not at low trust (else nothing a lookup finds could
+    join); the turn has an id (what a lookup finds is kept per turn); the
+    demo model is not answering; the reply has words and was not cut off;
+    the user's message has at least one word to look up; three rounds are
+    left; and in this reply the model has NOT looked and has called nothing
+    but tools that only read. A reply that called a tool that changes
+    something (whatever came of it: done, declined, refused) is left alone.
+    The caller asks once per reply. Never raises: cannot tell = not asked.
+    MIRROR NOTE (lock-step): both lanes ask at their final-text exit."""
+    try:
+        platform = d.platform
+        if not getattr(getattr(platform, "config", None), "capability_search", False):
+            return False
+        if not getattr(getattr(platform, "config", None), "capability_look_first", False):
+            return False
+        from ..capability_search import index as _ci
+        from ..capability_search import join as _cj
+
+        if _cj.NAME not in {str(n) for n in (armed or ())}:
+            return False
+        if demo or truncated or not getattr(body, "auto_tools", False):
+            return False
+        if finish_low_trust(trust_state):
+            return False
+        if not str(getattr(body, "turn_id", "") or "").strip():
+            return False
+        if not str(reply or "").strip():
+            return False
+        if int(round_index) > int(rounds) - LOOK_FIRST_ROUNDS_NEEDED:
+            return False
+        if not _look_first_has_words(_look_first_question(msgs, head)[: _ci.QUERY_CHARS]):
+            return False
+        registry = platform.registry
+        for message in list(msgs)[max(0, int(head)):]:
+            if getattr(message, "role", "") != "tool":
+                continue
+            name = str(getattr(message, "name", "") or "")
+            if name == _cj.NAME:
+                return False
+            tool = registry.get(name)
+            if tool is None or not _cj._reads(tool, name):
+                return False
+        return True
+    except Exception:  # noqa: BLE001 — cannot tell: the reply ends as written
+        return False
+
+
+async def look_first_call(
+    d: Any,
+    *,
+    msgs: Any,
+    system: str,
+    provider: str,
+    model: str,
+    head: int,
+    tools: Any,
+    reply: str,
+    raw_blocks: Any = None,
+    tally: "UsageTally | None" = None,
+    router_kw: "dict[str, Any] | None" = None,
+) -> tuple[Any, list, int, int, int]:
+    """Ask the model ONCE whether its reply should stand or it should look
+    first. ``router_kw`` is what the lane's own round call spreads into the
+    router beside these (the turn's reasoning level, ``_reasoning_kw``): the
+    check's answer becomes a turn of the transcript, so it is made the way
+    the rounds are made (v1.480.0 review: a thinking tool loop is one mode
+    from end to end, and the prompt cache holds only for the same call).
+    Returns ``(response, asked, usage_in, usage_out, completions)``:
+    ``response`` is the model's answer ONLY when it is `find_capability`
+    calls and nothing else, else ``None`` (the reply stands: KEEP, other
+    words, another tool, a failure, a refusal, a timeout). ``asked`` is the
+    two messages the lane adds to its transcript when it goes on (the reply
+    as the model wrote it, then the note). The transcript is fitted like
+    every completion of a tool loop (``_fit_turn_transcript``). Never raises
+    (a cancel passes through: Stop ends the turn)."""
+    from ..capability_search.join import NAME as _cap_name
+    from ..providers.adapters.base import LLMMessage
+
+    asked = [
+        LLMMessage(role="assistant", content=str(reply or ""), raw_blocks=list(raw_blocks or [])),
+        LLMMessage(role="user", content=LOOK_FIRST_NOTE),
+    ]
+    started = _time.perf_counter()
+    try:
+        send, send_system = _fit_turn_transcript(
+            d, [*msgs, *asked], system, provider, model, head=head
+        )
+        async with asyncio.timeout(LOOK_FIRST_TIMEOUT_S):
+            route = await d.platform.router.complete(
+                provider=provider or None,
+                model=model or None,
+                system=send_system,
+                messages=send,
+                tools=tools,
+                task_class="chat",
+                **dict(router_kw or {}),
+            )
+    except Exception:  # noqa: BLE001 — the reply stands
+        log.debug("look-first completion failed", exc_info=True)
+        return (None, asked, 0, 0, 0)
+    try:
+        response = route.response
+        usage = response.usage or {}
+        took = _time.perf_counter() - started
+        if tally is not None:
+            tally.add(getattr(route, "provider", ""), getattr(route, "model", ""), usage)
+        used = (int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0))
+        calls = list(response.tool_calls or [])
+        looked = bool(calls) and all(str(getattr(c, "name", "")) == _cap_name for c in calls)
+        # Names only, never a word of the reply: how often the check makes
+        # the model look (the plan's Phase 5 reads this beside the join line).
+        log.info("look first: %s (%.1f s)", "looked" if looked else "kept", took)
+        if not looked:
+            return (None, asked, used[0], used[1], 1)
+        return (response, asked, used[0], used[1], 1)
+    except Exception:  # noqa: BLE001
+        log.debug("look-first answer could not be read", exc_info=True)
+        return (None, asked, 0, 0, 1)
+
+
+async def note_look_first(platform: Any, body: Any, tool_session: str, round_index: int) -> None:
+    """ONE ``autonomy.nudged`` event (``core/nudges.LOOK_FIRST``) for a reply
+    that was taken back because the model looked something up when asked.
+    Never raises (``note_nudge`` swallows). MIRROR NOTE: both lanes."""
+    from ..core.nudges import LOOK_FIRST, note_nudge
+
+    await note_nudge(
+        getattr(platform, "event_bus", None), LOOK_FIRST,
+        session_id=str(tool_session or "chat"),
+        surface="chat",
+        turn_id=str(getattr(body, "turn_id", "") or ""),
+        thread_id=str(getattr(body, "thread_id", "") or ""),
+        round=int(round_index) + 1,
+    )
 
 
 def skills_offer_block(platform: Any, names: Any, armed_names: Any) -> str:
@@ -11543,6 +11790,12 @@ async def run_chat_turn(
     # (lock-step with the stream lane's `_stays_in_chat`).
     _office = _stays_in_chat(armed, force=stay_in_chat)
     _cut_office = False
+    #: v1.480.0: the reply was asked once to look it up before it ends
+    #: (lock-step: the stream lane's ``_looked_first``).
+    _looked_first = False
+    #: The reply the check took back, kept in case the model's last word
+    #: after its lookup is only "KEEP" (``look_first_kept_word``).
+    _look_draft = ""
     # v1.402.0: the turn's ONE extra allotment was given (`more_rounds`).
     _extended = False
     # IN-TURN BUDGET (v1.287.0): everything before round 0 is the planned
@@ -11776,6 +12029,44 @@ async def run_chat_turn(
                         continue
                     calls = _fin_calls
                     _finish_round = True
+            # LOOK IT UP BEFORE THE REPLY ENDS (v1.480.0): a plain chat reply
+            # about to end on words, that never looked and called nothing but
+            # readers, is asked ONCE: look it up, or keep the reply. Only a
+            # `find_capability` answer is acted on (this round then runs it);
+            # anything else leaves the reply as written. MIRROR NOTE
+            # (lock-step): routes/chat.py's stream loop.
+            if (
+                not calls and not _looked_first and _harness is None and not text_only_pick
+                and look_first_wanted(
+                    d, body, armed=armed, msgs=msgs, head=_head,
+                    reply=route.response.text or "", round_index=_round, rounds=_rounds,
+                    trust_state=_trust_state, truncated=_truncated,
+                    demo=is_demo_route(getattr(route, "provider", ""), getattr(route, "reason", "")),
+                )
+            ):
+                _looked_first = True
+                _lf, _lf_asked, _lf_in, _lf_out, _lf_n = await look_first_call(
+                    d, msgs=msgs, system=system, provider=provider_choice, model=model_choice,
+                    head=_head, tools=tool_specs, reply=route.response.text or "",
+                    raw_blocks=getattr(route.response, "raw_blocks", None), tally=_tally,
+                    # Review: the turn's reasoning level, like the round's own
+                    # call (lock-step: the stream lane).
+                    router_kw=_reasoning_kw(body),
+                )
+                usage_in += _lf_in
+                usage_out += _lf_out
+                completions += _lf_n
+                if _lf is not None:
+                    _look_draft = route.response.text or ""
+                    msgs.extend(_lf_asked)
+                    route.response = _lf
+                    calls = list(_lf.tool_calls or [])
+                    _model_calls = calls
+                    await note_look_first(platform, body, _tool_session, _round)
+            elif not calls and _look_draft and look_first_kept_word(route.response.text):
+                # The model looked, then answered only "KEEP": the reply it
+                # had written before the check is the one that is sent.
+                route.response.text = _look_draft
             # THE DELIVERABLES CHECK (v1.481.0): the model ends on words while
             # a required file is missing, empty or broken on disk: ONCE, the
             # check goes to the model and the loop goes on. MIRROR NOTE
@@ -12163,6 +12454,8 @@ async def run_chat_turn(
                         _label = refusal_label(result.error or "")
                         if _label == "permission denied":
                             denied_tools.append(tc.name)
+                            if _deliv is not None:
+                                _deliv.declined = True  # v1.481.0 (lock-step)
                         if _label:
                             refused_tools.append((tc.name, _label))
                         else:
@@ -12485,6 +12778,14 @@ async def run_chat_turn(
             _truncated = _truncated_by(_f_outcome["response"])
         _f_refusal = _f_outcome.get("refusal")
         model_text = _f_text or model_text
+        if _look_draft and look_first_kept_word(model_text):
+            # v1.480.0 (review): the check took a reply back, the model
+            # looked and then wrote nothing; asked for its final answer (the
+            # check's note is still above it) it said only "KEEP". The reply
+            # it had written is the one that is sent, never the word. MIRROR
+            # NOTE (lock-step): the stream lane's streamed nudge.
+            model_text = _look_draft
+            _truncated = False
         usage_in += _f_in
         usage_out += _f_out
         completions += _f_n
