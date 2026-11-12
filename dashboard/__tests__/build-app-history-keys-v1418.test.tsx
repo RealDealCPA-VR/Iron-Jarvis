@@ -106,7 +106,7 @@ import {
   wordsBack,
 } from "@/lib/buildAppHistory";
 import { decodeCodingTools } from "@/lib/buildApp";
-import { SESSION, effortButtons, modelRowsShown } from "./helpers/modelPicker";
+import { SESSION, chooseEffort, effortButtons, modelRowsShown } from "./helpers/modelPicker";
 
 const MODES = [
   { id: "ask", label: "Ask first", dangerous: false },
@@ -465,6 +465,20 @@ describe("keys (C4.8)", () => {
     expect(efforts.length).toBeGreaterThan(0);
     expect(efforts.every((b) => b.disabled)).toBe(true);
     expect(efforts[0].title).toContain("starts again");
+  });
+
+  it("v1.476.1: a model change while it works is said once (the line comes with the reply's stream)", async () => {
+    working("p1", { harness: "pi", mode: "own", model: "", effort: "high" });
+    H.postReply["PATCH /build/app/sessions/p1"] = {
+      session: sess("p1", { harness: "pi", mode: "own", model: "", effort: "low" }),
+      applied: { effort: "next" },
+    };
+    render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-working");
+    chooseEffort(SESSION, "low");
+    await waitFor(() => expect(H.patches).toHaveLength(1));
+    await act(async () => {});
+    expect(screen.queryByTestId("code-info")).toBeNull();
   });
 
   it("Pi's effort stays open while it works (it changes live)", async () => {

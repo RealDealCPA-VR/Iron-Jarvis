@@ -2042,6 +2042,19 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## The model picker's last rough edges (v1.476.1)
+
+Small fixes after v1.475.0's one-chip model picker in Build › Code:
+
+- **A model change is said once while a reply runs.** The page's short "from
+  your next message" note no longer repeats the line the change leaves in
+  the conversation.
+- **The "Model changed" line shows at once in a long session.** It used to
+  appear only after reopening the session when the reply on screen was long.
+- **No more "getServerSnapshot should be cached" warning** in the browser's
+  developer tools. It came from the Emergency stop strip, which is on every
+  page; nothing visible went wrong.
+
 ## Skills that get used, one approval for many changes, faster scripts (v1.476.0)
 
 ### A skill you saved is used without typing "/"

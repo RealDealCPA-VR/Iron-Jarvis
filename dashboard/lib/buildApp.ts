@@ -2189,6 +2189,22 @@ export function planChecklistSteps(steps: readonly { text: string; status: PlanS
  * names the RUNNING turn (an older record, or one that names it differently)
  * the cut is made at the last `user`.
  */
+/** v1.476.1: `drawn` plus every notice in `saved` newer than anything in
+ *  `drawn` (by its `at`). Used when a re-read keeps what is drawn because the
+ *  saved record holds fewer events than the live pieces on screen. */
+export function withNewerNotices(drawn: CodeEvent[], saved: CodeEvent[]): CodeEvent[] {
+  let last = "";
+  for (const e of drawn) {
+    const at = (e as { at?: unknown }).at;
+    if (typeof at === "string" && at > last) last = at;
+  }
+  const newer = saved.filter((e) => {
+    const at = (e as { at?: unknown }).at;
+    return e.type === "notice" && typeof at === "string" && at > last;
+  });
+  return newer.length ? [...drawn, ...newer] : drawn;
+}
+
 export function cutForRejoin(
   events: readonly CodeEvent[],
   runningTurn: string | null = null,

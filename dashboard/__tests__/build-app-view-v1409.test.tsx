@@ -955,6 +955,28 @@ describe("what the real daemon sends", () => {
     expect(chip.disabled).toBe(false);
   });
 
+  it("v1.476.1: the change's line shows even when the saved record is shorter than what is drawn", async () => {
+    const before = sess("a1", { harness_session_id: "h-1", model: "claude-sonnet-5-5" });
+    seed([before]);
+    openSession("a1", { session: before, events: SC.claude_deny, running: null, pending: [] });
+    const after = sess("a1", { harness_session_id: "h-1", model: "claude-opus-5-5" });
+    H.postReply["PATCH /build/app/sessions/a1"] = { session: after, applied: { model: "next" } };
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    const drawn = screen.getByTestId("code-session").textContent ?? "";
+    // The saved record holds fewer events than are drawn (live pieces merged).
+    openSession("a1", {
+      session: after,
+      events: [SC.claude_deny[0], { type: "notice", at: "2099-01-01T00:00:00Z", text: "Model changed: Sonnet 5.5 → Opus 5.5, from your next message." }],
+      running: null,
+      pending: [],
+    });
+    await chooseModel(SESSION, "claude-opus-5-5");
+    await waitFor(() => expect(screen.getByTestId("code-session").textContent).toContain("Model changed: Sonnet 5.5 → Opus 5.5"));
+    // What was drawn is kept (nothing blanked).
+    expect((screen.getByTestId("code-session").textContent ?? "").length).toBeGreaterThan(drawn.length);
+  });
+
   it("v1.475.0: before the conversation's first message nothing is read again", async () => {
     seed([sess("a1")]);
     openSession("a1", { session: sess("a1"), events: [], running: null, pending: [] });
