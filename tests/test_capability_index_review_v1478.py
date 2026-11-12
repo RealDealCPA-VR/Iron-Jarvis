@@ -83,16 +83,17 @@ def test_a_users_own_command_tool_is_never_indexed(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_looking_things_up_never_makes_another_tool_join_the_reply(tmp_path):
-    """DEFECT 2 (real harm, small: "nothing joins" is not true).
+async def test_looking_things_up_never_brings_the_script_tool(tmp_path):
+    """DEFECT 2 (real harm, small), as reviewed at Phase 1: four lookups in
+    one reply made ``tool_script`` join, ARMED AND GRANTED, because
+    ``chat_turn.offer_script_tool`` counted ``find_capability`` like any
+    other read done many times.
 
-    Phase 1's promise is that the model "holds exactly the tools it held
-    before" a lookup. ``chat_turn.offer_script_tool`` (v1.473.0) adds
-    ``tool_script`` to a turn, ARMED AND GRANTED, once the model has made
-    four successful calls of one armed read-only tool. ``find_capability``
-    is such a tool, so four lookups in one reply make the script tool join.
-    The builder's lane test makes ONE lookup and so never sees it. The plan's
-    own bound ("2 lookups per reply") is not in the code either.
+    MOVED ON PURPOSE for Phase 2 (v1.479.0): a lookup's own finds now join
+    the reply behind every gate (tests/test_capability_join_v1479.py), so
+    this no longer asserts that the reply gains NOTHING. It still asserts
+    what the defect was: the script tool never comes from looking things up,
+    and the plan's bound (2 lookups bring tools, later ones bring none) holds.
     """
     from tests.test_script_power_lanes_v1473 import Model, _body, _call, _stream
 
@@ -105,8 +106,8 @@ async def test_looking_things_up_never_makes_another_tool_join_the_reply(tmp_pat
     await _stream(app, _body(ws, "hello there"), model)
     assert CT_TOOL.NAME in model.offered[0]
     assert len(model.offered) == 5, model.offered
-    joined = sorted(set(model.offered[-1]) - set(model.offered[0]))
-    assert joined == [], f"after four lookups the reply gained: {joined}"
+    assert "tool_script" not in model.offered[-1], model.offered[-1]
+    assert model.offered[4] == model.offered[3] == model.offered[2], "a third or fourth lookup brought a tool"
 
 
 def test_one_thing_and_several_of_it_are_the_same_search(platform):
@@ -297,11 +298,16 @@ def test_with_the_setting_off_an_everyday_sentence_arms_no_settings_writer(platf
 # GUARDS the builder's file states and never drives (each passes today)
 # =========================================================================== #
 @pytest.mark.asyncio
-async def test_a_found_tool_the_reply_does_not_hold_is_refused_when_called(tmp_path):
-    """GUARD (test gap): Phase 1 answers only. The builder's lane test checks
-    the OFFERED list; nothing drives the model doing what a web page would
-    tell it to: call the changing tool the lookup just named. Both lanes
-    must refuse it through the registry's own gate, and nothing is written.
+async def test_a_found_changer_never_runs_without_the_users_allow(tmp_path):
+    """GUARD, as reviewed at Phase 1: drive the model doing what a web page
+    would tell it to: call the changing tool the lookup just named.
+
+    MOVED ON PURPOSE for Phase 2 (v1.479.0). Phase 1 refused the call in
+    both lanes (nothing joined). Now: in the stream lane the found changer
+    joins as ASK FIRST, its card shows, and with Deny nothing is written; in
+    the POST lane, where nobody can be asked, it does not join and the call
+    is refused. Either way a tool found by lookup never runs on the model's
+    word alone.
     """
     from tests.test_script_power_lanes_v1473 import Model, _body, _call, _post, _rows, _stream
 
@@ -316,16 +322,16 @@ async def test_a_found_tool_the_reply_does_not_hold_is_refused_when_called(tmp_p
             _call(2, "write_file", path=str(target), content="planted"),
             "Done.",
         ])
-        body = _body(ws, "hello there", workspace_dir="")
+        body = _body(ws, "hello there")
         if lane == "stream":
-            _frames, cards, _done = await _stream(app, body, model)
-            assert cards == [], cards
+            _frames, cards, _done = await _stream(app, body, model, decision="deny")
+            assert [c.get("tool") for c in cards] == ["write_file"], cards
         else:
             await _post(app, body, model)
+            assert "write_file" not in model.offered[-1], lane
         assert "write_file" not in model.offered[0], lane
         assert "tool write_file" in model.tool_texts[1][-1], "the lookup did name it"
         assert not target.exists(), f"{lane}: a tool found by lookup ran"
-        assert "write_file" not in model.offered[-1], lane
     assert not [r for r in _rows(app, "write_file") if r.ok]
 
 

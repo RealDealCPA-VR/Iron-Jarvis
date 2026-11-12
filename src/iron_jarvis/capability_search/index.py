@@ -250,6 +250,13 @@ class CapabilityIndex:
         self._avg = (sum(self._lengths) / n) or 1.0
         self._idf = {w: math.log(1.0 + (n - c + 0.5) / (c + 0.5)) for w, c in df.items()}
 
+    def known_words(self, query: Any) -> tuple[int, int]:
+        """``(search words of *query* that appear anywhere in the list, all its
+        search words)``. The list is in English, so a query in another
+        language knows few of its own words."""
+        words = list(dict.fromkeys(tokens(str(query or "")[:QUERY_CHARS])))
+        return sum(1 for w in words if w in self._idf), len(words)
+
     def search(self, query: Any, limit: int = 5) -> list[tuple[float, Capability]]:
         """The best matches for *query*, best first; ``[]`` for a query with
         no search words. Ties keep a fixed order (kind, then id), so a search

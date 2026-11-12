@@ -3120,11 +3120,21 @@ def offer_script_tool(
         if ceiling is not None and ceiling < _MAX_ARMED_TOOLS and len(armed) >= ceiling:
             return False
         counts: dict[str, int] = {}
+        # v1.479.0 (review): nor does a reader a LOOKUP brought. Four calls of
+        # it made the script tool join, and a script could then reach what a
+        # second lookup brought: a lookup must never bring a script runner,
+        # directly or by this door.
+        try:
+            from ..capability_search.join import brought_by_lookup
+
+            _brought = brought_by_lookup(ctx)
+        except Exception:  # noqa: BLE001 — cannot tell: offer no script
+            return False
         for name in tools_used:
             # Looking up what Iron Jarvis can do is not a read done many
             # times over the user's data: four lookups never bring a script
-            # (capability search plan, Phase 1: a lookup joins nothing).
-            if str(name) == "find_capability":
+            # (capability search plan, Phase 1).
+            if str(name) == "find_capability" or str(name) in _brought:
                 continue
             counts[str(name)] = counts.get(str(name), 0) + 1
         best = ""
@@ -3163,6 +3173,38 @@ def offer_script_tool(
     except Exception:  # noqa: BLE001 — an offer never fails a turn
         log.debug("script offer failed", exc_info=True)
         return False
+
+
+def join_found_tools(d: Any, body: Any, **kw: Any) -> list:
+    """WHAT A LOOKUP FOUND JOINS THE REPLY (capability search plan, Phase 2):
+    the tools this round's ``find_capability`` calls found join for the next
+    round, in place, behind every gate (``capability_search/join.join_found``
+    holds the rules: a reader joins and runs, a changer joins as ASK FIRST
+    and only where someone can be asked, nothing joins in low trust, only
+    tools chat could already bring). Returns the names that joined. Both
+    lanes call it at the end of a tool round — MIRROR NOTE (lock-step).
+    Never raises."""
+    try:
+        from ..capability_search.join import join_found
+
+        return join_found(d, body, max_tools=_MAX_ARMED_TOOLS, **kw)
+    except Exception:  # noqa: BLE001 — a join never fails a turn
+        log.debug("capability join failed", exc_info=True)
+        return []
+
+
+def looked_up_refusal(ctx: Any, name: str, args: Any) -> str:
+    """Why this call of a tool a LOOKUP brought is not run, or "" (v1.479.0
+    review): such a reader is never pointed at a path on another computer
+    (``capability_search/join.network_refusal``, judged by the text). Both
+    lanes ask it where they answer a repeated call — MIRROR NOTE (lock-step).
+    Never raises."""
+    try:
+        from ..capability_search.join import network_refusal
+
+        return network_refusal(ctx, name, args)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 #: The file tool that joins a turn when a script kept a result for a file
@@ -5269,6 +5311,16 @@ def _resolve_armed_tools(
         and d.platform.registry.get("find_capability") is not None
     ):
         auto.append("find_capability")
+    if bool(getattr(getattr(d.platform, "config", None), "capability_search", False)):
+        # v1.479.0 (review): whatever an EARLIER turn of this id left behind
+        # (stopped mid-round, it never reached its join) is dropped before
+        # this turn can look anything up.
+        try:
+            from ..capability_search.join import FOUND as _found_by_lookup
+
+            _found_by_lookup.forget_turn(getattr(body, "turn_id", ""))
+        except Exception:  # noqa: BLE001
+            pass
     auto = [t for t in auto if _not_denied(t)]
     # THE BROWSER CAPABILITY FILTER (v1.236.0, plan 11.2), applied LAST — after
     # the explicit picks, after every fill pass, and after the drop signal has
@@ -6396,6 +6448,39 @@ def skill_block(armed_names) -> str:
     if "skill_update" in armed:
         parts.append(SKILL_EDIT_BLOCK)
     return "\n\n".join(parts)
+
+
+#: v1.479.0 (capability search, Phase 2; the plan's remedy for "the model
+#: does not look"): a real model, shown the lookup tool alone, answered "I
+#: have no access to your earlier chats" without calling it. This short map
+#: says what is worth looking up. Stable text: it rides the Tools seam, in
+#: the head of the prompt, and never changes with the message.
+CAPABILITY_BLOCK = (
+    "# What Iron Jarvis can do beyond your current tools\n"
+    "Iron Jarvis can do more than the tools you hold right now. It has tools for "
+    "its own settings; schedules, rules, goals and folder watchers; agents and "
+    "projects; connected apps and model servers; memory, preferences and earlier "
+    "chats; files, documents and spreadsheets; the web; and making pictures. Most "
+    "of them are not among your tools until they are needed.\n"
+    "Before you tell the user you cannot do something, or that you have no access "
+    "to something (earlier chats, a setting, the web, a file), call "
+    "`find_capability` with a few English words for it. A tool it finds may "
+    "join this reply: its result says which, and which ask the user first."
+)
+
+
+def capability_block(armed_names, config: Any = None) -> str:
+    """The lookup's brief when ``find_capability`` is armed AND the setting
+    is on, else ``""`` (a brief beside no tool is a lie — the v1.262.0 rule;
+    with the setting off the prompt is byte-identical, also for a caller
+    that named the tool itself). MIRROR NOTE (lock-step): both lanes append
+    it at their Tools seam, after the skill brief."""
+    try:
+        if not getattr(config, "capability_search", False):
+            return ""
+        return CAPABILITY_BLOCK if "find_capability" in {str(n) for n in (armed_names or ())} else ""
+    except TypeError:
+        return ""
 
 
 def skills_offer_block(platform: Any, names: Any, armed_names: Any) -> str:
@@ -11186,6 +11271,10 @@ async def run_chat_turn(
         _skill_brief = skill_block(armed)
         if _skill_brief:
             system += "\n\n" + _skill_brief
+        # v1.479.0 — lock-step with the stream lane: the lookup's brief.
+        _cap_brief = capability_block(armed, d.platform.config)
+        if _cap_brief:
+            system += "\n\n" + _cap_brief
         # v1.473.0 — lock-step with the stream lane: the skills this message
         # fits, named only beside `skill_load`.
         if _skills_offered:
@@ -11743,7 +11832,9 @@ async def run_chat_turn(
                 if _failed_calls.get(_call_key, 0) >= REPEATED_CALL_LIMIT:
                     _refused.append(repeated_call_refusal(tc.name, _failed_calls[_call_key]))
                 else:
-                    _refused.append("")
+                    # v1.479.0 — lock-step with the stream lane: a reader a
+                    # lookup brought is never pointed at another computer.
+                    _refused.append(looked_up_refusal(ctx, tc.name, tc.arguments))
             # THE SPEND CHECK (v1.346.0, post-lane spend): ONCE per call of the
             # round, BEFORE anything runs, each armed tool with an opinion
             # about money is asked (`Tool.spend_check` — today only
@@ -12220,6 +12311,20 @@ async def run_chat_turn(
                     auto_armed=auto_armed, ask_armed=(), tool_specs=tool_specs,
                     overrides=overrides, armed_grant=armed_grant, msgs=msgs,
                     ctx=ctx, ceiling=_arm_ceiling,
+                ):
+                    _rounds = max(_rounds, _round_budget(armed, override=round_budget))
+                    _office = _stays_in_chat(armed, force=stay_in_chat)
+                # WHAT A LOOKUP FOUND JOINS THE REPLY (capability search plan,
+                # Phase 2). This lane can ask nobody, so only tools that READ
+                # join; a changer is named in the lookup's result with where
+                # the user can ask for it. MIRROR NOTE (lock-step):
+                # routes/chat.py.
+                if join_found_tools(
+                    d, body, tools_used=tools_used, armed=armed,
+                    auto_armed=auto_armed, ask_armed=(), tool_specs=tool_specs,
+                    overrides=overrides, armed_grant=armed_grant, msgs=msgs,
+                    ctx=ctx, ceiling=_arm_ceiling,
+                    low_trust=finish_low_trust(_trust_state), can_ask=False,
                 ):
                     _rounds = max(_rounds, _round_budget(armed, override=round_budget))
                     _office = _stays_in_chat(armed, force=stay_in_chat)

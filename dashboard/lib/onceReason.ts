@@ -22,14 +22,20 @@
  * - "undo" (v1.435.0 review): undoing one of Iron Jarvis's changes from chat
  *   (records_history UNDO_REASON) — an undo cannot itself be undone. A safety
  *   card.
+ * - "looked_up" (v1.479.0): a tool Jarvis brought into the reply by looking
+ *   it up (src/iron_jarvis/capability_search/join.py): your words did not
+ *   name it, so its card is Allow once / Deny and Enter never allows it.
  *
  * Kept OUT of lib/useChatStream.ts on purpose: ~50 test files mock that
  * module with a fixed list of exports, and lib/buildHelpers reads this too.
  */
 
-export type OnceReason = "git" | "page" | "command" | "memory" | "guarded" | "privacy" | "undo";
+export type OnceReason =
+  | "git" | "page" | "command" | "memory" | "guarded" | "privacy" | "undo" | "looked_up";
 
-const REASONS: ReadonlySet<string> = new Set(["git", "page", "command", "memory", "guarded", "privacy", "undo"]);
+const REASONS: ReadonlySet<string> = new Set([
+  "git", "page", "command", "memory", "guarded", "privacy", "undo", "looked_up",
+]);
 
 /** The reason as a card reads it, or undefined for anything else. */
 export function onceReasonOf(raw: unknown): OnceReason | undefined {

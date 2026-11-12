@@ -144,6 +144,9 @@ NOT_FROM_A_SCRIPT: frozenset[str] = frozenset({
     "ask_user", "exit_plan_mode", "consult", "config_secret", "plan_update",
     "page_open", "page_read", "page_screenshot", "web_look", "pane_wait",
     "view_image", "excel_live_look",
+    # v1.479.0: a lookup brings tools into the reply; a script must not make
+    # them (its nested calls are not the turn's own).
+    "find_capability",
 })
 
 _NO_OUTPUT_NOTE = (
@@ -482,6 +485,19 @@ class ToolScriptTool(Tool):
                 )
             perms = getattr(scope, "perms", None)
             key = tool.perm_key()
+            # v1.479.0 (review): an "ask" rule of THIS reply holds here
+            # whatever the tool's tier says. `mode_for` upgrades an ask on the
+            # read-only web tools to allow (so headless researchers can
+            # search), which let a web tool a LOOKUP brought as ask-first run
+            # from a script with no card.
+            rules = getattr(scope, "agent_overrides", None) or {}
+            if "ask" in (str(rules.get(name) or ""), str(rules.get(key) or "")):
+                granted = getattr(scope, "session_allow", None) or ()
+                if key not in granted and name not in granted:
+                    return (
+                        f"`{name}` asks the user first. Call it directly, not "
+                        "from a script"
+                    )
             mode = getattr(perms.mode_for(key, getattr(scope, "agent_overrides", None)), "value", "ask")
             if mode == "deny":
                 return f"`{name}` is set to never run here"

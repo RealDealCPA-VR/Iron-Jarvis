@@ -315,7 +315,11 @@ def test_a_tool_that_runs_without_asking_says_whether_it_changes_anything(platfo
     writes, _ = CT_TOOL.entry_line(platform, next(
         e for e in CI.index_for(platform).entries if e.id == "write_document"))
     assert reads.endswith("tool calculate. It only reads."), reads
-    assert writes.endswith("tool write_document. It runs without asking and changes something."), writes
+    # v1.479.0 (Phase 2, moved on purpose): a tool that changes something and
+    # that a lookup can bring says what happens THEN, so the list and the
+    # note under it agree. One a lookup never brings keeps the table's word.
+    assert writes.endswith("tool write_document. It asks the user first when a lookup brings it."), writes
+    assert CT_TOOL._how_it_runs("allow", True) == "It runs without asking and changes something."
 
 
 @pytest.mark.asyncio
@@ -402,39 +406,9 @@ def test_never_over_a_deny_and_never_past_a_weak_models_tool_budget(tmp_path):
     assert CT_TOOL.NAME not in CT._resolve_armed_tools(d, body)[0]
 
 
-@pytest.mark.asyncio
-async def test_both_lanes_offer_it_run_it_and_join_nothing(tmp_path):
-    """The model asks, is answered, and holds exactly the tools it held
-    before: Phase 1 answers only."""
-    from tests.test_script_power_lanes_v1473 import Model, _body, _call, _post, _rows, _stream
-
-    app = create_app(str(tmp_path / "home"))
-    ws = tmp_path / "work"
-    ws.mkdir()
-    p = app.state.platform
-    text = "I would like a new helper called Penny who looks after my refills"
-
-    off = Model(["ok"])
-    await _stream(app, _body(ws, text), off)
-    assert CT_TOOL.NAME not in off.offered[0]
-
-    p.config.capability_search = True
-    for lane in ("stream", "post"):
-        model = Model([_call(1, CT_TOOL.NAME, query="make a new helper agent"), "Iron Jarvis can make an agent."])
-        if lane == "stream":
-            frames, cards, done = await _stream(app, _body(ws, text), model)
-            assert cards == [], "a read-only lookup never asks"
-            reply = done.get("reply", "")
-        else:
-            reply = (await _post(app, _body(ws, text), model))["reply"]
-        assert CT_TOOL.NAME in model.offered[0], lane
-        assert model.offered[1] == model.offered[0], f"{lane}: the lookup joined a tool"
-        assert "agent_create" not in model.offered[1]
-        said = model.tool_texts[1][-1]
-        assert "tool agent_create. It asks the user first." in said and CT_TOOL.HOW_TO_USE in said, lane
-        assert "Iron Jarvis can make an agent." in reply
-    rows = _rows(app, CT_TOOL.NAME)
-    assert len(rows) == 2 and all(r.ok for r in rows)
+# (Phase 2 moved this file's lane test: what a lookup finds now JOINS the
+# reply, behind every gate. tests/test_capability_join_v1479.py drives both
+# lanes; the tool's own answer is pinned above.)
 
 
 # --------------------------------------------------------------------------- #

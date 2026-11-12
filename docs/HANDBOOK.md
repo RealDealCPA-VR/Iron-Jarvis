@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.478.0 (2026-11-12).*
+holds itself to. Current as of v1.479.0 (2026-11-12).*
 
 ---
 
@@ -2041,6 +2041,153 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## What Jarvis looks up, it can now use (v1.479.0)
+
+This is the second step of the feature lookup from v1.478.0. It is still
+**off by default** (Settings › Models › Feature lookup), and with it off
+nothing in chat is different.
+
+### What changed
+
+In v1.478.0 Jarvis could look up what Iron Jarvis can do, but only tell you
+about it. Now a tool the lookup finds joins the reply, so Jarvis can do the
+thing in the same answer.
+
+Example, typed in Spanish with approvals set to *Don't ask*: "Crea un nuevo
+agente llamado Penny que vigile mis recetas de medicamentos." The word
+patterns bring no tool for that sentence. With the lookup on, Jarvis looked
+up "create a custom agent", the agent tool joined the reply, and its
+approval card appeared.
+
+### The safety rules
+
+A tool your own words bring is allowed by your words. A tool Jarvis looked
+up is not: a web page or a document could tell Jarvis to look something up
+and use it. So:
+
+1. **A change found by lookup always shows a card first.** This holds in
+   every approval setting, including *Don't ask*, *Accept edits* and *Auto*.
+   The card says "Jarvis found this tool by looking it up, so it asks every
+   time before using it". It offers **Allow once** and **Deny** only, and
+   pressing Enter never allows it: you have to click.
+2. **A tool that reaches outside this PC is treated the same way**, even one
+   that only reads: web search, fetching a page, searching a memory base
+   that may be on another machine. It could carry what the reply has read
+   off this PC.
+3. **A tool that only reads, and stays on this PC, joins and runs** with no
+   card, like the readers chat already brings (searching past chats, listing
+   a folder, reading settings). Such a tool is never pointed at a folder on
+   another computer.
+4. **A reply that has read flagged content gets no new tools.** If a document
+   or page in the reply was flagged as carrying planted instructions, the
+   lookup still answers, and nothing joins.
+5. **Only tools chat could already bring can join.** The lookup widens the
+   words that reach a tool. It does not widen the set of tools. Tools that
+   run commands or scripts, and the browser's click and type tools, are
+   never brought by a lookup, and a script cannot use a tool a lookup
+   brought as ask-first.
+6. **Your own settings hold.** A tool set to *Never run* does not join. With
+   Auto tools off, the lookup answers and nothing joins. In a Local only
+   chat, an internet tool does not join. A protected setting always shows
+   its card.
+7. **Bounded.** At most 3 tools per lookup (the settings tools count as one
+   together), and 2 lookups per reply bring tools.
+8. **Where nobody can be asked, nothing that needs asking joins.** On the
+   phone and for programs that call Iron Jarvis, only local readers join.
+
+If you already answered "Allow for this chat" for a tool on an ordinary
+card, that answer still stands when a lookup brings the same tool later.
+
+### Measured with a real model
+
+Every request of the held-out set from v1.478.0 was sent as a real chat
+message to a test copy of the app, answered by Claude Haiku, once with the
+lookup off and once with it on. Every approval card was declined, so nothing
+that asks was changed. 161 requests ran (3 about backup folders were left
+out for safety); 135 of them ask for a tool.
+
+| | Lookup off | Lookup on |
+|---|---|---|
+| Jarvis called the right tool | 28 of 135 (21%) | 53 of 135 (39%) |
+| The same, English | 27 of 111 | 44 of 111 |
+| The same, other languages | 1 of 24 | 9 of 24 |
+| The right tool was within reach | 42 of 135 (31%) | 84 of 135 (62%) |
+| A looked-up change that ran without its card | not possible | 0 |
+| Typical time for a reply | 6.5 s | 8.5 s |
+
+26 requests were gained and 1 was lost. Jarvis looked something up in 57 of
+the 135 replies.
+
+What this does **not** show:
+
+- **The plan's target was 95%. This is 39% (62% within reach).** Two things
+  hold it back: the model looks things up in fewer than half of its replies,
+  and the list does not always put the right entry near the top.
+- One model, one run. A call counts as "called" even though its card was
+  then declined.
+- The run was made before the second reviewer's fixes below. Those make the
+  cards stricter, not looser, so the count of right tools called should not
+  fall, but it was not measured again in full.
+- No local model was measured. The owner's model server refused the test
+  for want of a key.
+
+On a second, fresh set of 104 requests written after the last change (new
+writers, and Italian), the right entry was among the lookup's first five
+answers for 73 (70%), against 75% on the first set.
+
+### What the first live runs changed
+
+Scripted tests had all passed. The real model then showed three things, each
+fixed as a general rule:
+
+- It searched in the user's language. The list is in English, so the tool
+  now says "English, whatever language the user writes in", and tells Jarvis
+  when a search did not look like English.
+- The lookup named an agent's own tool ahead of the chat tool for the same
+  thing, and Jarvis gave up. Tools that no lookup can bring are now listed
+  last.
+- Shown the lookup tool alone, Jarvis said "I have no access to your earlier
+  chats" without looking. While the lookup is on, a short note in Jarvis's
+  instructions says what Iron Jarvis has tools for, and to look before
+  saying it cannot do something.
+
+### Checked by a second reviewer before release
+
+A separate reviewer attacked the change and wrote a failing test for each
+thing it broke. It found 13 defects; all are fixed. The ones that mattered:
+
+- A web tool brought by a lookup could be run from inside a script with no
+  card. A script can no longer call a tool the reply holds as ask-first, a
+  script cannot make lookups, and a reader brought by a lookup never makes
+  the script tool join.
+- A memory search brought by a lookup could send Jarvis's words to a memory
+  base on another machine with no card. It now asks first.
+- A file reader brought by a lookup could be pointed at a folder on another
+  computer. It is now refused.
+- A protected setting found by lookup could change with no card when that
+  tool had been allowed for the chat. It now always shows its card.
+- Pressing Enter could approve a looked-up change while typing. Enter never
+  does now.
+- A reply stopped half way could leave its lookups for a later reply with
+  the same id. They are dropped.
+
+### What it does not do
+
+- **It does not cover connected apps or your own command tools.** Those come
+  in a later step.
+- **It does not work in coding sessions, agent runs or the browser sidebar.**
+  They keep their own tool lists.
+- **A plain text file is not checked for planted instructions.** Documents
+  read with the document reader are checked, and a flagged one stops new
+  tools (rule 4). A plain text file read with the simple file reader is not
+  checked. This is older than this change. Rule 1's card is what protects
+  you there.
+- **A match can still be wrong.** Jarvis is told to use only a tool that
+  fits the request.
+- **A document read by a tool the lookup brought may be sent to the model
+  that reads pictures** (for a scanned page), as it is when your own words
+  bring that tool.
 
 ## Jarvis can look up what it can do (v1.478.0)
 

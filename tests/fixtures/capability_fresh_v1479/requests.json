@@ -1,0 +1,626 @@
+[
+ {
+  "id": "f001",
+  "intent": "set_theme",
+  "lang": "en",
+  "text": "make it dark, my eyes are killing me at night when I'm doing the rosters"
+ },
+ {
+  "id": "f002",
+  "intent": "set_theme",
+  "lang": "en",
+  "text": "Could you change the colours of Jarvis to something softer, maybe a light blue background instead of the grey? I mostly use it in the office by the window, and the current one is too harsh in the afternoon sun."
+ },
+ {
+  "id": "f003",
+  "intent": "set_default_model",
+  "lang": "en",
+  "text": "switch to the bigger smart one for everything from now on"
+ },
+ {
+  "id": "f004",
+  "intent": "set_default_model",
+  "lang": "en",
+  "text": "I noticed the one answering me right now is slow when I ask about the Okafor care plan. Can you make the faster model the one that answers all my chats going forward, not just this one?"
+ },
+ {
+  "id": "f005",
+  "intent": "set_approvals",
+  "lang": "en",
+  "text": "stop asking me every single time you open a file, it's driving me nuts"
+ },
+ {
+  "id": "f006",
+  "intent": "set_approvals",
+  "lang": "en",
+  "text": "When you want to do something on my computer, like saving or moving a file, I'd like you to check with me first, but only for the big stuff. Right now you ask me about everything, even reading my Notes folder, and it wastes my time between visits."
+ },
+ {
+  "id": "f007",
+  "intent": "set_text_size",
+  "lang": "en",
+  "text": "the writing is tiny, make it bigger pls"
+ },
+ {
+  "id": "f008",
+  "intent": "set_text_size",
+  "lang": "en",
+  "text": "My eyes are getting worse and I have trouble reading the small words on the screen when I'm going through the visit notes. Could you make the text in the app a bit larger, maybe one step up from where it is now?"
+ },
+ {
+  "id": "f009",
+  "intent": "set_update_channel",
+  "lang": "en",
+  "text": "dont give me the new updates right away, wait till others have tried them first"
+ },
+ {
+  "id": "f010",
+  "intent": "set_update_channel",
+  "lang": "en",
+  "text": "Last month a new version broke the scheduling screen for a couple of days and I lost half a morning. So from now on, can you hold off on the newest updates until they've been out a while and proven stable? I'd rather be a bit behind than have it fall over on me."
+ },
+ {
+  "id": "f011",
+  "intent": "set_backup_copy",
+  "lang": "en",
+  "text": "save a second copy of the backups on my E drive, the one called Client Records"
+ },
+ {
+  "id": "f012",
+  "intent": "set_backup_copy",
+  "lang": "en",
+  "text": "I'm worried that if my laptop dies I'll lose everything saved in Jarvis. Could you make every backup also go into a second folder, maybe the USB stick labelled HOME CARE or the external drive, so I've got a copy somewhere else?"
+ },
+ {
+  "id": "f013",
+  "intent": "set_start_with_pc",
+  "lang": "en",
+  "text": "dont open jarvis when the computer turns on, I hate that it pops up"
+ },
+ {
+  "id": "f014",
+  "intent": "set_start_with_pc",
+  "lang": "en",
+  "text": "Could you have Jarvis open by itself when I switch the computer on in the mornings? I keep forgetting to open it and then I miss the 8am reminders for the carers."
+ },
+ {
+  "id": "f015",
+  "intent": "set_answer_language",
+  "lang": "en",
+  "text": "answer me in spanish from now on, my carers are more comfortable with it"
+ },
+ {
+  "id": "f016",
+  "intent": "set_answer_language",
+  "lang": "en",
+  "text": "Going forward, when you write back to me, I'd like everything in Tagalog please. Some of the families I look after prefer that, and I want to be able to show the replies to them without having to translate."
+ },
+ {
+  "id": "f017",
+  "intent": "read_setting",
+  "lang": "en",
+  "text": "Quick question, which AI model are you using by default right now? Don't change anything, I just want to know."
+ },
+ {
+  "id": "f018",
+  "intent": "read_setting",
+  "lang": "en",
+  "text": "Before I leave for the weekend I want to check something. Are the backups turned on on this computer, or did they quit again?"
+ },
+ {
+  "id": "f019",
+  "intent": "schedule_create",
+  "lang": "en",
+  "text": "Every Monday at eight, pull the sales numbers and write them up for me."
+ },
+ {
+  "id": "f020",
+  "intent": "schedule_create",
+  "lang": "en",
+  "text": "I'm tired of forgetting the supplier invoice check, so can you have it run every weekday around six in the evening? Just keep it going until I say stop."
+ },
+ {
+  "id": "f021",
+  "intent": "schedule_change",
+  "lang": "en",
+  "text": "Get rid of the Thursday inventory thing, we count on Sundays now."
+ },
+ {
+  "id": "f022",
+  "intent": "schedule_change",
+  "lang": "en",
+  "text": "Remember the bakery delivery check you set up for me? It runs at five every day, but the driver comes in late now, so could you move it to around seven thirty? If that's a hassle, just turn it off until I say so."
+ },
+ {
+  "id": "f023",
+  "intent": "project_create",
+  "lang": "en",
+  "text": "Start a new project for the Harbor Street catering job."
+ },
+ {
+  "id": "f024",
+  "intent": "project_create",
+  "lang": "en",
+  "text": "I've got a new customer, Dolores Vance. She wants a private dinner for forty people in March. I need one place to keep all the notes and prices for it, so call it Vance March Dinner."
+ },
+ {
+  "id": "f025",
+  "intent": "agent_create",
+  "lang": "en",
+  "text": "Make me a helper named Mo who handles the supplier orders."
+ },
+ {
+  "id": "f026",
+  "intent": "agent_create",
+  "lang": "en",
+  "text": "I want a second helper to keep track of the staff schedules and let me know when somebody misses a shift."
+ },
+ {
+  "id": "f027",
+  "intent": "agent_pause",
+  "lang": "en",
+  "text": "Tell Mo to stop for today. He ordered too much flour again."
+ },
+ {
+  "id": "f028",
+  "intent": "agent_pause",
+  "lang": "en",
+  "text": "The staff schedule helper keeps texting my cooks, and I don't want that. Until I say otherwise, have it only report to me and stop talking to the staff."
+ },
+ {
+  "id": "f029",
+  "intent": "rule_create",
+  "lang": "en",
+  "text": "Any email from Cooper Linen, flag it for me."
+ },
+ {
+  "id": "f030",
+  "intent": "rule_create",
+  "lang": "en",
+  "text": "From now on, when somebody emails the restaurant asking for a table for more than ten, write up a reply for me and wait for my OK before it goes out."
+ },
+ {
+  "id": "f031",
+  "intent": "watch_folder",
+  "lang": "en",
+  "text": "Keep an eye on the Invoices 2026 folder on my desktop and tell me if anything gets added or changed."
+ },
+ {
+  "id": "f032",
+  "intent": "watch_folder",
+  "lang": "en",
+  "text": "My nephew keeps dropping the new menu files into D:\\Shared\\Menus. I want to know the minute he changes one, so watch that folder for me."
+ },
+ {
+  "id": "f033",
+  "intent": "goal_add",
+  "lang": "en",
+  "text": "Please keep at my client follow-ups on your own until every bride on the list has heard back from me."
+ },
+ {
+  "id": "f034",
+  "intent": "goal_add",
+  "lang": "en",
+  "text": "Every week, could you go through my Bride Inbox folder, draft replies for anything still waiting, and keep doing that in the background without me having to ask each time."
+ },
+ {
+  "id": "f035",
+  "intent": "night_task",
+  "lang": "en",
+  "text": "Tonight while I sleep, can you fix the photo renamer thing so it stops skipping files with spaces in the name?"
+ },
+ {
+  "id": "f036",
+  "intent": "night_task",
+  "lang": "en",
+  "text": "I have a little program that sorts my wedding photos into date folders and it's acting up, so could you work on that while I'm asleep and have it ready for me by morning?"
+ },
+ {
+  "id": "f037",
+  "intent": "phone_notify",
+  "lang": "en",
+  "text": "Can you text me on Telegram when a job finishes? My Telegram name is Dana Shoots."
+ },
+ {
+  "id": "f038",
+  "intent": "phone_notify",
+  "lang": "en",
+  "text": "I'd rather get your updates somewhere I actually look during the day, like my Slack messages at work, so set that up for me."
+ },
+ {
+  "id": "f039",
+  "intent": "app_connect",
+  "lang": "en",
+  "text": "Hook up my Google Calendar so you can see my shoots."
+ },
+ {
+  "id": "f040",
+  "intent": "app_connect",
+  "lang": "en",
+  "text": "I keep my client contracts in Notion and my wedding timelines in Google Drive, and I'd love for you to be able to look at both of those."
+ },
+ {
+  "id": "f041",
+  "intent": "app_disconnect",
+  "lang": "en",
+  "text": "Turn off the Dropbox access you got last spring, I don't want you poking around in it anymore."
+ },
+ {
+  "id": "f042",
+  "intent": "app_disconnect",
+  "lang": "en",
+  "text": "Can you take Notion off your list of things you can reach? I'm moving everything over to my new system and don't want it lingering."
+ },
+ {
+  "id": "f043",
+  "intent": "local_server_add",
+  "lang": "en",
+  "text": "My nephew set up an AI brain on the little box in my office running Ollama at 192.168.1.40, so can you start using that one?"
+ },
+ {
+  "id": "f044",
+  "intent": "local_server_add",
+  "lang": "en",
+  "text": "I've got LM Studio running on the big desktop in the studio closet, and I want you to borrow its brain instead of the usual one when we're working on things."
+ },
+ {
+  "id": "f045",
+  "intent": "memory_base_add",
+  "lang": "en",
+  "text": "Use my Notes folder on the laptop as your memory, the one with all my client stuff in it."
+ },
+ {
+  "id": "f046",
+  "intent": "memory_base_add",
+  "lang": "en",
+  "text": "I'd like you to remember things from my wedding planning pages in Notion too, so you don't have to ask me the same questions again."
+ },
+ {
+  "id": "f047",
+  "intent": "remember_preference",
+  "lang": "en",
+  "text": "From now on, when you write up a quote for me, always put the deposit first and keep it under a page."
+ },
+ {
+  "id": "f048",
+  "intent": "remember_preference",
+  "lang": "en",
+  "text": "Just so you know, I hate it when you open with a long hello and then bullet points everywhere, so for every answer you give me, skip the fluff and get to the point in plain sentences."
+ },
+ {
+  "id": "f049",
+  "intent": "preference_review",
+  "lang": "en",
+  "text": "Jarvis, could you tell me what you've been holding onto about how I like things done? The bit saying I want reports every Monday is out of date now, so please remove it."
+ },
+ {
+  "id": "f050",
+  "intent": "preference_review",
+  "lang": "en",
+  "text": "Over the past few weeks I've told you a number of things about how I like my letters and summaries written, and with the new committee in place some of them may no longer apply. I'd like to go through everything you have on file about me, keep what's still right, and wipe out whatever doesn't fit any more."
+ },
+ {
+  "id": "f051",
+  "intent": "persona_create",
+  "lang": "en",
+  "text": "Could you become a more relaxed, friendly sort of helper for me, something like a chatty club secretary?"
+ },
+ {
+  "id": "f052",
+  "intent": "persona_create",
+  "lang": "en",
+  "text": "I'd like a different way of speaking from you, a bit warmer and less formal, the way a good neighbour would explain the club accounts over a cup of tea. Could you set that up so I can choose between it and your usual style whenever I like?"
+ },
+ {
+  "id": "f053",
+  "intent": "chat_private",
+  "lang": "en",
+  "text": "Please keep this conversation just on my own computer and make sure nothing from it gets sent off anywhere."
+ },
+ {
+  "id": "f054",
+  "intent": "chat_private",
+  "lang": "en",
+  "text": "The club's bank details are going to come up in this chat, so I'd rather they didn't leave my PC at all. Could you make sure this one talk stays only here and isn't uploaded to the internet?"
+ },
+ {
+  "id": "f055",
+  "intent": "undo_change",
+  "lang": "en",
+  "text": "Jarvis, please undo what you just did to the membership list."
+ },
+ {
+  "id": "f056",
+  "intent": "undo_change",
+  "lang": "en",
+  "text": "Could you show me a list of every change you made to my files today? I think the last one put the wrong totals in the spreadsheet, so after that please take it back."
+ },
+ {
+  "id": "f057",
+  "intent": "tool_server_add",
+  "lang": "en",
+  "text": "Please add the MCP server called BankLink so you can reach our bank statements."
+ },
+ {
+  "id": "f058",
+  "intent": "tool_server_add",
+  "lang": "en",
+  "text": "My colleague Priya told me about an MCP server named Ledgerly that would give you extra abilities for checking receipts. Could you connect it for me? She left the details in a note on my desk."
+ },
+ {
+  "id": "f059",
+  "intent": "skill_save",
+  "lang": "en",
+  "text": "Please remember how we just sorted the subscription payments, so you can do it the same way next time."
+ },
+ {
+  "id": "f060",
+  "intent": "skill_save",
+  "lang": "en",
+  "text": "The method we just worked through for matching the match-day fees against the payment list was really useful. Could you keep it somewhere safe as a ready-made routine I can call on again at the end of each season?"
+ },
+ {
+  "id": "f061",
+  "intent": "make_file",
+  "lang": "en",
+  "text": "Make me a Word document with the agenda for Thursday's committee meeting."
+ },
+ {
+  "id": "f062",
+  "intent": "make_file",
+  "lang": "en",
+  "text": "Could you put together an Excel sheet from the names and amounts I've pasted above, with a column for the date each one paid?"
+ },
+ {
+  "id": "f063",
+  "intent": "rename_files",
+  "lang": "en",
+  "text": "Rename all the invoices in the Club Accounts 2026 folder so the dates come first."
+ },
+ {
+  "id": "f064",
+  "intent": "rename_files",
+  "lang": "en",
+  "text": "There's a pile of scanned receipts in my Downloads folder from the summer tournament, and they're named things like IMG_4471. Would you be able to give them proper names with the date and the supplier, then move them into the Receipts folder on my PC?"
+ },
+ {
+  "id": "f065",
+  "intent": "web_lookup",
+  "lang": "en",
+  "text": "Look up online what the best time of year is to aerate lawns around here, my crew keeps asking and I want to give them a straight answer."
+ },
+ {
+  "id": "f066",
+  "intent": "web_lookup",
+  "lang": "en",
+  "text": "So I'm bidding a backyard retaining wall for the Delgado job and I need to know roughly what cinder block costs right now, could you go online and check what Home Depot and Lowe's are charging for them these days so I don't underbid it."
+ },
+ {
+  "id": "f067",
+  "intent": "find_file",
+  "lang": "en",
+  "text": "Find the Oakley contract PDF."
+ },
+ {
+  "id": "f068",
+  "intent": "find_file",
+  "lang": "en",
+  "text": "I think I saved the mower maintenance log from this spring somewhere on my computer, probably in a folder with the crew schedules, and I need you to track it down for me."
+ },
+ {
+  "id": "f069",
+  "intent": "arithmetic",
+  "lang": "en",
+  "text": "What's 14 bags at 6 dollars 75 plus 7 percent tax?"
+ },
+ {
+  "id": "f070",
+  "intent": "arithmetic",
+  "lang": "en",
+  "text": "Okay so I've got three crews and each crew runs about 6 hours a day for 5 days, and I pay them 28 an hour, so can you figure out the total weekly labor cost for me?"
+ },
+ {
+  "id": "f071",
+  "intent": "make_picture",
+  "lang": "en",
+  "text": "Make me a picture of a front yard with a stone walkway and boxwood hedges."
+ },
+ {
+  "id": "f072",
+  "intent": "make_picture",
+  "lang": "en",
+  "text": "I need an image for the flyer, something that looks like a nice backyard patio at dusk with string lights and a fire pit, kind of warm and inviting, so people can see what we can build for them."
+ },
+ {
+  "id": "f073",
+  "intent": "how_do_i",
+  "lang": "en",
+  "text": "Where's the setting to change the text size?"
+ },
+ {
+  "id": "f074",
+  "intent": "how_do_i",
+  "lang": "en",
+  "text": "I was trying to figure out how this thing remembers my customer names, like is there a place where I can see what it knows about my clients or change it, because I don't see anything obvious."
+ },
+ {
+  "id": "f075",
+  "intent": "whats_wrong",
+  "lang": "en",
+  "text": "Jarvis is acting weird again, the answer stops halfway through and never finishes."
+ },
+ {
+  "id": "f076",
+  "intent": "whats_wrong",
+  "lang": "en",
+  "text": "Something's off with the app this morning, when I hit send on my message the little dots just keep going forever and nothing comes back, so what's going on and can you tell me what's wrong?"
+ },
+ {
+  "id": "f077",
+  "intent": "find_old_chat",
+  "lang": "en",
+  "text": "Find the chat where we talked about fertilizer schedules."
+ },
+ {
+  "id": "f078",
+  "intent": "find_old_chat",
+  "lang": "en",
+  "text": "A while back, I think in August, we had a long conversation about the sprinkler system at the Hendricks job and whether we should switch the zones around, can you dig that old conversation up for me?"
+ },
+ {
+  "id": "f079",
+  "intent": "signin_claude_code",
+  "lang": "en",
+  "text": "Log me into Claude Code so you can use my plan."
+ },
+ {
+  "id": "f080",
+  "intent": "signin_claude_code",
+  "lang": "en",
+  "text": "My son told me to use Claude Code for the scheduling spreadsheet thing and it needs me to sign in with my Claude account, can you help me get that connected so it uses the plan I already pay for?"
+ },
+ {
+  "id": "f081",
+  "intent": "browser_use",
+  "lang": "en",
+  "text": "Can you go into my Chrome and check the Lumen Foods supplier page for me? I'm already logged in."
+ },
+ {
+  "id": "f082",
+  "intent": "browser_use",
+  "lang": "en",
+  "text": "The new hire forms are on the company portal, which is open in Edge on my laptop right now, and I don't know where anything is yet. Could you click around in there, starting from the Benefits tab, and grab them for me?"
+ },
+ {
+  "id": "f083",
+  "intent": "second_account",
+  "lang": "en",
+  "text": "My login ran out of usage again today, so could you help me add another login from the same AI company so I can keep going?"
+ },
+ {
+  "id": "f084",
+  "intent": "second_account",
+  "lang": "en",
+  "text": "Our team keeps hitting the limit on the one paid plan we share, and my manager suggested we have a spare ready. Could you walk me through putting a second copy on this computer so I'm not stuck waiting until tomorrow when one runs dry?"
+ },
+ {
+  "id": "f085",
+  "intent": "free_local_model",
+  "lang": "en",
+  "text": "Is there a way to get an AI running on this computer that costs nothing and doesn't send my stuff out to the internet? I don't have anything set up for it yet."
+ },
+ {
+  "id": "f086",
+  "intent": "free_local_model",
+  "lang": "en",
+  "text": "I keep hearing people in the office run their own AI at home with no monthly bill, and I'd love the same on my work PC. Could you help me figure out how to set one up from zero, since I've got nothing installed?"
+ },
+ {
+  "id": "f087",
+  "intent": "desktop_control",
+  "lang": "en",
+  "text": "Click the Save button in the Clinic Scheduler program on my desktop for me."
+ },
+ {
+  "id": "f088",
+  "intent": "desktop_control",
+  "lang": "en",
+  "text": "Every morning I have to go through a program on my desktop called ClinicSched to enter yesterday's appointments, and it's clunky. Could you move the pointer and type in the fields for me, clicking the right things in order, while I watch?"
+ },
+ {
+  "id": "f089",
+  "intent": "other_computer",
+  "lang": "en",
+  "text": "Can I get to you from my phone while I'm at home?"
+ },
+ {
+  "id": "f090",
+  "intent": "other_computer",
+  "lang": "en",
+  "text": "I'll be in the back conference room tomorrow and want to check on things from my tablet, which doesn't have the app, just a web page in its browser. How would I connect to you from that?"
+ },
+ {
+  "id": "f091",
+  "intent": "voice_talk",
+  "lang": "en",
+  "text": "Can I just talk to you instead of typing?"
+ },
+ {
+  "id": "f092",
+  "intent": "voice_talk",
+  "lang": "en",
+  "text": "My wrists have been bothering me, so I'd like to speak my requests out loud and have it answer back, like I'd talk to a coworker across the desk, rather than pecking at the keys. Is there a way to set that up?"
+ },
+ {
+  "id": "f093",
+  "intent": "internet_calls_in",
+  "lang": "en",
+  "text": "Can Zapier be set up so it starts a task in you when a new form is filled out on our website?"
+ },
+ {
+  "id": "f094",
+  "intent": "internet_calls_in",
+  "lang": "en",
+  "text": "Our intake coordinator uses Zapier with the sign-up form on the company website. When someone fills it in, she wants the assistant to automatically kick off the follow-up job without anyone telling it first. Is that something you can do?"
+ },
+ {
+  "id": "f095",
+  "intent": "set_theme",
+  "lang": "it",
+  "text": "Ciao, puoi passare l'app al tema scuro? Quello chiaro la sera mi stanca gli occhi."
+ },
+ {
+  "id": "f096",
+  "intent": "set_default_model",
+  "lang": "it",
+  "text": "Da adesso in poi, in tutte le chat, usa sempre il modello più potente, quello veloce non mi basta."
+ },
+ {
+  "id": "f097",
+  "intent": "set_text_size",
+  "lang": "it",
+  "text": "Le scritte dell'app sono troppo piccole, puoi ingrandire il testo un po'?"
+ },
+ {
+  "id": "f098",
+  "intent": "set_update_channel",
+  "lang": "it",
+  "text": "Non voglio aggiornamenti appena escono, fammi ricevere solo quelli che sono già stati provati da un po' di tempo."
+ },
+ {
+  "id": "f099",
+  "intent": "set_start_with_pc",
+  "lang": "it",
+  "text": "Fai in modo che Jarvis si apra da solo quando accendo il computer la mattina."
+ },
+ {
+  "id": "f100",
+  "intent": "set_answer_language",
+  "lang": "it",
+  "text": "D'ora in poi rispondimi sempre in italiano, anche se ti scrivo in inglese."
+ },
+ {
+  "id": "f101",
+  "intent": "schedule_create",
+  "lang": "it",
+  "text": "Ogni lunedì alle 8:30 preparami un riassunto delle email arrivate durante il fine settimana."
+ },
+ {
+  "id": "f102",
+  "intent": "schedule_change",
+  "lang": "it",
+  "text": "Metti in pausa il promemoria del venerdì sulle fatture di marzo, lo riattivo io più avanti."
+ },
+ {
+  "id": "f103",
+  "intent": "agent_create",
+  "lang": "it",
+  "text": "Crea un nuovo assistente che si chiama Contabile e si occupa solo di fatture e spese della ditta."
+ },
+ {
+  "id": "f104",
+  "intent": "rule_create",
+  "lang": "it",
+  "text": "Ogni volta che arriva una mail da billing@example.com, salvala in automatico nella cartella Fatture 2026."
+ }
+]

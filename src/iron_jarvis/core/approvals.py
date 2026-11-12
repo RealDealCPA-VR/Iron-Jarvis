@@ -96,7 +96,11 @@ DECISIONS = ("once", "conversation", "deny", "tab", "always")
 #: 24): "memory" — archiving, deleting, renaming or moving a note in the
 #: memory base (``brain/tools`` ``brain_change``) — joins them: an agent run's
 #: ask for it reached the phone.
-SAFETY_REASONS = frozenset({"command", "git", "page", "guarded", "privacy", "undo", "memory"})
+SAFETY_REASONS = frozenset({
+    "command", "git", "page", "guarded", "privacy", "undo", "memory",
+    # v1.479.0: a tool the MODEL brought into the reply by looking it up.
+    "looked_up",
+})
 
 #: How long a turn will hold for an answer before denying honestly. Long
 #: enough to read what the tool wants and decide; short enough that a stream

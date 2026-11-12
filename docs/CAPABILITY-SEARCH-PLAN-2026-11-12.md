@@ -74,6 +74,59 @@ older agent tool outranks the one chat should use; "the app is broken"
 matches the connected-app tools; three tools lack the everyday words for
 what they do. These go into Phase 2 with a fresh test set.
 
+## Phase 2 result (built 2026-11-12, to ship as v1.479.0, still off by default)
+
+What a lookup finds now joins the reply, behind the safety rules in "The
+safety rules" below. Both decisions were built as written: a change found by
+lookup always shows a card (decision 1), and with Auto tools off the lookup
+answers and nothing joins (decision 2).
+
+Measured with a real model (Claude Haiku) on the Phase 0 set, as real chat
+turns on a test copy of the app, every card declined. 161 of the 164
+requests ran (3 backup-folder requests were left out for safety); 135 of
+them ask for a tool.
+
+| Measure | Lookup off | Lookup on | Target |
+|---|---|---|---|
+| The model called the right tool | 28 of 135 (21%) | 53 of 135 (39%) | 95% |
+| The same, non-English | 1 of 24 | 9 of 24 | 90% |
+| The right tool was within reach | 42 of 135 (31%) | 84 of 135 (62%) | |
+| A looked-up change that ran without its card | | 0 | 0 |
+| Typical reply time | 6.5 s | 8.5 s | one extra step |
+
+**The target is not met.** The lookup nearly doubles what the model gets
+right, and it is safe, but:
+
+- **The model does not look often enough.** It looked something up in 57 of
+  135 replies, even with the short map in its instructions. When it does not
+  look, nothing changes.
+- **The list misses.** With good search words the right entry is in the
+  first five for 75% of the first set and 70% of a fresh second set.
+
+What the real model showed that scripted tests could not, each fixed as a
+general rule: it searched in the user's language (the list is English); the
+list named an agent's own tool ahead of the chat tool for the same thing;
+and shown the tool alone it said "I have no access" without looking.
+
+An independent reviewer found 13 defects before release, two of them
+serious (a web tool brought by a lookup could run from inside a script with
+no card). All are fixed, each with the reviewer's own failing test.
+
+Limits of this measurement: one model, one run; a call counts as "called"
+even though its card was declined; the full run was made before the
+reviewer's fixes (which make cards stricter); no local model was measured.
+
+For the next phases, in order of what the numbers say:
+
+1. Make the model look: measure a stronger wording of the map, and a rule
+   that the lookup runs automatically when a reply would otherwise say "I
+   cannot".
+2. Improve the list from real use (the join log names what each lookup
+   brought): everyday words for the tools that lack them, and settings help
+   text that crowds out tools. Check each change on the two held-out sets,
+   which must never guide the wording.
+3. Then Phases 3 and 4 as planned.
+
 ## The problem, measured
 
 Which tools a chat reply gets is decided before the model answers, by

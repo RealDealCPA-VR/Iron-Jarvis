@@ -4923,6 +4923,11 @@ async def chat_stream(
         _skill_brief = _chat_turn.skill_block({*armed, *ask_armed})
         if _skill_brief:
             system += "\n\n" + _skill_brief
+        # v1.479.0: the lookup's brief, only beside `find_capability`.
+        # MIRROR NOTE (lock-step): chat_turn's Tools seam.
+        _cap_brief = _chat_turn.capability_block({*armed, *ask_armed}, d.platform.config)
+        if _cap_brief:
+            system += "\n\n" + _cap_brief
         # v1.473.0: the skills this message fits, named only beside
         # `skill_load` (off the loop: a skill that is not the user's own is
         # scanned). MIRROR NOTE (lock-step): chat_turn's Tools seam.
@@ -5104,6 +5109,11 @@ async def chat_stream(
     system += _query_tail
     # Only the ALLOW entries are a grant (v1.298.0) — lock-step with chat_turn.
     armed_grant = {k for k, v in overrides.items() if v == "allow"}
+    # v1.479.0 (capability search, Phase 2): the tools a LOOKUP brought into
+    # this reply that change something or reach outside this PC
+    # (`capability_search/join.join_found` fills it). Each is a FORCED,
+    # once-only card (`_night_asks` below) for the whole reply.
+    _looked_up: set[str] = set()
     # CONVERSATION GRANTS (v1.312.0) — "Allow for this conversation", sent by
     # the page on every turn (`body.granted_tools`). Honoured ONLY for a tool
     # this turn armed or ask-armed by another path, through the ONE helper
@@ -6141,7 +6151,14 @@ async def chat_stream(
                     # every grant, and so is declined after the card wait.
                     # False for every other turn (no NightTurn). MIRROR NOTE:
                     # `_would_card` and the per-call branch read it the same.
-                    return _night_turn is not None and _night_mod.asks_at_night(_name)
+                    # v1.479.0: so is a tool a LOOKUP brought (`_looked_up`,
+                    # the owner's decision 1: a change found by lookup always
+                    # shows a card first) — the same forced card, in a turn
+                    # that is no night task.
+                    return (
+                        (_night_turn is not None and _night_mod.asks_at_night(_name))
+                        or _name in _looked_up
+                    )
 
                 def _finish_needs_a_person(_c) -> bool:
                     # THE FINISH CHECK (part 3, Phase 2; review): the folder's
@@ -6208,6 +6225,7 @@ async def chat_stream(
                         _forced = (
                             "once_only" if (_c.name in _ONCE_ONLY or _spend_once(_c))
                             else "local_only" if _ask_first(_c)
+                            else "looked_up" if _c.name in _looked_up
                             else "night" if _night_asks(_c.name)
                             else "priced" if (_sc0 is not None and _sc0.ask)
                             else ""
@@ -6352,6 +6370,13 @@ async def chat_stream(
                     _plan["key"] = _call_key
                     if _failed_calls.get(_call_key, 0) >= REPEATED_CALL_LIMIT:
                         _plan["refused"] = repeated_call_refusal(tc.name, _failed_calls[_call_key])
+                        continue
+                    # v1.479.0 (review): a reader a LOOKUP brought is never
+                    # pointed at a path on another computer; answered, not
+                    # run and not carded. MIRROR NOTE (lock-step): chat_turn.
+                    _lk_refusal = _chat_turn.looked_up_refusal(ctx, tc.name, tc.arguments)
+                    if _lk_refusal:
+                        _plan["refused"] = _lk_refusal
                         continue
                     _grant_extra: set[str] = set()
                     _perm_name = _t.perm_key() if _t is not None else tc.name
@@ -6524,6 +6549,9 @@ async def chat_stream(
                                 "can_always": _can_always(
                                     d.platform, _grant_scopes, _trust_state, tc.name
                                 ) and not _local_ask and not _spend_card and not _once_only
+                                # v1.479.0: nor for a tool a lookup brought —
+                                # "Allow for this chat" is its wider answer.
+                                and tc.name not in _looked_up
                                 # v1.473.0: nor for a call fed by a script's
                                 # kept value — the next value under the same
                                 # name is different data.
@@ -6585,6 +6613,13 @@ async def chat_stream(
                                     # so the screen could not treat it as the
                                     # safety card it is (its Enter allowed it).
                                     _frame["once_reason"] = _sc.reason
+                            if _night_card and tc.name in _looked_up:
+                                # v1.479.0 (review): a looked-up tool's card
+                                # is "Allow once" and "Deny" only, and a
+                                # SAFETY card (Enter never allows it): the
+                                # model, not the user, chose this tool.
+                                _frame["once_only"] = True
+                                _frame["once_reason"] = "looked_up"
                             # v1.417.0 (C1.3/C1.7): WHO asks and WHY — the
                             # card's one reason line. Iron Jarvis's own call
                             # (the finish check's test run, a project's
@@ -6616,7 +6651,11 @@ async def chat_stream(
                                     str(getattr(_sc, "reason", "") or "")
                                     if _sc is not None and _spend_once(tc) else ""
                                 ),
-                                forced="local_only" if _local_ask else "night" if _night_card else "",
+                                forced=(
+                                    "local_only" if _local_ask
+                                    else "looked_up" if (_night_card and tc.name in _looked_up)
+                                    else "night" if _night_card else ""
+                                ),
                                 rule=_auto_kept.get(id(tc), ""),
                                 strict=approval_mode == "always_ask",
                             )
@@ -6651,7 +6690,10 @@ async def chat_stream(
                                     else str(getattr(body, "thread_id", "") or "")
                                 ),
                                 turn_id=_step_turn,
-                                once_only=bool(_local_ask or _once_only or _spend_card),
+                                once_only=bool(
+                                    _local_ask or _once_only or _spend_card
+                                    or (_night_card and tc.name in _looked_up)
+                                ),
                                 reason=str(
                                     _frame.get("once_reason")
                                     or ("local_only" if _local_ask else "priced" if _spend_card else "")
@@ -6781,6 +6823,12 @@ async def chat_stream(
                                 # v1.332.0 (L3): a local-only card is "Allow
                                 # once": no tab grant, no conversation grant,
                                 # no standing grant is recorded from it.
+                                _decision = "once"
+                            if (_night_card and tc.name in _looked_up
+                                    and _decision in ("tab", "conversation", "always")):
+                                # v1.479.0 (review): a looked-up tool is
+                                # allowed one call at a time; no grant (and no
+                                # standing "always") is recorded from its card.
                                 _decision = "once"
                             if _spend_card and _decision in ("tab", "conversation", "always"):
                                 # v1.346.0: a PRICED call is approved one
@@ -7492,6 +7540,26 @@ async def chat_stream(
                         tool_specs=tool_specs, overrides=overrides,
                         armed_grant=armed_grant, msgs=msgs, ctx=ctx,
                         tool_ceiling=tool_ceiling, ceiling=_arm_ceiling,
+                    ):
+                        _rounds = max(
+                            _rounds,
+                            _round_budget({*armed, *ask_armed}, override=round_budget),
+                        )
+                        _office = _stays_in_chat({*armed, *ask_armed}, force=stay_in_chat)
+                    # WHAT A LOOKUP FOUND JOINS THE REPLY (capability search
+                    # plan, Phase 2): a tool that reads joins and runs; a
+                    # tool that changes anything joins as ASK FIRST (its card
+                    # is decided per call, like every ask-first tool); in low
+                    # trust nothing joins. MIRROR NOTE (lock-step):
+                    # chat_turn.run_chat_turn.
+                    if _chat_turn.join_found_tools(
+                        d, body, tools_used=tools_used, armed=armed,
+                        auto_armed=auto_armed, ask_armed=ask_armed,
+                        tool_specs=tool_specs, overrides=overrides,
+                        armed_grant=armed_grant, msgs=msgs, ctx=ctx,
+                        tool_ceiling=tool_ceiling, ceiling=_arm_ceiling,
+                        low_trust=_chat_turn.finish_low_trust(_trust_state), can_ask=True,
+                        found_asks=_looked_up,
                     ):
                         _rounds = max(
                             _rounds,

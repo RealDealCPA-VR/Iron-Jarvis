@@ -93,6 +93,9 @@ ASK_RULES: dict[str, str] = {
     "priced": "it may cost money",
     "local_only": "it reaches outside this PC in a Local only chat",
     "night": "the night shift asks about it",
+    # v1.479.0 (capability search, Phase 2): a tool the MODEL brought into
+    # the reply by looking it up — the user's words did not name it.
+    "looked_up": "Jarvis found this tool by looking it up, so it asks every time before using it",
     "quarantined": "it is new in its app",
     "low_trust": "the chat read something it does not trust",
     "folder_command": "it runs a command the folder wrote",

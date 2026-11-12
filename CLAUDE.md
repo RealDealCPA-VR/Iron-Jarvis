@@ -17475,6 +17475,138 @@ does not need a bump, stop and bump it.
     `tests/test_capability_index_v1478.py`,
     `tests/test_capability_index_review_v1478.py`.
 
+- **What a lookup FOUND joins the reply; a change it found ALWAYS shows a
+  once-only card; nothing joins a reply that read flagged content** (v1.479.0,
+  capability search plan Phase 2; the owner pressed "Build Phase 2"; decisions
+  1 and 2 of `docs/CAPABILITY-SEARCH-PLAN-2026-11-12.md` taken as written).
+  Still behind the setting **Feature lookup** (off by default; with it off
+  both lanes are unchanged, also for a body that names the tool itself).
+  - **The path.** `find_capability` leaves its matches on
+    `capability_search/join.FOUND`, keyed by `turn_key(ctx)` (session + turn
+    id; a turn with no id gets the answer alone). `FOUND` keeps, per turn:
+    the lookups not yet joined, how many lookups BROUGHT a tool, and every
+    name a lookup brought (`brought_by_lookup(ctx)`). Bounded at `MAX_KEYS`
+    turns (the OLDEST goes, never all); `forget_turn(turn_id)` runs where the
+    lookup is armed (`_resolve_armed_tools`), so a turn stopped mid-round
+    leaves nothing for a later turn of the same id. At the END of a tool
+    round both lanes call `chat_turn.join_found_tools` → `join.join_found`
+    (MIRROR NOTE, lock-step; right after `offer_file_tool`, plain chat only:
+    `_harness is None and not text_only_pick`). It changes the lane's own
+    lists IN PLACE (`armed`, `auto_armed`, `ask_armed`, `tool_specs`,
+    `overrides`, `armed_grant`, the stream lane's `_looked_up`) and appends
+    ONE note to the lookup's own tool message: which tools joined, which ask
+    first, which did not join and why. Never raises, and a fault RESTORES
+    every list (a half-done join left tools armed with stale specs).
+  - **Rule 1, the owner's decision 1: a change found by lookup always shows a
+    card.** A found tool that changes anything, OR reaches outside this PC
+    (`join.asks_when_found`: `egress.INTERNET_TOOLS`, `reaches_outside`,
+    `MEMORY_BASE_READERS` = ltm_search and recall, whose base may be on
+    another machine), joins as ask first: `overrides[name] = "ask"`, into
+    `ask_armed`, and its name into the stream lane's `_looked_up` set
+    (`found_asks`). `_night_asks` reads that set, so the card is FORCED: under
+    Don't ask, Accept edits and Auto too, past tab and standing grants and a
+    free spend verdict, never the Auto judge. It is ONCE-ONLY (`once_only`,
+    `once_reason: "looked_up"`, in `core/approvals.SAFETY_REASONS` and
+    `dashboard/lib/onceReason.ts`: Allow once / Deny, Enter never allows it,
+    never the phone), `can_always` false, a wider answer a client sends is
+    read as once and writes no grant, `why` =
+    `auto_approve.ASK_RULES["looked_up"]`. ONE thing lifts it: a name already
+    in `body.granted_tools` (the user's own "Allow for this chat" on an
+    ordinary card), never for `ALWAYS_CARD_TOOLS` (a protected setting). With
+    no `found_asks` set, or in the POST lane (`can_ask=False`: the phone, an
+    API caller), such a tool does NOT join (`WHY_CANNOT_ASK`; a reader the
+    reply's own rule asks about: `WHY_ASK_RULE`). A tool whose permission key
+    is shared with others (`image_*`, `pixio_*`) never joins, reader or not
+    (`WHY_SHARED`).
+  - **A script is not a way round the card.** `tool_script._refusal` refuses a
+    tool the reply holds under an explicit "ask" rule (`mode_for` upgrades an
+    ask on the read-only web tools to allow, so a looked-up `web_fetch` ran
+    from a script uncarded); `find_capability` is in `NOT_FROM_A_SCRIPT`; and
+    `offer_script_tool` does not count calls of a tool a lookup brought
+    (four calls of a looked-up reader made the script tool join).
+  - **Rule 2: a reader that stays on this PC joins granted** (allow tier),
+    in both lanes. It is never pointed at another computer:
+    `chat_turn.looked_up_refusal` → `join.network_refusal` answers a
+    `\\host\share` path (by its TEXT, `tool_script._network_path_in`; the
+    reply's own working folder on a share is exempt) at both lanes'
+    repeated-call seam. A reader the user's own words brought is untouched.
+  - **Rule 3: only a tool chat could already bring** (`join.joinable()` =
+    `AUTO_SAFE_TOOLS` ∪ `ASK_TIER_TOOLS` ∪ the record tools ∪
+    `ASK_FIRST_CREATE_TOOLS` ∪ `OWN_PLACE`, minus `NEVER_JOINED` and every
+    `browser_*`). The lookup widens the WORDS that reach a tool, never the set
+    of tools. Command and script runners (`shell`, `repl`, `run_code`,
+    `tool_script`, `apply_changes`, `process_*`) are never brought. A NEW tool
+    chat arms "in its own place" must be added to `OWN_PLACE` to be joinable.
+  - **Every other gate:** the setting itself, Auto tools off (decision 2:
+    the lookup answers, `AUTO_OFF_NOTE`, nothing joins), Never run, a deny of
+    the reply, Local only (an internet tool does not join; anything else
+    that reaches outside keeps its own Local only card), a weak model's tool
+    budget, a surface's tool list, and LOW TRUST. The lanes pass
+    `finish_low_trust(_trust_state)` (low from the door OR tainted mid-reply):
+    the first cut passed `_trust_state["low"]` alone, so a reply that had just
+    read a flagged document still gained tools; the direct test of the join
+    passed and only the both-lanes test caught it.
+  - **Bounds:** `MAX_JOINED_PER_LOOKUP` 3 (`SETTINGS_FAMILY`, the four
+    settings tools, takes ONE place together), `MAX_JOINING_LOOKUPS` 2 a
+    reply, counted by lookups that BROUGHT something (two lookups that found
+    nothing used to use up the allowance).
+  - **What the first real-model runs showed (Claude Haiku, scratch daemons
+    on 8823 / 8825), each fixed as a general rule:** the model searched in
+    the user's language (the tool and `NOTHING_FOUND` say "English, whatever
+    language the user writes in"; `tool.NOT_ENGLISH_HINT` when a query knew
+    fewer than half of its own words, `CapabilityIndex.known_words`); the
+    lookup named `create_agent` (an agent's tool no chat path brings) above
+    `agent_create` and the model gave up (`join.usable_first`, used by
+    `tool.answer`: tools no lookup can bring and that do not come another
+    way go LAST; `comes_another_way` = command runners and the browser);
+    shown the tool alone, the model said "I have no access to your earlier
+    chats" WITHOUT looking (`chat_turn.CAPABILITY_BLOCK`, about 110 words,
+    at the Tools seam of BOTH lanes only while the tool is armed and the
+    setting is on: `capability_block(armed, config)`). The answer line of an
+    allow-tier tool a lookup brings as ask-first says "It asks the user
+    first when a lookup brings it" (the list and the note agree).
+    `OWN_PLACE` gained `guide_read`, `excel_trace`, `excel_reconcile`,
+    `workflow_run`.
+  - **MEASURED LIVE** (161 held-out requests, 135 tool requests, real chat
+    turns, every card declined; BEFORE the review's fixes): right tool
+    called 28 → 53 of 135 (English 27 → 44 of 111, other languages 1 → 9 of
+    24); within reach 42 → 84; the model looked something up in 57 of 135;
+    26 gained, 1 lost; 0 looked-up changes ran uncarded; median 6.5 → 8.5 s.
+    The plan's 95% is NOT met: the model looks in fewer than half its
+    replies. Fresh set `tests/fixtures/capability_fresh_v1479/` (104 rows,
+    new personas + Italian, labels NOT hand-checked, held out too): right
+    entry in the first five for 73 (score order 72); held-out 123 either way.
+  - **A SCRATCH DAEMON INHERITS THE SHELL'S KEYS.** The measurement made 4
+    real pictures on the owner's Pixio account: `PIXIO_API_KEY` was in the
+    environment, the word tables armed `generate_media` for the "make a
+    picture" rows, and a FREE generation needs no card (the owner's own
+    rule). Start a scratch daemon with the media and provider keys removed
+    from its environment (`env -u PIXIO_API_KEY …`), or leave such rows out.
+  - **NOT scanned, an older fact this work met:** `read_file`'s output is not
+    treated as untrusted content (only `read_document` and the other
+    `returns_untrusted_content` tools are), so a plain text file read with
+    `read_file` never lowers a reply's trust. The forced card is what stands
+    between such a file and a change.
+  - **The log:** one INFO line per join, names only (`capability join:
+    turn=… joined=[…] asks=[…] not_joined=[…]`). Phase 5 reads it.
+  - **OPEN:** a looked-up `read_document` / `extract_pdf` can still send a
+    scanned page to the vision route's model (as when the user's words bring
+    it); the done frame's `auto_armed` lists lookup-brought readers; the
+    full live measurement was not repeated after the review's fixes (a
+    three-request sanity run was); one model, no local model (the owner's
+    server refused the worker for want of a key); coding sessions, agent
+    runs and the sidebar keep their own lists.
+  - **Moved on purpose:** `test_capability_index_v1478` (the lane test
+    removed; the write_document answer line), `test_capability_index_review_v1478`
+    ("never brings the script tool", "a found changer never runs without the
+    user's Allow"), and the reviewer's "lookups inside a script" test (a
+    script cannot look at all now).
+  - **Pins:** `tests/test_capability_join_v1479.py` (real stream and POST
+    lanes with a scripted model, real `registry.invoke`; the join's bounds
+    directly; the fresh-set measurement),
+    `tests/test_capability_join_review_v1479.py` (the reviewer's 13 defects
+    and 8 guards), `dashboard/__tests__/looked-up-card-v1479.test.tsx`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

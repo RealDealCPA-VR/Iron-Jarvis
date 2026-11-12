@@ -564,6 +564,12 @@ export function ApprovalCard({
         <p data-testid="approval-undo-once" className="text-[11px] leading-relaxed text-zinc-400">
           An undo from chat asks you every time and names the change. An undo cannot itself be undone.
         </p>
+      ) : onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "looked_up" ? (
+        // v1.479.0: a tool Jarvis brought by looking it up
+        // (src/iron_jarvis/capability_search/join.py).
+        <p data-testid="approval-looked-up-once" className="text-[11px] leading-relaxed text-zinc-400">
+          Jarvis found this tool by looking it up, so it asks every time, whatever your approval setting.
+        </p>
       ) : onceOnly && !planAsk && !buildPlanAsk ? (
         <p data-testid="approval-local-only" className="text-[11px] leading-relaxed text-zinc-400">
           This chat is local only, so this asks every time.
