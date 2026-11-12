@@ -268,33 +268,96 @@ class _StepClock:
         return getattr(self._real, name)
 
 
+class _LaneClock:
+    """The CHAT LANE's own view of a ``_StepClock`` (v1.477.2): the same time,
+    and ``on_read(now)`` is told each time the lane reads it. The lane reads
+    its clock only around a model call and around a step
+    (``routes/chat._timed_invoke``), so during a round of reads a read of this
+    clock IS a step being measured. The reply's clock
+    (``harness/timeline.ReplyClock``) keeps reading the plain ``_StepClock``,
+    so a frame it stamps is never taken for that."""
+
+    def __init__(self, clock: _StepClock, on_read) -> None:
+        self._clock, self._on_read = clock, on_read
+
+    def perf_counter(self) -> float:
+        now = self._clock.now
+        self._on_read(now)
+        return now
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._clock, name)
+
+
+#: How long a read of the test below waits for the other read, or for the
+#: lane, before it goes on and the test fails in words. Only ever spent when
+#: something is broken (a hang detector, never a speed bar).
+ORDER_WAIT_S = 20.0
+
+
 async def test_reads_that_ran_together_overlap_on_the_axis(app, work, monkeypatch):
+    """ORDERED BY EVENTS, NEVER BY SLEEPS (v1.477.2). The lane reads a step's
+    end AFTER the step's bookkeeping (``registry.invoke`` writes the ledger
+    row before it returns). The first shape slept 0.2 s and 0.4 s and let
+    each read set the ONE shared clock to its own end; on a loaded runner the
+    shorter read's ledger write took longer than the 0.2 s between the two
+    ends, the longer read moved the clock first, and the shorter read was
+    measured at the pair's length (GitHub run 43225505243: passed only on
+    retry; holding that one ledger write 0.35 s gives 399 ms twice on an idle
+    PC). Now nothing sleeps: both reads wait until both are running, the
+    shorter moves the clock to its end, and the longer moves it on only once
+    the lane has READ the shorter one's end."""
     import importlib
 
     chat_routes = importlib.import_module("iron_jarvis.daemon.routes.chat")
     clock = _StepClock()
-    monkeypatch.setattr(chat_routes, "time", clock)
+    ends = {name: clock.now + took for name, took in READ_TIMES.items()}
+    shorter = min(ends, key=ends.get)
+    both_running = asyncio.Event()
+    shorter_measured = asyncio.Event()
+    seen: list[str] = []
+    problems: list[str] = []
+
+    def lane_read(now: float) -> None:
+        if now == ends[shorter]:
+            shorter_measured.set()
+
+    monkeypatch.setattr(chat_routes, "time", _LaneClock(clock, lane_read))
     # v1.399.3: the REPLY's clock (harness/timeline.ReplyClock) caps each
-    # step's length at what it saw between the step's start and finish. On
-    # Windows asyncio.sleep(0.4) can end a few ms EARLY, so a reply clock on
-    # the real perf_counter cut the lane's 400 ms to 397 (v1.399.2's Tests
-    # gate). Both clocks read the same injected time.
+    # step's length at what it saw between the step's start and finish, so it
+    # reads the same injected time as the lane (a reply clock on the real
+    # perf_counter once cut the lane's 400 ms to 397).
     monkeypatch.setattr(TL, "time", clock)
     sid = new_session(app, work)
     tool = app.state.platform.registry.get("read_file")
     real = tool.execute
 
+    async def _within(event: asyncio.Event, problem: str) -> None:
+        try:
+            await asyncio.wait_for(event.wait(), ORDER_WAIT_S)
+        except asyncio.TimeoutError:
+            problems.append(problem)
+
     async def slow(*a, **kw):
         args = a[0] if a and isinstance(a[0], dict) else kw.get("args") or {}
         name = Path(str(args.get("path") or args.get("file_path") or "")).name
-        took = READ_TIMES.get(name, READ_S)
-        await asyncio.sleep(took)  # the real order: the shorter read ends first
-        clock.now = 1000.0 + took  # ... and the lane's clock says exactly when
+        if name not in ends or name in seen:
+            return await real(*a, **kw)  # not one of the round's two reads
+        seen.append(name)
+        if len(seen) == len(ends):
+            both_running.set()
+        # Both are running: each one's start is on the clock, at the same time.
+        await _within(both_running, f"{name} was read alone: the two reads did not run together")
+        if name != shorter:
+            # The shorter read ends first, and the lane has measured it.
+            await _within(shorter_measured, f"the lane never read its clock at the end of {shorter}'s read")
+        clock.now = ends[name]  # this read's own end, exactly
         return await real(*a, **kw)
 
     monkeypatch.setattr(tool, "execute", slow)
     wire(app, Timed(_three_calls_and_reads()))
     await _turn(app, sid, "read both files and make made.py", "tl-3")
+    assert problems == []
     reads = [s for s in _reply(app, sid)["steps"] if s["name"] == "read_file"]
     assert len(reads) == 2
     a, b = reads

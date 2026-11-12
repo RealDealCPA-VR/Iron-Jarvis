@@ -7557,6 +7557,26 @@ does not need a bump, stop and bump it.
   early reproduced CI's failure on the old shape (394 ms); the new shape
   passes with it, and dropping the lane's own length still goes red. When a
   test injects a clock, inject it into EVERY clock that bounds the number.
+  v1.477.2 (test-only): GitHub run 43225505243 passed the same test only on
+  its retry (the log keeps no failure text for a retried test). The lane
+  reads a step's end AFTER the step's bookkeeping (`registry.invoke` awaits
+  the ledger row), and the test let each read set the ONE shared clock to
+  its own end after a real sleep: when the shorter read's ledger write took
+  longer than the 0.2 s between the two ends, the longer read moved the
+  clock first and both reads were measured at the pair's length. Now nothing
+  sleeps: both reads wait until both are running, the shorter moves the
+  clock to its end, and the longer moves it on only once the LANE has read
+  the shorter one's end (`_LaneClock`: the lane's own view of the clock, so
+  a read of it during a round IS a step being measured; the reply clock
+  keeps the plain `_StepClock`). A wait that is only ever spent when
+  something is broken (`ORDER_WAIT_S`) fails the test in words ("did not
+  run together", "the lane never read its clock…"). Reproduced on an idle PC
+  by holding that one ledger write 0.35 s (a scratch plugin wrapping
+  `ToolRegistry._ledger_executed`): the old shape reads 399 ms twice, the
+  new one passes with it held 2 s; 8 mutations, all red (six of the lane /
+  reply clock / round, two of the test's own gate). A fake clock that two
+  steps running together both move is moved in the order the code under
+  test READS it, never in the order sleeps end.
 
 - **A coding-session reply is a reply the whole app can see; a failed one
   has a press; the view's name lives in ONE constant** (v1.389.0, the v1.388.0
