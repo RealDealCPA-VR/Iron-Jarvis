@@ -656,7 +656,7 @@ function SessionPane({
           // After a turn ends: the saved record replaces what was drawn —
           // unless it holds less (not written yet), which would blank the
           // reply the user just watched.
-          // v1.476.1: what is kept still gets a notice newer than anything
+          // v1.476.2: what is kept still gets a notice newer than anything
           // drawn (a model change's line, read again after the change: the
           // drawn reply's many small pieces outnumber the saved record).
           setEvents((prev) => (view.events.length >= prev.length ? view.events : withNewerNotices(prev, view.events)));
@@ -1288,7 +1288,7 @@ function SessionPane({
         const raw = await patch<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}`, patchIn);
         // v1.475.0: a model or effort change in a conversation is said by the
         // daemon's own line in it (read again below), so no second note here.
-        // v1.476.1: while a reply runs the line comes with the reply's own
+        // v1.476.2: while a reply runs the line comes with the reply's own
         // stream — said once then too.
         const onlyModel = Object.keys(patchIn).every((k) => k === "model" || k === "effort");
         const saidInConversation = onlyModel && (!!session.toolSessionId || running);

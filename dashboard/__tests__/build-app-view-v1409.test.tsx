@@ -955,7 +955,7 @@ describe("what the real daemon sends", () => {
     expect(chip.disabled).toBe(false);
   });
 
-  it("v1.476.1: the change's line shows even when the saved record is shorter than what is drawn", async () => {
+  it("v1.476.2: the change's line shows even when the saved record is shorter than what is drawn", async () => {
     const before = sess("a1", { harness_session_id: "h-1", model: "claude-sonnet-5-5" });
     seed([before]);
     openSession("a1", { session: before, events: SC.claude_deny, running: null, pending: [] });

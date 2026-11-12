@@ -3,7 +3,7 @@ import { withNewerNotices, type CodeEvent } from "@/lib/buildApp";
 
 const ev = (o: Record<string, unknown>) => o as unknown as CodeEvent;
 
-describe("withNewerNotices (v1.476.1)", () => {
+describe("withNewerNotices (v1.476.2)", () => {
   it("adds only notices newer than everything drawn", () => {
     const drawn = [ev({ type: "user", at: "2026-11-11T10:00:00Z", text: "hi" }), ev({ type: "text", at: "2026-11-11T10:00:05Z", text: "h" })];
     const saved = [

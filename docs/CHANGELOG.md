@@ -2,7 +2,7 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
-## v1.476.1
+## v1.476.2
 
 **The model picker's last rough edges.** Small fixes after v1.475.0's one-chip model picker in Build › Code:
 

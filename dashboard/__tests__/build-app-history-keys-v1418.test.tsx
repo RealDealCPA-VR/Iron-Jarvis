@@ -467,7 +467,7 @@ describe("keys (C4.8)", () => {
     expect(efforts[0].title).toContain("starts again");
   });
 
-  it("v1.476.1: a model change while it works is said once (the line comes with the reply's stream)", async () => {
+  it("v1.476.2: a model change while it works is said once (the line comes with the reply's stream)", async () => {
     working("p1", { harness: "pi", mode: "own", model: "", effort: "high" });
     H.postReply["PATCH /build/app/sessions/p1"] = {
       session: sess("p1", { harness: "pi", mode: "own", model: "", effort: "low" }),

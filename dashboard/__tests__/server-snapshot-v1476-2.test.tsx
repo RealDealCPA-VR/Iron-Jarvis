@@ -1,5 +1,5 @@
 /**
- * v1.476.1: React warns "The result of getServerSnapshot should be cached to
+ * v1.476.2: React warns "The result of getServerSnapshot should be cached to
  * avoid an infinite loop" when a store's server snapshot is a new object on
  * every call. Emergency stop's strip (in the layout, so on every page) did
  * that; it is one constant now. React checks it while it takes over the

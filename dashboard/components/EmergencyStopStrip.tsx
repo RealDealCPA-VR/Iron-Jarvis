@@ -120,7 +120,7 @@ function subscribe(l: () => void) {
   };
 }
 const snapshot = () => state;
-// v1.476.1: ONE object — React compares the server snapshot by identity and
+// v1.476.2: ONE object — React compares the server snapshot by identity and
 // warns ("getServerSnapshot should be cached") when it is new every call.
 const SERVER_STATE: EmergencyStopState = { known: false, on: false };
 const serverSnapshot = (): EmergencyStopState => SERVER_STATE;
