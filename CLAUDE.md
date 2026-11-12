@@ -18082,3 +18082,18 @@ suggest-don't-act for anything autonomous, everything reviewable.
     `test_repl_confinement_v1160` (`shutil.copy2` joined the routes out of
     the folder), the roster / permission / tool-word tables and both word
     fixtures.
+  - **v1.476.0 WAS NOT PUBLISHED** (its Release gate went red on one
+    dashboard part, Tests green on the same commit; v1.476.1 ships it,
+    test-only). `connections-key-check-v1449` "a key that passes is stored"
+    waited for the `/onboarding/use-model` request to be RECORDED (the mock
+    records a request when it is SENT) and then read the card for "Anthropic
+    accepted the key" at once. The page's `setTest(result)` is drawn by
+    React's own scheduled render a moment later, and on the release runner
+    the read came first, in the run and in its retry. The test now
+    `findByText`s the line itself. Reproduced on an idle PC by making
+    React's scheduled render 25 ms late (a `globalThis.setImmediate` wrapper
+    put in place before React's scheduler loads: hoisted in the test file,
+    or first in `setupFiles`): the old shape fails with the gate's exact
+    error, the new one passes, and ten sibling Connections tests pass under
+    the same delay. A request the mock has recorded is not a line the page
+    has drawn.

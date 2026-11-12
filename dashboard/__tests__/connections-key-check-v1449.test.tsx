@@ -206,7 +206,10 @@ describe("Settings › Connections tests a key before saving it", () => {
     const { card, box } = await pasteKey();
     await waitFor(() => expect(paths()).toEqual(["/connections/anthropic/key?check=1", "/onboarding/use-model"]));
     expect(hooks.posts[1].body).toEqual({ provider: "anthropic" });
-    expect(within(card).getByText(/Anthropic accepted the key/)).toBeTruthy();
+    // Wait for the line itself: the request above is recorded when it is
+    // SENT, a moment before the page has drawn the Test's words (the
+    // v1.476.0 release gate read the card in between).
+    expect(await within(card).findByText(/Anthropic accepted the key/, {}, { timeout: 10_000 })).toBeTruthy();
     expect(within(card).queryByText(KEY_NOT_SAVED_NOTE)).toBeNull();
     // The form closed (the key left the box) — the stored key is in the vault.
     await waitFor(() => expect(document.body.contains(box)).toBe(false));
