@@ -56,6 +56,7 @@ import {
 } from "@/lib/buildLinks";
 import { CODING_SESSION } from "@/lib/buildWords";
 import { announceChatViewLink } from "@/lib/chatSurface";
+import { announceChatThreadLink } from "@/lib/chatThreadLink";
 import { lookingAt, noteWatched, wasWatched } from "@/lib/buildWatching";
 import { CHAT_ASKS_CHANGED_EVENT, chatHereVersion, shownHere, subscribeChatHere, threadShownHere } from "@/lib/chatAway";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
@@ -216,6 +217,32 @@ function agentHref(name: unknown): string {
   return typeof name === "string" && name.trim()
     ? agentsPath({ kind: "team", agent: name.trim() })
     : agentsPath({ kind: "team" });
+}
+
+/** v1.477.1 (a USER BUG): where a chat's safety row opens. A chat turn has
+ *  no session row, and the row used to link bare `/chat` — pressed from
+ *  Chat, nothing moved and nothing said which chat. From v1.477.1 the daemon
+ *  names the chat (`thread_id`) when it knows it; an older event, or a chat
+ *  not saved yet, opens the activity log, where the event is listed. */
+export function chatEventHref(p: Record<string, unknown>): string {
+  const thread = typeof p.thread_id === "string" ? p.thread_id.trim() : "";
+  return thread ? `/chat?thread=${encodeURIComponent(thread)}` : "/activity";
+}
+
+/** Plain words for the four kinds of passage the guard keeps out
+ *  (`computeruse/safety.py` `_PATTERNS`); an unknown kind reads as itself. */
+const BLOCKED_KIND_WORDS: Record<string, string> = {
+  instruction_override: "text telling the AI to ignore its instructions",
+  credential_harvest: "a request for passwords, keys or card numbers",
+  phishing_urgency_payment: "an urgent request for a payment or bank details",
+  embedded_imperative: "hidden orders aimed at the AI",
+};
+
+export function blockedCategoryWords(cats: readonly string[]): string {
+  const words = cats.map((c) => BLOCKED_KIND_WORDS[c] ?? c.replace(/_/g, " "));
+  if (words.length === 0) return "";
+  const said = words.join("; ");
+  return `It looked like ${said}. It was kept out of what the AI read.`;
 }
 
 /** Exactly the types `toActivity` maps (v1.351.0, G04). Also the ONE list
@@ -765,7 +792,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       ts: e.ts,
       // A chat turn has no session row: its taint says session_id "chat".
       // v1.369.0: a Build session's ("build:<id>") opens in Build.
-      href: sid === "chat" ? "/chat" : sid ? sessionLinkFor(sid) : "/activity",
+      href: sid === "chat" ? chatEventHref(p) : sid ? sessionLinkFor(sid) : "/activity",
       icon: ShieldAlert,
       title: sid === "chat" ? "A chat turn dropped to low trust" : "A run dropped to low trust",
       body: typeof p.reason === "string" ? p.reason : "",
@@ -789,10 +816,10 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: sid === "chat" ? "/chat" : sid ? sessionLinkFor(sid) : "/activity",
+      href: sid === "chat" ? chatEventHref(p) : sid ? sessionLinkFor(sid) : "/activity",
       icon: ShieldCheck,
       title: `Blocked ${n} suspicious passage${n === 1 ? "" : "s"} from ${source}`,
-      body: cats.join(", "),
+      body: blockedCategoryWords(cats),
     };
   }
   if (e.type === "comm.received") {
@@ -2714,6 +2741,9 @@ export function NotificationBell() {
             // shows its Code view: Build switches to Terminal on it.
             if (announceBuildTerminalLink(href)) return;
             if (!announceBuildSessionLink(href)) announceChatViewLink(href);
+            // v1.477.1: a row naming a saved chat, pressed from inside Chat,
+            // opens that chat (the page read `?thread=` only at mount).
+            announceChatThreadLink(href);
           }}
         >
           <div className="card-surface overflow-hidden">

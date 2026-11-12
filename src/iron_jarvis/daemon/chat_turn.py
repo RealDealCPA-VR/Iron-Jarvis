@@ -3924,6 +3924,10 @@ async def _taint_chat_turn(
     if bus is None:
         return
     try:
+        # v1.477.1: inside a daemon-owned chat turn, name the chat, so the
+        # bell's row opens it (every chat turn's session id is "chat").
+        from ..core.promptguard import turn_keys
+
         await bus.publish(
             EventType.TRUST_LOWERED,
             {
@@ -3931,6 +3935,7 @@ async def _taint_chat_turn(
                 "tool": tool,
                 "category": str(inj.get("category") or ""),
                 "reason": state["reason"],
+                **turn_keys(),
             },
             session_id="chat",
         )

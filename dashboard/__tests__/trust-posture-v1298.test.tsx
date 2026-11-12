@@ -487,10 +487,13 @@ describe("the bell maps trust.lowered and context.blocked", () => {
     expect(item!.href).toBe("/sessions/session_abc");
     expect(item!.icon).toBe(ShieldCheck);
     expect(item!.title).toBe("Blocked 3 suspicious passages from web_fetch");
-    expect(item!.body).toBe("injection, exfiltration");
+    // v1.477.1: the kinds in plain words (an unknown kind reads as itself).
+    expect(item!.body).toBe("It looked like injection; exfiltration. It was kept out of what the AI read.");
   });
 
-  it("a chat-lane event (session_id \"chat\", no row) links to /chat, never /sessions/chat", () => {
+  it("a chat-lane event (session_id \"chat\", no row) never links to /sessions/chat", () => {
+    // v1.477.1 moved on purpose: bare "/chat" named no chat and, pressed from
+    // Chat, went nowhere (a user bug). With no chat named it opens /activity.
     // Both chat lanes publish their taint and their blocked passages with
     // session_id "chat" (a chat turn has no Session row): a bell link to
     // /sessions/chat would open an empty page.
@@ -501,7 +504,7 @@ describe("the bell maps trust.lowered and context.blocked", () => {
       session_id: "chat",
       payload: { session_id: "chat", tool: "web_fetch", category: "injection", reason: TAINT_REASON },
     });
-    expect(lowered!.href).toBe("/chat");
+    expect(lowered!.href).toBe("/activity");
     expect(lowered!.title).toBe("A chat turn dropped to low trust");
     expect(lowered!.body).toBe(TAINT_REASON);
     const blocked = toActivity({
@@ -511,7 +514,7 @@ describe("the bell maps trust.lowered and context.blocked", () => {
       session_id: "chat",
       payload: { session_id: "chat", source: "attachment notes.txt", count: 2, categories: ["x"] },
     });
-    expect(blocked!.href).toBe("/chat");
+    expect(blocked!.href).toBe("/activity");
     expect(blocked!.title).toBe("Blocked 2 suspicious passages from attachment notes.txt");
   });
 
