@@ -2,9 +2,13 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
-## v1.477.0
+## v1.477.1
 
 **Build › Code calls a finished command a command.** In Build › Code, a shell command that ended is no longer announced as "A helper finished".
+
+## v1.477.0
+
+**A ring that shows the coding tool is still working.** In Build › Code, a coding tool such as Claude Code can finish its reply and leave helpers working in the background.
 
 ## v1.476.0
 
@@ -77,7 +81,3 @@
 ## v1.466.0
 
 **Working in a workbook that is open in Excel.** Until now Jarvis worked on saved files, so a workbook had to be closed first.
-
-## v1.465.0
-
-**Spreadsheets Jarvis understands and works out itself.** Jarvis used to read a workbook as a grid of cells and leave every formula to Excel.

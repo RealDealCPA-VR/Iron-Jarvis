@@ -147,14 +147,17 @@ export async function leaveTurn(
   announceAfterMs: number = ANNOUNCE_AFTER_MS,
 ): Promise<void> {
   if (!turnId || !viewer) return;
+  const born = generation;
   noteNotFollowing(turnId, viewer);
   try {
     await post(awayPath(turnId), { viewer });
   } catch {
     return;
   }
-  if (typeof window === "undefined") return;
-  setTimeout(() => {
+  // `born`: a test's reset ran while the daemon was still being told.
+  if (typeof window === "undefined" || born !== generation) return;
+  const timer = setTimeout(() => {
+    announcing.delete(timer);
     if (followedHere(turnId)) return;
     try {
       window.dispatchEvent(new Event(CHAT_ASKS_CHANGED_EVENT));
@@ -162,7 +165,16 @@ export async function leaveTurn(
       /* a closed window */
     }
   }, Math.max(0, announceAfterMs));
+  announcing.add(timer);
 }
+
+/** The announcements pages that left have armed and not made yet, and a count
+ *  the tests' reset moves. Both exist only so `__resetChatAway` can take back
+ *  what earlier pages armed: a page unmounted mid-turn in one test told the
+ *  NEXT test's bell 1.5 s later (a red gate, v1.477.0). Nothing else moves
+ *  `generation`, so the app itself behaves exactly as before. */
+const announcing = new Set<ReturnType<typeof setTimeout>>();
+let generation = 0;
 
 /** v1.455.0 review: the chat page `viewer`'s WINDOW was hidden (minimised,
  *  covered by another window, the screen locked) or shows it again
@@ -185,8 +197,11 @@ export async function windowShown(
   }
 }
 
-/** Tests only. */
+/** Tests only. Also takes back every announcement a page armed before it. */
 export function __resetChatAway(): void {
+  generation += 1;
+  for (const timer of announcing) clearTimeout(timer);
+  announcing.clear();
   following.clear();
   showing.clear();
   changed();

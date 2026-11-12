@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.477.0 (2026-11-12).*
+holds itself to. Current as of v1.477.1 (2026-11-12).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Build › Code calls a finished command a command (v1.477.0)
+## Build › Code calls a finished command a command (v1.477.1)
 
 In Build › Code, a shell command that ended is no longer announced as "A
 helper finished".
@@ -2085,6 +2085,55 @@ Two things to know:
   finished: …" for a command that started before the update. The older
   version did not record whether that command ran in the background, so Iron
   Jarvis says the line and does not guess.
+
+## A ring that shows the coding tool is still working (v1.477.0)
+
+In Build › Code, a coding tool such as Claude Code can finish its reply and
+leave helpers working in the background. Until now the only sign of that was
+one grey line of text at the end of the conversation, under a list of other
+grey lines. It was easy to miss.
+
+Now a small ring sits at the end of the conversation, just above the message
+box, whenever the coding tool is at work:
+
+- **While a reply is being written:** a plain ring with a light going round
+  it, and "Claude Code is working…". This replaces the small spinning wheel.
+- **While helpers work in the background:** the ring has one segment for each
+  helper, and the number still working is in the middle. Beside it: "5 helpers
+  working". A light hops from one working segment to the next. When a helper
+  ends, its segment turns thin and steady, and the words count it: "3 helpers
+  working · 2 finished".
+- **While the tool writes a reply of its own** (its report once the helpers
+  are done): the plain ring again, with "Claude Code is writing a reply of its
+  own".
+- **While only a background command runs** (a dev server, say): a ring that
+  does not move, and the same quiet sentence as before. Nothing is being
+  worked on for you then, so nothing moves.
+
+Things to know:
+
+- **The "finished" number is what this window saw.** It counts helpers that
+  ended while the session was open on your screen. A helper that ended before
+  you opened the session is not in it, so the number can be lower than the
+  real one. It is never higher. It starts again when no helper is left.
+- **It stays in view.** If you scroll up to read, the ring stays just above
+  the message box, with a soft pill behind it so you can read it over the
+  text. At the end of the conversation it has no box around it.
+- **Nothing moves when it comes or goes.** Its place at the end of the
+  conversation is always kept. That adds about 30 pixels of space above the
+  message box, in every session, working or not.
+- **It costs almost nothing over a long session.** The light moves in steps,
+  less than twice a second, instead of turning smoothly. Measured in Edge with no
+  window on screen, three rounds of 20 seconds each: with the ring standing
+  still the browser's graphics process used 1.56% of one processor core; with
+  the light hopping as built, 1.90%; with the same light turning smoothly,
+  23.37%.
+- **It stands still** when Windows is set to show less animation, and while
+  the window is hidden. The ring, its number and the words still show.
+- **A screen reader hears the same sentence as before** ("5 helpers are still
+  working in the background. Their report will appear here when they
+  finish."). Resting the pointer on the ring shows that sentence too.
+- **Build › Code only.** Chat › Code keeps its own "Working for…" line.
 
 ## Skills that get used, one approval for many changes, faster scripts (v1.476.0)
 

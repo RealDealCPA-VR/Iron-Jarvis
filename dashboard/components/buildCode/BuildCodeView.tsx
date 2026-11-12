@@ -96,6 +96,7 @@ import {
   type BranchFacts,
 } from "@/lib/buildAppBranch";
 import { CodePanes } from "@/components/buildCode/CodePanes";
+import { WorkingSign } from "@/components/buildCode/WorkingSign";
 import { ArchiveSummaryCard } from "@/components/buildCode/ArchiveSummary";
 import {
   ARCHIVE_FAILED,
@@ -155,7 +156,6 @@ import {
   sessionFolderWords,
   sessionRowLine,
   backgroundRereadMs,
-  backgroundWorkWords,
   CODE_SEEN_BEAT_MS,
   COMMAND_SOURCE_WORDS,
   closeToolWords,
@@ -446,6 +446,9 @@ function SessionPane({
   const [branching, setBranching] = useState(false);
   /** The reader scrolled up while something new arrived. */
   const [jump, setJump] = useState(false);
+  /** The reader is away from the end of the conversation (the "working"
+   *  sign floats over the text then, and gets a pill behind it). */
+  const [away, setAway] = useState(false);
   const atBottomRef = useRef(true);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   /** Events that arrived and are not drawn yet (flushed once a frame). */
@@ -858,6 +861,7 @@ function SessionPane({
     if (!el) return;
     const at = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_SLACK_PX;
     atBottomRef.current = at;
+    setAway(!at);
     if (at) setJump(false);
   }, []);
   useEffect(() => {
@@ -866,6 +870,7 @@ function SessionPane({
   }, [conv.items]);
   const jumpToLatest = useCallback(() => {
     atBottomRef.current = true;
+    setAway(false);
     setJump(false);
     pinToBottom(sentinelRef.current);
   }, []);
@@ -1656,8 +1661,6 @@ function SessionPane({
   }
 
   const asking = conv.asks.length > 0;
-  // v1.417.0: helpers still at work after the reply ended (one quiet line).
-  const bgWords = backgroundWorkWords(session, toolName, running);
   const accountName = accountWords(session, tools);
   // v1.418.0 (C4.8): which chip changes wait for the reply to end.
   const modelLive = modelWhileRunning(session.tool, toolName, running);
@@ -1840,17 +1843,18 @@ function SessionPane({
                 messageActions={messageActions}
               />
             )}
-            {running && !asking ? (
-              <p data-testid="code-working" className="mt-3 flex items-center gap-2 text-[12px] text-zinc-500">
-                <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                {toolName} is working…
-              </p>
-            ) : null}
-            {bgWords ? (
-              <p role="status" data-testid="code-background" className="mt-3 text-[12px] text-zinc-500">
-                {bgWords}
-              </p>
-            ) : null}
+            {/* The "working" sign: a reply being written, helpers still at
+                work after it (v1.417.0), or the tool's own reply. Its slot is
+                always here, so nothing moves when the sign comes or goes; it
+                stays in view (sticky) for a reader who scrolled up. */}
+            <WorkingSign
+              session={session}
+              toolName={toolName}
+              running={running}
+              asking={asking}
+              floating={away}
+              compact={jump}
+            />
             {/* v1.422.0 (B4): kept open past its idle stop because the tool
                 runs a program it started that serves (a dev server) — said,
                 with the way to close it now; and what the last stop ENDED. */}

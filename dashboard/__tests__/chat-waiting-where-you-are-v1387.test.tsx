@@ -388,4 +388,39 @@ describe("leaveTurn", () => {
       window.removeEventListener(CHAT_ASKS_CHANGED_EVENT, announced);
     }
   });
+
+  // v1.477.0: the test above went red on GitHub. The tests before it unmount a
+  // chat page mid-turn, and each such page arms its announcement 1.5 s later
+  // (ANNOUNCE_AFTER_MS). On that run the tests in between added up to about
+  // 1.35 s, so two of those timers went off inside the test above and its bell
+  // was told by pages of EARLIER tests. The reset every test starts with now
+  // takes back what earlier pages armed.
+  it("a reset takes back what an earlier page armed, sent or not (one test's page never tells the next test's bell)", async () => {
+    const announced = vi.fn();
+    window.addEventListener(CHAT_ASKS_CHANGED_EVENT, announced);
+    try {
+      const post = vi.fn(async () => FIX.away_answer);
+      // A page left and armed its announcement …
+      await leaveTurn("t-old", "view-old", post, 30);
+      // … and another left, but the daemon has not answered it yet.
+      let answer: (v: unknown) => void = () => {};
+      const slow = vi.fn(
+        () =>
+          new Promise<unknown>((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const leaving = leaveTurn("t-slow", "view-old", slow, 0);
+      __resetChatAway(); // what every test's beforeEach does
+      answer(FIX.away_answer);
+      await leaving;
+      await new Promise((r) => setTimeout(r, 80));
+      expect(announced).not.toHaveBeenCalled();
+      // A page that leaves AFTER the reset still tells the bell.
+      await leaveTurn("t-new", "view-new", post, 0);
+      await waitFor(() => expect(announced).toHaveBeenCalledTimes(1));
+    } finally {
+      window.removeEventListener(CHAT_ASKS_CHANGED_EVENT, announced);
+    }
+  });
 });
