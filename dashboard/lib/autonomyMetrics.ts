@@ -132,6 +132,12 @@ const SYSTEM_WORDS: Record<string, [string, string]> = {
     "step a model wrote out as text and was told to run",
     "steps a model wrote out as text and was told to run",
   ],
+  // v1.480.0: a chat reply about to end on words looked up what Iron Jarvis
+  // can do first, when asked to check.
+  look_first: [
+    "reply that looked up a feature before it ended",
+    "replies that looked up a feature before they ended",
+  ],
 };
 
 /** The system's own nudges on one quiet line; "" when there were none. */

@@ -127,6 +127,71 @@ For the next phases, in order of what the numbers say:
    which must never guide the wording.
 3. Then Phases 3 and 4 as planned.
 
+## After Phase 2: making the model look (built 2026-11-12, to ship as v1.480.0)
+
+Phase 2's numbers said the model looks something up in fewer than half its
+replies. This step is about that, and only that. Still off by default.
+
+What was built:
+
+1. **Clearer wording**, part of Feature lookup, at no cost: "words alone
+   change nothing", and a tool that asks is described by its approval card
+   instead of "asks the user first" (which the model read as an instruction
+   to ask in words).
+2. **A check before a reply ends on words**, behind its own switch
+   (Feature lookup check, off by default): one question to the model,
+   "look it up, or keep the reply".
+
+Measured on the second set (86 tool requests, written before this step and
+never used to adjust it), real replies from Claude Haiku, cards declined:
+
+| Setting | Right tool used | Looked something up | Typical reply time |
+|---|---|---|---|
+| Lookup off | 17 of 86 (20%) | 0 | 6.4 s |
+| v1.479.0, lookup on | 28 of 86 (33%) | 28 | 8.3 s |
+| v1.480.0, lookup on | 32 of 86 (37%) | 36 | 9.1 s |
+| v1.480.0, lookup and check on | 39 of 86 (45%) | 55 | 12.1 s |
+
+On the first set (135 requests, the one this step was developed against):
+53 to 66 with the check.
+
+**The target (95%) is still far.** What is left, from the 47 misses with
+the check on:
+
+- 20: Jarvis looked, and the list did not show the right tool.
+- 11: the right tool joined, and Jarvis asked a question or explained
+  instead of using it. Some of these are reasonable (a detail really was
+  missing), so the true number is smaller.
+- 16: Jarvis still did not look.
+
+What the check costs: about 3.5 seconds on every reply that ends without a
+tool, after the answer is already on screen (Claude Haiku on a Claude
+plan). On 43 ordinary questions it never caused an unneeded lookup. On
+99 look-alike messages no approval card appeared, with or without it.
+
+Things tried and dropped, with numbers, so they are not tried again:
+
+- **Letting the app decide when to look, from the user's own words.** The
+  list matched something for 99 of 99 look-alike messages, with the same
+  scores as real requests. It cannot tell a request from a question.
+- **Re-tuning how the list ranks.** No setting tried beat the current one
+  (123 of 164).
+- **Adding the user's own words to the model's search.** Worse (105 to 99
+  of 138).
+- **Bringing five tools per lookup instead of three.** 105 to 109 of 138:
+  too little for the extra tools in every reply.
+
+Next, in order of what the numbers say:
+
+1. **The list.** It is now the largest gap. The entries lack everyday words
+   ("helper" for an agent, "every weekday" for a schedule). This needs a
+   careful way to add words without turning the list into a second set of
+   word tables, and a third fresh set to check it on.
+2. **Make the check cheap.** A small "is this a request?" question asked
+   while the reply is being written would remove the wait on ordinary
+   questions. Not built: it is one more model call on every reply.
+3. Then Phases 3 and 4 as planned.
+
 ## The problem, measured
 
 Which tools a chat reply gets is decided before the model answers, by

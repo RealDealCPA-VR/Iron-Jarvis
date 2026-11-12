@@ -17607,6 +17607,131 @@ does not need a bump, stop and bump it.
     `tests/test_capability_join_review_v1479.py` (the reviewer's 13 defects
     and 8 guards), `dashboard/__tests__/looked-up-card-v1479.test.tsx`.
 
+- **A reply about to end on WORDS is asked once to look first (its own
+  switch, off by default); a tool that asks is described by its CARD; the
+  app cannot decide by itself when to look** (v1.480.0, capability search:
+  "make the model look"; the owner said "proceed" after v1.479.0).
+  - **Why.** The Phase 2 live run (135 requests, Claude Haiku): the model
+    looked something up in 57 replies. In 34 of the others it ended on words
+    with no tool call at all ("Got it, I'll remember that", "I'll set up a
+    recurring task", how-to text, "I can't"), in 17 more it only read files,
+    and in 15 the right tool HAD joined and the model wrote "Would you like
+    me to…?".
+  - **MEASURED DEAD ENDS (do not walk them again):** (1) the app's own word
+    match of the user's message cannot gate anything: it found "something"
+    for 99 of 99 look-alike messages, with the same top scores as real
+    requests (median 10.7 vs 11.3), so it can neither pre-join tools nor
+    decide when to ask; (2) `daemon/change_claims.claimed_change_note`
+    flagged 1 of the 51 replies that ended on words, so it is no gate
+    either; (3) BM25 `k1`/`b` (123 of 164 at every setting tried) and
+    adding the user's own words to the model's query (joined 105 → 99 of
+    138) do not improve the list; (4) five join places instead of three:
+    105 → 109 of 138, not taken.
+  - **The words (part of `capability_search`, free).**
+    `chat_turn.CAPABILITY_BLOCK` now says "Words alone change nothing…" and
+    that a request about how things look, sound or behave may be about Iron
+    Jarvis itself. `join.CARD_WORDS` ("shows the user an approval card when
+    you call it") replaces "(asks the user first)", which a real model read
+    as an INSTRUCTION to ask in words; `join.CALL_IT_NOTE` follows the
+    joined list only when something asks; `tool.ASKS_LINE` /
+    `ASKS_WHEN_FOUND_LINE` say the same on the answer lines and in the
+    tool's description.
+  - **The check (`Config.capability_look_first`, schema row "Feature
+    lookup check", Models, allow, default OFF; the label is NOT a plain
+    sentence, like "Feature lookup").** `chat_turn.look_first_wanted` (every
+    condition a fact of the turn, never its words): both settings on, the
+    lookup among the reply's tools, Auto tools on, not low trust
+    (`finish_low_trust`), a turn id, not the demo route (`is_demo_route`),
+    a reply with words that was not cut off, a user message with at least
+    one word to look up (`_look_first_has_words`: an index token OR any
+    non-ASCII letter; the index tokenizer reads a-z and digits only, so a
+    Russian, Greek, Chinese or Arabic message used to read as "nothing to
+    look up"), `LOOK_FIRST_ROUNDS_NEEDED` (3) rounds
+    left, and in `msgs[head:]` no `find_capability` result and no result of
+    a tool that is not a reader (`join._reads`; an unknown tool counts as a
+    changer; a change that was TRIED, declined or refused counts).
+    `look_first_call`: ONE `router.complete` with the reply as written, then
+    `LOOK_FIRST_NOTE` (a user-role message, "From Iron Jarvis, not from the
+    user"), the SAME tools list and the turn's own reasoning level
+    (`router_kw=_reasoning_kw(body)`: the check's answer becomes a turn of
+    the transcript, and a thinking loop refuses a rebuilt, thinking-less
+    tool turn, v1.263.0), fitted with
+    `_fit_turn_transcript`, bounded by `LOOK_FIRST_TIMEOUT_S` (20), billed
+    to the turn's tally. It is acted on ONLY when the answer is
+    `find_capability` calls and nothing else; KEEP, other words, another
+    tool, a mixed answer, a failure, a refusal or a timeout leave the reply
+    exactly as written and nothing the check answered with is run.
+  - **Both lanes (MIRROR NOTE, lock-step), plain chat only** (`_harness is
+    None and not text_only_pick`), at the final-text exit, right before
+    `if not calls or not armed: break`. On a lookup: the lane appends the
+    reply and the note to `msgs`, takes the check's response as the round's
+    own (`final_resp` / `route.response`, `calls`, `_model_calls`), counts
+    one nudge (`core/nudges.LOOK_FIRST`, `note_look_first`; a kept reply is
+    not a nudge; dashboard `SYSTEM_WORDS.look_first`), and the STREAM lane
+    sends `reset {reason: "look_first"}` (the words on screen are taken
+    back) and races the call against Stop (`_prep_step`). `_look_draft` +
+    `look_first_kept_word`: a model that looked and then answered only
+    "KEEP" gets the reply it had written before the check sent, never the
+    word; the same guard runs after the final-answer nudge in both lanes (a
+    model that looked and then wrote nothing is nudged with the check's
+    note still in its transcript, and could answer "KEEP" there).
+    `_looked_first` duplicates the gate (after a lookup the gate sees
+    its result; after KEEP the loop ends): the two "asks twice" mutations
+    survive for that reason.
+  - **THE COST, measured (Claude Haiku on a Claude plan, one call = one
+    `claude` process):** the check is one more model call on EVERY reply
+    that ends without a tool, ordinary questions included: about 3.5 s
+    after the last word alone, 5 to 6 s with three runs at once. The answer
+    is on screen meanwhile, but the turn is still busy: Enter posts a steer
+    note that comes back unread. That is why it has its own switch.
+  - **MEASURED LIVE** on the fresh set (`tests/fixtures/
+    capability_fresh_v1479`, 86 tool requests, never tuned to; cards
+    declined; one run each): lookup off 17, v1.479.0 28, v1.480.0 words
+    only 32 (looked 36), words + check 39 (looked 55; other languages 5 of
+    10); median reply 6.4 / 8.3 / 9.1 / 12.1 s under load. Dev set (the
+    Phase 0 set, 135): 53 → 66 with the check. Of the 47 fresh misses with
+    the check: the list missed it 20, right tool joined but not called 11,
+    no look 16. Look-alike messages (99): 0 cards in every arm, lookups 0 /
+    2 / 3, one reply taken back. Ordinary questions (43, written blind
+    by Haiku, run one at a time): 0 lookups and 0 replies taken back in
+    every arm; median reply 5.9 s (off) / 5.9 s (words) / 9.5 s (check),
+    the wait after the last word 0 / 0 / 3.5 s.
+  - **Stop during the check** ends the turn as any Stop does (no `done`,
+    the call cancelled, nothing taken back); the reply on screen is kept by
+    the page as a stopped reply. **Read aloud:** the chat page's
+    `resetTTSFeed` now calls `tts.cancel()` before `resetStream()`, so a
+    reply that is taken back (by the check, a language rewrite, a cut-off)
+    is no longer read out before the new one.
+  - **A SETTING'S ALIAS IS A TRIGGER PHRASE.** The first alias, "look first
+    check", matched "Look first, check the invoice total, then change the
+    due date" and armed the settings tools (found in review). The row keeps
+    one alias, "capability lookup check"; the pin runs four everyday
+    sentences through `settings_tools_for`.
+  - **A LIVE RUN IS NOT HERMETIC:** rows that call `remember_preference`
+    (allow tier) save preferences in the scratch home, and later rows are
+    answered in Spanish or German. Every arm has it; compare arms, never
+    read a single row as clean.
+  - **OPEN:** a failed check is a real provider failure (it can strike the
+    breaker and publish `provider.failed`, like the final-answer nudge); a
+    hidden "Continue" turn can be asked (the daemon cannot tell it from a
+    question); the POST answer's `thinking` still holds the withdrawn
+    reply's; the list is now the largest gap (everyday words the entries
+    lack: "helper" for an agent, "every weekday" for a schedule); a parallel
+    small "is this a request?" call could remove the check's cost on
+    ordinary questions (not built: one more process per turn); one model,
+    no local model; the check is not made in coding sessions, agent runs or
+    the sidebar.
+  - **Pins:** `tests/test_look_first_v1480.py` (real stream and POST lanes,
+    scripted model, the real demo route; 39 mutations, 37 red, 2
+    duplicates), `tests/test_look_first_review_v1480.py` (the reviewer's 3
+    defects and its guards: the forced card after the check, Stop, the time
+    limit, the blocks of each turn; 35 mutations, all red),
+    `dashboard/__tests__/look-first-nudge-v1480.test.ts`, the reset case in
+    `chat-wave3-seeded-race-v1311`;
+    moved on purpose: the "asks the user first" strings in
+    `test_capability_index_v1478`, `test_capability_join_v1479` and
+    `test_capability_join_review_v1479`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

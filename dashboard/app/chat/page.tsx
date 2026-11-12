@@ -8750,6 +8750,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
    *  never looks shorter. Before the first token there is nothing to undo. */
   function resetTTSFeed() {
     if (!tts.enabled || !ttsStreamStartedRef.current) return;
+    // v1.480.0: the words being taken back are still queued to be read out.
+    // Stop them first, or the user hears the withdrawn reply and then the
+    // new one (the look-first check takes a whole reply back).
+    tts.cancel();
     tts.resetStream();
   }
 

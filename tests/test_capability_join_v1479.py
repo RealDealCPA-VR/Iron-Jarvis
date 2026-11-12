@@ -77,7 +77,7 @@ async def test_a_found_changer_joins_as_ask_first_and_runs_only_after_allow(desk
     assert "agent_create" in model.offered[1], "the lookup brought it"
     said = model.tool_texts[1][-1]
     assert "Now among your tools in this reply: " in said, said
-    assert "`agent_create` (asks the user first)" in said, said
+    assert f"`agent_create` ({J.CARD_WORDS})" in said, said
     assert [c.get("tool") for c in cards] == ["agent_create"], cards
     assert _agents(app) == before
 
@@ -135,7 +135,7 @@ async def test_a_found_reader_joins_and_runs_with_no_card_in_both_lanes(desk):
             await _post(app, body, model)
         assert "history_search" not in model.offered[0], lane
         assert "history_search" in model.offered[1], lane
-        assert "`history_search`" in model.tool_texts[1][-1] and "asks the user first" not in (
+        assert "`history_search`" in model.tool_texts[1][-1] and J.CARD_WORDS not in (
             model.tool_texts[1][-1].split("Now among your tools")[1].split("history_search`")[1][:25]
         ), lane
     assert len([r for r in _rows(app, "history_search") if r.ok]) == 2
@@ -173,7 +173,7 @@ async def test_where_nobody_can_be_asked_a_changer_does_not_join(desk):
     assert "agent_create" not in new and "config_change" not in new, new
     assert all(J._reads(registry.get(n), n) for n in new), new
     said = model.tool_texts[1][-1]
-    assert "(asks the user first)" not in said, said
+    assert f"({J.CARD_WORDS})" not in said, said
     assert "`agent_create` did not join: " + J.WHY_CANNOT_ASK in said, said
     assert _agents(app) == before and not [r for r in _rows(app, "agent_create") if r.ok]
 
@@ -326,7 +326,7 @@ async def test_a_tool_the_user_already_allowed_for_this_chat_joins_without_a_new
     assert cards == [], cards
     assert (ws / "g.txt").read_text(encoding="utf-8") == "two"
     assert "`write_file`" in model.tool_texts[1][-1]
-    assert "`write_file` (asks the user first)" not in model.tool_texts[1][-1]
+    assert f"`write_file` ({J.CARD_WORDS})" not in model.tool_texts[1][-1]
 
 
 @pytest.mark.asyncio
@@ -342,7 +342,7 @@ async def test_a_found_tool_that_reaches_the_internet_asks_first(desk):
     _f, cards, _d = await _stream(app, _body(ws, "hello there"), model, decision="deny")
     assert "web_search" not in model.offered[0]
     assert "web_search" in model.offered[1], model.tool_texts[1][-1]
-    assert "`web_search` (asks the user first)" in model.tool_texts[1][-1]
+    assert f"`web_search` ({J.CARD_WORDS})" in model.tool_texts[1][-1]
     assert [c.get("tool") for c in cards] == ["web_search"], cards
     assert not [r for r in _rows(app, "web_search") if r.ok]
     # and where nobody can be asked it does not join at all

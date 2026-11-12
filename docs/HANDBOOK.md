@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.479.0 (2026-11-12).*
+holds itself to. Current as of v1.480.0 (2026-11-12).*
 
 ---
 
@@ -2041,6 +2041,125 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Jarvis looks it up before it says "done" or "I can't" (v1.480.0)
+
+This is the third step of the feature lookup (v1.478.0, v1.479.0). The
+lookup is still **off by default** (Settings › Models › Feature lookup),
+and with it off nothing in chat is different.
+
+### Why
+
+In v1.479.0 a tool the lookup finds can join the reply. But in a test with
+a real model, Jarvis looked something up in fewer than half of its replies.
+Often it simply answered in words: "Got it, I'll remember that", "I'll set
+up a weekly reminder", or a list of steps for you to do by hand, with no
+tool behind the words. Nothing had been saved or set up.
+
+### What changed
+
+**1. Clearer instructions (part of Feature lookup, no extra cost).** Jarvis
+is now told plainly that words alone change nothing: a reply that says
+"done", "got it" or "I will" does nothing unless a tool did it. It is also
+told that a request about how things look, sound or behave may be about
+Iron Jarvis itself, so it should look before asking you which file you
+mean.
+
+**2. A tool that asks is described by its card.** A tool the lookup brings
+used to be described to Jarvis as one that "asks the user first". Jarvis
+read that as an instruction and asked you in words ("Would you like me
+to…?") instead of using the tool. It is now told that using the tool shows
+you an approval card, that the card is how you confirm, and to ask in words
+only for a detail it is missing.
+
+**3. A new switch: Feature lookup check (off by default).** Settings ›
+Models › Feature lookup check. With it on, when a reply is about to end
+without Jarvis having looked anything up or used any tool that changes
+something, Jarvis is asked one question before the reply is final: look it
+up, or keep the reply.
+
+- If it keeps the reply, nothing changes: the reply stays exactly as it was
+  written.
+- If it looks something up, the words already on screen are taken away,
+  Jarvis does the lookup, and writes the reply again. What the lookup finds
+  joins the reply under the same rules as in v1.479.0.
+
+### What the check costs
+
+The check is one more question to the model on every reply that ends
+without a tool. That includes ordinary questions that need no tool at all.
+Measured with Claude Haiku on a Claude plan: the answer appears as fast as
+before, and the reply then takes about 3.5 seconds longer to finish. During
+that time the reply still shows as in progress. If you type your next
+message and press Enter in those seconds, it is handed back to the message
+box and you press Enter again. If you press Stop in those seconds, the
+reply stays on screen as it is and is marked as stopped.
+
+This is why the check has its own switch and is off by default. Turn it on
+if finding the right tool matters more to you than those seconds.
+
+### Measured
+
+Real chat replies from Claude Haiku on a test copy of the app, every
+approval card declined, on a set of 86 requests that was written before
+this change and never used to adjust it:
+
+| Setting | Jarvis used the right tool | Jarvis looked something up | Typical time for a reply |
+|---|---|---|---|
+| Feature lookup off | 17 of 86 (20%) | 0 | 6.4 s |
+| v1.479.0, Feature lookup on | 28 of 86 (33%) | 28 | 8.3 s |
+| v1.480.0, Feature lookup on | 32 of 86 (37%) | 36 | 9.1 s |
+| v1.480.0, Feature lookup and the check on | 39 of 86 (45%) | 55 | 12.1 s |
+
+The times were taken while several tests ran at once, so they are slower
+than normal use; compare them with each other, not with your own
+experience.
+
+On the earlier set of 135 requests (the one this change was developed
+against), Feature lookup with the check went from 53 to 66 right.
+
+**The plan's goal of 95% is still not met.** The largest gap is now the
+list itself: in 20 of the 86 requests Jarvis looked, and the list did not
+show the right tool among its first matches. In 11 more the right tool had
+joined and Jarvis asked a question or explained instead of using it.
+
+Two more checks, with the check switched on:
+
+- **Messages that only look like requests** (99 of them, for example "My
+  sister says dark mode is easier on the eyes, is that true?"): no approval
+  card appeared for any of them. Jarvis looked something up for 3 (2 in
+  v1.479.0), and one reply was taken back and rewritten.
+- **Ordinary questions** (43 of them, for example "What's the difference
+  between a credit and a debit?"): all 43 replies were kept exactly as
+  written and nothing was looked up. Each took about 3.5 seconds longer to
+  finish (5.9 seconds without the check, 9.5 with it). With the check off,
+  Feature lookup added no time at all to these.
+
+### Safety
+
+The check cannot make anything run. The only answer it acts on is a
+lookup; if the model answers with any other tool, that tool is not run and
+the reply stays as it was. What a lookup then finds follows every rule from
+v1.479.0: a change always shows a card first, nothing joins a reply that
+has read flagged content, and so on. The check is not made at all when the
+reply has read flagged content, when Auto tools is off, when the demo
+model is answering, or in a coding session.
+
+If the check itself fails or takes more than 20 seconds, the reply stays as
+it was. With read-aloud on, a reply that is taken back stops being read
+out, and the new reply is read instead. The check's use of the model is counted in the reply's totals. The
+Autonomy page counts each reply that looked something up because of the
+check.
+
+### Limits
+
+- Measured with one model (Claude Haiku), one run per setting. A different
+  model may look more or less often.
+- No local model was measured.
+- The check is not made in coding sessions, agent runs or the browser
+  sidebar.
+- When the check makes Jarvis look something up, the first version of the
+  reply disappears from the screen and is replaced.
 
 ## What Jarvis looks up, it can now use (v1.479.0)
 

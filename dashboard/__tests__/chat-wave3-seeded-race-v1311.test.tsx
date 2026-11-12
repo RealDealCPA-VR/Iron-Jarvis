@@ -55,6 +55,7 @@ const H = vi.hoisted(() => {
     tts: {
       resetStream: vi.fn(),
       speakMore: vi.fn(),
+      cancel: vi.fn(),
     },
   };
 });
@@ -122,7 +123,7 @@ vi.mock("@/lib/useTTS", () => ({
   useTTS: () => ({
     supported: true, enabled: true, speaking: false, enable: () => {}, disable: () => {},
     toggle: () => {}, speak: () => {}, resetStream: H.tts.resetStream,
-    speakMore: H.tts.speakMore, cancel: () => {},
+    speakMore: H.tts.speakMore, cancel: H.tts.cancel,
   }),
 }));
 vi.mock("@/lib/useProviderHealth", () => ({
@@ -212,6 +213,7 @@ beforeEach(() => {
   H.run.release = null;
   H.run.script = null;
   H.tts.resetStream.mockClear();
+  H.tts.cancel.mockClear();
   H.tts.speakMore.mockClear();
   H.api.responses = {
     "/models": { models: [] },
@@ -482,6 +484,12 @@ describe("the TTS feed rewinds on the stream's reset signal (W3-1)", () => {
     // reset -> "Ho" -> reset -> the rewrite (then the final flush).
     expect(kinds.slice(0, 4)).toEqual(["reset", "more", "reset", "more"]);
     expect(H.tts.speakMore.mock.calls[1][0]).toBe("Hello friend");
+    // v1.480.0: the words taken back are no longer read out. The speech
+    // still queued is stopped at the reset, BEFORE the rewrite is fed.
+    const stopped = H.tts.cancel.mock.invocationCallOrder.filter(
+      (n) => n > H.tts.speakMore.mock.invocationCallOrder[0] && n < H.tts.speakMore.mock.invocationCallOrder[1],
+    );
+    expect(stopped.length).toBe(1);
   });
 
   it("CONTROL: a turn with no reset rewinds once, at its first token", async () => {

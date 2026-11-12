@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.480.0
+
+**Jarvis looks it up before it says "done" or "I can't".** This is the third step of the feature lookup (v1.478.0, v1.479.0).
+
 ## v1.479.0
 
 **What Jarvis looks up, it can now use.** This is the second step of the feature lookup from v1.478.0.
@@ -77,7 +81,3 @@
 ## v1.469.1
 
 **Links to another workbook follow the folders Jarvis may read.** A formula can link to another workbook, for example a summary sheet that reads a figure from a client's own file.
-
-## v1.469.0
-
-**Matching two lists, and Excel's features in a saved workbook.** **Matching two lists of transactions.** Ask Jarvis to reconcile a bank statement to the books, tie a sub-ledger out to its control account, or compare two exports, and it now does the matching in code instead of reading the rows.

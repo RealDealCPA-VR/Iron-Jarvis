@@ -5462,6 +5462,12 @@ async def chat_stream(
         # answer; the final-answer wording is chosen by the same helper.
         _office = _stays_in_chat({*armed, *ask_armed}, force=stay_in_chat)
         _cut_office = False
+        #: v1.480.0: the reply was asked once to look it up before it ends
+        #: (lock-step: chat_turn's ``_looked_first``).
+        _looked_first = False
+        #: The reply the check took back, kept in case the model's last word
+        #: after its lookup is only "KEEP" (lock-step: chat_turn).
+        _look_draft = ""
         # v1.402.0: the turn's ONE extra allotment was given (`more_rounds`).
         # MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
         _extended = False
@@ -5906,6 +5912,57 @@ async def chat_stream(
                             continue
                         calls = _fin_calls
                         _finish_round = True
+                # LOOK IT UP BEFORE THE REPLY ENDS (v1.480.0) — the lock-step
+                # copy of chat_turn's: a plain chat reply about to end on
+                # words, that never looked and called nothing but readers, is
+                # asked ONCE (a quiet side call: nothing of it is streamed).
+                # Only a `find_capability` answer is acted on: the words
+                # already on screen are taken back (`reset`, the frame a
+                # language rewrite uses) and this round runs the lookup.
+                # Anything else, a failure or a timeout leaves the reply as
+                # written. Raced against Stop like every slow stage.
+                if (
+                    not calls and not _looked_first and _harness is None and not text_only_pick
+                    and _chat_turn.look_first_wanted(
+                        d, body, armed=armed, msgs=msgs, head=_head, reply=reply_text,
+                        round_index=_round, rounds=_rounds, trust_state=_trust_state,
+                        truncated=_truncated,
+                        demo=_chat_turn.is_demo_route(route_provider, route_reason),
+                    )
+                ):
+                    _looked_first = True
+                    _lf_out = await _prep_step(_chat_turn.look_first_call(
+                        d, msgs=_eff_msgs, system=_eff_system, provider=provider_choice,
+                        model=model_choice, head=_head, tools=tool_specs, reply=reply_text,
+                        raw_blocks=getattr(final_resp, "raw_blocks", None), tally=_tally,
+                        # Review: the turn's reasoning level, like the round's
+                        # own call (lock-step: chat_turn).
+                        router_kw=_reasoning_kw(body),
+                    ))
+                    if _lf_out is _PREP_STOPPED:
+                        _persist_once(AgentState.CANCELLED)
+                        return
+                    _lf, _lf_asked, _lf_in, _lf_o, _lf_n = _lf_out
+                    usage_in += _lf_in
+                    usage_out += _lf_o
+                    completions += _lf_n
+                    if _lf is not None:
+                        _look_draft = reply_text
+                        msgs.extend(_lf_asked)
+                        final_resp = _lf
+                        reply_text = _lf.text or ""
+                        calls = list(_lf.tool_calls or [])
+                        _model_calls = calls
+                        await _chat_turn.note_look_first(d.platform, body, _tool_session, _round)
+                        yield _ev("reset", {"reason": "look_first"})
+                elif not calls and _look_draft and _chat_turn.look_first_kept_word(reply_text):
+                    # The model looked, then answered only "KEEP": the reply
+                    # it had written before the check is the one that is sent
+                    # (lock-step: chat_turn).
+                    reply_text = _look_draft
+                    final_resp.text = _look_draft
+                    yield _ev("reset", {"reason": "look_first"})
+                    yield _ev("token", {"text": _look_draft})
                 # ask_armed counts (v1.187.0): a turn whose ONLY armed
                 # verbs are approval-gated still has real calls to run.
                 if not calls or not (armed or ask_armed):
@@ -7739,6 +7796,17 @@ async def chat_stream(
                     reply_text = (_f_resp.text or "").strip() or reply_text
                     # v1.323.0: the nudge was the final answering call.
                     _truncated = _chat_turn._truncated_by(_f_resp)
+                    if _look_draft and _chat_turn.look_first_kept_word(reply_text):
+                        # v1.480.0 (review): the check took a reply back, the
+                        # model looked and then wrote nothing; asked for its
+                        # final answer (the check's note is still above it)
+                        # it said only "KEEP". The reply it had written is
+                        # the one that is sent, never the word (lock-step:
+                        # chat_turn).
+                        reply_text = _look_draft
+                        _truncated = False
+                        yield _sse("reset", {"reason": "look_first"})
+                        yield _sse("token", {"text": _look_draft})
             # A CLOSING OFFER THAT FIRED (v1.402.0, part 4): the answer that
             # ended on the offer, then what came after it (the live bubble
             # showed both, split by the separator token) — after the final-

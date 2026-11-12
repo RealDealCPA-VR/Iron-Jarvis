@@ -726,6 +726,13 @@ class Config(BaseModel):
     #: Capability search plan, Phase 1: chat may look up what Iron Jarvis can
     #: do (``find_capability``). Off by default while it only answers.
     capability_search: bool = False
+    #: v1.480.0: with the lookup on, a chat reply that is about to end on
+    #: words (no lookup, nothing but reading) is asked ONCE whether it should
+    #: look the request up first (``chat_turn.look_first_wanted``). Off by
+    #: default: it is one more model call on every such reply (measured:
+    #: about five seconds on a Claude plan). Does nothing without
+    #: ``capability_search``.
+    capability_look_first: bool = False
     #: START NEW CHATS LOCAL ONLY (v1.435.0, chat-first plan Wave 3 group I,
     #: D3): the chat page reads it when it starts a new chat and turns that
     #: chat's Local only switch on. The daemon enforces Local only per chat
