@@ -18143,3 +18143,23 @@ suggest-don't-act for anything autonomous, everything reviewable.
     `IJ_SIGN_MEASURE=1` runs the cost measurement). OPEN: Chat › Code keeps its
     own "Working for…" line; `hosted/claude.py` still words an ended background
     COMMAND as "A helper finished: <command>" (the wall of such lines).
+  - SAME RELEASE, A TIMER ONE TEST LEFT FOR THE NEXT (the branch's first full
+    run on GitHub went red in `chat-waiting-where-you-are-v1387` "leaveTurn …
+    tells the bell only when no chat page here follows the turn again", in the
+    run and in its retry; a file this change never touched). The tests before
+    it unmount a chat page mid-turn, and `lib/chatAway.leaveTurn` then arms its
+    bell announcement `ANNOUNCE_AFTER_MS` (1.5 s) later, on a real timer that
+    outlives the test. On that run the tests in between took about 1.35 s
+    (341 + 366 + 20 + 621 ms on the log), so two of those timers went off
+    inside the later test, whose listener counts EVERY announcement on the
+    window. It had passed for weeks only because the gap was usually longer;
+    a new test file moved the shard's mix. `__resetChatAway()` (tests only,
+    every `beforeEach`) now cancels the armed announcements (`announcing`) and
+    moves `generation`, which also drops a `leaveTurn` whose POST was still out
+    when the reset ran. Nothing else moves `generation`: the app is unchanged.
+    Reproduced on an idle PC by adding one test that leaves a page mid-turn and
+    then waits `ANNOUNCE_AFTER_MS - 30` ms: the old code gives GitHub's exact
+    error, the new one passes; 4 mutations of the fix, all red. THE RULE: a
+    module that arms a real timer needs a test reset that takes the timer
+    back, and a test that counts events on `window` is exposed to every timer
+    an earlier test in its file left.
