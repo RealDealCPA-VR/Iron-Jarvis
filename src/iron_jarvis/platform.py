@@ -1593,6 +1593,15 @@ def build_platform(
 
     for tool in handoff_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # THE LOOKUP (capability search plan, Phase 1): ``find_capability`` lets
+    # the model ask what Iron Jarvis can do, in its own words, and answers
+    # from one index of every built-in tool, setting, page step and "not
+    # offered" line. Read-only; armed in chat only while the
+    # ``capability_search`` setting is on (off by default in Phase 1).
+    from .capability_search.tool import capability_tools
+
+    for tool in capability_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
 
     # Memory Fabric: ONE federated recall over every store (files, notes, memory
     # graph, project knowledge, lessons, past sessions), sharing the same

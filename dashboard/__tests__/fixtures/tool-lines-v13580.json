@@ -328,6 +328,10 @@
       "ok": "presented its plan for approval",
       "failed": "tried a plan for approval and it failed"
     },
+    "find_capability": {
+      "ok": "looked up what Iron Jarvis can do",
+      "failed": "tried a capability lookup and it failed"
+    },
     "generate_media": {
       "ok": "made an image, video or sound",
       "failed": "tried a media generation and it failed"

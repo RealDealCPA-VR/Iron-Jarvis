@@ -3121,6 +3121,11 @@ def offer_script_tool(
             return False
         counts: dict[str, int] = {}
         for name in tools_used:
+            # Looking up what Iron Jarvis can do is not a read done many
+            # times over the user's data: four lookups never bring a script
+            # (capability search plan, Phase 1: a lookup joins nothing).
+            if str(name) == "find_capability":
+                continue
             counts[str(name)] = counts.get(str(name), 0) + 1
         best = ""
         for name, n in counts.items():
@@ -5245,6 +5250,25 @@ def _resolve_armed_tools(
                     auto.append(_name)
         except Exception:  # noqa: BLE001 — a saved script never breaks arming
             pass
+    # THE LOOKUP, IN ITS OWN PLACE (capability search plan, Phase 1). Every
+    # pass above reads the user's WORDS, and on wording nobody wrote a pattern
+    # for they bring the right tool for 50 of 164 requests
+    # (tests/test_capability_reach_v1478.py). `find_capability` lets the model
+    # ask instead: it describes the job and is told what Iron Jarvis has for
+    # it. Read-only and answers only (nothing it finds joins the reply in
+    # this phase), so it is armed whatever the words are, and with Auto tools
+    # off too, like the settings reader. Only while the `capability_search`
+    # setting is on (off by default: with it off this function is unchanged),
+    # never over the user's deny (the filter below), and never past a weak
+    # model's own tool budget.
+    if (
+        bool(getattr(getattr(d.platform, "config", None), "capability_search", False))
+        and (_ceiling >= _MAX_ARMED_TOOLS or len(explicit) + len(auto) < _ceiling)
+        and "find_capability" not in explicit
+        and "find_capability" not in auto
+        and d.platform.registry.get("find_capability") is not None
+    ):
+        auto.append("find_capability")
     auto = [t for t in auto if _not_denied(t)]
     # THE BROWSER CAPABILITY FILTER (v1.236.0, plan 11.2), applied LAST — after
     # the explicit picks, after every fill pass, and after the drop signal has

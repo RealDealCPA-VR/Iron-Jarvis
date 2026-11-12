@@ -157,6 +157,10 @@ def test_default_registry_serves_the_file_core_including_rename(platform):
 # is covered. (A bare test platform has none, but a fixture that registered one
 # would otherwise report a phantom orphan.)
 _OFF_ROSTER_BY_DESIGN = {
+    # THE LOOKUP (capability search plan, Phase 1): chat arms it in its own
+    # place while the `capability_search` setting is on
+    # (chat_turn._resolve_armed_tools); agent runs keep their own tool lists.
+    "find_capability",
     # TOOL SCRIPTS (v1.470.0): offered by chat beside a turn's read-only
     # tools (chat_turn._resolve_armed_tools) and, since v1.473.0, armed for
     # an agent run at the runtime seam; a custom agent can list it by name.

@@ -338,6 +338,17 @@ SETTINGS: tuple[SettingDef, ...] = (
       "This makes one extra short call to the same model after each reply.",
       tier="allow", aliases=("follow-up questions", "suggested questions", "follow ups",
                "follow-up suggestions")),
+    # Capability search plan, Phase 1: the model may look up what Iron Jarvis
+    # can do (``find_capability``) when the words of a request brought no
+    # fitting tool. It only answers in this phase, so it is off by default.
+    # The label is deliberately NOT a plain sentence: the settings trigger
+    # turns every label into a phrase, and "let Jarvis look up ..." armed the
+    # settings writers for ordinary messages (found in review).
+    S("capability_search", "Feature lookup", "models", "bool",
+      "When your request does not bring the right tool, Jarvis can search a list of "
+      "everything Iron Jarvis can do and tell you what it found: the tool, the setting, "
+      "the page, or that it is not offered. The lookup only reads; it changes nothing.",
+      tier="allow", aliases=("capability search", "capability lookup")),
     # v1.435.0 (chat-first plan, Wave 3 group I, D3): the starting point for a
     # NEW chat's Local only switch (the chat page reads it). Turning it off is
     # ask-floor: it widens what new chats may send off this network.

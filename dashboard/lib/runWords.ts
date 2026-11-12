@@ -133,6 +133,8 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   excel_accounts_diff: { did: "Compared a workbook's accounts", noun: "account compare" },
   excel_formula_check: { did: "Checked a formula", noun: "formula check" },
   calculate: { did: "Worked out the figures", noun: "calculation" },
+  // Capability search plan, Phase 1. Twin: agents/mission.py _RUN_TOOL_WORDS.
+  find_capability: { did: "Looked up what Iron Jarvis can do", noun: "capability lookup" },
   // v1.470.0 (agents/mission.py _RUN_TOOL_WORDS is the twin).
   tool_script: { did: "Ran a script over its tools", noun: "tool script" },
   excel_trace: { did: "Traced how a number is built", noun: "number trace" },

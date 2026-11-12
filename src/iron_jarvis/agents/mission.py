@@ -524,6 +524,8 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "excel_accounts_diff": ("compared a workbook's accounts", "account compare"),
     "excel_formula_check": ("checked a formula", "formula check"),
     "calculate": ("worked out the figures", "calculation"),
+    # Capability search plan, Phase 1. Twin: lib/runWords.ts AGENT_TOOLS.
+    "find_capability": ("looked up what Iron Jarvis can do", "capability lookup"),
     # v1.470.0. Twin: lib/runWords.ts AGENT_TOOLS.
     "tool_script": ("ran a script over its tools", "tool script"),
     "excel_trace": ("traced how a number is built", "number trace"),

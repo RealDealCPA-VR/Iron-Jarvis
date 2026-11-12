@@ -315,6 +315,7 @@ def default_permissions() -> dict[str, str]:
         "excel_query": "allow",
         "excel_formula_check": "allow",
         "calculate": "allow",  # v1.465.0: arithmetic only; reads and writes nothing
+        "find_capability": "allow",  # capability search: looks up what the app can do; reads only
         "excel_accounts_diff": "allow",
         "excel_sheet_spec": "allow",
         "excel_edit": "allow",
@@ -722,6 +723,9 @@ class Config(BaseModel):
     #: Follow-up questions under a chat reply (v1.323.0): one extra short call
     #: to the same model after each reply. Off by default.
     chat_followups: bool = False
+    #: Capability search plan, Phase 1: chat may look up what Iron Jarvis can
+    #: do (``find_capability``). Off by default while it only answers.
+    capability_search: bool = False
     #: START NEW CHATS LOCAL ONLY (v1.435.0, chat-first plan Wave 3 group I,
     #: D3): the chat page reads it when it starts a new chat and turns that
     #: chat's Local only switch on. The daemon enforces Local only per chat

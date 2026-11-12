@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.478.0
+
+**Jarvis can look up what it can do.** This is the first step of a larger change.
+
 ## v1.477.2
 
 **Build › Code calls a finished command a command.** In Build › Code, a shell command that ended is no longer announced as "A helper finished".
@@ -77,7 +81,3 @@
 ## v1.468.0
 
 **Jarvis beside Excel.** Jarvis can now sit beside your workbook and know what you have selected, the way a panel inside Excel would.
-
-## v1.467.0
-
-**How a number is built, what-if and goal seek.** Jarvis can now explain a figure in a spreadsheet, tell you what would change it, and take you to the cell.

@@ -3910,6 +3910,7 @@ const TOOL_WORDS_BUILTIN = {
   exit_plan_mode: "start working on this plan",
   extract_pdf: "read a file",
   file_search: "search your drives",
+  find_capability: "look up what Iron Jarvis can do",
   generate_media: "make an image, video or sound",
   git_read: "look something up in git",
   glob: "search files",

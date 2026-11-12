@@ -1,0 +1,986 @@
+[
+ {
+  "id": "r001",
+  "intent": "set_theme",
+  "lang": "en",
+  "text": "Can you make the app look darker? My eyes are tired from staring at the screen all afternoon."
+ },
+ {
+  "id": "r002",
+  "intent": "set_theme",
+  "lang": "en",
+  "text": "Would it be possible to switch the colours to something softer, maybe a light beige, for the Monday billing review?"
+ },
+ {
+  "id": "r003",
+  "intent": "set_theme",
+  "lang": "en",
+  "text": "I want the whole thing to look more cheerful than it does right now, so pick whatever colours you think go well with our firm's blue logo."
+ },
+ {
+  "id": "r004",
+  "intent": "set_default_model",
+  "lang": "en",
+  "text": "From now on, please have the smarter one answer my questions in every chat."
+ },
+ {
+  "id": "r005",
+  "intent": "set_default_model",
+  "lang": "en",
+  "text": "Which AI helper is the quick one you're using right now, and can you switch everything over to it permanently?"
+ },
+ {
+  "id": "r006",
+  "intent": "set_default_model",
+  "lang": "en",
+  "text": "I'd like you to stop using the fast one for my client emails and use the careful one instead, everywhere."
+ },
+ {
+  "id": "r007",
+  "intent": "set_approvals",
+  "lang": "en",
+  "text": "Stop asking me before every little thing, I already trust you to file the monthly reports on your own."
+ },
+ {
+  "id": "r008",
+  "intent": "set_approvals",
+  "lang": "en",
+  "text": "Can you check with me less often? It's driving me up the wall when you ping me for every spreadsheet I open."
+ },
+ {
+  "id": "r009",
+  "intent": "set_approvals",
+  "lang": "en",
+  "text": "Please ask me before you change or delete anything, but go ahead and read files without bugging me each time."
+ },
+ {
+  "id": "r010",
+  "intent": "set_text_size",
+  "lang": "en",
+  "text": "The letters are too tiny on my laptop, could you make everything in the app bigger?"
+ },
+ {
+  "id": "r011",
+  "intent": "set_text_size",
+  "lang": "en",
+  "text": "Can the writing be a bit smaller? I want more of the chat visible on screen at once."
+ },
+ {
+  "id": "r012",
+  "intent": "set_text_size",
+  "lang": "en",
+  "text": "I'm squinting at the replies from across the room, so please make the text much larger."
+ },
+ {
+  "id": "r013",
+  "intent": "set_update_channel",
+  "lang": "en",
+  "text": "Only install new versions of the app once other offices have tried them for a few weeks first, please."
+ },
+ {
+  "id": "r014",
+  "intent": "set_update_channel",
+  "lang": "en",
+  "text": "I want the newest version of the app the moment it comes out, even if it's a bit buggy."
+ },
+ {
+  "id": "r015",
+  "intent": "set_update_channel",
+  "lang": "en",
+  "text": "How do I make sure I'm not the guinea pig for every update? Give me the safer, slower option."
+ },
+ {
+  "id": "r016",
+  "intent": "set_backup_copy",
+  "lang": "en",
+  "text": "Please save a second copy of my backups to the D: drive, into a folder called Jarvis Backups."
+ },
+ {
+  "id": "r017",
+  "intent": "set_backup_copy",
+  "lang": "en",
+  "text": "Can you keep a spare copy of everything you back up in our shared Office Files folder on the server?"
+ },
+ {
+  "id": "r018",
+  "intent": "set_backup_copy",
+  "lang": "en",
+  "text": "Make an extra backup somewhere else too, like on the USB stick, so we're not relying on just one place."
+ },
+ {
+  "id": "r019",
+  "intent": "set_start_with_pc",
+  "lang": "en",
+  "text": "Stop opening yourself every time I turn on the computer, it's slowing down my morning."
+ },
+ {
+  "id": "r020",
+  "intent": "set_start_with_pc",
+  "lang": "en",
+  "text": "Could you start automatically when the computer boots up so I don't have to click your icon each day?"
+ },
+ {
+  "id": "r021",
+  "intent": "set_start_with_pc",
+  "lang": "en",
+  "text": "I'd like you to be ready and waiting when I log in on Monday mornings, so please open with Windows."
+ },
+ {
+  "id": "r022",
+  "intent": "set_answer_language",
+  "lang": "en",
+  "text": "From now on, reply to me in Spanish, since my new bookkeeper Lucia is more comfortable with that."
+ },
+ {
+  "id": "r023",
+  "intent": "set_answer_language",
+  "lang": "en",
+  "text": "Please always answer in French from here on, no matter what language I type in."
+ },
+ {
+  "id": "r024",
+  "intent": "set_answer_language",
+  "lang": "en",
+  "text": "Going forward, I need every answer written in German, can you set that up for all our chats?"
+ },
+ {
+  "id": "r025",
+  "intent": "read_setting",
+  "lang": "en",
+  "text": "Quick question, dear: is the assistant set to use the bigger model by default right now, or the smaller one?"
+ },
+ {
+  "id": "r026",
+  "intent": "read_setting",
+  "lang": "en",
+  "text": "Could you tell me whether the nightly backups are turned on? Please don't change anything, I only want to know."
+ },
+ {
+  "id": "r027",
+  "intent": "read_setting",
+  "lang": "en",
+  "text": "I've forgotten which language I picked for replies, so would you look that up and tell me?"
+ },
+ {
+  "id": "r028",
+  "intent": "schedule_create",
+  "lang": "en",
+  "text": "Every Monday, Wednesday and Friday at half past seven in the morning, please check the weather for Dayton and read it out to me."
+ },
+ {
+  "id": "r029",
+  "intent": "schedule_create",
+  "lang": "en",
+  "text": "I'd like you to go through my newsletter folder every single weekday at noon, so nothing gets missed."
+ },
+ {
+  "id": "r030",
+  "intent": "schedule_create",
+  "lang": "en",
+  "text": "Could you pull up my garden notes each Saturday around nine, so I can plan the week ahead?"
+ },
+ {
+  "id": "r031",
+  "intent": "schedule_change",
+  "lang": "en",
+  "text": "Please push back the Tuesday library-report job so it starts at ten instead of eight."
+ },
+ {
+  "id": "r032",
+  "intent": "schedule_change",
+  "lang": "en",
+  "text": "Stop the daily Ledger Backup for now, I'm going to be away until the end of the month."
+ },
+ {
+  "id": "r033",
+  "intent": "schedule_change",
+  "lang": "en",
+  "text": "Remove the Friday reminder about Mrs. Hollis's essays, she has finished handing them in."
+ },
+ {
+  "id": "r034",
+  "intent": "project_create",
+  "lang": "en",
+  "text": "I'm starting work for a new client named Patel Family Trust, so please set up a project for it."
+ },
+ {
+  "id": "r035",
+  "intent": "project_create",
+  "lang": "en",
+  "text": "Could you make a fresh project called \"Spring Garden Club Newsletter\" so I can keep everything about it together?"
+ },
+ {
+  "id": "r036",
+  "intent": "project_create",
+  "lang": "en",
+  "text": "Please open a new project for the history book I'm writing about the Harlan mill, and put my chapter notes in it."
+ },
+ {
+  "id": "r037",
+  "intent": "agent_create",
+  "lang": "en",
+  "text": "I'd like a new helper called Penny who looks after my medication schedule and reminds me when refills are due."
+ },
+ {
+  "id": "r038",
+  "intent": "agent_create",
+  "lang": "en",
+  "text": "Would you set up a second assistant, named Gus, whose only job is to check my church bulletin drafts for typos?"
+ },
+ {
+  "id": "r039",
+  "intent": "agent_create",
+  "lang": "en",
+  "text": "Can you create a helper for my school reunion planning, with its own name and its own list of tasks?"
+ },
+ {
+  "id": "r040",
+  "intent": "agent_pause",
+  "lang": "en",
+  "text": "Please put Penny on hold for a while, she has been sending me too many reminders."
+ },
+ {
+  "id": "r041",
+  "intent": "agent_pause",
+  "lang": "en",
+  "text": "Could you stop Gus from doing anything else until next week, and keep his settings the way they are?"
+ },
+ {
+  "id": "r042",
+  "intent": "agent_pause",
+  "lang": "en",
+  "text": "I want Gus to be allowed only to read my drafts and not change them anymore, so please narrow what he can do."
+ },
+ {
+  "id": "r043",
+  "intent": "rule_create",
+  "lang": "en",
+  "text": "Whenever an email arrives from my son Daniel, please save it into the Family folder and let me know."
+ },
+ {
+  "id": "r044",
+  "intent": "rule_create",
+  "lang": "en",
+  "text": "Every time someone messages me about a book order, I want you to put the details into my orders list automatically."
+ },
+ {
+  "id": "r045",
+  "intent": "rule_create",
+  "lang": "en",
+  "text": "If a message comes in from the school office, please flag it as urgent and tell me straight away."
+ },
+ {
+  "id": "r046",
+  "intent": "watch_folder",
+  "lang": "en",
+  "text": "Keep an eye on my \"Lesson Plans 2026\" folder in Documents and let me know if any files in it get changed."
+ },
+ {
+  "id": "r047",
+  "intent": "watch_folder",
+  "lang": "en",
+  "text": "Would it be possible to watch the Downloads folder on this computer and tell me when new pictures show up there?"
+ },
+ {
+  "id": "r048",
+  "intent": "watch_folder",
+  "lang": "en",
+  "text": "Please monitor the shared folder \"Parent Permission Slips\" so you can warn me whenever somebody adds or edits a file."
+ },
+ {
+  "id": "r049",
+  "intent": "goal_add",
+  "lang": "en",
+  "text": "keep an eye on our fall mulch bookings and keep pushing until we hit 40 booked jobs, I don't want to have to remind you"
+ },
+ {
+  "id": "r050",
+  "intent": "goal_add",
+  "lang": "en",
+  "text": "can you work on filling the spring cleanup slots for the crew all week on your own and just tell me when it's done"
+ },
+ {
+  "id": "r051",
+  "intent": "night_task",
+  "lang": "en",
+  "text": "can you fix the broken quote button on our site tonight while we're all asleep, it's in the folder called site v2"
+ },
+ {
+  "id": "r052",
+  "intent": "night_task",
+  "lang": "en",
+  "text": "would you rebuild the invoice page in the crew app overnight? the folder is CrewApp_Final and I want it ready when I wake up"
+ },
+ {
+  "id": "r053",
+  "intent": "night_task",
+  "lang": "en",
+  "text": "tonight while everybody's off, redo the estimate send button so it actually works on phones, and leave me a note on what you changed"
+ },
+ {
+  "id": "r054",
+  "intent": "phone_notify",
+  "lang": "en",
+  "text": "hook yourself up to my telegram so you can text me when a job finishes, my name on there is mikeyl_lawn"
+ },
+ {
+  "id": "r055",
+  "intent": "phone_notify",
+  "lang": "en",
+  "text": "can you slack me if something needs my attention? I'm in the channel called Greenline Crew"
+ },
+ {
+  "id": "r056",
+  "intent": "phone_notify",
+  "lang": "en",
+  "text": "I want to get pinged on discord when stuff is ready, my username is Dave R, go ahead and set that up"
+ },
+ {
+  "id": "r057",
+  "intent": "app_connect",
+  "lang": "en",
+  "text": "please link my google calendar so you can see when the crew is booked"
+ },
+ {
+  "id": "r058",
+  "intent": "app_connect",
+  "lang": "en",
+  "text": "go ahead and get into my notion, the one where we keep the job list, so you can read it"
+ },
+ {
+  "id": "r059",
+  "intent": "app_connect",
+  "lang": "en",
+  "text": "can you get into my google drive so you can read the estimate sheets in there"
+ },
+ {
+  "id": "r060",
+  "intent": "app_disconnect",
+  "lang": "en",
+  "text": "take the notion thing off, we switched over to a different program last week"
+ },
+ {
+  "id": "r061",
+  "intent": "app_disconnect",
+  "lang": "en",
+  "text": "turn off the calendar link please, it's showing my wife's appointments and I don't want that"
+ },
+ {
+  "id": "r062",
+  "intent": "app_disconnect",
+  "lang": "en",
+  "text": "stop letting you see my google drive, cancel that link, I'm done with it"
+ },
+ {
+  "id": "r063",
+  "intent": "local_server_add",
+  "lang": "en",
+  "text": "I have an ollama box running on the office computer called Gary's PC, add it so you can use it for the quick stuff"
+ },
+ {
+  "id": "r064",
+  "intent": "local_server_add",
+  "lang": "en",
+  "text": "set up my lm studio on the shop laptop so you can run answers on that instead of going out to the internet"
+ },
+ {
+  "id": "r065",
+  "intent": "local_server_add",
+  "lang": "en",
+  "text": "there's a little ai machine sitting on our network in the back office, can you connect to it and use it when you can"
+ },
+ {
+  "id": "r066",
+  "intent": "memory_base_add",
+  "lang": "en",
+  "text": "use the notes folder on my desktop called Jobs and Customers as your memory so you know our history"
+ },
+ {
+  "id": "r067",
+  "intent": "memory_base_add",
+  "lang": "en",
+  "text": "can you read through my notion pages for the business and keep them in your head for later questions"
+ },
+ {
+  "id": "r068",
+  "intent": "memory_base_add",
+  "lang": "en",
+  "text": "make the Estimates folder in my documents your brain for all our pricing stuff, okay?"
+ },
+ {
+  "id": "r069",
+  "intent": "remember_preference",
+  "lang": "en",
+  "text": "from now on always give me prices in whole dollars, no cents, and keep answers short, I hate long stuff"
+ },
+ {
+  "id": "r070",
+  "intent": "remember_preference",
+  "lang": "en",
+  "text": "when you write me a quote, put the crew lead's name at the top and list materials before labor, that's how we've always done it"
+ },
+ {
+  "id": "r071",
+  "intent": "remember_preference",
+  "lang": "en",
+  "text": "i want you to call our customers clients in anything you write for me, please remember that"
+ },
+ {
+  "id": "r072",
+  "intent": "preference_review",
+  "lang": "en",
+  "text": "Jarvis, show me everything you've written down about how I like things done, I want to look through it before Friday."
+ },
+ {
+  "id": "r073",
+  "intent": "preference_review",
+  "lang": "en",
+  "text": "Did you keep a note that I prefer invoices sorted by client name? If that's wrong, can you take it out?"
+ },
+ {
+  "id": "r074",
+  "intent": "preference_review",
+  "lang": "en",
+  "text": "For the last few weeks I've been telling you things like round numbers in client summaries and no emojis, and some of that may be outdated now. Could you go through what you're holding about me so I can fix or erase the wrong bits?"
+ },
+ {
+  "id": "r075",
+  "intent": "persona_create",
+  "lang": "en",
+  "text": "Make me a new speaking style for you, something calm and a little formal like a senior auditor, and save it so I can switch to it."
+ },
+ {
+  "id": "r076",
+  "intent": "persona_create",
+  "lang": "en",
+  "text": "Could I have a second voice for you that talks more casually, like a friendly coworker over coffee? I'd like to be able to pick between that and your normal one."
+ },
+ {
+  "id": "r077",
+  "intent": "persona_create",
+  "lang": "en",
+  "text": "I'm tired of your usual tone during year-end closing. Set up a no-nonsense, short-answers version of yourself that I can choose from a list whenever I want it, and tell me how to switch."
+ },
+ {
+  "id": "r078",
+  "intent": "chat_private",
+  "lang": "en",
+  "text": "Jarvis, for the payroll chat we're having this afternoon, please keep it only on this computer and don't send any of it to the cloud."
+ },
+ {
+  "id": "r079",
+  "intent": "chat_private",
+  "lang": "en",
+  "text": "Is there a way to make this conversation stay on my PC? Nothing about the Hendricks account should go online."
+ },
+ {
+  "id": "r080",
+  "intent": "chat_private",
+  "lang": "en",
+  "text": "I'm going to be talking about my clients' bank details today, so I need everything to stay on my own machine and nothing uploaded anywhere. Can you confirm that's set up before we start?"
+ },
+ {
+  "id": "r081",
+  "intent": "undo_change",
+  "lang": "en",
+  "text": "Jarvis, undo whatever you just changed in the Q3 reconciliation sheet, I didn't want that."
+ },
+ {
+  "id": "r082",
+  "intent": "undo_change",
+  "lang": "en",
+  "text": "What did you change in my files today? I want a list before I decide anything."
+ },
+ {
+  "id": "r083",
+  "intent": "undo_change",
+  "lang": "en",
+  "text": "I think your last edit to the vendor list messed up the totals, so tell me exactly what was altered and put the previous version back."
+ },
+ {
+  "id": "r084",
+  "intent": "tool_server_add",
+  "lang": "en",
+  "text": "Please hook up the new MCP server my colleague Dana told me about so you can pull bank feed data. The address is on the sticky note on my monitor."
+ },
+ {
+  "id": "r085",
+  "intent": "tool_server_add",
+  "lang": "en",
+  "text": "Can you add an MCP server to your setup? I have the install link from our IT guy Marcus and I need you to get the new tools working."
+ },
+ {
+  "id": "r086",
+  "intent": "tool_server_add",
+  "lang": "en",
+  "text": "I'd like you to start using an extra MCP server called QuickBooks Reader, which gives you more ways to match transactions. Let me know once it's connected and what it can do."
+ },
+ {
+  "id": "r087",
+  "intent": "skill_save",
+  "lang": "en",
+  "text": "Jarvis, that way we just reconciled the bank statement is perfect, so save it as a routine and do it the same way next month."
+ },
+ {
+  "id": "r088",
+  "intent": "skill_save",
+  "lang": "en",
+  "text": "Would it be possible to keep the steps we just followed for matching the credit card charges, so next time I can just ask you to run them again?"
+ },
+ {
+  "id": "r089",
+  "intent": "skill_save",
+  "lang": "en",
+  "text": "Last month you walked me through sorting the accrual journal entries, and I want that process saved for good under the name Month-End Accruals so it's ready whenever I ask."
+ },
+ {
+  "id": "r090",
+  "intent": "make_file",
+  "lang": "en",
+  "text": "Make me a Word document titled Engagement Letter - Patel Dental with the paragraphs I'm about to paste below."
+ },
+ {
+  "id": "r091",
+  "intent": "make_file",
+  "lang": "en",
+  "text": "Can you put together an Excel sheet with three columns, Date, Vendor and Amount, filled with these twelve rows I typed out?"
+ },
+ {
+  "id": "r092",
+  "intent": "make_file",
+  "lang": "en",
+  "text": "I need a PDF of the year-end checklist we went over, with the headings bold and the items numbered, saved in my Documents folder as Checklist_2026.pdf."
+ },
+ {
+  "id": "r093",
+  "intent": "rename_files",
+  "lang": "en",
+  "text": "Jarvis, in the folder Client Receipts 2026 on my D drive, rename every file so it starts with the date and then the vendor name."
+ },
+ {
+  "id": "r094",
+  "intent": "rename_files",
+  "lang": "en",
+  "text": "Could you move all the scanned invoices from my Downloads folder into the Invoices Archive folder and change their names to look like 2026-03-14_Staples.pdf?"
+ },
+ {
+  "id": "r095",
+  "intent": "rename_files",
+  "lang": "en",
+  "text": "Please take the files in the Q2 folder whose names start with scan, give them proper names based on what's inside, and put each one into its client's subfolder."
+ },
+ {
+  "id": "r096",
+  "intent": "web_lookup",
+  "lang": "en",
+  "text": "Hey can you dig up when the Sunrise Bagel place on Maple Street opens on Sundays?"
+ },
+ {
+  "id": "r097",
+  "intent": "web_lookup",
+  "lang": "en",
+  "text": "I'm trying to figure out whether the Ohio State vs Michigan game is on TV this weekend, can you check online for me?"
+ },
+ {
+  "id": "r098",
+  "intent": "find_file",
+  "lang": "en",
+  "text": "where did I save my resume from last semester, I think it was in a folder called Job stuff"
+ },
+ {
+  "id": "r099",
+  "intent": "find_file",
+  "lang": "en",
+  "text": "Pull up the spreadsheet with my budget for October, I don't remember which folder I put it in."
+ },
+ {
+  "id": "r100",
+  "intent": "find_file",
+  "lang": "en",
+  "text": "Look through my laptop and find the photo of my dog Biscuit from the beach trip."
+ },
+ {
+  "id": "r101",
+  "intent": "arithmetic",
+  "lang": "en",
+  "text": "What's 18% of 65 dollars? I'm splitting the tip."
+ },
+ {
+  "id": "r102",
+  "intent": "arithmetic",
+  "lang": "en",
+  "text": "Take 412 and subtract 139, then multiply the result by 3."
+ },
+ {
+  "id": "r103",
+  "intent": "arithmetic",
+  "lang": "en",
+  "text": "If I work 14 hours a week at 16.50 an hour, how much do I make in a month? Assume 4 weeks."
+ },
+ {
+  "id": "r104",
+  "intent": "make_picture",
+  "lang": "en",
+  "text": "Make me a picture of a cat wearing a graduation cap sitting on a stack of textbooks."
+ },
+ {
+  "id": "r105",
+  "intent": "make_picture",
+  "lang": "en",
+  "text": "Can you create an image for my poster? I want a cozy coffee shop at night with rain on the windows."
+ },
+ {
+  "id": "r106",
+  "intent": "make_picture",
+  "lang": "en",
+  "text": "I need a little drawing of a blue bicycle parked under a cherry blossom tree, kinda like a watercolor."
+ },
+ {
+  "id": "r107",
+  "intent": "how_do_i",
+  "lang": "en",
+  "text": "Where do I find the setting to change the voice you talk with?"
+ },
+ {
+  "id": "r108",
+  "intent": "how_do_i",
+  "lang": "en",
+  "text": "How do I get my old chats to show up again after I restart the app?"
+ },
+ {
+  "id": "r109",
+  "intent": "whats_wrong",
+  "lang": "en",
+  "text": "Jarvis is being weird today, it keeps freezing when I type and I don't know why. What's going on?"
+ },
+ {
+  "id": "r110",
+  "intent": "whats_wrong",
+  "lang": "en",
+  "text": "Something's off, you stopped answering me halfway through my last message. Is the app broken?"
+ },
+ {
+  "id": "r111",
+  "intent": "whats_wrong",
+  "lang": "en",
+  "text": "Ugh the app isn't working right, the buttons don't respond. Can you tell me what's wrong?"
+ },
+ {
+  "id": "r112",
+  "intent": "find_old_chat",
+  "lang": "en",
+  "text": "Remember that chat we had about my econ essay thesis last month? Can you find it for me?"
+ },
+ {
+  "id": "r113",
+  "intent": "find_old_chat",
+  "lang": "en",
+  "text": "Where's the conversation where you helped me plan my trip to Chicago?"
+ },
+ {
+  "id": "r114",
+  "intent": "find_old_chat",
+  "lang": "en",
+  "text": "Look for the old chat about my roommate situation, I want to read what you told me."
+ },
+ {
+  "id": "r115",
+  "intent": "signin_claude_code",
+  "lang": "en",
+  "text": "Help me log into Claude Code so you can use my Claude plan, I'm not sure where to start."
+ },
+ {
+  "id": "r116",
+  "intent": "signin_claude_code",
+  "lang": "en",
+  "text": "Can you sign me in to the Claude Code program? I want to use my plan there."
+ },
+ {
+  "id": "r117",
+  "intent": "signin_claude_code",
+  "lang": "en",
+  "text": "My friend said I need to connect Claude Code to my account so the assistant can use my subscription, how do I do that?"
+ },
+ {
+  "id": "r118",
+  "intent": "browser_use",
+  "lang": "en",
+  "text": "Can you go on Chrome for me and log into my supplier portal, then pull up the Hendricks lumber invoice from last Tuesday?"
+ },
+ {
+  "id": "r119",
+  "intent": "browser_use",
+  "lang": "en",
+  "text": "Why does the assistant keep making me do the website stuff myself? Can it just use my Edge browser, the one with all my logins, and do it?"
+ },
+ {
+  "id": "r120",
+  "intent": "second_account",
+  "lang": "en",
+  "text": "Get me a second login for the AI subscription so I'm not stuck when the first one hits its limit."
+ },
+ {
+  "id": "r121",
+  "intent": "second_account",
+  "lang": "en",
+  "text": "Our AI plan ran out of messages in the middle of the Miller bid yesterday, so can we add another account on the same plan so this doesn't happen again?"
+ },
+ {
+  "id": "r122",
+  "intent": "second_account",
+  "lang": "en",
+  "text": "Add a spare account to the same AI plan that Jenna can use when mine runs dry in the middle of a job."
+ },
+ {
+  "id": "r123",
+  "intent": "free_local_model",
+  "lang": "en",
+  "text": "I don't want to pay any monthly fee, so put a free AI on this PC that runs without internet, starting from zero."
+ },
+ {
+  "id": "r124",
+  "intent": "free_local_model",
+  "lang": "en",
+  "text": "Is there a way to have a free AI running right on my computer? I've got nothing installed on it yet."
+ },
+ {
+  "id": "r125",
+  "intent": "free_local_model",
+  "lang": "en",
+  "text": "Walk me through getting a no-cost AI model going on this machine, I'm starting with a totally blank setup."
+ },
+ {
+  "id": "r126",
+  "intent": "desktop_control",
+  "lang": "en",
+  "text": "Take over my mouse and keyboard and click through the estimating program on the desktop for me, starting with the Job Costs screen."
+ },
+ {
+  "id": "r127",
+  "intent": "desktop_control",
+  "lang": "en",
+  "text": "Can the assistant run the Buildertrend app on my desktop itself, clicking and typing, so I don't have to sit there babysitting it?"
+ },
+ {
+  "id": "r128",
+  "intent": "other_computer",
+  "lang": "en",
+  "text": "Can I open the assistant on my wife's laptop or on my phone at the job site, using the same account?"
+ },
+ {
+  "id": "r129",
+  "intent": "other_computer",
+  "lang": "en",
+  "text": "Set it up so I can reach the assistant from the office computer and from my phone at home, both on the same wifi."
+ },
+ {
+  "id": "r130",
+  "intent": "voice_talk",
+  "lang": "en",
+  "text": "Turn on talking mode so I can just speak to it while I'm up on a ladder."
+ },
+ {
+  "id": "r131",
+  "intent": "voice_talk",
+  "lang": "en",
+  "text": "Can I say stuff out loud to the assistant instead of typing? My thumbs are too greasy for the phone keyboard."
+ },
+ {
+  "id": "r132",
+  "intent": "voice_talk",
+  "lang": "en",
+  "text": "I want to talk to it like a person and hear it talk back, so explain how to set that up."
+ },
+ {
+  "id": "r133",
+  "intent": "internet_calls_in",
+  "lang": "en",
+  "text": "Have the form on my website send a job into the assistant automatically whenever someone fills out a quote request."
+ },
+ {
+  "id": "r134",
+  "intent": "internet_calls_in",
+  "lang": "en",
+  "text": "When Zapier sees a new lead come in through my email, make the assistant start the follow-up job for it."
+ },
+ {
+  "id": "r135",
+  "intent": "internet_calls_in",
+  "lang": "en",
+  "text": "Can you set it up so that when the contact form on my site gets filled, the assistant starts a job to write up a quote for that customer?"
+ },
+ {
+  "id": "r136",
+  "intent": "set_theme",
+  "lang": "es",
+  "text": "Oye, ¿me cambias la app a tema oscuro? Con la luz blanca me duelen los ojos en la noche."
+ },
+ {
+  "id": "r137",
+  "intent": "set_default_model",
+  "lang": "es",
+  "text": "Desde ahora quiero que todas mis conversaciones las responda el modelo más rápido, déjalo como el predeterminado en todos los chats."
+ },
+ {
+  "id": "r138",
+  "intent": "set_text_size",
+  "lang": "es",
+  "text": "La letra de la app se ve muy chiquita, ¿me la puedes agrandar un poquito, por favor?"
+ },
+ {
+  "id": "r139",
+  "intent": "set_update_channel",
+  "lang": "es",
+  "text": "No quiero probar versiones nuevas que todavía tengan errores, así que cuando salgan actualizaciones espera a que tengan unos días antes de instalarlas."
+ },
+ {
+  "id": "r140",
+  "intent": "set_start_with_pc",
+  "lang": "es",
+  "text": "Cuando prenda la computadora no quiero que Jarvis se abra solo, desactiva eso de que arranque con Windows."
+ },
+ {
+  "id": "r141",
+  "intent": "set_answer_language",
+  "lang": "es",
+  "text": "De ahora en adelante respóndeme siempre en inglés, aunque yo te escriba en español, porque estoy practicando."
+ },
+ {
+  "id": "r142",
+  "intent": "schedule_create",
+  "lang": "es",
+  "text": "Todos los días hábiles a las 8:30 de la mañana mándame un resumen de mis pendientes del día, por favor."
+ },
+ {
+  "id": "r143",
+  "intent": "schedule_change",
+  "lang": "es",
+  "text": "El resumen de los lunes que te pedí ayer, pásalo para las 10 de la mañana en vez de las 8."
+ },
+ {
+  "id": "r144",
+  "intent": "agent_create",
+  "lang": "es",
+  "text": "Crea un agente nuevo llamado Sofía que revise las facturas de la carpeta Clientes 2026 y me avise cuando alguna esté vencida."
+ },
+ {
+  "id": "r145",
+  "intent": "rule_create",
+  "lang": "es",
+  "text": "Cada vez que me llegue un correo de algún proveedor con la palabra factura en el asunto, guárdalo en la carpeta Facturas Mayo y avísame."
+ },
+ {
+  "id": "r146",
+  "intent": "watch_folder",
+  "lang": "fr",
+  "text": "Peux-tu surveiller le dossier Factures 2026 sur mon PC et me prévenir dès qu'un fichier y est ajouté, modifié ou supprimé ?"
+ },
+ {
+  "id": "r147",
+  "intent": "night_task",
+  "lang": "fr",
+  "text": "Ce soir, pendant que je dors, peux-tu corriger le bug d'export CSV dans le projet facturation et me laisser le résultat pour demain matin ?"
+ },
+ {
+  "id": "r148",
+  "intent": "phone_notify",
+  "lang": "fr",
+  "text": "Je voudrais recevoir tes messages sur mon téléphone, tu peux configurer Telegram pour que tu puisses me joindre quand une tâche est finie ?"
+ },
+ {
+  "id": "r149",
+  "intent": "app_disconnect",
+  "lang": "fr",
+  "text": "Déconnecte Google Drive de Jarvis s'il te plaît, je ne veux plus que tu accèdes à mes fichiers là-bas."
+ },
+ {
+  "id": "r150",
+  "intent": "local_server_add",
+  "lang": "fr",
+  "text": "Ajoute mon serveur Ollama installé sur le PC du bureau, à l'adresse 192.168.1.42 port 11434, pour que tu puisses t'en servir."
+ },
+ {
+  "id": "r151",
+  "intent": "remember_preference",
+  "lang": "fr",
+  "text": "À partir de maintenant, quand tu me réponds, fais des phrases courtes et donne-moi toujours le total en euros à la fin."
+ },
+ {
+  "id": "r152",
+  "intent": "persona_create",
+  "lang": "fr",
+  "text": "Crée-moi une nouvelle façon de parler pour toi : un assistant calme et un peu drôle, comme un vieux professeur, que je pourrai choisir plus tard."
+ },
+ {
+  "id": "r153",
+  "intent": "chat_private",
+  "lang": "pt",
+  "text": "Quero conversar com você nesta conversa sem que nada seja enviado para a nuvem, dá pra manter tudo só no meu computador?"
+ },
+ {
+  "id": "r154",
+  "intent": "tool_server_add",
+  "lang": "pt",
+  "text": "Quero instalar um servidor de ferramentas (MCP) pra você ganhar ferramentas novas, tipo uma que leia a minha planilha de vendas."
+ },
+ {
+  "id": "r155",
+  "intent": "skill_save",
+  "lang": "pt",
+  "text": "Acabamos de conferir as notas fiscais do mês desse jeito, dá pra salvar esse passo a passo como uma habilidade pra usar de novo na próxima vez?"
+ },
+ {
+  "id": "r156",
+  "intent": "rename_files",
+  "lang": "pt",
+  "text": "Pode renomear os arquivos da pasta Fotos_Viagem no meu PC, colocando a data na frente do nome, tipo 2026-03-15_praia.jpg?"
+ },
+ {
+  "id": "r157",
+  "intent": "web_lookup",
+  "lang": "pt",
+  "text": "Pesquisa na internet qual é a previsão do tempo para Curitiba amanhã?"
+ },
+ {
+  "id": "r158",
+  "intent": "arithmetic",
+  "lang": "pt",
+  "text": "Quanto é 1.250 dividido por 8 e depois multiplicado por 3,5?"
+ },
+ {
+  "id": "r159",
+  "intent": "whats_wrong",
+  "lang": "de",
+  "text": "Hallo, Jarvis zickt gerade rum: Antworten kommen ewig nicht und das Fenster hängt immer wieder. Was ist da los?"
+ },
+ {
+  "id": "r160",
+  "intent": "signin_claude_code",
+  "lang": "de",
+  "text": "Kannst du mich bei Claude Code anmelden, damit du meinen Claude-Tarif nutzen kannst?"
+ },
+ {
+  "id": "r161",
+  "intent": "browser_use",
+  "lang": "de",
+  "text": "Kannst du für mich im Chrome-Browser die Seite vom Steuerbüro öffnen und dort die Rechnung Nr. 4711 im Kundenportal suchen?"
+ },
+ {
+  "id": "r162",
+  "intent": "free_local_model",
+  "lang": "de",
+  "text": "Ich hätte gern ein kostenloses KI-Modell, das auf meinem PC läuft, ich habe aber noch gar nichts installiert. Wie richte ich das ein?"
+ },
+ {
+  "id": "r163",
+  "intent": "desktop_control",
+  "lang": "de",
+  "text": "Kannst du bitte das Programm \"Buchhaltung Pro\" auf meinem Desktop öffnen und die Monatsabrechnung für März durchklicken, also Maus und Tastatur selbst bedienen?"
+ },
+ {
+  "id": "r164",
+  "intent": "voice_talk",
+  "lang": "de",
+  "text": "Ich hab keine Lust zu tippen, kann ich dir einfach laut sagen, was du tun sollst, und du antwortest mir dann per Stimme?"
+ }
+]

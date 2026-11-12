@@ -1,0 +1,497 @@
+[
+ {
+  "id": "n001",
+  "topic": "set_theme",
+  "text": "My sister says dark mode is easier on the eyes at night, is that actually true?"
+ },
+ {
+  "id": "n002",
+  "topic": "set_theme",
+  "text": "Our office walls are a pale blue, do light colours make people feel calmer at work?"
+ },
+ {
+  "id": "n003",
+  "topic": "set_default_model",
+  "text": "Every fashion model I've met says the job is way harder than it looks, is that true?"
+ },
+ {
+  "id": "n004",
+  "topic": "set_default_model",
+  "text": "Our default lunch order at the deli is always the same, is that boring?"
+ },
+ {
+  "id": "n005",
+  "topic": "set_approvals",
+  "text": "My teenager asks my permission for everything, how do you handle that without losing your mind?"
+ },
+ {
+  "id": "n006",
+  "topic": "set_approvals",
+  "text": "Do most managers want to approve every small decision, or is that just my boss?"
+ },
+ {
+  "id": "n007",
+  "topic": "set_text_size",
+  "text": "My grandfather says the print in newspapers was bigger when he was young, was it?"
+ },
+ {
+  "id": "n008",
+  "topic": "set_text_size",
+  "text": "Why does small text on phone screens give so many people headaches?"
+ },
+ {
+  "id": "n009",
+  "topic": "set_update_channel",
+  "text": "Our building's elevator gets an update every few months, how do they decide when it's safe?"
+ },
+ {
+  "id": "n010",
+  "topic": "set_update_channel",
+  "text": "My neighbour always waits a while before getting the newest phone, is there a good reason?"
+ },
+ {
+  "id": "n011",
+  "topic": "set_backup_copy",
+  "text": "My mum keeps a photo of every family recipe in a shoebox, is that a smart kind of backup?"
+ },
+ {
+  "id": "n012",
+  "topic": "set_backup_copy",
+  "text": "Why do accountants always say to keep a copy of the tax papers somewhere else?"
+ },
+ {
+  "id": "n013",
+  "topic": "set_start_with_pc",
+  "text": "Every morning my coffee machine starts itself at 6, which is handy but a bit creepy."
+ },
+ {
+  "id": "n014",
+  "topic": "set_start_with_pc",
+  "text": "When I start my day at the office I always grab coffee first, does everyone have a ritual like that?"
+ },
+ {
+  "id": "n015",
+  "topic": "set_answer_language",
+  "text": "My grandmother only speaks Greek at home, how do families keep a language going across generations?"
+ },
+ {
+  "id": "n016",
+  "topic": "set_answer_language",
+  "text": "Is it hard to learn a second language after forty, or is that just a myth?"
+ },
+ {
+  "id": "n017",
+  "topic": "read_setting",
+  "text": "Do you know if backups are usually turned on by default on a Windows 11 PC, or does everyone have to switch them on?"
+ },
+ {
+  "id": "n018",
+  "topic": "read_setting",
+  "text": "Which model are you running on right now, and is that decided by the company or by whoever set you up?"
+ },
+ {
+  "id": "n019",
+  "topic": "schedule_create",
+  "text": "My coworker runs the same sales report by hand every Friday morning, is there a common way teams handle chores like that?"
+ },
+ {
+  "id": "n020",
+  "topic": "schedule_create",
+  "text": "I lose about twenty minutes every morning checking the same three websites, and I want to break that habit."
+ },
+ {
+  "id": "n021",
+  "topic": "schedule_change",
+  "text": "My Monday team check-in got moved to an hour later and now my whole week feels off."
+ },
+ {
+  "id": "n022",
+  "topic": "schedule_change",
+  "text": "Our weekly standup has been running long for a year and everyone dreads it, is that normal for a team this size?"
+ },
+ {
+  "id": "n023",
+  "topic": "project_create",
+  "text": "I'm getting ready to take on a new client who runs three bakeries, any advice on how to scope a job like that?"
+ },
+ {
+  "id": "n024",
+  "topic": "project_create",
+  "text": "Our big website redesign kicks off next month and I'm already nervous about the timeline."
+ },
+ {
+  "id": "n025",
+  "topic": "agent_create",
+  "text": "Our support team keeps talking about agents, but what does a good customer service agent really need to know?"
+ },
+ {
+  "id": "n026",
+  "topic": "agent_create",
+  "text": "My brother calls himself a real estate agent and swears by the job, is it harder than it looks from the outside?"
+ },
+ {
+  "id": "n027",
+  "topic": "agent_pause",
+  "text": "Our insurance agent keeps putting off my renewal paperwork and I'm getting really annoyed."
+ },
+ {
+  "id": "n028",
+  "topic": "agent_pause",
+  "text": "Whenever our travel agent takes a week off, nothing gets booked and everyone just waits around."
+ },
+ {
+  "id": "n029",
+  "topic": "rule_create",
+  "text": "Whenever my landlord emails about rent, my stomach drops, is that a normal reaction?"
+ },
+ {
+  "id": "n030",
+  "topic": "rule_create",
+  "text": "In small firms, is it common for clients to expect every email to be answered within an hour?"
+ },
+ {
+  "id": "n031",
+  "topic": "watch_folder",
+  "text": "My photos folder on the PC is a total mess and I keep losing track of what's in it, any tips for staying organized?"
+ },
+ {
+  "id": "n032",
+  "topic": "watch_folder",
+  "text": "Do people on shared work teams keep an eye on folders for changes, or does that feel like overkill?"
+ },
+ {
+  "id": "n033",
+  "topic": "goal_add",
+  "text": "My team lead says we should keep chipping away at the backlog until the quarter ends, what do you think of that approach?"
+ },
+ {
+  "id": "n034",
+  "topic": "night_task",
+  "text": "I always feel like my best ideas come at 2am, and I wish my brain could work while I sleep."
+ },
+ {
+  "id": "n035",
+  "topic": "night_task",
+  "text": "Our dev team keeps saying the big refactor takes forever during the day, do you think nights are better for that kind of work?"
+ },
+ {
+  "id": "n036",
+  "topic": "phone_notify",
+  "text": "My phone buzzes all day with work stuff, do you think it's better to keep notifications off on weekends?"
+ },
+ {
+  "id": "n037",
+  "topic": "phone_notify",
+  "text": "My sister only ever texts me on Telegram, how do people usually keep up with family across different apps?"
+ },
+ {
+  "id": "n038",
+  "topic": "app_connect",
+  "text": "Everyone at my company seems to live in Notion now, is it worth learning it or is Google Docs still enough?"
+ },
+ {
+  "id": "n039",
+  "topic": "app_connect",
+  "text": "My calendar is a complete mess since I joined three different committees, how do people usually keep track of it all?"
+ },
+ {
+  "id": "n040",
+  "topic": "app_disconnect",
+  "text": "I finally cut ties with my old fitness tracker company after they changed their privacy policy, feels good honestly."
+ },
+ {
+  "id": "n041",
+  "topic": "app_disconnect",
+  "text": "I think I've been too attached to my old GitHub habits from college, time to let some of them go."
+ },
+ {
+  "id": "n042",
+  "topic": "local_server_add",
+  "text": "My cousin runs a little home server with a spare graphics card in his closet, he's obsessed with it."
+ },
+ {
+  "id": "n043",
+  "topic": "local_server_add",
+  "text": "Is it worth buying a bigger graphics card if I want to run models on my own computer instead of paying for subscriptions?"
+ },
+ {
+  "id": "n044",
+  "topic": "memory_base_add",
+  "text": "My notes app is a jumble of ten years of random thoughts, I wonder if anyone ever really goes back and reads old notes."
+ },
+ {
+  "id": "n045",
+  "topic": "memory_base_add",
+  "text": "Our team wiki in Notion has become a graveyard of outdated pages, how do companies usually keep that kind of thing useful?"
+ },
+ {
+  "id": "n046",
+  "topic": "remember_preference",
+  "text": "My grandmother likes things explained slowly and with lots of examples, is that common for people her age?"
+ },
+ {
+  "id": "n047",
+  "topic": "preference_review",
+  "text": "My mom keeps saying I'm too forgetful, but honestly I think I just have too many things going on at work."
+ },
+ {
+  "id": "n048",
+  "topic": "preference_review",
+  "text": "Is it weird that my coworker still remembers what I said about hating cilantro three years ago?"
+ },
+ {
+  "id": "n049",
+  "topic": "persona_create",
+  "text": "My daughter says her favorite teachers all had a personality that made class fun, what makes a teacher stand out like that?"
+ },
+ {
+  "id": "n050",
+  "topic": "persona_create",
+  "text": "Every radio host from the 70s had a warm style that felt personal, why do old DJs sound so different from today's?"
+ },
+ {
+  "id": "n051",
+  "topic": "chat_private",
+  "text": "My lawyer cousin says sensitive family stuff should never sit on a server somewhere, is that true or is he overdoing it?"
+ },
+ {
+  "id": "n052",
+  "topic": "chat_private",
+  "text": "How do journalists usually keep their sources' names safe when they talk about them?"
+ },
+ {
+  "id": "n053",
+  "topic": "undo_change",
+  "text": "My dad always says the hardest part of baking is when you can't take back a bad decision, how do chefs deal with that?"
+ },
+ {
+  "id": "n054",
+  "topic": "undo_change",
+  "text": "Last week I changed my mind about my wedding venue three times, how do couples usually handle second-guessing themselves?"
+ },
+ {
+  "id": "n055",
+  "topic": "tool_server_add",
+  "text": "My nephew wants to start a plumbing business and keeps saying he needs better tools, what starter tools should a new plumber buy?"
+ },
+ {
+  "id": "n056",
+  "topic": "tool_server_add",
+  "text": "Our restaurant is short on servers this summer, how do managers usually find good ones?"
+ },
+ {
+  "id": "n057",
+  "topic": "skill_save",
+  "text": "My grandmother makes a soup that every family member has tried to copy, why is it so hard to get the same taste?"
+ },
+ {
+  "id": "n058",
+  "topic": "skill_save",
+  "text": "Our team just wrapped a big project and everyone's proud, what do good managers do to celebrate a win?"
+ },
+ {
+  "id": "n059",
+  "topic": "make_file",
+  "text": "My accountant keeps sending me PDF forms that look like they were made in 1995, why are tax forms still so clunky?"
+ },
+ {
+  "id": "n060",
+  "topic": "make_file",
+  "text": "I'm trying to decide between Word and Excel for my kid's school budget, what do most parents usually track in a spreadsheet?"
+ },
+ {
+  "id": "n061",
+  "topic": "rename_files",
+  "text": "My folder of vacation photos from Italy is a total mess, how do most people organize photos after a trip?"
+ },
+ {
+  "id": "n062",
+  "topic": "rename_files",
+  "text": "My PC desktop is covered in files named \"final_final2,\" why do people always end up with names like that?"
+ },
+ {
+  "id": "n063",
+  "topic": "web_lookup",
+  "text": "My dad keeps insisting the Great Wall is visible from space, is that actually true?"
+ },
+ {
+  "id": "n064",
+  "topic": "web_lookup",
+  "text": "Our team lead just got promoted and I heard he used to work in logistics, is that a common career path?"
+ },
+ {
+  "id": "n065",
+  "topic": "find_file",
+  "text": "My sister always loses the tax paperwork she emails me, how do people usually keep track of documents like that?"
+ },
+ {
+  "id": "n066",
+  "topic": "find_file",
+  "text": "I have hundreds of scattered photos from our trip to Lisbon, is it better to organize them by date or by place?"
+ },
+ {
+  "id": "n067",
+  "topic": "arithmetic",
+  "text": "Splitting the wedding costs evenly between three people feels unfair to me, is an equal split usually the norm?"
+ },
+ {
+  "id": "n068",
+  "topic": "arithmetic",
+  "text": "Our bakery sells out every Saturday, but I always feel like we undercount the sales at closing time. Is there a good end-of-day habit for that?"
+ },
+ {
+  "id": "n069",
+  "topic": "make_picture",
+  "text": "My daughter wants her bedroom walls to look like a rainy forest, what colors usually work well in a child's room?"
+ },
+ {
+  "id": "n070",
+  "topic": "make_picture",
+  "text": "Our café wants a cozy vibe for its menu board, what style trends are popular for small-town coffee shops right now?"
+ },
+ {
+  "id": "n071",
+  "topic": "how_do_i",
+  "text": "I'm new to this assistant app and wondering how most people get the hang of its features in the first week?"
+ },
+ {
+  "id": "n072",
+  "topic": "how_do_i",
+  "text": "My coworker says chat tools often hide extra options in menus, is that common across most apps?"
+ },
+ {
+  "id": "n073",
+  "topic": "whats_wrong",
+  "text": "The assistant app has been acting strange all morning, my replies keep cutting off halfway and I'm getting frustrated."
+ },
+ {
+  "id": "n074",
+  "topic": "whats_wrong",
+  "text": "This chat window feels sluggish today, I wonder if it's just me or something that happens when lots of people are online."
+ },
+ {
+  "id": "n075",
+  "topic": "find_old_chat",
+  "text": "Last month I talked with the assistant about my knee surgery recovery, and honestly I can barely remember what it said."
+ },
+ {
+  "id": "n076",
+  "topic": "find_old_chat",
+  "text": "Our book club spent a whole evening on grief memoirs last spring, and I still wonder why those books hit so hard for readers."
+ },
+ {
+  "id": "n077",
+  "topic": "signin_claude_code",
+  "text": "My nephew starts a coding bootcamp next week and his instructor says Claude Code is required, what is it like for beginners?"
+ },
+ {
+  "id": "n078",
+  "topic": "signin_claude_code",
+  "text": "I'm a freelance developer and I keep hearing that people pay for a Claude plan and then use it in the terminal, is that worth it?"
+ },
+ {
+  "id": "n079",
+  "topic": "browser_use",
+  "text": "My browser has about thirty tabs open and my laptop slows to a crawl every afternoon, is that normal?"
+ },
+ {
+  "id": "n080",
+  "topic": "browser_use",
+  "text": "Do you think people spend too much of their day inside a web browser now?"
+ },
+ {
+  "id": "n081",
+  "topic": "browser_use",
+  "text": "Which browser do you think is better for privacy, Chrome or Edge, in your opinion?"
+ },
+ {
+  "id": "n082",
+  "topic": "second_account",
+  "text": "Our team keeps running out of AI usage by Thursday, so I'm wondering whether that's just how these plans are priced."
+ },
+ {
+  "id": "n083",
+  "topic": "second_account",
+  "text": "My cousin says two people sharing one AI subscription breaks the rules, is that actually true?"
+ },
+ {
+  "id": "n084",
+  "topic": "second_account",
+  "text": "Running out of messages in the middle of a project is so frustrating, how do freelancers usually plan around that?"
+ },
+ {
+  "id": "n085",
+  "topic": "free_local_model",
+  "text": "My old gaming PC is collecting dust, and I wonder whether it could handle a smart chatbot without a monthly fee."
+ },
+ {
+  "id": "n086",
+  "topic": "free_local_model",
+  "text": "Why do some people prefer AI models that run privately on their own hardware instead of in the cloud?"
+ },
+ {
+  "id": "n087",
+  "topic": "free_local_model",
+  "text": "Is a free AI model you run at home usually noticeably weaker than the paid ones?"
+ },
+ {
+  "id": "n088",
+  "topic": "desktop_control",
+  "text": "My accountant still clicks through the same old billing program every single day, and it takes forever."
+ },
+ {
+  "id": "n089",
+  "topic": "desktop_control",
+  "text": "Do you think it's risky to let software move the mouse around by itself on a work computer?"
+ },
+ {
+  "id": "n090",
+  "topic": "desktop_control",
+  "text": "What's the hardest part of learning a new desktop program if you've never been comfortable with a mouse?"
+ },
+ {
+  "id": "n091",
+  "topic": "other_computer",
+  "text": "Our office has a desktop and two laptops, and everyone just grabs whichever one happens to be free."
+ },
+ {
+  "id": "n092",
+  "topic": "other_computer",
+  "text": "Is it better to use a phone or a laptop for reading long articles, in your opinion?"
+ },
+ {
+  "id": "n093",
+  "topic": "other_computer",
+  "text": "My phone battery dies by lunch every day, so I'm always switching over to the laptop, which is annoying."
+ },
+ {
+  "id": "n094",
+  "topic": "voice_talk",
+  "text": "My hands are covered in flour most mornings, so typing recipes into anything is a nightmare."
+ },
+ {
+  "id": "n095",
+  "topic": "voice_talk",
+  "text": "Do people actually talk to their phones in public, or is that still awkward for most folks?"
+ },
+ {
+  "id": "n096",
+  "topic": "voice_talk",
+  "text": "Is it bad for your voice to talk for hours every day, like call-center workers do?"
+ },
+ {
+  "id": "n097",
+  "topic": "internet_calls_in",
+  "text": "Our website contact form sends every message to my inbox, and half of them are spam."
+ },
+ {
+  "id": "n098",
+  "topic": "internet_calls_in",
+  "text": "How do companies usually link their online forms to their internal tools without things breaking?"
+ },
+ {
+  "id": "n099",
+  "topic": "internet_calls_in",
+  "text": "Zapier is a tool my friend swears by, but I honestly don't get what it's for."
+ }
+]

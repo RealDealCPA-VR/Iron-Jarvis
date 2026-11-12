@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.477.2 (2026-11-12).*
+holds itself to. Current as of v1.478.0 (2026-11-12).*
 
 ---
 
@@ -2041,6 +2041,90 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Jarvis can look up what it can do (v1.478.0)
+
+This is the first step of a larger change. It is **off by default**, and with
+it off nothing in chat is different.
+
+### The problem, measured
+
+Before Jarvis answers, Iron Jarvis decides which tools the reply gets by
+matching your words against hand-written patterns. When your wording fits no
+pattern, Jarvis has no tool for the request and says it cannot help, or
+reaches for the wrong tool.
+
+We measured how often that happens on wording nobody had written a pattern
+for: 164 everyday requests for 47 things Iron Jarvis can do, written by a
+separate model that had never seen the patterns, with every label checked by
+hand.
+
+| | Right tool reached |
+|---|---|
+| All 164 requests | 50 (30%) |
+| English | 48 of 135 |
+| Spanish, French, Portuguese, German | 2 of 29 |
+
+68 of the misses were offered no tool at all. For example, "I'd like a new
+helper called Penny who looks after my medication schedule" got no tool that
+makes an agent.
+
+### What is new
+
+Jarvis has a new read-only tool that looks up what Iron Jarvis can do. Jarvis
+describes the request in its own words, and Iron Jarvis answers from one list
+of everything it has:
+
+- every built-in tool, with whether it asks you first;
+- every setting, with where to change it by hand;
+- the steps that need a page (a sign-in, the browser add-on);
+- the things Iron Jarvis does not offer, said plainly.
+
+On the same 164 requests, with a model writing the search words, the right
+entry was in the first five answers for **123 (75%)**: 96 of 135 in English
+and 27 of 29 in the other languages. Counting a request as served when
+either the patterns or the lookup find the right thing gives 134 of 164.
+
+### What it does not do yet
+
+- **It only answers.** A tool the lookup finds does not join the reply. If
+  Jarvis did not already have that tool, it can tell you Iron Jarvis can do
+  the thing and name the setting or page, but it cannot do it in that reply.
+  Joining the found tool, behind the usual approval card, is the next step.
+- **It does not list connected apps' tools or your own command tools.** Their
+  descriptions are someone else's words. They come later, with a safety
+  check.
+- **A match can be wrong.** The lookup returns the closest entries it has,
+  even for a request Iron Jarvis has nothing for. Jarvis is told to use
+  only a line that fits.
+- **The 75% is a search result, not a count of finished requests.** No real
+  chat was measured: a model wrote search words for each request and the
+  list was searched with them.
+- **One writer wrote the test requests.** A second writer would move the
+  numbers a few points.
+
+### Turning it on
+
+**Settings › Models › Feature lookup**, or say "turn on capability search"
+in chat. While it is on, every chat reply carries the
+lookup tool, and a reply that used it shows the step "Looked up what Iron
+Jarvis can do". It reads only: it changes nothing and reaches nothing outside
+this PC. If you set the tool to *Never run*, it is not offered.
+
+### Checked by a second reviewer before release
+
+A separate reviewer attacked the change and wrote a failing test for each
+thing it broke. It found 11 defects; all are fixed. The ones that mattered:
+
+- A command tool you made yourself was in the list, presented as Iron
+  Jarvis's own.
+- Four lookups in one reply made another tool (the script tool) join it.
+- With the setting off, its own name made ordinary sentences such as "let
+  Jarvis look up the rates" bring the settings tools. The setting was
+  renamed.
+- "Settings" and "setting" were different searches.
+- A lookup that failed, or had no words to search with, was answered as
+  "nothing matches", which Jarvis would have passed on as "no such feature".
 
 ## Build › Code calls a finished command a command (v1.477.2)
 

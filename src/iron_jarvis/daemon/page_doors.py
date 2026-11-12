@@ -647,6 +647,18 @@ def _cli_line(name: str, inside: str) -> str:
     )
 
 
+#: The words of an install line that are true only where the chat page draws
+#: the press under the reply (``with_page_door`` matched the USER's words).
+ALSO_UNDER_THIS_REPLY = " (on the chat page, also under this reply)"
+
+
+def line_without_reply_press(step: "PageStep") -> str:
+    """*step*'s sentence for a reader that draws no press under the reply (the
+    capability lookup: it joins no door, so "also under this reply" would
+    point at a press that is not there)."""
+    return str(step.line or "").replace(ALSO_UNDER_THIS_REPLY, "")
+
+
 def _install_line(name: str, vendor: str) -> str:
     # The press opens POST /terminals/launch {cli: "<name>-install"}: a Build
     # terminal running the vendor's own documented installer, every step on
@@ -656,7 +668,7 @@ def _install_line(name: str, vendor: str) -> str:
     # the press under the reply — so Connections' press leads.
     return (
         f"Iron Jarvis can install {name} on this PC: the \"Install {name} for me\" press beside {name} in "
-        f"{CONNECTIONS_PLACE} (on the chat page, also under this reply) opens a terminal in Build that runs "
+        f"{CONNECTIONS_PLACE}{ALSO_UNDER_THIS_REPLY} opens a terminal in Build that runs "
         f"{vendor}'s own installer, and every step shows there. Iron Jarvis does not install anything until "
         f"the user presses it. After it finishes, {name} still has to be signed in, with its Sign in button "
         "there. Say so plainly and point there."

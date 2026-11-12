@@ -1,0 +1,597 @@
+[
+ {
+  "id": "set_theme",
+  "kind": "tool",
+  "say": "change how the assistant app looks: dark or light, or its colours",
+  "tools": [
+   "config_set",
+   "config_change",
+   "config_change_protected"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": [
+   "device.theme",
+   "device.theme_colors"
+  ]
+ },
+ {
+  "id": "set_default_model",
+  "kind": "tool",
+  "say": "choose which AI model answers from now on, in every chat",
+  "tools": [
+   "config_set",
+   "config_change",
+   "config_change_protected",
+   "model_server_default"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": [
+   "default_provider",
+   "default_model"
+  ]
+ },
+ {
+  "id": "set_approvals",
+  "kind": "tool",
+  "say": "change how often the assistant stops to ask permission before it does things",
+  "tools": [
+   "config_set",
+   "config_change",
+   "config_change_protected"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": [
+   "device.approval_mode"
+  ]
+ },
+ {
+  "id": "set_text_size",
+  "kind": "tool",
+  "say": "make the writing in the app bigger or smaller",
+  "tools": [
+   "config_set",
+   "config_change",
+   "config_change_protected"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": [
+   "device.text_size"
+  ]
+ },
+ {
+  "id": "set_update_channel",
+  "kind": "tool",
+  "say": "get app updates only after they have been out for a while, or get the newest ones at once",
+  "tools": [
+   "config_set",
+   "config_change",
+   "config_change_protected"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": [
+   "update_channel"
+  ]
+ },
+ {
+  "id": "set_backup_copy",
+  "kind": "tool",
+  "say": "keep a second copy of the app's backups in another folder or on another drive",
+  "tools": [
+   "config_set",
+   "config_change",
+   "config_change_protected"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": [
+   "backup_mirror_dir",
+   "backup_mirror_media"
+  ]
+ },
+ {
+  "id": "set_start_with_pc",
+  "kind": "tool",
+  "say": "have the app open by itself when the computer starts, or stop it doing that",
+  "tools": [
+   "config_set",
+   "config_change",
+   "config_change_protected"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": [
+   "start_with_windows",
+   "keep_running_in_background"
+  ]
+ },
+ {
+  "id": "set_answer_language",
+  "kind": "tool",
+  "say": "always answer in a certain language from now on",
+  "tools": [
+   "config_set",
+   "config_change",
+   "config_change_protected",
+   "remember_preference",
+   "lesson_add"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": [
+   "profile.language",
+   "profile.enforce_language"
+  ]
+ },
+ {
+  "id": "read_setting",
+  "kind": "tool",
+  "say": "ASK what a setting is right now, changing nothing (for example which model is the default, or whether backups are on)",
+  "tools": [
+   "config_list"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "schedule_create",
+  "kind": "tool",
+  "say": "have the assistant do a job again and again at set times (every morning, every Friday...)",
+  "tools": [
+   "schedule_create",
+   "workflow_schedule"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "schedule_change",
+  "kind": "tool",
+  "say": "pause, change the time of, or delete a recurring job that was set up earlier in the assistant",
+  "tools": [
+   "schedule_update",
+   "schedule_delete"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "project_create",
+  "kind": "tool",
+  "say": "start a new project in the assistant for a piece of work or a client",
+  "tools": [
+   "project_create"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "agent_create",
+  "kind": "tool",
+  "say": "make a new helper agent with its own name and job",
+  "tools": [
+   "agent_create"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "agent_pause",
+  "kind": "tool",
+  "say": "stop one of the helper agents from working for now, or change what it is allowed to do",
+  "tools": [
+   "agent_pause",
+   "agent_update"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "rule_create",
+  "kind": "tool",
+  "say": "a standing rule: whenever a message or email comes in, the assistant should do something by itself",
+  "tools": [
+   "reflex_create"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "watch_folder",
+  "kind": "tool",
+  "say": "keep an eye on a folder on the PC and tell me when files in it change",
+  "tools": [
+   "sentinel_add"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "goal_add",
+  "kind": "tool",
+  "say": "give the assistant a long-running goal it keeps working toward on its own",
+  "tools": [
+   "goal_add"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "night_task",
+  "kind": "tool",
+  "say": "queue a piece of coding work to be done overnight",
+  "tools": [
+   "night_task_add"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "phone_notify",
+  "kind": "tool",
+  "say": "set up messages to my phone (Telegram, Slack, Discord or email) so the assistant can reach me",
+  "tools": [
+   "channel_connect",
+   "channel_toggle"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "app_connect",
+  "kind": "tool",
+  "say": "connect an outside app to the assistant (Notion, GitHub, Google Drive, a calendar...)",
+  "tools": [
+   "app_connect"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "app_disconnect",
+  "kind": "tool",
+  "say": "disconnect or switch off an outside app that was connected before",
+  "tools": [
+   "app_disconnect",
+   "app_switch"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "local_server_add",
+  "kind": "tool",
+  "say": "add my own AI model server (Ollama, LM Studio, a box on my network) so the assistant can use it",
+  "tools": [
+   "model_server_add"
+  ],
+  "steps": [
+   "local_model"
+  ],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "memory_base_add",
+  "kind": "tool",
+  "say": "use my notes folder or my Notion as the assistant's long-term memory",
+  "tools": [
+   "memory_base_add"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "remember_preference",
+  "kind": "tool",
+  "say": "tell the assistant how I like things done, so it remembers for every later answer",
+  "tools": [
+   "remember_preference",
+   "lesson_add"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "preference_review",
+  "kind": "tool",
+  "say": "see, correct or delete what the assistant remembers about my preferences",
+  "tools": [
+   "preference_list",
+   "preference_edit",
+   "preference_forget"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "persona_create",
+  "kind": "tool",
+  "say": "give the assistant a new personality or speaking style I can pick",
+  "tools": [
+   "persona_create"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "chat_private",
+  "kind": "tool",
+  "say": "keep this one conversation on my own computer so nothing goes to the cloud",
+  "tools": [
+   "chat_local_only"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "undo_change",
+  "kind": "tool",
+  "say": "see what the assistant changed, or undo its last change",
+  "tools": [
+   "change_undo",
+   "changes_list",
+   "config_undo"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "tool_server_add",
+  "kind": "tool",
+  "say": "add a tool server (an MCP server) so the assistant gets new tools",
+  "tools": [
+   "mcp_server_add",
+   "app_import"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "skill_save",
+  "kind": "tool",
+  "say": "save the way we just did something as a reusable skill for next time",
+  "tools": [
+   "skill_create"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "make_file",
+  "kind": "tool",
+  "say": "make a new Word, Excel or PDF file with given content",
+  "tools": [
+   "write_document",
+   "excel_apply_spec",
+   "write_file"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "rename_files",
+  "kind": "tool",
+  "say": "rename or move files in a folder on my PC",
+  "tools": [
+   "rename_file",
+   "apply_changes"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "web_lookup",
+  "kind": "tool",
+  "say": "look something up on the internet",
+  "tools": [
+   "web_search",
+   "web_fetch",
+   "browse",
+   "web_extract"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "find_file",
+  "kind": "tool",
+  "say": "find a file somewhere on my computer",
+  "tools": [
+   "file_search",
+   "list_files",
+   "glob",
+   "list_folder"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "arithmetic",
+  "kind": "tool",
+  "say": "work out a calculation with numbers given in the message",
+  "tools": [
+   "calculate"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "make_picture",
+  "kind": "tool",
+  "say": "create a picture or image from a description",
+  "tools": [
+   "generate_media",
+   "pixio_generate"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "how_do_i",
+  "kind": "tool",
+  "say": "ask how to do something in the assistant app itself (where a feature is, how it works)",
+  "tools": [
+   "guide_search",
+   "guide_read",
+   "app_search"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "whats_wrong",
+  "kind": "tool",
+  "say": "say that the assistant app is broken or acting up and ask what is wrong",
+  "tools": [
+   "app_health",
+   "run_doctor",
+   "pack_status"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "find_old_chat",
+  "kind": "tool",
+  "say": "find an earlier conversation with the assistant about some topic",
+  "tools": [
+   "history_search",
+   "recall"
+  ],
+  "steps": [],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "signin_claude_code",
+  "kind": "step",
+  "say": "sign in to Claude Code (the coding program) so the assistant can use my Claude plan",
+  "tools": [],
+  "steps": [
+   "signin_claude_code"
+  ],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "browser_use",
+  "kind": "step",
+  "say": "let the assistant work in my own web browser (Chrome or Edge)",
+  "tools": [
+   "browser_navigate",
+   "browser_read_page",
+   "browser_get_status",
+   "browser_click",
+   "browser_create_tab"
+  ],
+  "steps": [
+   "browser_addon"
+  ],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "second_account",
+  "kind": "step",
+  "say": "add a second account of the same AI subscription so work can continue when the first runs out",
+  "tools": [
+   "account_add"
+  ],
+  "steps": [
+   "accounts"
+  ],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "free_local_model",
+  "kind": "step",
+  "say": "set up a free AI model that runs on this PC, with nothing installed yet",
+  "tools": [
+   "model_server_add"
+  ],
+  "steps": [
+   "local_model"
+  ],
+  "honest": [],
+  "settings": []
+ },
+ {
+  "id": "desktop_control",
+  "kind": "honest",
+  "say": "have the assistant take over the mouse and keyboard to click through a program on my desktop",
+  "tools": [],
+  "steps": [],
+  "honest": [
+   "desktop_control"
+  ],
+  "settings": []
+ },
+ {
+  "id": "other_computer",
+  "kind": "honest",
+  "say": "open and use the assistant from another computer or phone browser in the house or office",
+  "tools": [],
+  "steps": [],
+  "honest": [
+   "another_computer"
+  ],
+  "settings": []
+ },
+ {
+  "id": "voice_talk",
+  "kind": "honest",
+  "say": "talk to the assistant out loud instead of typing",
+  "tools": [],
+  "steps": [],
+  "honest": [
+   "voice_press"
+  ],
+  "settings": []
+ },
+ {
+  "id": "internet_calls_in",
+  "kind": "honest",
+  "say": "let an internet service (Zapier, a website form) start a job in the assistant",
+  "tools": [],
+  "steps": [],
+  "honest": [
+   "internet_calls_in"
+  ],
+  "settings": []
+ }
+]

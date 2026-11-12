@@ -93,6 +93,7 @@
     "exit_plan_mode",
     "extract_pdf",
     "file_search",
+    "find_capability",
     "generate_media",
     "git_read",
     "glob",
@@ -322,6 +323,7 @@
     "exit_plan_mode": "start working on this plan",
     "extract_pdf": "read a file",
     "file_search": "search your drives",
+    "find_capability": "look up what Iron Jarvis can do",
     "generate_media": "make an image, video or sound",
     "git_read": "look something up in git",
     "glob": "search files",
@@ -734,6 +736,10 @@
     "file_search": [
       "Searched your drives",
       "Searching your drives"
+    ],
+    "find_capability": [
+      "Looked up what Iron Jarvis can do",
+      "Looking up what Iron Jarvis can do"
     ],
     "generate_media": [
       "Made an image, video or sound",
@@ -1241,6 +1247,7 @@
     "exit_plan_mode": "",
     "extract_pdf": "read",
     "file_search": "",
+    "find_capability": "",
     "generate_media": "",
     "git_read": "",
     "glob": "search",

@@ -17380,6 +17380,101 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/bell-safety-row-opens-chat-v1477-1.test.tsx` (8
   mutations, all red); moved on purpose: `trust-posture-v1298`.
 
+- **The model can LOOK UP what Iron Jarvis can do; the word tables are
+  MEASURED on a held-out set that must never be tuned to** (v1.478.0,
+  capability search plan Phase 1, `docs/CAPABILITY-SEARCH-PLAN-2026-11-12.md`;
+  the owner pressed "Plan it", "Start Phase 0", "Build Phase 1").
+  - **Phase 0, the measurement.** `tests/fixtures/capability_heldout_v1478/`:
+    `intents.json` (47 everyday jobs and what counts as reached: tools, page
+    steps, "not offered" ids, and for a settings job its schema keys; built
+    by `build_intents.py` BEFORE any score was read), `requests.json` (164
+    requests, 29 not in English) and `near_misses.json` (99), written by
+    Claude Haiku run with `claude -p` from an EMPTY folder (no CLAUDE.md, so
+    it never saw the patterns), every label checked by hand, 9 unclear rows
+    dropped. `tests/test_capability_reach_v1478.py` runs each row through
+    the arming both lanes call (`_resolve_armed_tools` + `select_ask_tools`
+    + `settings_ask_tools`) and `page_doors`: **50 of 164 reached (30%)**,
+    English 48 of 135, other languages 2 of 29; 7 of 99 near-misses offered
+    a tool that changes something; 68 misses offered nothing at all. THE SET
+    IS HELD OUT: never add or change a pattern, an index entry or a tool
+    description because one of its rows misses. A general fix found by
+    reading its misses must be validated on a FRESH set. Its bounds in the
+    tests are loose floors, not targets. A nested `claude -p` picks up the
+    user's e-mail from its own context: one German row carried it and was
+    cut; the build script refuses any "@" in a row.
+  - **Phase 1, the index** (`capability_search/index.py`; NOT the older
+    `capability/` package, which is skill and tool proposals): one
+    `Capability` entry per built-in tool (name + `mission.card_words` + its
+    description; never `mcp__…`, never `NOT_FOR_CHAT`, and never a name in
+    `registry.custom_names()`: a user's command tool is registered under
+    its PLAIN name, `custom:<name>` is only its permission key), per
+    non-pattern schema row (label, aliases, help, choices; `SETTING_TOOL`
+    maps its tier to config_set / config_change / config_change_protected;
+    href `/settings?focus=<key>`), per `page_doors.STEPS` step and per
+    `NOT_OFFERED` line. Built ONLY from text the product already has: no
+    hand-written synonyms (it must not become a second set of word tables).
+    BM25 with the title and id counted three times, a stemmer that gives a
+    word and its plural / -ed / -ing ONE stem (`_stem`; stop words dropped
+    in every form), a query cut to `QUERY_CHARS` 300 before tokenising, at
+    most `MAX_RESULTS` 8, ties by kind then id. `index_for(platform)`
+    rebuilds only when the registered tool names change; an index with an
+    unreadable part (`unreadable`) is never kept.
+  - **The tool** (`capability_search/tool.py`, `find_capability(query, limit)`):
+    READONLY, allow tier (`core/config.py` row), off the loop, output is
+    Iron Jarvis's own words (not fenced). Each line says its kind's own way:
+    a tool with the permission table's word as it is NOW ("It asks the user
+    first." / "The user has set it to Never run."), a setting with its tool
+    and href, a page step and a not-offered line with `page_doors`' own
+    sentence (`page_doors.line_without_reply_press`: no "also under this
+    reply"; an install step is left out once `known_cli_presence` says the
+    program is there). A setting line names `config_change_protected` when
+    the row has `floor_when` values, and says Never run when its tool is
+    denied. THREE ANSWERS NEVER CONFUSED: `NOTHING_FOUND`, `TOO_GENERAL`
+    (no search words left) and `LOOKUP_FAILED`; only the first may be passed
+    on as "no feature for it". A tool's description is searched, never
+    quoted. PHASE 1 ANSWERS ONLY: `HOW_TO_USE` tells the model to call a
+    listed tool only if it already holds it; NOTHING JOINS (pinned in both
+    lanes; `offer_script_tool` does not count a lookup, or four of them
+    brought `tool_script`).
+  - **Arming:** the last block of `chat_turn._resolve_armed_tools`, in its
+    own place like the settings reader: only while `Config.capability_search`
+    (schema row "Feature lookup", Models, allow, default OFF; with it off
+    the function is unchanged, pinned; the label is NOT a plain sentence on
+    purpose: "Let Jarvis look up what it can do" became a trigger phrase and
+    armed the settings writers for ordinary messages), whatever the words
+    and with Auto tools off too,
+    never over the user's deny, never past a weak model's tool budget.
+    Registered in `platform.py` after the hand-off tools; on no roster
+    (`_OFF_ROSTER_BY_DESIGN`); words in `mission._RUN_TOOL_WORDS` + its
+    `lib/runWords` twin, the generated tables and both word fixtures. "job"
+    is a retired word: the tool's sentences say "request".
+  - **Measured on the held-out set** (`tests/test_capability_index_v1478.py`):
+    with each request's own words as the query the right entry is in the
+    first five for 67 of 164; with the search words a blind Haiku wrote for
+    each request (`queries.json`, shown only the tool's description and the
+    message) **123 of 164 (75%)**, non-English 27 of 29; tables OR lookup
+    134. No real chat ran. Seen in the misses, NOT fixed (held-out rule):
+    settings rows with long help crowd out tools on words like "how often";
+    the older `create_agent` outranks the chat's `agent_create`; "app" in
+    "the app is broken" matches the connected-app tools; `file_search`,
+    `web_search` and `skill_create` lack the everyday words for their jobs.
+  - **OPEN (Phase 2):** found tools join the reply (a changer always as ask,
+    never granted; POST lane never joins a changer); a fresh held-out set
+    before any index tuning; a real-model run with the setting on; apps and
+    command tools behind the skill-description scan; coding sessions, agent
+    runs and the sidebar keep their own lists. Your own model server could
+    not write the set (its gateway refused the worker for want of a key).
+  - **REVIEW** (an independent reviewer, 11 defects, each red first in
+    `tests/test_capability_index_review_v1478.py`): the command-tool leak,
+    the script tool joining, the trigger phrase, the stemmer, the three
+    answers, the protected and Never-run setting lines, the install line
+    and step, a limit of infinity. No relevance floor was added (it would
+    be tuning): a request Iron Jarvis has nothing for still gets its
+    closest entries, and `HOW_TO_USE` says a match may not fit.
+  - **Pins:** `tests/test_capability_reach_v1478.py`,
+    `tests/test_capability_index_v1478.py`,
+    `tests/test_capability_index_review_v1478.py`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
