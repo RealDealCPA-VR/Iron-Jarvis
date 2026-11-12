@@ -121,6 +121,22 @@ inside the window and every clipping ancestor, gone when the pointer leaves,
 and on the tab an arrow key focuses; the page never pans sideways.
 `IJ_PANE_ICONS_OUT=<folder>` writes a screenshot of each step.
 
+`e2e/build-code-working-sign.spec.ts` (Build › Code's "working" sign) stubs
+the Code view's routes and checks the small ring above the message box at
+1900 × 1000, 1280 × 800 and 390 × 844, on the default dark theme and on
+Daylight: helpers at work show in the ring and a finished one is counted; the
+ring rests 8 px under the last line of the conversation (never on it), inside
+the window, with no sideways pan; the light is only ever seen at its step
+places (it hops, it does not glide); when the helpers end, the message box,
+the last line and the conversation's height are exactly where they were; a
+reader who scrolled up still sees it 8 px above the message box with a pill
+behind it; with "reduce motion" on nothing is animated; and it takes its
+colours from the variables a theme the user made sets.
+`IJ_SIGN_OUT=<folder>` writes a screenshot and a close-up of each case.
+`IJ_SIGN_MEASURE=1` also runs a measurement (about four minutes): the
+browser's own count of processor time with the ring standing still, as it
+ships, and turning smoothly for contrast.
+
 Run from `dashboard/`:
 
 ```bash

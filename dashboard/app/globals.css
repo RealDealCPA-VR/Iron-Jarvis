@@ -821,6 +821,44 @@ table {
   }
 }
 
+/* WORKING SIGN (components/buildCode/WorkingSign.tsx): the small ring above
+   the message box in Build › Code while the coding tool works.
+
+   THE LIGHT HOPS, IT DOES NOT GLIDE. A coding session can work for hours, and
+   what an animation costs here is the frames it makes (v1.415.0's
+   measurement; the drifting glow near the top of this file learned the
+   same). steps() gives one new frame each time the light moves on, under two
+   a second, where a smooth turn would be a new frame at every screen refresh
+   for as long as the helpers run. Do not put a smooth timing function here.
+
+   Transform and opacity only. Still under prefers-reduced-motion, in
+   forced-colours mode, and where the component says so ([data-motion="off"]:
+   the window is hidden, or it read the setting itself). Standing still, the
+   ring and the count in it say "working" without the light. */
+.wsign-hop {
+  animation: wsign-hop calc(var(--wsign-m, 8) * var(--wsign-beat, 900ms)) steps(var(--wsign-m, 8)) infinite;
+}
+.wsign-tick {
+  animation: wsign-tick calc(2 * var(--wsign-beat, 900ms)) steps(1) infinite;
+}
+@keyframes wsign-hop {
+  to { transform: rotate(var(--wsign-sweep, 360deg)); }
+}
+@keyframes wsign-tick {
+  0% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+[data-motion="off"] .wsign-hop,
+[data-motion="off"] .wsign-tick {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  .wsign-hop,
+  .wsign-tick {
+    animation: none;
+  }
+}
+
 /* light-tone-overrides:start */
 :root[data-scheme="light"] .bg-cyan-500\/\[0\.06\] { background-color: rgb(6 182 212 / 0.12); }
 :root[data-scheme="light"] .bg-emerald-400\/\[0\.05\] { background-color: rgb(16 185 129 / 0.11); }
