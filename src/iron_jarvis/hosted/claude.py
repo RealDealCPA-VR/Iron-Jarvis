@@ -520,11 +520,71 @@ def _first_words(text: Any, cap: int = 300) -> str:
     return one_line(text, cap)
 
 
-def system_notice(obj: dict[str, Any]) -> str:
+def task_ended_words(obj: dict[str, Any], *, task_type: str | None = None, background: bool | None = None) -> str:
+    """v1.477.0 (a USER REPORT): the line for a task Claude Code says has
+    ended (``task_notification``), named by what the task WAS. Every one used
+    to read "A helper finished: …", so a session whose helpers ran shell
+    commands filled with "A helper finished: cd … && grep …" — a wall of
+    lines about commands, none of them a helper.
+
+    The notification itself says neither the task's type nor where it ran
+    (READ from the 2.1.322 program, and so recorded for 2.1.316:
+    ``{task_id, tool_use_id, status, summary, output_file, usage}``), so both
+    come from the caller, which read them off the task's ``task_started``:
+
+    * ``task_type`` — Claude Code's own (``local_bash`` is a shell command,
+      :func:`is_helper_task` says which are helper agents); ``None`` = the
+      start was never seen.
+    * ``background`` — True / False as Claude Code said (``is_backgrounded``
+      at the start, a later ``task_updated``, its ``background_tasks_changed``
+      list); ``None`` = it never said.
+
+    The rule:
+
+    * A helper agent keeps "A helper finished / failed / was stopped: …".
+    * A shell command in the background is "A background command …". When
+      Claude Code's summary is already its own sentence (`Background command
+      "…" completed (exit code 0)`) that sentence is the line.
+    * A shell command that ran in the FOREGROUND and has a step of its own
+      (``tool_use_id``) says NOTHING: Claude Code tracks any command that runs
+      for two seconds as a task and announces its end with the command line as
+      the summary, but that command's step row is already on the screen and
+      shows how it ended. (121 of the 185 "A helper finished" lines in the
+      reported session were these.)
+    * A shell command whose place was never said, or that has no step of its
+      own, is "A command …" — said, and not called background on a guess.
+    * Any other kind of task is "A background task …" / "A task …".
+    * A task whose start was never seen is "A task …": its kind is not known
+      (Claude Code does not announce every task's start, and its event queue
+      can drop one under load), so it is never called a helper and never kept
+      quiet.
+    """
+    ended = W.SYS_TASK_ENDED.get(str(obj.get("status") or ""))
+    summary = _first_words(obj.get("summary") or obj.get("reason") or "", 300)
+    if not ended or not summary:
+        return ""
+    kind = "task" if task_type is None else task_kind(task_type)
+    if kind == "helper":
+        subject = "helper"
+    elif summary.startswith(W.SYS_TASK_OWN_SENTENCE):
+        # Claude Code's own whole sentence about a background command.
+        return summary
+    elif kind == "command":
+        if background is False and obj.get("tool_use_id"):
+            return ""
+        subject = "background_command" if background else "command"
+    else:
+        subject = "background_task" if background else "task"
+    return W.SYS_TASK_DONE.format(who=W.SYS_TASK_SUBJECT[subject], ended=ended, summary=summary)
+
+
+def system_notice(obj: dict[str, Any], *, task_type: str | None = None, background: bool | None = None) -> str:
     """v1.418.0 (C4.3): what one of Claude Code's ``system`` messages says, in
     its own words ("" = nothing worth a line: ``requesting``, progress ticks,
     bookkeeping). ``init``, ``compact_boundary``, ``api_retry`` and the
     ``compacting`` status are the driver's own (they need its state).
+    ``task_type`` / ``background`` are what the driver knows about the task a
+    ``task_notification`` ends (v1.477.0, :func:`task_ended_words`).
 
     READ from claude 2.1.316's own bundle (read-only): ``hook_response``
     {hook_name, hook_event, output, stdout, stderr, exit_code?, outcome:
@@ -556,11 +616,7 @@ def system_notice(obj: dict[str, Any]) -> str:
             return ""
         return W.SYS_TASK_STARTED.format(what=_first_words(obj.get("description") or "a task", 200))
     if sub == "task_notification":
-        words = W.SYS_TASK_DONE.get(str(obj.get("status") or ""))
-        summary = _first_words(obj.get("summary") or obj.get("reason") or "", 300)
-        if not words or not summary:
-            return ""
-        return words.format(summary=summary)
+        return task_ended_words(obj, task_type=task_type, background=background)
     if sub in ("notification",):
         return _first_words(obj.get("text"), 500)
     if sub in ("informational", "local_command", "model_fallback", "model_refusal_fallback", "model_consent_fallback"):
@@ -832,6 +888,13 @@ class ClaudeDriver(Driver):
         #: (``task_started`` / ``background_tasks_changed`` ``description``),
         #: for the Session tab's list. task_id -> description.
         self._task_titles: dict[str, str] = {}
+        #: v1.477.0: where each open task runs, as Claude Code said — True in
+        #: the background, False in the foreground (a command that has run for
+        #: two seconds is tracked as a task too). task_id -> bool; a task with
+        #: no entry never had its place said (a task kept by an older
+        #: version's state), and is treated as not known, never as either.
+        #: Read when the task ends, to word that line (``task_ended_words``).
+        self._task_place: dict[str, bool] = {}
         #: v1.441.0 (g1): the tasks the USER stopped from the Session tab —
         #: their ``task_notification`` (status stopped) is not said again (the
         #: service already said what was stopped) and wakes nothing.
@@ -1185,6 +1248,12 @@ class ClaudeDriver(Driver):
     #: (:meth:`set_effort`); the harness row says so (``effort_live``).
     effort_live = True
 
+    def _note_task_place(self, tid: str, backgrounded: Any) -> None:
+        """v1.477.0: keep where an open task runs — only when Claude Code SAID
+        (a real true / false; a missing key leaves it not known)."""
+        if isinstance(backgrounded, bool) and tid in self._tasks:
+            self._task_place[tid] = backgrounded
+
     def _note_task_title(self, tid: str, description: Any) -> None:
         text = one_line(description or "", TASK_TITLE_CHARS)
         if text:
@@ -1373,6 +1442,7 @@ class ClaudeDriver(Driver):
         self._held = None
         self._tasks.clear()
         self._task_titles.clear()
+        self._task_place.clear()
         self._stopping.clear()
         self._alone = False
 
@@ -1557,14 +1627,25 @@ class ClaudeDriver(Driver):
             if tid:
                 self._tasks[tid] = str(obj.get("task_type") or "")
                 self._note_task_title(tid, obj.get("description"))
+                self._note_task_place(tid, obj.get("is_backgrounded"))
             # v1.418.0 (C4.3): the start is said too (a backgrounded task with
             # no row of its own) — the bookkeeping above never swallows it.
             text = system_notice(obj)
             if text:
                 self.emit(make("notice", text=text))
+        elif sub == "task_updated":
+            # v1.477.0: a command sent to the background after it started
+            # (READ from the 2.1.322 program: ``patch.is_backgrounded``). Only
+            # the place is taken; the update itself says nothing, as before.
+            patch = obj.get("patch")
+            if isinstance(patch, dict):
+                self._note_task_place(str(obj.get("task_id") or ""), patch.get("is_backgrounded"))
         elif sub == "task_notification":
             tid = str(obj.get("task_id") or "")
-            self._tasks.pop(tid, None)
+            # v1.477.0: what the task WAS is read before it is forgotten — the
+            # notification itself does not say (``task_ended_words``).
+            task_type = self._tasks.pop(tid, None)
+            background = self._task_place.pop(tid, None)
             self._task_titles.pop(tid, None)
             if tid and tid in self._stopping:
                 # v1.441.0 (g1): stopped from the Session tab — said already,
@@ -1575,7 +1656,7 @@ class ClaudeDriver(Driver):
             if not self.turn_open:
                 # Claude Code wakes itself to report what the task did.
                 self._alone = True
-            text = system_notice(obj)
+            text = system_notice(obj, task_type=task_type, background=background)
             if text:
                 self.emit(make("notice", text=text))
         elif sub == "background_tasks_changed":
@@ -1583,9 +1664,12 @@ class ClaudeDriver(Driver):
             # task after a change; READ from 2.1.316's schema). Only the titles
             # are taken: the count stays the task_started .. task_notification
             # bookends (v1.417.0), which also hold the foreground tasks.
+            # v1.477.0: and being on this list says the task is in the
+            # background.
             for t in (obj.get("tasks") or [])[:BACKGROUND_WORK_MAX]:
                 if isinstance(t, dict) and str(t.get("task_id") or "") in self._tasks:
                     self._note_task_title(str(t["task_id"]), t.get("description"))
+                    self._note_task_place(str(t["task_id"]), True)
         elif sub == "compact_boundary":
             self._compacting = False
             self.emit(make("notice", text="Claude Code compacted the conversation to make room."))

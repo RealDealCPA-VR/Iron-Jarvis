@@ -13045,6 +13045,50 @@ does not need a bump, stop and bump it.
   `reuseItems` now reuses an open helper's unchanged `children` (they drew
   again on every frame).
 
+- **An ended task is worded by what it WAS; a foreground command's end says
+  nothing** (v1.477.0, a USER REPORT: a wall of grey "A helper finished: cd
+  "C:/…" && grep …" lines buried the one line that mattered). `words.
+  SYS_TASK_DONE` said "A helper …" for EVERY `task_notification`. READ from
+  the 2.1.322 program on this PC (read-only): the notification carries NO
+  `task_type` and NO `is_backgrounded` (`{task_id, tool_use_id, status,
+  summary, output_file, usage}`), so both come from the task's `task_started`;
+  and a Bash / PowerShell command that runs in the FOREGROUND for 2 s
+  (`UTo=2000`) is registered as a `local_bash` task (`is_backgrounded:
+  false`, description = the command's description, else the command line)
+  whose end is announced with that description as the `summary`. In the
+  reported session 121 of 185 "A helper finished" lines were such commands,
+  13 were real background commands and 19 were helpers. A command sent to the
+  background later says `task_updated {patch: {is_backgrounded: true}}`; an
+  ended background command's summary is Claude Code's own sentence
+  (`Background command "…" completed (exit code 0)` / `failed with exit code
+  N`), and a STOPPED one sends only its description. THE RULE
+  (`claude.task_ended_words(obj, task_type=, background=)`, called by
+  `system_notice`): a helper (`is_helper_task`) keeps "A helper finished /
+  failed / was stopped: …"; a background command is "A background command …",
+  or Claude Code's own sentence as it is when the summary starts with
+  `words.SYS_TASK_OWN_SENTENCE` (never for a helper, whose answer may start
+  with those words); a foreground command WITH a step of its own
+  (`tool_use_id`) says NOTHING (its step row shows how it ended); a command
+  whose place was never said, or with no step, is "A command …"; any other
+  type is "A background task …" / "A task …"; a task whose start was never
+  seen is "A task …" (never a helper, never quiet). Words: `words.
+  SYS_TASK_SUBJECT` / `SYS_TASK_ENDED` / `SYS_TASK_DONE`. THE DRIVER keeps
+  `ClaudeDriver._task_place` (task_id → True background / False foreground;
+  NO entry = Claude Code never said, e.g. a state kept by an older version —
+  read as not known, so such a command's end is SAID, never kept quiet),
+  written only by `_note_task_place` (a real bool, an open task) from
+  `task_started.is_backgrounded`, `task_updated.patch.is_backgrounded` and
+  membership in `background_tasks_changed`; type and place are read BEFORE
+  the pop at `task_notification`; cleared in `on_exit`; kept across a restart
+  by `state()`. Unchanged on purpose: the open-task count, `background_
+  helpers`, the Session tab's list and Stop, and `_alone` (still set by every
+  notification with no reply open, a quiet one's too).
+  The recorded helper run and the dashboard contract fixture did not move.
+  Lines already in a session's log keep their old words. Pins:
+  `tests/test_build_app_task_ended_words_v1477.py`; moved on purpose:
+  `test_build_app_stream_rows_v1418` (the pure function, told nothing, says
+  "A task finished").
+
 - **Build › Code's history STAYS (paged by a cursor, the tool's own
   transcript merged in), a view is served from MEMORY, and a message sent
   while it works WAITS** (v1.418.0, fix plan C4.6/C4.8/C4.11, lane G).

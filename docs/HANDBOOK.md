@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.476.1 (2026-11-11).*
+holds itself to. Current as of v1.477.0 (2026-11-12).*
 
 ---
 
@@ -2041,6 +2041,50 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Build › Code calls a finished command a command (v1.477.0)
+
+In Build › Code, a shell command that ended is no longer announced as "A
+helper finished".
+
+Claude Code tells Iron Jarvis when a task it was tracking has ended, and Iron
+Jarvis writes one grey line for it in the conversation. Every such line used
+to start "A helper finished:", whatever had ended. In a session where helpers
+ran shell commands, the conversation filled with lines like `A helper
+finished: cd "C:/…" && grep …`. No helper had finished. A command had, and the
+text after the colon was the command line. The one line that mattered was
+easy to miss among them.
+
+The line now says what ended:
+
+- **A helper** (an agent Claude Code started): "A helper finished: …", "A
+  helper failed: …" or "A helper was stopped: …", as before.
+- **A command in the background** (a dev server, a long test run): "A
+  background command finished: …", "… failed: …" or "… was stopped: …". When
+  Claude Code sends its own whole sentence, such as `Background command "Run
+  the tests" completed (exit code 0)`, that sentence is the line.
+- **An ordinary command gets no extra line.** Claude Code tracks any command
+  that runs for two seconds or longer and reports its end with the command
+  line. That command already has its own step in the conversation, and the
+  step shows how it ended. Most of the lines in the reported session were
+  these: 121 of 185.
+- **Another kind of background task** (a monitor that watches a build): "A
+  background task finished: …".
+- **A task whose kind Iron Jarvis does not know**: "A task finished: …". It is
+  never called a helper on a guess.
+
+What did not change: the count of helpers still working, the Session tab's
+list of background work and its Stop button, and how Iron Jarvis knows that
+Claude Code is writing a reply by itself.
+
+Two things to know:
+
+- **Lines already in a conversation stay as they were written.** Only new
+  lines use the new words.
+- **A session that was running when you updated** may say "A command
+  finished: …" for a command that started before the update. The older
+  version did not record whether that command ran in the background, so Iron
+  Jarvis says the line and does not guess.
 
 ## Skills that get used, one approval for many changes, faster scripts (v1.476.0)
 

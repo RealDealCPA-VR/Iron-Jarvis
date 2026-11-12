@@ -665,12 +665,33 @@ SYS_STOP_HOOK = "A hook stopped Claude Code from carrying on{why}"
 #: C4.3: a task Claude Code runs in the background, and how one ended (its
 #: own summary).
 SYS_TASK_STARTED = "Claude Code started a background task: {what}"
-SYS_TASK_DONE = {
-    "completed": "A helper finished: {summary}",
-    "failed": "A helper failed: {summary}",
-    "killed": "A helper was stopped: {summary}",
-    "stopped": "A helper was stopped: {summary}",
+#: v1.477.0 (a USER REPORT): every ended task used to read "A helper …", so a
+#: session whose helpers ran shell commands filled with "A helper finished: cd
+#: … && grep …" lines. The line now names what the task WAS (read from its
+#: ``task_started``; ``hosted/claude.task_ended_words`` holds the rule):
+#: a helper agent, a shell command in the background, a shell command, any
+#: other kind of task in the background, and "a task" when the kind is not
+#: known. The second word of each key is the Session tab's own
+#: (``claude.TASK_KIND_TITLES``).
+SYS_TASK_SUBJECT = {
+    "helper": "A helper",
+    "background_command": "A background command",
+    "command": "A command",
+    "background_task": "A background task",
+    "task": "A task",
 }
+SYS_TASK_ENDED = {
+    "completed": "finished",
+    "failed": "failed",
+    "killed": "was stopped",
+    "stopped": "was stopped",
+}
+SYS_TASK_DONE = "{who} {ended}: {summary}"
+#: How Claude Code's OWN sentence for an ended background command starts
+#: (read from the 2.1.322 program: `Background command "…" completed (exit
+#: code 0)` / `… failed with exit code 1` / `… was stopped`). Such a summary
+#: is said as it is, never "A background command finished: Background command …".
+SYS_TASK_OWN_SENTENCE = "Background command "
 #: C4.3: an action Claude Code refused on its own (Auto's safety check, a rule).
 SYS_REFUSED = "Claude Code refused {tool}: {why}"
 #: C4.3: a model-service error Claude Code is retrying.
