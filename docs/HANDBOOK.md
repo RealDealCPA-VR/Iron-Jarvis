@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.479.0 (2026-11-12).*
+holds itself to. Current as of v1.481.0 (2026-11-12).*
 
 ---
 
@@ -2041,6 +2041,57 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A task's required files are checked before the reply ends (v1.481.0)
+
+When you give Jarvis a task in a chat that has a working folder, and your
+message lists the files the task must produce (a "Deliverables" or "Success
+criteria" list, or "write `OUTPUT/report.md`"), Jarvis now checks the work
+itself instead of trusting the model's last words.
+
+### What changed
+
+- **The files are checked on disk.** Before the reply ends, Jarvis looks for
+  each required file: it must exist, not be empty, and open (a workbook
+  loads, a Word or PowerPoint file is whole, a JSON file parses, a text file
+  reads). If one is missing and there is still room in the reply, the model
+  is told once what is missing and asked to write it directly. When a few
+  steps are left, it is told what is still missing.
+- **A note under the reply says what really happened**, drawn from the
+  disk, never from the plan: which files are done, which are not, which
+  steps failed and were not done again, helper scripts that were written and
+  never run, writes Jarvis refused, and anything that changed outside the
+  folders the task may write. If a required file is missing, the note says
+  "The task is NOT complete", whatever the reply says.
+- **Where the task may write is enforced.** When your message says so
+  ("Create files only in `OUTPUT/`", "the `INPUT/` folder is read-only",
+  "do not modify `INPUT/`"), Jarvis refuses a write anywhere else before
+  anything runs, and says why. A required file always goes in the folder you
+  named. A helper script never goes into your input or output folders:
+  Jarvis gives the model a scratch folder outside the task for that. With no
+  such rule in your message, nothing about where Jarvis writes changes,
+  except that when every required file goes into one output folder (a folder
+  named `OUTPUT`, `results` or `deliverables`), that folder is the place to
+  write.
+- **Paths mean the task folder.** If the chat's folder is the task's own
+  `INPUT` folder and your message says "`OUTPUT/`", Jarvis now works in the
+  folder above it, so `OUTPUT/` is the real output folder, not a new
+  `INPUT\OUTPUT`.
+- **A failed step is a failed step.** A command that printed a Python error
+  (a traceback, "No module named …") counts as failed even when it hid its
+  exit status, and the model is told so in the step's own result, in every
+  chat.
+
+### What it does not do yet
+
+- It works in the chat (Chat › Chat) when the chat has a folder. Coding
+  sessions keep their own finish check; agent runs are not checked yet.
+- It reads only your own message. A task described only in a README that
+  Jarvis reads is not turned into a checklist; paste the deliverables into
+  your message.
+- A program that a command starts can still write anywhere it is allowed
+  to. Jarvis cannot stop that ahead of time; it notices it afterwards and
+  says so in the note.
 
 ## What Jarvis looks up, it can now use (v1.479.0)
 
