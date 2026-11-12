@@ -162,6 +162,8 @@ async function open(page: Page, theme: "dark" | "light"): Promise<void> {
 async function shot(page: Page, name: string): Promise<void> {
   if (!OUT) return;
   mkdirSync(OUT, { recursive: true });
+  // The dev server's own badge (bottom left) is not part of the app.
+  await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
   await page.screenshot({ path: join(OUT, `${name}.png`) });
   // …and the place where the sign sits, close up.
   const pane = await page.getByTestId("code-session").boundingBox();
