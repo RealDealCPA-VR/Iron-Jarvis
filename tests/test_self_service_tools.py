@@ -49,7 +49,8 @@ def _ctx(platform, tmp_path) -> ToolContext:
 
 def test_factories_build_named_tools(tmp_path):
     platform = _platform(tmp_path)
-    assert [t.name for t in schedule_tools(platform)] == ["schedule_create"]
+    # v1.486.0: chat can list the schedules, too.
+    assert [t.name for t in schedule_tools(platform)] == ["schedule_create", "schedule_list"]
     assert [t.name for t in webhook_tools(platform)] == ["webhook_add"]
     # v1.170.0: chat can list and run saved workflows, not just author them.
     assert [t.name for t in workflow_tools(platform)] == [
