@@ -4285,6 +4285,13 @@ async def chat_stream(
         _prep.start("arming", asyncio.to_thread(
             _resolve_armed_tools, d, body, _tool_cap, **_chat_turn.arming_kw(_grounding)
         ))
+    # v1.489.0: Iron Jarvis looks the message up itself, beside the rest of
+    # the preparation. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+    _route = _chat_turn.start_route_first(
+        _prep, d, body, provider_choice, model_choice,
+        low_trust=normalize_trust(trust) == TRUST_LOW,
+        plain_chat=_harness is None and not text_only_pick,
+    )
 
     # Attachments: text formats extracted inline (scans via OCR), images to
     # VISION. SHARED IMPLEMENTATION (v1.174.0): this lane and
@@ -5127,6 +5134,28 @@ async def chat_stream(
     # (`capability_search/join.join_found` fills it). Each is a FORCED,
     # once-only card (`_night_asks` below) for the whole reply.
     _looked_up: set[str] = set()
+    # v1.489.0: what Iron Jarvis looked up for this message joins the reply
+    # through the lookup's own join (a change it found is a forced card,
+    # `_looked_up`), and the model is told in one section. Raced against Stop
+    # like every slow stage. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+    # A fast model's answer is in within the head start; a slow one's joins
+    # later (a tool round's end, or when the reply ends on words), so the
+    # reply's first word never waits for it.
+    _routed = None
+    if _route is not None:
+        _routed = await _prep_step(_route.head_start())
+        if _routed is _PREP_STOPPED:
+            _routed = None
+    if _routed is not None and isinstance(ask_armed, list):
+        _routed_section = _chat_turn.join_route_first(
+            d, body, _routed, armed=armed, auto_armed=auto_armed, ask_armed=ask_armed,
+            tool_specs=tool_specs, overrides=overrides, armed_grant=armed_grant,
+            ctx=ctx, tool_ceiling=tool_ceiling, ceiling=_arm_ceiling,
+            low_trust=_chat_turn.finish_low_trust(_trust_state), can_ask=True,
+            found_asks=_looked_up,
+        )
+        if _routed_section:
+            system += "\n\n" + _routed_section
     # CONVERSATION GRANTS (v1.312.0) — "Allow for this conversation", sent by
     # the page on every turn (`body.granted_tools`). Honoured ONLY for a tool
     # this turn armed or ask-armed by another path, through the ONE helper
@@ -5348,6 +5377,13 @@ async def chat_stream(
         # v1.300.0: the whole usage per completion, priced per step.
         # MIRROR NOTE (lock-step): chat_turn.run_chat_turn keeps one too.
         _tally = UsageTally()
+        if _route is not None:
+            # v1.489.0: the routing call is a billed call of this turn (billed
+            # once, where its answer is used).
+            _rf_in, _rf_out, _rf_n = _route.bill(_tally)
+            usage_in += _rf_in
+            usage_out += _rf_out
+            completions += _rf_n
         # THE TIMELINE (v1.390.0, the long-jobs plan's Phase 1): a HARNESS
         # turn (a coding session's reply, the benchmark) says each billed
         # model call as it ends — a `model_call` frame beside the tally's own
@@ -5940,14 +5976,47 @@ async def chat_stream(
                 # language rewrite uses) and this round runs the lookup.
                 # Anything else, a failure or a timeout leaves the reply as
                 # written. Raced against Stop like every slow stage.
+                # v1.489.0: what Iron Jarvis looked up ITSELF (route-first),
+                # not used yet, is put to a reply that ends on words: waited
+                # for (raced against Stop), joined (a change is a forced
+                # card), and the model is asked once with it. MIRROR NOTE
+                # (lock-step): chat_turn.run_chat_turn.
+                _rf_note = ""
                 if (
                     not calls and not _looked_first and _harness is None and not text_only_pick
-                    and _chat_turn.look_first_wanted(
+                    and _route is not None and isinstance(ask_armed, list)
+                ):
+                    _rf_end = await _prep_step(_chat_turn.route_first_at_end(
+                        _route, d, body,
+                        wanted=_chat_turn.look_first_wanted(
+                            d, body, armed=armed, msgs=msgs, head=_head, reply=reply_text,
+                            round_index=_round, rounds=_rounds, trust_state=_trust_state,
+                            truncated=_truncated,
+                            demo=_chat_turn.is_demo_route(route_provider, route_reason),
+                            for_route=True,
+                        ),
+                        tally=_tally, armed=armed, auto_armed=auto_armed, ask_armed=ask_armed,
+                        tool_specs=tool_specs, overrides=overrides, armed_grant=armed_grant,
+                        ctx=ctx, tool_ceiling=tool_ceiling, ceiling=_arm_ceiling,
+                        low_trust=_chat_turn.finish_low_trust(_trust_state), can_ask=True,
+                        found_asks=_looked_up,
+                    ))
+                    if _rf_end is _PREP_STOPPED:
+                        _persist_once(AgentState.CANCELLED)
+                        return
+                    _rf_note, (_rf_in, _rf_o, _rf_n) = _rf_end
+                    usage_in += _rf_in
+                    usage_out += _rf_o
+                    completions += _rf_n
+                if (
+                    not calls and not _looked_first and _harness is None and not text_only_pick
+                    and (_rf_note or _chat_turn.look_first_wanted(
                         d, body, armed=armed, msgs=msgs, head=_head, reply=reply_text,
                         round_index=_round, rounds=_rounds, trust_state=_trust_state,
                         truncated=_truncated,
                         demo=_chat_turn.is_demo_route(route_provider, route_reason),
-                    )
+                        routed=_route is not None and _route.used,
+                    ))
                 ):
                     _looked_first = True
                     _lf_out = await _prep_step(_chat_turn.look_first_call(
@@ -5956,7 +6025,7 @@ async def chat_stream(
                         raw_blocks=getattr(final_resp, "raw_blocks", None), tally=_tally,
                         # Review: the turn's reasoning level, like the round's
                         # own call (lock-step: chat_turn).
-                        router_kw=_reasoning_kw(body),
+                        router_kw=_reasoning_kw(body), note=_rf_note,
                     ))
                     if _lf_out is _PREP_STOPPED:
                         _persist_once(AgentState.CANCELLED)
@@ -6150,6 +6219,37 @@ async def chat_stream(
                 # tool; ``round_gate``). Every reader below uses it.
                 # MIRROR NOTE (lock-step): chat_turn.
                 _turn_tools = _chat_turn.round_gate({*armed, *ask_armed}, _finish, calls)
+                # A DETAIL ONLY THE USER HAS (v1.489.0, tools/details): a call
+                # that leaves one out (the address of a server to add) is
+                # asked of the user on a QUESTION card first, and the answer
+                # goes into the call's arguments, so the spend check, the
+                # approval card and the ledger below all see the whole call.
+                # Only where the page draws the card (`mcp_cards`), in plain
+                # chat; a call refused anyway (Never run) asks nothing; a
+                # Decline answers the call with a sentence, no card. The POST
+                # lane cannot ask: the registry tells the model to ask in
+                # words (`details.ask_in_words`).
+                _detail_refused: dict[int, str] = {}
+                if body.mcp_cards and _harness is None and calls:
+                    from ...tools import details as _details
+
+                    def _detail_skip(_c, _dt) -> bool:
+                        _dp = _dt.perm_key() if _dt is not None else _c.name
+                        return d.platform.permissions.mode_for(_dp, overrides) is PermissionMode.DENY
+
+                    if any(getattr(d.platform.registry.get(_c.name), "user_details", None)
+                           for _c in calls if _c.name in _turn_tools):
+                        _dbox: list = []
+                        async with contextlib.aclosing(_chat_turn._with_side(
+                            _details.fill_missing(
+                                d.platform.registry, calls, _turn_tools, _ti.elicit,
+                                ctx=ctx, refused=_detail_skip,
+                            ),
+                            _ti.side, _dbox,
+                        )) as _dframes:
+                            async for _side_event, _side_data in _dframes:
+                                yield _sse(_side_event, _side_data)
+                        _detail_refused = _dbox[0] if _dbox else {}
                 # v1.407.2: the posture rides along — Ask first's guard for
                 # Git's and Iron Jarvis's own files is dropped under "Don't
                 # ask" (tools/base.guarded_edit_check). MIRROR NOTE
@@ -6460,6 +6560,11 @@ async def chat_stream(
                     # chat_turn.py's loop does the same at its invoke.
                     _call_key = _repeat_key(tc.name, tc.arguments)
                     _plan["key"] = _call_key
+                    if id(tc) in _detail_refused:
+                        # v1.489.0: the user declined the question card for a
+                        # detail this call needs: answered, not run, no card.
+                        _plan["refused"] = _detail_refused[id(tc)]
+                        continue
                     if _failed_calls.get(_call_key, 0) >= REPEATED_CALL_LIMIT:
                         _plan["refused"] = repeated_call_refusal(tc.name, _failed_calls[_call_key])
                         continue
@@ -7653,6 +7758,14 @@ async def chat_stream(
                     # is decided per call, like every ask-first tool); in low
                     # trust nothing joins. MIRROR NOTE (lock-step):
                     # chat_turn.run_chat_turn.
+                    # v1.489.0: what Iron Jarvis looked up itself, in
+                    # meanwhile, joins with this round's lookups. MIRROR NOTE
+                    # (lock-step): chat_turn.run_chat_turn.
+                    _rf_in, _rf_o, _rf_n = _chat_turn.note_route_late(
+                        _route, d, armed=armed, msgs=msgs, ctx=ctx, tally=_tally)
+                    usage_in += _rf_in
+                    usage_out += _rf_o
+                    completions += _rf_n
                     if _chat_turn.join_found_tools(
                         d, body, tools_used=tools_used, armed=armed,
                         auto_armed=auto_armed, ask_armed=ask_armed,

@@ -9,6 +9,9 @@ the note told the model "Now among your tools: redact_pii, config_change,
 build_defaults_set. Call the one that fits": the one tool that did the job was
 never named. Now a held match counts as one of the lookup's places and the note
 says "Already among your tools in this reply: `reflex_create`."
+
+v1.489.0 (moved on purpose): `webhook_update` brings its family's maker,
+`webhook_add`, which takes no place (``MAKER_FOR``).
 """
 
 from __future__ import annotations
@@ -71,7 +74,7 @@ def test_a_held_match_takes_its_place_and_is_named(app):
     joined, state = _join(app, ROWS, held=("reflex_create",))
     # Three places: webhook_update, reflex_create (held), redact_pii. The two
     # lower matches no longer fill in for the held one.
-    assert joined == ["webhook_update", "redact_pii"], joined
+    assert joined == ["webhook_update", "webhook_add", "redact_pii"], joined
     note = state["msgs"][-1].content
     assert "Already among your tools in this reply: `reflex_create`." in note
     assert "build_defaults_set" not in note and "goal_add" not in note
@@ -79,7 +82,7 @@ def test_a_held_match_takes_its_place_and_is_named(app):
 
 def test_nothing_held_joins_as_before(app):
     joined, state = _join(app, ROWS, turn="turn-held-2")
-    assert joined == ["webhook_update", "reflex_create", "redact_pii"], joined
+    assert joined == ["webhook_update", "webhook_add", "reflex_create", "redact_pii"], joined
     assert "Already among your tools" not in state["msgs"][-1].content
 
 
@@ -89,7 +92,7 @@ def test_held_settings_tools_take_one_place_together(app):
             _row("agent_create"), _row("webhook_update"), _row("redact_pii")]
     joined, state = _join(app, rows, held=("config_set", "config_list", "config_change"), turn="turn-held-3")
     # The settings family (all held) holds ONE place; two tool matches join.
-    assert joined == ["agent_create", "webhook_update"], joined
+    assert joined == ["agent_create", "webhook_update", "webhook_add"], joined
     # The family is not listed as "already" (it is the settings reader and writers).
     assert "Already among your tools" not in state["msgs"][-1].content
 
@@ -112,5 +115,5 @@ def test_a_held_match_beside_a_tool_that_never_joins_is_no_reason_to_look_again(
 def test_only_a_held_match_within_the_lookups_places_is_named(app):
     rows = [_row("webhook_update"), _row("redact_pii"), _row("goal_add"), _row("reflex_create")]
     joined, state = _join(app, rows, held=("reflex_create",), turn="turn-held-6")
-    assert joined == ["webhook_update", "redact_pii", "goal_add"], joined
+    assert joined == ["webhook_update", "webhook_add", "redact_pii", "goal_add"], joined
     assert "Already among your tools" not in state["msgs"][-1].content

@@ -45,9 +45,37 @@ class SentinelAddTool(Tool):
         },
         "required": ["name", "path"],
     }
+    # v1.489.0: WHICH folder to watch is a detail only the user has. Seen
+    # live: "keep an eye on the folder called bookings on my desktop" ended on
+    # a question in words (or on "I can't read that folder") with no call.
+    # Left out, or given as a bare name, the user is asked for the full
+    # location on a card before the approval card (tools/details).
+    user_details = {
+        "path": {
+            "title": "The folder's full location",
+            "what": "the full location of the folder to watch",
+            "description": "Starting with its drive, for example C:\\Users\\you\\Desktop\\bookings",
+        },
+    }
+    user_details_lead = "Iron Jarvis needs to know which folder to watch."
 
     def __init__(self, platform) -> None:
         self.platform = platform
+
+    def missing_details(self, args: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, dict[str, Any]]:
+        given = args if isinstance(args, dict) else {}
+        text = str(given.get("path") or "").strip().strip("\"'")
+        if text:
+            try:
+                from ..settings.records_build import _absolute, _network
+
+                # A full location, or a network spelling (the tool refuses
+                # that in its own words), is not asked about.
+                if _network(text) or _absolute(text):
+                    return {}
+            except Exception:  # noqa: BLE001 — a fault asks nothing
+                return {}
+        return dict(self.user_details)
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         from ..settings.records import capture_create_undo

@@ -736,6 +736,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'ask if you should search before replying',
         "don't claim you're done without checking",
     ),
+    'capability_route': (
+        'make it pick the right tool first',
+        'have it figure out what I need first',
+        'I want smarter answers, even if slower',
+        'check which tools it needs before replying',
+        'make it better at choosing the right tool',
+        'slow replies are fine if answers get better',
+        'it should think about my request first',
+        'always look up the right settings first',
+    ),
     'capability_search': (
         'can you check if you can do this',
         'do you have a tool for this',

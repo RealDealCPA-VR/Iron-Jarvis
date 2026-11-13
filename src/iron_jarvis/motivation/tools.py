@@ -27,7 +27,10 @@ class GoalAddTool(Tool):
         "records the intent — it never acts on its own. Whether a goal ever leads "
         "to a self-initiated action is gated by its autonomy dial (default "
         "'suggest', i.e. propose-only) and the global autonomy switch (off by "
-        "default). Use this for durable objectives, not one-off tasks."
+        "default). Use this for durable objectives, not one-off tasks: it is the "
+        "tool for work the user wants KEPT AT UNTIL IT IS DONE ('keep chasing the "
+        "suppliers until every quote is in, don't stop after one go'). A schedule "
+        "only repeats at set times and never knows when the work is finished."
     )
     permission_key = "goal_add"
     # Calm UI redesign (AUDIT §6.3): a goal recorded from chat has an Undo (it

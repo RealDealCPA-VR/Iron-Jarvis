@@ -577,6 +577,16 @@ class ModelServerAddTool(R._RecordTool):
         },
         "required": ["address"],
     }
+    # v1.489.0: an address the user did not say is asked for on a card
+    # (tools/details), before the approval card. Never the key.
+    user_details = {
+        "address": {
+            "title": "The server's address",
+            "what": "the server's address",
+            "description": "For example http://192.168.1.20:1234 or http://my-pc:11434",
+        },
+    }
+    user_details_lead = "To add your model server, Iron Jarvis needs its address."
 
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
         return _redacted(args)
@@ -1279,6 +1289,25 @@ class MemoryBaseAddTool(R._RecordTool):
         },
         "required": ["kind", "name"],
     }
+    # v1.489.0: where the notes are is asked for on a card when the model
+    # leaves it out (tools/details). Never the Notion token.
+    user_details = {
+        "folder": {"title": "The notes folder's full location", "what": "the notes folder's full location",
+                   "description": "Starting with its drive, for example D:\\vault"},
+        "database": {"title": "The Notion database's link", "what": "the Notion database's link",
+                     "description": "In Notion: Share, then Copy link"},
+    }
+    user_details_lead = "To add this memory base, Iron Jarvis needs to know where it is."
+
+    def missing_details(self, args: dict[str, Any], ctx: Any = None) -> dict[str, dict[str, Any]]:
+        """`folder` for a notes folder, `database` for Notion; nothing while
+        the kind is not one of the two (the tool says so itself)."""
+        given = args if isinstance(args, dict) else {}
+        kind = _BASE_KINDS.get(_fold(given.get("kind")), "")
+        key = {"markdown": "folder", "notion": "database"}.get(kind, "")
+        if not key or str(given.get(key) or "").strip():
+            return {}
+        return {key: self.user_details[key]}
 
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
         return _redacted(args)

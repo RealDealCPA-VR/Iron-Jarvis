@@ -2392,6 +2392,32 @@ class ChannelConnectTool(_RecordTool):
         },
         "required": ["name", "type"],
     }
+    # v1.489.0: what only the user knows about a destination (never a token,
+    # a password or a webhook address: those go on the secure card) is asked
+    # for on a card when the model leaves it out (tools/details).
+    user_details = {
+        "chat_id": {"title": "Your Telegram chat id", "what": "the Telegram chat id",
+                    "description": "The number Telegram gives your chat with the bot, for example 123456789"},
+        "channel": {"title": "The Slack channel", "what": "the Slack channel",
+                    "description": "For example #general"},
+        "host": {"title": "Your mail server for sending", "what": "the mail server for sending",
+                 "description": "For example smtp.gmail.com"},
+        "from_addr": {"title": "The address the mail is sent from", "what": "the From address",
+                      "description": "For example you@example.com"},
+        "to_addr": {"title": "The address the mail is sent to", "what": "the address to send to",
+                    "description": "For example you@example.com"},
+    }
+    user_details_lead = "To set up this destination, Iron Jarvis needs a little more."
+
+    def missing_details(self, args: dict[str, Any], ctx: Any = None) -> dict[str, dict[str, Any]]:
+        """Only the fields the chosen `type` needs (``_CHANNEL_FIELDS``)."""
+        given = args if isinstance(args, dict) else {}
+        ctype = str(given.get("type") or "").strip().lower()
+        return {
+            f: self.user_details[f]
+            for f in _CHANNEL_FIELDS.get(ctype, ())
+            if f in self.user_details and not str(given.get(f) or "").strip()
+        }
 
     @staticmethod
     def _secret_arg(args: dict[str, Any]) -> str:
@@ -3312,7 +3338,11 @@ class ReflexCreateTool(_ReflexTool):
         "optional `task_template` ({body}, {text}, {slug} are filled in). An `email` rule hears only "
         "mail that reaches an email destination with two-way listening on (channel_connect with "
         "`imap_host`, then channel_toggle), from a sender on that destination's Allowed senders "
-        "list. The user approves on a card; Undo removes the rule."
+        "list. For an everyday request (\"when an email from the tax office arrives, file it in "
+        "the Tax folder\"): `source` email, `match` a word that marks those messages (the sender's "
+        "name), `action` session, `task_template` what to do with each one in plain words. A word to "
+        "match is enough: you do not need the sender's exact address or a folder's full location "
+        "to make the rule. The user approves on a card; Undo removes the rule."
     )
     input_schema = {
         "type": "object",

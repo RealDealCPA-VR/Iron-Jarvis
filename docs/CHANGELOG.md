@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.489.0
+
+**Jarvis asks on a card, and finds the right tool first.** **A missing detail is asked on a card, not in chat.** When you ask Jarvis to add your model server, a memory base, a notification destination, an extension, a web service, a folder watcher or a task for tonight, and one detail only you have is missing (the server's address, which folder), a small question card shows first.
+
 ## v1.488.0
 
 **Asked once, decided on the card.** **Settings changes: no second "are you sure?" in words.** When you ask Jarvis to change a setting and it's clear which value you mean, it now makes the change instead of asking "Would you like me to…?" first.
@@ -77,7 +81,3 @@
 ## v1.474.0
 
 **A coding tool can hand work to another one.** In Build › Code, the coding tool you are working with can now start another coding tool you have on this PC on a piece of the work.
-
-## v1.473.0
-
-**Long coding sessions open fast and stay smooth.** A long Build › Code session now draws only its newest messages, about 120 rows.

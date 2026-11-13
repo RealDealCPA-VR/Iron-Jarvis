@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.488.0 (2026-11-13).*
+holds itself to. Current as of v1.489.0 (2026-11-13).*
 
 ---
 
@@ -2041,6 +2041,41 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Jarvis asks on a card, and finds the right tool first (v1.489.0)
+
+- **A missing detail is asked on a card, not in chat.** When you ask Jarvis
+  to add your model server, a memory base, a notification destination, an
+  extension, a web service, a folder watcher or a task for tonight, and one
+  detail only you have is missing (the server's address, which folder), a
+  small question card shows first. Type the answer there and the usual approval card follows with the
+  whole change on it. Before, Jarvis asked in chat, and your answer started the
+  work all over again. Decline on the card and nothing is changed. A password
+  or key is never asked this way: those still go on the secure card.
+- **A setting with fixed choices is picked on a card.** "Make the app easier
+  on the eyes" or "don't give me brand-new updates" with no clear choice now
+  shows that setting's choices on a card (the themes, Stable or Fresh, the
+  approval levels) instead of a list in chat. The default model works the same
+  way: the card lists the models you can use now, each with its AI service.
+  Picking a model on another service changes both, and that change asks first
+  as it always did. A protected choice still needs its own approval card.
+- **Feature lookup first (a new setting, off by default; Settings › Models).**
+  With it on, Iron Jarvis reads each message itself with one small extra call
+  to the model you are chatting with, picks which of its own tools, settings
+  and setup pages fit, and has them ready for the reply. It runs beside the
+  reply, so an ordinary question is not held up. What it costs: one more model
+  call per message (on a subscription that is your plan's usage), and replies
+  that change something start a little later. What it never does: run
+  anything. A change it brings still shows its approval card every time, and
+  it brings nothing in a chat that read a flagged document or page.
+- **With Feature lookup on, a tool that changes or lists one kind of thing
+  now comes with the tool that makes a new one** (a schedule, a goal, a rule, a
+  watcher, a destination, a model server, a task for tonight). Before, "send
+  me an overview every Friday at 16:00" could find the tools that change or
+  delete a schedule and miss the one that makes it.
+- **"Keep at it until it's done" is a goal, not a schedule.** Jarvis is now
+  told the difference: a goal is work it keeps chasing until it is finished; a
+  schedule only repeats at set times.
 
 ## Asked once, decided on the card (v1.488.0)
 

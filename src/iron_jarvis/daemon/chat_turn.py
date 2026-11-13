@@ -3195,6 +3195,155 @@ def join_found_tools(d: Any, body: Any, **kw: Any) -> list:
         return []
 
 
+class RouteFirst:
+    """One turn's routing call and whether its answer was used yet (v1.489.0).
+
+    The call runs BESIDE the reply. Its answer is used exactly once, at the
+    first of three places the lane reaches with it ready: before the first
+    round (:meth:`head_start`, a short wait), at the end of a tool round
+    (:meth:`late`, never waits), or when the reply ends on words
+    (:meth:`wait`). ``used`` says the turn was looked up by Iron Jarvis, so
+    the look-first check does not ask the model the same question again."""
+
+    def __init__(self, task: Any) -> None:
+        self.task = task
+        self.used = False
+        self.routed: Any = None
+        self._billed = False
+
+    def _take(self) -> Any:
+        self.used = True
+        try:
+            self.routed = self.task.result()
+        except BaseException:  # noqa: BLE001 — cancelled or failed: nothing found
+            self.routed = None
+        return self.routed
+
+    async def head_start(self) -> Any:
+        """The answer if it is in within the head start, else None (the call
+        goes on beside the reply)."""
+        from ..capability_search.route import HEAD_START_S
+
+        if self.used:
+            return None
+        done, _pending = await asyncio.wait({self.task}, timeout=HEAD_START_S)
+        return self._take() if done else None
+
+    def late(self) -> Any:
+        """The answer if it came in meanwhile and was not used yet."""
+        if self.used or not self.task.done():
+            return None
+        return self._take()
+
+    async def wait(self) -> Any:
+        """The answer, waited for (the call bounds itself). None when it was
+        already used."""
+        if self.used:
+            return None
+        self.used = True
+        try:
+            self.routed = await self.task
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            self.routed = None
+        return self.routed
+
+    def bill(self, tally: Any) -> tuple[int, int, int]:
+        """Add the call to the turn's tally ONCE, when its answer was used.
+        Returns ``(input tokens, output tokens, completions)`` to add."""
+        routed = self.routed
+        if self._billed or routed is None:
+            return (0, 0, 0)
+        self._billed = True
+        usage = dict(getattr(routed, "usage", None) or {})
+        try:
+            tally.add(routed.provider, routed.model, usage)
+        except Exception:  # noqa: BLE001 — a tally fault never fails a turn
+            log.debug("route-first billing failed", exc_info=True)
+        return (int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0), 1)
+
+
+def start_route_first(prep: Any, d: Any, body: Any, provider: str, model: str, *,
+                      low_trust: bool, plain_chat: bool) -> "RouteFirst | None":
+    """IRON JARVIS LOOKS THE MESSAGE UP ITSELF (v1.489.0,
+    ``capability_search/route``): when the setting is on and this is a plain,
+    full-trust chat turn with Auto tools on, the routing call STARTS here,
+    beside the turn's other preparation (``_PrepGroup``: cancelled with the
+    turn). Returns the turn's :class:`RouteFirst`, or None when nothing is
+    looked up. Both lanes call it at the same place — MIRROR NOTE
+    (lock-step). Never raises."""
+    try:
+        from ..capability_search import route as _route
+
+        if _route.wanted(d, body, low_trust=low_trust, plain_chat=plain_chat):
+            prep.start("route", _none_on_error(_route.route_request(d, body, provider, model)))
+            return RouteFirst(prep.take("route"))
+    except Exception:  # noqa: BLE001 — nothing is looked up; the turn goes on
+        log.debug("route-first start failed", exc_info=True)
+    return None
+
+
+def note_route_late(route: "RouteFirst | None", d: Any, *, armed: Any, msgs: list, ctx: Any,
+                    tally: Any) -> tuple[int, int, int]:
+    """AT THE END OF A TOOL ROUND: if the routing call answered meanwhile,
+    what it found is left for this round's join (the lane calls
+    ``join_found_tools`` right after) and said on the round's newest tool
+    result. Returns the usage to add. MIRROR NOTE (lock-step). Never raises."""
+    try:
+        if route is None:
+            return (0, 0, 0)
+        routed = route.late()
+        if routed is None:
+            return (0, 0, 0)
+        from ..capability_search import route as _route
+
+        _route.note_late(d, routed, armed=armed, msgs=msgs, ctx=ctx)
+        return route.bill(tally)
+    except Exception:  # noqa: BLE001
+        log.debug("route-first late note failed", exc_info=True)
+        return (0, 0, 0)
+
+
+async def route_first_at_end(route: "RouteFirst | None", d: Any, body: Any, *, wanted: bool,
+                             tally: Any, **join_kw: Any) -> tuple[str, tuple[int, int, int]]:
+    """THE REPLY ENDS ON WORDS and the routing call was not used yet: wait
+    for it (it bounds itself), join what it found, and return the note the
+    model is asked ONCE with ("" when there is nothing to ask: the reply
+    stands) plus the usage to add. ``wanted`` is the lane's own reading of
+    the turn's facts (``look_first_wanted(for_route=True)``). A cancel passes
+    through (Stop ends the turn). MIRROR NOTE (lock-step)."""
+    if route is None or route.used or not wanted:
+        return "", (0, 0, 0)
+    routed = await route.wait()
+    if routed is None:
+        return "", (0, 0, 0)
+    used = route.bill(tally)
+    try:
+        from ..capability_search import route as _route
+
+        found = join_route_first(d, body, routed, found_text=True, **join_kw)
+        return (_route.REASK_NOTE.format(found=found) if found else ""), used
+    except Exception:  # noqa: BLE001
+        log.debug("route-first end join failed", exc_info=True)
+        return "", used
+
+
+def join_route_first(d: Any, body: Any, routed: Any, **kw: Any) -> str:
+    """What the routing call picked joins the reply through the lookup's own
+    join (every rule of ``capability_search/join.join_found``), and the
+    section the system prompt gains is returned ("" when nothing). Both lanes
+    call it once, right after their grant sets exist and before the first
+    round — MIRROR NOTE (lock-step). Never raises."""
+    try:
+        from ..capability_search import route as _route
+
+        return _route.join_routed(d, body, routed, max_tools=_MAX_ARMED_TOOLS, **kw)
+    except Exception:  # noqa: BLE001
+        log.debug("route-first join failed", exc_info=True)
+        return ""
+
+
 def looked_up_refusal(ctx: Any, name: str, args: Any) -> str:
     """Why this call of a tool a LOOKUP brought is not run, or "" (v1.479.0
     review): such a reader is never pointed at a path on another computer
@@ -6479,7 +6628,22 @@ CAPABILITY_BLOCK = (
     "first, then call the tool it finds.\n"
     "A request about how things look, sound or behave, or about what is kept, "
     "allowed or done automatically, may be about Iron Jarvis itself and not about "
-    "a file of the user's. Look it up before you ask the user which they mean."
+    "a file of the user's. Look it up before you ask the user which they mean.\n"
+    # v1.489.0, each seen live on the practice set: a timed request and a "keep
+    # at it" request were answered with a workflow draft (the exit line's own
+    # "every Friday" example); "which model do you use by default" and "show me
+    # what you remember about me" were answered from the prompt (the first one
+    # wrongly); and the model asked where a folder was that its file tools
+    # could see.
+    "Use the kind of thing the request is: at a set time (\"every Friday at "
+    "four\") is a schedule; when a message or a file arrives, a rule or a folder "
+    "watcher; work to keep at until it is finished, a goal; the way a piece of "
+    "work was done, kept to do again, a skill. Look its tool up and call it; "
+    "none of these is a workflow_draft.\n"
+    "What Iron Jarvis is set to, has scheduled or remembers about the user is "
+    "read with a tool, not from this prompt, which shows only part of it. A "
+    "folder or a file the user names you find with your file tools before "
+    "asking where it is."
 )
 
 
@@ -6536,8 +6700,19 @@ LOOK_FIRST_NOTE = (
     "The request may be about Iron Jarvis itself (how it looks, sounds or "
     "behaves, what it keeps, allows or does by itself) and not about a file of "
     "the user's: if your reply asks the user which they mean, look first.\n"
-    "If your reply above only answers a question, writes or explains "
-    "something, or asks the user for a detail that no lookup could give, "
+    # v1.489.0: 16 of 42 missed practice requests never looked. Their replies
+    # asked for setup details (an address, a folder, a time) before knowing
+    # what the tool needs, or answered a question about Iron Jarvis's own
+    # state from the prompt; both read as "asks for a detail" / "answers a
+    # question" and were kept.
+    "If your reply asks the user for details so that something can be set up, "
+    "scheduled or connected, look first: the tool says what it needs, and a "
+    "folder or a file the user named you can find yourself. The same if the "
+    "user asked what Iron Jarvis is set to, has scheduled or remembers about "
+    "them: this prompt shows only part of it.\n"
+    "If your reply above only answers a question that is not about Iron Jarvis "
+    "itself, writes or explains something, or asks the user what their own "
+    "content should say, "
     "answer with the single word KEEP and it stands exactly as it is. If you "
     "look something up, the reply above is thrown away: write the whole reply "
     "again after.)"
@@ -6695,6 +6870,8 @@ def look_first_wanted(
     trust_state: Any,
     demo: bool = False,
     truncated: bool = False,
+    routed: bool = False,
+    for_route: bool = False,
 ) -> bool:
     """Is this reply, about to end on words, asked ONCE to look first?
 
@@ -6719,7 +6896,7 @@ def look_first_wanted(
         platform = d.platform
         if not getattr(getattr(platform, "config", None), "capability_search", False):
             return False
-        if not getattr(getattr(platform, "config", None), "capability_look_first", False):
+        if not for_route and not getattr(getattr(platform, "config", None), "capability_look_first", False):
             return False
         from ..capability_search import index as _ci
         from ..capability_search import join as _cj
@@ -6752,9 +6929,15 @@ def look_first_wanted(
             tool = registry.get(name)
             if tool is None or not _cj._reads(tool, name):
                 return False
-        if looked:
+        if for_route:
+            # v1.489.0: the same facts decide whether what Iron Jarvis looked
+            # up itself is put to a reply that ended on words.
+            return True
+        if looked or routed:
             # v1.488.0: a reply that looked is asked only when it ends by
-            # offering a change its own tools make.
+            # offering a change its own tools make. v1.489.0: so is a reply
+            # Iron Jarvis looked up itself (`routed`): the model is not asked
+            # the same question twice.
             return offer_a_tool_makes(d, reply, armed, msgs, head)
         return True
     except Exception:  # noqa: BLE001 — cannot tell: the reply ends as written
@@ -6774,6 +6957,7 @@ async def look_first_call(
     raw_blocks: Any = None,
     tally: "UsageTally | None" = None,
     router_kw: "dict[str, Any] | None" = None,
+    note: str = "",
 ) -> tuple[Any, list, int, int, int]:
     """Ask the model ONCE whether its reply should stand or it should look
     first. ``router_kw`` is what the lane's own round call spreads into the
@@ -6795,10 +6979,14 @@ async def look_first_call(
     from ..providers.adapters.base import LLMMessage
 
     own = _tool_names(tools)
-    offer = offer_a_tool_makes(d, reply, own, msgs, head)
+    # v1.489.0: `note` is what Iron Jarvis looked up itself (route-first): the
+    # model is asked with it, and may answer with its own tools (they hold
+    # what was found), each call meeting its own card rules.
+    offer = bool(note) or offer_a_tool_makes(d, reply, own, msgs, head)
     asked = [
         LLMMessage(role="assistant", content=str(reply or ""), raw_blocks=list(raw_blocks or [])),
-        LLMMessage(role="user", content=LOOK_FIRST_OFFER_NOTE if offer else look_first_note(reply, msgs, head)),
+        LLMMessage(role="user", content=note or (
+            LOOK_FIRST_OFFER_NOTE if offer else look_first_note(reply, msgs, head))),
     ]
     started = _time.perf_counter()
     try:
@@ -11271,6 +11459,13 @@ async def run_chat_turn(
         _prep.start("arming", asyncio.to_thread(
             _resolve_armed_tools, d, body, _tool_cap, **arming_kw(_grounding)
         ))
+    # v1.489.0: Iron Jarvis looks the message up itself, beside the rest of
+    # the preparation. MIRROR NOTE (lock-step): routes/chat.py.
+    _route = start_route_first(
+        _prep, d, body, provider_choice, model_choice,
+        low_trust=normalize_trust(trust) == TRUST_LOW,
+        plain_chat=_harness is None and not text_only_pick,
+    )
 
     images, attach_block = await _prep.take("attachments")
     if attach_block:
@@ -11815,6 +12010,21 @@ async def run_chat_turn(
     # a deny before it reads the grant, but a grant list that names a denied
     # tool is a lie on the ledger). Full trust: identical to the old set.
     armed_grant = {k for k, v in overrides.items() if v == "allow"}
+    # v1.489.0: what Iron Jarvis looked up for this message joins the reply
+    # (this lane cannot ask, so only readers join) and the model is told in
+    # one section. MIRROR NOTE (lock-step): routes/chat.py.
+    # A fast model's answer is in within the head start; a slow one's joins
+    # later (a tool round's end, or when the reply ends on words).
+    _routed = (await _route.head_start()) if _route is not None else None
+    if _routed is not None:
+        _routed_section = join_route_first(
+            d, body, _routed, armed=armed, auto_armed=auto_armed, ask_armed=(),
+            tool_specs=tool_specs, overrides=overrides, armed_grant=armed_grant,
+            ctx=ctx, ceiling=_arm_ceiling,
+            low_trust=finish_low_trust(_trust_state), can_ask=False,
+        )
+        if _routed_section:
+            system += "\n\n" + _routed_section
     # ACCEPT EDITS / AUTO (v1.406.0 part 2, core/auto_approve): this lane
     # cannot show a card, so under either posture it runs only what the RULES
     # pass and refuses the rest in words — never the model judge (it must not
@@ -11883,6 +12093,13 @@ async def run_chat_turn(
     # v1.300.0: the whole usage per completion (cache counts, the provider's
     # own cost) — priced per step. Lock-step: the stream lane keeps one too.
     _tally = UsageTally()
+    if _route is not None:
+        # v1.489.0: the routing call is a billed call of this turn (billed
+        # once, where its answer is used).
+        _rf_in, _rf_out, _rf_n = _route.bill(_tally)
+        usage_in += _rf_in
+        usage_out += _rf_out
+        completions += _rf_n
     # THINKING + TRUNCATED (v1.323.0): every answering call's reasoning, in
     # order (display-only — it never joins `msgs`, the reply or the saved
     # history), and whether the FINAL answering call ran out of output tokens.
@@ -12161,14 +12378,38 @@ async def run_chat_turn(
             # `find_capability` answer is acted on (this round then runs it);
             # anything else leaves the reply as written. MIRROR NOTE
             # (lock-step): routes/chat.py's stream loop.
+            # v1.489.0: what Iron Jarvis looked up ITSELF (route-first), not
+            # used yet, is put to a reply that ends on words: waited for,
+            # joined (this lane cannot ask, so only readers join), and the
+            # model is asked once with it. MIRROR NOTE (lock-step): the
+            # stream lane.
+            _rf_note = ""
+            if not calls and not _looked_first and _harness is None and not text_only_pick and _route is not None:
+                _rf_demo = is_demo_route(getattr(route, "provider", ""), getattr(route, "reason", ""))
+                _rf_note, (_rf_in, _rf_out, _rf_n) = await route_first_at_end(
+                    _route, d, body,
+                    wanted=look_first_wanted(
+                        d, body, armed=armed, msgs=msgs, head=_head,
+                        reply=route.response.text or "", round_index=_round, rounds=_rounds,
+                        trust_state=_trust_state, truncated=_truncated, demo=_rf_demo, for_route=True,
+                    ),
+                    tally=_tally, armed=armed, auto_armed=auto_armed, ask_armed=(),
+                    tool_specs=tool_specs, overrides=overrides, armed_grant=armed_grant,
+                    ctx=ctx, ceiling=_arm_ceiling,
+                    low_trust=finish_low_trust(_trust_state), can_ask=False,
+                )
+                usage_in += _rf_in
+                usage_out += _rf_out
+                completions += _rf_n
             if (
                 not calls and not _looked_first and _harness is None and not text_only_pick
-                and look_first_wanted(
+                and (_rf_note or look_first_wanted(
                     d, body, armed=armed, msgs=msgs, head=_head,
                     reply=route.response.text or "", round_index=_round, rounds=_rounds,
                     trust_state=_trust_state, truncated=_truncated,
                     demo=is_demo_route(getattr(route, "provider", ""), getattr(route, "reason", "")),
-                )
+                    routed=_route is not None and _route.used,
+                ))
             ):
                 _looked_first = True
                 _lf, _lf_asked, _lf_in, _lf_out, _lf_n = await look_first_call(
@@ -12177,7 +12418,7 @@ async def run_chat_turn(
                     raw_blocks=getattr(route.response, "raw_blocks", None), tally=_tally,
                     # Review: the turn's reasoning level, like the round's own
                     # call (lock-step: the stream lane).
-                    router_kw=_reasoning_kw(body),
+                    router_kw=_reasoning_kw(body), note=_rf_note,
                 )
                 usage_in += _lf_in
                 usage_out += _lf_out
@@ -12787,6 +13028,13 @@ async def run_chat_turn(
                 # join; a changer is named in the lookup's result with where
                 # the user can ask for it. MIRROR NOTE (lock-step):
                 # routes/chat.py.
+                # v1.489.0: what Iron Jarvis looked up itself, in meanwhile,
+                # joins with this round's lookups. MIRROR NOTE (lock-step).
+                _rf_in, _rf_out, _rf_n = note_route_late(
+                    _route, d, armed=armed, msgs=msgs, ctx=ctx, tally=_tally)
+                usage_in += _rf_in
+                usage_out += _rf_out
+                completions += _rf_n
                 if join_found_tools(
                     d, body, tools_used=tools_used, armed=armed,
                     auto_armed=auto_armed, ask_armed=(), tool_specs=tool_specs,

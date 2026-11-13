@@ -735,6 +735,13 @@ class Config(BaseModel):
     #: about five seconds on a Claude plan). Does nothing without
     #: ``capability_search``.
     capability_look_first: bool = False
+    #: v1.489.0: with the lookup on, Iron Jarvis looks a chat message up
+    #: ITSELF before the model answers (``capability_search/route``): one
+    #: small call on the turn's own model that is shown the list of what Iron
+    #: Jarvis has and picks what the message needs; the picks join the reply
+    #: through the lookup's own join. Off by default: it is one more model
+    #: call on every chat message. Does nothing without ``capability_search``.
+    capability_route: bool = False
     #: START NEW CHATS LOCAL ONLY (v1.435.0, chat-first plan Wave 3 group I,
     #: D3): the chat page reads it when it starts a new chat and turns that
     #: chat's Local only switch on. The daemon enforces Local only per chat

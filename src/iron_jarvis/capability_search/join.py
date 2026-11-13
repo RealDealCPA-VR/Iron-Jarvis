@@ -287,9 +287,23 @@ LOOK_AGAIN = (
 CARD_WORDS = "shows the user an approval card when you call it"
 CALL_IT_NOTE = (
     "If you have what the call needs, call it now: the card is how the user "
-    "confirms, so do not ask again in words. Ask in words only for a detail the "
-    "call needs and you do not have."
+    "confirms, so do not ask again in words. If the user named a folder or a "
+    "file, find it with your file tools instead of asking where it is. Ask in "
+    "words only for a detail the call needs, that only the user has, and that "
+    "the tool does not ask for itself."
 )
+#: v1.489.0: a joined tool that asks the user for its own missing details on
+#: a card (``Tool.user_details``, tools/details). Seen live: with the tool in
+#: hand the model still asked in words for the server's address.
+ASKS_ITSELF_NOTE = (
+    "`{tool}` asks the user itself, on a card, for {what} when you leave it out: "
+    "call it without it, never ask for it in words."
+)
+
+#: How a note of Iron Jarvis's own (a message it adds after a round's tool
+#: results) starts. The join's note is added to such a note, never to a tool's
+#: fenced output, where the model would rightly read it as untrusted text.
+OWN_NOTE_LEAD = "(From Iron Jarvis, not from the user"
 
 WHY_NEVER = "a lookup does not bring this tool"
 WHY_DENIED = "it is set to Never run"
@@ -351,13 +365,62 @@ READER_FOR = {
     "preference_edit": "preference_list",
     "preference_forget": "preference_list",
 }
-_COMPANIONS = frozenset(READER_FOR.values())
+
+#: v1.489.0: a tool that changes or lists a kind of record brings that
+#: record's MAKER, right after it and taking none of the lookup's places. The
+#: words for changing a schedule and for making one are the same words, so the
+#: lookup often ranks the changers first. Seen live: "send me an overview every
+#: Friday at 16:00" brought `schedule_delete`, `schedule_list` and
+#: `schedule_update`, never `schedule_create`; "reach me by Slack or email when
+#: a job finishes" brought `channel_remove` and `channel_alerts`, never
+#: `channel_connect`. A maker is a changer like any other: it asks first.
+MAKER_FOR = {
+    "schedule_update": "schedule_create",
+    "schedule_delete": "schedule_create",
+    "schedule_list": "schedule_create",
+    "channel_remove": "channel_connect",
+    "channel_alerts": "channel_connect",
+    "channel_toggle": "channel_connect",
+    "goal_update": "goal_add",
+    "goal_delete": "goal_add",
+    "goal_list": "goal_add",
+    "night_task_cancel": "night_task_add",
+    "night_task_move": "night_task_add",
+    "night_task_list": "night_task_add",
+    "model_server_remove": "model_server_add",
+    "model_server_default": "model_server_add",
+    "reflex_update": "reflex_create",
+    "reflex_delete": "reflex_create",
+    "sentinel_update": "sentinel_add",
+    "sentinel_delete": "sentinel_add",
+    "webhook_update": "webhook_add",
+    "webhook_delete": "webhook_add",
+    "persona_update": "persona_create",
+    "persona_delete": "persona_create",
+    "agent_update": "agent_create",
+    "agent_pause": "agent_create",
+    "agent_delete": "agent_create",
+    "project_update": "project_create",
+    "project_archive": "project_create",
+    "project_focus": "project_create",
+    "app_disconnect": "app_connect",
+    "app_switch": "app_connect",
+    "skill_update": "skill_create",
+}
+_COMPANIONS = frozenset(READER_FOR.values()) | frozenset(MAKER_FOR.values())
+
+
+def _rides_with(name: str, others: Any) -> bool:
+    """Is *name* the reader or the maker of one of *others* (tools that have
+    joined or that the reply already holds)? Then it takes no place."""
+    return any(READER_FOR.get(w) == name or MAKER_FOR.get(w) == name for w in others)
 
 
 def _wanted(rows: list[dict[str, Any]]) -> list[str]:
     """The tools one lookup asks for, in its own order: a tool match's tool
-    (and, for a writer that takes a record's name, its reader right after);
-    a setting match's change tool and the settings reader."""
+    (and right after it, for a writer that takes a record's name, its reader,
+    and for a member of a record family, the family's maker); a setting
+    match's change tool and the settings reader."""
     out: list[str] = []
     for row in rows:
         kind = row.get("kind")
@@ -368,8 +431,11 @@ def _wanted(rows: list[dict[str, Any]]) -> list[str]:
             names = [str(row.get("tool") or ""), "config_list"]
         elif kind == "secret":
             names = [str(row.get("tool") or "")]
-        if names and names[0] in READER_FOR:
-            names.append(READER_FOR[names[0]])
+        first = names[0] if names else ""
+        if first in READER_FOR:
+            names.append(READER_FOR[first])
+        if first in MAKER_FOR:
+            names.append(MAKER_FOR[first])
         for name in names:
             if name and name not in out:
                 out.append(name)
@@ -473,13 +539,12 @@ def join_found(
                 held = {*armed, *(asks_list or ())}
                 if name in joined:
                     continue
-                # A writer's reader (READER_FOR) takes no place once its writer
-                # is among the reply's tools.
-                companion = name in _COMPANIONS and any(
-                    READER_FOR.get(w) == name for w in (*joined, *held)
-                )
+                # A writer's reader (READER_FOR) and a family's maker
+                # (MAKER_FOR) take no place once the tool they ride with is
+                # among the reply's tools.
+                companion = name in _COMPANIONS and _rides_with(name, (*joined, *held))
                 if name in _COMPANIONS and not companion and name not in _matched(rows):
-                    continue  # brought only for a writer that did not join
+                    continue  # brought only for a tool that did not join
                 if name in held:
                     # v1.484.1: a match the reply already holds takes its
                     # place among this lookup's, and the note names it. Seen
@@ -570,7 +635,8 @@ def join_found(
                 if isinstance(s, dict) and str(s.get("name") or "") not in known
             ]
             tool_specs[:] = registry.specs([*armed, *(asks_list or ())]) + extras
-        _say(msgs, _note(joined, asks, skipped, capped, already))
+        _say(msgs, _note(joined, asks, skipped, capped, already,
+                         asks_itself=_asks_itself(registry, [*already, *joined])))
         # Names only (never a query or an argument): which lookups brought
         # what. The plan's Phase 5 reads this to see what the word tables miss.
         log.info(
@@ -595,8 +661,36 @@ def join_found(
         return []
 
 
+def _asks_itself(registry: Any, names: list[str]) -> dict[str, str]:
+    """``{tool: the sentence said about it}`` for the tools among *names* that
+    ask the user for a missing detail themselves. Never raises."""
+    out: dict[str, str] = {}
+    try:
+        from ..tools.details import what_words
+
+        own: dict[str, list[str]] = {}
+        for name in names:
+            tool = registry.get(name)
+            details = getattr(tool, "user_details", None)
+            if not details or name in out:
+                continue
+            note = str(getattr(tool, "user_details_note", "") or "").strip()
+            if note:
+                # A tool with its own words (the settings tools: only a
+                # setting with fixed choices asks) is said in those words,
+                # once for all the tools that share them.
+                own.setdefault(note, []).append(name)
+                continue
+            out[name] = ASKS_ITSELF_NOTE.format(tool=name, what=what_words(dict(details)))
+        for note, tools in own.items():
+            out[tools[0]] = ", ".join(f"`{t}`" for t in tools) + ": " + note
+    except Exception:  # noqa: BLE001 — the note just says less
+        return {}
+    return out
+
+
 def _note(joined: list[str], asks: list[str], skipped: dict[str, str], capped: bool,
-          already: list[str] | None = None) -> str:
+          already: list[str] | None = None, asks_itself: dict[str, str] | None = None) -> str:
     parts: list[str] = []
     if already:
         parts.append(
@@ -613,6 +707,8 @@ def _note(joined: list[str], asks: list[str], skipped: dict[str, str], capped: b
         )
         if asks:
             parts.append(CALL_IT_NOTE)
+    for sentence in (asks_itself or {}).values():
+        parts.append(sentence)
     for name, why in skipped.items():
         parts.append(f"`{name}` did not join: {why}.")
     if capped:
@@ -625,8 +721,18 @@ def _note(joined: list[str], asks: list[str], skipped: dict[str, str], capped: b
 
 
 def _say(msgs: list, note: str) -> None:
-    """Put *note* on this round's lookup result (the newest one)."""
+    """Put *note* on this round's lookup result (the newest one), or on Iron
+    Jarvis's own note when the round ends with one (the routing call's picks,
+    ``route.note_late``)."""
     if not note:
+        return
+    last = msgs[-1] if msgs else None
+    if (
+        last is not None
+        and getattr(last, "role", "") == "user"
+        and str(getattr(last, "content", "") or "").startswith(OWN_NOTE_LEAD)
+    ):
+        last.content = str(last.content or "") + "\n\n" + note
         return
     for message in reversed(msgs):
         if getattr(message, "role", "") != "tool":

@@ -362,6 +362,17 @@ SETTINGS: tuple[SettingDef, ...] = (
       # No everyday alias: "look first check" matched "look first, check the
       # invoice…" and armed the settings tools (found in review).
       tier="allow", aliases=("capability lookup check",)),
+    # v1.489.0: Iron Jarvis looks the message up itself, before the reply.
+    # Its own switch: one more small model call on EVERY chat message. The
+    # label is NOT a plain sentence, for the reason above.
+    S("capability_route", "Feature lookup first", "models", "bool",
+      "Needs Feature lookup. Before Jarvis answers a chat message, Iron Jarvis itself looks "
+      "up which of its tools and settings the message needs, with one small extra call to "
+      "the same model, and hands them to Jarvis. Jarvis finds the right tool far more often "
+      "and more steadily; every chat reply starts a little later (about 2 to 4 seconds on a "
+      "Claude plan), ordinary questions included. A tool that changes something still shows "
+      "its approval card.",
+      tier="allow", aliases=("capability lookup first",)),
     # v1.435.0 (chat-first plan, Wave 3 group I, D3): the starting point for a
     # NEW chat's Local only switch (the chat page reads it). Turning it off is
     # ask-floor: it widens what new chats may send off this network.

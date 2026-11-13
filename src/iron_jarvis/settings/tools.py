@@ -381,6 +381,44 @@ class ConfigListTool(Tool):
 
 #: How many models the default-model line names (each "provider model (name)").
 MODEL_CHOICES_MAX = 30
+#: v1.489.0: a default model picked on the card names its AI service too:
+#: "provider::model" (the dashboard's own row id shape).
+PICKED_SEP = "::"
+
+
+def _model_rows(platform: Any) -> list[tuple[str, str, str]]:
+    """``(provider, model, label)`` for every model that can be chosen now,
+    from the model catalog's KEPT answer only (never a build: no endpoint is
+    asked and nothing starts here). The demo model and rows that are not
+    available are left out. Never raises; not kept yet = []."""
+    try:
+        cat = getattr(platform, "_model_catalog", None)
+        entry = getattr(cat, "_entry", None) if cat is not None else None
+        rows = list(getattr(entry, "rows", None) or [])
+    except Exception:  # noqa: BLE001 — not readable: nothing to offer
+        return []
+    out: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("available"):
+            continue
+        prov, mid = str(row.get("provider") or ""), str(row.get("model") or "")
+        if not prov or not mid or prov == "mock" or (prov, mid) in seen:
+            continue
+        seen.add((prov, mid))
+        out.append((prov, mid, str(row.get("label") or "")))
+    return out
+
+
+def _model_choice_name(provider: str, model: str, label: str) -> str:
+    """One model on the pick card: its name and the AI service it is on."""
+    try:
+        from ..providers.failure_words import plain_name
+
+        service = plain_name(provider)
+    except Exception:  # noqa: BLE001 — the id still says which
+        service = provider
+    return f"{label or model} ({service})"
 
 
 def _model_choices(platform: Any) -> str:
@@ -392,23 +430,10 @@ def _model_choices(platform: Any) -> str:
     from the model catalog's KEPT answer only (never a build: no endpoint is
     asked and nothing starts here). Not kept yet, or unreadable: "" (the line
     is as before). Names only, never a key."""
-    try:
-        cat = getattr(platform, "_model_catalog", None)
-        entry = getattr(cat, "_entry", None) if cat is not None else None
-        rows = list(getattr(entry, "rows", None) or [])
-    except Exception:  # noqa: BLE001 — not readable: the line is as before
-        return ""
-    names: list[str] = []
-    seen: set[tuple[str, str]] = set()
-    for row in rows:
-        if not isinstance(row, dict) or not row.get("available"):
-            continue
-        prov, mid = str(row.get("provider") or ""), str(row.get("model") or "")
-        if not prov or not mid or prov == "mock" or (prov, mid) in seen:
-            continue
-        seen.add((prov, mid))
-        label = str(row.get("label") or "")
-        names.append(f"{prov} {mid}" + (f" ({label})" if label and label != mid else ""))
+    names = [
+        f"{prov} {mid}" + (f" ({label})" if label and label != mid else "")
+        for prov, mid, label in _model_rows(platform)
+    ]
     if not names:
         return ""
     more = len(names) - MODEL_CHOICES_MAX
@@ -457,14 +482,77 @@ class _ConfigChangeBase(Tool):
         "required": ["key", "value"],
     }
     reversibility = Reversibility.REVERSIBLE
+    # v1.489.0: a setting with FIXED CHOICES asked for without a clear value
+    # ("can the app look different, whatever is easiest on the eyes") is put
+    # to the user as a card of its choices, instead of a list in words and a
+    # second message. Only such settings ask (`missing_details`); any other
+    # setting called without a value gets the registry's plain sentence.
+    user_details = {"value": {"title": "Which one?", "what": "which value to use"}}
+    user_details_lead = "Pick the one you want."
+    user_details_note = (
+        "When it is NOT clear which value the user wants for a setting with fixed choices "
+        "(config_list names them) or for default_model, call this with the key and WITHOUT "
+        "`value` (do not list the choices in words, and never guess): the user picks one "
+        "on a card."
+    )
 
     def __init__(self, platform: Any) -> None:
         self.platform = platform
+
+    def missing_details(self, args: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, dict[str, Any]]:
+        given = args if isinstance(args, dict) else {}
+        value = given.get("value")
+        if not (value is None or (isinstance(value, str) and not value.strip())):
+            return {}
+        try:
+            d = schema.get(str(given.get("key") or "").strip())
+        except Exception:  # noqa: BLE001 — an unknown key: execute says so
+            return {}
+        if d is None:
+            return {}
+        if d.key == "default_model":
+            # The models this install can use now (the catalog's KEPT answer:
+            # nothing is asked and nothing starts here). A pick names the AI
+            # service too ("provider::model"); `_writes` reads it.
+            choices = [
+                (f"{prov}{PICKED_SEP}{mid}", _model_choice_name(prov, mid, label))
+                for prov, mid, label in _model_rows(self.platform)[:MODEL_CHOICES_MAX]
+            ]
+        else:
+            choices = [(str(v), str(label or v)) for v, label in (d.options or ()) if isinstance(v, str) and v]
+        if len(choices) < 2:
+            return {}
+        help_text = " ".join(str(d.help or "").split())
+        return {
+            "value": {
+                "title": str(d.label),
+                "description": help_text if len(help_text) <= _HELP_CHARS else help_text[: _HELP_CHARS - 1] + "…",
+                "enum": [v for v, _ in choices],
+                "enumNames": [label for _, label in choices],
+                "what": f"which choice to use for {d.label}",
+            }
+        }
 
     def _resolve(self, args: dict[str, Any]) -> tuple[schema.SettingDef, str, Any]:
         key = str(args.get("key") or "").strip()
         d = schema.get(key)
         return d, key, _coerce(d, args.get("value"))
+
+    def _writes(self, key: str, value: Any, device_id: str = "") -> dict[str, Any]:
+        """The settings ONE call writes. Always ``{key: value}``, except a
+        default model given WITH its AI service ("provider::model", what the
+        pick card answers): that sets the model, and the service too when it
+        is not the one in use — so "the good one" picked on the card really
+        answers. BLOCKING (one settings read)."""
+        if key == "default_model" and isinstance(value, str) and PICKED_SEP in value:
+            provider, _, model = value.partition(PICKED_SEP)
+            provider, model = provider.strip(), model.strip()
+            if provider and model:
+                current = _writer(self.platform).current("default_provider", device_id=device_id)
+                if str(current or "") != provider:
+                    return {"default_provider": provider, "default_model": model}
+                return {"default_model": model}
+        return {key: value}
 
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
         key = str(args.get("key") or "")
@@ -479,8 +567,9 @@ class _ConfigChangeBase(Tool):
                 # v1.442.0 (Wave 7 group C): a row this change also clears
                 # (``device.theme`` <-> ``device.theme_colors``) is part of
                 # what the Undo puts back.
-                keys = [key, *writer.linked_keys({key: value}, device_id=ctx.device_id)]
-                return {k: writer.current(k, device_id=ctx.device_id) for k in keys}
+                writes = self._writes(key, value, ctx.device_id)
+                keys = [*writes, *writer.linked_keys(writes, device_id=ctx.device_id)]
+                return {k: writer.current(k, device_id=ctx.device_id) for k in dict.fromkeys(keys)}
 
             prior = await asyncio.to_thread(_snapshot)
         except Exception:  # noqa: BLE001 — no snapshot, no undo row; execute says why
@@ -511,13 +600,28 @@ class _ConfigChangeBase(Tool):
             value, named_problem = await asyncio.to_thread(named_setting_value, self.platform, key, value)
             if named_problem:
                 return ToolResult(ok=False, output="", error=f"{d.label}: {named_problem}.")
+        try:
+            writes = await asyncio.to_thread(self._writes, key, value, ctx.device_id)
+        except Exception:  # noqa: BLE001 — unreadable: the plain one-row write
+            writes = {key: value}
         tier = d.tier_for(value)
+        if len(writes) > 1 or key not in writes or writes[key] != value:
+            # A default model picked with its AI service: the strictest tier
+            # of the rows it writes decides (changing the service asks first).
+            order = ("allow", "ask", "ask-floor")
+            tier = max((schema.get(k).tier_for(v) for k, v in writes.items()), key=order.index)
         if tier != self.TIER:
             right = TOOL_FOR_TIER[tier]
             return ToolResult(
                 ok=False,
                 output="",
-                error=f"{d.label} needs {right} (it {'always asks first' if tier == 'ask-floor' else 'asks first'}). Call {right} with the same key and value.",
+                # (v1.489.0: the key and value are named — the value may have
+                # been picked by the user on a card, so the model's own call
+                # did not hold it.)
+                error=(
+                    f"{d.label} needs {right} (it {'always asks first' if tier == 'ask-floor' else 'asks first'}). "
+                    f"Call {right} with the same key and value: key {key!r}, value {_show(value)}."
+                ),
             )
         if d.store == "device" and not ctx.device_id:
             # v1.434.0 (Wave 2, F): every chat in the app window sends its
@@ -543,7 +647,7 @@ class _ConfigChangeBase(Tool):
         try:
             writer = _writer(self.platform)
             change = await asyncio.to_thread(
-                writer.apply, {key: value}, actor="chat", device_id=ctx.device_id, journal=False
+                writer.apply, writes, actor="chat", device_id=ctx.device_id, journal=False
             )
         except SettingError as exc:
             return ToolResult(ok=False, output="", error=str(exc))
@@ -565,10 +669,12 @@ class _ConfigChangeBase(Tool):
             restart_now = " This takes full effect after Iron Jarvis restarts." if (cleared and d.restart) else ""
             return ToolResult(
                 ok=True,
-                output=f"{d.label} was already {_show(value)}.{apps}{restart_now}",
+                output=f"{d.label} was already {_show(writes.get(key, value))}.{apps}{restart_now}",
                 data={"config_change": None},
             )
-        c = change.changed[0]
+        # The row this call was about leads; a second row it wrote (the AI
+        # service of a model picked on the card) is said after it.
+        c = next((x for x in change.changed if x.get("key") == key), change.changed[0])
         restart = " It takes full effect after Iron Jarvis restarts." if d.restart else ""
         # v1.438.0: a row the daemon does not act on itself says WHEN it
         # applies ("The desktop app on this PC picks this up…").
@@ -587,17 +693,28 @@ class _ConfigChangeBase(Tool):
         # value ("Ask before commands", never "approve_for_me") — the card and
         # the reply both say the name; a row with none keeps the plain value.
         _manager = getattr(self.platform, "providers", None)
-        old_label = value_label(d, c["old"], _manager)
-        new_label = value_label(d, c["new"], _manager)
+        d_c = d if c.get("key") == key else schema.get(c["key"])
+        old_label = value_label(d_c, c["old"], _manager)
+        new_label = value_label(d_c, c["new"], _manager)
+        also = ""
+        for other in change.changed:
+            if other is c:
+                continue
+            d_o = schema.get(other["key"])
+            also += (
+                f" Also changed {other['label']}: "
+                f"{value_label(d_o, other['old'], _manager) or _show(other['old'])} → "
+                f"{value_label(d_o, other['new'], _manager) or _show(other['new'])}."
+            )
         return ToolResult(
             ok=True,
             output=(
                 f"Changed {c['label']}: {old_label or _show(c['old'])} → "
-                f"{new_label or _show(c['new'])}.{apps}{restart}{applies}"
+                f"{new_label or _show(c['new'])}.{also}{apps}{restart}{applies}"
             ),
             data={
                 "config_change": {
-                    "key": key,
+                    "key": c.get("key") or key,
                     "label": c["label"],
                     "old": c["old"],
                     "new": c["new"],

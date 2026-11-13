@@ -1652,6 +1652,18 @@ class ToolRegistry:
                     )
         if not missing and not wrong:
             return ""
+        if missing and not wrong:
+            # v1.489.0: every missing argument is a detail only the USER has
+            # (`Tool.user_details`) and no question card reached them (a lane
+            # that cannot show one): the model is told to ask in words.
+            try:
+                from .details import ask_in_words, missing_for
+
+                asks = missing_for(tool, args)
+                if asks and all(k in asks for k in missing):
+                    return ask_in_words(tool, asks)
+            except Exception:  # noqa: BLE001 — the plain sentence below still says it
+                pass
         got = sorted(str(k) for k in args)
         parts: list[str] = []
         if missing:

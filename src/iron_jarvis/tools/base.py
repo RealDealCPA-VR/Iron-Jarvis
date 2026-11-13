@@ -308,6 +308,34 @@ class Tool(ABC):
         ``None`` and let ``execute`` say the words."""
         return None
 
+    #: DETAILS ONLY THE USER HAS (v1.489.0). Argument name -> the question
+    #: put to the user: ``{"title": ..., "description": ...}`` (plus ``enum``
+    #: / ``enumNames`` for a choice). When the model calls the tool without
+    #: one of them, a chat that can show a question card asks the user BEFORE
+    #: the approval card (``tools/details.fill_missing``, the stream lane), so
+    #: the approval card always shows the whole call. Never a secret: a key or
+    #: a password goes on the secure card. Empty on every tool that does not
+    #: opt in, and then nothing below changes.
+    user_details: dict[str, dict[str, Any]] = {}
+    #: One sentence above the questions ("To add your model server:").
+    user_details_lead: str = ""
+    #: What the model is told about leaving them out, when the general
+    #: sentence (``details.spec_sentence``) does not fit the tool. "" = the
+    #: general sentence.
+    user_details_note: str = ""
+
+    def missing_details(self, args: dict[str, Any], ctx: "ToolContext | None" = None) -> dict[str, dict[str, Any]]:
+        """The ``user_details`` this call leaves out (missing, ``None`` or
+        blank text), in declared order. A tool whose needs depend on the
+        other arguments overrides this. Must not raise or block."""
+        out: dict[str, dict[str, Any]] = {}
+        given = args if isinstance(args, dict) else {}
+        for key, question in (self.user_details or {}).items():
+            value = given.get(key)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                out[key] = question
+        return out
+
     def spec(self) -> dict[str, Any]:
         """Schema advertised to the model (§19 inputSchema)."""
         spec = {
@@ -315,6 +343,15 @@ class Tool(ABC):
             "description": self.description,
             "input_schema": self.input_schema,
         }
+        if self.user_details:
+            # v1.489.0: the model is told it may leave these out, and they
+            # stop being REQUIRED in what it is shown (a schema that still
+            # demanded the address would make it ask in words first). The
+            # tool's own schema is untouched: the registry checks the real
+            # requirement after the user has been asked.
+            from .details import relaxed_spec
+
+            spec = relaxed_spec(self, spec)
         # Additive and ONLY when set (v1.299.0): every provider adapter picks
         # name/description/input_schema by key, so an extra key never reaches
         # a strict API, and a spec without the key reads byte-identically to

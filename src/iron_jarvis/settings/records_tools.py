@@ -1068,6 +1068,17 @@ class McpServerAddTool(R._RecordTool):
         },
         "required": ["config"],
     }
+    # v1.489.0: an extension the user named only by what it does ("one for
+    # spreadsheets") is asked for on a card (tools/details). A key in the
+    # answer is refused like one in the call.
+    user_details = {
+        "config": {
+            "title": "The extension's command line, address or config block",
+            "what": "the extension's command line, address or config block",
+            "description": "For example npx -y @modelcontextprotocol/server-filesystem C:\\Clients. Leave any key out.",
+        },
+    }
+    user_details_lead = "To add this extension, Iron Jarvis needs to know how it starts."
     _DECLARED = frozenset({"config", "name", "values", "cwd"})
 
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -1264,6 +1275,16 @@ class WebServiceAddTool(R._RecordTool):
         },
         "required": ["name", "address"],
     }
+    # v1.489.0: an address the user did not say is asked for on a card
+    # (tools/details). Never the key.
+    user_details = {
+        "address": {
+            "title": "The service's address",
+            "what": "the service's address",
+            "description": "Starting with http:// or https://, for example https://api.example.com/v1",
+        },
+    }
+    user_details_lead = "To save this web service, Iron Jarvis needs its address."
     _DECLARED = frozenset({"name", "address", "description", "needs_key", "key_in", "header", "username"})
 
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:

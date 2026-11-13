@@ -211,6 +211,36 @@ def resolve_folder(platform: Any, ctx: Any, raw: Any) -> tuple[str, str]:
     return resolved_folder(text), ""
 
 
+#: v1.489.0: the question card for a folder the user did not place
+#: (tools/details): asked when no folder was named and this chat is in no
+#: project with one, or when the folder was named without its full location.
+FOLDER_QUESTION = {
+    "folder": {
+        "title": "The folder's full location",
+        "what": "the folder's full location",
+        "description": "Starting with its drive, for example D:\\code\\shop",
+    },
+}
+FOLDER_LEAD = "Iron Jarvis needs to know which folder you mean."
+
+
+def folder_to_ask(platform: Any, ctx: Any, raw: Any) -> bool:
+    """True when the user must be asked where the folder is: none was named
+    and this chat's project has none, or a name was given that is not a full
+    location on this PC. A network spelling is NOT asked about (the tool
+    refuses it in its own words). With no chat to look at (``ctx`` None)
+    nothing is asked. Blocking (one project read); never raises."""
+    try:
+        text = str(raw or "").strip().strip("\"'")
+        if not text:
+            if ctx is None:
+                return False
+            return not _project_root(platform, getattr(ctx, "project_id", None))
+        return not _network(text) and not _absolute(text)
+    except Exception:  # noqa: BLE001 — a fault asks nothing
+        return False
+
+
 def _existing_folder(platform: Any, ctx: Any, raw: Any) -> tuple[str, str]:
     """:func:`resolve_folder`, and the folder must exist on this PC. Blocking."""
     folder, problem = resolve_folder(platform, ctx, raw)
@@ -520,6 +550,14 @@ class _BuildTool(Tool):
         R._PENDING.set(None)  # noqa: SLF001
         _DESC.set(None)
 
+    def missing_details(self, args: dict[str, Any], ctx: Any = None) -> dict[str, dict[str, Any]]:
+        """v1.489.0: the folder, when the user has to say where it is
+        (:func:`folder_to_ask`). Only for the tools that name it."""
+        if "folder" not in (self.user_details or {}):
+            return {}
+        given = args if isinstance(args, dict) else {}
+        return dict(self.user_details) if folder_to_ask(self.platform, ctx, given.get("folder")) else {}
+
 
 def _night_words(platform: Any) -> tuple[str, str, bool]:
     """``(start, end, open now)`` of the night window, in words."""
@@ -595,9 +633,9 @@ class NightTaskAddTool(_BuildTool):
     RECORD = "night_task"
     description = (
         "Queue a coding task for tonight's night shift (Coding sessions › Tonight): `words` is what the "
-        "task should do; `folder` the full location of the repository it works in (leave it out to use "
-        "the folder of the project this chat is in — if there is none, ASK the user which folder, never "
-        "guess). It runs on its own, unattended, inside the night window from Settings, on a branch of "
+        "task should do; `folder` the full location of the repository it works in (leave it out when "
+        "the user did not give its full location: the folder of the project this chat is in is used, "
+        "else the user is asked which folder; never guess one). It runs on its own, unattended, inside the night window from Settings, on a branch of "
         "its own. Optional: `provider` and `model` (as the model list names them), `account` (an account "
         "of that model's vendor), `team` true to let the model hand pieces to the user's model team, or "
         "`try_on` [{provider, model}] (2 or 3) to try it on several models. The user approves on a card "
@@ -619,6 +657,8 @@ class NightTaskAddTool(_BuildTool):
         },
         "required": ["words"],
     }
+    user_details = FOLDER_QUESTION
+    user_details_lead = "To queue this for tonight, Iron Jarvis needs to know which folder the code is in."
 
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
         """The card says WHEN it runs (unattended work), every time — once
@@ -950,6 +990,9 @@ class BuildFolderShowTool(Tool):
 
 class _FolderTool(_BuildTool):
     """A change to one folder's coding settings (``RECORD`` names which)."""
+
+    user_details = FOLDER_QUESTION
+    user_details_lead = FOLDER_LEAD
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         await self._begin()

@@ -609,10 +609,15 @@ def test_at_most_three_tools_per_lookup(desk):
     joined, state, data = _join(app, "agent", limit=8)
     tools = [m for m in data["matches"] if m["kind"] == "tool"]
     assert len(tools) > J.MAX_JOINED_PER_LOOKUP, "pick a query with more tool matches"
-    # The settings tools take ONE place together (the next test).
-    places = len([n for n in joined if n not in J.SETTINGS_FAMILY]) + bool(set(joined) & J.SETTINGS_FAMILY)
+    # The settings tools take ONE place together (the next test). v1.489.0:
+    # a reader or a maker that rides with a joined tool takes none.
+    free = [n for n in joined if n in J._COMPANIONS and J._rides_with(n, joined)]
+    places = (
+        len([n for n in joined if n not in J.SETTINGS_FAMILY and n not in free])
+        + bool(set(joined) & J.SETTINGS_FAMILY)
+    )
     assert places <= J.MAX_JOINED_PER_LOOKUP, joined
-    assert len(joined) <= J.MAX_JOINED_PER_LOOKUP + len(J.SETTINGS_FAMILY) - 1
+    assert len(joined) - len(free) <= J.MAX_JOINED_PER_LOOKUP + len(J.SETTINGS_FAMILY) - 1
 
 
 def test_the_settings_tools_take_one_place_together(desk):
