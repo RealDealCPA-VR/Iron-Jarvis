@@ -492,7 +492,12 @@ async def test_the_check_is_off_by_default_and_the_clearer_words_are_not(desk):
     from iron_jarvis.settings import schema
 
     app, ws = desk
-    assert Config.model_fields["capability_look_first"].default is False
+    # v1.490.0 (moved on purpose): the setting is ON by default in the app
+    # and follows the one switch `config.LOOKUP_ON_BY_DEFAULT`, which the
+    # suite turns off for bare tests (tests/test_lookup_defaults_v1490.py).
+    from iron_jarvis.core import config as _config
+
+    assert Config.model_fields["capability_look_first"].default_factory is _config._lookup_default
     row = next(r for r in schema.SETTINGS if r.key == "capability_look_first")
     assert row.type == "bool" and row.tier == "allow" and row.group == "models"
     assert "Feature lookup" in row.help and "later" in row.help, "the row must say what it costs"

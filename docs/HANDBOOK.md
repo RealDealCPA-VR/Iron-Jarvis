@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.489.0 (2026-11-13).*
+holds itself to. Current as of v1.490.0 (2026-11-13).*
 
 ---
 
@@ -2042,6 +2042,50 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Feature lookup is on by default (v1.490.0)
+
+- **The three Feature lookup settings are now on** for anyone who never
+  changed them: **Feature lookup**, **Feature lookup check** and **Feature
+  lookup first** (Settings › Models). Together they let Jarvis find the right
+  tool for a request however you word it. If you turned one off (or on)
+  yourself, your choice is kept. Older sections of this Handbook that say
+  "off by default" describe the versions they were written for.
+- **What you will notice.** Jarvis far more often does what you asked instead
+  of answering "done" or "I can't" in words. A reply that changes something
+  starts a few seconds later, and each chat message costs one more small call
+  to the model you are chatting with (on a subscription that is your plan's
+  usage; on a pay-per-use key it is billed; on your own model server it is
+  free). Nothing runs without its card: a change Jarvis found by looking it
+  up still shows an approval card every time, and nothing is looked up in a
+  chat that read a flagged document or page, with Auto tools off, in a coding
+  session, an agent run or the browser sidebar.
+- **How to turn it off.** Settings › Models: switch off **Feature lookup
+  first** to get the earlier start back (Jarvis then looks things up only
+  when it thinks it must), **Feature lookup check** to stop the one extra
+  question at the end of a reply, or **Feature lookup** to turn all of it
+  off. You can also say it in chat: "turn off feature lookup first".
+- **What it measured.** 111 everyday requests that only a tool can carry
+  out, every approval declined, the settings off against on:
+  - **Claude Haiku** (v1.488.0 with the first two settings on, against
+    v1.489.0 with all three on): the right tool for 82 (74%), then 108
+    (97%); runs differ by two to four requests, so read it as 94 to 97%.
+    No approval card and no question card on 99 messages that only look
+    like requests, or on 43 ordinary questions, either way.
+  - **Your own model server (GLM 5.3 Flash)**, all three off against all
+    three on: 35 (32%), then 105 (95%). The first word of a reply came
+    later: 18 s, then 28 s on these requests, and 6 s, then 8 s on an
+    ordinary question (six test chats were sharing the server; alone it
+    is quicker). On the 99 look-alike messages, two brought an approval
+    card with the settings on and none with them off: a web search for
+    "what styles are popular right now", and a goal for "I want to break
+    that habit". Nothing ran: both waited for an answer and were
+    declined. Three of the 43 ordinary questions (sums) were answered a
+    second time with the calculator: the same answers, later.
+- **The demo model is not asked.** A fresh install that has no model yet
+  answers with the demo model; it is never asked the extra question.
+- **A small model is not asked either.** If the model's known size cannot
+  hold the list of what Iron Jarvis can do, the extra call is skipped.
+
 ## Jarvis asks on a card, and finds the right tool first (v1.489.0)
 
 - **A missing detail is asked on a card, not in chat.** When you ask Jarvis
@@ -2059,7 +2103,8 @@ reads; it never writes, runs commands, or starts work on its own.
   way: the card lists the models you can use now, each with its AI service.
   Picking a model on another service changes both, and that change asks first
   as it always did. A protected choice still needs its own approval card.
-- **Feature lookup first (a new setting, off by default; Settings › Models).**
+- **Feature lookup first (a new setting in Settings › Models; off by default
+  in this version, on by default since v1.490.0).**
   With it on, Iron Jarvis reads each message itself with one small extra call
   to the model you are chatting with, picks which of its own tools, settings
   and setup pages fit, and has them ready for the reply. It runs beside the
@@ -2098,7 +2143,8 @@ reads; it never writes, runs commands, or starts work on its own.
   97%. The price: the first word of a reply came about three seconds later
   (6.5 s to 9.3 s). On 99 messages that only look like requests and on 43
   ordinary questions, no approval card and no question card showed in either
-  version. All three settings are still off until you turn them on.
+  version. In this version all three settings were off until you turned them
+  on; since v1.490.0 they are on by default.
 
 ## Asked once, decided on the card (v1.488.0)
 

@@ -428,7 +428,12 @@ def test_the_setting_is_a_plain_switch_off_by_default(platform):
     assert row.type == "bool" and row.tier == "allow" and row.group == "models"
     from iron_jarvis.core.config import Config
 
-    assert Config.model_fields["capability_search"].default is False
+    # v1.490.0 (moved on purpose): the setting is ON by default in the app
+    # and follows the one switch `config.LOOKUP_ON_BY_DEFAULT`, which the
+    # suite turns off for bare tests (tests/test_lookup_defaults_v1490.py).
+    from iron_jarvis.core import config as _config
+
+    assert Config.model_fields["capability_search"].default_factory is _config._lookup_default
 
 
 # --------------------------------------------------------------------------- #

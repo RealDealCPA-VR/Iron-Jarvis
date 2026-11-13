@@ -205,6 +205,12 @@ def wanted(d: Any, body: Any, *, low_trust: bool = False, plain_chat: bool = Tru
             return False
         if not str(getattr(body, "turn_id", "") or "").strip():
             return False
+        # v1.490.0 (on by default now): the demo model is never asked. A
+        # fresh install answers with it, and its scripted reply names no
+        # feature, so the call would only be noise in the ledger.
+        asked = str(getattr(body, "provider", "") or getattr(config, "default_provider", "") or "")
+        if asked.strip().lower() == "mock":
+            return False
         return enough_words(last_user_text(body))
     except Exception:  # noqa: BLE001 — a fault looks nothing up
         return False
@@ -231,7 +237,27 @@ def parse_ids(text: Any, known: Any) -> list[str]:
     return out
 
 
-async def route_request(d: Any, body: Any, provider: str, model: str) -> "Routed | None":
+#: The list must fit the model with room to spare: past this share of a
+#: KNOWN window the call is not made (a small local model would refuse it
+#: on every message). An unknown window asks as before.
+WINDOW_SHARE = 0.5
+
+
+def fits_window(text: str, window: Any) -> bool:
+    """May the routing call be made on a model with this window? True when
+    the window is not known. Never raises."""
+    try:
+        if not window or int(window) <= 0:
+            return True
+        from ..context.budget import estimate_tokens
+
+        return estimate_tokens(text) <= int(window) * WINDOW_SHARE
+    except Exception:  # noqa: BLE001
+        return True
+
+
+async def route_request(d: Any, body: Any, provider: str, model: str, *,
+                        window: Any = None) -> "Routed | None":
     """ONE call on the turn's own provider and model: which entries does the
     user's message need? ``None`` when nothing was found or the call could not
     be made (a timeout, a refusal, the demo model, an unreadable answer).
@@ -245,6 +271,9 @@ async def route_request(d: Any, body: Any, provider: str, model: str) -> "Routed
             return None
         text, by_id = await asyncio.to_thread(catalog, d.platform)
         if not by_id:
+            return None
+        if not fits_window(text, window):
+            log.info("request not routed: the list does not fit this model's window")
             return None
         async with asyncio.timeout(ROUTE_TIMEOUT_S):
             route = await d.platform.router.complete(

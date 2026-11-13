@@ -76,6 +76,10 @@ def desk(tmp_path):
     cfg = app.state.platform.config
     cfg.capability_search = True
     cfg.capability_route = True
+    # v1.490.0: the demo model is never asked the routing question, and a
+    # fresh home's default IS the demo. These turns are answered by the
+    # scripted model standing in for a real one, so the default names one.
+    cfg.default_provider = "claude-cli"
     J.FOUND.clear()
     yield app, ws
     J.FOUND.clear()
@@ -103,7 +107,12 @@ async def _post(app, body, model) -> dict:
 # the setting
 # =========================================================================== #
 def test_the_setting_is_off_by_default_and_its_label_is_no_sentence():
-    assert Config.model_fields["capability_route"].default is False
+    # v1.490.0 (moved on purpose): the setting is ON by default in the app
+    # and follows the one switch `config.LOOKUP_ON_BY_DEFAULT`, which the
+    # suite turns off for bare tests (tests/test_lookup_defaults_v1490.py).
+    from iron_jarvis.core import config as _config
+
+    assert Config.model_fields["capability_route"].default_factory is _config._lookup_default
     row = next(r for r in schema.SETTINGS if r.key == "capability_route")
     assert row.label == "Feature lookup first" and row.tier == "allow"
     assert "approval card" in row.help and "later" in row.help, "the cost and the card are said"

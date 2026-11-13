@@ -7,7 +7,19 @@ import tempfile
 import pytest
 
 from iron_jarvis.agents.orchestrator import Orchestrator
+from iron_jarvis.core import config as _ij_config
 from iron_jarvis.platform import build_platform
+
+# THE FEATURE LOOKUP SETTINGS ARE OFF FOR BARE TESTS (v1.490.0). In the app
+# all three are on by default (`config.LOOKUP_ON_BY_DEFAULT`). With them on,
+# every scripted chat turn in this suite would hold one more tool
+# (`find_capability`), a longer system prompt, and up to two more model
+# calls (the routing call and the look-first check) that its scripted model
+# never planned for. Set here, at import, and not in a fixture: a Config a
+# test module builds while it is being collected must read it too. The
+# lookup's own tests turn the settings on themselves; the app's real
+# defaults are pinned in tests/test_lookup_defaults_v1490.py.
+_ij_config.LOOKUP_ON_BY_DEFAULT = False
 
 
 def pytest_collection_modifyitems(config, items):

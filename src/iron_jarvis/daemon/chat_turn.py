@@ -3277,7 +3277,14 @@ def start_route_first(prep: Any, d: Any, body: Any, provider: str, model: str, *
         from ..capability_search import route as _route
 
         if _route.wanted(d, body, low_trust=low_trust, plain_chat=plain_chat):
-            prep.start("route", _none_on_error(_route.route_request(d, body, provider, model)))
+            # A model whose KNOWN window cannot hold the list is not asked
+            # (v1.490.0; unknown = asked as before).
+            try:
+                window = _context_window(d, provider, model)
+            except Exception:  # noqa: BLE001
+                window = None
+            prep.start("route", _none_on_error(
+                _route.route_request(d, body, provider, model, window=window)))
             return RouteFirst(prep.take("route"))
     except Exception:  # noqa: BLE001 — nothing is looked up; the turn goes on
         log.debug("route-first start failed", exc_info=True)

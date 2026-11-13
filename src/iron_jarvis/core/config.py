@@ -555,6 +555,21 @@ def default_sandbox_policy() -> dict[str, Any]:
 #: every browser turn's system prompt, which the history planner cannot shrink.
 BROWSING_PREFERENCES_MAX = 2000
 
+#: v1.490.0 (the owner, 2026-11-13: "Turn them on"): the three Feature
+#: lookup settings are ON for an install that never chose (a value saved in
+#: config.toml, on or off, still wins: only changed settings are saved).
+#: Measured before the change, 111 practice requests, right tool used: Claude
+#: Haiku 74% -> 97%. ONE seam, read when a Config is made: the test suite
+#: sets it False for bare tests (tests/conftest.py), because with it on every
+#: scripted chat turn would get one more tool and up to two more model calls;
+#: the lookup's own tests turn the settings on themselves.
+LOOKUP_ON_BY_DEFAULT = True
+
+
+def _lookup_default() -> bool:
+    return bool(LOOKUP_ON_BY_DEFAULT)
+
+
 class Config(BaseModel):
     # Validate on assignment so a bad value via PUT /settings is rejected (400)
     # rather than silently persisted to config.toml and bricking the next boot.
@@ -726,22 +741,24 @@ class Config(BaseModel):
     #: to the same model after each reply. Off by default.
     chat_followups: bool = False
     #: Capability search plan, Phase 1: chat may look up what Iron Jarvis can
-    #: do (``find_capability``). Off by default while it only answers.
-    capability_search: bool = False
+    #: do (``find_capability``). On by default since v1.490.0
+    #: (``LOOKUP_ON_BY_DEFAULT``).
+    capability_search: bool = Field(default_factory=_lookup_default)
     #: v1.480.0: with the lookup on, a chat reply that is about to end on
     #: words (no lookup, nothing but reading) is asked ONCE whether it should
-    #: look the request up first (``chat_turn.look_first_wanted``). Off by
-    #: default: it is one more model call on every such reply (measured:
-    #: about five seconds on a Claude plan). Does nothing without
-    #: ``capability_search``.
-    capability_look_first: bool = False
+    #: look the request up first (``chat_turn.look_first_wanted``). It is
+    #: one more model call on every such reply (measured: about five
+    #: seconds on a Claude plan). Does nothing without
+    #: ``capability_search``. On by default since v1.490.0.
+    capability_look_first: bool = Field(default_factory=_lookup_default)
     #: v1.489.0: with the lookup on, Iron Jarvis looks a chat message up
     #: ITSELF before the model answers (``capability_search/route``): one
     #: small call on the turn's own model that is shown the list of what Iron
     #: Jarvis has and picks what the message needs; the picks join the reply
-    #: through the lookup's own join. Off by default: it is one more model
-    #: call on every chat message. Does nothing without ``capability_search``.
-    capability_route: bool = False
+    #: through the lookup's own join. It is one more model call on every
+    #: chat message. Does nothing without ``capability_search``. On by
+    #: default since v1.490.0.
+    capability_route: bool = Field(default_factory=_lookup_default)
     #: START NEW CHATS LOCAL ONLY (v1.435.0, chat-first plan Wave 3 group I,
     #: D3): the chat page reads it when it starts a new chat and turns that
     #: chat's Local only switch on. The daemon enforces Local only per chat

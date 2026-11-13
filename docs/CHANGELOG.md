@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.490.0
+
+**Feature lookup is on by default.** **The three Feature lookup settings are now on** for anyone who never changed them: **Feature lookup**, **Feature lookup check** and **Feature lookup first** (Settings › Models).
+
 ## v1.489.0
 
 **Jarvis asks on a card, and finds the right tool first.** **A missing detail is asked on a card, not in chat.** When you ask Jarvis to add your model server, a memory base, a notification destination, an extension, a web service, a folder watcher or a task for tonight, and one detail only you have is missing (the server's address, which folder), a small question card shows first.
@@ -77,7 +81,3 @@
 ## v1.475.0
 
 **One chip for the coding tool, model and effort.** In Build › Code, the coding tool, its model and its effort are now one chip under the box: "Claude Code · Opus 5.5 · High".
-
-## v1.474.0
-
-**A coding tool can hand work to another one.** In Build › Code, the coding tool you are working with can now start another coding tool you have on this PC on a piece of the work.

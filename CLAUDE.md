@@ -17844,6 +17844,65 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **The three Feature lookup settings are ON by default; the suite runs
+  with them OFF** (v1.490.0; the owner, 2026-11-13, after v1.489.0's
+  measurement: "Turn them on", then "Lets also run GLM through it").
+  - **THE DEFAULT.** `core/config.LOOKUP_ON_BY_DEFAULT = True`;
+    `capability_search`, `capability_look_first` and `capability_route` are
+    `Field(default_factory=_lookup_default)` (read when a Config is made;
+    `schema.config_default` follows it). Only CHANGED settings are saved
+    (`persist_config_values`), so a value the user saved, on or off, still
+    wins and an install that never touched them turns on with the update.
+  - **THE SUITE.** `tests/conftest.py` sets `LOOKUP_ON_BY_DEFAULT = False` AT
+    IMPORT (not in a fixture: a Config a test module builds while being
+    collected must read it too). With it on, every scripted chat turn would
+    hold one more tool, a longer system prompt and up to two more model calls
+    its scripted model never planned for. The lookup's own tests turn the
+    settings on themselves. A NEW test of the on-path sets the settings (or
+    monkeypatches the switch); a test that reads "what a fresh install does"
+    must use a fresh interpreter (`tests/test_lookup_defaults_v1490.py` does).
+    A daemon a test starts as a SUBPROCESS runs with the app's defaults (on).
+  - **TWO GUARDS that on-by-default needed.** `route.wanted` answers False
+    when the turn's provider (the body's, else `default_provider`) is the demo
+    model: a fresh install would have called it once more per message. A
+    routing test whose scripted model stands in for a real one sets
+    `default_provider` to a real name (the route tests' `desk` fixture).
+    `route.fits_window(list, window)` / `route_request(window=)`: a model
+    whose KNOWN window cannot hold the list at `WINDOW_SHARE` 0.5 is not asked
+    (`start_route_first` passes `_context_window`); unknown = asked.
+  - **MEASURED ON GLM** (the owner's own model server, `custom` /
+    glm-5.3-flash; the gateway's key copied by script from the installed
+    app's key store into the scratch daemons with the owner's OK, never
+    printed, deleted after): 111 strict rows, all three OFF vs all
+    three ON (v1.489.0 code both): 35 (32%) vs 105 (95%), gained 71, lost 1;
+    first word median 18.0 -> 27.6 s, whole reply 31.8 -> 37.5 s (six turns
+    sharing the server), 23 question cards vs 5. THE REGRESSION SETS ARE NOT
+    CLEAN ON GLM: 99 look-alikes 0 -> 2 approval cards (GLM as the ROUTER
+    picked `web_search` for "what style trends are popular right now" and
+    `goal_add` for "I want to break that habit"; the reask then called
+    them; both forced cards, declined, nothing ran), replies taken back
+    0 -> 3; 43 ordinary questions no card, 3 sums re-answered with
+    `calculate` after the look-first check (same answers), first word
+    5.9 -> 8.3 s, whole reply 18.1 -> 17.8 s. On Haiku the same sets were
+    clean (v1.489.0 bullet). Told to the owner; shipped on their "Turn
+    them on".
+  - **COST, said in the Handbook:** one more model call per message (billed
+    on a pay-per-use key), a later first word.
+  - **OPEN:** GLM is a weaker router than Haiku (2 false cards per 99
+    look-alikes): a per-model routing prompt or a "needs a request" gate
+    was NOT built; on a pay-per-use key the routing call adds roughly the
+    list's ~5k input tokens per message (no prompt caching wired for it);
+    older Handbook sections still say "off by default" (the new section
+    says so); a daemon a test starts as a subprocess runs with the lookup
+    on (demo model: one more tool and a longer prompt, no extra call); the
+    Claude "all three off" arm was not re-measured on this setup; not
+    driven in the packaged app.
+  - **Pins:** `tests/test_lookup_defaults_v1490.py` (9 mutations, all red);
+    moved on purpose: the three "off by default" pins in
+    `test_capability_index_v1478`, `test_look_first_v1480`,
+    `test_route_first_v1489` (now: the field follows the one switch), and the
+    route tests' fixture (a real default model name).
+
 - **A missing detail is asked on a CARD; a setting is PICKED on a card; Iron
   Jarvis can look a message up itself BESIDE the reply** (v1.489.0; the
   owner's /goal: the strict right-tool rate on practice set D to 95% "without
