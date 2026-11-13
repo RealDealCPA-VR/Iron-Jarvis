@@ -192,6 +192,49 @@ Next, in order of what the numbers say:
    questions. Not built: it is one more model call on every reply.
 3. Then Phases 3 and 4 as planned.
 
+## The list, in everyday words (built 2026-11-12, to ship as v1.481.0)
+
+Point 1 of the list above. Each index entry got eight everyday phrasings a
+model wrote from THAT ENTRY'S OWN TEXT (never from a request set), used as
+search words only. The lookup now asks for a few English words and two other
+ways to name the request. Measured offline (right entry in the first five,
+search words a blind model wrote): development set D (612 requests, written
+for this) 71% -> 94%; first held-out set 75% -> 96%; second held-out set
+70% -> 91%. With the requests' OWN words as the query (no model), set D
+reaches 72%: the model's lookup is still what finds things.
+
+Live (Claude Haiku, cards declined, one run each):
+
+| | v1.480.0 | v1.481.0 |
+|---|---|---|
+| Second held-out set (86 tool requests), lookup on, check off | 32 | 34 |
+| Same, lookup and check on | 39 | 42 |
+| Practice sample of set D (114 tool requests), check on, without / with the preference rule | 59 | 66 |
+
+When the model looks, the right tool is now almost always among what joins;
+the gaps that remain are the model not looking (about one tool request in
+ten with the check on), and the right tool joining while the model asks for
+a detail first (often rightly).
+
+A saved preference ("I've locked that in") no longer keeps the look-first
+check away. A second check, "you found the right tool: use it", was built
+and measured on set D's sample: asked 56 times, a tool used once (the model
+correctly needed a detail or had already answered). It only cost 3 to 10
+seconds, so it was dropped.
+
+No regression where nothing is asked for: 43 ordinary questions, no lookup
+and no card (the check's wait after the last word 3.6 s, as before); 99
+look-alike messages, one card (a web search for "what is popular right
+now", asked first).
+
+Next, still toward the 95% goal:
+
+1. **The model asks for a detail it could have found.** Read the "joined,
+   not called" replies of a FRESH set (never this one) for detail questions
+   whose answer a reader tool holds.
+2. **Make the check cheap** (unchanged from above).
+3. Then Phases 3 and 4 as planned.
+
 ## The problem, measured
 
 Which tools a chat reply gets is decided before the model answers, by

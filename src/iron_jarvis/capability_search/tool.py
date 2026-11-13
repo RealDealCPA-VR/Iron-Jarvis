@@ -226,9 +226,12 @@ class FindCapabilityTool(Tool):
         "user that something cannot be done here, and whenever the user asks "
         "Iron Jarvis to set up, change, remember, schedule, connect, watch or "
         "create something and none of your other tools fits. Describe the request "
-        "in a few plain ENGLISH words, whatever language the user writes in "
-        "(the list is in English; for example \"run a task every Monday "
-        "morning\", \"make the text bigger\", \"keep this chat on this PC\"). "
+        "in 3 to 8 plain ENGLISH words, whatever language the user writes in (the "
+        "list is in English), then \" / \" and two other short ways to name the "
+        "same request (other words the app itself might use for it), for example "
+        "\"new helper with its own name / create an agent / custom assistant\" or "
+        "\"run a task every Monday morning / repeat on a schedule / weekly task\". "
+        "Leave out the user's details (names, times, folders). "
         "It returns the closest matching tools, settings and pages, and says so "
         "when Iron Jarvis does not offer the thing. A fitting tool it finds may "
         "join your tools for the rest of this reply (the result says which, and "
@@ -240,7 +243,10 @@ class FindCapabilityTool(Tool):
         "properties": {
             "query": {
                 "type": "string",
-                "description": "The request, in a few plain English words (always English).",
+                "description": (
+                    "The request in 3 to 8 plain English words, then \" / \" and two other "
+                    "short ways to name it (always English)."
+                ),
             },
             "limit": {
                 "type": "integer",

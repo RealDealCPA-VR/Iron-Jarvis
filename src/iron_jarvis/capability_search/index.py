@@ -20,6 +20,17 @@ No hand-written synonym list lives here, on purpose: the index must not
 become a second set of word tables. A gap is closed by improving the text
 the entry is built from (a tool's description, a setting's help).
 
+EVERYDAY PHRASINGS (v1.481.0, ``phrasings.py``): people do not use the
+product's own words ("a helper" for an agent, "stop asking me" for the
+approvals setting). Each entry also carries eight short ways a non-technical
+person might ask for it, written by a model from THAT ENTRY'S OWN TEXT and
+nothing else (``scripts/gen_capability_phrasings.py``; never from a request
+set, never edited by hand because a request misses: regenerate the entry).
+They are search words only: no answer line ever shows them. Measured on a
+development set written for it (612 requests): the right entry among the
+first five 70.8% -> 86.3%, and 94.1% with the lookup's "two other ways to
+name it" (``tool.py``).
+
 NEVER in the index, because their words are someone else's:
 
 * a connected app's tools (``mcp__…``);
@@ -289,9 +300,25 @@ def clamp(limit: Any) -> int:
     return max(1, min(n or 5, MAX_RESULTS))
 
 
-def build(platform: Any) -> CapabilityIndex:
+def with_phrasings(entries: list[Capability]) -> list[Capability]:
+    """*entries* with each one's everyday phrasings (``phrasings.py``) added to
+    the words it is found by. An entry with none keeps its own text."""
+    from dataclasses import replace
+
+    from .phrasings import PHRASINGS
+
+    out = []
+    for entry in entries:
+        extra = PHRASINGS.get(entry.id)
+        out.append(replace(entry, text=f"{entry.text} {' '.join(extra)}") if extra else entry)
+    return out
+
+
+def build(platform: Any, *, phrasings: bool = True) -> CapabilityIndex:
     """The index for this install. A part that cannot be read contributes no
-    entries and is NAMED on the index (``unreadable``); the rest is built."""
+    entries and is NAMED on the index (``unreadable``); the rest is built.
+    ``phrasings=False`` builds from the product's own text alone (what the
+    phrasings are written from)."""
     entries: list[Capability] = []
     unreadable: list[str] = []
     for name, part in PARTS:
@@ -299,6 +326,11 @@ def build(platform: Any) -> CapabilityIndex:
             entries.extend(part(platform))
         except Exception:  # noqa: BLE001 — one unreadable part never empties the index
             unreadable.append(name)
+    if phrasings:
+        try:
+            entries = with_phrasings(entries)
+        except Exception:  # noqa: BLE001 — the product's own words still find everything they did
+            unreadable.append("phrasings")
     return CapabilityIndex(entries, tuple(unreadable))
 
 

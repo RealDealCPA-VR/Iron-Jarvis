@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.480.0 (2026-11-12).*
+holds itself to. Current as of v1.481.0 (2026-11-12).*
 
 ---
 
@@ -2041,6 +2041,92 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The lookup finds the right thing more often (v1.481.0)
+
+The fourth step of the feature lookup (v1.478.0 to v1.480.0). It is still
+**off by default** (Settings › Models › Feature lookup), and with it off
+nothing in chat is different.
+
+### What changed
+
+The lookup searches a list of everything Iron Jarvis can do. That list was
+written in the app's own words, and people rarely use them: they ask for "a
+helper", not "an agent"; they say "stop asking me before every little
+thing", not "approvals". When Jarvis looked something up, the right entry
+was often not among the matches it was shown.
+
+1. **Every entry now knows how people ask for it.** For each tool, setting
+   and page in the list, eight short everyday ways of asking for it were
+   written once, from that entry's own description and nothing else. They
+   are used only to find the entry; you never see them, and Jarvis never
+   sees them either.
+2. **Jarvis names your request three ways.** When it looks something up, it
+   now writes your request in a few words and adds two other ways to name
+   it, for example "new helper with its own name / create an agent / custom
+   assistant".
+3. **A saved preference no longer counts as done.** With **Feature lookup
+   check** also on (Settings › Models, off by default): when Jarvis answered
+   a request only by saving a preference ("Got it, I've locked that in")
+   while a real setting does it, the check never asked it to look. Now it
+   does. When the preference *was* what you asked for, the reply stays as
+   it was.
+
+### Measured
+
+How often the right tool, setting or page is among the first five matches,
+using search words a separate model wrote for each request:
+
+| Set of requests | Before | After |
+|---|---|---|
+| A set written to develop this (612 requests) | 71% | 94% |
+| The first test set (164 requests, never used to adjust anything) | 75% | 96% |
+| The second test set (104 requests, never used to adjust anything) | 70% | 91% |
+
+In real chats (Claude Haiku answering, every approval card declined, one run
+each, so a few requests either way is noise):
+
+| Requests for something Iron Jarvis does (right tool used) | v1.480.0 | v1.481.0 |
+|---|---|---|
+| Second test set (86 requests), lookup on, check off | 32 | 34 |
+| Second test set (86 requests), lookup and check on | 39 | 42 |
+| A practice set (114 requests), lookup and check on: without and with point 3 | 59 | 66 |
+
+And nothing got worse where nothing was asked for:
+
+- **Ordinary questions** (43): nothing looked up, no card, no reply taken
+  back. The check's wait after the last word is the same as in v1.480.0
+  (3.6 s; only with the check on).
+- **Messages that ask for nothing** (99): one card, a web search for "what
+  styles are popular right now" that Jarvis asked before running (v1.480.0:
+  none). Nothing was changed without asking.
+
+### Also fixed
+
+When a lookup had already brought its three tools, a setting it also
+matched could still bring the settings tools along, so one lookup could
+bring five tools instead of three. Now it brings at most three, as
+intended.
+
+### Tried and left out
+
+A second check, "you found the right tool: use it", asked once when a
+lookup had found a tool and Jarvis only described it. In the practice run
+it was asked 56 times and led to a tool being used once: almost every time
+Jarvis correctly needed a detail from you, or had already answered. It only
+added 3 to 10 seconds, so it is not in this version.
+
+### Limits
+
+- The goal is for Jarvis to use the right feature for nearly every request
+  it can handle. With both switches on it does so for about half of them in
+  these tests. What is left: Jarvis does not look at all (about one request
+  in ten with the check on), the lookup finds the right tool but Jarvis
+  asks you for a detail first (often rightly), and the list still misses
+  some requests.
+- Measured with one model (Claude Haiku) and one run per request.
+- The everyday phrasings are written in English. Jarvis looks up in English
+  whatever language you write in.
 
 ## Jarvis looks it up before it says "done" or "I can't" (v1.480.0)
 

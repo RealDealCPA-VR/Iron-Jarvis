@@ -446,7 +446,10 @@ def join_found(
                 # The settings tools count as ONE of a lookup's places
                 # together (several setting matches all map to the same two
                 # or three tools, and must not crowd out the tool matches).
-                free = name in SETTINGS_FAMILY and (settings_counted or name == "config_list")
+                # Free only once the family HOLDS its place (v1.481.0: the
+                # reader used to be free on its own, so with three places
+                # taken it slipped in and then let a changer in after it).
+                free = name in SETTINGS_FAMILY and settings_counted
                 if taken >= MAX_JOINED_PER_LOOKUP and not free:
                     continue
                 tool = registry.get(name)

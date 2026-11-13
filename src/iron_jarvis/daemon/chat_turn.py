@@ -6464,7 +6464,8 @@ CAPABILITY_BLOCK = (
     "of them are not among your tools until they are needed.\n"
     "Before you tell the user you cannot do something, or that you have no access "
     "to something (earlier chats, a setting, the web, a file), call "
-    "`find_capability` with a few English words for it. A tool it finds may "
+    "`find_capability` with a few English words for it and two other ways to name "
+    "it. A tool it finds may "
     "join this reply: its result says which, and which show the user an approval "
     "card when you call them.\n"
     "Words alone change nothing in Iron Jarvis. When the user asks for something to "
@@ -6523,9 +6524,11 @@ LOOK_FIRST_NOTE = (
     "for something to be done, set up, changed, saved, remembered, scheduled, "
     "watched, sent or connected, or asked whether Iron Jarvis can do something, "
     "and no tool call of yours did it, call `find_capability` now with a few "
-    "English words for what they asked. A reply that says it is done, that you "
+    "English words for what they asked and two other ways to name it. A reply "
+    "that says it is done, that you "
     "will do it or remember it, that it cannot be done, or that tells the user "
-    "how to do it by hand, is not true until you have looked.\n"
+    "how to do it by hand, is not true until you have looked (a saved "
+    "preference changes no setting).\n"
     "The request may be about Iron Jarvis itself (how it looks, sounds or "
     "behaves, what it keeps, allows or does by itself) and not about a file of "
     "the user's: if your reply asks the user which they mean, look first.\n"
@@ -6535,6 +6538,15 @@ LOOK_FIRST_NOTE = (
     "look something up, the reply above is thrown away: write the whole reply "
     "again after.)"
 )
+
+
+#: A saved preference is a note for the model ("from now on ...") and
+#: changes no setting (v1.481.0). In the live runs "wait till others have
+#: tried the updates" was answered with a saved preference ("I've locked that
+#: in") while the update channel stayed as it was, and the check was never
+#: asked because a tool that changes something had run. Such a call does not
+#: keep the check away; a reply whose preference WAS the request answers KEEP.
+LOOK_FIRST_NOT_A_CHANGE = frozenset({"remember_preference"})
 
 
 def look_first_kept_word(text: Any) -> bool:
@@ -6633,6 +6645,8 @@ def look_first_wanted(
             name = str(getattr(message, "name", "") or "")
             if name == _cj.NAME:
                 return False
+            if name in LOOK_FIRST_NOT_A_CHANGE:
+                continue
             tool = registry.get(name)
             if tool is None or not _cj._reads(tool, name):
                 return False
