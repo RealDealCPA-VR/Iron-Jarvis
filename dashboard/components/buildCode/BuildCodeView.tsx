@@ -1312,7 +1312,9 @@ function SessionPane({
       setNote(null);
       setInfo(null);
       setNoteUntilLine(null);
-      const linesBefore = changeLines(eventsNowRef.current);
+      // What is drawn AND what waits for the next frame: an earlier change's
+      // line still waiting must not stand in for this one's.
+      const linesBefore = changeLines([...eventsNowRef.current, ...pendingRef.current]);
       try {
         const raw = await patch<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}`, patchIn);
         // v1.475.0: a model or effort change in a conversation is said by the

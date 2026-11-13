@@ -17976,7 +17976,9 @@ does not need a bump, stop and bump it.
   record only). Only THAT note is taken away (matched by its text), the
   watch ends once anything else is shown in its place (a returned steer
   note, a rewind note, an account move), and a line that already arrived
-  (drawn or waiting for the next frame) means no note at all. NO extra session read for it: an extra read at a reply's end
+  (drawn or waiting for the next frame) means no note at all; the count at
+  the press takes in the waiting lines too, or an earlier change's line still
+  waiting stood in for this one's. NO extra session read for it: an extra read at a reply's end
   raced the next WAITING message's follow and drew its question twice (three
   review rounds found a new race each time). A re-read that keeps what is
   drawn (the live pieces outnumber the saved record) still adds every notice

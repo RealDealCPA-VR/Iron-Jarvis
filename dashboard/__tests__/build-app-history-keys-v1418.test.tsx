@@ -727,6 +727,29 @@ describe("keys (C4.8)", () => {
     expect(screen.queryByTestId("code-info")?.textContent ?? "").toMatch(/back|returned|box|read/i);
   });
 
+  it("v1.481.1: an earlier change's line still waiting to be drawn does not stand in for the next change's", async () => {
+    working("p8", { harness: "pi", mode: "own", model: "", effort: "high", harness_session_id: "h-1" });
+    H.postReply["PATCH /build/app/sessions/p8"] = {
+      session: sess("p8", { harness: "pi", mode: "own", model: "", effort: "low", harness_session_id: "h-1" }),
+      applied: { effort: "next" },
+    };
+    render(<BuildCodeView initialSession="p8" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-working");
+    fireEvent.click(screen.getByTestId("code-model-chip"));
+    await screen.findByTestId("code-pick-tool-menu");
+    // Change A's line arrives and is pressed past before the next frame draws it.
+    await act(async () => {
+      H.lastWatch?.onFrame?.("notice", { type: "notice", at: "2026-11-12T20:00:01Z", text: "Effort changed: Medium → High, from your next message.", turn: "turn_1" });
+      chooseEffort(SESSION, "low");
+    });
+    await waitFor(() => expect(H.patches).toHaveLength(1));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 60));
+    });
+    // B's own line has not come: its note is shown.
+    expect(screen.getByTestId("code-info")).toBeInTheDocument();
+  });
+
   it("Pi's effort stays open while it works (it changes live)", async () => {
     working("p1", { harness: "pi", mode: "own", model: "", effort: "high" });
     render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
