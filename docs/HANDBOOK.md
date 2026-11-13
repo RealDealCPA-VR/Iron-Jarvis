@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.483.0 (2026-11-12).*
+holds itself to. Current as of v1.483.1 (2026-11-12).*
 
 ---
 
@@ -2041,6 +2041,21 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The model picker's last rough edges (v1.483.1)
+
+Small fixes after v1.475.0's one-chip model picker in Build › Code:
+
+- **A model change is said once while a reply runs.** The short "from your
+  next message" note shows until the change's own line appears in the
+  conversation, then goes away.
+- **A change pressed just as a reply finishes is still said.** If the
+  line cannot reach the conversation in time, the note stays.
+- **The "Model changed" line shows at once in a long session.** It used to
+  appear only after reopening the session when the reply on screen was long.
+- **No more "getServerSnapshot should be cached" warning** in the browser's
+  developer tools. It came from the Emergency stop strip, which is on every
+  page; nothing visible went wrong.
 
 ## Chat can schedule a task in your own words (v1.483.0)
 

@@ -120,7 +120,10 @@ function subscribe(l: () => void) {
   };
 }
 const snapshot = () => state;
-const serverSnapshot = (): EmergencyStopState => ({ known: false, on: false });
+// v1.483.1: ONE object — React compares the server snapshot by identity and
+// warns ("getServerSnapshot should be cached") when it is new every call.
+const SERVER_STATE: EmergencyStopState = { known: false, on: false };
+const serverSnapshot = (): EmergencyStopState => SERVER_STATE;
 
 /** Is Emergency stop on? Reads once when nothing is known yet (a page shown
  *  outside the layout, or before the strip's first read lands). */

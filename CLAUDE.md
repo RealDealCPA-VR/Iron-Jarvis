@@ -18055,7 +18055,29 @@ does not need a bump, stop and bump it.
   answer makes it the chosen one (`pending`); Tab closes the panel (it is
   portaled to the end of the page); the shortcut opens nothing with no tools;
   the daemon line says the model's and the effort's own timing when they
-  differ (`effort_when`).
+  differ (`effort_when`). v1.483.1: a change made while a reply runs keeps
+  the page's own "applies from your next message" note only UNTIL a new
+  "Model/Effort changed" line is drawn (`noteUntilLine` + `changeLines`,
+  counted against what was drawn or waiting for the next frame at the
+  press): said once, and still said when the reply ended while the change
+  was out (the line then goes to the record only). Only THAT note is taken
+  away (matched by its text), the watch ends once anything else is shown in
+  its place (a returned steer note, a rewind note, an account move), and a
+  line that already arrived means no note at all. NO extra session read for
+  it: an extra read at a reply's end raced the next WAITING message's follow
+  and drew its question twice (three review rounds found a new race each
+  time). A re-read that keeps what is drawn (the live pieces outnumber the
+  saved record) still adds every notice newer than anything drawn
+  (`lib/buildApp.withNewerNotices`): stamps compared as `stampKey`s (the
+  daemon's `isoformat()` drops the fraction of a whole-second stamp, and
+  "…:07Z" sorts after "…:07.3Z" as text), a notice stamped AT the newest
+  drawn time added unless the same notice (stamp + text) is drawn.
+  `EmergencyStopStrip`'s server snapshot is ONE constant (a new object per
+  call is React's "getServerSnapshot should be cached" warning, checked
+  during HYDRATION — a `renderToString` alone never warns; pin
+  `__tests__/server-snapshot-v1483-1.test.tsx`). Checked and dropped: the
+  panel's placement does not need re-measuring when its list changes — its
+  height cap is the ROOM on its side, not its first height.
 - **A Store program is never asked into the pane job, and starts one at a
   time; a frozen loop says where it is stuck** (v1.407.1, a USER BUG on
   v1.407.0: Build stuck at "Attaching to sessions…", then "Iron Jarvis isn't
