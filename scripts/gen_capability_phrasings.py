@@ -54,7 +54,7 @@ HEAD = (
     "No other text. Do not use any tools; just answer.\n\nFEATURES:\n"
 )
 
-_KIND_WORDS = {"tool": "action", "setting": "setting", "page": "needs a page", "not_offered": "NOT offered"}
+_KIND_WORDS = {"tool": "action", "setting": "setting", "secret": "setting", "page": "needs a page", "not_offered": "NOT offered"}
 
 
 def entries() -> list:

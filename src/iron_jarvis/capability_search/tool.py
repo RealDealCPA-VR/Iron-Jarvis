@@ -170,6 +170,17 @@ def entry_line(platform: Any, entry: _index.Capability) -> tuple[str, dict[str, 
                 "config_change_protected, which asks the user every time."
             )
         return line, row
+    if entry.kind == "secret":
+        mode = _mode(platform, entry.tool)
+        row.update(tool=entry.tool, mode=mode, changes=True, key=entry.id)
+        head = f"Setting \"{entry.title}\" (key {entry.id}, a private value)"
+        if mode == "deny":
+            return (f"{head}: the user has set tool {entry.tool} to Never run, so it is "
+                    "set only by hand, in Settings."), row
+        return (
+            f"{head}: set with tool {entry.tool}, which shows the user a secure card to "
+            "paste it into. Never ask for the value in chat."
+        ), row
     if entry.kind == "page":
         row.update(href=entry.href)
         return f"Needs a page ({entry.title}, {entry.href}): {entry.line}", row

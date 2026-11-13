@@ -2042,6 +2042,26 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Jarvis finds your calendar link (v1.484.0)
+
+With **Feature lookup** on (Settings › Models, off by default), Jarvis can now
+find the settings that hold a private value: the **Calendar link** and the
+**speech-to-text key**. Before, "hook up my Google calendar so you can see my
+appointments" could not find the calendar link, and Jarvis tried to connect a
+"Google Calendar" app that Iron Jarvis doesn't have.
+
+- **What happens now:** Jarvis shows the secure card for your calendar's
+  private link (Google, Outlook and iCloud each give one). You paste the link
+  there, never into the chat. Turning on **Calendar reminders** makes Iron
+  Jarvis act on your calendar.
+- **If Jarvis still asks to connect a calendar app,** its answer now says the
+  way in is the calendar link.
+- **Measured** (9 calendar requests, Claude Haiku, both lookup settings on):
+  4 now open the calendar link's card; on v1.483.0 none did, and 3 tried a
+  "Google Calendar" app that does not exist.
+- **Not yet:** removing a saved calendar link is still done on the Rules page,
+  not from chat.
+
 ## Chat can schedule a task in your own words (v1.483.0)
 
 Ask in chat for something to happen on a schedule ("every Monday at 8, pull

@@ -17844,6 +17844,24 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **The lookup finds a setting that holds a private value** (v1.484.0).
+  `capability_search/index._secret_entries`: every `schema.SECRETS` row that
+  is not a family (`pattern=False`: today `calendar_ics_url` and
+  `voice_transcribe_key`) is an entry of kind `secret` (in `KINDS`), tool
+  `config_secret`; `tool.entry_line` says it is set through the secure card and
+  never that `config_list` reads it; `join._wanted` brings `config_secret` alone;
+  `scripts/gen_capability_phrasings.py` words it as a setting. A new standalone
+  SecretDef needs the phrasings regenerated (the check fails until then).
+  `settings/records.AppConnectTool`: an unknown app id holding "calendar" or
+  "ical" answers with the calendar link (`config_secret calendar_ics_url`) and
+  Calendar reminders; any other unknown app keeps its old words. STRICT LABELS
+  AND UX DISAGREE HERE: the practice set labels "hook up my Google calendar"
+  `app_connect`, but Iron Jarvis has no calendar app (that call ends "There is
+  no app called 'google_calendar'"); live, 9 calendar rows: `app_connect` 4 -> 2,
+  `config_secret` 0 -> 4. Shipped for the working path; the strict score
+  counts it as 2 fewer. OPEN: removing a saved calendar link from chat. Pins:
+  `tests/test_calendar_link_lookup_v1484.py` (6 mutations, all red).
+
 - **Chat can make a plain TASK schedule** (v1.483.0). `scheduling/tools.
   ScheduleCreateTool` takes `task` (the work in the user's own words): kind
   `task` (also the default when `task` is given), `payload["task"]` set, the

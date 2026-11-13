@@ -686,6 +686,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         "what's the monthly payment on this loan",
         'add up these prices for me',
     ),
+    'calendar_ics_url': (
+        'Connect my calendar so you can see it',
+        'Where do I put my calendar link?',
+        'Let you read my schedule from my calendar',
+        'Link my Google or Outlook calendar here',
+        'Sync my appointments so you know them',
+        'Add my calendar address for checking',
+        "Let you see what's on my schedule",
+        'Hook up my calendar file address',
+    ),
     'calendar_lead_minutes': (
         'how early to start before meetings',
         'set minutes before an event',
@@ -3535,6 +3545,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'Enter the address for my dictation server',
         'Hook up a separate server for dictation',
         'Change where my speech gets converted',
+    ),
+    'voice_transcribe_key': (
+        'Make my voice typing work again',
+        'Where do I paste my talk-to-text key?',
+        'Set up the key for speaking to text',
+        'Hook up my voice-to-words service',
+        'Enter my key so dictation works',
+        'Add my speech recognition password here',
+        'Connect the service that types what I say',
+        'Make the mic-to-text thing run for me',
     ),
     'voice_transcribe_model': (
         'Which model turns my speech into text',

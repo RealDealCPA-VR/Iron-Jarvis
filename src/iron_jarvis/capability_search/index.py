@@ -86,7 +86,7 @@ SETTING_TOOL = {
 QUERY_CHARS = 300
 MAX_RESULTS = 8
 
-KINDS = ("tool", "setting", "page", "not_offered")
+KINDS = ("tool", "setting", "secret", "page", "not_offered")
 
 _WORD = re.compile(r"[a-z0-9]+")
 _STOP = frozenset(
@@ -207,6 +207,29 @@ def _setting_entries(_platform: Any = None) -> list[Capability]:
     return out
 
 
+def _secret_entries(_platform: Any = None) -> list[Capability]:
+    """v1.484.0: the settings that hold a private value (the calendar link, the
+    speech-to-text key). They are not in ``schema.SETTINGS`` (a value never
+    rides a tool argument in chat), so before this nothing could find them: "connect
+    my calendar on the internet" never reached the calendar link. Each is set
+    only through ``config_secret``'s secure card. A family of secrets (one per
+    provider, channel or app) is left out: each has its own tool."""
+    from ..settings import schema
+
+    out: list[Capability] = []
+    for secret in schema.SECRETS:
+        if secret.pattern:
+            continue
+        others = " ".join(secret.aliases or ())
+        out.append(Capability(
+            kind="secret", id=secret.name, title=secret.label, tool="config_secret",
+            changes=True,
+            text=f"{secret.label} {others} {secret.name.replace('_', ' ')} "
+                 f"{_one_line(secret.help, 500)} setting",
+        ))
+    return out
+
+
 def _page_entries(_platform: Any = None) -> list[Capability]:
     from ..daemon import page_doors
 
@@ -230,6 +253,7 @@ def _page_entries(_platform: Any = None) -> list[Capability]:
 PARTS = (
     ("tools", _tool_entries),
     ("settings", _setting_entries),
+    ("secrets", _secret_entries),
     ("pages", _page_entries),
 )
 

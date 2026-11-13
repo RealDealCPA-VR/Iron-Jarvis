@@ -440,3 +440,25 @@ so a request like "every Monday at 8, pull together the rent list" had
 nothing simple to fill in. It now takes `task` in the user's own words.
 Live, 13 schedule requests of practice set D: 2 -> 6 offered the schedule.
 The held-out sets were not looked at for this change.
+
+## What still fails after one follow-up, and the calendar link (v1.484.0)
+
+On the practice set, v1.483.0 reaches the right tool on the first reply in 68
+of 114 requests (60%). Its misses were read one by one. Most are not failures
+of the lookup:
+
+- the requests name folders the scratch install does not have, or that lie
+  outside its readable folders (renames, night tasks, scheduled reads);
+- a rule on new email needs an email account set up to listen for mail;
+- "save what we just did as a skill" has nothing done yet;
+- Telegram needs the user's chat id, a picture needs the Pixio key;
+- "where is the button for…" is answered from the lookup (strict labels want
+  the Guide's search).
+
+Real gaps found: the settings that hold a private value (the calendar link)
+were not in the index at all (fixed in v1.484.0), and replies that only agree
+to a lasting change ("Got it, from now on I'll…") with no tool (3 rows; a
+rewording of the check's note to name that shape was measured and made the
+whole set worse, 68 -> 61, so it was dropped). On an empty install, strict
+scoring cannot get near 95%: for those requests the right answer is a
+question.

@@ -2703,7 +2703,18 @@ class AppConnectTool(_RecordTool):
                     ),
                 )
             known = ", ".join(c.id for c in CATALOG)
-            return ToolResult(ok=False, error=f"There is no app called {cid!r}. Known: {known}.")
+            # v1.484.0: a calendar is not an app here (seen live: "hook up my
+            # Google calendar" became app_connect google_calendar, which only
+            # ends in this refusal). Iron Jarvis reads a calendar by its
+            # private calendar link, so the refusal says that way in.
+            calendar = (
+                " There is no calendar app: Iron Jarvis reads a calendar (Google, Outlook, "
+                "iCloud) by its private calendar link. Call config_secret with name "
+                "calendar_ics_url to show the user the secure card for it; the setting "
+                "Calendar reminders (calendar_trigger_enabled) makes Iron Jarvis act on it."
+                if "calendar" in cid.lower() or "ical" in cid.lower() else ""
+            )
+            return ToolResult(ok=False, error=f"There is no app called {cid!r}. Known: {known}.{calendar}")
         if conn.connect_via == "oauth":
             # v1.353.0 re-review: an app the user ALREADY signed in to is not
             # sent to connect it again. "find my tax files in Google Drive"

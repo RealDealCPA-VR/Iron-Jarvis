@@ -346,6 +346,8 @@ def _wanted(rows: list[dict[str, Any]]) -> list[str]:
             names = [str(row.get("tool") or row.get("id") or "")]
         elif kind == "setting":
             names = [str(row.get("tool") or ""), "config_list"]
+        elif kind == "secret":
+            names = [str(row.get("tool") or "")]
         for name in names:
             if name and name not in out:
                 out.append(name)
