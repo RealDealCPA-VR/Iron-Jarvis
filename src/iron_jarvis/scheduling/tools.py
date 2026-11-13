@@ -134,6 +134,153 @@ class ScheduleCreateTool(Tool):
         )
 
 
+#: v1.486.0: how many schedules ``schedule_list`` shows at most.
+LIST_MAX = 50
+_DAYS = ("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+
+
+def _clock(minute: str, hour: str) -> str | None:
+    if not (minute.isdigit() and hour.isdigit()):
+        return None
+    h, m = int(hour), int(minute)
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return None
+    return f"{(h % 12) or 12}:{m:02d} {'AM' if h < 12 else 'PM'}"
+
+
+def _day_words(field: str) -> str | None:
+    if field in ("1-5", "MON-FRI", "mon-fri"):
+        return "every weekday"
+    if field in ("0,6", "6,0", "SAT,SUN", "sat,sun"):
+        return "every weekend day"
+    names = []
+    for part in field.split(","):
+        if not part.isdigit() or int(part) > 7:
+            return None
+        names.append(_DAYS[int(part) % 7])
+    return "every " + " and ".join(names) if names else None
+
+
+def when_words(rec: Any) -> str:
+    """The schedule's timing in plain words, with the exact trigger kept.
+
+    Common cron shapes are said in words ("every day at 8:00 AM"); anything
+    else is given as it is stored ("cron 0 */2 * * 1"), never guessed.
+    """
+    kind = getattr(rec, "trigger_type", "cron")
+    if kind == "date":
+        at = getattr(rec, "run_at", None)
+        return f"once, at {at.isoformat() if at is not None else 'an unknown time'}"
+    if kind == "interval":
+        secs = int(getattr(rec, "interval_seconds", 0) or 0)
+        for unit, size in (("day", 86400), ("hour", 3600), ("minute", 60)):
+            if secs and secs % size == 0:
+                n = secs // size
+                return f"every {n} {unit}{'' if n == 1 else 's'}"
+        return f"every {secs} seconds"
+    cron = str(getattr(rec, "cron", "") or "").strip()
+    parts = cron.split()
+    if len(parts) == 5:
+        minute, hour, dom, month, dow = parts
+        at = _clock(minute, hour)
+        if at and month == "*":
+            if dom == "*" and dow == "*":
+                return f"every day at {at} (cron {cron})"
+            if dom == "*":
+                days = _day_words(dow)
+                if days:
+                    return f"{days} at {at} (cron {cron})"
+            if dow == "*" and dom.isdigit():
+                return f"on day {int(dom)} of every month at {at} (cron {cron})"
+    return f"cron {cron}"
+
+
+def _does_words(rec: Any) -> str:
+    try:
+        payload = rec.decoded_payload()
+    except Exception:  # noqa: BLE001 — a bad payload still lists the schedule
+        payload = {}
+    if rec.kind == "task":
+        task = " ".join(str(payload.get("task") or "").split())
+        return f"does: {task[:200]}" if task else "a task schedule with no task"
+    if rec.kind == "event":
+        return f"publishes the event {payload.get('event') or payload.get('type') or '(unnamed)'}"
+    name = payload.get("name") if isinstance(payload, dict) else None
+    return f"runs the workflow {name}" if name else "runs a workflow"
+
+
+class ScheduleListTool(Tool):
+    """List the scheduled tasks, so a schedule can be found by what it does."""
+
+    name = "schedule_list"
+    description = (
+        "List the user's scheduled tasks (the Schedules page): each one's name, when it runs "
+        "in plain words, what it does, whether it is on or paused, and its next run and how "
+        "the last run went. Call it to find which schedule the user means ('the daily 8 "
+        "o'clock reminder') before changing one with schedule_update or schedule_delete, "
+        "which take the schedule's name. It only reads."
+    )
+    permission_key = "schedule_list"
+    reversibility = Reversibility.READONLY
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Optional words to keep only schedules whose name or work holds them.",
+            },
+        },
+    }
+
+    def __init__(self, platform) -> None:
+        self.platform = platform
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        import asyncio
+
+        scheduler = getattr(self.platform, "scheduler", None)
+        if scheduler is None:
+            return ToolResult(ok=False, error="Schedules are not available here.")
+        rows = await asyncio.to_thread(scheduler.list)
+        words = [w for w in str(args.get("query") or "").lower().split() if w]
+        lines: list[str] = []
+        results: list[dict[str, Any]] = []
+        for rec in rows:
+            when, does = when_words(rec), _does_words(rec)
+            text = f"{rec.name} {does}".lower()
+            if words and not all(w in text for w in words):
+                continue
+            state = "on" if rec.enabled else "paused"
+            nxt = rec.next_run.isoformat() if rec.next_run is not None and rec.enabled else ""
+            last = rec.last_status or "never run"
+            lines.append(
+                f"- {rec.name}: {when}; {does}; {state}"
+                + (f"; next run {nxt}" if nxt else "")
+                + f"; last run: {last}"
+            )
+            results.append({
+                "name": rec.name, "when": when, "does": does, "enabled": bool(rec.enabled),
+                "next_run": nxt or None, "last_status": rec.last_status or "",
+            })
+        total = len(results)
+        if not rows:
+            return ToolResult(ok=True, output="There are no scheduled tasks.", data={"schedules": []})
+        if not results:
+            return ToolResult(
+                ok=True,
+                output=f"No scheduled task matches {args.get('query')!r}. All {len(rows)}: "
+                + ", ".join(r.name for r in rows[:LIST_MAX]),
+                data={"schedules": []},
+            )
+        shown = lines[:LIST_MAX]
+        more = f"\n…and {total - LIST_MAX} more." if total > LIST_MAX else ""
+        return ToolResult(
+            ok=True,
+            output=f"{total} scheduled task{'' if total == 1 else 's'}:\n" + "\n".join(shown) + more,
+            data={"schedules": results[:LIST_MAX]},
+        )
+
+
 def _created_card(name: str) -> dict[str, Any] | None:
     try:
         from ..settings.records import create_card
@@ -144,5 +291,5 @@ def _created_card(name: str) -> dict[str, Any] | None:
 
 
 def schedule_tools(platform) -> list[Tool]:
-    """Build the scheduling tool bound to the assembled ``platform``."""
-    return [ScheduleCreateTool(platform)]
+    """Build the scheduling tools bound to the assembled ``platform``."""
+    return [ScheduleCreateTool(platform), ScheduleListTool(platform)]

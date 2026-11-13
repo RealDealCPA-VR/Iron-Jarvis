@@ -664,6 +664,10 @@
       "ok": "removed a schedule",
       "failed": "tried a schedule removal and it failed"
     },
+    "schedule_list": {
+      "ok": "listed your schedules",
+      "failed": "tried a schedule listing and it failed"
+    },
     "schedule_update": {
       "ok": "changed a schedule",
       "failed": "tried a schedule change and it failed"

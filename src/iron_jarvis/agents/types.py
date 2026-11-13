@@ -63,6 +63,8 @@ _SELF_SERVICE_TOOLS = [
     *_BRAIN_TOOLS,
     "ltm_append",
     "schedule_create",
+    # v1.486.0: an agent that makes a schedule can see the ones there are.
+    "schedule_list",
     "webhook_add",
     "workflow_create",
     # v1.172.0: an agent that can AUTHOR a workflow must be able to SEE the

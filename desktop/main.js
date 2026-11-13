@@ -4008,6 +4008,7 @@ const TOOL_WORDS_BUILTIN = {
   run_doctor: "run the health checks",
   schedule_create: "make a schedule",
   schedule_delete: "remove a schedule",
+  schedule_list: "list your schedules",
   schedule_update: "change a schedule",
   secret_list: "list your saved keys",
   secret_set: "save a key",

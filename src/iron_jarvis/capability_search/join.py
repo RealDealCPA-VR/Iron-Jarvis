@@ -87,7 +87,7 @@ OWN_PLACE = frozenset({
     "config_list", "config_set", "config_change", "config_change_protected",
     "config_secret", "calculate", "rename_file", "changes_list", "change_undo",
     "preference_list", "skill_create", "skill_update", "skill_load", "skill_search",
-    "goal_list", "workflow_list",
+    "goal_list", "workflow_list", "schedule_list",
     # v1.479.0: armed beside a tool the reply already has, or by a run verb
     # (`autoselect.wants_excel_trace` / `wants_excel_reconcile`, the Guide's
     # reader, `records._runs_a_named_workflow`).

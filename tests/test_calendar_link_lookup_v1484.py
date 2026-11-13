@@ -101,3 +101,21 @@ def test_another_unknown_app_keeps_its_words(platform):
     assert r.ok is False and r.error.startswith("There is no app called 'trello'. Known: ")
     assert "calendar" not in r.error.lower().split("known:")[0]
     assert "calendar_ics_url" not in r.error
+
+
+def test_the_line_says_where_the_link_is_removed_never_clear_the_field(platform):
+    """v1.485.1: config_secret only saves (its card refuses an empty value), so
+    the line says the calendar link is removed by hand on the Rules page."""
+    entry = next(e for e in CI.build(platform).entries if e.id == "calendar_ics_url")
+    line, row = CT_TOOL.entry_line(platform, entry)
+    assert "cannot be removed from chat" in line and "Rules page (/reflex)" in line
+    assert row["href"] == "/reflex"
+    voice = next(e for e in CI.build(platform).entries if e.id == "voice_transcribe_key")
+    vline, _ = CT_TOOL.entry_line(platform, voice)
+    assert "cannot be removed from chat" in vline and "in Settings" in vline
+
+
+def test_config_secret_says_it_only_saves():
+    from iron_jarvis.settings.credentials import ConfigSecretTool
+
+    assert "cannot clear or remove one" in ConfigSecretTool.description

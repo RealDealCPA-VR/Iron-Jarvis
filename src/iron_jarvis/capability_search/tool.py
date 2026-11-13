@@ -177,9 +177,17 @@ def entry_line(platform: Any, entry: _index.Capability) -> tuple[str, dict[str, 
         if mode == "deny":
             return (f"{head}: the user has set tool {entry.tool} to Never run, so it is "
                     "set only by hand, in Settings."), row
+        removed = _index.SECRET_REMOVED_AT.get(entry.id)
+        where = (
+            f" It cannot be removed from chat: the user removes it by hand on {removed[0]} "
+            f"({removed[1]})." if removed else
+            " It cannot be removed from chat: the user removes it by hand in Settings."
+        )
+        if removed:
+            row.update(href=removed[1])
         return (
             f"{head}: set with tool {entry.tool}, which shows the user a secure card to "
-            "paste it into. Never ask for the value in chat."
+            "paste it into. Never ask for the value in chat." + where
         ), row
     if entry.kind == "page":
         row.update(href=entry.href)

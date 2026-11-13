@@ -149,6 +149,7 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   goal_add: { did: "Added a goal", noun: "goal addition" },
   goal_delete: { did: "Dropped a goal", noun: "goal removal" },
   goal_list: { did: "Checked your goals", noun: "goal check" },
+  schedule_list: { did: "Listed your schedules", noun: "schedule listing" },
   goal_update: { did: "Updated a goal", noun: "goal update" },
   grant_revoke: { did: "Took back an always-allow", noun: "always-allow removal" },
   integration_list: { did: "Listed your web services", noun: "service listing" },

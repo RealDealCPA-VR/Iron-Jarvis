@@ -501,7 +501,8 @@ class ConfigSecretTool(Tool):
         "When a key, token, password or private link is needed (\"connect my Notion\", a "
         "provider API key, a Telegram bot token), call this with the credential's name from "
         "config_list. It shows the user a secure card to paste it into. NEVER ask the user to "
-        "type a secret into the chat, and never repeat one."
+        "type a secret into the chat, and never repeat one. It only SAVES a value: it cannot "
+        "clear or remove one (an empty value is refused)."
     )
     input_schema = {  # v1.341.0: was `parameters` (never read by Tool.spec()) — see settings/tools.py
         "type": "object",

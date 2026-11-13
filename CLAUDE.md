@@ -17844,6 +17844,21 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **Chat lists the schedules; a calendar link's removal is said honestly**
+  (v1.486.0). `scheduling/tools.ScheduleListTool` (`schedule_list`, allow,
+  READONLY, on the self-service roster; `when_words` says common cron shapes in
+  words with the cron kept, anything odd as stored; `query` keeps matching
+  name/work; `LIST_MAX` 50). `records._record_tools_named` offers it FIRST
+  whenever a schedule is named, and it is in `_RECORD_READERS` (a question
+  about schedules offers only it). `ScheduleUpdateTool` / `ScheduleDeleteTool`
+  answer an unknown name with the names there are (`_no_schedule_words`, ≤ 20).
+  `config_secret`'s description says it only SAVES; the lookup's secret line
+  says where a value is removed (`index.SECRET_REMOVED_AT`: the calendar link
+  on the Rules page; else Settings). Seen live: "move the daily 8 o'clock
+  reminder to 9" asked the user for the schedule's name. Pins:
+  `tests/test_schedule_list_v1486.py` (9 mutations, all red), the two
+  calendar-removal tests in `test_calendar_link_lookup_v1484.py`.
+
 - **Chat sets an agent's job card; `config_list` names the models; a held
   lookup match is named** (v1.485.0). `settings/records_projects`: `_AGENT_ARGS`
   gains `never_use_tools` (→ the route's `deny_tools`) and `approvals`

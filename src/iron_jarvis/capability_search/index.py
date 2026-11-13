@@ -70,7 +70,7 @@ READS_ONLY = frozenset({
     "app_search", "app_status", "browse", "computer_use_status", "file_search",
     "goal_list", "guide_read", "guide_search", "image_info", "integration_list",
     "list_agents", "memory_read", "memory_search", "recall", "recall_lessons",
-    "secret_list", "tool_list", "view_image", "web_extract", "web_fetch",
+    "schedule_list", "secret_list", "tool_list", "view_image", "web_extract", "web_fetch",
     "web_search",
 })
 
@@ -207,6 +207,15 @@ def _setting_entries(_platform: Any = None) -> list[Capability]:
     return out
 
 
+#: v1.485.1: where a private value is REMOVED by hand (``config_secret`` only
+#: saves one, and its card refuses an empty value). Seen live: asked to "take
+#: the calendar link off", Jarvis opened the card and said "clear the field and
+#: save it", which the card refuses.
+SECRET_REMOVED_AT = {
+    "calendar_ics_url": ("the Rules page", "/reflex"),
+}
+
+
 def _secret_entries(_platform: Any = None) -> list[Capability]:
     """v1.484.0: the settings that hold a private value (the calendar link, the
     speech-to-text key). They are not in ``schema.SETTINGS`` (a value never
@@ -223,7 +232,7 @@ def _secret_entries(_platform: Any = None) -> list[Capability]:
         others = " ".join(secret.aliases or ())
         out.append(Capability(
             kind="secret", id=secret.name, title=secret.label, tool="config_secret",
-            changes=True,
+            changes=True, href=SECRET_REMOVED_AT.get(secret.name, ("", ""))[1],
             text=f"{secret.label} {others} {secret.name.replace('_', ' ')} "
                  f"{_one_line(secret.help, 500)} setting",
         ))

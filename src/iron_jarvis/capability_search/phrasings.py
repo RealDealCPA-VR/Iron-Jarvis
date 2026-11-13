@@ -3146,6 +3146,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'remove the repeating task please',
         'turn off that scheduled thing',
     ),
+    'schedule_list': (
+        'what reminders do I have set up',
+        'show me all my scheduled tasks',
+        'which things are set to run automatically',
+        "what's running on a timer for me",
+        'can you list my recurring jobs',
+        'what do I have scheduled to happen',
+        'are any of my automations paused',
+        'show me what runs every day',
+    ),
     'schedule_update': (
         'change when that task runs',
         'move the reminder to a different time',

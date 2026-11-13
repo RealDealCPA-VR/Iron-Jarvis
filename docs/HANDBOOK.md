@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.485.0 (2026-11-12).*
+holds itself to. Current as of v1.486.0 (2026-11-12).*
 
 ---
 
@@ -2041,6 +2041,21 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Chat can see your schedules (v1.486.0)
+
+- **Jarvis can list your scheduled tasks.** Ask "move the daily 8 o'clock
+  reminder to 9" and Jarvis now looks at your schedules first (each one's
+  name, when it runs in plain words, what it does, whether it is on or
+  paused), finds the one you mean and changes it on a card, instead of asking
+  you for the schedule's name. Listing them never needs your OK; changing one
+  still does.
+- **A schedule name Jarvis gets wrong is answered with the real names**, so
+  it can correct itself in the same reply.
+- **Taking the calendar link off is said honestly.** Chat can save your
+  calendar link on the secure card, but it cannot remove one: Jarvis now says
+  to remove it on the Rules page, instead of telling you to clear the card's
+  field (the card refuses an empty value).
 
 ## Agents, default models and the lookup, from chat (v1.485.0)
 

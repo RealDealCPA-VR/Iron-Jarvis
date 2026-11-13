@@ -536,6 +536,7 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "goal_add": ("added a goal", "goal addition"),
     "goal_delete": ("dropped a goal", "goal removal"),
     "goal_list": ("checked your goals", "goal check"),
+    "schedule_list": ("listed your schedules", "schedule listing"),
     "goal_update": ("updated a goal", "goal update"),
     "grant_revoke": ("took back an always-allow", "always-allow removal"),
     "integration_list": ("listed your web services", "service listing"),

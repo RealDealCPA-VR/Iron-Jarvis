@@ -461,6 +461,8 @@ def default_permissions() -> dict[str, str]:
         # autonomy_enabled), so listing/adding goals is allowed.
         "goal_add": "allow",
         "goal_list": "allow",
+        # v1.486.0: listing the scheduled tasks only reads.
+        "schedule_list": "allow",
         # Sentinels: registering an always-on watcher is local + reversible and
         # never acts on its own (a fired Sentinel only mints a suggest-only
         # proposal, and the runner is OFF unless sentinels_enabled), so allowed.

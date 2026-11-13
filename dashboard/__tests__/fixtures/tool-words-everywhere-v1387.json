@@ -191,6 +191,7 @@
     "run_doctor",
     "schedule_create",
     "schedule_delete",
+    "schedule_list",
     "schedule_update",
     "secret_list",
     "secret_set",
@@ -421,6 +422,7 @@
     "run_doctor": "run the health checks",
     "schedule_create": "make a schedule",
     "schedule_delete": "remove a schedule",
+    "schedule_list": "list your schedules",
     "schedule_update": "change a schedule",
     "secret_list": "list your saved keys",
     "secret_set": "save a key",
@@ -1025,6 +1027,10 @@
       "Removed a schedule",
       "Removing a schedule"
     ],
+    "schedule_list": [
+      "Listed your schedules",
+      "Listing your schedules"
+    ],
     "schedule_update": [
       "Changed a schedule",
       "Changing a schedule"
@@ -1345,6 +1351,7 @@
     "run_doctor": "",
     "schedule_create": "",
     "schedule_delete": "",
+    "schedule_list": "",
     "schedule_update": "",
     "secret_list": "",
     "secret_set": "",

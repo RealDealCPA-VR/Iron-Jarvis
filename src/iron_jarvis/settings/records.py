@@ -562,7 +562,7 @@ _POLITE_REQUEST = re.compile(
     re.IGNORECASE,
 )
 #: The record tools a question may still arm: they only READ.
-_RECORD_READERS = frozenset({"goal_list"})
+_RECORD_READERS = frozenset({"goal_list", "schedule_list"})
 
 
 #: v1.448.0 (Wave A, A1 review): "Have my coding sessions run with a
@@ -681,7 +681,9 @@ def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]"
     # folder on this PC, never the app (connectors.app_names).
     schedule = _schedule_named(W.without_backup_sentences(t) if W.jarvis_backup(t) else t)
     if schedule:
-        out += ["schedule_update", "schedule_delete", "workflow_schedule"]
+        # v1.486.0: the reader first, so "move the daily 8 o'clock reminder
+        # to 9" can find the schedule's name instead of asking for it.
+        out += ["schedule_list", "schedule_update", "schedule_delete", "workflow_schedule"]
         # B1.3: a NEW schedule — "make a schedule that…", or a recurring time
         # in a request ("remind me every morning at 7…", "every weekday at
         # 8am send me a digest").
@@ -855,6 +857,21 @@ def restore_schedule(platform: Any, name: str, prior: dict[str, Any] | None) -> 
         enabled=bool(prior.get("enabled", True)),
     )
     return f"undo: restored the schedule '{name}'"
+
+
+async def _no_schedule_words(platform: Any, name: str) -> str:
+    """v1.486.0: an unknown schedule name says which ones there are."""
+    try:
+        names = [r.name for r in await asyncio.to_thread(platform.scheduler.list)]
+    except Exception:  # noqa: BLE001 — the refusal never fails
+        names = []
+    if not names:
+        return f"There is no schedule called {name!r}; there are no scheduled tasks."
+    shown = ", ".join(repr(n) for n in names[:20])
+    return (
+        f"There is no schedule called {name!r}. The schedules are: {shown}"
+        + (" (and more)" if len(names) > 20 else "") + ". schedule_list says what each does."
+    )
 
 
 def _describe_schedule(s: dict[str, Any] | None) -> str | None:
@@ -2029,7 +2046,7 @@ class ScheduleUpdateTool(_RecordTool):
         name = self._target(args)
         before = await asyncio.to_thread(snap_schedule, self.platform, name)
         if before is None:
-            return ToolResult(ok=False, error=f"There is no schedule called {name!r}.")
+            return ToolResult(ok=False, error=await _no_schedule_words(self.platform, name))
         payload = args.get("payload")
         if isinstance(payload, dict) and payload.get("script") not in (None, {}):
             return ToolResult(ok=False, error=_knobs.SCRIPT_FROM_AGENT_REFUSAL)
@@ -2076,7 +2093,7 @@ class ScheduleDeleteTool(_RecordTool):
         name = self._target(args)
         before = await asyncio.to_thread(snap_schedule, self.platform, name)
         if before is None:
-            return ToolResult(ok=False, error=f"There is no schedule called {name!r}.")
+            return ToolResult(ok=False, error=await _no_schedule_words(self.platform, name))
         await asyncio.to_thread(self.platform.scheduler.remove, name)
         return ToolResult(
             ok=True,
