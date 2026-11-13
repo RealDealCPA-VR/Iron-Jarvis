@@ -192,7 +192,7 @@ Next, in order of what the numbers say:
    questions. Not built: it is one more model call on every reply.
 3. Then Phases 3 and 4 as planned.
 
-## The list, in everyday words (built 2026-11-12, to ship as v1.481.0)
+## The list, in everyday words (built 2026-11-12, to ship as v1.482.0)
 
 Point 1 of the list above. Each index entry got eight everyday phrasings a
 model wrote from THAT ENTRY'S OWN TEXT (never from a request set), used as
@@ -205,7 +205,7 @@ reaches 72%: the model's lookup is still what finds things.
 
 Live (Claude Haiku, cards declined, one run each):
 
-| | v1.480.0 | v1.481.0 |
+| | v1.480.0 | v1.482.0 |
 |---|---|---|
 | Second held-out set (86 tool requests), lookup on, check off | 32 | 34 |
 | Same, lookup and check on | 39 | 42 |

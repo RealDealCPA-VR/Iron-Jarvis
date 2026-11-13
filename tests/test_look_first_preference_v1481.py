@@ -1,4 +1,4 @@
-"""A saved preference does not keep the look-first check away (v1.481.0).
+"""A saved preference does not keep the look-first check away (v1.482.0).
 
 In the live runs "wait till others have tried the updates" was answered with
 ``remember_preference`` and "I've locked that in", while the update channel

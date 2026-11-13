@@ -20,7 +20,7 @@ No hand-written synonym list lives here, on purpose: the index must not
 become a second set of word tables. A gap is closed by improving the text
 the entry is built from (a tool's description, a setting's help).
 
-EVERYDAY PHRASINGS (v1.481.0, ``phrasings.py``): people do not use the
+EVERYDAY PHRASINGS (v1.482.0, ``phrasings.py``): people do not use the
 product's own words ("a helper" for an agent, "stop asking me" for the
 approvals setting). Each entry also carries eight short ways a non-technical
 person might ask for it, written by a model from THAT ENTRY'S OWN TEXT and

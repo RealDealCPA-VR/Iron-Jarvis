@@ -958,7 +958,26 @@ class ToolRegistry:
         # and BEFORE the read cache / undo capture / execute, through the SAME
         # `_record` + TOOL_EXECUTED path as any failure, so it is ledgered and
         # the next step can fix the call. `_store_as` was stripped above.
-        shape_error = fill_error or self._argument_shape_error(tool, run_args)
+        # THE TASK'S WRITE RULES (v1.481.0, ``deliverables.scope``): when the
+        # user's message said where the task may write ("create files only in
+        # `OUTPUT/`") or what it must only read, a write elsewhere, into a
+        # read-only folder, or a helper script into a deliverable folder is
+        # refused here, through the same failed-result path, before anything
+        # runs. Read off the loop (it resolves paths). No scope: unchanged.
+        scope_error = ""
+        _task_scope = getattr(ctx, "task_scope", None)
+        if (
+            _task_scope is not None
+            and reversibility != Reversibility.READONLY
+            and isinstance(run_args, dict)
+            and not fill_error
+        ):
+            from ..deliverables.scope import write_refusal
+
+            scope_error = await asyncio.to_thread(
+                write_refusal, name, run_args, ctx.workspace, _task_scope
+            )
+        shape_error = fill_error or scope_error or self._argument_shape_error(tool, run_args)
         if shape_error:
             inv_id = await asyncio.to_thread(
                 self._record,
@@ -1094,9 +1113,14 @@ class ToolRegistry:
                     grants=grants,
                     scopes=scopes,
                 ))
+                # v1.481.0: the task's scope, for ``safe_path``'s scratch folder.
+                from ..deliverables.scope import _SCOPE as _TASK_SCOPE
+
+                _tscope = _TASK_SCOPE.set(getattr(ctx, "task_scope", None))
                 try:
                     result = await tool.execute(run_args, ctx)
                 finally:
+                    _TASK_SCOPE.reset(_tscope)
                     _CALL_SCOPE.reset(_call)
                     _DEADLINE_SCOPE.reset(_scope)
         except TimeoutError as exc:

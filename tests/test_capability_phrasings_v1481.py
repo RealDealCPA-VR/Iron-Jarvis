@@ -1,4 +1,4 @@
-"""Everyday phrasings in the capability index (v1.481.0).
+"""Everyday phrasings in the capability index (v1.482.0).
 
 The index is built from the product's own text, and people do not use those
 words. Each entry now also carries eight phrasings a model wrote from THAT
@@ -158,7 +158,7 @@ def test_the_index_is_still_bounded(platform):
 
 
 def test_a_full_lookup_lets_no_settings_tool_in_after_it(tmp_path):
-    """v1.481.0 (found by the new ranking): with a lookup's three places
+    """v1.482.0 (found by the new ranking): with a lookup's three places
     taken, a setting match after them brought the settings READER (it was free
     on its own) and then a settings CHANGER (free once the reader was in): five
     tools for one lookup. Matches are written by hand here, so the rule is

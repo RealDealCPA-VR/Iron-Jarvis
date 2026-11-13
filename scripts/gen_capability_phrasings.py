@@ -1,5 +1,5 @@
 """Write or check ``src/iron_jarvis/capability_search/phrasings.py``: everyday
-phrasings for each entry of the capability index (v1.481.0).
+phrasings for each entry of the capability index (v1.482.0).
 
 WHY: the index is built from the product's own text (a tool's description, a
 setting's help), and people do not use those words ("a helper" for an agent,
