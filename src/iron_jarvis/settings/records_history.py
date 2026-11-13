@@ -133,7 +133,8 @@ _LOCAL = r"local(?:[\s-]+only)?\b"
 _LOCAL_ONLY_RX = re.compile(
     # "keep this chat on my PC", "make this conversation local only"
     r"\b(?:keep|make|set|switch|turn|put|mark|move)\s+" + _THIS_CHAT
-    + r"\s+(?:to\s+|as\s+|back\s+to\s+)?(?:" + _LOCAL + r"|" + _ON_MY_PC + r"|off\s+the\s+cloud\b|private\b|offline\b)"
+    + r"\s+(?:to\s+|as\s+|back\s+to\s+)?(?:(?:just|only|strictly|completely|entirely|purely)\s+)?"
+    r"(?:" + _LOCAL + r"|" + _ON_MY_PC + r"|off\s+the\s+cloud\b|private\b|offline\b)"
     # "turn on local only", "turn local only off", "disable local only"
     r"|\b(?:turn|switch|toggle|set)\s+(?:on|off|back\s+on)\s+(?:the\s+)?local[\s-]+only\b"
     r"|\b(?:turn|switch|toggle|set)\s+(?:the\s+)?local[\s-]+only\s+(?:on|off|back\s+on)\b"
@@ -184,7 +185,11 @@ _CHANGE_UNDO_RX = re.compile(
     # "undo the change you made to notes.txt", "revert what you did"
     r"|\b(?:undo|revert|reverse|roll\s*back)\s+(?:(?:the|that|this)\s+)?(?:change|changes|edit|edits)\s+"
     + _ACTOR + r"\b"
-    r"|\b(?:undo|revert|reverse|roll\s*back)\s+what\s+" + _ACTOR + r"\s+(?:just\s+)?(?:did|changed|edited|wrote)\b"
+    r"|\b(?:undo|revert|reverse|roll\s*back|put\s+back|take\s+back)\s+what\s+" + _ACTOR
+    + r"\s+(?:just\s+)?(?:did|changed|edited|wrote)\b"
+    # v1.487.0: "put it back the way it was", "put my spreadsheet back how it was".
+    r"|\bput\s+(?:it|that|this|things|everything|(?:my|the)\s+\w+)\s+back\s+(?:the\s+way|how|as)\s+"
+    r"(?:it|they)\s+(?:was|were)\b"
     # "undo that" — config_undo's own phrases (records._UNDO_WORDS): the
     # newest change of ANY kind, named on the card.
     r"|\bundo\s+(?:that|it|this|my\s+last\s+change)\b",

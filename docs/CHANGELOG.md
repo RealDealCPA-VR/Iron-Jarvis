@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.487.0
+
+**Four everyday ways of asking, understood.** **"Keep this chat just on my computer"** now turns on Local only for the chat.
+
 ## v1.486.0
 
 **Chat can see your schedules.** **Jarvis can list your scheduled tasks.** Ask "move the daily 8 o'clock reminder to 9" and Jarvis now looks at your schedules first (each one's name, when it runs in plain words, what it does, whether it is on or paused), finds the one you mean and changes it on a card, instead of asking you for the schedule's name.
@@ -77,7 +81,3 @@
 ## v1.472.3
 
 **A Linux preview is attached to each release.** Nothing changes in the Windows app.
-
-## v1.472.2
-
-**Test results you can trust after a quick fix.** **A test run right after an edit always reads the new code.** Python keeps a compiled copy of each file and reuses it when the file's time (to the second) and size have not changed.

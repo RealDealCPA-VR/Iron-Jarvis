@@ -3384,6 +3384,10 @@ _ARITHMETIC_RX = re.compile(
     re.IGNORECASE,
 )
 
+#: v1.487.0: a question that asks for a quantity ("how much is that").
+_HOW_MUCH_RX = re.compile(r"\bhow\s+(?:much|long|many)\b", re.IGNORECASE)
+_NUMBER_RX = re.compile(r"\d+(?:[.,]\d+)?")
+
 #: Everyday verbs that mean arithmetic only beside a number or a money word
 #: ("work out the tax", never "work out the kids' schedule").
 _LOOSE_ARITHMETIC_RX = re.compile(r"\b(?:work(?:ed|ing)?\s+out|sum\s+up|tally|figure\s+out)\b", re.IGNORECASE)
@@ -3685,6 +3689,11 @@ def wants_calculator(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
     document and the message is about money or measurements. Pure, linear."""
     msg = (text or "")[:4000]
     if _ARITHMETIC_RX.search(msg):
+        return True
+    # v1.487.0: "14 rounds at 47 minutes each plus three 10-minute breaks, how
+    # long is the whole thing?", "45 for a cut and 60 for colour, 12 of each,
+    # how much is that" — worked out in the model's head (seen live).
+    if _HOW_MUCH_RX.search(msg) and len(_NUMBER_RX.findall(msg, 0, 4000)[:2]) >= 2:
         return True
     about_figures = bool(_FIGURE_WORD_RX.search(msg))
     if about_figures and _LOOSE_ARITHMETIC_RX.search(msg):

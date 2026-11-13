@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.486.0 (2026-11-12).*
+holds itself to. Current as of v1.487.0 (2026-11-12).*
 
 ---
 
@@ -2041,6 +2041,23 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Four everyday ways of asking, understood (v1.487.0)
+
+- **"Keep this chat just on my computer"** now turns on Local only for the
+  chat. Before, the extra word "just" stopped Jarvis from finding the switch,
+  and it answered that the chat stayed on your computer when it did not.
+- **"Put back what you did last"** and **"put it back the way it was"** now
+  reach Undo.
+- **"Save how we just did this so we can do it the same way next time"** now
+  offers to save it as a skill (written know-how Jarvis and its agents follow
+  later), instead of a workflow.
+- **"How long / how much / how many …" with two or more numbers** now offers
+  the calculator, so the figure is worked out, not guessed.
+- **"The Friday 4pm reminder is wrong, move it to 3:30"**: with Feature
+  lookup on, a tool that changes a schedule, goal, workflow or kept
+  preference by its name now comes with the list of them, so Jarvis finds
+  the one you mean instead of asking for its name.
 
 ## Chat can see your schedules (v1.486.0)
 

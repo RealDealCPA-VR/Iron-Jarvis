@@ -45,6 +45,27 @@ _SENTENCE = re.compile(r"[.!?;\n]+")
 #: "New skill: review lease agreements" — a heading that IS the request.
 _HEADING = re.compile(r"\s*(?:a\s+)?new\s+skill\s*[:–—-]", re.IGNORECASE)
 #: "Can we save this as a skill?" asks Jarvis to do it, like "can you".
+#: v1.487.0: "save what we just did as a thing you can repeat", "remember how
+#: we just did the invoice thing and save that so we can do it the same way
+#: next time". Seen live three times answered with a workflow card. A WAY OF
+#: WORKING saved to do again is a skill. Needs a reference to how the work was
+#: just done AND a repeat word in the same message, so "save what we did to
+#: the spreadsheet" (a file) never matches.
+#: The SAVE word may come before or after ("remember how we did it and save
+#: that"); "keep doing what we did" is a redo, not a save.
+_SAVE_VERB = r"\b(?:save|store|record|capture|turn)\b"
+_HOW_WE_DID = (
+    r"\b(?:(?:what|how)\s+(?:we|you)|the\s+way\s+(?:we|you))\s+(?:just\s+)?"
+    r"(?:did|handled|made|worked|went\s+about|dealt\s+with|set\s+up|put\s+together|prepared)\b"
+)
+_THE_WAY_WE_DID = re.compile(
+    _SAVE_VERB + r"[^.?!\n]{0,60}?" + _HOW_WE_DID + r"|" + _HOW_WE_DID + r"[^.?!\n]{0,60}?" + _SAVE_VERB,
+    re.IGNORECASE,
+)
+_DO_IT_AGAIN = re.compile(
+    r"\b(?:again|next\s+time|same\s+way|repeat(?:able)?|reuse|re-use|every\s+time|from\s+now\s+on)\b",
+    re.IGNORECASE,
+)
 _LETS = re.compile(r"\s*(?:can|could|shall|should)\s+we\b|\s*let'?s\b", re.IGNORECASE)
 
 #: Verbs that ask for a thing to be made or kept.
@@ -177,7 +198,9 @@ def wants_skill_create(text: str) -> bool:
         raw = str(text or "")[:_MAX_CHARS]
         if not raw.strip():
             return False
-        asked = bool(_HEADING.match(raw))
+        asked = bool(_HEADING.match(raw)) or bool(
+            _THE_WAY_WE_DID.search(raw) and _DO_IT_AGAIN.search(raw)
+        )
         if not asked:
             for sentence in _SENTENCE.split(raw.lower()):
                 if _asks_in(_WORD.findall(sentence)):

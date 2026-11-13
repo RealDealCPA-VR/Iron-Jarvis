@@ -6407,7 +6407,9 @@ def preference_block(armed_names) -> str:
 #: reusable thing" tool chat had), so the brief says which is which.
 SKILL_BLOCK = (
     "# Saving a skill\n"
-    "The user asked for a skill. In Iron Jarvis a SKILL is written know-how: "
+    "The user asked for a skill, or to save the way a piece of work was just "
+    "done so it can be done the same way again (that is a skill too). In Iron "
+    "Jarvis a SKILL is written know-how: "
     "how to approach a kind of task, what to ask and check, how to word the "
     "result. Later chats and agents load it. A WORKFLOW is a list of steps "
     "the app runs. Write the skill and save it with skill_create (a short "

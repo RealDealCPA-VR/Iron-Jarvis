@@ -335,8 +335,28 @@ def asks_when_found(registry: Any, name: str) -> bool:
         return True
 
 
+#: v1.487.0: a tool that changes a record BY ITS NAME brings the reader that
+#: lists those records, right after it and taking none of the lookup's places.
+#: Seen live: "the Friday 4pm reminder for the Pereira filings is wrong, move
+#: it to 3:30" found `schedule_update` alone, and the model asked the user for
+#: the schedule's name.
+READER_FOR = {
+    "schedule_update": "schedule_list",
+    "schedule_delete": "schedule_list",
+    "goal_update": "goal_list",
+    "goal_delete": "goal_list",
+    "workflow_update": "workflow_list",
+    "workflow_delete": "workflow_list",
+    "workflow_run": "workflow_list",
+    "preference_edit": "preference_list",
+    "preference_forget": "preference_list",
+}
+_COMPANIONS = frozenset(READER_FOR.values())
+
+
 def _wanted(rows: list[dict[str, Any]]) -> list[str]:
-    """The tools one lookup asks for, in its own order: a tool match's tool;
+    """The tools one lookup asks for, in its own order: a tool match's tool
+    (and, for a writer that takes a record's name, its reader right after);
     a setting match's change tool and the settings reader."""
     out: list[str] = []
     for row in rows:
@@ -348,10 +368,17 @@ def _wanted(rows: list[dict[str, Any]]) -> list[str]:
             names = [str(row.get("tool") or ""), "config_list"]
         elif kind == "secret":
             names = [str(row.get("tool") or "")]
+        if names and names[0] in READER_FOR:
+            names.append(READER_FOR[names[0]])
         for name in names:
             if name and name not in out:
                 out.append(name)
     return out
+
+
+def _matched(rows: list[dict[str, Any]]) -> set[str]:
+    """The tools a lookup matched itself (never a writer's added reader)."""
+    return {str(r.get("tool") or r.get("id") or "") for r in rows if r.get("kind") == "tool"}
 
 
 def _never_lifted() -> frozenset:
@@ -446,6 +473,13 @@ def join_found(
                 held = {*armed, *(asks_list or ())}
                 if name in joined:
                     continue
+                # A writer's reader (READER_FOR) takes no place once its writer
+                # is among the reply's tools.
+                companion = name in _COMPANIONS and any(
+                    READER_FOR.get(w) == name for w in (*joined, *held)
+                )
+                if name in _COMPANIONS and not companion and name not in _matched(rows):
+                    continue  # brought only for a writer that did not join
                 if name in held:
                     # v1.484.1: a match the reply already holds takes its
                     # place among this lookup's, and the note names it. Seen
@@ -453,7 +487,7 @@ def join_found(
                     # went to lower matches ("make a file", a folder's coding
                     # defaults) and the note told the model to call one of
                     # THOSE, never naming the rule tool it had.
-                    free = name in SETTINGS_FAMILY and settings_counted
+                    free = (name in SETTINGS_FAMILY and settings_counted) or companion
                     if taken < MAX_JOINED_PER_LOOKUP or free:
                         if name not in already and name not in SETTINGS_FAMILY:
                             already.append(name)
@@ -466,7 +500,7 @@ def join_found(
                 # Free only once the family HOLDS its place (v1.482.0: the
                 # reader used to be free on its own, so with three places
                 # taken it slipped in and then let a changer in after it).
-                free = name in SETTINGS_FAMILY and settings_counted
+                free = (name in SETTINGS_FAMILY and settings_counted) or companion
                 if taken >= MAX_JOINED_PER_LOOKUP and not free:
                     continue
                 tool = registry.get(name)

@@ -17844,6 +17844,23 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **Four wordings chat missed** (v1.487.0, each seen live). `records_history.
+  _LOCAL_ONLY_RX` takes just/only/strictly/completely/entirely/purely before
+  the place ("keep this chat just on my computer" got a FALSE "it stays on your
+  computer"); `_CHANGE_UNDO_RX` takes put back / take back and "put it back the
+  way it was"; `skills/trigger._THE_WAY_WE_DID` + `_DO_IT_AGAIN` (a save word
+  before or after "how/what we just did", AND a repeat word) arms
+  `skill_create`, and `chat_turn.SKILL_BLOCK` says that request is a skill (it
+  got workflow cards); `autoselect.wants_calculator` answers yes for "how
+  much/long/many" with two or more numbers. Pins:
+  `tests/test_four_wordings_v1487.py` (9 mutations, all red).
+  Same release: `capability_search/join.READER_FOR` — a lookup's writer that
+  takes a record's NAME (schedule/goal/workflow update+delete, workflow_run,
+  preference edit/forget) brings its reader right after it, taking NO place;
+  a reader brought only for a writer that did not join is dropped
+  (`_matched`). `test_capability_join_held_v1484` now samples `webhook_update`
+  (moved on purpose). Pins: `tests/test_capability_join_reader_v1487.py`.
+
 - **Chat lists the schedules; a calendar link's removal is said honestly**
   (v1.486.0). `scheduling/tools.ScheduleListTool` (`schedule_list`, allow,
   READONLY, on the self-service roster; `when_words` says common cron shapes in
