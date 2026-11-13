@@ -25,6 +25,20 @@ from tests._build_app_helpers_v1409 import client, new_session, sent, stop_all, 
 DONE_SCENARIO = "claude_full_mode_edit_v1418"
 
 
+@pytest.fixture(autouse=True)
+def _no_sign_in_verdict_from_another_test(monkeypatch):
+    """The coding-tool list reads Claude Code's sign-in from the ONE
+    process-wide probe (``cli_auth.DEFAULT_PROBE``). A test earlier on the
+    same worker can leave "claude: signed out" there, and every hand-off here
+    is then refused (seen on GitHub when new test files moved this one to
+    another shard). Each test starts from an empty probe, as the other tests
+    of the shared probe do."""
+    from iron_jarvis.providers import cli_auth
+
+    monkeypatch.setattr(cli_auth.DEFAULT_PROBE, "_cache", {})
+    monkeypatch.setattr(cli_auth.DEFAULT_PROBE, "_inflight", set())
+
+
 def _ctx(app, parent: str, work: Path) -> ToolContext:
     p = app.state.platform
     return ToolContext(workspace=work, session_id=f"mcp:code:{parent}", agent_run_id="",
