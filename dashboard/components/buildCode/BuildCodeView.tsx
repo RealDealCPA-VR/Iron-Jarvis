@@ -144,6 +144,7 @@ import {
   effortsFor,
   decodeCodingTools,
   withNewerNotices,
+  changeLines,
   foldConversationFrom,
   type FoldMemo,
   groupByFolder,
@@ -392,6 +393,9 @@ function SessionPane({
   const [helpers, setHelpers] = useState<CodeHelper[]>([]);
   const [handedFrom, setHandedFrom] = useState<CodeSessionView["handedFrom"]>(null);
   const [events, setEvents] = useState<CodeEvent[]>([]);
+  // v1.481.1: what is drawn, read by a change when it is pressed.
+  const eventsNowRef = useRef<CodeEvent[]>(events);
+  eventsNowRef.current = events;
   const [extra, setExtra] = useState<CodeEvent[]>([]);
   const [running, setRunning] = useState(false);
   const [following, setFollowing] = useState(false);
@@ -465,8 +469,6 @@ function SessionPane({
   const prevItemsRef = useRef<ConvItem[] | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const genRef = useRef(0);
-  // v1.481.1: how many session reads have started (a change's line).
-  const readsStartedRef = useRef(0);
   const optimisticRef = useRef<CodeEvent | null>(null);
   const answeredRef = useRef<Set<string>>(new Set());
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
@@ -587,7 +589,6 @@ function SessionPane({
   /** Read the session from the daemon; follow its running turn. */
   const load = useCallback(
     async (opts: { follow: boolean }) => {
-      readsStartedRef.current += 1;
       const gen = genRef.current;
       const seq = sendSeqRef.current;
       const aseq = answerSeqRef.current;
@@ -658,11 +659,6 @@ function SessionPane({
         } else if (opts.follow) {
           setEvents(view.events);
           setRunning(view.running);
-        } else if (abortRef.current) {
-          // v1.481.1: a reply is being followed (the next waiting message
-          // started while this read was out): its stream draws it, and this
-          // older read must not put its saved question back beside the
-          // replay's own.
         } else {
           // After a turn ends: the saved record replaces what was drawn —
           // unless it holds less (not written yet), which would blank the
@@ -1292,34 +1288,38 @@ function SessionPane({
     [onChanged],
   );
 
-  // v1.481.1: a model or effort change asked for its line: read the
-  // conversation again as soon as no reply runs here.
-  // A read started after the change answered already holds the line (the
-  // daemon writes it before it answers), so that one is enough.
-  const [lineRead, setLineRead] = useState(0);
-  const changeAnsweredAtRef = useRef(0);
+  // v1.481.1: a change made while a reply runs keeps the page's short note
+  // only until the change's own line is drawn (it comes with the reply's
+  // stream): said once, and never lost when the line does not come.
+  const [noteUntilLine, setNoteUntilLine] = useState<number | null>(null);
   useEffect(() => {
-    if (!lineRead || running) return;
-    setLineRead(0);
-    if (readsStartedRef.current > changeAnsweredAtRef.current) return;
-    void load({ follow: false });
-  }, [lineRead, running, load]);
+    if (noteUntilLine === null) return;
+    if (changeLines(events) > noteUntilLine) {
+      setInfo(null);
+      setNoteUntilLine(null);
+    }
+  }, [events, noteUntilLine]);
 
   const change = useCallback(
     async (patchIn: Record<string, unknown>) => {
       if (!session) return;
       setNote(null);
       setInfo(null);
+      setNoteUntilLine(null);
+      const linesBefore = changeLines(eventsNowRef.current);
       try {
         const raw = await patch<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}`, patchIn);
         // v1.475.0: a model or effort change in a conversation is said by the
         // daemon's own line in it (read again below), so no second note here.
-        // v1.481.1: while a reply runs the line comes with the reply's own
-        // stream — said once then too.
+        // v1.481.1: while a reply runs the note shows until the line the
+        // reply's stream brings is drawn (`noteUntilLine`).
         const onlyModel = Object.keys(patchIn).every((k) => k === "model" || k === "effort");
-        const saidInConversation = onlyModel && (!!session.toolSessionId || running);
+        const saidInConversation = onlyModel && !!session.toolSessionId && !running;
         const later = appliedNextWords(raw);
-        if (later && !saidInConversation) setInfo(later);
+        if (later && !saidInConversation) {
+          setInfo(later);
+          if (onlyModel && running) setNoteUntilLine(linesBefore);
+        }
         const keeps = keepsLastOf(raw);
         if (keeps !== null) setKeepsLast(keeps);
         const folder = piFolderOf(raw);
@@ -1329,15 +1329,10 @@ function SessionPane({
           setSession(next);
           onChanged(next);
           // v1.475.0: a model or effort change in a conversation leaves a
-          // line in it (the daemon writes it before it answers): read the
-          // conversation again to show it. v1.481.1: read once no reply runs
-          // ON THE PAGE (`lineRead` below), never by the `running` this
-          // press saw — a reply that ended while the change was out wrote
-          // the line to the record only, and the turn's own last read may
-          // have come too early to hold it.
-          if (("model" in patchIn || "effort" in patchIn) && (next.toolSessionId || running)) {
-            changeAnsweredAtRef.current = readsStartedRef.current;
-            setLineRead((n) => n + 1);
+          // line in it (the daemon writes it): read the conversation again to
+          // show it. While a reply runs the line comes with its stream.
+          if (("model" in patchIn || "effort" in patchIn) && next.toolSessionId && !running) {
+            void load({ follow: false });
           }
         } else {
           void load({ follow: false });

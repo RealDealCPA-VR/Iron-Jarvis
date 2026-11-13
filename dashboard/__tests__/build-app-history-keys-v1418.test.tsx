@@ -468,25 +468,36 @@ describe("keys (C4.8)", () => {
     expect(efforts[0].title).toContain("starts again");
   });
 
-  it("v1.481.1: a model or effort change while it works is said once (the line comes with the reply's stream)", async () => {
-    working("p1", { harness: "pi", mode: "own", model: "", effort: "high" });
+  it("v1.481.1: a model or effort change while it works is said once (the note goes when the line comes)", async () => {
+    working("p1", { harness: "pi", mode: "own", model: "", effort: "high", harness_session_id: "h-1" });
     H.postReply["PATCH /build/app/sessions/p1"] = {
-      session: sess("p1", { harness: "pi", mode: "own", model: "", effort: "low" }),
+      session: sess("p1", { harness: "pi", mode: "own", model: "", effort: "low", harness_session_id: "h-1" }),
       applied: { effort: "next" },
     };
     render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-working");
     chooseEffort(SESSION, "low");
-    await waitFor(() => expect(H.patches).toHaveLength(1));
-    await act(async () => {});
-    expect(screen.queryByTestId("code-info")).toBeNull();
+    // The note says it until the conversation says it.
+    expect(await screen.findByTestId("code-info")).toBeInTheDocument();
+    await act(async () => {
+      H.lastWatch?.onFrame?.("notice", { type: "notice", at: "2026-11-12T20:00:09Z", text: "Effort changed: High → Low, from your next message.", turn: "turn_1" });
+    });
+    await waitFor(() => expect(screen.queryByTestId("code-info")).toBeNull());
+    expect(screen.getAllByText(/Effort changed: High → Low/)).toHaveLength(1);
   });
 
-  it("v1.481.1: a change pressed as the reply ends still shows its line (the conversation is read after the change)", async () => {
-    // The effort applies from the next message (as Codex's always does). The reply ends
-    // while the change is out; the turn's own last read comes too early to
-    // hold the line, so the page must read again once the change answers.
-    working("c1", { harness: "pi", mode: "own", model: "", harness_session_id: "h-1", effort: "high" });
+  it("v1.481.1: a change pressed as the reply ends is still said (the note stays when no line comes)", async () => {
+    // The reply ends while the change is out, so the daemon's line goes to
+    // the record only; the page's note must not wait for a line that never
+    // reaches the stream.
+    // An earlier change's line is already drawn: only a NEW line ends the note.
+    working("c1", { harness: "pi", mode: "own", model: "", harness_session_id: "h-1", effort: "high" }, {
+      events: [
+        { type: "notice", at: "2026-11-12T19:00:00Z", text: "Effort changed: Low → High.", turn: "turn_0" },
+        { type: "user", at: "x", text: "Count to thirty", turn: "turn_1" },
+      ],
+    });
+    expect(H.gets["/build/app/sessions/c1"]).toBeTruthy();
     let answer: (v: unknown) => void = () => {};
     H.postReply["PATCH /build/app/sessions/c1"] = new Promise((res) => {
       answer = res;
@@ -495,25 +506,29 @@ describe("keys (C4.8)", () => {
     await screen.findByTestId("code-working");
     chooseEffort(SESSION, "low");
     await waitFor(() => expect(H.patches).toHaveLength(1));
-    // The reply ends; the record read then holds no line yet.
-    const ended = { session: sess("c1", { harness: "pi", mode: "own", model: "", harness_session_id: "h-1", effort: "low" }), events: [{ type: "user", at: "2026-11-12T20:00:00Z", text: "Count to thirty", turn: "turn_1" }], running: null, pending: [] };
-    H.gets["/build/app/sessions/c1"] = ended;
+    H.gets["/build/app/sessions/c1"] = {
+      session: sess("c1", { harness: "pi", mode: "own", model: "", harness_session_id: "h-1", effort: "low" }),
+      events: [
+        { type: "notice", at: "2026-11-12T19:00:00Z", text: "Effort changed: Low → High.", turn: "turn_0" },
+        { type: "user", at: "2026-11-12T20:00:00Z", text: "Count to thirty", turn: "turn_1" },
+      ],
+      running: null,
+      pending: [],
+    };
     await act(async () => {
       H.release?.();
     });
     await waitFor(() => expect(screen.queryByTestId("code-working")).toBeNull());
-    // The change lands; the record now holds its line.
-    H.gets["/build/app/sessions/c1"] = {
-      ...ended,
-      events: [...ended.events, { type: "notice", at: "2026-11-12T20:00:09Z", text: "Effort changed: High → Low, from your next message." }],
-    };
     await act(async () => {
       answer({ session: sess("c1", { harness: "pi", mode: "own", model: "", harness_session_id: "h-1", effort: "low" }), applied: { effort: "next" } });
     });
-    await waitFor(() => expect(screen.getByTestId("code-session").textContent).toContain("Effort changed: High → Low"));
+    expect(await screen.findByTestId("code-info")).toBeInTheDocument();
+    expect(screen.getByText("Effort changed: Low → High.")).toBeInTheDocument();
+    await act(async () => {});
+    expect(screen.getByTestId("code-info")).toBeInTheDocument();
   });
 
-  it("v1.481.1: while the reply still streams, the change's read waits for its end (no read mid-stream, no second read)", async () => {
+  it("v1.481.1: a change made while the reply streams reads nothing mid-stream, and nothing beside the reply's own last read", async () => {
     working("c2", { harness: "pi", mode: "own", model: "", harness_session_id: "h-1", effort: "high" });
     const view = H.gets["/build/app/sessions/c2"];
     let reads = 0;
@@ -581,10 +596,10 @@ describe("keys (C4.8)", () => {
     expect(screen.getAllByText("then add a test")).toHaveLength(1);
   });
 
-  it("v1.481.1: a read that lands while the next message is followed leaves that reply as drawn", async () => {
-    // The change answers AFTER the turn's last read started, so its own read
-    // goes too; the first read starts following turn_2, the second lands
-    // during that follow.
+  it("v1.481.1: a change answered as the reply ends makes no read beside the reply's own (the next message is drawn once)", async () => {
+    // The change answers AFTER the turn's last read started. A second read
+    // landing during turn_2's follow used to put its saved question back
+    // beside the replay's own.
     working("q2", { harness: "pi", mode: "own", model: "", effort: "high", harness_session_id: "h-1" });
     let answer: (v: unknown) => void = () => {};
     H.postReply["PATCH /build/app/sessions/q2"] = new Promise((res) => {
@@ -613,7 +628,7 @@ describe("keys (C4.8)", () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 100));
     });
-    expect(reads).toBe(2);
+    expect(reads).toBe(1);
     expect(screen.getAllByText("then add a test")).toHaveLength(1);
   });
 

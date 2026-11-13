@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stampKey, withNewerNotices, type CodeEvent } from "@/lib/buildApp";
+import { changeLines, stampKey, withNewerNotices, type CodeEvent } from "@/lib/buildApp";
 
 const ev = (o: Record<string, unknown>) => o as unknown as CodeEvent;
 
@@ -40,5 +40,15 @@ describe("withNewerNotices (v1.481.1)", () => {
     // Already drawn (it came with the reply's stream): not added again.
     const both = [...drawn, note];
     expect(withNewerNotices(both, [note])).toBe(both);
+  });
+  it("counts only the daemon's change lines", () => {
+    expect(
+      changeLines([
+        ev({ type: "notice", text: "Model changed: Sonnet 5.5 → Opus 5.5, from your next message." }),
+        ev({ type: "notice", text: "Effort changed: High → Low." }),
+        ev({ type: "notice", text: "Starting Claude Code…" }),
+        ev({ type: "text_done", text: "Model changed: not a notice" }),
+      ]),
+    ).toBe(2);
   });
 });

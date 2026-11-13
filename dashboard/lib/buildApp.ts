@@ -2201,6 +2201,17 @@ export function withNewerNotices(drawn: CodeEvent[], saved: CodeEvent[]): CodeEv
   return newer.length ? [...drawn, ...newer] : drawn;
 }
 
+/** v1.481.1: how many of the daemon's "Model changed" / "Effort changed"
+ *  lines (hosted/words.model_change_words) are drawn. */
+export function changeLines(events: readonly CodeEvent[]): number {
+  let n = 0;
+  for (const e of events) {
+    const text = (e as { text?: unknown }).text;
+    if (e.type === "notice" && typeof text === "string" && /^(Model|Effort) changed:/.test(text)) n += 1;
+  }
+  return n;
+}
+
 /** An ISO stamp in one comparable shape: its fraction padded to six digits
  *  (a whole-second stamp has none) and a plain "Z" ending; "" when it is not
  *  a stamp. */

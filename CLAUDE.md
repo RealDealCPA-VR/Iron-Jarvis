@@ -17968,34 +17968,25 @@ does not need a bump, stop and bump it.
   answer makes it the chosen one (`pending`); Tab closes the panel (it is
   portaled to the end of the page); the shortcut opens nothing with no tools;
   the daemon line says the model's and the effort's own timing when they
-  differ (`effort_when`). v1.481.1: the page's own "applies from your next
-  message" note is skipped while a reply runs too (the line comes with the
-  reply's stream); a re-read that keeps what is drawn (the live pieces
-  outnumber the saved record) still adds every notice newer than anything
-  drawn (`lib/buildApp.withNewerNotices`); and `EmergencyStopStrip`'s server
-  snapshot is ONE constant (a new object per call is React's
-  "getServerSnapshot should be cached" warning, checked during HYDRATION —
-  a `renderToString` alone never warns; pin
-  `__tests__/server-snapshot-v1481-1.test.tsx`). Checked and dropped: the
+  differ (`effort_when`). v1.481.1: a change made while a reply runs keeps
+  the page's own "applies from your next message" note only UNTIL a new
+  "Model/Effort changed" line is drawn (`noteUntilLine` + `changeLines`,
+  counted against what was drawn at the press): said once, and still said
+  when the reply ended while the change was out (the line then goes to the
+  record only). NO extra session read for it: an extra read at a reply's end
+  raced the next WAITING message's follow and drew its question twice (three
+  review rounds found a new race each time). A re-read that keeps what is
+  drawn (the live pieces outnumber the saved record) still adds every notice
+  newer than anything drawn (`lib/buildApp.withNewerNotices`): stamps compared
+  as `stampKey`s (the daemon's `isoformat()` drops the fraction of a
+  whole-second stamp, and "…:07Z" sorts after "…:07.3Z" as text), a notice
+  stamped AT the newest drawn time added unless the same notice (stamp +
+  text) is drawn. `EmergencyStopStrip`'s server snapshot is ONE constant (a
+  new object per call is React's "getServerSnapshot should be cached"
+  warning, checked during HYDRATION — a `renderToString` alone never warns;
+  pin `__tests__/server-snapshot-v1481-1.test.tsx`). Checked and dropped: the
   panel's placement does not need re-measuring when its list changes — its
-  height cap is the ROOM on its side, not its first height. REVIEW of the
-  port (each red first): the change's re-read waits on the page's CURRENT
-  `running` (`lineRead` state + an effect), never the `running` the press
-  saw — a reply that ended while the PATCH was out wrote the line to the
-  record only and the turn's own last read could come before it (Codex,
-  OpenCode, Grok, back to the default, an effort applied next); the read
-  never runs mid-stream (pinned by a read count); `withNewerNotices`
-  compares `stampKey`s (the daemon's `isoformat()` drops the fraction of a
-  whole-second stamp, and "…:07Z" sorts after "…:07.3Z" as text) and adds a
-  notice stamped AT the newest drawn time unless the same notice (stamp +
-  text) is drawn. SECOND REVIEW: the change's read is skipped when a session
-  read STARTED after the change answered (`readsStartedRef` vs
-  `changeAnsweredAtRef`: that read already holds the line), and a
-  `follow:false` read that lands while a reply is being followed
-  (`abortRef.current`) changes nothing — two reads at a reply's end had let
-  the second put the next WAITING message's saved question back beside its
-  replay's own (the question drawn twice). The test stream takes a `wait`
-  per frame to pin that order.
+  height cap is the ROOM on its side, not its first height.
 - **A Store program is never asked into the pane job, and starts one at a
   time; a frozen loop says where it is stuck** (v1.407.1, a USER BUG on
   v1.407.0: Build stuck at "Attaching to sessions…", then "Iron Jarvis isn't
