@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.484.0 (2026-11-12).*
+holds itself to. Current as of v1.485.0 (2026-11-12).*
 
 ---
 
@@ -2041,6 +2041,29 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Agents, default models and the lookup, from chat (v1.485.0)
+
+Three things you can now do from chat, and one change to Feature lookup (off by
+default):
+
+- **Set what an agent may do.** "Change what the insurance helper agent is
+  allowed to do, so it only reads the letters" can now name the tools that
+  agent must never use, and whether it asks before every action or only before
+  risky ones, the same as its card on the Agents page. A tool name Iron
+  Jarvis doesn't have is refused in words, so the card never claims an agent
+  can't do something while it still can. Undo puts the old setup back.
+- **Pick your default model by name.** When you ask to switch your default
+  model ("the fast one", "Sonnet"), Jarvis now sees the models you can choose
+  between, instead of asking you which one you mean.
+- **The lookup names the right tool when you already have it.** When the tool
+  that does what you asked was already offered in the reply, the lookup now
+  says so, instead of offering three less fitting tools in its place.
+
+**Measured** (the practice set of 114 requests in a scratch install filled with
+what they name, Claude Haiku, both lookup settings on): 70 reached the right
+tool on the first reply, against 66 and 64 for v1.484.0 in two runs side by
+side. Replies were faster too (median 9.4 s against 11.6 to 12.0 s).
 
 ## Jarvis finds your calendar link (v1.484.0)
 

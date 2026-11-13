@@ -17844,6 +17844,33 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **Chat sets an agent's job card; `config_list` names the models; a held
+  lookup match is named** (v1.485.0). `settings/records_projects`: `_AGENT_ARGS`
+  gains `never_use_tools` (→ the route's `deny_tools`) and `approvals`
+  (`""` | `approve_for_me` | `always_ask` → `approval_mode`; yolo is not offered,
+  the route refuses it anyway); `_unknown_tools` refuses a name not in
+  `registry.names()` before anything is sent; the card words `_never_words` /
+  `_approval_words`; `_A_FIELD` gains approvals, permissions, allowed to,
+  asks before/first, never use (rows both ways in
+  `test_records_projects_v14350`). `settings/tools._model_choices`: the
+  `default_model` line of `config_list` names the available models from the
+  model catalog's KEPT entry only (`platform._model_catalog._entry`; never a
+  build; mock and unavailable rows left out; at most `MODEL_CHOICES_MAX` 30).
+  `capability_search/join.join_found`: a wanted tool the reply ALREADY holds
+  takes its place among the lookup's `MAX_JOINED_PER_LOOKUP` (the settings
+  family once) and `_note(..., already)` says "Already among your tools in this
+  reply: `x`." (never for the settings family; no "look again" beside it).
+  Phrasings for `agent_update`/`agent_create` regenerated. MEASURING: the live
+  runs now use `live_iso.py` (scratch): each row restores every changed setting
+  and deletes the lessons it saved, with its own device id (one row's "always
+  answer in Spanish" had answered 23 of 92 later English rows in Spanish), and
+  a seeded install (`seed.py`: the folders, agents, reminders, an email account
+  that listens, earlier chats the requests name). Practice set, Haiku: 70 vs
+  66 / 64 (v1.484.0 twice, side by side). Sonnet on v1.484.0: 80. Pins:
+  `tests/test_agent_job_card_from_chat_v1484.py`,
+  `tests/test_default_model_choices_v1484.py`,
+  `tests/test_capability_join_held_v1484.py` (20 mutations, all red).
+
 - **The lookup finds a setting that holds a private value** (v1.484.0).
   `capability_search/index._secret_entries`: every `schema.SECRETS` row that
   is not a family (`pattern=False`: today `calendar_ics_url` and

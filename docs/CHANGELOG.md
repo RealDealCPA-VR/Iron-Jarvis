@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.485.0
+
+**Agents, default models and the lookup, from chat.** Three things you can now do from chat, and one change to Feature lookup (off by default):
+
 ## v1.484.0
 
 **Jarvis finds your calendar link.** With **Feature lookup** on (Settings › Models, off by default), Jarvis can now find the settings that hold a private value: the **Calendar link** and the **speech-to-text key**.
@@ -77,7 +81,3 @@
 ## v1.472.1
 
 **First steps toward Linux and Mac.** Iron Jarvis is still a Windows app, and nothing changes on Windows except two small things:
-
-## v1.472.0
-
-**Long coding sessions stream smoothly.** Nothing on screen changes.

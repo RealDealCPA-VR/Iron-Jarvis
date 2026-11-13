@@ -462,3 +462,23 @@ rewording of the check's note to name that shape was measured and made the
 whole set worse, 68 -> 61, so it was dropped). On an empty install, strict
 scoring cannot get near 95%: for those requests the right answer is a
 question.
+
+## A fair measurement, and what it shows (v1.485.0)
+
+Two faults in the live runs were found and fixed before reading any more
+numbers. The rows shared one install, and a setting Jarvis may change without a
+card ("answer in this language") plus saved preferences carried into later
+rows: 23 of 92 English requests in one run were answered in Spanish. Each row
+now starts from the same state (settings restored, its saved lessons removed,
+its own device). And the install is filled with what the requests name (the
+folders, the agents, the reminders, an email account that listens, earlier
+chats).
+
+On that fair setup, v1.484.0 with Claude Haiku: 66 and 64 of 114 in two runs
+(noise about 2 to 6 rows). With Claude Sonnet: 80 of 114 (70%), and faster.
+What is left on Sonnet is mostly the request needing a detail only the user
+has (a Telegram chat id, a server's address), or a label narrower than the job
+("make a folder in here" made a folder; the label wants a project). The real
+gaps it showed were fixed in v1.485.0: setting what an agent may do, choosing a
+default model by name, and the lookup naming a tool the reply already holds.
+Haiku: 70 of 114.

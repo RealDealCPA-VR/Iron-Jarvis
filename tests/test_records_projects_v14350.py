@@ -166,6 +166,10 @@ AGENT_REQUESTS = [
     "raise the bookkeeper agent's monthly budget to $50",
     "let the reviewer agent only read",
     "change the instructions of the intake agent",
+    # v1.484.1: the job card (never_use_tools, approvals).
+    "change what the insurance helper agent is allowed to do",
+    "change the insurance-helper agent so it asks before every action",
+    "change the permissions of the bookkeeper agent",
     "turn on the bookkeeper agent again",
     "disable the intake agent",
 ]
@@ -211,6 +215,10 @@ NEAR_MISSES = [
     "the builder gave us a quote",
     "an agent-based model of the economy",
     "my real estate agent called",
+    "my insurance agent asks first before quoting",
+    "our estate agent is not allowed to show the flat on Sundays",
+    "tell the letting agent his approvals are late",
+    "change my insurance agent to someone cheaper",
     "draft an email to the agent",
     # A PERSON who is an agent, in a request (only the human-agent guard
     # holds these).

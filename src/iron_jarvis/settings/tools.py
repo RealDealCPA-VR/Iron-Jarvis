@@ -368,6 +368,7 @@ class ConfigListTool(Tool):
             + _what_it_does(r["key"])
             + (ACCOUNT_GROUPS_HOW if r["key"] == "account_groups" else "")
             + (THEME_COLORS_HOW if r["key"] == "device.theme_colors" else "")
+            + (_model_choices(self.platform) if r["key"] == "default_model" else "")
             for r in rows
         ]
         lines += [f"{s['label']} ({s['key']}) → config_secret (a secure card; never ask for the value)" for s in secrets]
@@ -376,6 +377,46 @@ class ConfigListTool(Tool):
             output="\n".join(lines) if lines else "No setting matches those words.",
             data={"settings": rows, "secrets": secrets},
         )
+
+
+#: How many models the default-model line names (each "provider model (name)").
+MODEL_CHOICES_MAX = 30
+
+
+def _model_choices(platform: Any) -> str:
+    """v1.484.1: the models that can be chosen, for the default-model line.
+
+    Seen live: "switch my default to the fast model" made the model read
+    ``config_list``, which showed the current value and nothing else, so it
+    asked the user which model they meant. This names what the pickers offer,
+    from the model catalog's KEPT answer only (never a build: no endpoint is
+    asked and nothing starts here). Not kept yet, or unreadable: "" (the line
+    is as before). Names only, never a key."""
+    try:
+        cat = getattr(platform, "_model_catalog", None)
+        entry = getattr(cat, "_entry", None) if cat is not None else None
+        rows = list(getattr(entry, "rows", None) or [])
+    except Exception:  # noqa: BLE001 — not readable: the line is as before
+        return ""
+    names: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("available"):
+            continue
+        prov, mid = str(row.get("provider") or ""), str(row.get("model") or "")
+        if not prov or not mid or prov == "mock" or (prov, mid) in seen:
+            continue
+        seen.add((prov, mid))
+        label = str(row.get("label") or "")
+        names.append(f"{prov} {mid}" + (f" ({label})" if label and label != mid else ""))
+    if not names:
+        return ""
+    more = len(names) - MODEL_CHOICES_MAX
+    shown = "; ".join(names[:MODEL_CHOICES_MAX]) + (f"; and {more} more" if more > 0 else "")
+    return (
+        " Models that can be chosen now (set default_provider to the first word and "
+        f"default_model to the second): {shown}."
+    )
 
 
 #: v1.442.0 (Wave 7 live run): a row's help and its choices' NAMES, so the

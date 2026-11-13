@@ -1051,6 +1051,26 @@ def _describe_agent(a: dict[str, Any] | None) -> str | None:
     return ", ".join(bits)
 
 
+def _never_used(a: dict[str, Any]) -> list[str]:
+    try:
+        return [str(x) for x in json.loads(a.get("deny_tools_json") or "[]")]
+    except (TypeError, ValueError):
+        return []
+
+
+def _never_words(a: dict[str, Any]) -> str:
+    names = _never_used(a)
+    return f"never uses {', '.join(names)}" if names else "may use all its tools"
+
+
+def _approval_words(a: dict[str, Any]) -> str:
+    mode = str(a.get("approval_mode") or "")
+    return {
+        "always_ask": "asks before every action",
+        "approve_for_me": "asks before risky actions",
+    }.get(mode, "asks as the app's default says")
+
+
 def _agent_change_words(before: dict[str, Any], after: dict[str, Any]) -> tuple[str, str]:
     old: list[str] = []
     new: list[str] = []
@@ -1072,6 +1092,12 @@ def _agent_change_words(before: dict[str, Any], after: dict[str, Any]) -> tuple[
     if before.get("description") != after.get("description"):
         old.append(f"description {_q(before.get('description')) if before.get('description') else 'none'}")
         new.append(f"description {_q(after.get('description')) if after.get('description') else 'none'}")
+    if _never_used(before) != _never_used(after):
+        old.append(_never_words(before))
+        new.append(_never_words(after))
+    if str(before.get("approval_mode") or "") != str(after.get("approval_mode") or ""):
+        old.append(_approval_words(before))
+        new.append(_approval_words(after))
     # Review: a raised limit also lifts an allowance pause (the route's own
     # rule) — the card says the agent is working again, never only the limit.
     if bool(before.get("paused_reason")) != bool(after.get("paused_reason")):
@@ -1113,6 +1139,15 @@ _AGENT_ARGS = {
               "description": "Team roles; [] takes it off the model team."},
     "monthly_limit_usd": {"type": "number", "minimum": 0, "description": "Dollars it may spend a month (0 = no limit)."},
     "monthly_limit_tokens": {"type": "integer", "minimum": 0, "description": "Tokens it may use a month (0 = no limit)."},
+    # v1.484.1: the Agents page's job card, from chat (seen live: "make the
+    # insurance helper only read the letters, never send anything" had no
+    # way in, so the model said no such option exists).
+    "never_use_tools": {"type": "array", "items": {"type": "string"},
+                        "description": "Tool names it must never use (names from Iron Jarvis's tools, "
+                                       "e.g. notify, write_file, web_fetch); [] lets it use all its tools again."},
+    "approvals": {"type": "string", "enum": ["", "approve_for_me", "always_ask"],
+                  "description": "How it asks before acting: always_ask = before every action, "
+                                 "approve_for_me = only before risky ones, \"\" = the app's default."},
 }
 #: The tool's argument → the route body's field.
 _FIELD_OF = {
@@ -1124,6 +1159,8 @@ _FIELD_OF = {
     "roles": "roles",
     "monthly_limit_usd": "allowance_usd",
     "monthly_limit_tokens": "allowance_tokens",
+    "never_use_tools": "deny_tools",
+    "approvals": "approval_mode",
 }
 
 
@@ -1135,10 +1172,34 @@ def _agent_fields(args: dict[str, Any]) -> dict[str, Any]:
             continue
         if field in ("system_prompt", "description", "base_type", "provider", "model"):
             value = str(value).strip()
-        elif field == "roles":
-            value = [str(r) for r in value] if isinstance(value, list) else [str(value)]
+        elif field in ("roles", "deny_tools"):
+            value = [str(r).strip() for r in value] if isinstance(value, list) else [str(value).strip()]
+        elif field == "approval_mode":
+            value = str(value).strip()
         out[field] = value
     return out
+
+
+def _unknown_tools(platform: Any, fields: dict[str, Any]) -> str:
+    """v1.484.1: a never-use name that is not one of Iron Jarvis's tools, in
+    words ("" when all are known or none given). An agent told never to use a
+    name that does not exist would still hold the tool that really does it,
+    while the card said it could not."""
+    names = [n for n in fields.get("deny_tools") or [] if n]
+    if not names:
+        return ""
+    try:
+        known = set(platform.registry.names())
+    except Exception:  # noqa: BLE001 — the list cannot be read: nothing is refused here
+        return ""
+    unknown = [n for n in names if n not in known]
+    if not unknown:
+        return ""
+    return (
+        f"Iron Jarvis has no tool called {', '.join(_q(n) for n in unknown)}. Name its real "
+        "tools (for example notify, write_file, web_fetch); to have it only read, set "
+        "works_like to reviewer."
+    )
 
 
 class _AgentTool(R._RecordTool):  # noqa: SLF001 — the records module's own base
@@ -1160,8 +1221,9 @@ class AgentCreateTool(_AgentTool):
     description = (
         "Make a new agent of the user's own (the Agents page's New agent): `name`, its "
         "`instructions`, what it `works_like` (reviewer = only reads), the model it runs on "
-        "(`provider` and `model`), its model-team `roles` and a monthly limit "
-        "(`monthly_limit_usd`, `monthly_limit_tokens`; 0 = none). The user approves on a "
+        "(`provider` and `model`), its model-team `roles`, a monthly limit "
+        "(`monthly_limit_usd`, `monthly_limit_tokens`; 0 = none), tools it must "
+        "`never_use_tools` and how it asks first (`approvals`). The user approves on a "
         "card; Undo removes it again."
     )
     input_schema = {
@@ -1188,7 +1250,8 @@ class AgentCreateTool(_AgentTool):
         if not name:
             return ToolResult(ok=False, error="An agent needs a name.")
         fields = _agent_fields(args)
-        problem = await asyncio.to_thread(_check_provider, self.platform, fields.get("provider", ""))
+        problem = _unknown_tools(self.platform, fields) or await asyncio.to_thread(
+            _check_provider, self.platform, fields.get("provider", ""))
         if problem:
             return ToolResult(ok=False, error=problem)
         try:
@@ -1212,9 +1275,11 @@ class AgentUpdateTool(_AgentTool):
     name = "agent_update"
     description = (
         "Change an agent the user made (`agent` = its name): its `instructions`, `description`, "
-        "what it `works_like`, its model (`provider`, `model`), its model-team `roles` or its "
-        "monthly limit (`monthly_limit_usd`, `monthly_limit_tokens`; 0 = none). Only the fields "
-        "given change. The user approves on a card; the change has an Undo."
+        "what it `works_like` (reviewer = only reads), its model (`provider`, `model`), its "
+        "model-team `roles`, its monthly limit (`monthly_limit_usd`, `monthly_limit_tokens`; "
+        "0 = none), tools it must `never_use_tools`, or how it asks before acting "
+        "(`approvals`). Only the fields given change. The user approves on a card; the change "
+        "has an Undo."
     )
     input_schema = {
         "type": "object",
@@ -1235,9 +1300,13 @@ class AgentUpdateTool(_AgentTool):
         fields = _agent_fields(args)
         if not fields:
             return ToolResult(
-                ok=False, error="Say what to change: its instructions, model, team roles, monthly limit or what it works like."
+                ok=False, error=(
+                    "Say what to change: its instructions, model, team roles, monthly limit, what it "
+                    "works like, the tools it must never use or how it asks first."
+                )
             )
-        problem = await asyncio.to_thread(_check_provider, self.platform, fields.get("provider", ""))
+        problem = _unknown_tools(self.platform, fields) or await asyncio.to_thread(
+            _check_provider, self.platform, fields.get("provider", ""))
         if problem:
             return ToolResult(ok=False, error=problem)
         before = await asyncio.to_thread(snap_agent, self.platform, name)
@@ -1485,7 +1554,10 @@ _A_NEW = re.compile(
 _A_FIELD = re.compile(
     r"\b(?:model|gpt|chatgpt|claude|sonnet|opus|haiku|gemini|grok|codex|llama|qwen|glm|deepseek|mistral|ollama"
     r"|limit|allowance|budget|cap|monthly|a\s+month|per\s+month|roles?|only\s+reads?|read-?only|read\s+only"
-    r"|team|instructions|description|prompt|works?\s+like)\b|\$\s?\d",
+    r"|team|instructions|description|prompt|works?\s+like"
+    # v1.484.1: the job card (never_use_tools, approvals) — "change what the
+    # insurance helper agent is allowed to do", "make the X agent ask first".
+    r"|approvals?|permissions?|allowed\s+to|asks?\s+(?:before|first)|never\s+uses?)\b|\$\s?\d",
     re.IGNORECASE,
 )
 _A_CHANGE = re.compile(

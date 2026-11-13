@@ -432,6 +432,7 @@ def join_found(
         can = joinable()
         joined: list[str] = []
         asks: list[str] = []
+        already: list[str] = []
         skipped: dict[str, str] = {}
         capped = False
         for rows in lookups:
@@ -443,7 +444,21 @@ def join_found(
             mine: list[str] = []
             for name in _wanted(rows):
                 held = {*armed, *(asks_list or ())}
-                if name in held or name in joined:
+                if name in joined:
+                    continue
+                if name in held:
+                    # v1.484.1: a match the reply already holds takes its
+                    # place among this lookup's, and the note names it. Seen
+                    # live: with `reflex_create` already held, the three places
+                    # went to lower matches ("make a file", a folder's coding
+                    # defaults) and the note told the model to call one of
+                    # THOSE, never naming the rule tool it had.
+                    free = name in SETTINGS_FAMILY and settings_counted
+                    if taken < MAX_JOINED_PER_LOOKUP or free:
+                        if name not in already and name not in SETTINGS_FAMILY:
+                            already.append(name)
+                        taken += 0 if free else 1
+                        settings_counted = settings_counted or name in SETTINGS_FAMILY
                     continue
                 # The settings tools count as ONE of a lookup's places
                 # together (several setting matches all map to the same two
@@ -521,7 +536,7 @@ def join_found(
                 if isinstance(s, dict) and str(s.get("name") or "") not in known
             ]
             tool_specs[:] = registry.specs([*armed, *(asks_list or ())]) + extras
-        _say(msgs, _note(joined, asks, skipped, capped))
+        _say(msgs, _note(joined, asks, skipped, capped, already))
         # Names only (never a query or an argument): which lookups brought
         # what. The plan's Phase 5 reads this to see what the word tables miss.
         log.info(
@@ -546,8 +561,14 @@ def join_found(
         return []
 
 
-def _note(joined: list[str], asks: list[str], skipped: dict[str, str], capped: bool) -> str:
+def _note(joined: list[str], asks: list[str], skipped: dict[str, str], capped: bool,
+          already: list[str] | None = None) -> str:
     parts: list[str] = []
+    if already:
+        parts.append(
+            "Already among your tools in this reply: "
+            + ", ".join(f"`{n}`" for n in already) + "."
+        )
     if joined:
         shown = ", ".join(
             f"`{n}`" + (f" ({CARD_WORDS})" if n in asks else "") for n in joined
@@ -562,7 +583,7 @@ def _note(joined: list[str], asks: list[str], skipped: dict[str, str], capped: b
         parts.append(f"`{name}` did not join: {why}.")
     if capped:
         parts.append(NO_MORE_NOTE.strip("()"))
-    elif skipped and not joined:
+    elif skipped and not joined and not already:
         parts.append(LOOK_AGAIN)
     if not parts:
         return ""
