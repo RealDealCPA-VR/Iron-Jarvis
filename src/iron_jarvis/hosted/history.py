@@ -57,6 +57,7 @@ from .events import (
     clip,
     coalesce_into,
 )
+from .old_task_lines import reword as _reword
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +73,11 @@ _PRIVATE = ("seq", LOG_FULL_KEY, FULL_KEY, "htool", "hseq")
 TAIL_EVENTS = 2000
 #: How many events one "Load earlier" page holds at most.
 PAGE_MAX = 2000
+#: v1.480.1: how many events just BEFORE what a view or page serves are read
+#: (never shown) when old "A helper …" lines are read in their record's words
+#: (:mod:`.old_task_lines`): the command a line names is often just before the
+#: first event served.
+REWORD_CONTEXT = 400
 #: How many events a coding tool's own transcript gives the view (newest).
 TRANSCRIPT_EVENTS = 2000
 #: A transcript's text, cut (after masking): an answer is rarely longer.
@@ -199,6 +205,9 @@ class TailLog(EventLog):
         #: :meth:`seed`): its newest ``keep`` events with their file index.
         self.prior: list[tuple[int, dict[str, Any]]] = []
         self.prior_total = 0
+        #: v1.480.1: up to :data:`REWORD_CONTEXT` events the file held just
+        #: before ``prior`` (read, never served: :mod:`.old_task_lines`).
+        self.context: list[dict[str, Any]] = []
         self.dropped = 0
         self.seeded = False
 
@@ -249,6 +258,8 @@ class TailLog(EventLog):
                 prior.append((i, {k: v for k, v in ev.items() if k != LOG_FULL_KEY} if LOG_FULL_KEY in ev else ev))
             self.prior_total = len(prior)
             self.prior = prior[-self.keep:]
+            cut = max(0, len(prior) - self.keep)
+            self.context = [ev for _, ev in prior[max(0, cut - REWORD_CONTEXT):cut]]
             self.dropped = dropped
             self.seeded = True
 
@@ -266,9 +277,13 @@ class TailLog(EventLog):
             prior_cut = self.prior_total > len(self.prior)
             total = self.prior_total + self.mine_total
             dropped = self.dropped
+            seed_context = list(self.context)
         picked: list[tuple[int | None, dict[str, Any]]]
         if len(mine) >= limit:
             picked = [(None, e) for e in mine[-limit:]]
+            # What memory holds just before (never across in-process events
+            # memory already let go of).
+            before = mine[:-limit] if overflow else seed_context + [e for _, e in prior] + mine[:-limit]
         else:
             if overflow:
                 return None  # older in-process events live only in the file
@@ -276,15 +291,18 @@ class TailLog(EventLog):
             if want > len(prior) and prior_cut:
                 return None
             picked = list(prior[-want:]) + [(None, e) for e in mine]
+            before = seed_context + [e for _, e in prior[: max(0, len(prior) - want)]]
         events = [e for _, e in picked]
         oldest_index = total - len(events)
         older = None
         if picked and oldest_index > 0:
             idx, first_ev = picked[0]
             older = cursor_for(first_ev, idx if idx is not None else oldest_index, dropped)
+        # v1.480.1: old "A helper …" lines in their record's words.
+        shown, hidden = _reword(events, before[-REWORD_CONTEXT:])
         return {
-            "events": [public(e) for e in events],
-            "events_total": total,
+            "events": [public(e) for e in shown],
+            "events_total": total - hidden,
             "dropped": dropped,
             "older": older,
             "from_memory": True,
@@ -302,9 +320,11 @@ def file_view(path: Path, meta_path: Path, limit: int) -> dict[str, Any]:
     start = max(0, total - limit)
     picked = events[start:]
     older = cursor_for(picked[0], start, dropped) if picked and start > 0 else None
+    # v1.480.1: old "A helper …" lines in their record's words.
+    shown, hidden = _reword(picked, events[max(0, start - REWORD_CONTEXT):start])
     return {
-        "events": [public(e) for e in picked],
-        "events_total": total,
+        "events": [public(e) for e in shown],
+        "events_total": total - hidden,
         "dropped": dropped,
         "older": older,
         "from_memory": False,
@@ -361,8 +381,10 @@ def read_page(path: Path, meta_path: Path, before: str, limit: int) -> dict[str,
     start = max(0, cut - limit)
     page = events[start:cut]
     older = cursor_for(page[0], start, dropped) if page and start > 0 else None
+    # v1.480.1: old "A helper …" lines in their record's words.
+    shown, _hidden = _reword(page, events[max(0, start - REWORD_CONTEXT):start])
     return {
-        "events": [public(e) for e in page],
+        "events": [public(e) for e in shown],
         "older": older,
         "earlier": start,
         "events_total": len(events),

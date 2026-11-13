@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.480.1
+
+**Older Build › Code sessions say what really finished.** Since v1.477.2, a new grey line in Build › Code says what ended: a helper, a command in the background, or nothing at all for an ordinary command, whose own step already shows how it ended.
+
 ## v1.480.0
 
 **Jarvis looks it up before it says "done" or "I can't".** This is the third step of the feature lookup (v1.478.0, v1.479.0).
@@ -77,7 +81,3 @@
 ## v1.470.0
 
 **Scripts that call tools, and skills made from chat.** A **skill** and a **workflow** are two different things:
-
-## v1.469.1
-
-**Links to another workbook follow the folders Jarvis may read.** A formula can link to another workbook, for example a summary sheet that reads a figure from a client's own file.
