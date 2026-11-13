@@ -112,6 +112,30 @@ def _iron_proxy_service_per_test():
 
 
 @pytest.fixture(autouse=True)
+def _sign_in_answers_do_not_cross_tests():
+    """v1.480.1: the CLIs' sign-in answers are PROCESS memory
+    (``providers.cli_auth.DEFAULT_PROBE``: one object per worker). A test
+    whose stand-in Claude Code refused a sign-in, or that marked one signed
+    out, left that answer for every LATER test on the worker: GitHub's shard
+    10 read "Claude Code is not signed in on this PC" in all eight Hand off
+    tests (``test_code_handoff_v1474``) once a new test file moved which
+    files shared the shard; alone they passed. v1.396.1 fixed one test this
+    way; every test now starts from an empty probe, and the probe it had is
+    put back after."""
+    from iron_jarvis.providers import cli_auth as _cli_auth
+
+    probe = _cli_auth.DEFAULT_PROBE
+    with probe._lock:
+        cache, inflight = probe._cache, probe._inflight
+        probe._cache, probe._inflight = {}, set()
+    try:
+        yield
+    finally:
+        with probe._lock:
+            probe._cache, probe._inflight = cache, inflight
+
+
+@pytest.fixture(autouse=True)
 def _turn_links_do_not_cross_tests():
     """v1.473.0: which saved chat a turn was linked to is PROCESS memory
     (``providers.egress._TURN_THREADS``). A new chat's first script is keyed

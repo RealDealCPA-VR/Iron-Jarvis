@@ -13134,6 +13134,18 @@ does not need a bump, stop and bump it.
   rewords a rejoined turn's replay. A NEW reader of a hosted log that shows
   notices must go through these readers. Pins:
   `tests/test_build_app_old_task_lines_v1480.py`.
+  SAME RELEASE (test-only): the branch's first GitHub run went red in shard
+  10, all eight `test_code_handoff_v1474` tests reading "Claude Code is not
+  signed in on this PC" (and again on retry); alone they passed. Adding a test
+  file moved which files shared the shard, and an earlier test on the worker
+  had left a "claude is signed out" answer in `cli_auth.DEFAULT_PROBE` (one
+  object per process; real code writes it when a stand-in CLI refuses a
+  sign-in). The Build › Code tool list reads it through `harnesses()`.
+  `tests/conftest._sign_in_answers_do_not_cross_tests` now gives EVERY test an
+  empty `_cache` / `_inflight` and puts the old ones back after (the v1.396.1
+  lesson, now suite-wide). Reproduced by a plugin that marks claude signed out
+  at `pytest_configure`: the old conftest gives CI's exact 8 failures, the new
+  one 14 passed.
 
 - **Build › Code's history STAYS (paged by a cursor, the tool's own
   transcript merged in), a view is served from MEMORY, and a message sent
