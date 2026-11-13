@@ -465,6 +465,8 @@ function SessionPane({
   const prevItemsRef = useRef<ConvItem[] | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const genRef = useRef(0);
+  // v1.481.1: how many session reads have started (a change's line).
+  const readsStartedRef = useRef(0);
   const optimisticRef = useRef<CodeEvent | null>(null);
   const answeredRef = useRef<Set<string>>(new Set());
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
@@ -585,6 +587,7 @@ function SessionPane({
   /** Read the session from the daemon; follow its running turn. */
   const load = useCallback(
     async (opts: { follow: boolean }) => {
+      readsStartedRef.current += 1;
       const gen = genRef.current;
       const seq = sendSeqRef.current;
       const aseq = answerSeqRef.current;
@@ -655,6 +658,11 @@ function SessionPane({
         } else if (opts.follow) {
           setEvents(view.events);
           setRunning(view.running);
+        } else if (abortRef.current) {
+          // v1.481.1: a reply is being followed (the next waiting message
+          // started while this read was out): its stream draws it, and this
+          // older read must not put its saved question back beside the
+          // replay's own.
         } else {
           // After a turn ends: the saved record replaces what was drawn —
           // unless it holds less (not written yet), which would blank the
@@ -1286,10 +1294,14 @@ function SessionPane({
 
   // v1.481.1: a model or effort change asked for its line: read the
   // conversation again as soon as no reply runs here.
+  // A read started after the change answered already holds the line (the
+  // daemon writes it before it answers), so that one is enough.
   const [lineRead, setLineRead] = useState(0);
+  const changeAnsweredAtRef = useRef(0);
   useEffect(() => {
     if (!lineRead || running) return;
     setLineRead(0);
+    if (readsStartedRef.current > changeAnsweredAtRef.current) return;
     void load({ follow: false });
   }, [lineRead, running, load]);
 
@@ -1324,6 +1336,7 @@ function SessionPane({
           // the line to the record only, and the turn's own last read may
           // have come too early to hold it.
           if (("model" in patchIn || "effort" in patchIn) && (next.toolSessionId || running)) {
+            changeAnsweredAtRef.current = readsStartedRef.current;
             setLineRead((n) => n + 1);
           }
         } else {

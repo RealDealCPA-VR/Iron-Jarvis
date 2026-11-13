@@ -17988,7 +17988,14 @@ does not need a bump, stop and bump it.
   compares `stampKey`s (the daemon's `isoformat()` drops the fraction of a
   whole-second stamp, and "…:07Z" sorts after "…:07.3Z" as text) and adds a
   notice stamped AT the newest drawn time unless the same notice (stamp +
-  text) is drawn.
+  text) is drawn. SECOND REVIEW: the change's read is skipped when a session
+  read STARTED after the change answered (`readsStartedRef` vs
+  `changeAnsweredAtRef`: that read already holds the line), and a
+  `follow:false` read that lands while a reply is being followed
+  (`abortRef.current`) changes nothing — two reads at a reply's end had let
+  the second put the next WAITING message's saved question back beside its
+  replay's own (the question drawn twice). The test stream takes a `wait`
+  per frame to pin that order.
 - **A Store program is never asked into the pane job, and starts one at a
   time; a frozen loop says where it is stuck** (v1.407.1, a USER BUG on
   v1.407.0: Build stuck at "Attaching to sessions…", then "Iron Jarvis isn't

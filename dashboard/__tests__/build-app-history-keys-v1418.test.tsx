@@ -30,7 +30,7 @@ const H = vi.hoisted(() => ({
   postReply: {} as Record<string, unknown>,
   postFail: {} as Record<string, { status: number; message: string; body?: unknown }>,
   streams: [] as { path: string; body: unknown }[],
-  scripts: [] as { event: string; data: Record<string, unknown> }[][],
+  scripts: [] as { event: string; data: Record<string, unknown>; wait?: number }[][],
   lastWatch: null as null | { onFrame?: (event: string, data: Record<string, unknown>) => void },
   hold: null as Promise<void> | null,
   release: null as (() => void) | null,
@@ -81,6 +81,7 @@ vi.mock("@/lib/useChatStream", () => ({
     H.lastWatch = watch ?? null;
     const frames = H.scripts.shift() ?? [];
     for (const f of frames) {
+      if (f.wait) await new Promise((r) => setTimeout(r, f.wait));
       if (signal?.aborted) return;
       watch?.onFrame?.(f.event, f.data);
       await Promise.resolve();
@@ -512,7 +513,7 @@ describe("keys (C4.8)", () => {
     await waitFor(() => expect(screen.getByTestId("code-session").textContent).toContain("Effort changed: High → Low"));
   });
 
-  it("v1.481.1: while the reply still streams, the change's read waits for its end (no read mid-stream)", async () => {
+  it("v1.481.1: while the reply still streams, the change's read waits for its end (no read mid-stream, no second read)", async () => {
     working("c2", { harness: "pi", mode: "own", model: "", harness_session_id: "h-1", effort: "high" });
     const view = H.gets["/build/app/sessions/c2"];
     let reads = 0;
@@ -537,7 +538,83 @@ describe("keys (C4.8)", () => {
     await act(async () => {
       H.release?.();
     });
-    await waitFor(() => expect(reads).toBe(before + 2));
+    // The turn's own last read started after the change answered, so it
+    // holds the line: one read, never a second one beside it.
+    await waitFor(() => expect(reads).toBe(before + 1));
+    await act(async () => {});
+    expect(reads).toBe(before + 1);
+  });
+
+  const QUEUED = (id: string) => ({
+    session: sess(id, { harness: "pi", mode: "own", model: "", effort: "low", harness_session_id: "h-1" }),
+    events: [
+      { type: "user", at: "2026-11-12T20:00:00Z", text: "Count to thirty", turn: "turn_1" },
+      { type: "done", at: "2026-11-12T20:00:05Z", stop: "completed", turn: "turn_1" },
+      { type: "user", at: "2026-11-12T20:00:06Z", text: "then add a test", turn: "turn_2" },
+    ],
+    running: "turn_2",
+    pending: [],
+    queued: [],
+    queue_held: false,
+  });
+
+  it("v1.481.1: a change made during a reply never draws the next waiting message twice", async () => {
+    working("q1", { harness: "pi", mode: "own", model: "", effort: "high", harness_session_id: "h-1" });
+    H.postReply["PATCH /build/app/sessions/q1"] = { session: QUEUED("q1").session, applied: { effort: "now" } };
+    render(<BuildCodeView initialSession="q1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-working");
+    chooseEffort(SESSION, "low");
+    await waitFor(() => expect(H.patches).toHaveLength(1));
+    await act(async () => {});
+    // The reply ends and the daemon starts the waiting message as turn_2.
+    H.gets["/build/app/sessions/q1"] = () => new Promise((r) => setTimeout(() => r(QUEUED("q1")), 15));
+    H.scripts = [[{ event: "user", data: { type: "user", at: "2026-11-12T20:00:06Z", text: "then add a test", turn: "turn_2" } }]];
+    const rel = H.release;
+    H.hold = new Promise<void>((res) => {
+      H.release = res;
+    });
+    rel?.();
+    await new Promise((r) => setTimeout(r, 300));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
+    });
+    expect(screen.getAllByText("then add a test")).toHaveLength(1);
+  });
+
+  it("v1.481.1: a read that lands while the next message is followed leaves that reply as drawn", async () => {
+    // The change answers AFTER the turn's last read started, so its own read
+    // goes too; the first read starts following turn_2, the second lands
+    // during that follow.
+    working("q2", { harness: "pi", mode: "own", model: "", effort: "high", harness_session_id: "h-1" });
+    let answer: (v: unknown) => void = () => {};
+    H.postReply["PATCH /build/app/sessions/q2"] = new Promise((res) => {
+      answer = res;
+    });
+    render(<BuildCodeView initialSession="q2" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-working");
+    chooseEffort(SESSION, "low");
+    await waitFor(() => expect(H.patches).toHaveLength(1));
+    let reads = 0;
+    H.gets["/build/app/sessions/q2"] = () => {
+      reads += 1;
+      const wait = reads === 1 ? 40 : 80;
+      return new Promise((r) => setTimeout(() => r(QUEUED("q2")), wait));
+    };
+    // turn_2's replay brings its question only after the second read landed.
+    H.scripts = [[{ event: "user", wait: 120, data: { type: "user", at: "2026-11-12T20:00:06Z", text: "then add a test", turn: "turn_2" } }]];
+    const rel = H.release;
+    H.hold = new Promise<void>((res) => {
+      H.release = res;
+    });
+    rel?.();
+    await new Promise((r) => setTimeout(r, 5));
+    answer({ session: QUEUED("q2").session, applied: { effort: "now" } });
+    await new Promise((r) => setTimeout(r, 300));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
+    });
+    expect(reads).toBe(2);
+    expect(screen.getAllByText("then add a test")).toHaveLength(1);
   });
 
   it("Pi's effort stays open while it works (it changes live)", async () => {
