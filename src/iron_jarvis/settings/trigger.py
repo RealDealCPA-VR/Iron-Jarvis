@@ -283,6 +283,16 @@ _EXTRA_REFERENCES: tuple[re.Pattern[str], ...] = tuple(
         r"\b(?:iron\s+jarvis|jarvis|the\s+desktop\s+app)\s+(?:to\s+)?(?:open|start|launch|run)s?\b"
         r"[^.?!\n]{0,24}?\b(?:when\s+i\s+(?:log|sign)\s+(?:in|on)|at\s+(?:login|log\s*in|sign\s*in|startup)"
         r"|on\s+startup|with\s+windows)\b",
+        # v1.486.0: the app (or "it") opening by itself when the PC starts, asked
+        # to stop — "stop it popping up every time the pc starts", "don't let
+        # Jarvis open when my computer boots". A program the user NAMES
+        # ("stop Outlook popping up…") is not Iron Jarvis and matches nothing.
+        r"\b(?:stop|don'?t(?:\s+let)?|do\s+not(?:\s+let)?|no\s+longer)\s+"
+        r"(?:(?:it|this|the\s+app|jarvis|iron\s+jarvis)\s+(?:from\s+)?)?"
+        r"(?:pop(?:ping|s)?|open(?:ing|s)?|start(?:ing|s)?|launch(?:ing|es)?|com(?:ing|es?))\b"
+        r"(?:\s+up)?[^.?!\n]{0,24}?\b(?:every\s+time|each\s+time|whenever|when|at|on)\s+"
+        r"(?:the\s+|my\s+)?(?:pc|computer|laptop|windows|machine)\s+"
+        r"(?:starts?|boots?|turns?\s+on|restarts?|starts?\s+up|boots?\s+up)\b",
         # "open files in Cursor", "use VS Code for files".
         r"\b(?:open|edit|show)\b[^.?!\n]{0,30}?\b(?:in|with)\s+(?:cursor|vs\s*code|vscode)\b",
         r"\b(?:use|switch\s+to|set|pick|choose)\s+(?:cursor|vs\s*code|vscode)\b",

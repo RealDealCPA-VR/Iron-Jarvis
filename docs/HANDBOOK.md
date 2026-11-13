@@ -2052,6 +2052,9 @@ reads; it never writes, runs commands, or starts work on its own.
   still does.
 - **A schedule name Jarvis gets wrong is answered with the real names**, so
   it can correct itself in the same reply.
+- **"Stop it popping up every time the PC starts"** now reaches the
+  "Start Iron Jarvis with Windows" setting, instead of a question about
+  what is popping up.
 - **Taking the calendar link off is said honestly.** Chat can save your
   calendar link on the secure card, but it cannot remove one: Jarvis now says
   to remove it on the Rules page, instead of telling you to clear the card's

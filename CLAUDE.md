@@ -17857,7 +17857,10 @@ does not need a bump, stop and bump it.
   on the Rules page; else Settings). Seen live: "move the daily 8 o'clock
   reminder to 9" asked the user for the schedule's name. Pins:
   `tests/test_schedule_list_v1486.py` (9 mutations, all red), the two
-  calendar-removal tests in `test_calendar_link_lookup_v1484.py`.
+  calendar-removal tests in `test_calendar_link_lookup_v1484.py`. Same release:
+  `settings/trigger._EXTRA_REFERENCES` reads "stop it / the app / Jarvis
+  popping up (opening, starting) when the PC starts" (a program the user names
+  matches nothing; `tests/test_startup_popup_setting_v1486.py`).
 
 - **Chat sets an agent's job card; `config_list` names the models; a held
   lookup match is named** (v1.485.0). `settings/records_projects`: `_AGENT_ARGS`
