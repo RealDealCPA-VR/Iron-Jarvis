@@ -2128,6 +2128,45 @@ added 3 to 10 seconds, so it is not in this version.
 - The everyday phrasings are written in English. Jarvis looks up in English
   whatever language you write in.
 
+## Older Build › Code sessions say what really finished (v1.481.1)
+
+Since v1.477.2, a new grey line in Build › Code says what ended: a helper, a
+command in the background, or nothing at all for an ordinary command, whose
+own step already shows how it ended. Lines written before that update kept
+the old words. So a session from before it could still show a long run of
+"A helper finished: cd … && grep …" lines about commands, not helpers.
+
+Those older lines are now checked against the session's own record each time
+the session is shown:
+
+- **A line about an ordinary command is no longer shown.** That command's own
+  step is in the conversation, and the step shows how it ended.
+- **A line about a command that ran in the background** says "A background
+  command finished: …" (or "failed", or "was stopped"). Iron Jarvis knows the
+  command ran in the background because its own step says so.
+- **Claude Code's own sentence about a background command**, such as
+  `Background command "npm run build" completed (exit code 0)`, is shown as
+  it is. Its sentence about a monitor reads "A background task finished: …".
+  Both are what a new line says today.
+- **Every other old line stays as it was written.** In the sessions on this
+  PC, every one of those was a real helper's report, or Claude Code's own
+  words about a helper.
+
+In the three sessions on this PC that had such lines, 618 lines were checked:
+523 are no longer shown, 27 now say what they were, and the 68 real helper
+lines are unchanged.
+
+Two things to know:
+
+- **Nothing in a session's files is changed.** The check happens when a
+  session is shown, so it also covers "Load earlier" and a reply that was
+  running when Iron Jarvis restarted. The count of earlier steps leaves out
+  the lines that are no longer shown.
+- **A line is matched by its command's description or command line**, using
+  the same session's steps up to 400 events before the part being shown. A
+  command further back than that is not found, and its line keeps its old
+  words. On this PC no line was that far from its command.
+
 ## A task's required files are checked before the reply ends (v1.481.0)
 
 When you give Jarvis a task in a chat that has a working folder, and your
@@ -2181,6 +2220,7 @@ its approval card, Jarvis never asks the model to try it again.
 - A program that a command starts can still write anywhere it is allowed
   to. Jarvis cannot stop that ahead of time; it notices it afterwards and
   says so in the note.
+
 ## Jarvis looks it up before it says "done" or "I can't" (v1.480.0)
 
 This is the third step of the feature lookup (v1.478.0, v1.479.0). The
@@ -2569,7 +2609,9 @@ Claude Code is writing a reply by itself.
 Two things to know:
 
 - **Lines already in a conversation stay as they were written.** Only new
-  lines use the new words.
+  lines use the new words. (Since v1.481.1, older lines are shown in the new
+  words when the session's own record shows what they were: see "Older
+  Build › Code sessions say what really finished".)
 - **A session that was running when you updated** may say "A command
   finished: …" for a command that started before the update. The older
   version did not record whether that command ran in the background, so Iron

@@ -1937,6 +1937,8 @@ class HostedService:
         running = live.turn.id if live and live.turn and live.turn.running else None
         # v1.418.0 (C4.6): the coding tool's own transcript, for a conversation
         # that lived outside this view (opened from disk, or a terminal).
+        # (v1.481.1: old "A helper …" lines come already read in their
+        # record's words, :mod:`.old_task_lines` via :mod:`.history`.)
         events = await self._with_transcript(row, live, got["events"], cut=bool(got["older"]))
         dropped = got["dropped"]
         out: dict[str, Any] = {

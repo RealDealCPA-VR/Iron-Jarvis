@@ -481,11 +481,14 @@ def _reopen(svc: Any, live: Any, a: Ask) -> None:
 
 async def _turn_back(svc: Any, live: Any, turn_id: str, started_at: str) -> None:
     from .history import public
+    from .old_task_lines import reword
     from .service import HostedTurn
 
     events, _total, _dropped = await asyncio.to_thread(live.log.read, 0, turn=turn_id)
     turn = HostedTurn(turn_id, live.sid)
-    turn.events = coalesce([public(e) for e in events])
+    # v1.481.1: a turn begun before the update can hold old "A helper …"
+    # lines; a rejoin replays them the way the view shows them.
+    turn.events = coalesce(reword([public(e) for e in events])[0])
     try:
         began = datetime.fromisoformat(started_at)
         began = began if began.tzinfo else began.replace(tzinfo=timezone.utc)

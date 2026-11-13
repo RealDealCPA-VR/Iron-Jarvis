@@ -13108,6 +13108,44 @@ does not need a bump, stop and bump it.
   `tests/test_build_app_task_ended_words_v1477.py`; moved on purpose:
   `test_build_app_stream_rows_v1418` (the pure function, told nothing, says
   "A task finished").
+  v1.481.1 (the owner: "address the risk"): OLD lines are read at SERVING
+  time, never rewritten on disk. `hosted/old_task_lines.reword(events,
+  context)` (pure; copies a changed line; a list with no old line comes back
+  as the same object) takes a notice that fully matches the v1.418.0 ..
+  v1.477.1 template `A helper (finished|failed|was stopped): …` and: says
+  Claude Code's own `Background command "` sentence as it is; makes its
+  `Monitor "` sentence "A background task …"; matches the summary to the
+  NEAREST command step BEFORE it by title (the description, cut at 90 with
+  "…": prefix match), subtitle (the command) or a "Run <cmd>" title — then
+  the step's own result in one of Claude Code's five background sentences
+  (`BACKGROUND_RESULT`, read from its program) or its input's
+  `"run_in_background": true` makes it "A background command …", an ending
+  row (done/failed/stopped) in the record HIDES it, no ending row makes it
+  "A command …"; anything else is left exactly as written. MEASURED on the
+  owner's three logs (618 old lines): 523 hidden, 24 own sentences, 2
+  background, 1 monitor, 68 left — every one of those a helper's report or
+  Claude Code's own agent words. `history.file_view`, `read_page` and
+  `TailLog.served` call it with up to `REWORD_CONTEXT` (400) events from just
+  before what they serve (`TailLog.seed` keeps them in `self.context`; a
+  memory window whose in-process events overflowed takes no seed context),
+  and subtract hidden lines from `events_total` (no phantom "earlier
+  steps"); cursors are computed on the raw events first. Without the context
+  4 of 311 lines in a view kept the old words; with it 0. `adopt._turn_back`
+  rewords a rejoined turn's replay. A NEW reader of a hosted log that shows
+  notices must go through these readers. Pins:
+  `tests/test_build_app_old_task_lines_v1480.py`.
+  SAME RELEASE (test-only): the branch's first GitHub run went red in shard
+  10, all eight `test_code_handoff_v1474` tests reading "Claude Code is not
+  signed in on this PC" (and again on retry); alone they passed. Adding a test
+  file moved which files shared the shard, and an earlier test on the worker
+  had left a "claude is signed out" answer in `cli_auth.DEFAULT_PROBE` (one
+  object per process; real code writes it when a stand-in CLI refuses a
+  sign-in). The Build › Code tool list reads it through `harnesses()`.
+  `tests/conftest._sign_in_answers_do_not_cross_tests` now gives EVERY test an
+  empty `_cache` / `_inflight` and puts the old ones back after (the v1.396.1
+  lesson, now suite-wide). Reproduced by a plugin that marks claude signed out
+  at `pytest_configure`: the old conftest gives CI's exact 8 failures, the new
+  one 14 passed.
 
 - **Build › Code's history STAYS (paged by a cursor, the tool's own
   transcript merged in), a view is served from MEMORY, and a message sent
