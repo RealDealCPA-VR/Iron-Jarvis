@@ -17968,7 +17968,17 @@ does not need a bump, stop and bump it.
   answer makes it the chosen one (`pending`); Tab closes the panel (it is
   portaled to the end of the page); the shortcut opens nothing with no tools;
   the daemon line says the model's and the effort's own timing when they
-  differ (`effort_when`).
+  differ (`effort_when`). v1.481.1: the page's own "applies from your next
+  message" note is skipped while a reply runs too (the line comes with the
+  reply's stream); a re-read that keeps what is drawn (the live pieces
+  outnumber the saved record) still adds every notice newer than anything
+  drawn (`lib/buildApp.withNewerNotices`); and `EmergencyStopStrip`'s server
+  snapshot is ONE constant (a new object per call is React's
+  "getServerSnapshot should be cached" warning, checked during HYDRATION —
+  a `renderToString` alone never warns; pin
+  `__tests__/server-snapshot-v1481-1.test.tsx`). Checked and dropped: the
+  panel's placement does not need re-measuring when its list changes — its
+  height cap is the ROOM on its side, not its first height.
 - **A Store program is never asked into the pane job, and starts one at a
   time; a frozen loop says where it is stuck** (v1.407.1, a USER BUG on
   v1.407.0: Build stuck at "Attaching to sessions…", then "Iron Jarvis isn't
