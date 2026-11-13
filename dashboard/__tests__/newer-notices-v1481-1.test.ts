@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withNewerNotices, type CodeEvent } from "@/lib/buildApp";
+import { stampKey, withNewerNotices, type CodeEvent } from "@/lib/buildApp";
 
 const ev = (o: Record<string, unknown>) => o as unknown as CodeEvent;
 
@@ -16,5 +16,29 @@ describe("withNewerNotices (v1.481.1)", () => {
     expect(out.slice(2).map((e) => (e as { text?: string }).text)).toEqual(["Model changed: A → B."]);
     // Nothing newer: the very same array back.
     expect(withNewerNotices(drawn, saved.slice(0, 2))).toBe(drawn);
+  });
+  it("compares stamps as times: a whole-second stamp has no fraction", () => {
+    // The daemon writes "…:07Z" when the microseconds are 0; as text that
+    // sorts after "…:07.300000Z", so the later notice was dropped.
+    const drawn = [ev({ type: "text_done", at: "2026-11-12T20:00:07Z", text: "done" })];
+    const saved = [ev({ type: "notice", at: "2026-11-12T20:00:07.300000Z", text: "Model changed." })];
+    expect(withNewerNotices(drawn, saved).map((e) => (e as { text?: string }).text)).toEqual(["done", "Model changed."]);
+    // And the other way round: a whole-second notice is not newer than a later stamp.
+    const later = [ev({ type: "text_done", at: "2026-11-12T20:00:07.300000Z", text: "done" })];
+    expect(withNewerNotices(later, [ev({ type: "notice", at: "2026-11-12T20:00:07Z", text: "old" })])).toBe(later);
+    expect(stampKey("2026-11-12T20:00:07Z")).toBe("2026-11-12T20:00:07.000000000Z");
+    expect(stampKey("2026-11-12T20:00:07.3+00:00")).toBe("2026-11-12T20:00:07.300000000Z");
+    expect(stampKey("x")).toBe("");
+  });
+
+  it("a notice stamped at the newest drawn time is added once, never twice", () => {
+    const at = "2026-11-12T20:00:07.123000Z";
+    const drawn = [ev({ type: "text_done", at, text: "done" })];
+    const note = ev({ type: "notice", at, text: "Model changed." });
+    // Same tick, not drawn yet: added.
+    expect(withNewerNotices(drawn, [note]).length).toBe(2);
+    // Already drawn (it came with the reply's stream): not added again.
+    const both = [...drawn, note];
+    expect(withNewerNotices(both, [note])).toBe(both);
   });
 });

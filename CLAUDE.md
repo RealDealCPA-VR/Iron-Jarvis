@@ -17978,7 +17978,17 @@ does not need a bump, stop and bump it.
   a `renderToString` alone never warns; pin
   `__tests__/server-snapshot-v1481-1.test.tsx`). Checked and dropped: the
   panel's placement does not need re-measuring when its list changes — its
-  height cap is the ROOM on its side, not its first height.
+  height cap is the ROOM on its side, not its first height. REVIEW of the
+  port (each red first): the change's re-read waits on the page's CURRENT
+  `running` (`lineRead` state + an effect), never the `running` the press
+  saw — a reply that ended while the PATCH was out wrote the line to the
+  record only and the turn's own last read could come before it (Codex,
+  OpenCode, Grok, back to the default, an effort applied next); the read
+  never runs mid-stream (pinned by a read count); `withNewerNotices`
+  compares `stampKey`s (the daemon's `isoformat()` drops the fraction of a
+  whole-second stamp, and "…:07Z" sorts after "…:07.3Z" as text) and adds a
+  notice stamped AT the newest drawn time unless the same notice (stamp +
+  text) is drawn.
 - **A Store program is never asked into the pane job, and starts one at a
   time; a frozen loop says where it is stuck** (v1.407.1, a USER BUG on
   v1.407.0: Build stuck at "Attaching to sessions…", then "Iron Jarvis isn't

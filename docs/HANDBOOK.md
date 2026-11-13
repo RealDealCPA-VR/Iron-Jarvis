@@ -2051,6 +2051,9 @@ Small fixes after v1.475.0's one-chip model picker in Build › Code:
   the conversation.
 - **The "Model changed" line shows at once in a long session.** It used to
   appear only after reopening the session when the reply on screen was long.
+- **A change pressed just as a reply finishes is still said.** The
+  conversation is read again once the reply has ended, so the "Model
+  changed" or "Effort changed" line always shows.
 - **No more "getServerSnapshot should be cached" warning** in the browser's
   developer tools. It came from the Emergency stop strip, which is on every
   page; nothing visible went wrong.

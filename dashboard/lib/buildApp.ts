@@ -2178,6 +2178,44 @@ export function planChecklistSteps(steps: readonly { text: string; status: PlanS
   }));
 }
 
+/** v1.481.1: `drawn` plus every notice in `saved` newer than anything in
+ *  `drawn` (by its `at`). Used when a re-read keeps what is drawn because the
+ *  saved record holds fewer events than the live pieces on screen. Stamps are
+ *  compared as times (`stampKey`: the daemon leaves the fraction out of a
+ *  whole-second stamp, and "…:07Z" sorts after "…:07.3Z" as text), and a
+ *  notice stamped AT the newest drawn time is added unless it is drawn
+ *  already (the stamps tick about once a millisecond). */
+export function withNewerNotices(drawn: CodeEvent[], saved: CodeEvent[]): CodeEvent[] {
+  let last = "";
+  const shown = new Set<string>();
+  for (const e of drawn) {
+    const at = stampKey((e as { at?: unknown }).at);
+    if (at && at > last) last = at;
+    if (e.type === "notice") shown.add(noticeKey(e));
+  }
+  const newer = saved.filter((e) => {
+    if (e.type !== "notice") return false;
+    const at = stampKey((e as { at?: unknown }).at);
+    return !!at && at >= last && !shown.has(noticeKey(e));
+  });
+  return newer.length ? [...drawn, ...newer] : drawn;
+}
+
+/** An ISO stamp in one comparable shape: its fraction padded to six digits
+ *  (a whole-second stamp has none) and a plain "Z" ending; "" when it is not
+ *  a stamp. */
+export function stampKey(at: unknown): string {
+  if (typeof at !== "string") return "";
+  const m = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|\+00:00)?$/.exec(at);
+  if (!m) return "";
+  return `${m[1]}.${(m[2] ?? "").padEnd(9, "0")}Z`;
+}
+
+function noticeKey(e: CodeEvent): string {
+  const r = e as { at?: unknown; text?: unknown };
+  return `${stampKey(r.at)}\u0000${typeof r.text === "string" ? r.text : ""}`;
+}
+
 // ── rejoin ──────────────────────────────────────────────────────────────────
 
 /**
@@ -2189,22 +2227,6 @@ export function planChecklistSteps(steps: readonly { text: string; status: PlanS
  * names the RUNNING turn (an older record, or one that names it differently)
  * the cut is made at the last `user`.
  */
-/** v1.481.1: `drawn` plus every notice in `saved` newer than anything in
- *  `drawn` (by its `at`). Used when a re-read keeps what is drawn because the
- *  saved record holds fewer events than the live pieces on screen. */
-export function withNewerNotices(drawn: CodeEvent[], saved: CodeEvent[]): CodeEvent[] {
-  let last = "";
-  for (const e of drawn) {
-    const at = (e as { at?: unknown }).at;
-    if (typeof at === "string" && at > last) last = at;
-  }
-  const newer = saved.filter((e) => {
-    const at = (e as { at?: unknown }).at;
-    return e.type === "notice" && typeof at === "string" && at > last;
-  });
-  return newer.length ? [...drawn, ...newer] : drawn;
-}
-
 export function cutForRejoin(
   events: readonly CodeEvent[],
   runningTurn: string | null = null,

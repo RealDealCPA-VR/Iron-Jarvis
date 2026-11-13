@@ -1284,6 +1284,15 @@ function SessionPane({
     [onChanged],
   );
 
+  // v1.481.1: a model or effort change asked for its line: read the
+  // conversation again as soon as no reply runs here.
+  const [lineRead, setLineRead] = useState(0);
+  useEffect(() => {
+    if (!lineRead || running) return;
+    setLineRead(0);
+    void load({ follow: false });
+  }, [lineRead, running, load]);
+
   const change = useCallback(
     async (patchIn: Record<string, unknown>) => {
       if (!session) return;
@@ -1308,10 +1317,14 @@ function SessionPane({
           setSession(next);
           onChanged(next);
           // v1.475.0: a model or effort change in a conversation leaves a
-          // line in it (the daemon writes it): read the conversation again to
-          // show it. While a reply runs the line comes with its stream.
-          if (("model" in patchIn || "effort" in patchIn) && next.toolSessionId && !running) {
-            void load({ follow: false });
+          // line in it (the daemon writes it before it answers): read the
+          // conversation again to show it. v1.481.1: read once no reply runs
+          // ON THE PAGE (`lineRead` below), never by the `running` this
+          // press saw — a reply that ended while the change was out wrote
+          // the line to the record only, and the turn's own last read may
+          // have come too early to hold it.
+          if (("model" in patchIn || "effort" in patchIn) && (next.toolSessionId || running)) {
+            setLineRead((n) => n + 1);
           }
         } else {
           void load({ follow: false });
