@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.484.0
+
+**Jarvis finds your calendar link.** With **Feature lookup** on (Settings › Models, off by default), Jarvis can now find the settings that hold a private value: the **Calendar link** and the **speech-to-text key**.
+
 ## v1.483.1
 
 **The model picker's last rough edges.** Small fixes after v1.475.0's one-chip model picker in Build › Code:
@@ -77,7 +81,3 @@
 ## v1.472.0
 
 **Long coding sessions stream smoothly.** Nothing on screen changes.
-
-## v1.471.1
-
-**Three more requests read right.** Nothing on screen changes.
