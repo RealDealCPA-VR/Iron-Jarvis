@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.488.0
+
+**Asked once, decided on the card.** **Settings changes: no second "are you sure?" in words.** When you ask Jarvis to change a setting and it's clear which value you mean, it now makes the change instead of asking "Would you like me to…?" first.
+
 ## v1.487.0
 
 **Four everyday ways of asking, understood.** **"Keep this chat just on my computer"** now turns on Local only for the chat.
@@ -77,7 +81,3 @@
 ## v1.473.0
 
 **Long coding sessions open fast and stay smooth.** A long Build › Code session now draws only its newest messages, about 120 rows.
-
-## v1.472.3
-
-**A Linux preview is attached to each release.** Nothing changes in the Windows app.

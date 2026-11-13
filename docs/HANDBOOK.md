@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.487.0 (2026-11-12).*
+holds itself to. Current as of v1.488.0 (2026-11-13).*
 
 ---
 
@@ -2041,6 +2041,19 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Asked once, decided on the card (v1.488.0)
+
+- **Settings changes: no second "are you sure?" in words.** When you ask Jarvis
+  to change a setting and it's clear which value you mean, it now makes the
+  change instead of asking "Would you like me to…?" first. A change that needs
+  your OK still shows an approval card (that's where you decide), and a
+  change that doesn't shows an Undo.
+- **With the Feature lookup check on**, a reply that ends by offering a change
+  its own tools make ("The best fit is Auto. Would you like me to set it?") is
+  asked once to make the call, so you answer on the card instead of twice.
+  Sending and deleting stay your call, and a change that needs a detail only
+  you have (an address, which of several) is still asked in words.
 
 ## Four everyday ways of asking, understood (v1.487.0)
 

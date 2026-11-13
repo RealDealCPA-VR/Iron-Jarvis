@@ -615,7 +615,9 @@ class ConfigSetTool(_ConfigChangeBase):
     TIER = "allow"
     description = (
         "Change an Iron Jarvis setting that is safe to apply at once (config_list says which "
-        "tool each setting needs). The reply shows the change with an Undo."
+        "tool each setting needs). The reply shows the change with an Undo. When the user "
+        "asked for a change and it is clear which value fits, make it: do not ask in words "
+        "whether to (they can Undo it)."
     )
 
 
@@ -624,7 +626,9 @@ class ConfigChangeTool(_ConfigChangeBase):
     TIER = "ask"
     description = (
         "Change an Iron Jarvis setting that asks the user first (config_list says which tool "
-        "each setting needs). The user approves on a card; the change has an Undo."
+        "each setting needs). The user approves on a card; the change has an Undo. When the "
+        "user asked for a change and it is clear which value fits, call this: do not ask in "
+        "words first, the card is where they decide."
     )
 
 
@@ -633,7 +637,9 @@ class ConfigChangeProtectedTool(_ConfigChangeBase):
     TIER = "ask-floor"
     description = (
         "Change a PROTECTED Iron Jarvis setting (autonomy, sandbox, self-development, tool "
-        "permissions, or turning a safety off). The user approves every time on a card."
+        "permissions, or turning a safety off). The user approves every time on a card. When "
+        "the user asked for a change and it is clear which value fits, call this: do not ask "
+        "in words first, the card is where they decide."
     )
 
 

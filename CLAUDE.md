@@ -17844,6 +17844,25 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **A change asked for is made, not asked about again** (v1.488.0).
+  `settings/tools`: config_set / config_change / config_change_protected
+  descriptions say "when the user asked for a change and it is clear which
+  value fits, call this: do not ask in words first" (the card or the Undo is
+  where they decide). `chat_turn.LOOK_FIRST_OFFER_NOTE` +
+  `offer_a_tool_makes(d, reply, armed, msgs, head)`: with the Feature lookup
+  check on, a reply ending on an offer `harness.closing_offer.offer_kind`
+  calls "work" (never send/delete, the user's call) while it holds a tool
+  that changes something and has not called it is asked once, AFTER a lookup
+  too (`look_first_wanted`); `look_first_call` sends that note and acts on a
+  call of the reply's OWN tools (`_tool_names(tools)`), each meeting its own
+  card rules. REVIEW: the gate knows the reply holds A changing tool, not
+  that it is the right one, so the note says "If one of your tools makes that
+  change" and names `find_capability` for when none does (a lookup answer is
+  acted on as before), and `remember_preference` (`LOOK_FIRST_NOT_A_CHANGE`)
+  never counts as the tool that makes an offer. Pins:
+  `tests/test_look_first_offer_v1488.py` (10 mutations, all red), real stream
+  and POST lanes.
+
 - **Four wordings chat missed** (v1.487.0, each seen live). `records_history.
   _LOCAL_ONLY_RX` takes just/only/strictly/completely/entirely/purely before
   the place ("keep this chat just on my computer" got a FALSE "it stays on your

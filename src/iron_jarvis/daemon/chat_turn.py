@@ -6544,6 +6544,70 @@ LOOK_FIRST_NOTE = (
 )
 
 
+#: v1.488.0: the check's note for a reply that ENDS BY OFFERING a change one of
+#: its own tools makes ("The best fit is auto. Would you like me to set it to
+#: auto?"). Seen live after a lookup had brought the tool: the model asked in
+#: words, and the user would have had to answer twice (in words, then on the
+#: card). Part of the Feature lookup check (its own switch, off by default).
+LOOK_FIRST_OFFER_NOTE = (
+    "(From Iron Jarvis, not from the user. Your reply above ends by asking the "
+    "user whether to make a change. If one of your tools makes that change, "
+    "call it now instead of asking in words: a change that needs the user's OK "
+    "shows them an approval card when you call the tool, and a setting changed "
+    "without one shows them an Undo, so the card or the Undo is how they "
+    "decide. If none of your tools makes it, call `find_capability` with a few "
+    "English words for it (a saved preference changes no setting). "
+    "If the change needs a detail only the user can give (an address, a "
+    "name, which of several things), or the user only asked a question, answer "
+    "with the single word KEEP and your reply stands exactly as it is. If you "
+    "call a tool, the reply above is thrown away: write the whole reply again "
+    "after.)"
+)
+
+
+def _tool_names(tools: Any) -> list[str]:
+    out: list[str] = []
+    for t in tools or ():
+        name = getattr(t, "name", None)
+        if name is None and isinstance(t, dict):
+            name = t.get("name")
+        if name:
+            out.append(str(name))
+    return out
+
+
+def offer_a_tool_makes(d: Any, reply: Any, armed: Any, msgs: Any, head: int) -> bool:
+    """Does *reply* end by offering a change (``harness.closing_offer``: the
+    offered action is work, not the user's own call like sending or
+    deleting) while the reply holds a tool that changes something and has not
+    called it yet? Never raises: cannot tell = no."""
+    try:
+        from ..capability_search import join as _cj
+        from ..harness.closing_offer import offer_kind
+
+        if offer_kind(str(reply or "")) != "work":
+            return False
+        called = {
+            str(getattr(m, "name", "") or "")
+            for m in list(msgs or ())[max(0, int(head)):]
+            if getattr(m, "role", "") == "tool"
+        }
+        registry = d.platform.registry
+        for name in {str(n) for n in (armed or ())}:
+            if name == _cj.NAME or name in called or name in _cj.NEVER_JOINED:
+                continue
+            if name in LOOK_FIRST_NOT_A_CHANGE:
+                # Review: a saved preference changes no setting (v1.482.0);
+                # it is never "the tool that makes the offered change".
+                continue
+            tool = registry.get(name)
+            if tool is not None and not _cj._reads(tool, name):
+                return True
+        return False
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def look_first_note(reply: Any, msgs: Any, head: int) -> str:
     """The check's note (v1.487.0): :data:`LOOK_FIRST_NOTE`, led by what Iron
     Jarvis's own claim reader found in the reply when it claims or promises a
@@ -6647,6 +6711,8 @@ def look_first_wanted(
     left; and in this reply the model has NOT looked and has called nothing
     but tools that only read. A reply that called a tool that changes
     something (whatever came of it: done, declined, refused) is left alone.
+    v1.488.0: a reply that DID look is asked too, but only when it ends by
+    offering a change one of its own tools makes (``offer_a_tool_makes``).
     The caller asks once per reply. Never raises: cannot tell = not asked.
     MIRROR NOTE (lock-step): both lanes ask at their final-text exit."""
     try:
@@ -6673,17 +6739,23 @@ def look_first_wanted(
         if not _look_first_has_words(_look_first_question(msgs, head)[: _ci.QUERY_CHARS]):
             return False
         registry = platform.registry
+        looked = False
         for message in list(msgs)[max(0, int(head)):]:
             if getattr(message, "role", "") != "tool":
                 continue
             name = str(getattr(message, "name", "") or "")
             if name == _cj.NAME:
-                return False
+                looked = True
+                continue
             if name in LOOK_FIRST_NOT_A_CHANGE:
                 continue
             tool = registry.get(name)
             if tool is None or not _cj._reads(tool, name):
                 return False
+        if looked:
+            # v1.488.0: a reply that looked is asked only when it ends by
+            # offering a change its own tools make.
+            return offer_a_tool_makes(d, reply, armed, msgs, head)
         return True
     except Exception:  # noqa: BLE001 — cannot tell: the reply ends as written
         return False
@@ -6711,7 +6783,9 @@ async def look_first_call(
     from end to end, and the prompt cache holds only for the same call).
     Returns ``(response, asked, usage_in, usage_out, completions)``:
     ``response`` is the model's answer ONLY when it is `find_capability`
-    calls and nothing else, else ``None`` (the reply stands: KEEP, other
+    calls and nothing else (v1.488.0: or, for a reply that ended by offering
+    a change, calls of the reply's OWN tools and nothing else), else ``None``
+    (the reply stands: KEEP, other
     words, another tool, a failure, a refusal, a timeout). ``asked`` is the
     two messages the lane adds to its transcript when it goes on (the reply
     as the model wrote it, then the note). The transcript is fitted like
@@ -6720,9 +6794,11 @@ async def look_first_call(
     from ..capability_search.join import NAME as _cap_name
     from ..providers.adapters.base import LLMMessage
 
+    own = _tool_names(tools)
+    offer = offer_a_tool_makes(d, reply, own, msgs, head)
     asked = [
         LLMMessage(role="assistant", content=str(reply or ""), raw_blocks=list(raw_blocks or [])),
-        LLMMessage(role="user", content=look_first_note(reply, msgs, head)),
+        LLMMessage(role="user", content=LOOK_FIRST_OFFER_NOTE if offer else look_first_note(reply, msgs, head)),
     ]
     started = _time.perf_counter()
     try:
@@ -6751,6 +6827,10 @@ async def look_first_call(
         used = (int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0))
         calls = list(response.tool_calls or [])
         looked = bool(calls) and all(str(getattr(c, "name", "")) == _cap_name for c in calls)
+        if offer and calls and all(str(getattr(c, "name", "")) in set(own) for c in calls):
+            # v1.488.0: the offer was made good with the reply's own tools
+            # (each call still meets its own card, grant and refusal rules).
+            looked = True
         # Names only, never a word of the reply: how often the check makes
         # the model look (the plan's Phase 5 reads this beside the join line).
         log.info("look first: %s (%.1f s)", "looked" if looked else "kept", took)
