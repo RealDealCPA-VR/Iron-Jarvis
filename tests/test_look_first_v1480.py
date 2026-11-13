@@ -39,6 +39,18 @@ pytestmark = [pytest.mark.usefixtures("no_network"), pytest.mark.timeout(300)]
 
 NAME = CT_TOOL.NAME
 CLAIM = "Got it, I'll remember that from now on."
+#: v1.487.0: the reply promises to remember with nothing saved, so Iron
+#: Jarvis says so under it (``change_claims``).
+NOTED = "\n\n_Note: No preference was changed in this reply._"
+
+
+def _is_check_note(content) -> bool:
+    """The check's note, plain or led by what Iron Jarvis found in the reply
+    (v1.487.0: the scripted reply promises "from now on", so the note now
+    leads with "No preference was changed in this reply")."""
+    tail = CT.LOOK_FIRST_NOTE[len("(From Iron Jarvis, not from the user. "):]
+    content = str(content or "")
+    return content.startswith("(From Iron Jarvis, not from the user.") and content.endswith(tail)
 
 
 class Seen(Model):
@@ -66,7 +78,7 @@ class Seen(Model):
     def asked(self) -> list[int]:
         """The calls (by index) that carried the look-first note."""
         return [i for i, t in enumerate(self.transcripts)
-                if t and t[-1] == ("user", CT.LOOK_FIRST_NOTE)]
+                if t and t[-1][0] == "user" and _is_check_note(t[-1][1])]
 
 
 @pytest.fixture()
@@ -258,19 +270,19 @@ async def test_the_checks_own_word_is_never_sent_as_the_reply(desk, word):
     app, ws = desk
     model = Seen([CLAIM, _call(1, NAME, query="zzqx unknown words"), word])
     frames, _cards, done = await _stream(app, _body(ws, "remember my zzqx"), model)
-    assert done["reply"] == CLAIM, done["reply"]
+    assert done["reply"] == CLAIM + NOTED, done["reply"]
     shown = ""
     for ev, d in frames:
         if ev == "reset":
             shown = ""
         elif ev == "token":
             shown += d.get("text", "")
-    assert shown == CLAIM, "what is on screen at the end is not the reply"
+    assert shown.startswith(CLAIM), "what is on screen at the end is not the reply"
 
     J.FOUND.clear()
     model = Seen([CLAIM, _call(1, NAME, query="zzqx unknown words"), word])
     out = await _post(app, _body(ws, "remember my zzqx"), model)
-    assert out["reply"] == CLAIM, out["reply"]
+    assert out["reply"] == CLAIM + NOTED, out["reply"]
 
 
 def test_only_the_bare_word_counts_as_keep():
@@ -443,7 +455,7 @@ async def test_the_post_lane_asks_too_and_a_found_reader_runs(desk):
     assert model.asked() == [1]
     # The later rounds carry the reply as written and the note, in order.
     assert model.transcripts[2][-4][0:2] == ("assistant", CLAIM), model.transcripts[2][-4:]
-    assert model.transcripts[2][-3] == ("user", CT.LOOK_FIRST_NOTE)
+    assert model.transcripts[2][-3][0] == "user" and _is_check_note(model.transcripts[2][-3][1])
     assert [r for r, _c in model.transcripts[2][-2:]] == ["assistant", "tool"]
     assert out["reply"].startswith("Nothing about invoices"), out["reply"]
     assert CLAIM not in out["reply"]

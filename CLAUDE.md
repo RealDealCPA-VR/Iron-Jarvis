@@ -17860,6 +17860,14 @@ does not need a bump, stop and bump it.
   a reader brought only for a writer that did not join is dropped
   (`_matched`). `test_capability_join_held_v1484` now samples `webhook_update`
   (moved on purpose). Pins: `tests/test_capability_join_reader_v1487.py`.
+  Same release: `change_claims` reads "even if/when/though" as part of a
+  promise, never a condition; `_PROMISE_STYLE` (keep things short, skip
+  bullet points) is a formatting promise and `_PROMISE_REMEMBER` ("I'll
+  remember that", "keep that in mind"; not "remember to ask") a preference
+  promise. `chat_turn.look_first_note(reply, msgs, head)` leads the check's
+  note with that finding (tools after `head` back a claim). The look-first
+  tests' scripted CLAIM now gets the note (`NOTED`, `_is_check_note`; moved on
+  purpose). Pins: `tests/test_promises_v1487.py` (7 mutations, all red).
 
 - **Chat lists the schedules; a calendar link's removal is said honestly**
   (v1.486.0). `scheduling/tools.ScheduleListTool` (`schedule_list`, allow,

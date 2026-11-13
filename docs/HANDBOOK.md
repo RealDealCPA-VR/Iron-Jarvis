@@ -2058,6 +2058,11 @@ reads; it never writes, runs commands, or starts work on its own.
   lookup on, a tool that changes a schedule, goal, workflow or kept
   preference by its name now comes with the list of them, so Jarvis finds
   the one you mean instead of asking for its name.
+- **A promise with nothing behind it is said so.** When a reply says "I'll
+  answer in English from now on", "I'll keep things short from now on" or
+  "I'll remember that" and nothing was saved, a short note under it says so
+  (it lasts only while this chat's history does). With the Feature lookup
+  check on, Jarvis is first shown that finding, so it can save it for real.
 
 ## Chat can see your schedules (v1.486.0)
 

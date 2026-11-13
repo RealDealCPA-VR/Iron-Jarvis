@@ -38,6 +38,7 @@ from iron_jarvis.daemon import chat_turn as CT
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.providers.adapters.base import LLMMessage
 from tests.test_capability_join_v1479 import _agents
+from tests.test_look_first_v1480 import NOTED, _is_check_note
 from tests.test_chat_approvals_v1187 import _asgi_post, _drive_stream
 from tests.test_script_power_lanes_v1473 import Model, _answer, _body, _call, _rows, _text_of
 
@@ -77,7 +78,7 @@ class Seen(Model):
 
     def asked(self) -> list[int]:
         return [i for i, t in enumerate(self.transcripts)
-                if t and t[-1] == ("user", CT.LOOK_FIRST_NOTE)]
+                if t and t[-1][0] == "user" and _is_check_note(t[-1][1])]
 
 
 @pytest.fixture()
@@ -138,14 +139,14 @@ async def test_the_final_answer_nudge_never_sends_the_checks_word(desk, word):
     frames, _cards, done = await _stream(app, _body(ws, "remember my zzqx"), model)
     assert model.doors == ["stream", "complete", "stream", "stream"], model.doors
     assert model.transcripts[3][-1] == ("user", CT.FINAL_ANSWER_INSTRUCTION), "the control: the nudge ran"
-    assert done["reply"] == CLAIM, done["reply"]
-    assert _on_screen(frames) == CLAIM, "what is on screen at the end is not the reply"
+    assert done["reply"] == CLAIM + NOTED, done["reply"]
+    assert _on_screen(frames).startswith(CLAIM), "what is on screen at the end is not the reply"
 
     J.FOUND.clear()
     model = Seen(list(steps))
     out = await _post(app, _body(ws, "remember my zzqx"), model)
     assert model.transcripts[3][-1] == ("user", CT.FINAL_ANSWER_INSTRUCTION), "the control: the nudge ran"
-    assert out["reply"] == CLAIM, out["reply"]
+    assert out["reply"] == CLAIM + NOTED, out["reply"]
 
 
 @pytest.mark.asyncio
@@ -390,7 +391,7 @@ async def test_stop_during_the_check_ends_the_turn_and_cancels_the_call(desk):
     assert model.doors == ["stream", "complete"], model.doors
     assert not [d for ev, d in frames if ev == "done"], "a stopped turn sent a done frame"
     assert not [d for ev, d in frames if ev == "reset"], "a stopped check took the reply back"
-    assert _on_screen(frames) == CLAIM
+    assert _on_screen(frames).startswith(CLAIM)
     assert _rows(app, NAME) == []
 
 
@@ -546,7 +547,7 @@ async def test_the_demo_model_is_never_asked_in_the_post_lane(desk):
 
     async def watched(**kw):
         last = (kw.get("messages") or [None])[-1]
-        if getattr(last, "content", "") == CT.LOOK_FIRST_NOTE:
+        if _is_check_note(getattr(last, "content", "")):
             notes.append(1)
         return await real(**kw)
 
@@ -582,13 +583,13 @@ async def test_a_check_that_does_not_answer_in_time_keeps_the_reply(desk, monkey
         _stream(app, _body(ws, "remember my zzqx"), model), timeout=30,
     )
     assert model.doors == ["stream", "complete"], model.doors
-    assert done["reply"] == CLAIM and _on_screen(frames) == CLAIM
+    assert done["reply"] == CLAIM + NOTED and _on_screen(frames).startswith(CLAIM)
     assert not [d for ev, d in frames if ev in ("reset", "error")]
 
     model = Slow([CLAIM])
     out = await asyncio.wait_for(_post(app, _body(ws, "remember my zzqx"), model), timeout=30)
     assert model.doors == ["complete", "complete"], model.doors
-    assert out["reply"] == CLAIM
+    assert out["reply"] == CLAIM + NOTED
     assert seen["cancelled"] == 2, seen
 
 
@@ -619,7 +620,7 @@ async def test_a_note_typed_during_the_check_is_never_lost(desk):
     body = _body(ws, "remember my zzqx")
     model = Steered([CLAIM, "KEEP"], app, body["turn_id"], note)
     _frames, _cards, done = await _stream(app, body, model)
-    assert done["reply"] == CLAIM
+    assert done["reply"] == CLAIM + NOTED
     assert done.get("unread_steers") == [note], done.get("unread_steers")
 
     # The check makes the model look: the note joins at the next round, after

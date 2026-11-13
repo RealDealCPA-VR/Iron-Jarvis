@@ -1266,6 +1266,18 @@ _PROMISE_FORMAT = re.compile(
     r"(?:short\s+)?(?:bullet(?:\s+points?|ed\s+lists?)?|bullets|headings|numbered\s+lists?|tables"
     r"|short\s+paragraphs|plain\s+prose|prose)\b"
 )
+#: v1.487.0: the answer's STYLE promised for good ("I'll keep things short and
+#: skip bullet points from now on"), and "I'll remember that…" with nothing
+#: kept. Seen live, each with no tool behind it.
+_PROMISE_STYLE = re.compile(
+    r"\b" + _I_WILL + r"\s+(?:now\s+|always\s+){0,2}(?:keep\s+(?:things|it|everything|my\s+(?:answers?|repl(?:y|ies)"
+    r"|responses?)|answers?|repl(?:y|ies)|responses?)\s+(?:short|brief|concise|simple)"
+    r"|(?:skip|avoid|drop|leave\s+out)\s+(?:the\s+)?bullet(?:\s+points?|s)?|stop\s+using\s+bullet(?:\s+points?|s)?)\b"
+)
+_PROMISE_REMEMBER = re.compile(
+    r"\b" + _I_WILL + r"\s+(?:always\s+)?(?:remember|keep\s+(?:that|this|it)\s+in\s+mind)\b"
+    r"(?!\s+(?:to\s+ask|what\s+you\s+said\s+in\s+this))"
+)
 _APP_NAME = r"(?:iron\s+jarvis|jarvis|the\s+(?:desktop\s+)?app|it)"
 _PROMISE_START_ON = re.compile(
     r"\b" + _APP_NAME + r"\s+(?:will\s+now\s+|now\s+|will\s+from\s+now\s+on\s+)(?:start|open|launch|run)s?\s+(?:by\s+itself\s+|"
@@ -1298,7 +1310,9 @@ def _promise_claims(sentence: str) -> list[Claim]:
     """The lasting promises one sentence makes (see :data:`_LASTING_RX`)."""
     low = sentence.lower()
     out: list[Claim] = []
-    if _PROMISE_CONDITION.search(low):
+    # v1.487.0: "even if you write in Dutch" is part of the promise, not a
+    # condition on it ("I'll respond in English from now on, even if…").
+    if _PROMISE_CONDITION.search(re.sub(r"\beven\s+(?:if|when|though)\b", " ", low)):
         # Review (v1.438.0): an OFFER or a condition ("If you want, I'll
         # always reply in German — confirm and I'll set it", "Once you
         # confirm, I will answer in Spanish from now on") promises nothing.
@@ -1307,9 +1321,12 @@ def _promise_claims(sentence: str) -> list[Claim]:
         if _PROMISE_LANGUAGE.search(low):
             out.append(Claim(verb=CHANGE, word="changed", phrase=["answer", "language"],
                              settings=["profile.language"], records=["preference"], promise=True))
-        if _PROMISE_FORMAT.search(low):
+        if _PROMISE_FORMAT.search(low) or _PROMISE_STYLE.search(low):
             out.append(Claim(verb=CHANGE, word="changed", phrase=["formatting"],
                              settings=["profile.formatting"], records=["preference"], promise=True))
+    if _PROMISE_REMEMBER.search(low) and not out:
+        out.append(Claim(verb=CHANGE, word="changed", phrase=["preference"],
+                         records=["preference"], promise=True))
     for rx, verb, word in (
         (_PROMISE_START_ON, ON, "turned on"),
         (_PROMISE_START_OFF, OFF, "turned off"),

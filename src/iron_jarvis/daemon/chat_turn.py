@@ -6544,6 +6544,36 @@ LOOK_FIRST_NOTE = (
 )
 
 
+def look_first_note(reply: Any, msgs: Any, head: int) -> str:
+    """The check's note (v1.487.0): :data:`LOOK_FIRST_NOTE`, led by what Iron
+    Jarvis's own claim reader found in the reply when it claims or promises a
+    change no tool of this reply made ("“Answer in this language” was not
+    changed in this reply…", ``change_claims.claimed_change_note``). Seen
+    live: "I'll respond in English from now on" with nothing saved, and the
+    general note answered KEEP. Never raises: cannot tell = the plain note."""
+    try:
+        from .change_claims import claimed_change_note
+
+        ran = [
+            str(getattr(m, "name", "") or "")
+            for m in list(msgs or ())[max(0, int(head)):]
+            if getattr(m, "role", "") == "tool"
+        ]
+        found = claimed_change_note(str(reply or ""), ran, ()).strip()
+        if found.startswith("_Note:"):
+            found = found[len("_Note:"):].strip().rstrip("_").strip()
+        if not found:
+            return LOOK_FIRST_NOTE
+        return LOOK_FIRST_NOTE.replace(
+            "(From Iron Jarvis, not from the user. ",
+            "(From Iron Jarvis, not from the user. Iron Jarvis read your reply "
+            f"above and found: {found} No tool call of yours made it so. ",
+            1,
+        )
+    except Exception:  # noqa: BLE001
+        return LOOK_FIRST_NOTE
+
+
 #: A saved preference is a note for the model ("from now on ...") and
 #: changes no setting (v1.482.0). In the live runs "wait till others have
 #: tried the updates" was answered with a saved preference ("I've locked that
@@ -6692,7 +6722,7 @@ async def look_first_call(
 
     asked = [
         LLMMessage(role="assistant", content=str(reply or ""), raw_blocks=list(raw_blocks or [])),
-        LLMMessage(role="user", content=LOOK_FIRST_NOTE),
+        LLMMessage(role="user", content=look_first_note(reply, msgs, head)),
     ]
     started = _time.perf_counter()
     try:
