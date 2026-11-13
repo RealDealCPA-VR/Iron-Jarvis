@@ -632,6 +632,101 @@ describe("keys (C4.8)", () => {
     expect(screen.getAllByText("then add a test")).toHaveLength(1);
   });
 
+  it("v1.481.1: a note left waiting for a line that never came does not later erase another message", async () => {
+    working("c1", { harness: "pi", mode: "own", model: "", harness_session_id: "h-1", effort: "high" }, {
+      events: [{ type: "user", at: "2026-11-12T20:00:00Z", text: "Count to thirty", turn: "turn_1" }],
+    });
+    let answer: (v: unknown) => void = () => {};
+    H.postReply["PATCH /build/app/sessions/c1"] = new Promise((res) => {
+      answer = res;
+    });
+    render(<BuildCodeView initialSession="c1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-working");
+    chooseEffort(SESSION, "low");
+    await waitFor(() => expect(H.patches).toHaveLength(1));
+    const S1 = sess("c1", { harness: "pi", mode: "own", model: "", harness_session_id: "h-1", effort: "low" });
+    H.gets["/build/app/sessions/c1"] = {
+      session: S1,
+      events: [
+        { type: "user", at: "2026-11-12T20:00:00Z", text: "Count to thirty", turn: "turn_1" },
+        { type: "done", at: "2026-11-12T20:00:05Z", stop: "completed", turn: "turn_1" },
+      ],
+      running: null,
+      pending: [],
+    };
+    await act(async () => {
+      H.release?.();
+    });
+    await waitFor(() => expect(screen.queryByTestId("code-working")).toBeNull());
+    await act(async () => {
+      answer({ session: S1, applied: { effort: "next" } });
+    });
+    expect(await screen.findByTestId("code-info")).toBeInTheDocument();
+    // turn_2: the user sends a message.
+    H.scripts = [[{ event: "user", data: { type: "user", at: "2026-11-12T20:00:10Z", text: "go on", turn: "turn_2" } }]];
+    H.hold = new Promise<void>((res) => {
+      H.release = res;
+    });
+    H.gets["/build/app/sessions/c1"] = { session: S1, events: [], running: "turn_2", pending: [] };
+    const box = screen.getByTestId("code-box");
+    fireEvent.change(box, { target: { value: "go on" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await screen.findByTestId("code-working");
+    // A note that comes straight back.
+    H.postReply["/build/app/sessions/c1/steer"] = { ok: true, id: "n2", state: "returned" };
+    fireEvent.change(box, { target: { value: "also" } });
+    fireEvent.keyDown(box, { key: "Enter", shiftKey: true });
+    await waitFor(() => expect(screen.getByTestId("code-info").textContent).toContain("did not read this note"));
+    // turn_2 ends; the saved record now holds the earlier change's line.
+    H.gets["/build/app/sessions/c1"] = {
+      session: S1,
+      events: [
+        { type: "user", at: "2026-11-12T20:00:00Z", text: "Count to thirty", turn: "turn_1" },
+        { type: "notice", at: "2026-11-12T20:00:06Z", text: "Effort changed: High → Low, from your next message.", turn: "turn_1" },
+        { type: "done", at: "2026-11-12T20:00:05Z", stop: "completed", turn: "turn_1" },
+        { type: "user", at: "2026-11-12T20:00:10Z", text: "go on", turn: "turn_2" },
+        { type: "text_done", at: "2026-11-12T20:00:11Z", text: "ok", turn: "turn_2" },
+        { type: "done", at: "2026-11-12T20:00:12Z", stop: "completed", turn: "turn_2" },
+      ],
+      running: null,
+      pending: [],
+    };
+    await act(async () => {
+      H.release?.();
+    });
+    await waitFor(() => expect(screen.queryByTestId("code-working")).toBeNull());
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    // On master this note stays (nothing clears it).
+    expect(screen.queryByTestId("code-info")?.textContent ?? "").toContain("did not read this note");
+  });
+
+  it("v1.481.1: a change line and a returned note drawn together keep the returned-note message", async () => {
+    working("p9", { harness: "pi", mode: "own", model: "", effort: "high", harness_session_id: "h-1" });
+    H.postReply["/build/app/sessions/p9/steer"] = { ok: true, id: "n1", state: "sent" };
+    H.postReply["PATCH /build/app/sessions/p9"] = {
+      session: sess("p9", { harness: "pi", mode: "own", model: "", effort: "low", harness_session_id: "h-1" }),
+      applied: { effort: "next" },
+    };
+    render(<BuildCodeView initialSession="p9" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-working");
+    const box = screen.getByTestId("code-box");
+    fireEvent.change(box, { target: { value: "also this" } });
+    fireEvent.keyDown(box, { key: "Enter", shiftKey: true });
+    await waitFor(() => expect(H.posts.some((p) => p.path.endsWith("/steer"))).toBe(true));
+    await act(async () => {});
+    chooseEffort(SESSION, "low");
+    expect(await screen.findByTestId("code-info")).toBeInTheDocument();
+    await act(async () => {
+      H.lastWatch?.onFrame?.("notice", { type: "notice", at: "2026-11-12T20:00:09Z", text: "Effort changed: High → Low, from your next message.", turn: "turn_1" });
+      H.lastWatch?.onFrame?.("steer", { type: "steer", id: "n1", state: "returned", text: "also this", turn: "turn_1" });
+    });
+    await act(async () => { await new Promise((r) => setTimeout(r, 80)); });
+    expect((screen.getByTestId("code-box") as HTMLTextAreaElement).value).toContain("also this");
+    expect(screen.queryByTestId("code-info")?.textContent ?? "").toMatch(/back|returned|box|read/i);
+  });
+
   it("Pi's effort stays open while it works (it changes live)", async () => {
     working("p1", { harness: "pi", mode: "own", model: "", effort: "high" });
     render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);

@@ -1291,14 +1291,20 @@ function SessionPane({
   // v1.481.1: a change made while a reply runs keeps the page's short note
   // only until the change's own line is drawn (it comes with the reply's
   // stream): said once, and never lost when the line does not come.
-  const [noteUntilLine, setNoteUntilLine] = useState<number | null>(null);
+  // Only THAT note is ever taken away (by its text), and the watch ends as
+  // soon as anything else is shown in its place.
+  const [noteUntilLine, setNoteUntilLine] = useState<{ lines: number; text: string } | null>(null);
   useEffect(() => {
     if (noteUntilLine === null) return;
-    if (changeLines(events) > noteUntilLine) {
+    if (info !== noteUntilLine.text) {
+      setNoteUntilLine(null);
+      return;
+    }
+    if (changeLines(events) > noteUntilLine.lines) {
       setInfo(null);
       setNoteUntilLine(null);
     }
-  }, [events, noteUntilLine]);
+  }, [events, info, noteUntilLine]);
 
   const change = useCallback(
     async (patchIn: Record<string, unknown>) => {
@@ -1316,9 +1322,13 @@ function SessionPane({
         const onlyModel = Object.keys(patchIn).every((k) => k === "model" || k === "effort");
         const saidInConversation = onlyModel && !!session.toolSessionId && !running;
         const later = appliedNextWords(raw);
-        if (later && !saidInConversation) {
+        // The line already arrived (drawn, or waiting for the next frame):
+        // nothing more to say.
+        const lineCame =
+          onlyModel && running && changeLines([...eventsNowRef.current, ...pendingRef.current]) > linesBefore;
+        if (later && !saidInConversation && !lineCame) {
           setInfo(later);
-          if (onlyModel && running) setNoteUntilLine(linesBefore);
+          if (onlyModel && running) setNoteUntilLine({ lines: linesBefore, text: later });
         }
         const keeps = keepsLastOf(raw);
         if (keeps !== null) setKeepsLast(keeps);
