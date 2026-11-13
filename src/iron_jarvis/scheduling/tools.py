@@ -20,10 +20,14 @@ class ScheduleCreateTool(Tool):
     description = (
         "Create a persistent scheduled task. Supply exactly one trigger: `cron` "
         "(a 5-field crontab string), `run_at` (an ISO-8601 datetime for a "
-        "one-time fire), or `interval_seconds` (a fixed repeat period). `kind` is "
-        "'workflow' (default — `payload` is a workflow definition) or 'event' "
-        "(`payload` carries the event to publish). Returns the "
-        "created task name and its next run time."
+        "one-time fire), or `interval_seconds` (a fixed repeat period). For work "
+        "to do on a schedule, give `task`: what to do each time, in the user's "
+        "own words (e.g. 'pull together the list of flats with rent due this "
+        "week'); it runs as an agent task at every fire, which finds the files "
+        "and details then, so they need not be asked for first. Otherwise "
+        "`kind` is 'workflow' (default — `payload` is a workflow definition) or "
+        "'event' (`payload` carries the event to publish). Returns the created "
+        "task name and its next run time."
     )
     permission_key = "schedule_create"
     # Calm UI redesign S5: a schedule made from chat has an Undo (it removes
@@ -36,7 +40,8 @@ class ScheduleCreateTool(Tool):
             "cron": {"type": "string"},
             "run_at": {"type": "string"},
             "interval_seconds": {"type": "integer", "minimum": 1},
-            "kind": {"type": "string", "enum": ["workflow", "event"]},
+            "task": {"type": "string"},
+            "kind": {"type": "string", "enum": ["task", "workflow", "event"]},
             "payload": {"type": "object"},
         },
         "required": ["name"],
@@ -56,11 +61,34 @@ class ScheduleCreateTool(Tool):
         from . import knobs as _knobs
 
         payload = args.get("payload")
-        kind = args.get("kind", "workflow")
+        # v1.483.0: a plain TASK schedule from chat (the Schedules page could
+        # always make one; this tool offered only a whole workflow definition,
+        # so "every Monday at 8, pull together the rent list" became questions
+        # instead of a schedule). The task runs as an agent task at each fire,
+        # exactly like a task schedule made on the page; no new power (a
+        # workflow can hold the same agent step).
+        task = args.get("task")
+        if task is not None and not isinstance(task, str):
+            return ToolResult(ok=False, error="task must be the work to do each time, as text")
+        task = (task or "").strip()
+        kind = args.get("kind") or ("task" if task else "workflow")
+        if kind == "task":
+            if payload is not None and not isinstance(payload, dict):
+                return ToolResult(ok=False, error="payload must be an object of schedule knobs")
+            payload = dict(payload or {})
+            if task:
+                payload["task"] = task
+            if not str(payload.get("task") or "").strip():
+                return ToolResult(ok=False, error=(
+                    "a task schedule needs `task`: what to do each time, in the user's own words"))
+        elif task:
+            return ToolResult(ok=False, error=(
+                f"`task` makes a task schedule; leave `kind` out, or set it to 'task' (not {kind!r})"))
         # THE SCRIPT KNOB IS THE USER'S (v1.299.0): a pre-run command runs on
         # the host with the shell tool's confinement, so a schedule an AGENT
-        # makes may never carry one — refused by name, before anything else,
-        # even though this tool's kinds (workflow/event) could not fire it.
+        # makes may never carry one — refused by name, before anything else
+        # (v1.483.0: a TASK schedule made here could fire it, so this refusal
+        # is what keeps it the user's).
         if isinstance(payload, dict) and payload.get("script") not in (None, {}):
             return ToolResult(ok=False, error=_knobs.SCRIPT_FROM_AGENT_REFUSAL)
         try:
@@ -83,8 +111,8 @@ class ScheduleCreateTool(Tool):
                 args.get("cron"),
                 run_at=args.get("run_at"),
                 interval_seconds=args.get("interval_seconds"),
-                kind=args.get("kind", "workflow"),
-                payload=args.get("payload"),
+                kind=kind,
+                payload=payload,
             )
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))

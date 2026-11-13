@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.483.0
+
+**Chat can schedule a task in your own words.** Ask in chat for something to happen on a schedule ("every Monday at 8, pull together the list of flats with rent due this week") and Jarvis now makes that schedule.
+
 ## v1.482.0
 
 **The lookup finds the right thing more often.** The fourth step of the feature lookup (v1.478.0 to v1.480.0).
@@ -77,7 +81,3 @@
 ## v1.471.0
 
 **Faster tool calls, better reading of requests, sturdier scripts.** Nothing on screen changes.
-
-## v1.470.2
-
-**The installer is signed.** Since v1.470.1 the Windows installer is signed as **RealDealCPA.Ai LLC**.

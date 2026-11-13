@@ -429,3 +429,14 @@ result is "no gain for that model", and the tables still serve it.
 Phase 0 is small: a test set and a script. Phases 1 to 4 are about one wave
 each of the usual shape (a builder and an independent reviewer per lane).
 Each phase is its own release.
+
+## Fixing what the strict misses show (v1.483.0)
+
+The owner chose to keep strict labels (the right tool called). Read as a
+list of tools, the remaining first-reply misses are mostly the model asking
+for details after the right tool had joined. For schedules the cause was in
+the product: `schedule_create` could only take a whole workflow definition,
+so a request like "every Monday at 8, pull together the rent list" had
+nothing simple to fill in. It now takes `task` in the user's own words.
+Live, 13 schedule requests of practice set D: 2 -> 6 offered the schedule.
+The held-out sets were not looked at for this change.

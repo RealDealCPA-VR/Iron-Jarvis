@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.482.0 (2026-11-12).*
+holds itself to. Current as of v1.483.0 (2026-11-12).*
 
 ---
 
@@ -2041,6 +2041,26 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Chat can schedule a task in your own words (v1.483.0)
+
+Ask in chat for something to happen on a schedule ("every Monday at 8, pull
+together the list of flats with rent due this week") and Jarvis now makes
+that schedule. Before, chat could only schedule a whole workflow, so a plain
+request like this turned into a list of questions instead.
+
+- **What it makes:** the same kind of schedule as **Add a scheduled task** on
+  the Schedules page. Each time it fires, an agent does the task in your
+  words. It looks for the files and details then, so they don't need to be
+  known now.
+- **You still approve it:** Jarvis shows the usual approval card before it
+  saves anything.
+- **The rules stay the same:** a schedule made from chat still can't run a
+  command before each fire, and the other schedule settings get the same
+  checks as on the page.
+- **Measured** (13 everyday schedule requests, answered by Claude Haiku, with
+  both lookup settings on): 6 now offer to make the schedule. On v1.482.0, 2
+  did.
 
 ## The lookup finds the right thing more often (v1.482.0)
 

@@ -17844,6 +17844,20 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **Chat can make a plain TASK schedule** (v1.483.0). `scheduling/tools.
+  ScheduleCreateTool` takes `task` (the work in the user's own words): kind
+  `task` (also the default when `task` is given), `payload["task"]` set, the
+  same fire as a task schedule made on the Schedules page (`POST /schedules`
+  always took it). Refused in words with nothing saved: `task` beside another
+  kind, a task schedule with no task, a task that is not text, a payload that
+  is not an object. `validate_knobs` runs as before, and
+  `SCRIPT_FROM_AGENT_REFUSAL` still refuses a pre-run script (now the thing
+  that keeps a task schedule from chat the user's own). Found in the strict
+  live misses: every schedule request asked for details, because the chat
+  tool offered only a whole workflow definition. Live (13 of practice set D,
+  Haiku, lookup + check on): 2 -> 6 offered the schedule. Pins:
+  `tests/test_schedule_task_from_chat_v1483.py` (6 mutations, all red).
+
 - **The capability index carries EVERYDAY PHRASINGS (search words only);
   the lookup names a request three ways; a saved preference no longer keeps
   the look-first check away** (v1.482.0; capability search, still off by
