@@ -6643,7 +6643,14 @@ CAPABILITY_BLOCK = (
     "What Iron Jarvis is set to, has scheduled or remembers about the user is "
     "read with a tool, not from this prompt, which shows only part of it. A "
     "folder or a file the user names you find with your file tools before "
-    "asking where it is."
+    "asking where it is.\n"
+    # Seen live: "I am not sure where the button is to switch on the reminders,
+    # could you show me how to find it" was answered with an approval card to
+    # switch them on, and "where do I find the button to change the font" with
+    # a Settings section that does not exist.
+    "When the user asks WHERE something is in Iron Jarvis or HOW to do it "
+    "themselves, tell them, from `guide_search` and not from memory; do not "
+    "make the change for them unless they ask."
 )
 
 

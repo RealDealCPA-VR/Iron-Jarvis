@@ -539,8 +539,11 @@ def test_the_note_and_the_map_say_words_alone_change_nothing(desk):
     # Bounded: these ride every turn / every check. v1.489.0 (moved on
     # purpose, 240 / 260 before): the note also says to look before asking for
     # setup details or answering about Iron Jarvis's own state, and the map
-    # says which kind of thing a request is (schedule, rule, goal, skill).
-    assert len(CT.LOOK_FIRST_NOTE.split()) < 300 and len(block.split()) < 360
+    # says which kind of thing a request is (schedule, rule, goal, skill), and
+    # (360 -> 400) that a "where is it / how do I" question is answered from
+    # the guide and never by making the change.
+    assert len(CT.LOOK_FIRST_NOTE.split()) < 300 and len(block.split()) < 400
+    assert "`guide_search`" in block and "do not make the change for them" in block
     # No dashes that read as jargon, and no retired word.
     for text in (CT.LOOK_FIRST_NOTE, block):
         assert "job" not in text.lower().split()

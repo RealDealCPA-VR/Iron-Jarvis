@@ -2073,9 +2073,32 @@ reads; it never writes, runs commands, or starts work on its own.
   watcher, a destination, a model server, a task for tonight). Before, "send
   me an overview every Friday at 16:00" could find the tools that change or
   delete a schedule and miss the one that makes it.
+- **"Take the calendar link off" now works from chat.** Jarvis could save
+  your private calendar link but not remove it: you had to go to the Rules
+  page. Now it shows an approval card, takes the link off, and leaves an Undo
+  on the reply that puts it back (unless you saved a newer link since; then
+  the Undo leaves the newer one alone and says so).
 - **"Keep at it until it's done" is a goal, not a schedule.** Jarvis is now
   told the difference: a goal is work it keeps chasing until it is finished; a
   schedule only repeats at set times.
+- **Ask where a button is, and Jarvis tells you where** (with Feature lookup
+  on). "Where do I switch on the reminders?" used to bring an approval card to
+  switch them on for you, and "where is the button to change the font" named a
+  Settings section that does not exist. Jarvis now looks the place up in its
+  own guide and tells you, and changes nothing unless you ask it to.
+- **A notes folder is added as a memory base, and a project is offered for
+  "keep everything for this together"** (with Feature lookup first on). Before,
+  "remember what is in my Shop Notes folder" could save a one-off copy of
+  today's notes instead of connecting the folder.
+- **What it measured.** On a practice set of 111 everyday requests that only a
+  tool can carry out, answered by a small model (Claude Haiku) with every
+  approval declined: v1.488.0 used the right tool for 82 (74%); this version,
+  with Feature lookup, Feature lookup check and Feature lookup first all on,
+  for 108 (97%). Runs differ by two to four requests, so read that as 94 to
+  97%. The price: the first word of a reply came about three seconds later
+  (6.5 s to 9.3 s). On 99 messages that only look like requests and on 43
+  ordinary questions, no approval card and no question card showed in either
+  version. All three settings are still off until you turn them on.
 
 ## Asked once, decided on the card (v1.488.0)
 

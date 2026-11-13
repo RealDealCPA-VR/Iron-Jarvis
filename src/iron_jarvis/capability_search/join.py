@@ -431,6 +431,10 @@ def _wanted(rows: list[dict[str, Any]]) -> list[str]:
             names = [str(row.get("tool") or ""), "config_list"]
         elif kind == "secret":
             names = [str(row.get("tool") or "")]
+            # v1.489.0: a private value chat can take off brings the tool
+            # that removes it too (the calendar link: app_disconnect).
+            if row.get("remover"):
+                names.append(str(row["remover"]))
         first = names[0] if names else ""
         if first in READER_FOR:
             names.append(READER_FOR[first])

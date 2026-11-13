@@ -103,16 +103,27 @@ def test_another_unknown_app_keeps_its_words(platform):
     assert "calendar_ics_url" not in r.error
 
 
-def test_the_line_says_where_the_link_is_removed_never_clear_the_field(platform):
+def test_the_line_says_how_the_link_is_removed_never_clear_the_field(platform, monkeypatch):
     """v1.485.1: config_secret only saves (its card refuses an empty value), so
-    the line says the calendar link is removed by hand on the Rules page."""
+    the line never says "clear the field". v1.489.0 (moved on purpose): chat
+    CAN take the calendar link off now, with app_disconnect, and the line says
+    so; with that tool set to Never run it is back to "by hand on the Rules
+    page". A private value with no remover keeps its old words."""
     entry = next(e for e in CI.build(platform).entries if e.id == "calendar_ics_url")
     line, row = CT_TOOL.entry_line(platform, entry)
+    assert 'To REMOVE the saved value, call tool app_disconnect with `app` "calendar"' in line
+    assert "cannot be removed from chat" not in line and "Undo puts it back" in line
+    assert row["href"] == "/reflex" and row["remover"] == "app_disconnect"
+    # The lookup that finds the link brings the tool that removes it too.
+    assert CJ._wanted([row]) == ["config_secret", "app_disconnect"]
+    real = CT_TOOL._mode
+    monkeypatch.setattr(CT_TOOL, "_mode", lambda p, t: "deny" if t == "app_disconnect" else real(p, t))
+    line, row = CT_TOOL.entry_line(platform, entry)
     assert "cannot be removed from chat" in line and "Rules page (/reflex)" in line
-    assert row["href"] == "/reflex"
+    assert "remover" not in row
     voice = next(e for e in CI.build(platform).entries if e.id == "voice_transcribe_key")
-    vline, _ = CT_TOOL.entry_line(platform, voice)
-    assert "cannot be removed from chat" in vline and "in Settings" in vline
+    vline, vrow = CT_TOOL.entry_line(platform, voice)
+    assert "cannot be removed from chat" in vline and "in Settings" in vline and "remover" not in vrow
 
 
 def test_config_secret_says_it_only_saves():

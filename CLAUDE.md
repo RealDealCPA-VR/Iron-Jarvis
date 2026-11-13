@@ -17844,6 +17844,163 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **A missing detail is asked on a CARD; a setting is PICKED on a card; Iron
+  Jarvis can look a message up itself BESIDE the reply** (v1.489.0; the
+  owner's /goal: the strict right-tool rate on practice set D to 95% "without
+  any regressions and under the same strict rules". MEASURED live, Claude Haiku on the
+  TSI account, seeded pretend homes, cards declined, side by side, 111 strict
+  rows of practice set D: v1.488.0 82 (74%) vs v1.489.0 with all three
+  switches on 108 (97.3%), gained 26, lost 0; the runs before the last three
+  wording fixes read 103, 102, 104, 104, and run-to-run noise is about ±2-4
+  rows, so read it as 94-97%. First word median 6.5 s -> 9.3 s, whole reply
+  8.9 s -> 10.6 s, 18 question cards. NO REGRESSION on the two sets that
+  must change nothing (final code, same daemons): 99 look-alike messages 0
+  approval cards and 0 question cards in both versions, lookups 7 -> 3,
+  replies taken back 5 -> 0, first word 2.8 -> 4.3 s, whole reply 7.9 -> 6.7 s;
+  43 ordinary questions no tool in either, first word 2.0 -> 3.4 s, whole
+  reply 5.9 -> 5.4 s.)
+  - **DETAIL CARDS (`tools/details.py`).** `Tool.user_details` {argument:
+    {title, what, description, enum?, enumNames?}}, `user_details_lead`,
+    `user_details_note` (the tool's own words in its spec instead of
+    `spec_sentence`), `missing_details(args, ctx)` (override when what is
+    needed depends on the other arguments; never raises or blocks long).
+    `Tool.spec()` → `relaxed_spec`: the details leave `required` in what the
+    model is SHOWN (deep copy; the tool's own `input_schema` is untouched and
+    the registry still checks it). STREAM LANE ONLY, plain chat, and only when
+    the body says `mcp_cards: true` (the chat page): before
+    `spend_checks_for`, `details.fill_missing` shows ONE question card per
+    call through the app-question channel (`_ti.elicit(call_id, "Iron
+    Jarvis", params)`, frames through `_with_side`; no clock) and writes an
+    accepted answer INTO `call.arguments`, so the approval card, the spend
+    check, Local only and the ledger see the WHOLE call. Decline = the
+    `DECLINED` result and no approval card; a cut-off card = `NOT_ASKED`; a
+    call the permission table denies asks nothing. Where no card can show
+    (POST lane, Build pane chat, sidebar, agent runs) the registry's
+    `_argument_shape_error` answers `details.ask_in_words`. NEVER A SECRET
+    (pinned): a key or password still goes on the secure card. Tools:
+    `model_server_add` (address), `memory_base_add` (folder or database, by
+    kind), `channel_connect` (by type, `_CHANNEL_FIELDS`), `night_task_add` /
+    `build_defaults_set` / `build_team_set` (folder:
+    `records_build.folder_to_ask`, asked only when no full location was given
+    and the chat's project has no folder), `mcp_server_add` (config),
+    `web_service_add` (address), `sentinel_add` (path: missing, or not a full
+    location; a network spelling is left to the tool's own refusal).
+  - **PICK CARDS (`settings/tools._ConfigChangeBase`).** The three settings
+    change tools may be called with the key and NO value "when it is not
+    clear which value the user wants" (`user_details_note`; a clear value is
+    still just set, the v1.488.0 rule). `missing_details` asks only for a row
+    with fixed choices (`d.options`, ≥ 2) — the card's choices are the
+    options' own labels — and for `default_model`: the models of the catalog's
+    KEPT answer (`_model_rows`: available, never the demo model, each once, ≤
+    `MODEL_CHOICES_MAX`), value `provider::model` (`PICKED_SEP`), named "Sonnet
+    5.5 (Claude Code)". `_writes(key, value)` is what ONE call writes: a
+    picked model on ANOTHER service writes `default_provider` too, the
+    strictest tier of the rows decides (so it needs `config_change` and its
+    card), the Undo copy holds both rows, and the answer says "Also changed
+    …". The wrong-tier refusal names the key and value (the model's own call
+    held none). Any other setting called without a value shows no card
+    ("missing required: value"). `join._asks_itself` says the settings tools'
+    note ONCE, in their own words.
+  - **FEATURE LOOKUP FIRST (`capability_search/route.py`,
+    `Config.capability_route`, schema row "Feature lookup first", Models,
+    allow, default OFF; needs Feature lookup on).** `route.wanted`: plain
+    chat, full trust, Auto tools on, a user message of ≥ `MIN_WORDS` 3 words.
+    ONE `router.complete(tools=[], pin=True)` on the turn's own provider and
+    model, shown `ROUTE_SYSTEM` + the catalog (`catalog()`: one `id: title`
+    line per joinable tool, setting, private value, page step and "not
+    offered" line; ~290 lines), answers a JSON list of ≤ `MAX_PICKS` 4 ids
+    (`parse_ids`: only ids from the list; anything else = nothing); bounded
+    `ROUTE_TIMEOUT_S` 25; the demo model is never asked. It runs BESIDE the
+    reply (`chat_turn.RouteFirst`, started with the turn's other preparation,
+    cancelled with the turn) and its answer is used EXACTLY ONCE, at the
+    first of three places: (1) before the first round if it is in within
+    `HEAD_START_S` 1.5 s → the picks join and the system prompt gains "#
+    Looked up for this request" (before the planner); (2) at a tool round's
+    end (`note_route_late`) → a note of Iron Jarvis's OWN, a user-role message
+    after the round's tool results starting `join.OWN_NOTE_LEAD` — NEVER
+    appended to a tool's result: seen live, the same words on a file search's
+    fenced output were read as text from the files and ignored ("that came
+    from the search output, not from you"); the join's own note rides that
+    message (`join._say`); (3) when the reply ends on words
+    (`route_first_at_end`): wait for it, join, and ask the model ONCE with
+    `REASK_NOTE` through `look_first_call(note=)` (KEEP leaves the reply as
+    written). The picks go through `join.join_found` — EVERY v1.479.0 rule
+    holds: a change or anything reaching outside joins ask-first with the
+    forced once-only `looked_up` card, nothing joins in low trust, the POST
+    lane joins no changer, bounds per lookup. Billed to the turn's tally once
+    (`RouteFirst.bill`). MIRROR NOTE: both lanes call the same five functions
+    (`start_route_first`, `join_route_first`, `note_route_late`,
+    `route_first_at_end`, `look_first_wanted(routed=, for_route=)`). The
+    router prompt was written against the practice set (allowed: it is the
+    practice set, never a held-out one).
+  - **MAKERS (`join.MAKER_FOR`).** A tool that changes or lists a kind of
+    record brings that record's maker right after it, taking none of the
+    lookup's places (schedule, destination, goal, night task, model server,
+    rule, watcher, webhook, persona): the words for changing a schedule and
+    for making one are the same words, and the lookup often ranked the
+    changers first. A maker is a changer like any other (forced card).
+  - **THE CALENDAR LINK COMES OFF FROM CHAT.** `app_disconnect` with `app`
+    naming the calendar (`records_apps.names_calendar`; only when no real app
+    resolves) → `CredentialStore.remove("calendar_ics_url")`: an encrypted
+    copy under `__undo__<id>` FIRST (no copy = nothing removed), the vault row
+    deleted, the same `secret_restore` ledger row a save writes (names only,
+    `removed: true`). The Undo puts it back and REFUSES (409, in words) when
+    a newer link was saved since (`routes/undo` catches `CredentialError`).
+    No card when no link is saved (`spend_check` → nothing changes). Words:
+    `_CALENDAR_OFF` arms the tool ("take the calendar link off", "disconnect
+    my Google calendar"; never a thing ON a calendar). The lookup's line for
+    the link names the remover (`index.SECRET_REMOVER`) and the remover joins
+    with the secure card's tool (`join._wanted`); `remove` refuses every
+    family that has its own remove door (connection, channel, app, …).
+  - `goal_add`'s description says what tells a goal from a schedule ("kept
+    at until it is done"). `project_create`'s leads with what a project IS.
+  - **WHERE / HOW QUESTIONS (`chat_turn.CAPABILITY_BLOCK`, last sentence).**
+    "When the user asks WHERE something is in Iron Jarvis or HOW to do it
+    themselves, tell them, from `guide_search` and not from memory; do not
+    make the change for them unless they ask." Seen live: "where is the button
+    to switch on the reminders, show me how to find it" got an approval card
+    to switch them on, and "where do I find the button to change the font"
+    was answered "Settings → Device" (no such section; the guide says
+    Appearance). The block's word bound moved 360 → 400 on purpose
+    (`test_look_first_v1480`).
+  - **THE ROUTER'S KINDS (`route.ROUTE_SYSTEM`).** Its one sentence of "what
+    kind of thing is this" also says: a folder of notes (or a Notion) to keep
+    using as memory is a memory base and not a single saved note (it had
+    routed "remember what is in my Shop Notes folder" to `ltm_append`); one
+    place that keeps everything for a piece of work together is a project; a
+    file in Downloads is a file like any other. The prompt is put together
+    with `str.format`: one `{list}` field, no other brace (pinned).
+  - **THE TEST INSTALL IS A PRETEND HOME NOW.** The scratch daemons used to
+    tell the model the REAL home folder, which they rightly may not read, so
+    every "the folder on my desktop" request failed in both versions. Each
+    daemon now gets `USERPROFILE`/`HOME` = `C:\ijb\live-homes\<port>\Sam`
+    (seeded with Desktop, Downloads, the folders the requests name, valid
+    PDFs) and `TEMP` beside it: a path under the real user's temp folder
+    made the model distrust the home and guess `C:\Users\<name>\Desktop`.
+    Both versions are always measured on the same setup, side by side.
+  - **OPEN:** the two calendar rows of the practice set call the secure
+    card (`config_secret`) where the label says `app_connect` (the v1.484.0
+    choice: Iron Jarvis has no calendar app); a where-is question is sometimes
+    answered from the lookup's own line without the guide; the routing call
+    adds about 2-3 s to the first word of every reply and one model call per
+    message (why it has its own switch, off by default); a first-round
+    workflow-draft exit is not held for the routing result; only the calendar
+    link is removable from chat; ONE model measured (Haiku), no local model;
+    the held-out sets were not run; the question card was not looked at in
+    the packaged app; "make a folder" has no tool of its own (the model uses
+    a command or a project).
+  - **Pins:** `tests/test_tool_details_v1489.py`,
+    `tests/test_setting_pick_card_v1489.py`,
+    `tests/test_watch_folder_card_v1489.py`,
+    `tests/test_route_first_v1489.py`,
+    `tests/test_capability_join_maker_v1489.py`,
+    `tests/test_calendar_link_off_v1489.py` (mutations: details 19, route 24
+    with one redundant-guard survivor, pick cards 17, watcher 4, calendar and
+    the late note 20; all others red); moved on purpose:
+    `test_calendar_link_lookup_v1484` (the line names the remover),
+    `test_capability_join_reader_v1487`, `test_capability_join_held_v1484`,
+    `test_capability_join_v1479`, `test_look_first_v1480`.
+
 - **A change asked for is made, not asked about again** (v1.488.0).
   `settings/tools`: config_set / config_change / config_change_protected
   descriptions say "when the user asked for a change and it is clear which

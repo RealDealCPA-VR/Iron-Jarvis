@@ -740,6 +740,19 @@ class AppSwitchTool(R._RecordTool):
 
 # --- app_disconnect --------------------------------------------------------
 
+#: v1.489.0: the calendar is not an app (Iron Jarvis reads one by a saved
+#: private link, the secure card's ``calendar_ics_url``), but "disconnect my
+#: calendar" / "take the calendar link off" is how a person asks for the link
+#: to go. Before this, chat could only save the link, never remove it.
+CALENDAR_SECRET = "calendar_ics_url"
+
+
+def names_calendar(ref: str) -> bool:
+    """Does *ref* (app_disconnect's ``app``) name the calendar link?"""
+    low = str(ref or "").strip().lower()
+    return "calendar" in low or low in ("ical", "ics", "agenda")
+
+
 
 class AppDisconnectTool(_RemovalTool):
     name = "app_disconnect"
@@ -747,7 +760,9 @@ class AppDisconnectTool(_RemovalTool):
     description = (
         "Disconnect an app the user added (\"disconnect Notion\"): `app` is its name. Its tools "
         "and saved keys go; the Undo on the reply brings it back with its keys. To pause an app "
-        "and keep it, use app_switch instead. The user approves on a card."
+        "and keep it, use app_switch instead. The user approves on a card. It also takes the "
+        "saved calendar link off (\"take the calendar link off\", \"stop looking at my "
+        "calendar\"): `app` \"calendar\"; the Undo puts the link back."
     )
     input_schema = {"type": "object", "properties": {"app": {"type": "string"}}, "required": ["app"]}
 
@@ -757,16 +772,65 @@ class AppDisconnectTool(_RemovalTool):
     def _resolve(self, args: dict[str, Any]) -> str:
         return resolve_app(self.platform, self._target(args))[0]
 
+    def _calendar_saved(self) -> bool:
+        """Is a calendar link saved? Blocking (one vault read); never raises."""
+        try:
+            return bool(self.platform.secrets.get(CALENDAR_SECRET))
+        except Exception:  # noqa: BLE001 — unsure: the ordinary card decides
+            return True
+
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
         try:
             stored, _d, _c = await asyncio.to_thread(resolve_app, self.platform, self._target(args))
         except Exception:  # noqa: BLE001
             return None
+        if not stored and names_calendar(self._target(args)):
+            # The calendar link: the ordinary card while one is saved; with
+            # none saved the call changes nothing, so it shows no card.
+            return None if await asyncio.to_thread(self._calendar_saved) else _NOTHING
         return None if stored else _NOTHING
+
+    async def _calendar_link_off(self) -> ToolResult:
+        """v1.489.0: take the saved calendar link off, with an Undo (the
+        secure card's own store keeps an encrypted copy and the same
+        ``secret_restore`` ledger row a save writes; names only)."""
+        from .credentials import CredentialError, CredentialStore
+
+        store = CredentialStore(SimpleNamespace(platform=self.platform))
+        try:
+            out = await asyncio.to_thread(store.remove, CALENDAR_SECRET, actor="chat")
+        except CredentialError as exc:
+            return ToolResult(ok=False, error=str(exc))
+        except Exception as exc:  # noqa: BLE001 — names only
+            return ToolResult(ok=False, error=f"The calendar link could not be taken off ({type(exc).__name__}).")
+        if out.get("status") != "removed":
+            return ToolResult(
+                ok=True,
+                output="No calendar link is saved, so there was nothing to take off. Iron Jarvis is not reading a calendar.",
+            )
+        return ToolResult(
+            ok=True,
+            output=(
+                "Took the saved calendar link off: Iron Jarvis no longer reads that calendar. "
+                "The Undo on the reply puts the link back."
+            ),
+            data={
+                "record_change": {
+                    "title": "Calendar link removed",
+                    "key": f"secret.{CALENDAR_SECRET}",
+                    "label": "Calendar link",
+                    "old": "saved",
+                    "new": None,
+                    "change_id": out.get("change_id") or "",
+                }
+            },
+        )
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         ref = self._target(args)
         stored, display, conn = await asyncio.to_thread(resolve_app, self.platform, ref)
+        if not stored and names_calendar(ref):
+            return await self._calendar_link_off()
         if not stored:
             return ToolResult(ok=False, error=_not_switchable(conn) or await asyncio.to_thread(_no_such_app, self.platform, ref))
         plan = self._plan_for(stored)
@@ -1197,6 +1261,20 @@ _DISCONNECT = re.compile(
     r"\b(?:disconnect|uninstall|unlink|unhook|remove|delete|drop|forget|get\s+rid\s+of)\s+" + _THING + _AFTER,
     re.IGNORECASE,
 )
+#: v1.489.0: "take the calendar link off", "disconnect my Google calendar",
+#: "remove the calendar feed". The calendar itself (optionally its link),
+#: never a thing ON a calendar ("remove the calendar invite", "delete the
+#: calendar event for Friday": the next word is a noun, so `_AFTER` fails).
+_CALENDAR_WORDS = (
+    r"(?:(?:google|outlook|icloud|apple|ical|ics|online|internet)\s+)?calendar"
+    r"(?:\s+(?:link|feed|connection|address|url))?"
+)
+_CALENDAR_OFF = re.compile(
+    r"\b(?:disconnect|unlink|unhook|remove|delete|drop|forget|get\s+rid\s+of)\s+"
+    + _DET + r"?" + _CALENDAR_WORDS + _AFTER
+    + r"|\btake\s+" + _DET + r"?" + _CALENDAR_WORDS + r"\s+(?:off|out|away|down)" + _AFTER,
+    re.IGNORECASE,
+)
 #: The other programs whose servers can be brought over.
 _OTHER_PROGRAM = (
     r"(?:claude\s+desktop|claude\s+code|codex|cursor|vs\s?code|visual\s+studio\s+code|windsurf"
@@ -1315,7 +1393,7 @@ def _apps_tools_for(t: str) -> tuple[str, ...]:
     try:
         if _SWITCH.search(t):
             out.append("app_switch")
-        if _DISCONNECT.search(t):
+        if _DISCONNECT.search(t) or _CALENDAR_OFF.search(t):
             out.append("app_disconnect")
         if _IMPORT_NAMED.search(t) or any(_import_span_ok(m.group(1)) for m in _IMPORT_FROM.finditer(t)):
             out.append("app_import")

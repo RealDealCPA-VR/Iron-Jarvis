@@ -214,6 +214,13 @@ def _setting_entries(_platform: Any = None) -> list[Capability]:
 SECRET_REMOVED_AT = {
     "calendar_ics_url": ("the Rules page", "/reflex"),
 }
+#: v1.489.0: a private value chat CAN take off, the tool that does it and how
+#: to call it. The calendar link: ``app_disconnect`` with app "calendar" (an
+#: approval card, and an Undo that puts the link back). The lookup's line says
+#: so and the tool joins with the secure card's (``join._wanted``).
+SECRET_REMOVER = {
+    "calendar_ics_url": ("app_disconnect", 'with `app` "calendar"'),
+}
 
 
 def _secret_entries(_platform: Any = None) -> list[Capability]:

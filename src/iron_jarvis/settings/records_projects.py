@@ -475,7 +475,9 @@ class _ProjectTool(R._RecordTool):  # noqa: SLF001 — the records module's own 
 class ProjectCreateTool(_ProjectTool):
     name = "project_create"
     description = (
-        "Make a new project (the Projects page's New project): `name`, optionally the "
+        "Make a new project: the one place in Iron Jarvis that keeps everything for a piece "
+        "of work, an event or a client together (its chats, tasks and files). It is the "
+        "Projects page's New project: `name`, optionally the "
         "`folder` its files live in on this PC (a full path that already exists, such as "
         "D:\\Clients\\Johnson — nothing is created or moved there) and a short `description`. "
         "The first project made becomes the focused one. The user approves on a card; Undo "

@@ -224,13 +224,20 @@ async def perform_undo(d, action_id: str) -> dict[str, Any]:
         # Calm UI redesign S4: a credential set from a chat card — put the
         # backed-up value back (or remove a new one). Names only, never a
         # value, in the result.
-        from ...settings.credentials import CredentialStore
+        from ...settings.credentials import CredentialError, CredentialStore
 
         try:
             _sec = json.loads(desc.get("pre_inline") or "{}")
         except (TypeError, ValueError):
             _sec = {}
-        result_output = await asyncio.to_thread(CredentialStore(d).restore, _sec if isinstance(_sec, dict) else {})
+        try:
+            result_output = await asyncio.to_thread(
+                CredentialStore(d).restore, _sec if isinstance(_sec, dict) else {}
+            )
+        except CredentialError as exc:
+            # v1.489.0: an Undo that would write over a newer value refuses
+            # in words (the Wave 3 Undo rule), never a 500.
+            raise HTTPException(status_code=409, detail=str(exc))
     elif journal_kind == "record_restore":
         # Calm UI redesign S5: a schedule / workflow / channel / app
         # changed from chat — put the snapshot back (a created record is

@@ -614,3 +614,21 @@ async def test_a_reply_that_looked_for_itself_is_still_asked_with_what_iron_jarv
     assert len(model.asked_with) == 1, "what Iron Jarvis found was not put to the reply"
     assert [c["tool"] for c in cards] == ["model_server_add"]
     assert done["reply"].startswith("Not added.")
+
+
+def test_the_routing_words_say_which_kind_of_thing_a_request_is():
+    """Each seen live on the practice set: "remember what is in my Shop Notes
+    folder" was routed to a single saved note (never the memory base), and a
+    file in Downloads to the browser's download features."""
+    text = RT.ROUTE_SYSTEM
+    for words in (
+        "is a memory base and not a single saved note",
+        "together is a project",
+        "where a button is or how the app works is the guide",
+        "a file in the user's Downloads folder is a file like any other",
+        "is a schedule",
+        "is a goal",
+    ):
+        assert words in " ".join(text.split()), words
+    # The list is put in with str.format: exactly one field, and no stray brace.
+    assert text.count("{list}") == 1 and text.replace("{list}", "").count("{") == 0

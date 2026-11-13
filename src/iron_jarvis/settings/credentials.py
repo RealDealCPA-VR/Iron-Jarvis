@@ -258,6 +258,34 @@ class CredentialStore:
             out.update(self._app_outcome(arg))
         return out
 
+    def remove(self, name: str, *, actor: str = "chat") -> dict[str, Any]:
+        """v1.489.0: take a saved private value OFF (the calendar link), with
+        an Undo. The value is first copied, encrypted, under an ``__undo__``
+        name (what a replaced value's Undo keeps), the vault row is deleted,
+        and the same ``secret_restore`` ledger row a save writes is written
+        (names only), so the existing Undo puts it back. Only for a plain
+        vault secret: a provider's key, a destination's token and an app's key
+        each have their own remove door. ``status`` is "removed" or "absent"
+        (nothing was saved; nothing written). Blocking."""
+        if name.startswith(("connection.", "channel.", "app.", "tool_server.", "web_service.", "model_server.")):
+            raise CredentialError("That one is removed with its own tool, not here.")
+        sdef, _arg, vault = resolve_secret(name)
+        secrets = self.platform.secrets
+        with self._lock:
+            prior = secrets.get(vault)
+            if not prior:
+                return {"secret": name, "label": sdef.label, "status": "absent", "action_id": "", "change_id": ""}
+            change_id = new_id("sec")
+            backup = f"{BACKUP_PREFIX}{change_id}"
+            secrets.set(backup, prior, kind="password")
+            if secrets.get(backup) != prior:
+                raise CredentialError("A copy for the Undo could not be kept, so nothing was removed.")
+            secrets.delete(vault)
+            action_id = self._journal(
+                name, vault, backup, True, "removed", actor, change_id, extra={"removed": True}
+            )
+        return {"secret": name, "label": sdef.label, "status": "removed", "action_id": action_id, "change_id": change_id}
+
     def _check_key(self, provider: str, value: str) -> dict[str, Any] | None:
         """The connect door's own pre-save check (``routes.connections.
         check_key_first``): the Test route's verdict for a candidate key, or
@@ -420,6 +448,13 @@ class CredentialStore:
                 prior = secrets.get(backup)
                 if prior is None:
                     return f"undo: the earlier value of {name} is no longer kept"
+                if desc.get("removed") and secrets.get(vault):
+                    # v1.489.0: the value was REMOVED and a new one was saved
+                    # since: the Undo never writes over the newer one (the
+                    # undo route answers these words as a 409).
+                    raise CredentialError(
+                        "A newer value was saved since this one was removed, so the Undo left it as it is."
+                    )
                 if name.startswith("connection."):
                     self.platform.connections.set_api_key(name.split(".", 1)[1], prior)
                 else:
@@ -502,7 +537,8 @@ class ConfigSecretTool(Tool):
         "provider API key, a Telegram bot token), call this with the credential's name from "
         "config_list. It shows the user a secure card to paste it into. NEVER ask the user to "
         "type a secret into the chat, and never repeat one. It only SAVES a value: it cannot "
-        "clear or remove one (an empty value is refused)."
+        "clear or remove one (an empty value is refused). To take the saved calendar link off, "
+        "call app_disconnect with app \"calendar\"."
     )
     input_schema = {  # v1.341.0: was `parameters` (never read by Tool.spec()) — see settings/tools.py
         "type": "object",

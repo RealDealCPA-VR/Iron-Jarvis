@@ -178,11 +178,21 @@ def entry_line(platform: Any, entry: _index.Capability) -> tuple[str, dict[str, 
             return (f"{head}: the user has set tool {entry.tool} to Never run, so it is "
                     "set only by hand, in Settings."), row
         removed = _index.SECRET_REMOVED_AT.get(entry.id)
-        where = (
-            f" It cannot be removed from chat: the user removes it by hand on {removed[0]} "
-            f"({removed[1]})." if removed else
-            " It cannot be removed from chat: the user removes it by hand in Settings."
-        )
+        remover = _index.SECRET_REMOVER.get(entry.id)
+        if remover and _mode(platform, remover[0]) != "deny":
+            # v1.489.0: chat can take this one off (the calendar link).
+            where = (
+                f" To REMOVE the saved value, call tool {remover[0]} {remover[1]}: the user "
+                "approves on a card and an Undo puts it back."
+            )
+            row.update(remover=remover[0])
+        elif removed:
+            where = (
+                f" It cannot be removed from chat: the user removes it by hand on {removed[0]} "
+                f"({removed[1]})."
+            )
+        else:
+            where = " It cannot be removed from chat: the user removes it by hand in Settings."
         if removed:
             row.update(href=removed[1])
         return (
