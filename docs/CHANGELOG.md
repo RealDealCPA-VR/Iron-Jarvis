@@ -2,9 +2,13 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
-## v1.480.1
+## v1.481.1
 
 **Older Build › Code sessions say what really finished.** Since v1.477.2, a new grey line in Build › Code says what ended: a helper, a command in the background, or nothing at all for an ordinary command, whose own step already shows how it ended.
+
+## v1.481.0
+
+**A task's required files are checked before the reply ends.** When you give Jarvis a task in a chat that has a working folder, and your message lists the files the task must produce (a "Deliverables" or "Success criteria" list, two or more files to write, or a rule such as "create files only in `OUTPUT/`"), Jarvis now checks the work itself instead of trusting the model's last words.
 
 ## v1.480.0
 
@@ -77,7 +81,3 @@
 ## v1.470.1
 
 **The installer can be signed.** The Windows installer can now be signed as **RealDealCPA.Ai LLC**, through Microsoft Artifact Signing.
-
-## v1.470.0
-
-**Scripts that call tools, and skills made from chat.** A **skill** and a **workflow** are two different things:

@@ -45,6 +45,8 @@ import re as _re
 import threading as _threading
 import time as _time
 
+from ..deliverables.turn import TurnDeliverables
+from ..deliverables.turn import step_note as deliverables_step_note
 from fastapi import HTTPException
 from pathlib import Path
 from types import SimpleNamespace
@@ -11237,15 +11239,29 @@ async def run_chat_turn(
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py — edit both or
     # neither.
     _ws_resolved: "tuple[Path, bool] | None" = None
+    # THE TASK'S DELIVERABLES (v1.481.0, ``deliverables``): the required files
+    # and write rules the user's message states, read off the loop. None =
+    # nothing changes. MIRROR NOTE (lock-step): routes/chat.py's stream lane.
+    _deliv: "TurnDeliverables | None" = None
     if _prep.has("workspace"):
         # Started with the other prep steps above (v1.332.0). Resolution
         # MKDIRs a folder the user picked; that can fail, and None
         # (`_none_on_error`) renders the honest "not accessible" wording
         # rather than a grounding claim tools cannot back.
         _ws_resolved = await _prep.take("workspace")
+        if _harness is None and not text_only_pick:
+            _deliv = await TurnDeliverables.start(body.messages, _ws_resolved)
+            if _deliv is not None:
+                # The user's paths mean the TASK folder ("`INPUT/`" while the
+                # chat is in INPUT): the tools work there.
+                _ws_resolved = _deliv.resolved(_ws_resolved)
         _ws_text = _workspace_grounding_block(body.workspace_dir, _ws_resolved)
         system += _ws_text
         _ctx_pieces.setdefault("project", []).append(_ws_text)
+        if _deliv is not None:
+            _dv_text = _deliv.prompt()
+            system += _dv_text
+            _ctx_pieces.setdefault("project", []).append(_dv_text)
 
     # IJ HARNESS (v1.366.0): the folder's own instruction files (when the
     # grounding above did not already carry them) and the component tree, at
@@ -11481,6 +11497,8 @@ async def run_chat_turn(
             # door refuses in plain words here (MIRROR NOTE: the stream lane
             # registers a resolver for its turn instead, routes/chat.py).
             cannot_ask=True,
+            # v1.481.0: the task's write rules (lock-step: routes/chat.py).
+            task_scope=(_deliv.scope if _deliv is not None else None),
             # Redesign S3 — lock-step: per-device settings land on this device.
             device_id=str(getattr(body, "device_id", "") or ""),
             # v1.346.0 — lock-step: the SAVED chat this turn belongs to, so a
@@ -11795,6 +11813,12 @@ async def run_chat_turn(
                 # complete calls' results (lock-step: the stream lane).
                 msgs.append(LLMMessage(role="user", content=_cut_pending))
                 _cut_pending = ""
+            # v1.481.0: ONCE, with a few steps left, what the task still lacks
+            # on disk. MIRROR NOTE (lock-step): routes/chat.py.
+            if _deliv is not None:
+                _dv_left = await _deliv.reserve_note(_round, _rounds)
+                if _dv_left:
+                    msgs.append(LLMMessage(role="user", content=_dv_left))
             # THE CODING-SESSION TEAM (v1.403.0): no worker could take a piece
             # — the lead's coding tools for the rest of this reply, before the
             # model is asked again. MIRROR NOTE (lock-step): the stream lane.
@@ -12043,6 +12067,21 @@ async def run_chat_turn(
                 # The model looked, then answered only "KEEP": the reply it
                 # had written before the check is the one that is sent.
                 route.response.text = _look_draft
+            # THE DELIVERABLES CHECK (v1.481.0): the model ends on words while
+            # a required file is missing, empty or broken on disk: ONCE, the
+            # check goes to the model and the loop goes on. MIRROR NOTE
+            # (lock-step): routes/chat.py's stream loop, same seam.
+            if not calls and _deliv is not None and armed:
+                _dv_end = await _deliv.end_note(_round, _rounds)
+                if _dv_end:
+                    _dv_said = route.response.text or ""
+                    if _dv_said.strip():
+                        msgs.append(LLMMessage(
+                            role="assistant", content=_dv_said,
+                            raw_blocks=list(getattr(route.response, "raw_blocks", None) or []),
+                        ))
+                    msgs.append(LLMMessage(role="user", content=_dv_end))
+                    continue
             if not calls or not armed:
                 break
             if _round == _rounds - 1 and _office:
@@ -12415,6 +12454,8 @@ async def run_chat_turn(
                         _label = refusal_label(result.error or "")
                         if _label == "permission denied":
                             denied_tools.append(tc.name)
+                            if _deliv is not None:
+                                _deliv.declined = True  # v1.481.0 (lock-step)
                         if _label:
                             refused_tools.append((tc.name, _label))
                         else:
@@ -12569,6 +12610,16 @@ async def run_chat_turn(
                                 )
                             continue
                         _finish.observe(tc, result, refused=_fin_refused)
+                    # v1.481.0: a program that answered ok but PRINTED an
+                    # error (a traceback, "No module named …") is a failed
+                    # step: the model is told in the call's own result, and a
+                    # scoped turn keeps it for the note under the reply.
+                    # MIRROR NOTE (lock-step): routes/chat.py.
+                    _dv_step = deliverables_step_note(tc.name, result)
+                    if _dv_step:
+                        content = str(content) + _dv_step
+                    if _deliv is not None:
+                        _deliv.observe(tc.name, tc.arguments, result)
                     msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                            name=(_harness.called_as(tc) if _harness is not None else tc.name),
                                            # Part 3, Phase 3: a harness turn's own cap,
@@ -12866,6 +12917,13 @@ async def run_chat_turn(
             from ..tools.script_values import unchecked_figures_note
 
             reply += unchecked_figures_note(ctx)
+        # v1.481.0: THE DELIVERABLES CHECK under the reply, drawn from the
+        # disk and the turn's own steps, never from the plan or the reply:
+        # what is done, what failed, what is not done, what changed outside
+        # the folders the task may write. MIRROR NOTE (lock-step):
+        # routes/chat.py appends the same.
+        if _deliv is not None and not escalate:
+            reply += await _deliv.final()
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did ("I'm passing this to builder") gets the plain note.
         # MIRROR NOTE (lock-step): routes/chat.py appends the same helper.

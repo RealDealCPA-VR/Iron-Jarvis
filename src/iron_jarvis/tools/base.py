@@ -78,6 +78,13 @@ class ToolContext:
     #: refuses in plain words ("this needs your OK on the chat page"), never
     #: a queue id. False everywhere a card can be drawn.
     cannot_ask: bool = False
+    #: v1.481.0: the task's required files and write rules, read by Iron
+    #: Jarvis from the user's own message (``deliverables.scope``). With one,
+    #: ``registry.invoke`` refuses a write outside the folders the task may
+    #: write, into a read-only folder, or a helper script into a deliverable
+    #: folder, and ``safe_path`` lets a file tool use the task's scratch
+    #: folder. None everywhere else: nothing changes.
+    task_scope: Any = None
 
 
 @dataclass
@@ -464,6 +471,13 @@ def safe_path(workspace: Path, rel: str) -> Path:
     root = workspace.resolve()
     target = (root / rel).resolve()
     if target != root and not target.is_relative_to(root):
+        # v1.481.0: a task's scratch folder (outside the task folder, so a
+        # helper script never lands in its input or output) is the one other
+        # place a scoped turn's file tools may use.
+        from ..deliverables.scope import in_scratch
+
+        if in_scratch(target):
+            return target
         raise PermissionError(f"path '{rel}' escapes the session workspace")
     return target
 

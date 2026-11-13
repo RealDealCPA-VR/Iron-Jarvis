@@ -13108,7 +13108,7 @@ does not need a bump, stop and bump it.
   `tests/test_build_app_task_ended_words_v1477.py`; moved on purpose:
   `test_build_app_stream_rows_v1418` (the pure function, told nothing, says
   "A task finished").
-  v1.480.1 (the owner: "address the risk"): OLD lines are read at SERVING
+  v1.481.1 (the owner: "address the risk"): OLD lines are read at SERVING
   time, never rewritten on disk. `hosted/old_task_lines.reword(events,
   context)` (pure; copies a changed line; a list with no old line comes back
   as the same object) takes a notice that fully matches the v1.418.0 ..
@@ -17769,6 +17769,80 @@ does not need a bump, stop and bump it.
     moved on purpose: the "asks the user first" strings in
     `test_capability_index_v1478`, `test_capability_join_v1479` and
     `test_capability_join_review_v1479`.
+
+- **A task's required files are checked ON DISK before the reply ends; its
+  write rules are enforced at the tool gate; a printed traceback is a failed
+  step** (v1.481.0; a USER REPORT: a plain chat on the user's own model
+  server, bound to the task's `INPUT` folder, given three required files and
+  "CREATE files only in `OUTPUT/`", wrote one, wrote a helper script that
+  began `import base` and never ran it, made a stray `INPUT\OUTPUT\`, and
+  ended "The repair is complete and verified").
+  - **Reading** (`src/iron_jarvis/deliverables/scope.py`): ONLY the user's own
+    newest message (for a bare "continue", the task message up to four back),
+    sentence by sentence. Required files = a file under a Deliverables /
+    Success criteria / Outputs heading, or the object of a making verb (never
+    after of/from/using/based on, never negated; a bare word counts only with
+    a folder, `_`/`-`/digit or a document extension, so "a Node.js script"
+    names nothing). Write roots = "create files only in X/", "outputs go in
+    X/", a write line under Permissions, else the ONE output-named folder
+    every required file is in (`OUTPUT_FOLDER_NAMES`). Read-only = "READ X/"
+    under Permissions, "read-only", "do not modify X/".
+  - **The task folder**: when the message names the chat's own folder as a
+    path's first part, the task folder is its parent and the turn's tools
+    work there (`rebase`; the write rule then defaults to the chat folder
+    plus the required files' folders, never the whole parent). A scope exists
+    only for a chat with a usable bound folder, plain chat only
+    (`_harness is None`, not text-only).
+  - **The gate**: `tools/registry.invoke` asks `write_refusal` (off the loop)
+    for every non-READONLY tool when `ToolContext.task_scope` is set, through
+    the `shape_error` failed-result path ("NOTHING WAS WRITTEN. …"): a write
+    outside the write roots, into a read-only folder, or a helper script
+    (`SCRIPT_EXTS`) into a write root that is not a required file. What a tool
+    WRITES is the `WRITE_ARGS` table (a tool not listed is not refused; the
+    folder check sees its writes). `shell`/`process_start` command text is
+    read for redirects, copy/move/del/mkdir and PowerShell writers
+    (`command_targets`; a program the command starts is unseen). The per-root
+    scratch folder (`<temp>/ij-task-scratch/<hash>`) is the one place outside
+    the workspace `safe_path` accepts, via the `_SCOPE` ContextVar the
+    registry sets around `execute`. A NEW file-writing tool needs a
+    `WRITE_ARGS` row.
+  - **The check** (`check.py`): a required file is done only when it exists,
+    is not empty and opens (xlsx loads, docx/pptx package whole, json parses,
+    text decodes incl. UTF-16). `outside_changes` compares the task folder
+    (minus write roots and scratch; bounded walk, no links) with the snapshot
+    taken when the turn began.
+  - **Failed steps** (`steps.py`): `error_line` reads a program's output tail
+    for a traceback's error line, "No module named", "can't open file";
+    `failed_step_note` is added to a `RUNS_PROGRAMS` tool's OK result in EVERY
+    chat turn (both lanes). `StepLog` keeps failures not done again and helper
+    scripts written and never run.
+  - **Both lanes** (MIRROR NOTE, `deliverables/turn.TurnDeliverables`): start
+    after the workspace resolution (the rebased folder in the grounding
+    block, the scope block after it, before the planner); `task_scope` on the
+    ToolContext; ONE reserve note at the top of a round with ≤ 3 steps left;
+    ONE ask-to-finish note when the reply ends on words with a required file
+    missing (the stream lane sends the closing-offer separator); `final()`
+    appended after `unchecked_figures_note`, never on an escalation: Done /
+    Not done / Failed and not done again / Helper scripts written and never
+    run / Writes Iron Jarvis refused / Changed outside …, ending "The task is
+    NOT complete: N of M …" or "All M required files are on disk and open."
+    Quiet for one done file with no write rule. Every regex is linear (a
+    child-process pin on hostile input).
+  - **A task, never a one-line request**: a scope needs a Deliverables list,
+    two or more required files, a write rule, or a required file beside a
+    read-only rule; "write new.txt" alone is an ordinary request and the
+    turn is unchanged. **The user's no stands**: a call refused as
+    "permission denied" (a declined card included) sets
+    `TurnDeliverables.declined` in both lanes, and the model is then never
+    asked to finish (the note under the reply still says what is missing).
+  - **OPEN**: agent runs and Chat › Code are not checked; a task described
+    only in a README the model reads is not read; a program a command starts
+    can write anywhere it may (seen afterwards, not stopped).
+  - **Pins**: `tests/test_deliverables_v1481.py`. The acceptance test drives
+    BOTH real lanes: three required files, a scratch script with
+    `import base` run through `shell`, writes into `OUTPUT/` scripts and
+    `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
+    mutations, all red.
 
 ## Map (where things live)
 

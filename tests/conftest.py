@@ -113,7 +113,7 @@ def _iron_proxy_service_per_test():
 
 @pytest.fixture(autouse=True)
 def _sign_in_answers_do_not_cross_tests():
-    """v1.480.1: the CLIs' sign-in answers are PROCESS memory
+    """v1.481.1: the CLIs' sign-in answers are PROCESS memory
     (``providers.cli_auth.DEFAULT_PROBE``: one object per worker). A test
     whose stand-in Claude Code refused a sign-in, or that marked one signed
     out, left that answer for every LATER test on the worker: GitHub's shard

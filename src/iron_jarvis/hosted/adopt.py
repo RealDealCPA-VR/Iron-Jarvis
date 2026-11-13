@@ -486,7 +486,7 @@ async def _turn_back(svc: Any, live: Any, turn_id: str, started_at: str) -> None
 
     events, _total, _dropped = await asyncio.to_thread(live.log.read, 0, turn=turn_id)
     turn = HostedTurn(turn_id, live.sid)
-    # v1.480.1: a turn begun before the update can hold old "A helper …"
+    # v1.481.1: a turn begun before the update can hold old "A helper …"
     # lines; a rejoin replays them the way the view shows them.
     turn.events = coalesce(reword([public(e) for e in events])[0])
     try:

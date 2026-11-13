@@ -1,5 +1,5 @@
 """Old "A helper …" lines in Build › Code, read in the words the session's own
-record supports (v1.480.1; the owner: "address the risk").
+record supports (v1.481.1; the owner: "address the risk").
 
 From v1.418.0 to v1.477.1 every task Claude Code said had ended was written
 to a session's log as "A helper finished / failed / was stopped: <summary>",

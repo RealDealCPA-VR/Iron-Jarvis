@@ -1,4 +1,4 @@
-"""v1.480.1 (the owner: "address the risk"): old "A helper …" lines in Build ›
+"""v1.481.1 (the owner: "address the risk"): old "A helper …" lines in Build ›
 Code read in the words their session's own record supports.
 
 From v1.418.0 to v1.477.1 every task Claude Code said had ended was logged as

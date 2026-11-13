@@ -73,7 +73,7 @@ _PRIVATE = ("seq", LOG_FULL_KEY, FULL_KEY, "htool", "hseq")
 TAIL_EVENTS = 2000
 #: How many events one "Load earlier" page holds at most.
 PAGE_MAX = 2000
-#: v1.480.1: how many events just BEFORE what a view or page serves are read
+#: v1.481.1: how many events just BEFORE what a view or page serves are read
 #: (never shown) when old "A helper …" lines are read in their record's words
 #: (:mod:`.old_task_lines`): the command a line names is often just before the
 #: first event served.
@@ -205,7 +205,7 @@ class TailLog(EventLog):
         #: :meth:`seed`): its newest ``keep`` events with their file index.
         self.prior: list[tuple[int, dict[str, Any]]] = []
         self.prior_total = 0
-        #: v1.480.1: up to :data:`REWORD_CONTEXT` events the file held just
+        #: v1.481.1: up to :data:`REWORD_CONTEXT` events the file held just
         #: before ``prior`` (read, never served: :mod:`.old_task_lines`).
         self.context: list[dict[str, Any]] = []
         self.dropped = 0
@@ -298,7 +298,7 @@ class TailLog(EventLog):
         if picked and oldest_index > 0:
             idx, first_ev = picked[0]
             older = cursor_for(first_ev, idx if idx is not None else oldest_index, dropped)
-        # v1.480.1: old "A helper …" lines in their record's words.
+        # v1.481.1: old "A helper …" lines in their record's words.
         shown, hidden = _reword(events, before[-REWORD_CONTEXT:])
         return {
             "events": [public(e) for e in shown],
@@ -320,7 +320,7 @@ def file_view(path: Path, meta_path: Path, limit: int) -> dict[str, Any]:
     start = max(0, total - limit)
     picked = events[start:]
     older = cursor_for(picked[0], start, dropped) if picked and start > 0 else None
-    # v1.480.1: old "A helper …" lines in their record's words.
+    # v1.481.1: old "A helper …" lines in their record's words.
     shown, hidden = _reword(picked, events[max(0, start - REWORD_CONTEXT):start])
     return {
         "events": [public(e) for e in shown],
@@ -381,7 +381,7 @@ def read_page(path: Path, meta_path: Path, before: str, limit: int) -> dict[str,
     start = max(0, cut - limit)
     page = events[start:cut]
     older = cursor_for(page[0], start, dropped) if page and start > 0 else None
-    # v1.480.1: old "A helper …" lines in their record's words.
+    # v1.481.1: old "A helper …" lines in their record's words.
     shown, _hidden = _reword(page, events[max(0, start - REWORD_CONTEXT):start])
     return {
         "events": [public(e) for e in shown],
