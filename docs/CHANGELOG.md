@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.483.1
+
+**The model picker's last rough edges.** Small fixes after v1.475.0's one-chip model picker in Build › Code:
+
 ## v1.483.0
 
 **Chat can schedule a task in your own words.** Ask in chat for something to happen on a schedule ("every Monday at 8, pull together the list of flats with rent due this week") and Jarvis now makes that schedule.
@@ -77,7 +81,3 @@
 ## v1.471.1
 
 **Three more requests read right.** Nothing on screen changes.
-
-## v1.471.0
-
-**Faster tool calls, better reading of requests, sturdier scripts.** Nothing on screen changes.

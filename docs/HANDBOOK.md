@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.483.0 (2026-11-12).*
+holds itself to. Current as of v1.483.1 (2026-11-12).*
 
 ---
 
@@ -2061,6 +2061,21 @@ appointments" could not find the calendar link, and Jarvis tried to connect a
   "Google Calendar" app that does not exist.
 - **Not yet:** removing a saved calendar link is still done on the Rules page,
   not from chat.
+
+## The model picker's last rough edges (v1.483.1)
+
+Small fixes after v1.475.0's one-chip model picker in Build › Code:
+
+- **A model change is said once while a reply runs.** The short "from your
+  next message" note shows until the change's own line appears in the
+  conversation, then goes away.
+- **A change pressed just as a reply finishes is still said.** If the
+  line cannot reach the conversation in time, the note stays.
+- **The "Model changed" line shows at once in a long session.** It used to
+  appear only after reopening the session when the reply on screen was long.
+- **No more "getServerSnapshot should be cached" warning** in the browser's
+  developer tools. It came from the Emergency stop strip, which is on every
+  page; nothing visible went wrong.
 
 ## Chat can schedule a task in your own words (v1.483.0)
 

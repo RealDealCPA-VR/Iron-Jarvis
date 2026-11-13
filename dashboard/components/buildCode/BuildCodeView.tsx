@@ -143,6 +143,8 @@ import {
   decodeTryChoices,
   effortsFor,
   decodeCodingTools,
+  withNewerNotices,
+  changeLines,
   foldConversationFrom,
   type FoldMemo,
   groupByFolder,
@@ -391,6 +393,9 @@ function SessionPane({
   const [helpers, setHelpers] = useState<CodeHelper[]>([]);
   const [handedFrom, setHandedFrom] = useState<CodeSessionView["handedFrom"]>(null);
   const [events, setEvents] = useState<CodeEvent[]>([]);
+  // v1.483.1: what is drawn, read by a change when it is pressed.
+  const eventsNowRef = useRef<CodeEvent[]>(events);
+  eventsNowRef.current = events;
   const [extra, setExtra] = useState<CodeEvent[]>([]);
   const [running, setRunning] = useState(false);
   const [following, setFollowing] = useState(false);
@@ -658,7 +663,10 @@ function SessionPane({
           // After a turn ends: the saved record replaces what was drawn —
           // unless it holds less (not written yet), which would blank the
           // reply the user just watched.
-          setEvents((prev) => (view.events.length >= prev.length ? view.events : prev));
+          // v1.483.1: what is kept still gets a notice newer than anything
+          // drawn (a model change's line, read again after the change: the
+          // drawn reply's many small pieces outnumber the saved record).
+          setEvents((prev) => (view.events.length >= prev.length ? view.events : withNewerNotices(prev, view.events)));
           setRunning(view.running);
         }
       } catch (e) {
@@ -1280,19 +1288,50 @@ function SessionPane({
     [onChanged],
   );
 
+  // v1.483.1: a change made while a reply runs keeps the page's short note
+  // only until the change's own line is drawn (it comes with the reply's
+  // stream): said once, and never lost when the line does not come.
+  // Only THAT note is ever taken away (by its text), and the watch ends as
+  // soon as anything else is shown in its place.
+  const [noteUntilLine, setNoteUntilLine] = useState<{ lines: number; text: string } | null>(null);
+  useEffect(() => {
+    if (noteUntilLine === null) return;
+    if (info !== noteUntilLine.text) {
+      setNoteUntilLine(null);
+      return;
+    }
+    if (changeLines(events) > noteUntilLine.lines) {
+      setInfo(null);
+      setNoteUntilLine(null);
+    }
+  }, [events, info, noteUntilLine]);
+
   const change = useCallback(
     async (patchIn: Record<string, unknown>) => {
       if (!session) return;
       setNote(null);
       setInfo(null);
+      setNoteUntilLine(null);
+      // What is drawn AND what waits for the next frame: an earlier change's
+      // line still waiting must not stand in for this one's.
+      const linesBefore = changeLines([...eventsNowRef.current, ...pendingRef.current]);
       try {
         const raw = await patch<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}`, patchIn);
         // v1.475.0: a model or effort change in a conversation is said by the
         // daemon's own line in it (read again below), so no second note here.
+        // v1.483.1: while a reply runs the note shows until the line the
+        // reply's stream brings is drawn (`noteUntilLine`).
         const onlyModel = Object.keys(patchIn).every((k) => k === "model" || k === "effort");
         const saidInConversation = onlyModel && !!session.toolSessionId && !running;
         const later = appliedNextWords(raw);
-        if (later && !saidInConversation) setInfo(later);
+        // The line already arrived (drawn, or waiting for the next frame):
+        // nothing more to say.
+        const lineCame =
+          onlyModel && running && changeLines([...eventsNowRef.current, ...pendingRef.current]) > linesBefore;
+        if (later && !saidInConversation && !lineCame) {
+          setInfo(later);
+          if (onlyModel && running) setNoteUntilLine({ lines: linesBefore, text: later });
+        }
         const keeps = keepsLastOf(raw);
         if (keeps !== null) setKeepsLast(keeps);
         const folder = piFolderOf(raw);
