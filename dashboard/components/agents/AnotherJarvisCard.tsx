@@ -41,6 +41,7 @@ import {
   replyFailedLine,
   type TaskDoorStatus,
 } from "@/lib/anotherJarvis";
+import { OTHER_COMPUTERS_HREF, PAIR_INSTEAD, PAIR_INSTEAD_LINK } from "@/lib/otherComputers";
 import { GHOST_BTN, QUIET_FIELD, SUB_LABEL, primaryBtn } from "./teamLook";
 
 export function AnotherJarvisCard() {
@@ -134,6 +135,15 @@ export function AnotherJarvisCard() {
       <h4 id={titleId} className={`px-1 ${SUB_LABEL}`}>
         {CARD_TITLE}
       </h4>
+
+      {/* v1.497.0: pairing does all of this in one step; this card stays for
+          a tunnel or a setup by hand. */}
+      <p data-testid="another-jarvis-pair-instead" className="px-1 text-[12px] leading-relaxed text-zinc-400">
+        {PAIR_INSTEAD}{" "}
+        <Link href={OTHER_COMPUTERS_HREF} className="text-accent hover:underline">
+          {PAIR_INSTEAD_LINK}
+        </Link>
+      </p>
 
       {!status && loadError && (
         <LoadFailedLine

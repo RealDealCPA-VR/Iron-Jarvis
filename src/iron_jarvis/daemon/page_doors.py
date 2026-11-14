@@ -891,9 +891,12 @@ NOT_OFFERED: tuple[NotOffered, ...] = (
         "Iron Jarvis's screens open only on this PC; another computer cannot open them. Another computer can "
         "run its own copy of Iron Jarvis, with its own settings and data, and the setting \"Let other "
         "computers on my network reach this Iron Jarvis\" only lets such a copy hand this one tasks (and a "
-        "remote agent the user connected send its messages back); it never opens these screens there. From "
-        "a phone, the user can chat with Jarvis through a notification destination with two-way chat "
-        "turned on (Telegram, Slack or email). Say so plainly.",
+        "remote agent the user connected send its messages back); it never opens these screens there. To "
+        "have two computers hand each other tasks, the user pairs them in Settings › Connections › Your "
+        "other computers: one computer shows a six-digit code and the other types it, with the first one's "
+        "address. Then \"@\" and the other computer's name in chat hands it a task, and the answer comes "
+        "back to that chat. From a phone, the user can chat with Jarvis through a notification destination "
+        "with two-way chat turned on (Telegram, Slack or email). Say so plainly.",
     ),
     NotOffered(
         "full_access_default",

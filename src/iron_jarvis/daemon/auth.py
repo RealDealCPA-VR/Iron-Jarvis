@@ -285,6 +285,16 @@ MCP_PATH = "/mcp"
 #: ``/disable``) stay guarded by the install bearer.
 TASK_DOOR_PATH = "/agents/task-door/task"
 
+#: Pairing two computers (v1.497.0; ``daemon/routes/peers.py``). The other
+#: computer calls these two, and it never holds this one's install token:
+#: ``/peers/pair`` is checked by the six-digit code this computer is showing
+#: (one at a time, ten minutes, works once, five wrong tries end it, ten tries
+#: a minute from anyone), ``/peers/unpair`` by the token this computer made
+#: for that peer. EXACT MATCH ONLY: ``/peers``, ``/peers/code`` and
+#: ``/peers/join`` beside them stay guarded by the install bearer.
+PEER_PAIR_PATH = "/peers/pair"
+PEER_UNPAIR_PATH = "/peers/unpair"
+
 _EXEMPT_EXACT = frozenset(
     {"/health", "/docs", "/openapi.json", "/redoc", MCP_PATH}
 )
@@ -549,6 +559,10 @@ def _is_exempt(path: str) -> bool:
     # Another computer running Iron Jarvis sending a task (v1.357.0): its own
     # door token, verified fail-closed in the handler. Exactly this leaf.
     if path == TASK_DOOR_PATH:
+        return True
+    # Another computer pairing with this one, or ending a pairing (v1.497.0):
+    # the code, or that peer's own token, verified fail-closed in the handler.
+    if path in (PEER_PAIR_PATH, PEER_UNPAIR_PATH):
         return True
     # An animated background (v1.410.0) drawn in a sandboxed <iframe>, which
     # cannot send the bearer header — and the token must never ride a URL the

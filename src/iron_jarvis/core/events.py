@@ -312,6 +312,13 @@ class EventType:
     # phone conversation, on the phone). {agent, thread_id, kind, documents}.
     # AGENT_THREAD_UPDATED fires for the same entry; this one names the door.
     REMOTE_MESSAGE = "remote.message"
+    # YOUR OTHER COMPUTERS (v1.497.0, daemon/routes/peers.py): a pairing with
+    # another computer running Iron Jarvis was made or ended. {name} — what
+    # this computer calls the other one; PEER_REMOVED adds by = "here" (the
+    # user removed it on this computer) or "them" (the other computer did).
+    # Never a token, never an address.
+    PEER_PAIRED = "peer.paired"
+    PEER_REMOVED = "peer.removed"
     # YOUR BROWSER (v1.235.0) — the user's own Chrome/Edge over /browser/ws.
     # Ambient facts about a browser, so they carry NO session_id: nothing here
     # belongs to one conversation. No payload ever carries the pairing token;

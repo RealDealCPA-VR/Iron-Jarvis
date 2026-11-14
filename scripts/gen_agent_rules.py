@@ -68,7 +68,7 @@ PACKAGE_AREAS: dict[str, list[str]] = {
                   "ocr_worker.py"],
     "memory": ["brain", "capability", "guide", "inbox", "learning", "ltm", "memory",
                "personas", "profile", "projects", "skills", "workmap"],
-    "messaging": ["comm"],
+    "messaging": ["comm", "peers"],
     "providers": ["envelope", "eval", "fleet", "iron_proxy", "providers"],
     "settings": ["settings"],
     "tools": ["detections", "history", "sandbox", "secrets", "tools"],
@@ -86,7 +86,7 @@ SPLIT_PACKAGES: list[tuple[str, str]] = [
      "`daemon/routes/assignments.py`, `daemon/routes/coach.py`", "agents"),
     ("`daemon/routes/connections.py`, `daemon/routes/fleet.py`, `daemon/routes/iron_proxy.py`",
      "providers"),
-    ("`daemon/routes/comm.py`", "messaging"),
+    ("`daemon/routes/comm.py`, `daemon/routes/peers.py`", "messaging"),
     ("`daemon/routes/settings.py`, `daemon/routes/undo.py`", "settings"),
     ("`daemon/routes/improvements.py`, `daemon/routes/memory_review.py`", "memory"),
     ("`core/procs.py`, `core/auto_approve.py`, `core/approvals.py`, `core/trust.py`, "

@@ -122,7 +122,8 @@ TASK_INTRO = "A task sent from {caller}, another computer running Iron Jarvis:"
 
 #: The door refuses while it is off — the sender's room shows this.
 DOOR_OFF = (
-    "This computer is not taking tasks from another computer. Turn it on in "
+    "This computer is not taking tasks from that one. Pair the two computers in "
+    "Settings › Connections › Your other computers, or turn tasks on by hand in "
     "Agents, Your team, New & manage, Another computer running Jarvis."
 )
 

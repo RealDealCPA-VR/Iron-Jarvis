@@ -4,6 +4,7 @@
 // threads stay the star. Two columns on lg: your (dynamic) agents and remote
 // agents. Collapsed by default; the open state persists in localStorage.
 
+import Link from "next/link";
 import { AccountChoice } from "@/components/AccountChoice";
 import {
   type ReactNode,
@@ -54,6 +55,7 @@ import { agentLabel } from "@/lib/agentWorlds";
 import type { RemoteAgentInfo } from "./identity";
 import { AnotherJarvisCard } from "./AnotherJarvisCard";
 import { TASK_DOOR_PATH } from "@/lib/anotherJarvis";
+import { OTHER_COMPUTERS_HREF, PAIRED_REMOTE_NOTE } from "@/lib/otherComputers";
 import { modelPickTitle, modelPickWords } from "@/lib/onboarding";
 import { cleanRoles, roleWords } from "@/lib/teamRoles";
 import { TeamRoleChecks } from "./TeamRoleChecks";
@@ -2162,7 +2164,18 @@ function RemoteRow({
             messages back
           </span>
         )}
+        {agent.paired && (
+          <Link
+            href={OTHER_COMPUTERS_HREF}
+            data-testid="remote-paired"
+            title={PAIRED_REMOTE_NOTE}
+            className="rounded-md bg-accent/10 px-1.5 py-0.5 text-[11px] font-medium text-accent hover:underline"
+          >
+            paired
+          </Link>
+        )}
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {!agent.paired && (
           <button
             type="button"
             onClick={agent.inbound_enabled ? disableInbound : enableInbound}
@@ -2183,7 +2196,8 @@ function RemoteRow({
               <>Let it message back</>
             )}
           </button>
-          {agent.inbound_enabled && (
+          )}
+          {agent.inbound_enabled && !agent.paired && (
             <button
               type="button"
               onClick={enableInbound}
@@ -2204,21 +2218,25 @@ function RemoteRow({
           >
             {testing ? <LoaderInline label="…" /> : <><CheckCircle2 size={12} /> Test</>}
           </button>
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            aria-expanded={editing}
-            title={`Fix "${agent.name}" without re-entering it`}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
-          >
-            <Pencil size={12} /> Edit
-          </button>
-          <ConfirmButton
-            variant="calm"
-            onConfirm={remove}
-            label="Delete"
-            title={`Remove remote agent "${agent.name}"`}
-          />
+          {!agent.paired && (
+            <>
+              <button
+                type="button"
+                onClick={() => setEditing((v) => !v)}
+                aria-expanded={editing}
+                title={`Fix "${agent.name}" without re-entering it`}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
+              >
+                <Pencil size={12} /> Edit
+              </button>
+              <ConfirmButton
+                variant="calm"
+                onConfirm={remove}
+                label="Delete"
+                title={`Remove remote agent "${agent.name}"`}
+              />
+            </>
+          )}
         </span>
       </div>
       {minted && isTaskDoorUrl(agent.base_url) && (

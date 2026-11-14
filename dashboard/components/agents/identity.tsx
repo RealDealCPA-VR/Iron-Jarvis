@@ -67,6 +67,9 @@ export interface RemoteAgentInfo {
    *  files) through `inbound_url` with its own token — shown once at enable. */
   inbound_enabled?: boolean;
   inbound_url?: string;
+  /** v1.497.0: made by pairing with another computer — changed and removed
+   *  only in Settings › Connections › Your other computers. */
+  paired?: boolean;
 }
 
 /** Role presets offered at panel setup — free text is equally valid. */

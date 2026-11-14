@@ -81,6 +81,13 @@ AUTO_PAUSE_PREFIX = "monthly allowance used up"
 LAN_ACCESS_KEY = "lan_access"
 LAN_ACCESS_PLACE = "Settings › Connections"
 
+#: v1.497.0: a remote agent a pairing made is changed or removed only where
+#: the pairing lives.
+PAIRED_REMOTE_REFUSAL = (
+    "This is a paired computer. Remove it, or pair it again, in Settings › Connections › Your other "
+    "computers."
+)
+
 
 def _lan_access_label() -> str:
     """The setting's own label, read from the ONE schema (never retyped)."""
@@ -2704,7 +2711,15 @@ def register(app: FastAPI, d) -> None:
             # The inbound TOKEN is never here — it was shown once, at enable.
             "inbound_enabled": bool(getattr(r, "inbound_enabled", False)),
             "inbound_url": str(getattr(r, "inbound_url", "") or ""),
+            # v1.497.0: made by pairing with another computer (removed and
+            # changed in Settings › Connections › Your other computers).
+            "paired": _is_paired(r.name),
         }
+
+    def _is_paired(name: str) -> bool:
+        from ...peers.store import is_paired_remote
+
+        return is_paired_remote(d.platform, name)
 
     @app.get("/agents/remote")
     def list_remote_agents() -> dict[str, Any]:
@@ -2835,6 +2850,15 @@ def register(app: FastAPI, d) -> None:
                 )
             fields["inbound_url"] = inbound_url
 
+        # v1.497.0: a paired computer's address, kind and token belong to
+        # the pairing (its timeout, model and on/off do not).
+        if (
+            body.base_url is not None
+            or body.kind is not None
+            or body.clear_token
+            or (body.token or "").strip()
+        ):
+            _refuse_paired(name)
         # v1.357.0 (G61): refused BEFORE the credential is touched below, so
         # a refused edit can never have replaced the stored token.
         _refuse_door_kind(
@@ -2868,12 +2892,22 @@ def register(app: FastAPI, d) -> None:
             return {**_remote_view(updated), **_jarvis_reply_on(request, updated)}
         return _remote_view(updated)
 
+    def _refuse_paired(name: str) -> None:
+        """A remote agent a PAIRING made (v1.497.0) is changed or removed only
+        by that pairing: removing it here would leave the other computer
+        holding a token this one still honours. One place for it."""
+        from ...peers.store import is_paired_remote
+
+        if is_paired_remote(d.platform, name):
+            raise HTTPException(status_code=409, detail=PAIRED_REMOTE_REFUSAL)
+
     @app.delete("/agents/remote/{name}")
     def delete_remote_agent(name: str) -> dict[str, Any]:
         reg = _remote_reg()
         rec = reg.get(name)
         if rec is None:
             raise HTTPException(status_code=404, detail="no such remote agent")
+        _refuse_paired(name)
         # Drop its vault secret too (best-effort — an absent secret is fine).
         if rec.secret_name:
             try:
@@ -3110,6 +3144,7 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/agents/remote/{name}/inbound/disable")
     def disable_remote_inbound(name: str) -> dict[str, Any]:
+        _refuse_paired(name)
         reg = _remote_reg()
         row = reg.disable_inbound(name, d.platform.secrets.delete)
         if row is None:
@@ -3156,6 +3191,13 @@ def register(app: FastAPI, d) -> None:
         )
         if not ok:
             raise HTTPException(status_code=401, detail="invalid inbound token")
+        # A paired computer's answer counts as hearing from it (v1.497.0).
+        try:
+            from ...peers.store import store_for
+
+            await asyncio.to_thread(store_for(d.platform).note_heard_by_remote, name)
+        except Exception:  # noqa: BLE001 — bookkeeping only
+            pass
         if not _inbound_rate_ok(name):
             raise HTTPException(status_code=429, detail="too many inbound messages — slow down")
         # Refuse an oversized body BEFORE parsing it: 20 files × 25 MB in base64
@@ -3457,25 +3499,42 @@ def register(app: FastAPI, d) -> None:
         return header[7:].strip() if header.lower().startswith("bearer ") else ""
 
     async def _door_check(request: Request):
-        """The door's two locks, fail-closed and off the loop: on (else 403,
-        in words) and the sender's token (else 401). Returns the door."""
+        """The door's locks, fail-closed and off the loop. A PAIRED computer
+        (v1.497.0, ``peers/``) shows the token this computer made for it and
+        is let in whether or not the hand-made door is on. Anyone else needs
+        the hand-made door on (else 403, in words) and its token (else 401).
+        Returns ``(door, peer)``; ``peer`` is None for the hand-made door."""
         from ...agents.task_door import DOOR_OFF
+        from ...peers.store import store_for
 
         door = _task_door()
+        token = _door_bearer(request)
+        try:
+            peer = await asyncio.to_thread(store_for(d.platform).verify, token)
+        except Exception:  # noqa: BLE001 — a store that cannot be read lets nobody in by it
+            log.warning("task door: the paired computers could not be read", exc_info=True)
+            peer = None
+        if peer is not None:
+            return door, peer
         if not await asyncio.to_thread(door.enabled):
             raise HTTPException(status_code=403, detail=DOOR_OFF)
-        if not await asyncio.to_thread(door.verify, _door_bearer(request)):
+        if not await asyncio.to_thread(door.verify, token):
             raise HTTPException(
                 status_code=401,
                 detail="this computer does not know that token — copy it again from its card",
             )
-        return door
+        return door, None
 
     @app.get(_TASK_DOOR_PATH)
     async def task_door_probe(request: Request) -> dict[str, Any]:
         """The other computer's Test: does this door take its tasks? Token
-        checked; nothing is started."""
-        await _door_check(request)
+        checked; nothing is started. A paired computer's Check counts as
+        hearing from it."""
+        _door, peer = await _door_check(request)
+        if peer is not None:
+            from ...peers.store import store_for
+
+            await asyncio.to_thread(store_for(d.platform).note_heard, peer.id)
         return {"ok": True, "takes_tasks": True}
 
     @app.post(_TASK_DOOR_PATH, status_code=202)
@@ -3495,7 +3554,7 @@ def register(app: FastAPI, d) -> None:
         ends (``task_door.send_reply``)."""
         from ...agents import task_door as td
 
-        door = await _door_check(request)
+        door, peer = await _door_check(request)
         if not door.rate_ok():
             raise HTTPException(
                 status_code=429, detail="too many tasks this minute — try again shortly"
@@ -3529,7 +3588,9 @@ def register(app: FastAPI, d) -> None:
                 detail="reply_to must be another Iron Jarvis's inbound address",
             )
         reply_token = str(body.get("reply_token") or "").strip()
-        caller = await asyncio.to_thread(door.caller)
+        # A paired computer is called by the name this computer gave it; the
+        # hand-made door by the one name its card set.
+        caller = peer.name if peer is not None else await asyncio.to_thread(door.caller)
         origin = td.remote_origin(caller)
         orchestrator = d.orchestrator
         options: dict[str, Any] = {}
@@ -3588,7 +3649,12 @@ def register(app: FastAPI, d) -> None:
                 )
             except Exception:  # noqa: BLE001 — the run still happens; its reply will say why
                 log.warning("task door: could not keep the answer key for %s", session.id)
-        await asyncio.to_thread(door.note_task, session.id)
+        if peer is not None:
+            from ...peers.store import store_for
+
+            await asyncio.to_thread(store_for(d.platform).note_heard, peer.id)
+        else:
+            await asyncio.to_thread(door.note_task, session.id)
         d._spawn_bg(session.id, orchestrator.run_session(session.id))
         return {"accepted": True}
 

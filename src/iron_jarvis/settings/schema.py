@@ -589,9 +589,9 @@ SETTINGS: tuple[SettingDef, ...] = (
     # sentence (routes/agents.reachability) names THIS row.
     S("lan_access", "Let other computers on my network reach this Iron Jarvis", "connections", "bool",
       "Off unless you turn it on. When on, Iron Jarvis also listens on this PC's address on your "
-      "network after it restarts, so another computer running Iron Jarvis can hand it tasks "
-      "(Agents, Your team, Another computer running Jarvis). Every request still needs that "
-      "door's token. Windows may ask once whether to allow Iron Jarvis on your network.",
+      "network after it restarts, so another computer running Iron Jarvis can pair with it and "
+      "hand it tasks (Settings, Connections, Your other computers). Every request still needs "
+      "its own token. Windows may ask once whether to allow Iron Jarvis on your network.",
       tier="ask-floor", restart=True, section="Another computer",
       aliases=("lan access", "network access", "another computer", "other computers",
                "reach from another computer", "local network")),

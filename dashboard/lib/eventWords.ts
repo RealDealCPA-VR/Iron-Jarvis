@@ -127,6 +127,8 @@ export const EVENT_WORDS: Record<string, string> = {
   "library.proposal": "A lesson or rule was proposed for a folder",
   "agent_thread.updated": "A team conversation was updated",
   "remote.message": "A remote agent messaged back",
+  "peer.paired": "Paired with another computer",
+  "peer.removed": "A paired computer was removed",
   "browser.connected": "The browser add-on connected",
   "browser.disconnected": "The browser add-on disconnected",
   "browser.tab_activated": "You switched browser tabs",

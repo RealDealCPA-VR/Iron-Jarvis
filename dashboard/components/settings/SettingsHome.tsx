@@ -117,6 +117,15 @@ const SUB_DEFS: Record<string, SubDef[]> = {
       Comp: page(() => import("@/components/settings/pages/BrowserPage")),
     },
     {
+      // v1.497.0 (vision plan leap 7): pair this computer with another one
+      // running Iron Jarvis. It is also the control for `lan_access` (below).
+      id: "connections-computers",
+      label: "Your other computers",
+      blurb: "Pair this computer with another one running Iron Jarvis, so each can hand the other tasks.",
+      Comp: named(() => import("@/components/settings/OtherComputers"), "OtherComputers"),
+      requiresKey: "lan_access",
+    },
+    {
       id: "connections-secrets",
       formerly: "Keys & secrets",
       blurb: "The encrypted vault: values are write-only, never shown back.",
@@ -233,6 +242,10 @@ export const CONTROLLED_IN_SECTION: Record<string, string> = {
   // picker per account (components/connections/IronProxyCard); the raw JSON
   // of account ids beside it was a second control nobody could read.
   account_groups: "connections-accounts",
+  // v1.497.0: "Let other computers on my network reach this Iron Jarvis" is
+  // turned on and off by the Your other computers card, which restarts Iron
+  // Jarvis to apply it (a plain switch here would save it and apply nothing).
+  lan_access: "connections-computers",
 };
 
 /**

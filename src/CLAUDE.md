@@ -19,7 +19,7 @@ for every change are in the root `CLAUDE.md`.
 | `backgrounds/`, `onboarding/` | `docs/rules/dashboard.md` |
 | `creative/`, `documents/`, `excel_worker.py`, `filesearch/`, `media/`, `ocr_worker.py` | `docs/rules/documents.md` |
 | `brain/`, `capability/`, `guide/`, `inbox/`, `learning/`, `ltm/`, `memory/`, `personas/`, `profile/`, `projects/`, `skills/`, `workmap/` | `docs/rules/memory.md` |
-| `comm/` | `docs/rules/messaging.md` |
+| `comm/`, `peers/` | `docs/rules/messaging.md` |
 | `envelope/`, `eval/`, `fleet/`, `iron_proxy/`, `providers/` | `docs/rules/providers.md` |
 | `settings/` | `docs/rules/settings.md` |
 | `detections/`, `history/`, `sandbox/`, `secrets/`, `tools/` | `docs/rules/tools.md` |
@@ -27,7 +27,7 @@ for every change are in the root `CLAUDE.md`.
 | `daemon/routes/build*.py`, `daemon/routes/night.py`, `daemon/routes/ci_watch.py`, `daemon/routes/terminals.py`, `daemon/routes/editor.py` | `docs/rules/build.md` |
 | `daemon/routes/agents.py`, `daemon/routes/sessions.py`, `daemon/routes/team.py`, `daemon/routes/assignments.py`, `daemon/routes/coach.py` | `docs/rules/agents.md` |
 | `daemon/routes/connections.py`, `daemon/routes/fleet.py`, `daemon/routes/iron_proxy.py` | `docs/rules/providers.md` |
-| `daemon/routes/comm.py` | `docs/rules/messaging.md` |
+| `daemon/routes/comm.py`, `daemon/routes/peers.py` | `docs/rules/messaging.md` |
 | `daemon/routes/settings.py`, `daemon/routes/undo.py` | `docs/rules/settings.md` |
 | `daemon/routes/improvements.py`, `daemon/routes/memory_review.py` | `docs/rules/memory.md` |
 | `core/procs.py`, `core/auto_approve.py`, `core/approvals.py`, `core/trust.py`, `core/promptguard.py`, `core/grants.py`, `core/fs_policy.py`, `core/risk_door.py` | `docs/rules/tools.md` |

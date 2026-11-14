@@ -3903,6 +3903,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import improvements as _improvements_routes
 
     _improvements_routes.register(app, d)
+    # Your other computers (v1.497.0, vision plan leap 7): pair two PCs
+    # running Iron Jarvis with a six-digit code.
+    from .routes import peers as _peers_routes
+
+    _peers_routes.register(app, d)
     from .routes import followups as _followups_routes
 
     _followups_routes.register(app, d)

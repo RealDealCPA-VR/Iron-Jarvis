@@ -60,6 +60,8 @@ are routes the check counts as called that have no caller.
 | DELETE | `/mcp` | KEEP | The same MCP server: ends an MCP session (by hand, as above). |
 | POST | `/comm/slack/events/{name}` | KEEP | Slack calls it (Events API). |
 | POST | `/agents/remote/{name}/inbound` | KEEP | A remote agent calls it to message back (token-checked). |
+| POST | `/peers/pair` | KEEP | Another computer running Iron Jarvis calls it to pair, with the six-digit code this one shows (v1.497.0; checked by the code). |
+| POST | `/peers/unpair` | KEEP | A paired computer calls it when it removes the pairing, so this one removes its side too (v1.497.0; checked by that peer's own token). |
 | GET | `/doctor` | KEEP | The headless doctor (the readiness and Settings views read the same checks in-process); probes and support use it. |
 | GET | `/metrics` | KEEP | Headless twin of `ironjarvis metrics`. Its last screen was the Overview's HealthCard, removed in this wave. |
 | GET | `/ui/visits` | KEEP | The redesign's measurement read of page opens (`docs/redesign/REPORT.md`, S0). |
