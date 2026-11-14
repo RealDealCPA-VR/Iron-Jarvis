@@ -1597,6 +1597,9 @@ class AgentRuntime:
         declined), its task (whether it asked for a file), the figures
         shelf. One ``autonomy.nudged`` event per note. Never raises."""
         try:
+            if self._effective_trust(session) == TRUST_LOW or int(steps_left) < 2:
+                # Nothing is sent then: never read the ledger for it.
+                return ""
             from ..daemon.chat_turn import _asked_for_a_file, custom_tools_used, ran_local_writer
             from ..daemon.until_done import Facts, note_checked_again, run_record
 

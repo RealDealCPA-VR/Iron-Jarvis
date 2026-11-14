@@ -784,7 +784,9 @@ def test_desktop_send_escalate_dynamic_target_runs_its_definition(
         msgs: list = []
         while _time.time() < deadline:   # summary lands from the background task
             msgs = store.history_body(thread.id)
-            if len(msgs) >= 3:
+            # v1.495.0: wait for BOTH halves — the summary is stored, THEN sent
+            # to the phone; reading the send right after the store raced it.
+            if len(msgs) >= 3 and any("desk dyn summary" in body for body in ch.sent):
                 break
             _time.sleep(0.05)
         assert len(msgs) >= 3
