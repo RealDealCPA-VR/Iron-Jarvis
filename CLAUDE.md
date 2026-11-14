@@ -17844,6 +17844,93 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **A calendar connects through `app_connect`; the Guide has a page per
+  setting; a "where is it" question goes to the Guide** (v1.491.1, BUILT AS
+  v1.490.5: another session released v1.491.0 meanwhile, so the code comments
+  and the two test files keep the tag v1.490.5 / v14905; the owner's
+  /goal: 95% on the practice set with every label counted. Three requests
+  missed in EVERY earlier run because Jarvis handled them another way than
+  the labels expect; this changes the product to the labelled way where that
+  costs the user nothing).
+  - **Calendar.** `AppConnectTool.execute`: an unknown app id that
+    `records_apps.names_calendar` reads as the calendar ("calendar" inside
+    it, or exactly ical / ics / agenda: never "ical" inside "medical") →
+    `_calendar_card()`: `ok=True`, `data = {secret_requests: [{name:
+    "calendar_ics_url", …}], calendar: True, already_saved}`, words
+    `records.CALENDAR_CARD_WORDS` (the link is READ, appointments cannot be
+    added or changed: a model had claimed they could) + `CALENDAR_SAVED_WORDS`
+    when a link is saved. Nothing is saved by the call; `spend_check` already
+    answers "changes nothing" for an id that is no catalog app, so there is NO
+    approval card. v1.484.0's refusal that named `config_secret` is gone
+    (`test_calendar_link_lookup_v1484` moved on purpose). Words:
+    `records_apps._CALENDAR_ON` (a connect verb + the calendar + end / so /
+    and / "to you|Jarvis|the assistant|this app"; never a thing ON a calendar,
+    never "sync my calendar with my phone") adds `app_connect` in
+    `_apps_tools_for`. Lookup: `index.SECRET_CONNECTOR = {"calendar_ics_url":
+    ("app_connect", …)}`; `tool.entry_line` says "when tool app_connect is
+    among your tools, connect it by calling app_connect with `app`
+    "calendar"; otherwise set it with tool config_secret" and puts
+    `connector` on the row. `join._wanted` does NOT bring `app_connect` (a
+    looked-up changer would get the forced card: two consents for one link);
+    the user's own words bring it, the lookup still brings `config_secret`.
+    Dashboard: `lib/appConnect.namesCalendar` (twin of `names_calendar`);
+    `appConnectIds` skips a calendar, so it is never "turned on for this
+    chat" as an app switch.
+  - **Guide.** `guide/corpus.settings_places()` → one live page per setting,
+    heading `SETTINGS_PLACE_HEAD` ("Where a setting is") + ": <label>", text
+    "<label> is in <capability_search.index.setting_place>." + "Also called:
+    <aliases>." + help (≤ 300); labels and help only, never a value.
+    `is_where_question` (`_WHERE_RX`: where / which page / find|locate|get
+    to|show me … button|setting|switch…, first 200 chars) multiplies those
+    pages by `_WHERE_BONUS` 2.5 in `GuideIndex.search`; every other question
+    ranks as before. `base_knowledge` lists them as ONE line, not ~170
+    headings.
+  - **Steering (three places, each needed live).** `CAPABILITY_BLOCK`'s last
+    sentence: "call `guide_search`, not `find_capability`, when you hold it"
+    (the block stays under 400 words: 399, pinned). `find_capability`'s
+    description: "It is NOT for a question about WHERE something is in the app
+    or HOW the user does it by hand". `tool.WHERE_HINT` under any lookup
+    answer that lists a setting ("If the user asked WHERE … call guide_search
+    for it when you hold that tool"). With the first two alone Haiku still
+    looked the setting up first and answered from the list in 3 of 10 trial
+    runs; with the hint, 6 of 6 reached the guide (two calls, ~2 s more).
+  - **Measured (Haiku, TSI account, cards declined, fresh homes, the stand-in
+    picture service).** Practice strict rows: **109, 110, 108 of 111** on
+    v1.490.4 + this change, and **109** on the shipped code (on top of
+    v1.491.0): 97.3-99.1% (nine runs on v1.490.2-.4: 103-108). Misses: d400
+    (3 of 4: "make a folder" made as a folder, label wants a project), d595
+    (2 of 4), d073, d574, d583 (1 of 4 each). Look-alikes, two passes:
+    held-out 99 → 0 cards / 0 retakes both times; `nearfresh` 101 → f053,
+    then f053 + f051 (both real requests), 1 retake each; `nearfresh2` 100 →
+    0 cards, then 1 (g094 "Phone screens are too small for this":
+    `config_set` text size behind the forced looked-up card; the known ~1 in
+    300); 43 ordinary questions → no card, 0 retakes. First word 7.5-8.0 s,
+    total 9.2-9.8 s on practice (v1.490.4: 7.8 / 9.0).
+  - **GLM on v1.490.4** (2026-11-14; the owner said "Copy it": the gateway
+    key was copied by script from the installed app's key store into the six
+    test copies, never printed, deleted from all six after the run, the script
+    removed): practice **102 of 111** (91.9%; earlier GLM runs 103-105).
+    Misses d039, d133, d073, d449 (the four this version changes), d103 (saved
+    a preference and CLAIMED updates would wait), d573, d574, d586, d594 (said
+    appointments could be added through the calendar link). Look-alikes:
+    held-out 99 → 0 cards; `nearfresh` → f053 only; `nearfresh2` → 1 card
+    (g052, `remember_preference` picked unmarked by GLM's routing call;
+    v1.490.1: 3); 43 ordinary → no card, 1 sum redone. First word 34.9 s only
+    because six daemons shared the server. **GLM is NOT measured on
+    this version** (a new run needs a new yes for the key).
+  - **Built in a separate worktree** (`C:/ijb/wt-labels`, branch
+    `feat/labels-95`) because another session held the main checkout on
+    `feat/work-memory` (v1.491.0); the scratch daemons ran it through
+    `start_one_tsi.sh`'s third argument (PYTHONPATH). Rebased onto v1.491.0
+    after its push, and measured once more there (the last run below).
+  - **OPEN:** GLM on this version; d400 (folder vs project) and d595 still
+    vary; a calendar asked for in words the tables miss ("join that up", with
+    the calendar a sentence earlier) is found by the lookup and connected with
+    `config_secret` (works; counts as a miss); the where-bonus is a fixed
+    number; the hint rides every lookup answer that lists a setting.
+  - **Pins:** `tests/test_calendar_connect_and_where_v14905.py` (25
+    mutations, all red), `dashboard/__tests__/app-connect-calendar-v1490-5.test.ts`.
+
 - **A setting's lookup line says WHERE it is on the Settings page**
   (v1.490.4). `capability_search/index.setting_place(row)` → "Settings ›
   <group label>" + ", under <section>" + " (in More options)" for an

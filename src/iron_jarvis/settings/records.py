@@ -2626,6 +2626,18 @@ def signin_hint(conn: Any) -> str:
     )
 
 
+#: v1.490.5: what ``app_connect`` says when it shows the calendar link's
+#: secure card. True of an .ics link: it is read, never written to.
+CALENDAR_CARD_WORDS = (
+    "A secure card for the calendar link is shown to the user. Iron Jarvis reads a calendar "
+    "(Google, Outlook, iCloud) through its private calendar link: it can read the "
+    "appointments, it cannot add or change them. Wait for the user to save the link; never "
+    "ask for it in chat. The setting Calendar reminders (calendar_trigger_enabled) makes "
+    "Iron Jarvis act on what it reads."
+)
+CALENDAR_SAVED_WORDS = " A calendar link is already saved; saving a new one replaces it."
+
+
 class AppConnectTool(_RecordTool):
     name = "app_connect"
     RECORD = "app"
@@ -2637,7 +2649,8 @@ class AppConnectTool(_RecordTool):
         "chat. The user approves on a card; Undo disconnects it. Apps that sign in through "
         "the browser (google_drive, onedrive, dropbox) and the browser itself are set up on "
         "their own pages: the call says whether one is connected, and where to connect it "
-        "when it is not."
+        "when it is not. A calendar (Google, Outlook, iCloud) is connected here too: `app` "
+        "\"calendar\" shows the secure card for its private calendar link."
     )
     input_schema = {
         "type": "object",
@@ -2721,6 +2734,33 @@ class AppConnectTool(_RecordTool):
                 return SpendCheck(ask=False, cost_note="changes nothing by itself")
         return None
 
+    async def _calendar_card(self) -> ToolResult:
+        """The secure card for the private calendar link (v1.490.5). Nothing
+        is saved by this call: the card is the consent, as for an API-key app
+        (``spend_check`` answers "changes nothing" for an id that is no
+        catalog app). The words say what the link can and cannot do: seen
+        live, a model told the user appointments could be ADDED through it."""
+        from .credentials import resolve_secret
+        from .records_apps import CALENDAR_SECRET
+
+        sdef, _arg, _vault = resolve_secret(CALENDAR_SECRET)
+        try:
+            saved = bool(await asyncio.to_thread(self.platform.secrets.exists, CALENDAR_SECRET))
+        except Exception:  # noqa: BLE001 — not knowing is not a reason to fail the card
+            saved = False
+        req = {
+            "name": CALENDAR_SECRET,
+            "label": sdef.label,
+            "help": sdef.help,
+            "why": "to connect your calendar",
+            "request_id": new_id("seq"),
+        }
+        return ToolResult(
+            ok=True,
+            output=CALENDAR_CARD_WORDS + (CALENDAR_SAVED_WORDS if saved else ""),
+            data={"secret_requests": [req], "calendar": True, "already_saved": saved},
+        )
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from ..connectors.catalog import CATALOG, get_connector
         from ..connectors.service import _secret_name
@@ -2745,19 +2785,18 @@ class AppConnectTool(_RecordTool):
                         "add-on there, and turn on browser access)."
                     ),
                 )
+            # v1.490.5: a calendar is CONNECTED from here. Iron Jarvis reads
+            # one by its private calendar link, and `app_disconnect` already
+            # takes that link off (v1.489.0), so "hook up my Google calendar"
+            # is this tool's job too: it shows the link's secure card, the
+            # same one `config_secret` shows. (v1.484.0 answered with a
+            # refusal that named config_secret: one more step for nothing.)
+            from .records_apps import names_calendar
+
+            if names_calendar(cid):
+                return await self._calendar_card()
             known = ", ".join(c.id for c in CATALOG)
-            # v1.484.0: a calendar is not an app here (seen live: "hook up my
-            # Google calendar" became app_connect google_calendar, which only
-            # ends in this refusal). Iron Jarvis reads a calendar by its
-            # private calendar link, so the refusal says that way in.
-            calendar = (
-                " There is no calendar app: Iron Jarvis reads a calendar (Google, Outlook, "
-                "iCloud) by its private calendar link. Call config_secret with name "
-                "calendar_ics_url to show the user the secure card for it; the setting "
-                "Calendar reminders (calendar_trigger_enabled) makes Iron Jarvis act on it."
-                if "calendar" in cid.lower() or "ical" in cid.lower() else ""
-            )
-            return ToolResult(ok=False, error=f"There is no app called {cid!r}. Known: {known}.{calendar}")
+            return ToolResult(ok=False, error=f"There is no app called {cid!r}. Known: {known}.")
         if conn.connect_via == "oauth":
             # v1.353.0 re-review: an app the user ALREADY signed in to is not
             # sent to connect it again. "find my tax files in Google Drive"

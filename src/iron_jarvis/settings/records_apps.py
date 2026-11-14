@@ -1275,6 +1275,19 @@ _CALENDAR_OFF = re.compile(
     + r"|\btake\s+" + _DET + r"?" + _CALENDAR_WORDS + r"\s+(?:off|out|away|down)" + _AFTER,
     re.IGNORECASE,
 )
+#: v1.490.5: "hook up my Google calendar to you", "connect my calendar",
+#: "link my Outlook calendar and tell me what is on today". The calendar
+#: itself, joined to Iron Jarvis: never a thing ON a calendar ("add the
+#: calendar invite") and never a calendar joined to something else ("sync my
+#: calendar with my phone").
+_CALENDAR_ON = re.compile(
+    r"\b(?:connect|hook\s+up|link(?:\s+up)?|sync|join(?:\s+up)?|plug\s+in|wire\s+up|tie\s+in"
+    r"|add|bring\s+in|set\s+up)\s+" + _DET + r"?" + _CALENDAR_WORDS
+    + r"(?=\s*(?:$|[.,!?;:)]|\b(?:so|and|then|please|too|now)\b"
+    r"|\b(?:up\s+)?(?:to|with|into)\s+(?:you|jarvis|iron\s+jarvis|the\s+assistant|here|chat"
+    r"|this(?:\s+(?:app|chat|program|assistant))?)\b))",
+    re.IGNORECASE,
+)
 #: The other programs whose servers can be brought over.
 _OTHER_PROGRAM = (
     r"(?:claude\s+desktop|claude\s+code|codex|cursor|vs\s?code|visual\s+studio\s+code|windsurf"
@@ -1395,6 +1408,8 @@ def _apps_tools_for(t: str) -> tuple[str, ...]:
             out.append("app_switch")
         if _DISCONNECT.search(t) or _CALENDAR_OFF.search(t):
             out.append("app_disconnect")
+        if _CALENDAR_ON.search(t):
+            out.append("app_connect")
         if _IMPORT_NAMED.search(t) or any(_import_span_ok(m.group(1)) for m in _IMPORT_FROM.finditer(t)):
             out.append("app_import")
         if _DEST_REMOVE.search(t):

@@ -6805,9 +6805,13 @@ CAPABILITY_BLOCK = (
     # could you show me how to find it" was answered with an approval card to
     # switch them on, and "where do I find the button to change the font" with
     # a Settings section that does not exist.
+    # v1.490.5: "from guide_search" was read as "from a tool", and the model
+    # called find_capability, which lists tools and has no steps. The Guide
+    # now knows where each setting is, so such a question is the Guide's.
     "When the user asks WHERE something is in Iron Jarvis or HOW to do it "
-    "themselves, tell them, from `guide_search` and not from memory; do not "
-    "make the change for them unless they ask."
+    "themselves, call `guide_search`, not `find_capability`, when you hold it: "
+    "it knows where settings are. Answer from it, not memory; do not make the "
+    "change for them unless they ask."
 )
 
 

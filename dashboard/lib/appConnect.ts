@@ -303,6 +303,12 @@ interface ToolLike {
   args?: Record<string, unknown>;
 }
 
+/** The daemon's `names_calendar` (settings/records_apps.py), for `app_connect`. */
+export function namesCalendar(ref: string): boolean {
+  const low = String(ref ?? "").trim().toLowerCase();
+  return low.includes("calendar") || low === "ical" || low === "ics" || low === "agenda";
+}
+
 /** The apps a turn's FINISHED, successful `app_connect` calls named — turned
  *  on for the chat so the next message has their tools ("It is on for this
  *  chat now" is the tool's own promise for an app that was already
@@ -312,6 +318,10 @@ export function appConnectIds(tools: readonly ToolLike[] | null | undefined): st
   for (const t of tools ?? []) {
     if (!t || t.name !== "app_connect" || t.ok !== true || (t.status && t.status !== "done")) continue;
     const id = str(t.args?.app).trim().toLowerCase();
+    // v1.490.5: `app_connect` with a calendar shows the calendar link's secure
+    // card (settings/records_apps.names_calendar). A calendar is not one of
+    // the chat's app switches, so it is never turned on as one.
+    if (namesCalendar(id)) continue;
     if (/^[a-z0-9_-]{1,64}$/.test(id) && !out.includes(id)) out.push(id);
   }
   return out;

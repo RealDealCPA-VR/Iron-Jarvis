@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.491.0 (2026-11-13).*
+holds itself to. Current as of v1.491.1 (2026-11-13).*
 
 ---
 
@@ -2041,6 +2041,39 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Connect your calendar by asking, and "where is it" answers come from the guide (v1.491.1)
+
+- **"Hook up my Google calendar" works like connecting any app.** Jarvis
+  already took a calendar link off when you asked it to disconnect your
+  calendar. Asked to connect one, though, its connect tool answered that there
+  was no calendar app and pointed at another tool. Now it shows the card where
+  you paste your private calendar link, straight away. It is the same single
+  card as before, with no approval step, and nothing is saved until you paste
+  the link. Jarvis also says plainly what the link can do: it can read your
+  appointments, it cannot add or change them.
+- **The guide knows where every setting is.** The built-in guide now has a
+  page for each setting that says where it is on the Settings page, in the
+  page's own words ("Text size is in Settings › Appearance"). When you ask
+  where something is or how to do it yourself, Jarvis reads the guide for it,
+  and such a question finds the setting's own page first.
+- **What it measured (Claude Haiku).** Four runs of the 111 practice
+  requests: 109, 110, 108 and 109 (97 to 99 in 100). The nine runs before
+  this change ranged from 103 to 108. The two calendar requests and the
+  "where is the reminders button" request, which had missed in every earlier
+  run, now pass. Messages that only look like requests, two passes: 99
+  held-out messages, no card either time; a second set of 101, cards only on
+  the messages that really are requests; a third set of 100, no card the
+  first time and one the second ("Phone screens are too small for this" got a
+  card offering bigger text, which asks first and changes nothing unless you
+  allow it); 43 ordinary questions, no card and no answer redone. A "where is
+  it" answer now takes two look-ups, about two seconds more.
+- **GLM on your own server.** On v1.490.4 GLM
+  picked the right tool for 102 of the 111 practice requests (92 in 100),
+  with no card on the 99 held-out look-alike messages, one card on a real
+  request in the second set and one on a remark in the third. Four of its
+  nine misses were the calendar and "where is it" requests this version
+  changes. GLM has not been measured on this version yet.
 
 ## Jarvis remembers the work it did, folder by folder (v1.491.0)
 

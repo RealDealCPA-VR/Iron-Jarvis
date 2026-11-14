@@ -51,6 +51,14 @@ HOW_TO_USE = (
     "line fits, say plainly that you found no feature for it."
 )
 
+#: v1.490.5: said under an answer that lists a setting. A "where is it"
+#: question is the Guide's (it has a page per setting and the steps); the
+#: lookup lists tools. Seen live: the model looked the setting up here and
+#: answered from this list, with the Guide among its tools and unused.
+WHERE_HINT = (
+    "If the user asked WHERE a setting is or HOW to change it by hand (and did not ask you "
+    "to change it), call guide_search for it when you hold that tool, and answer from the guide."
+)
 NOTHING_FOUND = (
     "Nothing in Iron Jarvis matches that. Try once more with other ENGLISH words for "
     "the request (what should change, or what should happen): this list is written "
@@ -201,6 +209,16 @@ def entry_line(platform: Any, entry: _index.Capability) -> tuple[str, dict[str, 
             where = " It cannot be removed from chat: the user removes it by hand in Settings."
         if removed:
             row.update(href=removed[1])
+        connector = _index.SECRET_CONNECTOR.get(entry.id)
+        if connector and _mode(platform, connector[0]) != "deny":
+            # v1.490.5: connected like an app (the calendar link).
+            row.update(connector=connector[0])
+            return (
+                f"{head}: when tool {connector[0]} is among your tools, connect it by calling "
+                f"{connector[0]} {connector[1]}; otherwise set it with tool {entry.tool}. Either "
+                "shows the user a secure card to paste it into. Never ask for the value in "
+                "chat." + where
+            ), row
         return (
             f"{head}: set with tool {entry.tool}, which shows the user a secure card to "
             "paste it into. Never ask for the value in chat." + where
@@ -248,6 +266,8 @@ def answer(platform: Any, query: Any, limit: Any = 5) -> tuple[str, dict[str, An
             lines.append(missing)
         if foreign:
             lines.append(NOT_ENGLISH_HINT)
+        if any(row.get("kind") == "setting" for row in rows):
+            lines.append(WHERE_HINT)
         lines.append(HOW_TO_USE)
         return "\n".join(lines), {**data, "matches": rows}
     except Exception:  # noqa: BLE001 — a fault is said as a fault, never as "nothing matches"
@@ -260,7 +280,10 @@ class FindCapabilityTool(Tool):
         "Look up what Iron Jarvis itself can do. Call this BEFORE you tell the "
         "user that something cannot be done here, and whenever the user asks "
         "Iron Jarvis to set up, change, remember, schedule, connect, watch or "
-        "create something and none of your other tools fits. Describe the request "
+        "create something and none of your other tools fits. It is NOT for a "
+        "question about WHERE something is in the app or HOW the user does it by "
+        "hand: when you hold guide_search, call that for such a question. "
+        "Describe the request "
         "in 3 to 8 plain ENGLISH words, whatever language the user writes in (the "
         "list is in English), then \" / \" and two other short ways to name the "
         "same request (other words the app itself might use for it), for example "

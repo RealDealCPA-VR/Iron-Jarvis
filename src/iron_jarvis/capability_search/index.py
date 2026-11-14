@@ -253,6 +253,17 @@ SECRET_REMOVER = {
 }
 
 
+#: v1.490.5: a private value that is CONNECTED like an app, the tool that
+#: does it and how to call it. The calendar link: ``app_connect`` with app
+#: "calendar" shows the same secure card ``config_secret`` shows. The lookup's
+#: line names it for a reply that already holds the tool (the user's own
+#: words bring it); the lookup itself never brings it, so a looked-up
+#: calendar request is still one secure card and no approval card.
+SECRET_CONNECTOR = {
+    "calendar_ics_url": ("app_connect", 'with `app` "calendar"'),
+}
+
+
 def _secret_entries(_platform: Any = None) -> list[Capability]:
     """v1.484.0: the settings that hold a private value (the calendar link, the
     speech-to-text key). They are not in ``schema.SETTINGS`` (a value never

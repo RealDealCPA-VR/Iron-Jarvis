@@ -13,8 +13,9 @@ could never reach the calendar link. Seen live, it became
 * its answer line says it is set with ``config_secret``'s secure card, and
   never claims ``config_list`` reads it;
 * a lookup that finds it brings ``config_secret`` alone;
-* ``app_connect`` asked for a calendar app says the way in is the calendar
-  link; any other unknown app keeps its old words.
+* ``app_connect`` asked for a calendar app shows the calendar link's secure card
+  (since v1.490.5; before, it said the way in was the calendar
+  link); any other unknown app keeps its old words.
 """
 
 from __future__ import annotations
@@ -91,9 +92,12 @@ def _connect(platform, app):
 
 @pytest.mark.parametrize("app", ["google_calendar", "iCal", "outlook_calendar"])
 def test_a_calendar_app_points_at_the_calendar_link(platform, app):
+    """Moved on purpose in v1.490.5: the call no longer ends in a refusal that
+    names config_secret. It shows the calendar link's secure card itself
+    (tests/test_calendar_connect_and_where_v14905.py)."""
     r = _connect(platform, app)
-    assert r.ok is False and "calendar_ics_url" in r.error and "config_secret" in r.error
-    assert f"There is no app called {app.lower()!r}" in r.error
+    assert r.ok is True and not r.error
+    assert [q["name"] for q in r.data["secret_requests"]] == ["calendar_ics_url"]
 
 
 def test_another_unknown_app_keeps_its_words(platform):

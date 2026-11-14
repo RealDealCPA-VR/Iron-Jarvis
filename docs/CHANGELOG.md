@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.491.1
+
+**Connect your calendar by asking, and "where is it" answers come from the guide.** **"Hook up my Google calendar" works like connecting any app.** Jarvis already took a calendar link off when you asked it to disconnect your calendar.
+
 ## v1.491.0
 
 **Jarvis remembers the work it did, folder by folder.** **A record of your work, kept by itself.** Iron Jarvis now keeps its own record of every piece of work that has a folder: the chats, the coding sessions (both Code views) and the agent runs, each with its title, when it happened, how it ended and the files it wrote.
@@ -77,7 +81,3 @@
 ## v1.479.0
 
 **What Jarvis looks up, it can now use.** This is the second step of the feature lookup from v1.478.0.
-
-## v1.478.0
-
-**Jarvis can look up what it can do.** This is the first step of a larger change.

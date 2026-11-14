@@ -381,6 +381,53 @@ def _first_line(doc: str | None) -> str:
     return ""
 
 
+#: The heading every "where is this setting" catalog page starts with.
+SETTINGS_PLACE_HEAD = "Where a setting is"
+#: v1.490.5: "where do I find the button to change the font", "which page has
+#: the backup switch", "how do I get to the update setting". For such a
+#: question a setting's own page counts for more than a release note that
+#: happens to share its words. Checked on the first 200 characters only.
+_WHERE_RX = re.compile(
+    r"\bwhere\b|\bwhich\s+(?:page|screen|menu|tab|section)\b"
+    r"|\b(?:find|locate|get\s+to|show\s+me)\b[^.?!\n]{0,60}\b(?:button|setting|settings|switch|option"
+    r"|toggle|checkbox|menu|page|screen)\b",
+    re.I,
+)
+_WHERE_BONUS = 2.5
+
+
+def is_where_question(query: str) -> bool:
+    """True for a question about WHERE something is in the app."""
+    return bool(_WHERE_RX.search(str(query or "")[:200]))
+
+
+def settings_places() -> list[tuple[str, list[str]]]:
+    """(heading, lines) per setting (v1.490.5): where it is on the Settings
+    page, in the page's own words (``capability_search.index.setting_place``),
+    its other names and its one-line help. One page per setting, so a search
+    hit's short preview holds the place. Read from the schema that draws the
+    page; no value is read."""
+    from ..capability_search.index import setting_place
+    from ..settings import schema
+
+    out: list[tuple[str, list[str]]] = []
+    for row in schema.SETTINGS:
+        if getattr(row, "pattern", False):
+            continue
+        place = setting_place(row)
+        if not place:
+            continue
+        lines = [f"{row.label} is in {place}."]
+        others = ", ".join(str(a) for a in (getattr(row, "aliases", None) or ()) if a)
+        if others:
+            lines.append(f"Also called: {others}.")
+        help_ = " ".join(str(getattr(row, "help", "") or "").split())[:300]
+        if help_:
+            lines.append(help_)
+        out.append((f"{SETTINGS_PLACE_HEAD}: {row.label}", lines))
+    return out
+
+
 def live_sections(platform, app=None) -> list[Section]:
     """The catalogs generated from the running daemon. Each reader is
     best-effort: a store that cannot answer contributes nothing and logs,
@@ -422,6 +469,16 @@ def live_sections(platform, app=None) -> list[Section]:
             )
     except Exception:  # noqa: BLE001
         log.exception("guide live catalog: settings keys unavailable")
+
+    # v1.490.5: WHERE each setting is on the Settings page, in the page's own
+    # words (the schema draws the page). One catalog page per setting, so
+    # "where do I change the font" finds "Text size is in Settings ›
+    # Appearance". Labels, other names and the one-line help only: never a value.
+    try:
+        for heading, lines in settings_places():
+            add(heading, lines)
+    except Exception:  # noqa: BLE001
+        log.exception("guide live catalog: settings places unavailable")
 
     # Connected models.
     try:
@@ -572,6 +629,7 @@ class GuideIndex:
         phrases = [f"{a} {b}" for a, b in zip(q, q[1:]) if a != b]
         k1, b = 1.2, 0.75
         defining = is_definition_question(query)
+        asks_where = is_where_question(query)
         scored: list[tuple[float, Section]] = []
         for s in secs:
             score = 0.0
@@ -589,6 +647,8 @@ class GuideIndex:
             score *= _DOC_PRIOR.get(s.doc, 1.0) * s.prior
             if defining and s.doc == "vocabulary":
                 score *= _DEFINITION_BONUS
+            if asks_where and s.live and s.heading.startswith(SETTINGS_PLACE_HEAD):
+                score *= _WHERE_BONUS
             scored.append((score, s))
         scored.sort(key=lambda x: x[0], reverse=True)
         return scored[:k]
@@ -663,7 +723,10 @@ class GuideIndex:
                 break
             body += block
             used += len(block)
-        heads = [s.heading for s in live]
+        # v1.490.5: one line for the per-setting pages, never ~170 headings.
+        heads = [s.heading for s in live if not s.heading.startswith(SETTINGS_PLACE_HEAD)]
+        if any(s.heading.startswith(SETTINGS_PLACE_HEAD) for s in live):
+            heads.append(f"{SETTINGS_PLACE_HEAD} (one page per setting: its place on the Settings page)")
         if heads:
             body += "\n\nLive catalogs guide_search can reach: " + "; ".join(heads)
         return body
