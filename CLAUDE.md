@@ -19853,7 +19853,11 @@ suggest-don't-act for anything autonomous, everything reviewable.
   checked-again-nudge-v1495.test.ts`; moved on purpose: `test_look_first_v1480`
   (a restored promise is now sent back once: `HONEST`), `test_look_first_review_
   v1480` (`ANSWER`, a reply that claims nothing, for the check's mechanics),
-  `test_wave1_outcome_v1227` (the claim kept three times: verdict + note).
+  `test_wave1_outcome_v1227` (the claim kept three times: verdict + note),
+  `test_decompose_v1132` (three planner pins whose scripted model answered a
+  task asking for two files with "All done." and no file: it now answers the
+  loop's note with a "Blocked:" line — a scripted model for a file-making task
+  needs one more answer).
   OPEN: Build › Code unchanged; the checks read English; a claimed change the
   record cannot back always counts as unfinished, even when only a missing
   tool stops it (the model ends on "Blocked:"); not driven in the packaged app.

@@ -101,6 +101,11 @@ _LONG_TASK = (
     "session workspace so they can be reviewed later."
 )
 
+#: v1.495.0: _LONG_TASK asks for two files, so a flat answer that wrote none is
+#: sent back by the check-again loop (daemon/until_done). The scripted models
+#: below answer that note honestly, which ends the loop.
+_BLOCKED = "Blocked: this scripted model writes no files."
+
 _PLAN_JSON = json.dumps(
     {
         "steps": [
@@ -548,18 +553,21 @@ async def test_decomposed_run_end_to_end_double_fail_surfaced(
 
 # --------------------------------- (g) degenerate plan → flat-loop fallback --
 async def test_degenerate_plan_falls_back_to_flat_loop(platform, orchestrator):
-    inner = _TextOnly(['{"steps": []}', "Flat answer."], provider="local-flat")
+    inner = _TextOnly(['{"steps": []}', "Flat answer.", _BLOCKED], provider="local-flat")
     platform.providers.register("local-flat", lambda model=None: inner)
     events: list = []
     platform.event_bus.add_handler(lambda e: events.append(e))
     session = await orchestrator.run(_LONG_TASK, AgentType.BUILDER, provider="local-flat")
     assert session.status is SessionStatus.COMPLETED
-    assert orchestrator.transcript(session.id)["runs"][0]["result"] == "Flat answer."
+    # The FLAT loop answered: no planner contract on its call (then the
+    # check-again loop's one note, answered with a Blocked line).
+    assert "task planner" not in inner.calls[1][0]
+    assert orchestrator.transcript(session.id)["runs"][0]["result"] == _BLOCKED
     # The planner WAS consulted (call 1 = the plan contract)...
     assert "task planner" in inner.calls[0][0]
     # ...but declined, so no plan.* event was ever published.
     assert not [e for e in events if e.type.startswith("plan.")]
-    assert len(inner.calls) == 2
+    assert len(inner.calls) == 3
 
 
 # ------------------------------------------- (h) flat path stays untouched ---
@@ -587,12 +595,12 @@ async def test_simple_task_never_calls_planner(platform, orchestrator, monkeypat
 
 async def test_native_adapter_never_calls_planner(platform, orchestrator, monkeypatch):
     calls = _spy_planner(monkeypatch)
-    adapter = _Native(["All done."], provider="native-e2e")
+    adapter = _Native(["All done.", _BLOCKED], provider="native-e2e")
     platform.providers.register("native-e2e", lambda model=None: adapter)
     session = await orchestrator.run(_LONG_TASK, AgentType.BUILDER, provider="native-e2e")
     assert session.status is SessionStatus.COMPLETED
     assert calls == []  # native tool_use → flat loop even for a long task
-    assert len(adapter.calls) == 1
+    assert len(adapter.calls) == 2  # the answer, then the check-again note's
 
 
 async def test_middle_step_double_fail_rest_runs_and_lying_assemble_corrected(
@@ -662,9 +670,9 @@ async def test_middle_step_double_fail_rest_runs_and_lying_assemble_corrected(
 async def test_flag_off_never_engages(platform, orchestrator, monkeypatch):
     calls = _spy_planner(monkeypatch)
     platform.config.decompose_local_tasks = False
-    inner = _TextOnly(["Done the flat way."], provider="local-off")
+    inner = _TextOnly(["Done the flat way.", _BLOCKED], provider="local-off")
     platform.providers.register("local-off", lambda model=None: inner)
     session = await orchestrator.run(_LONG_TASK, AgentType.BUILDER, provider="local-off")
     assert session.status is SessionStatus.COMPLETED
-    assert orchestrator.transcript(session.id)["runs"][0]["result"] == "Done the flat way."
+    assert orchestrator.transcript(session.id)["runs"][0]["result"] == _BLOCKED
     assert calls == []
