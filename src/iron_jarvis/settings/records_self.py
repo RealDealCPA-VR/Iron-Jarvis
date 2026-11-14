@@ -480,7 +480,9 @@ class PreferenceListTool(Tool):
     name = PREFERENCE_READER
     description = (
         "List the preferences and lessons the user kept (what Iron Jarvis remembers about how "
-        "to answer them), each with the id preference_edit and preference_forget take. Read-only."
+        "to answer them), each with the id preference_edit and preference_forget take. Read-only. "
+        "When the user asks what you remember about how they like things, call this: what your "
+        "instructions show of it is only a part, never the list."
     )
     input_schema = {"type": "object", "properties": {"query": {"type": "string"}}}
     reversibility = Reversibility.READONLY

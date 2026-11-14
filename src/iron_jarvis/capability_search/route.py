@@ -246,6 +246,14 @@ def wanted(d: Any, body: Any, *, low_trust: bool = False, plain_chat: bool = Tru
         return False
 
 
+def short_list(text: str, by_id: dict, only: Any) -> tuple[str, dict]:
+    """The list and its entries cut down to the ids in *only* (in the
+    list's own order). An id that is not in the list is dropped."""
+    keep = {str(i) for i in (only or ()) if str(i) in by_id}
+    lines = [line for line in str(text or "").split("\n") if line.split(":", 1)[0] in keep]
+    return "\n".join(lines), {i: e for i, e in by_id.items() if i in keep}
+
+
 def answered_nothing(text: Any) -> bool:
     """Did the call answer with a readable EMPTY list ("[]")? An answer
     that cannot be read, or that names anything at all, is not "nothing".
@@ -328,11 +336,15 @@ def fits_window(text: str, window: Any) -> bool:
 
 
 async def route_request(d: Any, body: Any, provider: str, model: str, *,
-                        window: Any = None) -> "Routed | None":
+                        window: Any = None, only: Any = None) -> "Routed | None":
     """ONE call on the turn's own provider and model: which entries does the
     user's message need? ``None`` when nothing was found or the call could not
     be made (a timeout, a refusal, the demo model, an unreadable answer).
-    Never raises; a cancel passes through (Stop ends the turn)."""
+    Never raises; a cancel passes through (Stop ends the turn).
+
+    ``only`` (v1.490.2, the SECOND LOOK): the same question with just these
+    entry ids in the list. A list of a few lines is far easier for a small
+    model than the whole one; no id of it in the list = None."""
     from ..providers.adapters.base import LLMMessage
 
     started = time.perf_counter()
@@ -341,6 +353,8 @@ async def route_request(d: Any, body: Any, provider: str, model: str, *,
         if not message:
             return None
         text, by_id = await asyncio.to_thread(catalog, d.platform)
+        if only is not None:
+            text, by_id = short_list(text, by_id, only)
         if not by_id:
             return None
         if not fits_window(text, window):
@@ -369,7 +383,8 @@ async def route_request(d: Any, body: Any, provider: str, model: str, *,
         unasked = said_unasked(getattr(response, "text", ""))
         took = time.perf_counter() - started
         # Names only, never a word of the message.
-        log.info("request routed: %s%s (%.1f s)", ids, " unasked" if unasked else "", took)
+        log.info("request routed%s: %s%s (%.1f s)", " (second look)" if only is not None else "",
+                 ids, " unasked" if unasked else "", took)
         return Routed(
             entries=[by_id[i] for i in ids], provider=served,
             model=str(getattr(route, "model", "") or ""),

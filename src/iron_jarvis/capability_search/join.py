@@ -167,7 +167,8 @@ class _Found:
         if entry is None:
             while len(self._by) >= MAX_KEYS:
                 self._by.popitem(last=False)
-            entry = self._by[key] = {"pending": [], "joining": 0, "names": set(), "not_asked": False}
+            entry = self._by[key] = {"pending": [], "joining": 0, "names": set(), "not_asked": False,
+                                     "asked_ids": set()}
         return entry
 
     def note(self, key: str, rows: Any) -> None:
@@ -193,13 +194,36 @@ class _Found:
             entry = self._by.get(key)
             return bool(entry and entry["pending"])
 
-    def mark_not_asked(self, key: str) -> None:
+    def pending_ids(self, key: str) -> list[str]:
+        """The entry ids of the lookups waiting to be joined (each once,
+        at most :data:`SECOND_LOOK_IDS`): what the second look is asked
+        about."""
+        out: list[str] = []
+        with self._lock:
+            entry = self._by.get(key)
+            for rows in (entry["pending"] if entry else ()):
+                for row in rows:
+                    rid = str(row.get("id") or "")
+                    if rid and rid not in out and len(out) < SECOND_LOOK_IDS:
+                        out.append(rid)
+        return out
+
+    def mark_not_asked(self, key: str, asked_ids: Any = None) -> None:
         """Iron Jarvis's own routing call answered that this turn's message
-        needs none of its features (``route.Routed.nothing``)."""
+        needs none of its features (``route.Routed.nothing``). *asked_ids*
+        (v1.490.2): the entries its SECOND LOOK said the user did ask for;
+        those may still join."""
         if not key:
             return
         with self._lock:
-            self._entry(key)["not_asked"] = True
+            entry = self._entry(key)
+            entry["not_asked"] = True
+            entry["asked_ids"] = {str(i) for i in (asked_ids or ())}
+
+    def asked_ids(self, key: str) -> frozenset:
+        with self._lock:
+            entry = self._by.get(key)
+            return frozenset(entry.get("asked_ids") or ()) if entry else frozenset()
 
     def not_asked(self, key: str) -> bool:
         with self._lock:
@@ -341,6 +365,8 @@ WHY_SHARED = "its permission is shared with other tools, so a lookup does not br
 #: call said "nothing" for "my goal this year is to get my Year 10s to stop
 #: guessing at units", and the model looked `goal_add` up by itself and put
 #: up its card. Two readings must agree before a card is shown.
+#: How many entries the second look is shown at most.
+SECOND_LOOK_IDS = 12
 WHY_NOT_ASKED = (
     "the user's message does not ask Iron Jarvis to do this (Iron Jarvis read it "
     "itself); answer in words, and you may say what Iron Jarvis could do and "
@@ -348,8 +374,50 @@ WHY_NOT_ASKED = (
 )
 
 #: Readers that can send the model's words to a memory base that is not on
-#: this PC (a Notion base, a memory server): treated as reaching outside.
+#: this PC (a Notion base, a memory server): treated as reaching outside
+#: unless :func:`memory_stays_here` can tell that nothing they read is.
 MEMORY_BASE_READERS = frozenset({"ltm_search", "recall"})
+
+
+def memory_stays_here(platform: Any) -> bool:
+    """Is everything a memory search reads on this PC (v1.490.2)?
+
+    True only when EVERY memory base is a folder of notes on this PC
+    (``egress.ltm_connector_is_local``: anything else, Notion, a memory
+    server, an app's memory, a cloud drive, is not) AND the server that turns
+    text into search vectors, when one is set, is on the user's own network
+    (``egress.private_host``, judged from its address, nothing is looked up).
+    Then a memory search sends nothing anywhere, and a lookup may bring it as
+    it brings any reader that stays on this PC.
+
+    Measured: on an install whose only memory is its own notes folder, the
+    forced card for a looked-up memory search was the most common card on
+    messages that asked for nothing ("I believe we once spoke about my
+    pupil's recital").
+
+    FAIL CLOSED: no platform, no memory manager, a base that cannot be judged
+    or any fault = False (the search asks first, as before). Reads memory
+    only; never blocks."""
+    try:
+        from ..providers import egress
+
+        ltm = getattr(platform, "ltm", None)
+        connectors = getattr(ltm, "connectors", None)
+        if not callable(connectors):
+            return False
+        for connector in connectors():
+            if not egress.ltm_connector_is_local(connector):
+                return False
+        config = getattr(platform, "config", None)
+        if config is None:
+            return False
+        provider = str(getattr(config, "embedder_provider", "auto") or "auto")
+        url = str(getattr(config, "ollama_base_url", "") or "").strip()
+        if provider != "mock" and url and not egress.private_host(url):
+            return False
+        return True
+    except Exception:  # noqa: BLE001 — cannot tell: it asks
+        return False
 
 
 def _reads(tool: Any, name: str) -> bool:
@@ -359,10 +427,13 @@ def _reads(tool: Any, name: str) -> bool:
     return name in _index.READS_ONLY or rev in (Reversibility.READONLY, Reversibility.READONLY.value)
 
 
-def asks_when_found(registry: Any, name: str) -> bool:
+def asks_when_found(registry: Any, name: str, platform: Any = None) -> bool:
     """Would a lookup bring *name* as ASK FIRST (it changes something, or
     reaches outside this PC)? What the lookup's own answer line says, so the
-    list and the note under it agree. Fail-closed: cannot tell = it asks."""
+    list and the note under it agree. Fail-closed: cannot tell = it asks.
+
+    *platform* (v1.490.2): with it, a memory search asks only when a memory
+    base is NOT on this PC (:func:`memory_stays_here`); without it, always."""
     try:
         tool = registry.get(name)
         if tool is None:
@@ -371,10 +442,11 @@ def asks_when_found(registry: Any, name: str) -> bool:
             return True
         from ..providers import egress
 
-        return bool(
-            name in egress.INTERNET_TOOLS or name in MEMORY_BASE_READERS
-            or egress.reaches_outside(tool, registry)
-        )
+        if name in egress.INTERNET_TOOLS or egress.reaches_outside(tool, registry):
+            return True
+        if name in MEMORY_BASE_READERS:
+            return not (platform is not None and memory_stays_here(platform))
+        return False
     except Exception:  # noqa: BLE001
         return True
 
@@ -556,6 +628,12 @@ def join_found(
         except Exception:  # noqa: BLE001 — Local only cannot be read: nothing joins
             return []
         not_asked = FOUND.not_asked(key)
+        # v1.490.2: what the routing call's SECOND LOOK said the user did
+        # ask for (the tools those entries bring) is not held back.
+        asked_ids = FOUND.asked_ids(key) if not_asked else frozenset()
+        asked_names = set(_wanted([
+            r for rows in lookups for r in rows if str(r.get("id") or "") in asked_ids
+        ])) if asked_ids else set()
         room = max(0, MAX_JOINING_LOOKUPS - FOUND.joining(key))
         can = joinable()
         joined: list[str] = []
@@ -630,7 +708,7 @@ def join_found(
                 if ceiling is not None and ceiling < max_tools and len(held) >= ceiling:
                     skipped[name] = WHY_BUDGET
                     continue
-                must_ask = asks_when_found(registry, name)
+                must_ask = asks_when_found(registry, name, d.platform)
                 mode = str(getattr(perms.mode_for(name, overrides), "value", "ask") or "ask")
                 if not must_ask and mode == "allow" and turn_rule != "ask":
                     # Rule 2: a reader that stays on this PC joins and runs,
@@ -641,7 +719,7 @@ def join_found(
                     armed_grant.add(name)
                 else:
                     # Rule 1: everything else asks first, or does not join.
-                    if not_asked:
+                    if not_asked and name not in asked_names:
                         # v1.490.1: the routing call said the message asks
                         # for nothing, so no card is put up for it.
                         skipped[name] = WHY_NOT_ASKED

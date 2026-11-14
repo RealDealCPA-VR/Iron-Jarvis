@@ -59,7 +59,9 @@ async def test_a_change_the_model_looked_up_does_not_join_when_the_message_asked
     app, ws = desk
     model = Routing(_steps(), picks=[])
     _frames, cards, done = await _stream(app, _body(ws, ASK), model, decision="once")
-    assert len(model.route_calls) == 1
+    # v1.490.2: the routing question is asked a second time, with only what
+    # the lookup found (tests/test_second_look_v14902.py); it says [] again.
+    assert len(model.route_calls) == 2
     assert "model_server_add" not in model.offered[1], "a card could be put up for a message that asked for nothing"
     assert cards == [], cards
     said = " ".join(model.tool_texts[1])

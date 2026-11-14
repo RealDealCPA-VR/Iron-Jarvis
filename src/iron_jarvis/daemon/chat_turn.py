@@ -3210,6 +3210,11 @@ class RouteFirst:
         self.used = False
         self.routed: Any = None
         self._billed = False
+        #: v1.490.2: ``again(only)`` asks the routing question once more
+        #: with a short list (set by ``start_route_first``); ``_owed`` is
+        #: that call's usage, added to the turn at the next billing point.
+        self.again: Any = None
+        self._owed: list = []
 
     def _take(self) -> Any:
         self.used = True
@@ -3270,6 +3275,27 @@ class RouteFirst:
             self.routed = None
         return self.routed
 
+    def owe(self, routed: Any) -> None:
+        """A second look was made: its usage is added to the turn at the
+        next billing point (:meth:`take_owed`)."""
+        if routed is not None:
+            self._owed.append(routed)
+
+    def take_owed(self, tally: Any) -> tuple[int, int, int]:
+        """Bill every second look not billed yet. Returns the usage to add."""
+        owed, self._owed = self._owed, []
+        total = [0, 0, 0]
+        for routed in owed:
+            usage = dict(getattr(routed, "usage", None) or {})
+            try:
+                tally.add(routed.provider, routed.model, usage)
+            except Exception:  # noqa: BLE001 — a tally fault never fails a turn
+                log.debug("second-look billing failed", exc_info=True)
+            total[0] += int(usage.get("input_tokens", 0) or 0)
+            total[1] += int(usage.get("output_tokens", 0) or 0)
+            total[2] += 1
+        return (total[0], total[1], total[2])
+
     def bill(self, tally: Any) -> tuple[int, int, int]:
         """Add the call to the turn's tally ONCE, when its answer was used.
         Returns ``(input tokens, output tokens, completions)`` to add."""
@@ -3306,7 +3332,10 @@ def start_route_first(prep: Any, d: Any, body: Any, provider: str, model: str, *
                 window = None
             prep.start("route", _none_on_error(
                 _route.route_request(d, body, provider, model, window=window)))
-            return RouteFirst(prep.take("route"))
+            first = RouteFirst(prep.take("route"))
+            first.again = lambda only: _route.route_request(
+                d, body, provider, model, window=window, only=only)
+            return first
     except Exception:  # noqa: BLE001 — nothing is looked up; the turn goes on
         log.debug("route-first start failed", exc_info=True)
     return None
@@ -3351,11 +3380,61 @@ async def settle_route_for_join(route: "RouteFirst | None", ctx: Any, *, stopped
                     stop_task.cancel()
             verdict = route.nothing_asked()
         if verdict:
-            FOUND.mark_not_asked(key)
+            asked = await _second_look(route, FOUND.pending_ids(key), stopped)
+            FOUND.mark_not_asked(key, asked_ids=asked)
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 — not known: the join goes on as before
         log.debug("route verdict for the join failed", exc_info=True)
+
+
+#: How long the second look may take (a short list answers fast).
+SECOND_LOOK_WAIT_S = 12.0
+
+
+async def _second_look(route: "RouteFirst", ids: list, stopped: Any) -> set:
+    """THE SECOND LOOK (v1.490.2): the routing call answered an EMPTY list
+    for this message, and the model's own lookup is about to bring a tool
+    that asks first. A small model's routing call misses a real request now
+    and then (measured on the owner's model server: 4 to 11 of 138 practice
+    requests a run), and the gate then cost the user their card. So the
+    routing question is asked ONCE more with only the entries that lookup
+    found (*ids*): what it picks there, unmarked, the user did ask for.
+
+    Not made when the first answer was marked "unasked" (the routing call
+    positively read a remark) or there is nothing to ask about. Bounded by
+    :data:`SECOND_LOOK_WAIT_S` and ended by Stop; a failure, a timeout, an
+    empty or marked answer = nothing was asked for (the tools stay held).
+    Returns the entry ids the user asked for. Never raises (a cancel passes
+    through)."""
+    try:
+        routed = route.task.result() if route.task.done() else None
+    except BaseException:  # noqa: BLE001
+        routed = None
+    if routed is None or getattr(routed, "unasked", False) or not getattr(routed, "nothing", False):
+        return set()
+    if not ids or not callable(getattr(route, "again", None)):
+        return set()
+    task = asyncio.ensure_future(route.again(list(ids)))
+    stop_task = asyncio.ensure_future(stopped()) if callable(stopped) else None
+    try:
+        waits = {task} if stop_task is None else {task, stop_task}
+        await asyncio.wait(waits, timeout=SECOND_LOOK_WAIT_S, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        if stop_task is not None and not stop_task.done():
+            stop_task.cancel()
+        if not task.done():
+            task.cancel()
+    try:
+        second = task.result() if task.done() and not task.cancelled() else None
+    except Exception:  # noqa: BLE001 — the tools stay held
+        second = None
+    if second is None:
+        return set()
+    route.owe(second)
+    if getattr(second, "unasked", False):
+        return set()
+    return {str(getattr(e, "id", "") or "") for e in (getattr(second, "entries", None) or [])} - {""}
 
 
 def note_route_late(route: "RouteFirst | None", d: Any, *, armed: Any, msgs: list, ctx: Any,
@@ -3367,13 +3446,17 @@ def note_route_late(route: "RouteFirst | None", d: Any, *, armed: Any, msgs: lis
     try:
         if route is None:
             return (0, 0, 0)
+        # v1.490.2: a second look made just before (``settle_route_for_join``)
+        # is billed here, whether or not the first answer is used now.
+        owed = route.take_owed(tally)
         routed = route.late()
         if routed is None:
-            return (0, 0, 0)
+            return owed
         from ..capability_search import route as _route
 
         _route.note_late(d, routed, armed=armed, msgs=msgs, ctx=ctx)
-        return route.bill(tally)
+        used = route.bill(tally)
+        return (owed[0] + used[0], owed[1] + used[1], owed[2] + used[2])
     except Exception:  # noqa: BLE001
         log.debug("route-first late note failed", exc_info=True)
         return (0, 0, 0)

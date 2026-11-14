@@ -36,6 +36,7 @@ Three layers:
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 import threading
 import weakref
@@ -210,6 +211,63 @@ def readable_hint() -> str:
     if more > 0:
         text += f"; and {more} more"
     return text + ". If what you want is inside one of them, use its full path there."
+
+
+#: How many trailing parts of a refused path are looked for inside the
+#: folders Jarvis may read ("Desktop/Quotes" before "Quotes").
+SAME_NAME_PARTS = 3
+
+
+def same_name_inside(path: str | Path) -> str:
+    """Where the END of a refused *path* exists inside a folder the user's
+    setting lets Jarvis read, or "" (v1.490.2).
+
+    Seen live on a local model: refused the usual place for Downloads and
+    shown the folders it may read, it listed another folder under the right
+    home and still told the user that Downloads was not readable. The
+    Downloads folder was there. This names it.
+
+    Only the refused path's own last parts are used, as NAMES: the refused
+    path is never touched. They are looked up inside the first
+    :data:`HINT_FOLDERS` of the user's folders, the longest tail first
+    (``Desktop/Quotes`` before ``Quotes``), so at most a few local stats, and
+    only when a read was refused. A tail holding ``..``, a drive or an empty
+    part is not used. One name alone is only ever a FOLDER (a file of the
+    same name somewhere else is another file); a file is named with the
+    folder it is in. BLOCKING (a few stats). Never raises."""
+    try:
+        folders = setting_folders()[:HINT_FOLDERS]
+        if not folders:
+            return ""
+        text = os.fspath(path).replace("\\", "/")
+        parts = [s for s in text.split("/") if s]
+        if parts and parts[0].endswith(":"):
+            parts = parts[1:]
+        parts = parts[-SAME_NAME_PARTS:]
+        for k in range(len(parts), 0, -1):
+            tail = parts[-k:]
+            if any(s in (".", "..") or ":" in s or len(s) > 200 for s in tail):
+                continue
+            for folder in folders:
+                candidate = Path(folder).joinpath(*tail)
+                try:
+                    # ``lexists``: a link is named, never followed. A place
+                    # Jarvis may not read anyway (a protected folder, the
+                    # installation's own limit) is never named.
+                    if not os.path.lexists(candidate):
+                        continue
+                    # One name alone must be a FOLDER: a file called
+                    # notes.txt somewhere else is another file, not this one.
+                    if k == 1 and not stat.S_ISDIR(os.lstat(candidate).st_mode):
+                        continue
+                    if is_protected_path(candidate) or _read_refusal(candidate):
+                        continue
+                    return f"There is a {' / '.join(tail)} at {candidate}."[:400]
+                except OSError:
+                    continue
+    except Exception:  # noqa: BLE001 - a hint never fails a read check
+        return ""
+    return ""
 
 
 def _env_roots() -> list[Path] | None:
@@ -521,5 +579,9 @@ def fs_read_ok(path: str | Path) -> tuple[bool, str]:
             hint = readable_hint()
             if hint:
                 why = why + " " + hint
+                # v1.490.2: and where a folder of that name IS readable.
+                found = same_name_inside(path)
+                if found:
+                    why = why + " " + found
         return False, why
     return True, ""

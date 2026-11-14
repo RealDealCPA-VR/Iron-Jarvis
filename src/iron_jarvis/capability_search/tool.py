@@ -143,7 +143,7 @@ def entry_line(platform: Any, entry: _index.Capability) -> tuple[str, dict[str, 
             from . import join as _join
 
             asks_found = entry.tool in _join.joinable() and _join.asks_when_found(
-                platform.registry, entry.tool)
+                platform.registry, entry.tool, platform)
         except Exception:  # noqa: BLE001 — the table's own word stands
             asks_found = False
         line = f"{entry.title}: tool {entry.tool}. {_how_it_runs(mode, entry.changes, asks_found)}".rstrip()

@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.490.2
+
+**A second look, and fewer cards for memory.** **A request the first reading missed still gets its card.** Since v1.490.1 two readings must agree before a card shows.
+
 ## v1.490.1
 
 **A card only for what you asked.** **Jarvis no longer puts up an approval card for something you did not ask for.** With Feature lookup on, a remark such as "my goal this year is to get my class to stop guessing at units" could bring an approval card for a goal, "what styles are popular right now?" a card for a web search, and "my eyes are not what they were" a card for the text size.
@@ -77,7 +81,3 @@
 ## v1.477.0
 
 **A ring that shows the coding tool is still working.** In Build › Code, a coding tool such as Claude Code can finish its reply and leave helpers working in the background.
-
-## v1.476.0
-
-**Skills that get used, one approval for many changes, faster scripts.** A skill used to reach a chat only when you picked it with "/".

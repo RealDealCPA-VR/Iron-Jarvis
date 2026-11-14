@@ -17844,6 +17844,96 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **A SECOND LOOK before a held card stays held; a looked-up memory search
+  asks only when a memory base is really off this PC; a refused read names
+  the same-named folder** (v1.490.2; the /goal again, after v1.490.1 measured
+  94-95%: the gate cost real requests when the routing call answered `[]`).
+  - **THE SECOND LOOK (`chat_turn._second_look`, `SECOND_LOOK_WAIT_S` 12).**
+    In `settle_route_for_join` (both lanes, unchanged call sites), when the
+    routing call's verdict is "nothing asked" AND its answer was a plain empty
+    list (`Routed.nothing`, never `unasked`), the routing question is asked
+    ONCE more with only the entries the model's own pending lookups found
+    (`FOUND.pending_ids(key)`, each once, at most `join.SECOND_LOOK_IDS` 12;
+    `route.route_request(..., only=ids)` → `route.short_list`; logged
+    "request routed (second look)"). What it picks, unmarked, the user asked
+    for: `FOUND.mark_not_asked(key, asked_ids=…)`, and `join_found` holds back
+    an ask-first tool only when its name is not among `_wanted(rows whose id
+    is in asked_ids)`. A marked answer, an empty one, an unreadable one, a
+    failure, a timeout or a Stop (the turn's `wait_stopped`) = nothing asked,
+    exactly v1.490.1. Never made when the first answer picked something or
+    was marked, or when no lookup is pending (an ordinary reply still costs
+    one routing call). Billed once: `RouteFirst.owe` / `take_owed`, taken at
+    the top of `note_route_late`. `RouteFirst.again` is the closure
+    `start_route_first` sets (same body, provider, model, window).
+  - **MEMORY THAT STAYS HERE (`join.memory_stays_here(platform)`).** True
+    only when every `platform.ltm.connectors()` is
+    `egress.ltm_connector_is_local` (a notes folder) AND the embedding server
+    is unset, the mock, or `egress.private_host(config.ollama_base_url)`.
+    FAIL CLOSED (no platform, no manager, no config, any fault = False).
+    `asks_when_found(registry, name, platform=None)`: a `MEMORY_BASE_READERS`
+    tool (recall, ltm_search) asks unless that is True; with no platform it
+    always asks. The join passes `d.platform`, the lookup's own line
+    (`tool.entry_line`) too, so the list and the note agree. Web tools and
+    changers are untouched (`test_only_the_memory_readers_are_judged_this_way`).
+    The reviewer's remote-base pin
+    (`test_a_looked_up_memory_search_reaches_a_remote_base_with_no_card`)
+    still holds. Why: the forced card for a looked-up `recall` was the most
+    common card on look-alike messages (Haiku g025, f049, f050; GLM g078),
+    and the word tables already arm `recall` granted.
+  - **THE SAME-NAME HINT (`fs_policy.same_name_inside`, `SAME_NAME_PARTS` 3).**
+    After `readable_hint()` a refused read adds "There is a Desktop / Quotes
+    at <folder>\Desktop\Quotes." Only the refused path's last parts are used,
+    as NAMES (the refused path is never touched; pinned with a spy): longest
+    tail first, inside the first `HINT_FOLDERS` setting folders, `lexists`
+    (a link is named, never followed), never a part that is `.`/`..`, holds
+    ":" (a drive in the middle restarts `joinpath`) or is over 200 chars,
+    never a protected place or one the installation's limit refuses. ONE
+    name alone must be a FOLDER (a `notes.txt` elsewhere is another file;
+    two folder tests went red on the first cut for exactly that). Never
+    raises into the read check.
+  - `PreferenceListTool.description` ends "When the user asks what you
+    remember about how they like things, call this: what your instructions
+    show of it is only a part, never the list." (GLM answered d519 from the
+    prompt in 3 of 3 runs.)
+  - **THE TEST SETUP CHANGED, SAID IN EVERY REPORT.** `start_one_tsi.sh` sets
+    `IRONJARVIS_MEDIA_FAKE=1` (the owner's install has Pixio; without a media
+    service `generate_media` can only be swapped for `app_connect`, so two
+    practice rows could never pass), and `seed_home.py` is run before every
+    practice run (homes persist between runs: one run renamed the Mill House
+    photos and the next three runs "missed" d251).
+  - **MEASURED (Haiku on the TSI account, cards declined, final code unless
+    said).** Practice strict rows: 107 (h8, the code before the lone-file
+    rule and the memory rule), 107 (h9), 108 (h10) of 111; misses every run:
+    d039, d133 (calendar label), d073 (where-is, answered from the lookup
+    line, label wants the guide); once each: d400, d597. Held-out 99
+    look-alikes: 0 cards / 0 question cards / 0 retakes. `nearfresh` 101:
+    cards on f053 and f051 only (both real requests; v1.490.1 also carded
+    recall on f049, f050), 2 retakes (f051, and f075 looked at app health
+    for "answers are coming out jumbled"). `nearfresh2` 100: 0 cards (h8, on
+    the code before the memory rule: 1, `recall` for g025, brought by the
+    routing call). 43 ordinary questions: no card, 0 retakes. First word
+    7.2-8.2 s on practice. The second look fired twice in ~620 Haiku turns
+    (Haiku's routing call rarely answers `[]`); both answers held.
+  - **GLM NOT MEASURED on this code** (the key copy was not approved again).
+    Evidence that exists: the v1.490.1 probe of the second look alone on GLM
+    (`rp/second_glm.json`): 176 request pairs → a wanted tool for 146, nothing
+    for 10; 40 look-alike pairs → no changer (one `recall`). Expect on GLM:
+    d295-type rows recovered, g078's recall card gone on a local-memory
+    install; g052 (`remember_preference` picked unmarked by GLM's routing)
+    and g013 (`shell`, ask-armed because the chat has a folder, called by the
+    model itself) unchanged.
+  - **OPEN:** GLM's numbers; d073 (the lookup's setting line gives the link
+    but not the Settings section, so the answer's "where" is vague: adding
+    the section is the better fix than steering to the guide); "make a
+    folder" still has no tool (d400: mkdir through the command card);
+    `memory_stays_here` does not look at memory profiles (their tools are not
+    looked-up readers); the hint searches six folders only.
+  - **Pins:** `tests/test_second_look_v14902.py`,
+    `tests/test_memory_search_stays_here_v14902.py`,
+    `tests/test_read_hint_same_name_v14902.py` (40 mutations, all red); moved
+    on purpose: `test_asked_before_a_card_v14901` (two routing calls when the
+    first says `[]` and a lookup is pending).
+
 - **TWO READINGS MUST AGREE BEFORE A CARD: the routing call says whether the
   user ASKED; when it says no, no tool that asks first joins** (v1.490.1; the
   /goal's "without any regressions", after v1.490.0's GLM run showed 2

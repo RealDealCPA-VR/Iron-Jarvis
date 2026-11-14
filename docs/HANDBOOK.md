@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.490.1 (2026-11-13).*
+holds itself to. Current as of v1.490.2 (2026-11-13).*
 
 ---
 
@@ -2041,6 +2041,66 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A second look, and fewer cards for memory (v1.490.2)
+
+- **A request the first reading missed still gets its card.** Since v1.490.1
+  two readings must agree before a card shows. On a local model Iron Jarvis's
+  own first reading sometimes took a real request for nothing ("Don't open
+  yourself every time I switch the computer on"), and you got an offer in
+  words where the card should have been. Now, when the first reading found
+  nothing and Jarvis itself looked up a tool that needs a card, Iron Jarvis
+  reads your message once more, this time against only the few things Jarvis
+  looked up. If that second reading names the tool, the card shows. If it
+  finds nothing, calls the message a remark, fails or takes too long, the tool
+  stays held, as in v1.490.1. The second reading is one short extra model call,
+  made only in that case, and it is added to the reply's usage.
+- **Searching memory no longer asks when your memory is on this PC.** A memory
+  search that Jarvis looked up always showed a card, because a memory base may
+  be on another machine (Notion, a memory server). Iron Jarvis now looks at
+  your install: when every memory base is a folder of notes on this PC, and
+  the server that prepares text for searching (if you set one) is on your own
+  network, a memory search sends nothing anywhere and runs without a card,
+  like any other reading. With a base anywhere else, or when it cannot tell,
+  the card shows as before.
+- **A refused folder read also says where that folder is.** If Jarvis guesses
+  the wrong place for a folder ("C:\Users\Sam\Downloads") and a folder of that
+  name is inside a folder it may read, the refusal now names it. A single
+  file name is not enough: only a folder, or a file together with its folder.
+  A protected folder is never named.
+- **"What do you remember about how I like things?"** Jarvis now reads the
+  saved list instead of answering from the few preferences it happens to see.
+- **What it measured.** Claude Haiku, the three settings on, every card
+  declined, three runs of the 111 practice requests on this version: the
+  right tool in 107, 107 and 108 (96 to 97 in 100; v1.490.1: 104 to 106). No
+  request that worked before was lost in two of the three runs, one in the
+  third. The three it still misses every time: two calendar requests where
+  the practice set expects another tool than the calendar link card Jarvis
+  opens, and one "where is the button" question that Jarvis answers without
+  the guide. On 300 look-alike messages (messages that use a feature's words
+  and ask for nothing): no approval card and no question card except on the
+  real requests hidden in one set, and two fewer cards than before there,
+  because a memory search no longer asks on this install. 43 ordinary
+  questions: no card, nothing taken back. The first word of a reply came
+  after about 8 seconds for a practice request and 3 for an ordinary
+  question, as before.
+- **Two things about the test, said plainly.** The test copies now have a
+  stand-in picture service (your real install has Pixio; before, "draw me a
+  picture" could only end in "connect a service"), and each run starts from
+  freshly made folders (an earlier run had renamed the photos a later run
+  was asked to rename). Both make the test closer to a real install; each is
+  worth about one request in 111.
+- **GLM on your own server was not measured again for this version.** It
+  needs the saved GLM key copied into the test copies, and that was not
+  approved again. The second look was tried on GLM by itself before it was
+  built (the reading alone, no chat): asked about 176 real requests with the
+  tools Jarvis had looked up, it named a wanted tool for 146; asked about 40
+  look-alikes, it named no tool that changes anything.
+- **What this does not do.** The second look only happens after Jarvis looked
+  something up itself; a request both readings miss still gets an answer in
+  words. The memory change does not apply to an install with Notion, a memory
+  server or an app as a memory base. The folder hint looks only inside the
+  first six folders you listed in Settings › Permissions.
 
 ## A card only for what you asked (v1.490.1)
 
