@@ -2642,13 +2642,21 @@ How to use this file: read the contents list, then read only the entries your ch
   the carry-on path (`carry_on._start`, carry `{why: "check", note, round}`;
   drawn as the quiet carry line, `lib/buildCodeCarry` decodes `check`; Retry
   resends its own text), at most 2 per user message, stuck = same keys
-  twice, "Blocked:" ends it; a verdict notice when limit/stuck leaves a file
-  missing. Pins: `tests/test_until_done_gaps_v1497.py` (both lanes, a real
+  twice, "Blocked:" ends it, a step the user DECLINED this turn (a
+  `resolved` event whose decision starts "deny") ends it; a verdict notice
+  when limit/stuck leaves a file missing. WRITER ARMING:
+  `chat_turn._asks_new_file_other_language` arms `write_document` beside
+  `wants_new_file` for a request in another language (`asks_for_file`, or an
+  unread script naming a file that is not in the folder; never when a file
+  changer is already picked, the English advice/create rules decided, or a
+  share folder) — live on v1.496.1 a Spanish, German or Chinese "save it as
+  a file" made NO file and ended "The model finished without writing an
+  answer". Pins: `tests/test_until_done_gaps_v1497.py` (both lanes, a real
   agent run, tables both ways, a 60 kB linearity pin in a child process),
   `tests/test_build_app_check_again_v1497.py`, `dashboard/__tests__/
   build-code-check-again-v1497.test.tsx`; moved on purpose:
-  `test_until_done_v1493` (a team's reply is checked again). OPEN: tool
-  ARMING for a non-English request still leans on the routing call (the
-  word tables are English); languages beyond the seven get only the side
-  question; Build › Code checks only missing files and give-ups; follow-up
+  `test_until_done_v1493` (a team's reply is checked again). OPEN: tools
+  other than the file writer are still armed for a non-English request by
+  the routing call (the word tables are English); languages beyond the
+  seven get only the side question; Build › Code checks only missing files and give-ups; follow-up
   counts there live in memory.

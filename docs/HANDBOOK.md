@@ -2079,6 +2079,13 @@ left out.
   that is not in the folder, or a step failed), it asks the model one quiet
   question on the side. The reply changes only if the model then makes the
   file or tries again; otherwise it stays exactly as it was, on screen too.
+- **A file asked for in another language is made.** Before, asking in
+  Spanish, German or Chinese (for example) to "save the summary as a Word
+  file" could end with no file and "The model finished without writing an
+  answer". The file writer is now offered for those requests too, so the
+  file is made in your folder.
+- **A step you declined stays declined.** In Build › Code, when you said no
+  to a step, Iron Jarvis does not send the tool back to try it again.
 - **A change no tool could make.** When a reply says it changed a setting
   and the chat has no tool that can change it, the model is now asked only to
   say plainly that it was not made (before, it was told to make the change,
