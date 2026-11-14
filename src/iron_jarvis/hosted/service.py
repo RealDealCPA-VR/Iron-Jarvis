@@ -3040,6 +3040,13 @@ class HostedService:
         if live.turn is turn:
             live.turn = None
         self._room_changed()  # v1.425.0 (B7): this session may be stoppable now
+        # v1.497.0: a clean reply whose own record says it is not done (a file
+        # it claims that is not in the folder, a give-up after real work) is
+        # sent back ONCE more (``hosted.check_again``) — read before the queue
+        # is sent, which then goes first.
+        from . import check_again as CA
+
+        CA.after_turn(self, live, turn, done)
         self._after_turn_queue(live, turn, done)  # v1.418.0 (C4.8)
         # v1.414.0: a long reply that ENDED is told to the bell and the tray
         # (never for a Stop or a cut-off, never beside an account's limit

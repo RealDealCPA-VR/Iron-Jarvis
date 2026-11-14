@@ -588,7 +588,7 @@ def failed_carry(events: list[dict[str, Any]], turn: str) -> dict[str, Any] | No
         return None
     mine = [ev for ev in events if isinstance(ev, dict) and str(ev.get("turn") or "") == turn]
     carry = next((ev.get("carry") for ev in mine if ev.get("type") == "user"), None)
-    if not isinstance(carry, dict) or carry.get("why") not in CARRY_TEXT:
+    if not isinstance(carry, dict) or (carry.get("why") not in CARRY_TEXT and carry.get("why") != "check"):
         return None
     ended = any(ev.get("type") == "done" for ev in mine)
     failed = any(ev.get("type") == "error" and ev.get("fix_kind") != "account_limit" for ev in mine)
@@ -627,7 +627,16 @@ async def continue_cut(svc: Any, sid: str) -> dict[str, Any]:
         from . import words as W
 
         raise Refused(W.ARCHIVED)
-    new = await _start(svc, sid, CARRY_TEXT[again["why"]], {**again, "pressed": True, "retry": True})
+    if again["why"] == "check":
+        # v1.497.0: a check's follow-up (``hosted.check_again``) carries its
+        # own words: the same hidden message again.
+        text = next((str(ev.get("text") or "") for ev in events if isinstance(ev, dict)
+                     and ev.get("type") == "user" and str(ev.get("turn") or "") == newest), "")
+        if not text.strip():
+            raise Refused(NOTHING_CUT, 409)
+    else:
+        text = CARRY_TEXT[again["why"]]
+    new = await _start(svc, sid, text, {**again, "pressed": True, "retry": True})
     return {"ok": True, "turn_id": new.id}
 
 

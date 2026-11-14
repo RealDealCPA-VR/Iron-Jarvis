@@ -44,7 +44,9 @@ export interface CarryFacts {
 
 /** What a hidden carry-on message says it was (its `carry`). */
 export interface CarryMark {
-  why: "restart" | "reset" | "move";
+  /** v1.497.0: "check" = Iron Jarvis sent the reply back (its own record
+   *  said it was not done: hosted/check_again.py); `note` says why. */
+  why: "restart" | "reset" | "move" | "check";
   fromAccount: string;
   toAccount: string;
   accountName: string;
@@ -52,6 +54,8 @@ export interface CarryMark {
   pressed: boolean;
   /** v1.422.0 review: the user pressed Retry on a carry-on that failed. */
   retry?: boolean;
+  /** v1.497.0: the daemon's own plain line for a "check" follow-up. */
+  note?: string;
 }
 
 function obj(v: unknown): Record<string, unknown> | null {
@@ -94,7 +98,7 @@ export function decodeCarry(raw: unknown): CarryFacts {
 export function decodeCarryMark(raw: unknown): CarryMark | null {
   const r = obj(raw);
   if (!r) return null;
-  const why = r.why === "restart" || r.why === "reset" || r.why === "move" ? r.why : null;
+  const why = r.why === "restart" || r.why === "reset" || r.why === "move" || r.why === "check" ? r.why : null;
   if (!why) return null;
   return {
     why,
@@ -104,12 +108,14 @@ export function decodeCarryMark(raw: unknown): CarryMark | null {
     group: str(r.group, 120),
     pressed: r.pressed === true,
     ...(r.retry === true ? { retry: true } : {}),
+    ...(why === "check" && str(r.note, 400) ? { note: str(r.note, 400) } : {}),
   };
 }
 
 /** The quiet line a carry-on message is drawn as. */
 export function carryLineWords(m: CarryMark): string {
   if (m.retry) return "You pressed Retry: carrying the reply on again.";
+  if (m.why === "check") return m.note || "Iron Jarvis sent it back to finish what it said it had done.";
   if (m.why === "restart") {
     return m.pressed
       ? "You pressed Continue: carrying on the reply Iron Jarvis's restart cut off."
