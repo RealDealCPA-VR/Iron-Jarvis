@@ -504,26 +504,31 @@ def _split(rows: "list[tuple[str, str]]") -> dict[str, list[str]]:
     return by_kind
 
 
-def live_state(db: Any, rows: "list[tuple[str, str]]") -> dict[tuple[str, str], dict[str, bool]]:
+def live_state(db: Any, rows: "list[tuple[str, str]]") -> dict[tuple[str, str], dict[str, Any]]:
     """What each ``(kind, ref)`` looks like in its SOURCE right now:
-    ``{(kind, ref): {"local_only": bool, "archived": bool}}``. A source row
+    ``{(kind, ref): {"local_only": bool, "archived": bool}}``, and for a
+    conversation also ``"updated"`` (its ``updated_at``, the way a recap
+    remembers it: a recap written before the latest change is not told). A source row
     that is gone is simply absent. Read by primary key, so a chat deleted or
     switched to Local only a moment ago is never told to another chat from a
     work row that has not been rebuilt yet. Raises when a source cannot be
     read (the caller then shows nothing)."""
     from ..providers.egress import setup_says_local_only
 
-    out: dict[tuple[str, str], dict[str, bool]] = {}
+    out: dict[tuple[str, str], dict[str, Any]] = {}
     by_kind = _split(rows)
     T = ChatThreadRecord
     for kind in (KIND_CHAT, KIND_CODE):
         refs = by_kind.get(kind) or []
         for i in range(0, len(refs), _IN_CHUNK):
-            stmt = select(T.id, T.setup_json, T.archived_at).where(T.id.in_(refs[i : i + _IN_CHUNK]))  # type: ignore[attr-defined]
-            for tid, setup_json, archived in db.exec(stmt):
+            stmt = select(T.id, T.setup_json, T.archived_at, T.updated_at).where(
+                T.id.in_(refs[i : i + _IN_CHUNK])  # type: ignore[attr-defined]
+            )
+            for tid, setup_json, archived, updated in db.exec(stmt):
                 out[(kind, str(tid))] = {
                     "local_only": bool(setup_says_local_only(setup_json or "")),
                     "archived": archived is not None,
+                    "updated": _iso(updated),
                 }
     refs = by_kind.get(KIND_RUN) or []
     for i in range(0, len(refs), _IN_CHUNK):

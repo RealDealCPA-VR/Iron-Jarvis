@@ -9,32 +9,50 @@
  * read when the user opens it. Read-only. An older daemon (404) or a daemon
  * that cannot answer draws nothing new: the failed-read line, never an empty
  * list that reads as "you have done nothing".
+ *
+ * v1.492.0 (Phase 2): a piece of work shows its RECAP (written by a model
+ * after the work went quiet, checked against the work's own record), and an
+ * opened folder has a two-press "Forget this folder"; forgotten folders are
+ * listed at the foot with "Remember again".
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronRight, FolderClosed } from "lucide-react";
-import { get } from "@/lib/api";
+import { get, post } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
 import { failureOf, type FailureLike } from "@/lib/loadFailed";
 import { plainText } from "@/lib/plainText";
 import { outcomeWords, statusWords, toneTextClass } from "@/lib/statusWords";
 import {
+  FORGET_CONFIRM,
+  FORGET_LABEL,
+  FORGET_TITLE,
+  FORGOTTEN_ABOUT,
+  FORGOTTEN_HEADING,
+  RECAP_ABOUT,
+  RECAP_STALE,
+  REMEMBER_LABEL,
   WORK_ABOUT,
   WORK_BUILDING,
   WORK_EMPTY,
   WORK_FOLDERS_PATH,
+  WORK_FORGET_PATH,
   WORK_HEADING,
+  WORK_REMEMBER_PATH,
   countWords,
   decodeEntries,
   decodeFolders,
   filesWords,
+  forgotWords,
   kindWords,
   workEntriesPath,
+  type ForgottenFolder,
   type WorkFolder,
   type WorkItem,
 } from "@/lib/workRecord";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
+import { ConfirmButton } from "@/components/ui";
 
 /** Reads again this often while the first build is still going. */
 export const WORK_BUILD_REREAD_MS = 4000;
@@ -51,6 +69,9 @@ export function WorkByFolder() {
   const [hidden, setHidden] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const [work, setWork] = useState<Record<string, FolderWork>>({});
+  const [forgotten, setForgotten] = useState<ForgottenFolder[]>([]);
+  // What the last Forget / Remember press did, in words (or why it could not).
+  const [note, setNote] = useState<{ words: string; failed: boolean } | null>(null);
   const workRef = useRef<Record<string, FolderWork>>({});
   const rereads = useRef(0);
   const alive = useRef(true);
@@ -64,6 +85,7 @@ export function WorkByFolder() {
         setFolders(got.folders);
         setBuilding(got.building);
         setFoldersTotal(got.foldersTotal);
+        setForgotten(got.forgotten);
         setFailed(null);
       })
       .catch((e: unknown) => {
@@ -124,6 +146,37 @@ export function WorkByFolder() {
     [readFolder],
   );
 
+  const forget = useCallback(
+    async (f: WorkFolder) => {
+      try {
+        const res = await post<{ removed?: number }>(WORK_FORGET_PATH, { folder: f.folder });
+        if (!alive.current) return;
+        setNote({ words: forgotWords(f.name, typeof res?.removed === "number" ? res.removed : 0), failed: false });
+        setOpen(null);
+        read();
+      } catch (e) {
+        if (!alive.current) return;
+        setNote({ words: failureOf(e).message || "That folder could not be forgotten. Try again.", failed: true });
+      }
+    },
+    [read],
+  );
+
+  const remember = useCallback(
+    async (f: ForgottenFolder) => {
+      try {
+        await post<unknown>(WORK_REMEMBER_PATH, { folder: f.folder });
+        if (!alive.current) return;
+        setNote({ words: `Remembering ${f.name} again.`, failed: false });
+        read();
+      } catch (e) {
+        if (!alive.current) return;
+        setNote({ words: failureOf(e).message || "That could not be changed. Try again.", failed: true });
+      }
+    },
+    [read],
+  );
+
   if (hidden) return null;
 
   return (
@@ -132,6 +185,17 @@ export function WorkByFolder() {
         {WORK_HEADING}
       </h2>
       <p className="mt-1 max-w-2xl text-[13px] text-zinc-500">{WORK_ABOUT}</p>
+      <p className="mt-1 max-w-2xl text-[13px] text-zinc-500" data-testid="work-recap-about">
+        {RECAP_ABOUT}
+      </p>
+      {/* Always mounted, so a screen reader hears the words when they come. */}
+      <p
+        role="status"
+        data-testid="work-forget-note"
+        className={`text-[13px] ${note ? "py-1" : ""} ${note?.failed ? "text-tone-danger" : "text-zinc-400"}`}
+      >
+        {note?.words ?? ""}
+      </p>
 
       {failed ? (
         <LoadFailedLine thing="Your work record" error={failed} onRetry={read} testId="work-by-folder-failed" />
@@ -189,6 +253,16 @@ export function WorkByFolder() {
                       ) : (
                         <FolderWorkList entries={mine.entries} total={mine.total} />
                       )}
+                      <div className="pt-2">
+                        <ConfirmButton
+                          variant="calm"
+                          label={FORGET_LABEL}
+                          confirmLabel={FORGET_CONFIRM}
+                          title={FORGET_TITLE}
+                          testId="work-forget"
+                          onConfirm={() => forget(f)}
+                        />
+                      </div>
                     </div>
                   )}
                 </li>
@@ -201,6 +275,31 @@ export function WorkByFolder() {
             </p>
           )}
         </>
+      )}
+      {!failed && forgotten.length > 0 && (
+        <div className="mt-4" data-testid="work-forgotten">
+          <h3 className="text-[13px] font-medium text-zinc-300">
+            {FORGOTTEN_HEADING} ({forgotten.length})
+          </h3>
+          <p className="text-[12px] text-zinc-500">{FORGOTTEN_ABOUT}</p>
+          <ul className="mt-1 space-y-1">
+            {forgotten.map((f) => (
+              <li key={f.folder} className="flex flex-wrap items-baseline gap-x-3 text-[13px]">
+                <span className="min-w-0 truncate text-zinc-300" title={f.folder}>
+                  {f.folder}
+                </span>
+                <button
+                  type="button"
+                  className="shrink-0 text-accent underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+                  data-testid="work-remember"
+                  onClick={() => void remember(f)}
+                >
+                  {REMEMBER_LABEL}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </section>
   );
@@ -238,6 +337,20 @@ function FolderWorkList({ entries, total }: { entries: WorkItem[]; total: number
               </div>
               {files && <p className="text-[12px] text-zinc-500">{files}</p>}
               {e.note && <p className="text-[12px] text-zinc-500">{plainText(e.note)}</p>}
+              {e.recap && (
+                <div className="mt-1 border-l border-white/10 pl-2" data-testid="work-recap">
+                  <ul className="space-y-0.5 text-[12px] text-zinc-400">
+                    {e.recap.lines.map((line, i) => (
+                      <li key={i}>{plainText(line)}</li>
+                    ))}
+                  </ul>
+                  {!e.recap.current && (
+                    <p className="text-[12px] text-zinc-500" data-testid="work-recap-stale">
+                      {RECAP_STALE}
+                    </p>
+                  )}
+                </div>
+              )}
             </li>
           );
         })}

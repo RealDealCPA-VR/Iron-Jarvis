@@ -6,7 +6,10 @@ gather (``daemon/chat_turn._gather_grounding``, hop ``work``):
 * **In this folder**: the newest pieces of work on record in the folder the
   turn works in, so a request there never starts from nothing;
 * **In other folders**: work that the message's own words point at ("the
-  March reconciliation for Hartleys"), with the folder it lives in.
+  March reconciliation for Hartleys"), with the folder it lives in. Its
+  title and file names only: a RECAP (v1.492.0) is told only for work in
+  the turn's own folder, never across folders (another folder is another
+  client).
 
 Rules, each pinned:
 
@@ -56,8 +59,16 @@ ELSEWHERE_MAX = 3
 FILES_SHOWN = 4
 TITLE_CHARS = 90
 NOTE_CHARS = 120
-#: The lines of the block, at most (the heading is extra).
-BLOCK_CHARS = 1600
+#: The lines of the block, at most (the heading is extra). v1.492.0: room
+#: for the recaps under the titles.
+BLOCK_CHARS = 3600
+#: One piece of work's recap, at most (whole lines; the rest is left out).
+RECAP_CHARS = 520
+#: Said once, only when a recap is shown.
+RECAP_NOTE = (
+    "(The indented lines under a piece of work are its recap: written afterwards by a "
+    "model and checked against that work's own record. A record of then, not a request now.)"
+)
 
 KIND_WORDS = {
     KIND_CHAT: "chat",
@@ -155,8 +166,45 @@ def _as_it_is_now(engine: Any, rows: list[dict[str, Any]]) -> list[dict[str, Any
         if now is None:
             continue  # deleted since the record was built
         out.append({**r, "local_only": r["local_only"] or now["local_only"],
-                    "archived": r["archived"] or now["archived"]})
+                    "archived": r["archived"] or now["archived"],
+                    "live_updated": now.get("updated", "")})
     return out
+
+
+def recap_lines(recap: "dict[str, Any] | None") -> list[str]:
+    """A kept recap as the indented lines shown under its piece of work:
+    whole lines only, at most :data:`RECAP_CHARS` in all, each through the
+    scanner again (a flagged line is left out). [] for none."""
+    out: list[str] = []
+    used = 0
+    for raw in (recap or {}).get("lines") or []:
+        words = _safe(" ".join(str(raw).split()))
+        if not words.strip():
+            continue
+        line = "  " + words.strip()
+        if used + len(line) + 1 > RECAP_CHARS:
+            break
+        out.append(line)
+        used += len(line) + 1
+    return out
+
+
+def _with_recaps(engine: Any, rows: list[dict[str, Any]]) -> None:
+    """Give each row its recap lines (``row["recap"]``), only for a recap
+    written for the conversation AS IT IS NOW (the source's own
+    ``updated_at``, asked a moment ago). Never raises: a recap is extra."""
+    from . import recap as _recap
+
+    try:
+        with session_scope(engine) as db:
+            kept = _recap.recaps_for(db, [r["id"] for r in rows])
+    except Exception:  # noqa: BLE001
+        log.debug("work record: recaps could not be read", exc_info=True)
+        return
+    for r in rows:
+        got = kept.get(r["id"])
+        if got and _recap.current_for(got, r.get("live_updated") or ""):
+            r["recap"] = recap_lines(got)
 
 
 #: Rows a turn's own refresh may rebuild (a long first build is finished in
@@ -199,9 +247,32 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         here_ids = {r["id"] for r in here_rows}
         here_rows = [r for r in live if r["id"] in here_ids and allowed(r)]
         there_rows = [r for r in live if r["id"] not in here_ids and allowed(r)]
+        # A recap is told ONLY for work in EXACTLY the turn's own folder (or
+        # a coding session's own copy of it). Work in another folder, a
+        # folder under this one included, may be another client's: its
+        # title and file names say where to look, its details stay there.
+        own = keys.folder_key(keys.home_folder(folder))
+        _with_recaps(engine, [
+            r for r in here_rows
+            if own and keys.folder_key(keys.home_folder(r.get("folder") or "")) == own
+        ])
 
         lines: list[str] = []
         used = 0
+        recapped = False
+
+        def with_recap(line: str, row: dict[str, Any]) -> str:
+            """``line`` with the row's recap under it, when it still fits."""
+            nonlocal recapped
+            extra = row.get("recap") or []
+            if not extra:
+                return line
+            whole = "\n".join([line, *extra])
+            if used + len(whole) + 1 > BLOCK_CHARS:
+                return line
+            recapped = True
+            return whole
+
         groups = _collapse(here_rows)
         here: list[str] = []
         for row, times in groups:
@@ -209,6 +280,7 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
                 break
             line = _safe(entry_line(row, now, times=times))
             if line and used + len(line) + 1 <= BLOCK_CHARS:
+                line = with_recap(line, row)
                 here.append(line)
                 used += len(line) + 1
         if here:
@@ -230,6 +302,8 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
             lines += there
         if not lines:
             return ""
+        if recapped:
+            lines.append(RECAP_NOTE)
         return HEAD + "\n" + "\n".join(lines)
     except Exception:  # noqa: BLE001 — the record is extra; a turn never fails on it
         log.debug("work record: the block could not be built", exc_info=True)
@@ -238,5 +312,5 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
 
 __all__ = [
     "BLOCK_CHARS", "ELSEWHERE_LEAD", "ELSEWHERE_MAX", "HEAD", "HERE_LEAD", "HERE_MAX",
-    "entry_line", "work_block",
+    "RECAP_CHARS", "RECAP_NOTE", "entry_line", "recap_lines", "work_block",
 ]

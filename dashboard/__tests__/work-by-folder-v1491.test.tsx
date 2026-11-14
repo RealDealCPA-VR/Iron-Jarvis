@@ -111,7 +111,7 @@ describe("the words and the decoders", () => {
   });
 
   it("drops rows that are not rows and never invents a count", () => {
-    expect(decodeFolders(null)).toEqual({ folders: [], foldersTotal: 0, total: 0, building: false });
+    expect(decodeFolders(null)).toEqual({ folders: [], foldersTotal: 0, total: 0, building: false, forgotten: [] });
     expect(decodeFolders({ folders: [null, { name: "x" }, { folder: "C:\\a", count: "7" }] }).folders).toEqual([
       { folder: "C:\\a", name: "C:\\a", count: 0, lastAt: null },
     ]);
@@ -141,7 +141,7 @@ describe("the section", () => {
     expect(rows[1].textContent).toContain("1 piece of work");
     expect(H.paths).toEqual(["/work-record/folders"]);
 
-    fireEvent.click(within(rows[0]).getByRole("button"));
+    fireEvent.click(within(rows[0]).getAllByRole("button")[0]);
     const items = await screen.findAllByTestId("work-item");
     expect(items).toHaveLength(2);
     expect(H.paths.filter((p) => p.startsWith("/work-record/entries"))).toHaveLength(1);
@@ -162,8 +162,8 @@ describe("the section", () => {
 
     // Opening it again reads again (the record grows), and what was shown
     // stays on screen meanwhile.
-    fireEvent.click(within(rows[0]).getByRole("button"));
-    fireEvent.click(within(rows[0]).getByRole("button"));
+    fireEvent.click(within(rows[0]).getAllByRole("button")[0]);
+    fireEvent.click(within(rows[0]).getAllByRole("button")[0]);
     expect(screen.getAllByTestId("work-item")).toHaveLength(2);
     await waitFor(() => expect(H.paths.filter((p) => p.startsWith("/work-record/entries"))).toHaveLength(2));
   });
@@ -178,7 +178,7 @@ describe("the section", () => {
     };
     render(<WorkByFolder />);
     const rows = await screen.findAllByTestId("work-folder");
-    fireEvent.click(within(rows[0]).getByRole("button"));
+    fireEvent.click(within(rows[0]).getAllByRole("button")[0]);
     const item = await screen.findByTestId("work-item");
     expect(item.textContent).toContain("The run failed: see bank.csv");
     expect(item.textContent).not.toContain("**");
@@ -229,7 +229,7 @@ describe("the section", () => {
     render(<WorkByFolder />);
     const rows = await screen.findAllByTestId("work-folder");
     H.failEntries = true;
-    fireEvent.click(within(rows[0]).getByRole("button"));
+    fireEvent.click(within(rows[0]).getAllByRole("button")[0]);
     const line = await within(rows[0]).findByText(/This folder's work couldn't load/);
     H.failEntries = false;
     fireEvent.click(within(line.closest("p") as HTMLElement).getByRole("button"));

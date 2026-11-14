@@ -646,6 +646,14 @@ class Config(BaseModel):
     #: skipped while that account is at or near its limit). Nothing is kept
     #: until the user accepts it.
     build_reflect: bool = True
+    #: v1.492.0 (vision plan leap 3, Phase 2): once a chat or a coding
+    #: session in Chat › Code has been quiet for 10 minutes, ONE model call
+    #: writes a short recap of it (done / decided / open), which is checked
+    #: against the conversation's own record before it is kept
+    #: (``workmap/recap``). On the conversation's own model and account;
+    #: Local only work only on a model on this network; at most 30 a day;
+    #: never for work from before this was first switched on.
+    work_recaps: bool = True
     #: v1.405.0: the code editor a coding session's "Open in …" presses open
     #: (harness/code_editor): "auto" = VS Code when installed, else Cursor;
     #: "vscode" / "cursor" = that one. Read live by GET /editor/options.

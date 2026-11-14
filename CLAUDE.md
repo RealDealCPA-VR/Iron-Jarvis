@@ -18651,6 +18651,166 @@ does not need a bump, stop and bump it.
   - **Pins:** `tests/test_work_record_v1491.py` (55; 31 mutations, all red),
     `dashboard/__tests__/work-by-folder-v1491.test.tsx`.
 
+- **A RECAP of finished work is written by the conversation's own model and
+  kept only where the conversation's record supports it; it is told only in
+  ITS OWN folder; a folder can be FORGOTTEN** (v1.494.0, BUILT AS v1.492.0:
+  another session released v1.493.0 meanwhile, so the code comments and the
+  test files keep the tag v1.492.0 / v1492; vision plan leap 3,
+  Phase 2; the owner pressed "Memory: recaps"; a builder + TWO independent
+  reviews: the first found 3 high and 20 smaller defects, the second 7 more
+  in the fixes; each is a test now).
+  - **What it is.** `workmap/recap.py` + table `workrecap` (`WorkRecap`, its
+    OWN table: `WorkEntry` rows are rebuilt whole with `db.merge`, which would
+    wipe recap columns). For a CHAT or a Chat › Code session (never a run,
+    which has its own summary line, never Build › Code) quiet for `IDLE_S`
+    (600 s): ONE `router.complete(pin=True, tools=[])` on the newest reply's
+    own served provider and model (`served_by`; never another agent's line,
+    `panelWho`), on the conversation's account (`_pin`: `choice.pin_for` for a
+    chat, `turn_account` for a coding session, only when the setup names an
+    account), inside `egress.local_only_scope(local_only)`, bounded
+    `RECAP_TIMEOUT_S` 90, billed to the conversation (`library._bill`; a
+    billing failure never loses the recap).
+  - **THE CHECK (`recap.check`, pure).** A line is kept only when it starts
+    `DONE:` / `DECIDED:` / `OPEN:` (shown as Done / Decided / Open), is at
+    most `RECAP_LINE_CHARS`, and EVERYTHING CHECKABLE in it is on record
+    (the conversation as the model was
+    SHOWN it, or the work entry's own file list):
+    - every NUMBER, any size (`_NUMBER_RX` + `_number_key`: "1,234.50" =
+      "1234.5"; "12,50", "9,99,999" and "1.491.0" are only themselves; a
+      leading dot after a space or sign is a decimal, after a letter
+      ("no.4471") punctuation). A SCALE is part of the number: a short one
+      only when glued on ("25k", "15B"; "2 K-1 forms" is two K-1s), a word
+      after a space or hyphen (thousand, million, mil, grand, lakh…, plurals
+      too). A count the conversation wrote as a WORD (one..twelve) is on
+      record as its digit (`counts_in_words`), never the other way round. A
+      number inside a KNOWN file's name is on record only there
+      (`_without_known_files`): it vouches for no other use in the line. The
+      first cut skipped numbers under three digits ("15%", "$95", "April 15")
+      and any number written right after a dot or comma.
+    - every quoted span in ANY marks, matched or not (`_QUOTE_RXS`: straight,
+      curly, low, guillemets, corner brackets, backticks; a single quote only
+      at a word's start and end; a full stop inside the marks is ignored),
+      word for word in the conversation.
+    - every file name (`_FILE_RX`: an ending of 1 to 10 characters, dot-files;
+      "e.g" / "U.S" are abbreviations), every token written with a slash (a
+      path, a folder; "a/r", "n/a", "and/or" are words: `_SHORT_SLASH_RX`),
+      every e-mail address: each as a WHOLE token (`_tokens`, `_file_names`),
+      never a part of a real one ("march.xlsx" is not "recon_march.xlsx",
+      "b@x.com" is not "bob@x.com", "C:\\Clients\\Hart" is not
+      "…\\Hartleys"). `_TOKEN_TRIM` takes marks, brackets, `<>`, `*` and
+      backticks off both sides.
+    - unchanged by `detections.redact.mask`; not flagged by promptguard.
+    At most `MAX_RECAP_LINES` 8. `NONE` or no surviving line = no recap. The
+    conversation text is clipped at a SPACE (`_clip_words`), so half a number
+    is never "on record". `compaction.verify` is NOT used (it accepts a path
+    by its last part and reads only straight double quotes). NOT checked
+    (said in the Handbook): a name, a figure in words, a dropped "not",
+    numbers each on record but put together anew. Strict on purpose: a true
+    line is sometimes dropped. The regexes are linear (child-process pins).
+  - **NEVER / LATER.** Written down as a `none` row (not looked at again
+    until the conversation changes): too short (`MIN_LINES` 4), a reply at low
+    trust (its own `trust` or a delivered agent run's `runResult.trust`;
+    checked BEFORE the same-lines re-stamp, so a reply marked low trust
+    later takes a kept recap away), no
+    model on record, the demo model (asked OR answering), Local only with a
+    model `egress.stays_on_this_network` refuses, a model that BILLS PER USE
+    (`_bills_per_use` → `providers/billing.billing_kind`, unsure = pay:
+    `WHY_PAY`), nothing supported. `SETUP_REASONS` (Local only, pay) come
+    from a setting, so they are never re-stamped: the same lines are looked at
+    again when the conversation's row changes. WAITS with nothing written: a
+    reply running in that conversation OR an unfinished agent run started
+    from it (`_running_threads`: ACTIVE/QUEUED `Session.options_json
+    ["chat_thread_id"]`), the conversation changed again,
+    `library.account_refusal`, the provider not available (`never_probe`), a
+    recap asked within `REWRITE_GAP_S` (1 h), Emergency stop,
+    `RECAPS_PER_DAY` 30, the setting off. A conversation that had to wait is
+    left alone for `WAIT_RETRY_S` (`_WAITING`, in memory, skipped BEFORE the
+    `EXAMINE_MAX` count; one asked within the hour for what is left of it)
+    so it never blocks the ones behind it. A FAILED call
+    is tried `MAX_TRIES` 2 times in all for the SAME lines (`covers`), then
+    left.
+  - **RIGHT BEFORE THE CALL (`_still_ready`).** The conversation is asked
+    again: gone, changed, archived or running = nothing sent; switched to
+    Local only since the pick = sent only inside the scope to a model on this
+    network, else a `none` row and nothing sent. The call runs as a task made
+    INSIDE the scopes and is polled every second: Emergency stop or the
+    switch going off CANCELS it (`WAIT_STOPPED`).
+  - **NOTHING PAID FOR IS ASKED TWICE.** Every store goes through `_keep`
+    (never raises; a row that cannot be written leaves the conversation alone
+    for `REWRITE_GAP_S`); `write_one` never raises except for a cancel.
+    `pass_once` DOES raise when the record itself cannot be read: the loop
+    reports that as its health row.
+  - **NEVER A BURST.** `<home>/work-recaps.json` holds `since` (written the
+    first time a pass runs; only work whose `updated_at` is later, and within
+    `LOOK_BACK_DAYS` 14, is recapped), `calls` (today's call times:
+    `note_call` / `calls_today`, so a restart does not forget the daily
+    limit) and `off` (`note_off` when a pass sees the switch off; `back_on`
+    then moves `since` to NOW and answers False when that could not be
+    written: the pass then recaps nothing). `_read_marker`: a MISSING file
+    or rubbish = `{}` (start from now), a file that cannot be READ just now
+    = None, which is never answered by writing a new marker (it moved
+    `since` to now and dropped the day's calls). A call stamped up to a day
+    in the future still counts (the clock was set back). No marker that
+    can be kept = nothing is recapped. One model call per pass (`pass_once`), a pass every
+    `PASS_EVERY_S` 180 (`bg_tasks["work_recaps"]`, `_tick("work_recaps")`,
+    `lib/loopWords` row; off pops the row). A pass with nothing to do reads
+    only light columns of the candidates' threads (never `messages_json`).
+  - **A FAILED BACKGROUND CALL RINGS NOTHING.** `providers/background_call.
+    background(name)` (a ContextVar around ONE call); `ModelRouter.
+    _publish_provider_event` adds `background: name` to that call's
+    `provider.failed` (label stays last) and `comm/notifier.on_event` returns
+    None for it. The ledger and the breaker still record it. A NEW background
+    nicety that calls a model uses the same scope.
+  - **WHAT A CHAT IS TOLD.** `collect.live_state` also answers a
+    conversation's `updated` stamp; `block._with_recaps` attaches a recap
+    ONLY to rows in EXACTLY the turn's folder (`folder_key(home_folder(row))
+    == own`; a session's own copy counts as its folder) and only when
+    `recap.current_for(recap, live updated)`. NEVER to an "in other folders"
+    row (the first review: Hartleys' figures told to a chat in Smith's
+    folder through a like-worded request) and NEVER to work in a folder
+    UNDER the turn's (the second review: a chat opened on `…\\Clients` was
+    told every client's recap; `for_folder` lists subfolders). Lines are indented under the work's own
+    line (`recap_lines`: whole lines, `RECAP_CHARS` 520, each through the
+    scanner again); `RECAP_NOTE` is added ONCE and only when a recap is
+    shown, so a block with no recap is byte-identical to v1.491.0's.
+    `BLOCK_CHARS` 3600. `WorkMap.matching` does not read recaps.
+  - **FORGET A FOLDER.** Table `workforgotten`; `WorkMap.forget(folder)`
+    takes the folder AS SPELLED (rows are keyed that way; mapping it through
+    `keys.home_folder` forgot the wrong folder), deletes the entries in and
+    under it and in a coding session's own copies of it
+    (`<folder>.ij-worktrees/…`, `index.covered`) with their recaps, and keeps
+    them out (`_write` treats a covered candidate as not work); the top of a
+    drive, the top of a share or server and anything that is not a whole
+    location ("books", "..") is refused (`_FORGETTABLE`); `remember` deletes the row, clears `_skip` and the
+    throttle. `entries(folder)` reads exactly the folder asked for
+    (`for_folder(as_spelled=True)`). Routes `POST /work-record/forget|
+    remember {folder}`; `GET /work-record/folders` adds `forgotten`; entries
+    carry `recap {lines, written_at, current}`. `_store` keeps nothing for a
+    work entry that left the record meanwhile. Deleted work takes its recap
+    with it (`_refresh`).
+  - **Setting** `work_recaps` (Memory & you, allow, default ON). A new
+    schema row means regenerating `capability_search/phrasings.py`; the
+    `claude` CLI was at its weekly limit and the local server refused for want
+    of a key, so the one entry's eight phrases were written by a Haiku
+    subagent given only the generator's prompt.
+  - **OPEN:** runs and Build › Code get no recap; inside a Project the "in
+    this folder" list is the project's own (titles only, no recap), and a
+    Project's recent activity does not read `workforgotten`; a failed recap
+    call can strike the provider's breaker; a recap of ordinary (not Local
+    only) work done on a local model is told to a later cloud chat in that
+    folder, as its title already was; work done under Emergency stop, a
+    daily limit or an account wait is recapped afterwards, one call a pass;
+    a setting-made "never" (Local only, pay per use) is looked at again
+    only when the conversation's row changes; not driven in the packaged
+    app.
+  - **Pins:** `tests/test_work_recaps_v1492.py`,
+    `tests/test_work_recaps_review_v1492.py` (the first reviewer's 25 proofs
+    + the fixes it described), `tests/test_work_recaps_review2_v1492.py`
+    (the second reviewer's), `dashboard/__tests__/work-recaps-v1492.test.tsx`
+    (97 mutations);
+    moved on purpose: `work-by-folder-v1491` (a folder row has two buttons;
+    `forgotten` in the decoded folders).
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

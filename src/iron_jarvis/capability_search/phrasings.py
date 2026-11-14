@@ -3696,6 +3696,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'edit my webhook settings',
         'make the webhook send somewhere else',
     ),
+    'work_recaps': (
+        'tell me what we did last time in this folder',
+        'remember what happened in my earlier chats here',
+        'summarize the work we finished in this folder',
+        'catch me up on what we already did here',
+        'keep a short summary of what we decided',
+        'let later chats here know what was done',
+        "write a recap once we've gone quiet",
+        'show what got done and what is still open',
+    ),
     'workflow_create': (
         'save these steps as a routine',
         'make a repeatable process I can reuse',

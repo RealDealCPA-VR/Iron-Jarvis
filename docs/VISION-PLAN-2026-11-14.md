@@ -64,13 +64,24 @@ finished work.
 - A new part of the Memory page, **Your work, by folder**: every folder Iron
   Jarvis has worked in, what happened there, with a link back to each piece.
 
-### Phase 2: recaps
+### Phase 2: recaps (shipped in v1.494.0)
 
 When a piece of work ends, a short recap is written (what was done, what was
 decided, what is still open) and checked against the record before it is
 kept. It is written by the model that did the work; a Local only piece is
-recapped only by a model on this network. Recaps replace bare titles in what
-later chats are told.
+recapped only by a model on this network. Recaps are added under the titles
+that later chats in the same folder are told.
+
+As built: chats and Chat › Code sessions, ten minutes after they go quiet;
+one model call each, at most 30 a day, only for work that changed after the
+update. A line is kept only when every number, quote, file name, path and
+e-mail address in it is in the conversation. A recap is told only while the
+conversation is unchanged, and only to chats in the same folder (an
+independent review found the first cut told one client's recap to a chat in
+another client's folder). A model that bills per use writes no recap.
+"Forget this folder" (the owner's decision 2) is on the Memory page. Not
+done: recaps for agent runs and Build › Code; recaps inside a Project's own
+recent activity.
 
 ### Phase 3: clients and matters
 

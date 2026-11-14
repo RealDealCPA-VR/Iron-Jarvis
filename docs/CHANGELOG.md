@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.494.0
+
+**Jarvis writes a short recap of finished work, and can forget a folder.** **A recap of each finished conversation.** When a chat or a coding session in Chat › Code that works in a folder has been quiet for 10 minutes, Jarvis writes a short recap of it: what was done, what was decided, and what is still open.
+
 ## v1.493.0
 
 **A coding reply keeps working until Jarvis's own check passes, and says so honestly when it does not.** This is for coding sessions in **Chat › Code**.
@@ -77,7 +81,3 @@
 ## v1.481.0
 
 **A task's required files are checked before the reply ends.** When you give Jarvis a task in a chat that has a working folder, and your message lists the files the task must produce (a "Deliverables" or "Success criteria" list, two or more files to write, or a rule such as "create files only in `OUTPUT/`"), Jarvis now checks the work itself instead of trusting the model's last words.
-
-## v1.480.0
-
-**Jarvis looks it up before it says "done" or "I can't".** This is the third step of the feature lookup (v1.478.0, v1.479.0).

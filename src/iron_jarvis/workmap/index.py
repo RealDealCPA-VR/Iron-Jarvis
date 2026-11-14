@@ -20,6 +20,8 @@ looks at the newest :data:`LIGHT_MAX` rows. Everything here is BLOCKING
 
 from __future__ import annotations
 
+import re
+
 import json
 import logging
 import threading
@@ -34,7 +36,7 @@ from sqlmodel import select
 
 from ..core.db import session_scope
 from . import collect, keys
-from .models import KIND_CHAT, KIND_RUN, KIND_TOOL_CODE, WorkEntry
+from .models import KIND_CHAT, KIND_RUN, KIND_TOOL_CODE, WorkEntry, WorkForgotten, WorkRecap
 
 log = logging.getLogger(__name__)
 
@@ -195,6 +197,7 @@ class WorkMap:
                 select(WorkEntry.id, WorkEntry.stamp, WorkEntry.kind, WorkEntry.ref)
             )}
             cands, complete = collect.candidates(db, home=self.home)
+            forgotten = [str(k) for k in db.exec(select(WorkForgotten.folder_key)) if k]
             wanted = {c.id for c in cands}
             unlisted = [i for i in existing if i not in wanted]
             gone = [i for i in unlisted if existing[i][1] in complete]
@@ -218,7 +221,7 @@ class WorkMap:
         self.pending = len(changed) - len(todo)
         built = 0
         for start in range(0, len(todo), _WRITE_CHUNK):
-            got, dropped = self._write(todo[start : start + _WRITE_CHUNK], existing)
+            got, dropped = self._write(todo[start : start + _WRITE_CHUNK], existing, forgotten)
             built += got
             gone += dropped
             if got:
@@ -231,15 +234,19 @@ class WorkMap:
             chunk = gone[start : start + 400]
             with session_scope(self.engine) as db:
                 db.exec(sa_delete(WorkEntry).where(WorkEntry.id.in_(chunk)))  # type: ignore[attr-defined]
+                # Work that is gone takes its recap with it.
+                db.exec(sa_delete(WorkRecap).where(WorkRecap.id.in_(chunk)))  # type: ignore[attr-defined]
                 db.commit()
             removed += len(chunk)
             self.version += 1
         return {"built": built, "removed": removed, "pending": self.pending}
 
-    def _write(self, chunk: list[collect.Candidate], existing: dict[str, Any]) -> tuple[int, list[str]]:
+    def _write(self, chunk: list[collect.Candidate], existing: dict[str, Any],
+               forgotten: "list[str] | None" = None) -> tuple[int, list[str]]:
         """Build and store ``chunk``: ``(rows written, ids to remove)``. One
         transaction for the chunk; if that fails, row by row, so one row
-        SQLite refuses never costs the others."""
+        SQLite refuses never costs the others. Work in a folder the user told
+        Iron Jarvis to forget (or under one) is never stored."""
         entries: list[tuple[collect.Candidate, WorkEntry]] = []
         dropped: list[str] = []
         with session_scope(self.engine) as db:
@@ -250,7 +257,11 @@ class WorkMap:
                     log.debug("work record: %s could not be built", cand.id, exc_info=True)
                     self._skip[cand.id] = cand.stamp
                     continue
-                if values is None:  # gone, or not work yet
+                if values is not None and forgotten and any(
+                    covered(str(values.get("folder_key") or ""), f) for f in forgotten
+                ):
+                    values = None  # a forgotten folder: kept out of the record
+                if values is None:  # gone, not work yet, or forgotten
                     self._skip[cand.id] = cand.stamp
                     if cand.id in existing:
                         dropped.append(cand.id)
@@ -300,12 +311,13 @@ class WorkMap:
             return int(db.exec(select(func.count()).select_from(WorkEntry)).one() or 0)
 
     def for_folder(self, folder: str, *, limit: int = 6, exclude_ref: str = "",
-                   under: bool = True) -> tuple[list[dict[str, Any]], int]:
+                   under: bool = True, as_spelled: bool = False) -> tuple[list[dict[str, Any]], int]:
         """The work on record in ``folder`` (and, with ``under``, in folders
         under it), newest first: ``(rows[:limit], how many there are)``. A
         coding session's own copy of a repository counts as the repository's
-        folder."""
-        base = keys.folder_key(keys.home_folder(folder))
+        folder, unless ``as_spelled`` (the Memory page lists a copy as the
+        folder it is, and asks for exactly that one)."""
+        base = keys.folder_key(folder if as_spelled else keys.home_folder(folder))
         if not base:
             return [], 0
         W = WorkEntry
@@ -405,14 +417,120 @@ class WorkMap:
         return out, total
 
     def entries(self, folder: str, *, limit: int = 100) -> tuple[list[dict[str, Any]], int]:
-        """The work in exactly ``folder``, as the API answers it."""
-        rows, total = self.for_folder(folder, limit=limit, under=False)
-        return [public(r) for r in rows], total
+        """The work in exactly ``folder``, as the API answers it (each piece
+        with its kept recap, when it has one)."""
+        rows, total = self.for_folder(folder, limit=limit, under=False, as_spelled=True)
+        recaps = self.recaps([r["id"] for r in rows])
+        return [public(r, recaps.get(r["id"])) for r in rows], total
+
+    def recaps(self, ids: list[str]) -> dict[str, dict[str, Any]]:
+        """The kept recaps of the work entries ``ids`` (``recap.recaps_for``).
+        ``{}`` when they cannot be read: a recap is extra, never a failure."""
+        from . import recap as _recap
+
+        try:
+            with session_scope(self.engine) as db:
+                return _recap.recaps_for(db, ids)
+        except Exception:  # noqa: BLE001
+            log.debug("work record: recaps could not be read", exc_info=True)
+            return {}
+
+    # -- forgetting a folder --------------------------------------------------
+    def forgotten(self) -> list[dict[str, Any]]:
+        """The folders the user told Iron Jarvis to forget, newest first."""
+        F = WorkForgotten
+        with session_scope(self.engine) as db:
+            rows = list(db.exec(select(F).order_by(F.created_at.desc(), F.folder_key)))  # type: ignore[attr-defined]
+            return [
+                {"folder": r.folder or r.folder_key, "name": keys.folder_name(r.folder or r.folder_key),
+                 "at": _iso(r.created_at)}
+                for r in rows
+            ]
+
+    def forget(self, folder: str) -> dict[str, Any]:
+        """Forget ``folder``: the work on record in it and under it (and its
+        recaps) leaves the record now, and none is added while the folder
+        stays forgotten. The chats, sessions and files themselves are not
+        touched. ``{"ok", "removed"}``; ``ok`` False for no folder or the top
+        of a drive (that would forget everything on the drive). The folder
+        is taken AS SPELLED (rows are keyed that way): forgetting a coding
+        session's own copy forgets that copy, and forgetting a repository
+        also forgets the copies made of it."""
+        shown = str(folder or "").strip()
+        base = keys.folder_key(shown)
+        if not base or not _FORGETTABLE.fullmatch(base):
+            # The top of a drive, a share or a server (far too many folders),
+            # or not a whole location ("books", ".."): it names no one folder.
+            return {"ok": False, "removed": 0}
+        W = WorkEntry
+        prefix = base if base.endswith("/") else base + "/"
+        inside = or_(  # type: ignore[attr-defined]
+            W.folder_key == base,
+            W.folder_key.startswith(prefix, autoescape=True),
+            W.folder_key.startswith(base + keys.WORKTREES_SUFFIX + "/", autoescape=True),
+        )
+        with self._lock:
+            with session_scope(self.engine) as db:
+                db.merge(WorkForgotten(folder_key=base, folder=shown))
+                ids = [str(i) for i in db.exec(select(W.id).where(inside))]
+                for i in range(0, len(ids), 400):
+                    chunk = ids[i : i + 400]
+                    db.exec(sa_delete(WorkRecap).where(WorkRecap.id.in_(chunk)))  # type: ignore[attr-defined]
+                    db.exec(sa_delete(W).where(W.id.in_(chunk)))  # type: ignore[attr-defined]
+                db.commit()
+            self.version += 1
+        return {"ok": True, "removed": len(ids)}
+
+    def remember(self, folder: str) -> dict[str, Any]:
+        """Stop forgetting ``folder``: its work is read into the record again
+        (from Iron Jarvis's own records, which were never touched). Recaps
+        are written again as work there changes. ``{"ok"}``; False when the
+        folder was not forgotten."""
+        base = keys.folder_key(str(folder or "").strip())
+        if not base:
+            return {"ok": False}
+        with self._lock:
+            with session_scope(self.engine) as db:
+                row = db.get(WorkForgotten, base)
+                if row is None:
+                    return {"ok": False}
+                db.delete(row)
+                db.commit()
+            # Everything skipped as forgotten is looked at again.
+            self._skip = {}
+            self._last = None
+        return {"ok": True}
 
 
-def public(row: dict[str, Any]) -> dict[str, Any]:
-    """One row as a route answers it (names, never a transcript)."""
+#: A folder that can be forgotten: a drive with at least one folder, a
+#: share with at least one folder under it, or a rooted path.
+_FORGETTABLE = re.compile(r"[A-Za-z]:/[^/].*|//[^/?.]+/[^/]+/[^/].*|/[^/].*")
+
+
+def covered(key: str, forgotten: str) -> bool:
+    """Is the folder ``key`` kept out of the record by the forgotten folder
+    ``forgotten``? It is that folder, under it, or a coding session's own
+    copy of it (``<forgotten>.ij-worktrees/…``)."""
+    return keys.inside(key, forgotten) or (
+        bool(forgotten) and key.startswith(forgotten + keys.WORKTREES_SUFFIX + "/")
+    )
+
+
+def public(row: dict[str, Any], recap: "dict[str, Any] | None" = None) -> dict[str, Any]:
+    """One row as a route answers it (names, never a transcript). ``recap``
+    is the piece's kept recap: its lines, when it was written, and whether
+    the conversation is still as it was then (``current``)."""
+    from . import recap as _recap
+
+    shown = None
+    if recap and recap.get("lines"):
+        shown = {
+            "lines": list(recap["lines"]),
+            "written_at": _iso(recap.get("created_at")),
+            "current": _recap.current_for(recap, row.get("updated")),
+        }
     return {
+        "recap": shown,
         "id": row["id"], "kind": row["kind"], "ref": row["ref"], "title": row["title"],
         "folder": row["folder"], "tool": row["tool"], "origin": row["origin"],
         "outcome": row["outcome"], "local_only": row["local_only"], "archived": row["archived"],

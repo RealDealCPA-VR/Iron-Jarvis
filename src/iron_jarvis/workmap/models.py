@@ -1,4 +1,5 @@
-"""The work record's one table (v1.491.0, vision plan leap 3, Phase 1).
+"""The work record's tables (v1.491.0, vision plan leap 3; recaps and forgotten
+folders v1.492.0).
 
 One row per PIECE OF WORK that has a folder: a chat, a coding session in
 Chat › Code, a coding session in a real tool (Build › Code), an agent run.
@@ -71,4 +72,70 @@ class WorkEntry(SQLModel, table=True):
     stamp: str = ""
 
 
-__all__ = ["KINDS", "KIND_CHAT", "KIND_CODE", "KIND_RUN", "KIND_TOOL_CODE", "WorkEntry"]
+#: A recap that was kept / a try that kept nothing (not tried again until
+#: the conversation changes).
+RECAP_KEPT = "kept"
+RECAP_NONE = "none"
+
+
+class WorkRecap(SQLModel, table=True):
+    """A short recap of one finished conversation (v1.492.0, Phase 2): what
+    was done, what was decided, what is still open. MODEL-WRITTEN and then
+    checked against the conversation's own record (``workmap/recap``); every
+    line that names a file, quotes words or states a figure the record does
+    not hold is removed before it is kept.
+
+    Its own table, never columns of :class:`WorkEntry`: that row is rebuilt
+    whole from its sources (``db.merge``), which would wipe a recap. Deleting
+    a recap loses nothing but the model call that wrote it.
+    """
+
+    __tablename__ = "workrecap"
+
+    #: The work entry's id (``<kind>:<ref>``).
+    id: str = Field(primary_key=True)
+    kind: str = ""
+    ref: str = ""
+    #: :data:`RECAP_KEPT` | :data:`RECAP_NONE`.
+    state: str = RECAP_NONE
+    #: The kept lines ("Done: …", "Decided: …", "Open: …"), one per line.
+    text: str = ""
+    #: Why nothing was kept ("" for a kept recap). Plain words.
+    reason: str = ""
+    #: A hash of the conversation's lines the recap was written from.
+    covers: str = ""
+    #: The conversation's ``updated_at`` when it was written (ISO, naive
+    #: UTC). A recap is told to a chat only while the conversation still
+    #: carries this stamp.
+    source_updated: str = Field(default="", index=True)
+    #: Lines the check removed.
+    dropped: int = 0
+    provider: str = ""
+    model: str = ""
+    #: A model was asked (false for a try that stopped before any call).
+    asked: bool = False
+    #: Calls in a row that got no answer (a failed try is made once more,
+    #: later, and then left until the conversation changes).
+    tries: int = 0
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class WorkForgotten(SQLModel, table=True):
+    """A folder the user told Iron Jarvis to forget (v1.492.0): no work in it
+    or under it is kept in the record, told to a chat, or recapped, until the
+    user says to remember it again. The chats and files themselves are not
+    touched."""
+
+    __tablename__ = "workforgotten"
+
+    #: ``keys.folder_key`` of the folder.
+    folder_key: str = Field(primary_key=True)
+    #: The folder as the user would read it.
+    folder: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+__all__ = [
+    "KINDS", "KIND_CHAT", "KIND_CODE", "KIND_RUN", "KIND_TOOL_CODE", "RECAP_KEPT",
+    "RECAP_NONE", "WorkEntry", "WorkForgotten", "WorkRecap",
+]

@@ -21,6 +21,21 @@ export interface WorkFile {
   path: string;
 }
 
+/** v1.492.0: a recap of a finished conversation, written by a model after
+ *  the work went quiet and checked against the work's own record. */
+export interface WorkRecap {
+  lines: string[];
+  writtenAt: string | null;
+  /** False when the conversation changed after the recap was written. */
+  current: boolean;
+}
+
+/** v1.492.0: a folder the user told Iron Jarvis to forget. */
+export interface ForgottenFolder {
+  folder: string;
+  name: string;
+}
+
 export interface WorkItem {
   id: string;
   kind: string;
@@ -35,9 +50,14 @@ export interface WorkItem {
   updatedAt: string | null;
   /** An address inside the app, or "" when the daemon sent anything else. */
   link: string;
+  recap: WorkRecap | null;
 }
 
 export const WORK_FOLDERS_PATH = "/work-record/folders";
+export const WORK_FORGET_PATH = "/work-record/forget";
+export const WORK_REMEMBER_PATH = "/work-record/remember";
+/** Recap lines one piece of work shows, at most. */
+export const RECAP_LINES_SHOWN = 8;
 
 export function workEntriesPath(folder: string): string {
   return `/work-record/entries?folder=${encodeURIComponent(folder)}&limit=100`;
@@ -57,11 +77,23 @@ export function insideLink(v: unknown): string {
   return s.startsWith("/") && !s.startsWith("//") && !s.includes("\\") ? s : "";
 }
 
+export function decodeRecap(raw: unknown): WorkRecap | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const lines = (Array.isArray(o.lines) ? o.lines : [])
+    .filter((l): l is string => typeof l === "string" && l.trim().length > 0)
+    .map((l) => l.trim().slice(0, 400))
+    .slice(0, RECAP_LINES_SHOWN);
+  if (lines.length === 0) return null;
+  return { lines, writtenAt: text(o.written_at) || null, current: o.current === true };
+}
+
 export function decodeFolders(raw: unknown): {
   folders: WorkFolder[];
   foldersTotal: number;
   total: number;
   building: boolean;
+  forgotten: ForgottenFolder[];
 } {
   const data = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const rows = Array.isArray(data.folders) ? data.folders : [];
@@ -78,11 +110,18 @@ export function decodeFolders(raw: unknown): {
       lastAt: text(o.last_at) || null,
     });
   }
+  const forgotten: ForgottenFolder[] = [];
+  for (const r of Array.isArray(data.forgotten) ? data.forgotten : []) {
+    if (!r || typeof r !== "object") continue;
+    const folder = text((r as Record<string, unknown>).folder);
+    if (folder) forgotten.push({ folder, name: text((r as Record<string, unknown>).name) || folder });
+  }
   return {
     folders,
     foldersTotal: Math.max(count(data.folders_total), folders.length),
     total: count(data.total),
     building: data.building === true,
+    forgotten,
   };
 }
 
@@ -114,6 +153,7 @@ export function decodeEntries(raw: unknown): { entries: WorkItem[]; total: numbe
       note: text(o.note),
       updatedAt: text(o.updated_at) || null,
       link: insideLink(o.link),
+      recap: decodeRecap(o.recap),
     });
   }
   return { entries, total: Math.max(count(data.total), entries.length) };
@@ -147,3 +187,22 @@ export const WORK_ABOUT =
 export const WORK_EMPTY =
   "Nothing on record yet. Work in a folder (pick one in a chat or start a coding session) and it shows up here.";
 export const WORK_BUILDING = "Still reading your earlier work. This list will grow.";
+
+// v1.492.0: recaps and forgetting a folder.
+export const RECAP_ABOUT =
+  "When a chat or coding session here goes quiet for 10 minutes, Iron Jarvis writes a short recap of it and checks every line against that conversation before keeping it. Later chats in this same folder are told the recap; chats in other folders never are. You can turn this off in Settings › Memory & you, under Work recaps.";
+export const RECAP_STALE = "Written before the latest messages. It is not told to chats until it is written again.";
+export const FORGET_LABEL = "Forget this folder";
+export const FORGET_CONFIRM = "Forget it?";
+export const FORGET_TITLE =
+  "Takes this folder, and the folders inside it, out of the work record: the record no longer tells chats what was done here, and no recaps are written. Your chats, sessions and files are not touched. You can undo it below.";
+export const REMEMBER_LABEL = "Remember again";
+export const FORGOTTEN_HEADING = "Forgotten folders";
+export const FORGOTTEN_ABOUT =
+  "Iron Jarvis keeps no record of work in these folders and tells no chat about it.";
+
+export function forgotWords(name: string, removed: number): string {
+  return removed > 0
+    ? `Forgot ${name}: ${countWords(removed)} left the record.`
+    : `Forgot ${name}. Nothing was on record there.`;
+}

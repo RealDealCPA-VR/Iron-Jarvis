@@ -1333,6 +1333,12 @@ class ModelRouter:
             if prov == "custom" or prov.startswith("fleet-"):
                 payload = {**payload, "label": self._endpoint_label(prov)}
         keys = event_keys()
+        if etype == EventType.PROVIDER_FAILED:
+            # v1.492.0: a call nobody is waiting for (a recap of finished
+            # work) says so, and the notifier rings nothing for it.
+            from .background_call import payload_extra as _background_extra
+
+            keys = {**_background_extra(), **keys}
         if keys and isinstance(payload, dict):
             if "label" in payload:
                 label = payload["label"]

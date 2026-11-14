@@ -1157,6 +1157,11 @@ class Notifier:
             # retry_round`).
             if isinstance(payload, dict) and payload.get("retry"):
                 return None
+            # v1.492.0: a call nobody was waiting for (a recap of finished
+            # work, ``providers/background_call``) rings nothing: the user
+            # never asked for it and cannot retry it. The ledger keeps it.
+            if isinstance(payload, dict) and payload.get("background"):
+                return None
             # v1.455.0 (a USER BUG): a failure inside a CHAT turn. While a
             # window shows that turn the chat itself shows the failure — no
             # destination repeats it (the phone got "couldn't answer" while

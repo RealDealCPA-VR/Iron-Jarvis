@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.493.0 (2026-11-14).*
+holds itself to. Current as of v1.494.0 (2026-11-14).*
 
 ---
 
@@ -2042,6 +2042,83 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Jarvis writes a short recap of finished work, and can forget a folder (v1.494.0)
+
+- **A recap of each finished conversation.** When a chat or a coding session
+  in Chat › Code that works in a folder has been quiet for 10 minutes, Jarvis
+  writes a short recap of it: what was done, what was decided, and what is
+  still open. At most eight lines.
+- **Later chats in the same folder are told the recap.** Until now a new chat
+  in a folder was told the titles and file names of earlier work there. Now
+  it is also told each piece's recap, under its title. So "pick up the
+  Hartleys reconciliation" starts from what was decided and what was left
+  open, not only from a title. The Memory page shows the recap under each
+  piece of work too (Memory › Your work, by folder).
+- **A recap never crosses folders.** A chat is told a recap only for work in
+  exactly the folder it works in. When a message names earlier work that
+  lives in another folder, or the work sits in a folder inside this one, the
+  chat is still told that work's title, its file names and where it lives,
+  but not its recap. Another folder is usually another client, and one
+  client's figures and decisions must not reach a chat about someone else.
+  So a chat opened on a folder that holds all your client folders is told no
+  client's recap.
+- **Every line is checked before it is kept.** The recap is written by a
+  model, so Jarvis checks it against the conversation itself. A line is kept
+  only if everything in it that can be checked is on record: every number
+  (an amount, a rate, a date, a count; "15 thousand" is not "15"), every
+  phrase in quotation marks of any kind, every file name and every folder
+  path as a whole (part of a real name does not count), and every e-mail
+  address. "On record" means it appears in the conversation, or in Jarvis's
+  own list of the files that work wrote. A line that holds a password or
+  key, or that reads as an instruction to the model, is dropped. If no line
+  passes, no recap is kept. The check is strict on purpose, so now and then
+  a true line is dropped too. What the check cannot catch: a wrong name, a
+  figure written out in words, "not" left out of a sentence, or numbers that
+  each appear in the conversation but are put together in a new way (a date
+  or a rate built from numbers used for something else). Treat a recap as a
+  good note, and open the conversation when it matters.
+- **Who writes it.** The same model that answered that conversation, on the
+  same account. A conversation switched to Local only is recapped only by a
+  model on this PC or your own network; if its model is not, no recap is
+  written and nothing is sent. The demo model writes none. A conversation
+  that read flagged content, or that holds the reply of an agent run that
+  did, is never recapped.
+- **It never spends money by itself.** A recap is written only when the
+  request is free (your own model server) or covered by a plan (Claude Code,
+  Codex and the other sign-ins). A conversation answered by a model that
+  bills per use, such as an API key, gets no recap.
+- **How it holds back.** On a plan a recap counts toward that plan's limits,
+  so: one request at a time, at most 30 a day (a restart does not reset the
+  count), never while that account is at or near its limit, never while a
+  reply or an agent run started from that chat is still going, and never
+  under Emergency stop, which also ends a recap request that is under way.
+  Only work that changes after this update is recapped, so the update itself
+  sends nothing; the same holds after you switch recaps off and on again. If
+  the request fails, nothing rings: it is tried once more later and then
+  left until the conversation changes.
+- **A recap never outlives what it describes.** When you add a message, edit
+  or rewind a conversation, its recap is no longer told to chats until it is
+  written again (the Memory page still shows it, marked "written before the
+  latest messages"). Delete a chat and its recap goes with it.
+- **Forget this folder.** Open a folder under Memory › Your work, by folder
+  and press **Forget this folder** twice. Its work, and the work in folders
+  inside it, leaves the work record: the record no longer tells chats what
+  was done there and no recaps are written. Forgetting a coding project also
+  forgets the separate copies coding sessions made of it. The top of a drive
+  or of a network share cannot be forgotten. Your chats,
+  sessions and files are not touched. Forgotten folders are listed at the
+  foot of that section with **Remember again**, which reads the work back
+  in. One limit: a Project that uses the folder still shows its own recent
+  activity (titles only) to chats inside that Project.
+- **The switch.** Settings › Memory & you › **Work recaps** (on by default).
+  Turning it off stops new recaps; recaps already kept stay until their
+  conversation changes or is deleted.
+- **What it does not do yet.** Agent runs keep their own one-line result and
+  get no recap. Build › Code sessions (the real coding tools) get none. A
+  chat inside a Project is told the Project's own recent activity for its
+  folder, which has titles and no recaps. A failed recap request can count
+  toward the short pause Jarvis puts on a model that keeps failing. Not yet
+  tried in the installed app.
 ## A coding reply keeps working until Jarvis's own check passes, and says so honestly when it does not (v1.493.0)
 
 This is for coding sessions in **Chat › Code**. Before, Jarvis checked a

@@ -886,6 +886,17 @@ SETTINGS: tuple[SettingDef, ...] = (
       "you accept it.",
       tier="allow", aliases=("build library", "build lessons", "learn from build",
                             "learn from build sessions")),
+    # v1.492.0 (vision plan leap 3, Phase 2): recaps of finished work.
+    S("work_recaps", "Work recaps", "memory", "bool",
+      "When a chat or a coding session that has a folder has been quiet for 10 minutes, Iron "
+      "Jarvis writes a short recap of it: what was done, what was decided and what is still "
+      "open. Later chats in that same folder are told the recap, and the Memory page shows it. "
+      "It sends one request to the conversation's own model on its own account, so on a Claude "
+      "Code or Codex plan it counts toward that plan's limits. A model that bills per use "
+      "writes no recap, and a Local only conversation is recapped only by a model on this PC "
+      "or your own network. Every line is checked against the conversation before it is kept. "
+      "At most 30 a day, and never for work from before this was last switched on.",
+      tier="allow", aliases=("recaps of finished work",)),
     # v1.406.0 (brain/): which Brain Profile chat and agent runs use, app-wide.
     # Its own control in Settings › Memory & you (CONTROLLED_IN_SECTION); a
     # project may choose its own (Project.brain_profile). Choosing where

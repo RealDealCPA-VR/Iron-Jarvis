@@ -130,6 +130,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Your pull requests' checks aren't being watched",
     href: CODE_VIEW_HREF,
   },
+  // v1.492.0: the loop that writes a short recap of a chat or coding session
+  // once it has gone quiet.
+  work_recaps: {
+    label: "Work recaps",
+    problem: "Recaps of your finished work aren't being written",
+    href: "/memory",
+  },
   dispatcher: { label: "Queued tasks", problem: "Queued tasks aren't starting", href: TEAM },
   autonomy: { label: "Autonomy", problem: "Work Jarvis plans on its own isn't being checked", href: "/autonomy" },
   sentinels: { label: "Watchers", problem: "Your watchers aren't checking", href: "/sentinels" },

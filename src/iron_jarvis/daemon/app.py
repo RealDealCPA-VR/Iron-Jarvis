@@ -1890,6 +1890,22 @@ def create_app(project_root: str | None = None) -> FastAPI:
             _ci_loop(_app.state.d, lambda ok, exc: _tick("ci_watch", ok, exc))
         )
 
+        # RECAPS OF FINISHED WORK (v1.492.0, vision plan leap 3, Phase 2): a
+        # chat or coding session quiet for ten minutes gets a short recap,
+        # checked against its own record (workmap/recap). At most ONE model
+        # call a pass; with nothing to recap a pass is one indexed read. Each
+        # pass reports ITS OWN outcome on loop_health["work_recaps"]; switched
+        # off pops the row (off is neither failing nor healthy).
+        from ..workmap.recap import recap_loop as _recap_loop
+
+        bg_tasks["work_recaps"] = asyncio.create_task(
+            _recap_loop(
+                platform,
+                lambda ok, exc: _tick("work_recaps", ok, exc),
+                on_off=lambda: loop_health.pop("work_recaps", None),
+            )
+        )
+
         # SHARE MY PROFILE WITH BUILD (v1.306.0): when a switch is on, bring
         # its block up to date — on a timer THREAD (poke returns at once), so
         # boot never waits on a file write.
