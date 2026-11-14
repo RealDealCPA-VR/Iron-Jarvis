@@ -62,7 +62,8 @@ def test_file_search_outside_the_chosen_folders_says_the_read_gates_sentence(tmp
     tool = platform.registry.get("file_search")
     res = asyncio.run(tool.execute({"query": "inside", "root": str(c)}, _ctx(platform, tmp_path / "ws")))
     assert res.ok is False
-    assert res.error == fs_policy.READ_REFUSAL
+    # v1.490.1: the sentence, then the folders Jarvis may read.
+    assert res.error.startswith(fs_policy.READ_REFUSAL + " Jarvis may read: " + str(a))
     assert ENV not in (res.error or "")
     # Control: inside a chosen folder the search runs.
     ok = asyncio.run(tool.execute({"query": "inside", "root": str(a), "mode": "content"}, _ctx(platform, tmp_path / "ws")))

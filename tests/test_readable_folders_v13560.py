@@ -34,6 +34,13 @@ from iron_jarvis.settings import schema
 from iron_jarvis.tools.base import ToolContext
 
 REFUSAL = "That folder isn't one Jarvis may read. Change the folders in Settings › Permissions."
+
+
+def _refused(answer) -> bool:
+    """A read the SETTING refused: the sentence, then (v1.490.1) the folders
+    Jarvis may read, so a wrong guess at a folder's place can be corrected."""
+    ok, why = answer
+    return ok is False and why.startswith(REFUSAL + " Jarvis may read: ") and why.endswith("use its full path there.")
 ENV = "IRONJARVIS_FS_ALLOWLIST"
 
 
@@ -116,7 +123,7 @@ async def test_a_user_limits_reading_to_two_folders_and_a_read_outside_is_refuse
     assert fs_policy.fs_read_ok(a / "notes.txt") == (True, "")
     assert fs_policy.fs_read_ok(b / "notes.txt") == (True, "")
     ok, why = fs_policy.fs_read_ok(c / "notes.txt")
-    assert ok is False and why == REFUSAL
+    assert _refused((ok, why))
     assert ENV not in why
 
     # A real file tool says the same thing to the model and the user.
@@ -144,7 +151,7 @@ async def test_a_user_limits_reading_to_two_folders_and_a_read_outside_is_refuse
     assert "readable_folders" in toml
     again = load_config(str(tmp_path / "root"))
     assert [Path(x) for x in again.readable_folders] == [a, b]
-    assert fs_policy.fs_read_ok(c / "notes.txt") == (False, REFUSAL)
+    assert _refused(fs_policy.fs_read_ok(c / "notes.txt"))
 
 
 def test_settings_access_names_the_chosen_folders(tmp_path):
@@ -174,7 +181,7 @@ def test_clearing_the_setting_puts_back_the_old_behaviour_and_undo_restores_the_
     (b / "notes.txt").unlink()
     b.rmdir()
     assert client.post(f"/undo/{cleared.json()['action_id']}").status_code == 200
-    assert fs_policy.fs_read_ok(c / "notes.txt") == (False, REFUSAL)
+    assert _refused(fs_policy.fs_read_ok(c / "notes.txt"))
     assert fs_policy.fs_read_ok(a / "notes.txt") == (True, "")
 
 
@@ -238,7 +245,7 @@ def test_both_limits_set_a_read_must_satisfy_both_and_the_setting_never_widens(t
     monkeypatch.setenv(ENV, f"{a},{c}")
     assert fs_policy.fs_read_ok(sub / "k1.txt") == (True, "")
     # Inside the installation's limit but outside the user's: the setting refused.
-    assert fs_policy.fs_read_ok(a / "notes.txt") == (False, REFUSAL)
+    assert _refused(fs_policy.fs_read_ok(a / "notes.txt"))
     # Outside the installation's limit: refused WITHOUT sending the user to a
     # setting that cannot change it, and never naming the variable.
     ok, why = fs_policy.fs_read_ok(b / "notes.txt")

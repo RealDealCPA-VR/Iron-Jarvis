@@ -54,6 +54,8 @@ READ_REFUSAL = (
 READ_REFUSAL_INSTALL = "That folder isn't one Jarvis may read."
 #: The longest folder list the setting keeps (a limit, not a crawl list).
 MAX_READABLE_FOLDERS = 50
+#: How many of the user's folders a refused read names (v1.490.1).
+HINT_FOLDERS = 6
 
 _ENV = "IRONJARVIS_FS_ALLOWLIST"
 
@@ -188,6 +190,26 @@ def setting_folders() -> list[str]:
     if not isinstance(raw, (list, tuple)):
         return []
     return [s.strip() for s in raw if isinstance(s, str) and s.strip()][:MAX_READABLE_FOLDERS]
+
+
+def readable_hint() -> str:
+    """ONE sentence naming the folders the user's setting lets Jarvis read
+    ("" when there is no setting). Added to a read the SETTING refused
+    (:func:`fs_read_ok`), because a refusal alone leaves a model guessing:
+    seen live, a model that tried the usual Downloads place on a PC
+    whose readable home was elsewhere told the user to change their
+    permissions, when the Downloads folder it wanted was readable all along
+    under the home folder the setting names. The folders are the user's own
+    setting, as typed; at most :data:`HINT_FOLDERS`, the rest counted."""
+    folders = setting_folders()
+    if not folders:
+        return ""
+    shown = [f[:200] for f in folders[:HINT_FOLDERS]]
+    text = "Jarvis may read: " + "; ".join(shown)
+    more = len(folders) - len(shown)
+    if more > 0:
+        text += f"; and {more} more"
+    return text + ". If what you want is inside one of them, use its full path there."
 
 
 def _env_roots() -> list[Path] | None:
@@ -493,5 +515,11 @@ def fs_read_ok(path: str | Path) -> tuple[bool, str]:
         return False, "path is a protected secrets/key directory and is not readable"
     why = _read_refusal(path)
     if why:
+        if why == READ_REFUSAL:
+            # v1.490.1: say what MAY be read, so a wrong guess at a folder's
+            # place is corrected instead of ending in "change your permissions".
+            hint = readable_hint()
+            if hint:
+                why = why + " " + hint
         return False, why
     return True, ""

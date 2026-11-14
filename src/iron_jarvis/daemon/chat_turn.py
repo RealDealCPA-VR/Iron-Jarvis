@@ -3235,6 +3235,27 @@ class RouteFirst:
             return None
         return self._take()
 
+    def nothing_asked(self) -> "bool | None":
+        """True when the routing call ANSWERED that the message needs none
+        of Iron Jarvis's features; False when it picked something; None
+        while that is not known (still running, failed, unreadable). Reads
+        the answer whether or not it was used. Never raises."""
+        try:
+            if not self.task.done():
+                return None
+            routed = self.task.result()
+        except BaseException:  # noqa: BLE001 — cancelled or failed: not known
+            return None
+        if routed is None:
+            return None
+        if getattr(routed, "unasked", False):
+            # It picked features the message only touches on, and marked
+            # them "unasked": the same verdict as an empty list.
+            return True
+        if getattr(routed, "entries", None):
+            return False
+        return True if getattr(routed, "nothing", False) else None
+
     async def wait(self) -> Any:
         """The answer, waited for (the call bounds itself). None when it was
         already used."""
@@ -3289,6 +3310,52 @@ def start_route_first(prep: Any, d: Any, body: Any, provider: str, model: str, *
     except Exception:  # noqa: BLE001 — nothing is looked up; the turn goes on
         log.debug("route-first start failed", exc_info=True)
     return None
+
+
+#: How long a tool round's end waits for the routing call's verdict when a
+#: lookup of the model's own is about to join (the call is usually in long
+#: before; it bounds itself at ``route.ROUTE_TIMEOUT_S``).
+ROUTE_VERDICT_WAIT_S = 12.0
+
+
+async def settle_route_for_join(route: "RouteFirst | None", ctx: Any, *, stopped: Any = None) -> None:
+    """TWO READINGS MUST AGREE BEFORE A CARD (v1.490.1). At the end of a
+    tool round, when a lookup of the model's own waits to be joined: if Iron
+    Jarvis's own routing call answered that the message needs NONE of its
+    features, that is recorded for the join (``join.FOUND.mark_not_asked``),
+    which then brings no tool that asks first. Waits for the call only when
+    a lookup is pending and the call is still running, at most
+    :data:`ROUTE_VERDICT_WAIT_S`, and never past a Stop (*stopped*: the
+    named turn's ``wait_stopped``). No routing call, a failed or unreadable
+    one, or one that picked something: nothing changes. Both lanes call it
+    right before ``note_route_late`` — MIRROR NOTE (lock-step). Never
+    raises (a cancel passes through)."""
+    if route is None:
+        return
+    try:
+        from ..capability_search.join import FOUND, turn_key
+
+        key = turn_key(ctx)
+        if not key or not FOUND.has_pending(key):
+            return
+        verdict = route.nothing_asked()
+        if verdict is None and not route.task.done():
+            waits = {route.task}
+            stop_task = asyncio.ensure_future(stopped()) if callable(stopped) else None
+            if stop_task is not None:
+                waits.add(stop_task)
+            try:
+                await asyncio.wait(waits, timeout=ROUTE_VERDICT_WAIT_S, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                if stop_task is not None and not stop_task.done():
+                    stop_task.cancel()
+            verdict = route.nothing_asked()
+        if verdict:
+            FOUND.mark_not_asked(key)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — not known: the join goes on as before
+        log.debug("route verdict for the join failed", exc_info=True)
 
 
 def note_route_late(route: "RouteFirst | None", d: Any, *, armed: Any, msgs: list, ctx: Any,
@@ -6740,7 +6807,11 @@ LOOK_FIRST_NOTE = (
 #: card). Part of the Feature lookup check (its own switch, off by default).
 LOOK_FIRST_OFFER_NOTE = (
     "(From Iron Jarvis, not from the user. Your reply above ends by asking the "
-    "user whether to make a change. If one of your tools makes that change, "
+    "user whether to make a change. If the change is your own idea (the user "
+    "asked a question, described a problem or wanted advice, and did not ask "
+    "Iron Jarvis to change or set up anything), answer with the single word "
+    "KEEP: an offer in words is right there. When the user did ask for it: "
+    "If one of your tools makes that change, "
     "call it now instead of asking in words: a change that needs the user's OK "
     "shows them an approval card when you call the tool, and a setting changed "
     "without one shows them an Undo, so the card or the Undo is how they "
@@ -13044,6 +13115,9 @@ async def run_chat_turn(
                 # routes/chat.py.
                 # v1.489.0: what Iron Jarvis looked up itself, in meanwhile,
                 # joins with this round's lookups. MIRROR NOTE (lock-step).
+                # v1.490.1: two readings must agree before a card. MIRROR
+                # NOTE (lock-step): routes/chat.py.
+                await settle_route_for_join(_route, ctx)
                 _rf_in, _rf_out, _rf_n = note_route_late(
                     _route, d, armed=armed, msgs=msgs, ctx=ctx, tally=_tally)
                 usage_in += _rf_in

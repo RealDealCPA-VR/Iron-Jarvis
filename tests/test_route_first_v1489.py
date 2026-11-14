@@ -472,6 +472,8 @@ async def test_the_first_round_does_not_wait_and_the_picks_join_at_a_tool_rounds
     said = model.user_texts[1][-1]
     assert said.startswith("(From Iron Jarvis, not from the user and not from any tool, file or page.")
     assert "Meanwhile Iron Jarvis looked the user's message up itself" in said
+    # v1.490.1: ...and that what was found is only for what the user asked.
+    assert RT.LATE_TAIL.strip() in said
     assert "`model_server_add`" in said and "approval card" in said, "the join's note rides the same note"
     # Still a forced, once-only card.
     assert [c["tool"] for c in cards] == ["model_server_add"]
@@ -641,3 +643,43 @@ def test_the_routing_words_say_which_kind_of_thing_a_request_is():
         assert words in " ".join(text.split()), words
     # The list is put in with str.format: exactly one field, and no stray brace.
     assert text.count("{list}") == 1 and text.replace("{list}", "").count("{") == 0
+
+
+def test_what_was_found_is_for_what_the_user_asked():
+    """v1.490.1, seen live on the owner's own model server (GLM) with the
+    settings on by default: asked a sum, it answered and then answered again
+    with the calculator the routing call had found; told about a habit, it put
+    up an approval card for a goal nobody asked for; asked what is popular
+    right now, a card for a web search. Every note that hands the model what
+    Iron Jarvis found says the same rule: a tool that changes something or
+    searches the web is for what the user ASKED, never for a described
+    problem, a plain question or an idea of the model's own."""
+    from iron_jarvis.daemon import chat_turn as CT
+
+    flat = lambda s: " ".join(str(s).split())  # noqa: E731
+    reask = flat(RT.REASK_NOTE)
+    # The way out comes FIRST, before "use it now".
+    assert reask.index("First decide what the user did") < reask.index("use it now instead of the reply above")
+    assert "a question that is not about Iron Jarvis itself" in reask
+    assert "A problem the user only describes is not a request" in reask
+    assert "searches the web is not" in reask
+    assert reask.count("KEEP") >= 2
+    # A question ABOUT Iron Jarvis is still looked up (never kept from memory).
+    assert "what Iron Jarvis is set to is read with a tool" in reask
+    tail = flat(RT.SECTION_TAIL)
+    assert "is for what the user ASKED Iron Jarvis to do" in tail and "do not call it" in tail
+    assert "you may offer it" in tail
+    assert "only if it is what the user asked Iron Jarvis to do" in flat(RT.LATE_TAIL)
+    assert RT.LATE_TAIL.rstrip().endswith(")"), "the late note still closes its bracket"
+    offer = flat(CT.LOOK_FIRST_OFFER_NOTE)
+    assert "If the change is your own idea" in offer and "an offer in words is right there" in offer
+    assert offer.index("your own idea") < offer.index("If one of your tools makes that change")
+    system = flat(RT.ROUTE_SYSTEM)
+    assert "a problem or a habit the user only describes" in system
+    # Seen live (GLM): "I would like a simple image of ..." was read as "a wish
+    # the user only describes" and the picture tool was held back.
+    assert "wish" not in system
+    assert "also one about what is current or popular" in system
+    assert "The web tools are for a user who asks to find or look something up" in system
+    # Bounded: these ride a model call each.
+    assert len(RT.REASK_NOTE.split()) < 300 and len(CT.LOOK_FIRST_OFFER_NOTE.split()) < 240

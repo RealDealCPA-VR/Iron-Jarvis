@@ -7761,6 +7761,11 @@ async def chat_stream(
                     # v1.489.0: what Iron Jarvis looked up itself, in
                     # meanwhile, joins with this round's lookups. MIRROR NOTE
                     # (lock-step): chat_turn.run_chat_turn.
+                    # v1.490.1: two readings must agree before a card. MIRROR
+                    # NOTE (lock-step): chat_turn.run_chat_turn.
+                    await _chat_turn.settle_route_for_join(
+                        _route, ctx,
+                        stopped=(handle.wait_stopped if handle is not None else None))
                     _rf_in, _rf_o, _rf_n = _chat_turn.note_route_late(
                         _route, d, armed=armed, msgs=msgs, ctx=ctx, tally=_tally)
                     usage_in += _rf_in

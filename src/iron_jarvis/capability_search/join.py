@@ -167,7 +167,7 @@ class _Found:
         if entry is None:
             while len(self._by) >= MAX_KEYS:
                 self._by.popitem(last=False)
-            entry = self._by[key] = {"pending": [], "joining": 0, "names": set()}
+            entry = self._by[key] = {"pending": [], "joining": 0, "names": set(), "not_asked": False}
         return entry
 
     def note(self, key: str, rows: Any) -> None:
@@ -186,6 +186,25 @@ class _Found:
                 return []
             pending, entry["pending"] = entry["pending"], []
             return pending
+
+    def has_pending(self, key: str) -> bool:
+        """Is a lookup of this turn waiting to be joined?"""
+        with self._lock:
+            entry = self._by.get(key)
+            return bool(entry and entry["pending"])
+
+    def mark_not_asked(self, key: str) -> None:
+        """Iron Jarvis's own routing call answered that this turn's message
+        needs none of its features (``route.Routed.nothing``)."""
+        if not key:
+            return
+        with self._lock:
+            self._entry(key)["not_asked"] = True
+
+    def not_asked(self, key: str) -> bool:
+        with self._lock:
+            entry = self._by.get(key)
+            return bool(entry and entry.get("not_asked"))
 
     def joining(self, key: str) -> int:
         with self._lock:
@@ -316,6 +335,17 @@ WHY_CANNOT_ASK = (
 )
 WHY_ASK_RULE = "it is set to ask first, and nobody can be asked here"
 WHY_SHARED = "its permission is shared with other tools, so a lookup does not bring it"
+#: v1.490.1: Iron Jarvis's own routing call read the user's message and
+#: answered that it asks for none of its features. Seen live on the owner's
+#: model server (GLM) and on a fresh set of look-alike messages: the routing
+#: call said "nothing" for "my goal this year is to get my Year 10s to stop
+#: guessing at units", and the model looked `goal_add` up by itself and put
+#: up its card. Two readings must agree before a card is shown.
+WHY_NOT_ASKED = (
+    "the user's message does not ask Iron Jarvis to do this (Iron Jarvis read it "
+    "itself); answer in words, and you may say what Iron Jarvis could do and "
+    "offer it: when the user asks for it, it joins"
+)
 
 #: Readers that can send the model's words to a memory base that is not on
 #: this PC (a Notion base, a memory server): treated as reaching outside.
@@ -525,6 +555,7 @@ def join_found(
             internet = frozenset(egress.INTERNET_TOOLS)
         except Exception:  # noqa: BLE001 — Local only cannot be read: nothing joins
             return []
+        not_asked = FOUND.not_asked(key)
         room = max(0, MAX_JOINING_LOOKUPS - FOUND.joining(key))
         can = joinable()
         joined: list[str] = []
@@ -610,6 +641,11 @@ def join_found(
                     armed_grant.add(name)
                 else:
                     # Rule 1: everything else asks first, or does not join.
+                    if not_asked:
+                        # v1.490.1: the routing call said the message asks
+                        # for nothing, so no card is put up for it.
+                        skipped[name] = WHY_NOT_ASKED
+                        continue
                     if not can_ask or asks_list is None or found_asks is None:
                         skipped[name] = WHY_CANNOT_ASK if must_ask else WHY_ASK_RULE
                         continue
@@ -717,7 +753,7 @@ def _note(joined: list[str], asks: list[str], skipped: dict[str, str], capped: b
         parts.append(f"`{name}` did not join: {why}.")
     if capped:
         parts.append(NO_MORE_NOTE.strip("()"))
-    elif skipped and not joined and not already:
+    elif skipped and not joined and not already and any(w != WHY_NOT_ASKED for w in skipped.values()):
         parts.append(LOOK_AGAIN)
     if not parts:
         return ""

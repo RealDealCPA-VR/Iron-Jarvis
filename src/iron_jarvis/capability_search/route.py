@@ -80,9 +80,13 @@ ROUTE_SYSTEM = (
     "when the message needs none "
     "of them: small talk; a question answered from general knowledge; writing or "
     "explaining something with no file to make; or a message that only talks "
-    "ABOUT such a topic (a general question, someone else's schedule or "
-    "settings, asking for advice or an opinion) without asking Iron Jarvis to do "
-    "it and without asking about Iron Jarvis itself.\n"
+    "ABOUT such a topic (a general question, also one about what is current "
+    "or popular; someone else's schedule or settings; a problem or a habit the "
+    "user only describes; asking for advice or an opinion) without "
+    "asking Iron Jarvis to do it and without asking about Iron Jarvis itself. "
+    "The web tools are for a user who asks to find or look something up. "
+    "When the user did not ASK for it (the message only remarks on or describes something a feature "
+    "could help with, and asks the assistant for nothing), put \"unasked\" first in the list.\n"
     "Answer with the JSON list only."
 )
 
@@ -96,11 +100,26 @@ LATE_LEAD = (
     "(From Iron Jarvis, not from the user and not from any tool, file or page. "
     "Meanwhile Iron Jarvis looked the user's message up itself. It found: "
 )
+#: How the late note ends (v1.490.1): what was found is for what the user asked.
+LATE_TAIL = (
+    " Use one only if it is what the user asked Iron Jarvis to do; a tool that "
+    "changes something or searches the web is never for an idea of your own.)"
+)
 #: The reply ended on words and the picks are in: the model is asked ONCE.
 REASK_NOTE = (
     "(From Iron Jarvis, not from the user. While you wrote the reply above, Iron "
     "Jarvis looked the user's message up itself.\n{found}\n"
-    "If one of these is what the user asked for, use it now instead of the reply "
+    # v1.490.1, seen live on the owner's own model server (GLM): asked a sum,
+    # it answered, then answered again with the calculator; told about a
+    # habit, it put up a card for a goal nobody asked for.
+    "First decide what the user did. If they asked a question that is not "
+    "about Iron Jarvis itself, told you about something (a problem, a habit, a "
+    "plan) or wanted advice or an opinion, and did NOT ask Iron Jarvis to do, "
+    "change, set up, save, find or look up anything, answer with the single "
+    "word KEEP: the reply above is sent as it is. A problem the user only "
+    "describes is not a request: offering help in words is right, calling a "
+    "tool that changes something or searches the web is not.\n"
+    "If they did ask, and one of these is what they asked for, use it now instead of the reply "
     "above: a change shows the user an approval card when you call its tool, and "
     "a tool that needs a detail only the user has asks them for it on a card, so "
     "do not ask in words first. Words alone change nothing in Iron Jarvis: a "
@@ -119,7 +138,10 @@ SECTION_LEAD = (
 SECTION_TAIL = (
     "If one of these is what the user asked for, use it in this reply. If none "
     "fits what they asked, ignore this list and answer as you would have (you can "
-    "still call `find_capability` yourself)."
+    "still call `find_capability` yourself). A tool that changes something or "
+    "searches the web is for what the user ASKED Iron Jarvis to do: when they "
+    "only asked a question, described a problem or wanted advice, answer in "
+    "words (you may offer it), and do not call it."
 )
 
 
@@ -132,6 +154,14 @@ class Routed:
     model: str = ""
     usage: dict = field(default_factory=dict)
     seconds: float = 0.0
+    #: The call ANSWERED with an empty list: the message needs none of Iron
+    #: Jarvis's features (v1.490.1). False for an unreadable answer.
+    nothing: bool = False
+    #: The call marked its picks :data:`UNASKED`: the message touches on
+    #: these features and asks for nothing. Nothing it picked joins, the
+    #: model is told nothing, and (like ``nothing``) the model's own lookup
+    #: then brings no tool that asks first.
+    unasked: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -216,6 +246,47 @@ def wanted(d: Any, body: Any, *, low_trust: bool = False, plain_chat: bool = Tru
         return False
 
 
+def answered_nothing(text: Any) -> bool:
+    """Did the call answer with a readable EMPTY list ("[]")? An answer
+    that cannot be read, or that names anything at all, is not "nothing".
+    Linear."""
+    raw = str(text or "")[:4000]
+    start = raw.find("[")
+    end = raw.find("]", start + 1) if start >= 0 else -1
+    if start < 0 or end < 0:
+        return False
+    try:
+        picked = json.loads(raw[start : end + 1])
+    except ValueError:
+        return False
+    return isinstance(picked, list) and not picked
+
+
+#: The mark the routing call puts FIRST in its list when the message only
+#: remarks on something a feature could help with and asks for nothing
+#: (v1.490.1). Measured on the owner's model server (GLM), the routing call
+#: alone: 0 of 141 practice requests carried it, and every look-alike message
+#: whose pick had brought a card did.
+UNASKED = "unasked"
+
+
+def said_unasked(text: Any) -> bool:
+    """Does the call's answer (its first JSON list) carry the
+    :data:`UNASKED` mark? An answer that cannot be read does not. Linear."""
+    raw = str(text or "")[:4000]
+    start = raw.find("[")
+    end = raw.find("]", start + 1) if start >= 0 else -1
+    if start < 0 or end < 0:
+        return False
+    try:
+        picked = json.loads(raw[start : end + 1])
+    except ValueError:
+        return False
+    return isinstance(picked, list) and any(
+        isinstance(item, str) and item.strip().lower() == UNASKED for item in picked
+    )
+
+
 def parse_ids(text: Any, known: Any) -> list[str]:
     """The ids in the call's answer: the first JSON list of text in it, only
     ids in *known*, each once, at most :data:`MAX_PICKS`. Linear."""
@@ -295,13 +366,16 @@ async def route_request(d: Any, body: Any, provider: str, model: str, *,
             return None  # the demo model looks nothing up
         response = route.response
         ids = parse_ids(getattr(response, "text", ""), by_id)
+        unasked = said_unasked(getattr(response, "text", ""))
         took = time.perf_counter() - started
         # Names only, never a word of the message.
-        log.info("request routed: %s (%.1f s)", ids, took)
+        log.info("request routed: %s%s (%.1f s)", ids, " unasked" if unasked else "", took)
         return Routed(
             entries=[by_id[i] for i in ids], provider=served,
             model=str(getattr(route, "model", "") or ""),
             usage=dict(getattr(response, "usage", None) or {}), seconds=took,
+            nothing=answered_nothing(getattr(response, "text", "")),
+            unasked=unasked,
         )
     except Exception:  # noqa: BLE001
         log.debug("request routing answer unreadable", exc_info=True)
@@ -332,6 +406,11 @@ def _lines_and_rows(d: Any, routed: "Routed | None", armed: Any) -> tuple[list[s
     from .tool import _not_needed, entry_line
 
     if routed is None or not routed.entries or NAME not in {str(n) for n in (armed or ())}:
+        return [], []
+    if getattr(routed, "unasked", False):
+        # v1.490.1: the message asks for nothing. What the call picked does
+        # not join and the model is told nothing (no section, no late note,
+        # no question at the end): it answers the remark as it would have.
         return [], []
     lines: list[str] = []
     rows: list[dict[str, Any]] = []
@@ -388,7 +467,7 @@ def note_late(d: Any, routed: "Routed | None", *, armed: Any, msgs: list, ctx: A
         if not any(getattr(m, "role", "") == "tool" for m in reversed(msgs[-8:])):
             return False
         FOUND.note(key, rows)
-        text = LATE_LEAD + " ".join(f"{n}. {line}" for n, line in enumerate(lines, 1)) + ")"
+        text = LATE_LEAD + " ".join(f"{n}. {line}" for n, line in enumerate(lines, 1)) + LATE_TAIL
         # Iron Jarvis's own note, after the round's tool results (the join's
         # own note is added to it: ``join._say``).
         msgs.append(LLMMessage(role="user", content=text[:SECTION_CHARS]))
