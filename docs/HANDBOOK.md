@@ -2042,6 +2042,48 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## The "keep working until it's true" check, everywhere and in more languages (v1.497.0)
+
+v1.495.0 checked chat replies and agent runs, in English. This closes what it
+left out.
+
+- **Build › Code.** When a reply from Claude Code, Codex or another coding
+  tool in Build › Code ends saying it saved a file, and that file is not in
+  the session's folder, Iron Jarvis sends the tool back once to make it, or to
+  say plainly it was not made. A reply that ends "I couldn't do this" after it
+  had started the work is sent back once too. In the conversation this shows
+  as one quiet line, for example *"Iron Jarvis sent it back: the reply said
+  report.xlsx was saved, and it is not in the folder."*, never as a message
+  from you. At most two follow-ups per message you send (each one uses your
+  plan). It is never sent when you pressed Stop, when the reply failed, when a
+  card or question is waiting for you, when you have a message queued, while
+  the tool is still working on its own, under Emergency stop, or when your
+  message said not to use tools or make files. If the file is still missing
+  after that, a line says so: *"Checked by Iron Jarvis: this is not finished.
+  … Tell it to keep going and it will carry on."* Only "saved" and "created"
+  claims are checked here: the tool runs its own commands, so a missing file
+  is the one thing Iron Jarvis can be sure of. A folder on another computer is
+  never looked in.
+- **The browser sidebar.** A sidebar reply that ends "I couldn't do that"
+  after it had started working on the page is sent back once to try another
+  way. Every click and typed value still asks the way it always did.
+- **Team replies in Chat › Code.** A coding session with a team now gets the
+  same check-again rounds after its team's review. The lead is told to hand
+  each fix to a worker.
+- **Other languages.** The checks now also read Spanish, French, German,
+  Italian, Portuguese and Dutch: a reply saying it saved or changed a file, a
+  reply giving up, your message asking for a file, and your message saying
+  not to use tools. "Bloqueado:", "Blockiert:" and the like count as a
+  "Blocked:" line. For a reply in any other language, Iron Jarvis cannot read
+  the words, so when something certain looks wrong (the reply names a file
+  that is not in the folder, or a step failed), it asks the model one quiet
+  question on the side. The reply changes only if the model then makes the
+  file or tries again; otherwise it stays exactly as it was, on screen too.
+- **A change no tool could make.** When a reply says it changed a setting
+  and the chat has no tool that can change it, the model is now asked only to
+  say plainly that it was not made (before, it was told to make the change,
+  which it could not do).
+
 ## Pair two computers in one step (v1.497.0)
 
 - **What it is.** If you run Iron Jarvis on two computers (an office PC and
