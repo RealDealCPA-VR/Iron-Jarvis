@@ -54,6 +54,44 @@ NOT_A_FIGURE_QUESTION = [
     "Limit the summary to 2026 items.",
 ]
 
+# v1.490.3: the same figure ASKED FOR, not put as a question. Seen live:
+# "Find me the current rate of Gift Aid, I can never remember what it is this
+# year." armed the memory tools and nothing that could look it up.
+ASKED_FOR = [
+    "Find me the current rate of Gift Aid, I can never remember what it is this year.",
+    "Find the current rate of Gift Aid.",
+    "Tell me the 2026 standard deduction.",
+    "Please look up the minimum wage for next year.",
+    "Get me today's prime rate.",
+    "Check the 2027 contribution limits.",
+    "Show me the current per diem for Orlando.",
+]
+ASKED_FOR_BUT_THEIR_OWN = [
+    "Find the current rate in my spreadsheet.",
+    "Tell me our 2026 deadline for the Smith engagement.",
+    "Check the rate in this document for 2026.",
+    "Show me the client's current rate.",
+    "Get the 2026 limits from the attached file.",
+]
+NOT_ASKED_FOR = [
+    "Remember the current rate for later.",
+    "Write down the 2026 limits somewhere.",
+    "Keep an eye on the deadline this year.",
+    "Find me a good book.",
+    "Tell me a joke about deadlines.",
+]
+
+
+@pytest.mark.parametrize("text", ASKED_FOR)
+def test_a_published_figure_asked_for_arms_web_search(text):
+    assert "web_search" in select_auto_tools(text)
+
+
+@pytest.mark.parametrize("text", ASKED_FOR_BUT_THEIR_OWN + NOT_ASKED_FOR)
+def test_asking_for_the_users_own_figure_or_for_something_else_stays_off_the_web(text):
+    armed = select_auto_tools(text)
+    assert "web_search" not in armed and "web_fetch" not in armed
+
 
 @pytest.mark.parametrize("text", NEEDS_THE_WEB)
 def test_a_published_figure_question_arms_web_search(text):

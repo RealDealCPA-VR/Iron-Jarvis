@@ -1577,7 +1577,8 @@ def _web_signal_is_an_app(msg: str, apps_on: "frozenset[str] | set[str] | tuple[
 #: whole pattern is linear, and only the first 4,000 characters are read):
 #:  1. nothing says the figure is the user's OWN (my/our/we, a client, an
 #:     invoice, an attached or open file): that is their data, not the web's;
-#:  2. it is a question (a question word first, or a "?" anywhere);
+#:  2. it is a question (a question word first, or a "?" anywhere), or it
+#:     opens by asking for it ("find me", "tell me", "look up": v1.490.3);
 #:  3. a figure noun sits in one clause with a year, or right after a word
 #:     for "now".
 _PF_FIGURE = (
@@ -1595,6 +1596,10 @@ _PF_OWN = (
 _PUBLISHED_FIGURE_RX = re.compile(
     r"\A(?![\s\S]{0,4000}?\b" + _PF_OWN + r"\b)"
     r"(?=\s*(?:what|when|how\s+much|how\s+many|which|who|is|are|does|did|has|will)\b"
+    # v1.490.3: or it is ASKED FOR ("Find me the current rate of Gift Aid, I
+    # can never remember what it is this year" armed the memory tools and
+    # nothing that could look it up).
+    r"|\s*(?:please\s+)?(?:find|get|give|tell|show|check|look\s+up)\b"
     r"|[\s\S]{0,4000}?\?)"
     r"(?=[\s\S]{0,4000}?(?:"
     r"\b" + _PF_YEAR + r"\b[^.!?\n]{0,80}?\b" + _PF_FIGURE + r"\b"

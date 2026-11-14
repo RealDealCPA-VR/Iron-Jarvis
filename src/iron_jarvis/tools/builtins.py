@@ -113,12 +113,23 @@ def _is_under(path: Path, root: Path) -> bool:
         return False
 
 
-def _walk_files(base: Path, *, limit: int, deadline_s: float = _WALK_DEADLINE_S):
+#: How many empty folders a listing names (v1.490.3).
+_MAX_EMPTY_DIRS = 40
+
+
+def _walk_files(base: Path, *, limit: int, deadline_s: float = _WALK_DEADLINE_S,
+                empty_dirs: "list[Path] | None" = None):
     """Yield files under *base*, pruned and bounded.
 
     Returns ``(paths, truncated_reason)``. Uses ``os.walk`` rather than
     ``rglob`` because only ``os.walk`` can PRUNE — dropping ``node_modules``
     after descending into it is the expensive half of the problem.
+
+    *empty_dirs* (v1.490.3): when given, the folders under *base* that hold
+    nothing at all are appended to it (at most :data:`_MAX_EMPTY_DIRS`; never
+    *base* itself, never a pruned or hidden folder). A caller that lists
+    FILES would otherwise never mention them, and a listing that leaves a
+    folder out reads as "that folder does not exist".
     """
     import os
     import time
@@ -127,6 +138,9 @@ def _walk_files(base: Path, *, limit: int, deadline_s: float = _WALK_DEADLINE_S)
     out: list[Path] = []
     truncated = ""
     for root, dirs, files in os.walk(base, followlinks=False):
+        if (empty_dirs is not None and not dirs and not files
+                and len(empty_dirs) < _MAX_EMPTY_DIRS and Path(root) != base):
+            empty_dirs.append(Path(root))
         dirs[:] = [dd for dd in dirs if dd not in _SKIP_DIRS and not dd.startswith(".")]
         for fn in files:
             out.append(Path(root) / fn)
@@ -1500,18 +1514,35 @@ class ListFilesTool(Tool):
 
         def _list():
             root = ctx.workspace.resolve()
-            paths, truncated = _walk_files(base, limit=_MAX_WALK_ENTRIES)
+            hollow: list[Path] = []
+            paths, truncated = _walk_files(base, limit=_MAX_WALK_ENTRIES, empty_dirs=hollow)
             names = sorted(
                 str(p.relative_to(root)).replace("\\", "/")
                 for p in paths
                 if _is_under(p, root)
             )
-            return names, truncated
+            folders = sorted(
+                str(p.relative_to(root)).replace("\\", "/") + "/"
+                for p in hollow
+                if _is_under(p, root)
+            )
+            return names, truncated, folders
 
         # Offloaded for the same reason ShellTool is: this runs on the daemon's
         # single event loop, and inline it freezes every other request.
-        entries, truncated = await asyncio.to_thread(_list)
+        entries, truncated, empty = await asyncio.to_thread(_list)
         out = "\n".join(entries)
+        if empty:
+            # v1.490.3, seen live: asked to move files "into the Facturen 2026
+            # folder" (there, and empty), Jarvis listed the files, did not see
+            # the folder and told the user it did not exist. A listing of
+            # FILES says which folders it found with nothing in them.
+            out += (
+                ("\n\n" if out else "")
+                + "[empty folders, nothing in them: " + ", ".join(empty)
+                + (" (and possibly more)" if len(empty) >= _MAX_EMPTY_DIRS else "")
+                + "]"
+            )
         if truncated:
             # Said OUT LOUD. A silently-truncated listing reads as complete, and
             # the model then reports that a file is not there.
@@ -1522,7 +1553,7 @@ class ListFilesTool(Tool):
         return ToolResult(
             ok=True,
             output=out,
-            data={"count": len(entries), "truncated": bool(truncated)},
+            data={"count": len(entries), "truncated": bool(truncated), "empty_folders": empty},
         )
 
 

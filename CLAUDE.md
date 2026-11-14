@@ -17844,6 +17844,51 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **`list_files` names EMPTY folders; a published figure ASKED FOR arms the
+  web; the Haiku rate is 95% ON AVERAGE, 93-97% a run** (v1.490.3; read off
+  the misses of a third Haiku pass on v1.490.2, which came in at 104).
+  - `tools/builtins._walk_files(..., empty_dirs=None)`: when a list is handed
+    in, folders under the base with no entry at all are appended (never the
+    base, never a pruned or hidden folder, at most `_MAX_EMPTY_DIRS` 40).
+    `ListFilesTool` ends its output with "[empty folders, nothing in them:
+    a/, b/]" (+ "(and possibly more)" at the bound) and `data.empty_folders`;
+    with none the output is byte-identical. Its DESCRIPTION is unchanged on
+    purpose (tool-spec goldens and the capability phrasings read it). Seen
+    live: "move the PDFs into the Facturen 2026 folder" → "that folder does
+    not exist" (it was empty; d597 missed in 2 of 3 runs). A test double of
+    `_walk_files` must take `**kw` (`test_workspace_walk_v11531` moved).
+  - `autoselect._PUBLISHED_FIGURE_RX`: the "it is a question" condition also
+    accepts an opening `(please )?(find|get|give|tell|show|check|look up)`.
+    The own-data exclusion (`_PF_OWN`) and the figure + year/now condition are
+    unchanged. Rows both ways in `tests/test_published_figure_web_v1463.py`.
+  - **TEST SETUP:** `seed_home.py` now also makes `hours.xlsx` and
+    `Invoices Q4/invoice_hartleys.docx` (the files d435's earlier chat says
+    were used and made).
+  - **MEASURED (Haiku, TSI account, cards declined).** Practice strict rows,
+    seven runs: v1.490.2 107 (h8, pre-final), 107, 108, 104; v1.490.3 106,
+    105, 103. Mean 105.7 of 111 (95.2%), range 103-108. THE RATE IS NOT
+    ">= 95% in every run": three rows miss always (d039, d133 calendar label;
+    d073 where-is answered from the lookup's setting line), and 0-5 more miss
+    per run, different rows each time (d400 folder vs project 4 of 7; d583
+    night task done at once 2 of 3; d449, d595 workflow draft, d103
+    preference instead of the update channel, d574 own model from memory,
+    d435 the model distrusts a seeded earlier chat that has no tool record,
+    d030 details asked in words). The rows this release aimed at (d597, d347,
+    d251) passed in all three runs. Look-alikes on v1.490.3: held-out 99 → 0
+    cards; `nearfresh` → f053 only (a real request); `nearfresh2` → 1 card
+    (g095: the routing call picked Read replies aloud for "I'd rather just
+    hear someone explain debits and credits out loud while I drive", then the
+    look-first check called `config_set`); earlier runs of that set: 1 (g025
+    recall, gone with the memory rule), 0, 0. 43 ordinary questions: no card,
+    0 retakes, `calculate` joined by the routing call for two sums.
+  - **OPEN:** GLM unmeasured since v1.490.1; a where-is answer built from the
+    lookup's setting line says "Settings → Device" for `device.text_size`
+    (the section is Appearance): put the section's own name in the line;
+    about one look-alike card in 300 on Haiku comes and goes.
+  - **Pins:** `tests/test_list_files_empty_folders_v14903.py` (10 mutations,
+    all red), the v1.490.3 rows of `tests/test_published_figure_web_v1463.py`
+    (3 mutations, all red).
+
 - **A SECOND LOOK before a held card stays held; a looked-up memory search
   asks only when a memory base is really off this PC; a refused read names
   the same-named folder** (v1.490.2; the /goal again, after v1.490.1 measured

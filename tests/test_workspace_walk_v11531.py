@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -88,7 +87,7 @@ async def _walk_under_heartbeat(tool, args, root: Path) -> dict:
             if ticks["target"] is not None and ticks["n"] >= ticks["target"]:
                 reached.set()
 
-    def slow_walk(base, *, limit, deadline_s=B._WALK_DEADLINE_S):
+    def slow_walk(base, *, limit, deadline_s=B._WALK_DEADLINE_S, **_more):  # v1.490.3: + empty_dirs
         seen["walk_thread"] = threading.get_ident()
         try:
             asyncio.get_running_loop()

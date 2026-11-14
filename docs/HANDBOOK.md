@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.490.2 (2026-11-13).*
+holds itself to. Current as of v1.490.3 (2026-11-13).*
 
 ---
 
@@ -2041,6 +2041,43 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Empty folders are listed, and "find me the current rate" looks it up (v1.490.3)
+
+- **A folder that is there but empty is no longer "missing".** Asked to move
+  files "into the Facturen 2026 folder", Jarvis listed the files, did not see
+  the folder (it was empty, and the listing only showed files) and told you
+  the folder did not exist. A listing of files now ends with the folders it
+  found with nothing in them (up to 40). Hidden folders and the heavy ones a
+  listing always skips (node_modules and the like) are not named.
+- **"Find me the current rate of Gift Aid" now reaches the web.** A question
+  about a published figure ("What is the current rate...?", "What is the 2026
+  limit?") already brought the web search. The same figure asked for with
+  "find me", "tell me", "get me", "show me", "check" or "look up" did not, so
+  Jarvis answered from what it knew and said it could not check. Now it can
+  look it up. A figure of your own ("the current rate in my spreadsheet", "our
+  2026 deadline") still stays off the web.
+- **What it measured.** Claude Haiku, the three Feature lookup settings on,
+  every card declined, the 111 practice requests:
+  - Seven runs since v1.490.2 (four on v1.490.2, three on this version):
+    107, 107, 108, 104, then 106, 105, 103. That is 95 in 100 on average, and
+    between 93 and 97 in a single run. So the rate is at 95% on average, not
+    in every run.
+  - Three requests miss in every run: two calendar requests where the
+    practice set expects another tool than the calendar link card Jarvis
+    opens, and a "where is the button" question that Jarvis answers without
+    the guide. The other misses change from run to run (a night task done on
+    the spot instead of queued, a folder made instead of a project, a
+    workflow drafted instead of a skill).
+  - Look-alike messages (they use a feature's words and ask for nothing), 300
+    in three sets, on this version: no question card; approval cards only on
+    one real request hidden in a set, plus one card for "Read replies aloud"
+    on "I'd rather just hear someone explain debits and credits out loud
+    while I drive". Earlier runs showed none there; about one such card in
+    300 messages comes and goes between runs.
+  - 43 ordinary questions: no card, nothing taken back.
+- **GLM on your own server is still not measured** on v1.490.2 or v1.490.3
+  (the saved key was not copied into the test copies again).
 
 ## A second look, and fewer cards for memory (v1.490.2)
 
