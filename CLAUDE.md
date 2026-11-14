@@ -18490,6 +18490,80 @@ does not need a bump, stop and bump it.
   `tests/test_capability_phrasings_v1481.py`,
   `tests/test_look_first_preference_v1481.py`.
 
+- **THE WORK RECORD: what Iron Jarvis did, in which folder, built only from
+  its own records; a chat is told of a piece of work only after its SOURCE
+  was asked again** (v1.491.0; vision plan leap 3, Phase 1,
+  `docs/VISION-PLAN-2026-11-14.md`; the owner: "a memory that compounds …
+  full steam"; a builder + an independent reviewer who found 4 high and 7
+  medium defects, each a test now).
+  - **What it is.** `src/iron_jarvis/workmap/`: `models.WorkEntry` (table
+    `workentry`, a late model) = one row per piece of work that has a FOLDER:
+    kind `chat` | `code` (Chat › Code) | `tool_code` (Build › Code) | `run`;
+    title, folder + `folder_key`, files (newest first, ≤ 40, from a reply's
+    `documents` and the undo journal), outcome, `local_only`, `keep_home`
+    (Pi / OpenCode), `archived`, a run's summary line. A DERIVED index: no
+    model call, no file on disk opened, deleting it loses nothing.
+  - **Sources (`collect.py`).** A conversation is work only once Jarvis has
+    REPLIED in it (the page saves a new chat's question before its first turn
+    names its thread: it must never be listed to itself). Never a phone
+    thread (`owner == "daemon"`), a hosted helper (`handed_from`), a hosted
+    session whose tool never answered, a helper / mission-member run
+    (filtered IN the SQL, so they never use up the listing bound), a
+    delegated child (`AgentRun.parent_id`), or a run in its own scratch
+    folder with no project. A STAMP decides what is rebuilt; it holds the
+    title (a coding session's rename does not move `updated_at`) and the
+    journal's row + undone counts (`journal_counts`, one grouped read).
+  - **Keeping it (`index.WorkMap`, `work_map(engine, home)` one per
+    engine).** `refresh()` is throttled (20 s), never waits for another
+    refresh, builds ≤ 60 rows inline and hands the rest to ONE daemon thread
+    (`_build_rest`: one scan, 25-row transactions). No loop wakes for it: it
+    runs right before a read. A source that cannot be listed leaves its rows
+    alone; a row past a listing's bound is removed only when
+    `collect.source_exists` says its source is gone; one row that cannot be
+    built or stored is skipped (`_skip`) until its source changes. A hosted
+    read that fails RAISES (never "no rows"). `files_json` is ASCII JSON and
+    every text goes through `storable_text`.
+  - **What a chat is told (`block.work_block`, hop `work` in
+    `_gather_grounding`, joined in `_Grounding.query()` right after the
+    project's query part).** "In this folder" (newest six, repeats folded)
+    for the turn's `workspace_dir`, else the project's root; inside a project
+    that part is left to the project's own recent activity. "In other
+    folders, matching this message" via `WorkMap.matching`. BEFORE anything
+    is said, `collect.live_state` asks each row's source by id: gone → not
+    said; Local only / archived read from the source, not the row. Sources
+    unreadable → "". Local only and `keep_home` rows only for a turn that
+    `egress.may_recall_local_only_chats`. Archived never. Every line through
+    promptguard. "" when nothing is on record (both lanes byte-identical,
+    pinned against the hop switched off).
+  - **THE MATCHING RULE IS STRICT ON PURPOSE** (the first cut pulled other
+    clients into "What are the 2025 tax brackets?"): `keys.words` = lower-case
+    words of 4+ letters that are not stop words, bare numbers or file
+    endings; a row matches with TWO such words of which one belongs to few
+    folders (`≤ max(1, folders // 10)`), or with ONE word written as a NAME
+    in the message (`keys.named_words`: capitalised, not starting its
+    sentence) that is the name of exactly one folder; more than
+    `QUERY_WORDS_MAX` (30) words is a paste and matches nothing. Looks at the
+    newest `LIGHT_MAX` (3,000) rows. Change it only with rows added BOTH ways
+    to the two parametrized tables in the test file.
+  - **Paths are compared as TEXT** (`keys.folder_key`, `inside`,
+    `home_folder`: a `<repo>.ij-worktrees/<name>` copy belongs to `<repo>`);
+    nothing stats or resolves (pinned with the disk calls patched to raise).
+  - **Routes** (`routes/work_map.py`): `GET /work-record/folders`
+    (`folders_total`, `building`; 503, never an empty list, when the record
+    cannot be read) and `GET /work-record/entries?folder=` (exactly that
+    folder). NOT under `/memory/`: `GET /memory/{layer}/{key}` answers any
+    two-part path there. Dashboard: `components/memory/WorkByFolder.tsx` +
+    `lib/workRecord.ts` (no `ApiError` import: failures read through
+    `failureOf`), mounted under KnowsAboutYou.
+  - **OPEN:** recaps, clients, recall in agent runs and a lookup tool are
+    Phases 2-4; Build › Code files are not read; `matching` is lexical and
+    English; a chat with a folder AND a project lists the folder part only
+    through the project's block; no setting turns the block off; a worktree
+    copy's subfolder maps to the whole repository; not driven with a real
+    model or in the packaged app.
+  - **Pins:** `tests/test_work_record_v1491.py` (55; 31 mutations, all red),
+    `dashboard/__tests__/work-by-folder-v1491.test.tsx`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

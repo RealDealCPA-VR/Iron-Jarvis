@@ -23,6 +23,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { WorkingMemory } from "./WorkingMemory";
 import { KnowsAboutYou } from "./KnowsAboutYou";
+import { WorkByFolder } from "./WorkByFolder";
 import { Lessons } from "./Lessons";
 import { LongTerm } from "./LongTerm";
 import MemoryGraph from "./MemoryGraph";
@@ -109,6 +110,9 @@ export function MemorySurface({
       {/* v1.279.0: the answer to "what do you know about me?" comes first —
           the scopes below are where a person goes to look something up. */}
       <KnowsAboutYou onSettled={onAboveSettled} />
+      {/* v1.491.0 (vision plan leap 3): what Iron Jarvis did, folder by
+          folder. Its own record of the work, beside what it knows of you. */}
+      <WorkByFolder />
       <Suspense fallback={null}>
         <ScopedMemory initialScope={initialScope} aboveSettled={aboveSettled} />
       </Suspense>

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.490.4 (2026-11-13).*
+holds itself to. Current as of v1.491.0 (2026-11-13).*
 
 ---
 
@@ -2041,6 +2041,49 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Jarvis remembers the work it did, folder by folder (v1.491.0)
+
+- **A record of your work, kept by itself.** Iron Jarvis now keeps its own
+  record of every piece of work that has a folder: the chats, the coding
+  sessions (both Code views) and the agent runs, each with its title, when it
+  happened, how it ended and the files it wrote. It is built only from what
+  Iron Jarvis already stores. No model is called to build it and no file on
+  your disk is opened.
+- **A chat in a folder is told what was done there before.** Pick a folder in
+  a chat, or open a coding session in one, and Jarvis starts with the newest
+  six pieces of earlier work in that folder: titles and file names. A nightly
+  run that repeats is one line ("4 times, newest shown").
+- **Name earlier work and Jarvis knows where it lives.** "Redo the March
+  reconciliation for Hartleys" in a new chat brings the folder and the files
+  of that earlier work, even when the new chat has no folder yet. The rule is
+  strict on purpose, so one client's work is not pulled into a chat about
+  something else: two of your words must match the earlier work and one of
+  them must be a word few folders share, or you name a client folder the way
+  a name is written ("for Hartleys"). Years, file endings, short words and
+  ordinary shared words ("tax", "report", "invoices") match nothing, and a
+  long pasted message is never read as a pointer.
+- **Memory › Your work, by folder.** The Memory page lists the folders Jarvis
+  has worked in, how many pieces of work are on record in each and when the
+  last one was. Open a folder to see each piece with its files and a link
+  back to it.
+- **What stays private.** Work switched to Local only is left out of what a
+  chat is told unless that chat itself stays on your network. Archived work
+  is on the Memory page but is never told to a chat. A title that reads as an
+  instruction to the model is left out. Deleting a chat or a run removes it
+  from the record, and before anything is said Jarvis checks each piece
+  again, so a chat you deleted, archived or switched to Local only a moment
+  ago is not mentioned. What a chat is told goes to the model answering that
+  chat, as the rest of the chat does.
+- **What it does not do yet.** It records titles and file names, not what was
+  decided: short recaps of finished work, client pages and recall inside
+  agent runs are the next steps (`docs/VISION-PLAN-2026-11-14.md`). A chat is
+  on record once Jarvis has replied in it. Inside a Project the "in this
+  folder" list is the project's own recent activity, as before. A
+  Build › Code session's files are not listed (only its title). "Name
+  earlier work" looks at the newest 3,000 pieces of work. After the update
+  the first read of a long history is finished in the background; the Memory
+  page says while it is still reading.
 
 ## "Where is that setting?" gets the real place (v1.490.4)
 

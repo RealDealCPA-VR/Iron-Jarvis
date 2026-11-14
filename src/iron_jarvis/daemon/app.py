@@ -3877,6 +3877,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     _preferences_routes.register(app, d)
     # Follow-up questions under a reply (v1.323.0), when chat_followups is on.
+    # The work record (v1.491.0, vision plan leap 3): every folder Iron
+    # Jarvis has worked in and what was done there, for the Memory page.
+    from .routes import work_map as _work_map_routes
+
+    _work_map_routes.register(app, d)
     from .routes import followups as _followups_routes
 
     _followups_routes.register(app, d)

@@ -10407,7 +10407,7 @@ class _Grounding:
         "project", "project_query", "folder_rules", "folder_rules_used", "lessons", "index",
         "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
         "text_only", "apps", "apps_named", "apps_live", "apps_on", "apps_offer",
-        "harness", "apps_phone", "late",
+        "harness", "apps_phone", "late", "work",
     )
 
     def __init__(self) -> None:
@@ -10419,6 +10419,12 @@ class _Grounding:
         #: the stable head. ``project`` keeps the instructions, the brief and
         #: the folder line.
         self.project_query = ""
+        #: v1.491.0 (vision plan leap 3, Phase 1): "Earlier work on record" —
+        #: what was done before in the turn's folder and where earlier work
+        #: the message names lives (``workmap.block.work_block``). "" when
+        #: there is nothing on record, so the prompt is byte-identical then.
+        #: Changes as work is done, so it rides :meth:`query`.
+        self.work = ""
         #: Set by the lane once it knows the turn is a text-only pick
         #: (:func:`is_text_only_pick`, v1.330.0): the roster ("Who can take
         #: this work") is then left out, because the turn has no exit to
@@ -10479,7 +10485,7 @@ class _Grounding:
         :meth:`query` apart since C3.7)."""
         return (
             self.project + self.project_query + self.folder_rules + self.lessons + self.index
-            + self.fabric + self.connector + self.apps
+            + self.work + self.fabric + self.connector + self.apps
         )
 
     def stable(self) -> str:
@@ -10497,7 +10503,7 @@ class _Grounding:
         and the apps the message names. The lanes join it LAST, after the
         tool list, with the attachments and the "/" skill (before the planner
         still prices it)."""
-        return self.project_query + self.fabric + self.connector + self.apps
+        return self.project_query + self.work + self.fabric + self.connector + self.apps
 
     def after_skill(self) -> str:
         # The packs note rides the shared join (v1.311.0 review), so both
@@ -10858,6 +10864,23 @@ async def _gather_grounding(
                                            fallback_root=_proj_root)
         return chat_folder_rules_block(_proj_root, event_bus=bus, session_id="chat")
 
+    # THE WORK RECORD (v1.491.0, vision plan leap 3): what Iron Jarvis did
+    # before in this turn's folder, and where earlier work the message names
+    # lives. The folder is the one the turn is bound to, else the project's;
+    # inside a project the "in this folder" part is left to the project's own
+    # recent activity (never said twice). Reads SQLite, so off the loop like
+    # every hop; never raises; "" when nothing is on record.
+    _work_folder = (getattr(body, "workspace_dir", "") or "").strip() or _proj_root
+
+    def _work() -> str:
+        from ..workmap.block import work_block
+
+        return work_block(
+            platform, folder=_work_folder, query=recall_query,
+            exclude_ref=str(getattr(body, "thread_id", "") or ""),
+            list_folder=resolved_proj is None,
+        )
+
     hops: list[tuple[str, Any]] = []
     if resolved_proj is not None:
         hops += [("project", _project_text), ("knowledge", _knowledge)]
@@ -10870,6 +10893,8 @@ async def _gather_grounding(
     if learning is not None:
         hops.append(("lessons", _lessons))
     hops.append(("index", _index))
+    if getattr(platform, "engine", None) is not None and (_work_folder or recall_query.strip()):
+        hops.append(("work", _work))
     if fabric is not None and recall_query.strip():
         hops.append(("fabric", _fabric))
     hops += [("connector", _connector), ("roster", _roster), ("workflows", _workflows)]
@@ -10943,6 +10968,7 @@ async def _gather_grounding(
         out.folder_rules, out.folder_rules_used = got["folder_rules"]
     out.lessons = got.get("lessons", "")
     out.index = got.get("index", "")
+    out.work = got.get("work", "") or ""
     out.fabric = got.get("fabric", "")
     out.conn_tools, out.connector = got["connector"]
     out.roster = got.get("roster", "")

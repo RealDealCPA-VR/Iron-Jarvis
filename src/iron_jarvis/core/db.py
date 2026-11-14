@@ -257,6 +257,7 @@ _LATE_MODEL_MODULES = (
     "..hosted.models",        # HostedSessionRecord — a Code-view session (Build, v1.409.0)
     "..agents.team_findings",  # TeamFinding — a reviewer's finding and what became of it (v1.423.0)
     "..agents.team_notes",    # TeamNote + TeamNoteState — a member's accepted working habits (v1.423.0)
+    "..workmap.models",       # WorkEntry — the work record: what was done, in which folder (v1.491.0)
 )
 
 
