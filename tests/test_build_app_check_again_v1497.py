@@ -496,3 +496,9 @@ async def test_a_check_made_stale_by_a_newer_message_sends_nothing(app, work, mo
     await settle(svc, row.id)
     assert len(drivers[row.id].sent) == 2 and svc.live[row.id].turn is None
     await stop_all(app)
+
+
+def test_a_claimed_name_spelled_as_a_share_is_left_alone(tmp_path):
+    for name in (r"\\host\share\x.xlsx", "//host/share/x.xlsx", r"\\?\C:\x.xlsx"):
+        assert CA.missing_files([name], str(tmp_path), []) == [], name
+    assert CA.missing_files(["x.xlsx"], str(tmp_path), []) == ["x.xlsx"]
