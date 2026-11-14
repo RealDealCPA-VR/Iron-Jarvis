@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.490.1
+
+**A card only for what you asked.** **Jarvis no longer puts up an approval card for something you did not ask for.** With Feature lookup on, a remark such as "my goal this year is to get my class to stop guessing at units" could bring an approval card for a goal, "what styles are popular right now?" a card for a web search, and "my eyes are not what they were" a card for the text size.
+
 ## v1.490.0
 
 **Feature lookup is on by default.** **The three Feature lookup settings are now on** for anyone who never changed them: **Feature lookup**, **Feature lookup check** and **Feature lookup first** (Settings › Models).
@@ -77,7 +81,3 @@
 ## v1.476.0
 
 **Skills that get used, one approval for many changes, faster scripts.** A skill used to reach a chat only when you picked it with "/".
-
-## v1.475.0
-
-**One chip for the coding tool, model and effort.** In Build › Code, the coding tool, its model and its effort are now one chip under the box: "Claude Code · Opus 5.5 · High".

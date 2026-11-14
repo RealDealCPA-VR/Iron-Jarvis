@@ -17844,6 +17844,123 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **TWO READINGS MUST AGREE BEFORE A CARD: the routing call says whether the
+  user ASKED; when it says no, no tool that asks first joins** (v1.490.1; the
+  /goal's "without any regressions", after v1.490.0's GLM run showed 2
+  approval cards on 99 look-alike messages and 3 sums answered twice).
+  - **WHAT WAS WRONG, read off the run logs.** Three different things. (1) At
+    the end of a reply, `route.REASK_NOTE` said "if one of these is what the
+    user asked for, use it now", with KEEP only for "none fits": a sum the
+    model had answered was redone with the calculator, and a web search / a
+    goal was called for a plain question / a described habit. (2) On FRESH
+    look-alikes the cards came from the MODEL's own `find_capability` lookup
+    while the routing call had answered `[]`. (3) On a second fresh set the
+    routing call itself PICKED a feature for a remark ("my eyes are not what
+    they were" -> text size) and the model followed the section.
+  - **THE MARK (`route.UNASKED`, `said_unasked`, `Routed.unasked`).**
+    `ROUTE_SYSTEM` ends: "When the user did not ASK for it (the message only
+    remarks on or describes something a feature could help with, and asks the
+    assistant for nothing), put "unasked" first in the list." A marked answer
+    brings NOTHING (`_lines_and_rows` answers empty: no join, no section, no
+    late note, no question at the end; the system prompt and tools are
+    byte-identical to a turn whose routing said `[]`, pinned) and counts as
+    "nothing asked" for the gate below. Measured on GLM, the routing call
+    alone: 0 of 141 practice requests marked; on the two validation sets every
+    look-alike whose pick had brought a card was marked. The mark is never an
+    id (`parse_ids` drops it) and `["unasked"]` is not `answered_nothing`.
+  - **THE GATE (`join.WHY_NOT_ASKED`).** `chat_turn.RouteFirst.
+    nothing_asked()` -> True (an empty list, or marked unasked) / False
+    (picked something) / None (running, failed, unreadable); it reads the task
+    whether or not the answer was "used". `chat_turn.settle_route_for_join(
+    route, ctx, stopped=)` — both lanes, right before `note_route_late` at a
+    tool round's end, MIRROR NOTE — acts ONLY when a lookup of the model's own
+    is pending (`FOUND.has_pending`; an ordinary tool round never waits): it
+    waits for a routing call still running at most `ROUTE_VERDICT_WAIT_S`
+    (12 s; ended by Stop through the turn's `wait_stopped`) and on True calls
+    `FOUND.mark_not_asked(key)`. `join_found` then skips every tool that would
+    join ASK-FIRST (a changer, or a reader that reaches outside: Rule 1) with
+    `WHY_NOT_ASKED` ("…answer in words, and you may say what Iron Jarvis could
+    do and offer it: when the user asks for it, it joins"); a reader that
+    stays on this PC still joins (Rule 2), and `_note` adds no "look once
+    more". NOTHING CHANGES when the routing call picked something unmarked,
+    failed, was unreadable, timed out, is off, or was never made (< 3 words,
+    demo model, small window). Tools the word tables arm are untouched.
+  - **THE WORDS.** `REASK_NOTE` opens with "First decide what the user did":
+    a question not about Iron Jarvis itself, something they told you (a
+    problem, a habit, a plan) or a wish for advice -> KEEP. `SECTION_TAIL`,
+    the late note (`LATE_TAIL`) and `chat_turn.LOOK_FIRST_OFFER_NOTE` ("If the
+    change is your own idea … KEEP") say the same; `ROUTE_SYSTEM`'s `[]` cases
+    gained "also one about what is current or popular", "a problem or a habit
+    the user only describes", and "The web tools are for a user who asks to
+    find or look something up". NEVER "a wish" in `ROUTE_SYSTEM` (pinned).
+  - **ROUTING-PROMPT WORDING IS A LOTTERY ON GLM (measured; do not walk it
+    again).** The routing call alone, five wordings over the 141 practice
+    rows: each wording answers `[]` for 4 to 12 real requests, and WHICH rows
+    changes with every edit (one sentence added: 6 -> 12, a different set);
+    under load the same prompt gave 4 in a probe and 11 live. Rewording to
+    win one row loses another. What moved the numbers was structure (the
+    mark, the gate). Also tried and not built: asking the routing question a
+    second time with only the tools the model looked up (it picked no changer
+    on 40 look-alike pairs, but did not recover the request it was meant for).
+  - **A REFUSED READ NAMES WHAT MAY BE READ (`fs_policy.readable_hint`,
+    `HINT_FOLDERS` 6).** `fs_read_ok` appends "Jarvis may read: A; B[; and N
+    more]. If what you want is inside one of them, use its full path there."
+    to `READ_REFUSAL` (the user's setting refused) and to nothing else: the
+    installation's own limit and a protected folder keep their words. Seen
+    live on both models with reading limited to a home folder: the model
+    tried the usual place for Downloads, was refused, and told the user to
+    change their permissions. A test must keep its `Config` alive
+    (`fs_policy` holds it weakly). Moved on purpose: four `== REFUSAL` pins in
+    `test_readable_folders_v13560` / `test_read_refusal_words_v13560`.
+  - **MEASURED (final code, three settings on, cards declined).** Haiku
+    (TSI account): practice 104 of 111 in each of the last three runs
+    (h5 before the mark, h6 with it, h7 with the hint too), 105 and 106 on the two passes
+    before; routing marked 0 of 138 practice rows unasked; look-alikes: held-
+    out 99 -> 0 cards / 0 question cards / 0 retakes, `nearfresh` 101 -> cards
+    only on the four real requests, `nearfresh2` 100 -> 0 cards (off baseline:
+    0); 43 ordinary questions -> no tool, 0 retakes; first word 7.7 s / total
+    9.2 s on practice. GLM (`custom` / glm-5.3-flash): practice 104 of 111
+    with the hint (103 without; pass 3 and 4: 105; v1.490.0: 105; off: 35);
+    routing marked 0 of 138 unasked and answered `[]` for 11; held-out 99 -> 0
+    / 0 / 0 (v1.490.0: 2 approval cards, 3 retakes; pass 4, before the mark: 1
+    question card); `nearfresh` -> cards only on real requests; `nearfresh2`
+    -> 3 approval cards (off baseline, run on the same daemons: 0; pass 4,
+    before the mark: 3 approval + 2 question cards); 43 ordinary questions ->
+    1 retake (a sum, with `calculate`, which the strict labels call the right
+    tool for a sum; v1.490.0: 3). The 108 of v1.489.0 was one run at the top
+    of a 102-108 spread.
+  - **THE SETS.** The original 99 look-alikes are the held-out fixture's
+    (`capability_heldout_v1478/near_misses.json`); the wording fix was read
+    off two of its rows, so it was validated on fresh sets written blind by
+    Haiku from an empty folder: `nearfresh` (101; hand-checked, four rows are
+    real indirect requests and are counted apart) showed the model's-own-
+    lookup cards and led to the gate; a SECOND fresh set (`nearfresh2`, 100,
+    hand-checked before it ran, none dropped) showed the routing-pick cards
+    and led to the mark, which was designed on the practice set and
+    `nearfresh` and then checked ONCE, routing call alone, on `nearfresh2` and
+    the held-out 99. No wording was changed after reading a held-out row's
+    result. A scratch daemon's routing can be probed alone, cheaply
+    (`route.route_request` on a platform built from the scratch root).
+  - **OPEN:** GLM still shows cards on about 1 look-alike in 100 (3 of
+    296 true look-alikes across the three sets, all in `nearfresh2`): two
+    where the routing call picked a feature WITHOUT the mark and the model
+    followed (`remember_preference`, `recall`), one `shell` call of the
+    model's own that no lookup brought. The gate costs a real request when
+    GLM's routing call answers `[]` for it and the word tables do not arm the
+    tool (d072 in two runs, d295 in one): the user gets an offer in words and
+    the card after "yes". The practice rate is 104 of 111 (93.7%) on both
+    models in the final runs, inside a +/-2 run-to-run spread: NOT a solid
+    95%; two of the misses are label disagreements the strict rules keep
+    (calendar: `app_connect` vs the private-link card). The pretend home's
+    odd path makes models guess the usual `C:/Users/<name>` place for Desktop
+    and Downloads; the hint recovers some of those, not all. One model each;
+    not driven in the packaged app; the GLM key copied into the test copies
+    for the measurement was deleted afterwards.
+  - **Pins:** `tests/test_asked_before_a_card_v14901.py` (real stream lane
+    with a scripted model and routing call; 20 mutations, all red),
+    `tests/test_read_hint_v14901.py` (6 mutations, all red),
+    `test_route_first_v1489::test_what_was_found_is_for_what_the_user_asked`.
+
 - **The three Feature lookup settings are ON by default; the suite runs
   with them OFF** (v1.490.0; the owner, 2026-11-13, after v1.489.0's
   measurement: "Turn them on", then "Lets also run GLM through it").

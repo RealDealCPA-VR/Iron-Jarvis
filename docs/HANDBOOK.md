@@ -2042,6 +2042,66 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## A card only for what you asked (v1.490.1)
+
+- **Jarvis no longer puts up an approval card for something you did not ask
+  for.** With Feature lookup on, a remark such as "my goal this year is to
+  get my class to stop guessing at units" could bring an approval card for a
+  goal, "what styles are popular right now?" a card for a web search, and
+  "my eyes are not what they were" a card for the text size. This happened
+  mostly on a local model. Two things changed:
+  - When Iron Jarvis reads your message itself (the Feature lookup first
+    call), it now also says whether you **asked** for something or only
+    remarked on it. For a remark, nothing it found is handed to Jarvis, and
+    Jarvis answers as it would have.
+  - Two readings must agree before a card shows. When Iron Jarvis's own
+    reading says the message asks for nothing, a tool that changes something
+    or reaches outside this PC is not handed to Jarvis for it, also when
+    Jarvis looked the tool up by itself. Jarvis answers in words and may
+    offer the feature; say yes and it does it.
+- **A question you asked is answered once.** A general question that Jarvis
+  had already answered could be taken back and answered a second time with a
+  tool. The note that caused it now says to keep the reply.
+- **Reading is unchanged.** Looking in the guide, your settings, your earlier
+  chats or your files still happens without a card, also for a question.
+- **A refused folder read says what may be read.** If you limited the folders
+  Jarvis may read (Settings › Permissions) and Jarvis looks in the wrong
+  place, the refusal now names the folders it may read. Before, Jarvis told
+  you to change your permissions when the folder it wanted was readable all
+  along, somewhere else.
+- **What it measured, after the fix.** The three settings on, every card
+  declined. A "look-alike" is a message that uses a feature's words and asks
+  for nothing:
+  - **Claude Haiku.** 300 look-alike messages in three sets (four of them
+    are really requests put indirectly): no approval card and no question
+    card on any of the 296 look-alikes, and the four real requests got their
+    card. 43 ordinary questions: no tool, nothing taken back. Right tool on
+    the 111 practice requests: 104 (the last three runs all read 104; two
+    runs earlier the same day read 105 and 106). The 108 reported
+    for v1.489.0 was the top of the run-to-run spread, not a level it holds.
+  - **GLM on your own server.** The first 99 look-alikes: 0 approval cards,
+    0 question cards, 0 replies taken back (v1.490.0: 2 cards and 3 taken
+    back). A fresh set of 101: only real requests got a card. A second fresh
+    set of 100: 3 approval cards, where the same set with the three settings
+    off shows none. Two came from GLM's own reading taking a remark for a
+    request ("my style of talking is pure chaos" brought a card to remember
+    a preference, "I believe we once spoke about my pupil's recital" a card
+    to search memory); one was a command Jarvis tried by itself. Before the
+    "asked or remarked" reading that set showed 5. 43 ordinary questions: 1
+    sum answered again with the calculator (v1.490.0: 3). Right tool on the
+    practice requests: 104 of 111 (v1.490.0: 105; the three settings off: 35).
+  - **Speed.** The first word of a reply to a practice request came after
+    about 8 seconds on Claude Haiku and 14 on GLM (median), to an ordinary
+    question after about 3.
+- **What this does not do.** If Feature lookup first is off, or its call
+  fails, there is no second reading and Jarvis decides alone, as in v1.489.0.
+  A message that asks indirectly ("I'd rather nothing I type leaves this
+  computer, is that possible?") still brings its card, and should. When Iron
+  Jarvis's own reading wrongly takes a real request for a remark, you get an
+  offer in words instead of the card; answer yes and the card comes. On a
+  local model the reading is sometimes wrong the other way too, so a card for
+  a remark is now rare, not impossible.
+
 ## Feature lookup is on by default (v1.490.0)
 
 - **The three Feature lookup settings are now on** for anyone who never
