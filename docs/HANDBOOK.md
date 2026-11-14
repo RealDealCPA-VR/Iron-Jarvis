@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.490.3 (2026-11-13).*
+holds itself to. Current as of v1.490.4 (2026-11-13).*
 
 ---
 
@@ -2041,6 +2041,25 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## "Where is that setting?" gets the real place (v1.490.4)
+
+- **Jarvis names the section a setting is really in.** Asked "where do I find
+  the button to change the font", Jarvis told you to open "Settings → Device",
+  a section that does not exist, and for the calendar reminders it said "it's
+  under the calendar setting". What Jarvis looks up about a setting now
+  includes its place in the Settings page's own words, for example
+  "Settings › Appearance" or "Settings › Connections, under Calendar", next
+  to the link that opens it. A setting folded under More options is said to
+  be there.
+- **What it measured.** Claude Haiku, two runs of the 111 practice requests
+  on this version: 107 and 107. Both "where is it" requests were answered
+  with the right place. With the seven earlier runs since v1.490.2 (107, 107,
+  108, 104, 106, 105, 103) that is nine runs averaging 95.5 in 100, between
+  93 and 97 in a single run. One of the "where is it" requests still counts
+  as a miss in the practice set, which expects the guide to be read; the
+  answer itself is now right without it.
+- **GLM on your own server is still not measured** since v1.490.1.
 
 ## Empty folders are listed, and "find me the current rate" looks it up (v1.490.3)
 

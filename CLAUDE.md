@@ -17844,6 +17844,28 @@ does not need a bump, stop and bump it.
     `INPUT/` refused, the ask-to-finish note, recover and no-recover. 15
     mutations, all red.
 
+- **A setting's lookup line says WHERE it is on the Settings page**
+  (v1.490.4). `capability_search/index.setting_place(row)` → "Settings ›
+  <group label>" + ", under <section>" + " (in More options)" for an
+  `advanced` row, from `schema.GROUPS` and the row's own `section` (the
+  schema draws the page, so these are its names; "" for a group the page
+  does not draw); kept on `Capability.where` (NOT in `text`: search words and
+  the generated phrasings are unchanged). `tool.entry_line` says "by hand in
+  Settings › Appearance (the link /settings?focus=device.text_size opens
+  it)" (also in the Never-run line) and puts `where` on the data row; an
+  entry with no place keeps "by hand at <href>". Why: d073 / d449, in every
+  run the model answered a where-is question from this line and invented the
+  section ("Settings → Device" from the key `device.text_size`). NOT done on
+  purpose: steering the model to `guide_search` for these (the practice label
+  wants the guide; with the place in the line the guide adds nothing, so d073
+  stays a strict miss with a correct answer). Measured (Haiku): 107, 107 of
+  111; nine runs since v1.490.2 average 106.0 (95.5%), range 103-108. OPEN:
+  a row the dashboard draws in another card of the same group
+  (`CONTROLLED_IN_SECTION`: the backup copy folder sits on the Maintenance
+  card, not under "Backups") still gets its schema sub-heading; the link is
+  right either way. Pins: `tests/test_setting_place_v14904.py` (10 mutations,
+  all red).
+
 - **`list_files` names EMPTY folders; a published figure ASKED FOR arms the
   web; the Haiku rate is 95% ON AVERAGE, 93-97% a run** (v1.490.3; read off
   the misses of a third Haiku pass on v1.490.2, which came in at 104).

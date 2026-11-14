@@ -153,16 +153,22 @@ def entry_line(platform: Any, entry: _index.Capability) -> tuple[str, dict[str, 
         row.update(tool=entry.tool, mode=mode, changes=True, href=entry.href, key=entry.id,
                    protected=entry.protected)
         head = f"Setting \"{entry.title}\" (key {entry.id})"
+        # v1.490.4: WHERE it is, in the Settings page's own words, so a "where
+        # is the button" answer names a section that exists.
+        place = getattr(entry, "where", "") or ""
+        by_hand = f"in {place} (the link {entry.href} opens it)" if place else f"at {entry.href}"
+        if place:
+            row.update(where=place)
         if mode == "deny":
             return (
                 f"{head}: read with config_list. The user has set tool {entry.tool} to Never "
-                f"run, so it is changed only by hand, at {entry.href}."
+                f"run, so it is changed only by hand, {by_hand}."
             ), row
         line = (
             f"{head}: changed with tool {entry.tool}"
             f"{' (calling it shows the user an approval card first)' if mode == 'ask' else ''}, "
             "read with config_list, "
-            f"or by hand at {entry.href}."
+            f"or by hand {by_hand}."
         )
         if entry.protected:
             line += (

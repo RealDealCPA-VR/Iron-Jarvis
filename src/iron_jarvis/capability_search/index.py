@@ -118,6 +118,9 @@ class Capability:
     text: str = ""
     #: A setting some of whose values only the protected tool may set.
     protected: bool = False
+    #: A setting's place on the Settings page, in the page's own words
+    #: ("Settings › Appearance"; v1.490.4).
+    where: str = ""
 
 
 def _stem(word: str) -> str:
@@ -187,6 +190,32 @@ def _tool_entries(platform: Any) -> list[Capability]:
     return out
 
 
+def setting_place(row: Any) -> str:
+    """Where *row* is on the Settings page, in the page's own words (v1.490.4):
+    "Settings › Appearance", or "Settings › Connections, under Calendar" for a
+    row in one of a section's own sub-headings. "" when the row's group is not
+    one the page draws. The schema draws the page, so these are its names.
+
+    Seen live: asked "where do I find the button to change the font", Jarvis
+    read the lookup's line (a link and a key, `device.text_size`) and told the
+    user to open "Settings → Device", a section that does not exist."""
+    from ..settings import schema
+
+    try:
+        label = {g[0]: g[1] for g in schema.GROUPS}.get(getattr(row, "group", ""), "")
+        if not label:
+            return ""
+        place = f"Settings › {label}"
+        section = str(getattr(row, "section", "") or "").strip()
+        if section:
+            place += f", under {section}"
+        if getattr(row, "advanced", False):
+            place += " (in More options)"
+        return place
+    except Exception:  # noqa: BLE001 — a place that cannot be told is not said
+        return ""
+
+
 def _setting_entries(_platform: Any = None) -> list[Capability]:
     from ..settings import schema
 
@@ -201,6 +230,7 @@ def _setting_entries(_platform: Any = None) -> list[Capability]:
             tool=SETTING_TOOL[row.tier], changes=True,
             href=f"/settings?focus={row.key}",
             protected=bool(row.floor_when) and row.tier != "ask-floor",
+            where=setting_place(row),
             text=f"{row.label} {others} {row.key.replace('_', ' ').replace('.', ' ')} "
                  f"{_one_line(row.help, 500)} {choices} setting",
         ))
