@@ -18811,6 +18811,94 @@ does not need a bump, stop and bump it.
     moved on purpose: `work-by-folder-v1491` (a folder row has two buttons;
     `forgotten` in the decoded folders).
 
+- **THE IMPROVEMENTS INBOX: one read over every waiting suggestion; it
+  decides NOTHING itself** (v1.496.0, BUILT AS v1.495.0: another session
+  released v1.495.0 meanwhile, so the code comments and the two test files
+  keep the tag v1.495.0 / v1495; vision plan leap 5, Phase 1,
+  `docs/VISION-PLAN-2026-11-14.md`; the owner: "yes proceed"; a builder + an
+  independent reviewer who found 13 defects, each a test now).
+  - **What it is.** `GET /improvements` (`daemon/routes/improvements.py`, a
+    sync `def`) → `inbox/collect.collect(d)` → `{items, groups: [{kind,
+    label, count, shown}], total, unreadable: [{kind, label}]}`. Ten kinds,
+    in `collect.KINDS` order: `preference` (`LessonRecord` status proposed),
+    `skill` (`SkillProposalRecord` pending), `coach` and `habit`
+    (`CoachProposalRecord` pending; kind `team_note` is a habit), `lesson`
+    and `session_edit` (`HarnessLibraryRecord` proposed; `layer_edit` is a
+    session edit), `memory` (`MemoryProposalRecord` pending), `tool`
+    (`CapabilityProposalRecord` pending), `wants` (`ProposalRecord`
+    pending), `unasked` (a goal's offers to use a tool without asking, from
+    `routes/goals`' own `exact_offers` / `grant_offers`). No model call,
+    nothing written.
+  - **THE RULE: no decision code.** Every item carries `accept` / `decline`
+    = `{label, method: "POST", path, body, note, confirm, blocked}` naming the
+    suggestion's OWN route. A source-level pin refuses `.accept(`,
+    `.approve(`, `db.add(` … in `inbox/collect.py` and holds the route
+    prefixes to the seven suggestion routes. A NEW kind of suggestion adds a
+    builder + a source function there and a pattern in the dashboard's
+    `DECISION_PATHS`; it never adds a route.
+  - **EVERY KIND IS READ WITH THE INBOX'S OWN QUERY, WHICH RAISES**
+    (`collect._pending(engine, model, *where)`: a count + the newest
+    `PER_KIND` 30 rows, `created_at DESC, rowid DESC`). Three stores' own
+    `list` swallow a failure and answer `[]` (`memory/proposals`,
+    `capability/store`, `goals/store`, and `routes/goals._ask_rows`), so the
+    first cut read a locked database as "nothing waiting". `routes/goals.
+    ask_rows_strict` is `_ask_rows` without the catch. A failed source names
+    every kind it answers for in `unreadable`; `_built` skips ONE row that
+    cannot be shown (the count still includes it). A build with no such
+    service (`platform.coach` None) lists nothing for it and is not
+    "unreadable".
+  - **WHAT AN ACCEPT WILL DO IS READ FROM THE RECORD.** A memory tidy-up is
+    built from `routes/memory_review.suggestion_view(store, p)` (lifted to
+    module level; the card's own view): `collect.memory_effect` (the Python
+    twin of MemoryReview.tsx `effectOf`) says which notes are deleted or
+    replaced, by name; the model's `suggested_action` is evidence ("The
+    suggestion says: …"), never the note. `blocked` (the reason, before the
+    press): a memory base that is not connected (`base_note`), a tool Iron
+    Jarvis cannot add (`can_apply` / the floor), "Approve and run" under
+    Emergency stop (`STOPPED_BLOCK`; the route answers 403, which
+    `lib/api.ts` reads as "not signed in") and a maintainer task with
+    Self-development off (`SELF_DEV_BLOCK`). A habit's note follows
+    `config.team_notes` (`HABIT_OFF_NOTE`).
+  - `confirm: true` for an accept that acts at once (`memory`, `tool`,
+    `wants`) and for the `wants` Reject (final; two presses on Autonomy too).
+    `unasked` has NO accept/decline (a permission is answered on Autonomy);
+    `extra {goal_id, tool, args_hash}` lets the page hide one this browser
+    answered "Not now". Offers are looked for only on goals that have EVER
+    asked (`_goals_with_asks`: one query over Session origins `goal:%` with
+    an `approval.requested` event, at most `GOALS_MAX` 60; more → the kind is
+    named in `unreadable` as incomplete, via `Read.partial`), and a goal's
+    grants are read once (`_GrantsOnce`).
+  - **Dashboard.** `/improvements` (`app/improvements/page.tsx`, title
+    "Improvements" = the `NON_RAIL_ENTRIES` label; `GROUP_OF` knowledge; not
+    a sidebar row). `lib/improvements.ts`: `decodeInbox` (whitelist),
+    `isDecisionPath` (`DECISION_PATHS`: the seven routes, ONE id of
+    `[A-Za-z0-9_-]+` and its own verbs: a browser reads a backslash as a
+    slash and resolves dot segments, so "anything but a slash" let
+    `/proposals/x\..\..\reviews\s1/approve` through), home links in-app only
+    (no `//`, backslash or control character), `answerNote` (the accept
+    route's own `note`), `stillWaiting` + `groupsToShow` (`more` = count
+    minus the items this page could read). `components/improvements/
+    ImprovementsInbox.tsx`: reads on mount, when the window is looked at
+    again (not hidden, not within `FOCUS_REREAD_MS`), after an answer, after
+    a 404/409 refusal (the suggestion changed elsewhere: the refusal goes to
+    the page note) and on `IMPROVEMENT_EVENT_TYPES` (debounced); never on a
+    clock; a sequence guard drops a late older read; `gone` hides an answered
+    item at once and is reset by every read. `PressButton`: two presses for
+    `confirm`, and a second press within `SECOND_PRESS_AFTER_MS` (400) of the
+    first does not count (a double click). `lib/goalOffers.ts` holds the "Not
+    now" key the Autonomy page and this page share.
+  - **THE PACKAGE SHADOWS ITS MODULE** (the v1.254.0 trap, again):
+    `inbox/__init__` re-exports the function `collect`, so tests reach the
+    module with `importlib.import_module("iron_jarvis.inbox.collect")`.
+  - **OPEN:** no count in the bell or on the home line (Phase 2's morning
+    line); action approvals, reviews and skill tidy-up are not listed; an
+    offer answered "Not now" in another browser profile is still listed; a
+    refine of a skill, a coach change and a session edit are one press, as on
+    their own screens; the shared `ConfirmButton` elsewhere still takes a
+    double click as two presses; not driven in the packaged app.
+  - **Pins:** `tests/test_improvements_inbox_v1495.py`,
+    `dashboard/__tests__/improvements-inbox-v1495.test.tsx`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

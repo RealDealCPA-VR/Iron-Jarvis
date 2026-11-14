@@ -130,6 +130,61 @@ def _decision_error(exc: ValueError) -> HTTPException:
     return HTTPException(status_code=status, detail=detail)
 
 
+def suggestion_view(store, p) -> dict[str, Any]:
+    """One suggestion, FLAT, with the honesty fields the card needs.
+
+    Module level since v1.495.0: the Improvements inbox builds its memory
+    items from this same view, so both screens say the same real effect.
+
+    ``can_apply`` / ``undoable`` / ``base_note`` come from the LIVE base, so
+    the UI can say "this base can't be edited from here" BEFORE the user
+    clicks, and can promise undo only where undo is real.
+    """
+    try:
+        capability = store.describe_base(p.base)
+    except Exception:  # noqa: BLE001
+        capability = {"can_apply": False, "undoable": False, "note": ""}
+    payload = p.decoded_payload()
+    full_text = str(payload.get("text") or "")
+    if len(full_text) > _PAYLOAD_TEXT_PREVIEW:
+        payload = {
+            **payload,
+            "text": full_text[:_PAYLOAD_TEXT_PREVIEW],
+            "text_truncated": True,
+            "text_length": len(full_text),
+        }
+    applied = p.decoded_applied()
+    return {
+        "id": p.id,
+        "kind": p.kind,
+        "base": p.base,
+        "refs": p.decoded_refs(),
+        "rationale": p.rationale,
+        "suggested_action": p.suggested_action,
+        "payload": payload,
+        "status": p.status,
+        "run_id": p.run_id,
+        "applied": applied,
+        # True when an earlier approve got PART-WAY and then failed: some
+        # notes already changed while the suggestion is still pending. The
+        # card has to say so — "nothing has changed yet" would be a lie.
+        "partial": bool(applied.get("partial")) and p.status == "pending",
+        "can_apply": bool(capability.get("can_apply")),
+        "undoable": bool(capability.get("undoable")),
+        "base_note": str(capability.get("note") or ""),
+        # The CONCRETE effect, taken from the payload rather than from the
+        # model's prose: the card shows exactly which notes disappear, so an
+        # approval is informed by what will happen and not by what the
+        # suggestion says will happen.
+        "rewrites": bool(str(payload.get("text") or "").strip()),
+        "survivor_ref": str(payload.get("survivor_ref") or ""),
+        "remove_refs": [str(r) for r in (payload.get("remove_refs") or [])],
+        "removes": len(payload.get("remove_refs") or []),
+        "created_at": p.created_at.isoformat() if p.created_at else None,
+        "decided_at": p.decided_at.isoformat() if p.decided_at else None,
+    }
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
@@ -289,56 +344,7 @@ def register(app: FastAPI, d) -> None:
         return {"available": True, "stats": stats, "runs": runs}
 
     def _proposal_view(p) -> dict[str, Any]:
-        """One suggestion, FLAT, with the honesty fields the card needs.
-
-        ``can_apply`` / ``undoable`` / ``base_note`` come from the LIVE base, so
-        the UI can say "this base can't be edited from here" BEFORE the user
-        clicks, and can promise undo only where undo is real.
-        """
-        store = _store()
-        try:
-            capability = store.describe_base(p.base)
-        except Exception:  # noqa: BLE001
-            capability = {"can_apply": False, "undoable": False, "note": ""}
-        payload = p.decoded_payload()
-        full_text = str(payload.get("text") or "")
-        if len(full_text) > _PAYLOAD_TEXT_PREVIEW:
-            payload = {
-                **payload,
-                "text": full_text[:_PAYLOAD_TEXT_PREVIEW],
-                "text_truncated": True,
-                "text_length": len(full_text),
-            }
-        applied = p.decoded_applied()
-        return {
-            "id": p.id,
-            "kind": p.kind,
-            "base": p.base,
-            "refs": p.decoded_refs(),
-            "rationale": p.rationale,
-            "suggested_action": p.suggested_action,
-            "payload": payload,
-            "status": p.status,
-            "run_id": p.run_id,
-            "applied": applied,
-            # True when an earlier approve got PART-WAY and then failed: some
-            # notes already changed while the suggestion is still pending. The
-            # card has to say so — "nothing has changed yet" would be a lie.
-            "partial": bool(applied.get("partial")) and p.status == "pending",
-            "can_apply": bool(capability.get("can_apply")),
-            "undoable": bool(capability.get("undoable")),
-            "base_note": str(capability.get("note") or ""),
-            # The CONCRETE effect, taken from the payload rather than from the
-            # model's prose: the card shows exactly which notes disappear, so an
-            # approval is informed by what will happen and not by what the
-            # suggestion says will happen.
-            "rewrites": bool(str(payload.get("text") or "").strip()),
-            "survivor_ref": str(payload.get("survivor_ref") or ""),
-            "remove_refs": [str(r) for r in (payload.get("remove_refs") or [])],
-            "removes": len(payload.get("remove_refs") or []),
-            "created_at": p.created_at.isoformat() if p.created_at else None,
-            "decided_at": p.decided_at.isoformat() if p.decided_at else None,
-        }
+        return suggestion_view(_store(), p)
 
     def _template_view() -> dict[str, Any]:
         """The opt-in weekly schedule, plus whether it is already installed.

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.495.0 (2026-11-14).*
+holds itself to. Current as of v1.496.0 (2026-11-14).*
 
 ---
 
@@ -2042,6 +2042,79 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## One page for everything Jarvis suggests (v1.496.0)
+
+- **A new page, Improvements.** It lists every suggestion Iron Jarvis is
+  waiting on you to accept or decline, in one place. Until now each kind sat
+  on its own screen, and a suggestion on a screen you did not open stayed
+  unanswered. Open it from Everything (under Knowledge) or with Ctrl K
+  ("improvements", "suggestions" or "inbox" all find it).
+- **What it lists.**
+  - Preferences Jarvis noticed (you corrected the same thing twice).
+  - Skill drafts it wrote from work you did.
+  - Changes to an agent's instructions that the coach suggests.
+  - Working habits for a team member, from a reviewer's confirmed findings.
+  - Lessons from coding sessions, and changes to a folder's coding session
+    instructions.
+  - Memory tidy-up (two notes that say the same thing, a note that looks out
+    of date).
+  - Requests for a tool an agent asked for.
+  - Things Jarvis wants to do (a watcher saw something change).
+  - Offers to let a goal use a tool without asking.
+- **Each one says what it is and why.** A title in plain words, the reason,
+  and the evidence it rests on (what you said, which runs, which finding).
+  "See the change" or "Read it" opens the whole text; a change to
+  instructions is shown as added and removed lines.
+- **You answer it right there.** Each suggestion has its own two buttons
+  (Keep / Not this, Approve / Reject, Accept / Decline), and pressing one
+  sends the same answer the suggestion's own screen sends. The page adds no
+  rules of its own. When a suggestion is refused (a skill of that name
+  already exists, an agent's instructions changed since), you get the same
+  sentence you would get there. If the refusal means the suggestion is gone
+  or was answered somewhere else, the list is read again.
+- **It says what accepting will really do.** For a memory tidy-up the page
+  reads the change itself, not the model's sentence about it: "Approving
+  replaces everything in “hartleys”, and deletes 1 note: “hartleys-copy”."
+  The model's own sentence is shown beside it as what the suggestion says.
+  A habit accepted while team notes are turned off says that no model is
+  shown it until you turn them on.
+- **What cannot be accepted right now says why, before you press.** With
+  Emergency stop on, "Approve and run" is greyed out with the reason. So is
+  a memory tidy-up whose memory base is not connected, a tool Iron Jarvis
+  cannot add for you, and a change to Iron Jarvis's own code while
+  Self-development is off.
+- **Accepting something that acts takes two presses.** Three kinds do
+  something the moment you accept: "Approve and run" starts the work,
+  "Approve & create" makes the tool, and a memory tidy-up deletes or
+  rewrites notes. The first press arms the button, the second does it, and
+  a double click counts as one press. Rejecting something Jarvis wants to do
+  is final, so that also takes two presses, as on the Autonomy page. Every
+  other decline is one press.
+- **Offers to stop asking are listed, not answered here.** Letting a goal use
+  a tool without asking is a permission, so it is answered on the Autonomy
+  page, where you see the goal. The row links there. An offer you already
+  answered "Not now" on that page is not listed.
+- **It never guesses that nothing is waiting.** If one kind could not be read
+  just now, the page names it and still shows the others. "Nothing is
+  waiting for you" is shown only when everything was read and nothing is.
+- **Long lists.** At most 30 of each kind are shown, newest first, with a
+  line saying how many more there are. A long text is shortened on this
+  page; "Open where it lives" shows all of it. Offers to stop asking are
+  looked for on up to 60 goals that have ever asked for approval; with more
+  than that, the page says some may be missing.
+- **What it does not list.** Approval cards for an action in progress (those
+  are in the chat, the bell and the phone), agent work waiting for your
+  review (the Session board), and skills the tidy-up wants to archive (the
+  Skills page).
+- **Nothing new is made.** This page only reads. It calls no model, costs
+  nothing and changes nothing until you press a button. Nothing new leaves
+  this PC.
+- **When it reads.** When you open it, when you come back to the window,
+  after you answer something, and when Jarvis makes a new suggestion. Not on
+  a clock.
+- **Not yet.** There is no count of waiting suggestions in the bell or on
+  the home line. A nightly review that makes suggestions by itself and one
+  morning line for them is the next step of this work.
 ## Chat replies and agent runs keep working until what they say is true (v1.495.0)
 
 v1.493.0 gave coding sessions a check that sends the model back until its

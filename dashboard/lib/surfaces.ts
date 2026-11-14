@@ -101,6 +101,7 @@ const GROUP_OF: Readonly<Record<string, SurfaceGroup>> = {
   "/webhooks": "automations",
   "/memory": "knowledge",
   "/skills": "knowledge",
+  "/improvements": "knowledge",
   "/artifacts": "knowledge",
   "/you": "knowledge",
   "/train": "knowledge",

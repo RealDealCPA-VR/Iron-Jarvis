@@ -130,9 +130,19 @@ Three things are missing:
 
 ### Phases
 
-- **Phase 1: the Improvements inbox.** One page listing every waiting
-  proposal of every kind, each with its evidence and its Accept / Decline.
-  No new proposal types; one read over the stores that exist.
+- **Phase 1: the Improvements inbox (shipped in v1.496.0).** One page
+  listing every waiting proposal of every kind, each with its evidence and
+  its Accept / Decline. No new proposal types; one read over the stores that
+  exist.
+
+  As built: the page is **Improvements** (Everything › Knowledge, Ctrl K).
+  Ten kinds are listed; each answer is given through the suggestion's own
+  route, so the page has no rules of its own. An accept that acts at once
+  takes two presses. Offers to let a goal use a tool without asking are
+  listed with a link only (a permission is answered where the goal is
+  shown). A kind that could not be read is named, never shown as empty. Not
+  done: a count in the bell or on the home line (Phase 2's morning line),
+  and action approvals, reviews and skill tidy-up, which stay where they are.
 - **Phase 2: the nightly review.** In the night window, on the idle pacing
   the coding lessons already use (never near an account's limit, never for
   Local only work on a cloud model), Iron Jarvis reads the day's shortfalls

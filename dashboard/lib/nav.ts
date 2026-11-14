@@ -33,6 +33,7 @@ import {
   GraduationCap,
   FolderKanban,
   SquareKanban,
+  Lightbulb,
   type LucideIcon,
 } from "lucide-react";
 import { BUILD_BLURB, CHAT_BLURB } from "@/lib/buildWords";
@@ -619,6 +620,24 @@ export const NON_RAIL_ENTRIES: NavEntry[] = [
     ],
     blurb:
       "Every session as a card in its lane — running, waiting for your review, finished or failed. Drag from Waiting for you to approve or reject.",
+  },
+  // v1.495.0 (vision plan leap 5, Phase 1): one page for every suggestion
+  // that waits for an answer. Not a rail row: Everything and Ctrl K reach it.
+  {
+    href: "/improvements",
+    label: "Improvements",
+    icon: Lightbulb,
+    aliases: [
+      "suggestions",
+      "inbox",
+      "improvements inbox",
+      "accept or decline",
+      "waiting suggestions",
+      "skill drafts",
+      "what jarvis suggests",
+    ],
+    blurb:
+      "Every suggestion Iron Jarvis is waiting on you to accept or decline, in one place.",
   },
 ];
 

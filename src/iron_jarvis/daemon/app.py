@@ -3898,6 +3898,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import work_map as _work_map_routes
 
     _work_map_routes.register(app, d)
+    # The Improvements inbox (v1.495.0, vision plan leap 5): every
+    # suggestion that is waiting for an answer, in one read.
+    from .routes import improvements as _improvements_routes
+
+    _improvements_routes.register(app, d)
     from .routes import followups as _followups_routes
 
     _followups_routes.register(app, d)

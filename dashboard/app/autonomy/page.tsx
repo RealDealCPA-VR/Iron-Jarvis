@@ -22,6 +22,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { api, get, post, put, ApiError } from "@/lib/api";
+import { OFFER_DISMISS_PREFIX, offerKey as goalOfferKey } from "@/lib/goalOffers";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import {
   Card,
@@ -1019,8 +1020,8 @@ function GoalsDigest() {
 
 /* --------------------------- grant offers --------------------------------- */
 
-/** "Not now" survives revisits via localStorage, keyed per goal+tool. */
-const OFFER_DISMISS_PREFIX = "ij_goal_offer_dismissed:";
+// "Not now" survives revisits via localStorage, keyed per goal+tool. Since
+// v1.495.0 the key lives in lib/goalOffers (the Improvements page reads it).
 
 type GoalVerb = "run" | "pause" | "resume" | "stop" | "reopen";
 
@@ -1051,7 +1052,7 @@ function offersOf(g: GoalRecord): Offer[] {
 
 /** The dismiss/busy key — the hash keeps two exact offers for one tool apart. */
 function offerKey(goalId: string, offer: Offer): string {
-  return offer.args_hash ? `${goalId}:${offer.tool}:${offer.args_hash}` : `${goalId}:${offer.tool}`;
+  return goalOfferKey(goalId, offer.tool, offer.args_hash);
 }
 
 function GoalsSection() {

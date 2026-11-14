@@ -90,6 +90,16 @@ def _ask_rows(engine, goal_id: str) -> list[tuple[str, dict]]:
     capped at :data:`_ASK_EVENT_CAP` (both columns indexed). ONE query for
     both aggregations below; a corrupt row is skipped, a broken query
     answers ``[]`` (loads never raise — the GoalStore contract)."""
+    try:
+        return ask_rows_strict(engine, goal_id)
+    except Exception:  # noqa: BLE001 — receipts must never take a goal view down
+        log.exception("ask-stats query failed for %s", goal_id)
+        return []
+
+
+def ask_rows_strict(engine, goal_id: str) -> list[tuple[str, dict]]:
+    """:func:`_ask_rows`, but a broken query RAISES (v1.495.0): the
+    Improvements inbox must tell "no asks" from "could not be read"."""
     from sqlmodel import select
 
     from ...core.db import session_scope
@@ -98,27 +108,23 @@ def _ask_rows(engine, goal_id: str) -> list[tuple[str, dict]]:
     from ...core.models import Session as SessionRow
     from ...goals.engine import _goal_origin
 
-    try:
-        with session_scope(engine) as db:
-            session_ids = select(SessionRow.id).where(
-                SessionRow.origin == _goal_origin(goal_id)
-            )
-            rows = list(
-                db.exec(
-                    select(EventRecord.type, EventRecord.payload_json)
-                    .where(EventRecord.session_id.in_(session_ids))  # type: ignore[union-attr]
-                    .where(
-                        EventRecord.type.in_(  # type: ignore[union-attr]
-                            [EventType.APPROVAL_REQUESTED, EventType.APPROVAL_RESOLVED]
-                        )
+    with session_scope(engine) as db:
+        session_ids = select(SessionRow.id).where(
+            SessionRow.origin == _goal_origin(goal_id)
+        )
+        rows = list(
+            db.exec(
+                select(EventRecord.type, EventRecord.payload_json)
+                .where(EventRecord.session_id.in_(session_ids))  # type: ignore[union-attr]
+                .where(
+                    EventRecord.type.in_(  # type: ignore[union-attr]
+                        [EventType.APPROVAL_REQUESTED, EventType.APPROVAL_RESOLVED]
                     )
-                    .order_by(EventRecord.created_at.desc())  # type: ignore[arg-type]
-                    .limit(_ASK_EVENT_CAP)
                 )
+                .order_by(EventRecord.created_at.desc())  # type: ignore[arg-type]
+                .limit(_ASK_EVENT_CAP)
             )
-    except Exception:  # noqa: BLE001 — receipts must never take a goal view down
-        log.exception("ask-stats query failed for %s", goal_id)
-        return []
+        )
     out: list[tuple[str, dict]] = []
     for etype, payload_json in rows:
         try:

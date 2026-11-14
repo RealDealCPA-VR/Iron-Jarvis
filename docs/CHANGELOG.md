@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.496.0
+
+**One page for everything Jarvis suggests.** **A new page, Improvements.** It lists every suggestion Iron Jarvis is waiting on you to accept or decline, in one place.
+
 ## v1.495.0
 
 **Chat replies and agent runs keep working until what they say is true.** v1.493.0 gave coding sessions a check that sends the model back until its work checks out.
@@ -77,7 +81,3 @@
 ## v1.482.0
 
 **The lookup finds the right thing more often.** The fourth step of the feature lookup (v1.478.0 to v1.480.0).
-
-## v1.481.1
-
-**Older Build › Code sessions say what really finished.** Since v1.477.2, a new grey line in Build › Code says what ended: a helper, a command in the background, or nothing at all for an ordinary command, whose own step already shows how it ended.
