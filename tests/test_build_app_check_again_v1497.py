@@ -527,3 +527,15 @@ async def test_a_spanish_claim_is_sent_back_and_a_spanish_blocked_line_ends_it(a
     assert len(drivers[row.id].sent) == 2
     assert not any(n.startswith("Checked by Iron Jarvis") for n in notices(svc, row.id))
     await stop_all(app)
+
+
+async def test_a_reply_after_the_user_declined_a_step_is_never_sent_back(app, work, monkeypatch, nudges):
+    """Found live: after the user declined Claude Code's command card, its
+    reply ended on what it could not do. The user's no stands."""
+    svc, row, drivers = await started(app, monkeypatch, work)
+    live = svc.live[row.id]
+    svc._emit(live, make("resolved", request_id="ask_1", decision="deny"))
+    reply(svc, row.id, "I tried several things but I cannot do this. You will need to do this yourself.")
+    await settle(svc, row.id)
+    assert quiet(svc, row.id, drivers) and nudges == []
+    await stop_all(app)

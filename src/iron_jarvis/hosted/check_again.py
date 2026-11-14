@@ -427,9 +427,14 @@ def _after_turn(svc: Any, live: Any, turn: Any, done: dict[str, Any]) -> None:
     ):
         table.pop(sid, None)
         return
+    events = list(getattr(turn, "events", []) or [])
+    if any(isinstance(e, dict) and e.get("type") == "resolved"
+           and str(e.get("decision") or "").startswith("deny") for e in events):
+        # The user said no to a step of this reply: their no stands.
+        table.pop(sid, None)
+        return
     chain.pending = str(turn.id)
     table[sid] = chain
-    events = list(getattr(turn, "events", []) or [])
     from ..harness.stall import keep
 
     with contextlib.suppress(RuntimeError):

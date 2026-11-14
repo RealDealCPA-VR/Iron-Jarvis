@@ -5074,6 +5074,42 @@ def ask_first_overrides(
     return failed
 
 
+def _asks_new_file_other_language(text: str, picked: Iterable[str], workspace: str) -> bool:
+    """v1.497.0: a message NOT in English that asks for a new file. Measured
+    live (Claude Haiku): "Resume notes.txt … y guárdalo como resumen.docx",
+    the same in German and in Chinese, armed no file-writing tool (the word
+    tables are English), so the model read the notes and ended with no answer
+    and no file. True when the turn picked no tool that makes or changes a
+    file, the message is not English advice, and either it asks for a file in
+    Spanish, French, German, Italian, Portuguese or Dutch
+    (``core/claim_languages.asks_for_file``), or it is in a language those do
+    not read and names a document file that is not in the chat's folder (a
+    file to be made). A folder spelled as a network path is never looked in.
+    Never raises."""
+    try:
+        from ..core import claim_languages as L
+
+        text = str(text or "")
+        if not text.strip() or set(picked or ()) & _FILE_CHANGING_TOOLS:
+            return False
+        if _ADVICE_RX.match(text) or _CREATE_INTENT_RX.search(text):
+            return False  # English: the English rules decide, as before
+        if L.asks_for_file(text):
+            return True
+        if L.covered(text):
+            return False
+        names = [m.group(1) for m in _re.finditer(L.FILE_NAME, text[:4000])]
+        if not names:
+            return False
+        folder = str(workspace or "").strip()
+        if not folder or folder.replace("/", "\\").startswith("\\\\"):
+            return False
+        base = Path(folder)
+        return any(not (base / n).exists() for n in names[:10])
+    except Exception:  # noqa: BLE001 — a reading never breaks a turn
+        return False
+
+
 def _resolve_armed_tools(
     d, body, max_tools: "int | None" = None, *, apps_on: "list[str] | tuple[str, ...] | None" = None
 ) -> "ArmedSelection":
@@ -5415,7 +5451,9 @@ def _resolve_armed_tools(
     ):
         from ..tools.autoselect import wants_new_file
 
-        if wants_new_file(last_user, explicit + auto):
+        if wants_new_file(last_user, explicit + auto) or _asks_new_file_other_language(
+            last_user, explicit + auto, getattr(body, "workspace_dir", "") or "",
+        ):
             auto.append("write_document")
     # RENAMING OR MOVING THE USER'S FILES, IN ITS OWN PLACE (v1.473.0). Chat
     # never offered `rename_file` (no rule arms it), so a request to rename a

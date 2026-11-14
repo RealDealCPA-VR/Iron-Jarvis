@@ -358,7 +358,9 @@ _FILE_KIND = (
 )
 _MAKE = (
     r"(?:crea|cr[ée]ame|crear|haz|hazme|genera|gen[ée]rame|prepara|prep[áa]rame|escribe|guarda|"
-    r"exporta|redacta|"
+    r"exporta|redacta|gu[áa]rdal[oa]s?|cr[ée]al[oa]s?|hazl[oa]s?|esc[ríi]+bel[oa]s?|exp[óo]rtal[oa]s?|"
+    r"salvalo|salvala|crealo|creala|scrivilo|esportalo|salve-o|salva-o|guarde-o|crie-o|exporte-o|"
+    r"sauvegarde|sauvegardez|sla|"
     r"cr[ée]e|cr[ée]ez|cr[ée]er|fais|faites|g[ée]n[èe]re|g[ée]n[ée]rez|pr[ée]pare|pr[ée]parez|[ée]cris|"
     r"[ée]crivez|enregistre|exporte|r[ée]dige|"
     r"erstelle|erzeuge|mach|mache|schreib|schreibe|speichere|exportiere|generiere|"

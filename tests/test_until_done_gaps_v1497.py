@@ -530,3 +530,53 @@ def test_a_team_leads_note_says_to_hand_the_fix_to_a_worker():
     assert check._lead_locked()
     check.team = None
     assert not check._lead_locked()
+
+
+# --------------------------------------------------------------------------- #
+# 5. a file asked for in another language is offered the file writer
+#    (found live: Spanish, German and Chinese requests armed no writer, in the
+#    old version and the new, and ended with no answer and no file)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("text", [
+    "Resume notes.txt en pocas líneas y guárdalo como resumen.docx.",
+    "Fasse notes.txt kurz zusammen und speichere es als zusammenfassung.docx.",
+    "Crea una hoja de cálculo con los totales.",
+    "请把 notes.txt 总结成几句话，并保存为 summary.docx 文件。",
+])
+def test_a_new_file_asked_for_in_another_language_arms_the_writer(text, tmp_path):
+    (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
+    assert CT._asks_new_file_other_language(text, [], str(tmp_path)), text
+
+
+@pytest.mark.parametrize("text,picked", [
+    ("请总结 notes.txt 的内容。", []),                       # names only a file that is there
+    ("你好，今天怎么样？", []),                               # no file at all
+    ("¿Cómo creo una hoja de cálculo?", []),               # advice
+    ("Write a summary and save it as summary.docx.", []),  # English: its own rules decide
+    ("Please look at budget.docx and tell me the total for March.", []),  # English, a file not there
+    ("Bitte lies budget.docx und sag mir die Summe für März.", []),  # German, reading only
+    ("Resume notes.txt y guárdalo como resumen.docx.", ["write_document"]),
+])
+def test_no_writer_is_added_where_it_is_not_asked_for(text, picked, tmp_path):
+    (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
+    assert not CT._asks_new_file_other_language(text, picked, str(tmp_path)), text
+
+
+def test_a_network_folder_is_never_looked_in_for_the_writer(monkeypatch):
+    looked: list[str] = []
+    monkeypatch.setattr(Path, "exists", lambda self, *a, **k: looked.append(str(self)) or False)
+    for share in (r"\\host\share\w", "//host/share/w"):
+        assert not CT._asks_new_file_other_language("请保存为 summary.docx 文件，谢谢你。", [], share)
+    assert looked == []
+
+
+@LANES
+async def test_a_spanish_summary_request_is_offered_the_writer_and_makes_the_file(desk, lane):
+    app, ws = desk
+    model = Model([_call(1, "write_document", path="resumen.docx", content="# Resumen\n\nCorto."),
+                   "Listo: guardé resumen.docx."])
+    done, _frames = await _run(lane, app, _body(ws, "Resume estas notas y guárdalo como resumen.docx."), model)
+    assert "write_document" in model.offered[0], model.offered[0]
+    assert (ws / "resumen.docx").is_file()
