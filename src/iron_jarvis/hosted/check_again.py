@@ -97,8 +97,12 @@ GIVE_UP_WORDS = (
 )
 VERDICT_CARRY_ON = "Tell it to keep going and it will carry on."
 
+from ..core.claim_languages import BLOCKED_WORDS as _BLOCKED_WORDS
+
+#: "Blocked:" in English and the six languages ``core/claim_languages`` reads.
 _BLOCKED_LINE_RX = re.compile(
-    r"^[^\S\n]*(?:[-*]\s*)?(?:\*\*\s*)?blocked\s*(?:\*\*\s*)?:", re.IGNORECASE | re.MULTILINE,
+    r"^[^\S\n]*(?:[-*]\s*)?(?:\*\*\s*)?" + _BLOCKED_WORDS + r"\s*(?:\*\*\s*)?:",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -404,6 +408,12 @@ def _after_turn(svc: Any, live: Any, turn: Any, done: dict[str, Any]) -> None:
         table.pop(sid, None)
         if carry:
             return  # another carry-on Iron Jarvis started by itself: never judged
+        from ..daemon.until_done import said_no
+
+        asked = next((str(e.get("text") or "") for e in list(getattr(turn, "events", []) or [])
+                      if isinstance(e, dict) and e.get("type") == "user"), "")
+        if said_no(asked):
+            return  # the user said not to use tools or make files: their no stands
         chain = Chain(origin=str(turn.id))
     if (
         str(done.get("stop") or "") != "completed"

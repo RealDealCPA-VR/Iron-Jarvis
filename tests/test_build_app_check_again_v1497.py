@@ -502,3 +502,28 @@ def test_a_claimed_name_spelled_as_a_share_is_left_alone(tmp_path):
     for name in (r"\\host\share\x.xlsx", "//host/share/x.xlsx", r"\\?\C:\x.xlsx"):
         assert CA.missing_files([name], str(tmp_path), []) == [], name
     assert CA.missing_files(["x.xlsx"], str(tmp_path), []) == ["x.xlsx"]
+
+
+# --------------------------------------------------------------------------- #
+# The user's no, and other languages (integration, v1.497.0)
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_user_who_said_no_tools_is_never_sent_back(app, work, monkeypatch, nudges):
+    svc, row, drivers = await started(app, monkeypatch, work, text="Just explain the plan, do not create any files.")
+    reply(svc, row.id, "Done! I saved report.xlsx.")
+    await settle(svc, row.id)
+    assert quiet(svc, row.id, drivers) and nudges == []
+    await stop_all(app)
+
+
+async def test_a_spanish_claim_is_sent_back_and_a_spanish_blocked_line_ends_it(app, work, monkeypatch, nudges):
+    svc, row, drivers = await started(app, monkeypatch, work, text="Haz el informe.")
+    reply(svc, row.id, "Listo. Guardé el informe en informe.xlsx.")
+    second = await next_send(drivers, row.id, 2)
+    assert second.startswith(CA.NOTE_HEAD) and "informe.xlsx" in second
+    reply(svc, row.id, "Guardé el informe en informe.xlsx, creo.\n\nBloqueado: el disco es de solo lectura.")
+    await settle(svc, row.id, 0.4)
+    assert len(drivers[row.id].sent) == 2
+    assert not any(n.startswith("Checked by Iron Jarvis") for n in notices(svc, row.id))
+    await stop_all(app)
