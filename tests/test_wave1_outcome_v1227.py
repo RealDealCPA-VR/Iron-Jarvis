@@ -288,7 +288,10 @@ async def test_the_agent_lane_flags_a_file_the_model_never_wrote(tmp_path):
     p = build_platform(str(tmp_path / "home"))
     orch = Orchestrator(p)
     claim = "I saved the summary as report.docx in your folder."
-    script(p, [final(claim)])
+    # v1.495.0: the run is sent back while the claim stands (daemon/
+    # until_done); a model that keeps claiming is stopped after two tries that
+    # change nothing, and the run's answer carries the loop's own line.
+    script(p, [final(claim), final(claim), final(claim)])
     s = await orch.create_session("summarize the notes", AgentType.BUILDER, origin="chat")
 
     row = await orch.run_session(s.id)
@@ -299,7 +302,10 @@ async def test_the_agent_lane_flags_a_file_the_model_never_wrote(tmp_path):
     assert not (Path(s.workspace_path) / "report.docx").exists()
     note = _claimed_write_note(claim, [t["tool"] for t in res["tools_used"]])
     assert note, "the chat-lane checker flags this sentence"
-    assert row.summary == claim + note, "and the agent lane now appends the SAME note"
+    from iron_jarvis.daemon.until_done import UntilDone
+
+    loop = UntilDone(notes=2, ended="stuck", open=["claimed_file"])
+    assert row.summary == claim + loop.verdict() + note, "and the agent lane now appends the SAME note"
     assert "nothing was written to disk" in row.summary and "report.docx" in row.summary
     assert orch.get_session(s.id).summary == row.summary, "persisted — the bubble reads the row"
 

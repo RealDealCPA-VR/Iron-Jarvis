@@ -42,6 +42,9 @@ CLAIM = "Got it, I'll remember that from now on."
 #: v1.487.0: the reply promises to remember with nothing saved, so Iron
 #: Jarvis says so under it (``change_claims``).
 NOTED = "\n\n_Note: No preference was changed in this reply._"
+#: v1.495.0: what a model answers when the check-again loop sends the
+#: promise back (``daemon/until_done``): honest, and no claim left.
+HONEST = "I have not saved that: Iron Jarvis has no tool for it here."
 
 
 def _is_check_note(content) -> bool:
@@ -268,21 +271,27 @@ async def test_the_checks_own_word_is_never_sent_as_the_reply(desk, word):
     writing its reply again. The user gets the reply it had written before
     the check, never the word."""
     app, ws = desk
-    model = Seen([CLAIM, _call(1, NAME, query="zzqx unknown words"), word])
+    model = Seen([CLAIM, _call(1, NAME, query="zzqx unknown words"), word, HONEST])
     frames, _cards, done = await _stream(app, _body(ws, "remember my zzqx"), model)
-    assert done["reply"] == CLAIM + NOTED, done["reply"]
+    # v1.495.0: the restored reply still promises what no tool did, so the
+    # check-again loop sends IT (never the word) back once; the model's
+    # honest answer is the reply.
+    assert done["reply"] == HONEST, done["reply"]
+    assert ("assistant", CLAIM) in model.transcripts[-1], model.transcripts[-1]
+    assert ("assistant", word) not in model.transcripts[-1]
     shown = ""
     for ev, d in frames:
         if ev == "reset":
             shown = ""
         elif ev == "token":
             shown += d.get("text", "")
-    assert shown.startswith(CLAIM), "what is on screen at the end is not the reply"
+    assert shown.startswith(HONEST), "what is on screen at the end is not the reply"
 
     J.FOUND.clear()
-    model = Seen([CLAIM, _call(1, NAME, query="zzqx unknown words"), word])
+    model = Seen([CLAIM, _call(1, NAME, query="zzqx unknown words"), word, HONEST])
     out = await _post(app, _body(ws, "remember my zzqx"), model)
-    assert out["reply"] == CLAIM + NOTED, out["reply"]
+    assert out["reply"] == HONEST, out["reply"]
+    assert ("assistant", CLAIM) in model.transcripts[-1]
 
 
 def test_only_the_bare_word_counts_as_keep():

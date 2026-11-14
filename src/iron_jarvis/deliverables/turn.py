@@ -70,6 +70,27 @@ class TurnDeliverables:
         self.nudged = True
         return await asyncio.to_thread(missing_now, self.scope, None)
 
+    def open_now(self) -> "tuple[str, str]":
+        """BLOCKING. ``(words, signature)`` of the required files that are not
+        done right now: the words for the check-again note
+        (``daemon/until_done``, v1.495.0), and a signature that changes when
+        any file's state or size does (a try that changed nothing has the
+        same one). ``("", "")`` when every required file is done."""
+        from .check import _state_line, check_deliverables
+
+        states = check_deliverables(self.scope)
+        bad = [s for s in states if not s.done]
+        if not bad:
+            return "", ""
+        lines = ["Iron Jarvis looked for this task's required files on disk:"]
+        lines += [_state_line(s) for s in states]
+        lines.append(
+            "Write the missing ones now, directly (not through a script), in the folder the "
+            "task allows, then check they exist."
+        )
+        sig = ";".join(f"{s.rel}={s.status}/{s.size}" for s in states)
+        return "\n  ".join(lines), sig
+
     def observe(self, name: str, args: Any, result: Any) -> None:
         self.steps.note(name, args, result)
 

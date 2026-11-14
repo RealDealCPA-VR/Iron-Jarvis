@@ -24,10 +24,13 @@ A wrong reading costs one extra round, never a wrong answer: the nudge
 authorises nothing, and a model that was right to stop says so on its
 "Blocked:" line.
 
-Coding sessions only (``harness/mode.HarnessTurn.give_up``): plain chat, agent
-runs and Build › Code are unchanged. Both chat lanes ask it through the
-closing offer's seam (``chat_turn.closing_offer_wanted``), so they stay in
-lock-step.
+Coding sessions hold one (``harness/mode.HarnessTurn.give_up``); both chat
+lanes ask it through the closing offer's seam
+(``chat_turn.closing_offer_wanted``), so they stay in lock-step. v1.495.0:
+plain chat replies and agent runs read :func:`gives_up` through
+``daemon/until_done`` — only after the reply did some work with its tools (a
+plain "I can't book flights" to a question is an honest limit). Build › Code
+is unchanged.
 """
 from __future__ import annotations
 

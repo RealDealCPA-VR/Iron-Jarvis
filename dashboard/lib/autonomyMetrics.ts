@@ -128,6 +128,12 @@ const SYSTEM_WORDS: Record<string, [string, string]> = {
   closing_question: ["offer to do more it took up instead of asking", "offers to do more it took up instead of asking"],
   // v1.493.0: a coding reply ended by saying the work could not be done and
   // was told once to try another way first.
+  // v1.495.0: a chat reply or an agent run's answer was sent back because
+  // Iron Jarvis's own check found it unfinished.
+  checked_again: [
+    "reply sent back because Jarvis's check found it unfinished",
+    "replies sent back because Jarvis's check found them unfinished",
+  ],
   gave_up: [
     "reply that said it could not be done and was told to try another way",
     "replies that said it could not be done and were told to try another way",

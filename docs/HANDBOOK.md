@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.494.0 (2026-11-14).*
+holds itself to. Current as of v1.495.0 (2026-11-14).*
 
 ---
 
@@ -2041,6 +2041,68 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Chat replies and agent runs keep working until what they say is true (v1.495.0)
+
+v1.493.0 gave coding sessions a check that sends the model back until its
+work checks out. This brings the same idea to ordinary chat replies and to
+agent runs. Before, when a reply said "I saved summary.docx" and no file was
+ever written, Jarvis only added a note under the reply saying so; you then had
+to ask again yourself.
+
+- **It is sent back while the reply can still fix it.** Each time a reply is
+  about to end, Jarvis runs the checks it already made under a finished reply,
+  using only its own record of what really ran:
+  - a file the reply says it saved, or changed, that no tool wrote or changed;
+  - a file you asked for that no tool wrote (the reply described it instead);
+  - a setting or record the reply says it changed that nothing changed;
+  - a figure in a file it wrote that no script or calculator worked out;
+  - a required file of your task that is missing, empty or broken;
+  - a reply that ends "I couldn't do this" after it had started the work.
+
+  When one of these fails and the reply has a tool that could fix it, the
+  model is sent back with exactly what is wrong. A reply that fixed it ends
+  normally, with no extra note.
+- **It stops for a reason.** At most five times per reply; it stops early when
+  two tries in a row change nothing, when the reply is out of steps, or when
+  the model ends with a clear "Blocked:" line saying what stops it and what
+  you need to do. If you said no to a step in that reply, your no stands and
+  it is not pushed. It never runs in low trust or on the demo model.
+- **"Done" is never the model's word alone.** The notes under a finished reply
+  are unchanged and still say what is wrong. A reply that was sent back and is
+  still not right gets one more line, for example: *"Checked by Iron Jarvis:
+  this is not finished. It was sent back to fix it twice and stopped there:
+  two tries in a row changed nothing. Tell it to keep going and it will carry
+  on."*
+- **An honest limit is left alone.** "I can't book flights" to a question, with
+  no work started, is not sent back, and neither is "I couldn't do that here"
+  after only looking up what Jarvis can do. A reply that ends by asking you
+  something is not pushed to write a file.
+- **A figure worked out afterwards counts.** If the model checks a total with
+  the calculator after writing it and gets the same figure, the file is no
+  longer named as holding an unchecked figure.
+- **Agent runs too.** A run's final answer gets the same checks for files,
+  figures and "I couldn't". Runs handed out by another agent (a helper, a
+  mission's teammate) are judged by the agent that handed them out, as before.
+- **What is not covered.** Build › Code (Claude Code, Codex and the other tools
+  run by themselves) and the browser sidebar are unchanged, and so is a chat
+  with "text only" picked (it has no tools to fix anything with). A change to
+  the workbook open in Excel that did not land keeps only its note: Excel
+  itself usually refused it (a protected sheet), and sending the model back
+  cannot fix that. The checks read English. A reply that is cut off at the model's output limit is handled
+  by the cut-off rule, not this one.
+- **Your "don't" stands.** If your message says not to use tools or make a
+  file ("do not call any tool", "don't create a file"), the reply is never
+  sent back to make one. The first try-out found the opposite: a message that
+  said "do not call any tool" was pushed into writing the file anyway.
+- **What the live runs showed (Claude Haiku, old version beside new).**
+  Ordinary requests (summarize a file into a document, say hello, total three
+  amounts into a file) gave the same answers in about the same time. Asked
+  for a file it at first refused to make, the old version ended with no file
+  and a note; the new one was sent back once and made the file. A reply that
+  ended by asking a question, and one with no file-writing tool in the turn,
+  were rightly left alone. Strong models rarely make these mistakes, so the
+  loop mostly matters for weaker or local models.
 
 ## Jarvis writes a short recap of finished work, and can forget a folder (v1.494.0)
 

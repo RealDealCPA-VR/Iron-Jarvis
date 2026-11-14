@@ -1480,6 +1480,10 @@ class AgentRuntime:
         #: the row (``Session.trust``/``tainted_at``) is the durable record
         #: and the ``trust.lowered`` event is published once per session.
         self._tainted: dict[str, bool] = {}
+        #: v1.495.0: run id -> the run's check-again loop
+        #: (``daemon/until_done.UntilDone``), kept across the run's
+        #: invocations (a step-limit carry-on) and dropped when it answers.
+        self._until_runs: dict[str, Any] = {}
         #: v1.421.0 (Wave 1, A1): session id -> the shell language this RUN's
         #: commands are written in and run in (``"bash"``: a Build session's
         #: helper on Windows with Git for Windows' bash found —
@@ -1554,6 +1558,80 @@ class AgentRuntime:
             return ends_on_offer(text or "")
         except Exception:  # noqa: BLE001 — a reading never breaks a run
             return False
+
+    def _until_done_for(self, session: Session, run: AgentRun, *, transcript: bool,
+                        tool_specs: list) -> Any:
+        """v1.495.0: the run's check-again loop (``daemon/until_done``), or
+        None — under exactly the closing offer's conditions (the FLAT lane's
+        answer, tools offered, never a child run, a read-only reviewer, a
+        Build helper or a mission's member: the model that handed the piece
+        out judges it). Low trust is checked at each answer. Never raises."""
+        if not transcript or not tool_specs or getattr(run, "parent_id", None):
+            return None
+        try:
+            from ..harness.helpers import HELPER_ORIGIN, REVIEW_ONLY_OPTION
+            from ..scheduling.knobs import session_options
+            from .team import MISSION_MEMBER_ORIGIN
+
+            if session_options(session).get(REVIEW_ONLY_OPTION) is True:
+                return None
+            if str(getattr(session, "origin", "") or "").startswith((HELPER_ORIGIN, MISSION_MEMBER_ORIGIN)):
+                return None
+            found = self._until_runs.get(run.id)
+            if found is None:
+                from ..daemon.until_done import UntilDone
+
+                while len(self._until_runs) >= 256:
+                    # A run that ended another way (failed, cut, stopped)
+                    # never dropped its entry: the oldest goes first.
+                    self._until_runs.pop(next(iter(self._until_runs)))
+                found = self._until_runs[run.id] = UntilDone(chat=False)
+            return found
+        except Exception:  # noqa: BLE001 — a check never breaks a run
+            return None
+
+    async def _until_done_note(self, until: Any, session: Session, run: AgentRun, text: str,
+                               messages: list[LLMMessage], tool_specs: list, *, steps_left: int) -> str:
+        """The check-again note for this answer, or "". The facts are the
+        run's own: its ledger (the calls that succeeded, a call the user
+        declined), its task (whether it asked for a file), the figures
+        shelf. One ``autonomy.nudged`` event per note. Never raises."""
+        try:
+            from ..daemon.chat_turn import _asked_for_a_file, custom_tools_used, ran_local_writer
+            from ..daemon.until_done import Facts, note_checked_again, run_record
+
+            used, declined = await asyncio.to_thread(run_record, self.p.engine, session.id)
+            if declined:
+                until.declined = True
+            armed = {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)}
+            task = [m for m in messages[:1] if getattr(m, "role", "") == "user"]
+            custom = custom_tools_used(self.p, used)
+            facts = Facts(
+                reply=str(text or ""), tools_used=used, armed=armed,
+                asked_for_file=_asked_for_a_file(SimpleNamespace(messages=task)) if task else False,
+                request=str(getattr(task[0], "content", "") or "") if task else "",
+                custom_tools=custom, ran_writer=ran_local_writer(self.p, used, custom),
+                figures_ctx=SimpleNamespace(session_id=session.id), chat=False,
+            )
+            note = await until.check(
+                facts, round_index=0, rounds=int(steps_left) + 1,
+                low_trust=self._effective_trust(session) == TRUST_LOW,
+            )
+            if note:
+                from ..core.nudges import GAVE_UP, note_nudge
+
+                if until.gave_up_only:
+                    await note_nudge(self.p.event_bus, GAVE_UP, session_id=session.id,
+                                     run_id=run.id, step=int(run.steps), surface="agent")
+                else:
+                    await note_checked_again(self.p, session_id=session.id, surface="agent",
+                                             run_id=run.id, step=int(run.steps))
+            return note
+        except Exception:  # noqa: BLE001 — a check never breaks a run
+            logging.getLogger("iron_jarvis.agents.runtime").debug(
+                "until-done note for a run failed", exc_info=True,
+            )
+            return ""
 
     def _effective_trust(self, session: Session) -> str:
         return effective_trust(
@@ -4450,8 +4528,36 @@ class AgentRuntime:
                         sink.token_delta(SEPARATOR)
                     await asyncio.to_thread(self._save, run)
                     continue
+                # v1.495.0: THE CHECK-AGAIN LOOP (``daemon/until_done``, the
+                # plain chat rule): an answer that claims a file no tool wrote,
+                # leaves a file the task asked for unwritten, holds a figure
+                # nobody worked out, or gives up after doing some work, is
+                # sent back — at most five times, never after two tries that
+                # changed nothing — under the closing offer's own conditions
+                # (the flat lane, tools offered, never a child, a reviewer or
+                # low trust). An answer still unfinished then says so.
+                _ud = self._until_done_for(session, run, transcript=transcript, tool_specs=tool_specs)
+                if _ud is not None:
+                    _ud_note = await self._until_done_note(
+                        _ud, session, run, resp.text, messages, tool_specs,
+                        steps_left=max_steps - (run.steps - _offer_from),
+                    )
+                    if _ud_note:
+                        messages.append(LLMMessage(
+                            role="assistant", content=resp.text,
+                            raw_blocks=list(getattr(resp, "raw_blocks", None) or []),
+                        ))
+                        messages.append(LLMMessage(role="user", content=_ud_note))
+                        if sink:
+                            sink.reset("check_again")
+                        await asyncio.to_thread(self._save, run)
+                        continue
                 await asyncio.to_thread(self._save, run)  # v1.226.0: off the loop
-                return True, _closing_offer_reply(messages, resp.text) if transcript else resp.text
+                _final = _closing_offer_reply(messages, resp.text) if transcript else resp.text
+                if _ud is not None:
+                    _final = f"{_final}{_ud.verdict()}"
+                    self._until_runs.pop(run.id, None)
+                return True, _final
 
             messages.append(
                 LLMMessage(

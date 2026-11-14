@@ -50,7 +50,7 @@ from ..deliverables.turn import step_note as deliverables_step_note
 from fastapi import HTTPException
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Iterable
 
 from ..providers import egress as _egress
 from ..providers.adapters.base import refusal_of
@@ -8644,6 +8644,87 @@ def closing_offer_wanted(
         return False
 
 
+def until_done_for_turn(harness: Any, text_only_pick: Any) -> Any:
+    """v1.495.0: the plain chat reply's check-again loop
+    (``daemon/until_done.UntilDone``), or None — a coding session has its own
+    (the finish check), a text-only pick has no tool to fix anything with, and
+    the browser sidebar is left exactly as it was. MIRROR NOTE (lock-step):
+    both lanes make it at the same place, beside the deliverables."""
+    if harness is not None or text_only_pick or _in_the_sidebar():
+        return None
+    from .until_done import UntilDone
+
+    return UntilDone(chat=True)
+
+
+async def until_done_note(
+    d: Any,
+    until: Any,
+    body: Any,
+    *,
+    reply: str,
+    tools_used: list[str],
+    armed: Iterable[str],
+    config_cards: Iterable[Any],
+    ctx: Any,
+    deliverables: Any,
+    denied: Iterable[str],
+    round_index: int,
+    rounds: int,
+    trust_state: dict[str, Any],
+    truncated: bool,
+    demo: bool,
+    session_id: str = "chat",
+) -> str:
+    """The check-again note for a plain chat reply about to end on words
+    (v1.495.0, ``daemon/until_done``), or "" (let it end). Every fact is the
+    reply's own record: the calls that ran (``tools_used``), the cards, the
+    disk, the figures shelf. One ``autonomy.nudged`` event per note. Never
+    raises. MIRROR NOTE (lock-step): both lanes ask it at the same seam, where
+    the deliverables check used to ask once."""
+    if until is None or demo:
+        return ""
+    try:
+        from .until_done import Facts
+
+        if list(denied or ()) or (deliverables is not None and getattr(deliverables, "declined", False)):
+            until.declined = True
+        custom = custom_tools_used(d.platform, tools_used)
+        facts = Facts(
+            reply=str(reply or ""),
+            tools_used=list(tools_used),
+            armed=set(armed or ()),
+            asked_for_file=_asked_for_a_file(body),
+            request=next((str(getattr(m, "content", "") or "") for m in reversed(
+                list(getattr(body, "messages", None) or [])) if getattr(m, "role", "") == "user"), ""),
+            custom_tools=custom,
+            ran_writer=ran_local_writer(d.platform, tools_used, custom),
+            config_cards=list(config_cards or ()),
+            history=list(getattr(body, "messages", None) or []),
+            figures_ctx=ctx,
+            deliverables=deliverables,
+            chat=True,
+        )
+        note = await until.check(
+            facts, round_index=round_index, rounds=rounds,
+            low_trust=finish_low_trust(trust_state), truncated=truncated,
+        )
+        if note:
+            from ..core.nudges import CHECKED_AGAIN, GAVE_UP, note_nudge
+
+            await note_nudge(
+                getattr(d.platform, "event_bus", None), GAVE_UP if until.gave_up_only else CHECKED_AGAIN,
+                session_id=str(session_id or "chat"), surface="chat",
+                turn_id=str(getattr(body, "turn_id", "") or ""),
+                thread_id=str(getattr(body, "thread_id", "") or ""),
+                round=int(round_index) + 1,
+            )
+        return note
+    except Exception:  # noqa: BLE001 — a check never breaks a reply
+        log.debug("until-done note failed", exc_info=True)
+        return ""
+
+
 def take_closing_offer(harness: Any, reply: str) -> str:
     """The closing offer fires: the nudge's words (the reply it fired on is
     kept as the head of the reply the user keeps). v1.493.0: when the nudge
@@ -9196,10 +9277,49 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), r
     that succeeded, cannot show); None = judged from the names. MIRROR NOTE
     (lock-step): both chat lanes pass it.
     """
+    named, changed = _claimed_write_names(
+        reply, tools_used, custom_tools=custom_tools, ran_writer=ran_writer,
+    )
+    if not named and not changed:
+        return ""
+    said = ""
+    if named:
+        shown = ", ".join(f"`{n}`" for n in named[:3])
+        said += (
+            f" The reply mentions {shown}, but no document-writing tool ran — so"
+            f" that file does not exist."
+        )
+    if changed:
+        shown = ", ".join(f"`{n}`" for n in changed[:3])
+        which = "that file" if len(changed) == 1 else "those files"
+        said += (
+            f" The reply says it changed {shown}, but no tool that changes files"
+            f" succeeded this turn — so {which} did not change."
+        )
+    if _in_the_sidebar():
+        # v1.433.0 review: the browser sidebar has no Tools menu, and its turn
+        # never arms a document tool (its ceiling is the browser tools).
+        return f"\n\n_Note: nothing was written to disk this turn.{said} {SIDEBAR_NO_FILES}_"
+    return (
+        # v1.358.0 (integrate): the place is the chat's Tools menu (the wrench
+        # chip); it said "the “+” menu", a different button.
+        f"\n\n_Note: nothing was written to disk this turn.{said} Ask again with"
+        f" Auto tools on, or a document tool turned on, in the chat's Tools menu._"
+    )
+
+
+def _claimed_write_names(
+    reply: str, tools_used: list[str], *, custom_tools=(), ran_writer=None,
+) -> tuple[list[str], list[str]]:
+    """``(saved, changed)``: the files the REPLY claims it saved / changed
+    that no tool of this turn wrote / changed (the reading behind
+    :func:`_claimed_write_note`; v1.495.0: the check-again loop,
+    ``daemon/until_done``, reads it too, while the reply can still be fixed).
+    Both empty when nothing is claimed falsely."""
     if not reply or set(tools_used) & _FILE_CHANGING_TOOLS:
-        return ""
+        return [], []
     if _ran_writer(ran_writer, tools_used, custom_tools):
-        return ""
+        return [], []
     named: list[str] = []
     for m in _FILE_CLAIM_RX.finditer(reply):
         lead = reply[max(0, m.start() - 40) : m.start()]
@@ -9233,32 +9353,7 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), r
             changed.append(m.group(1))
     # A file the reply says it CHANGED existed before: never "does not exist".
     named = [n for n in named if n not in changed]
-    if not named and not changed:
-        return ""
-    said = ""
-    if named:
-        shown = ", ".join(f"`{n}`" for n in named[:3])
-        said += (
-            f" The reply mentions {shown}, but no document-writing tool ran — so"
-            f" that file does not exist."
-        )
-    if changed:
-        shown = ", ".join(f"`{n}`" for n in changed[:3])
-        which = "that file" if len(changed) == 1 else "those files"
-        said += (
-            f" The reply says it changed {shown}, but no tool that changes files"
-            f" succeeded this turn — so {which} did not change."
-        )
-    if _in_the_sidebar():
-        # v1.433.0 review: the browser sidebar has no Tools menu, and its turn
-        # never arms a document tool (its ceiling is the browser tools).
-        return f"\n\n_Note: nothing was written to disk this turn.{said} {SIDEBAR_NO_FILES}_"
-    return (
-        # v1.358.0 (integrate): the place is the chat's Tools menu (the wrench
-        # chip); it said "the “+” menu", a different button.
-        f"\n\n_Note: nothing was written to disk this turn.{said} Ask again with"
-        f" Auto tools on, or a document tool turned on, in the chat's Tools menu._"
-    )
+    return named, changed
 
 
 #: v1.433.0 review: what the honesty notes say in the browser SIDEBAR, which
@@ -11791,6 +11886,9 @@ async def run_chat_turn(
     # and write rules the user's message states, read off the loop. None =
     # nothing changes. MIRROR NOTE (lock-step): routes/chat.py's stream lane.
     _deliv: "TurnDeliverables | None" = None
+    # v1.495.0: THE PLAIN CHAT REPLY'S CHECK-AGAIN LOOP (``until_done``).
+    # MIRROR NOTE (lock-step): routes/chat.py's stream lane.
+    _until = until_done_for_turn(_harness, text_only_pick)
     if _prep.has("workspace"):
         # Started with the other prep steps above (v1.332.0). Resolution
         # MKDIRs a folder the user picked; that can fail, and None
@@ -12665,8 +12763,21 @@ async def run_chat_turn(
             # a required file is missing, empty or broken on disk: ONCE, the
             # check goes to the model and the loop goes on. MIRROR NOTE
             # (lock-step): routes/chat.py's stream loop, same seam.
-            if not calls and _deliv is not None and armed:
-                _dv_end = await _deliv.end_note(_round, _rounds)
+            # v1.495.0: and no longer once — THE CHECK-AGAIN LOOP
+            # (``until_done``) asks, each time the reply is about to end, the
+            # honesty checks the notes under a finished reply make (a file
+            # claimed but never written, a file asked for and never made, a
+            # change claimed but not made, an unchecked figure, the required
+            # files), and sends the model back while one fails and a tool
+            # could fix it. MIRROR NOTE (lock-step): the stream lane.
+            if not calls and (_until is not None or _deliv is not None) and armed:
+                _dv_end = await (until_done_note(
+                    d, _until, body, reply=route.response.text or "", tools_used=tools_used,
+                    armed=armed, config_cards=config_cards, ctx=ctx, deliverables=_deliv,
+                    denied=denied_tools, round_index=_round, rounds=_rounds,
+                    trust_state=_trust_state, truncated=_truncated,
+                    demo=is_demo_route(getattr(route, "provider", ""), getattr(route, "reason", "")),
+                ) if _until is not None else _deliv.end_note(_round, _rounds))
                 if _dv_end:
                     _dv_said = route.response.text or ""
                     if _dv_said.strip():
@@ -13535,6 +13646,11 @@ async def run_chat_turn(
         # routes/chat.py appends the same.
         if _deliv is not None and not escalate:
             reply += await _deliv.final()
+        # v1.495.0: a reply the check-again loop sent back and that STILL has
+        # a problem says how many times and why it stopped (the notes above
+        # say what). MIRROR NOTE (lock-step): routes/chat.py appends the same.
+        if _until is not None and not escalate:
+            reply += _until.verdict()
         # v1.493.0: A CODING REPLY ITS OWN CHECK FOUND NOT FINISHED says so
         # under the reply, in Iron Jarvis's words (the tests still fail, a
         # point is not done, how the check-again loop ended) — whatever the

@@ -19806,3 +19806,54 @@ suggest-don't-act for anything autonomous, everything reviewable.
     `test_finish_shell_writes_review_v1387` (the commented `cd`: 2 notes,
     `stuck`, the verdict line), `test_finish_shell_replay_v1387` (a confirm
     step).
+
+- **A plain chat reply and an agent run's answer are CHECKED AGAIN while they
+  can still be fixed** (v1.495.0; the owner, after v1.493.0's coding loop:
+  "Yes, extend it"). `daemon/until_done.py` (`UntilDone`, `Facts`,
+  `find_problems`, `run_record`) asks, each time a reply is about to end on
+  words, the honesty readings the notes under a finished reply already make,
+  from the reply's OWN record: a file it claims it saved / changed that no tool
+  wrote (`chat_turn._claimed_write_names`, now the reading behind
+  `_claimed_write_note`, output byte-identical), a file the user asked for
+  (`_asked_for_a_file`) that no tool wrote (never when the reply ends on a
+  question), a claimed setting/record change (`change_claims.
+  claimed_change_note`, chat only), a figure no script or calculator worked
+  out (`script_values.unchecked_now` = `peek_unchecked` filtered by
+  `_still_unchecked`: a figure a computing tool produced AFTER the write is a
+  worked-out one; `unchecked_figures_note` applies the same filter), a
+  required file missing (`TurnDeliverables.open_now`, chat only), and a
+  give-up (`harness/give_up.gives_up`) only after real work (`NOT_WORK`:
+  lookups and guide reads are not work). A problem is put to the model ONLY
+  when the turn holds a tool that can fix it (a writer, the calculator / a
+  script). NOT in the loop on purpose: Excel's `unchanged_note` (Excel itself
+  refused it; two wasted rounds). Limits: `MAX_ROUNDS` 5, `IDLE_MAX` 2 tries
+  with the same problem keys, `MIN_ROUNDS_LEFT` 2, a "Blocked:" line after a
+  note, a declined call in the reply (`denied_tools`, or a run's ledger saying
+  "the user declined"), low trust, a cut reply, the demo model. CHAT: both
+  lanes (MIRROR NOTE) make `chat_turn.until_done_for_turn(_harness,
+  text_only_pick)` (None for a coding session, a text-only pick, the browser
+  sidebar) beside the deliverables and ask `chat_turn.until_done_note` where
+  the deliverables' once-only `end_note` used to ask (it is the fallback when
+  there is no loop); the stream lane takes the words back (`reset {reason:
+  "check_again"}`); `_until.verdict()` is appended after the deliverables'
+  note ("Checked by Iron Jarvis: this is not finished. It was sent back to fix
+  it twice and stopped there: two tries in a row changed nothing. Tell it to
+  keep going and it will carry on."), only when the loop ran and a problem is
+  still open and it stopped for limit/stuck/steps. AGENT RUNS: `runtime.
+  _until_done_for` (the closing offer's conditions: the flat lane, tools
+  offered, never a child run, a review-only reviewer, a Build helper or a
+  mission member; `self._until_runs[run.id]` spans a step-limit carry-on) and
+  `_until_done_note` (ledger read off the loop, the task's first message for
+  "asked for a file") at the flat final answer after the closing offer;
+  `sink.reset("check_again")`; the verdict rides the run's answer, before the
+  orchestrator's own note. One `autonomy.nudged` per note: `core/nudges.
+  CHECKED_AGAIN` (dashboard `SYSTEM_WORDS.checked_again`), `GAVE_UP` for a
+  give-up alone. Pins: `tests/test_until_done_everywhere_v1495.py` (both
+  lanes and a real agent run, scripted model), `dashboard/__tests__/
+  checked-again-nudge-v1495.test.ts`; moved on purpose: `test_look_first_v1480`
+  (a restored promise is now sent back once: `HONEST`), `test_look_first_review_
+  v1480` (`ANSWER`, a reply that claims nothing, for the check's mechanics),
+  `test_wave1_outcome_v1227` (the claim kept three times: verdict + note).
+  OPEN: Build › Code unchanged; the checks read English; a claimed change the
+  record cannot back always counts as unfinished, even when only a missing
+  tool stops it (the model ends on "Blocked:"); not driven in the packaged app.

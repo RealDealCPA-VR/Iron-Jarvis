@@ -4402,6 +4402,9 @@ async def chat_stream(
     # THE TASK'S DELIVERABLES (v1.481.0): MIRROR NOTE (lock-step):
     # chat_turn.run_chat_turn makes the same calls at the same seams.
     _deliv = None
+    # v1.495.0: the plain chat reply's check-again loop. MIRROR NOTE
+    # (lock-step): chat_turn.run_chat_turn.
+    _until = _chat_turn.until_done_for_turn(_harness, text_only_pick)
     if _prep.has("workspace"):
         # Started with the other prep steps above (v1.332.0). Resolution
         # MKDIRs a folder the user picked; that can fail, and None
@@ -6055,8 +6058,21 @@ async def chat_stream(
                 # while a required file is missing, empty or broken on disk:
                 # ONCE, the check goes to the model and the loop goes on, as
                 # the closing offer does. MIRROR NOTE (lock-step): chat_turn.
-                if not calls and _deliv is not None and (armed or ask_armed):
-                    _dv_end = await _deliv.end_note(_round, _rounds)
+                # v1.495.0: and no longer once — THE CHECK-AGAIN LOOP
+                # (`until_done`), the lock-step copy of chat_turn's. The words
+                # it sends back are taken off the screen (`reset`): what the
+                # model writes after fixing them is the reply.
+                if not calls and (_until is not None or _deliv is not None) and (armed or ask_armed):
+                    if _until is not None:
+                        _dv_end = await _chat_turn.until_done_note(
+                            d, _until, body, reply=reply_text, tools_used=tools_used,
+                            armed=[*armed, *ask_armed], config_cards=config_cards, ctx=ctx,
+                            deliverables=_deliv, denied=denied_tools, round_index=_round,
+                            rounds=_rounds, trust_state=_trust_state, truncated=_truncated,
+                            demo=_chat_turn.is_demo_route(route_provider, route_reason),
+                        )
+                    else:
+                        _dv_end = await _deliv.end_note(_round, _rounds)
                     if _dv_end:
                         if reply_text.strip():
                             msgs.append(LLMMessage(
@@ -6065,7 +6081,10 @@ async def chat_stream(
                             ))
                         msgs.append(LLMMessage(role="user", content=_dv_end))
                         if reply_text.strip():
-                            yield _ev("token", {"text": _CLOSING_OFFER_SEPARATOR})
+                            if _until is not None:
+                                yield _ev("reset", {"reason": "check_again"})
+                            else:
+                                yield _ev("token", {"text": _CLOSING_OFFER_SEPARATOR})
                         continue
                 # ask_armed counts (v1.187.0): a turn whose ONLY armed
                 # verbs are approval-gated still has real calls to run.
@@ -8162,6 +8181,9 @@ async def chat_stream(
         # chat_turn), drawn from the disk and the turn's own steps.
         if _deliv is not None and not escalate:
             reply += await _deliv.final()
+        # v1.495.0: the check-again loop's line (lock-step: chat_turn).
+        if _until is not None and not escalate:
+            reply += _until.verdict()
         # v1.493.0: A CODING REPLY ITS OWN CHECK FOUND NOT FINISHED says so
         # under the reply, in Iron Jarvis's words (the tests still fail, a
         # point is not done, how the check-again loop ended) — whatever the

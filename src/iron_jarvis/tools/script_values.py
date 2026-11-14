@@ -286,6 +286,14 @@ class Shelf:
             if files and files.pop(path, None) is not None and not files:
                 self._unchecked.pop(key, None)
 
+    def peek_unchecked(self, key: str) -> "dict[str, list[str]]":
+        """:meth:`take_unchecked` without forgetting (v1.495.0: the check-again
+        loop asks while the reply can still fix the file)."""
+        with self._lock:
+            files = self._unchecked.get(key) or {}
+            fresh = time.monotonic() - UNCHECKED_TTL_S
+            return {p: list(figs) for p, (figs, at) in files.items() if at >= fresh}
+
     def take_unchecked(self, key: str) -> "dict[str, list[str]]":
         """The files of *key* that still hold such a figure. Reading forgets
         them: a reply says it once."""
@@ -681,6 +689,49 @@ def typed_figures_note(tool: str, args: Any, ctx: Any) -> str:
         return ""
 
 
+def _matches_produced(token: str, produced: "list[float]") -> bool:
+    """*token* (a figure as written) is one a computing tool produced, to the
+    places it shows (the rule :func:`typed_figures_note` matches by)."""
+    import bisect
+
+    found = figures_in(token)
+    if not found:
+        return False
+    _t, value, places = found[0]
+    tolerance = 0.5 * 10 ** (-min(places, 6)) + 1e-9
+    at = bisect.bisect_left(produced, value)
+    return any(abs(produced[i] - value) <= tolerance for i in (at - 1, at) if 0 <= i < len(produced))
+
+
+def _still_unchecked(key: str, files: "dict[str, list[str]]") -> "dict[str, list[str]]":
+    """*files* without the figures a computing tool has produced SINCE the
+    file was written (v1.495.0: the model worked them out after the check
+    asked it to; the figure in the file is then a worked-out one)."""
+    if not files:
+        return {}
+    produced = SHELF.figures(key)
+    out: dict[str, list[str]] = {}
+    for path, figures in files.items():
+        left = [t for t in figures if not (produced and _matches_produced(t, produced))]
+        if left:
+            out[path] = left
+    return out
+
+
+def unchecked_now(ctx: Any) -> "dict[str, list[str]]":
+    """The files of this chat or run whose newest write still holds a figure
+    nobody worked out, and those figures, WITHOUT forgetting them (v1.495.0:
+    ``daemon/until_done`` asks while the reply can still fix them). Never
+    raises."""
+    try:
+        if ctx is None:
+            return {}
+        key, once = _key_for(ctx)
+        return {} if once else _still_unchecked(key, SHELF.peek_unchecked(key))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def unchecked_figures_note(ctx: Any) -> str:
     """What the USER reads under a reply whose turn left a file holding a
     figure nobody worked out: the file's name and the figure. "" when there
@@ -693,7 +744,7 @@ def unchecked_figures_note(ctx: Any) -> str:
         if ctx is None:
             return ""
         key, once = _key_for(ctx)
-        files = {} if once else SHELF.take_unchecked(key)
+        files = {} if once else _still_unchecked(key, SHELF.take_unchecked(key))
         if not files:
             return ""
         parts = []

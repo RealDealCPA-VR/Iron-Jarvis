@@ -47,6 +47,10 @@ pytestmark = [pytest.mark.usefixtures("no_network"), pytest.mark.timeout(300)]
 NAME = CT_TOOL.NAME
 CLAIM = "Got it, I'll remember that from now on."
 LOOK = "zzqx unknown words"
+#: v1.495.0: a reply that claims nothing, for the pins about the check's
+#: own mechanics (a claim is now sent back by the check-again loop,
+#: ``daemon/until_done``, which would add a round to them).
+ANSWER = "Here is what I found about zzqx."
 
 
 class Seen(Model):
@@ -578,18 +582,18 @@ async def test_a_check_that_does_not_answer_in_time_keeps_the_reply(desk, monkey
                     raise
             return await super().complete(**kw)
 
-    model = Slow([CLAIM])
+    model = Slow([ANSWER])
     frames, _cards, done = await asyncio.wait_for(
         _stream(app, _body(ws, "remember my zzqx"), model), timeout=30,
     )
     assert model.doors == ["stream", "complete"], model.doors
-    assert done["reply"] == CLAIM + NOTED and _on_screen(frames).startswith(CLAIM)
+    assert done["reply"] == ANSWER and _on_screen(frames).startswith(ANSWER)
     assert not [d for ev, d in frames if ev in ("reset", "error")]
 
-    model = Slow([CLAIM])
+    model = Slow([ANSWER])
     out = await asyncio.wait_for(_post(app, _body(ws, "remember my zzqx"), model), timeout=30)
     assert model.doors == ["complete", "complete"], model.doors
-    assert out["reply"] == CLAIM + NOTED
+    assert out["reply"] == ANSWER
     assert seen["cancelled"] == 2, seen
 
 
@@ -618,9 +622,9 @@ async def test_a_note_typed_during_the_check_is_never_lost(desk):
     # The check keeps the reply: the turn ends, and the note it never read is
     # handed back (the page puts it back in the box).
     body = _body(ws, "remember my zzqx")
-    model = Steered([CLAIM, "KEEP"], app, body["turn_id"], note)
+    model = Steered([ANSWER, "KEEP"], app, body["turn_id"], note)
     _frames, _cards, done = await _stream(app, body, model)
-    assert done["reply"] == CLAIM + NOTED
+    assert done["reply"] == ANSWER
     assert done.get("unread_steers") == [note], done.get("unread_steers")
 
     # The check makes the model look: the note joins at the next round, after

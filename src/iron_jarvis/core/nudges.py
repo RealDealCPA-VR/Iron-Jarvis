@@ -35,9 +35,15 @@ LOOK_FIRST = "look_first"
 #: v1.493.0: a coding reply ended by saying the work could not be done and was
 #: told once to try another way first (``harness/give_up.GIVE_UP_NUDGE``).
 GAVE_UP = "gave_up"
+#: v1.495.0: a plain chat reply or an agent run's answer was about to end while
+#: Iron Jarvis's own check found it unfinished (a file it claimed but no tool
+#: wrote, a file asked for and never made, a change claimed but not made, an
+#: unchecked figure, a missing required file) and was sent back to fix it
+#: (``daemon/until_done``). One per note sent.
+CHECKED_AGAIN = "checked_again"
 
 NUDGE_KINDS = (PLAN_RUN, STEP_LIMIT_CONTINUE, ROUNDS_EXTENDED, CLOSING_QUESTION, TEXT_TOOL_CALL,
-               LOOK_FIRST, GAVE_UP)
+               LOOK_FIRST, GAVE_UP, CHECKED_AGAIN)
 
 
 async def note_nudge(bus: Any, kind: str, *, session_id: "str | None" = None, **facts: Any) -> None:
@@ -56,5 +62,5 @@ async def note_nudge(bus: Any, kind: str, *, session_id: "str | None" = None, **
         log.debug("autonomy nudge event failed", exc_info=True)
 
 
-__all__ = ["CLOSING_QUESTION", "GAVE_UP", "LOOK_FIRST", "NUDGE_KINDS", "PLAN_RUN", "ROUNDS_EXTENDED",
+__all__ = ["CHECKED_AGAIN", "CLOSING_QUESTION", "GAVE_UP", "LOOK_FIRST", "NUDGE_KINDS", "PLAN_RUN", "ROUNDS_EXTENDED",
            "STEP_LIMIT_CONTINUE", "TEXT_TOOL_CALL", "note_nudge"]
