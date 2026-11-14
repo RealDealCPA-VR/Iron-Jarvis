@@ -5929,7 +5929,7 @@ async def chat_stream(
                     msgs.append(LLMMessage(
                         role="user", content=_chat_turn.take_closing_offer(_harness, reply_text),
                     ))
-                    await _chat_turn.note_closing_offer(d.platform, body, _tool_session, _round)
+                    await _chat_turn.note_closing_offer(d.platform, body, _tool_session, _round, _harness)
                     yield _ev("token", {"text": _CLOSING_OFFER_SEPARATOR})
                     continue
                 # THE FINISH CHECK (part 3, Phase 2): the model ends a Build
@@ -7786,6 +7786,14 @@ async def chat_stream(
                         )
                         _office = _stays_in_chat({*armed, *ask_armed}, force=stay_in_chat)
                 if _finish_round:
+                    # v1.493.0 (the check-again loop): the tests Iron Jarvis
+                    # ran AGAIN say there is nothing more to tell the model —
+                    # the reply ends on the words it already wrote. Never for
+                    # the first check's round. MIRROR NOTE (lock-step):
+                    # chat_turn.run_chat_turn.
+                    if _finish.settled():
+                        _fin_live["on"] = False
+                        break
                     # The finish check's tests ran (or were refused / declined
                     # on their card): its ONE note goes to the model now, and
                     # the next round is its answer. Lock-step: chat_turn.
@@ -8154,6 +8162,12 @@ async def chat_stream(
         # chat_turn), drawn from the disk and the turn's own steps.
         if _deliv is not None and not escalate:
             reply += await _deliv.final()
+        # v1.493.0: A CODING REPLY ITS OWN CHECK FOUND NOT FINISHED says so
+        # under the reply, in Iron Jarvis's words (the tests still fail, a
+        # point is not done, how the check-again loop ended) — whatever the
+        # model wrote. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+        if _finish is not None and _finish.ran:
+            reply += await _finish.verdict_note()
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did gets the plain note. MIRROR NOTE (lock-step): chat_turn.
         # Only an AGENT-shaped receiver counts (the roster's names, read off

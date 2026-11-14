@@ -8608,30 +8608,51 @@ def closing_offer_wanted(
     offer = getattr(harness, "closing_offer", None) if harness is not None else None
     if offer is None:
         return False
+    # v1.493.0: A REPLY THAT ENDS BY GIVING UP (``harness/give_up``: it says
+    # the work cannot be done, or that it could not do it) rides this same
+    # seam, so both lanes get it in lock-step: once per reply, under the
+    # offer's own conditions, it is told to try another way first. The offer
+    # goes first when both would fire.
+    give = getattr(harness, "give_up", None)
+    if give is not None:
+        give.pending = False
+    facts = dict(
+        has_calls=has_calls, round_index=round_index, rounds=rounds, armed=armed,
+        truncated=truncated, low_trust=finish_low_trust(trust_state),
+        plan_mode=bool(getattr(harness, "plan_mode", False)),
+        # v1.402.0 review: a reply resumed after a restart whose cut part
+        # already carried the finish note (`checked_before`) is past the
+        # check too — its next ending is the check's answer.
+        after_finish=bool(finish is not None and (
+            getattr(finish, "ran", False) or getattr(finish, "checked_before", False)
+        )),
+    )
     try:
         from ..harness.closing_offer import nudge_index
 
-        if messages is not None and nudge_index(messages) >= 0:
+        if not (messages is not None and nudge_index(messages) >= 0) and offer.wants(reply, **facts):
+            return True
+    except Exception:  # noqa: BLE001 — a reading never breaks a turn
+        pass
+    try:
+        from ..harness.give_up import nudge_index as _gave_up_index
+
+        if give is None or (messages is not None and _gave_up_index(messages) >= 0):
             return False
-        return bool(offer.wants(
-            reply,
-            has_calls=has_calls, round_index=round_index, rounds=rounds, armed=armed,
-            truncated=truncated, low_trust=finish_low_trust(trust_state),
-            plan_mode=bool(getattr(harness, "plan_mode", False)),
-            # v1.402.0 review: a reply resumed after a restart whose cut part
-            # already carried the finish note (`checked_before`) is past the
-            # check too — its next ending is the check's answer.
-            after_finish=bool(finish is not None and (
-                getattr(finish, "ran", False) or getattr(finish, "checked_before", False)
-            )),
-        ))
+        return bool(give.wants(reply, **facts))
     except Exception:  # noqa: BLE001 — a reading never breaks a turn
         return False
 
 
 def take_closing_offer(harness: Any, reply: str) -> str:
     """The closing offer fires: the nudge's words (the reply it fired on is
-    kept as the head of the reply the user keeps)."""
+    kept as the head of the reply the user keeps). v1.493.0: when the nudge
+    owed is the GIVE-UP one (``closing_offer_wanted`` said so), its words;
+    the reply it fired on is not kept: what the model writes after trying
+    again, or its "Blocked:" line, is the answer."""
+    give = getattr(harness, "give_up", None)
+    if give is not None and getattr(give, "pending", False):
+        return give.take()
     return harness.closing_offer.take(reply)
 
 
@@ -8648,13 +8669,21 @@ def combine_closing_offer(harness: Any, text: str) -> str:
     return offer.combine(text)
 
 
-async def note_closing_offer(platform: Any, body: Any, tool_session: str, round_index: int) -> None:
+async def note_closing_offer(platform: Any, body: Any, tool_session: str, round_index: int,
+                             harness: Any = None) -> None:
     """ONE ``autonomy.nudged`` event (``core/nudges.CLOSING_QUESTION``) for
-    a closing offer that fired. Never raises (``note_nudge`` swallows)."""
-    from ..core.nudges import CLOSING_QUESTION, note_nudge
+    a closing offer that fired, or (v1.493.0) ``GAVE_UP`` when the nudge that
+    just fired was the give-up one (``harness`` says which). Never raises
+    (``note_nudge`` swallows)."""
+    from ..core.nudges import CLOSING_QUESTION, GAVE_UP, note_nudge
 
+    kind = CLOSING_QUESTION
+    give = getattr(harness, "give_up", None) if harness is not None else None
+    if give is not None and getattr(give, "just_fired", False):
+        give.just_fired = False
+        kind = GAVE_UP
     await note_nudge(
-        getattr(platform, "event_bus", None), CLOSING_QUESTION,
+        getattr(platform, "event_bus", None), kind,
         session_id=str(tool_session or "chat"),
         surface="build" if str(tool_session or "").startswith("build:") else "chat",
         turn_id=str(getattr(body, "turn_id", "") or ""),
@@ -12542,7 +12571,7 @@ async def run_chat_turn(
                     raw_blocks=list(getattr(route.response, "raw_blocks", None) or []),
                 ))
                 msgs.append(LLMMessage(role="user", content=take_closing_offer(_harness, _offer_text)))
-                await note_closing_offer(d.platform, body, _tool_session, _round)
+                await note_closing_offer(d.platform, body, _tool_session, _round, _harness)
                 continue
             # THE FINISH CHECK (part 3, Phase 2): the model ends a Build reply
             # that changed files — ONCE, its tests run as this round's own
@@ -13246,6 +13275,13 @@ async def run_chat_turn(
                     _rounds = max(_rounds, _round_budget(armed, override=round_budget))
                     _office = _stays_in_chat(armed, force=stay_in_chat)
             if _finish_round:
+                # v1.493.0 (the check-again loop): the tests Iron Jarvis ran
+                # AGAIN say there is nothing more to tell the model — the
+                # reply ends on the words it already wrote. Never for the
+                # first check's round. MIRROR NOTE (lock-step): the stream
+                # lane.
+                if _finish.settled():
+                    break
                 # The finish check's tests ran (or were refused): its ONE note
                 # goes to the model now; the next round is its answer.
                 # Lock-step: the stream lane.
@@ -13499,6 +13535,12 @@ async def run_chat_turn(
         # routes/chat.py appends the same.
         if _deliv is not None and not escalate:
             reply += await _deliv.final()
+        # v1.493.0: A CODING REPLY ITS OWN CHECK FOUND NOT FINISHED says so
+        # under the reply, in Iron Jarvis's words (the tests still fail, a
+        # point is not done, how the check-again loop ended) — whatever the
+        # model wrote. MIRROR NOTE (lock-step): routes/chat.py appends the same.
+        if _finish is not None and _finish.ran:
+            reply += await _finish.verdict_note()
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did ("I'm passing this to builder") gets the plain note.
         # MIRROR NOTE (lock-step): routes/chat.py appends the same helper.

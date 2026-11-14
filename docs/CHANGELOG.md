@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.493.0
+
+**A coding reply keeps working until Jarvis's own check passes, and says so honestly when it does not.** This is for coding sessions in **Chat › Code**.
+
 ## v1.491.1
 
 **Connect your calendar by asking, and "where is it" answers come from the guide.** **"Hook up my Google calendar" works like connecting any app.** Jarvis already took a calendar link off when you asked it to disconnect your calendar.
@@ -77,7 +81,3 @@
 ## v1.480.0
 
 **Jarvis looks it up before it says "done" or "I can't".** This is the third step of the feature lookup (v1.478.0, v1.479.0).
-
-## v1.479.0
-
-**What Jarvis looks up, it can now use.** This is the second step of the feature lookup from v1.478.0.

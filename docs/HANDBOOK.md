@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.491.1 (2026-11-13).*
+holds itself to. Current as of v1.493.0 (2026-11-14).*
 
 ---
 
@@ -2041,6 +2041,68 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A coding reply keeps working until Jarvis's own check passes, and says so honestly when it does not (v1.493.0)
+
+This is for coding sessions in **Chat › Code**. Before, Jarvis checked a
+reply's work once (ran the tests, went through what you asked for) and the
+model got one chance to fix what the check found. If the tests still failed
+after that, the reply ended anyway, and the model's own closing words were
+all you had to go on.
+
+- **It checks again, and sends the model back.** After the first check, each
+  time the model says it is finished Jarvis looks again: it runs the tests
+  itself when files changed since the last run, re-reads the points of your
+  request the model said were not done, and looks for the files your request
+  listed. While something is still open the model is sent back to work with
+  exactly what is open. You see "sent back to work twice" on the reply's work
+  line.
+- **It stops for a reason, and tells you which.** The loop ends when the
+  check passes, after five rounds, when two rounds in a row changed nothing
+  (going in circles), when the reply is out of steps, on your Stop, or at the
+  time or cost limit you set for the session. It never runs without end.
+- **"Done" comes from the check, not from the model.** When a reply ends
+  with something still open, one line under it says so in Jarvis's own words,
+  for example: *"Checked by Iron Jarvis: the tests still fail. Jarvis sent it
+  back to work 5 times and stopped there. Tell it to keep going and it will
+  carry on."* A reply whose check passed gets no extra line. If the
+  tests could not be run again after the last change (you declined the
+  command, say), the line says that instead of guessing.
+- **No "I can't" on the first try.** When a reply ends by saying the job
+  cannot be done, Jarvis sends it back once: try another way first, and if
+  it truly cannot be done, say exactly what blocks it and what you would need
+  to do. A question to you, or a clear "Blocked:" line, is not sent back.
+- **Your request is the standard, not the test suite.** If you ask for part
+  of a fix ("only fix add(), leave the rest to me") the other tests still
+  fail, and that is what you asked for. The model can say those failures are
+  outside your request, and Jarvis then does not push it. The line under the
+  reply still says the tests fail and that the reply calls them outside what
+  you asked.
+- **A point that is truly blocked is named.** For a point of your request it
+  cannot finish, the model must say what stops it and what you need to do.
+  Jarvis then stops asking about that point and lists it as not done.
+- **Turning it off.** A folder's `.ironjarvis/harness/finish.toml` takes
+  `again = false` (the single check stays), or `enabled = false` for no
+  check at all.
+- **What the live runs showed (Claude Haiku, eight small tasks, old version
+  beside new).** On the four ordinary tasks (fix failing tests, add a
+  feature, write two report files, fix without re-running) both versions got
+  the same result in the same time: the model finished by itself and the loop
+  added nothing. Asked to run a command on a machine that does not exist, the
+  old version stopped after one failed try; the new one was sent back, tried
+  four more ways, and ended with a plain "Blocked:" line saying what you
+  would need to do (21 seconds instead of 5). Asked to fix only one function,
+  the new version left the rest alone and added the honest line that the
+  other tests still fail. A plain question got a plain answer in both.
+- **Limits.** This is for Chat › Code replies without a team. Build › Code
+  (Claude Code, Codex and the other tools run by themselves), plain chat and
+  agent runs are unchanged. Jarvis can only re-run tests when it knows the
+  test command (the folder's own check, or the one the model ran); with no
+  tests it checks the request's points and listed files only. A request's
+  files are recognised when it lists them (a "Deliverables:" list, or two or
+  more named files). The model could wrongly call a failure "outside the
+  request"; the line under the reply always says the tests fail and whose
+  claim that is. Tried live on one model.
 
 ## Connect your calendar by asking, and "where is it" answers come from the guide (v1.491.1)
 

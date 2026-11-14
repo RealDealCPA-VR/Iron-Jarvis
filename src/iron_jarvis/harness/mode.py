@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable
 
 from . import closing_offer as _closing_offer
+from . import give_up as _give_up
 from . import components as _components
 from . import dialects as _dialects
 
@@ -994,6 +995,11 @@ class HarnessTurn:
         #: left is told once to do it. Read by both chat lanes at the same
         #: seam as :meth:`wants_nudge`.
         self.closing_offer = _closing_offer.ClosingOffer()
+        #: v1.493.0: this reply's GIVE-UP nudge (``harness/give_up``): a
+        #: reply that ends by saying the work cannot be done is told once to
+        #: try another way first. Asked by both chat lanes through the closing
+        #: offer's seam (``chat_turn.closing_offer_wanted``).
+        self.give_up = _give_up.GiveUp()
         #: call id -> the name the model used, for calls that were translated
         self._called_as: dict[str, str] = {}
         #: call id -> the dialect tool the model called (for its own words)

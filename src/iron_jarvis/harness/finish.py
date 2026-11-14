@@ -265,6 +265,69 @@ GONE_HEAD = "## Files that were here when this reply began and are gone now"
 #: was checked, and the note promises it "comes once per reply"
 #: (:func:`noted_in`).
 NOTE_OPENING = "FINISH CHECK."
+# THE CHECK-AGAIN LOOP (v1.493.0; the owner: "i need some form of loop so it
+# doesnt just stop … and dont lie about being done if you are not"). After the
+# model's answer to the note the reply used to end whatever that answer said.
+# Now, when the model ends again, Iron Jarvis looks once more: a test run that
+# is stale (a file changed since it) is run again as the check's own calls, and
+# while the tests fail, a point is still "not met", or a file the request
+# names is not there, a short note sends the model back to work. It stops when
+# everything checks out, after AGAIN_MAX_ROUNDS notes, when AGAIN_IDLE_MAX
+# endings in a row changed no file (going in circles), at the reply's last
+# rounds, on a cut-off reply, in low trust — and on Stop like any round.
+#: At most this many check-again notes a reply.
+AGAIN_MAX_ROUNDS = 5
+#: This many endings in a row with no file changed since the last note end it.
+AGAIN_IDLE_MAX = 2
+#: How the loop ended (the record's ``again.ended``): everything checked out /
+#: a point is left that the model calls blocked (nothing more it can try) /
+#: the tests failed and could not be run again after the last change / it ran
+#: out of notes / it went in circles / the reply ran out of steps.
+AGAIN_DONE = "done"
+AGAIN_BLOCKED = "blocked"
+AGAIN_UNCHECKED = "unchecked"
+AGAIN_LIMIT = "limit"
+AGAIN_STUCK = "stuck"
+AGAIN_STEPS = "steps"
+#: The tests fail and the model says those failures are OUTSIDE what the user
+#: asked for (:data:`OUTSIDE_FORM`): the loop never pushes on them.
+AGAIN_OUTSIDE = "outside"
+AGAIN_ENDS = (
+    AGAIN_DONE, AGAIN_BLOCKED, AGAIN_UNCHECKED, AGAIN_LIMIT, AGAIN_STUCK, AGAIN_STEPS, AGAIN_OUTSIDE,
+)
+#: THE USER'S REQUEST IS THE STANDARD, not the test suite (seen live: "only
+#: fix add(), leave the rest to me" — the other tests rightly still failed,
+#: and the loop pushed three times). A model that leaves failing tests alone
+#: because the user asked it to says so on a line that starts with this, and
+#: the loop then never sends it back for those tests; the line under the
+#: reply says the tests fail and that the reply calls them outside the
+#: request.
+OUTSIDE_FORM = "Outside the request:"
+OUTSIDE_ASK = (
+    "If the tests fail only because of something the user asked you to leave alone, do not fix "
+    f'that: say so on a line that starts "{OUTSIDE_FORM}".'
+)
+#: At most this many missing files named in a note or under the reply.
+AGAIN_FILES_SHOWN = 6
+#: The loop's ask (its note's last part).
+AGAIN_KEEP_GOING = (
+    "Keep working until this is done: find the cause and fix it with your tools. Do not end by "
+    "saying it cannot be done: when one way does not work, try another."
+)
+AGAIN_TESTS_ASK = "Run the tests again after your fix. " + OUTSIDE_ASK
+AGAIN_POINTS_ASK = (
+    'Answer each point above on its own line again: "<number>. met: <how you checked>". Only when '
+    "something outside your reach stops you (a sign-in, a file or a decision only the user has), "
+    'answer "<number>. blocked: <exactly what stops you and what the user must do>".'
+)
+AGAIN_FILES_ASK = (
+    "Make each missing file, or say in one sentence why the request does not need it after all."
+)
+AGAIN_END_ASK = "End with one sentence saying what you changed since this check."
+#: The line Iron Jarvis writes under a reply its check found not finished
+#: (:meth:`FinishCheck.verdict_note`).
+VERDICT_LEAD = "Checked by Iron Jarvis:"
+VERDICT_CARRY_ON = "Tell it to keep going and it will carry on."
 #: v1.420.0 (C3.3): the note's section with the project's own checkers
 #: (``harness/checkers``), which run once per reply in the check's round.
 CHECKERS_HEAD = "## The project's checkers"
@@ -297,7 +360,7 @@ GONE_ASK = (
 # the folder's switch
 # --------------------------------------------------------------------------- #
 
-FINISH_KEYS = ("enabled", "tests", "new_files", "request", "review")
+FINISH_KEYS = ("enabled", "tests", "new_files", "request", "review", "again")
 
 
 @dataclass(frozen=True)
@@ -305,13 +368,18 @@ class FinishConfig:
     """``.ironjarvis/harness/finish.toml`` as read. Every key defaults on.
     ``review`` (v1.401.0): the team's review at the finish — it runs only
     when "Hand work to my team first" is on and a member holds the Review
-    role; ``review = false`` keeps this folder's replies from it."""
+    role; ``review = false`` keeps this folder's replies from it.
+    ``again`` (v1.493.0): the check-again loop — after the model's answer to
+    the note, Iron Jarvis checks once more and sends the model back to work
+    while the tests fail or a point is not met (:meth:`FinishCheck.
+    _check_again`); ``again = false`` keeps the check to its one note."""
 
     enabled: bool = True
     tests: bool = True
     new_files: bool = True
     request: bool = True
     review: bool = True
+    again: bool = True
 
     @property
     def is_default(self) -> bool:
@@ -1841,8 +1909,12 @@ class GitIgnore:
 # the model's answer
 # --------------------------------------------------------------------------- #
 
+# v1.493.0: the same lines as before, written so that no two whitespace runs
+# sit side by side (`\s*(?:\*\*)?\s*` took quadratic time on a long run of
+# spaces: 2 s for 16,000 of them, on the event loop) and the leading run
+# stays on its own line.
 _ANSWER_RX = re.compile(
-    r"^\s*(?:[-*]\s*)?(?:\*\*)?\s*(\d{1,3})\s*[.):\-]\s*(?:\*\*)?\s*"
+    r"^[^\S\n]*(?:[-*]\s*)?(?:\*\*\s*)?(\d{1,3})\s*[.):\-]\s*(?:\*\*\s*)?"
     r"(not\s+met|unmet|not\s+done|not\s+yet\s+met|missing|met|done)\b",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -1864,6 +1936,51 @@ def answered_points(text: str, total: int) -> tuple[set[int], set[int]]:
         else:
             unmet.add(n)
     return met - unmet, unmet
+
+
+#: v1.493.0 (the check-again loop): "3. blocked: needs your GitHub sign-in" —
+#: a point the model says something OUTSIDE its reach stops. Anchored at the
+#: line start, one bounded number: linear.
+_BLOCKED_RX = re.compile(
+    r"^[^\S\n]*(?:[-*]\s*)?(?:\*\*\s*)?(\d{1,3})\s*[.):\-]\s*(?:\*\*\s*)?blocked\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+#: "Outside the request: …" at a line start (bold or a list mark before it
+#: allowed). No two whitespace runs side by side: linear.
+_OUTSIDE_RX = re.compile(
+    r"^[^\S\n]*(?:[-*]\s*)?(?:\*\*\s*)?outside\s+the\s+request\s*(?:\*\*\s*)?:",
+    re.IGNORECASE | re.MULTILINE,
+)
+_TIMING_RX = re.compile(r"\b\d+(?:\.\d+)?\s*(?:ms|s|sec|secs|seconds)\b|0x[0-9a-fA-F]+")
+
+
+def says_outside(text: str) -> bool:
+    """Does the model's answer say the failing tests are outside what the
+    user asked for (a line starting :data:`OUTSIDE_FORM`)? Pure."""
+    return bool(_OUTSIDE_RX.search(str(text or "")))
+
+
+def run_signature(runs: Iterable[Any]) -> str:
+    """What a test run SAID, without what differs between two identical runs
+    (timings, addresses): the same signature twice means nothing moved."""
+    parts = []
+    for r in runs or ():
+        out = _TIMING_RX.sub("", str(getattr(r, "output", "") or "")[-OUTPUT_CHARS:])
+        parts.append(f"{getattr(r, 'verdict', '')}|{getattr(r, 'exit_code', '')}|{' '.join(out.split())}")
+    return "\n".join(parts)
+
+
+def blocked_points(text: str, total: int) -> set[int]:
+    """Point numbers the model's answer calls ``blocked`` (the check-again
+    note's second answer form). Pure."""
+    out: set[int] = set()
+    for m in _BLOCKED_RX.finditer(str(text or "")):
+        n = int(m.group(1))
+        if 1 <= n <= total:
+            out.add(n)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -2452,6 +2569,59 @@ class FinishCheck:
         #: in this reply's check — their runs ride the check's round, their
         #: findings its note, their outcome its record (``checkers``).
         self.project_checks: Any = None
+        # THE CHECK-AGAIN LOOP (v1.493.0; see AGAIN_MAX_ROUNDS).
+        #: The newest test verdict known since the note (the check's own run,
+        #: the model's own covering run, a re-run) — "" = none; and whether a
+        #: call that may change a file ran SINCE it (it is stale then).
+        self._latest = ""
+        self._dirty = False
+        #: A call that may change a file ran since the last note (the first
+        #: or a check-again one): the model did something with it.
+        self._moved = False
+        #: The points the model last called "not met", and those of them it
+        #: called "blocked" (still not done, but nothing it can do).
+        self._unmet_set: set[int] = set()
+        self._blocked: set[int] = set()
+        #: "Not met" claims a file change came AFTER (the model may have dealt
+        #: with them since), and the points a check-again note asked about. A
+        #: point that was asked about, is stale and was not restated is no
+        #: longer counted as open: nothing says it is not done.
+        self._stale: set[int] = set()
+        self._asked: set[int] = set()
+        #: The model said the failing tests are outside the request.
+        self._outside = False
+        #: What the newest test run said (:func:`run_signature`): a re-run
+        #: that says something else is progress, the same thing is not.
+        self._last_sig = ""
+        #: How many check-again notes went out, endings in a row with no
+        #: change, how the loop ended ("" = it never had to end), how many
+        #: times the tests were run again.
+        self.again_rounds = 0
+        self._idle = 0
+        self.again_end = ""
+        self.again_reruns = 0
+        self._again_note_due = False
+        self._again_pending = False
+        self._again_runs: list[_Run] = []
+        #: The newest verdict IS the re-run's (its output goes in the note).
+        self._again_fresh = False
+        self._again_why: tuple[bool, list[int], list[str]] = (False, [], [])
+        #: A re-run could not run (its card declined, a refusal): no more.
+        self._rerun_blocked = False
+        #: The words the model last ENDED the reply on after the note (a
+        #: later answer that is only "N. met" lines keeps these as the close).
+        self._ending = ""
+        self._ending_moved = False
+        #: The endings the reply keeps (:meth:`combine`): the model's answer
+        #: to the first note, then each later ending that came after a change.
+        self._endings: list[str] = []
+        #: The model's own test command after the note (tool args, test part,
+        #: shell language) — what a re-run runs when the check ran none.
+        self._after_run: "tuple[dict[str, Any], str, str] | None" = None
+        #: Files the request names that are not on disk (as last looked), and
+        #: whether a note already asked for them (asked once, then only said).
+        self._missing: list[str] = []
+        self._files_asked = False
 
     # -- what the lane tells it -------------------------------------------- #
 
@@ -2571,6 +2741,21 @@ class FinishCheck:
             self._seq += 1
             if self._may_change_files(name, call, result):
                 self._last_change_seq = self._seq
+        elif self._note_sent and self._may_change_files(name, call, result):
+            # v1.493.0 (the check-again loop): the model changed something
+            # after the note — the newest test verdict is stale, and this
+            # ending is not "nothing changed".
+            self._dirty = True
+            self._stale |= self._unmet_set - self._blocked
+            # PROGRESS, for the going-in-circles rule, is a change that is
+            # certain: an edit through a file tool. A command that only MAY
+            # have changed a file (seen live: `python -m unittest | tail`)
+            # makes the verdict stale, so the tests are run again, and their
+            # answer says whether anything moved (:meth:`settled`).
+            from .folder_changes import JOURNALED_TOOLS as _JOURNALED
+
+            if name in _JOURNALED:
+                self._moved = True
         data = dict(getattr(result, "data", None) or {})
         if not self._may_write and _wrote_unjournaled(name, result, self._custom):
             # A command, a program, a hand-off or an app's tool RAN: what it
@@ -2588,6 +2773,7 @@ class FinishCheck:
                 self._ended[handle] = data["exit_code"]
                 if handle in self._after_handles:
                     self.after = TESTS_PASSED if data["exit_code"] == 0 else TESTS_FAILED
+                    self._latest, self._dirty = self.after, False  # v1.493.0
             return
         if name not in COMMAND_TOOLS:
             return
@@ -2615,8 +2801,14 @@ class FinishCheck:
             # test of a failing suite passing is not "then fixed").
             return
         verdict = _verdict(name, result)
+        # v1.493.0 (the check-again loop): the model's own test command after
+        # the note is what a re-run runs when the check itself ran none.
+        part = test_part(command, self._named_names(), posix=_posix(syntax))
+        if part:
+            self._after_run = (dict(args), part, syntax)
         if verdict:
             self.after = verdict
+            self._latest, self._dirty = verdict, False
         elif handle:
             # still running: its later process_read decides
             self._after_handles.add(handle)
@@ -2691,12 +2883,30 @@ class FinishCheck:
                 said = said[: MAX_ANSWER_WINDOW_CHARS - window["chars"]]
                 window["texts"].append(said)
                 window["chars"] += len(said)
+        if self._note_sent and says_outside(text):
+            self._outside = True  # v1.493.0: see OUTSIDE_FORM
+        if self._note_sent and self._answer_heard:
+            # v1.493.0 (the check-again loop): every LATER answer may settle
+            # a point — "2. met: …" takes it off the open ones, "2. not met"
+            # keeps it, and (after a check-again note, which offers the form)
+            # "2. blocked: …" keeps it as something the model cannot do.
+            # ``unmet`` — the record's "needed more work" — stays the first
+            # answer's count.
+            total = len(self.points)
+            met, unmet = answered_points(text, total)
+            blocked = blocked_points(text, total) if self.again_rounds else set()
+            if met or unmet or blocked:
+                self._unmet_set = (self._unmet_set - met) | unmet | blocked
+                self._blocked = (self._blocked - met - unmet) | blocked
+                self._stale -= met | unmet | blocked
+            return
         if not self._note_sent or self._answer_heard:
             return
         self._answer_heard = True
         self._answer = str(text or "")
         _met, unmet = answered_points(text, len(self.points))
         self.unmet = len(unmet)
+        self._unmet_set = set(unmet)
 
     def _covers(self, command: str, syntax: str = "") -> bool:
         """Does a later run cover every test the check's own runs ran (same
@@ -2750,9 +2960,16 @@ class FinishCheck:
         # the step-limit report), so a reply that had ENDED would end on the
         # step-limit report instead.
         if self.ran and not self.checked_before:
-            # v1.403.0 (the coding-session team): the check ran once; the ONE
-            # thing that may follow is the team's second review.
-            return await self._second_review(
+            # v1.403.0 (the coding-session team): the check ran once; what may
+            # follow is the team's second review —
+            second = await self._second_review(
+                reply=reply, round_index=round_index, rounds=rounds, truncated=truncated,
+                low_trust=low_trust,
+            )
+            if second is not None or self.team is not None:
+                return second
+            # — or, v1.493.0, for a reply with no team: the check-again loop.
+            return await self._check_again(
                 reply=reply, round_index=round_index, rounds=rounds, truncated=truncated,
                 low_trust=low_trust,
             )
@@ -2825,6 +3042,324 @@ class FinishCheck:
         if calls or getattr(pc, "used", False):
             self.project_checks = pc
         return calls
+
+    # -- the check-again loop (v1.493.0; see AGAIN_MAX_ROUNDS) -------------- #
+
+    async def _check_again(
+        self, *, reply: str = "", round_index: int, rounds: int, truncated: bool, low_trust: bool,
+    ) -> "list[Any] | None":
+        """The model ended the reply AGAIN after the note. ``None``: the reply
+        ends. A list: Iron Jarvis looks once more — its own test calls when
+        the newest test verdict is stale (the lane asks :meth:`settled` once
+        they ran), or ``[]`` when what is known already says "not finished"
+        (the check-again note goes straight to the model). Never on a cut
+        reply or in low trust; never raises."""
+        try:
+            if (not self.config.again or not self._note_sent or self.again_end
+                    or self._again_note_due or self._again_pending or truncated or low_trust):
+                return None
+            self._missing = await asyncio.to_thread(self._missing_files)
+            # What the model wrote as it ended, and whether it had changed
+            # anything since the last note (kept for :meth:`combine`).
+            self._ending = str(reply or "")
+            self._ending_moved = self._moved
+            if round_index >= rounds - 2:
+                # No round left for a fix to run in: the reply ends, and the
+                # line under it says what is still open.
+                tests_bad, points, _files = self._open_work()
+                if tests_bad or points or (self._latest == TESTS_FAILED and self._dirty):
+                    self.again_end = AGAIN_STEPS
+                return None
+            if self._dirty:
+                calls = self._again_calls()
+                if calls:
+                    self._again_pending = True
+                    return calls
+            self._again_fresh = False
+            return [] if self._again_next() else None
+        except Exception:  # noqa: BLE001 — a check never breaks a reply
+            log.warning("finish check: the check-again step failed", exc_info=True)
+            self._again_pending = False
+            self._again_note_due = False
+            return None
+
+    def _open_work(self) -> "tuple[bool, list[int], list[str]]":
+        """What still says "not finished": the tests fail (the newest verdict,
+        with nothing changed since), points the model calls not met and not
+        blocked, and files the request names that are not there (asked for
+        once; after that only said under the reply)."""
+        tests_bad = self._latest == TESTS_FAILED and not self._dirty and not self._outside
+        points = sorted(self._unmet_set - self._blocked)
+        files = [] if self._files_asked else list(self._missing)
+        return tests_bad, points, files
+
+    def _again_next(self) -> bool:
+        """The loop's decision. True: a check-again note goes to the model
+        (:meth:`note` writes it). False: the reply ends — ``again_end`` says
+        how whenever the loop was in play."""
+        unknown = self._asked & self._stale
+        if unknown:
+            # Asked about, changed since, and not restated: no longer claimed.
+            self._unmet_set -= unknown
+            self._stale -= unknown
+        tests_bad, points, files = self._open_work()
+        if not (tests_bad or points or files):
+            if self._latest == TESTS_FAILED and self._dirty:
+                # They failed, a file changed since, and they could not be
+                # run again: nothing says they pass.
+                self.again_end = AGAIN_UNCHECKED
+            elif self._latest == TESTS_FAILED and self._outside:
+                self.again_end = AGAIN_OUTSIDE
+            elif self._unmet_set:
+                self.again_end = AGAIN_BLOCKED
+            elif self.again_rounds or self.again_reruns:
+                self.again_end = AGAIN_DONE
+            return False
+        # Going in circles: an ending with no file changed since the last note.
+        self._idle = 0 if self._moved else self._idle + 1
+        if self._idle >= AGAIN_IDLE_MAX:
+            self.again_end = AGAIN_STUCK
+            return False
+        if self.again_rounds >= AGAIN_MAX_ROUNDS:
+            self.again_end = AGAIN_LIMIT
+            return False
+        self.again_rounds += 1
+        self._again_why = (tests_bad, points, files)
+        self._again_note_due = True
+        self._moved = False
+        self._asked |= set(points)
+        if files:
+            self._files_asked = True
+        if self._ending.strip() and (self._ending_moved or not self._endings):
+            self._endings.append(self._ending)
+        return True
+
+    def _again_calls(self) -> list[Any]:
+        """The tests, run again as the check's OWN calls (new ``ij-finish-N``
+        ids: the same cards, gate and ledger as its first run). What it ran
+        the first time; else the test part of the model's own test command
+        after the note. [] when there is nothing it can run."""
+        from ..providers.adapters.base import ToolCall
+
+        if not self.config.tests or self._rerun_blocked or self.carrier not in self.gate:
+            return []
+        base = [r for r in self.runs if r.verdict in (TESTS_PASSED, TESTS_FAILED)]
+        if base:
+            runs = [
+                _Run(command=r.command, args=r.args, source=r.source, timeout_s=r.timeout_s, syntax=r.syntax)
+                for r in base
+            ]
+        elif self._after_run is not None:
+            args, part, syntax = self._after_run
+            runs = [_Run(command=part, args=args, source="yours",
+                         timeout_s=_int_or_none(args.get("timeout_s")), syntax=syntax)]
+        else:
+            return []
+        calls = []
+        for run in runs:
+            self._calls_made += 1
+            call = ToolCall(id=f"{CALL_ID_PREFIX}{self._calls_made}", name=self.carrier,
+                            arguments=self._args_for(run))
+            self._by_id[call.id] = run
+            calls.append(call)
+            if self.harness is not None:
+                extra = {"shell_syntax": run.syntax} if run.syntax else {}
+                try:
+                    self.harness.mark_called_as(call.id, CALLED_AS, **extra)
+                except Exception:  # noqa: BLE001 — a double without the method
+                    pass
+        self._again_runs = runs
+        return calls
+
+    def settled(self) -> bool:
+        """The lane asks ONCE after a round of the check's own calls ran: is
+        there nothing more to tell the model, so the reply ends on the words
+        it already wrote? False for the first check's round (its note always
+        goes) and whenever a check-again note is owed (:meth:`note` then
+        writes it). MIRROR NOTE (lock-step): both lanes ask it right before
+        they would append the note. Never raises."""
+        if not self._again_pending:
+            return False
+        self._again_pending = False
+        try:
+            self.again_reruns += 1
+            verdicts = [r.verdict or TESTS_NOT_RUN for r in self._again_runs]
+            if TESTS_FAILED in verdicts:
+                verdict = TESTS_FAILED
+            elif TESTS_NOT_RUN in verdicts:
+                verdict = ""
+            else:
+                verdict = TESTS_PASSED
+            if verdict:
+                self._latest, self._dirty, self.after = verdict, False, verdict
+                self._again_fresh = True
+                sig = run_signature(self._again_runs)
+                if sig != self._last_sig:
+                    self._moved = True  # the tests say something new
+                self._last_sig = sig
+            else:
+                # It could not run (its card declined, a refusal): the newest
+                # verdict stays stale, and the tests are not run again.
+                self._rerun_blocked = True
+                self._again_fresh = False
+            return not self._again_next()
+        except Exception:  # noqa: BLE001 — a check never breaks a reply
+            log.warning("finish check: the check-again verdict could not be read", exc_info=True)
+            self._again_note_due = False
+            return True
+
+    def _missing_files(self) -> list[str]:
+        """BLOCKING. The files the request names as things to make that are
+        not in the session's folder (``deliverables.scope.required_files``: a
+        task's listed files, never a one-line request's; only paths inside
+        the folder, never a network spelling). [] when the folder turned the
+        request part off, in any doubt and on any error."""
+        if not self.config.request or not self.request.strip():
+            return []
+        try:
+            from ..deliverables.scope import required_files
+
+            out: list[str] = []
+            for item in required_files(self.request, self.folder):
+                try:
+                    there = item.path.exists()
+                except OSError:
+                    there = True
+                if not there and item.text not in out:
+                    out.append(item.text)
+            return out
+        except Exception:  # noqa: BLE001 — a reading never breaks a reply
+            return []
+
+    def _tests_command(self) -> str:
+        if self.runs:
+            return "; ".join(r.command for r in self.runs if r.command)
+        return self._after_run[1] if self._after_run is not None else ""
+
+    async def _again_note(self, fence: "Callable[[str], Awaitable[str]] | None") -> str:
+        """The check-again note: what Iron Jarvis found still open, and the
+        ask to keep working (never "it cannot be done" before another way was
+        tried; a point truly out of reach is answered "blocked: …")."""
+        self._again_note_due = False
+        tests_bad, points, files = self._again_why
+        parts = [
+            f"{NOTE_OPENING} Check again ({self.again_rounds} of at most {AGAIN_MAX_ROUNDS}). Iron "
+            "Jarvis looked at this reply's work once more and it is not finished. Iron Jarvis "
+            "wrote this note."
+        ]
+        if tests_bad:
+            parts.append("## Tests\n" + await self._again_tests_text(fence))
+        if points:
+            lines = []
+            for i in points:
+                if 1 <= i <= self.request_count:
+                    lines.append(f"{i}. {self.points[i - 1]}")
+                elif 1 <= i <= len(self.points):
+                    lines.append(f"{i}. (point {i}, as the first check listed it)")
+            parts.append("## Points you said are not met\n" + "\n".join(lines))
+        if files:
+            shown = files[:AGAIN_FILES_SHOWN]
+            more = len(files) - len(shown)
+            parts.append(
+                "## Files the request names that are not there\n" + "\n".join(f"- {f}" for f in shown)
+                + (f"\n(and {more} more)" if more > 0 else "")
+            )
+        ask = [AGAIN_KEEP_GOING]
+        if tests_bad:
+            ask.append(AGAIN_TESTS_ASK)
+        if points:
+            ask.append(AGAIN_POINTS_ASK)
+        if files:
+            ask.append(AGAIN_FILES_ASK)
+        ask.append(AGAIN_END_ASK)
+        parts.append("\n".join(ask))
+        return "\n\n".join(parts)
+
+    async def _again_tests_text(self, fence: "Callable[[str], Awaitable[str]] | None") -> str:
+        """The failing tests for a check-again note: Iron Jarvis's own re-run
+        with its output (fenced, like the first run's), else what was last
+        known when nothing changed since."""
+        failed = [r for r in self._again_runs if r.verdict == TESTS_FAILED] if self._again_fresh else []
+        if not failed:
+            cmd = self._tests_command()
+            shown = f" (`{_clip(cmd, 200)}`)" if cmd else ""
+            return f"The tests{shown} failed when they were last run, and no file was changed since."
+        lines = []
+        for run in failed:
+            shown = f"`{run.command}`"
+            if run.timed_out:
+                head = (f"{shown} FAILED when Iron Jarvis ran it again after your last change: it was "
+                        "cut off by its time limit, so it counts as failed.")
+            else:
+                code = f" (exit code {run.exit_code})" if run.exit_code is not None else ""
+                head = f"{shown} FAILED{code} when Iron Jarvis ran it again after your last change."
+            out = str(run.output or "").strip()
+            if len(out) > OUTPUT_CHARS:
+                out = "[earlier output left out]\n" + out[-OUTPUT_CHARS:]
+            if out and fence is not None:
+                out = str(await fence(out))
+            lines.append(head + (f" Its output:\n{out}" if out else ""))
+        return "\n".join(lines)
+
+    async def verdict_note(self) -> str:
+        """Iron Jarvis's OWN line under a reply its check found not finished
+        (v1.493.0, the owner: "dont lie about being done if you are not") —
+        from the check's own record, never from the model's words: the tests'
+        newest verdict, the points still not met, a file the request names
+        that is not there, and how the check-again loop ended. "" when all it
+        could check is fine, for a team's reply, with the loop off and when
+        the check never ran. MIRROR NOTE (lock-step): both lanes append it
+        where they append their other notes. Never raises."""
+        try:
+            if not self.ran or not self._note_sent or self.team is not None or not self.config.again:
+                return ""
+            missing = await asyncio.to_thread(self._missing_files)
+            cmd = self._tests_command().replace("`", "'")
+            shown = f" (`{_clip(cmd, 120)}`)" if cmd else ""
+            bits: list[str] = []
+            if self._latest == TESTS_FAILED and self._dirty:
+                bits.append(
+                    f"The tests{shown} failed when they were last run, and were not run again "
+                    "after the last change."
+                )
+            elif self._latest == TESTS_FAILED and self._outside:
+                bits.append(
+                    f"The tests{shown} still fail; the reply says those failures are outside "
+                    "what you asked for."
+                )
+            elif self._latest == TESTS_FAILED:
+                bits.append(f"The tests{shown} still fail.")
+            n = len(self._unmet_set)
+            if n:
+                bits.append(
+                    f"{n} point{'s' if n != 1 else ''} of your request {'are' if n != 1 else 'is'} not done."
+                )
+            lead = "this is not finished. " if n else ""
+            if missing:
+                names = ", ".join(f"`{m.replace('`', chr(39))}`" for m in missing[:AGAIN_FILES_SHOWN])
+                more = len(missing) - AGAIN_FILES_SHOWN
+                bits.append(
+                    ("A file the request names is not there: " if len(missing) == 1
+                     else "Files the request names are not there: ")
+                    + names + (f" and {more} more" if more > 0 else "") + "."
+                )
+            if not bits:
+                return ""
+            end = {
+                AGAIN_STUCK: "Jarvis sent it back to work and stopped when two tries in a row changed nothing.",
+                AGAIN_LIMIT: f"Jarvis sent it back to work {self.again_rounds} times and stopped there.",
+                AGAIN_STEPS: "It ran out of steps for this reply.",
+            }.get(self.again_end, "")
+            carry = [] if (self._outside and not n and not missing and not end) else [VERDICT_CARRY_ON]
+            words = " ".join([*bits, *([end] if end else []), *carry])
+            if not lead:
+                # Facts only (the tests' verdict, a missing file): the line
+                # states them and judges nothing more.
+                words = words[:1].lower() + words[1:]
+            return f"\n\n_{VERDICT_LEAD} {lead}{words}_"
+        except Exception:  # noqa: BLE001 — a note never breaks a reply
+            log.warning("finish check: the verdict note could not be written", exc_info=True)
+            return ""
 
     async def _second_review(
         self, *, reply: str, round_index: int, rounds: int, truncated: bool, low_trust: bool,
@@ -3478,10 +4013,17 @@ class FinishCheck:
 
         v1.403.0 (the coding-session team): after the team's SECOND review
         the note is that review alone (:meth:`_second_note`)."""
+        if self._again_note_due:
+            # v1.493.0: the check-again loop's note (a reply with no team).
+            return await self._again_note(fence)
         if self._second_note_due:
             return await self._second_note(fence)
         self._settle_tests()
         self._note_sent = True
+        # v1.493.0 (the check-again loop): what is known as the note goes out.
+        self._latest = self.tests if self.tests in (TESTS_PASSED, TESTS_FAILED) else ""
+        self._dirty = self._moved = False
+        self._last_sig = run_signature(self.runs)
         parts = [
             f"{NOTE_OPENING} Before you end this reply, check your work once. Iron Jarvis "
             "wrote this note; it comes once per reply."
@@ -3520,6 +4062,9 @@ class FinishCheck:
             "your tools (and run the tests again). Then end your reply with one sentence saying "
             "what you changed after this check, or that nothing needed changing."
         )
+        if self.tests == TESTS_FAILED and self.config.again and self.team is None:
+            # v1.493.0: the user's request is the standard, not the suite.
+            ask.append(OUTSIDE_ASK)
         parts.append("\n".join(ask))
         return "\n\n".join(parts)
 
@@ -3779,12 +4324,29 @@ class FinishCheck:
             return final
         head = str(self.draft or "").rstrip()
         tail = str(final or "").strip()
-        if self._answer_heard and tail and tail == self._answer.strip():
+        if self.again_rounds:
+            # v1.493.0 (the check-again loop): the reply ended more than once
+            # after the note. It keeps the model's answer to the first note,
+            # each later ending that came after a change, and its last words
+            # — never the same text twice, and never the "N. met: …" lines
+            # (the check's bookkeeping; "not met" and "blocked" lines stay:
+            # they are what the user must read).
+            total = len(self.points)
+            kept: list[str] = []
+            for text in [*self._endings, tail]:
+                text = drop_met_lines(str(text or "").strip(), total)
+                if text and text not in kept:
+                    kept.append(text)
+            tail = SEPARATOR.join(kept)
+        elif self._answer_heard and tail:
             # The reply ENDED on its answer to the note: its "N. met: ..."
             # lines are the check's bookkeeping (the record counts them, the
             # work line says "Checked: ..."), not what a person reads. What
             # was NOT met, and the model's closing words, stay (review).
-            tail = drop_met_lines(tail, len(self.points))
+            # v1.493.0: also when the model wrote those lines in a LATER
+            # answer (it verified first, then answered): seen live, the
+            # bookkeeping lines were kept in the reply then.
+            tail = drop_met_lines(tail, len(self.points)) or tail
         tail = self._with_answer_lines(tail)
         if not head:
             return tail if tail else final
@@ -3929,6 +4491,14 @@ class FinishCheck:
             # run passed after the last change. Only then (every other record
             # is byte-identical).
             out["reused"] = True
+        if self.again_rounds or self.again_reruns or self.again_end:
+            # v1.493.0: the check-again loop — only when it was in play (every
+            # other record is byte-identical): how often the model was sent
+            # back to work, and how it ended.
+            out["again"] = {
+                "rounds": int(self.again_rounds), "ended": self.again_end,
+                "open": len(self._unmet_set),
+            }
         if self.project_checks is not None:
             # v1.420.0 (C3.3): the project's checkers — only when they had
             # something to do (every other record is byte-identical).
@@ -3947,7 +4517,8 @@ class FinishCheck:
 
 #: The record's keys, in order (the reply line keeps exactly these).
 RECORD_KEYS = (
-    "tests", "command", "removed", "kept", "points", "unmet", "after", "why", "reused", "checkers", "review",
+    "tests", "command", "removed", "kept", "points", "unmet", "after", "why", "reused", "again",
+    "checkers", "review",
 )
 #: v1.420.0: a record's ``checkers`` keeps at most this many names per list.
 MAX_RECORD_CHECKERS = 8
@@ -4006,6 +4577,24 @@ def saved_checkers(raw: Any) -> "dict[str, Any] | None":
     return {"ran": names(raw.get("ran")), "skipped": skipped[:MAX_RECORD_CHECKERS], "late": names(raw.get("late"))}
 
 
+def saved_again(raw: Any) -> "dict[str, Any] | None":
+    """A record's ``again`` as a reply line keeps it (v1.493.0): how many
+    check-again notes went out (0..:data:`AGAIN_MAX_ROUNDS`), how the loop
+    ended (one of :data:`AGAIN_ENDS`, or "" — it never had to end) and how
+    many of the request's points were still open at the end; else None
+    (dropped)."""
+    if not isinstance(raw, dict):
+        return None
+    rounds, ended = raw.get("rounds"), raw.get("ended")
+    if not isinstance(rounds, int) or isinstance(rounds, bool) or not 0 <= rounds <= AGAIN_MAX_ROUNDS:
+        return None
+    if ended != "" and ended not in AGAIN_ENDS:
+        return None
+    still = raw.get("open")
+    still = still if isinstance(still, int) and not isinstance(still, bool) and 0 <= still <= 1000 else 0
+    return {"rounds": rounds, "ended": ended, "open": still}
+
+
 def saved_record(raw: Any) -> "dict[str, Any] | None":
     """The done frame's ``finish`` as a Build reply line keeps it: the known
     keys with the right types, else None (an older daemon's line has none —
@@ -4027,6 +4616,9 @@ def saved_record(raw: Any) -> "dict[str, Any] | None":
         out["why"] = _clip(why, 200)
     if raw.get("reused") is True and tests == TESTS_PASSED:
         out["reused"] = True  # v1.417.0 (C1.3)
+    again = saved_again(raw.get("again"))
+    if again is not None:
+        out["again"] = again  # v1.493.0 (the check-again loop)
     checkers = saved_checkers(raw.get("checkers"))
     if checkers is not None:
         out["checkers"] = checkers  # v1.420.0 (C3.3)
@@ -4322,6 +4914,15 @@ __all__ = [
     "FinishCheck",
     "FinishConfig",
     "NOTE_OPENING",
+    "AGAIN_MAX_ROUNDS",
+    "AGAIN_IDLE_MAX",
+    "AGAIN_ENDS",
+    "VERDICT_LEAD",
+    "blocked_points",
+    "says_outside",
+    "run_signature",
+    "OUTSIDE_FORM",
+    "saved_again",
     "TESTS_FAILED",
     "TESTS_NONE",
     "TESTS_NOT_RUN",

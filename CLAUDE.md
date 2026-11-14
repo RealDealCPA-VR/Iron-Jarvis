@@ -19541,3 +19541,108 @@ suggest-don't-act for anything autonomous, everything reviewable.
     module that arms a real timer needs a test reset that takes the timer
     back, and a test that counts events on `window` is exposed to every timer
     an earlier test in its file left.
+
+- **A coding reply is CHECKED AGAIN until its check passes or a limit ends
+  it; the line under an unfinished reply is Iron Jarvis's own; a reply that
+  ends on "can't" is sent back once** (v1.493.0; the owner: "i need some form
+  of loop so it doesnt just stop and so it doesn't claim it cant be done …
+  and dont lie about being done if you are not"). Chat › Code only (harness
+  turns with no team); plain chat, agent runs and Build › Code are unchanged.
+  - **THE LOOP (`harness/finish.py`, `FinishCheck`).** The v1.386.0 finish
+    check ran once. Now, after its note, every time the reply is about to
+    end on words `prepare()` goes to `_check_again`: `[]` + a check-again
+    note (`_again_note`: "FINISH CHECK. Check again (n of at most 5)…", what
+    is still open and nothing else), or new `ij-finish-N` calls that re-run
+    the tests when a file may have changed since the last run (`_dirty`;
+    the same gates, cards and ledger mark as the first check's calls), or
+    None (the reply ends). Both lanes call `_finish.settled()` once after a
+    round of the check's OWN calls: True = the re-run passed and nothing else
+    is open, so the reply ends with NO extra model round (MIRROR NOTE,
+    lock-step; the stream lane turns `_fin_live` off first).
+  - **WHAT IS OPEN (`_open_work`).** Tests whose newest verdict is FAILED
+    (not stale, not called outside the request); points the model answered
+    "N. not met" and has not settled; files the request lists that are not on
+    disk (`deliverables/scope.required_files`: reading only, listed
+    deliverables or two or more named files, inside the folder by text, never
+    `//host` or `..`), asked for once. A point asked about and then left
+    unconfirmed after a change is dropped from the count (the model fixed it
+    and did not say so); a point answered "N. blocked: <what stops it, what
+    the user must do>" (`blocked_points`, only after a check-again note) is
+    never asked again and stays listed as not done.
+  - **LIMITS, each an ending in the record (`AGAIN_ENDS`).** `done`,
+    `blocked`, `unchecked` (the tests failed, a file changed since, and they
+    could not be run again, e.g. the re-run card was declined), `limit`
+    (`AGAIN_MAX_ROUNDS` 5), `stuck` (`AGAIN_IDLE_MAX` 2 rounds in a row with
+    no progress), `steps` (`round_index >= rounds - 2`), `outside`. Stop, the
+    reply's time or cost cap and the step limit end the reply as before.
+    Never for a cut reply, low trust, a team's reply, or with `again = false`
+    in `.ironjarvis/harness/finish.toml` (`FinishConfig.again`).
+  - **PROGRESS IS A CERTAIN CHANGE.** `_moved` is set only by a journaled
+    file edit (`folder_changes.JOURNALED_TOOLS`) or by a test re-run whose
+    `run_signature` (verdict, exit code, output with timings and addresses
+    removed) differs from the last one. A command that only MAY have changed
+    a file makes the verdict stale (so the tests are run again) but is not
+    progress: seen live, a model that re-ran `python -m unittest | tail`
+    each round was pushed three times.
+  - **THE USER'S REQUEST IS THE STANDARD (`OUTSIDE_FORM` "Outside the
+    request:").** Seen live: "only fix add(), leave the rest to me" left
+    tests failing by design and the first cut pushed the model three times.
+    The first note (when its tests failed) and every check-again note offer
+    the form; `says_outside` (line start, linear) sets `_outside`, the tests
+    are then never pushed, the ending is `outside`, and the verdict line says
+    "the tests still fail; the reply says those failures are outside what you
+    asked for." with no "keep going" sentence.
+  - **THE VERDICT (`verdict_note()`, both lanes, appended after
+    `_deliv.final()`).** "_Checked by Iron Jarvis: …_" built only from the
+    check's record: the tests' newest verdict (or "failed when they were
+    last run, and were not run again after the last change"), points not
+    done, listed files not there, how the loop ended, then "Tell it to keep
+    going and it will carry on." "this is not finished." leads only when a
+    point is not done. "" when everything it could check is fine. `combine()`
+    keeps each round's closing words once and drops "N. met" bookkeeping
+    lines from any final answer.
+  - **THE RECORD.** `finish.again {rounds, ended, open}` only when the loop
+    was in play (`RECORD_KEYS` before checkers/review, `saved_again`).
+    Dashboard: `lib/buildSessions.decodeFinish` whitelists it;
+    `lib/stepWords` `againWords` ("sent back to work twice, stopped: two
+    tries changed nothing"), `finishNotDone`, `testsFailing` (the old
+    `finishWarn` body), `finishWarn = testsFailing || finishNotDone`;
+    `lib/nextStep` offers "Fix the failing tests" only when `testsFailing`
+    and says "N point(s) of the request is/are not done." from `again.open`.
+  - **GIVE-UP (`harness/give_up.py`, `HarnessTurn.give_up`).** `gives_up`
+    (deterministic, English, linear): first-person inability + a work verb,
+    "this can't be done", "unable to <verb>", "you'll need to do this
+    yourself", read in the last paragraph of prose, or the first sentence
+    unless the last paragraph says success; never a reply ending on a
+    question or holding a "Blocked:" line, never inside code or a quote.
+    Once per reply `GIVE_UP_NUDGE` goes through the closing offer's own seam
+    (`chat_turn.closing_offer_wanted` asks the offer first, then
+    `give.wants`; `take_closing_offer` returns `give.take()`;
+    `note_closing_offer(..., harness)` publishes nudge kind
+    `core/nudges.GAVE_UP`, dashboard `SYSTEM_WORDS.gave_up`). Never after
+    the finish check ran, with tool calls, cut, low trust or plan mode. A
+    wrong reading costs one round; the nudge authorises nothing.
+  - **REGEXES OVER MODEL TEXT.** `_ANSWER_RX` (older) was quadratic (2 s on
+    16,000 spaces): never two whitespace runs side by side. `_BLOCKED_RX`,
+    `_OUTSIDE_RX`, `give_up._BLOCKED_LINE_RX` follow the same shape; a
+    child-process pin feeds hostile text.
+  - **LIVE** (Haiku through claude-cli, scratch daemons 8881 old / 8891 new,
+    eight small tasks, one run each): four ordinary tasks identical in result
+    and time (the loop added nothing); a command on a host that does not
+    exist: old stopped after one failed try, new was sent back, tried four
+    more ways and ended on a "Blocked:" line (21 s vs 5 s); "only fix add()":
+    ended `outside`, no push, the honest line under the reply; a plain
+    question: no nudge. The benchmark's `harness_sha256` includes
+    `harness_give_up`.
+  - **OPEN:** no loop for a team's reply, Build › Code, plain chat or agent
+    runs; with no known test command only points and listed files are
+    checked; a model can misuse "Outside the request:" (the line attributes
+    the claim); `gives_up` is English only; one model tried live, single
+    runs; not driven in the packaged app.
+  - **Pins:** `tests/test_until_done_v1493.py` (both lanes with a scripted
+    model; tables both ways for `gives_up`),
+    `dashboard/__tests__/until-done-v1493.test.ts`; moved on purpose:
+    `test_finish_lanes_v1386` (failed tests: 2 notes, `again`),
+    `test_finish_shell_writes_review_v1387` (the commented `cd`: 2 notes,
+    `stuck`, the verdict line), `test_finish_shell_replay_v1387` (a confirm
+    step).

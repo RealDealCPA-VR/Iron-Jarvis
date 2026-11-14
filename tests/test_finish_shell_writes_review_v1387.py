@@ -751,7 +751,13 @@ async def test_a_commented_cd_never_turns_failing_tests_into_a_pass(env):  # noq
     model = wire([[ToolCall(id="b1", name="Bash", arguments={"command": command})],
                   "Added other.py.", "1. not met: the test fails."])
     out = await _stream(platform, _body(ws, text="add other.py and run the tests"), harness="claude")
-    assert len(model.notes()) == 1
+    # v1.493.0 (moved on purpose — the check-again loop): the model answered
+    # "not met" and changed nothing, so it was sent back ONCE; it changed
+    # nothing again, and the loop stopped as going in circles.
+    assert len(model.notes()) == 2
     finish = out["done"]["finish"]
     assert finish["command"] == f"cd {folder} && python -m unittest -q test_mini"
     assert finish["tests"] == "failed", finish
+    assert finish["again"] == {"rounds": 1, "ended": "stuck", "open": 1}
+    assert "_Checked by Iron Jarvis: this is not finished. The tests" in out["done"]["reply"]
+    assert "still fail. 1 point of your request is not done." in out["done"]["reply"]

@@ -346,10 +346,52 @@ export interface FinishRecord {
   unmet: number;
   after: "" | "passed" | "failed";
   why?: string;
+  /** v1.493.0: the check-again loop (harness/finish `saved_again`): how often
+   *  Iron Jarvis sent the model back to work after the check's note, how the
+   *  loop ended, and how many of the request's points were still open at the
+   *  end. Absent when the loop was not in play (every older record). */
+  again?: FinishAgain;
   /** v1.401.0: the team's review at the finish ("Hand work to my team
    *  first" on, a member with the Review role) — absent when it did not
    *  apply. */
   review?: FinishReview;
+}
+
+/** v1.493.0: a finish record's `again` (see FinishRecord). `ended`: "done"
+ *  everything checked out; "blocked" a point is left that the model says is
+ *  out of its reach; "unchecked" the tests failed and could not be run again
+ *  after the last change; "limit" it ran out of tries; "stuck" two tries in a
+ *  row changed nothing; "steps" the reply ran out of steps; "outside" the
+ *  tests fail and the reply says those failures are outside what was asked
+ *  for; "" it never had to end. */
+export interface FinishAgain {
+  rounds: number;
+  ended: "" | "done" | "blocked" | "unchecked" | "limit" | "stuck" | "steps" | "outside";
+  open: number;
+}
+
+/** The loop's few words on the work line: "sent back to work twice",
+ *  "stopped: no progress", "1 point not done". "" when there is nothing to
+ *  add. Built only from the record. */
+export function againWords(a: FinishAgain): string {
+  const bits: string[] = [];
+  if (a.rounds === 1) bits.push("sent back to work once");
+  else if (a.rounds > 1) bits.push(`sent back to work ${a.rounds} times`);
+  if (a.ended === "stuck") bits.push("stopped: two tries changed nothing");
+  else if (a.ended === "limit") bits.push("stopped at its limit");
+  else if (a.ended === "steps") bits.push("ran out of steps");
+  else if (a.ended === "unchecked") bits.push("tests not run again after the last change");
+  else if (a.ended === "outside") bits.push("the reply says the failures are outside the request");
+  if (a.open > 0) bits.push(`${plural(a.open, "point")} not done`);
+  return bits.join(", ");
+}
+
+/** Did the check-again loop end with the work NOT finished? */
+export function finishNotDone(f: FinishRecord): boolean {
+  const a = f.again;
+  if (!a) return false;
+  return a.open > 0 || a.ended === "stuck" || a.ended === "limit" || a.ended === "steps"
+    || a.ended === "unchecked" || a.ended === "blocked";
 }
 
 /** v1.401.0: how the team's review at the finish went (the daemon's
@@ -411,15 +453,26 @@ export function finishWords(f: FinishRecord): string {
   if (f.removed > 0) parts.push(`${plural(f.removed, "scratch file")} removed`);
   if (f.kept > 0) parts.push(`${plural(f.kept, "new file")} kept`);
   if (f.unmet > 0) parts.push(`${plural(f.unmet, "point")} needed more work`);
+  if (f.again) {
+    // v1.493.0: what the check-again loop did, and how it ended.
+    const again = againWords(f.again);
+    if (again) parts.push(again);
+  }
   if (f.review) parts.push(reviewWords(f.review));
   return `Checked: ${parts.join(", ")}`;
 }
 
-/** Does the finish line carry the warn mark? Only when the tests were last
- *  seen FAILING (never fixed after), the same theme token as a failed step. */
-export function finishWarn(f: FinishRecord): boolean {
+/** Were the tests last seen FAILING (never fixed after)? */
+export function testsFailing(f: FinishRecord): boolean {
   if (f.after === "failed") return true;
   return f.tests === "failed" && f.after !== "passed";
+}
+
+/** Does the finish line carry the warn mark? When the tests were last seen
+ *  FAILING (never fixed after), or (v1.493.0) when the check-again loop ended
+ *  with the work not finished: the same theme token as a failed step. */
+export function finishWarn(f: FinishRecord): boolean {
+  return testsFailing(f) || finishNotDone(f);
 }
 
 /** The finish line's hover: the command it ran — or, when the tests did not

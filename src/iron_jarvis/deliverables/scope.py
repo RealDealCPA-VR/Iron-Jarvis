@@ -597,6 +597,53 @@ def scope_for_turn(messages: Any, workspace: "Path | None") -> "TaskScope | None
         return None
 
 
+def required_files(text: str, workspace: Path) -> "list[Deliverable]":
+    """The files *text* requires that lie INSIDE *workspace*: the reading
+    alone (v1.493.0, for a coding session's check-again loop,
+    ``harness/finish``). Nothing is made or looked at on disk here: no
+    snapshot, no scratch folder, no moving to the folder above. [] for a
+    one-line request (the task threshold of :func:`scope_for_text`), for a
+    path spelled as another computer's (``\\\\host`` / ``//host``, by its text)
+    and for one that leaves the folder. Pure; never raises."""
+    try:
+        if not text or not workspace:
+            return []
+        reading = _read(str(text)[:MAX_TEXT_CHARS])
+        if not (
+            reading.listed or len(set(reading.deliverables)) >= 2
+            or reading.write_dirs or (reading.deliverables and reading.read_only)
+        ):
+            return []
+        root = Path(workspace)
+        out: list[Deliverable] = []
+        seen: set[str] = set()
+        for text_path in reading.deliverables:
+            raw = str(text_path).replace("\\", "/").strip()
+            if raw.startswith("//") or ".." in raw.split("/"):
+                continue
+            path = _resolve(root, text_path)
+            if not _inside_text(path, root):
+                continue
+            key = os.path.normcase(str(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(Deliverable(text_path, path))
+            if len(out) >= MAX_DELIVERABLES:
+                break
+        return out
+    except Exception:  # noqa: BLE001 - a reading that fails names no file
+        return []
+
+
+def _inside_text(path: Path, root: Path) -> bool:
+    """Is *path* under *root*, judged by the two paths' TEXT (nothing on disk
+    is touched or followed)?"""
+    a = os.path.normcase(os.path.normpath(str(path)))
+    b = os.path.normcase(os.path.normpath(str(root)))
+    return a == b or a.startswith(b.rstrip("\\/") + os.sep)
+
+
 def _unique(paths: Any) -> tuple[Path, ...]:
     out: list[Path] = []
     seen: set[str] = set()

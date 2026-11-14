@@ -28,7 +28,7 @@
  */
 
 import { offerKind, offeredAction, type OfferKind } from "@/lib/closingOffer";
-import { finishWarn, type FinishRecord } from "@/lib/stepWords";
+import { finishNotDone, testsFailing, type FinishRecord } from "@/lib/stepWords";
 import { KEEP_GOING_TEXT, decodeFinish, decodeStepLimit } from "@/lib/buildSessions";
 import { decodeCapMet } from "@/lib/buildLongJobs";
 
@@ -123,7 +123,7 @@ function joinAnd(parts: string[]): string {
 
 /** The tests' state in the box's words, from the finish record only. */
 function testsWords(f: FinishRecord): string {
-  if (finishWarn(f)) return "tests are failing";
+  if (testsFailing(f)) return "tests are failing";
   if (f.tests === "failed" && f.after === "passed") return "tests pass after a fix";
   if (f.tests === "passed" || f.after === "passed") return "tests pass";
   if (f.tests === "not_run") return "tests were not run";
@@ -254,13 +254,21 @@ export function codeNextStep(r: ReplyFacts, git: GitFacts | null): NextStep | nu
       testid: r.stopped === "cap" ? "harness-cap-keep-going" : "harness-keep-going",
     });
   }
-  if (f && finishWarn(f)) {
+  if (f && testsFailing(f)) {
     actions.push({ kind: "fix_tests", label: "Fix the failing tests", title: `Sends "${FIX_TESTS_TEXT}"`, how: "send", text: FIX_TESTS_TEXT });
   }
   if (f?.review?.state === "done" && f.review.verdict === "changes_needed") {
     actions.push({ kind: "fix_review", label: "Fix what the reviewer found", title: `Sends "${FIX_REVIEW_TEXT}"`, how: "send", text: FIX_REVIEW_TEXT });
   }
-  if (!left && f && f.unmet > 0) left = `${plural(f.unmet, "point")} of the request still need${f.unmet === 1 ? "s" : ""} work.`;
+  if (!left && f?.again) {
+    // v1.493.0: the check-again loop knows what is still open at the end
+    // (a point the model fixed and confirmed is no longer counted).
+    const open = f.again.open;
+    if (open > 0) left = `${plural(open, "point")} of the request ${open === 1 ? "is" : "are"} not done.`;
+    else if (finishNotDone(f) && !testsFailing(f)) left = "Jarvis's own check says this is not finished.";
+  } else if (!left && f && f.unmet > 0) {
+    left = `${plural(f.unmet, "point")} of the request still need${f.unmet === 1 ? "s" : ""} work.`;
+  }
   // The offer is read only off a reply that ended whole.
   const offer = r.cutOff || r.stopped ? null : offerAction(r.content, changed ? git : null);
   if (offer) {

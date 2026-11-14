@@ -325,6 +325,20 @@ export function decodeFinish(raw: unknown): FinishRecord | null {
   };
   const why = str(r.why, 200).trim();
   if (tests === "not_run" && why) out.why = why;
+  // v1.493.0: the check-again loop, whitelisted (a known ending, small whole
+  // numbers); anything else is dropped and the line reads as before.
+  const a = rec(r.again);
+  if (a) {
+    const ended = a.ended;
+    const rounds = a.rounds;
+    if (
+      typeof rounds === "number" && Number.isInteger(rounds) && rounds >= 0 && rounds <= 5
+      && (ended === "" || ended === "done" || ended === "blocked" || ended === "unchecked"
+        || ended === "limit" || ended === "stuck" || ended === "steps" || ended === "outside")
+    ) {
+      out.again = { rounds, ended, open: Math.min(count(a.open), 1000) };
+    }
+  }
   const review = decodeFinishReview(r.review);
   if (review) {
     // v1.403.0: a team's reviewer checks at most TWICE a reply (once more

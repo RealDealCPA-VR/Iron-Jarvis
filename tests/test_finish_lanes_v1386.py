@@ -264,6 +264,13 @@ async def test_failed_tests_keep_the_reply_working_and_the_check_never_runs_twic
         return ("1. not met: X is 11, the test wants 2.",
                 [ToolCall(id="fix", name="edit_file", arguments={"path": "app.py", "old": "X = 11", "new": "X = 2"})])
 
+    def confirm(model: Model):
+        note = model.calls[-1]["messages"][-1].content
+        assert note.startswith(NOTE_HEAD + " Check again (1 of at most 5).")
+        assert "## Points you said are not met\n1. set X to 2 in app.py and run the tests" in note
+        assert "## Tests" not in note  # the model's own re-run passed after its fix
+        return "1. met: app.py says X = 2 and the tests pass."
+
     # The wrong value has a DIFFERENT LENGTH from the fix (v1.386.1): Python
     # reuses a cached .pyc whose recorded source size and whole-second mtime
     # still match, and a scripted model writes, tests and fixes inside one
@@ -272,14 +279,20 @@ async def test_failed_tests_keep_the_reply_working_and_the_check_never_runs_twic
     # PYTHONDONTWRITEBYTECODE, which hid it.
     model = wire([
         _write("app.py", "X = 11\n"), _shell(TEST_CMD), "Done: X is set.",
-        answer, _shell(TEST_CMD, "s2"), "Fixed: X is 2 now and the tests pass.",
+        answer, _shell(TEST_CMD, "s2"), "Fixed: X is 2 now and the tests pass.", confirm,
     ])
     done, _frames_ = await _lane(lane, platform, _body(ws), monkeypatch)
     assert (ws / "app.py").read_bytes().replace(b"\r\n", b"\n") == b"X = 2\n"
-    # ONE note, though the reply ended twice.
-    assert len(model.notes()) == 1
+    # v1.493.0 (moved on purpose — the check-again loop): the model called
+    # point 1 "not met" and never said it was met after its fix, so when the
+    # reply ended again Iron Jarvis asked ONCE more about that point (the
+    # tests had passed on the model's own re-run: they are not run again).
+    assert len(model.notes()) == 2
     assert done["finish"]["tests"] == "failed" and done["finish"]["after"] == "passed"
     assert done["finish"]["unmet"] == 1
+    assert done["finish"]["again"] == {"rounds": 1, "ended": "done", "open": 0}
+    # The confirming answer was only its "1. met" line: the reply keeps the
+    # words the model had ended on.
     assert done["reply"] == "Done: X is set.\n\nFixed: X is 2 now and the tests pass."
     # The check's own run is the only one ledgered as the check's — and its
     # failure did not count toward the MODEL's repeated-call limit: the

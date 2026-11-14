@@ -1234,6 +1234,7 @@ class JarvisRunner:
         from ..harness import dialects as harness_dialects
         from ..harness import finish as harness_finish
         from ..harness import folder_changes as harness_folder_changes
+        from ..harness import give_up as harness_give_up
         from ..harness import mode as harness_mode
         from ..harness import patience as harness_patience
         from ..harness import project_map as harness_project_map
@@ -1275,6 +1276,10 @@ class JarvisRunner:
                 # is "did not run". (``providers/retry_round`` only marks a
                 # notice: it changes nothing a run does, and stays out.)
                 + b"\0" + _module_bytes(harness_patience)
+                # v1.493.0: and the give-up nudge (a reply that ends "this
+                # can't be done" is sent back once): it decides whether a run
+                # ends there or tries another way.
+                + b"\0" + _module_bytes(harness_give_up)
             ),
             "dialect": turn.plan.dialect.id,
             "dialect_requested": self.dialect,

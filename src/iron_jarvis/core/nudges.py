@@ -32,9 +32,12 @@ TEXT_TOOL_CALL = "text_tool_call"
 #: once whether it should look up what Iron Jarvis can do first, and DID
 #: (``chat_turn.LOOK_FIRST_NOTE``); a reply that was kept is not counted.
 LOOK_FIRST = "look_first"
+#: v1.493.0: a coding reply ended by saying the work could not be done and was
+#: told once to try another way first (``harness/give_up.GIVE_UP_NUDGE``).
+GAVE_UP = "gave_up"
 
 NUDGE_KINDS = (PLAN_RUN, STEP_LIMIT_CONTINUE, ROUNDS_EXTENDED, CLOSING_QUESTION, TEXT_TOOL_CALL,
-               LOOK_FIRST)
+               LOOK_FIRST, GAVE_UP)
 
 
 async def note_nudge(bus: Any, kind: str, *, session_id: "str | None" = None, **facts: Any) -> None:
@@ -53,5 +56,5 @@ async def note_nudge(bus: Any, kind: str, *, session_id: "str | None" = None, **
         log.debug("autonomy nudge event failed", exc_info=True)
 
 
-__all__ = ["CLOSING_QUESTION", "LOOK_FIRST", "NUDGE_KINDS", "PLAN_RUN", "ROUNDS_EXTENDED",
+__all__ = ["CLOSING_QUESTION", "GAVE_UP", "LOOK_FIRST", "NUDGE_KINDS", "PLAN_RUN", "ROUNDS_EXTENDED",
            "STEP_LIMIT_CONTINUE", "TEXT_TOOL_CALL", "note_nudge"]

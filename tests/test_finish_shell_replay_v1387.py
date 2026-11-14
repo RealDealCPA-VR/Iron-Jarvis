@@ -209,9 +209,24 @@ async def test_the_lost_run_is_shown_the_one_argument_point_and_then_passes(tmp_
 
     # (Review: the same run as the check's own, so it can say "then passed".)
     rerun = [ToolCall(id="rerun", name="Bash", arguments={"command": "python -m unittest -q"})]
-    out = await _replay_lost_run(tmp_path, name, [answer, rerun, "Fixed min and max with one argument."],
-                                 monkeypatch)
-    note = _note(out["model"])
+    # v1.493.0 (moved on purpose — the check-again loop): the model called
+    # the point "not met", fixed it and never said it was met, so Iron Jarvis
+    # asks about that point ONCE more when the reply ends again.
+    def confirm(model: Model):
+        again = model.calls[-1]["messages"][-1].content
+        assert again.startswith(NOTE_HEAD + " Check again (1 of at most 5).")
+        assert "## Points you said are not met" in again and "## Tests" not in again
+        listed = again.split("## Points you said are not met\n", 1)[1].split("\n\n", 1)[0]
+        numbers = [line.split(".", 1)[0] for line in listed.splitlines()]
+        assert len(numbers) == 1 and numbers[0].isdigit()
+        return f"{numbers[0]}. met: min(4) and max(4) work now."
+
+    out = await _replay_lost_run(
+        tmp_path, name, [answer, rerun, "Fixed min and max with one argument.", confirm], monkeypatch,
+    )
+    notes = out["model"].notes()
+    assert len(notes) == 2
+    note = notes[0]
     # The heredoc wrote calc.py (no journal row): the folder says it changed.
     assert "The request points to the docstring of `calc.py`" in note
     assert "``min`` and ``max`` (one or more arguments)" in note
@@ -226,6 +241,9 @@ async def test_the_lost_run_is_shown_the_one_argument_point_and_then_passes(tmp_
     finish = out["done"]["finish"]
     assert finish["tests"] == "passed" and finish["command"] == part
     assert finish["unmet"] == 1 and finish["after"] == "passed"
+    assert finish["again"] == {"rounds": 1, "ended": "done", "open": 0}
+    assert out["done"]["reply"].rstrip().endswith("Fixed min and max with one argument.")
+    assert "Checked by Iron Jarvis" not in out["done"]["reply"]
     # Review: the recorded reply ended with "no file was actually written
     # this turn" although its heredoc WROTE calc.py — the folder says so now.
     assert "no file was actually written" not in out["done"]["reply"]
