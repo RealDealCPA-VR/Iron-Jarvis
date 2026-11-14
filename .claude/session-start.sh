@@ -27,4 +27,4 @@ else
 fi
 
 echo "[Iron Jarvis session state] version: $ver | branch: $branch | tree: $tree | $sync"
-echo "RULE: State the current (or new target) Iron Jarvis app version in EVERY response so the user knows what to expect after pulling an update. Version bumps must edit all 3 files with ANCHORED edits: pyproject.toml, src/iron_jarvis/__init__.py, desktop/package.json. Push to master => CI publishes the release (~10 min)."
+echo "RULE: State the current (or new target) Iron Jarvis app version in EVERY response so the user knows what to expect after pulling an update. Bump a version ONLY with: uv run python scripts/bump_version.py OLD NEW (it edits every place the version lives; never by hand). Push to master => CI publishes the release (~15 min). Area rules: docs/rules/<area>.md (table in CLAUDE.md)."

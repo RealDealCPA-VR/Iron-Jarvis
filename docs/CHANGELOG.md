@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.496.1
+
+**The rules for AI helpers working on Iron Jarvis were reorganized.** Nothing changes in the app.
+
 ## v1.496.0
 
 **One page for everything Jarvis suggests.** **A new page, Improvements.** It lists every suggestion Iron Jarvis is waiting on you to accept or decline, in one place.
@@ -77,7 +81,3 @@
 ## v1.483.0
 
 **Chat can schedule a task in your own words.** Ask in chat for something to happen on a schedule ("every Monday at 8, pull together the list of flats with rent due this week") and Jarvis now makes that schedule.
-
-## v1.482.0
-
-**The lookup finds the right thing more often.** The fourth step of the feature lookup (v1.478.0 to v1.480.0).

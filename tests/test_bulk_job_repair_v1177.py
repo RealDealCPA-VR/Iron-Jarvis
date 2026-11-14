@@ -620,6 +620,10 @@ def test_the_release_workflow_gates_on_the_suite():
 
 
 def test_the_manual_no_longer_claims_a_gate_that_did_not_exist():
-    doc = (_REPO / "CLAUDE.md").read_text(encoding="utf-8")
+    # Moved on purpose (2026-11-14): the manual was split, and the release
+    # flow's full text now lives in docs/rules/ci.md beside the short root file.
+    doc = (_REPO / "CLAUDE.md").read_text(encoding="utf-8") + (
+        _REPO / "docs" / "rules" / "ci.md"
+    ).read_text(encoding="utf-8")
     assert "a red Tests run BLOCKS the installer" not in doc
     assert "RUNS THE OFFLINE SUITE AS A GATE" in doc

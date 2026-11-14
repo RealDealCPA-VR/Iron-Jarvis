@@ -1,24 +1,24 @@
 # Agents: read CLAUDE.md
 
-The full operating manual for AI agents working on this repo — architecture
-map, commands, release flow, and the hard rules learned from production
-incidents — lives in [CLAUDE.md](./CLAUDE.md). It applies to every agent
-(Claude Code, Codex, or otherwise), not just Claude.
+The operating manual for AI agents working on this repo is
+[CLAUDE.md](./CLAUDE.md). It is short (under 300 lines) and applies to every
+agent (Claude Code, Codex, or any other), not just Claude. Read all of it.
 
-Quick essentials if you read nothing else:
+The rules for one area of the code are in `docs/rules/<area>.md`. The table
+"Before you touch an area" in CLAUDE.md names them. Each starts with a contents
+list; read the list, then only the entries your change touches.
 
-- Test: `uv run pytest -q --no-header` (offline, ~3150 tests, ~11 min). Build:
-  `cd dashboard && pnpm build` (must reach 43/43 routes).
-- **EVERY PUSH GETS A VERSION BUMP — no exceptions, not even a test-only or
-  docs-only commit.** Bump `pyproject.toml` + `src/iron_jarvis/__init__.py` +
-  `desktop/package.json` with ANCHORED edits, push to master; CI publishes the
-  installer. Standing instruction from the user; see the Release flow section
-  of CLAUDE.md for why the "but nothing user-visible changed" argument does not
-  apply.
-- `GET /sessions/{id}` is `{session, transcript}` (nested); the POST session
-  endpoints return the session flat. This mismatch has shipped real bugs twice.
-- Never let a failed real provider return mock output. Never verify
-  native-dependency changes only from source — check the frozen build.
-- Anything that talks to the user carries the identity spine (`profile/` +
-  `personas/voice.py`) and budgets its history (`context/`). A new surface adds
-  both in the same change — see CLAUDE.md's hard rules.
+If you read nothing else:
+
+- **Never run the full test suites on this PC.** Run the test files your
+  change touches (`uv run pytest -q --no-header -n 4 tests/test_<area>*.py`);
+  the whole suite runs on GitHub (`gh workflow run tests.yml --ref <branch>`).
+- **Every push to master gets a version bump**, test-only and docs-only
+  commits included: `uv run python scripts/bump_version.py OLD NEW`. Never edit
+  a version by hand.
+- **Never let a failed real provider return demo output**, and never move work
+  to a provider the user did not choose.
+- **Tests and scratch daemons never reach the owner's live services** (their
+  own root, port, and no real keys).
+- When two goals pull against each other, the "North star" list in CLAUDE.md
+  decides, in its order.

@@ -1,0 +1,365 @@
+# key	area	also (comma separated)	headline (for the reader; not used)
+the identity spine reaches every prompt seam	memory	chat	The identity spine reaches EVERY prompt seam
+history is budgeted never sliced	context		History is BUDGETED, never sliced
+compaction is model written and ledger checked	context		Compaction is MODEL-written and LEDGER-checked
+an assistant turn and its role tool results are one unit	context		An assistant turn and its `role="tool"` results are ONE unit
+keep big results out of the context don t trim them after	context		Keep big results OUT of the context, don't trim them after
+every chat reply is accountable where the user is standing	chat		Every chat reply is ACCOUNTABLE where the user is standing
+a remote agent is editable and an edit must never eat its credential	messaging		A remote agent is EDITABLE, and an edit must never eat its credential
+a draft the user will send is fenced boxed and copied as rich text	chat		A draft the user will SEND is fenced, boxed, and copied as RICH TEXT
+the repl s writes are confined its reads are not	context		The REPL's writes are CONFINED; its reads are not
+nothing blocking runs on the event loop	daemon	tools	NOTHING BLOCKING RUNS ON THE EVENT LOOP
+every door ends in create session so the folder and the ask live there	agents		Every door ends in `create_session`, so the folder and the ask live THERE
+a step that raises is a failed step and a result is written when it lands	automations		A step that RAISES is a failed step, and a result is written when it LANDS
+a cancel goes to the task s own loop and a fire that did not happen is written where the u	automations		A cancel goes to the task's OWN loop, and a fire that did not happen is written where the user reads
+a refused credential is not an empty batch and at most once must leave a trace	messaging		A refused credential is not an empty batch, and at-most-once must leave a trace
+a rule that lives in one page s jsx is not a rule and a delete must untag what spawns	memory		A rule that lives in one page's JSX is not a rule, and a delete must untag what SPAWNS
+the roster is the contract and the gate is in the registry	tools		The roster is the CONTRACT, and the gate is in the registry
+model output is almost json recover it in one place	chat		Model output is ALMOST JSON; recover it in ONE place
+armed is not healthy a loop reports its own cycles	daemon		Armed is not healthy: a loop reports its OWN cycles
+a log handler on the app tree runs inside every except branch the daemon has	daemon		A log handler on the app tree runs inside every `except` branch the daemon has
+shipping the mechanism is not shipping the feature	ci		Shipping the mechanism is not shipping the feature
+an injected value must be injected and a field must have a way in	build		An injected value must be injected, and a field must have a way IN
+one pty many attaches only the primary attach resizes it	build		One PTY, many attaches: only the PRIMARY attach resizes it
+a build terminal outlives the build page	build		A Build terminal OUTLIVES the Build page
+a chat handed a file gets a folder project or not	chat	documents	A chat handed a file gets a FOLDER, project or not
+build daily driver pass b1	build		Build daily-driver pass, B1
+a chat turn never goes quiet never ends empty	chat		A chat turn never goes quiet, never ends empty
+an attended ask waits a batch is one ask office work stays in chat	tools		An attended ask WAITS; a batch is ONE ask; office work stays in chat
+the build terminal path is bytes pushed and paced only the pane on screen draws	build		The Build terminal path is BYTES, PUSHED and paced; only the pane on screen draws
+an update stops tidily and what it interrupted is offered back	desktop	daemon,build	An update stops tidily, and what it interrupted is offered back
+a backup that never leaves the disk it protects is one failure from nothing	daemon		A backup that never leaves the disk it protects is one failure from nothing
+cost scales with attention and the composer is not the page	chat		Cost scales with attention, and the composer is not the page
+a warm up without single flight is duplicated work and a boot must be able to explain itse	daemon		A warm-up without single-flight is duplicated work, and a boot must be able to explain itself
+a grant is written where the next run reads and yolo never rides an escalation	tools		A grant is written where the NEXT run reads, and yolo never rides an escalation
+frozen build verification	desktop		Frozen-build verification
+get sessions id returns session transcript nested	agents		`GET /sessions/{id}` returns `{session, transcript}` — NESTED.
+pdf redaction edits the page it never regenerates it	documents		PDF redaction edits the page; it never regenerates it
+a tool that writes a file says where absolutely	documents		A tool that writes a file says WHERE, absolutely
+never let a real provider failure return mock output	providers		Never let a real-provider failure return mock output
+it answered so it is up is false for a proxy	providers	chat	"It answered, so it is up" is false for a proxy
+openai chatgpt account backend retires model ids	providers		OpenAI ChatGPT-account backend retires model ids
+one shot agent utilities	providers		One-shot agent utilities
+event payloads	daemon		Event payloads
+parallel agent work	ci		Parallel agent work
+a frontend waitfor must wait for the thing you are asserting	ci		A frontend `waitFor` must wait for the THING YOU ARE ASSERTING
+a package that re exports a function shadows the module of the same name	ci		A PACKAGE THAT RE-EXPORTS A FUNCTION SHADOWS THE MODULE OF THE SAME NAME
+a destructive bulk action moves it does not delete	tools		A DESTRUCTIVE BULK ACTION MOVES, IT DOES NOT DELETE
+a folder is writable when a file lands in it and tempfile is not the way to find out	tools		A folder is WRITABLE when a file lands in it, and `tempfile` is not the way to find out
+freshness is the server s header and a caller s abort is not an outage	dashboard		Freshness is the SERVER's header, and a caller's abort is not an outage
+cost scales with attention and a conditional get is only as good as the header the browser	dashboard		Cost scales with attention, and a conditional GET is only as good as the header the browser may READ
+connected is the router s answer and a status row that reads its own store is a second tru	providers		"Connected" is the ROUTER's answer, and a status row that reads its own store is a second truth
+a source pin reads a file the ci runner checked out with crlf	ci		A SOURCE PIN READS A FILE THE CI RUNNER CHECKED OUT WITH CRLF
+windows dev shell	ci		Windows dev shell
+before deferring a boot step into the daemon lifespan ask who builds a platform without on	daemon		Before deferring a boot step into the daemon lifespan, ask who builds a platform WITHOUT one.
+a pin that survives the obvious revert is unchecked mutate what the pin itself claims	ci		A pin that survives the obvious revert is UNCHECKED — mutate what the pin itself claims.
+edit n tests run all n verify the file not the one test you were thinking about	ci		Edit N tests, run all N — verify the FILE, not the one test you were thinking about.
+to falsify a wait mutate it by deleting it shrinking it to sleep 0 proves nothing	ci		To falsify a WAIT, mutate it by DELETING it — shrinking it to `sleep(0)` proves nothing.
+a component is not its own chunk before deferring one check what else its module exports a	dashboard		A component is not its own chunk: before deferring one, check what else its module exports as a VALUE.
+inserting a declaration above a named one orphans its doc comment check for one first	ci		Inserting a declaration above a named one ORPHANS its doc comment — check for one first.
+define the done condition before you edit and report four things when you deliver	ci		Define the done condition before you edit, and report four things when you deliver.
+the browser add on is proven in the browser the user actually has against an isolated daem	browser		The browser add-on is proven in the browser the user actually has, against an ISOLATED daemon — never by loading a bundl
+the browser add on wears the app s icon and a missing icon is a refused folder	browser		The browser add-on wears the app's icon, and a missing icon is a refused folder
+one card for a whole form point at it	browser		One card for a whole form; Point at it
+a task the user records in the browser becomes a skill the recorder never reads a value a 	browser		A task the user RECORDS in the browser becomes a skill; the recorder never reads a value; a replay re-finds every elemen
+the browser sidebar has skills the user s browsing preferences and a pointer the user can 	browser		The browser sidebar has skills, the user's browsing preferences, and a pointer the user can watch
+updates come from the updates branch manifest first github s releases feed is the fallback	desktop		Updates come from the `updates` branch manifest first; GitHub's releases feed is the FALLBACK, and no raw HttpError ever
+the sidebar is armed by surface and a browser agent turn stays in chat	browser		The sidebar is armed BY SURFACE, and a browser-agent turn stays in chat
+a plan row is the model it runs effort lists levels extra where the cli says the session s	providers		A plan row is the model it runs; effort lists levels, Extra where the CLI says; the session's pane tabs are icons
+the reasoning level is one vocabulary one table and applied only where the serving model o	providers		The reasoning level is ONE vocabulary, ONE table, and applied only where the serving model offers it
+a remote agent is a conversation both ways	messaging		A remote agent is a CONVERSATION, both ways
+an mentioned agent is shown the chat stays addressed and hands work to a session	agents		An @-mentioned agent is shown the CHAT, stays addressed, and hands WORK to a session
+a module pops out into its own window on the other screen when there is one	desktop		A module pops out into its own window, on the other screen when there is one
+a kept preference is said on the receipt in the user s words	chat		A kept preference is said on the receipt, in the user's words
+a build pane outside any project can make one in one press	build		A Build pane outside any project can make one in one press
+the build assist carries the pane the profile the project and the lessons dead pane keys a	build		The Build assist carries the pane, the profile, the project and the lessons; dead pane keys are pruned; the job card rem
+task reflections are not knowledge about the user chat can remember a stated preference th	memory		Task reflections are not knowledge about the user; chat can remember a stated preference; the Memory page says what it k
+a named chat turn takes steer notes from any connection and a sent message is editable	chat		A named chat turn takes steer notes from any connection, and a sent message is editable
+a key opens the panel esc stops open jarvis focuses and the model menu is typed into a gat	browser		A key opens the panel, Esc stops, Open Jarvis focuses, and the model menu is typed into; a gate proves concurrency by co
+the risk door s card is answered where the turn is a named click reads first a loading pag	browser		The risk door's card is answered where the turn is; a named click reads first; a loading page is read twice
+a send never goes without its files and a file alone is a message	chat		A send never goes without its files, and a file alone is a message
+the same failing call is not run a third time the ledger is the backlog	browser		The same failing call is not run a third time; the ledger is the backlog
+the tab the agent is working in glows the worker knows from the commands it answers	browser		The tab the agent is working in GLOWS; the worker knows from the commands it answers
+a side panel cannot show the microphone prompt a page in a tab can	browser	agents	A side panel cannot show the microphone prompt; a page in a tab can
+a navigation is judged by its destination never by the page it leaves	browser		A navigation is judged by its DESTINATION, never by the page it leaves
+the sidebar works in the tab the user is looking at a new tab is a thing the user asks for	browser		The sidebar works in the tab the user is looking at; a new tab is a thing the user asks for
+a covered call must carry its grant into the registry a test that stubs invoke cannot see 	tools		A covered call must CARRY its grant into the registry; a test that stubs `invoke` cannot see that it did not
+the sidebar s conversation lives in the daemon its one switch is the per tab grant widened	browser		The sidebar's conversation lives in the daemon; its ONE switch is the per-tab grant widened to every tab; its steps fold
+the sidebar s composer owns the model icon and a mic send button dictation rides the panel	browser		The sidebar's composer owns the model icon and a mic/send button; dictation rides the panel socket into the app's OWN vo
+the add on s worker is kept alive by the daemon s heartbeat a timer in the worker cannot d	browser		The add-on's worker is kept alive by the DAEMON's heartbeat; a timer in the worker cannot do it
+the sidebar prints only what changes what the user can do and it has a model picker the us	browser		The sidebar prints only what changes what the user can do, and it has a model picker — the user's decision, reversing D2
+asyncio sleep d measures less than d on windows bill by an injected clock never by a sleep	ci		`asyncio.sleep(d)` measures LESS than `d` on Windows; bill by an injected clock, never by a sleep
+one approval per tab the grant lives on the runtime the lane consults it the risk gate nev	browser		One approval per tab: the grant lives on the runtime, the lane consults it, the risk gate never does
+mint after the check and undo a mint that was not delivered	browser		Mint AFTER the check, and undo a mint that was not delivered
+a browser tab has no token and restart is not the answer to a 401	desktop		A browser tab has no token, and "restart" is not the answer to a 401
+the gate collects what ci collects runs on ci s python and a hang fails by name	ci		The gate collects what CI collects, runs on CI's Python, and a hang fails BY NAME
+stop is a kill a steer is never dropped a tool round is budgeted	chat		Stop is a KILL, a steer is never dropped, a tool round is budgeted
+background work you can trust	daemon	automations	Background work you can trust
+packs spreadsheets and the phone	connections		Packs, spreadsheets and the phone
+safety checks other agents history and a read only memory door	tools		Safety checks, other agents' history, and a read-only Memory door
+an overview tile never leaves the screen pushing it off opens the module in its own window	dashboard		An Overview tile never leaves the screen; pushing it off opens the module in its own window
+the overview desktop is three screens of ten office operations system and only the current	dashboard		The Overview desktop is three screens of ten — Office, Operations, System — and only the current screen is in the DOM
+a custom agent is an employee a job card a monthly allowance a day off	agents		A custom agent is an EMPLOYEE: a job card, a monthly allowance, a day off
+an assignment is a durable job queued for a named agent the dispatcher runs it when the ag	agents		An ASSIGNMENT is a durable job queued for a named agent; the dispatcher runs it when the agent is free
+an agent keeps a folder learns from a coach and its skills are curated	agents	memory	An agent keeps a FOLDER, learns from a COACH, and its skills are CURATED
+a run has a trust posture and every injected context is scanned	tools	chat	A run has a TRUST posture, and every injected context is SCANNED
+a standing grant is keyed on the exact arguments a pack s new write tool is quarantined a 	tools	automations,connections	A standing grant is keyed on the EXACT arguments; a pack's new write tool is QUARANTINED; a schedule carries its own ski
+claude cli speaks the cli s own protocol behind a one request relay	providers	agents	claude-cli speaks the CLI's own protocol, behind a one-request relay
+iron proxy is the account manager iron jarvis still executes	providers		Iron-Proxy is the ACCOUNT MANAGER; Iron Jarvis still EXECUTES
+a build pane s account is chosen when the pane starts and shown on it	providers		A Build pane's ACCOUNT is chosen when the pane STARTS, and shown on it
+continue on the next account is detected from claude code s own limit record chosen by ses	build		Continue on the next account is DETECTED from Claude Code's own limit record, CHOSEN by session id, and COPIED, never mo
+a build pane and a claude child are top level sessions a parent claude code session s mark	build		A Build pane and a `claude` child are TOP-LEVEL sessions: a parent Claude Code session's markers never cross
+a carried conversation the next account refuses ends in a handoff never a dead end	build		A carried conversation the next account refuses ends in a HANDOFF, never a dead end
+iron proxy is told to re check a sign in it never notices by itself	providers		Iron-Proxy is TOLD to re-check a sign-in; it never notices by itself
+the agents page is a set of project worlds a project s room is grounded in that project an	agents		The Agents page is a set of PROJECT WORLDS; a project's room is grounded in that project and private to its table
+a preference has a status and only a confirmed one reaches a prompt the second same correc	memory	chat	A preference has a STATUS, and only a confirmed one reaches a prompt; the second same correction becomes ONE question
+the profile reaches a build pane only through a switched on generated block in the cli s o	memory	providers	The profile reaches a Build pane ONLY through a switched-on, generated block in the CLI's own instructions file — outsid
+the composer is the only card a question takes its place a project folder s agents md clau	chat		The composer is the only card; a question takes its place; a project folder's AGENTS.md / CLAUDE.md ride every chat turn
+a local only chat keeps its content on this network the catalog is cached and asked all at	providers		A LOCAL-ONLY chat keeps its content on this network; the catalog is cached and asked all at once; a box that just answer
+iron jarvis must not eat the pc	daemon	desktop	Iron Jarvis must not eat the PC
+the idle window s cost is its motion and the dead ends are written down here so nobody wal	dashboard		The idle window's cost is its MOTION, and the dead ends are written down here so nobody walks them again
+everything status is the system map	dashboard	daemon	Everything › Status is the system map
+a tool call is recorded before it runs one daemon per home a chat totals its own use a too	chat	daemon	A tool call is recorded BEFORE it runs; one daemon per home; a chat totals its own use; a too-long refusal is shrunk and
+a named chat turn is the daemon s not the connection s	chat		A NAMED chat turn is the DAEMON's, not the connection's
+an agent run keeps its conversation continue after a restart resumes it	agents	daemon,build	An agent run KEEPS its conversation; Continue after a restart RESUMES it
+the update rehearsal runs a real daemon through a restart every release	daemon		The UPDATE REHEARSAL runs a real daemon through a restart, every release
+the pi durable borrow finished every surface rejoins and a planned run resumes its steps	agents	browser	The pi-durable borrow, finished: every surface rejoins, and a planned run resumes its steps
+a fetched page brings its links a model must never have to guess a url	tools		A fetched page brings its LINKS; a model must never have to guess a URL
+a state that matters is never told by hue alone	dashboard		A state that matters is never told by hue alone
+a pack says why it failed where the model and the user each read	connections		A pack SAYS WHY it failed, where the model and the user each read
+a pack is added through one door from any dialect and a secret never crosses the browser	connections		A pack is added through ONE door, from any dialect, and a secret never crosses the browser
+a failed run reads in plain words at every door one sign in press every built in worded a 	cross-area	messaging	A failed run reads in plain words at EVERY door; one Sign in press; every built-in worded; a waiting chat is seen where 
+never while tasks await asyncio gather tasks it spins	daemon		NEVER `while tasks: await asyncio.gather(*tasks)` — it SPINS
+an mcp memory base writes only through tools the user confirmed a refusal is never unavail	memory		An MCP memory base WRITES only through tools the user CONFIRMED; a refusal is never "unavailable"; a save that landed is
+a brain profile names the durable memory base one resolve rule the guide is trusted every 	memory	chat,tools	A BRAIN PROFILE names the durable memory base; ONE resolve rule; the guide is trusted, every retrieved note is DATA; a s
+the session tab s context drop down what fills the conversation part by part in both codin	build	context	The Session tab's CONTEXT drop-down: what fills the conversation, part by part, in BOTH coding-session views; a part nob
+a user s words never run one of claude code s own slash commands	providers		A user's words never run one of Claude Code's OWN slash commands
+a step is running only while its coding tool runs it	build		A step is "running" only while its coding tool runs it
+two iron proxy claude accounts can be one claude login continue never moves between them a	providers	build	Two Iron-Proxy Claude accounts can be ONE Claude login; Continue never moves between them, and a parked account can be t
+microsoft 365 is locked down for client data read and draft only one account the firm s ow	connections		Microsoft 365 is LOCKED DOWN for client data: read and draft only, one account, the firm's own app, a locked install, th
+a code view session whose tool still runs background work is never reaped or evicted	build		A Code-view session whose tool still runs BACKGROUND work is never reaped or evicted
+build s code view drives the user s real claude code codex with their own tools on iron ja	build	providers	Build's CODE view drives the user's REAL Claude Code / Codex with their OWN tools ON; Iron Jarvis only starts them, draw
+pi in build code offers what pi s terminal offers pi s own model list read in the backgrou	build		Pi in Build › Code offers what Pi's terminal offers: Pi's OWN model list (read in the background before any session), ea
+a pi folder s own extensions are loaded only by the user s press for that session pi appro	build	agents	A Pi folder's OWN extensions are loaded only by the user's press, for that session (`pi --approve`); Iron Jarvis says wh
+build code allow all commands this session is iron jarvis s own whole tool session rule th	build		Build › Code: "Allow all commands this session" is Iron Jarvis's OWN whole-tool session rule; the plan is on its card; a
+a coding session starts at the composer no form no folder until one is chosen choose is wi	build	desktop	A coding session STARTS AT THE COMPOSER: no form, no folder until one is chosen; Choose… is Windows' own folder picker; 
+same release v1 412 0 build code takes pictures changes mode at any time and a note typed 	build	agents	SAME RELEASE (v1.412.0): Build › Code takes PICTURES, changes MODE at any time, and a note typed while it works STEERS t
+opencode is the fourth tool in build code opencode acp the agent client protocol json rpc 	build	agents	OpenCode is the FOURTH tool in Build › Code: `opencode acp` (the Agent Client Protocol, JSON-RPC over stdio), its own to
+grok is the fifth tool in build code grok agent no leader stdio acp the core opencode spea	build		Grok is the FIFTH tool in Build › Code: `grok agent --no-leader stdio` (ACP, the core OpenCode speaks, LIFTED into `host
+build code is part of the app its running work is seen everywhere its card reaches the pho	build		Build › Code is part of the app: its running work is seen everywhere, its card reaches the phone, and the REAL tool may 
+a stream response closes its stream when it stops	chat		A stream response CLOSES its stream when it stops
+a build code reply ends only after the tool s own session id is on the row	build		A Build › Code reply ends only after the tool's own session id is on the row
+python s platform module never asks wmi in this app	daemon		Python's `platform` module never asks WMI in this app
+a build code tool signed out on this pc is still offered when an iron proxy account can ru	build	providers	A Build › Code tool signed out on this PC is still offered when an Iron-Proxy account can run it
+a build code reply ends on the answer to its message never on earlier work	build		A Build › Code reply ends on the answer to ITS message, never on earlier work
+a project knows its coding sessions resolved by folder at read time merged into recent act	memory	build	A project KNOWS its coding sessions: resolved by FOLDER at read time, merged into "Recent activity", and a repeated corr
+a coding session s changes tab is one scrolling review and every file hunk step and findin	build		A coding session's Changes tab is ONE scrolling review, and every file, hunk, step and finding opens in VS Code / Cursor
+the stable update channel a release reaches updates stable only once it has been out a day	desktop	ci	The STABLE update channel: a release reaches `updates-stable` only once it has been out a day, no newer patch replaced i
+a grant in a coding session is the session s not one helper s	build		A grant in a coding session is the SESSION's, not one helper's
+a coding session s pull request is watched a failed check is fixed by the session reviewed	build		A coding session's PULL REQUEST is watched; a failed check is fixed BY THE SESSION, reviewed by a CLOUD reviewer, and on
+one permission switch accept edits and auto start from ask first s cards and only remove s	tools	chat	ONE permission switch: Accept edits and Auto START from Ask first's cards and only remove some; risky always asks; a mod
+the next step box under the newest settled reply is derived never saved every button is an	build		The NEXT-STEP BOX under the newest settled reply is DERIVED, never saved; every button is an existing action; the user's
+ask first asks before an edit of git s and jarvis s own files a closing offer is the user 	tools		Ask first asks before an edit of Git's and Jarvis's own files; a closing offer is the user's when ANY clause of it is
+the coding sessions are the chat page s code view build is the terminals the sidebar is fi	build	messaging	The coding sessions are the CHAT page's Code view; Build is the terminals; the sidebar is five rooms
+two coding sessions side by side one shared pane column keys stay in the focused column bo	build		Two coding sessions SIDE BY SIDE: one shared pane column, keys stay in the focused column, both are looked at
+a coding session s session tab reads what the app already knows its one new read is the se	build		A coding session's SESSION tab reads what the app already knows; its one new read is the session's background programs
+a coding session can have a team the lead plans and checks and never edits workers do the 	build		A CODING SESSION CAN HAVE A TEAM: the lead plans and checks and NEVER edits; workers do the code; the reviewer checks ev
+approve once then off to the races every ask is counted an approved plan runs runs you sta	cross-area	build	APPROVE ONCE, THEN OFF TO THE RACES: every ask is counted, an approved plan runs, runs you start do not stop at 12, and 
+team review at the finish iron jarvis hands the change to the team s reviewer itself the r	build	agents	TEAM REVIEW AT THE FINISH: Iron Jarvis hands the change to the team's reviewer ITSELF; the reviewer only reads, is bound
+team first a coding session s planner can be told to hand pieces to the team off is byte i	agents		TEAM FIRST: a coding session's planner can be TOLD to hand pieces to the team; off is byte-identical
+the bench s team tier six tasks that split into pieces tier takes a comma list	build	ci	The bench's TEAM tier: six tasks that split into pieces; `--tier` takes a comma list
+the chat toolbar stays one row it gives up words one chip at a time least needed first	chat		The chat toolbar stays ONE ROW; it gives up words one chip at a time, least needed first
+night shift n2 iron jarvis commits each ended night task to its own branch screened and on	build	messaging	NIGHT SHIFT N2: Iron Jarvis commits each ended night task to ITS OWN branch (screened), and ONE summary per night is ann
+night shift n1 a queue of coding tasks that run overnight on their own branches file edits	build		NIGHT SHIFT N1: a queue of coding tasks that run overnight on their own branches; file edits and commands run unasked, E
+try on several models up to three attempts each its own branch worktree model and account 	build	desktop	TRY ON SEVERAL MODELS: up to three attempts, each its own branch, worktree, model and account; opt-in by the user's word
+the bench measures a team one command runs the team then the planner alone and refuses the	build	providers	The bench MEASURES a team: one command runs the team, then the planner alone, and refuses the night before it starts
+the planner asks for a role the team router picks the member local first never past an acc	agents	providers	The planner asks for a ROLE; the team router picks the member, local first, never past an account's limit, never across 
+a model team member is a custom agent with roles it runs on its own model held on an accou	agents	build	A MODEL TEAM member is a custom agent with ROLES; it runs on ITS OWN model, held, on an account the user's groups allow
+an account limit is waited out by itself a move to another account happens only within a g	build	messaging	An account limit is WAITED OUT by itself; a move to another account happens only WITHIN a group the user made, same vend
+a coding reply never stalls silently a stall notice with stop the step a question to the p	build	messaging	A coding reply NEVER STALLS SILENTLY: a stall notice with Stop the step, a question to the phone, a summary mid-reply, a
+a coding reply survives sleep and restarts awake while working its own record kept per rou	build		A coding reply SURVIVES sleep and restarts: awake while WORKING, its own record kept per round, carried on by itself exa
+a coding reply s timeline one precise clock for lengths the wall clock for windows	build	ci	A coding reply's TIMELINE: one precise clock for LENGTHS, the wall clock for WINDOWS
+a coding session reply is a reply the whole app can see a failed one has a press the view 	build		A coding-session reply is a reply the whole app can see; a failed one has a press; the view's name lives in ONE constant
+a local endpoint s reply budget fits the work a reply cut at the limit never runs its half	providers	context	A LOCAL endpoint's reply budget fits the work; a reply CUT at the limit never runs its half call and is picked up again
+the finish check sees files a reply changed through commands a folder snapshot beside the 	build		The finish check sees files a reply changed THROUGH COMMANDS: a folder snapshot beside the journal
+a build turn starts with a project map the project s own checkers run after an edit as gat	build		A Build turn starts with a PROJECT MAP; the project's OWN checkers run after an edit as GATED calls that need a person; 
+the claude dialect s bash runs in bash on windows wherever cmd exe still runs a model s co	build		The claude dialect's `Bash` RUNS IN BASH on Windows; wherever cmd.exe still runs a model's command, a `;` guard refuses 
+a build reply that changed files checks its own work once before it ends through the same 	build		A Build reply that changed files CHECKS ITS OWN WORK once before it ends, through the same gates as any call
+a build reply works until it is done no fixed step limit never stopped for being unwatched	build	chat	A Build reply works until it is DONE: no fixed step limit, never stopped for being unwatched, resumed from where the pag
+the benchmark can rank repeats with a range the exact model a frontier tier and every run 	build	ci	The benchmark can RANK: repeats with a range, the exact model, a `frontier` tier, and every run worked ALONE
+the composer s model menu is portaled fixed at its chip and always inside the window	chat		The composer's model menu is PORTALED, FIXED at its chip and always inside the window
+every request to a saved endpoint carries its saved key and only to that server nothing re	providers		Every request to a saved endpoint carries ITS saved key, and only to that server; nothing reaches a LiteLLM gateway the 
+an account iron proxy says is ready is never needs to sign in again because of an old note	providers		An account Iron-Proxy says is READY is never "needs to sign in again" because of an old note
+shell lines from a project s or plugin s command file always ask in every posture past eve	build		Shell lines from a PROJECT's or PLUGIN's command file always ask — in every posture, past every grant; the user's own co
+the app icon is the user s iu tile at every size windows draws	desktop		The app icon is the user's "iU" tile, at every size Windows draws
+a skill works in a coding session the way the harness it came from runs it the same discov	memory	chat	A skill works in a coding session the way the harness it came from runs it: the same discovery, listed up front, Claude 
+claude code s in the ij harness a typed name words runs it claude code s own command files	build	tools	Claude Code's `/` in the IJ harness: a typed `/name words` RUNS it; Claude Code's own command files are read, never exec
+the ij harness is measured again a benchmark turn runs as a build session the walkthrough 	build		The IJ harness is MEASURED again: a benchmark turn runs AS a Build session; the walkthrough's gaps are written down
+a provider s safety refusal is a typed error with a way out never an empty reply never ret	providers		A provider's safety REFUSAL is a typed error with a way out — never an empty reply, never retried, never moved to anothe
+a build session s commands see the user s path and home never a secret the rest of the app	build	providers	A Build session's commands see the user's PATH and home, never a secret; the rest of the app stays scrubbed
+a build session s agent drives its own invisible edge on local pages only page text is unt	build	ci,providers	A Build session's agent drives its OWN invisible Edge on local pages only; page text is untrusted; nothing outlives the 
+a build session in a git folder works on its own branch in a worktree beside the repositor	build		A Build session in a git folder works on ITS OWN BRANCH in a worktree BESIDE the repository; the user's main checkout is
+a build session shows its work the plan under the reply how full the conversation is a ses	build	context	A Build session SHOWS its work: the plan under the reply, how full the conversation is, a session summary only Compact w
+and in a build session s box the app s font is shipped the harness reads like a document	build		`/` and `@` in a Build session's box; the app's font is SHIPPED; the harness reads like a document
+a build session can start helpers and a build turn is held on its model pinned account or 	build	agents,memory	A Build session can start HELPERS, and a Build turn is HELD on its model, pinned account or not
+the ij harness sees a picture rides the message and the tool result the browser pane s pag	build	providers	The IJ harness SEES: a picture rides the message and the tool result; the Browser pane's page is looked at without askin
+rewind is all or nothing through the undo journal the library proposes and the user accept	build		Rewind is ALL OR NOTHING through the undo journal; the library PROPOSES and the user accepts; the refine loop ADOPTS onl
+the ij harness is a view of build built from the chat s own pieces the daemon writes the t	build		The IJ harness is a VIEW of Build built from the chat's own pieces; the daemon writes the transcript, and a turn's end i
+a build session is pinned to one account a lost pin is a rotation so the pin rides a conte	providers		A Build session is PINNED to one account; a lost pin is a rotation, so the pin rides a ContextVar that every lease path 
+a build session is a chat row that is never a chat its turn is the daemon s plan mode asks	build	chat	A Build session is a chat ROW that is never a chat; its turn is the daemon's; plan mode asks ONCE and nothing grants it
+harness mode one switch a dialect per model family a component tree per folder	build	chat	Harness mode: one switch, a dialect per model family, a component tree per folder
+a renamed endpoint slot is still the slot	providers		A renamed endpoint slot is still the slot
+codex cli speaks codex s own app server protocol and jarvis runs every tool	providers		codex-cli speaks Codex's own app-server protocol, and Jarvis runs every tool
+the coding tools claude code and codex give their models on jarvis s own registry	build		The coding tools Claude Code and Codex give their models, on Jarvis's own registry
+the ij harness is measured ironjarvis bench harness	build	chat	The IJ harness is MEASURED: `ironjarvis bench-harness`
+stays on this network is judged per model a name a proxy sends to the cloud is the cloud	providers		"Stays on this network" is judged per MODEL: a name a proxy sends to the cloud is the cloud
+no notice lost one window speaks a workflow s notice stands in only for the step that ende	cross-area	desktop,automations	No notice lost: ONE window speaks, a workflow's notice stands in only for the step that ENDED it, a schedule's line name
+one notice per outcome and per ask on this pc the connect door only for the user s own dat	cross-area	messaging	ONE notice per outcome and per ask on this PC; the Connect door only for the user's own data; the user's model server by
+a run speaks in the log s words the connect door never waits for the model a model is name	cross-area	chat,agents,connections	A run speaks in the log's words, the Connect door never waits for the model, a model is named the menu's way in every li
+every surface gives one verdict per run chat picks the right tools the directory and chat 	cross-area	chat	Every surface gives ONE verdict per run; chat picks the right tools; the Directory and chat agree; another computer come
+another jarvis is a teammate through one door every pack lives in one catalog file a saved	cross-area	messaging,connections	Another Jarvis is a teammate through ONE door; every pack lives in ONE catalog file; a saved web service is callable, ca
+a switched off pack reads off on every surface an app that signs in on this pc is one row 	cross-area	connections,tools	A switched-off pack reads OFF on every surface; an app that signs in on this PC is ONE row from every door; the calm chi
+a failure carries its press on both lanes a pack has one add remove door an imported place	cross-area	connections,chat	A failure carries its press on BOTH lanes; a pack has ONE add/remove door; an imported placeholder is ASKED, never store
+one sentence per cause in the app s name wherever the user meets it	cross-area	providers,messaging,connections	ONE sentence per cause, in the app's name, wherever the user meets it
+one place for each kind of thing and a refusal leaves the door the other surfaces already 	cross-area	chat	ONE place for each kind of thing, and a refusal leaves the door the other surfaces already use
+one vocabulary one receipt one approval language	cross-area	agents,chat,automations	One vocabulary, one receipt, one approval language
+every surface tells the truth about an outcome one verdict vocabulary and emergency stop s	cross-area	agents,automations,messaging	Every surface tells the truth about an outcome — ONE verdict vocabulary, and Emergency stop stops what starts on its own
+a catalog pack that starts today an unpinned uvx npx package can break when an upstream li	connections		A catalog pack that STARTS today: an unpinned uvx/npx package can break when an upstream library moves
+a catalog names a package that exists a proxy s picker offers its real models	connections		A catalog names a package that EXISTS; a proxy's picker offers its real models
+a helper agent s plan is a checklist approving it first is an off by default setting	agents		A helper agent's plan is a checklist; approving it first is an OFF-by- default setting
+a step can be opened a helper agent is one row	chat		A step can be opened; a helper agent is one row
+the chat shows its work ideas from agent elements never its boxes	chat		The chat shows its work: ideas from agent-elements, never its boxes
+media is quoted before it is made a spend is carded free is free a long render comes home 	documents	chat,tools	Media is QUOTED before it is made, a spend is CARDED, free is free, a long render comes home through the daemon
+a line that arrives while nobody is looking is written by the daemon into the chat it belo	chat		A line that arrives while nobody is looking is written by the DAEMON, into the chat it belongs to
+jarvis reads its own health through tools repairs only with a card and a failed call is an	chat		Jarvis reads its own health through TOOLS, repairs only with a card, and a failed call is answered by a rule
+the calm chat finished	chat	providers	The calm chat, finished
+one calm app	chat	providers	One calm app
+another chat what a reply changed archive	chat		@ another chat, what a reply changed, archive
+the chat list is grouped and lit one permission chip the receipt names its rules and refs	chat	ci,agents	The chat list is grouped and lit, one permission chip, the receipt names its rules and refs
+a replaced answer is kept a queued message waits for a clean finish and page text is an at	chat	ci	A replaced answer is KEPT, a queued message waits for a clean finish, and page text is an attachment
+a pack can ask only where someone can answer and a pack s model request is answered by the	connections		A pack can ASK only where someone can answer, and a pack's model request is answered by THE TURN'S model or refused
+thinking is a frame never answer text truncated is honest a continue is one reply	chat		Thinking is a FRAME, never answer text; `truncated` is honest; a Continue is ONE reply
+a web image waits for a press web fetch is vetted by dns and pinned an mcp answer is the m	tools		A web image waits for a press; web_fetch is vetted by DNS and pinned; an MCP answer is the message with OUR id
+the calm ui one settings schema one writer chat changes with undo a four item sidebar	settings	dashboard	The calm UI: ONE settings schema, ONE writer, chat changes with Undo, a four-item sidebar
+a chat reply can be rated teach it your style names what to do	chat	ci	A chat reply can be rated; "Teach it your style" names what to do
+settings in simple is the everyday three	settings		Settings in Simple is the everyday three
+simple mode is a different shape not a filtered list	dashboard		Simple mode is a different SHAPE, not a filtered list
+light is a scheme and a theme can be the user s own	dashboard		Light is a SCHEME, and a theme can be the user's own
+labels are tied names read as names a capped canvas an estimate is never spend	dashboard		Labels are tied, names read as names, a capped canvas, an estimate is never spend
+the busy surfaces calmer one ai name a findable board a story first	dashboard		The busy surfaces, calmer: one AI name, a findable board, a story first
+a user reads words never ids an empty page shows the way the demo strip is subtracted from	dashboard		A user reads WORDS, never ids; an empty page shows the way; the demo strip is subtracted from every full-height module
+the shell never claims a model during a demo colour lives in tone tokens a phone page neve	dashboard		The shell never claims a model during a demo; colour lives in TONE tokens; a phone page never pans sideways
+when something goes wrong the user sees what happened and has a way forward	chat	ci	When something goes wrong, the user sees what happened and has a way forward
+fast where people wait the turn the boot the poll	cross-area	chat	Fast where people wait: the turn, the boot, the poll
+the first answer is real the wizard tells the truth and the first screen leads somewhere	dashboard	desktop	The first answer is REAL, the wizard tells the truth, and the first screen leads somewhere
+a mission s teammates can ask can be stopped are visible when remote and a mission is neve	agents		A mission's teammates can ASK, can be STOPPED, are VISIBLE when remote, and a mission is never a dead end
+the round table is gone from the dashboard missions are the only way team work is given an	agents		The round table is GONE from the dashboard; missions are the only way team work is given, and a project's TEAM is enforc
+the agents page is a mission screen one objective jarvis runs the team the deliverable fir	agents		The Agents page is a MISSION screen: one objective, Jarvis runs the team, the deliverable first
+an agent s run ends honestly	agents		An agent's run ends honestly
+no winrt in the daemon process windows ocr runs in a killable child	documents		NO WinRT IN THE DAEMON PROCESS: Windows OCR runs in a killable child
+an animated background is downloaded verified and sealed the app ships only the catalog	dashboard		An animated background is DOWNLOADED, VERIFIED and SEALED; the app ships only the catalog
+an npx y uvx pack s server starts directly once its launcher has said which files it runs 	connections		An `npx -y` / `uvx` pack's server starts DIRECTLY once its launcher has SAID which files it runs; anything uncertain sta
+an approval card says why and who enter is never silent and a button never promises a gran	tools		An approval card says WHY and WHO, Enter is never silent, and a button never promises a grant the daemon will not write
+a coding session is drawn like the chat page never redrawn per word a reply that never bli	build	chat	A coding session is drawn like the chat page: never redrawn per word, a reply that never blinks, the finish check off th
+chat code starts at the composer reads a reply in order has one line under each reply and 	build		Chat › Code starts at the composer, reads a reply IN ORDER, has ONE line under each reply, and lists its archived sessio
+one approval means one approval in chat code a session grant reaches the running reply rea	build		One approval means one approval in Chat › Code: a session grant reaches the RUNNING reply; read-only commands, Iron Jarv
+the project s checkers run once per reply at the finish check inside one 15 s budget tsc o	build		The project's checkers run ONCE per reply, at the finish check, inside one 15 s budget; tsc only on a small TypeScript p
+v1 420 1 test only v1 420 0 s tests gate went red on four pins nothing shipped	ci		v1.420.1 (test-only; v1.420.0's Tests gate went red on four pins, nothing shipped).
+a scroll box is the positioning box for what it holds	build		A scroll box is the POSITIONING box for what it holds
+grounding has a soft deadline the project map is cached by its top two levels a kept reply	chat		Grounding has a SOFT DEADLINE; the project map is CACHED by its top two levels; a kept reply APPENDS; a token is never r
+build code shows the work as it happens a row from the first written character helpers nes	build		Build › Code shows the work AS IT HAPPENS: a row from the first written character, helpers nested, the tool's own words,
+an ended task is worded by what it was a foreground command s end says nothing	build	ci	An ended task is worded by what it WAS; a foreground command's end says nothing
+build code s history stays paged by a cursor the tool s own transcript merged in a view is	build		Build › Code's history STAYS (paged by a cursor, the tool's own transcript merged in), a view is served from MEMORY, and
+a follow up turn is told its last reply s tool work the prompt s stable head comes first a	chat		A follow-up turn is TOLD its last reply's tool work; the prompt's STABLE head comes first; a coding turn drops chat-only
+build code s opencode never changes a rule of the user s looser or tighter codex on window	build		Build › Code's OpenCode never CHANGES a rule of the user's (looser or tighter); Codex on Windows has no "edits free, com
+a claude cli round is released at result torn down in the background and rides one listene	providers		A claude-cli round is RELEASED at `result`, torn down in the background, and rides ONE listener, ONE TLS context and a k
+inside an open turn scope a claude cli reply keeps one claude the relay holds claude code 	providers		Inside an open turn scope a claude-cli reply keeps ONE `claude`; the relay HOLDS Claude Code's follow-up and fills in th
+my latest emails is the mail kind a feature question asks the guide and a build code file 	chat	build	"My latest emails" is the mail KIND, a feature question asks the Guide, and a Build › Code file can be reverted per mess
+two views called code are told apart by the tool the approval levels are named by what the	dashboard	build	Two views called Code are told apart by the TOOL; the approval levels are named by what they do; the engine-room words l
+a coding session s keys work from its portaled list a long question s title is the first r	build		A coding session's keys work from its PORTALED list; a long question's title is the first reply's words; the panes poll,
+an agent s failure is said in words and its round can be stopped a connection test answers	agents		An @-agent's failure is said in words and its round can be stopped; a connection Test answers TYPED facts the route word
+a remote s accepted has an end state a helper s failure an account refusal and a phone cra	messaging	providers,agents	A remote's "accepted" has an end state; a helper's failure, an account refusal and a phone crash read in plain words; Gr
+a team that works a build session s helpers run bash and see the session s standard every 	build	context,agents	A team that works: a Build session's HELPERS run bash and see the session's standard, every member piece is recorded, th
+never lose work a coding reply waits out a passing outage and keeps its rounds when it fai	build		Never lose work: a coding reply waits out a passing outage and keeps its rounds when it fails; Stop stops the running st
+a reviewer s findings are records only a later write confirms a fix copy as a fix request 	agents	ci	A reviewer's findings are RECORDS; only a LATER write confirms a fix; "Copy as a fix request" reads the records, never a
+every subscription everywhere failover never spends money the user did not choose capabili	providers	build	Every subscription, everywhere: failover never spends money the user did not choose; capability is per MODEL; Codex's ow
+a member s confirmed findings become working habits the owner accepts a habit is measured 	build	agents	A member's CONFIRMED findings become working habits the owner accepts; a habit is MEASURED, never removed by a measure; 
+what a coding session s model is told is visible the chat s coding door carries the reques	build	providers	What a coding session's model is told is VISIBLE; the chat's coding door carries the request; one writer per conversatio
+a destination s edit keeps what is saved two way says why it cannot hear the user	messaging		A destination's Edit KEEPS what is saved; two-way says why it cannot hear the user
+the approvals menu shows names a level s meaning shows beside its row after a pause	tools	agents	The approvals menu shows NAMES; a level's meaning shows beside its row after a pause
+wave 1 of the chat first plan 17 verified bugs fixed	cross-area	browser	Wave 1 of the chat-first plan: 17 verified bugs fixed
+wave 2 of the chat first plan chat finds the right tool and every chat says which screen i	settings	automations,chat	Wave 2 of the chat-first plan: chat finds the right tool, and every chat says which screen it is on
+wave 3 of the chat first plan projects agents apps destinations goals from chat local only	settings		Wave 3 of the chat-first plan: projects, agents, apps, destinations, goals from Chat, Local only and Undo from chat
+wave 5 of the chat first plan a door to the exact page plain not offered lines and a note 	chat	messaging,providers	Wave 5 of the chat-first plan: a door to the exact page, plain "not offered" lines, and a note under a change chat claim
+chat code s new session box is the session composer s own row	build		Chat › Code's new-session box is the session composer's own row
+wave 4 of the chat first plan the night shift a folder s coding setup model servers accoun	settings	build	Wave 4 of the chat-first plan: the night shift, a folder's coding setup, model servers, accounts, memory bases, preferen
+antigravity is the sixth tool in build code an account s usage is read from its own cli on	build	providers	Antigravity is the SIXTH tool in Build › Code; an account's usage is READ from its own CLI on a press or while it is in 
+wave 6 of the chat first plan four features reconnected dead code gone and every uncalled 	cross-area	providers,agents	Wave 6 of the chat-first plan: four features reconnected, dead code gone, and every uncalled route has a written reason
+build code catches up with each tool s own terminal	build		Build › Code catches up with each tool's own terminal
+wave 7 of the chat first plan the 30 setup requests are a test each driven through the rea	settings	chat	Wave 7 of the chat-first plan: the 30 setup requests are a TEST, each driven through the real stream lane; every gap the
+antigravity s model list and sign in are read by agy models in the background only once it	build	desktop	Antigravity's model list and sign-in are READ by `agy models` in the background, only once its own sign-in finished; a c
+the first ten minutes	cross-area		The first ten minutes
+build code every tool again a calm sweep	build		Build › Code, every tool again; a calm sweep
+nothing silent	cross-area	automations	Nothing silent
+wave a of the readiness plan chat configures everything	settings	chat,connections	Wave A of the readiness plan: chat configures everything
+wave b of the readiness plan did it work is answered everywhere	cross-area	messaging,tools	Wave B of the readiness plan: "did it work?" is answered everywhere
+wave c of the readiness plan the first run and the connections	cross-area	connections,providers	Wave C of the readiness plan: the first run and the connections
+wave d of the readiness plan settings words the automations pages help	cross-area	build	Wave D of the readiness plan: Settings, words, the automations pages, Help
+the owner s four answers 2026 11 08 plain page names coding straight in the folder ticked 	cross-area	automations	The owner's four answers (2026-11-08): plain page names, coding straight in the folder, ticked tools run unasked, Gmail/
+archiving a build code session writes a short markdown summary from its own record never a	build		Archiving a Build › Code session writes a short Markdown summary from its OWN record, never a model
+waves e h of the v1 452 0 re audit plan 0j 5 one word for each thing did it work to the en	cross-area	build	Waves E–H of the v1.452.0 re-audit plan (0j.5): one word for each thing, "did it work?" to the end, chat finds the right
+text size is the window s zoom from one per device row	desktop		Text size is the window's ZOOM, from one per-device row
+a streamed reply from the user s own model server may go silent 10 minutes a chat s phone 	providers	messaging	A streamed reply from the user's OWN model server may go silent 10 minutes; a chat's phone alert waits for the turn's en
+spreadsheets are worked out by iron jarvis checked against excel itself results are kept i	documents		Spreadsheets are WORKED OUT by Iron Jarvis, checked against Excel itself; results are kept IN the file; every stated fig
+live excel the workbook open in excel is reached through one short lived child a change is	documents	chat,tools	Live Excel: the workbook OPEN in Excel is reached through ONE short-lived child; a change is all-or-nothing, listed, und
+matching two lists of transactions in whole cents excel s own features in a saved workbook	documents	chat	Matching two lists of transactions in whole cents; Excel's own features in a SAVED workbook; what only Excel can do safe
+jarvis beside excel the chat knows what is in front in excel by the user s own switch a na	documents	chat	Jarvis beside Excel: the chat knows what is in front in Excel, by the user's own switch; a narrow chat window stays besi
+how a number is built what if goal seek and a cell the user can jump to	documents		How a number is built, what-if, goal seek, and a cell the user can jump to
+a tool script runs isolated and reaches a tool only through the registry s gate chat makes	tools	chat	A tool script runs ISOLATED and reaches a tool only through the registry's gate; chat makes a skill when asked for one
+every tool call s three ledger rows are plain inserts of the orm s own rows the two chat m	tools		Every tool call's three ledger rows are PLAIN INSERTS of the ORM's own rows; the two chat matchers are measured on label
+the installer is signed when six secrets are set a signed build is checked by windows befo	desktop		The installer is SIGNED when six secrets are set; a signed build is checked by Windows before it is kept
+a streamed word in build code costs only its own work	build		A streamed word in Build › Code costs only its own work
+a long build code session draws its newest rows only	build		A long Build › Code session draws its newest rows only
+a build code session s coding tool can hand a piece of work to another coding tool	build		A Build › Code session's coding tool can hand a piece of work to another coding tool
+a chat turn s safety notice names its chat a chat thread link works while chat is open	chat		A chat turn's safety notice names its chat; a `/chat?thread=` link works while Chat is open
+the model can look up what iron jarvis can do the word tables are measured on a held out s	chat		The model can LOOK UP what Iron Jarvis can do; the word tables are MEASURED on a held-out set that must never be tuned t
+what a lookup found joins the reply a change it found always shows a once only card nothin	chat	tools	What a lookup FOUND joins the reply; a change it found ALWAYS shows a once-only card; nothing joins a reply that read fl
+a reply about to end on words is asked once to look first its own switch off by default a 	chat		A reply about to end on WORDS is asked once to look first (its own switch, off by default); a tool that asks is describe
+a task s required files are checked on disk before the reply ends its write rules are enfo	chat		A task's required files are checked ON DISK before the reply ends; its write rules are enforced at the tool gate; a prin
+a calendar connects through app connect the guide has a page per setting a where is it que	chat	connections	A calendar connects through `app_connect`; the Guide has a page per setting; a "where is it" question goes to the Guide
+a setting s lookup line says where it is on the settings page	chat		A setting's lookup line says WHERE it is on the Settings page
+list files names empty folders a published figure asked for arms the web the haiku rate is	chat		`list_files` names EMPTY folders; a published figure ASKED FOR arms the web; the Haiku rate is 95% ON AVERAGE, 93-97% a 
+a second look before a held card stays held a looked up memory search asks only when a mem	chat		A SECOND LOOK before a held card stays held; a looked-up memory search asks only when a memory base is really off this P
+two readings must agree before a card the routing call says whether the user asked when it	chat	tools	TWO READINGS MUST AGREE BEFORE A CARD: the routing call says whether the user ASKED; when it says no, no tool that asks 
+the three feature lookup settings are on by default the suite runs with them off	chat		The three Feature lookup settings are ON by default; the suite runs with them OFF
+a missing detail is asked on a card a setting is picked on a card iron jarvis can look a m	chat	tools	A missing detail is asked on a CARD; a setting is PICKED on a card; Iron Jarvis can look a message up itself BESIDE the 
+a change asked for is made not asked about again	chat	settings	A change asked for is made, not asked about again
+four wordings chat missed	chat		Four wordings chat missed
+chat lists the schedules a calendar link s removal is said honestly	automations		Chat lists the schedules; a calendar link's removal is said honestly
+chat sets an agent s job card config list names the models a held lookup match is named	settings		Chat sets an agent's job card; `config_list` names the models; a held lookup match is named
+the lookup finds a setting that holds a private value	chat		The lookup finds a setting that holds a private value
+chat can make a plain task schedule	automations		Chat can make a plain TASK schedule
+the capability index carries everyday phrasings search words only the lookup names a reque	chat		The capability index carries EVERYDAY PHRASINGS (search words only); the lookup names a request three ways; a saved pref
+the work record what iron jarvis did in which folder built only from its own records a cha	memory	build	THE WORK RECORD: what Iron Jarvis did, in which folder, built only from its own records; a chat is told of a piece of wo
+a recap of finished work is written by the conversation s own model and kept only where th	memory	providers,build	A RECAP of finished work is written by the conversation's own model and kept only where the conversation's record suppor
+src iron jarvis daemon app py is factory glue only platform build lifespan boot rehydratio	daemon		`src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build, lifespan boot-rehydration + backg
+agents orchestrator sessions reviews continue runtime the perceive act loop dynamic agents	agents	providers	`agents/` — orchestrator (sessions/reviews/continue), runtime (the perceive→act loop), dynamic agents. `provid
+repl the session namespace v1 159 0 worker py is the child stdlib only it is spawned from 	context		`repl/` — the session NAMESPACE (v1.159.0). `worker.py` is the child: stdlib-only (it is spawned from a frozen
+context budget plan history the per turn chat history planner pure offline deterministic r	context		`context/` — `budget.plan_history`: the per-turn CHAT history planner (pure, offline, deterministic recap), co
+guide the iron jarvis guide v1 224 0 v1 223 0 shipped it as a chat persona which the user 	memory		`guide/` — THE IRON JARVIS GUIDE (v1.224.0; v1.223.0 shipped it as a chat persona, which the user rejected — i
+profile the user profile one row models record store read never writes partial save preset	memory		`profile/` — the user profile (ONE row): `models` (record), `store` (read-never-writes, partial save), `preset
+skills recursive discovery incl claude skills claude plugins codex skills framework p	memory	automations	`skills/` — recursive discovery incl. `~/.claude/skills`, `~/.claude/plugins`, `~/.codex/skills` (`framework.p
+documents pdf classify py is the per page scan router v1 176 0 wraps the mit pdf inspector	documents		`documents/` — `pdf_classify.py` is the per-PAGE scan router (v1.176.0, wraps the MIT `pdf-inspector` Rust ext
+build code s tool model and effort are one picker	build		Build › Code's tool, model and effort are ONE picker
+a store program is never asked into the pane job and starts one at a time a frozen loop sa	build		A Store program is never asked into the pane job, and starts one at a time; a frozen loop says where it is stuck
+build app terminals page tsx	build		Build (`app/terminals/page.tsx`)
+dashboard app route page tsx per page shared in dashboard components ui tsx primitives app	dashboard		`dashboard/app/<route>/page.tsx` per page; shared in `dashboard/components/` (`ui.tsx` primitives, `AppSidebar
+desktop main js supervisor auto restart children tray global hotkeys ctrl shift j window c	desktop		`desktop/main.js` — supervisor (auto-restart children), tray, global hotkeys (Ctrl+Shift+J window, Ctrl+Shift+
+first steps off windows the suite runs on linux and mac as a trial and tests about windows	ci		First steps off Windows: the suite runs on Linux and Mac as a TRIAL, and tests about Windows-only things are LISTED, not
+linux and mac round two four real faults each invisible on windows	ci	build	Linux and Mac, round two: four real faults, each invisible on Windows
+the linux preview is its own workflow after the release and can only add one file	ci		The Linux preview is its OWN workflow, after the release, and can only ADD one file
+a script may call many tools at once hand a value to a file tool and plan a batch what it 	tools	chat,documents	A script may call many tools at once, hand a value to a file tool, and plan a batch; what it read stays where it was rea
+build code s working sign one ring in a slot that is always there the light hops in steps 	build		Build › Code's "working" sign: ONE ring in a slot that is always there; the light hops in steps, never turns smoothly
+a coding reply is checked again until its check passes or a limit ends it the line under a	build	chat	A coding reply is CHECKED AGAIN until its check passes or a limit ends it; the line under an unfinished reply is Iron Jarvis's own; a reply that ends on "can't" is sent back once
+a plain chat reply and an agent run s answer are checked again while they can still be fix	chat	agents	A plain chat reply and an agent run's answer are CHECKED AGAIN while they can still be fixed
+the improvements inbox one read over every waiting suggestion it decides nothing itself	memory	agents	THE IMPROVEMENTS INBOX: one read over every waiting suggestion; it decides NOTHING itself

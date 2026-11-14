@@ -1,0 +1,4 @@
+# Read by ripgrep (and tools built on it). The archive is a frozen copy of the
+# old manual; every rule in it also lives in an area file, so searching it
+# would return each hit twice. Open it by name when you need it.
+ARCHIVE-*.md

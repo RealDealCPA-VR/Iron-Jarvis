@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.496.0 (2026-11-14).*
+holds itself to. Current as of v1.496.1 (2026-11-14).*
 
 ---
 
@@ -2041,6 +2041,19 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The rules for AI helpers working on Iron Jarvis were reorganized (v1.496.1)
+
+Nothing changes in the app. This version only changes the instructions
+that AI coding helpers read before they work on Iron Jarvis.
+
+Those instructions used to be one file of nearly 20,000 lines, read in full
+at the start of every working session. They are now a short file with the
+rules for every change, and one file of rules for each area of the app,
+which a helper opens only when it works on that area. Every rule was moved
+word for word, and a record lists where each one went. The short file also
+starts with a statement of what Iron Jarvis is for and how it should behave,
+in order of priority, so that every change is judged against the same goals.
 
 ## One page for everything Jarvis suggests (v1.496.0)
 
