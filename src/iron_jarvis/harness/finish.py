@@ -314,6 +314,11 @@ AGAIN_KEEP_GOING = (
     "Keep working until this is done: find the cause and fix it with your tools. Do not end by "
     "saying it cannot be done: when one way does not work, try another."
 )
+#: v1.497.0: the same ask for a team LEAD, which holds no coding tool.
+AGAIN_KEEP_GOING_TEAM = (
+    "Keep working until this is done: hand each fix to a worker now (and have it run the tests "
+    "again). Do not end by saying it cannot be done: when one way does not work, try another."
+)
 AGAIN_TESTS_ASK = "Run the tests again after your fix. " + OUTSIDE_ASK
 AGAIN_POINTS_ASK = (
     'Answer each point above on its own line again: "<number>. met: <how you checked>". Only when '
@@ -2966,9 +2971,11 @@ class FinishCheck:
                 reply=reply, round_index=round_index, rounds=rounds, truncated=truncated,
                 low_trust=low_trust,
             )
-            if second is not None or self.team is not None:
+            if second is not None or self._second_note_due:
                 return second
-            # — or, v1.493.0, for a reply with no team: the check-again loop.
+            # — or, v1.493.0, the check-again loop. v1.497.0: for a team's
+            # reply too, once its reviews are done (a lead's note says to hand
+            # each fix to a worker: ``AGAIN_KEEP_GOING_TEAM``).
             return await self._check_again(
                 reply=reply, round_index=round_index, rounds=rounds, truncated=truncated,
                 low_trust=low_trust,
@@ -3264,7 +3271,7 @@ class FinishCheck:
                 "## Files the request names that are not there\n" + "\n".join(f"- {f}" for f in shown)
                 + (f"\n(and {more} more)" if more > 0 else "")
             )
-        ask = [AGAIN_KEEP_GOING]
+        ask = [AGAIN_KEEP_GOING_TEAM if self._lead_locked() else AGAIN_KEEP_GOING]
         if tests_bad:
             ask.append(AGAIN_TESTS_ASK)
         if points:
@@ -3311,7 +3318,7 @@ class FinishCheck:
         the check never ran. MIRROR NOTE (lock-step): both lanes append it
         where they append their other notes. Never raises."""
         try:
-            if not self.ran or not self._note_sent or self.team is not None or not self.config.again:
+            if not self.ran or not self._note_sent or not self.config.again:
                 return ""
             missing = await asyncio.to_thread(self._missing_files)
             cmd = self._tests_command().replace("`", "'")
@@ -4062,7 +4069,7 @@ class FinishCheck:
             "your tools (and run the tests again). Then end your reply with one sentence saying "
             "what you changed after this check, or that nothing needed changing."
         )
-        if self.tests == TESTS_FAILED and self.config.again and self.team is None:
+        if self.tests == TESTS_FAILED and self.config.again:
             # v1.493.0: the user's request is the standard, not the suite.
             ask.append(OUTSIDE_ASK)
         parts.append("\n".join(ask))

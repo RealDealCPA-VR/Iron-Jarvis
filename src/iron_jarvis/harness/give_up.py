@@ -99,8 +99,12 @@ _SUCCESS_RX = re.compile(
     r"implemented|completed|succeed(?:s|ed)|is\s+done|are\s+done|done\s*[.!]?$)",
     re.IGNORECASE,
 )
+from ..core.claim_languages import BLOCKED_WORDS as _BLOCKED_WORDS
+
+#: v1.497.0: "Blocked:" in the six other languages too ("Bloqueado:").
 _BLOCKED_LINE_RX = re.compile(
-    r"^[^\S\n]*(?:[-*]\s*)?(?:\*\*\s*)?blocked\s*(?:\*\*\s*)?:", re.IGNORECASE | re.MULTILINE,
+    r"^[^\S\n]*(?:[-*]\s*)?(?:\*\*\s*)?" + _BLOCKED_WORDS + r"\s*(?:\*\*\s*)?:",
+    re.IGNORECASE | re.MULTILINE,
 )
 _FIRST_SENTENCE_RX = re.compile(r"(?<=[.?!])\s")
 
@@ -137,6 +141,12 @@ def gives_up(text: str) -> bool:
             # It ends by ASKING the user something: not stopping.
             return False
         if last and _says(last):
+            return True
+        # v1.497.0: the same, in Spanish, French, German, Italian, Portuguese
+        # and Dutch — in the LAST paragraph only (``core/claim_languages``).
+        from ..core.claim_languages import says_gives_up
+
+        if last and says_gives_up(last):
             return True
         prose = _prose(raw).strip()
         first = _FIRST_SENTENCE_RX.split(prose[:HEAD_CHARS], maxsplit=1)[0]

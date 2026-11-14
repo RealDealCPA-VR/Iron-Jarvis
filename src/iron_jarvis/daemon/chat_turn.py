@@ -8647,14 +8647,66 @@ def closing_offer_wanted(
 def until_done_for_turn(harness: Any, text_only_pick: Any) -> Any:
     """v1.495.0: the plain chat reply's check-again loop
     (``daemon/until_done.UntilDone``), or None — a coding session has its own
-    (the finish check), a text-only pick has no tool to fix anything with, and
-    the browser sidebar is left exactly as it was. MIRROR NOTE (lock-step):
-    both lanes make it at the same place, beside the deliverables."""
-    if harness is not None or text_only_pick or _in_the_sidebar():
+    (the finish check) and a text-only pick has no tool to fix anything with.
+    v1.497.0: the browser sidebar gets it too. Its turn holds only browser
+    tools, so the file, figure and change problems (each put only beside a
+    tool that can fix it) never reach it there; a reply that gives up after
+    real work on the page is sent back once, as in chat — every page action it
+    leads to still meets its own card and the risk door. MIRROR NOTE
+    (lock-step): both lanes make it at the same place, beside the
+    deliverables."""
+    if harness is not None or text_only_pick:
         return None
     from .until_done import UntilDone
 
     return UntilDone(chat=True)
+
+
+async def until_done_side_note(
+    d: Any,
+    until: Any,
+    body: Any,
+    *,
+    reply: str,
+    tools_used: list[str],
+    armed: Iterable[str],
+    ctx: Any,
+    failed_calls: int,
+    round_index: int,
+    rounds: int,
+    trust_state: dict[str, Any],
+    truncated: bool,
+    demo: bool,
+) -> str:
+    """v1.497.0: the check-again loop's ONE side question for a reply in a
+    language its readings do not know (``UntilDone.side_note``), or "". The
+    lanes ask it with ``look_first_call(note=…)``: the reply changes only when
+    the model answers with a call of its own tools. Never raises. MIRROR NOTE
+    (lock-step): both lanes ask it right after ``until_done_note`` found
+    nothing."""
+    if until is None or demo:
+        return ""
+    try:
+        from .until_done import Facts
+
+        custom = custom_tools_used(d.platform, tools_used)
+        facts = Facts(
+            reply=str(reply or ""),
+            tools_used=list(tools_used),
+            armed=set(armed or ()),
+            request=next((str(getattr(m, "content", "") or "") for m in reversed(
+                list(getattr(body, "messages", None) or [])) if getattr(m, "role", "") == "user"), ""),
+            custom_tools=custom,
+            ran_writer=ran_local_writer(d.platform, tools_used, custom),
+        )
+        return await until.side_note(
+            facts, workspace=getattr(ctx, "workspace", None), failed_calls=int(failed_calls or 0),
+            round_index=round_index, rounds=rounds, low_trust=finish_low_trust(trust_state),
+            truncated=truncated,
+        )
+    except Exception:  # noqa: BLE001 — a check never breaks a reply
+        log.debug("until-done side note failed", exc_info=True)
+        return ""
 
 
 async def until_done_note(
@@ -8723,6 +8775,21 @@ async def until_done_note(
     except Exception:  # noqa: BLE001 — a check never breaks a reply
         log.debug("until-done note failed", exc_info=True)
         return ""
+
+
+async def note_until_done_side(platform: Any, body: Any, tool_session: str, round_index: int) -> None:
+    """ONE ``autonomy.nudged`` event (``core/nudges.CHECKED_AGAIN``, ``side:
+    true``) for a reply the side question sent back (v1.497.0). Never raises.
+    MIRROR NOTE: both lanes."""
+    from ..core.nudges import CHECKED_AGAIN, note_nudge
+
+    await note_nudge(
+        getattr(platform, "event_bus", None), CHECKED_AGAIN,
+        session_id=str(tool_session or "chat"), surface="chat",
+        turn_id=str(getattr(body, "turn_id", "") or ""),
+        thread_id=str(getattr(body, "thread_id", "") or ""),
+        round=int(round_index) + 1, side=True,
+    )
 
 
 def take_closing_offer(harness: Any, reply: str) -> str:
@@ -9328,6 +9395,14 @@ def _claimed_write_names(
         name = m.group(1)
         if name not in named:
             named.append(name)
+    # v1.497.0: the same claim in Spanish, French, German, Italian, Portuguese
+    # and Dutch (``core/claim_languages``), so the note under a reply and the
+    # check-again loop read a reply written in those languages too.
+    from ..core import claim_languages as _other_langs
+
+    for name in _other_langs.saved_names(reply):
+        if name not in named:
+            named.append(name)
     changed: list[str] = []
     # A CHANGE claim is judged only when nothing that can change a file
     # without naming it succeeded (v1.351.0 review) — see
@@ -9351,6 +9426,9 @@ def _claimed_write_names(
             continue  # "once budget.xlsx has been updated, …"
         if m.group(1) not in changed:
             changed.append(m.group(1))
+    for name in _other_langs.changed_names(reply) if judge_changes else ():
+        if name not in changed:
+            changed.append(name)
     # A file the reply says it CHANGED existed before: never "does not exist".
     named = [n for n in named if n not in changed]
     return named, changed
@@ -9388,7 +9466,16 @@ def _asked_for_a_file(body) -> bool:
     last_user = next(
         (m.content or "" for m in reversed(body.messages) if m.role == "user"), ""
     )
-    return bool(_CREATE_INTENT_RX.search(last_user)) and not _ADVICE_RX.match(last_user)
+    if _ADVICE_RX.match(last_user):
+        return False
+    if _CREATE_INTENT_RX.search(last_user):
+        return True
+    # v1.497.0: the same request in Spanish, French, German, Italian,
+    # Portuguese and Dutch (``core/claim_languages``; its own question check
+    # beside the English one above).
+    from ..core.claim_languages import asks_for_file
+
+    return asks_for_file(last_user)
 
 
 def _write_directive(body, armed: list[str]) -> str:
@@ -12787,6 +12874,33 @@ async def run_chat_turn(
                         ))
                     msgs.append(LLMMessage(role="user", content=_dv_end))
                     continue
+                # v1.497.0: a reply in a language the loop's readings do not
+                # know is asked ONE side question (`until_done_side_note`): it
+                # changes only when the model answers with a call of its own
+                # tools. MIRROR NOTE (lock-step): the stream lane.
+                _side = await until_done_side_note(
+                    d, _until, body, reply=route.response.text or "", tools_used=tools_used,
+                    armed=armed, ctx=ctx, failed_calls=sum(_failed_calls.values()),
+                    round_index=_round, rounds=_rounds, trust_state=_trust_state,
+                    truncated=_truncated,
+                    demo=is_demo_route(getattr(route, "provider", ""), getattr(route, "reason", "")),
+                )
+                if _side:
+                    _sd, _sd_asked, _sd_in, _sd_out, _sd_n = await look_first_call(
+                        d, msgs=msgs, system=system, provider=provider_choice, model=model_choice,
+                        head=_head, tools=tool_specs, reply=route.response.text or "",
+                        raw_blocks=getattr(route.response, "raw_blocks", None), tally=_tally,
+                        router_kw=_reasoning_kw(body), note=_side,
+                    )
+                    usage_in += _sd_in
+                    usage_out += _sd_out
+                    completions += _sd_n
+                    if _sd is not None:
+                        msgs.extend(_sd_asked)
+                        route.response = _sd
+                        calls = list(_sd.tool_calls or [])
+                        _model_calls = calls
+                        await note_until_done_side(platform, body, _tool_session, _round)
             if not calls or not armed:
                 break
             if _round == _rounds - 1 and _office:

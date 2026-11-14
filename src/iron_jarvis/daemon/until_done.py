@@ -100,9 +100,32 @@ NOTE_TAIL = (
     "saying what you tried, exactly what stops you and what the user must do."
 )
 VERDICT_CARRY_ON = "Tell it to keep going and it will carry on."
+#: v1.497.0: the ONE side question for a reply in a language Iron Jarvis's own
+#: readings do not know (``core/claim_languages.covered``). It is asked as a
+#: separate call (``chat_turn.look_first_call``): the reply changes only when
+#: the model answers with a call of its own tools; KEEP, or any words, leaves
+#: the reply exactly as it was written, on screen too.
+SIDE_HEAD = (
+    "FROM IRON JARVIS, NOT FROM THE USER. Your answer is in a language Iron Jarvis's own check "
+    "cannot read, so it asks you once:"
+)
+SIDE_FILES = "Your answer names {names}, and {it} not in the folder."
+SIDE_FAILED = "A call failed in this reply."
+SIDE_TAIL = (
+    "If your answer says a file was saved or a change was made that no tool made in this reply, "
+    "or says the work cannot be done although your tools could still do it, do it now with your "
+    "tools. If the user asked you not to use tools or make files, or your answer is right as "
+    "written, answer only KEEP."
+)
+#: At most this many files a side question names.
+SIDE_FILES_MAX = 10
 
+from ..core.claim_languages import BLOCKED_WORDS as _BLOCKED_WORDS
+
+#: v1.497.0: "Blocked:" in the six other languages too ("Bloqueado:").
 _BLOCKED_LINE_RX = re.compile(
-    r"^[^\S\n]*(?:[-*]\s*)?(?:\*\*\s*)?blocked\s*(?:\*\*\s*)?:", re.IGNORECASE | re.MULTILINE,
+    r"^[^\S\n]*(?:[-*]\s*)?(?:\*\*\s*)?" + _BLOCKED_WORDS + r"\s*(?:\*\*\s*)?:",
+    re.IGNORECASE | re.MULTILINE,
 )
 _NOTE_RX = re.compile(r"^\s*_Note:\s*", re.IGNORECASE)
 #: The user's own message says not to use tools or make a file ("do not call
@@ -116,9 +139,37 @@ _SAID_NO_RX = re.compile(
 )
 
 
+def change_fixers() -> "frozenset[str]":
+    """The tools that can make a change ``change_claims`` reads (a setting, a
+    record, an app, Local only, a preference, an undo). Never raises."""
+    names: set[str] = {
+        "remember_preference", "skill_create", "skill_update", "schedule_create",
+        "create_agent", "workflow_create", "reflex_create", "config_secret",
+    }
+    try:
+        from . import change_claims as CC
+
+        names |= set(CC._SETTINGS_WRITERS) | set(CC._UNDO_TOOLS) | set(CC._APP_CONNECTORS)
+        names |= set(CC._APP_REMOVERS) | {CC._LOCAL_ONLY_TOOL}
+    except Exception:  # noqa: BLE001
+        log.debug("until-done: the change claim tools could not be read", exc_info=True)
+    try:
+        from ..settings.records import ASK_FIRST_CREATE_TOOLS, RECORD_TOOL_TIERS
+
+        names |= set(RECORD_TOOL_TIERS) | set(ASK_FIRST_CREATE_TOOLS)
+    except Exception:  # noqa: BLE001
+        log.debug("until-done: the record tools could not be read", exc_info=True)
+    return frozenset(names)
+
+
 def said_no(request: str) -> bool:
-    """Does the user's message say not to use tools or write anything?"""
-    return bool(_SAID_NO_RX.search(str(request or "")[:4000]))
+    """Does the user's message say not to use tools or write anything? In
+    English, and (v1.497.0) in the six other languages ``core/claim_languages``
+    reads."""
+    from ..core.claim_languages import said_no as _said_no_other
+
+    text = str(request or "")[:4000]
+    return bool(_SAID_NO_RX.search(text)) or _said_no_other(text)
 
 
 def _plain(note: str) -> str:
@@ -231,11 +282,23 @@ def find_problems(f: Facts) -> list[Problem]:
                 reply, list(f.tools_used), list(f.config_cards or ()),
                 history=list(f.history or ()), custom_tools=list(f.custom_tools or ()),
             ))
-            if said:
+            if said and armed & change_fixers():
                 out.append(Problem(
                     "claimed_change:" + said[:200],
                     f"Iron Jarvis's own check says: {said} Make the change now with the right "
                     "tool, or say plainly in your answer that it was not made.",
+                ))
+            elif said:
+                # v1.497.0: no tool this reply holds can make such a change,
+                # so "make the change now" would be an order the model cannot
+                # follow (v1.495.0 then let it end only on a "Blocked:" line).
+                # It is asked only to say so: an answer that no longer claims
+                # the change has no problem left.
+                out.append(Problem(
+                    "claimed_change:" + said[:200],
+                    f"Iron Jarvis's own check says: {said} No tool you hold in this reply can "
+                    "make that change, so do not claim it: say plainly in your answer that it "
+                    "was not made, and how the user can make it.",
                 ))
         except Exception:  # noqa: BLE001
             log.debug("until-done: the change claims could not be read", exc_info=True)
@@ -266,6 +329,52 @@ def find_problems(f: Facts) -> list[Problem]:
     return out
 
 
+def _missing_named(f: Facts, workspace: Any) -> list[str]:
+    """BLOCKING. The files the reply names that are not in the folder, for the
+    side question — only when the turn holds a file writer, no tool wrote or
+    changed a file in this reply, and the user's own message did not name the
+    file. A folder spelled as a network or device path is never looked in (by
+    its text first: the v1.379.0 lesson). [] in any doubt."""
+    try:
+        from pathlib import Path
+
+        from . import chat_turn as CT
+        from ..core.claim_languages import FILE_NAME
+
+        if workspace is None or not str(workspace).strip():
+            return []
+        spelled = str(workspace).replace("/", "\\")
+        if spelled.startswith("\\\\"):
+            return []
+        armed = set(f.armed or ())
+        if not armed & CT._FILE_WRITING_TOOLS:
+            return []
+        used = list(f.tools_used)
+        if set(used) & CT._FILE_CHANGING_TOOLS or CT._ran_writer(f.ran_writer, used, f.custom_tools):
+            return []
+        asked = str(f.request or "").lower()
+        names: list[str] = []
+        for m in re.finditer(FILE_NAME, str(f.reply or "")[:40_000]):
+            name = m.group(1)
+            if name in names or name.lower() in asked:
+                continue
+            names.append(name)
+            if len(names) >= SIDE_FILES_MAX:
+                break
+        folder = Path(str(workspace))
+        out: list[str] = []
+        for name in names:
+            try:
+                if not (folder / name).exists():
+                    out.append(name)
+            except OSError:
+                continue
+        return out
+    except Exception:  # noqa: BLE001
+        log.debug("until-done: the named files could not be looked for", exc_info=True)
+        return []
+
+
 @dataclass
 class UntilDone:
     """One reply's (or one run's) check-again loop. Both chat lanes and the
@@ -281,6 +390,11 @@ class UntilDone:
     open: list[str] = field(default_factory=list)
     #: The user (or the permission table) refused a call in this reply.
     declined: bool = False
+    #: v1.497.0: the side question (:meth:`side_note`) was asked.
+    side_asked: bool = False
+    #: v1.497.0 (an agent run, which asks the side question in its own
+    #: transcript): the answer it had, given back when the model says KEEP.
+    side_draft: str = ""
 
     async def check(
         self,
@@ -361,6 +475,55 @@ class UntilDone:
             lines.append(f"(Check {self.notes} of at most {MAX_ROUNDS}.)")
         return "\n".join(lines)
 
+    async def side_note(
+        self,
+        facts: Facts,
+        *,
+        workspace: Any,
+        failed_calls: int,
+        round_index: int,
+        rounds: int,
+        low_trust: bool = False,
+        truncated: bool = False,
+    ) -> str:
+        """v1.497.0: the ONE side question for a reply Iron Jarvis's readings
+        cannot read (:data:`SIDE_HEAD`), or "". Asked once per reply, only when
+        the reply is in a language none of the readings know AND something
+        certain points at a problem: a file the reply names that is not in the
+        folder while no tool wrote a file, or a call that failed in this reply
+        after real work. Never raises."""
+        try:
+            if self.side_asked or low_trust or truncated or self.declined:
+                return ""
+            if said_no(facts.request) or not set(facts.armed or ()):
+                return ""
+            if int(rounds) - 1 - int(round_index) < MIN_ROUNDS_LEFT:
+                return ""
+            from ..core.claim_languages import covered
+
+            reply = str(facts.reply or "")
+            if not reply.strip() or covered(reply):
+                return ""
+            import asyncio
+
+            missing = await asyncio.to_thread(_missing_named, facts, workspace)
+            worked = [t for t in facts.tools_used if t not in NOT_WORK]
+            failed = bool(worked) and int(failed_calls or 0) > 0
+            if not missing and not failed:
+                return ""
+            self.side_asked = True
+            lines = [SIDE_HEAD]
+            if missing:
+                one = len(missing) == 1
+                lines.append("- " + SIDE_FILES.format(names=_names(missing), it="it is" if one else "they are"))
+            if failed:
+                lines.append("- " + SIDE_FAILED)
+            lines.append(SIDE_TAIL)
+            return "\n".join(lines)
+        except Exception:  # noqa: BLE001 — a check never breaks a reply
+            log.debug("until-done side note failed", exc_info=True)
+            return ""
+
     @property
     def gave_up_only(self) -> bool:
         """The last note sent was the give-up nudge alone."""
@@ -406,6 +569,25 @@ def run_record(engine: Any, session_id: str) -> "tuple[list[str], bool]":
     except Exception:  # noqa: BLE001
         log.debug("until-done: the run's ledger could not be read", exc_info=True)
         return [], True
+
+
+def run_failures(engine: Any, session_id: str) -> int:
+    """BLOCKING. How many calls of an agent run's session failed (its
+    ledger). 0 when it cannot be read: nothing is asked on a record nobody
+    could read."""
+    try:
+        from sqlmodel import Session as _DB, func, select
+
+        from ..core.models import ToolInvocation
+
+        with _DB(engine) as db:
+            return int(db.exec(
+                select(func.count()).select_from(ToolInvocation)
+                .where(ToolInvocation.session_id == str(session_id), ToolInvocation.ok == False)  # noqa: E712
+            ).one() or 0)
+    except Exception:  # noqa: BLE001
+        log.debug("until-done: the run's failures could not be read", exc_info=True)
+        return 0
 
 
 async def note_checked_again(platform: Any, *, session_id: str, surface: str, **facts: Any) -> None:

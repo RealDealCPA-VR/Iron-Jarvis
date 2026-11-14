@@ -492,13 +492,18 @@ def test_required_files_reads_a_tasks_list_inside_the_folder_only(tmp_path):
     assert required_files("", ws) == [] and required_files(listed, None) == []
 
 
-async def test_a_teams_reply_is_never_looped_and_gets_no_line(tmp_path):
+async def test_a_teams_reply_is_checked_again_too_and_its_lead_hands_the_fix_out(tmp_path):
+    """v1.497.0 (moved on purpose): a team's reply was never looped and got no
+    line. Once its reviews are done it is checked again like any other, and a
+    lead that holds no coding tool is told to hand each fix to a worker."""
     check = F.FinishCheck(engine=None, home=tmp_path, event_bus=None, session_id="build:t",
                           folder=tmp_path, mark=0, request="do it", team=object())
     check.ran = check._note_sent = True
     check._latest = F.TESTS_FAILED
-    assert await check.prepare(reply="done", round_index=3, rounds=30, truncated=False, low_trust=False) is None
-    assert await check.verdict_note() == "" and check.again_end == ""
+    assert await check.prepare(reply="done", round_index=3, rounds=30, truncated=False, low_trust=False) == []
+    note = await check.note()
+    assert F.AGAIN_KEEP_GOING_TEAM in note and F.AGAIN_KEEP_GOING not in note
+    assert check.again_rounds == 1
 
 
 async def test_the_loop_never_runs_on_a_cut_reply_or_in_low_trust(tmp_path):

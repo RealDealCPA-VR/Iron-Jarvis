@@ -1620,6 +1620,22 @@ class AgentRuntime:
                 facts, round_index=0, rounds=int(steps_left) + 1,
                 low_trust=self._effective_trust(session) == TRUST_LOW,
             )
+            if not note and not until.side_asked:
+                # v1.497.0: an answer in a language the readings do not know
+                # gets ONE side question; an answer of only KEEP then gives the
+                # run back the answer it had (``UntilDone.side_draft``).
+                from ..core.claim_languages import covered
+                from ..daemon.until_done import run_failures
+
+                if not covered(str(text or "")):
+                    failed = await asyncio.to_thread(run_failures, self.p.engine, session.id)
+                    note = await until.side_note(
+                        facts, workspace=getattr(session, "workspace_path", None) or None,
+                        failed_calls=failed, round_index=0, rounds=int(steps_left) + 1,
+                        low_trust=self._effective_trust(session) == TRUST_LOW,
+                    )
+                    if note:
+                        until.side_draft = str(text or "")
             if note:
                 from ..core.nudges import GAVE_UP, note_nudge
 
@@ -4540,6 +4556,17 @@ class AgentRuntime:
                 # (the flat lane, tools offered, never a child, a reviewer or
                 # low trust). An answer still unfinished then says so.
                 _ud = self._until_done_for(session, run, transcript=transcript, tool_specs=tool_specs)
+                if _ud is not None and _ud.side_draft:
+                    # v1.497.0: the side question was answered with words, not
+                    # a call: KEEP gives the run back the answer it had.
+                    from ..daemon.chat_turn import look_first_kept_word
+
+                    _draft, _ud.side_draft = _ud.side_draft, ""
+                    if look_first_kept_word(resp.text):
+                        resp.text = _draft
+                        if sink:
+                            sink.reset("check_again")
+                            sink.token_delta(_draft)
                 if _ud is not None:
                     _ud_note = await self._until_done_note(
                         _ud, session, run, resp.text, messages, tool_specs,

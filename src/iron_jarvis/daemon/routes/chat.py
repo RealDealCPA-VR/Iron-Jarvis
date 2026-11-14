@@ -6086,6 +6086,39 @@ async def chat_stream(
                             else:
                                 yield _ev("token", {"text": _CLOSING_OFFER_SEPARATOR})
                         continue
+                    # v1.497.0: a reply in a language the loop's readings do
+                    # not know is asked ONE side question; the words on screen
+                    # are taken back only when the model answers with a call of
+                    # its own tools. MIRROR NOTE (lock-step): chat_turn.
+                    _side = await _chat_turn.until_done_side_note(
+                        d, _until, body, reply=reply_text, tools_used=tools_used,
+                        armed=[*armed, *ask_armed], ctx=ctx,
+                        failed_calls=sum(_failed_calls.values()), round_index=_round,
+                        rounds=_rounds, trust_state=_trust_state, truncated=_truncated,
+                        demo=_chat_turn.is_demo_route(route_provider, route_reason),
+                    )
+                    if _side:
+                        _sd_out = await _prep_step(_chat_turn.look_first_call(
+                            d, msgs=_eff_msgs, system=_eff_system, provider=provider_choice,
+                            model=model_choice, head=_head, tools=tool_specs, reply=reply_text,
+                            raw_blocks=getattr(final_resp, "raw_blocks", None), tally=_tally,
+                            router_kw=_reasoning_kw(body), note=_side,
+                        ))
+                        if _sd_out is _PREP_STOPPED:
+                            _persist_once(AgentState.CANCELLED)
+                            return
+                        _sd, _sd_asked, _sd_in, _sd_o, _sd_n = _sd_out
+                        usage_in += _sd_in
+                        usage_out += _sd_o
+                        completions += _sd_n
+                        if _sd is not None:
+                            msgs.extend(_sd_asked)
+                            final_resp = _sd
+                            reply_text = _sd.text or ""
+                            calls = list(_sd.tool_calls or [])
+                            _model_calls = calls
+                            await _chat_turn.note_until_done_side(d.platform, body, _tool_session, _round)
+                            yield _ev("reset", {"reason": "check_again"})
                 # ask_armed counts (v1.187.0): a turn whose ONLY armed
                 # verbs are approval-gated still has real calls to run.
                 if not calls or not (armed or ask_armed):
