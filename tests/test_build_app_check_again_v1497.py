@@ -74,9 +74,18 @@ def reply(svc, sid, text, *, stop="completed", step=True):
     svc._emit(live, make("done", stop=stop))
 
 
-async def settle(svc, sid, wait=0.3):
-    await until(lambda: svc.live[sid].turn is None or svc.live[sid].turn.running)
+async def settle(svc, sid, wait=0.1):
+    """Until the reply has ended and every check of it has finished. A
+    follow-up a check started is then still RUNNING (the fake tool never ends
+    a turn by itself), so :func:`quiet` can tell."""
     await asyncio.sleep(wait)
+    await until(lambda: not CA.judging(svc))
+    await asyncio.sleep(wait)
+
+
+def quiet(svc, sid, drivers):
+    """Nothing was sent back: one message, no turn running."""
+    return len(drivers[sid].sent) == 1 and svc.live[sid].turn is None
 
 
 async def next_send(drivers, sid, n):
@@ -129,7 +138,7 @@ async def test_a_file_that_is_in_the_folder_is_never_sent_back(app, work, monkey
     (work / "out" / "Report.xlsx").write_bytes(b"x")
     reply(svc, row.id, "Done! I saved report.xlsx with the totals.")
     await settle(svc, row.id)
-    assert len(drivers[row.id].sent) == 1 and nudges == []
+    assert quiet(svc, row.id, drivers) and nudges == []
     await stop_all(app)
 
 
@@ -140,7 +149,7 @@ async def test_a_name_one_of_its_steps_mentions_is_left_alone(app, work, monkeyp
                          input="cp out.xlsx ../elsewhere/report.xlsx", status="done"))
     reply(svc, row.id, "Done! I saved report.xlsx.", step=False)
     await settle(svc, row.id)
-    assert len(drivers[row.id].sent) == 1
+    assert quiet(svc, row.id, drivers)
     await stop_all(app)
 
 
@@ -148,7 +157,7 @@ async def test_a_stopped_reply_is_never_sent_back(app, work, monkeypatch, nudges
     svc, row, drivers = await started(app, monkeypatch, work)
     reply(svc, row.id, "Done! I saved report.xlsx.", stop="interrupted")
     await settle(svc, row.id)
-    assert len(drivers[row.id].sent) == 1 and nudges == []
+    assert quiet(svc, row.id, drivers) and nudges == []
     await stop_all(app)
 
 
@@ -156,7 +165,7 @@ async def test_a_failed_reply_is_never_sent_back(app, work, monkeypatch, nudges)
     svc, row, drivers = await started(app, monkeypatch, work)
     reply(svc, row.id, "Done! I saved report.xlsx.", stop="failed")
     await settle(svc, row.id)
-    assert len(drivers[row.id].sent) == 1
+    assert quiet(svc, row.id, drivers)
     await stop_all(app)
 
 
@@ -254,17 +263,25 @@ async def test_a_share_spelling_is_never_looked_up(app, work, monkeypatch, nudge
     svc, row, drivers = await started(app, monkeypatch, work)
     reply(svc, row.id, "Done! I saved \\\\host\\share\\x.xlsx and //host/share/y.xlsx for you.")
     await settle(svc, row.id)
-    assert len(drivers[row.id].sent) == 1 and touched == []
+    assert quiet(svc, row.id, drivers) and touched == []
     await stop_all(app)
 
 
 async def test_a_folder_on_a_share_is_never_walked(tmp_path, monkeypatch):
-    def boom(*a, **k):
-        raise AssertionError("walked")
+    walked: list[str] = []
+    real = os.scandir
 
-    monkeypatch.setattr(os, "scandir", boom)
+    def record(path=".", *a, **k):
+        walked.append(str(path))
+        return real(str(tmp_path), *a, **k)  # an empty folder: "x.xlsx" is missing
+
+    monkeypatch.setattr(os, "scandir", record)
+    # Control: a local folder IS walked (and the name found missing).
+    assert CA.missing_files(["x.xlsx"], str(tmp_path / "local"), []) == ["x.xlsx"] and walked
+    walked.clear()
     assert CA.missing_files(["x.xlsx"], "\\\\host\\share\\proj", []) == []
     assert CA.missing_files(["x.xlsx"], "//host/share/proj", []) == []
+    assert walked == []
 
 
 async def test_a_name_the_reply_puts_elsewhere_is_left_alone(tmp_path):
@@ -296,11 +313,18 @@ def test_the_walk_follows_no_link(tmp_path):
     (outside / "x.xlsx").write_bytes(b"")
     inner = tmp_path / "work"
     inner.mkdir()
-    try:
-        os.symlink(outside, inner / "link", target_is_directory=True)
-    except OSError:
-        pytest.skip("this PC cannot make a link")
+    import subprocess
+
+    made = subprocess.run(["cmd", "/c", "mklink", "/J", str(inner / "link"), str(outside)],
+                          capture_output=True) if os.name == "nt" else None
+    if made is None or made.returncode != 0:
+        try:
+            os.symlink(outside, inner / "link", target_is_directory=True)
+        except OSError:
+            pytest.skip("this PC cannot make a link")
+    assert (inner / "link" / "x.xlsx").exists()  # the link really leads there
     assert "x.xlsx" not in (CA.files_by_name(str(inner)) or set())
+    assert CA.missing_files(["x.xlsx"], str(inner), []) == ["x.xlsx"]
 
 
 # --------------------------------------------------------------------------- #
@@ -327,7 +351,7 @@ async def test_a_give_up_with_no_work_is_left_alone(app, work, monkeypatch, nudg
     svc, row, drivers = await started(app, monkeypatch, work)
     reply(svc, row.id, GIVE_UP, step=False)
     await settle(svc, row.id)
-    assert len(drivers[row.id].sent) == 1
+    assert quiet(svc, row.id, drivers)
     await stop_all(app)
 
 
@@ -339,7 +363,7 @@ async def test_never_while_emergency_stop_is_on(app, work, monkeypatch, nudges):
     app.state.platform.config.autonomy_kill_switch = True
     reply(svc, row.id, "Done! I saved report.xlsx.")
     await settle(svc, row.id)
-    assert len(drivers[row.id].sent) == 1
+    assert quiet(svc, row.id, drivers)
     await stop_all(app)
 
 
@@ -351,7 +375,7 @@ async def test_another_carry_on_is_never_judged(app, work, monkeypatch, nudges):
     await until(lambda: row.id in drivers and drivers[row.id].sent)
     reply(svc, row.id, "Done! I saved report.xlsx.")
     await settle(svc, row.id)
-    assert len(drivers[row.id].sent) == 1
+    assert quiet(svc, row.id, drivers)
     await stop_all(app)
 
 
@@ -361,7 +385,7 @@ async def test_an_open_card_or_a_limit_card_leaves_it_alone(app, work, monkeypat
     svc._emit(live, make("error", title="limit", fix="", technical="", fix_kind="account_limit"))
     reply(svc, row.id, "Done! I saved report.xlsx.")
     await settle(svc, row.id)
-    assert len(drivers[row.id].sent) == 1
+    assert quiet(svc, row.id, drivers)
     await stop_all(app)
 
 
@@ -370,7 +394,7 @@ async def test_an_archived_session_is_never_sent_back(app, work, monkeypatch, nu
     store.update(app.state.platform.engine, row.id, archived_at=S.utcnow())
     reply(svc, row.id, "Done! I saved report.xlsx.")
     await settle(svc, row.id)
-    assert len(drivers[row.id].sent) == 1
+    assert quiet(svc, row.id, drivers)
     await stop_all(app)
 
 
@@ -406,7 +430,7 @@ async def test_an_open_card_leaves_it_alone(app, work, monkeypatch, nudges):
     live.asks["r1"] = object()
     reply(svc, row.id, "Done! I saved report.xlsx.")
     await settle(svc, row.id)
-    assert len(drivers[row.id].sent) == 1
+    assert quiet(svc, row.id, drivers)
     live.asks.clear()
     await stop_all(app)
 
@@ -416,6 +440,59 @@ async def test_a_helpers_piece_is_never_judged(app, work, monkeypatch, nudges):
     svc.handoff_turns["child"] = "t1"
     reply(svc, row.id, "Done! I saved report.xlsx.")
     await settle(svc, row.id)
-    assert len(drivers[row.id].sent) == 1
+    assert quiet(svc, row.id, drivers)
     svc.handoff_turns.clear()
+    await stop_all(app)
+
+
+
+def test_the_walks_own_bounds_are_used(tmp_path, monkeypatch):
+    for i in range(30):
+        (tmp_path / f"f{i}.txt").write_bytes(b"")
+    monkeypatch.setattr(CA, "WALK_MAX_ENTRIES", 5)
+    assert CA.missing_files(["x.xlsx"], str(tmp_path), []) == []
+
+
+async def test_never_judged_while_emergency_stop_is_on(app, work, monkeypatch, nudges):
+    judged: list[str] = []
+    real = CA._judge
+
+    async def spy(svc, sid, chain, turn_id, events):
+        judged.append(turn_id)
+        await real(svc, sid, chain, turn_id, events)
+
+    monkeypatch.setattr(CA, "_judge", spy)
+    svc, row, drivers = await started(app, monkeypatch, work)
+    app.state.platform.config.autonomy_kill_switch = True
+    reply(svc, row.id, "Done! I saved report.xlsx.")
+    await settle(svc, row.id)
+    assert judged == [] and quiet(svc, row.id, drivers)
+    await stop_all(app)
+
+
+async def test_a_check_made_stale_by_a_newer_message_sends_nothing(app, work, monkeypatch, nudges):
+    gate = asyncio.Event()
+    entered = asyncio.Event()
+    real = CA.missing_files
+
+    def held(*a, **k):
+        loop.call_soon_threadsafe(entered.set)
+        fut = asyncio.run_coroutine_threadsafe(gate.wait(), loop)
+        fut.result(timeout=20)
+        return real(*a, **k)
+
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(CA, "missing_files", held)
+    svc, row, drivers = await started(app, monkeypatch, work)
+    reply(svc, row.id, "Done! I saved report.xlsx.")
+    await asyncio.wait_for(entered.wait(), 10)
+    # The user sends another message, and its reply ends, while the check
+    # of the first reply is still looking at the folder.
+    await svc.start_turn(row.id, "never mind, just tell me the total", "t2")
+    await next_send(drivers, row.id, 2)
+    reply(svc, row.id, "The total is 42.", step=False)
+    await until(lambda: svc.live[row.id].turn is None)
+    gate.set()
+    await settle(svc, row.id)
+    assert len(drivers[row.id].sent) == 2 and svc.live[row.id].turn is None
     await stop_all(app)

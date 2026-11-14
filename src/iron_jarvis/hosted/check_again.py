@@ -126,6 +126,11 @@ def chains(svc: Any) -> dict[str, Chain]:
     return svc.__dict__.setdefault("_check_again", {})
 
 
+def judging(svc: Any) -> "set[asyncio.Future]":
+    """The checks still running (a test waits for them to end)."""
+    return svc.__dict__.setdefault("_check_again_tasks", set())
+
+
 # --------------------------------------------------------------------------- #
 # Reading the turn
 # --------------------------------------------------------------------------- #
@@ -193,11 +198,16 @@ def _is_link(entry: os.DirEntry) -> bool:
         return True
 
 
-def files_by_name(folder: str, *, max_entries: int = WALK_MAX_ENTRIES,
-                  deadline_s: float = WALK_DEADLINE_S) -> "set[str] | None":
+def files_by_name(folder: str, *, max_entries: "int | None" = None,
+                  deadline_s: "float | None" = None) -> "set[str] | None":
     """BLOCKING: every file name (case-folded) under ``folder``, or None when
     the walk could not finish inside its bounds (then nothing is certain).
-    Follows no link; skips :data:`SKIP_DIRS`."""
+    Follows no link; skips :data:`SKIP_DIRS`. The bounds are read when it is
+    called (:data:`WALK_MAX_ENTRIES`, :data:`WALK_DEADLINE_S`)."""
+    if max_entries is None:
+        max_entries = WALK_MAX_ENTRIES
+    if deadline_s is None:
+        deadline_s = WALK_DEADLINE_S
     names: set[str] = set()
     stack = [folder]
     seen = 0
@@ -413,7 +423,11 @@ def _after_turn(svc: Any, live: Any, turn: Any, done: dict[str, Any]) -> None:
     from ..harness.stall import keep
 
     with contextlib.suppress(RuntimeError):
-        keep(asyncio.ensure_future(_judge(svc, sid, chain, str(turn.id), events)))
+        task = asyncio.ensure_future(_judge(svc, sid, chain, str(turn.id), events))
+        running = judging(svc)
+        running.add(task)
+        task.add_done_callback(running.discard)
+        keep(task)
 
 
 def _still_current(svc: Any, sid: str, chain: Chain, turn_id: str) -> bool:
