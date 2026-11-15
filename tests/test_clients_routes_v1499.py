@@ -116,7 +116,7 @@ def _a_page(s):
     cid = _hartleys(s)
     t1 = _chat(s, HART + r"\2026", "March reconciliation for Mary Quinn",
                docs=[HART + r"\2026\recon_march.xlsx", HART + r"\2026\John_Carter_1099.pdf"])
-    t2 = _chat(s, r"E:\Scans\Hartleys", "Scanned letters", hours_ago=3)
+    t2 = _chat(s, r"E:\Scans\Hartleys", "Scanned letters for Hartleys", hours_ago=3)
     _chat(s, r"D:\Work\Smith", "Smith payroll", hours_ago=2)
     _chat(s, r"C:\Users\Pat\Downloads", "Hartleys bank letter", hours_ago=4)
     _built(s)
@@ -147,7 +147,7 @@ def test_every_page_claim_names_its_evidence(scene):
     assert all(f["last_at"] for f in got["folders"])
     # Work: its folders only, newest first, the public row shape.
     assert got["entries_total"] == 2
-    assert [e["title"] for e in got["entries"]] == ["March reconciliation for Mary Quinn", "Scanned letters"]
+    assert [e["title"] for e in got["entries"]] == ["March reconciliation for Mary Quinn", "Scanned letters for Hartleys"]
     assert got["entries"][0]["link"] == f"/chat?thread={t1}" and got["entries"][0]["recap"]["current"] is True
     # Files: each names the work it came from.
     assert got["files_total"] == 2
@@ -175,6 +175,19 @@ def test_every_page_claim_names_its_evidence(scene):
     assert got["preferences"] == []
     assert got["told"] == block.client_block(scene.platform, folder=HART, local=False)
     assert got["told"].startswith("# Client: Hartleys")
+
+
+def test_a_forgotten_folder_stays_the_clients_and_shows_no_work(scene):
+    cid, _t1, t2 = _a_page(scene)
+    assert scene.client.post("/work-record/forget", json={"folder": r"E:\Scans\Hartleys"}).status_code == 200
+    got = scene.client.get(f"/clients/{cid}").json()
+    scans = next(f for f in got["folders"] if f["folder"] == r"E:\Scans\Hartleys")
+    assert (scans["forgotten"], scans["count"], scans["last_at"]) == (True, 0, None)
+    assert f"chat:{t2}" not in {e["id"] for e in got["entries"]} and got["entries_total"] == 1
+    # Still Hartleys' folder for the wall: a chat there is Hartleys', not "no client".
+    cmap = store.load_map(scene.engine)
+    assert cmap.client_of(r"E:\Scans\Hartleys\2026").client_id == cid
+    assert r"E:\Scans\Hartleys" not in got["told"]  # never spoken of
 
 
 def test_a_stale_recap_is_shown_stale(scene):

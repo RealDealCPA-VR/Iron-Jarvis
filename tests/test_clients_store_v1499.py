@@ -365,14 +365,14 @@ def test_client_block_scans_caps_and_withholds_local_only(platform):
         store.add_folder(platform, hid, folder)
     # A FOUND folder that holds only Local only work: its path stays home in a cloud turn.
     with session_scope(platform.engine) as db:
-        db.add(WorkClientFolder(folder_key=keys.folder_key(r"K:\Private\Hartleys"), client_id=hid,
-                                folder=r"K:\Private\Hartleys", how="found"))
-        db.add(WorkClientFolder(folder_key=keys.folder_key(r"L:\Shared\Hartleys"), client_id=hid,
-                                folder=r"L:\Shared\Hartleys", how="found"))
+        db.add(WorkClientFolder(folder_key=keys.folder_key(r"B:\Private\Hartleys"), client_id=hid,
+                                folder=r"B:\Private\Hartleys", how="found"))
+        db.add(WorkClientFolder(folder_key=keys.folder_key(r"C:\Shared\Hartleys"), client_id=hid,
+                                folder=r"C:\Shared\Hartleys", how="found"))
         db.commit()
     store.bump_version()
-    _chat(platform, r"K:\Private\Hartleys", local_only=True)
-    _chat(platform, r"L:\Shared\Hartleys")
+    _chat(platform, r"B:\Private\Hartleys", local_only=True)
+    _chat(platform, r"C:\Shared\Hartleys")
     work_map(platform.engine, platform.config.home).refresh(force=True)
     later_local = _chat(platform, r"D:\Work\Hartleys", title="Source chat")
     for i in range(14):
@@ -401,11 +401,16 @@ def test_client_block_scans_caps_and_withholds_local_only(platform):
     assert len(prefs) == block.MAX_PREFERENCE_LINES == 12
     folders = cloud.split("Hartleys' other folders:\n", 1)[1].splitlines()[:-1]
     assert len(folders) == block.MAX_OTHER_FOLDERS == 4
-    assert r"- K:\Private\Hartleys" not in cloud and r"- D:\Work\Hartleys" not in cloud
+    assert r"- B:\Private\Hartleys" not in cloud and r"- D:\Work\Hartleys" not in cloud
+    # Sorted first, the found folder with only Local only work is left out; the one with
+    # shared work and the owner's own added folders fill the four places.
+    assert folders == [r"- C:\Shared\Hartleys", r"- E:\Scans\Hartleys", r"- F:\Mail\Hartleys",
+                       r"- G:\Old\Hartleys"]
     assert "What the owner keeps for Hartleys (follow these for Hartleys' work" in cloud
 
     local = block.client_block(platform, folder=r"D:\Work\Hartleys", local=True)
     assert "Kept in a Local only chat." in local and "Its chat went Local only later." in local
+    assert r"- B:\Private\Hartleys" in local
     assert INJ not in local
     # The turn's own scope decides when ``local`` is not given.
     assert block.client_block(platform, folder=r"D:\Work\Hartleys") == cloud
