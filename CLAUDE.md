@@ -78,6 +78,7 @@ cd dashboard && pnpm vitest run __tests__/<area> && npx tsc --noEmit
 cd dashboard && pnpm build          # must reach "Generating static pages (N/N)"
 cd desktop && node --check main.js  # syntax-check desktop changes
 uv run python scripts/gen_agent_rules.py --check   # the rule files are in step
+uv run python scripts/gen_dep_graph.py --impact <package|file.py|library|/route>
 
 # Full gate before master: push your branch, then
 gh workflow run tests.yml --ref <branch>
@@ -213,10 +214,10 @@ ships a broken release. The area file named in brackets has the detail.
   delivery state: `in the tree` / `committed` / `pushed` / `CI green` /
   `installer published`, never higher than the evidence; (4) risk: what could
   still be wrong and what would show it.
-- **Parallel agents: one file per agent.** Shared files are edited by one
-  agent at a time.
-- **User-facing words follow `VOCABULARY.md`** (enforced by
-  `dashboard/__tests__/vocabulary.test.ts`).
+- **Before an upgrade, look up what it reaches** in `docs/DEPENDENCIES.md`, or
+  ask `--impact` (above). A new import? Rerun the script; a test checks the page.
+- **Parallel agents: one file per agent.** Shared files: one agent at a time.
+- **User-facing words follow `VOCABULARY.md`** (enforced by `vocabulary.test.ts`).
 
 ## Before you touch an area, read its rules
 
@@ -246,9 +247,8 @@ under it. A code comment that says "see CLAUDE.md" means the area file.
 | Tests, CI, release, working practice | `docs/rules/ci.md` |
 | Write-ups that span many areas | `docs/rules/cross-area.md` |
 
-`docs/rules/ARCHIVE-2026-11-14.md` is the whole manual from before the split,
-kept unchanged. Never edit or search it: the area files hold the same text.
-`docs/rules/SPLIT-RECORD-2026-11-14.md` lists where each part went.
+`docs/rules/ARCHIVE-2026-11-14.md` is the old manual, kept unchanged: never edit
+or search it. `SPLIT-RECORD-2026-11-14.md` beside it lists where each part went.
 
 ## Where things live
 

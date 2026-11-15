@@ -344,6 +344,10 @@ def _exempt_for(request: Request) -> bool:
     path = request.url.path
     if not _is_exempt(path):
         return False
+    # The pairing doors are POSTs. Any other method there falls through to the
+    # guarded routes (DELETE /peers/{name} for a pairing called "pair").
+    if path in (PEER_PAIR_PATH, PEER_UNPAIR_PATH) and request.method != "POST":
+        return False
     if path in _LOCAL_ONLY_EXEMPT and _lan_opened() and not _peer_is_this_computer(request):
         return False
     return True

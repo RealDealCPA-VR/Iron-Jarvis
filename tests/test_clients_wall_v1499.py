@@ -250,6 +250,24 @@ def test_may_tell_table(scene, what, turn, row, told):
     assert wall.may_tell(t, scene.cmap, folder=row[0], title=row[1]) is told, (what, t)
 
 
+def test_a_row_owned_by_a_confirmed_client_and_another_kind_still_needs_the_name(scene):
+    """Rule 4 holds when a row's owners MIX kinds (the v1.499.0 review): a
+    Downloads chat that touched a file in Hartleys' folder AND one in a
+    waiting name's folder is a Hartleys row, told to a no-client turn only
+    when the owner names Hartleys."""
+    files = [H + r"\a.pdf", JONES + r"\b.pdf"]
+    plain = _turn(scene, r"D:\Personal", "tidy up my notes")
+    named = _turn(scene, r"D:\Personal", "what did we send Hartleys?")
+    assert wall.may_tell(plain, scene.cmap, folder=DOWNLOADS, title="letters", files=files) is False
+    assert wall.may_tell(named, scene.cmap, folder=DOWNLOADS, title="letters", files=files) is True
+    # The waiting name alone keeps the Phase 1 rule for a no-client turn.
+    assert wall.may_tell(plain, scene.cmap, folder=DOWNLOADS, title="letters",
+                         files=[JONES + r"\b.pdf"]) is True
+    # A turn in Smith's folder is told neither (rule 3).
+    smith = _turn(scene, S, "what did we send Hartleys?")
+    assert wall.may_tell(smith, scene.cmap, folder=DOWNLOADS, title="letters", files=files) is False
+
+
 def test_may_tell_fails_closed_to_exactly_the_turns_folder(scene):
     closed = TurnWall(ok=False, folder_key=_k(H))
     assert wall.may_tell(closed, scene.cmap, folder=H) is True

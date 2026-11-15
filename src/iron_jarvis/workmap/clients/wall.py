@@ -242,7 +242,8 @@ def may_tell(
     2. The row owner is None: True.
     3. ``turn.owner`` is set: True only if the row owner is exactly
        ``turn.owner`` (a named set must equal ``{turn.owner}``).
-    4. The row owner is confirmed: True only if it is in ``turn.named``.
+    4. The row owner is confirmed: True only if it is in ``turn.named``
+       (every confirmed owner, even beside owners of another kind).
     5. ``turn.spans`` (or the turn's folder strictly holds the row's owned
        folder): False.
     6. Otherwise True.
@@ -266,8 +267,14 @@ def may_tell(
             return True
         if wall.owner is not None:  # 3.
             return owners == frozenset({wall.owner})
-        if all(o.startswith(_CLIENT) for o in owners):  # 4. pointers only
-            return {o[len(_CLIENT):] for o in owners} <= set(wall.named)
+        # 4. pointers only. A row whose owners MIX kinds (a confirmed client
+        # and a waiting home, say) still needs every confirmed one named; the
+        # other owners then go on to rule 5.
+        confirmed = {o[len(_CLIENT):] for o in owners if o.startswith(_CLIENT)}
+        if confirmed and not confirmed <= set(wall.named):
+            return False
+        if len(confirmed) == len(owners):
+            return True
         holds = (
             bool(wall.folder_key) and bool(home) and home != wall.folder_key
             and keys.inside(home, wall.folder_key)

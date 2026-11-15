@@ -3672,8 +3672,10 @@ const MessageRow = memo(function MessageRow({
       )}
       {/* CLIENT QUESTION (v1.499.0): "Is Hartleys a client?" in the same
           quiet voice, asked once under one reply (components/chat/
-          ClientQuestion). Its answer is stored on the message. */}
-      {clientQuestion && clientQuestion.state !== "gone" && (
+          ClientQuestion). Its answer is stored on the message. A "gone" one
+          stays mounted: the line shows the route's "already answered"
+          sentence in this chat and nothing once the chat is reopened. */}
+      {clientQuestion && (
         <ClientQuestion
           question={clientQuestion}
           onSettle={(next) => h.settleClientQuestion(i, next)}

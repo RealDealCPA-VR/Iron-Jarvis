@@ -2603,8 +2603,10 @@ How to use this file: read the contents list, then read only the entries your ch
   `changed_names` (first person or a present-perfect passive only, never a
   file's history; 40 chars before a claim read for negation, modal,
   condition or second person; German/Dutch subject-first with the participle
-  after the file), `says_gives_up` (LAST paragraph only; "pero ahora pasan"
-  is not one), `said_no`, `asks_for_file`, `BLOCKED_WORDS` ("Bloqueado:"
+  after the file, never across "und"/"en"/";" into the next clause:
+  v1.499.1, "Ich habe x.xlsx gelesen und ... erstellt" claimed x.xlsx), `says_gives_up` (LAST paragraph only; "pero ahora pasan"
+  is not one), `said_no`, `asks_for_file` (Dutch "sla" only with its "op":
+  v1.499.1, English "SLA" asked for a file), `BLOCKED_WORDS` ("Bloqueado:"
   ends a loop: until_done, give_up, finish's caller, check_again),
   `covered(text)` (prose only, code stripped; mostly another script = False;
   fewer than `MIN_WORDS` 6 words = True; a Latin-script reply is False ONLY

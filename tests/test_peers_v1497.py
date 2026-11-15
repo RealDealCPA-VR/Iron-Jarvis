@@ -235,6 +235,12 @@ async def test_the_controls_need_the_install_token(tmp_path, lan):
             ("POST", "/peers/check"),
             ("POST", "/peers/desk/check"),
             ("DELETE", "/peers/desk"),
+            # The two doors are exempt for POST only: a DELETE there would
+            # reach DELETE /peers/{name} for a pairing named "pair" (v1.499.1).
+            ("DELETE", PEER_PAIR_PATH),
+            ("DELETE", PEER_UNPAIR_PATH),
+            ("GET", PEER_PAIR_PATH),
+            ("PATCH", PEER_UNPAIR_PATH),
         ):
             r = await bare.request(method, path, json={})
             assert r.status_code == 401, (method, path, r.status_code)

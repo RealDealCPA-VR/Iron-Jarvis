@@ -249,7 +249,9 @@ How to use this file: read the contents list, then read only the entries your ch
   `/agents/task-door/task`, message-back on), so "@name", delegation and
   answers coming home reuse the remote-agent code untouched. Hold these:
   - `/peers/pair` and `/peers/unpair` are the ONLY exempt doors, matched
-    exactly in `daemon/auth._is_exempt`. Pair is checked by the code, unpair
+    exactly in `daemon/auth._is_exempt`, and for POST only (`_exempt_for`;
+    v1.499.1: a DELETE there reached `DELETE /peers/{name}` with no token for
+    a pairing named "pair"). Pair is checked by the code, unpair
     by that peer's in-token. Both read the body no further than
     `PAIR_MAX_BODY_BYTES` (stream, never `request.body()`), share the
     ten-tries-a-minute budget, and answer a failure in WORDS, never the app's

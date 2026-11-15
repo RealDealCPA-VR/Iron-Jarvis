@@ -387,6 +387,14 @@ def test_preferences_read_confirmed_only(platform):
         db.add(WorkClientPreference(id=new_id("cpref"), client_id=hid, text="Declined one.", status="declined"))
         db.commit()
     second = store.keep_preference(platform, hid, "Send the letter by e-mail.", origin="typed")
+    # Newest first. Two keeps a few ms apart can share one clock tick on
+    # Windows (then the random id decided the order and this test flaked), so
+    # the first is put an hour earlier: the order checked is by time.
+    with session_scope(platform.engine) as db:
+        row = db.get(WorkClientPreference, first["preference"]["id"])
+        row.created_at = row.created_at - timedelta(hours=1)
+        db.add(row)
+        db.commit()
     got = store.preferences(platform.engine, hid)
     assert [p["text"] for p in got] == ["Send the letter by e-mail.", "Uses cash basis."]
     assert got[1]["thread_id"] == "chat_1" and got[1]["origin"] == "said"

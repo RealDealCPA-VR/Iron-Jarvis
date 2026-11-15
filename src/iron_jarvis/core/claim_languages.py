@@ -85,9 +85,18 @@ _SAVED_VERB_FIRST_RX = re.compile(
     + _GAP + FILE_NAME,
     re.IGNORECASE,
 )
+#: Words that start a second clause. The participle after one of them belongs
+#: to that clause, not to the file: "Ich habe bericht.xlsx gelesen UND eine
+#: Zusammenfassung erstellt" saved nothing called bericht.xlsx.
+_NEXT_CLAUSE = (
+    r"(?:und|oder|aber|sowie|dann|danach|anschlie(?:ß|ss)end|"
+    r"en|of|maar|daarna|toen|vervolgens)"
+)
 _SAVED_SUBJECT_FIRST_RX = re.compile(
     r"\b(?:(?:ich|wir)\s+(?:habe|haben|hab)|(?:ik|we|wij)\s+(?:heb|hebben))\b"
-    r"[^.\n!?]{0,80}?" + FILE_NAME + r"[^.\n!?]{0,40}?\b(?:" + _PART_DE + "|" + _PART_NL + r")\b",
+    r"[^.\n!?]{0,80}?" + FILE_NAME
+    + r"(?:(?!\b" + _NEXT_CLAUSE + r"\b)[^.\n!?;]){0,40}?"
+    r"\b(?:" + _PART_DE + "|" + _PART_NL + r")\b",
     re.IGNORECASE,
 )
 #: "bericht.xlsx wurde soeben gespeichert", "rapport.xlsx is nu opgeslagen".
@@ -360,7 +369,8 @@ _MAKE = (
     r"(?:crea|cr[ée]ame|crear|haz|hazme|genera|gen[ée]rame|prepara|prep[áa]rame|escribe|guarda|"
     r"exporta|redacta|gu[áa]rdal[oa]s?|cr[ée]al[oa]s?|hazl[oa]s?|esc[ríi]+bel[oa]s?|exp[óo]rtal[oa]s?|"
     r"salvalo|salvala|crealo|creala|scrivilo|esportalo|salve-o|salva-o|guarde-o|crie-o|exporte-o|"
-    r"sauvegarde|sauvegardez|sla|"
+    # Dutch "sla ... op" only WITH its "op": a bare "sla" is English "SLA".
+    r"sauvegarde|sauvegardez|sla(?=\s+(?:\S+\s+){0,4}?op\b)|"
     r"cr[ée]e|cr[ée]ez|cr[ée]er|fais|faites|g[ée]n[èe]re|g[ée]n[ée]rez|pr[ée]pare|pr[ée]parez|[ée]cris|"
     r"[ée]crivez|enregistre|exporte|r[ée]dige|"
     r"erstelle|erzeuge|mach|mache|schreib|schreibe|speichere|exportiere|generiere|"

@@ -70,6 +70,7 @@ SAVED_YES = [
     "Ik heb het bestand rapport.xlsx opgeslagen.",
     "Gespeichert unter bericht.xlsx",
     "- Guardado: resumen.xlsx",
+    "Ich habe bericht.xlsx im Ordner Berichte gespeichert.",
 ]
 SAVED_NO = [
     "No he podido guardar resumen.xlsx.",
@@ -85,6 +86,10 @@ SAVED_NO = [
     "El archivo resumen.xlsx fue creado en 2023.",
     "I saved it to report.pdf.",
     "Here is the summary of report.pdf.",
+    # The participle of ANOTHER clause is not the file's (v1.499.1 review).
+    "Ich habe bericht.xlsx gelesen und eine Zusammenfassung erstellt.",
+    "Ich habe bericht.xlsx geöffnet; danach eine Tabelle erstellt.",
+    "Ik heb rapport.xlsx gelezen en een samenvatting gemaakt.",
 ]
 CHANGED_YES = [
     "Actualicé resumen.xlsx con los totales nuevos.",
@@ -139,12 +144,16 @@ ASKS_YES = [
     "Crea un file Excel con i dati.",
     "Crie uma planilha com os totais.",
     "Maak een Excel-bestand met de cijfers.",
+    "Sla het rapport op als PDF.",
 ]
 ASKS_NO = [
     "¿Cómo creo una hoja de cálculo?",
     "Wie erstelle ich eine Excel-Datei?",
     "Comment créer un fichier PDF ?",
     "Explícame qué es un PDF.",
+    # English "SLA" is not Dutch "sla ... op" (v1.499.1 review).
+    "Summarize the SLA terms in contract.pdf",
+    "Check the SLA in the attached PDF and tell me the uptime.",
 ]
 
 

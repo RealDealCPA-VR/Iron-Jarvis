@@ -50,6 +50,7 @@ vi.mock("next/link", () => ({
 }));
 
 import type React from "react";
+import { useState } from "react";
 import { ClientQuestion } from "@/components/chat/ClientQuestion";
 import { decodeClientQuestion, type ChatClientQuestion } from "@/lib/clients";
 
@@ -163,6 +164,23 @@ describe("the question under a reply", () => {
     expect(settle).toHaveBeenCalledWith({ ...ASK, state: "gone" });
   });
 
+  it("the refusal stays on screen after the page stores 'gone' on the message", async () => {
+    // The chat page stores the answer on the message and draws the line from
+    // it (v1.499.1: it used to unmount the line on "gone", so the sentence
+    // was never seen). A parent that does the same keeps the sentence.
+    H.fail = { status: 409, message: "Hartleys was already answered." };
+    function Row() {
+      const [q, setQ] = useState<ChatClientQuestion>(ASK);
+      return <ClientQuestion question={q} onSettle={setQ} />;
+    }
+    render(<Row />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("client-question-decline"));
+    });
+    expect(screen.getByTestId("client-question").getAttribute("data-state")).toBe("gone");
+    expect(screen.getByTestId("client-question-refused").textContent).toBe("Hartleys was already answered.");
+  });
+
   it("a 404 says the client is not on record", async () => {
     H.fail = { status: 404, message: "" };
     render(<ClientQuestion question={ASK} />);
@@ -226,6 +244,15 @@ describe("where it is stored and drawn (source pins)", () => {
     expect(page).toContain("msgs = applySettledQuestions(msgs, settledClientQuestionsRef.current);");
     expect(page).toMatch(/settleClientQuestion: \(index, next\) => \{[\s\S]{0,400}settledClientQuestionsRef\.current\.set\(next\.id, next\)/);
     expect(page).toContain("onSettle={(next) => h.settleClientQuestion(i, next)}");
+  });
+
+  it("the page never hides a settled question itself: the line decides what a 'gone' one shows", () => {
+    // Hiding it on "gone" unmounted the line the moment a 409 settled it,
+    // and the route's "already answered" sentence was never seen (v1.499.1).
+    const at = page.indexOf("<ClientQuestion");
+    expect(at).toBeGreaterThan(0);
+    const gate = page.slice(page.lastIndexOf("{", at), at);
+    expect(gate).not.toContain('"gone"');
   });
 
   it("at most one question line rides a reply: a preference suggestion goes first", () => {

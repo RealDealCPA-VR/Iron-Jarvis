@@ -2042,6 +2042,27 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Five fixes from a second review of clients, checking and pairing (v1.499.1)
+
+- **A client's work stays with that client in one more case.** A chat with
+  no folder of its own, say in Downloads, that used files from a client's
+  folder and also from a folder you have not answered about yet could be
+  shown to an unrelated chat. Now that chat is shown only to a chat that
+  names the client, like any other work of that client.
+- **"Summarize the SLA terms" no longer makes a file.** The check that
+  notices a request for a file in other languages took the English "SLA" for
+  the Dutch word for save. It now needs the whole Dutch phrase.
+- **Reading a file is not taken for saving it.** In German or Dutch, a reply
+  that said it read a file and then made a summary was taken as saying it
+  saved the file it read, and Jarvis was told to write it again. A word for
+  "saved" now counts only in the same part of the sentence as the file.
+- **Ending a pairing needs your own sign-in, except through its one door.**
+  In one rare case (a paired computer named "pair" or "unpair") another
+  computer on your network could remove that pairing without any sign-in.
+- **"Already answered" is said, not hidden.** When you answer "Is Hartleys a
+  client?" under a reply after answering it somewhere else, the line now says
+  it was already answered instead of disappearing without a word.
+
 ## Iron Jarvis knows your clients (v1.499.0)
 
 - **What it is.** Iron Jarvis now knows which of your folders belong to

@@ -103,7 +103,8 @@ file stems or snippet name (``names.named_in``).
 3. ``turn.owner`` set: True only if the row owner is exactly ``turn.owner``
    (a named set must equal ``{turn.owner}``).
 4. Row owner confirmed: True only if it is in ``turn.named`` (pointers only,
-   never facts).
+   never facts). A row with several owners needs EVERY confirmed one named,
+   whatever its other owners are; those then go on to rule 5.
 5. ``turn.spans``: False.
 6. Otherwise True.
 
