@@ -67,7 +67,12 @@ export function ClientQuestion({ question, onSettle }: ClientQuestionProps) {
     setPending(kind);
     setError(null);
     try {
-      const res = await post<unknown>(clientVerbPath(q.id, kind === "yes" ? "confirm" : "decline"), {});
+      // A No expects a WAITING name: a stale line never takes a client away
+      // (the daemon answers 409 "already answered" instead).
+      const res = await post<unknown>(
+        clientVerbPath(q.id, kind === "yes" ? "confirm" : "decline"),
+        kind === "yes" ? {} : { expect: "proposed" },
+      );
       const got = decodeAnswer(res);
       const next: ChatClientQuestion = {
         ...q,
@@ -75,7 +80,7 @@ export function ClientQuestion({ question, onSettle }: ClientQuestionProps) {
         state: kind,
       };
       setLocal(next);
-      setNote(kind === "yes" ? got.note : "");
+      setNote(got.note);
       onSettle?.(next);
     } catch (e) {
       const f = failureOf(e);
@@ -95,14 +100,14 @@ export function ClientQuestion({ question, onSettle }: ClientQuestionProps) {
 
   if (q.state === "gone") {
     return refusal ? (
-      <div id={domId} data-testid="client-question" data-state="gone" className="mt-1 text-[11px] text-zinc-500">
+      <div id={domId} data-testid="client-question" data-state="gone" role="status" className="mt-1 text-[11px] text-zinc-500">
         <span data-testid="client-question-refused">{refusal}</span>
       </div>
     ) : null;
   }
   if (q.state === "yes") {
     return (
-      <div id={domId} data-testid="client-question" data-state="yes" className="mt-1 text-[11px] text-zinc-500">
+      <div id={domId} data-testid="client-question" data-state="yes" role="status" className="mt-1 text-[11px] text-zinc-500">
         <span data-testid="client-question-yes" className="text-accent-soft">
           {afterYes(q.name)}
         </span>{" "}
@@ -119,8 +124,8 @@ export function ClientQuestion({ question, onSettle }: ClientQuestionProps) {
   }
   if (q.state === "no") {
     return (
-      <div id={domId} data-testid="client-question" data-state="no" className="mt-1 text-[11px] text-zinc-600">
-        <span data-testid="client-question-no">{afterNo(q.name)}</span>
+      <div id={domId} data-testid="client-question" data-state="no" role="status" className="mt-1 text-[11px] text-zinc-600">
+        <span data-testid="client-question-no">{note || afterNo(q.name)}</span>
       </div>
     );
   }
@@ -160,7 +165,7 @@ export function ClientQuestion({ question, onSettle }: ClientQuestionProps) {
         </span>
       </div>
       {error && (
-        <p data-testid="client-question-error" className="mt-1 text-[11px] text-tone-danger">
+        <p data-testid="client-question-error" role="alert" className="mt-1 text-[11px] text-tone-danger">
           {error}
         </p>
       )}

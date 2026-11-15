@@ -295,7 +295,7 @@ export function WorkByFolder() {
                     >
                       {chipWords(f.client.name)}
                     </Link>
-                  ) : mayMakeClient(f.folder) ? (
+                  ) : f.mayMakeClient !== false && mayMakeClient(f.folder) ? (
                     <button
                       type="button"
                       data-testid="work-folder-make-client"

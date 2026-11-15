@@ -109,6 +109,64 @@ def _stems(files: Iterable[Any]) -> list[str]:
     return out
 
 
+#: File paths whose folders :func:`_path_owners` reads, at most.
+FILES_MAX = 50
+
+
+def parent_folder(path: object) -> str:
+    """The folder a file sits in, by TEXT ("" for a bare name)."""
+    raw = str(path or "").strip().rstrip("\\/")
+    cut = max(raw.rfind("\\"), raw.rfind("/"))
+    return raw[:cut] if cut > 0 else ""
+
+
+def _segment_names(folder: object, cmap: ClientMap) -> set[str]:
+    """The CONFIRMED clients whose name (or alias) is one whole segment of
+    ``folder``'s path, in any case (``D:\\Scans\\hartleys`` names Hartleys).
+    ``names.path_parts`` already leaves out the drive and ``Users\\<name>``.
+    Never raises."""
+    try:
+        sigs = {names.signature(p) for p in names.path_parts(folder)}
+        sigs.discard("")
+        if not sigs:
+            return set()
+        found: set[str] = set()
+        for cid, entry in (cmap.names or {}).items():
+            try:
+                _name, sig, aliases = entry
+            except (TypeError, ValueError):
+                continue
+            for want in (sig, *tuple(aliases or ())):
+                if " ".join(str(want or "").split()) in sigs:
+                    found.add(str(cid))
+                    break
+        return found
+    except Exception:  # noqa: BLE001 — a path that cannot be read names nobody
+        log.debug("clients: a path's segments could not be read", exc_info=True)
+        return set()
+
+
+def _path_owners(cmap: ClientMap, folder: object, files: Iterable[Any]) -> set[str]:
+    """The owners an UNOWNED row's paths prove (the independent review): a
+    confirmed client named by a whole segment of the row's folder, and the
+    owner of each file's own folder (``_owner_of_folder``) or a client named
+    by one of its segments. A Downloads chat whose files sit in
+    ``Clients\\Hartleys`` is Hartleys' work. Text only."""
+    out: set[str] = {_CLIENT + i for i in _segment_names(folder, cmap)}
+    for n, f in enumerate(files or ()):
+        if n >= FILES_MAX:
+            break
+        path = f.get("path") if isinstance(f, dict) else f
+        parent = parent_folder(path)
+        if not parent:
+            continue
+        owner, _home, _root = _owner_of_folder(cmap, parent)
+        if owner is not None:
+            out.add(owner)
+        out.update(_CLIENT + i for i in _segment_names(parent, cmap))
+    return out
+
+
 def _named(text: object, cmap: ClientMap) -> frozenset[str]:
     """The CONFIRMED clients ``text`` names (ids). Never raises."""
     words = str(text or "")[:TEXT_MAX]
@@ -199,8 +257,11 @@ def may_tell(
         if owner is not None:
             owners = frozenset({owner})
         else:  # NAMED ATTRIBUTION: an unowned row that names confirmed clients
+            files = list(files or ())
             text = " \n ".join([str(title or ""), *_stems(files), str(snippet or "")])
-            owners = frozenset(_CLIENT + i for i in _named(text, cmap))
+            owners = frozenset(
+                {_CLIENT + i for i in _named(text, cmap)} | _path_owners(cmap, folder, files)
+            )
         if not owners:  # 2.
             return True
         if wall.owner is not None:  # 3.
@@ -248,12 +309,60 @@ def tell_passages(
     run_folders = session_owners(engine, cmap, runs) if runs else {}
     if chat_folders is None or run_folders is None:
         return None
+    # The files the work record keeps for each (a Downloads chat whose files
+    # sit in a client's folder is that client's work).
+    chat_files = work_files(engine, PASSAGE_CHAT, chats) if chats else {}
+    run_files = work_files(engine, PASSAGE_RUN, runs) if runs else {}
+    if chat_files is None or run_files is None:
+        return None
     out: list[bool] = []
     for kind, pid, title, snippet in items:
         where = chat_folders if kind == PASSAGE_CHAT else run_folders if kind == PASSAGE_RUN else {}
+        made = chat_files if kind == PASSAGE_CHAT else run_files if kind == PASSAGE_RUN else {}
         out.append(may_tell(wall, cmap, folder=where.get(str(pid), ""), title=title or "",
-                            snippet=snippet or ""))
+                            files=made.get(str(pid), ()), snippet=snippet or ""))
     return out
+
+
+def work_files(engine: Any, kind: str, ids: Iterable[Any]) -> dict[str, list[str]] | None:
+    """The file paths the work record keeps for each chat thread
+    (``kind`` :data:`PASSAGE_CHAT`) or agent run (:data:`PASSAGE_RUN`) in
+    ``ids``: ``{ref: [path, …]}``, at most :data:`FILES_MAX` each; a ref with
+    no row is left out. One bounded IN query. None when it cannot be read.
+    BLOCKING. Never raises."""
+    wanted = _wanted(ids)
+    if not wanted:
+        return {}
+    if engine is None:
+        return None
+    try:
+        import json
+
+        from sqlmodel import select
+
+        from ...core.db import session_scope
+        from ..models import KIND_CHAT, KIND_CODE, KIND_RUN, WorkEntry
+
+        kinds = [KIND_RUN] if kind == PASSAGE_RUN else [KIND_CHAT, KIND_CODE]
+        out: dict[str, list[str]] = {}
+        with session_scope(engine) as db:
+            for i in range(0, len(wanted), _IN_CHUNK):
+                stmt = select(WorkEntry.ref, WorkEntry.files_json).where(
+                    WorkEntry.ref.in_(wanted[i : i + _IN_CHUNK]),  # type: ignore[attr-defined]
+                    WorkEntry.kind.in_(kinds),  # type: ignore[attr-defined]
+                )
+                for ref, files_json in db.exec(stmt):
+                    try:
+                        raw = json.loads(files_json or "[]")
+                    except ValueError:
+                        raw = []
+                    paths = [str(f.get("path") if isinstance(f, dict) else f or "")
+                             for f in raw if f][:FILES_MAX]
+                    out.setdefault(str(ref), []).extend(p for p in paths if p)
+        return out
+    except Exception:  # noqa: BLE001 — unreadable: the caller drops every passage
+        log.debug("clients: the work record's files could not be read", exc_info=True)
+        return None
 
 
 def current() -> TurnWall:
@@ -264,6 +373,48 @@ def current() -> TurnWall:
     except Exception:  # noqa: BLE001 — never raises
         return NO_CLIENT
     return wall if isinstance(wall, TurnWall) else NO_CLIENT
+
+
+def inherited() -> TurnWall | None:
+    """The wall a caller already set in THIS context (a chat turn, a parent
+    run), or None when nothing set one (a run the owner started from a page
+    or a schedule). Never raises."""
+    try:
+        wall = CURRENT.get(None)  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001 — never raises
+        return None
+    return wall if isinstance(wall, TurnWall) else None
+
+
+def narrowed(parent: TurnWall, own: TurnWall) -> TurnWall:
+    """The wall of work started INSIDE another turn or run (a helper the
+    model delegated to, a child run): never wider than ``parent``
+    (the independent review). Its ``named`` is the parent's (the owner's
+    words) intersected with its own (a task the MODEL wrote widens
+    nothing); its owner is the parent's, else its own folder's; two
+    different owners, or either side failing closed, fail closed. ``spans``
+    is either side's; the folder is its own. Pure; never raises."""
+    try:
+        p = parent if isinstance(parent, TurnWall) else NO_CLIENT
+        o = own if isinstance(own, TurnWall) else TurnWall(ok=False)
+        key = o.folder_key or p.folder_key
+        if not p.ok or not o.ok:
+            return TurnWall(ok=False, folder_key=key)
+        if p.owner is not None and o.owner is not None and p.owner != o.owner:
+            return TurnWall(ok=False, folder_key=key)
+        owner = p.owner if p.owner is not None else o.owner
+        client = p.client if p.owner is not None else o.client
+        return TurnWall(
+            owner=owner,
+            client=client,
+            spans=bool(p.spans or o.spans),
+            named=frozenset(p.named) & frozenset(o.named),
+            ok=True,
+            folder_key=key,
+        )
+    except Exception:  # noqa: BLE001 — unsure: closed
+        log.debug("clients: a child's wall could not be narrowed", exc_info=True)
+        return TurnWall(ok=False)
 
 
 def on_owner_screen() -> bool:
@@ -462,8 +613,11 @@ __all__ = [
     "PASSAGE_RUN",
     "TurnWall",
     "current",
+    "inherited",
     "may_tell",
+    "narrowed",
     "on_owner_screen",
+    "parent_folder",
     "owner_screen",
     "scoped_frames",
     "session_owners",
@@ -472,4 +626,5 @@ __all__ = [
     "turn_and_map",
     "turn_scope",
     "turn_wall",
+    "work_files",
 ]

@@ -96,7 +96,7 @@ class _Spies:
         self.block_calls: list[str] = []
         self.wall_calls: list[tuple[str, str]] = []
         self.walls: list[C.TurnWall] = []
-        self._block = client_block_mod.client_block
+        self._block = client_block_mod.client_block_or_raise
         self._turn_wall = wall_mod.turn_wall
 
     def block(self, platform, *, folder, local=None):
@@ -110,7 +110,7 @@ class _Spies:
         return got
 
     def install(self, monkeypatch):
-        monkeypatch.setattr(client_block_mod, "client_block", self.block)
+        monkeypatch.setattr(client_block_mod, "client_block_or_raise", self.block)
         monkeypatch.setattr(wall_mod, "turn_wall", self.turn_wall)
         return self
 
@@ -306,18 +306,41 @@ def test_both_lanes_are_byte_identical_without_a_client(scene, monkeypatch):
         assert "late" not in done["context"], done["context"]
     assert scene.clients.block_calls == [str(folder)] * 2  # the hop really ran
 
-    def boom(platform, *, folder, local=None):
-        raise RuntimeError("the client tables are locked")
+    # The REAL layer fails (the independent review): the record's own reads
+    # raise, never a patched block, so a block that swallowed the error and
+    # answered "" would go red here.
+    def locked(*a, **k):
+        raise C.ClientsUnreadable()
 
-    monkeypatch.setattr(client_block_mod, "client_block", boom)
-    for lane in LANES:
-        before = len(seen["systems"])
-        done = _turn(scene.client, lane, _body("tidy these notes", folder))
-        assert seen["systems"][before] == with_hop[lane], f"{lane}: an empty client hop added bytes"
-        assert "client" in (done["context"].get("late") or []), (
-            f"{lane}: a client block that could not be read must be named: {done['context']}"
-        )
+    for broken in ("load_map",):
+        with monkeypatch.context() as m:
+            m.setattr(store_mod, broken, locked)
+            for lane in LANES:
+                before = len(seen["systems"])
+                done = _turn(scene.client, lane, _body("tidy these notes", folder))
+                assert seen["systems"][before] == with_hop[lane], f"{lane}: an empty client hop added bytes"
+                assert "client" in (done["context"].get("late") or []), (
+                    f"{broken}/{lane}: a client block that could not be read must be named: {done['context']}"
+                )
     assert with_hop["post"] == with_hop["stream"]
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_clients_preferences_that_cannot_be_read_are_named_on_the_receipt(scene, monkeypatch, lane):
+    """In Hartleys' folder the map reads but the preferences do not (the
+    record's own reader raises): the turn goes on without the block, and
+    ``context.late`` names ``client`` (the independent review)."""
+    seen = _scripted(scene.platform, monkeypatch)
+    done = _turn(scene.client, lane, _body("payroll status?", scene.hartleys))
+    assert "Use cash basis." in seen["systems"][0] and "late" not in done["context"]
+
+    def locked(*a, **k):
+        raise C.ClientsUnreadable()
+
+    monkeypatch.setattr(store_mod, "preferences", locked)
+    done = _turn(scene.client, lane, _body("payroll status?", scene.hartleys))
+    assert "Use cash basis." not in seen["systems"][1]
+    assert "client" in (done["context"].get("late") or []), done["context"]
 
 
 # --------------------------------------------------------------------------- #
@@ -342,7 +365,7 @@ def test_the_client_hop_is_required(scene, monkeypatch, lane):
         hold.wait(1.0)  # a slow read (a locked table); awaited anyway
         return BLOCK_H
 
-    monkeypatch.setattr(client_block_mod, "client_block", slow)
+    monkeypatch.setattr(client_block_mod, "client_block_or_raise", slow)
     seen = _scripted(scene.platform, monkeypatch)
     done = _turn(scene.client, lane, _body("payroll status?", scene.hartleys))
     assert BLOCK_H in seen["systems"][0], f"{lane}: a required hop was dropped at the soft deadline"
@@ -366,7 +389,7 @@ def test_a_client_hop_past_its_bound_is_left_out_and_named(scene, monkeypatch, l
         asked.wait(10)
         return BLOCK_H
 
-    monkeypatch.setattr(client_block_mod, "client_block", stalled)
+    monkeypatch.setattr(client_block_mod, "client_block_or_raise", stalled)
     seen = _scripted(scene.platform, monkeypatch)
     real_complete, real_stream = scene.platform.router.complete, scene.platform.router.stream
 
@@ -459,8 +482,9 @@ QUESTION = {"id": "client_abcdefabcdef", "name": "Hartleys", "folders": 2, "work
 def test_the_client_question_is_always_on_both_lanes(scene, monkeypatch, lane):
     asked: list[dict] = []
 
-    def question_for_turn(platform, *, folder, thread_id):
+    def question_for_turn(platform, *, folder, thread_id, budget_s=None):
         asked.append({"folder": folder, "thread_id": thread_id})
+        assert budget_s == CT.CLIENT_QUESTION_WAIT_S  # the lane hands over its own wait
         return dict(QUESTION, extra="never on the wire")
 
     monkeypatch.setattr(store_mod, "question_for_turn", question_for_turn)
@@ -765,3 +789,41 @@ def _fake_backend():
     from iron_jarvis.terminals.backend import FakeBackend
 
     return FakeBackend()
+
+
+def test_terminal_help_follows_the_folder_the_pane_is_in_now(scene, monkeypatch):
+    """The independent review: ``session.cwd`` is only the folder the pane
+    STARTED in. A pane that moved into Smith's folder (its prompt says so),
+    or that ran a ``cd`` nobody can follow, is told no client; a pane whose
+    prompt is still in Hartleys' folders is told Hartleys'."""
+    from iron_jarvis.daemon.routes import terminals as T
+
+    monkeypatch.setattr("iron_jarvis.terminals.session.default_backend", _fake_backend)
+    seen: dict = {}
+    _spy_adapters(scene.platform, seen)
+    term = scene.client.post("/terminals", json={"cwd": str(scene.hartleys)}).json()
+    session = scene.platform.terminals.get(term["id"])
+
+    def assist(output: str) -> str:
+        session._tail += output.encode("utf-8")
+        seen.clear()
+        r = scene.client.post(f"/terminals/{term['id']}/ai", json={"prompt": "how do I total this CSV?"})
+        assert r.status_code == 200, r.text
+        return seen["systems"][-1]
+
+    assert BLOCK_H in assist("")  # just opened: where it started
+    sep = "\\"
+    assert BLOCK_H in assist(f"PS {scene.hartleys}{sep}2026> dir\r\n")
+    assert "# Client:" not in assist(
+        f"PS {scene.hartleys}> cd ..{sep}Smith{sep}2025\r\nPS {scene.smith}{sep}2025> ")
+    assert "cash basis" not in assist("")
+    assert BLOCK_H in assist(f"\r\nPS {scene.hartleys}{sep}2026{sep}payroll> ")
+    # A cd with no prompt to follow it: not known, so no client.
+    session._tail.clear()
+    assert "# Client:" not in assist(f"cd ..{sep}Smith\r\n")
+    # The prompt shapes read.
+    assert T._live_folder(r"C:\a", "") == r"C:\a"
+    assert T._live_folder(r"C:\a", r"C:\b\c>dir" + "\n") == r"C:\b\c"
+    assert T._live_folder("/a", "me@box:/srv/x$ ls\n") == "/srv/x"
+    assert T._live_folder(r"C:\a", "some output\nmore\n") == r"C:\a"
+    assert T._live_folder(r"C:\a", r"Set-Location D:\x" + "\n") is None

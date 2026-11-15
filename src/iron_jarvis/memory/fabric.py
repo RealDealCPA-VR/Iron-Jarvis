@@ -473,7 +473,36 @@ class MemoryFabric:
                     extra={"path": path, "line": line},
                 )
             )
-        return out
+        return self._walled_files(out) if out else out
+
+    def _walled_files(self, hits: list[FabricHit]) -> list[FabricHit]:
+        """THE CLIENT WALL over file passages (the independent review): a
+        passage from a file in another client's folder is not recalled into
+        this turn (``may_tell`` with the file's own folder, its name and its
+        text). The owner's own screens are not walled. A turn that failed
+        closed, or a client record that cannot be read, recalls NO file. A
+        fabric with no database has no client record to wall by. Runs in the
+        store's job thread, which carries the caller's context. Never raises."""
+        try:
+            from ..workmap.clients import store as client_store
+            from ..workmap.clients import wall
+
+            if wall.on_owner_screen() or self.engine is None:
+                return hits
+            turn = wall.current()
+            if not turn.ok:
+                return []
+            cmap = client_store.load_map(self.engine)
+            out: list[FabricHit] = []
+            for h in hits:
+                path = str((h.extra or {}).get("path") or "")
+                if wall.may_tell(turn, cmap, folder=wall.parent_folder(path),
+                                 files=[path], snippet=h.snippet or ""):
+                    out.append(h)
+            return out
+        except Exception:  # noqa: BLE001 — unsure: no file passage
+            log.debug("memory fabric: the client wall could not be read for files", exc_info=True)
+            return []
 
     def _notes(
         self,

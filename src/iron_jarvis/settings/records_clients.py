@@ -50,10 +50,12 @@ import logging
 import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, AsyncIterator, Iterable, Iterator, Mapping
 
 from ..tools.base import Reversibility, SpendCheck, Tool, ToolContext, ToolResult
 from ..workmap import clients as C
+from ..workmap import keys as K
 from ..workmap.clients import names as N
 from ..workmap.clients import page as PG
 from ..workmap.clients import store as S
@@ -298,8 +300,10 @@ def find(platform: Any, cmap: Any, ref: Any) -> Target:
                 if sig == s or sig in tuple(aliases or ()):
                     return Target(str(cid), str(name), status, status == "confirmed", tuple(aliases or ()))
         for row in _declined(platform):
-            if _sig(row.get("name")) == sig:
-                return Target(str(row["id"]), str(row.get("name") or ""), "declined", bool(row.get("was_client")))
+            aliases = tuple(str(a) for a in (row.get("aliases") or ()) if a)
+            if _sig(row.get("name")) == sig or sig in aliases:
+                return Target(str(row["id"]), str(row.get("name") or ""), "declined", bool(row.get("was_client")),
+                              aliases)
     return Target(name=raw)
 
 
@@ -332,6 +336,11 @@ def snap_client(platform: Any, client_id: str) -> dict[str, Any] | None:
         roots = cmap.roots_of(client_id) if status == "confirmed" else ()
     except Exception:  # noqa: BLE001
         roots = ()
+    if status == "declined":
+        # A Not-a-client client's folder rows are kept, unused: a later
+        # takeover of one is a change since (the independent review).
+        roots = tuple(SimpleNamespace(key=str(r.get("key") or ""))
+                      for r in S.folder_rows(_engine(platform), client_id) or [])
     prefs = {str(p.get("id")): str(p.get("text") or "") for p in S.preferences(_engine(platform), client_id) or []}
     return {
         "id": client_id,
@@ -385,6 +394,34 @@ class Gate:
         return ""
 
     @property
+    def owned(self) -> bool:
+        """The turn's folder belongs to ONE client: a confirmed client, a
+        waiting name, or a folder under a Clients-type folder nobody has
+        answered about yet (``folder:<key>``). Walled the same way."""
+        return bool(str(getattr(self.turn, "owner", "") or ""))
+
+    @property
+    def provisional_sig(self) -> str:
+        """For a ``folder:<key>`` owner, the signature of that folder's own
+        name ("" otherwise): the one name that may be acted on from it."""
+        owner = str(getattr(self.turn, "owner", "") or "")
+        if not owner.startswith("folder:"):
+            return ""
+        return N.signature(K.folder_name(owner.split(":", 1)[1]))
+
+    def is_own(self, target: Any) -> bool:
+        """Is ``target`` the client this turn's folder belongs to?"""
+        tid = str(getattr(target, "id", "") or "")
+        own = self.own_id
+        if own:
+            return bool(tid) and tid == own
+        psig = self.provisional_sig
+        if not psig:
+            return False
+        sigs = {_sig(getattr(target, "name", "")), *(getattr(target, "aliases", ()) or ())}
+        return psig in sigs
+
+    @property
     def own_name(self) -> str:
         cid = self.own_id
         for table in (getattr(self.cmap, "names", {}) or {}, getattr(self.cmap, "waiting_names", {}) or {}):
@@ -427,7 +464,8 @@ def _other_client_words(g: Gate, what: str) -> str:
     """The refusal in a client's folder for a change to ANOTHER client. It
     never names that other client's folders or work."""
     own = g.own_name
-    where = f"{possessive(own)} folder" if own else "another client's folder"
+    where = (f"{possessive(own)} folder" if own
+             else "a folder kept apart for one client" if g.owned else "another client's folder")
     if what == "preference":
         return (
             f"This chat is in {where}. A preference for another client is kept from that client's page "
@@ -442,8 +480,7 @@ def _other_client_words(g: Gate, what: str) -> str:
 def _wall_problem(g: Gate, target: Target, *, what: str = "change") -> str:
     """In a client's folder (or a waiting name's), only THAT client may be
     acted on; anywhere else the owner's words decide."""
-    own = g.own_id
-    if not own or (target.id and target.id == own):
+    if not g.owned or g.is_own(target):
         return ""
     return _other_client_words(g, what)
 
@@ -483,6 +520,25 @@ def _client_id_of(view: Any, fallback: str = "") -> str:
     return fallback
 
 
+#: The refusal kinds whose sentence names ANOTHER client (``store._refusal``).
+_NAMES_ANOTHER = frozenset({"taken", "inside", "holds", "name_taken"})
+OVERLAPS_ANOTHER = (
+    "That overlaps a folder or name another client has on record, so nothing was changed. "
+    f"The Clients page ({CLIENTS_HREF}) shows which."
+)
+
+
+def chat_sentence(exc: BaseException) -> str:
+    """What a client tool says for a refused change. In a turn whose folder
+    belongs to one client (the independent review), a folder or name rule
+    that names ANOTHER client is told without that client's name or
+    folders; the page's own routes keep the named sentence."""
+    sentence = exc.sentence if isinstance(exc, C.ClientError) else NOT_READY
+    if getattr(exc, "kind", "") in _NAMES_ANOTHER and getattr(W.current(), "owner", None):
+        return OVERLAPS_ANOTHER
+    return sentence
+
+
 def run_ops(platform: Any, ops: list[dict[str, Any]], client_id: str) -> tuple[str, list[dict[str, Any]], str]:
     """Do each op through the record's own functions, in order. Returns
     ``(client id, the ops done with what each made, the refusal of the op
@@ -497,11 +553,15 @@ def run_ops(platform: Any, ops: list[dict[str, Any]], client_id: str) -> tuple[s
         try:
             if kind == "confirm":
                 cid = _client_id_of(S.confirm(platform, oid), oid)
+            elif kind == "ask_again":
+                S.ask_again(platform, oid)
             elif kind == "reconfirm":
                 S.ask_again(platform, oid)
                 cid = _client_id_of(S.confirm(platform, oid), oid)
             elif kind == "create":
-                cid = _client_id_of(S.create(platform, folder=str(op.get("folder") or ""), name=str(op.get("name") or "")))
+                made = {"local_only": True} if _local_turn() else {}
+                cid = _client_id_of(S.create(platform, folder=str(op.get("folder") or ""),
+                                             name=str(op.get("name") or ""), **made))
             elif kind == "restore":
                 cid = _client_id_of(S.restore(platform, oid), oid)
             elif kind == "decline":
@@ -509,7 +569,12 @@ def run_ops(platform: Any, ops: list[dict[str, Any]], client_id: str) -> tuple[s
             elif kind == "add_folder":
                 S.add_folder(platform, oid, str(op.get("folder") or ""))
             elif kind == "remove_folder":
-                S.remove_folder(platform, oid, str(op.get("folder") or ""))
+                got = S.remove_folder(platform, oid, str(op.get("folder") or ""))
+                # What was removed, so its Undo puts it back AS IT WAS (a
+                # found folder stays found: its Local only check holds).
+                was = got.get("folder") if isinstance(got, Mapping) else None
+                if isinstance(was, Mapping):
+                    op = {**op, "how": str(was.get("how") or ""), "spelled": str(was.get("folder") or "")}
             elif kind == "rename":
                 S.rename(platform, oid, str(op.get("name") or ""))
             elif kind == "aliases":
@@ -522,7 +587,10 @@ def run_ops(platform: Any, ops: list[dict[str, Any]], client_id: str) -> tuple[s
                 pref = got.get("preference") if isinstance(got, Mapping) else None
                 op = {**op, "pref_id": str((pref or {}).get("id") or "")}
             elif kind == "change_pref":
-                S.change_preference(platform, oid, str(op.get("pref_id") or ""), str(op.get("text") or ""))
+                S.change_preference(
+                    platform, oid, str(op.get("pref_id") or ""), str(op.get("text") or ""),
+                    **_pref_fields(op, ""),
+                )
             elif kind == "forget_pref":
                 got = S.forget_preference(platform, oid, str(op.get("pref_id") or ""))
                 op = {**op, "view": dict(got.get("preference") or got) if isinstance(got, Mapping) else {}}
@@ -531,34 +599,90 @@ def run_ops(platform: Any, ops: list[dict[str, Any]], client_id: str) -> tuple[s
         except (C.ClientError, NotImplementedError) as exc:
             if not done:
                 raise
-            why = exc.sentence if isinstance(exc, C.ClientError) else NOT_READY
+            # Some of it WAS done: never "Nothing was changed" over it.
+            why = chat_sentence(exc).replace(" Nothing was changed.", "").strip()
             return cid, done, why
+        if kind in _MAKES_A_CLIENT:
+            op = {**op, "no_folder": _has_no_folder(platform, cid or oid)}
         done.append({**op, "id": cid if kind in ("create",) else oid})
         if not cid:
             cid = oid
     return cid, done, ""
 
 
-def _undo_one(platform: Any, op: Mapping[str, Any]) -> None:
+def _pref_fields(op: Mapping[str, Any], prefix: str) -> dict[str, Any]:
+    """The Local only flag, origin and evidence a ``change_pref`` op sets
+    (``prefix`` "old_" for its Undo); none for an op written before them."""
+    if prefix + "local_only" not in op:
+        return {}
+    return {
+        "local_only": bool(op.get(prefix + "local_only")),
+        "origin": str(op.get(prefix + "origin") or "said"),
+        "evidence": list(op.get(prefix + "evidence") or ()),
+    }
+
+
+#: Ops that make a client (a Yes, again or after all).
+_MAKES_A_CLIENT = frozenset({"confirm", "reconfirm", "create", "restore"})
+
+
+def _has_no_folder(platform: Any, client_id: str) -> bool:
+    """Was the client left with no folder (every home another client's), so
+    no chat is told about it? (The independent review: the reply says so.)"""
+    try:
+        return not _map(platform).roots_of(client_id)
+    except Exception:  # noqa: BLE001 — unsure: say nothing more
+        return False
+
+
+def _local_turn() -> bool:
+    """Is the turn in flight Local only (a client made here is known only
+    from Local only words)?"""
+    try:
+        from ..providers import egress
+
+        return bool(egress.current_scope().on)
+    except Exception:  # noqa: BLE001 — unsure: treat it as Local only (withheld)
+        return True
+
+
+def _note_of(answer: Any) -> str:
+    return " ".join(str(answer.get("note") or "").split()) if isinstance(answer, Mapping) else ""
+
+
+def _undo_one(platform: Any, op: Mapping[str, Any]) -> str:
+    """Put back one op; returns what the record said it could NOT put back
+    exactly ("" when it did)."""
     kind = str(op.get("op"))
     cid = str(op.get("id") or "")
     if kind == "confirm":
         S.unconfirm(platform, cid, back_to="proposed")
     elif kind == "reconfirm":
         S.unconfirm(platform, cid, back_to="declined")
+    elif kind == "ask_again":
+        S.decline(platform, cid)
     elif kind == "create":
         S.unconfirm(platform, cid, back_to=str(op.get("reused") or "gone"))
     elif kind == "restore":
         S.decline(platform, cid)
     elif kind == "decline":
         if op.get("was") == "confirmed":
-            S.restore(platform, cid)
-        else:
-            S.ask_again(platform, cid)
+            engine = _engine(platform)
+            before = {str(r.get("key")) for r in S.folder_rows(engine, cid) or []}
+            note = _note_of(S.restore(platform, cid))
+            after = {str(r.get("key")) for r in S.folder_rows(engine, cid) or []}
+            # A folder that now overlaps another client's was dropped: say so.
+            return note if before - after else ""
+        S.ask_again(platform, cid)
     elif kind == "add_folder":
         S.remove_folder(platform, cid, str(op.get("folder") or ""))
     elif kind == "remove_folder":
-        S.add_folder(platform, cid, str(op.get("folder") or ""))
+        how = str(op.get("how") or "")
+        folder = str(op.get("spelled") or op.get("folder") or "")
+        if how:
+            S.add_folder(platform, cid, folder, how=how)
+        else:
+            S.add_folder(platform, cid, folder)
     elif kind == "rename":
         S.rename(platform, cid, str(op.get("old") or ""))
         S.set_aliases(platform, cid, list(op.get("old_aliases") or ()))
@@ -567,7 +691,8 @@ def _undo_one(platform: Any, op: Mapping[str, Any]) -> None:
     elif kind == "keep_pref":
         S.forget_preference(platform, cid, str(op.get("pref_id") or ""))
     elif kind == "change_pref":
-        S.change_preference(platform, cid, str(op.get("pref_id") or ""), str(op.get("old") or ""))
+        S.change_preference(platform, cid, str(op.get("pref_id") or ""), str(op.get("old") or ""),
+                            **_pref_fields(op, "old_"))
     elif kind == "forget_pref":
         view = op.get("view") if isinstance(op.get("view"), Mapping) else {}
         S.keep_preference(
@@ -576,6 +701,7 @@ def _undo_one(platform: Any, op: Mapping[str, Any]) -> None:
         )
     else:
         raise R.RecordError("This change has nothing Undo can put back.")
+    return ""
 
 
 def _same(a: Mapping[str, Any] | None, b: Mapping[str, Any] | None) -> bool:
@@ -610,21 +736,31 @@ def restore_client(platform: Any, client_id: str, prior: Any, desc: Mapping[str,
             f"{name} was changed again after this change, so Undo would undo that too; change it on "
             "its page instead."
         )
+    notes: list[str] = []
     try:
         for op in reversed(ops):
-            _undo_one(platform, op)
+            note = _undo_one(platform, op)
+            if note:
+                notes.append(note)
     except C.ClientError as exc:
         raise R.RecordError(exc.sentence) from exc
     except (NotImplementedError, AttributeError) as exc:
         raise R.RecordError("This change cannot be undone in this build; change it on the Clients page.") from exc
+    if notes:
+        # Never "as it was" over what the record could not put back.
+        return f"undo: {name} is back, but not exactly as before this change: " + " ".join(notes)
     return f"undo: {name} is back as it was before this change"
 
 
-def _did(op: Mapping[str, Any], name: str) -> str:
+def _did(op: Mapping[str, Any], name: str, *, no_folder: bool = False) -> str:
     kind = str(op.get("op"))
     poss = possessive(name)
     if kind in ("confirm", "reconfirm", "create", "restore"):
+        if op.get("no_folder"):
+            return f"{name} is a client now, but has no folder yet, so no chat is told about {name}"
         return f"{name} is a client now"
+    if kind == "ask_again":
+        return f"{name} waits for your answer again (you had said it was not a client)"
     if kind == "decline":
         if op.get("was") == "confirmed":
             return f"{name} is marked as not a client; {poss} folders and preferences are kept, unused"
@@ -639,6 +775,8 @@ def _did(op: Mapping[str, Any], name: str) -> str:
         extra = [a for a in (op.get("aliases") or []) if a not in (op.get("prior") or [])]
         return f"{name} is now also known as " + ", ".join(str(a) for a in extra)
     if kind == "keep_pref":
+        if no_folder:
+            return f"kept for {name} only: {_q(op.get('text'))}; no chat is told it until {name} has a folder"
         return f"kept for {name} only: {_q(op.get('text'))}; chats in {poss} folders are told it"
     if kind == "change_pref":
         return f"changed what is kept for {name}: {_q(op.get('old'))} now reads {_q(op.get('text'))}"
@@ -651,7 +789,8 @@ def _did(op: Mapping[str, Any], name: str) -> str:
 def did_words(name: str, client_id: str, done: list[dict[str, Any]]) -> str:
     """What the ops DONE did, in words, read from the ops themselves (never
     from the plan's promise: an op that did not run is not said)."""
-    parts = [_did(op, name) for op in done]
+    no_folder = any(op.get("no_folder") for op in done)
+    parts = [_did(op, name, no_folder=no_folder) for op in done]
     text = "; ".join(p for p in parts if p)
     text = (text[:1].upper() + text[1:] + ".") if text else "Nothing was changed."
     if any(str(op.get("op")) in ("confirm", "reconfirm", "create", "restore") for op in done):
@@ -771,7 +910,11 @@ def plan_answer(platform: Any, args: Mapping[str, Any]) -> dict[str, Any]:
             if folder:
                 ops.append({"op": "create", "folder": folder, "name": shown, "reused": "declined"})
             else:
-                ops.append({"op": "reconfirm", "id": t.id})
+                # Two recorded steps (the independent review): if the Yes
+                # cannot land after the No was undone, the reply says so and
+                # its Undo puts the No back.
+                ops.append({"op": "ask_again", "id": t.id})
+                ops.append({"op": "confirm", "id": t.id})
             words = (
                 f"Makes {shown} a client after all (you had said it was not one)"
                 + (f", with the folder {folder}." if folder else ", with the folders it was seen in.")
@@ -835,12 +978,11 @@ def _target_client(platform: Any, g: Gate, ref: str, *, what: str, waiting_ok: b
                 t = find(platform, g.cmap, named[0])
     except C.ClientError as exc:
         return Target(), exc.sentence
-    own = g.own_id
-    if own:
-        if t.id != own:
+    if g.owned:
+        if not g.is_own(t):
             return t, _other_client_words(g, what)
         named = g.named()
-        if named - {own} and own not in named:
+        if named - {t.id} and t.id not in named:
             return t, _other_client_words(g, what)
         return t, ""
     if not _names_it(g.words, t.name, t.aliases):
@@ -855,6 +997,17 @@ def _where(g: Gate) -> str:
 
 def _thread_link(thread_id: str) -> str:
     return f"/chat?thread={thread_id}" if re.fullmatch(r"[A-Za-z0-9_-]{1,80}", thread_id or "") else ""
+
+
+def _said_evidence(g: Gate, thread_id: str) -> list[dict[str, Any]]:
+    """The owner's own words in this chat, as a preference's evidence."""
+    return [{
+        "quote": _flat(g.words, QUOTE_CHARS),
+        "thread_id": thread_id if _thread_link(thread_id) else "",
+        "where": _where(g),
+        "at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "link": _thread_link(thread_id),
+    }]
 
 
 def plan_preference_add(platform: Any, args: Mapping[str, Any], *, thread_id: str = "") -> dict[str, Any]:
@@ -873,13 +1026,7 @@ def plan_preference_add(platform: Any, args: Mapping[str, Any], *, thread_id: st
     if problem:
         return _plan(problem=problem)
     poss = possessive(t.name)
-    evidence = [{
-        "quote": _flat(g.words, QUOTE_CHARS),
-        "thread_id": thread_id if _thread_link(thread_id) else "",
-        "where": _where(g),
-        "at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
-        "link": _thread_link(thread_id),
-    }]
+    evidence = _said_evidence(g, thread_id)
     local = bool(egress.current_scope().on)
     keep = {"op": "keep_pref", "id": t.id, "text": text, "local_only": local, "evidence": evidence}
     if t.status == "proposed":
@@ -930,9 +1077,13 @@ def _resolve_pref(platform: Any, client_id: str, name: str, ref_id: str, ref_tex
     return None, f"No preference kept for {name} matches. Kept for {name}: {some}."
 
 
-def plan_preference_change(platform: Any, args: Mapping[str, Any]) -> dict[str, Any]:
-    """``client_preference_change {id|text, new_text, client?}``. BLOCKING."""
+def plan_preference_change(platform: Any, args: Mapping[str, Any], *, thread_id: str = "") -> dict[str, Any]:
+    """``client_preference_change {id|text, new_text, client?}``. The new
+    words are the owner's, said in THIS chat: the row becomes Local only when
+    this turn is (never the other way), and its evidence is this message.
+    BLOCKING."""
     from ..learning.preferences import PreferenceInvalid, clean_text
+    from ..providers import egress
 
     g = gate(platform)
     if g.problem:
@@ -954,7 +1105,14 @@ def plan_preference_change(platform: Any, args: Mapping[str, Any]) -> dict[str, 
     if " ".join(old.split()) == new:
         return _plan(nothing=f"That preference for {t.name} already reads {_q(new)}; nothing was changed.",
                      client_id=t.id, name=t.name)
-    ops = [{"op": "change_pref", "id": t.id, "pref_id": str(pref.get("id")), "text": new, "old": old}]
+    was_local = bool(pref.get("local_only"))
+    ops = [{
+        "op": "change_pref", "id": t.id, "pref_id": str(pref.get("id")), "text": new, "old": old,
+        "local_only": was_local or bool(egress.current_scope().on), "origin": "said",
+        "evidence": _said_evidence(g, thread_id),
+        "old_local_only": was_local, "old_origin": str(pref.get("origin") or "said"),
+        "old_evidence": list(pref.get("evidence") or ()),
+    }]
     words = f"Change what is kept for {t.name}: {_q(old)} becomes {_q(new)}"
     return _plan(ops=ops, words=words, client_id=t.id, name=t.name, title="Client preference changed", old=old, new=new)
 
@@ -1027,29 +1185,52 @@ def plan_update(platform: Any, args: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _local_only_known(platform: Any) -> set[str] | None:
-    """The clients known ONLY from Local only work (every home it was noticed
-    in is Local only or kept home, and the owner did not add it), read from
-    the record's own evidence. None when it cannot be read (the caller then
-    withholds every client from a cloud turn)."""
+    """The clients known ONLY from Local only work, so a cloud turn is not
+    told their names. Asked AGAIN each time (the independent review; the
+    house rule that the source is asked again, never a frozen copy):
+
+    * made by the owner in a Local only chat (``made_local`` in its record);
+    * noticed, with folders on record, none of which now holds work that is
+      neither Local only nor kept home (``block.shared_work``);
+    * noticed, with no folder on record, every home it was noticed in Local
+      only (its evidence).
+
+    None when it cannot be read (the caller then withholds every client from
+    a cloud turn)."""
     try:
         from sqlmodel import select
 
         from ..core.db import session_scope
-        from ..workmap.models import CLIENT_NOTICED, WorkClient
+        from ..workmap.clients.block import shared_work
+        from ..workmap.models import CLIENT_ADDED, CLIENT_NOTICED, WorkClient, WorkClientFolder
 
+        engine = _engine(platform)
         out: set[str] = set()
-        with session_scope(_engine(platform)) as db:
-            for cid, how, evidence in db.exec(
+        with session_scope(engine) as db:
+            rows = list(db.exec(
                 select(WorkClient.id, WorkClient.how, WorkClient.evidence_json).limit(5000)
-            ):
-                if how != CLIENT_NOTICED:
-                    continue
-                try:
-                    homes = (json.loads(evidence or "{}") or {}).get("homes") or []
-                except (TypeError, ValueError, AttributeError):
-                    homes = []
-                if homes and all(isinstance(h, dict) and h.get("local") is True for h in homes):
+            ))
+            folder_keys: dict[str, list[str]] = {}
+            for key, cid in db.exec(select(WorkClientFolder.folder_key, WorkClientFolder.client_id)):
+                folder_keys.setdefault(str(cid), []).append(str(key))
+        for cid, how, evidence in rows:
+            try:
+                ev = json.loads(evidence or "{}") or {}
+                homes = ev.get("homes") or []
+            except (TypeError, ValueError, AttributeError):
+                ev, homes = {}, []
+            if how == CLIENT_ADDED:
+                if isinstance(ev, dict) and ev.get("made_local") is True:
                     out.add(str(cid))
+                continue
+            if how != CLIENT_NOTICED:
+                continue
+            mine = folder_keys.get(str(cid)) or []
+            if mine:
+                if not any(shared_work(engine, k) for k in mine[:20]):
+                    out.add(str(cid))
+            elif homes and all(isinstance(h, dict) and h.get("local") is True for h in homes):
+                out.add(str(cid))
         return out
     except Exception:  # noqa: BLE001 — fail closed
         log.debug("client_list: Local only read failed", exc_info=True)
@@ -1087,8 +1268,8 @@ def list_words(platform: Any) -> tuple[str, dict[str, Any]]:
     lines: list[str] = []
     shown: list[dict[str, Any]] = []
     own = g.own_id
-    if own:
-        mine = [r for r in clients if str(r.get("id")) == own]
+    if g.owned:  # a client's, a waiting name's or a not-yet-answered Clients folder
+        mine = [r for r in clients if own and str(r.get("id")) == own]
         others = len(clients) - len(mine)
         if mine:
             lines.append("This chat's folder belongs to a client. " + _row_line(mine[0]))
@@ -1220,7 +1401,7 @@ class _ClientTool(R._RecordTool):  # noqa: SLF001 — the records module's own b
         try:
             cid, done, stopped = await asyncio.to_thread(run_ops, self.platform, plan["ops"], plan["client_id"])
         except C.ClientError as exc:
-            return ToolResult(ok=False, error=exc.sentence)
+            return ToolResult(ok=False, error=chat_sentence(exc))
         except NotImplementedError:
             return ToolResult(ok=False, error=NOT_READY)
         try:
@@ -1325,7 +1506,7 @@ class ClientPreferenceChangeTool(_ClientTool):
     }
 
     def plan(self, args: Mapping[str, Any], ctx: "ToolContext | None" = None) -> dict[str, Any]:
-        return plan_preference_change(self.platform, args)
+        return plan_preference_change(self.platform, args, thread_id=str(getattr(ctx, "thread_id", "") or ""))
 
 
 class ClientPreferenceForgetTool(_ClientTool):

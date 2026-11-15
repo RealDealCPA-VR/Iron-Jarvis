@@ -101,9 +101,53 @@ describe("the question under a reply", () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId("client-question-decline"));
     });
-    expect(H.posts).toEqual([{ path: `/clients/${HID}/decline`, body: {} }]);
+    // A No expects a WAITING name, so a stale line never takes a client away.
+    expect(H.posts).toEqual([{ path: `/clients/${HID}/decline`, body: { expect: "proposed" } }]);
     expect(screen.getByTestId("client-question-no").textContent).toBe("Iron Jarvis won't ask about Hartleys again.");
     expect(settle).toHaveBeenCalledWith({ ...ASK, state: "no" });
+  });
+
+  it("a No shows the daemon's own note, never a sentence of its own over it", async () => {
+    H.answer = { ok: true, client: { id: HID, name: "Hartleys" }, note: "Iron Jarvis won't ask about Hartleys again." };
+    render(<ClientQuestion question={ASK} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("client-question-decline"));
+    });
+    expect(screen.getByTestId("client-question-no").textContent).toBe("Iron Jarvis won't ask about Hartleys again.");
+    cleanup();
+    H.answer = { ok: true, client: { id: HID, name: "Hartleys" }, note: "Chats in Hartleys' folders stop being told about Hartleys." };
+    render(<ClientQuestion question={ASK} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("client-question-decline"));
+    });
+    expect(screen.getByTestId("client-question-no").textContent).toBe(
+      "Chats in Hartleys' folders stop being told about Hartleys.",
+    );
+  });
+
+  it("the answer is announced, and a failure is an alert", async () => {
+    render(<ClientQuestion question={ASK} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("client-question-confirm"));
+    });
+    expect(screen.getByTestId("client-question").getAttribute("role")).toBe("status");
+    cleanup();
+    H.fail = { status: 503, message: "" };
+    render(<ClientQuestion question={ASK} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("client-question-confirm"));
+    });
+    await waitFor(() => expect(screen.getByTestId("client-question-error").getAttribute("role")).toBe("alert"));
+  });
+
+  it("a stale No after a Yes elsewhere is refused (409) and the line says so", async () => {
+    H.fail = { status: 409, message: "Hartleys was already answered." };
+    render(<ClientQuestion question={ASK} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("client-question-decline"));
+    });
+    expect(H.posts).toEqual([{ path: `/clients/${HID}/decline`, body: { expect: "proposed" } }]);
+    expect(screen.getByTestId("client-question-refused").textContent).toBe("Hartleys was already answered.");
   });
 
   it("answered somewhere else (409) shows the route's own sentence and the question goes", async () => {

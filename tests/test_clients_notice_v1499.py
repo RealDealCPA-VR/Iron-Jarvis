@@ -526,3 +526,51 @@ def test_reads_never_mint(platform):
     assert platform.event_bus.events == []
     # A pass is what mints.
     assert detect.notice(platform, force=True) == 2
+
+
+def test_a_question_the_lane_gave_up_on_is_never_marked_asked(platform, tmp_path, monkeypatch):
+    """The independent review: the write that marks the question asked waits
+    on SQLite only for what is left of the lane's wait, and is rolled back
+    past it, so a question the reply went out without rides a later reply."""
+    import sqlite3
+
+    import iron_jarvis.daemon.chat_turn as CT
+
+    _chats(platform, r"C:\Clients\Hartleys", 2)
+    _built(platform)
+    assert detect.notice(platform, force=True) == 1
+    (row,) = _rows(platform, "proposed")
+    holder = sqlite3.connect(str(tmp_path / "clients.db"), timeout=0)
+    try:
+        holder.execute("BEGIN IMMEDIATE")  # another writer holds the lock
+        import time as _time
+
+        began = _time.monotonic()
+        assert store.question_for_turn(platform, folder=r"C:\Clients\Hartleys", thread_id="t1",
+                                       budget_s=store.QUESTION_MARGIN_S + 0.05) is None
+        # It gave up with the lane, never after SQLite's own 30 s.
+        assert _time.monotonic() - began < 10
+        # Past the budget before it starts: nothing is written at all.
+        assert store.question_for_turn(platform, folder=r"C:\Clients\Hartleys", thread_id="t1",
+                                       budget_s=0.0) is None
+    finally:
+        holder.rollback()
+        holder.close()
+    (still,) = _rows(platform, "proposed")
+    assert still.asked_at is None
+    # The connection's own wait is put back (the pool hands it out again).
+    with session_scope(platform.engine) as db:
+        assert db.connection().exec_driver_sql("PRAGMA busy_timeout").scalar() == 30_000
+    got = store.question_for_turn(platform, folder=r"C:\Clients\Hartleys", thread_id="t2", budget_s=1.0)
+    assert got is not None and got["id"] == row.id
+    # Both lanes hand the store their own wait.
+    seen = {}
+
+    def spy(p, **kw):
+        seen.update(kw)
+        return None
+
+    monkeypatch.setattr(store, "question_for_turn", spy)
+    asyncio.run(CT.client_question_for(platform, SimpleNamespace(thread_id="t3"), folder=r"C:\Clients\Hartleys",
+                                       suggest_preferences=True, suggestion=None))
+    assert seen.get("budget_s") == CT.CLIENT_QUESTION_WAIT_S

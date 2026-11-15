@@ -459,7 +459,7 @@ describe("the review", () => {
     await act(async () => {
       fireEvent.click(within(screen.getAllByTestId("client-waiting")[1]).getByTestId("client-waiting-decline"));
     });
-    expect(H.posts).toEqual([{ path: `/clients/${PRID}/decline`, body: {} }]);
+    expect(H.posts).toEqual([{ path: `/clients/${PRID}/decline`, body: { expect: "proposed" } }]);
     await waitFor(() =>
       expect(screen.getByTestId("client-review-note")).toHaveTextContent("Iron Jarvis won't ask about Price again."),
     );
@@ -625,7 +625,8 @@ describe("a client's page", () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId("client-not-a-client"));
     });
-    expect(H.posts).toEqual([{ path: `/clients/${HID}/decline`, body: {} }]);
+    // The two-press footer is the one press that may take a CONFIRMED client away.
+    expect(H.posts).toEqual([{ path: `/clients/${HID}/decline`, body: { expect: "confirmed" } }]);
     await waitFor(() => expect(screen.getByTestId("client-note")).toHaveTextContent("Iron Jarvis won't ask about Hartleys again."));
   });
 
@@ -834,5 +835,64 @@ describe("where Clients lives", () => {
     expect(screen.queryByTestId("client-of-folder")).toBeNull();
     // Wired in where the Project shows its folder.
     expect(src("app/projects/[id]/page.tsx")).toContain("{project.root && <ClientOfFolder folder={project.root} />}");
+  });
+});
+
+/* ===================================================== the independent review */
+
+describe("the independent review", () => {
+  it("Look again now is off while noticing is off", async () => {
+    H.answers["/clients"] = { ...LIST(), noticing: false };
+    render(<ClientList />);
+    await screen.findByTestId("client-row");
+    expect((screen.getByTestId("client-look-again") as HTMLButtonElement).disabled).toBe(true);
+    cleanup();
+    H.answers["/clients"] = LIST();
+    render(<ClientList />);
+    await screen.findByTestId("client-row");
+    expect((screen.getByTestId("client-look-again") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("a confirmed client with no folder is never said to be 'not a client now'", async () => {
+    await openPage({ ...PAGE(), folders: [], told: "", told_for: "" });
+    expect(screen.getByTestId("client-told-nothing").textContent).toBe(
+      "Hartleys has no folder yet, so no chat is told about Hartleys.",
+    );
+    cleanup();
+    await openPage({ ...PAGE(), client: { ...PAGE().client, status: "declined" }, told: "" });
+    expect(screen.getByTestId("client-told-nothing").textContent).toBe("Nothing is told: it is not a client now.");
+  });
+
+  it("the preview of what is told names the folder it was built for", async () => {
+    await openPage({ ...PAGE(), told_for: "C:\\Clients\\Hartleys" });
+    expect(screen.getByTestId("client-told-for").textContent).toBe("A chat in C:\\Clients\\Hartleys is told:");
+  });
+
+  it("a folder row the server says names nobody offers no Make this a client", async () => {
+    H.answers["/work-record/folders"] = {
+      folders: [
+        { folder: "C:\\Clients\\Hartleys\\2026", name: "2026", count: 1, last_at: null, client: null, may_make_client: false },
+        { folder: "C:\\Work\\Pereira Farms", name: "Pereira Farms", count: 1, last_at: null, client: null, may_make_client: true },
+      ],
+      total: 2,
+      building: false,
+    };
+    render(<WorkByFolder />);
+    const rows = await screen.findAllByTestId("work-folder");
+    expect(within(rows[0]).queryByTestId("work-folder-make-client")).toBeNull();
+    expect(within(rows[1]).getByTestId("work-folder-make-client")).toBeTruthy();
+  });
+
+  it("each one-press answer names its row for a screen reader, and the chat answer is announced", async () => {
+    render(<ClientReview waiting={decodeClientsList(LIST())!.waiting} />);
+    const declines = screen.getAllByTestId("client-waiting-decline");
+    const names = decodeClientsList(LIST())!.waiting.map((w) => w.name);
+    expect(declines.map((b) => b.getAttribute("aria-label"))).toEqual(names.map((n) => `Not a client: ${n}`));
+    cleanup();
+    H.answers["/clients"] = LIST();
+    render(<ClientList />);
+    await screen.findByTestId("client-row");
+    const back = screen.getAllByTestId("client-bring-back").map((b) => b.getAttribute("aria-label"));
+    expect(back.every((l) => /^(Ask again|Make it a client again): \S/.test(l ?? ""))).toBe(true);
   });
 });

@@ -378,6 +378,8 @@ export interface ClientPageData {
   projects: ClientProject[];
   /** Exactly what a cloud chat in this client's folders is told. */
   told: string;
+  /** The folder that preview was built for ("" with no preview). */
+  toldFor: string;
 }
 
 function seenIn(v: unknown, max: number): SeenIn[] {
@@ -544,6 +546,7 @@ export function decodeClientPage(raw: unknown): ClientPageData | null {
     namedElsewhere,
     projects,
     told: str(r.told, 4000),
+    toldFor: str(r.told_for, 1000),
   };
 }
 
@@ -711,6 +714,19 @@ export const WORK_HEADING = "Work";
 export const FILES_HEADING = "Files";
 export const FOLDERS_HEADING = "Folders";
 export const NOTHING_TOLD = "Nothing is told: it is not a client now.";
+
+/** The sentence under "What a chat in X's folders is told" when nothing is:
+ *  by status, never "not a client" for a client (the independent review). */
+export function nothingToldWords(name: string, status: ClientStatus, folders: number): string {
+  if (status !== "confirmed") return NOTHING_TOLD;
+  if (folders === 0) return `${name} has no folder yet, so no chat is told about ${name}.`;
+  return `Nothing is told about ${name} now.`;
+}
+
+/** Which folder the preview of what is told was built for. */
+export function toldForWords(folder: string): string {
+  return `A chat in ${folder} is told:`;
+}
 
 export function isAClient(name: string): string {
   return `Is ${name} a client?`;

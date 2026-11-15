@@ -76,7 +76,7 @@ export function ClientReview({
     setBusy(true);
     setNote(null);
     try {
-      await post<unknown>(clientVerbPath(w.id, "decline"), {});
+      await post<unknown>(clientVerbPath(w.id, "decline"), { expect: "proposed" });
       setNote({ words: afterNo(w.name), failed: false });
       onChanged?.();
     } catch (e) {
@@ -142,6 +142,7 @@ export function ClientReview({
                   <button
                     type="button"
                     data-testid="client-waiting-decline"
+                    aria-label={`${NOT_A_CLIENT}: ${w.name}`}
                     disabled={busy}
                     onClick={() => void decline(w)}
                     className="shrink-0 rounded px-1 py-0.5 text-[12px] text-zinc-500 underline-offset-2 hover:text-zinc-200 hover:underline disabled:opacity-40"

@@ -138,7 +138,7 @@ def test_every_page_claim_names_its_evidence(scene):
     assert r.status_code == 200, r.text
     got = r.json()
     assert set(got) == {"client", "folders", "entries", "entries_total", "files", "files_total", "decisions",
-                        "people", "preferences", "named_elsewhere", "projects", "told"}
+                        "people", "preferences", "named_elsewhere", "projects", "told", "told_for"}
     c = got["client"]
     assert (c["id"], c["name"], c["status"], c["how"]) == (cid, "Hartleys", "confirmed", "added")
     assert c["why"] == ["You added it with the folder Work › Hartleys."] and c["confirmed_at"]
@@ -231,7 +231,7 @@ def test_told_preview_equals_client_block_for_a_cloud_turn(scene):
     assert "- Use cash basis." in told and "Kept in a Local only chat." not in told
     assert told != block.client_block(scene.platform, folder=HART, local=True)
     # Not a client: nothing is told, and the preview says so by being empty.
-    scene.client.post(f"/clients/{cid}/decline")
+    assert scene.client.post(f"/clients/{cid}/decline", json={"expect": "confirmed"}).status_code == 200
     assert scene.client.get(f"/clients/{cid}").json()["told"] == ""
 
 
@@ -246,7 +246,7 @@ def test_work_record_folder_rows_carry_their_client(scene):
     assert scene.client.get("/clients/of", params={"folder": HART + r"\2026"}).json() == {
         "client": {"id": cid, "name": "Hartleys"}}
     assert scene.client.get("/clients/of", params={"folder": r"D:\Work\Smith"}).json() == {"client": None}
-    scene.client.post(f"/clients/{cid}/decline")
+    assert scene.client.post(f"/clients/{cid}/decline", json={"expect": "confirmed"}).status_code == 200
     rows = {f["folder"]: f for f in scene.client.get("/work-record/folders").json()["folders"]}
     assert rows[HART + r"\2026"]["client"] is None
 
@@ -425,3 +425,55 @@ def test_a_typed_preference_is_scanned_and_refused_when_flagged(scene):
     assert r.status_code == 200 and r.json()["client"]["name"] == "Hartley Group"
     assert c.patch(f"/clients/{cid}", json={"name": INJ[:60]}).status_code == 400
     assert keys.folder_name(HART) == "Hartleys"
+
+
+def test_a_one_press_no_never_takes_a_confirmed_client_away(scene):
+    """The independent review: a stale "Is Hartleys a client?" under a reply
+    (or in the review or the inbox) posts its No with no expectation after
+    the owner said Yes elsewhere. It is refused as already answered, and the
+    client stays a client; only the page's two-press footer (``expect:
+    confirmed``) takes it away."""
+    c = scene.client
+    for i in range(3):
+        _chat(scene, rf"C:\Clients\Hartleys\Job{i}", "Work", hours_ago=i + 1)
+    _built(scene)
+    assert c.post("/clients/notice").json()["noticed"] == 1
+    cid = c.get("/clients").json()["waiting"][0]["id"]
+    assert c.post(f"/clients/{cid}/confirm").status_code == 200
+    for body in (None, {}, {"expect": "proposed"}):
+        r = c.post(f"/clients/{cid}/decline", json=body) if body is not None else c.post(f"/clients/{cid}/decline")
+        assert r.status_code == 409 and r.json()["detail"] == "Hartleys was already answered.", r.text
+    assert c.get(f"/clients/{cid}").json()["client"]["status"] == "confirmed"
+    assert c.post(f"/clients/{cid}/decline", json={"expect": "nonsense"}).status_code == 400
+    r = c.post(f"/clients/{cid}/decline", json={"expect": "confirmed"})
+    assert r.status_code == 200 and "stop being told" in r.json()["note"], r.text
+    assert c.get(f"/clients/{cid}").json()["client"]["status"] == "declined"
+
+
+def test_look_again_with_noticing_off_says_it_did_not_look(scene):
+    """The independent review: with Notice clients in your folders off, no
+    pass runs, and the route says so instead of "nothing new"."""
+    c = scene.client
+    for i in range(3):
+        _chat(scene, rf"C:\Clients\Hartleys\Job{i}", "Work", hours_ago=i + 1)
+    _built(scene)
+    scene.platform.config.notice_clients = False
+    try:
+        r = c.post("/clients/notice")
+        assert r.status_code == 409 and "is off" in r.json()["detail"], r.text
+        assert c.get("/clients").json()["waiting"] == []
+    finally:
+        scene.platform.config.notice_clients = True
+    assert c.post("/clients/notice").json()["noticed"] == 1
+
+
+def test_folder_rows_offer_make_this_a_client_only_where_the_folder_names_someone(scene):
+    """The independent review: a year or a work word names nobody, so the
+    row never offers a press that is always refused."""
+    for folder in (r"C:\Clients\Hartleys\2026", r"C:\Work\Smith\Payroll", r"C:\Work\Pereira Farms"):
+        _chat(scene, folder, "Work")
+    _built(scene)
+    rows = {f["folder"]: f for f in scene.client.get("/work-record/folders").json()["folders"]}
+    assert rows[r"C:\Clients\Hartleys\2026"]["may_make_client"] is False
+    assert rows[r"C:\Work\Smith\Payroll"]["may_make_client"] is False
+    assert rows[r"C:\Work\Pereira Farms"]["may_make_client"] is True

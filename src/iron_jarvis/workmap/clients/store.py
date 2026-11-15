@@ -93,6 +93,11 @@ QUOTE_CHARS = 160
 #: (the lane gives up at 1 s).
 QUESTION_LOCK_S = 0.5
 
+try:
+    from ...core.db import BUSY_TIMEOUT_MS as _BUSY_MS
+except Exception:  # noqa: BLE001
+    _BUSY_MS = 30_000
+
 #: One noticing pass, or one question picked, at a time (``detect.notice``
 #: and :func:`question_for_turn` share it).
 NOTICE_LOCK = threading.RLock()
@@ -400,7 +405,14 @@ def folder_rows(engine: Any, client_id: str) -> list[dict[str, Any]]:
              "created_at": _iso(r.created_at)} for r in rows]
 
 
-def question_for_turn(platform: Any, *, folder: str, thread_id: str) -> dict[str, Any] | None:
+#: Kept free of the lane's wait, so a question marked asked is one the lane
+#: still takes (the thread's return and the hand-over cost a little).
+QUESTION_MARGIN_S = 0.25
+
+
+def question_for_turn(
+    platform: Any, *, folder: str, thread_id: str, budget_s: float | None = None,
+) -> dict[str, Any] | None:
     """The one question under a reply: ``{id, name, folders, work}`` or None.
 
     BLOCKING; the lanes call it after a finished turn, beside
@@ -410,7 +422,20 @@ def question_for_turn(platform: Any, *, folder: str, thread_id: str) -> dict[str
     ``notice_clients`` is on and the turn's ``folder`` is inside a home of a
     proposed row whose ``asked_at`` is NULL; the strongest such row is
     picked and ``asked_at`` set under the notice lock (a question ignored
-    under its reply is never put under another). Never raises (None)."""
+    under its reply is never put under another). Never raises (None).
+
+    ``budget_s`` (the independent review): the lane's own wait. The write
+    that marks the row asked waits on SQLite for what is left of it (minus
+    :data:`QUESTION_MARGIN_S`), never the database's 30 s, and is rolled back
+    once the time is past: a question the lane gave up on is never marked
+    asked, so it rides a later reply."""
+    started = time.monotonic()
+
+    def _left() -> float:
+        if budget_s is None:
+            return float("inf")
+        return float(budget_s) - QUESTION_MARGIN_S - (time.monotonic() - started)
+
     try:
         if not getattr(getattr(platform, "config", None), "notice_clients", True):
             return None
@@ -435,9 +460,27 @@ def question_for_turn(platform: Any, *, folder: str, thread_id: str) -> dict[str
                     return None
                 hits.sort(key=lambda r: (int(r.strength or 0), _iso(r.created_at) or ""), reverse=True)
                 row = hits[0]
-                row.asked_at = utcnow()
-                db.add(row)
-                db.commit()
+                raw = None
+                if budget_s is not None:
+                    left = _left()
+                    if left <= 0:
+                        return None
+                    # The mark-asked write waits on SQLite only for what is
+                    # left of the lane's wait. Set on the DBAPI connection
+                    # itself, so it is put back however the write ends.
+                    raw = db.connection().connection.dbapi_connection
+                    raw.execute(f"PRAGMA busy_timeout={max(1, int(left * 1000))}")
+                try:
+                    row.asked_at = utcnow()
+                    db.add(row)
+                    db.flush()
+                    if _left() <= 0:
+                        db.rollback()
+                        return None
+                    db.commit()
+                finally:
+                    if raw is not None:
+                        raw.execute(f"PRAGMA busy_timeout={int(_BUSY_MS)}")
                 ev = evidence_of(row)
                 return {
                     "id": row.id,
@@ -722,8 +765,27 @@ def check_folder(db: Any, folder: object, *, client_id: str, name: str) -> tuple
     return key, shown, takeover
 
 
+#: The evidence key where a client row remembers the folder rows it took
+#: over from a Not-a-client client, so :func:`unconfirm` hands them back.
+_TOOK_OVER = "took_over"
+
+
+def _remember_takeover(row: WorkClient, takeover: Any) -> None:
+    """Note on ``row`` whose folder row it is taking over (the independent
+    review): an Undo of this Yes gives the row back, never deletes it."""
+    ev = evidence_of(row)
+    took = [t for t in (ev.get(_TOOK_OVER) or []) if isinstance(t, dict)]
+    took.append({"key": str(takeover.folder_key), "from": str(takeover.client_id),
+                 "folder": str(takeover.folder or ""), "how": str(takeover.how or "")})
+    ev[_TOOK_OVER] = took[-50:]
+    row.evidence_json = json.dumps(ev, ensure_ascii=True)
+
+
 def _link(db: Any, row: WorkClient, key: str, shown: str, how: str, takeover: Any) -> None:
     if takeover is not None:
+        if takeover.client_id != row.id:
+            _remember_takeover(row, takeover)
+            db.add(row)
         takeover.client_id = row.id
         takeover.folder = shown
         takeover.how = how
@@ -805,7 +867,7 @@ def _confirm_one(platform: Any, client_id: str, *, name: str | None = None) -> d
             if sig != row.signature:
                 other = _by_signature(db, sig, exclude=row.id)
                 if other is not None:
-                    raise ClientRefused(f"{other.name} is already on record with that name.")
+                    raise _refusal(f"{other.name} is already on record with that name.", "name_taken", other.name)
                 row.aliases_json = json.dumps(_merge_aliases([row.signature, *aliases_of(row)], sig))
                 row.signature = sig
             row.name = wanted
@@ -847,14 +909,21 @@ def confirm(platform: Any, client_id: str, *, name: str | None = None) -> dict[s
     return out
 
 
-def decline(platform: Any, client_id: str) -> dict[str, Any]:
+def decline(platform: Any, client_id: str, *, expect: str | None = None) -> dict[str, Any]:
     """``proposed`` or ``confirmed`` → ``declined`` (Not a client). Folders
     and preferences are kept but claim and reach nothing; the signature and
     aliases are never asked about again. Publishes ``client.declined
-    {id}``. Returns ``{ok, client: {id, name}, note}``."""
+    {id}``. Returns ``{ok, client: {id, name}, note}``.
+
+    ``expect`` (the independent review): the status the press was drawn for.
+    A one-press No under a reply, in the review or the inbox expects a
+    waiting name, so a stale one never takes a confirmed client away
+    (409, "already answered"); only the client page's two-press footer
+    expects ``confirmed``. None (chat's own tool, which names the client and
+    shows a card) declines either."""
     with _writing(platform) as db:
         row = _get(db, client_id)
-        if row.status == CLIENT_DECLINED:
+        if row.status == CLIENT_DECLINED or (expect is not None and row.status != expect):
             raise ClientConflict(f"{row.name} was already answered.")
         was = row.status
         now = utcnow()
@@ -1022,8 +1091,24 @@ def unconfirm(platform: Any, client_id: str, *, back_to: str) -> dict[str, Any]:
             raise ClientConflict(
                 f"A folder was added to {name} since, so Undo would take it away too. "
                 "Change it on its page instead.")
+        given_back = {str(t.get("key")): t for t in (evidence_of(row).get(_TOOK_OVER) or [])
+                      if isinstance(t, dict) and t.get("key") and t.get("from")}
         for f in folders:
+            back = given_back.get(str(f.folder_key))
+            prev = db.get(WorkClient, str(back["from"])) if back else None
+            if prev is not None and prev.id != row.id:
+                # A folder this Yes took over from a Not-a-client client goes
+                # back to it, as it was ("kept, unused").
+                f.client_id = prev.id
+                f.folder = str(back.get("folder") or f.folder)
+                f.how = str(back.get("how") or f.how)
+                db.add(f)
+                continue
             db.delete(f)
+        if back_to != "gone" and given_back:
+            ev = evidence_of(row)
+            ev.pop(_TOOK_OVER, None)
+            row.evidence_json = json.dumps(ev, ensure_ascii=True)
         if back_to == "gone":
             db.delete(row)
             note = f"{name} is no longer on record."
@@ -1045,14 +1130,16 @@ def unconfirm(platform: Any, client_id: str, *, back_to: str) -> dict[str, Any]:
     return out
 
 
-def create(platform: Any, *, folder: str = "", name: str = "") -> dict[str, Any]:
+def create(platform: Any, *, folder: str = "", name: str = "", local_only: bool = False) -> dict[str, Any]:
     """An owner-made client (``POST /clients {folder, name?}``, "Make this a
     client", chat's ``client_answer``): ``how = added``, confirmed at once.
     With no name, the folder's own name (``names.display_name``). Reuses a
     proposed or declined row with the same signature (no twin; the owner's
     explicit action overrides an earlier No). Folder rules apply. A client
     with no folder reaches no chat until it has one. Publishes
-    ``client.confirmed {id}``. Returns ``{ok, client: {id, name}, note}``."""
+    ``client.confirmed {id}``. Returns ``{ok, client: {id, name}, note}``.
+    ``local_only``: made in a Local only chat (recorded as ``made_local``,
+    so a cloud turn is not told its name)."""
     shown = str(folder or "").strip().strip('"').strip()
     given = " ".join(str(name or "").split())
     if not shown and not given:
@@ -1085,12 +1172,15 @@ def create(platform: Any, *, folder: str = "", name: str = "") -> dict[str, Any]
             if row is None:
                 homes = []
                 if checked is not None:
-                    homes = [{"folder": checked[1], "key": checked[0], "work": 0, "last_at": None, "local": False}]
+                    homes = [{"folder": checked[1], "key": checked[0], "work": 0, "last_at": None,
+                              "local": bool(local_only)}]
+                made = {"rule": "added", "homes": homes, "work": 0, "folders": len(homes)}
+                if local_only:
+                    made["made_local"] = True
                 row = WorkClient(
                     id=new_id("client"), name=clean, name_key=names.name_key(clean), signature=sig,
                     status=CLIENT_CONFIRMED, how=CLIENT_ADDED,
-                    evidence_json=json.dumps({"rule": "added", "homes": homes, "work": 0,
-                                              "folders": len(homes)}, ensure_ascii=True),
+                    evidence_json=json.dumps(made, ensure_ascii=True),
                     confirmed_at=now, decided_at=now,
                 )
                 db.add(row)
@@ -1144,9 +1234,10 @@ def rename(platform: Any, client_id: str, name: str) -> dict[str, Any]:
         if sig != row.signature:
             other = _by_signature(db, sig, exclude=row.id)
             if other is not None:
-                raise ClientRefused(f"{other.name} is already on record with that name.")
+                raise _refusal(f"{other.name} is already on record with that name.", "name_taken", other.name)
             row.aliases_json = json.dumps(
                 _merge_aliases([a for a in aliases_of(row) if a != sig], row.signature))
+            _spell(row, {row.signature: row.name})
             row.signature = sig
         row.name = clean
         row.name_key = names.name_key(clean)
@@ -1206,6 +1297,29 @@ def remove_folder(platform: Any, client_id: str, folder: str) -> dict[str, Any]:
     return out
 
 
+#: The evidence key holding how the owner WROTE each alias (``{signature:
+#: spelling}``): the page shows the spelling, never a bare signature.
+_ALIAS_SPELLINGS = "alias_spellings"
+
+
+def _spell(row: WorkClient, spellings: Mapping[str, str]) -> None:
+    """Remember how each alias signature was written (the independent
+    review). Kept to the signatures the row still has."""
+    ev = evidence_of(row)
+    known = {str(k): str(v) for k, v in (ev.get(_ALIAS_SPELLINGS) or {}).items()
+             if isinstance(v, str)} if isinstance(ev.get(_ALIAS_SPELLINGS), dict) else {}
+    known.update({str(k): " ".join(str(v).split())[:80] for k, v in spellings.items() if k and v})
+    keep = set(aliases_of(row))
+    ev[_ALIAS_SPELLINGS] = {k: v for k, v in known.items() if k in keep}
+    row.evidence_json = json.dumps(ev, ensure_ascii=True)
+
+
+def alias_spellings(row: Any) -> dict[str, str]:
+    """``{signature: how the owner wrote it}`` for a row's aliases."""
+    got = evidence_of(row).get(_ALIAS_SPELLINGS)
+    return {str(k): str(v) for k, v in got.items() if isinstance(v, str)} if isinstance(got, dict) else {}
+
+
 def set_aliases(platform: Any, client_id: str, aliases: Sequence[str]) -> dict[str, Any]:
     """The client's other spellings, at most 5, stored as signatures; one
     that another row already uses is refused. Publishes ``client.changed
@@ -1218,6 +1332,7 @@ def set_aliases(platform: Any, client_id: str, aliases: Sequence[str]) -> dict[s
     with _writing(platform) as db:
         row = _get(db, client_id)
         sigs: list[str] = []
+        spelled: dict[str, str] = {}
         for raw in given:
             text = " ".join(str(raw or "").split())
             if scan_context(text, source="client name", cap=None).blocked:
@@ -1229,9 +1344,12 @@ def set_aliases(platform: Any, client_id: str, aliases: Sequence[str]) -> dict[s
                 continue
             other = _by_signature(db, sig, exclude=row.id)
             if other is not None:
-                raise ClientRefused(f"{text} is how {other.name} is written. A name belongs to one client.")
+                raise _refusal(f"{text} is how {other.name} is written. A name belongs to one client.",
+                               "name_taken", other.name)
             sigs.append(sig)
+            spelled[sig] = text
         row.aliases_json = json.dumps(sigs)
+        _spell(row, spelled)
         row.updated_at = utcnow()
         db.add(row)
         db.commit()
@@ -1328,21 +1446,47 @@ def keep_preference(
     return out
 
 
-def change_preference(platform: Any, client_id: str, pref_id: str, text: str) -> dict[str, Any]:
+def change_preference(
+    platform: Any,
+    client_id: str,
+    pref_id: str,
+    text: str,
+    *,
+    local_only: bool | None = None,
+    origin: str | None = None,
+    evidence: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     """``PATCH /clients/{id}/preferences/{pid}``: new text, same checks as
     :func:`keep_preference`. Publishes ``client.changed {id}``. The answer
-    also carries ``before`` (the text it had), so an Undo changes it back."""
+    also carries ``before`` (the text it had), so an Undo changes it back,
+    and ``before_view`` (the whole row as it was).
+
+    A change said in a chat (the independent review) passes ``local_only``
+    (the row's flag OR'd with the turn's Local only), ``origin`` and
+    ``evidence`` (the owner's own words for THIS change), so words said in a
+    Local only chat are never told to a cloud turn; an Undo passes the old
+    ones back. None leaves that field as it is (the page)."""
     clean = _clean_preference(text)
+    if origin is not None and origin not in (CLIENT_PREF_SAID, CLIENT_PREF_TYPED):
+        raise ClientRefused("A preference is kept from a chat card or typed on the client's page.")
     with _writing(platform) as db:
         row = _get(db, client_id)
         pref = _pref(db, row, pref_id)
         before = pref.text or ""
+        before_view = _pref_view(pref)
         pref.text = clean
+        if local_only is not None:
+            pref.local_only = bool(local_only)
+        if origin is not None:
+            pref.origin = origin
+        if evidence is not None:
+            pref.evidence_json = json.dumps(_clean_evidence(evidence), ensure_ascii=True)
         pref.updated_at = utcnow()
         db.add(pref)
         db.commit()
         db.refresh(pref)
-        out = {"ok": True, "client": _ref(row), "preference": _pref_view(pref), "before": before}
+        out = {"ok": True, "client": _ref(row), "preference": _pref_view(pref), "before": before,
+               "before_view": before_view}
     bump_version()
     _event(platform, "CLIENT_CHANGED", {"id": out["client"]["id"]})
     return out
@@ -1370,6 +1514,7 @@ __all__ = [
     "NOTICE_LOCK",
     "ClientMap",
     "add_folder",
+    "alias_spellings",
     "aliases_of",
     "answer_states",
     "ask_again",

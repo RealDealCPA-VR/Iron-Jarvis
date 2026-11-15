@@ -529,3 +529,31 @@ def test_events_carry_no_client_name(platform):
         for name in ("Hartley", "Smith", "Jones", "cash"):
             assert name not in text
     assert events[5][1] == {"id": sid} and events[7][1] == {"ids": [nid]}
+
+
+def test_the_page_shows_how_the_owner_wrote_each_other_spelling(platform):
+    """The independent review: "Also written:" shows the owner's spellings,
+    never a folded signature ("hrt holding", "smith")."""
+    from iron_jarvis.workmap.clients import page
+
+    hid = store.create(platform, folder=r"D:\Clients\Hartleys", name="Hartleys")["client"]["id"]
+    store.set_aliases(platform, hid, ["HRT Holdings LLC"])
+    assert page.client_page(platform, hid)["client"]["aliases"] == ["HRT Holdings LLC"]
+    sid = store.create(platform, folder=r"D:\Clients\Smiths", name="Smiths")["client"]["id"]
+    store.rename(platform, sid, "Smith Group")
+    assert page.client_page(platform, sid)["client"]["aliases"] == ["Smiths"]
+
+
+def test_the_told_preview_names_the_folder_it_was_built_for(platform):
+    """The independent review: the preview of what a chat is told says
+    which folder's chat it is; with no folder it is empty and says so."""
+    from iron_jarvis.workmap.clients import page
+
+    hid = store.create(platform, folder=r"D:\Clients\Hartleys", name="Hartleys")["client"]["id"]
+    store.add_folder(platform, hid, r"E:\Scans\Hartleys")
+    got = page.client_page(platform, hid)
+    assert got["told"] and got["told_for"] == r"D:\Clients\Hartleys"
+    for f in (r"D:\Clients\Hartleys", r"E:\Scans\Hartleys"):
+        store.remove_folder(platform, hid, f)
+    got = page.client_page(platform, hid)
+    assert got["client"]["status"] == "confirmed" and got["told"] == "" and got["told_for"] == ""

@@ -18,6 +18,9 @@ export interface WorkFolder {
    *  (`GET /work-record/folders` rows carry `client: {id, name} | null`).
    *  The dashboard never works it out itself; absent when there is none. */
   client?: { id: string; name: string };
+  /** The SERVER's answer to "may this row offer Make this a client?" (its
+   *  folder's own name must name someone). Absent from an older daemon. */
+  mayMakeClient?: boolean;
 }
 
 /** v1.499.0: a client's id (lib/clients CLIENT_ID_RE; kept here too so this
@@ -125,6 +128,7 @@ export function decodeFolders(raw: unknown): {
       count: count(o.count),
       lastAt: text(o.last_at) || null,
       ...(client ? { client } : {}),
+      ...(typeof o.may_make_client === "boolean" ? { mayMakeClient: o.may_make_client } : {}),
     });
   }
   const forgotten: ForgottenFolder[] = [];

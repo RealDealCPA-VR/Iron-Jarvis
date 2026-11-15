@@ -79,9 +79,20 @@ def _with_clients(platform, folders: list[dict[str, Any]]) -> None:
         cmap = store.load_map(getattr(platform, "engine", None))
     except Exception:  # noqa: BLE001 — the chip is extra
         cmap = None
+    from ...workmap import keys as _keys
+    from ...workmap.clients import names as _names
+
     for row in folders:
         root = cmap.client_of(row.get("folder")) if cmap is not None else None
         row["client"] = {"id": root.client_id, "name": root.name} if root is not None else None
+        # "Make this a client" takes the client's name from the folder's own
+        # name; a year or a work word ("2026", "Payroll") names nobody, so
+        # the press is not offered there (the independent review).
+        try:
+            own = _keys.folder_name(_keys.home_folder(str(row.get("folder") or "")))
+            row["may_make_client"] = bool(_names.display_name(own)) and not _names.is_client_parent(own)
+        except Exception:  # noqa: BLE001 — unsure: not offered
+            row["may_make_client"] = False
 
 
 def register(app: FastAPI, d) -> None:

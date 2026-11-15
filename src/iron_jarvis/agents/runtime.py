@@ -654,7 +654,22 @@ async def run_client_wall(platform, session):
     ``session.task`` is the owner's words (a chat's hand-off carries them).
     Off the loop and bounded by ``workmap.clients.CLIENT_HOP_MAX_S``; past
     the bound or on any error it FAILS CLOSED (``ok=False``: memory recall
-    drops every chat passage). Never raises."""
+    drops every chat passage). Never raises.
+
+    A run started INSIDE a turn or another run (a helper the model
+    delegated to, a child run: the caller's wall is already set) is never
+    wider than that wall (``wall.narrowed``; the independent review): its
+    task is the MODEL's words, so it names no client the owner did not, and
+    it keeps the caller's client."""
+    from ..workmap.clients import wall as _wall_mod
+
+    parent = _wall_mod.inherited()
+    own = await _own_client_wall(platform, session)
+    return own if parent is None else _wall_mod.narrowed(parent, own)
+
+
+async def _own_client_wall(platform, session):
+    """:func:`run_client_wall` from the run's own folder and task alone."""
     from ..workmap import clients as _clients
 
     engine = getattr(platform, "engine", None)
@@ -694,7 +709,7 @@ async def run_client_block(platform, session) -> str:
         from ..workmap.clients import block as _block
 
         folder = run_client_folder(getattr(platform, "config", None), session)
-        return _block.client_block(platform, folder=folder) if folder else ""
+        return _block.client_block_or_raise(platform, folder=folder) if folder else ""
 
     try:
         text = await asyncio.wait_for(
@@ -2220,7 +2235,9 @@ class AgentRuntime:
             # confirmed clients its TASK (the owner's words) names — set
             # around the whole run, beside its Local only scope, so memory
             # recall, history search, a consult and every child run awaited
-            # inside it read it. Bounded, fails closed, never raises.
+            # inside it read it. A child run's wall is never wider than the
+            # one it was started in (``run_client_wall``). Bounded, fails
+            # closed, never raises.
             from ..workmap.clients import wall as _client_wall
 
             _turn_wall = await run_client_wall(self.p, session)

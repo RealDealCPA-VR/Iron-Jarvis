@@ -11220,7 +11220,7 @@ async def _gather_grounding(
         try:
             from ..workmap.clients import block as _client_mod
 
-            text = _client_mod.client_block(platform, folder=_work_folder)
+            text = _client_mod.client_block_or_raise(platform, folder=_work_folder)
         except Exception:  # noqa: BLE001 — named on the receipt below
             log.warning("the client block could not be read; this turn goes on without it",
                         exc_info=True)
@@ -11772,6 +11772,7 @@ async def client_question_for(
         got = await asyncio.wait_for(
             asyncio.to_thread(
                 _store.question_for_turn, platform, folder=str(folder), thread_id=thread_id,
+                budget_s=CLIENT_QUESTION_WAIT_S,
             ),
             timeout=CLIENT_QUESTION_WAIT_S,
         )

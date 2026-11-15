@@ -207,8 +207,11 @@ def clients_list(platform: Any) -> dict[str, Any]:
                 "_strength": int(r.strength or 0),
             })
         elif r.status == CLIENT_DECLINED:
+            # ``aliases``: its other signatures, so chat finds a declined name
+            # by any of them, as the record itself does (the independent review).
             declined.append({"id": r.id, "name": r.name, "decided_at": _iso(r.decided_at),
-                             "was_client": r.confirmed_at is not None})
+                             "was_client": r.confirmed_at is not None,
+                             "aliases": list(store.aliases_of(r))})
     clients.sort(key=lambda c: (c["name"].casefold(), c["id"]))
     waiting.sort(key=lambda w: (-w["_strength"], w["created_at"] or "", w["id"]))
     for w in waiting:
@@ -410,9 +413,16 @@ def _aliases(row: Any) -> list[str]:
         if d and d != row.name and d not in shown:
             shown.append(d)
     covered_sigs = {names.signature(x) for x in [row.name, *shown]}
+    spelled = store.alias_spellings(row)
     for sig in store.aliases_of(row):
-        if sig not in covered_sigs:
-            shown.append(sig)
+        if sig in covered_sigs:
+            continue
+        # How the owner wrote it; a bare signature ("hrt holding") is never
+        # put on screen (the independent review).
+        text = " ".join(str(spelled.get(sig) or "").split())
+        if text and text != row.name and text not in shown:
+            shown.append(text)
+            covered_sigs.add(sig)
     return shown
 
 
@@ -527,7 +537,11 @@ def client_page(platform: Any, client_id: str) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — said, never an empty page
         raise ClientsUnreadable() from exc
     told = block.client_block(platform, folder=first, local=False) if row.status == CLIENT_CONFIRMED and first else ""
+    # The folder the preview was built for: a chat in another of its folders
+    # is told a different "other folders" list (the independent review).
+    told_for = first if told else ""
     return {
+        "told_for": told_for,
         "client": client,
         "folders": folders,
         "entries": entries,

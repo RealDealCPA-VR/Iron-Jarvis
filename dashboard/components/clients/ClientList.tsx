@@ -215,7 +215,7 @@ export function ClientList() {
         <button
           type="button"
           data-testid="client-look-again"
-          disabled={busy}
+          disabled={busy || !data.noticing}
           onClick={() => void lookAgain()}
           className="btn-ghost btn-sm"
         >
@@ -235,6 +235,7 @@ export function ClientList() {
                 <button
                   type="button"
                   data-testid="client-bring-back"
+                  aria-label={`${d.wasClient ? MAKE_IT_A_CLIENT_AGAIN : ASK_AGAIN}: ${d.name}`}
                   disabled={busy}
                   onClick={() => void bringBack(d)}
                   className="shrink-0 text-accent underline-offset-2 hover:underline disabled:opacity-40 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"

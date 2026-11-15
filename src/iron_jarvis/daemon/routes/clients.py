@@ -8,7 +8,8 @@ The contract is the docstring of ``workmap/clients/__init__.py``. Here:
 * ``GET  /clients/{id}`` → one client's page (``page.client_page``).
 * ``POST /clients {folder, name?}`` → an owner-made client.
 * ``PATCH /clients/{id} {name}`` → renamed.
-* ``POST /clients/{id}/confirm`` (``{name?}``) | ``/decline`` |
+* ``POST /clients/{id}/confirm`` (``{name?}``) | ``/decline`` (``{expect?}``:
+  a waiting name unless it says ``confirmed``) |
   ``/ask-again`` | ``/restore``.
 * ``POST /clients/confirm-many {ids}`` → ``{confirmed, skipped}``.
 * ``POST /clients/{id}/folders {folder}``; ``POST /clients/{id}/folders/
@@ -35,6 +36,10 @@ from pydantic import BaseModel
 from ...workmap.clients import CLIENT_ID_RE, ClientError, ClientNotFound
 
 NOT_ON_RECORD = ClientNotFound.default
+NOTICING_OFF = (
+    "Notice clients in your folders is off, so Iron Jarvis did not look. "
+    "It is under Settings › Memory & you."
+)
 
 
 class CreateBody(BaseModel):
@@ -62,6 +67,11 @@ class TextBody(BaseModel):
     text: str = ""
 
 
+class DeclineBody(BaseModel):
+    #: The status the press was drawn for: "proposed" (default) or "confirmed".
+    expect: str | None = None
+
+
 def _call(fn, *args, **kwargs):
     """Run one client read or change; its errors are plain-sentence HTTP."""
     try:
@@ -80,7 +90,7 @@ def _id(client_id: str) -> str:
 def register(app: FastAPI, d) -> None:
     """Attach the client routes; ``d`` is the create_app deps object."""
     from ...workmap.clients import detect, page, store
-    from ...workmap.models import CLIENT_PREF_TYPED
+    from ...workmap.models import CLIENT_CONFIRMED, CLIENT_PREF_TYPED, CLIENT_PROPOSED
 
     def _platform():
         return d.platform
@@ -105,6 +115,10 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/clients/notice")
     def clients_notice() -> dict[str, Any]:
+        # Off means no pass ran: never "Looked again" over a look that did
+        # not happen (the independent review).
+        if not detect.enabled(_platform()):
+            raise HTTPException(status_code=409, detail=NOTICING_OFF)
         minted = _call(detect.notice, _platform(), force=True)
         return {"ok": True, "noticed": int(minted or 0)}
 
@@ -122,8 +136,13 @@ def register(app: FastAPI, d) -> None:
         return _call(store.confirm, _platform(), _id(client_id), name=name)
 
     @app.post("/clients/{client_id}/decline")
-    def clients_decline(client_id: str) -> dict[str, Any]:
-        return _call(store.decline, _platform(), _id(client_id))
+    def clients_decline(client_id: str, body: DeclineBody | None = None) -> dict[str, Any]:
+        # A press with no ``expect`` is a one-press No for a WAITING name; a
+        # confirmed client is taken away only by the page's two-press footer.
+        expect = body.expect if body is not None and body.expect else CLIENT_PROPOSED
+        if expect not in (CLIENT_PROPOSED, CLIENT_CONFIRMED):
+            raise HTTPException(status_code=400, detail="Say which answer this is.")
+        return _call(store.decline, _platform(), _id(client_id), expect=expect)
 
     @app.post("/clients/{client_id}/ask-again")
     def clients_ask_again(client_id: str) -> dict[str, Any]:

@@ -42,7 +42,7 @@ import {
   LOCAL_ONLY_TAG,
   MAKE_IT_A_CLIENT_AGAIN,
   NAMED_ELSEWHERE,
-  NOTHING_TOLD,
+  nothingToldWords,
   NOT_A_CLIENT,
   NOT_A_CLIENT_CONFIRM,
   NOT_ON_RECORD,
@@ -87,6 +87,7 @@ import {
   pressFailed,
   removeFrom,
   sinceLine,
+  toldForWords,
   toldHeading,
   whatWants,
   type ClientDecision,
@@ -239,6 +240,11 @@ export function ClientPage({ id }: { id: string }) {
       <Preferences data={d} busy={busy} press={press} />
 
       <Section id="client-told" title={toldHeading(c.name)}>
+        {d.told && d.toldFor && (
+          <p data-testid="client-told-for" className="mt-1 text-[12px] text-zinc-500">
+            {toldForWords(d.toldFor)}
+          </p>
+        )}
         {d.told ? (
           <pre
             data-testid="client-told-text"
@@ -247,7 +253,9 @@ export function ClientPage({ id }: { id: string }) {
             {d.told}
           </pre>
         ) : (
-          <p className="py-1 text-[13px] text-zinc-500">{NOTHING_TOLD}</p>
+          <p data-testid="client-told-nothing" className="py-1 text-[13px] text-zinc-500">
+            {nothingToldWords(c.name, c.status, d.folders.length)}
+          </p>
         )}
       </Section>
 
@@ -364,8 +372,9 @@ export function ClientPage({ id }: { id: string }) {
               testId="client-not-a-client"
               onConfirm={() =>
                 void press(async () => {
-                  await post<unknown>(clientVerbPath(c.id, "decline"), {});
-                  return afterNo(c.name);
+                  // The one press that may take a CONFIRMED client away.
+                  const res = decodeAnswer(await post<unknown>(clientVerbPath(c.id, "decline"), { expect: "confirmed" }));
+                  return res.note || afterNo(c.name);
                 }, "change that")
               }
             />
@@ -438,7 +447,7 @@ function Header({ data, busy, press }: { data: ClientPageData; busy: boolean; pr
             disabled={busy}
             onClick={() =>
               void press(async () => {
-                await post<unknown>(clientVerbPath(c.id, "decline"), {});
+                await post<unknown>(clientVerbPath(c.id, "decline"), { expect: "proposed" });
                 return afterNo(c.name);
               }, "save your answer")
             }

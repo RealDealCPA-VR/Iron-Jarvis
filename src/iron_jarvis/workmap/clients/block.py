@@ -55,6 +55,11 @@ def _may_recall_local(local: bool | None) -> bool:
         return False
 
 
+def shared_work(engine: Any, key: str) -> bool:
+    """:func:`_shared_work` for the client list (one rule for both)."""
+    return _shared_work(engine, key)
+
+
 def _shared_work(engine: Any, key: str) -> bool:
     """Does this folder hold at least one piece of work that is neither Local
     only nor kept home (so a cloud turn may hear its path)?"""
@@ -160,10 +165,25 @@ def _assemble(name: str, prefs: list[str], folders: list[str]) -> str:
 
 
 def client_block(platform: Any, *, folder: str, local: bool | None = None) -> str:
+    """:func:`client_block_or_raise`, "" on any error. For a reader that
+    shows the block (the client page's "told" preview). A PROMPT seam calls
+    :func:`client_block_or_raise` instead, so a block that could not be read
+    is named on its receipt and logged, never dropped in silence (the
+    independent review). BLOCKING; NEVER RAISES."""
+    try:
+        return client_block_or_raise(platform, folder=folder, local=local)
+    except Exception:  # noqa: BLE001 — never raises
+        log.debug("clients: the client block could not be built", exc_info=True)
+        return ""
+
+
+def client_block_or_raise(platform: Any, *, folder: str, local: bool | None = None) -> str:
     """The client block for a turn whose ``folder`` resolves to a CONFIRMED
     client (``store.load_map(...).client_of(folder)``); "" otherwise (no
-    folder, no client, a waiting or declined name, a timeout, any error).
-    BLOCKING; NEVER RAISES. Its only shape::
+    folder, no client, a waiting or declined name). RAISES (``ClientsUnreadable``
+    or anything else) when the map or the preferences cannot be read: "no
+    client here" and "could not read" are never the same answer. BLOCKING.
+    Its only shape::
 
         # Client: Hartleys
         This chat's folder belongs to Hartleys, a client the owner confirmed.
@@ -183,28 +203,25 @@ def client_block(platform: Any, *, folder: str, local: bool | None = None) -> st
     preview); True a turn that stays on this network. Other folders are
     listed in a cloud turn only when they hold work that is not Local only or
     kept home, or when the owner added them."""
-    try:
-        engine = getattr(platform, "engine", None)
-        if engine is None or not str(folder or "").strip():
-            return ""
-        cmap = store.load_map(engine)
-        root = cmap.client_of(folder)
-        if root is None:
-            return ""
-        name = " ".join(str(root.name or "").split())
-        if not name or _safe(f"# Client: {name}") != f"# Client: {name}":
-            return ""  # a name that cannot be said safely: say nothing
-        may_local = _may_recall_local(local)
-        prefs = _preference_lines(engine, root.client_id, may_local)
-        try:
-            folders = _folder_lines(platform, cmap, root, folder, may_local)
-        except Exception:  # noqa: BLE001 — the paths are extra; the preferences are not
-            log.debug("clients: the other folders could not be read", exc_info=True)
-            folders = []
-        return _assemble(name, prefs, folders)
-    except Exception:  # noqa: BLE001 — never raises; the hop names a miss itself
-        log.debug("clients: the client block could not be built", exc_info=True)
+    engine = getattr(platform, "engine", None)
+    if engine is None or not str(folder or "").strip():
         return ""
+    cmap = store.load_map(engine)
+    root = cmap.client_of(folder)
+    if root is None:
+        return ""
+    name = " ".join(str(root.name or "").split())
+    if not name or _safe(f"# Client: {name}") != f"# Client: {name}":
+        return ""  # a name that cannot be said safely: say nothing
+    may_local = _may_recall_local(local)
+    prefs = _preference_lines(engine, root.client_id, may_local)
+    try:
+        folders = _folder_lines(platform, cmap, root, folder, may_local)
+    except Exception:  # noqa: BLE001 — the paths are extra; the preferences are not
+        log.debug("clients: the other folders could not be read", exc_info=True)
+        folders = []
+    return _assemble(name, prefs, folders)
 
 
-__all__ = ["MAX_OTHER_FOLDERS", "MAX_PREFERENCE_LINES", "client_block"]
+__all__ = ["MAX_OTHER_FOLDERS", "MAX_PREFERENCE_LINES", "client_block", "client_block_or_raise",
+           "shared_work"]

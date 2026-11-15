@@ -41,11 +41,13 @@ from iron_jarvis.daemon import doors as D
 from iron_jarvis.daemon import page_doors as PD
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.learning.models import LessonRecord
+from iron_jarvis.providers import egress
 from iron_jarvis.settings import records as R
 from iron_jarvis.settings import records_clients as RC
 from iron_jarvis.tools.base import ToolContext
 from iron_jarvis.workmap import clients as C
 from iron_jarvis.workmap import keys as K
+from iron_jarvis.workmap.clients import block as CB
 from iron_jarvis.workmap.clients import names as N
 from iron_jarvis.workmap.clients import page as PG
 from iron_jarvis.workmap.clients import store as S
@@ -180,7 +182,7 @@ class FakeClients:
         r["status"] = "confirmed"
         return self._view(cid)
 
-    def create(self, platform, *, folder="", name=""):
+    def create(self, platform, *, folder="", name="", **_kw):
         self.calls.append(("create", folder, name))
         sig = fake_sig(name)
         for cid, r in self.rows.items():
@@ -192,7 +194,7 @@ class FakeClients:
         self.add(cid, name, "confirmed", [folder])
         return self._view(cid)
 
-    def add_folder(self, platform, cid, folder):
+    def add_folder(self, platform, cid, folder, **_kw):
         self.calls.append(("add_folder", cid, folder))
         self._row(cid)["folders"].append(folder)
         return self._view(cid)
@@ -223,7 +225,7 @@ class FakeClients:
         self.version += 1
         return {"ok": True, "preference": dict(self.prefs[pid])}
 
-    def change_preference(self, platform, cid, pid, text):
+    def change_preference(self, platform, cid, pid, text, **_kw):
         self.calls.append(("change_preference", cid, pid, text))
         self.prefs[pid]["text"] = text
         self.version += 1
@@ -980,3 +982,234 @@ def test_on_the_real_record_client_list_is_walled(real):
     _c, _d, res = call(real, "client_list", {}, turn=W.turn_wall(real.engine, r"D:\Work\Misc", words),
                        words=words)
     assert "Hartleys" in res.output and "Smith" in res.output and "Lee Dental" not in res.output
+
+
+def test_on_the_real_record_a_provisional_client_folder_is_walled_too(real):
+    """The independent review: a folder under Clients that is not a client
+    yet (owner ``folder:``) is walled like a waiting home: client_list names
+    no other client, and the writers refuse a change to another client."""
+    hid = S.create(real, folder=r"C:\Clients\Hartleys", name="Hartleys")["client"]["id"]
+    S.create(real, folder=r"C:\Clients\Smith", name="Smith")
+    words = "who are my clients?"
+    turn = W.turn_wall(real.engine, r"C:\Clients\Jones\2025", words)
+    assert turn.ok and turn.owner == "folder:" + _fk(r"C:\Clients\Jones") and turn.client is None
+    _c, _d, res = call(real, "client_list", {}, turn=turn, words=words)
+    assert res.ok, res.error
+    assert "Hartleys" not in res.output and "Smith" not in res.output, res.output
+    assert "kept apart for one client" in res.output and "2 other clients" in res.output
+    assert res.data["clients"] == []
+    # A writer may not change another client from here, even when named.
+    words = "Hartleys wants cash basis"
+    turn = W.turn_wall(real.engine, r"C:\Clients\Jones\2025", words)
+    _c, _d, res = call(real, "client_preference_add", {"client": "Hartleys", "text": "Uses cash basis."},
+                       turn=turn, words=words)
+    assert not res.ok and "Hartleys" not in (res.error or ""), res.error
+    assert S.preferences(real.engine, hid) == []
+    words = "Smith isn't a client"
+    turn = W.turn_wall(real.engine, r"C:\Clients\Jones\2025", words)
+    _c, _d, res = call(real, "client_answer", {"name": "Smith", "answer": "no"}, turn=turn, words=words)
+    assert not res.ok, res.output
+    # The folder's own name may still be made a client from inside it.
+    words = r"Jones is a client, its folder is C:\Clients\Jones"
+    turn = W.turn_wall(real.engine, r"C:\Clients\Jones\2025", words)
+    _c, _d, res = call(real, "client_answer", {"name": "Jones", "answer": "yes", "folder": r"C:\Clients\Jones"},
+                       turn=turn, words=words)
+    assert res.ok, res.error
+
+
+def test_on_the_real_record_a_preference_changed_in_a_local_only_chat_stays_off_the_cloud(real, tmp_path):
+    """The independent review: the changed words are the owner's, said in a
+    Local only chat. The row becomes Local only and its evidence is this
+    message; the Undo puts the old flag, origin and evidence back."""
+    folder = tmp_path / "Clients" / "Hartleys"
+    folder.mkdir(parents=True)
+    hid = S.create(real, folder=str(folder), name="Hartleys")["client"]["id"]
+    S.keep_preference(real, hid, "Uses cash basis.", origin="typed")
+    new = "Uses accrual; the divorce settlement is in the 2025 binder."
+    words = "change their preference to: " + new
+    with egress.local_only_scope(True):
+        _c, desc, res = call(real, "client_preference_change", {"text": "cash basis", "new_text": new},
+                             turn=W.turn_wall(real.engine, str(folder), words), words=words)
+    assert res.ok, res.error
+    pref = S.preferences(real.engine, hid)[0]
+    assert pref["text"] == new and pref["local_only"] is True and pref["origin"] == "said"
+    assert pref["evidence"][0]["quote"] == words[:160]
+    cloud = CB.client_block(real, folder=str(folder), local=False)
+    assert "divorce" not in cloud, cloud
+    assert "divorce" in CB.client_block(real, folder=str(folder), local=True)
+    undo(real, desc)
+    pref = S.preferences(real.engine, hid)[0]
+    assert (pref["text"], pref["local_only"], pref["origin"], pref["evidence"]) == (
+        "Uses cash basis.", False, "typed", [])
+
+
+def test_on_the_real_record_undo_of_a_folder_removal_puts_a_found_folder_back_as_found(real):
+    """The independent review: Undo of "remove this folder" puts the folder
+    back as it WAS (found stays found), so its Local only check still holds
+    and the page never says "Added by you" for a folder the owner never
+    added."""
+    a, b = r"D:\Tax\2024\Hartleys", r"D:\Tax\2025\Hartleys"
+    hid = _waiting_row(real, "Hartleys", [a, b])
+    S.confirm(real, hid)
+    assert {r["folder"]: r["how"] for r in S.folder_rows(real.engine, hid)} == {a: "found", b: "found"}
+    words = "remove " + a + " from Hartleys"
+    _c, desc, res = call(real, "client_update", {"remove_folder": a}, turn=W.turn_wall(real.engine, b, words),
+                         words=words)
+    assert res.ok, res.error
+    assert [r["folder"] for r in S.folder_rows(real.engine, hid)] == [b]
+    undo(real, desc)
+    assert {r["folder"]: r["how"] for r in S.folder_rows(real.engine, hid)} == {a: "found", b: "found"}
+
+
+def test_on_the_real_record_a_refusal_in_a_clients_chat_never_names_another_client(real):
+    """The independent review: a folder or name rule that names ANOTHER
+    client is told in a client's chat without that client's name or folder;
+    the owner's own page route keeps the named sentence."""
+    hid = S.create(real, folder=r"C:\Clients\Hartleys", name="Hartleys")["client"]["id"]
+    S.create(real, folder=r"D:\Scans\Smith", name="Smith")
+    words = r"add D:\Scans to Hartleys' folders"
+    turn = W.turn_wall(real.engine, r"C:\Clients\Hartleys", words)
+    _c, _d, res = call(real, "client_update", {"add_folder": r"D:\Scans"}, turn=turn, words=words)
+    assert not res.ok and res.error == RC.OVERLAPS_ANOTHER, res.error
+    assert "Smith" not in res.error
+    words = "rename Hartleys to Smith"
+    turn = W.turn_wall(real.engine, r"C:\Clients\Hartleys", words)
+    _c, _d, res = call(real, "client_update", {"rename": "Smith"}, turn=turn, words=words)
+    assert not res.ok and res.error == RC.OVERLAPS_ANOTHER, res.error
+    # A chat with no client still hears which rule (it may be told names).
+    with pytest.raises(C.ClientRefused) as got:
+        S.add_folder(real, hid, r"D:\Scans")
+    assert "Smith" in got.value.sentence
+
+
+def test_on_the_real_record_a_declined_name_is_found_by_its_other_spellings(real):
+    """The independent review: chat finds a name marked Not a client by any
+    of its spellings, as the record does, so the card says what really
+    happens and the Undo it promises can run (and never loses the No)."""
+    hid = S.create(real, folder=r"C:\Clients\Hartleys", name="Hartleys")["client"]["id"]
+    S.rename(real, hid, "Hartley Family Trust")
+    S.keep_preference(real, hid, "Uses cash basis.", origin="typed")
+    S.decline(real, hid)
+    words = r"Hartleys is a client, its folder is D:\Clients\Hartleys 2027"
+    check, desc, res = call(real, "client_answer",
+                            {"name": "Hartleys", "answer": "yes", "folder": r"D:\Clients\Hartleys 2027"},
+                            words=words)
+    assert res.ok, res.error
+    assert "again" in check.words and "Hartley Family Trust" in check.words, check.words
+    assert res.data["client_id"] == hid and _status(real, hid) == "confirmed"
+    assert desc is not None
+    undo(real, desc)
+    assert _status(real, hid) == "declined"
+    # A never-confirmed name, renamed then declined: its Undo keeps the No.
+    wid = _waiting_row(real, "Lee Dental", [r"C:\Clients\Lee Dental"])
+    S.rename(real, wid, "Lee Family Dental")
+    S.decline(real, wid)
+    words = r"Lee Dental is a client, its folder is D:\Clients\Lee Dental"
+    _c, desc, res = call(real, "client_answer",
+                         {"name": "Lee Dental", "answer": "yes", "folder": r"D:\Clients\Lee Dental"}, words=words)
+    assert res.ok, res.error
+    assert res.data["client_id"] == wid and _status(real, wid) == "confirmed"
+    undo(real, desc)
+    assert _status(real, wid) == "declined"
+
+
+def test_on_the_real_record_undo_of_not_a_client_says_what_it_could_not_put_back(real):
+    """The independent review: Undo never says "as it was" over a folder the
+    record dropped, and a Yes that took over a Not-a-client client's folder
+    gives it back on its Undo instead of deleting it."""
+    a, b = r"C:\Clients\Hartleys", r"D:\Scans\Hartleys"
+    hid = S.create(real, folder=a, name="Hartleys")["client"]["id"]
+    S.add_folder(real, hid, b)
+    words = "Hartleys isn't a client"
+    _c, desc, res = call(real, "client_answer", {"name": "Hartleys", "answer": "no"}, words=words)
+    assert res.ok, res.error
+    S.create(real, folder=b + r"\Trust", name="Hartley Trust")
+    told = undo(real, desc)
+    assert [r["folder"] for r in S.folder_rows(real.engine, hid)] == [a]
+    assert "as it was" not in told and "not exactly" in told and b in told, told
+    # A takeover: declined Hartleys' folder is made another client's, then
+    # that Yes is undone: the folder is Hartleys' again, kept, unused.
+    lee = r"C:\Clients\Lee"
+    lid = S.create(real, folder=lee, name="Lee")["client"]["id"]
+    S.decline(real, lid)
+    words = r"HRT Holdings is a client, its folder is C:\Clients\Lee"
+    _c, desc, res = call(real, "client_answer", {"name": "HRT Holdings", "answer": "yes", "folder": lee},
+                         words=words)
+    assert res.ok, res.error
+    assert S.folder_rows(real.engine, lid) == []
+    undo(real, desc)
+    assert [(r["folder"], r["how"]) for r in S.folder_rows(real.engine, lid)] == [(lee, "added")]
+    assert _status(real, lid) == "declined"
+
+
+def test_on_the_real_record_a_cloud_client_list_asks_local_only_again(real):
+    """The independent review: a client made in a Local only chat, or whose
+    work is all Local only NOW, is not named to a cloud turn."""
+    from iron_jarvis.workmap.models import WorkEntry
+
+    words = r"Pereira Farms is a client, its folder is D:\Clients\Pereira Farms"
+    with egress.local_only_scope(True):
+        _c, _d, res = call(real, "client_answer",
+                           {"name": "Pereira Farms", "answer": "yes", "folder": r"D:\Clients\Pereira Farms"},
+                           words=words)
+    assert res.ok, res.error
+    home = r"C:\Clients\Hartleys"
+    hid = _waiting_row(real, "Hartleys", [home])
+    S.confirm(real, hid)
+    with session_scope(real.engine) as db:
+        for i in range(2):
+            db.add(WorkEntry(id=f"chat:t{i}", kind="chat", ref=f"t{i}", title="x", folder=home,
+                             folder_key=_fk(home), local_only=True))
+        db.commit()
+    S.create(real, folder=r"C:\Clients\Smith", name="Smith")
+    words = "who are my clients?"
+    _c, _d, res = call(real, "client_list", {}, words=words)
+    assert res.ok, res.error
+    assert "Pereira" not in res.output and "Hartleys" not in res.output, res.output
+    assert "Smith" in res.output and "2 more clients are kept on this computer" in res.output
+    # The work in Hartleys' folder is shared again: named again.
+    with session_scope(real.engine) as db:
+        row = db.get(WorkEntry, "chat:t0")
+        row.local_only = False
+        db.add(row)
+        db.commit()
+    _c, _d, res = call(real, "client_list", {}, words=words)
+    assert "Hartleys" in res.output and "Pereira" not in res.output, res.output
+
+
+def test_on_the_real_record_a_yes_after_a_no_that_fails_halfway_says_so(real, monkeypatch):
+    """The independent review: "actually Lee Dental is a client" undoes the
+    No and then says Yes, as two recorded steps. When the Yes cannot land,
+    the reply says the No was undone (never "Nothing was changed") and its
+    Undo puts the No back."""
+    wid = _waiting_row(real, "Lee Dental", [r"C:\Clients\Lee Dental"])
+    S.decline(real, wid)
+
+    def locked(*a, **k):
+        raise C.ClientsUnreadable()
+
+    monkeypatch.setattr(S, "confirm", locked)
+    words = "actually Lee Dental is a client"
+    _c, desc, res = call(real, "client_answer", {"name": "Lee Dental", "answer": "yes"}, words=words)
+    assert "Nothing was changed." not in (res.output or "") + (res.error or ""), (res.output, res.error)
+    assert "waits for your answer again" in (res.output or ""), res.output
+    assert _status(real, wid) == "proposed"
+    monkeypatch.undo()
+    assert desc is not None
+    undo(real, desc)
+    assert _status(real, wid) == "declined"
+
+
+def test_on_the_real_record_a_yes_that_links_no_folder_never_says_chats_are_told(real):
+    """The independent review: a Yes from chat whose every home is another
+    client's says the client has no folder yet, never "chats in its folders
+    are told it"."""
+    home = r"C:\Work\Hartleys"
+    wid = _waiting_row(real, "Hartleys", [home])
+    S.create(real, folder=home + "/Trust", name="Hartleys Trust")  # inside the home: it is skipped
+    assert _status(real, wid) == "proposed"
+    words = "Hartleys wants cash basis"
+    _c, _d, res = call(real, "client_preference_add", {"client": "Hartleys", "text": "Uses cash basis."},
+                       words=words)
+    assert res.ok, res.error
+    assert "are told it" not in res.output and "no folder yet" in res.output, res.output

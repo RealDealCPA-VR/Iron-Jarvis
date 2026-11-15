@@ -765,8 +765,9 @@ def _leaks(scene) -> list[str]:
 @pytest.fixture()
 def unplaced(scene):
     """Hartleys and Smith in folders with NO Clients-type parent, titles that
-    name nobody: only the folder records keep them apart."""
-    hart, scene.smith = r"D:\Work\Hartleys", r"D:\Work\Smith"
+    name nobody, folder names that name nobody either: only the folder
+    records keep them apart."""
+    hart, scene.smith = r"D:\Work\Job A", r"D:\Work\Job B"
     scene.use(make_map(confirmed=[(H_ID, "Hartleys", [hart]), (S_ID, "Smith", [scene.smith])]))
     scene.h_march = _chat(scene, "March reconciliation", hart, hours_ago=2)
     scene.s_report = _chat(scene, "Quarterly report", scene.smith, hours_ago=3)
@@ -1059,3 +1060,126 @@ def test_events_carry_no_client_name(tmp_path, monkeypatch):
     for e in events:
         blob = json.dumps(e.payload, default=str)
         assert "Hartley" not in blob and "Clients" not in blob and "cash basis" not in blob, (e.type, blob)
+
+
+# --------------------------------------------------------------------------- #
+# The independent review (v1.499.0): memory recall's files, and a row whose
+# folder or files name a client
+# --------------------------------------------------------------------------- #
+class _Files:
+    """A fake "By meaning" file index: every hit, whatever the query."""
+
+    def __init__(self, hits):
+        self.hits = hits
+
+    def search(self, query, mode="semantic", limit=10):
+        return list(self.hits)[:limit]
+
+
+def test_memory_recall_files_are_walled_by_client(firm):
+    h_doc = H + r"\2025\depreciation memo.docx"
+    s_doc = S + r"\2025\fixed assets.xlsx"
+    plain = DOWNLOADS + r"\depreciation table.pdf"
+    raw = [{"path": h_doc, "line": 3, "text": "Hartleys elected Section 179 for the truck", "score": 0.9},
+           {"path": s_doc, "line": 1, "text": "Smith straight line", "score": 0.8},
+           {"path": plain, "line": 2, "text": "a plain table", "score": 0.7}]
+    fabric = MemoryFabric(engine=firm.engine, filesearch=_Files(raw))
+
+    def paths():
+        return {h.extra["path"] for h in fabric.recall("depreciation", k=6, sources=["files"])}
+
+    with wall.turn_scope(wall.turn_wall(firm.engine, S + r"\2025", "which depreciation method?")):
+        assert paths() == {s_doc, plain}
+        grounded = fabric.ground("which depreciation method?", k=6)
+        assert "Hartleys" not in grounded and "Section 179" not in grounded
+    with wall.turn_scope(wall.turn_wall(firm.engine, H, "which method?")):
+        assert paths() == {h_doc, plain}
+    # No client: a confirmed client's file only when the owner names it.
+    assert paths() == {plain}
+    with wall.turn_scope(wall.turn_wall(firm.engine, "", "what did Hartleys elect?")):
+        assert paths() == {h_doc, plain}
+    # Fails closed: no file at all.
+    with wall.turn_scope(TurnWall(ok=False, folder_key=_k(S))):
+        assert paths() == set()
+    # The owner's own screen is not walled.
+    with wall.owner_screen():
+        assert paths() == {h_doc, s_doc, plain}
+
+
+def test_a_row_whose_folder_or_files_name_a_client_is_that_clients(firm):
+    scans = r"D:\Scans\Hartleys"  # not one of Hartleys' folders
+    in_smith = _turn(firm, S + r"\2025", "March bank reconciliation")
+    in_hart = _turn(firm, H, "")
+    nobody = _turn(firm, r"D:\Work\Misc", "")
+    # The folder's own path names Hartleys (any case).
+    for folder in (scans, r"D:\Scans\hartleys\2026"):
+        assert wall.may_tell(in_smith, firm.cmap, folder=folder, title="March bank reconciliation") is False
+        assert wall.may_tell(in_hart, firm.cmap, folder=folder, title="x") is True
+        assert wall.may_tell(nobody, firm.cmap, folder=folder, title="x") is False
+    # The files sit in Hartleys' own folder, the chat in Downloads.
+    ledger = [H + r"\2025\ledger.xlsx"]
+    assert wall.may_tell(in_smith, firm.cmap, folder=DOWNLOADS, title="Fix the ledger formulas",
+                         files=ledger) is False
+    assert wall.may_tell(in_hart, firm.cmap, folder=DOWNLOADS, title="Fix the ledger formulas",
+                         files=ledger) is True
+    # A path naming nobody is still told.
+    assert wall.may_tell(in_smith, firm.cmap, folder=r"D:\Scans\Bank", title="x",
+                         files=[r"D:\Scans\Bank\march.pdf"]) is True
+    # The work block of Smith's chat says none of it.
+    _chat(firm, "March bank reconciliation", scans, docs=[scans + r"\bank_march.pdf"], hours_ago=2)
+    _run(firm, "March bank reconciliation", scans, summary="Balance at March 31 was 12,400")
+    dl = _chat(firm, "Fix the ledger formulas", DOWNLOADS, docs=ledger, hours_ago=4,
+               said="fix the ledger", answer="fixed the ledger")
+    text = _block(firm, folder=S + r"\2025", query="March bank reconciliation ledger formulas")
+    assert "Scans" not in text and "12,400" not in text and "ledger" not in text.lower(), text
+    # Memory recall reads the work record's files too.
+    hits = [_chit(dl, "Fix the ledger formulas", "fixed the ledger")]
+    fabric = _fabric(firm, hits)
+    with wall.turn_scope(in_smith):
+        assert fabric._chats("ledger", 5) == []
+    with wall.turn_scope(in_hart):
+        assert [h.ref for h in fabric._chats("ledger", 5)]
+
+
+def test_a_child_runs_wall_is_never_wider_than_the_turn_it_was_started_in(talks):
+    """A helper the model delegated to (its task is the MODEL's words) keeps
+    the wall of the chat or run it was started in: same client, and it names
+    no client the owner did not."""
+    from iron_jarvis.agents import runtime as RT
+
+    fabric = _fabric(talks, talks.hits)
+    child = SimpleNamespace(task="Summarize what we did for Hartleys in March", workspace_path="")
+
+    def child_wall(parent):
+        async def go():
+            return await RT.run_client_wall(talks.platform, child)
+
+        if parent is None:
+            return asyncio.run(go())
+        with wall.turn_scope(parent):
+            return asyncio.run(go())
+
+    def recalled(turn):
+        with wall.turn_scope(turn):
+            return {h.ref for h in fabric.recall("basis", k=6, sources=["chats"])}
+
+    # Started by the owner (nothing set): its task is the owner's words.
+    alone = child_wall(None)
+    assert alone.owner is None and H_ID in alone.named
+    # A helper inside Smith's chat: Smith's wall, Hartleys never recalled.
+    smith = wall.turn_wall(talks.engine, S + r"\2025", "have a helper pull up the March figures")
+    got = child_wall(smith)
+    assert got.owner == "client:" + S_ID and got.named == frozenset(), got
+    assert talks.h_march not in recalled(got)
+    # A helper inside a chat with no client where the owner named only Smith.
+    quiet = wall.turn_wall(talks.engine, "", "Draft Smith's engagement letter")
+    got = child_wall(quiet)
+    assert got.owner is None and H_ID not in got.named
+    assert talks.h_march not in recalled(got)
+    # The owner named Hartleys: the helper may recall it.
+    asked = wall.turn_wall(talks.engine, "", "have a helper summarize Hartleys' March work")
+    assert talks.h_march in recalled(child_wall(asked))
+    # Either side failing closed, or two different owners: closed.
+    assert child_wall(TurnWall(ok=False)).ok is False
+    hart = wall.turn_wall(talks.engine, H, "")
+    assert wall.narrowed(smith, hart).ok is False

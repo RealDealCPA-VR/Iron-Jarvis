@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re as _re
 import threading
 import time
 from datetime import datetime, timezone
@@ -58,6 +59,50 @@ def _sniff_snippet_mime(data: bytes) -> str | None:
     if kind is None and data[:6] in (b"GIF87a", b"GIF89a"):
         kind = "gif"
     return f"image/{kind}" if kind else None
+
+
+#: A shell prompt that names its folder: PowerShell ("PS C:\x> "), cmd
+#: ("C:\x>"), bash ("user@host:/x$ "), Git Bash ("user@host MINGW64 /c/x").
+_PROMPT_RXS = (
+    _re.compile(r"^PS ((?:[A-Za-z]:\\|\\\\)[^>\r\n]*)>"),
+    _re.compile(r"^([A-Za-z]:\\[^>\r\n]*)>"),
+    _re.compile(r"^[^\s@]+@[^\s:]+:([~/][^\r\n$#]*?)[$#](?:\s|$)"),
+    _re.compile(r"^[^\s@]+@\S+ MINGW(?:32|64) ([~/][^\r\n]*?)\s*$"),
+)
+#: A command that may change the shell's folder.
+_CD_RX = _re.compile(r"(?:^|[\s;&|>])(?:cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)(?:\s|$)",
+                     _re.IGNORECASE)
+
+
+def _prompt_path(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("~"):
+        text = os.path.expanduser(text)  # the home folder from the environment: no disk
+    m = _re.match(r"^/([A-Za-z])(/.*)?$", text)
+    if m and os.name == "nt":  # Git Bash "/c/Users/x" is C:\Users\x
+        text = m.group(1).upper() + ":" + (m.group(2) or "/").replace("/", "\\")
+    return text
+
+
+def _live_folder(cwd: str, tail: str) -> str | None:
+    """The folder a pane's shell is in NOW, as far as its output shows (the
+    independent review: ``session.cwd`` is only the folder it started in):
+    the folder the LAST prompt in ``tail`` names; else the start folder when
+    nothing in the tail could have moved it (no prompt and no ``cd``-like
+    command); else None (not known: the caller tells no client). Text only."""
+    last = ""
+    moved = False
+    for line in str(tail or "").splitlines()[-400:]:
+        for rx in _PROMPT_RXS:
+            m = rx.match(line)
+            if m:
+                last = _prompt_path(m.group(1))
+                break
+        if not moved and _CD_RX.search(line):
+            moved = True
+    if last:
+        return last
+    return None if moved else (str(cwd or "").strip() or None)
 
 
 def _snippet_reference(cli: str, path) -> str:
@@ -1081,21 +1126,40 @@ def register(app: FastAPI, d) -> None:
             return ""
         return "\n\nThis pane is " + ", ".join(parts) + "."
 
-    async def _client_block_for_pane(cwd: str) -> str:
+    async def _client_block_for_pane(cwd: str, tail: str = "") -> str:
         """v1.499.0: the client block for a pane's folder
         (``workmap.clients.block.client_block``), ready to append ("\\n\\n"
         + the block), or "" — no folder, no confirmed client there, past
         ``CLIENT_HOP_MAX_S`` or any error (logged). A SQLite read, so off the
-        loop. Never raises."""
+        loop. Never raises.
+
+        The pane may have moved since it started (the independent review): the
+        block is told only while the folder its output shows it in NOW
+        (:func:`_live_folder`) belongs to the SAME client as its start folder;
+        a pane whose folder is not known, or that moved into another client's
+        or nobody's folder, is told no client (fail closed)."""
         folder = str(cwd or "").strip()
         if not folder or getattr(d.platform, "engine", None) is None:
             return ""
+        live = _live_folder(folder, tail)
+        if not live:
+            return ""
+
+        def _read() -> str:
+            from ...workmap.clients import block as _client_block
+            from ...workmap.clients import store as _client_store
+
+            cmap = _client_store.load_map(d.platform.engine)
+            started, now = cmap.client_of(folder), cmap.client_of(live)
+            if started is None or now is None or started.client_id != now.client_id:
+                return ""
+            return _client_block.client_block_or_raise(d.platform, folder=live)
+
         try:
             from ...workmap import clients as _clients
-            from ...workmap.clients import block as _client_block
 
             text = await asyncio.wait_for(
-                asyncio.to_thread(_client_block.client_block, d.platform, folder=folder),
+                asyncio.to_thread(_read),
                 timeout=float(_clients.CLIENT_HOP_MAX_S),
             )
         except asyncio.CancelledError:
@@ -1164,7 +1228,7 @@ def register(app: FastAPI, d) -> None:
         # client, right after the owner's own lessons — the same block a chat
         # there gets, for the pane's folder (``session.cwd``). "" anywhere
         # else (byte-identical). Off the loop, bounded, never raises.
-        system += await _client_block_for_pane(getattr(session, "cwd", "") or "")
+        system += await _client_block_for_pane(getattr(session, "cwd", "") or "", tail)
         # Skills: make the WHOLE discovered library (builtin + user + Claude +
         # Codex) usable by ANY provider — as prompt injection, not tool calls,
         # so it works identically on models with weak/no tool support.
