@@ -209,8 +209,14 @@ def seed_client(desk, name="Hartleys", status="proposed", **more):
          "last_at": "", "local": False},
     ]
     more.setdefault("evidence_json", json.dumps({"rule": "under_clients", "homes": homes, "work": 9, "folders": 2}))
-    return _add(desk, WorkClient(id=new_id("client"), name=name, name_key=name.lower(), signature=f"sig-{name}",
-                                 status=status, **more))
+    cid = _add(desk, WorkClient(id=new_id("client"), name=name, name_key=name.lower(), signature=f"sig-{name}",
+                                status=status, **more))
+    # Written outside the record's own functions: move its write version so
+    # a cached client map is read again (``store.load_map``).
+    from iron_jarvis.workmap.clients import store as client_store
+
+    client_store.bump_version()
+    return cid
 
 
 def _clients_routes(desk) -> bool:

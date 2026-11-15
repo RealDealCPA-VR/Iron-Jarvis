@@ -50,7 +50,7 @@ from ..deliverables.turn import step_note as deliverables_step_note
 from fastapi import HTTPException
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from ..providers import egress as _egress
 from ..providers.adapters.base import refusal_of
@@ -4954,7 +4954,7 @@ def settings_ask_tools(
     ask_armed: "list[str]",
     *,
     workflow_names: "list[str] | tuple[str, ...]" = (),
-    client_names: "list[str] | tuple[str, ...]" = (),
+    client_names: Any = (),
     in_client: str = "",
 ) -> "list[str]":
     """The STREAM lane's settings and record tools for *text* — VISIBLE,
@@ -4971,8 +4971,10 @@ def settings_ask_tools(
       record_tools_for``), with ``workflow_names`` — the saved workflows'
       names, read off the loop by the lane only when a run verb is there —
       and (v1.499.0) ``client_names`` / ``in_client``
-      (:func:`client_arming_kw`: the live confirmed and waiting client
-      names, the turn's own confirmed client), PASSED ONLY WHEN SET.
+      (:func:`client_arming_kw`: the live confirmed and waiting clients as
+      ``{id: (name, signature, aliases)}``, so another spelling the owner
+      gave a client arms too, and the turn's own confirmed client's name),
+      PASSED ONLY WHEN SET.
 
     A create tool among them (``records.ASK_FIRST_CREATE_TOOLS``) is
     allow-tier by itself; the lane writes an "ask" override for it
@@ -4992,7 +4994,9 @@ def settings_ask_tools(
             names += list(ASK_CONFIG_TOOLS)
         _client_kw: dict[str, Any] = {}
         if client_names:
-            _client_kw["client_names"] = tuple(client_names)
+            _client_kw["client_names"] = (
+                dict(client_names) if isinstance(client_names, Mapping) else tuple(client_names)
+            )
         if in_client:
             _client_kw["in_client"] = str(in_client)
         try:
@@ -11728,15 +11732,18 @@ def _client_turn(turn):
     :func:`_local_only_turn` is one (the turn's body is read by pins with
     ``inspect.getsource``). MIRROR NOTE (lock-step):
     ``routes/chat.stream_chat_turn`` sets the same wall around the stream
-    (``wall.scoped_frames``)."""
+    (``wall.scoped_frames``). The OWNER's words ride beside it
+    (``settings.records_clients.owner_words_scope``, :func:`client_owner_words`):
+    a client chat tool acts only on a client the owner named."""
     import functools
 
     @functools.wraps(turn)
     async def walled(platform, personas, body, *args, **kwargs):
+        from ..settings import records_clients as _rc
         from ..workmap.clients import wall as _wall
 
         turn_wall = await client_wall_for(platform, body)
-        with _wall.turn_scope(turn_wall):
+        with _wall.turn_scope(turn_wall), _rc.owner_words_scope(client_owner_words(body)):
             return await turn(platform, personas, body, *args, **kwargs)
 
     return walled
@@ -11841,34 +11848,69 @@ async def with_client_door(entries: Any, platform: Any, *, dashboard: bool) -> l
 
 def client_arming_kw(platform: Any) -> "dict[str, Any]":
     """The client keyword arguments of ``settings.records.record_tools_for``
-    (v1.499.0): ``client_names`` — the live confirmed AND waiting names (the
-    client chat tools arm on the owner's message naming one) — and
-    ``in_client`` — the name of the confirmed client whose folder this turn is
-    in (``wall.current().client``). PASSED ONLY WHEN SET (``{}`` with no
-    clients), so a PC without clients arms exactly as before. BLOCKING (the
-    cached map; the stream lane calls it in its arming thread, which copies
-    the turn's wall). Never raises (``{}``)."""
+    (v1.499.0): ``client_names`` — every confirmed AND waiting client as
+    ``{id: (name, signature, aliases)}`` (``settings.records_clients.
+    live_names``: the client chat tools arm on the owner's message naming
+    one, by any spelling on record) — and ``in_client`` — the NAME of the
+    confirmed client whose folder this turn is in (``wall.current().client``).
+    PASSED ONLY WHEN SET (``{}`` with no clients), so a PC without clients
+    arms exactly as before. BLOCKING (the cached map; the stream lane calls it
+    in its arming thread, which copies the turn's wall). Never raises
+    (``{}``)."""
     try:
-        from ..workmap.clients import store as _store
+        from ..settings import records_clients as _rc
         from ..workmap.clients import wall as _wall
 
-        cmap = _store.load_map(platform.engine)
-        names: list[str] = []
-        for table in (cmap.names, cmap.waiting_names):
-            for row in (table or {}).values():
-                name = str((row or ("",))[0] or "").strip()
-                if name and name not in names:
-                    names.append(name)
+        table = _rc.live_names(platform)
         client = getattr(_wall.current(), "client", None)
         in_client = str(getattr(client, "name", "") or "").strip() if client is not None else ""
     except Exception:  # noqa: BLE001 — arming never breaks a turn
         return {}
     out: dict[str, Any] = {}
-    if names:
-        out["client_names"] = tuple(names)
+    if table:
+        out["client_names"] = dict(table)
     if in_client:
         out["in_client"] = in_client
     return out
+
+
+#: The tool that keeps a preference for ONE client (v1.499.0).
+CLIENT_PREFERENCE_TOOL = "client_preference_add"
+
+
+def client_preference_arm(armed: Any, ask_armed: Any, registry: Any) -> "list[str]":
+    """``["client_preference_add"]`` when this turn is in a CONFIRMED client's
+    folder (``wall.current().client``) and ``remember_preference`` is armed,
+    else ``[]`` (v1.499.0; the clients design, guard 5): whenever a turn
+    there may keep a preference for every chat, it may also keep one for
+    this client only. ASK-armed: visible, never granted (the card names the
+    client). STREAM LANE ONLY (the POST lane shows no card). Never raises."""
+    try:
+        taken = set(armed or ()) | set(ask_armed or ())
+        if _REMEMBER_TOOL not in taken or CLIENT_PREFERENCE_TOOL in taken:
+            return []
+        if registry is None or registry.get(CLIENT_PREFERENCE_TOOL) is None:
+            return []
+        from ..workmap.clients import wall as _wall
+
+        if getattr(_wall.current(), "client", None) is None:
+            return []
+        return [CLIENT_PREFERENCE_TOOL]
+    except Exception:  # noqa: BLE001 — arming never breaks a turn
+        return []
+
+
+def client_owner_words(body: Any) -> str:
+    """The OWNER's own words of this turn, for the client chat tools
+    (``settings.records_clients.OWNER_WORDS``): the same text the turn's wall
+    reads (:func:`_compose_recall_query` over the user's messages, never the
+    model's), so a tool acts only on a client the owner named. Both lanes
+    set it around the turn beside the wall — MIRROR NOTE (lock-step). Never
+    raises ("" — every client writer then refuses)."""
+    try:
+        return _compose_recall_query(getattr(body, "messages", None) or [])
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 @_counts_for_its_chat

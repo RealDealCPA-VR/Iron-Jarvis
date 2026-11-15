@@ -474,7 +474,12 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
         # done frame has carried it since v1.165.0; the chat page's POST
         # fallback reads it. tests/test_wave1_chat_post_v14330.py.
         "denied_tools",
+        # v1.499.0: one more — "client_question" ({id, name, folders, work} |
+        # null, always present): "Is Hartleys a client?" under the reply. Same
+        # key on the SSE done frame; pinned by tests/test_clients_lanes_v1499.py.
+        "client_question",
     }
+    assert body["client_question"] is None
     assert body["refit"] is None and body["approved"] == []
     assert body["thread_refs"] == []
     assert body["folder_rules"] == []

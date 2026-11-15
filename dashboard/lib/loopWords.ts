@@ -137,6 +137,12 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Recaps of your finished work aren't being written",
     href: "/memory",
   },
+  // v1.499.0: the pass that notices names in your folder names that may be clients.
+  work_clients: {
+    label: "Clients in your folders",
+    problem: "Names in your folders aren't being looked at for clients",
+    href: "/clients",
+  },
   dispatcher: { label: "Queued tasks", problem: "Queued tasks aren't starting", href: TEAM },
   autonomy: { label: "Autonomy", problem: "Work Jarvis plans on its own isn't being checked", href: "/autonomy" },
   sentinels: { label: "Watchers", problem: "Your watchers aren't checking", href: "/sentinels" },

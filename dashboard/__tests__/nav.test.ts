@@ -130,7 +130,9 @@ describe("nav catalogue — the friction phrases resolve", () => {
     // The context spine has to be findable by the words people use for the
     // thing they are working on.
     ["project", "/projects"],
-    ["client", "/projects"],
+    // v1.499.0: "client" leads to the Clients page now (clients-v1499 pins
+    // it); a matter is still a project.
+    ["matter", "/projects"],
     ["kanban", "/projects"],
     // v1.145.0 — the on-ramp, asked for in the words people actually use.
     ["writing samples", "/train"],

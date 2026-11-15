@@ -29,11 +29,12 @@ The seams (builder B2 of the clients design):
 * ``client_question`` ALWAYS on the POST response and the stream's done frame
   (null, never absent), and the client door — both lanes, MIRROR NOTE.
 
-``client_block`` and ``turn_wall`` belong to other builders; here they are
-FAKES with the contract's shapes (the fake block resolves a folder the way
-the contract says the resolver does: ``keys.home_folder`` + ``keys.folder_key``
-+ ``keys.inside``). Made-up names (Hartleys, Smith) and made-up folders under
-the test's own tmp_path only. No wall-clock bars: a stalled hop waits on an
+The clients are REAL: made through builder A's store (``store.create`` +
+``store.keep_preference``), told through its ``client_block`` and walled by
+builder B1's ``turn_wall``; the scene only SPIES on those two (each call is
+recorded, then handed to the real function). A test that stalls or breaks a
+hop replaces it for that test alone. Made-up names (Hartleys, Smith) and
+made-up folders under the test's own tmp_path only. No wall-clock bars: a stalled hop waits on an
 Event, and the bound is crossed by the injected clock.
 """
 
@@ -60,8 +61,6 @@ from iron_jarvis.workmap.clients import store as store_mod
 from iron_jarvis.workmap.clients import wall as wall_mod
 
 LANES = ("post", "stream")
-HARTLEYS_ID = "client_0a1b2c3d4e5f"
-SMITH_ID = "client_5f4e3d2c1b0a"
 
 BLOCK_H = (
     "# Client: Hartleys\n"
@@ -87,57 +86,32 @@ FAB = "\n\nFABRIC-FOR:"
 
 
 # --------------------------------------------------------------------------- #
-# fakes with the contract's shapes
+# spies on the real block and the real wall
 # --------------------------------------------------------------------------- #
-class _Clients:
-    """``client_block`` and ``turn_wall`` for a set of CONFIRMED clients'
-    folders. Text only, like the contract's resolver."""
+class _Spies:
+    """Records each ``client_block`` and ``turn_wall`` call, then hands it to
+    the real function (builder A's block, builder B1's wall)."""
 
-    def __init__(self, roots: dict[str, tuple[str, str, str]]):
-        #: folder -> (client id, name, block)
-        self.roots = {K.folder_key(f): (f, *v) for f, v in roots.items()}
+    def __init__(self):
         self.block_calls: list[str] = []
         self.wall_calls: list[tuple[str, str]] = []
         self.walls: list[C.TurnWall] = []
-
-    def _root_of(self, folder):
-        key = K.folder_key(K.home_folder(str(folder or "")))
-        for root, row in self.roots.items():
-            if K.inside(key, root):
-                return root, row
-        return None, None
+        self._block = client_block_mod.client_block
+        self._turn_wall = wall_mod.turn_wall
 
     def block(self, platform, *, folder, local=None):
         self.block_calls.append(str(folder))
-        _root, row = self._root_of(folder)
-        return row[3] if row else ""
+        return self._block(platform, folder=folder, local=local)
 
     def turn_wall(self, engine, folder, user_text):
         self.wall_calls.append((str(folder), str(user_text)))
-        root, row = self._root_of(folder)
-        named = frozenset(
-            cid for _f, cid, name, _b in self.roots.values() if name in str(user_text or "")
-        )
-        if row is None:
-            wall = C.TurnWall(named=named, folder_key=K.folder_key(folder))
-        else:
-            _f, cid, name, _b = row
-            wall = C.TurnWall(
-                owner=f"client:{cid}", client=C.ClientRoot(cid, name, root, _f),
-                named=named, folder_key=K.folder_key(folder),
-            )
-        self.walls.append(wall)
-        return wall
-
-    def cmap(self):
-        return store_mod.ClientMap(
-            names={cid: (name, name.lower().rstrip("s"), ()) for _f, cid, name, _b in self.roots.values()},
-        )
+        got = self._turn_wall(engine, folder, user_text)
+        self.walls.append(got)
+        return got
 
     def install(self, monkeypatch):
         monkeypatch.setattr(client_block_mod, "client_block", self.block)
         monkeypatch.setattr(wall_mod, "turn_wall", self.turn_wall)
-        monkeypatch.setattr(store_mod, "load_map", lambda engine: self.cmap())
         return self
 
 
@@ -156,10 +130,11 @@ def scene(tmp_path, folders, monkeypatch):
     client = TestClient(app)
     platform = app.state.platform
     platform.learning.note_preference(LESSON)
-    clients = _Clients({
-        str(folders["hartleys"]): (HARTLEYS_ID, "Hartleys", BLOCK_H),
-        str(folders["smith"]): (SMITH_ID, "Smith", BLOCK_S),
-    }).install(monkeypatch)
+    hid = store_mod.create(platform, folder=str(folders["hartleys"]), name="Hartleys")["client"]["id"]
+    sid = store_mod.create(platform, folder=str(folders["smith"]), name="Smith")["client"]["id"]
+    store_mod.keep_preference(platform, hid, "Use cash basis.", origin="typed")
+    store_mod.keep_preference(platform, sid, "Use accrual basis.", origin="typed")
+    clients = _Spies().install(monkeypatch)
 
     class _Fabric:
         """Query-dependent snippets: everything before them is the stable head."""
@@ -172,7 +147,8 @@ def scene(tmp_path, folders, monkeypatch):
 
     monkeypatch.setattr(platform, "fabric", _Fabric())
     return type("Scene", (), {"app": app, "client": client, "platform": platform,
-                              "clients": clients, "tmp": tmp_path, **folders})
+                              "clients": clients, "tmp": tmp_path, "hid": hid, "sid": sid,
+                              **folders})
 
 
 def _scripted(platform, monkeypatch, rounds=(), final="Done."):
@@ -419,10 +395,14 @@ def test_a_client_hop_past_its_bound_is_left_out_and_named(scene, monkeypatch, l
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("lane", LANES)
 def test_tools_in_a_turn_see_the_turns_wall_on_both_lanes(scene, monkeypatch, lane):
+    from iron_jarvis.settings import records_clients as RC
+
     seen_by_tool: list[C.TurnWall] = []
+    words_by_tool: list[str] = []
 
     async def invoke(name, args, ctx, permissions, overrides=None, **kw):
         seen_by_tool.append(wall_mod.current())
+        words_by_tool.append(RC.owner_words())
         return ToolResult(ok=True, output="OUT")
 
     monkeypatch.setattr(scene.platform.registry, "invoke", invoke)
@@ -435,13 +415,17 @@ def test_tools_in_a_turn_see_the_turns_wall_on_both_lanes(scene, monkeypatch, la
     assert seen_by_tool, f"{lane}: the tool never ran"
     wall = scene.clients.walls[-1]
     assert all(w is wall for w in seen_by_tool), f"{lane}: a tool saw another wall: {seen_by_tool}"
-    assert wall.client is not None and wall.client.client_id == HARTLEYS_ID
-    assert wall.named == frozenset({HARTLEYS_ID})
+    assert wall.client is not None and wall.client.client_id == scene.hid
+    assert wall.named == frozenset({scene.hid})
     # Built from the OWNER's words and the turn's folder — never the model's.
     assert scene.clients.wall_calls[-1] == (str(scene.hartleys / "2026"), owner_words)
     assert "Smith" not in scene.clients.wall_calls[-1][1]
+    # The client chat tools read the OWNER's words (records_clients.
+    # OWNER_WORDS), the same text the wall was built from.
+    assert words_by_tool and all(w == owner_words for w in words_by_tool), (lane, words_by_tool)
     # Reset when the turn ends: nothing outside a turn reads a client's wall.
     assert wall_mod.current() is C.NO_CLIENT
+    assert RC.owner_words() == ""
 
 
 @pytest.mark.parametrize("lane", LANES)
@@ -526,11 +510,23 @@ def test_a_named_client_gets_its_door_on_both_lanes(scene, monkeypatch, lane):
     monkeypatch.setattr(doors_mod, "with_client_door", with_client_door, raising=False)
     _scripted(scene.platform, monkeypatch)
     done = _turn(scene.client, lane, _body("what did we last do for Hartleys?"))
-    assert handed == [[{"id": HARTLEYS_ID, "name": "Hartleys"}]], handed
-    assert {"href": f"/clients/{HARTLEYS_ID}", "label": "Open Hartleys"} in done["doors"]
+    assert handed == [[{"id": scene.hid, "name": "Hartleys"}]], handed
+    assert {"href": f"/clients/{scene.hid}", "label": "Open Hartleys"} in done["doors"]
     # A message that names no client hands nothing to the door.
     _turn(scene.client, lane, _body("what is a closure?"))
     assert len(handed) == 1
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_the_real_client_door_opens_the_named_clients_page(scene, monkeypatch, lane):
+    """Builder C's ``doors.with_client_door`` itself (not a double): the
+    owner names Hartleys in a chat with no client folder and the reply's
+    doors hold Hartleys' page, built from its id."""
+    _scripted(scene.platform, monkeypatch)
+    done = _turn(scene.client, lane, _body("what did we last do for Hartleys?"))
+    assert {"href": f"/clients/{scene.hid}", "label": "Open Hartleys' page"} in done["doors"], done["doors"]
+    done = _turn(scene.client, lane, _body("what is a closure?"))
+    assert not any(str(d.get("href", "")).startswith("/clients") for d in done["doors"]), done["doors"]
 
 
 def test_the_arming_pass_is_handed_the_client_names_only_when_there_are_any(scene, monkeypatch):
@@ -554,13 +550,50 @@ def test_the_arming_pass_is_handed_the_client_names_only_when_there_are_any(scen
     })
     assert got, "the arming pass never ran"
     assert got[-1]["in_client"] == "Hartleys"
-    assert set(got[-1]["client_names"]) == {"Hartleys", "Smith"}
+    # The live table ``{id: (name, signature, aliases)}`` (records_clients.
+    # live_names), so another spelling on record arms too.
+    table = got[-1]["client_names"]
+    assert set(table) == {scene.hid, scene.sid}
+    assert {row[0] for row in table.values()} == {"Hartleys", "Smith"}
+    assert all(len(row) == 3 for row in table.values())
     # No clients on record: the call is exactly what it was.
     monkeypatch.setattr(store_mod, "load_map", lambda engine: store_mod.ClientMap())
     _turn(scene.client, "stream", {
         "messages": [{"role": "user", "content": "hello there"}], "auto_tools": True,
     })
     assert got[-1] == {}
+
+
+def test_in_a_clients_folder_a_preference_turn_may_keep_it_for_the_client_only(scene, monkeypatch):
+    """The design's guard 5: in a CONFIRMED client's folder,
+    ``client_preference_add`` is armed (ask: visible, never granted) whenever
+    ``remember_preference`` is; in a folder no client claims it is not."""
+    offered: list[set[str]] = []
+
+    async def fake_stream(*, system, messages, tools=None, **kw):
+        offered.append({str(t.get("name") or "") for t in (tools or []) if isinstance(t, dict)})
+        resp = LLMResponse(text="Noted.", usage={"input_tokens": 3, "output_tokens": 1})
+        yield {"type": "text", "text": resp.text}
+        yield {"type": "final", "response": resp, "provider": "mock", "model": "mock"}
+
+    monkeypatch.setattr(scene.platform.router, "stream", fake_stream)
+    words = "from now on, always use numbered steps"
+    misc = scene.tmp / "Misc"
+    misc.mkdir()
+    for folder, client_only in ((scene.hartleys / "2026", True), (misc, False)):
+        _turn(scene.client, "stream", {"messages": [{"role": "user", "content": words}],
+                                       "workspace_dir": str(folder), "auto_tools": True})
+        assert "remember_preference" in offered[-1], offered[-1]
+        assert ("client_preference_add" in offered[-1]) is client_only, (folder, offered[-1])
+    # The rule itself, outside a lane: nothing without the client, nothing
+    # twice, nothing without remember_preference.
+    reg = scene.platform.registry
+    assert CT.client_preference_arm(["remember_preference"], [], reg) == []  # no wall: no client
+    hart = wall_mod.turn_wall(scene.platform.engine, str(scene.hartleys), "")
+    with wall_mod.turn_scope(hart):
+        assert CT.client_preference_arm(["remember_preference"], [], reg) == ["client_preference_add"]
+        assert CT.client_preference_arm(["read_file"], [], reg) == []
+        assert CT.client_preference_arm(["remember_preference"], ["client_preference_add"], reg) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -586,7 +619,60 @@ async def test_a_chat_code_turn_in_its_own_copy_gets_its_client(scene, monkeypat
     assert BLOCK_H in script.calls[0]["system"], "a Chat › Code turn in its own copy lost its client"
     assert str(copy) in scene.clients.block_calls, scene.clients.block_calls
     assert scene.clients.wall_calls[-1][0] == str(copy)
-    assert scene.clients.walls[-1].client.client_id == HARTLEYS_ID
+    assert scene.clients.walls[-1].client.client_id == scene.hid
+
+
+async def test_a_chat_code_reply_keeps_its_client_question_and_reads_its_answer(scene):
+    """A Chat › Code turn in a waiting name's folder carries the question on
+    its done frame AND on the reply line the daemon writes
+    (``clientQuestion``, a line key on both sides); the session's view folds
+    in the CURRENT answer from the record, so a reopened session never asks
+    again."""
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.ids import new_id
+    from iron_jarvis.harness import sessions as S
+    from iron_jarvis.workmap.clients import names as N
+    from iron_jarvis.workmap.models import WorkClient
+    from tests.test_build_sessions_v1367 import Script, frames_of, messages_of, new_session, open_turn, wire
+
+    jones = scene.root / "Jones"
+    jones.mkdir()
+    (jones / "ledger.py").write_text("X = 1", encoding="utf-8")
+    jid = new_id("client")
+    with session_scope(scene.platform.engine) as db:
+        db.add(WorkClient(
+            id=jid, name="Jones", name_key=N.name_key("Jones"), signature=N.signature("Jones"),
+            status="proposed", how="noticed", strength=9, evidence_json=json.dumps({
+                "rule": "under_clients", "work": 4, "folders": 1,
+                "homes": [{"folder": str(jones), "key": K.folder_key(str(jones)), "work": 4,
+                           "last_at": None, "local": False}],
+            }),
+        ))
+        db.commit()
+    store_mod.bump_version()
+    sid = new_session(scene.app, jones)["id"]
+    wire(scene.app, Script([]))
+    status, raw = await open_turn(scene.app, sid, {"text": "tidy the ledger", "turn_id": "cq-1"})
+    assert status == 200, raw
+    done = [d for e, d in frames_of(raw) if e == "done"][-1]
+    assert done["client_question"] == {"id": jid, "name": "Jones", "folders": 1, "work": 4}, done
+    reply = [m for m in messages_of(scene.app, sid) if m["role"] == "assistant"][-1]
+    assert reply["clientQuestion"] == {"id": jid, "name": "Jones", "folders": 1, "work": 4}
+    assert "clientQuestion" in S.LINE_KEYS
+
+    def shown():
+        msgs = scene.client.get(f"/build/sessions/{sid}").json()["messages"]
+        return [m for m in msgs if m["role"] == "assistant"][-1]["clientQuestion"]
+
+    assert "state" not in shown()  # still asking
+    r = scene.client.post(f"/clients/{jid}/confirm")
+    assert r.status_code == 200, r.text
+    assert shown()["state"] == "yes"
+    with session_scope(scene.platform.engine) as db:
+        db.delete(db.get(WorkClient, jid))
+        db.commit()
+    store_mod.bump_version()
+    assert shown()["state"] == "gone"
 
 
 # --------------------------------------------------------------------------- #
@@ -630,14 +716,14 @@ def test_agent_run_and_terminal_assist_get_only_their_own_clients_block(scene, m
     system, wall = run("prepare the Hartleys payroll summary", scene.hartleys / "2026")
     assert BLOCK_H in system and BLOCK_S not in system
     assert system.index(LESSON) < system.index(BLOCK_H), "the run's block comes after the lessons"
-    assert wall.client is not None and wall.client.client_id == HARTLEYS_ID
+    assert wall.client is not None and wall.client.client_id == scene.hid
     assert scene.clients.wall_calls[-1] == (str(scene.hartleys / "2026"), "prepare the Hartleys payroll summary")
     assert wall_mod.current() is C.NO_CLIENT
 
     # A run in Smith's folder: Smith's block, never Hartleys'.
     system, wall = run("prepare the payroll summary", scene.smith / "2025")
     assert BLOCK_S in system and "# Client: Hartleys" not in system and "cash basis" not in system
-    assert wall.client is not None and wall.client.client_id == SMITH_ID
+    assert wall.client is not None and wall.client.client_id == scene.sid
 
     # A run in its own scratch folder belongs to no client: no block, and the
     # scratch folder is never handed to the resolver.
@@ -645,7 +731,7 @@ def test_agent_run_and_terminal_assist_get_only_their_own_clients_block(scene, m
     system, wall = run("summarise Hartleys and Smith", None)
     assert "# Client:" not in system
     assert scene.clients.block_calls == calls_before, scene.clients.block_calls
-    assert wall.client is None and wall.named == frozenset({HARTLEYS_ID, SMITH_ID})
+    assert wall.client is None and wall.named == frozenset({scene.hid, scene.sid})
 
     # A run told to skip memory (a schedule's knob) skips the client block
     # with the lessons — it is a memory injection.

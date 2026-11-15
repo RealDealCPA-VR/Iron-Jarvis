@@ -8,13 +8,10 @@ update lands (folders under a Clients-type folder and waiting names are
 walled before the owner answers anything), and it fails CLOSED when the
 client tables cannot be read.
 
-Builder A's record (``store.load_map``) and name matcher (``names.named_in``)
-are stubs while the builders work at once: the wall's own tests run here on
-a FAKE map built by the same rules (:class:`FakeMap`) and, while
-``names.named_in`` is the stub, a local matcher with its contract
-(:func:`fake_named_in`). The tests that need A's real store (preferences,
-the client block, events) say so and skip until it lands; nothing in them is
-faked.
+Every test here runs on builder A's real record: the wall's own tests build
+a real :class:`store.ClientMap` from made-up folders (:func:`make_map`) and
+read it through ``store.load_map``; the lane, preference and event tests
+make their clients through the real store functions.
 
 All names and paths are made up (Hartleys, Smith, Jones, Lee); nothing here
 reads a real folder: a folder is TEXT (the disk calls are patched to raise
@@ -45,7 +42,6 @@ from iron_jarvis.workmap import block as B
 from iron_jarvis.workmap import keys
 from iron_jarvis.workmap import recap as R
 from iron_jarvis.workmap.clients import (
-    CLIENT_PARENT_PHRASES,
     NO_CLIENT,
     ClientRoot,
     ClientsUnreadable,
@@ -76,84 +72,19 @@ DOWNLOADS = r"C:\Users\Owner\Downloads"
 
 
 # --------------------------------------------------------------------------- #
-# The fake record (builder A's map and matcher are stubs until they land)
+# The record: builder A's real map, built from made-up folders
 # --------------------------------------------------------------------------- #
 def _k(folder: str) -> str:
     return keys.folder_key(keys.home_folder(folder))
 
 
-def _fold(word: str) -> str:
-    w = word.replace("'", "").replace("’", "").lower()
-    return w[:-1] if len(w) >= 5 and w.endswith("s") and not w.endswith("ss") else w
-
-
-def _sig(name: str) -> str:
-    try:
-        real = names.signature(name)
-    except Exception:  # noqa: BLE001
-        real = ""
-    return real or " ".join(_fold(t) for t in name.split())
-
-
-def fake_named_in(text, table):
-    """``names.named_in``'s contract for single-word names: written
-    capitalised as a whole word, apostrophes folded; aliases count."""
-    caps = {_fold(w) for w in re.findall(r"[A-Za-z][A-Za-z'’]*", str(text or "")) if w[0].isupper()}
-    return frozenset(cid for cid, (_n, sig, aliases) in table.items()
-                     if sig in caps or caps & set(aliases))
-
-
-def _is_parent(segment: str) -> bool:
-    return " ".join(segment.lower().replace("'", "").split()) in CLIENT_PARENT_PHRASES
-
-
-class FakeMap(store.ClientMap):
-    """A :class:`store.ClientMap` that answers by the contract's rules,
-    from the folders it was given (text only)."""
-
-    def client_of(self, folder):
-        key = _k(str(folder or ""))
-        if not key:
-            return None
-        return next((r for r in self.confirmed if keys.inside(key, r.key)), None)
-
-    def waiting_of(self, folder):
-        key = _k(str(folder or ""))
-        if not key or self.client_of(folder) is not None:
-            return None
-        return next((w for w in self.waiting if any(keys.inside(key, h) for h in w.homes)), None)
-
-    def provisional_of(self, folder):
-        parts = keys.home_folder(str(folder or "")).replace("\\", "/").split("/")
-        last = max((i for i, p in enumerate(parts) if _is_parent(p)), default=-1)
-        if last < 0:
-            return None
-        for j in range(last + 1, len(parts)):
-            if parts[j] and not parts[j].isdigit():
-                return "folder:" + _k("/".join(parts[: j + 1]))
-        return None
-
-    def spans(self, folder):
-        key = _k(str(folder or ""))
-        if not key:
-            return False
-        tail = keys.home_folder(str(folder)).replace("\\", "/").rstrip("/").split("/")[-1]
-        if _is_parent(tail):
-            return True
-        owned = [r.key for r in self.confirmed] + [h for w in self.waiting for h in w.homes]
-        return any(o != key and keys.inside(o, key) for o in owned)
-
-    def roots_of(self, client_id):
-        return tuple(r for r in self.confirmed if r.client_id == client_id)
-
-
-def make_map(confirmed=(), waiting=()) -> FakeMap:
+def make_map(confirmed=(), waiting=()) -> store.ClientMap:
     roots = tuple(ClientRoot(cid, name, _k(f), f) for cid, name, folders in confirmed for f in folders)
     wait = tuple(Waiting(cid, name, tuple(_k(h) for h in homes)) for cid, name, homes in waiting)
-    return FakeMap(
+    return store.ClientMap(
         version=1, confirmed=roots, waiting=wait,
-        names={cid: (name, _sig(name), ()) for cid, name, _f in confirmed},
-        waiting_names={cid: (name, _sig(name), ()) for cid, name, _f in waiting},
+        names={cid: (name, names.signature(name), ()) for cid, name, _f in confirmed},
+        waiting_names={cid: (name, names.signature(name), ()) for cid, name, _f in waiting},
     )
 
 
@@ -164,15 +95,9 @@ FIRM = dict(
 )
 
 
-def _named_in_is_the_stub() -> bool:
-    return names.named_in("for Hartleys", {"x": ("Hartleys", "hartley", ())}) == frozenset()
-
-
 @pytest.fixture()
 def use_map(monkeypatch):
     """``use_map(cmap)``: the record the wall reads is ``cmap``."""
-    if _named_in_is_the_stub():
-        monkeypatch.setattr(names, "named_in", fake_named_in)
 
     def use(cmap):
         monkeypatch.setattr(store, "load_map", lambda engine: cmap)
@@ -803,7 +728,7 @@ def test_wall_and_names_never_touch_the_disk(scene, monkeypatch):
         for what, _turn_row, row, _told in TABLE:
             wall.may_tell(t, scene.cmap, folder=row[0], title=row[1], files=[row[0] + r"\a.xlsx"],
                           snippet="Hartleys")
-    # Builder A's text helpers (the stubs now, the real ones once they land).
+    # Builder A's text helpers.
     for folder in (H + r"\2026", r"\\server\share\Clients\Lee", "~/Clients/Ng", ""):
         names.path_parts(folder)
         names.name_key(folder)
@@ -854,14 +779,13 @@ def test_each_wall_goes_red_without_it(unplaced, monkeypatch):
         m.setattr(wall, "may_tell", lambda *a, **k: True)
         assert _leaks(unplaced) == ["work block", "memory recall", "history search"]
     with monkeypatch.context() as m:
-        m.setattr(FakeMap, "client_of", lambda self, folder: None)
+        m.setattr(store.ClientMap, "client_of", lambda self, folder: None)
         assert _leaks(unplaced) == ["work block", "memory recall", "history search"]
     assert _leaks(unplaced) == []
 
 
 # --------------------------------------------------------------------------- #
-# Builder A's record: these run once its store, names and client block land
-# (until then each skips, naming the stub; nothing in them is faked)
+# Builder A's record: its store, names and client block, nothing faked
 # --------------------------------------------------------------------------- #
 SD_ID = "client_00000000000d"  # Smith Dental
 NAMED_CASES = [
@@ -880,8 +804,6 @@ NAMED_CASES = [
 
 @pytest.mark.parametrize("text, expected", NAMED_CASES, ids=[c[0] for c in NAMED_CASES])
 def test_named_in_both_ways(text, expected):
-    if _named_in_is_the_stub():
-        pytest.skip("builder A's names.named_in is still the contract stub; this runs once it lands")
     table = {
         H_ID: ("Hartleys", names.signature("Hartleys"), (names.signature("HRT"),)),
         SD_ID: ("Smith Dental", names.signature("Smith Dental"), ()),
@@ -905,10 +827,7 @@ def _app(tmp_path, monkeypatch):
 def _real_client(platform, folder, name) -> str:
     """A confirmed client made by builder A's store (an owner-made client)."""
     Path(folder).mkdir(parents=True, exist_ok=True)
-    try:
-        got = store.create(platform, folder=str(folder), name=name)
-    except NotImplementedError:
-        pytest.skip("builder A's store is still the contract stub; this runs once it lands")
+    got = store.create(platform, folder=str(folder), name=name)
     return got["client"]["id"]
 
 

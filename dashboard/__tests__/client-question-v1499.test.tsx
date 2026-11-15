@@ -29,6 +29,17 @@ vi.mock("@/lib/api", () => ({
     if (H.fail) throw H.fail;
     return H.answer;
   },
+  // What the stream hook (lib/useChatStream) imports, for its own pin below.
+  API_BASE: "",
+  ijToken: () => "",
+  flattenDetail: (d: unknown) => String(d ?? ""),
+  ApiError: class ApiError extends Error {
+    status: number;
+    constructor(message: string, status = 0) {
+      super(message);
+      this.status = status;
+    }
+  },
 }));
 vi.mock("next/link", () => ({
   default: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) => (
@@ -178,5 +189,47 @@ describe("where it is stored and drawn (source pins)", () => {
     const row = src("components/harness/HarnessMessageRow.tsx");
     expect(row).toMatch(/if \(decodeSuggestion\(m\.suggestion\)\) return null;\s+const cq = decodeClientQuestion\(/);
     expect(row).toContain("<ClientQuestion key={cq.id} question={cq} />");
+  });
+});
+
+describe("the stream hook carries the question (whitelist, like the suggestion)", () => {
+  const WIRE = { id: "client_ab12cd34ef56", name: "Hartleys", folders: 2, work: 9, extra: "never kept" };
+
+  it("decodes a valid one and drops null and a name for an id", async () => {
+    const { decodeSSE } = await import("@/lib/useChatStream");
+    const ev = decodeSSE("done", JSON.stringify({ reply: "r", client_question: WIRE })) as {
+      client_question?: Record<string, unknown>;
+    };
+    expect(ev.client_question).toEqual({ id: "client_ab12cd34ef56", name: "Hartleys", folders: 2, work: 9 });
+    const none = decodeSSE("done", JSON.stringify({ reply: "r", client_question: null })) as Record<string, unknown>;
+    expect("client_question" in none).toBe(false);
+    const bad = decodeSSE("done", JSON.stringify({ reply: "r", client_question: { ...WIRE, id: "Hartley's" } }));
+    expect("client_question" in (bad as Record<string, unknown>)).toBe(false);
+  });
+
+  it("the real hook puts it on the resolved result as clientQuestion", async () => {
+    const { useChatStream } = await import("@/lib/useChatStream");
+    const { renderHook } = await import("@testing-library/react");
+    const frames = `event: done
+data: ${JSON.stringify({ reply: "ok", client_question: WIRE })}
+
+`;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(frames));
+        controller.close();
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(stream, { status: 200 })));
+    try {
+      const { result } = renderHook(() => useChatStream());
+      let settled: { clientQuestion?: { id: string; name: string } } | null = null;
+      await act(async () => {
+        settled = (await result.current.run({ messages: [] })) as typeof settled;
+      });
+      expect(settled!.clientQuestion).toEqual({ id: "client_ab12cd34ef56", name: "Hartleys", folders: 2, work: 9 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

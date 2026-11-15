@@ -3673,9 +3673,14 @@ async def stream_chat_turn(
     # task that iterates it: the grounding, every tool round (history search,
     # the client tools) and memory recall read it. MIRROR NOTE (lock-step):
     # chat_turn.run_chat_turn runs inside the same wall (`_client_turn`).
+    # The OWNER's words ride beside it (`records_clients.scoped_owner_words`,
+    # the same text the wall reads): a client chat tool acts only on a client
+    # the owner named, never one only the model wrote.
+    from ...settings import records_clients as _records_clients
     from ...workmap.clients import wall as _client_wall
 
     _turn_wall = await _chat_turn.client_wall_for(platform, body)
+    _owner_words = _chat_turn.client_owner_words(body)
     turn_id = str(getattr(body, "turn_id", "") or "").strip()
     handle = TURNS.register(turn_id) if turn_id else None
     if handle is not None and steer_source is None:
@@ -3698,7 +3703,7 @@ async def stream_chat_turn(
     # connection leaves no step running. MIRROR NOTE (lock-step):
     # chat_turn.run_chat_turn closes its own through `_settles_its_prep`.
     _prep = _chat_turn._PrepGroup()
-    inner = _honest_failures(_client_wall.scoped_frames(_egress.scoped_frames(
+    inner = _honest_failures(_records_clients.scoped_owner_words(_client_wall.scoped_frames(_egress.scoped_frames(
         _chat_turn._prep_settled_frames(chat_stream(
             platform, personas, body, should_stop=should_stop,
             steer_source=steer_source, handle=handle, tool_ceiling=tool_ceiling,
@@ -3710,7 +3715,7 @@ async def stream_chat_turn(
             # v1.392.0: passed only when set (a lane double that predates the
             # cap sees the call it always saw).
             **({"reply_cap": reply_cap} if reply_cap is not None else {}),
-        ), _prep), _lo_scope), _turn_wall))
+        ), _prep), _lo_scope), _turn_wall), _owner_words))
     if _acct_pin is not None:
         inner = _chat_turn.account_pinned_frames(inner, _acct_pin)
     if thread_turn is not None:
@@ -4710,6 +4715,11 @@ async def chat_stream(
             ask_armed += await asyncio.to_thread(
                 _settings_and_records, _last_user_text(body.messages), list(armed), list(ask_armed),
             )
+            # CLIENTS (v1.499.0, the design's guard 5): in a confirmed
+            # client's folder, a turn that may keep a preference for every
+            # chat may also keep one for this client only. VISIBLE, never
+            # granted (the card names the client). THIS LANE ONLY.
+            ask_armed += _chat_turn.client_preference_arm(armed, ask_armed, d.platform.registry)
             # LIVE EXCEL (v1.466.0): when this turn can LOOK at the workbook
             # open in Excel, it can also ask to change it. VISIBLE, never
             # granted: a call shows the ordinary card (and the tool's own

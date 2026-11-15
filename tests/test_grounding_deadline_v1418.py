@@ -42,7 +42,9 @@ from tests.test_wave3_chat_lanes_v1311 import LANES, _client, _post_turn, _scrip
 
 def test_the_soft_deadline_is_two_and_a_half_seconds_and_names_the_required_hops():
     assert chat_turn.GROUNDING_SOFT_S == 2.5
-    assert chat_turn.GROUNDING_REQUIRED_HOPS == {"project", "folder_rules", "connector"}
+    # v1.499.0: the client block is required too, and bounded at
+    # workmap.clients.CLIENT_HOP_MAX_S (tests/test_clients_lanes_v1499.py).
+    assert chat_turn.GROUNDING_REQUIRED_HOPS == {"project", "folder_rules", "connector", "client"}
 
 
 @pytest.mark.parametrize("lane", LANES)

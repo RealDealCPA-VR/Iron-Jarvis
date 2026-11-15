@@ -111,6 +111,11 @@ LINE_KEYS: tuple[str, ...] = (
     # v1.414.0: a repeated correction offered as a standing preference
     # (learning/preferences — the chat's own Keep line).
     "suggestion",
+    # v1.499.0: "Is Hartleys a client?" under a reply (workmap/clients/store
+    # question_for_turn) — at most one question line rides a reply, the
+    # preference first. Its CURRENT answer is folded in on read
+    # (store.fold_question_states).
+    "clientQuestion",
     "approved", "refit", "doors", "trust", "trustReason", "trustNote",
     "timing",
     # v1.368.0 (Phase 5): a continuation question the DAEMON wrote ("Resume

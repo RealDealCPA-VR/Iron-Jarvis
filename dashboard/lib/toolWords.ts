@@ -156,6 +156,14 @@ const WORDS: Record<string, string> = {
   persona_create: "make a chat persona",
   persona_update: "change a chat persona",
   persona_delete: "remove or reset a chat persona",
+  // v1.499.0 (leap 3 Phase 3): your clients from chat
+  // (settings/records_clients.py). agents/mission.ASK_WORDS says the same
+  // (pinned equal).
+  client_answer: "say whether a name is one of your clients",
+  client_update: "change one of your clients",
+  client_preference_add: "keep a preference for one client",
+  client_preference_change: "change a preference kept for one client",
+  client_preference_forget: "forget a preference kept for one client",
   // v1.438.0 (chat-first plan Wave 4 group A): the night shift and a folder's
   // coding settings (settings/records_build.py). desktop/main.js TOOL_WORDS
   // and agents/mission.ASK_WORDS say the same (pinned equal).

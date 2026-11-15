@@ -1262,6 +1262,14 @@ class _ReplyWatch:
             # a coding session's lines.
             if isinstance(done.get("suggestion"), dict) and done["suggestion"].get("id"):
                 line["suggestion"] = done["suggestion"]
+            # v1.499.0: the client question under the reply ("Is Hartleys a
+            # client?"), kept like the suggestion; its CURRENT answer is
+            # read from the record on read (store.fold_question_states), so a
+            # reopened session never asks again. The id was already checked
+            # against CLIENT_ID_RE by the lane.
+            cq = done.get("client_question")
+            if isinstance(cq, dict) and cq.get("id"):
+                line["clientQuestion"] = {k: cq.get(k) for k in ("id", "name", "folders", "work")}
             # v1.374.0: how full the conversation was for the model this turn
             # — the planner's own numbers, never a guess on the screen.
             ctx = context_receipt(done.get("context"))
@@ -4345,6 +4353,11 @@ def register(app: FastAPI, d: Any) -> None:
         from ...learning.preferences import fold_suggestion_states
 
         view["messages"] = fold_suggestion_states(engine_of(), view.get("messages"))
+        # v1.499.0: each reply's client question with its CURRENT answer
+        # (yes / no / gone), read from the client record — one indexed read.
+        from ...workmap.clients.store import fold_question_states
+
+        view["messages"] = fold_question_states(engine_of(), view.get("messages"))
         view["turn_id"] = _running_turn(d, row.id) if view["running"] else ""
         # v1.377.0 (part 2, Phase 6): Compact is writing this session's summary
         # right now — a screen that comes back to it mid-Compact says

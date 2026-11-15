@@ -109,6 +109,12 @@ def _refused(fn, *a, **k) -> str:
     return err.value.sentence
 
 
+def _conflict(fn, *a, **k) -> str:
+    with pytest.raises(ClientConflict) as err:
+        fn(*a, **k)
+    return err.value.sentence
+
+
 def _chat(p, folder, *, title="Work", local_only=False):
     setup = {"workspace_dir": str(folder)}
     if local_only:
@@ -265,6 +271,58 @@ def test_not_a_client_keeps_rows_and_restore_brings_free_folders_back(platform):
     assert [p["id"] for p in store.preferences(platform.engine, hid)] == [kept["preference"]["id"]]
     with pytest.raises(ClientConflict):
         store.restore(platform, hid)
+
+
+def test_unconfirm_undoes_exactly_one_yes_and_refuses_anything_more(platform):
+    """The Undo of a Yes made from chat (builder C's cards): back to waiting,
+    back to Not a client, or gone; only what that Yes made is taken away."""
+    # 1. A waiting name answered Yes waits again; the folder the Yes linked
+    #    is gone; asked_at is kept (never asked under another reply).
+    wid = _proposed(platform, "Hartleys", [r"C:\Clients\Hartleys"])
+    with session_scope(platform.engine) as db:
+        row = db.get(WorkClient, wid)
+        row.asked_at = utcnow()
+        db.add(row)
+        db.commit()
+    store.confirm(platform, wid)
+    assert store.load_map(platform.engine).client_of(r"C:\Clients\Hartleys\2026").client_id == wid
+    platform.event_bus.events.clear()
+    got = store.unconfirm(platform, wid, back_to="proposed")
+    assert got == {"ok": True, "client": {"id": wid, "name": "Hartleys"},
+                   "note": "Hartleys waits for your answer again."}
+    row = _client(platform, wid)
+    assert row.status == "proposed" and row.confirmed_at is None and row.asked_at is not None
+    assert _folders(platform, wid) == []
+    cmap = store.load_map(platform.engine)
+    assert cmap.client_of(r"C:\Clients\Hartleys\2026") is None and wid in cmap.waiting_names
+    assert platform.event_bus.events == [("client.changed", {"id": wid})]
+    # 2. A never-confirmed No answered Yes after all is Not a client again.
+    no = _proposed(platform, "Smith", [r"C:\Clients\Smith"])
+    store.decline(platform, no)
+    store.create(platform, folder=r"E:\Work\Smith", name="Smith")
+    store.unconfirm(platform, no, back_to="declined")
+    row = _client(platform, no)
+    assert row.status == "declined" and row.confirmed_at is None and _folders(platform, no) == []
+    store.ask_again(platform, no)  # still a name that was never a client
+    # 3. The row create() made for a name not on record is deleted.
+    made = store.create(platform, folder=r"D:\Work\Pereira Farms", name="Pereira Farms")["client"]["id"]
+    assert store.unconfirm(platform, made, back_to="gone")["note"] == "Pereira Farms is no longer on record."
+    assert _client(platform, made) is None and _folders(platform, made) == []
+    # Refused: anything the Yes did not make, and a client from before it.
+    lee = store.create(platform, folder=r"D:\Work\Lee", name="Lee Dental")["client"]["id"]
+    store.keep_preference(platform, lee, "Wants paper statements.", origin="typed")
+    assert "A preference was kept for Lee Dental since" in _conflict(store.unconfirm, platform, lee, back_to="gone")
+    ng = _proposed(platform, "Ng", [r"C:\Clients\Ng"])
+    store.confirm(platform, ng)
+    store.add_folder(platform, ng, r"E:\Scans\Ng")
+    assert "A folder was added to Ng since" in _conflict(store.unconfirm, platform, ng, back_to="proposed")
+    old = store.create(platform, folder=r"D:\Work\Dalton", name="Dalton")["client"]["id"]
+    store.decline(platform, old)
+    store.restore(platform, old)
+    assert "was a client before this change" in _conflict(store.unconfirm, platform, old, back_to="declined")
+    assert "there is no Yes to undo" in _conflict(store.unconfirm, platform, wid, back_to="proposed")
+    assert _refused(store.unconfirm, platform, ng, back_to="confirmed") == "That change cannot be undone."
+    assert {f[0] for f in _folders(platform, ng)} == {r"C:\Clients\Ng", r"E:\Scans\Ng"}
 
 
 def test_owner_made_client_reuses_a_waiting_or_declined_row(platform):

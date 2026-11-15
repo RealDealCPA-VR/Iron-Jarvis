@@ -54,6 +54,12 @@
     "channel_remove",
     "channel_toggle",
     "chat_local_only",
+    "client_answer",
+    "client_list",
+    "client_preference_add",
+    "client_preference_change",
+    "client_preference_forget",
+    "client_update",
     "code_handoff_check",
     "code_handoff_list",
     "code_handoff_start",
@@ -285,6 +291,12 @@
     "channel_remove": "remove a notification destination",
     "channel_toggle": "turn a channel's two-way messages on or off",
     "chat_local_only": "change Local only for this chat",
+    "client_answer": "say whether a name is one of your clients",
+    "client_list": "list your clients",
+    "client_preference_add": "keep a preference for one client",
+    "client_preference_change": "change a preference kept for one client",
+    "client_preference_forget": "forget a preference kept for one client",
+    "client_update": "change one of your clients",
     "code_handoff_check": "check on a helper coding tool",
     "code_handoff_list": "list the coding tools that can help",
     "code_handoff_start": "hand work to another coding tool",
@@ -614,6 +626,30 @@
     "chat_local_only": [
       "Changed Local only for this chat",
       "Changing Local only for this chat"
+    ],
+    "client_answer": [
+      "Noted whether a name is one of your clients",
+      "Noting whether a name is one of your clients"
+    ],
+    "client_list": [
+      "Listed your clients",
+      "Listing your clients"
+    ],
+    "client_preference_add": [
+      "Saved a preference for one client",
+      "Saving a preference for one client"
+    ],
+    "client_preference_change": [
+      "Changed a preference kept for one client",
+      "Changing a preference kept for one client"
+    ],
+    "client_preference_forget": [
+      "Forgot a preference kept for one client",
+      "Forgetting a preference kept for one client"
+    ],
+    "client_update": [
+      "Changed one of your clients",
+      "Changing one of your clients"
     ],
     "code_handoff_check": [
       "Checked on a helper coding tool",
@@ -1214,6 +1250,12 @@
     "channel_remove": "",
     "channel_toggle": "",
     "chat_local_only": "",
+    "client_answer": "",
+    "client_list": "",
+    "client_preference_add": "",
+    "client_preference_change": "",
+    "client_preference_forget": "",
+    "client_update": "",
     "code_handoff_check": "",
     "code_handoff_list": "",
     "code_handoff_start": "",

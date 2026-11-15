@@ -301,6 +301,10 @@ export type BuildMessage = PaneMessage & {
    *  (raw; lib/preferences decodeSuggestion) — with its CURRENT answer, read
    *  from the row by the daemon (a coding session's lines are the daemon's). */
   suggestion?: unknown;
+  /** v1.499.0: "Is Hartleys a client?" under a reply (raw; lib/clients
+   *  decodeClientQuestion) — with its CURRENT answer, read from the record
+   *  by the daemon (a coding session's lines are the daemon's). */
+  clientQuestion?: unknown;
 };
 
 /** Part 3, Phase 2: a reply line's `finish`, whitelisted — the known keys
@@ -493,6 +497,8 @@ const LINE_KEYS = [
   // v1.414.0: a repeated correction offered as a standing preference (raw;
   // lib/preferences decodeSuggestion) — its answer folded in by the daemon.
   "suggestion",
+  // v1.499.0: the client question under a reply (with its current answer).
+  "clientQuestion",
   // v1.406.0 part 3: a line Iron Jarvis wrote about the session's pull
   // request's checks ({kind, round}; its words are the content).
   "ci",

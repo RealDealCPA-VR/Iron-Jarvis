@@ -10,10 +10,14 @@ client is refused. Plus the guards on ``remember_preference``, the client
 door, the Clients page door, the "client" claim family, the inbox kind's
 setting row and the permission tiers.
 
-The client record itself (``workmap/clients/store``, ``names``, ``page``)
-is builder A's and still a stub here, so it is FAKED with an in-memory
-record that keeps the same contract (``FakeClients`` below). The walls are
-set through the real ContextVar (``wall.turn_scope``) and the owner's words
+Most tests drive the tools' own logic over an in-memory record that keeps
+builder A's contract (``FakeClients`` below: it records every change made,
+so a refusal is proven to write nothing); its map is A's real
+``store.ClientMap`` and its names A's real ``names.signature`` /
+``names.named_in``. The section "On builder A's REAL record" at the end runs
+the same changes and their Undo on A's real store (``store.unconfirm``
+included), with each turn's wall from the real resolver. The walls are set
+through the real ContextVar (``wall.turn_scope``) and the owner's words
 through ``records_clients.owner_words_scope`` — the same seams the lanes use.
 All names and paths are made up.
 """
@@ -41,6 +45,7 @@ from iron_jarvis.settings import records as R
 from iron_jarvis.settings import records_clients as RC
 from iron_jarvis.tools.base import ToolContext
 from iron_jarvis.workmap import clients as C
+from iron_jarvis.workmap import keys as K
 from iron_jarvis.workmap.clients import names as N
 from iron_jarvis.workmap.clients import page as PG
 from iron_jarvis.workmap.clients import store as S
@@ -58,42 +63,14 @@ DECLINED = "client_" + "e5" * 6
 # --------------------------------------------------------------------------- #
 # the record, faked to its contract (builder A's store / names / page)
 # --------------------------------------------------------------------------- #
-_SUFFIX = {"llc", "inc", "corp", "co", "ltd", "pllc", "pc", "lp", "llp", "plc"}
-
-
 def fake_sig(s) -> str:
-    toks = re.findall(r"[a-z0-9]+", str(s or "").lower().replace("'", "").replace("’", ""))
-    out = []
-    for t in toks:
-        if t in _SUFFIX or t.isdigit() or len(t) < 2:
-            continue
-        if len(t) >= 5 and t.endswith("s") and not t.endswith("ss"):
-            t = t[:-1]
-        out.append(t)
-    return " ".join(out)
+    """The record's signature: builder A's real (pure) ``names.signature``."""
+    return N.signature(s)
 
 
-def fake_named_in(text, names) -> frozenset:
-    raw = re.findall(r"[A-Za-z0-9'’&]+", str(text or ""))
-    folded = [fake_sig(w) for w in raw]
-    caps = [w[:1].isupper() for w in raw]
-    hit = set()
-    for cid, (_name, sig, aliases) in dict(names or {}).items():
-        for s in {sig, *aliases}:
-            parts = s.split()
-            if not parts:
-                continue
-            n = len(parts)
-            for i in range(len(folded) - n + 1):
-                if folded[i:i + n] == parts and (n > 1 or caps[i]):
-                    hit.add(cid)
-                    break
-    return frozenset(hit)
-
-
-class FakeMap(S.ClientMap):
-    def roots_of(self, client_id):
-        return tuple(r for r in self.confirmed if r.client_id == client_id)
+def _fk(folder: str) -> str:
+    """A folder's key, as the record keys it."""
+    return K.folder_key(K.home_folder(folder))
 
 
 class FakeClients:
@@ -127,18 +104,18 @@ class FakeClients:
     def load_map(self, engine):
         self.calls.append(("load_map",))
         conf = tuple(
-            C.ClientRoot(cid, r["name"], f.lower().replace("\\", "/"), f)
+            C.ClientRoot(cid, r["name"], _fk(f), f)
             for cid, r in self.rows.items() if r["status"] == "confirmed" for f in r["folders"]
         )
         waiting = tuple(
-            C.Waiting(cid, r["name"], tuple(f.lower() for f in r["homes"]))
+            C.Waiting(cid, r["name"], tuple(_fk(f) for f in r["homes"]))
             for cid, r in self.rows.items() if r["status"] == "proposed"
         )
         table = lambda st: {  # noqa: E731
             cid: (r["name"], fake_sig(r["name"]), tuple(r["aliases"])) for cid, r in self.rows.items()
             if r["status"] == st
         }
-        return FakeMap(version=self.version, confirmed=conf, waiting=waiting, names=table("confirmed"),
+        return S.ClientMap(version=self.version, confirmed=conf, waiting=waiting, names=table("confirmed"),
                        waiting_names=table("proposed"))
 
     def preferences(self, engine, client_id):
@@ -286,8 +263,6 @@ def rec(monkeypatch):
     for name in _MUTATIONS:
         monkeypatch.setattr(S, name, getattr(f, name))
     monkeypatch.setattr(S, "unconfirm", f.unconfirm, raising=False)
-    monkeypatch.setattr(N, "signature", fake_sig)
-    monkeypatch.setattr(N, "named_in", fake_named_in)
     return f
 
 
@@ -302,8 +277,8 @@ def _ctx(p, thread_id="chat_t1"):
 
 
 def client_turn(cid, name, folder):
-    return C.TurnWall(owner=f"client:{cid}", client=C.ClientRoot(cid, name, folder.lower(), folder),
-                      folder_key=folder.lower())
+    return C.TurnWall(owner=f"client:{cid}", client=C.ClientRoot(cid, name, _fk(folder), folder),
+                      folder_key=_fk(folder))
 
 
 def call(p, tool_name, args, *, turn=C.NO_CLIENT, words=""):
@@ -852,6 +827,20 @@ def test_possessive_follows_the_one_table():
     assert RC.possessive("Hartley's") == "Hartley's"
     assert RC.possessive("Hartleys") == "Hartleys'"
     assert RC.possessive("Smith") == "Smith's"
+    # The ONE table, read from the dashboard's own copy
+    # (dashboard/lib/clients.ts POSSESSIVE_TABLE): the daemon's sentences and
+    # the page headings say the same.
+    from pathlib import Path
+
+    ts = (Path(__file__).resolve().parents[1] / "dashboard" / "lib" / "clients.ts").read_text(encoding="utf-8")
+    ts = ts.replace("\r\n", "\n")
+    body = ts[ts.index("export const POSSESSIVE_TABLE"):]
+    body = body[: body.index("];")]
+    rows = re.findall(r'\[\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\]', body)
+    assert len(rows) >= 5, rows
+    for name, want in rows:
+        assert N.possessive(name) == want, (name, N.possessive(name), want)
+        assert RC.possessive(name) == want, (name, RC.possessive(name), want)
 
 
 def test_live_names_never_raises(platform, monkeypatch):
@@ -861,3 +850,133 @@ def test_live_names_never_raises(platform, monkeypatch):
     monkeypatch.setattr(S, "load_map", broken)
     assert RC.live_names(platform) == {}
     assert datetime  # imported for the evidence's timestamp shape
+
+
+# --------------------------------------------------------------------------- #
+# On builder A's REAL record: no fake, the turn's wall from the real
+# resolver. Proves the shapes the tools read (a Yes, its Undo through
+# ``store.unconfirm``, ``forget_preference``'s answer, ``roots_of`` keys,
+# ``clients_list`` rows) are the record's own.
+# --------------------------------------------------------------------------- #
+@pytest.fixture()
+def real(tmp_path):
+    p = create_app(str(tmp_path / "home")).state.platform
+    yield p
+    p.engine.dispose()
+
+
+def _waiting_row(p, name, homes) -> str:
+    """A name the noticing pass would have left waiting (the row as
+    ``detect.notice`` writes it); the map's write version is moved, as for
+    any row written outside the store's functions."""
+    from iron_jarvis.core.ids import new_id
+
+    cid = new_id("client")
+    with session_scope(p.engine) as db:
+        db.add(WorkClient(
+            id=cid, name=name, name_key=N.name_key(name), signature=N.signature(name), status="proposed",
+            how="noticed", strength=9, evidence_json=json.dumps({
+                "rule": "under_clients", "work": 4, "folders": len(homes),
+                "homes": [{"folder": h, "key": _fk(h), "work": 2, "last_at": None, "local": False} for h in homes],
+            }),
+        ))
+        db.commit()
+    S.bump_version()
+    return cid
+
+
+def _status(p, cid):
+    with session_scope(p.engine) as db:
+        row = db.get(WorkClient, cid)
+        return None if row is None else row.status
+
+
+def test_on_the_real_record_a_yes_from_chat_and_its_undo(real):
+    wid = _waiting_row(real, "Lee Dental", [r"C:\Clients\Lee Dental"])
+    check, desc, res = call(real, "client_answer", {"name": "Lee Dental", "answer": "yes"},
+                            words="yes, Lee Dental is a client")
+    assert check.ask is True and res.ok, res.error
+    assert desc is not None, "a Yes has an Undo on the real record (store.unconfirm)"
+    assert _status(real, wid) == "confirmed"
+    cmap = S.load_map(real.engine)
+    assert cmap.client_of(r"C:\Clients\Lee Dental\2026").client_id == wid
+    undo(real, desc)
+    assert _status(real, wid) == "proposed"
+    assert S.load_map(real.engine).client_of(r"C:\Clients\Lee Dental\2026") is None
+    # A name not on record, made a client from its folder; Undo: gone again.
+    check, desc, res = call(real, "client_answer",
+                            {"name": "Pereira Farms", "answer": "yes", "folder": r"D:\Clients\Pereira Farms"},
+                            words=r"Pereira Farms is a client, its folder is D:\Clients\Pereira Farms")
+    assert res.ok, res.error
+    made = res.data["client_id"]
+    assert C.CLIENT_ID_RE.fullmatch(made) and _status(real, made) == "confirmed"
+    undo(real, desc)
+    assert _status(real, made) is None
+
+
+def test_on_the_real_record_preferences_and_folders_undo_exactly(real):
+    hid = S.create(real, folder=r"C:\Clients\Hartleys", name="Hartleys")["client"]["id"]
+    S.create(real, folder=r"C:\Clients\Smith", name="Smith")
+    turn = W.turn_wall(real.engine, r"C:\Clients\Hartleys\2026", "they want cash basis from now on")
+    assert turn.client is not None and turn.client.client_id == hid
+    _c, _d, res = call(real, "client_preference_add", {"text": "Uses cash basis."}, turn=turn,
+                       words="they want cash basis from now on")
+    assert res.ok, res.error
+    kept = S.preferences(real.engine, hid)
+    assert [p["text"] for p in kept] == ["Uses cash basis."] and kept[0]["origin"] == "said"
+    assert kept[0]["evidence"][0]["quote"] == "they want cash basis from now on"
+    # Change, then Undo puts the old words back.
+    words = "change their preference to accrual"
+    _c, desc, res = call(real, "client_preference_change", {"text": "cash basis", "new_text": "Uses accrual."},
+                         turn=W.turn_wall(real.engine, r"C:\Clients\Hartleys", words), words=words)
+    assert res.ok, res.error
+    assert [p["text"] for p in S.preferences(real.engine, hid)] == ["Uses accrual."]
+    undo(real, desc)
+    assert [p["text"] for p in S.preferences(real.engine, hid)] == ["Uses cash basis."]
+    # Forget, then Undo keeps it again with its own words, origin and evidence.
+    words = "forget that they use cash basis"
+    _c, desc, res = call(real, "client_preference_forget", {"text": "cash basis"},
+                         turn=W.turn_wall(real.engine, r"C:\Clients\Hartleys", words), words=words)
+    assert res.ok and S.preferences(real.engine, hid) == []
+    undo(real, desc)
+    again = S.preferences(real.engine, hid)
+    assert [(p["text"], p["origin"]) for p in again] == [("Uses cash basis.", "said")]
+    assert again[0]["evidence"][0]["quote"] == "they want cash basis from now on"
+    # A folder and a spelling added, then both put back in reverse.
+    words = r"add D:\Scans\Hartleys to Hartleys, it is also called HRT"
+    _c, desc, res = call(real, "client_update", {"add_folder": r"D:\Scans\Hartleys", "aliases": ["HRT"]},
+                         turn=W.turn_wall(real.engine, r"C:\Clients\Hartleys", words), words=words)
+    assert res.ok, res.error
+    cmap = S.load_map(real.engine)
+    assert {r.key for r in cmap.roots_of(hid)} == {_fk(r"C:\Clients\Hartleys"), _fk(r"D:\Scans\Hartleys")}
+    assert cmap.names[hid][2] == (N.signature("HRT"),)
+    undo(real, desc)
+    cmap = S.load_map(real.engine)
+    assert [r.key for r in cmap.roots_of(hid)] == [_fk(r"C:\Clients\Hartleys")] and cmap.names[hid][2] == ()
+
+
+def test_on_the_real_record_a_waiting_names_card_confirms_keeps_and_undoes_both(real):
+    wid = _waiting_row(real, "Lee Dental", [r"C:\Clients\Lee Dental"])
+    check, desc, res = call(real, "client_preference_add", {"text": "Wants paper statements."},
+                            words="Lee Dental wants paper statements")
+    assert check.words == "Make Lee Dental a client and keep for Lee Dental: “Wants paper statements.”"
+    assert res.ok, res.error
+    assert _status(real, wid) == "confirmed"
+    assert [p["text"] for p in S.preferences(real.engine, wid)] == ["Wants paper statements."]
+    undo(real, desc)
+    assert _status(real, wid) == "proposed" and S.preferences(real.engine, wid) == []
+
+
+def test_on_the_real_record_client_list_is_walled(real):
+    hid = S.create(real, folder=r"C:\Clients\Hartleys", name="Hartleys")["client"]["id"]
+    S.create(real, folder=r"C:\Clients\Smith", name="Smith")
+    _waiting_row(real, "Lee Dental", [r"C:\Clients\Lee Dental"])
+    words = "who are my clients?"
+    _c, _d, res = call(real, "client_list", {}, turn=W.turn_wall(real.engine, r"C:\Clients\Hartleys", words),
+                       words=words)
+    assert res.ok, res.error
+    assert "Hartleys" in res.output and "Smith" not in res.output and "Lee Dental" not in res.output
+    assert [c["id"] for c in res.data["clients"]] == [hid]
+    _c, _d, res = call(real, "client_list", {}, turn=W.turn_wall(real.engine, r"D:\Work\Misc", words),
+                       words=words)
+    assert "Hartleys" in res.output and "Smith" in res.output and "Lee Dental" not in res.output

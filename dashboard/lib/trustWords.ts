@@ -120,6 +120,13 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       "lesson_add",
       // v1.438.0 (Wave 4 group B).
       "memory_base_add",
+      // v1.499.0 (leap 3 Phase 3): what is kept for one client reaches
+      // every later chat in its folders.
+      "client_answer",
+      "client_update",
+      "client_preference_add",
+      "client_preference_change",
+      "client_preference_forget",
     ],
   },
 

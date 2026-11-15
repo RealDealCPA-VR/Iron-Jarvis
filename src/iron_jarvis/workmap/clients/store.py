@@ -452,6 +452,60 @@ def question_for_turn(platform: Any, *, folder: str, thread_id: str) -> dict[str
         return None
 
 
+#: A question's answer as the dashboard keeps it on the line.
+_ANSWER_STATE = {CLIENT_CONFIRMED: "yes", CLIENT_DECLINED: "no"}
+
+
+def answer_states(engine: Any, ids: Sequence[str]) -> dict[str, str]:
+    """``{id: "yes" | "no" | "gone"}`` for client questions asked under
+    replies: confirmed → yes, Not a client → no, not on record → gone. A name
+    still waiting has no entry (its question stays open). One indexed read.
+    Never raises (``{}``: the lines show as they were saved)."""
+    wanted = sorted({str(i) for i in ids or () if CLIENT_ID_RE.fullmatch(str(i or ""))})
+    if engine is None or not wanted:
+        return {}
+    try:
+        with session_scope(engine) as db:
+            got = {str(cid): str(status) for cid, status in db.exec(
+                select(WorkClient.id, WorkClient.status).where(WorkClient.id.in_(wanted))  # type: ignore[attr-defined]
+            )}
+    except Exception:  # noqa: BLE001 — the lines show as saved
+        log.debug("clients: the answers of saved questions could not be read", exc_info=True)
+        return {}
+    out: dict[str, str] = {}
+    for cid in wanted:
+        status = got.get(cid)
+        if status is None:
+            out[cid] = "gone"
+        elif status in _ANSWER_STATE:
+            out[cid] = _ANSWER_STATE[status]
+    return out
+
+
+def fold_question_states(engine: Any, messages: Any) -> Any:
+    """A coding session's lines with each reply's ``clientQuestion`` carrying
+    its CURRENT answer (:func:`answer_states`), so a reopened session never
+    asks again (the daemon writes those lines; the chat page keeps its own).
+    The mirror of ``learning.preferences.fold_suggestion_states``. Never
+    raises (the lines come back unchanged)."""
+    if not isinstance(messages, list):
+        return messages
+    ids = [
+        str(m["clientQuestion"].get("id") or "")
+        for m in messages
+        if isinstance(m, dict) and isinstance(m.get("clientQuestion"), dict)
+    ]
+    states = answer_states(engine, ids) if ids else {}
+    if not states:
+        return messages
+    out = []
+    for m in messages:
+        q = m.get("clientQuestion") if isinstance(m, dict) else None
+        state = states.get(str(q.get("id") or "")) if isinstance(q, dict) else None
+        out.append({**m, "clientQuestion": {**q, "state": state}} if state else m)
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # events and the pass after an answer
 # --------------------------------------------------------------------------- #
@@ -925,6 +979,72 @@ def restore(platform: Any, client_id: str) -> dict[str, Any]:
     return out
 
 
+#: Where :func:`unconfirm` may put a client back to.
+_UNCONFIRM_TO = (CLIENT_PROPOSED, CLIENT_DECLINED, "gone")
+
+
+def unconfirm(platform: Any, client_id: str, *, back_to: str) -> dict[str, Any]:
+    """Undo ONE Yes made from chat (builder C's cards; never a route):
+    ``back_to='proposed'`` (a waiting name answered Yes waits again, its
+    ``asked_at`` kept), ``'declined'`` (a never-confirmed No answered Yes
+    after all is Not a client again) or ``'gone'`` (the row :func:`create`
+    made for a name not on record is deleted). The folder rows that Yes
+    linked are deleted and ``confirmed_at`` is cleared (it was this Yes's).
+
+    Refused with ``ClientConflict`` when the client is not confirmed, was a
+    client before this Yes (``confirmed_at`` is not the Yes's own
+    ``decided_at``), holds a kept preference, or has more folders added than
+    that Yes made (none for ``proposed``; the one :func:`create` linked
+    otherwise). The card's Undo puts back the change's later steps first
+    (a preference it kept, a folder it added), so a clean Undo reaches here
+    with only what the Yes made. Proposed rows that Yes withdrew come back on
+    the next noticing pass. Publishes ``client.changed {id}``. Returns
+    ``{ok, client: {id, name}, note}``."""
+    if back_to not in _UNCONFIRM_TO:
+        raise ClientRefused("That change cannot be undone.")
+    with _writing(platform) as db:
+        row = _get(db, client_id)
+        name = row.name
+        if row.status != CLIENT_CONFIRMED:
+            raise ClientConflict(f"{name} is not a client now, so there is no Yes to undo.")
+        if row.confirmed_at is None or row.confirmed_at != row.decided_at:
+            raise ClientConflict(
+                f"{name} was a client before this change, so Undo would undo more than it did. "
+                "Mark it Not a client on its page instead.")
+        P = WorkClientPreference
+        if db.exec(select(P.id).where(P.client_id == row.id)).first() is not None:
+            raise ClientConflict(
+                f"A preference was kept for {name} since, so Undo would lose it. "
+                "Mark it Not a client on its page instead.")
+        folders = list(db.exec(select(WorkClientFolder).where(WorkClientFolder.client_id == row.id)))
+        added = [f for f in folders if f.how == CLIENT_FOLDER_ADDED]
+        if len(added) > (0 if back_to == CLIENT_PROPOSED else 1):
+            raise ClientConflict(
+                f"A folder was added to {name} since, so Undo would take it away too. "
+                "Change it on its page instead.")
+        for f in folders:
+            db.delete(f)
+        if back_to == "gone":
+            db.delete(row)
+            note = f"{name} is no longer on record."
+        else:
+            now = utcnow()
+            row.status = back_to
+            row.confirmed_at = None
+            if back_to == CLIENT_DECLINED:
+                row.decided_at = now
+            row.updated_at = now
+            db.add(row)
+            note = (f"{name} waits for your answer again." if back_to == CLIENT_PROPOSED
+                    else f"{name} is marked as not a client again.")
+        db.commit()
+        out = {"ok": True, "client": {"id": str(client_id), "name": name}, "note": note}
+    bump_version()
+    _event(platform, "CLIENT_CHANGED", {"id": out["client"]["id"]})
+    _after_answer(platform)
+    return out
+
+
 def create(platform: Any, *, folder: str = "", name: str = "") -> dict[str, Any]:
     """An owner-made client (``POST /clients {folder, name?}``, "Make this a
     client", chat's ``client_answer``): ``how = added``, confirmed at once.
@@ -1251,6 +1371,7 @@ __all__ = [
     "ClientMap",
     "add_folder",
     "aliases_of",
+    "answer_states",
     "ask_again",
     "bump_version",
     "change_preference",
@@ -1261,6 +1382,7 @@ __all__ = [
     "create",
     "decline",
     "evidence_of",
+    "fold_question_states",
     "folder_rows",
     "forget_preference",
     "homes_of",
@@ -1274,4 +1396,5 @@ __all__ = [
     "rename",
     "restore",
     "set_aliases",
+    "unconfirm",
 ]

@@ -250,6 +250,14 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   persona_create: { did: "Made a chat persona", noun: "persona creation" },
   persona_update: { did: "Changed a chat persona", noun: "persona change" },
   persona_delete: { did: "Removed or reset a chat persona", noun: "persona removal" },
+  // v1.499.0 (leap 3 Phase 3): your clients from chat (agents/mission.py
+  // _RUN_TOOL_WORDS is the twin).
+  client_list: { did: "Listed your clients", noun: "client list" },
+  client_answer: { did: "Noted whether a name is one of your clients", noun: "client answer" },
+  client_update: { did: "Changed one of your clients", noun: "client change" },
+  client_preference_add: { did: "Saved a preference for one client", noun: "client preference" },
+  client_preference_change: { did: "Changed a preference kept for one client", noun: "client preference change" },
+  client_preference_forget: { did: "Forgot a preference kept for one client", noun: "client preference removal" },
   // v1.438.0 (chat-first plan Wave 4 group A): the night shift and a folder's
   // coding settings from chat (agents/mission.py _RUN_TOOL_WORDS is the twin).
   night_task_add: { did: "Queued a coding task for tonight", noun: "night task" },

@@ -310,6 +310,12 @@ _OFF_ROSTER_BY_DESIGN = {
     # harness/helpers.helper_definition arms it for a review-only helper and
     # nothing else does (tests/test_git_read_v14210.py pins that).
     "git_read",
+    # v1.499.0 (leap 3 Phase 3): the owner's clients from chat, where the
+    # owner is present (the card names the client; the Undo is on it); chat
+    # arms them (settings.records_clients.clients_tools_for). Pinned by
+    # tests/test_clients_chat_v1499.py.
+    "client_list", "client_answer", "client_update", "client_preference_add",
+    "client_preference_change", "client_preference_forget",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

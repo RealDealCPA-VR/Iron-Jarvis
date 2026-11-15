@@ -200,6 +200,30 @@
       "ok": "changed Local only for this chat",
       "failed": "tried a Local only change and it failed"
     },
+    "client_answer": {
+      "ok": "noted whether a name is one of your clients",
+      "failed": "tried a client answer and it failed"
+    },
+    "client_list": {
+      "ok": "listed your clients",
+      "failed": "tried a client list and it failed"
+    },
+    "client_preference_add": {
+      "ok": "saved a preference for one client",
+      "failed": "tried a client preference and it failed"
+    },
+    "client_preference_change": {
+      "ok": "changed a preference kept for one client",
+      "failed": "tried a client preference change and it failed"
+    },
+    "client_preference_forget": {
+      "ok": "forgot a preference kept for one client",
+      "failed": "tried a client preference removal and it failed"
+    },
+    "client_update": {
+      "ok": "changed one of your clients",
+      "failed": "tried a client change and it failed"
+    },
     "code_handoff_check": {
       "ok": "checked on a helper coding tool",
       "failed": "tried a helper check and it failed"
