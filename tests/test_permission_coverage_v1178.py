@@ -68,6 +68,11 @@ _MUST_NEVER_BE_ALLOW = DENY_FLOOR_TOOLS | {"tool_create", "tool_delete", "create
     "model_server_add", "model_server_default", "model_server_remove", "account_add", "memory_base_add",
     # v1.448.0 (Wave A item 4): a tool server or a web service from chat — always a card.
     "mcp_server_add", "web_service_add",
+    # v1.499.0 (vision plan leap 3 Phase 3): a client answered or changed, or a
+    # preference kept, changed or forgotten for one client — always a card
+    # that names the client.
+    "client_answer", "client_update", "client_preference_add", "client_preference_change",
+    "client_preference_forget",
 }
 
 

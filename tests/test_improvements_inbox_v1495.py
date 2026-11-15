@@ -37,6 +37,7 @@ from iron_jarvis.learning.models import LessonRecord
 from iron_jarvis.memory.proposals import MemoryProposalRecord, MemoryProposalStore
 from iron_jarvis.motivation.models import ProposalRecord
 from iron_jarvis.skills.learning_models import SkillProposalRecord
+from iron_jarvis.workmap.models import WorkClient, WorkClientFolder
 
 # The package re-exports the function ``collect``, which shadows the module.
 C = importlib.import_module("iron_jarvis.inbox.collect")
@@ -198,9 +199,30 @@ def seed_goal_with_approved_asks(desk, tool="web_fetch", n=3):
     return gid
 
 
+def seed_client(desk, name="Hartleys", status="proposed", **more):
+    """v1.499.0: a name noticed in the owner's folder names (made-up folders)."""
+    three_days = (datetime.utcnow() - timedelta(days=3)).isoformat()
+    homes = [
+        {"folder": f"C:\\Clients\\{name}", "key": f"c:/clients/{name.lower()}", "work": 6, "last_at": three_days,
+         "local": False},
+        {"folder": f"D:/Scans/Clients/{name} 2024", "key": f"d:/scans/clients/{name.lower()} 2024", "work": 3,
+         "last_at": "", "local": False},
+    ]
+    more.setdefault("evidence_json", json.dumps({"rule": "under_clients", "homes": homes, "work": 9, "folders": 2}))
+    return _add(desk, WorkClient(id=new_id("client"), name=name, name_key=name.lower(), signature=f"sig-{name}",
+                                 status=status, **more))
+
+
+def _clients_routes(desk) -> bool:
+    """Builder A's ``daemon/routes/clients.py`` (the client's own answer
+    routes) is registered in this build."""
+    return any(str(getattr(r, "path", "")).startswith("/clients/") for r in desk.app.routes)
+
+
 def seed_everything(desk):
     return {
-        "preference": seed_preference(desk), "skill": seed_skill(desk), "coach": seed_coach(desk),
+        "preference": seed_preference(desk), "client": seed_client(desk), "skill": seed_skill(desk),
+        "coach": seed_coach(desk),
         "habit": seed_habit(desk), "lesson": seed_lesson(desk), "session_edit": seed_session_edit(desk),
         "memory": seed_memory(desk), "tool": seed_tool(desk), "wants": seed_wants(desk),
         "unasked": seed_goal_with_approved_asks(desk),
@@ -242,6 +264,12 @@ def test_each_item_says_what_it_is_in_plain_words(desk):
     assert by["preference"]["title"] == "Keep answers short"
     assert by["preference"]["evidence"] == [
         "You said, in a chat: “shorter please”", "You said, on your phone: “too long again”"]
+    assert by["client"]["title"] == "Is Hartleys a client?"
+    assert by["client"]["about"] == "2 folders, 9 pieces of work"
+    assert by["client"]["evidence"] == ["Clients › Hartleys: 6 pieces of work, last 3 days ago",
+                                        "Clients › Hartleys 2024: 3 pieces of work"]
+    assert by["client"]["why"].startswith("Iron Jarvis saw this name in your folder names.")
+    assert "Nothing was sent anywhere" in by["client"]["why"]
     assert by["skill"]["title"] == "New skill: month-end-close"
     assert by["skill"]["evidence"] == ["Written from 2 earlier runs"]
     assert by["skill"]["detail"]["mode"] == "text" and "Month end" in by["skill"]["detail"]["after"]
@@ -278,6 +306,8 @@ def test_each_kind_points_at_its_own_routes(desk):
     want = {
         "preference": ("Keep", "Not this", f"/memory/preferences/{ids['preference']}/keep",
                        f"/memory/preferences/{ids['preference']}/decline"),
+        "client": ("Yes, a client", "Not a client", f"/clients/{ids['client']}/confirm",
+                   f"/clients/{ids['client']}/decline"),
         "skill": ("Approve", "Reject", f"/skills/proposals/{ids['skill']}/approve",
                   f"/skills/proposals/{ids['skill']}/reject"),
         "coach": ("Accept", "Decline", f"/coach/proposals/{ids['coach']}/accept",
@@ -376,6 +406,7 @@ def test_every_home_link_is_the_screen_the_suggestion_lives_on(desk):
     by = {i["kind"]: i for i in _inbox(desk)["items"]}
     assert {k: (i["home"] or {}).get("href") for k, i in by.items()} == {
         "preference": "/memory#prefs-suggested",
+        "client": "/clients#waiting",
         "skill": "/skills",
         "coach": "/agents?view=team&agent=custom%3Atax-reader",
         "habit": "/agents?view=team&agent=custom%3Aglm-worker",
@@ -492,6 +523,8 @@ def test_a_tool_request_iron_jarvis_cannot_add_says_so_before_the_press(desk):
 def test_an_answered_suggestion_is_not_listed(desk):
     seed_preference(desk, "Already kept", status="confirmed")
     seed_preference(desk, "Already declined", status="declined")
+    seed_client(desk, "Hartleys", status="confirmed")
+    seed_client(desk, "Smith", status="declined")
     seed_skill(desk, name="approved-one", status="approved")
     seed_skill(desk, name="rejected-one", status="rejected")
     for status in ("accepted", "declined", "stale"):
@@ -561,6 +594,7 @@ def test_only_a_few_lines_of_evidence_are_listed(desk):
 # ---- a store that cannot be read --------------------------------------------
 TABLES = [
     (LessonRecord, ["preference"]),
+    (WorkClient, ["client"]),
     (SkillProposalRecord, ["skill"]),
     (CoachProposalRecord, ["coach", "habit"]),
     (HarnessLibraryRecord, ["lesson", "session_edit"]),
@@ -625,7 +659,8 @@ def test_a_build_without_a_service_lists_nothing_for_it(desk, monkeypatch):
 def test_reading_the_inbox_changes_nothing(desk):
     seed_everything(desk)
     tables = (LessonRecord, SkillProposalRecord, CoachProposalRecord, HarnessLibraryRecord,
-              MemoryProposalRecord, CapabilityProposalRecord, ProposalRecord, EventRecord, GoalContractRecord)
+              MemoryProposalRecord, CapabilityProposalRecord, ProposalRecord, EventRecord, GoalContractRecord,
+              WorkClient, WorkClientFolder)
 
     def snapshot():
         with session_scope(desk.engine) as db:
@@ -644,7 +679,8 @@ def _press(desk, act):
 
 
 DECLINED = {
-    "preference": (LessonRecord, "declined"), "skill": (SkillProposalRecord, "rejected"),
+    "preference": (LessonRecord, "declined"), "client": (WorkClient, "declined"),
+    "skill": (SkillProposalRecord, "rejected"),
     "coach": (CoachProposalRecord, "declined"), "habit": (CoachProposalRecord, "declined"),
     "lesson": (HarnessLibraryRecord, "declined"), "session_edit": (HarnessLibraryRecord, "declined"),
     "memory": (MemoryProposalRecord, "dismissed"), "tool": (CapabilityProposalRecord, "rejected"),
@@ -653,11 +689,13 @@ DECLINED = {
 
 
 @pytest.mark.parametrize("kind,seed", [
-    ("preference", seed_preference), ("skill", seed_skill), ("coach", seed_coach), ("habit", seed_habit),
-    ("lesson", seed_lesson), ("session_edit", seed_session_edit), ("memory", seed_memory),
+    ("preference", seed_preference), ("client", seed_client), ("skill", seed_skill), ("coach", seed_coach),
+    ("habit", seed_habit), ("lesson", seed_lesson), ("session_edit", seed_session_edit), ("memory", seed_memory),
     ("tool", seed_tool), ("wants", seed_wants),
 ])
 def test_saying_no_through_the_inbox_is_that_kinds_own_no(desk, kind, seed):
+    if kind == "client" and not _clients_routes(desk):
+        pytest.skip("the client's own routes (builder A, daemon/routes/clients.py) are not in this build yet")
     rid = seed(desk)
     it = _only(desk, kind)
     res = _press(desk, it["decline"])
@@ -728,7 +766,45 @@ def test_the_inbox_has_no_decision_code_of_its_own():
     for word in (".accept(", ".decline(", ".approve(", ".reject(", ".dismiss(", ".keep(", "db.add(", "db.delete(",
                  "db.commit(", "db.merge(", ".apply("):
         assert word not in src, word
-    # Every decision it hands out goes to one of the seven suggestion routes.
+    # Every decision it hands out goes to one of the eight suggestion routes.
     assert set(re.findall(r'f"(/[a-z/]+/)\{_seg\((?:pid|rid)\)\}/', src)) == {
-        "/build/library/", "/capability/proposals/", "/coach/proposals/", "/memory/preferences/",
+        "/build/library/", "/capability/proposals/", "/clients/", "/coach/proposals/", "/memory/preferences/",
         "/memory/review/", "/proposals/", "/skills/proposals/"}
+
+
+# ---- clients (v1.499.0, vision plan leap 3 Phase 3) ---------------------------
+def test_client_evidence_names_folders_not_paths(desk):
+    seed_client(desk, evidence_json=json.dumps({"rule": "under_clients", "work": 4, "folders": 2, "homes": [
+        {"folder": "C:\\Users\\Pat\\Documents\\Clients\\Hartleys", "work": 2, "last_at": "", "local": True},
+        {"folder": "\\\\fileserver\\share\\Clients\\Hartleys 2025", "work": 2, "last_at": "", "local": False},
+    ]}))
+    it = _only(desk, "client")
+    assert it["evidence"] == ["Clients › Hartleys: 2 pieces of work", "Clients › Hartleys 2025: 2 pieces of work"]
+    said = json.dumps(it, ensure_ascii=False)
+    for part in ("C:", "Users", "Pat", "Documents", "fileserver", "share", "\\\\"):
+        assert part not in said, part
+    # One press each, both to the client's own routes; its home is the review.
+    assert it["accept"]["confirm"] is False and it["decline"]["confirm"] is False
+    assert it["accept"]["note"] == ("Gives Hartleys a page and keeps its folders, work and preferences together. "
+                                    "Chats are told about Hartleys only in Hartleys' folders.")
+    assert it["decline"]["note"] == "Iron Jarvis won't ask about Hartleys again."
+    assert it["home"] == {"href": "/clients#waiting", "label": C.OPEN_LABEL}
+    assert C.folder_label("C:\\Clients\\Hartleys\\2025") == "Hartleys › 2025"
+    assert C.folder_label("/home/pat/Clients/Smith") == "Clients › Smith"
+    # A folder right under the user's own folder never shows the user's name.
+    assert C.folder_label("C:\\Users\\Pat\\Hartleys") == "Hartleys"
+    assert C.folder_label("/home/pat/Smith") == "Smith"
+    assert C.folder_label("\\\\fileserver\\share\\Hartleys") == "Hartleys"
+
+
+def test_yes_through_the_inbox_confirms_the_client_and_links_its_folders(desk):
+    if not _clients_routes(desk):
+        pytest.skip("the client's own routes (builder A, daemon/routes/clients.py) are not in this build yet")
+    cid = seed_client(desk)
+    res = _press(desk, _only(desk, "client")["accept"])
+    assert res.status_code == 200, res.text
+    assert _status(desk, WorkClient, cid) == "confirmed"
+    with session_scope(desk.engine) as db:
+        linked = [r.folder for r in db.exec(select(WorkClientFolder).where(WorkClientFolder.client_id == cid))]
+    assert linked, "confirming links the folders the name was seen in"
+    assert [i for i in _inbox(desk)["items"] if i["kind"] == "client"] == []

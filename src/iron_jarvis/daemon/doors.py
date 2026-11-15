@@ -179,6 +179,19 @@ def door_for(tool_name: str, result: Any) -> dict[str, str] | None:
             return {"href": _APPS_FIX_HREF, "label": label}
         except Exception:  # noqa: BLE001 — no door beats no reply
             return None
+    if tool_name in CLIENT_DOOR_TOOLS:
+        # v1.499.0 (leap 3 Phase 3): a client changed or listed from chat
+        # opens its page — the href built ONLY from an id that is a client's
+        # id (``client_<12 hex>``), else the Clients page; the label names
+        # the client from the record's own name, flattened and clipped.
+        try:
+            data = getattr(result, "data", None)
+            data = data if isinstance(data, dict) else {}
+            href = client_href(data.get("client_id"))
+            name = _clean_name(data.get("client") or "")
+            return client_door(href, name)
+        except Exception:  # noqa: BLE001 — no door beats no reply
+            return None
     spec = _CATALOG.get(tool_name)
     if spec is None:
         return None
@@ -382,6 +395,98 @@ def with_connect_door(entries: Any, offers: Any, offered: Any = ()) -> list[Any]
         if len(kept) >= MAX_DOORS:
             return kept[: MAX_DOORS - 1] + [door]
         return out + [door]
+    except Exception:  # noqa: BLE001 — no door beats no reply
+        return base
+
+
+# --------------------------------------------------------------------------- #
+# v1.499.0 (vision plan leap 3 Phase 3): a door to a client's page
+# --------------------------------------------------------------------------- #
+#: The client tools whose success opens the client's page (or the Clients page).
+CLIENT_DOOR_TOOLS = frozenset({
+    "client_list", "client_answer", "client_update", "client_preference_add",
+    "client_preference_change", "client_preference_forget",
+})
+#: The Clients page.
+CLIENTS_HREF = "/clients"
+def client_href(client_id: Any) -> str:
+    """``/clients/<id>`` for an id that is a client's id (``client_<12
+    hex>``, ``workmap.clients.CLIENT_ID_RE``, matched WHOLE: a trailing
+    newline is no id), else ``/clients``: a name, a path or anything a model
+    wrote never becomes part of an address."""
+    from ..workmap.clients import CLIENT_ID_RE
+
+    cid = client_id if isinstance(client_id, str) else ""
+    return f"{CLIENTS_HREF}/{cid}" if CLIENT_ID_RE.fullmatch(cid) else CLIENTS_HREF
+
+
+def _possessive(name: str) -> str:
+    try:
+        from ..settings.records_clients import possessive
+
+        return possessive(name)
+    except Exception:  # noqa: BLE001
+        return name
+
+
+def client_door(href: str, name: str = "") -> dict[str, str]:
+    """The door's words: "Open Hartleys' page" for one client's page, "Open
+    your clients" for the Clients page."""
+    if href != CLIENTS_HREF and name:
+        return {"href": href, "label": f"Open {_possessive(name)} page"}
+    return {"href": CLIENTS_HREF, "label": "Open your clients"}
+
+
+def _named_pairs(named: Any) -> list[tuple[str, str]]:
+    """``named`` as ``[(id, name)]``: a mapping id → name (or id → (name,
+    signature, aliases), ``ClientMap.names``' shape), or a list of
+    ``{id, name}`` / ``(id, name)``."""
+    out: list[tuple[str, str]] = []
+    items: Any
+    if isinstance(named, dict):
+        items = list(named.items())
+    else:
+        items = list(named or ())
+    for item in items:
+        cid, name = "", ""
+        if isinstance(item, dict):
+            cid, name = str(item.get("id") or ""), str(item.get("name") or "")
+        elif isinstance(item, (tuple, list)) and len(item) == 2:
+            cid = str(item[0] or "")
+            val = item[1]
+            name = str(val[0] if isinstance(val, (tuple, list)) and val else val or "")
+        if cid and (cid, name) not in out:
+            out.append((cid, name))
+    return out
+
+
+def with_client_door(entries: Any, named: Any) -> list[Any]:
+    """The turn's door entries with AT MOST ONE door for the confirmed
+    clients the OWNER's own message named (``named``: their ids and names,
+    ``wall.current().named`` with the map's names; never the model's words).
+    One client named → its page; several → the Clients page. Dashboard turns
+    only (the lanes decide); added LAST only while there is room under
+    :data:`MAX_DOORS`, and never beside a door that already leads to the
+    Clients page or a client's page (a client tool's own door, the page
+    door). The href is built only from an id matching
+    ``^client_[0-9a-f]{12}$``. Never raises (the entries come back
+    unchanged)."""
+    base = list(entries or [])
+    try:
+        pairs = _named_pairs(named)
+        if not pairs:
+            return base
+        if len(pairs) == 1:
+            href = client_href(pairs[0][0])
+            door = client_door(href, _clean_name(pairs[0][1]))
+        else:
+            door = client_door(CLIENTS_HREF)
+        kept = collect_doors(base)
+        if len(kept) >= MAX_DOORS:
+            return base
+        if any(str(e.get("href") or "").startswith(CLIENTS_HREF) for e in kept):
+            return base
+        return base + [door]
     except Exception:  # noqa: BLE001 — no door beats no reply
         return base
 

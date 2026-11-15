@@ -92,6 +92,9 @@ OWN_PLACE = frozenset({
     # (`autoselect.wants_excel_trace` / `wants_excel_reconcile`, the Guide's
     # reader, `records._runs_a_named_workflow`).
     "guide_read", "excel_trace", "excel_reconcile", "workflow_run",
+    # v1.499.0 (leap 3 Phase 3): the walled list of the owner's clients
+    # (settings.records_clients), armed by the client words beside its writers.
+    "client_list",
 })
 
 
@@ -466,6 +469,13 @@ READER_FOR = {
     "workflow_run": "workflow_list",
     "preference_edit": "preference_list",
     "preference_forget": "preference_list",
+    # v1.499.0 (leap 3 Phase 3): a client is changed BY ITS NAME, so its
+    # changers bring the (walled) list of clients.
+    "client_answer": "client_list",
+    "client_update": "client_list",
+    "client_preference_add": "client_list",
+    "client_preference_change": "client_list",
+    "client_preference_forget": "client_list",
 }
 
 #: v1.489.0: a tool that changes or lists a kind of record brings that

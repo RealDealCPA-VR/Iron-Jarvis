@@ -11,11 +11,90 @@ injected:
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import re
 from typing import Any
 
 from ..core.events import EventType
 from ..tools.base import Tool, ToolContext, ToolResult
 from .engine import LearningEngine
+
+log = logging.getLogger(__name__)
+
+#: v1.499.0 (vision plan leap 3 Phase 3): in a confirmed client's folder, a
+#: sentence whose SUBJECT is the client ("They want cash basis", "The client
+#: prefers paper statements", "… for them") is that client's preference,
+#: never one for every chat. Anchored and linear: one look at the start, and
+#: one bounded phrase anywhere.
+_CLIENT_SUBJECT = re.compile(
+    r"\A\W{0,4}(?:they|their|them|he|she|his|her|the\s+client|this\s+client)\b"
+    r"|\bfor\s+(?:them|the\s+client|this\s+client)\b",
+    re.IGNORECASE,
+)
+#: The longest sentence the guard reads (a preference is at most 280).
+_GUARD_CHARS = 2000
+
+
+def _possessive(name: str) -> str:
+    try:
+        from ..settings.records_clients import possessive
+
+        return possessive(name) or name
+    except Exception:  # noqa: BLE001
+        return name
+
+
+def client_guard(engine: Any, text: Any) -> tuple[str, str]:
+    """``(refusal, note)`` for a preference about to be kept for EVERY chat
+    (v1.499.0). BLOCKING (the client map, cached); never raises.
+
+    * The sentence names a confirmed or WAITING client (``names.named_in``):
+      refused — one client's preference stays with that client.
+    * In a confirmed client's folder (``wall.current().client``) a sentence
+      whose subject is the client ("they …", "the client …", "… for them"):
+      refused the same way.
+    * In a client's folder anything else is kept, with the note "Kept for
+      every chat. If this was only for Hartleys, say so."
+    * The client record cannot be read: refused (fail closed — it could
+      have been about a client)."""
+    words = str(text or "")[:_GUARD_CHARS]
+    try:
+        from ..workmap import clients as C
+        from ..workmap.clients import names as N
+        from ..workmap.clients import store as S
+        from ..workmap.clients import wall as W
+
+        turn = W.current()
+        if not getattr(turn, "ok", True):
+            return ("Your clients could not be read, so this preference was not kept; try again in a moment.", "")
+        try:
+            cmap = S.load_map(engine)
+        except C.ClientError:
+            return ("Your clients could not be read, so this preference was not kept; try again in a moment.", "")
+        table = {**dict(getattr(cmap, "names", {}) or {}), **dict(getattr(cmap, "waiting_names", {}) or {})}
+        hit = sorted(N.named_in(words, table)) if table else []
+        if hit:
+            name = str(table[hit[0]][0])
+            return (
+                f"This is about {name}, a client. A preference for one client stays with that client: use "
+                "client_preference_add.",
+                "",
+            )
+        client = getattr(turn, "client", None)
+        if client is None:
+            return ("", "")
+        name = str(getattr(client, "name", "") or "this client")
+        if _CLIENT_SUBJECT.search(words):
+            return (
+                f"This chat is in {_possessive(name)} folder, and this reads as {_possessive(name)} own "
+                "preference. A preference for one client stays with that client: use client_preference_add.",
+                "",
+            )
+        return ("", f"Kept for every chat. If this was only for {name}, say so.")
+    except Exception:  # noqa: BLE001 — fail closed: it could have been about a client
+        log.warning("remember_preference: the client guard failed", exc_info=True)
+        return ("Your clients could not be read, so this preference was not kept; try again in a moment.", "")
 
 
 class RememberPreferenceTool(Tool):
@@ -37,6 +116,12 @@ class RememberPreferenceTool(Tool):
         self.learning = learning
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        # v1.499.0 (leap 3 Phase 3): a preference about ONE client is never
+        # kept for every chat (it would be told in every other client's
+        # chats). The guard runs off the loop (the client map is a read).
+        refusal, note = await asyncio.to_thread(client_guard, getattr(self.learning, "engine", None), args.get("text"))
+        if refusal:
+            return ToolResult(ok=False, error=refusal)
         record = self.learning.note_preference(args["text"])
         await ctx.event_bus.publish(
             EventType.MEMORY_UPDATED,
@@ -45,7 +130,7 @@ class RememberPreferenceTool(Tool):
         )
         return ToolResult(
             ok=True,
-            output=f"remembered preference: {record.text}",
+            output=f"remembered preference: {record.text}" + (f" {note}" if note else ""),
             data={
                 "id": record.id,
                 "weight": record.weight,

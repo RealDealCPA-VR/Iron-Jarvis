@@ -977,6 +977,63 @@ _NOT_OFFERED_RULES: dict[str, Callable[[str], bool]] = {
     "internet_calls_in": W.internet_calls_in,
 }
 
+# --------------------------------------------------------------------------- #
+# v1.499.0 (vision plan leap 3 Phase 3): the Clients page
+# --------------------------------------------------------------------------- #
+#: The Clients page, and its list of names that wait for an answer.
+CLIENTS_HREF = "/clients"
+CLIENTS_WAITING_HREF = "/clients#waiting"
+#: "show my clients", "open the clients page", "my client list" — never "the
+#: client portal" (a list of clients is plural, or a client LIST / PAGE).
+_CLIENTS_LIST = re.compile(
+    r"\b(?:show|list|open|see|view|go\s+to|take\s+me\s+to|bring\s+up|pull\s+up)\s+(?:me\s+)?(?:all\s+)?"
+    r"(?:of\s+)?(?:my|our|the)\s+(?:clients\b(?!['’])|client\s+(?:list|page)\b)"
+    r"|\b(?:my|our|the)\s+clients\s+page\b|\bmy\s+client\s+list\b|\bwho\s+are\s+my\s+clients\b",
+    re.IGNORECASE,
+)
+#: "make all of those clients", "yes to all of them as clients", "these are
+#: all my clients": answering MANY names at once, which the Clients page's
+#: review does with one press and chat does not.
+_CLIENTS_BULK = re.compile(
+    r"\b(?:make|mark|confirm|accept|approve|answer|add|say\s+yes\s+to)\s+(?:them\s+)?"
+    r"(?:all|every\s+one|each\s+(?:one|of\s+them))\b" + _GAP + r"\bclients?\b"
+    r"|\b(?:yes\s+to\s+)?all\s+(?:of\s+)?(?:those|these|them|the\s+names|the\s+suggestions)\b" + _GAP
+    + r"\bclients?\b"
+    r"|\b(?:those|these|they)\s+are\s+all\s+(?:my\s+|our\s+)?clients\b",
+    re.IGNORECASE,
+)
+#: What the model is told when the message asks to answer many names at once.
+CLIENTS_BULK_LINE = (
+    "Answering many noticed names at once is done on the Clients page: each name Iron Jarvis noticed in "
+    "the user's folders has a tick box there, and one press answers every ticked name. client_answer, "
+    "when it is offered in this reply, answers one name at a time, and only a name the user wrote "
+    "themselves. Say so plainly and point there."
+)
+
+
+def clients_page_door(text: Any) -> "dict[str, str] | None":
+    """The Clients page door the message asks for: answering many names at
+    once opens the waiting names; asking to see the clients opens the page.
+    A NAMED client's own page is ``doors.with_client_door`` (it needs the
+    record; this module reads only words). Pure; never raises."""
+    t = _scan(text)
+    try:
+        if _CLIENTS_BULK.search(t):
+            return {"href": CLIENTS_WAITING_HREF, "label": "Answer the names on the Clients page"}
+        if _CLIENTS_LIST.search(t):
+            return {"href": CLIENTS_HREF, "label": "Open your clients"}
+    except Exception:  # noqa: BLE001 — a broken rule is no match
+        return None
+    return None
+
+
+def _clients_lines(text: Any) -> list[str]:
+    try:
+        return [CLIENTS_BULK_LINE] if _CLIENTS_BULK.search(_scan(text)) else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
 #: Every compiled pattern over the user's words (the linear-time pin reads it).
 ALL_PATTERNS: tuple[re.Pattern[str], ...] = (
     *_ACCOUNT_RULES, *_M365_RULES, _MS_VENDOR, _MS_APPROVAL, _ENTRA, _GOOGLE, _GOOGLE_SETUP, _GOOGLE_LITERAL,
@@ -986,6 +1043,7 @@ ALL_PATTERNS: tuple[re.Pattern[str], ...] = (
     *W.ALL_PATTERNS,
     *_cli_rules(_CLAUDE, bare="claude"), *_cli_rules(_CODEX), *_cli_rules(_GROK), *_cli_rules(_OPENCODE),
     *_install_rules(_CLAUDE), *_install_rules(_CODEX),
+    _CLIENTS_LIST, _CLIENTS_BULK,
 )
 
 #: The heading the model reads the lines under.
@@ -1048,9 +1106,11 @@ def prompt_block(text: Any, *, installed: "Callable[[str], bool | None] | None" 
         # pretending, so it is never the line the cap cuts: the steps give up
         # their places first (the door's own step always keeps one).
         steps = [s for s in page_steps(text) if not (s.install and step_not_needed(s, text, installed=installed))]
-        nots = not_offered(text)
+        # v1.499.0: answering many client names at once is a "not from chat"
+        # line too (the Clients page does it), never the line the cap cuts.
+        nots = [n.line for n in not_offered(text)] + _clients_lines(text)
         room = max(1 if steps else 0, MAX_LINES - len(nots))
-        lines = [s.line for s in steps[:room]] + [n.line for n in nots]
+        lines = [s.line for s in steps[:room]] + nots
         if not lines:
             return ""
         return "\n\n" + BLOCK_HEADING + "\n" + "\n".join("- " + ln for ln in lines[:MAX_LINES])
@@ -1092,10 +1152,18 @@ def with_page_door(entries: Any, text: Any, *, ready: "Callable[[str], bool | No
             (s for s in page_steps(text) if not step_not_needed(s, text, ready=ready, installed=installed)),
             None,
         )
-        if step is None:
-            return base
-        door = step.door()
         kept = collect_doors(base)
+        if step is None:
+            # v1.499.0: the Clients page ("show my clients", "make all of those
+            # clients") — never beside a door that already leads there or to
+            # one client's page (a client tool's door, the named client's).
+            door = clients_page_door(text)
+            if door is None or len(kept) >= MAX_DOORS:
+                return base
+            if any(str(e.get("href") or "").startswith(CLIENTS_HREF) for e in kept):
+                return base
+            return base + [door]
+        door = step.door()
         if len(kept) >= MAX_DOORS or any(e.get("href") == door["href"] for e in kept):
             return base
         return base + [door]

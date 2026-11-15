@@ -187,6 +187,15 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         "persona_create",
         "persona_update",
         "persona_delete",
+        # v1.499.0 (vision plan leap 3 Phase 3): a client answered or changed,
+        # or a preference kept, changed or forgotten for one client — each is
+        # told to every later chat in that client's folders, so flagged
+        # content must not change any of them. Listing clients stays allowed.
+        "client_answer",
+        "client_update",
+        "client_preference_add",
+        "client_preference_change",
+        "client_preference_forget",
     }
 )
 

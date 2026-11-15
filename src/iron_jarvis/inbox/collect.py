@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -73,12 +74,16 @@ KIND_SKILL = "skill"
 KIND_TOOL = "tool"
 KIND_MEMORY = "memory"
 KIND_PREFERENCE = "preference"
+#: v1.499.0 (vision plan leap 3 Phase 3): a name noticed in the owner's folder
+#: names that may be a client (``workmap/clients``).
+KIND_CLIENT = "client"
 KIND_WANTS = "wants"
 KIND_UNASKED = "unasked"
 
 #: The groups, in the order the page shows them: ``(kind, heading)``.
 KINDS: tuple[tuple[str, str], ...] = (
     (KIND_PREFERENCE, "Preferences Iron Jarvis noticed"),
+    (KIND_CLIENT, "Clients Iron Jarvis noticed"),
     (KIND_SKILL, "Skill drafts"),
     (KIND_COACH, "Agent instructions"),
     (KIND_HABIT, "Working habits for a team member"),
@@ -403,6 +408,119 @@ def preference_item(view: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+#: v1.499.0: where a client's suggestion is answered in bulk.
+CLIENTS_HOME = "/clients#waiting"
+
+
+def _possessive(name: str) -> str:
+    """The ONE possessive table (``workmap.clients.names.possessive``)."""
+    from ..settings.records_clients import possessive
+
+    return possessive(name) or name
+
+
+def _segments(folder: Any) -> list[str]:
+    """A folder's parts as spelled, without its drive, a share's server and
+    share, or a ``Users\\<name>`` / ``home/<name>`` (text only)."""
+    raw = str(folder or "").replace("\\", "/")
+    unc = raw.startswith("//")
+    parts = [p for p in raw.split("/") if p and p not in (".", "..")]
+    if unc:
+        parts = parts[2:]
+    elif parts and len(parts[0]) == 2 and parts[0][1] == ":":
+        parts = parts[1:]
+    if len(parts) >= 2 and parts[0].lower() in ("users", "home"):
+        parts = parts[2:]
+    return parts
+
+
+def folder_label(folder: Any) -> str:
+    """A home folder by NAME, never a full path: its parent and its own
+    name, "Clients › Hartleys" (or just its name)."""
+    parts = _segments(folder)
+    return " › ".join(parts[-2:]) if parts else ""
+
+
+def _ago(at: Any, now: datetime) -> str:
+    """ "today", "yesterday", "3 days ago", "2 weeks ago", "5 months ago"."""
+    when: datetime | None = None
+    if isinstance(at, datetime):
+        when = at
+    elif isinstance(at, str) and at.strip():
+        try:
+            when = datetime.fromisoformat(at.strip().replace("Z", "+00:00"))
+        except ValueError:
+            when = None
+    if when is None:
+        return ""
+    if when.tzinfo is not None:
+        when = when.astimezone(timezone.utc).replace(tzinfo=None)
+    days = max(0, (now - when).days)
+    if days == 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    if days < 14:
+        return f"{days} days ago"
+    if days < 60:
+        return f"{days // 7} weeks ago"
+    if days < 730:
+        return f"{days // 30} months ago"
+    return f"{days // 365} years ago"
+
+
+def client_view(row: Any) -> dict[str, Any]:
+    """A waiting client row as the builder reads it (the record's own
+    columns; nothing else)."""
+    return {
+        "id": str(getattr(row, "id", "") or ""),
+        "name": str(getattr(row, "name", "") or ""),
+        "evidence": _loads(getattr(row, "evidence_json", "{}"), {}),
+        "created_at": getattr(row, "created_at", None),
+    }
+
+
+def client_item(view: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    """A name Iron Jarvis noticed in the owner's folder names (v1.499.0):
+    "Is Hartleys a client?". Its folders are named by NAME (parent › name),
+    never by a full path. Both answers are ONE press (saving the answer is
+    all either does)."""
+    pid = str(view.get("id") or "")
+    name = " ".join(str(view.get("name") or "").split())
+    poss = _possessive(name)
+    ev = view.get("evidence") if isinstance(view.get("evidence"), dict) else {}
+    homes = [h for h in (ev.get("homes") or []) if isinstance(h, dict)]
+    work = int(ev.get("work") or sum(int(h.get("work") or 0) for h in homes) or 0)
+    folders = int(ev.get("folders") or len(homes) or 0)
+    moment = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    lines: list[str] = []
+    for h in homes:
+        label = folder_label(h.get("folder"))
+        if not label:
+            continue
+        line = f"{label}: {_plural(int(h.get('work') or 0), 'piece of work', 'pieces of work')}"
+        age = _ago(h.get("last_at"), moment)
+        if age:
+            line += f", last {age}"
+        lines.append(line)
+    return item(
+        KIND_CLIENT, pid, title=f"Is {name} a client?",
+        about=f"{_plural(folders, 'folder')}, {_plural(work, 'piece of work', 'pieces of work')}",
+        why=(
+            f"Iron Jarvis saw this name in your folder names. Saying yes gives {name} a page and lets you "
+            f"keep preferences for {name} only; chats in other clients' folders are never told about it. "
+            "Nothing was sent anywhere to notice it. You can answer many at once on the Clients page."
+        ),
+        evidence=lines, created_at=view.get("created_at"),
+        accept=action("Yes, a client", f"/clients/{_seg(pid)}/confirm",
+                      note=f"Gives {name} a page and keeps its folders, work and preferences together. "
+                           f"Chats are told about {name} only in {poss} folders."),
+        decline=action("Not a client", f"/clients/{_seg(pid)}/decline",
+                       note=f"Iron Jarvis won't ask about {name} again."),
+        home=CLIENTS_HOME,
+    )
+
+
 _RISK_WORDS = {"low": "Low risk", "med": "Medium risk", "high": "High risk"}
 _SOURCE_WORDS = {
     "sentinel": "A watcher noticed a change",
@@ -503,6 +621,15 @@ def _preferences(d: Any) -> Read:
 
     rows, total = _pending(d.platform.engine, LessonRecord, LessonRecord.status == prefs.STATUS_PROPOSED)
     return Read({KIND_PREFERENCE: (_built(rows, lambda r: preference_item(prefs.pref_view(r)), "preference"), total)})
+
+
+def _clients(d: Any) -> Read:
+    """v1.499.0: the names noticed in the owner's folders that wait for an
+    answer (``workclient`` rows still proposed)."""
+    from ..workmap.models import CLIENT_PROPOSED, WorkClient
+
+    rows, total = _pending(d.platform.engine, WorkClient, WorkClient.status == CLIENT_PROPOSED)
+    return Read({KIND_CLIENT: (_built(rows, lambda r: client_item(client_view(r)), "client"), total)})
 
 
 def _skills(d: Any) -> Read:
@@ -654,6 +781,7 @@ def _unasked(d: Any) -> Read:
 #: ``(the kinds a source answers for, the source)``.
 SOURCES: tuple[tuple[tuple[str, ...], Source], ...] = (
     ((KIND_PREFERENCE,), _preferences),
+    ((KIND_CLIENT,), _clients),
     ((KIND_SKILL,), _skills),
     ((KIND_COACH, KIND_HABIT), _coach),
     ((KIND_LESSON, KIND_SESSION_EDIT), _library),
@@ -699,6 +827,7 @@ def collect(d: Any) -> dict[str, Any]:
 
 __all__ = [
     "DETAIL_CHARS", "GOALS_MAX", "KINDS", "LABELS", "OPEN_LABEL", "PER_KIND", "SOURCES", "Read", "action",
-    "coach_item", "collect", "detail_diff", "detail_text", "item", "library_item", "memory_effect",
+    "client_item", "client_view", "coach_item", "collect", "detail_diff", "detail_text", "folder_label", "item",
+    "library_item", "memory_effect",
     "memory_item", "preference_item", "skill_item", "tool_item", "unasked_item", "wants_item",
 ]

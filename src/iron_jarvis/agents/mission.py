@@ -386,6 +386,13 @@ ASK_WORDS: dict[str, str] = {
     "persona_create": "make a chat persona",
     "persona_update": "change a chat persona",
     "persona_delete": "remove or reset a chat persona",
+    # v1.499.0 (vision plan leap 3 Phase 3): the owner's clients from chat
+    # (settings.records_clients). The card's own sentence names the client.
+    "client_answer": "say whether a name is one of your clients",
+    "client_update": "change one of your clients",
+    "client_preference_add": "keep a preference for one client",
+    "client_preference_change": "change a preference kept for one client",
+    "client_preference_forget": "forget a preference kept for one client",
     # v1.438.0 (chat-first plan Wave 4 group A): the night shift and a
     # folder's coding-session defaults and team (settings.records_build).
     "night_task_add": "queue a coding task for tonight",
@@ -638,6 +645,14 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "persona_create": ("made a chat persona", "persona creation"),
     "persona_update": ("changed a chat persona", "persona change"),
     "persona_delete": ("removed or reset a chat persona", "persona removal"),
+    # v1.499.0 (vision plan leap 3 Phase 3): the owner's clients from chat.
+    # Twin: lib/runWords.ts AGENT_TOOLS.
+    "client_list": ("listed your clients", "client list"),
+    "client_answer": ("noted whether a name is one of your clients", "client answer"),
+    "client_update": ("changed one of your clients", "client change"),
+    "client_preference_add": ("saved a preference for one client", "client preference"),
+    "client_preference_change": ("changed a preference kept for one client", "client preference change"),
+    "client_preference_forget": ("forgot a preference kept for one client", "client preference removal"),
     # v1.438.0 (chat-first plan Wave 4 group A): the night shift and a
     # folder's coding settings. Twin: lib/runWords.ts AGENT_TOOLS.
     "night_task_add": ("queued a coding task for tonight", "night task"),
