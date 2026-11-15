@@ -24,6 +24,10 @@
   or the top of a drive.
 * ``POST /work-record/remember {folder}`` → ``{ok}``: stop forgetting it;
   its work is read into the record again. 404 when it was not forgotten.
+* v1.499.0: each ``/work-record/folders`` row also carries ``client:
+  {id, name} | null``, the confirmed client whose folder it is (computed
+  here from ``workmap/clients/store.load_map``; the dashboard never works
+  it out).
 
 Names, file names, a run's own summary line and a checked recap: never a
 transcript, never a file's content. The reads are SQLite, so both handlers
@@ -64,6 +68,22 @@ def _map(d):
     return wm
 
 
+def _with_clients(platform, folders: list[dict[str, Any]]) -> None:
+    """v1.499.0: each folder row says whose it is, ``client: {id, name} |
+    null``, from THE resolver (``workmap/clients/store.load_map``); the page
+    never works it out itself. Client tables that cannot be read leave every
+    row ``null`` (the list is still the work record's)."""
+    try:
+        from ...workmap.clients import store
+
+        cmap = store.load_map(getattr(platform, "engine", None))
+    except Exception:  # noqa: BLE001 — the chip is extra
+        cmap = None
+    for row in folders:
+        root = cmap.client_of(row.get("folder")) if cmap is not None else None
+        row["client"] = {"id": root.client_id, "name": root.name} if root is not None else None
+
+
 def register(app: FastAPI, d) -> None:
     @app.get("/work-record/folders")
     def work_folders() -> dict[str, Any]:
@@ -80,6 +100,7 @@ def register(app: FastAPI, d) -> None:
             forgotten = wm.forgotten()
         except Exception:  # noqa: BLE001 — the list is extra
             forgotten = []
+        _with_clients(d.platform, folders)
         return {
             "folders": folders,
             "folders_total": folders_total,
