@@ -1177,6 +1177,43 @@ def test_on_the_real_record_a_cloud_client_list_asks_local_only_again(real):
     assert "Hartleys" in res.output and "Pereira" not in res.output, res.output
 
 
+def test_on_the_real_record_a_cloud_client_list_never_names_a_local_only_folder(real):
+    """The independent review (left open by the fixer, closed by the lead): a
+    client that IS named to a cloud turn is listed with only the folders that
+    hold shared work. A folder whose every piece of work is Local only (or
+    kept home) is counted, never named; it is named again once shared."""
+    from iron_jarvis.workmap.models import WorkEntry
+
+    shared, private = r"C:\Clients\Hartleys", r"D:\Private\Hartleys Estate"
+    hid = _waiting_row(real, "Hartleys", [shared])
+    S.confirm(real, hid)
+    S.add_folder(real, hid, private)
+    with session_scope(real.engine) as db:
+        db.add(WorkEntry(id="chat:s0", kind="chat", ref="s0", title="x", folder=shared,
+                         folder_key=_fk(shared), local_only=False))
+        db.add(WorkEntry(id="chat:p0", kind="chat", ref="p0", title="x", folder=private,
+                         folder_key=_fk(private), local_only=True))
+        db.commit()
+    words = "who are my clients?"
+    _c, _d, res = call(real, "client_list", {}, words=words)
+    assert res.ok, res.error
+    assert "Hartleys" in res.output, res.output
+    assert "Estate" not in res.output, res.output
+    assert "1 more folder not named here" in res.output, res.output
+    # In a Local only turn the folder is named.
+    with egress.local_only_scope(True):
+        _c, _d, res = call(real, "client_list", {}, words=words)
+    assert "Hartleys Estate" in res.output, res.output
+    # Its work is shared again: named again.
+    with session_scope(real.engine) as db:
+        row = db.get(WorkEntry, "chat:p0")
+        row.local_only = False
+        db.add(row)
+        db.commit()
+    _c, _d, res = call(real, "client_list", {}, words=words)
+    assert "Hartleys Estate" in res.output, res.output
+
+
 def test_on_the_real_record_a_yes_after_a_no_that_fails_halfway_says_so(real, monkeypatch):
     """The independent review: "actually Lee Dental is a client" undoes the
     No and then says Yes, as two recorded steps. When the Yes cannot land,

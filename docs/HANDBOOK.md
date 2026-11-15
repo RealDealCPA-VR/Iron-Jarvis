@@ -2042,6 +2042,83 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Iron Jarvis knows your clients (v1.499.0)
+
+- **What it is.** Iron Jarvis now knows which of your folders belong to
+  which client. When the same name keeps coming back in the folders your
+  work is in ("Clients › Hartleys › 2025", "Hartleys LLC › Payroll"), it asks
+  you once: **"Is Hartleys a client?"** A client you say yes to gets its own
+  page, and you can keep preferences that belong to that client only
+  ("Hartleys uses cash basis").
+- **How it notices.** It reads only the names of the folders that work it
+  already did was in. It opens no file, calls no model and sends nothing
+  anywhere. Hartley's, Hartleys and Hartleys LLC count as one name. Folders
+  that are clearly not a client (code projects, "Downloads", a year or
+  "Payroll" on its own) are left out. At most 30 names wait for an answer at
+  a time.
+- **Where it asks.** Once, under one chat reply in a folder of that name:
+  "Iron Jarvis has seen Hartleys in 2 folders and 9 pieces of work. Is
+  Hartleys a client?" with **Yes, a client** and **No**. It never asks under
+  another reply. Until you answer, the name also waits in **Improvements**
+  (under "Clients Iron Jarvis noticed"), in Memory › **Your clients**, and on
+  the **Clients** page.
+- **Answering many at once.** The Clients page lists every name it noticed,
+  each with the folders it saw. Names found under a folder called Clients,
+  Customers, Client Files or Tax Clients start ticked; press **These are
+  clients** to say yes to the ticked ones. Unticked names keep waiting.
+- **A No is final.** Iron Jarvis does not ask about that name again, in any
+  spelling. "Not clients" on the Clients page lists them, with **Ask again**.
+- **Clients it did not notice.** A client whose work sits in one folder with
+  nothing around it may never be noticed. Make it a client yourself: **Add a
+  client** on the Clients page, **Make this a client** on a folder in
+  Memory › Your work, by folder, or say so in chat ("Lee Dental is a client,
+  its folder is C:\Clients\Lee Dental").
+- **The client page.** Clients (Ctrl K, or "client" in Everything) lists
+  your clients; each has a page with its folders, the work done there, the
+  files that work made or changed, the "Decided" and "Still open" lines
+  from checked recaps, the people named in your own titles and file names,
+  and what Hartleys wants. Every line says where it came from. The page
+  also shows, word for word, **what a chat in Hartleys' folders is told**.
+  Rename, add or remove a folder, or mark it **Not a client** (two presses;
+  its folders and preferences are kept, unused, and can come back).
+- **Preferences for one client.** Type one on the client's page ("Uses cash
+  basis"), or say it in a chat in that client's folder ("Hartleys always
+  wants cash basis"): Jarvis asks on a card first, and the card has Undo. A
+  client's preference is told only to chats, Chat › Code sessions, agent
+  runs and terminal help in that client's folders. It never reaches another
+  client's chat, and it is never added to your general preferences. If you
+  ask Jarvis to remember something for every chat and it names a client,
+  Jarvis does not add it to your general preferences: it offers to keep it
+  for that client instead.
+- **One client's work stays out of another client's chats.** A chat in
+  Hartleys' folders is told about Hartleys' work and Hartleys' preferences,
+  and nothing from another client's folders: not titles, not recaps, not
+  past chat passages, not search results. A chat in no client's folder may
+  be told which clients you have (names and folder names) but not their
+  preferences. Folders right under a Clients folder, and names still waiting
+  for your answer, are kept apart this way from the moment the update lands,
+  before you answer anything. Work in another folder that carries a client's
+  name ("D:\Scans\Hartleys"), or whose files sit in that client's folder,
+  counts as that client's too.
+- **Local only stays local.** A preference kept in a Local only chat, a
+  client known only from Local only work, and a folder that holds only Local
+  only work are never told to a chat that uses a cloud model.
+- **What it cannot keep apart.** It can only place work that has a folder.
+  Work done with no folder, or in Downloads, that does not name a client is
+  shown the way it was before.
+- **Turning it off.** Settings › Memory & you › **Notice clients in your
+  folders** (on by default). Off: nothing new is noticed or asked. Clients
+  you already said yes to keep their pages and preferences, and their
+  folders stay apart from other clients' chats.
+- **From chat.** "Who are my clients?", "Hartleys is a client", "Lee Dental
+  is not a client", "rename Hartleys to Hartley & Sons", "add C:\Clients\Old
+  Hartleys to Hartleys", "Hartleys wants cash basis", "forget that for
+  Hartleys". Each change asks on a card first and has Undo.
+- **Not yet.** Client preferences are not told to Build › Code's own coding
+  tools (that would mean writing a file into the client's folder). Clients
+  are not shared with your other computers. A client is not a Project:
+  confirming one creates or changes nothing in Projects.
+
 ## The "keep working until it's true" check, everywhere and in more languages (v1.498.0)
 
 v1.495.0 checked chat replies and agent runs, in English. This closes what it

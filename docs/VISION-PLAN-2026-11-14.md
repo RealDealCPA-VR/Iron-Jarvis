@@ -83,12 +83,31 @@ another client's folder). A model that bills per use writes no recap.
 done: recaps for agent runs and Build › Code; recaps inside a Project's own
 recent activity.
 
-### Phase 3: clients and matters
+### Phase 3: clients and matters (shipped in v1.499.0)
 
 Iron Jarvis notices names that recur across folders and work ("Hartley's")
 and asks once: "Is Hartley's a client?" A confirmed client gets a page: its
 folders, its work, its files, the decisions on record, the people named.
 Preferences can then belong to a client ("Hartley's wants cash basis").
+
+As built: noticing reads only the folder names of work already on record
+(no model, no file opened), at most 30 names wait, and a No is final for
+every spelling. The question is asked under one reply and waits in
+Improvements, Memory › Your clients and the new **Clients** page, which can
+answer many at once. Each client's page shows its folders, work, files,
+checked "Decided" and "Still open" lines, people named, preferences, and
+word for word what a chat in its folders is told. One rule decides what
+every chat, coding session, agent run, terminal help and history search may
+be told, so one client's work, recaps, chat passages and documents never
+reach another client's chat; folders under a Clients folder and waiting
+names are kept apart before the owner answers. A client's preferences reach
+only its own folders. The twelve decisions in the design were taken as
+recommended (titles from a client's other folders yes, decisions no;
+preferences reach agent runs and terminal help; noticing on by default; a
+client links to a Project, never becomes one; the owner reads the proposed
+names on their own PC). An independent review confirmed 24 findings, all
+fixed or named. Not done: matters, roll-ups (Phase 5), client facts on the
+phone, Build › Code's own tools, and walling project recent activity.
 
 ### Phase 4: recall everywhere
 

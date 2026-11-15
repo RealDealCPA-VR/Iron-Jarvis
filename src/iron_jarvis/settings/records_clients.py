@@ -1237,9 +1237,36 @@ def _local_only_known(platform: Any) -> set[str] | None:
         return None
 
 
+def _cloud_row(platform: Any, row: Mapping[str, Any]) -> dict[str, Any]:
+    """The row a CLOUD turn may hear: only the folders that hold shared work
+    (``block.shared_work``, the client block's own rule), the rest counted in
+    ``held``. A folder that cannot be asked is held (fail closed)."""
+    from ..workmap.clients.block import shared_work
+
+    engine = _engine(platform)
+    keep: list[Any] = []
+    held = 0
+    for f in row.get("folders") or []:
+        if not isinstance(f, Mapping):
+            continue
+        try:
+            key = K.folder_key(K.home_folder(str(f.get("folder") or "")))
+            ok = bool(key) and shared_work(engine, key)
+        except Exception:  # noqa: BLE001 — unsure: not named (fail closed)
+            ok = False
+        if ok:
+            keep.append(f)
+        else:
+            held += 1
+    return {**row, "folders": keep, "held": held}
+
+
 def _row_line(row: Mapping[str, Any]) -> str:
     folders = [str(f.get("name") or "") for f in (row.get("folders") or []) if isinstance(f, Mapping)]
     folders = [f for f in folders if f][:4]
+    held = int(row.get("held") or 0)
+    if held:
+        folders.append(f"{_plural(held, 'more folder')} not named here")
     parts = [("folders " + ", ".join(folders)) if folders else "no folder yet"]
     parts.append(_plural(int(row.get("work_count") or 0), "piece of work", "pieces of work"))
     parts.append(_plural(int(row.get("preferences_count") or 0), "preference"))
@@ -1296,7 +1323,8 @@ def list_words(platform: Any) -> tuple[str, dict[str, Any]]:
     if listed:
         lines.append(f"Your clients ({len(listed)}):")
         for r in listed[:LIST_LIMIT]:
-            lines.append("- " + _row_line(r))
+            # A cloud turn hears only the folders that hold shared work.
+            lines.append("- " + _row_line(r if local_ok else _cloud_row(platform, r)))
             shown.append({"id": str(r.get("id")), "name": str(r.get("name") or "")})
         if len(listed) > LIST_LIMIT:
             lines.append(f"…and {len(listed) - LIST_LIMIT} more on the Clients page ({CLIENTS_HREF}).")
