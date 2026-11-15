@@ -441,6 +441,18 @@ def default_permissions() -> dict[str, str]:
         "persona_create": "ask",
         "persona_update": "ask",
         "persona_delete": "ask",
+        # v1.499.0 (vision plan leap 3 Phase 3, settings.records_clients): the
+        # owner's clients from chat. Listing them (walled: a chat in one
+        # client's folder hears of no other client) is allowed; answering
+        # whether a name is a client, changing a client and keeping, changing
+        # or forgetting a preference for one client each ask on a card that
+        # names the client, and have an Undo.
+        "client_list": "allow",
+        "client_answer": "ask",
+        "client_update": "ask",
+        "client_preference_add": "ask",
+        "client_preference_change": "ask",
+        "client_preference_forget": "ask",
         # v1.438.0 (chat-first plan Wave 4 group A, settings/records_build):
         # the night shift and a folder's coding-session defaults and team.
         # Queuing, cancelling and moving a night task and changing a folder's

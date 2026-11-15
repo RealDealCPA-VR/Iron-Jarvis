@@ -138,7 +138,9 @@ _RECORD_TOOLS: dict[str, frozenset[str]] = {
     "preference": frozenset(
         {"preference_edit", "preference_forget", "lesson_add", "remember_preference",
          # …or kept in another of the user's memories ("saved to memory").
-         "memory_write", "memory_propose", "ltm_append", "brain_save", "notebook"}
+         "memory_write", "memory_propose", "ltm_append", "brain_save", "notebook",
+         # v1.499.0 (leap 3 Phase 3): …or kept for ONE client.
+         "client_preference_add", "client_preference_change", "client_preference_forget"}
     ),
     "persona": frozenset({"persona_create", "persona_update", "persona_delete"}),
     # v1.438.0 (Wave 4 group A, settings/records_build): the night shift and a
@@ -155,6 +157,12 @@ _RECORD_TOOLS: dict[str, frozenset[str]] = {
     # service (a REST hookup).
     "tool_server": frozenset({"mcp_server_add", "app_import", "app_connect", "app_disconnect"}),
     "web_service": frozenset({"web_service_add"}),
+    # v1.499.0 (vision plan leap 3 Phase 3, settings/records_clients): one of
+    # the owner's clients — answered, changed, or a preference kept for it.
+    "client": frozenset(
+        {"client_answer", "client_update", "client_preference_add", "client_preference_change",
+         "client_preference_forget"}
+    ),
 }
 #: A record card's key starts with these (``records._card``).
 _RECORD_CARD_PREFIX: dict[str, tuple[str, ...]] = {
@@ -178,6 +186,7 @@ _RECORD_CARD_PREFIX: dict[str, tuple[str, ...]] = {
     "memory_base": ("memory_base.", "memory_profile."),
     "tool_server": ("tool_server.", "app."),
     "web_service": ("web_service.",),
+    "client": ("client.",),
 }
 #: v1.438.0 (Wave 4 group B): a record card that ALSO changed a setting (a
 #: model server made the default, a memory base made the memory profile's) —
@@ -226,6 +235,7 @@ _RECORD_NOUN = {
     "memory_base": "memory base",
     "tool_server": "extension",
     "web_service": "web service",
+    "client": "client",
 }
 
 ON, OFF, CHANGE, CREATE, REMOVE, PAUSE, CONNECT, DISCONNECT, UNDO = (
@@ -803,6 +813,20 @@ _NOT_OUR_PERSONA_BEFORE = frozenset(
      "alter", "narrator's", "agent", "agents", "villain", "hero"}
 )
 
+#: v1.499.0 (leap 3 Phase 3): before "client", another program's client
+#: ("the email client", "a VPN client"), never one of the owner's clients.
+_NOT_OUR_CLIENT_BEFORE = frozenset(
+    {"email", "e-mail", "mail", "vpn", "ftp", "sftp", "ssh", "desktop", "web", "api", "sql", "torrent",
+     "chat", "outlook", "git", "windows", "remote", "thin", "rich", "mobile", "oauth", "http", "dns",
+     "dhcp", "smtp", "imap", "test", "rdp", "telnet", "irc", "mcp", "cli"}
+)
+#: Words before "client" that are not its NAME ("a new client", "another
+#: client"): a claim about one of the owner's clients names it.
+_CLIENT_NOT_A_NAME = _DETS | frozenset(
+    {"new", "another", "one", "existing", "returning", "former", "current", "potential", "prospective",
+     "regular", "big", "small", "important", "first", "next", "same", "other", "as"}
+)
+
 #: A recurring "rule" is a reflex rule: "a rule that sends …".
 _RULE_VERBS = frozenset({"runs", "fires", "starts", "sends", "notifies", "triggers", "watches", "alerts", "will"})
 
@@ -873,6 +897,14 @@ def _record_kind(np: list[str], rest: list[str], sentence_toks: list[str]) -> st
         if nxt == "for" and after not in ("you", "this", "chat", "chats", "jarvis", "iron", "me", "us"):
             return ""
         return "persona"
+    if head in ("client", "clients"):
+        # v1.499.0 (leap 3 Phase 3): one of the owner's clients — only when
+        # the claim NAMES it ("I made Hartleys a client"), never another
+        # program's client ("the email client") or one kept elsewhere ("a new
+        # client in QuickBooks" ends its noun phrase at "in").
+        if prv in _NOT_OUR_CLIENT_BEFORE or nxt in ("portal", "portals", "list", "lists", "meeting", "meetings"):
+            return ""
+        return "client" if [t for t in mods if t not in _CLIENT_NOT_A_NAME] else ""
     if head in ("destination", "destinations"):
         return "destination" if _NOTIFY_WORDS.intersection(sentence_toks) else ""
     if head in ("notification", "notifications", "alert", "alerts"):

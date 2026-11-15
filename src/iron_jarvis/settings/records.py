@@ -149,6 +149,14 @@ RECORD_TOOL_TIERS: dict[str, str] = {
     # card (the server's card once-only, showing what starts) and has an Undo.
     "mcp_server_add": "ask",
     "web_service_add": "ask",
+    # v1.499.0 (vision plan leap 3 Phase 3, settings/records_clients): the
+    # owner's clients from chat. Each writer asks on a card that names the
+    # client and has an Undo; the reader (client_list) is allow and walled.
+    "client_answer": "ask",
+    "client_update": "ask",
+    "client_preference_add": "ask",
+    "client_preference_change": "ask",
+    "client_preference_forget": "ask",
 }
 #: The create tools that gained an Undo (their own tiers are unchanged).
 RECORD_CREATE_TOOLS = frozenset({"schedule_create", "workflow_create", "webhook_add", "sentinel_add", "goal_add"})
@@ -602,7 +610,13 @@ def is_question(text: str) -> bool:
     return False
 
 
-def record_tools_for(text: str, *, workflow_names: "list[str] | tuple[str, ...]" = ()) -> list[str]:
+def record_tools_for(
+    text: str,
+    *,
+    workflow_names: "list[str] | tuple[str, ...]" = (),
+    client_names: Any = (),
+    in_client: Any = "",
+) -> list[str]:
     """The record tools a chat message plausibly asks for, by the record it
     names (chat-only arming, like ``settings.tools.wants_settings``). The
     stream lane arms them VISIBLE, never granted: an ask-tier one renders
@@ -613,6 +627,11 @@ def record_tools_for(text: str, *, workflow_names: "list[str] | tuple[str, ...]"
     ``workflow_names`` (v1.434.0, B1.4) — the saved workflows' names, read by
     the stream lane only when :func:`wants_workflow_names` says a run verb is
     there: "run triage now" names no workflow word.
+
+    ``client_names`` / ``in_client`` (v1.499.0, leap 3 Phase 3): the live
+    confirmed and waiting clients (``records_clients.live_names``, read off
+    the loop by the lane) and the turn's own confirmed client's name ("" in
+    no client's folder), for :func:`records_clients.clients_tools_for`.
 
     A QUESTION-shaped message ("what went wrong with my schedule?") keeps only
     the readers — see :data:`_QUESTION_HEAD`."""
@@ -652,6 +671,11 @@ def record_tools_for(text: str, *, workflow_names: "list[str] | tuple[str, ...]"
     from .records_tools import tools_tools_for
 
     out += [n for n in tools_tools_for(t) if n not in out]
+    # v1.499.0 (leap 3 Phase 3): the owner's clients (settings/records_clients)
+    # — it keeps its own question guard (a question keeps only client_list).
+    out += [
+        n for n in _rc().clients_tools_for(t, client_names=client_names, in_client=in_client) if n not in out
+    ]
     return out
 
 
@@ -1834,7 +1858,17 @@ _SNAP = {
     # v1.438.0 (Wave 4 group C): a kept preference or lesson, and a persona.
     "preference": lambda p, n: _self().snap_preference(p, n),
     "persona": lambda p, n: _self().snap_persona(p, n),
+    # v1.499.0 (leap 3 Phase 3): one of the owner's clients.
+    "client": lambda p, n: _rc().snap_client(p, n),
 }
+
+
+def _rc() -> Any:
+    """``settings.records_clients`` (v1.499.0) — imported when used: it
+    builds on this module."""
+    from . import records_clients
+
+    return records_clients
 
 
 def _self() -> Any:
@@ -1948,6 +1982,8 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
         return _hist().restore_chat_local_only(platform, name, prior)
     if record in ("preference", "persona"):
         return _self().restore_kind(platform, record, name, prior, desc)
+    if record == "client":
+        return _rc().restore_kind(platform, record, name, prior, desc)
     if record in _BUILD_KINDS:
         return _rb().restore_kind(platform, record, name, prior, desc)
     if record in _CONN_KINDS:
@@ -3726,6 +3762,8 @@ def record_tools(platform: Any) -> list[Tool]:
         *_conn_record_tools(platform),
         # v1.448.0 (Wave A item 4): a tool server and a web service.
         *_tools_record_tools(platform),
+        # v1.499.0 (leap 3 Phase 3): the owner's clients.
+        *_rc().client_tools(platform),
     ]
 
 

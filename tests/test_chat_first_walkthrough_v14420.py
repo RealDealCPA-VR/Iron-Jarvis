@@ -101,6 +101,9 @@ WRITERS = frozenset({
     "build_defaults_set", "build_defaults_clear", "build_team_set", "build_team_clear",
     "model_server_add", "model_server_default", "model_server_remove", "account_add", "memory_base_add",
     "chat_local_only", "change_undo", "remember_preference",
+    # v1.499.0 (vision plan leap 3 Phase 3): the owner's clients from chat.
+    "client_answer", "client_update", "client_preference_add", "client_preference_change",
+    "client_preference_forget",
 })
 SETTINGS = frozenset({"config_set", "config_change", "config_change_protected", "config_secret"})
 

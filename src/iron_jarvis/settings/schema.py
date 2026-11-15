@@ -897,6 +897,14 @@ SETTINGS: tuple[SettingDef, ...] = (
       "or your own network. Every line is checked against the conversation before it is kept. "
       "At most 30 a day, and never for work from before this was last switched on.",
       tier="allow", aliases=("recaps of finished work",)),
+    # v1.499.0 (vision plan leap 3, Phase 3): clients noticed in folder names.
+    S("notice_clients", "Notice clients in your folders", "memory", "bool",
+      "Iron Jarvis looks at the names of the folders your work is in, and when a name keeps coming "
+      "back (for example under a Clients folder) it asks you once whether it is a client: under one "
+      "reply, in Improvements and on the Clients page. It calls no model and opens no file to "
+      "notice them, and nothing is sent anywhere. Off: nothing new is noticed or asked. Clients you "
+      "already said yes to keep working, and their folders stay apart from other clients' chats.",
+      tier="allow", aliases=("noticing clients", "client suggestions")),
     # v1.406.0 (brain/): which Brain Profile chat and agent runs use, app-wide.
     # Its own control in Settings › Memory & you (CONTROLLED_IN_SECTION); a
     # project may choose its own (Project.brain_profile). Choosing where
