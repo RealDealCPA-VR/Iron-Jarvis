@@ -22,6 +22,11 @@ Two deliberate design points:
 Read-only end to end: ``Reversibility.READONLY`` (nothing to undo) and the
 default permission is ``allow`` (``core/config.py::default_permissions``), the
 same tier as ``recall``/``ltm_search``.
+
+WALLED BY CLIENT (v1.499.0): every hit goes through the TURN's client wall
+(``workmap.clients.wall.current()``, built from the owner's own words), so
+the model cannot reach another client's conversations by wording its query;
+what was kept back is counted in one sentence that names no client.
 """
 
 from __future__ import annotations
@@ -91,6 +96,59 @@ def _kinds(value: Any) -> "list[str] | None":
         parts = [p.strip() for p in str(value).split(",")]
     kept = [p for p in parts if p]
     return kept or None
+
+
+def left_out_sentence(count: int, *, in_client: bool, unreadable: bool = False) -> str:
+    """What the model is told when the client wall kept results back. It
+    never names whose work they were."""
+    n = int(count)
+    results = "1 result" if n == 1 else f"{n} results"
+    was = "was" if n == 1 else "were"
+    if unreadable:
+        return f"{results} {was} left out because the user's clients could not be read."
+    if in_client:
+        return f"{results} from other clients' work {was} left out of this client's chat."
+    return (
+        f"{results} from clients' work {was} left out of this chat; the user's own "
+        "message did not name those clients."
+    )
+
+
+async def _walled(hits: list[Any], engine: Any) -> "tuple[list[Any], tuple[int, str] | None]":
+    """``hits`` the turn in flight may be told (``workmap.clients.wall``),
+    and ``(how many were left out, the sentence)`` or None. The wall is the
+    TURN's (``wall.current()``, set by the lanes and the agent runtime from
+    the OWNER's words), so a query the model words to name another client
+    finds nothing of that client's. The owner's own screens are not walled.
+    When the client record cannot be read every hit is left out (fail
+    closed)."""
+    from ..workmap.clients import wall
+
+    if not hits or wall.on_owner_screen():
+        return hits, None
+    turn = wall.current()
+    passages = [
+        (
+            wall.PASSAGE_CHAT if h.kind in ("chat", "comm")
+            else wall.PASSAGE_RUN if h.kind == "session" else str(h.kind or ""),
+            str((h.ref if h.kind == "session" else h.thread_id) or h.ref or ""),
+            str(h.title or ""),
+            str(h.snippet or ""),
+        )
+        for h in hits
+    ]
+    try:
+        verdicts = await asyncio.to_thread(wall.tell_passages, engine, turn, passages)
+    except Exception:  # noqa: BLE001 — unsure: nothing from past work
+        verdicts = None
+    if verdicts is None:
+        return [], (len(hits), left_out_sentence(len(hits), in_client=turn.owner is not None,
+                                                 unreadable=True))
+    kept = [h for h, ok in zip(hits, verdicts) if ok]
+    gone = len(hits) - len(kept)
+    if not gone:
+        return kept, None
+    return kept, (gone, left_out_sentence(gone, in_client=turn.owner is not None))
 
 
 class HistorySearchTool(Tool):
@@ -189,6 +247,9 @@ class HistorySearchTool(Tool):
                 h for h in hits
                 if not (h.kind == "chat" and (kept_home is None or h.thread_id in kept_home))
             ]
+        # THE CLIENT WALL (v1.499.0): the TURN's wall, built from the owner's
+        # own words, never from this call's query (the model's words).
+        hits, left_out = await _walled(hits, getattr(self.index, "engine", None))
 
         lines: list[str] = []
         for i, hit in enumerate(hits, start=1):
@@ -202,7 +263,13 @@ class HistorySearchTool(Tool):
             "mode": mode,
             "count": len(hits),
         }
+        if left_out:
+            data["left_out"] = left_out[0]
+            lines.append(left_out[1])
         if not hits:
+            if left_out:
+                # Not "nothing matched": something did, and the wall kept it.
+                return ToolResult(ok=True, output=left_out[1], data=data)
             # Honest empty — a search that found nothing SUCCEEDED. Saying so
             # plainly is what stops a model narrating a remembered answer.
             return ToolResult(

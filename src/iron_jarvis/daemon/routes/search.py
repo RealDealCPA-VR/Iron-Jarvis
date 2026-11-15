@@ -33,6 +33,11 @@ palette keys on. Out-of-range integers ARE accepted and clamped by the index
 not a type error. Pinned by ``test_route_limit_is_typed_but_out_of_range_is_clamped``.
 
 Closure-local state is reached through ``d`` (the create_app deps object).
+
+THE OWNER'S OWN SCREEN (v1.499.0): both routes run inside
+``workmap.clients.wall.owner_screen()``. The client wall decides what a chat
+TURN is told; the palette is the owner looking at their own history, so
+nothing here is walled.
 """
 
 from __future__ import annotations
@@ -40,6 +45,8 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI
+
+from ...workmap.clients import wall
 
 
 def register(app: FastAPI, d) -> None:
@@ -67,14 +74,15 @@ def register(app: FastAPI, d) -> None:
         if index is None:  # pragma: no cover — always built by build_platform
             return {"hits": [], "mode": "basic", "count": 0}
         kinds = [k.strip() for k in (kind or "").split(",") if k.strip()] or None
-        hits = index.search(
-            q or "",
-            kinds=kinds,
-            project_id=(project_id or "").strip() or None,
-            after=(after or "").strip() or None,
-            before=(before or "").strip() or None,
-            limit=limit,
-        )
+        with wall.owner_screen():
+            hits = index.search(
+                q or "",
+                kinds=kinds,
+                project_id=(project_id or "").strip() or None,
+                after=(after or "").strip() or None,
+                before=(before or "").strip() or None,
+                limit=limit,
+            )
         return {
             "hits": [h.as_dict() for h in hits],
             "mode": index.mode,
@@ -92,6 +100,9 @@ def register(app: FastAPI, d) -> None:
         """
         from ...search.unified import search_all as _search_all
 
-        return await _search_all(
-            d.platform, getattr(d, "search_index", None), q, project_id
-        )
+        # The palette is the owner's own screen: its lanes run in threads
+        # that copy this context, so memory recall inside is not walled.
+        with wall.owner_screen():
+            return await _search_all(
+                d.platform, getattr(d, "search_index", None), q, project_id
+            )

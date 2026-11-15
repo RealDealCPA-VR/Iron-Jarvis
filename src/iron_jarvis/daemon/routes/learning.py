@@ -183,9 +183,14 @@ def register(app: FastAPI, d) -> None:
         if fabric is None:
             raise HTTPException(status_code=503, detail="memory fabric unavailable")
         want = [s.strip() for s in (sources or "").split(",") if s.strip()] or None
-        hits = fabric.recall(
-            q, k=max(1, min(int(k), 50)), project_id=(project_id or None), sources=want
-        )
+        from ...workmap.clients import wall
+
+        # The owner's own screen (the Memory page): the client wall is for
+        # what a TURN is told, so nothing is walled here (v1.499.0).
+        with wall.owner_screen():
+            hits = fabric.recall(
+                q, k=max(1, min(int(k), 50)), project_id=(project_id or None), sources=want
+            )
         by_source: dict[str, int] = {}
         for h in hits:
             by_source[h.source] = by_source.get(h.source, 0) + 1
