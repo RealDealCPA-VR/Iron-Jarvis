@@ -412,6 +412,7 @@ QUESTION_MARGIN_S = 0.25
 
 def question_for_turn(
     platform: Any, *, folder: str, thread_id: str, budget_s: float | None = None,
+    deadline: float | None = None,
 ) -> dict[str, Any] | None:
     """The one question under a reply: ``{id, name, folders, work}`` or None.
 
@@ -428,13 +429,20 @@ def question_for_turn(
     that marks the row asked waits on SQLite for what is left of it (minus
     :data:`QUESTION_MARGIN_S`), never the database's 30 s, and is rolled back
     once the time is past: a question the lane gave up on is never marked
-    asked, so it rides a later reply."""
-    started = time.monotonic()
+    asked, so it rides a later reply.
+
+    ``deadline`` (v1.499.1 review): the same wait as a ``time.monotonic()``
+    instant taken by the lane BEFORE it handed the job to a thread. The lanes
+    pass this, because ``budget_s`` starts counting only when the thread
+    starts: a thread pool slow to start it left the lane already gone while
+    the budget still showed time. ``budget_s`` stays for direct callers."""
+    if deadline is None and budget_s is not None:
+        deadline = time.monotonic() + float(budget_s)
 
     def _left() -> float:
-        if budget_s is None:
+        if deadline is None:
             return float("inf")
-        return float(budget_s) - QUESTION_MARGIN_S - (time.monotonic() - started)
+        return float(deadline) - QUESTION_MARGIN_S - time.monotonic()
 
     try:
         if not getattr(getattr(platform, "config", None), "notice_clients", True):
@@ -461,7 +469,7 @@ def question_for_turn(
                 hits.sort(key=lambda r: (int(r.strength or 0), _iso(r.created_at) or ""), reverse=True)
                 row = hits[0]
                 raw = None
-                if budget_s is not None:
+                if deadline is not None:
                     left = _left()
                     if left <= 0:
                         return None

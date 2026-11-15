@@ -210,7 +210,13 @@ import { excelNowForSend } from "@/lib/excelNow";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
 // v1.499.0 (leap 3, Phase 3): "Is Hartleys a client?" under one reply.
 import { ClientQuestion } from "@/components/chat/ClientQuestion";
-import { applySettledQuestions, decodeClientQuestion, type ChatClientQuestion } from "@/lib/clients";
+import {
+  applySettledQuestions,
+  decodeClientQuestion,
+  rememberClientAnswer,
+  type ChatClientQuestion,
+  type SettledClientQuestions,
+} from "@/lib/clients";
 import { ReplyRating, type ReplyRatingValue } from "@/components/chat/ReplyRating";
 import { ConfigCards } from "@/components/chat/ConfigCards";
 import { SecretPasteNotice } from "@/components/chat/SecretPasteNotice";
@@ -5059,9 +5065,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // each save through it, so a turn that began BEFORE the press (its history
   // still holds the open ask) can never put the question back on disk.
   const settledSuggestionsRef = useRef<Map<string, ChatSuggestion>>(new Map());
-  // v1.499.0: every client question answered in this window, by id (same
-  // reason: a turn that began before the press must not put it back).
-  const settledClientQuestionsRef = useRef<Map<string, ChatClientQuestion>>(new Map());
+  // v1.499.0: every client question answered in this window (same reason:
+  // a turn that began before the press must not put it back). v1.499.1:
+  // keyed by the question object it answered, never the client id, so an
+  // old answer never lands on a newer question for the same client.
+  const settledClientQuestionsRef = useRef<SettledClientQuestions>(new Map());
   // Redesign S3/S4: settings cards settled in this window (same reason).
   const settledCardsRef = useRef<Map<string, ConfigCard>>(new Map());
   // Redesign S4 (AUDIT Q9): a message held because it looks like a key or
@@ -11905,10 +11913,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     settleClientQuestion: (index, next) => {
       // v1.499.0: exactly like settleSuggestion — remembered for every later
       // save, stored on its message, saved now unless a turn is running.
-      settledClientQuestionsRef.current.set(next.id, next);
+      // Remembered against the message's own question object (v1.499.1).
       const cur = messagesRef.current;
       const target = cur[index];
-      if (!target || decodeClientQuestion(target.clientQuestion)?.id !== next.id) return;
+      if (!target?.clientQuestion || decodeClientQuestion(target.clientQuestion)?.id !== next.id) return;
+      rememberClientAnswer(settledClientQuestionsRef.current, target.clientQuestion, next);
       const updated = cur.map((m, j) => (j === index ? { ...m, clientQuestion: next } : m));
       messagesRef.current = updated;
       setMessages(updated);

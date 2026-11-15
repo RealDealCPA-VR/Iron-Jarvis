@@ -62,7 +62,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Iterable, Mapping
 
-from sqlalchemy import case, func, or_
+from sqlalchemy import case, delete, func, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
@@ -450,20 +450,31 @@ def _write(engine: Any, cands: list[Candidate]) -> tuple[list[str], bool]:
             kept.add(row.id)
             evidence = json.dumps(evidence_of(c), ensure_ascii=True)
             if row.evidence_json != evidence or row.strength != c.strength:
-                row.evidence_json = evidence
-                row.strength = c.strength
-                row.updated_at = now
-                db.add(row)
-                changed = True
+                # Only while it still waits: an answer given since the read
+                # above is never touched by a pass (the v1.499.1 review).
+                done = db.exec(
+                    update(WorkClient)
+                    .where(WorkClient.id == row.id, WorkClient.status == CLIENT_PROPOSED,
+                           WorkClient.decided_at.is_(None))  # type: ignore[union-attr]
+                    .values(evidence_json=evidence, strength=c.strength, updated_at=now)
+                )
+                changed = changed or bool(done.rowcount)
         withdrawn = 0
         for row in proposed:
             if row.id in kept or row.decided_at is not None or row.how != CLIENT_NOTICED:
                 continue
             if _rule_of(row) not in NOTICED_RULES:
                 continue  # not minted by a pass: never withdrawn by one
-            db.delete(row)
-            withdrawn += 1
-            changed = True
+            # Deleted only while it STILL waits undecided: the owner may have
+            # answered since the read above (a Yes or a No kept its row).
+            gone = db.exec(
+                delete(WorkClient)
+                .where(WorkClient.id == row.id, WorkClient.status == CLIENT_PROPOSED,
+                       WorkClient.decided_at.is_(None))  # type: ignore[union-attr]
+            )
+            if gone.rowcount:
+                withdrawn += 1
+                changed = True
         db.commit()
         waiting = len(proposed) - withdrawn
     minted: list[str] = []

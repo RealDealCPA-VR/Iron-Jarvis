@@ -242,7 +242,13 @@ describe("where it is stored and drawn (source pins)", () => {
 
   it("an answer is stored on its message and survives a later save", () => {
     expect(page).toContain("msgs = applySettledQuestions(msgs, settledClientQuestionsRef.current);");
-    expect(page).toMatch(/settleClientQuestion: \(index, next\) => \{[\s\S]{0,400}settledClientQuestionsRef\.current\.set\(next\.id, next\)/);
+    // v1.499.1: remembered against the very question it answered (the
+    // message's own object), never the client id: after "Ask again" a newer
+    // question for the same client must not take the old answer.
+    expect(page).toMatch(
+      /settleClientQuestion: \(index, next\) => \{[\s\S]{0,900}rememberClientAnswer\(settledClientQuestionsRef\.current, target\.clientQuestion, next\)/,
+    );
+    expect(page).not.toContain("settledClientQuestionsRef.current.set(next.id, next)");
     expect(page).toContain("onSettle={(next) => h.settleClientQuestion(i, next)}");
   });
 

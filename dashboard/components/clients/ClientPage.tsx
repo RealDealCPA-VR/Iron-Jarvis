@@ -370,6 +370,7 @@ export function ClientPage({ id }: { id: string }) {
               label={NOT_A_CLIENT}
               confirmLabel={NOT_A_CLIENT_CONFIRM}
               testId="client-not-a-client"
+              disabled={busy}
               onConfirm={() =>
                 void press(async () => {
                   // The one press that may take a CONFIRMED client away.
@@ -561,6 +562,7 @@ function Folders({ data, busy, press }: { data: ClientPageData; busy: boolean; p
                 label={removeFrom(c.name)}
                 confirmLabel="Remove it?"
                 testId="client-folder-remove"
+                disabled={busy}
                 onConfirm={() =>
                   void press(async () => {
                     await post<unknown>(clientRemoveFolderPath(c.id), { folder: f.folder });
@@ -674,6 +676,7 @@ function Preferences({ data, busy, press }: { data: ClientPageData; busy: boolea
                       label={FORGET}
                       confirmLabel={FORGET_CONFIRM}
                       testId="client-pref-forget"
+                      disabled={busy}
                       onConfirm={() =>
                         void press(async () => {
                           await del<unknown>(clientPrefPath(c.id, p.id));

@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -482,9 +483,12 @@ QUESTION = {"id": "client_abcdefabcdef", "name": "Hartleys", "folders": 2, "work
 def test_the_client_question_is_always_on_both_lanes(scene, monkeypatch, lane):
     asked: list[dict] = []
 
-    def question_for_turn(platform, *, folder, thread_id, budget_s=None):
+    def question_for_turn(platform, *, folder, thread_id, budget_s=None, deadline=None):
         asked.append({"folder": folder, "thread_id": thread_id})
-        assert budget_s == CT.CLIENT_QUESTION_WAIT_S  # the lane hands over its own wait
+        # The lane hands over its own wait as a DEADLINE taken before the
+        # thread started (v1.499.1): a thread that starts late has less left.
+        assert budget_s is None and deadline is not None
+        assert deadline <= time.monotonic() + CT.CLIENT_QUESTION_WAIT_S
         return dict(QUESTION, extra="never on the wire")
 
     monkeypatch.setattr(store_mod, "question_for_turn", question_for_turn)
@@ -827,3 +831,17 @@ def test_terminal_help_follows_the_folder_the_pane_is_in_now(scene, monkeypatch)
     assert T._live_folder("/a", "me@box:/srv/x$ ls\n") == "/srv/x"
     assert T._live_folder(r"C:\a", "some output\nmore\n") == r"C:\a"
     assert T._live_folder(r"C:\a", r"Set-Location D:\x" + "\n") is None
+    # A cd AFTER the last prompt wins over that prompt (v1.499.1 review): on
+    # the prompt line itself (a server still running, no new prompt yet)...
+    assert T._live_folder(r"C:\a", "PS C:\\a> cd D:\\Smith; npm run dev\r\nlistening on 3000\r\n") is None
+    # ...or on a later line; a prompt printed after the cd is the answer.
+    assert T._live_folder(r"C:\a", "PS C:\\a> dir\r\nx.csv\r\ncd ..\\Smith\r\n") is None
+    assert T._live_folder(r"C:\a", "PS C:\\a> cd D:\\x\r\nPS D:\\x> ") == r"D:\x"
+    # No prompt in output that was CUT (the cd may have scrolled out): not known.
+    assert T._live_folder(r"C:\a", "some output\n", whole=False) is None
+    # The pane end to end: more output than the window keeps, no prompt in it.
+    session._tail.clear()
+    assert BLOCK_H in assist("x\r\n")
+    assert session.output_tail_is_whole()
+    assert "# Client:" not in assist("y" * 100 + "\r\n" * 400 + "z" * (40 * 1024) + "\r\n")
+    assert not session.output_tail_is_whole()

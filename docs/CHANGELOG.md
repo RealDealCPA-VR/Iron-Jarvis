@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.499.2
+
+**The rest of the review: clients, terminal help and pairing.** **Your answer about a client is never undone by Jarvis.** When you pressed Yes or No on a name at the same moment Jarvis was looking through your folders again, that look could delete the name you had just answered about.
+
 ## v1.499.1
 
 **Five fixes from a second review of clients, checking and pairing.** **A client's work stays with that client in one more case.** A chat with no folder of its own, say in Downloads, that used files from a client's folder and also from a folder you have not answered about yet could be shown to an unrelated chat.
@@ -77,7 +81,3 @@
 ## v1.487.0
 
 **Four everyday ways of asking, understood.** **"Keep this chat just on my computer"** now turns on Local only for the chat.
-
-## v1.486.0
-
-**Chat can see your schedules.** **Jarvis can list your scheduled tasks.** Ask "move the daily 8 o'clock reminder to 9" and Jarvis now looks at your schedules first (each one's name, when it runs in plain words, what it does, whether it is on or paused), finds the one you mean and changes it on a card, instead of asking you for the schedule's name.

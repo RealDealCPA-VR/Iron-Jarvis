@@ -11769,10 +11769,13 @@ async def client_question_for(
         from ..workmap.clients import store as _store
 
         thread_id = str(getattr(body, "thread_id", "") or "")
+        # The deadline is taken HERE, when the wait below starts, so a thread
+        # that starts late has less left (never a fresh second of its own).
+        deadline = _time.monotonic() + CLIENT_QUESTION_WAIT_S
         got = await asyncio.wait_for(
             asyncio.to_thread(
                 _store.question_for_turn, platform, folder=str(folder), thread_id=thread_id,
-                budget_s=CLIENT_QUESTION_WAIT_S,
+                deadline=deadline,
             ),
             timeout=CLIENT_QUESTION_WAIT_S,
         )

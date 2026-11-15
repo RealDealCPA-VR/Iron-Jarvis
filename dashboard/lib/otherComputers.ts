@@ -70,7 +70,8 @@ export const TASKS_LINE =
 
 export const NETWORK_OFF =
   "Other computers cannot reach this one yet. To pair, turn this on here and on the other computer. " +
-  "Iron Jarvis restarts to apply it, and every request from another computer still needs its own token.";
+  "Iron Jarvis restarts to apply it, and another computer can ask this one for nothing until you pair it " +
+  "or connect it yourself.";
 export const TURN_ON = "Turn on and restart";
 export const NETWORK_SAVED = "Turned on. It takes effect when Iron Jarvis restarts.";
 export const RESTART_NOW = "Restart now";
@@ -146,7 +147,7 @@ export const ANSWERS_AFTER_RESTART =
 export const CHECK = "Check";
 export const REMOVE = "Remove";
 export function removeTitle(name: string): string {
-  return `End the pairing with ${name} on both computers. Its tokens stop working at once`;
+  return `End the pairing with ${name} on both computers. From that moment it cannot reach this one`;
 }
 
 /** The remote-agent row (Agents › Your team) for a paired computer. */

@@ -185,6 +185,43 @@ async def test_when_this_side_cannot_keep_the_pairing_the_other_drops_its_half(t
     _nothing_kept(a, b)
 
 
+async def test_a_keep_slower_than_the_joiners_wait_is_taken_back(tmp_path, lan, monkeypatch):
+    """The showing side used the code, then kept the pairing with no bound,
+    while the joining side gives up after ``link.PAIR_TIMEOUT_S`` (v1.499.1
+    review): a slow keep left a pairing on one computer only. The door now
+    answers within ``KEEP_MAX_S`` (below the joiner's wait), and a keep that
+    finishes after that is taken back."""
+    import asyncio
+    import threading
+
+    from iron_jarvis.daemon.routes import peers as R
+    from iron_jarvis.peers import link as L
+
+    assert R.KEEP_MAX_S < L.PAIR_TIMEOUT_S - 2  # room for the network and the code check
+    a, b = _two(tmp_path)
+    lan({A_HOST: a, B_HOST: b})
+    store_b = S.store_for(b.state.platform)
+    real_add = store_b.add
+    release = threading.Event()
+
+    def slow_add(**kw):
+        release.wait(30)  # the vault or SQLite is busy
+        return real_add(**kw)
+
+    monkeypatch.setattr(store_b, "add", slow_add)
+    monkeypatch.setattr(R, "KEEP_MAX_S", 0.2)
+    async with _client(A_HOST) as ca, _client(B_HOST) as cb:
+        code = (await cb.post("/peers/code", json={"this_name": "desk"})).json()["code"]["code"]
+        r = await ca.post("/peers/join", json={"address": B_HOST, "code": code, "this_name": "laptop"})
+        assert r.status_code >= 400
+        assert "nothing was kept" in r.json()["detail"].lower()
+        release.set()  # the keep finishes, after the door said no
+        assert R._LATE_KEEPS, "the late keep is followed"
+        await asyncio.gather(*list(R._LATE_KEEPS))
+    _nothing_kept(a, b)
+    assert _peer_secrets(a) == [] and _peer_secrets(b) == []
+
+
 async def test_a_side_that_fails_half_way_keeps_nothing_of_it(tmp_path, lan, monkeypatch):
     """The pairing side writes two tokens, a remote agent and a record; a
     failure after the first of them must not leave the rest behind (an

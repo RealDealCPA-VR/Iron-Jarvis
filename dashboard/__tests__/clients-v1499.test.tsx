@@ -29,6 +29,8 @@ const H = vi.hoisted(() => ({
   dels: [] as string[],
   postAnswer: {} as unknown,
   postError: null as null | { status: number; message: string },
+  // A press that has not answered yet (the save still busy), when set.
+  postGate: null as null | Promise<void>,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -41,6 +43,7 @@ vi.mock("@/lib/api", () => ({
   },
   post: async (path: string, body: unknown) => {
     H.posts.push({ path, body });
+    if (H.postGate) await H.postGate;
     if (H.postError) throw H.postError;
     return H.postAnswer;
   },
@@ -83,6 +86,7 @@ import {
   mayMakeClient,
   possessive,
   questionLine,
+  rememberClientAnswer,
   type ChatClientQuestion,
 } from "@/lib/clients";
 import * as CLIENT_WORDS from "@/lib/clients";
@@ -237,6 +241,7 @@ beforeEach(() => {
   H.dels = [];
   H.postAnswer = {};
   H.postError = null;
+  H.postGate = null;
 });
 afterEach(() => cleanup());
 
@@ -393,9 +398,28 @@ describe("the decoders", () => {
   it("an answer given in this window is never put back by a later save", () => {
     const open: ChatClientQuestion = { id: HID, name: "Hartleys", folders: 2, work: 9 };
     const msgs = [{ role: "assistant", clientQuestion: open }, { role: "user" }];
-    const settled = new Map([[HID, { ...open, state: "yes" as const }]]);
+    const settled = rememberClientAnswer(new Map(), open, { ...open, state: "yes" });
     expect(applySettledQuestions(msgs, settled)[0].clientQuestion?.state).toBe("yes");
     expect(applySettledQuestions(msgs, new Map())).toBe(msgs);
+  });
+
+  it("a remembered answer is written only onto the question it was given for, never a newer one for the same client", () => {
+    // The owner said No in one chat; later "Ask again" on the Clients page
+    // let Iron Jarvis ask once more, under a newer reply (same client id).
+    const asked: ChatClientQuestion = { id: HID, name: "Hartleys", folders: 2, work: 9 };
+    const settled = rememberClientAnswer(new Map(), asked, { ...asked, state: "no" });
+    // The save of a turn that began before the press still holds the open ask.
+    const stale = [{ role: "assistant", clientQuestion: asked }];
+    expect(applySettledQuestions(stale, settled)[0].clientQuestion?.state).toBe("no");
+    // The newer question, in this chat or any other chat of the window, stays open.
+    const askedAgain: ChatClientQuestion = { id: HID, name: "Hartleys", folders: 2, work: 11 };
+    const later = [{ role: "assistant", clientQuestion: asked }, { role: "user" }, { role: "assistant", clientQuestion: askedAgain }];
+    const saved = applySettledQuestions(later, settled);
+    expect(saved[0].clientQuestion?.state).toBe("no");
+    expect(saved[2].clientQuestion).toBe(askedAgain);
+    expect(saved[2].clientQuestion?.state).toBeUndefined();
+    const otherChat = [{ role: "assistant", clientQuestion: { ...asked } }];
+    expect(applySettledQuestions(otherChat, settled)).toBe(otherChat);
   });
 
   it("a work-record folder carries only the server's client, and only with a client id", () => {
@@ -702,7 +726,7 @@ describe("the Memory page", () => {
     expect((await screen.findByTestId("your-clients-empty")).textContent).toBe(MEMORY_EMPTY);
   });
 
-  it("a 503 is said, and a 404 or an answer that is not a client list draws nothing", async () => {
+  it("a 503 or an answer that is not a client list is said, and a 404 draws nothing", async () => {
     H.answers["/clients"] = { __fail: { status: 503, message: "x" } };
     render(<YourClients />);
     expect((await screen.findByTestId("your-clients-failed")).textContent).toContain("Your clients couldn't load");
@@ -712,10 +736,11 @@ describe("the Memory page", () => {
     await waitFor(() => expect(H.gets.length).toBe(2));
     await waitFor(() => expect(screen.queryByTestId("your-clients-memory")).toBeNull());
     cleanup();
+    // v1.499.1: an odd answer (a daemon mid-restart) is a failed read with
+    // Try again, never a section that is gone until the page is reloaded.
     H.answers["/clients"] = {};
     render(<YourClients />);
-    await waitFor(() => expect(H.gets.length).toBe(3));
-    await waitFor(() => expect(screen.queryByTestId("your-clients-memory")).toBeNull());
+    expect((await screen.findByTestId("your-clients-failed")).textContent).toContain("Your clients couldn't load");
   });
 });
 
@@ -894,5 +919,46 @@ describe("the independent review", () => {
     await screen.findByTestId("client-row");
     const back = screen.getAllByTestId("client-bring-back").map((b) => b.getAttribute("aria-label"));
     expect(back.every((l) => /^(Ask again|Make it a client again): \S/.test(l ?? ""))).toBe(true);
+  });
+});
+
+describe("the second review", () => {
+  it("Remove, Forget and Not a client cannot be pressed while another save is busy", async () => {
+    await openPage();
+    let answer: () => void = () => {};
+    H.postGate = new Promise<void>((r) => {
+      answer = r;
+    });
+    fireEvent.change(screen.getByTestId("client-pref-add-input"), { target: { value: "Uses cash basis" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Keep for Hartleys" }));
+    });
+    // The keep is still being saved: a confirmed press now would be dropped.
+    const waiting = [
+      ...screen.getAllByTestId("client-folder-remove"),
+      ...screen.getAllByTestId("client-pref-forget"),
+      screen.getByTestId("client-not-a-client"),
+    ];
+    expect(waiting.length).toBeGreaterThan(2);
+    for (const b of waiting) expect(b).toBeDisabled();
+    await act(async () => {
+      answer();
+    });
+    await waitFor(() => expect(screen.getByTestId("client-not-a-client")).not.toBeDisabled());
+    for (const b of screen.getAllByTestId("client-folder-remove")) expect(b).not.toBeDisabled();
+    for (const b of screen.getAllByTestId("client-pref-forget")) expect(b).not.toBeDisabled();
+  });
+
+  it("an answer that is not a client list is said as a failed read, and Try again brings the section back", async () => {
+    H.answers["/clients"] = { detail: "starting" };
+    render(<YourClients />);
+    const failed = await screen.findByTestId("your-clients-failed");
+    expect(failed.textContent).toContain("Your clients couldn't load");
+    H.answers["/clients"] = LIST();
+    await act(async () => {
+      fireEvent.click(within(failed).getByRole("button"));
+    });
+    expect(await screen.findByTestId("your-client")).toHaveTextContent("Hartleys");
+    expect(screen.queryByTestId("your-clients-failed")).toBeNull();
   });
 });

@@ -51,6 +51,8 @@ MOUSE_WATCH_WAIT_S = 30.0
 #: to a RE-ATTACHING pane (tab switch / navigation) so it shows its history
 #: instead of a blank screen, and as the context for the per-terminal AI assist.
 TAIL_MAX_BYTES = 256 * 1024
+#: How much of the newest output :meth:`TerminalSession.output_tail` decodes.
+OUTPUT_TAIL_BYTES = 32 * 1024
 
 #: ANSI escape sequences (CSI + OSC) — stripped from the AI-facing tail so the
 #: model reads clean text instead of color/cursor noise.
@@ -771,8 +773,14 @@ class TerminalSession:
         Only the last ~32KB is decoded — the AI needs a short window, and the
         full scrollback can be up to :data:`TAIL_MAX_BYTES`. The window is cut
         at a byte offset, so it is decoded by :func:`_utf8_window` (v1.248.0)."""
-        text = _utf8_window(bytes(self._tail[-32 * 1024:]))
+        text = _utf8_window(bytes(self._tail[-OUTPUT_TAIL_BYTES:]))
         return _ANSI_RE.sub("", text)
+
+    def output_tail_is_whole(self) -> bool:
+        """True when :meth:`output_tail` holds EVERYTHING this pane printed
+        since it started: nothing scrolled out of it (v1.499.1, terminal help's
+        client folder: a ``cd`` that scrolled out cannot be seen)."""
+        return not self._tail_truncated and len(self._tail) <= OUTPUT_TAIL_BYTES
 
     def scrollback_bytes(self) -> bytes:
         """The raw recent output (with ANSI intact) to REPLAY into a re-attaching

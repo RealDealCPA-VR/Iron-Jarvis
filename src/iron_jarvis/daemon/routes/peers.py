@@ -83,6 +83,16 @@ KEEP_FAILED = (
 )
 
 
+#: How long the door that took the code may spend keeping the pairing before
+#: it answers "nothing was kept" (v1.499.1 review). Well under the joining
+#: side's whole wait (``link.PAIR_TIMEOUT_S``), so the two never disagree.
+KEEP_MAX_S = 10.0
+
+#: Keeps that finished after the door gave up: each is taken back when it
+#: lands (tests wait on these).
+_LATE_KEEPS: set[asyncio.Task] = set()
+
+
 def join_failed_words(name: str, told: bool) -> str:
     """THIS computer could not keep a pairing the other one already kept: it
     was told to drop its side (or could not be)."""
@@ -391,8 +401,18 @@ def register(app: FastAPI, d: Any) -> None:
             )
             return peer, store.this_name()
 
+        keeping = asyncio.ensure_future(asyncio.to_thread(_keep))
         try:
-            peer, this_name = await asyncio.to_thread(_keep)
+            peer, this_name = await asyncio.wait_for(asyncio.shield(keeping), timeout=KEEP_MAX_S)
+        except asyncio.TimeoutError:
+            # The joining side would give up soon and keep nothing: say so
+            # now, and take this side back whenever the slow keep lands, so a
+            # pairing is never left on one computer only.
+            log.warning("pairing: keeping the pairing took longer than %.0f s; it is taken back", KEEP_MAX_S)
+            late = asyncio.ensure_future(_take_back_late(keeping))
+            _LATE_KEEPS.add(late)
+            late.add_done_callback(_LATE_KEEPS.discard)
+            raise HTTPException(status_code=503, detail=KEEP_FAILED) from None
         except Exception:  # noqa: BLE001 — never the exception's text to the other computer
             # ``add`` took back whatever it had written. The app's own 500
             # envelope would have sent this door's caller — anyone on the
@@ -406,6 +426,19 @@ def register(app: FastAPI, d: Any) -> None:
             "door_token": in_token,
             "seen_as": str(seen),
         }
+
+    async def _take_back_late(keeping: "asyncio.Future[tuple[Any, str]]") -> None:
+        """A keep the door already answered "nothing was kept" for: once it
+        finishes, remove what it kept (its record, tokens and remote agent).
+        Never raises."""
+        try:
+            peer, _name = await keeping
+        except Exception:  # noqa: BLE001 — it failed: ``add`` already took itself back
+            return
+        try:
+            await asyncio.to_thread(_store().remove, peer.name)
+        except Exception:  # noqa: BLE001
+            log.warning("pairing: could not take back a pairing kept too late", exc_info=True)
 
     @app.post(PEER_UNPAIR_PATH)
     async def unpair_here(request: Request) -> dict[str, Any]:

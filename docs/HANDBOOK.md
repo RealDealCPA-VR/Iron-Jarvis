@@ -2042,6 +2042,31 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## The rest of the review: clients, terminal help and pairing (v1.499.2)
+
+- **Your answer about a client is never undone by Jarvis.** When you pressed
+  Yes or No on a name at the same moment Jarvis was looking through your
+  folders again, that look could delete the name you had just answered
+  about. It now leaves any name you have answered alone.
+- **A question under a reply is asked only when you can see it.** A busy
+  moment could mark "Is Hartleys a client?" as asked while the reply went out
+  without it, so it was never asked at all.
+- **A No stays on the question you said it to.** After "Ask again" on the
+  Clients page, the new question about the same name could show your old No
+  the next time a chat was saved.
+- **Terminal help follows you out of a client's folder.** A pane that ran
+  `cd` into another folder and started something long, with no new prompt
+  yet, was still given the first client's notes. A pane whose folder cannot
+  be read from its output now gets no client's notes at all.
+- **Pairing never leaves one computer paired alone.** When the computer
+  showing the code took too long to save the pairing, it kept it while the
+  other gave up. It now answers in time, and takes back a pairing it saved
+  too late.
+- **Smaller things.** On a client's page, Remove, Forget and Not a client
+  wait while another change is saving instead of doing nothing. "Your
+  clients" in Memory says when it could not be read, with Try again, instead
+  of disappearing. The Other computers card no longer uses the word "token".
+
 ## Five fixes from a second review of clients, checking and pairing (v1.499.1)
 
 - **A client's work stays with that client in one more case.** A chat with

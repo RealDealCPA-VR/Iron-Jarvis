@@ -260,6 +260,10 @@ How to use this file: read the contents list, then read only the entries your ch
   - The address kept for the other computer is the TCP client's IP plus the
     port it sent, never anything else in the body, and it is read BEFORE the
     code (a request that cannot be placed never uses the code up).
+  - The door that took the code answers within `routes/peers.KEEP_MAX_S`
+    (10 s, under the joiner's `link.PAIR_TIMEOUT_S` 15 s); a keep that lands
+    after that is taken back (`_take_back_late`), so a slow vault or SQLite
+    never leaves a pairing on one computer only (v1.499.1).
   - `PeerStore.add` is all or nothing (`_undo_half`), and a remote agent
     made under the name meanwhile is never overwritten (`NameTaken`). When the
     joining side cannot keep a pairing the other already kept, it calls

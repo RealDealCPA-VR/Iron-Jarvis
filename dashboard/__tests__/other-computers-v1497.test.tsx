@@ -99,6 +99,7 @@ import {
   codeSteps,
   decodePeers,
   peerStatusLine,
+  removeTitle,
   typedCode,
 } from "@/lib/otherComputers";
 
@@ -433,6 +434,16 @@ describe("the words and shapes", () => {
   it("the steps name the address to type", () => {
     expect(codeSteps(["192.168.1.20:8787"])).toContain("this computer's address, 192.168.1.20:8787");
     expect(codeSteps(["a:1", "b:1"])).toContain("one of this computer's addresses: a:1 or b:1");
+  });
+
+  it("never says 'token' on screen: a computer is paired, and a pairing ends (VOCABULARY.md)", () => {
+    const code = readFileSync(join(__dirname, "..", "lib/otherComputers.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toMatch(/\btokens?\b/i);
+    expect(NETWORK_OFF).not.toMatch(/token/i);
+    expect(removeTitle("laptop")).toMatch(/^End the pairing with laptop on both computers\. /);
+    expect(removeTitle("laptop")).not.toMatch(/token/i);
   });
 });
 

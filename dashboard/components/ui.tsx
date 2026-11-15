@@ -698,6 +698,7 @@ export function ConfirmButton({
   variant = "default",
   testId,
   icon,
+  disabled = false,
 }: {
   onConfirm: () => void | Promise<void>;
   label?: string;
@@ -714,6 +715,10 @@ export function ConfirmButton({
    *  armed second press still says `confirmLabel` in words. Two presses,
    *  exactly as before. The calm variant only. */
   icon?: ReactNode;
+  /** v1.499.1: the caller's own "not now" (another save on the page is
+   *  busy), so a confirmed press is never silently dropped. Absent: false,
+   *  exactly as before. */
+  disabled?: boolean;
 }) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -749,7 +754,7 @@ export function ConfirmButton({
             tip.handlers.onPointerDown();
             void onClick();
           }}
-          disabled={busy}
+          disabled={busy || disabled}
           aria-label={resting ? label : undefined}
           data-testid={testId}
           data-confirm-variant="calm"
@@ -776,7 +781,7 @@ export function ConfirmButton({
       <button
         type="button"
         onClick={onClick}
-        disabled={busy}
+        disabled={busy || disabled}
         title={title}
         data-testid={testId}
         data-confirm-variant="calm"
@@ -791,7 +796,7 @@ export function ConfirmButton({
     <button
       type="button"
       onClick={onClick}
-      disabled={busy}
+      disabled={busy || disabled}
       title={title}
       data-testid={testId}
       className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${

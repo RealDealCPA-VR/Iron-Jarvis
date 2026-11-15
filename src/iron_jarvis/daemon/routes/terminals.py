@@ -84,25 +84,32 @@ def _prompt_path(raw: str) -> str:
     return text
 
 
-def _live_folder(cwd: str, tail: str) -> str | None:
+def _live_folder(cwd: str, tail: str, *, whole: bool = True) -> str | None:
     """The folder a pane's shell is in NOW, as far as its output shows (the
     independent review: ``session.cwd`` is only the folder it started in):
-    the folder the LAST prompt in ``tail`` names; else the start folder when
-    nothing in the tail could have moved it (no prompt and no ``cd``-like
-    command); else None (not known: the caller tells no client). Text only."""
+    the folder the LAST prompt in ``tail`` names, unless a ``cd``-like command
+    came after it (on the prompt line or later: v1.499.1, a server started
+    with ``cd ..; npm run dev`` prints no new prompt); else, with no
+    prompt at all, the start folder only when ``tail`` is the pane's WHOLE
+    output (``whole``) and holds no ``cd``; else None (not known: the caller
+    tells no client). Text only."""
     last = ""
-    moved = False
-    for line in str(tail or "").splitlines()[-400:]:
+    moved_after_last = False  # a cd since the last prompt (or since the start)
+    for line in str(tail or "").splitlines():
         for rx in _PROMPT_RXS:
             m = rx.match(line)
             if m:
                 last = _prompt_path(m.group(1))
+                moved_after_last = bool(_CD_RX.search(line[m.end():]))
                 break
-        if not moved and _CD_RX.search(line):
-            moved = True
+        else:
+            if _CD_RX.search(line):
+                moved_after_last = True
+    if moved_after_last:
+        return None
     if last:
         return last
-    return None if moved else (str(cwd or "").strip() or None)
+    return (str(cwd or "").strip() or None) if whole else None
 
 
 def _snippet_reference(cli: str, path) -> str:
@@ -1126,7 +1133,7 @@ def register(app: FastAPI, d) -> None:
             return ""
         return "\n\nThis pane is " + ", ".join(parts) + "."
 
-    async def _client_block_for_pane(cwd: str, tail: str = "") -> str:
+    async def _client_block_for_pane(cwd: str, tail: str = "", *, whole: bool = False) -> str:
         """v1.499.0: the client block for a pane's folder
         (``workmap.clients.block.client_block``), ready to append ("\\n\\n"
         + the block), or "" — no folder, no confirmed client there, past
@@ -1141,7 +1148,7 @@ def register(app: FastAPI, d) -> None:
         folder = str(cwd or "").strip()
         if not folder or getattr(d.platform, "engine", None) is None:
             return ""
-        live = _live_folder(folder, tail)
+        live = _live_folder(folder, tail, whole=whole)
         if not live:
             return ""
 
@@ -1228,7 +1235,14 @@ def register(app: FastAPI, d) -> None:
         # client, right after the owner's own lessons — the same block a chat
         # there gets, for the pane's folder (``session.cwd``). "" anywhere
         # else (byte-identical). Off the loop, bounded, never raises.
-        system += await _client_block_for_pane(getattr(session, "cwd", "") or "", tail)
+        # The folder is read from the pane's whole kept window (not the 6000
+        # characters the model is shown), and with no prompt in it the start
+        # folder counts only while nothing has scrolled out (v1.499.1).
+        _is_whole = getattr(session, "output_tail_is_whole", None)
+        system += await _client_block_for_pane(
+            getattr(session, "cwd", "") or "", session.output_tail(),
+            whole=bool(_is_whole()) if callable(_is_whole) else False,
+        )
         # Skills: make the WHOLE discovered library (builtin + user + Claude +
         # Codex) usable by ANY provider — as prompt injection, not tool calls,
         # so it works identically on models with weak/no tool support.

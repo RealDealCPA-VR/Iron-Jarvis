@@ -614,19 +614,39 @@ export function decodeClientQuestion(raw: unknown): ChatClientQuestion | null {
   return out;
 }
 
+/** The answers given in this window, keyed by the very question object each
+ *  one answered (the one stored on its message), never by the client id.
+ *  v1.499.1: keyed by id, an old "no" was written onto a NEWER question for
+ *  the same client (asked again after "Ask again" on the Clients page) on
+ *  the next save, in any chat of the window. A turn that began before the
+ *  press holds that same object in its history, so its save still takes the
+ *  answer; a newer question, or one read back from disk, is another object. */
+export type SettledClientQuestions = Map<ChatClientQuestion, ChatClientQuestion>;
+
+/** Remember `answer` for the question it was given on (`asked`, the object on
+ *  the message). Returns the same map. */
+export function rememberClientAnswer(
+  settled: SettledClientQuestions,
+  asked: ChatClientQuestion,
+  answer: ChatClientQuestion,
+): SettledClientQuestions {
+  settled.set(asked, answer);
+  return settled;
+}
+
 /** The save hazard the preference line has too: a turn that began before
  *  the owner answered ends with a history still holding the open question.
  *  Every save runs through this with the answers given in this window. */
 export function applySettledQuestions<M extends { clientQuestion?: ChatClientQuestion }>(
   msgs: M[],
-  settled: ReadonlyMap<string, ChatClientQuestion>,
+  settled: ReadonlyMap<ChatClientQuestion, ChatClientQuestion>,
 ): M[] {
   if (settled.size === 0) return msgs;
   let changed = false;
   const out = msgs.map((m) => {
     const q = m.clientQuestion;
     if (!q) return m;
-    const done = settled.get(q.id);
+    const done = settled.get(q);
     if (!done || done.state === q.state) return m;
     changed = true;
     return { ...m, clientQuestion: done };

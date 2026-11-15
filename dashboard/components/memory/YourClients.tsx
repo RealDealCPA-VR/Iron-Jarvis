@@ -6,9 +6,12 @@
  *
  * One read of `GET /clients` when the section mounts: how many names wait for
  * an answer (with a link to the review), then one row per client. Read-only;
- * the answers are given on the Clients page. An older Iron Jarvis (404) or an
- * answer that is not a client list draws nothing; a read that failed is said,
- * never shown as "no clients".
+ * the answers are given on the Clients page. An older Iron Jarvis (404)
+ * draws nothing; a read that failed is said, never shown as "no clients".
+ *
+ * v1.499.1: an answer that is not a client list (a daemon mid-restart) is a
+ * failed read too, with Try again. It used to hide the section until the
+ * page was reloaded, Try again included.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -46,7 +49,8 @@ export function YourClients() {
         if (!alive.current) return;
         const got = decodeClientsList(raw);
         if (!got) {
-          setHidden(true);
+          // Not a client list: said, with Try again (never nothing).
+          setFailed({ status: 200, message: "The answer was not a client list." });
           return;
         }
         setData(got);

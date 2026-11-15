@@ -341,6 +341,36 @@ def test_minting_is_capped_locked_refreshed_and_withdrawn(platform):
     assert len({r.signature for r in after} & left_out) == 1
 
 
+def test_a_pass_never_withdraws_a_name_the_owner_answered_meanwhile(platform, monkeypatch):
+    """The pass reads the waiting names, then withdraws those that no longer
+    qualify. An answer landing in between (v1.499.1 review) must survive: the
+    withdraw deletes only a row that is STILL waiting and undecided."""
+    _chats(platform, r"C:\Clients\Sutton", 3)
+    _built(platform)
+    assert detect.notice(platform, force=True) == 1
+    sutton = next(r for r in _rows(platform, "proposed") if r.signature == "sutton")
+    work_map(platform.engine, platform.config.home).forget(r"C:\Clients\Sutton")
+
+    real_rule_of = detect._rule_of
+    answered: list[str] = []
+
+    def owner_says_yes_now(row):
+        if row.id == sutton.id and not answered:  # the press lands mid-pass
+            with session_scope(platform.engine) as db:
+                live = db.get(WorkClient, sutton.id)
+                live.status, live.decided_at = "confirmed", utcnow()
+                db.add(live)
+                db.commit()
+            answered.append(row.id)
+        return real_rule_of(row)
+
+    monkeypatch.setattr(detect, "_rule_of", owner_says_yes_now)
+    detect.notice(platform, force=True)
+    assert answered == [sutton.id]
+    kept = [r for r in _rows(platform) if r.id == sutton.id]
+    assert kept and kept[0].status == "confirmed", "the owner's Yes was deleted by the pass"
+
+
 def test_a_pass_is_throttled_and_off_with_the_switch(platform):
     _chats(platform, r"C:\Clients\Hartleys", 2)
     _built(platform)
@@ -561,7 +591,16 @@ def test_a_question_the_lane_gave_up_on_is_never_marked_asked(platform, tmp_path
     # The connection's own wait is put back (the pool hands it out again).
     with session_scope(platform.engine) as db:
         assert db.connection().exec_driver_sql("PRAGMA busy_timeout").scalar() == 30_000
-    got = store.question_for_turn(platform, folder=r"C:\Clients\Hartleys", thread_id="t2", budget_s=1.0)
+    # A DEADLINE taken when the lane handed the job over (v1.499.1): a thread
+    # that started late, with less than the margin left, writes nothing.
+    import time as _t
+
+    assert store.question_for_turn(platform, folder=r"C:\Clients\Hartleys", thread_id="t2",
+                                   deadline=_t.monotonic() + store.QUESTION_MARGIN_S / 2) is None
+    (still,) = _rows(platform, "proposed")
+    assert still.asked_at is None
+    got = store.question_for_turn(platform, folder=r"C:\Clients\Hartleys", thread_id="t2",
+                                  deadline=_t.monotonic() + 5.0)
     assert got is not None and got["id"] == row.id
     # Both lanes hand the store their own wait.
     seen = {}
@@ -573,4 +612,6 @@ def test_a_question_the_lane_gave_up_on_is_never_marked_asked(platform, tmp_path
     monkeypatch.setattr(store, "question_for_turn", spy)
     asyncio.run(CT.client_question_for(platform, SimpleNamespace(thread_id="t3"), folder=r"C:\Clients\Hartleys",
                                        suggest_preferences=True, suggestion=None))
-    assert seen.get("budget_s") == CT.CLIENT_QUESTION_WAIT_S
+    # Both lanes go through client_question_for: a deadline taken BEFORE the
+    # thread starts, never a budget the thread starts counting itself.
+    assert "budget_s" not in seen and seen.get("deadline") is not None
