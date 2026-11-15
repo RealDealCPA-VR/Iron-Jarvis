@@ -856,8 +856,13 @@ def _never_in_the_clear(app, model: "_Scripted", done: dict, values) -> None:
     and event row, config.toml, any other file), never in what the lane showed
     the model, never in a frame of the turn, never in the change ledger."""
     home = Path(app.state.platform.config.home)
-    files = [f for f in home.rglob("*") if f.is_file()]
-    assert any(f.name.startswith("ironjarvis.db") for f in files), "the scan reads the database"
+    # v1.499.0: SQLite's ``-shm`` (the WAL index: page numbers and checksums,
+    # never a byte of row content) is skipped. Windows refuses a read of it
+    # while any connection holds a byte-range lock there (any transaction),
+    # so on v1.499.0's gate this scan failed with PermissionError twice in a
+    # row. The database and its WAL, which hold every row, are still read.
+    files = [f for f in home.rglob("*") if f.is_file() and not f.name.endswith("-shm")]
+    assert any(f.name == "ironjarvis.db" for f in files), "the scan reads the database"
     ledger = TestClient(app).get("/config/ledger").text
     shown = " ".join(model.shown)
     frames = json.dumps(done["_frames"], default=str)
