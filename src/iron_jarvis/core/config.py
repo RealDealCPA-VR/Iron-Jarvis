@@ -654,6 +654,13 @@ class Config(BaseModel):
     #: Local only work only on a model on this network; at most 30 a day;
     #: never for work from before this was first switched on.
     work_recaps: bool = True
+    #: v1.499.0 (vision plan leap 3, Phase 3): notice names in the work
+    #: record's own folder names that look like clients (no model call, no
+    #: file read; ``workmap/clients/detect``) and ask about each ONCE, under
+    #: one reply and on the Clients page. Off = nothing new is noticed or
+    #: asked; clients the owner already confirmed keep working, and their
+    #: folders stay walled.
+    notice_clients: bool = True
     #: v1.405.0: the code editor a coding session's "Open in …" presses open
     #: (harness/code_editor): "auto" = VS Code when installed, else Cursor;
     #: "vscode" / "cursor" = that one. Read live by GET /editor/options.

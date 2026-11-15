@@ -219,6 +219,15 @@ class EventType:
     PREFERENCE_SUGGESTED = "preference.suggested"
     PREFERENCE_KEPT = "preference.kept"
     PREFERENCE_DECLINED = "preference.declined"
+    # Clients (v1.499.0, vision plan leap 3 Phase 3, ``workmap/clients``):
+    # names noticed in folder names now wait for an answer ({ids}); the owner
+    # said a name is a client ({id}), or Not a client ({id}); a client was
+    # renamed, restored or had a folder or preference changed ({id}). IDS
+    # ONLY, never a client's name: events can reach the phone channel.
+    CLIENT_SUGGESTED = "client.suggested"
+    CLIENT_CONFIRMED = "client.confirmed"
+    CLIENT_DECLINED = "client.declined"
+    CLIENT_CHANGED = "client.changed"
     # Calm UI redesign S0 (v1.321.0): the dashboard tells the daemon which
     # page was opened ({route, via}) so usage of each surface is countable
     # over time. Route = the first path segment only; no ids, no query.

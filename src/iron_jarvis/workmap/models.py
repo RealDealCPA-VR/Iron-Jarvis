@@ -1,5 +1,5 @@
 """The work record's tables (v1.491.0, vision plan leap 3; recaps and forgotten
-folders v1.492.0).
+folders v1.492.0; clients, their folders and their preferences v1.499.0).
 
 One row per PIECE OF WORK that has a folder: a chat, a coding session in
 Chat › Code, a coding session in a real tool (Build › Code), an agent run.
@@ -135,7 +135,130 @@ class WorkForgotten(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+# --------------------------------------------------------------------------- #
+# Clients (v1.499.0, vision plan leap 3, Phase 3; the contract is the
+# docstring of ``workmap/clients/__init__.py``).
+# --------------------------------------------------------------------------- #
+#: A client's status. Only a CONFIRMED client is a client; a proposed row is
+#: a suggestion that reaches no prompt; a declined row is kept so its name is
+#: never asked about again.
+CLIENT_PROPOSED = "proposed"
+CLIENT_CONFIRMED = "confirmed"
+CLIENT_DECLINED = "declined"
+CLIENT_STATUSES = (CLIENT_PROPOSED, CLIENT_CONFIRMED, CLIENT_DECLINED)
+#: How a client came to be on record.
+CLIENT_NOTICED = "noticed"   # Iron Jarvis saw the name in folder names
+CLIENT_ADDED = "added"       # the owner made it (a page or a chat)
+#: How a folder came to be a client's.
+CLIENT_FOLDER_FOUND = "found"   # a home the name was noticed in, kept at the Yes
+CLIENT_FOLDER_ADDED = "added"   # the owner gave it
+#: Where a client preference came from.
+CLIENT_PREF_SAID = "said"     # an approval card in chat
+CLIENT_PREF_TYPED = "typed"   # typed on the client's page
+#: The only status a client preference is ever read in.
+CLIENT_PREF_CONFIRMED = "confirmed"
+
+
+class WorkClient(SQLModel, table=True):
+    """A person or business the owner works for, known by its FOLDERS and
+    confirmed by the owner (v1.499.0). Noticed from the work record's own
+    folder names with no model call, or added by the owner. Not a Project
+    (a Project links to it by folder) and not a ``LessonRecord``.
+
+    The row of a declined name is KEPT: its ``signature`` and aliases are
+    what stop Iron Jarvis asking about that name again, in any spelling.
+    """
+
+    __tablename__ = "workclient"
+
+    #: ``core.ids.new_id("client")``: ``client_<12 hex>``.
+    id: str = Field(primary_key=True)
+    #: The display spelling, 1–80 chars, promptguard-scanned on write.
+    name: str = ""
+    #: ``clients.names.name_key(name)``.
+    name_key: str = Field(default="", index=True)
+    #: ``clients.names.signature(name)``: the never-ask-twice key.
+    signature: str = Field(index=True, unique=True)
+    #: ``[<signature>, …]``: at most 5 more spellings (seen at the Yes, earlier
+    #: names after a rename, aliases the owner adds).
+    aliases_json: str = "[]"
+    #: :data:`CLIENT_PROPOSED` | :data:`CLIENT_CONFIRMED` | :data:`CLIENT_DECLINED`.
+    status: str = Field(default=CLIENT_PROPOSED, index=True)
+    #: :data:`CLIENT_NOTICED` | :data:`CLIENT_ADDED`.
+    how: str = CLIENT_NOTICED
+    #: ``{"rule": "under_clients" | "several_folders" | "added", "homes":
+    #: [{"folder", "key", "work", "last_at", "local"}] (≤ 8), "work",
+    #: "folders"}``. ``local`` is true when every piece of work in that home
+    #: is Local only or kept home.
+    evidence_json: str = "{}"
+    #: The rank score (``detect``): stronger names are asked about first.
+    strength: int = 0
+    #: When the question rode under a reply (it rides under ONE reply only).
+    asked_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    #: The owner's answer (Yes or Not a client).
+    decided_at: datetime | None = None
+    #: The first Yes (kept through a later Not a client).
+    confirmed_at: datetime | None = None
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class WorkClientFolder(SQLModel, table=True):
+    """A folder that belongs to a client (v1.499.0). The folder key IS the
+    primary key, so a folder belongs to one client. The row of a client that
+    became Not a client is kept and claims nothing; another client may take
+    it over."""
+
+    __tablename__ = "workclientfolder"
+
+    #: ``keys.folder_key(keys.home_folder(folder))``.
+    folder_key: str = Field(primary_key=True)
+    client_id: str = Field(default="", index=True)
+    #: The folder as the owner spelled it.
+    folder: str = ""
+    #: :data:`CLIENT_FOLDER_FOUND` | :data:`CLIENT_FOLDER_ADDED`.
+    how: str = CLIENT_FOLDER_FOUND
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class WorkClientPreference(SQLModel, table=True):
+    """Something the owner keeps for ONE client ("Uses cash basis",
+    v1.499.0). Kept only with the owner's yes. Told only to a turn whose
+    folder is inside that client's folders, through
+    ``clients.block.client_block``; never to the global preference block,
+    memory recall, the Build share file or the Kept list. Its ONLY reader is
+    ``clients.store.preferences`` (a grep pin refuses this class's name
+    anywhere in ``src/`` outside this file and ``workmap/clients/store.py``).
+    """
+
+    __tablename__ = "workclientpreference"
+
+    #: ``core.ids.new_id("cpref")``: ``cpref_<12 hex>``.
+    id: str = Field(primary_key=True)
+    client_id: str = Field(default="", index=True)
+    #: 1–280 chars, through ``learning.preferences.clean_text`` (promptguard
+    #: at write; scanned again when it is told).
+    text: str = ""
+    #: Only :data:`CLIENT_PREF_CONFIRMED` is ever read or written this
+    #: release; the column exists so a test can insert another status and
+    #: prove it reaches nothing.
+    status: str = CLIENT_PREF_CONFIRMED
+    #: :data:`CLIENT_PREF_SAID` | :data:`CLIENT_PREF_TYPED`.
+    origin: str = CLIENT_PREF_SAID
+    #: Kept in a Local only turn: told only to a turn that stays on this
+    #: network.
+    local_only: bool = False
+    #: ``[{"quote" (≤ 160, the OWNER's own words, never the model's
+    #: argument), "thread_id", "where" (a folder NAME), "at", "link"}]``.
+    evidence_json: str = "[]"
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 __all__ = [
-    "KINDS", "KIND_CHAT", "KIND_CODE", "KIND_RUN", "KIND_TOOL_CODE", "RECAP_KEPT",
-    "RECAP_NONE", "WorkEntry", "WorkForgotten", "WorkRecap",
+    "CLIENT_ADDED", "CLIENT_CONFIRMED", "CLIENT_DECLINED", "CLIENT_FOLDER_ADDED",
+    "CLIENT_FOLDER_FOUND", "CLIENT_NOTICED", "CLIENT_PREF_CONFIRMED", "CLIENT_PREF_SAID",
+    "CLIENT_PREF_TYPED", "CLIENT_PROPOSED", "CLIENT_STATUSES", "KINDS", "KIND_CHAT",
+    "KIND_CODE", "KIND_RUN", "KIND_TOOL_CODE", "RECAP_KEPT", "RECAP_NONE", "WorkClient",
+    "WorkClientFolder", "WorkClientPreference", "WorkEntry", "WorkForgotten", "WorkRecap",
 ]
