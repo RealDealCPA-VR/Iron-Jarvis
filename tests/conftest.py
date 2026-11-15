@@ -371,6 +371,27 @@ def _isolate_subscription_cli_detection():
         ProviderManager._cli_signed_in = original_signed
 
 
+@pytest.fixture(autouse=True)
+def _forget_learned_windows():
+    """v1.497.0: a window a server named in a "prompt is too long" refusal is
+    remembered for the PROCESS (``chat_turn._LEARNED_WINDOWS``,
+    ``providers/reply_budget``), keyed by provider and model — and the shared
+    scripted lanes all answer as one model (``tests/_fakes/harness_lane.WHO``).
+    ``test_build_patience_v14220`` teaches it 200,000 tokens, so a later test
+    on the same worker planned against that window
+    (``test_harness_project_map_v1387`` read map limit 8000, not 2560: red on
+    CI once new files moved the two into one shard). Every test starts with
+    nothing learned. Only modules a test already imported are touched, so no
+    test pays for importing them."""
+    yield
+    ct = sys.modules.get("iron_jarvis.daemon.chat_turn")
+    if ct is not None:
+        getattr(ct, "_LEARNED_WINDOWS", {}).clear()
+    rb = sys.modules.get("iron_jarvis.providers.reply_budget")
+    if rb is not None and hasattr(rb, "forget_learned"):
+        rb.forget_learned()
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _isolate_launch_recipe_probes():
     """No test ever runs the developer's real ``claude``/``codex``/``pi`` (v1.238.0).
