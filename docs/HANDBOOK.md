@@ -2042,6 +2042,51 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## One client's notes stay with that client, and Iron Jarvis asks before it keeps what it guessed (v1.501.0)
+
+A review of the app against its own promises found places where something
+learned during one client's work could be told in another client's chat, and
+places where Iron Jarvis kept what a model guessed as if you had said it.
+This release closes them.
+
+- **Lessons, saved notes and an agent's notebook now follow the client
+  wall.** A note Iron Jarvis saves while working in a client's folder is told
+  only in that client's folders. The same goes for an agent's own notebook
+  and for lessons that came from a run or a chat in a client's folder.
+  Notes with no folder, and everything saved before this release, are told
+  as before. Your own pages (Memory, an agent's page) still show everything.
+- **Two chats no longer share one note.** A note saved "for this session" is
+  kept for the chat or run that wrote it. Before, a second chat saving under
+  the same name replaced the first one's note.
+- **A preference an agent guessed is a suggestion.** When you tell chat how
+  you like things done, it is kept at once, as before. When an agent run, a
+  schedule or a helper *notices* a preference, it now waits in
+  **Improvements** with the run it came from. It is used only after you
+  press **Keep**.
+- **Lessons condensed overnight are suggestions too.** With autonomy on,
+  Iron Jarvis sometimes condenses its notes on past runs into a few general
+  lessons. These now wait in Improvements, and the notes they came from are
+  kept until you answer. Before, they were used at once and the notes were
+  deleted.
+- **Every preference you kept is used.** Only eight lessons used to reach a
+  reply, so a ninth preference could silently stop applying while the Memory
+  page still listed it as kept. All kept preferences are now told.
+- **The tidy-up leaves a record.** When duplicate run notes are merged (once
+  a day, or with **Distill now** on the Memory page), Activity now says
+  which notes were merged.
+- **A skill is never replaced silently.** Saving a new skill under a name
+  you already have is refused; Iron Jarvis is told to update the existing
+  one, which keeps the version before the change.
+- **A changed note can be undone.** Undo on a saved note puts the earlier
+  text back.
+- **"Skip memory" reaches helpers.** A run set to skip memory no longer has
+  helpers that are given memory anyway.
+- **Tasks from your phone or another computer leave no run note.**
+
+Not changed: a preference an agent saved *before* this release cannot be
+told apart from one you stated, so it stays kept. Remove any you do not want
+on the Memory page.
+
 ## Resize the panel beside a coding session (v1.500.2)
 
 In Chat › Code and Build › Code, the panel on the right (plan, timeline,

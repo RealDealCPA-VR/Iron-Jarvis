@@ -255,7 +255,9 @@ def test_every_lessons_reader_in_src_is_known():
         "memory/graph.py",
         "memory/overview.py",
         "daemon/routes/learning.py",
-        "improvement/engine.py",
+        # v1.501.0: improvement/engine.py no longer reads ``.lessons(`` — an
+        # outcome is credited to the ids ``apply_to_prompt`` told that run
+        # (``LearningEngine.injected_into``), all confirmed when told.
     }, callers
     # v1.306.0: profile/share.py reads the CONFIRMED preference sentences for
     # the block it shares with Claude Code / Codex (confirmed_clause, pinned below).

@@ -2105,15 +2105,31 @@ class Orchestrator:
                 log.exception("outcome recording failed for session %s", session.id)
 
         # Self-correction: reflect on what happened into a durable lesson.
+        # v1.501.0 (north-star plan 1.9): NOT for a low-trust run (a phone or
+        # other-computer task, a child of one, or a run that read flagged
+        # content) — as the coding lessons skip a low-trust turn
+        # (``harness/library.REASON_LOW_TRUST``), a run that read something
+        # that lowered its trust does not write a note later runs learn from.
+        # The ROW is the record (a run tainted mid-run may hold a stale object).
         try:
-            self.p.learning.reflect(
-                session.id,
-                task=session.task,
-                summary=session.summary,
-                ok=session.status is SessionStatus.COMPLETED,
+            with session_scope(self.p.engine) as db:
+                _row = db.get(Session, session.id)
+                _trust = getattr(_row, "trust", None) if _row is not None else None
+            _low_trust = _TRUST_LOW in (
+                _normalize_trust(_trust), _normalize_trust(getattr(session, "trust", "")),
             )
-        except Exception:  # noqa: BLE001
-            log.exception("reflection failed for session %s", session.id)
+        except Exception:  # noqa: BLE001 — unreadable: the object in hand decides
+            _low_trust = _normalize_trust(getattr(session, "trust", "")) == _TRUST_LOW
+        if not _low_trust:
+            try:
+                self.p.learning.reflect(
+                    session.id,
+                    task=session.task,
+                    summary=session.summary,
+                    ok=session.status is SessionStatus.COMPLETED,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("reflection failed for session %s", session.id)
 
         # Skill learning (v1.135.0): derive skill uses + mint suggest-only
         # create/refine candidates from this finished run. Runs AFTER

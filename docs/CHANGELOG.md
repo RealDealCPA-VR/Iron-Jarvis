@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.501.0
+
+**One client's notes stay with that client, and Iron Jarvis asks before it keeps what it guessed.** A review of the app against its own promises found places where something learned during one client's work could be told in another client's chat, and places where Iron Jarvis kept what a model guessed as if you had said it.
+
 ## v1.500.2
 
 **Resize the panel beside a coding session.** In Chat › Code and Build › Code, the panel on the right (plan, timeline, changes, usage, files and the rest) can now be made wider or narrower: drag its left edge.
@@ -77,7 +81,3 @@
 ## v1.490.2
 
 **A second look, and fewer cards for memory.** **A request the first reading missed still gets its card.** Since v1.490.1 two readings must agree before a card shows.
-
-## v1.490.1
-
-**A card only for what you asked.** **Jarvis no longer puts up an approval card for something you did not ask for.** With Feature lookup on, a remark such as "my goal this year is to get my class to stop guessing at units" could bring an approval card for a goal, "what styles are popular right now?" a card for a web search, and "my eyes are not what they were" a card for the text size.

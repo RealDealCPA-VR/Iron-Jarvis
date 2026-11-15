@@ -9,6 +9,7 @@ Lifecycle state transitions are persisted and emitted on the event bus.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import re
@@ -645,6 +646,35 @@ def run_client_folder(config, session) -> str:
         return ws if ws and is_direct_workspace(config, ws) else ""
     except Exception:  # noqa: BLE001 — no folder is the safe answer
         return ""
+
+
+#: SKIP MEMORY SPREADS DOWN (v1.501.0, north-star 1.4): True inside a run
+#: whose options say ``skip_memory``. A child run awaited inside it (a
+#: ``delegate`` helper, a ``spawn_agent`` worker: their tasks copy this
+#: context) reads it as its own, the way Local only reaches a child through
+#: ``egress.local_only_scope``. A child's OWN options used to decide alone,
+#: and nobody set them, so a helper of a skip-memory run was told every
+#: lesson, the memory index and the recall block. Set and reset around the
+#: run body (``run``), never past it.
+SKIP_MEMORY: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "iron_jarvis_skip_memory", default=False
+)
+
+
+def run_skips_memory(session) -> bool:
+    """Does ``session`` run without the memory injections: its own options
+    say ``skip_memory``, or the run it was started inside does
+    (:data:`SKIP_MEMORY`)? Never raises (unsure reads its own options)."""
+    from ..scheduling.knobs import session_options as _session_options
+
+    try:
+        own = _session_options(session).get("skip_memory") is True
+    except Exception:  # noqa: BLE001 — an unreadable row has no options
+        own = False
+    try:
+        return own or SKIP_MEMORY.get() is True
+    except Exception:  # noqa: BLE001
+        return own
 
 
 async def run_client_wall(platform, session):
@@ -2241,11 +2271,20 @@ class AgentRuntime:
             from ..workmap.clients import wall as _client_wall
 
             _turn_wall = await run_client_wall(self.p, session)
-            with _client_wall.turn_scope(_turn_wall):
-                if not _lo:
-                    return await self._run_body(session, agent_def, parent_id)
-                with _egress.local_only_scope(True):
-                    return await self._run_body(session, agent_def, parent_id)
+            # SKIP MEMORY (v1.501.0, north-star 1.4): set for the run body so
+            # every child run awaited inside it skips memory too.
+            _skip_token = SKIP_MEMORY.set(run_skips_memory(session))
+            try:
+                with _client_wall.turn_scope(_turn_wall):
+                    if not _lo:
+                        return await self._run_body(session, agent_def, parent_id)
+                    with _egress.local_only_scope(True):
+                        return await self._run_body(session, agent_def, parent_id)
+            finally:
+                try:
+                    SKIP_MEMORY.reset(_skip_token)
+                except (ValueError, LookupError, RuntimeError):  # another context's token
+                    SKIP_MEMORY.set(False)
         except RunStoppedByUser as stop:
             return await self._end_stopped(stop.run, session)
         except ContextTooSmall as small:
@@ -2464,9 +2503,12 @@ class AgentRuntime:
             files = getattr(getattr(self.p, "agents_registry", None), "files", None)
             if files is None:
                 return ""
+            # v1.501.0 (north-star 1.3): the run's client wall decides which
+            # notes it hears; the engine reads the client record.
             block = str(
                 files.notebook_block(
-                    slug, event_bus=self.p.event_bus, session_id=session_id
+                    slug, event_bus=self.p.event_bus, session_id=session_id,
+                    engine=getattr(self.p, "engine", None),
                 )
                 or ""
             )
@@ -2716,7 +2758,8 @@ class AgentRuntime:
         from ..scheduling.knobs import session_options as _session_options
 
         _run_options = _session_options(session)
-        skip_memory = _run_options.get("skip_memory") is True
+        # v1.501.0 (north-star 1.4): or the run this one was started inside.
+        skip_memory = run_skips_memory(session)
         # RESUME (v1.337.0): Continue on a job a restart cut off names the
         # run it continues (`options.resume_run`). When that run kept its
         # conversation (`agents/transcript`), this run starts FROM it — the

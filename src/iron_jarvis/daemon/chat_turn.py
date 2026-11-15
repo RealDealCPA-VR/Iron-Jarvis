@@ -11184,10 +11184,17 @@ async def _gather_grounding(
             # Every store: files, notes, memory graph, lessons, past sessions
             # and — v1.142.0 — past CONVERSATIONS (project knowledge is the
             # project block's).
+            # v1.501.0 (north-star 1.2): ``memory_session`` is this chat as
+            # ``memory_write`` keys its session entries, so the chat recalls
+            # its own notes and never another chat's. Both lanes build their
+            # grounding here.
+            from ..memory.origin import chat_tag as _chat_tag
+
             return _fab.ground(
                 recall_query,
                 project_id=pid,
                 sources=["files", "notes", "memory", "lessons", "sessions", "chats"],
+                memory_session=_chat_tag(getattr(body, "thread_id", "")),
             ) or ""
         except Exception:  # noqa: BLE001 — grounding must never BREAK a turn,
             # but never fail silently either: a bare ``pass`` here swallowed a

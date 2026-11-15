@@ -114,7 +114,10 @@ class NotebookTool(Tool):
             return ToolResult(ok=False, output="", error=NO_NOTEBOOK)
         try:
             if action == "read":
-                notes = await asyncio.to_thread(files.read_notes, slug)
+                # v1.501.0 (north-star 1.3): the notebook as THIS run may be
+                # told it (the client wall), the same text the run was shown
+                # at its start; the raw file stays the owner's page's.
+                notes = await asyncio.to_thread(lambda: files.told_notes(slug, engine=engine))
                 path = str(files.folder(slug) / "NOTES.md")
                 return ToolResult(
                     ok=True,
@@ -136,7 +139,10 @@ class NotebookTool(Tool):
                     ok=False, output="",
                     error="text is required for replace (use append to add a line)",
                 )
-            path = await asyncio.to_thread(files.write_notes, slug, text)
+            # v1.501.0 (north-star 1.3): the engine lets the write KEEP the
+            # notes this run was not shown (another client's) instead of
+            # replacing them away.
+            path = await asyncio.to_thread(lambda: files.write_notes(slug, text, engine=engine))
             return ToolResult(
                 ok=True,
                 output=f"notebook replaced at {path}",

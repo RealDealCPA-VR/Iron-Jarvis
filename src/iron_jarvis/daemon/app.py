@@ -1415,15 +1415,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 not in {"0", "false", "no", "off"}):
 
             async def _lesson_compact_loop() -> None:
+                from ..learning.engine import tidy_pass
+
                 await asyncio.sleep(300)  # never compete with boot
                 while True:
                     try:
-                        removed = await asyncio.to_thread(platform.learning.dedup)
-                        if removed:
-                            log.info("lesson dedup removed %d echo(es)", removed)
+                        # v1.501.0 (north-star plan 1.7): ONE recorded pass —
+                        # dedup, then (with autonomy and a real model) the
+                        # condensed lessons, which wait in Improvements as
+                        # suggestions (D3). It publishes one memory.updated
+                        # event naming what it merged and suggested.
                         raw = await asyncio.to_thread(
                             platform.learning.raw_reflection_count
                         )
+                        _complete = None
                         if getattr(platform.config, "autonomy_enabled", False) and raw >= 20:
                             adapter, used = _failover_adapter("mock")
                             if adapter is not None:
@@ -1442,8 +1447,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
                                     )
                                     return resp.text or ""
 
-                                res = await platform.learning.distill(_complete)
-                                log.info("lesson distillation: %s", res)
+                        res = await tidy_pass(
+                            platform.learning, event_bus=platform.event_bus,
+                            complete=_complete, min_notes=20,
+                        )
+                        if res["deduped"] or res["suggested"]:
+                            log.info(
+                                "lesson tidy-up: %d echo(es) merged, %d suggestion(s)",
+                                res["deduped"], len(res["suggested"]),
+                            )
                         _tick("lesson_compaction", True)
                     except asyncio.CancelledError:
                         raise

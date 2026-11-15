@@ -55,13 +55,22 @@ def test_distill_replaces_raw_reflections(platform):
         return json.dumps(["Break work into small verified steps.", "State assumptions up front."])
 
     res = asyncio.run(learning.distill(fake_complete))
-    assert res == {"reviewed": 6, "distilled": 2, "removed": 6}
+    # v1.501.0 (decision D3): the condensed lessons are SUGGESTIONS and the
+    # notes stay until the owner answers; keeping them replaces the notes.
+    assert (res["reviewed"], res["distilled"], res["removed"]) == (6, 2, 0)
+    texts = _texts(learning)
+    assert "Break work into small verified steps." not in texts  # waiting, not kept
+    assert sum(t.startswith("Worked well for") for t in texts) == 6
+    from iron_jarvis.learning import preferences as prefs
+
+    for s in res["suggested"]:
+        prefs.keep(platform.engine, s["id"])
     texts = _texts(learning)
     assert "Break work into small verified steps." in texts
     assert "Keep replies short" in texts  # preference untouched
     assert not any(t.startswith("Worked well for") for t in texts)
     distilled = [r for r in learning.lessons(limit=100) if r.source == "distilled"]
-    assert all(r.weight == 2 for r in distilled)
+    assert len(distilled) == 2 and all(r.weight == 2 for r in distilled)
 
 
 def test_distill_noop_when_too_few_raws(platform):

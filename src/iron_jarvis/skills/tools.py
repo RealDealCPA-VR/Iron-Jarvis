@@ -161,7 +161,8 @@ class SkillCreateTool(Tool):
         "validated). The skill appears on the Skills page immediately and is "
         "searchable via skill_search. Use after solving something non-obvious "
         "— e.g. a validated financial-statement formula workflow, or the "
-        "run_code script that cracked a task."
+        "run_code script that cracked a task. A name the user already has is "
+        "refused: change that skill with skill_update instead."
     )
     input_schema = {
         "type": "object",
@@ -194,6 +195,20 @@ class SkillCreateTool(Tool):
 
         skills_root = self._config.home / "skills"
         name = str(args.get("name", ""))
+        # NEVER A SILENT REPLACE (v1.501.0, north-star 1.10): a skill of the
+        # same name (the same folder) is the user's work; ``save_skill`` would
+        # overwrite it in place with no earlier version kept. Refused before
+        # anything is written, pointing to ``skill_update``, which keeps the
+        # version before the change in ``.history``.
+        if name.strip() and (skills_root / slugify(name) / SKILL_FILE).exists():
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"nothing was saved: a skill named `{name.strip()}` already "
+                    "exists. To change it, use skill_update (it keeps the version "
+                    "before the change); to keep both, choose another name"
+                ),
+            )
         # A SAVED SCRIPT (v1.473.0): checked before anything is written, so a
         # script that cannot be saved never leaves a skill that says it has one.
         script = args.get("script")
@@ -208,10 +223,9 @@ class SkillCreateTool(Tool):
             )
         # Provenance (v1.297.0): a skill the LOOP CREATES is "agent"-made and
         # remembers the session — the curator's sweep only ever considers
-        # agent/proposal skills, never the user's own. ONLY on a new file: an
-        # overwrite of an existing slug keeps that file's provenance (the same
-        # rule `learning.approve` follows), or an agent rewriting the user's
-        # own skill would turn it into a sweep candidate.
+        # agent/proposal skills, never the user's own. ONLY on a new file (an
+        # existing slug is refused above since v1.501.0; the check stays for
+        # a file that appeared in between, which keeps its provenance).
         provenance: dict[str, Any] = {}
         if not (skills_root / slugify(name) / SKILL_FILE).is_file():
             provenance = {

@@ -24,6 +24,16 @@ class MemoryRecord(SQLModel, table=True):
     text: str = ""
     embedding_json: str = "[]"
     created_at: datetime = Field(default_factory=utcnow)
+    # -- v1.501.0 (north-star 1.2): WHERE an entry was written, for the client
+    # wall (additive, nullable columns: an older DB gains them as NULL through
+    # core.db's additive reconciler). Set by ``memory_write`` only; NULL = a row
+    # written before this change or by the owner's own Memory page, told as
+    # before (``memory/origin.py``).
+    #: The writing session (``origin.session_tag``: a run's id, ``chat:<thread>``).
+    origin_session: str | None = None
+    #: The folder the work was in, as the wall keys it (``TurnWall.folder_key``;
+    #: "" = no folder).
+    origin_folder: str | None = None
 
 
 class MemoryLinkRecord(SQLModel, table=True):

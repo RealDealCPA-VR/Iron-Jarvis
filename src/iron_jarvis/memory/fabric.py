@@ -197,6 +197,41 @@ def _clip(text: str, n: int = _SNIPPET_CHARS) -> str:
     return text if len(text) <= n else text[: n - 1] + "…"
 
 
+#: The two evidence links a lesson's source is read from (v1.501.0): a run's
+#: page (``/sessions/<id>``, the learning engine's run evidence) and a chat
+#: (``/chat?thread=<id>``, a noticed correction's).
+_RUN_LINK_RX = re.compile(r"^/sessions/([A-Za-z0-9_.:-]+)")
+_CHAT_LINK_RX = re.compile(r"^/chat\?(?:.*&)?thread=([A-Za-z0-9_.:-]+)")
+#: Sources read per lesson, at most.
+_LESSON_SOURCES_MAX = 8
+
+
+def _lesson_sources(lesson: Any) -> "list[tuple[str, str]]":
+    """The ``(passage kind, id)`` sources a lesson's evidence links (a run,
+    a chat), for the client wall. Unreadable evidence names no source.
+    Never raises."""
+    raw = getattr(lesson, "evidence_json", None)
+    if not raw:
+        return []
+    try:
+        from ..workmap.clients.wall import PASSAGE_CHAT, PASSAGE_RUN
+
+        data = json.loads(raw)
+        out: list[tuple[str, str]] = []
+        for item in data if isinstance(data, list) else []:
+            link = str(item.get("link") or "") if isinstance(item, dict) else ""
+            run = _RUN_LINK_RX.match(link)
+            chat = _CHAT_LINK_RX.match(link)
+            ref = (PASSAGE_RUN, run.group(1)) if run else (PASSAGE_CHAT, chat.group(1)) if chat else None
+            if ref is not None and ref not in out:
+                out.append(ref)
+            if len(out) >= _LESSON_SOURCES_MAX:
+                break
+        return out
+    except Exception:  # noqa: BLE001 — unreadable evidence names no source
+        return []
+
+
 class MemoryFabric:
     """Federated recall over every Iron Jarvis memory store.
 
@@ -271,9 +306,15 @@ class MemoryFabric:
         project_id: str | None = None,
         sources: "list[str] | None" = None,
         min_score: float = 0.0,
+        session_id: "str | None" = None,
     ) -> list[FabricHit]:
         """Top-``k`` hits across the selected stores, ranked by score desc and
-        de-duplicated by (source, ref) and near-identical snippet."""
+        de-duplicated by (source, ref) and near-identical snippet.
+
+        ``session_id`` (v1.501.0, north-star 1.2): the turn's own session as
+        ``memory_write`` keys it (``memory.origin.session_tag``); a ``session``
+        memory entry written by another session is not recalled, and none is
+        when it is None."""
         query = (query or "").strip()
         if not query:
             return []
@@ -296,7 +337,9 @@ class MemoryFabric:
                 query, per_source, qtokens, self._project_bases(project_id)
             )))
         if "memory" in wanted:
-            jobs.append(("memory", lambda: self._memory(query, per_source)))
+            jobs.append(("memory", lambda: self._memory(
+                query, per_source, session_id=session_id, project_id=project_id
+            )))
         if "knowledge" in wanted and project_id:
             jobs.append(("knowledge", lambda: self._knowledge(query, per_source, project_id)))
         if "lessons" in wanted:
@@ -329,10 +372,18 @@ class MemoryFabric:
         char_budget: int = 1200,
         event_bus: Any = None,
         session_id: "str | None" = None,
+        memory_session: "str | None" = None,
     ) -> str:
         """A compact, prompt-ready block of the most relevant memory, or ``""``
         when nothing relevant surfaces. Safe to concatenate onto any system
         prompt — bounded by ``char_budget`` and never raises.
+
+        ``memory_session`` (v1.501.0, north-star 1.2): the turn's own session
+        as ``memory_write`` keys its ``session`` entries
+        (``memory.origin.session_tag`` / ``chat_tag``), so the turn recalls its
+        own and no other session's. It is NOT ``session_id``, which only names
+        the turn in a ``context.blocked`` event (a chat's is always "chat");
+        when it is None, ``session_id`` is used.
 
         v1.298.0: every retrieved snippet is SCANNED for prompt injection
         before it rides the prompt (``core/promptguard``, source "memory") —
@@ -348,7 +399,8 @@ class MemoryFabric:
         """
         try:
             hits = self.recall(
-                query, k=k, project_id=project_id, sources=sources, min_score=0.05
+                query, k=k, project_id=project_id, sources=sources, min_score=0.05,
+                session_id=memory_session if memory_session is not None else session_id,
             )
         except Exception:  # noqa: BLE001 — grounding must never break a run
             return ""
@@ -592,14 +644,33 @@ class MemoryFabric:
             )
         return out
 
-    def _memory(self, query: str, k: int) -> list[FabricHit]:
+    def _memory(
+        self,
+        query: str,
+        k: int,
+        *,
+        session_id: "str | None" = None,
+        project_id: "str | None" = None,
+    ) -> list[FabricHit]:
+        """The layered memory entries. v1.501.0 (north-star 1.2): an entry
+        ``memory_write`` stamped is recalled only in its scope (a ``session``
+        entry in ``session_id``, a ``project`` entry in its project or folder)
+        and only past THE CLIENT WALL (``memory.origin.told``: the turn in
+        flight, failing closed like ``_sessions``); an entry with no stamp
+        (written before, or on the owner's own Memory page) is told as
+        before. Asked for a surplus so a walled entry costs no slot."""
         mem = self.memory
         if mem is None:
             return []
         try:
-            pairs = mem.search(query, k=k)
+            pairs = mem.search(query, k=max(k, 1) * 3)
         except Exception:  # noqa: BLE001
             return []
+        from .origin import told
+
+        verdicts = told(self.engine, [rec for rec, _s in pairs],
+                        session=session_id, project_id=project_id)
+        pairs = [p for p, ok in zip(pairs, verdicts) if ok][:k]
         out: list[FabricHit] = []
         for rec, score in pairs:
             out.append(
@@ -665,19 +736,32 @@ class MemoryFabric:
         return scored[:k]
 
     def _lessons(self, k: int, qtokens: set[str]) -> list[FabricHit]:
+        """Lessons, by lexical relevance and weight. v1.501.0 (north-star
+        1.1): task reflections are left out, as ``apply_to_prompt`` leaves
+        them out (the learning engine's one ``_PROMPT_EXCLUDED_SOURCES``),
+        and a lesson whose evidence names a source run or chat passes THE
+        CLIENT WALL by that source (``_walled``; every source must be told).
+        When the wall cannot be read no sourced lesson is; a lesson with no
+        source (a stated preference, a note on a reply) is told as before."""
         learning = self.learning
         if learning is None:
             return []
         try:
-            lessons = learning.lessons(limit=_MAX_LESSON_SCAN)
+            from ..learning.engine import _PROMPT_EXCLUDED_SOURCES
+
+            lessons = learning.lessons(
+                limit=_MAX_LESSON_SCAN, exclude_sources=_PROMPT_EXCLUDED_SOURCES
+            )
         except Exception:  # noqa: BLE001
             return []
+        relevant = [(les, _lexical(qtokens, getattr(les, "text", ""))) for les in lessons]
+        relevant = [(les, rel) for les, rel in relevant if rel > 0.0]
+        kept = {id(les) for les in self._walled_lessons([les for les, _r in relevant])}
         out: list[FabricHit] = []
-        for les in lessons:
-            text = getattr(les, "text", "")
-            rel = _lexical(qtokens, text)
-            if rel <= 0.0:
+        for les, rel in relevant:
+            if id(les) not in kept:
                 continue
+            text = getattr(les, "text", "")
             # A high-weight lesson (a stated preference/feedback) gets a small
             # boost so durable guidance surfaces above a passing reflection.
             weight = float(getattr(les, "weight", 1)) + float(
@@ -738,6 +822,33 @@ class MemoryFabric:
         except Exception:  # noqa: BLE001 — unsure: nothing from past work
             log.debug("memory fabric: the client wall could not be read", exc_info=True)
             return None
+
+    def _walled_lessons(self, lessons: list) -> list:
+        """THE CLIENT WALL over lessons (v1.501.0, north-star 1.1): the
+        lessons in ``lessons`` the turn in flight may be told. A lesson whose
+        evidence links a source (:func:`_lesson_sources`: a run, a chat) is
+        told only when EVERY source passes ``_walled``; when the wall cannot
+        be read, no sourced lesson is. A lesson with no source is told as
+        before. Never raises."""
+        sources = [_lesson_sources(les) for les in lessons]
+        if not any(sources):
+            return lessons
+        passages = [
+            (kind, ref, "", str(getattr(les, "text", "") or ""))
+            for les, refs in zip(lessons, sources) for kind, ref in refs
+        ]
+        verdicts = self._walled(passages)
+        out: list = []
+        at = 0
+        for les, refs in zip(lessons, sources):
+            if not refs:
+                out.append(les)
+                continue
+            mine = verdicts[at : at + len(refs)] if verdicts is not None else []
+            at += len(refs)
+            if verdicts is not None and all(mine):
+                out.append(les)
+        return out
 
     def _sessions_indexed(self, query: str, k: int) -> list[FabricHit]:
         """Session hits from the history index, enriched with live status.

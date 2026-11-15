@@ -141,8 +141,13 @@ def test_feedback_for_returns_session_feedback(learning):
 
 
 async def test_remember_preference_tool_stores_lesson(learning, ctx):
+    # v1.501.0 (decision D2): kept at once only in a CHAT turn (the chat
+    # lanes' tool session "chat"); an agent run's call is a suggestion
+    # (tests/test_north_star_learning_consent_v1501.py).
+    from dataclasses import replace
+
     tool = RememberPreferenceTool(learning)
-    res = await tool.execute({"text": "User prefers dark mode mockups"}, ctx)
+    res = await tool.execute({"text": "User prefers dark mode mockups"}, replace(ctx, session_id="chat"))
 
     assert res.ok
     lessons = learning.lessons(scope="user")

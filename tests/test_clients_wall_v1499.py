@@ -712,7 +712,10 @@ def test_every_recall_and_history_search_caller_runs_under_a_known_wall_mode():
             text = (SRC / route).read_text(encoding="utf-8")
             assert "wall.owner_screen()" in text, route
     fabric = (SRC / "memory/fabric.py").read_text(encoding="utf-8")
-    assert fabric.count("self._walled(") == 2  # chats and sessions
+    # chats, sessions and (v1.501.0, north-star 1.1) lessons by their source
+    assert fabric.count("self._walled(") == 3
+    # v1.501.0 (north-star 1.2): memory entries pass the wall through origin.told
+    assert "told(self.engine" in fabric
     tools = (SRC / "search/tools.py").read_text(encoding="utf-8")
     assert "wall.current()" in tools and "on_owner_screen()" in tools
 

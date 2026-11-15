@@ -14,7 +14,9 @@ scores. It does four things, ordered from cheapest/always-on to gated:
    plus a ``weight_bonus`` this engine maintains: lessons whose sessions score
    BELOW the global baseline decay, those that score ABOVE are rewarded. The
    learning layer orders ``recall_lessons`` / prompt injection by that sum, so a
-   helpful lesson surfaces first and a harmful one sinks.
+   helpful lesson surfaces first and a harmful one sinks. v1.501.0: only the
+   lessons a run was actually told are credited, and the owner's own
+   preferences get no bonus (every kept one is told).
 3. :meth:`reflect` — the model-driven step. ON-DEMAND / cadence-gated only (never
    auto-fires by default or in tests). It picks recent LOW-scoring sessions, makes
    ONE lightweight, injectable, mock-safe model call, and returns STRUCTURED
@@ -51,9 +53,9 @@ log = get_logger("improvement")
 # gathered context dict and returns a list of suggestions (or None to fall back).
 Reflector = Callable[[dict[str, Any]], "Any | None | Awaitable[Any]"]
 
-#: How many active user-scope lessons we attribute a session's outcome to (mirrors
-#: LearningEngine.apply_to_prompt's default injection window).
-_LESSON_LIMIT = 8
+#: v1.501.0: a lesson of this source is the owner's own (``learning.engine.
+#: stated_clause``); no outcome bonus is written on it.
+_STATED_SOURCE = "preference"
 #: Minimum samples before a lesson's outcome stats move its effective weight.
 _MIN_SAMPLES = 2
 #: Scale + cap for the score->weight adjustment (kept small + bounded).
@@ -183,7 +185,11 @@ class ImprovementEngine:
         name = str(agent_name or "").strip() or session_name or agent_type
         tools = self._tools_used(session_id)
         if lessons_applied is None:
-            lessons_applied = self._active_lesson_ids()
+            # v1.501.0 (north-star plan 1.8): credit ONLY what this run was
+            # told (``LearningEngine.apply_to_prompt`` remembers it per run),
+            # never whatever ranks top now — that credited task notes no
+            # prompt reads, and lessons added after the run started.
+            lessons_applied = self._injected_lesson_ids(session_id)
         lessons_applied = [str(x) for x in lessons_applied]
 
         now = utcnow()
@@ -227,6 +233,13 @@ class ImprovementEngine:
                 s = db.get(LessonStatRecord, lid)
                 lr = db.get(LessonRecord, lid)
                 if lr is None:
+                    continue
+                if lr.source == _STATED_SOURCE:
+                    # v1.501.0 (plan 1.8): the owner's own preference is never
+                    # ranked by how runs scored; its stats are still kept.
+                    if lr.weight_bonus:
+                        lr.weight_bonus = 0.0
+                        db.add(lr)
                     continue
                 if s is not None and s.applied_count >= _MIN_SAMPLES:
                     avg = s.score_sum / s.applied_count
@@ -359,12 +372,15 @@ class ImprovementEngine:
             seen.setdefault(t.tool, None)
         return list(seen)
 
-    def _active_lesson_ids(self) -> list[str]:
+    def _injected_lesson_ids(self, session_id: str) -> list[str]:
+        """The lessons ``apply_to_prompt`` told THIS run (v1.501.0); ``[]``
+        when none were told (``skip_memory``) or the daemon restarted since."""
         learning = getattr(self.p, "learning", None)
-        if learning is None:
+        injected = getattr(learning, "injected_into", None)
+        if injected is None:
             return []
         try:
-            return [l.id for l in learning.lessons(scope="user", limit=_LESSON_LIMIT)]
+            return list(injected(session_id))
         except Exception:  # noqa: BLE001
             return []
 

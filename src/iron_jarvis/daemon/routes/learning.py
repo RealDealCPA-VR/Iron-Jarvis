@@ -39,13 +39,21 @@ def register(app: FastAPI, d) -> None:
         into a few short generalized lessons — only through a REAL provider
         (mock distillation would fabricate lessons into every future prompt).
         Honest note when no real model is connected."""
-        out: dict[str, Any] = {"deduped": d.platform.learning.dedup(), "distilled": 0, "removed": 0}
-        if not distill:
-            return out
-        adapter, used = d._failover_adapter("mock")
-        if adapter is None:
-            # v1.424.0 review (D1): names a key left out by the money rule.
-            out["note"] = "no real model connected — deterministic dedup only" + (getattr(d, "_paid_only_note", None) or (lambda: ""))()
+        # v1.501.0 (north-star plan 1.7): the press goes through the SAME
+        # recorded pass as the daily loop (``learning.engine.tidy_pass``): the
+        # dedup runs off the loop and one ``memory.updated`` event names what
+        # was merged and what was suggested. It used to dedup on the loop and
+        # leave no record of the rows it removed.
+        from ...learning.engine import tidy_pass
+
+        out: dict[str, Any] = {"deduped": 0, "distilled": 0, "removed": 0}
+        adapter, used = d._failover_adapter("mock") if distill else (None, "")
+        if not distill or adapter is None:
+            res = await tidy_pass(d.platform.learning, event_bus=d.platform.event_bus)
+            out["deduped"] = res["deduped"]
+            if distill:
+                # v1.424.0 review (D1): names a key left out by the money rule.
+                out["note"] = "no real model connected — deterministic dedup only" + (getattr(d, "_paid_only_note", None) or (lambda: ""))()
             return out
 
         from ...providers.adapters.base import LLMMessage
@@ -63,12 +71,15 @@ def register(app: FastAPI, d) -> None:
             return resp.text or ""
 
         try:
-            res = await d.platform.learning.distill(_complete)
+            res = await tidy_pass(
+                d.platform.learning, event_bus=d.platform.event_bus, complete=_complete
+            )
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001 — unusable model reply etc.
             raise HTTPException(status_code=422, detail=f"distillation failed: {exc}")
-        out.update(res)
+        out["deduped"] = res["deduped"]
+        out.update(res.get("distill") or {})
         return out
 
     @app.post("/lessons")

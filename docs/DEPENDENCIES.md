@@ -169,7 +169,7 @@ function runs.
 | `git` | build | 3 | **4**: agents, harness, hosted, sandbox | core | none |
 | `goals` | automations | 5 | **4**: daemon, inbox, platform, settings | core | agents, eval, providers, tools, workflows |
 | `guide` | memory | 3 | **4**: agents, daemon, onboarding, platform | tools | __init__, agents, capability_search, core, personas, settings, workflows |
-| `memory` | memory | 17 | **4**: agents, daemon, inbox, platform | computeruse, core, ltm, search, tools | detections, learning, profile, providers, workmap |
+| `memory` | memory | 18 | **4**: agents, daemon, inbox, platform | computeruse, core, ltm, search, tools | detections, learning, profile, providers, workmap |
 | `search` | chat | 5 | **4**: core, daemon, memory, platform | core, tools | agents, providers, workmap |
 | `webhooks` | automations | 7 | **4**: daemon, integrations, platform, settings | core, tools | reflex, settings |
 | `artifacts` | agents | 3 | **3**: creative, daemon, platform | core | none |

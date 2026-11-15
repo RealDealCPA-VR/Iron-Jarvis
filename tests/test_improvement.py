@@ -100,9 +100,12 @@ def test_record_outcome_never_raises_on_unknown_session(platform):
 
 
 def test_negative_lesson_decays_positive_lesson_gains(platform):
-    good = platform.learning.note_preference("Good: cite sources")
-    bad = platform.learning.note_preference("Bad: ramble on")
-    assert good.weight == bad.weight == 5  # same static base
+    # v1.501.0 (north-star plan 1.8): the bonus moves only lessons the owner
+    # did not STATE (a kept preference is never ranked by run scores), so
+    # this uses lessons from feedback.
+    good = platform.learning._add_lesson("Good: cite sources", source="feedback", weight=3)
+    bad = platform.learning._add_lesson("Bad: ramble on", source="feedback", weight=3)
+    assert good.weight == bad.weight == 3  # same static base
 
     # Interleave so each lesson's LAST attribution sees the full score mix.
     for _ in range(3):

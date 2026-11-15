@@ -4,7 +4,8 @@ Captures two signals and turns them into durable, reusable *lessons*:
 
 * explicit **feedback** (thumbs up/down + comment) the user leaves on a session;
 * automatic **reflection** the orchestrator runs after each session completes;
-* **preferences** the agent infers mid-conversation and chooses to remember.
+* **preferences** the user states in chat (kept at once) or an agent run
+  infers (v1.501.0: a suggestion that waits for the user to keep it).
 
 The payoff is :meth:`apply_to_prompt`: before every run, the accumulated lessons
 are appended to the agent's system prompt — so each interaction makes Iron Jarvis
@@ -22,14 +23,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
-from typing import Awaitable, Callable
+import threading
+from collections import OrderedDict
+from typing import Any, Awaitable, Callable
 
-from sqlalchemy import Engine, func, or_
+from sqlalchemy import Engine, case, func, or_
 from sqlmodel import select
 
 from ..core.db import session_scope
-from .models import STATUS_CONFIRMED, FeedbackRecord, LessonRecord
+from ..core.ids import utcnow
+from .models import STATUS_CONFIRMED, STATUS_PROPOSED, FeedbackRecord, LessonRecord
+
+log = logging.getLogger(__name__)
 
 #: Heading under which lessons are injected into the system prompt.
 _LESSONS_HEADING = "\n\n# What I've learned about working with you\n"
@@ -57,6 +64,37 @@ _DISTILL_BATCH = 40
 #: Ceiling on lessons a distillation pass may produce.
 _DISTILL_MAX_OUT = 8
 
+#: v1.501.0 (north-star plan 1.8): the most characters of lesson lines one
+#: prompt carries. EVERY kept preference (``source="preference"``, the
+#: owner's own words or a suggestion they kept) is told first (highest weight,
+#: then newest) until this is spent; then up to ``limit`` lessons the owner did not state
+#: (feedback, condensed lessons) by effective weight, in what is left. It was
+#: a count of eight, so a ninth kept preference — or one an unrelated run's
+#: score had sunk — reached no prompt while the Memory page listed it as kept.
+LESSONS_BUDGET_CHARS = 6000
+#: Most kept preferences read for one prompt (each is at most a few hundred
+#: characters, so the budget, not this, is the real bound).
+_STATED_SCAN = 400
+#: Runs whose injected lessons are remembered for outcome credit, and the most
+#: lesson ids kept per run (process memory: a restart forgets, and that run
+#: credits nothing rather than whatever ranks top at scoring time).
+_INJECTED_RUNS = 512
+_INJECTED_PER_RUN = 200
+
+#: A tidy-up event names at most this many rows of each kind.
+_TIDY_EVENT_ROWS = 50
+#: Text kept per row a tidy-up event names.
+_TIDY_TEXT = 160
+
+
+def stated_clause():
+    """The SQL condition "the owner stated (or kept) this preference"
+    (v1.501.0): ``source == "preference"``. Such a row reaches every prompt
+    under the character budget and no outcome bonus moves it — the owner's
+    word is not ranked by how unrelated runs scored. (A row an agent run
+    wrote before v1.501.0 was stored the same way and cannot be told apart.)"""
+    return LessonRecord.source == "preference"
+
 
 def _norm(text: str) -> str:
     """Normalize for duplicate detection: lowercase, collapse non-alphanumerics."""
@@ -68,6 +106,10 @@ class LearningEngine:
 
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
+        # v1.501.0 (plan 1.8): {session id: [lesson ids apply_to_prompt told
+        # that run]} — the ONLY lessons an outcome is credited to.
+        self._injected: "OrderedDict[str, list[str]]" = OrderedDict()
+        self._injected_lock = threading.Lock()
 
     # -- feedback -----------------------------------------------------------
     def record_feedback(
@@ -147,6 +189,17 @@ class LearningEngine:
         notify_changed()
         return row
 
+    def suggest_preference(self, text: str, *, evidence: list[dict]) -> "tuple[LessonRecord | None, str]":
+        """v1.501.0 (decision D2): a preference an agent run (a schedule, a
+        mission, a helper) GUESSED — the owner did not say it in a chat turn
+        — waits in Improvements as a suggestion with the run as ``evidence``
+        and reaches no prompt until the owner keeps it. Secrets are masked as
+        in :meth:`note_preference`. Returns ``(row, outcome)``; see
+        ``preferences.mint_noticed``."""
+        from .preferences import mint_noticed
+
+        return mint_noticed(self.engine, without_secrets((text or "").strip()), evidence=evidence)
+
     # -- reflection ---------------------------------------------------------
     def reflect(
         self,
@@ -168,7 +221,7 @@ class LearningEngine:
         if not ok:
             label = task or "a recent task"
             text = f"Task '{label}' did not fully succeed — revisit the approach."
-            return self._add_lesson(text, source="reflection", weight=1)
+            return self._add_lesson(text, source="reflection", weight=1, **_run_evidence(session_id, text))
 
         # Success: only worth storing if there's a reusable nugget.
         note = summary or task
@@ -177,7 +230,7 @@ class LearningEngine:
         if len(note) > _MAX_NOTE:
             note = note[: _MAX_NOTE - 1].rstrip() + "…"
         text = f"Worked well for '{task}': {note}" if task else note
-        return self._add_lesson(text, source="reflection", weight=1)
+        return self._add_lesson(text, source="reflection", weight=1, **_run_evidence(session_id, text))
 
     # -- retrieval / injection ---------------------------------------------
     def lessons(
@@ -201,8 +254,14 @@ class LearningEngine:
         actually been helping surfaces ahead of one that has been hurting. (NULL
         bonus on a pre-existing row is coalesced to 0.) ``scope=None`` returns
         lessons across all scopes.
+
+        v1.501.0 (plan 1.8): the bonus counts only for a lesson the owner did
+        NOT state (:func:`stated_clause`); a kept preference is ordered by its
+        own weight, whatever bonus an older release wrote on it.
         """
-        effective = LessonRecord.weight + func.coalesce(LessonRecord.weight_bonus, 0.0)
+        effective = LessonRecord.weight + case(
+            (stated_clause(), 0.0), else_=func.coalesce(LessonRecord.weight_bonus, 0.0)
+        )
         with session_scope(self.engine) as db:
             query = select(LessonRecord)
             if scope is not None:
@@ -216,6 +275,16 @@ class LearningEngine:
             ).limit(limit)
             return list(db.exec(query))
 
+    def _stated(self, scope: str | None) -> list[LessonRecord]:
+        """Every kept preference (:func:`stated_clause`, confirmed), the
+        highest weight first, newest next — what each prompt tells first."""
+        with session_scope(self.engine) as db:
+            query = select(LessonRecord).where(stated_clause()).where(confirmed_clause())
+            if scope is not None:
+                query = query.where(LessonRecord.scope == scope)
+            query = query.order_by(LessonRecord.weight.desc(), LessonRecord.created_at.desc()).limit(_STATED_SCAN)
+            return list(db.exec(query))
+
     def apply_to_prompt(
         self,
         system_prompt: str,
@@ -225,9 +294,16 @@ class LearningEngine:
         event_bus=None,
         session_id: "str | None" = None,
     ) -> str:
-        """Append the top lessons to ``system_prompt`` — the self-correction step.
+        """Append what was learned to ``system_prompt`` — the self-correction step.
 
         Returns the prompt unchanged when there is nothing learned yet.
+
+        v1.501.0 (plan 1.8): EVERY kept preference is told (the owner's own
+        words come first, never ranked out by a count), then up to ``limit``
+        lessons the owner did not state by effective weight; all of it inside
+        :data:`LESSONS_BUDGET_CHARS`. The ids told are remembered against
+        ``session_id`` (:meth:`injected_into`), so a run's outcome is credited
+        only to what that run was actually told.
 
         v1.298.0: each lesson line is SCANNED for prompt injection
         (``core/promptguard``, source "lessons") and a flagged lesson is
@@ -237,14 +313,21 @@ class LearningEngine:
         """
         from ..core.promptguard import publish_blocked, scan_context
 
-        items = self.lessons(
-            scope=scope, limit=limit, exclude_sources=_PROMPT_EXCLUDED_SOURCES
-        )
-        if not items:
+        stated = self._stated(scope)
+        stated_ids = {r.id for r in stated}
+        others = [
+            r for r in self.lessons(
+                scope=scope, limit=limit + len(stated_ids), exclude_sources=_PROMPT_EXCLUDED_SOURCES
+            )
+            if r.id not in stated_ids
+        ][: max(0, int(limit))]
+        if not stated and not others:
             return system_prompt
         kept: list[str] = []
+        told: list[str] = []
+        spent = 0
         dropped = None
-        for lesson in items:
+        for lesson in [*stated, *others]:
             result = scan_context(lesson.text, source="lessons")
             if result.blocked:
                 if dropped is None:
@@ -252,13 +335,39 @@ class LearningEngine:
                 else:
                     dropped.blocked.extend(result.blocked)
                 continue
-            kept.append(result.text)
+            line = f"- {result.text}"
+            cost = len(line) + (1 if kept else 0)
+            if spent + cost > LESSONS_BUDGET_CHARS:
+                continue  # a shorter one later may still fit
+            spent += cost
+            kept.append(line)
+            told.append(lesson.id)
         if dropped is not None:
             publish_blocked(event_bus, session_id, dropped)
+        if session_id:
+            self._remember_injected(str(session_id), told)
         if not kept:
             return system_prompt
-        bullets = "\n".join(f"- {text}" for text in kept)
+        bullets = "\n".join(kept)
         return f"{system_prompt}{_LESSONS_HEADING}{bullets}"
+
+    def _remember_injected(self, session_id: str, ids: list[str]) -> None:
+        with self._injected_lock:
+            prior = self._injected.pop(session_id, [])
+            merged = list(dict.fromkeys([*prior, *ids]))[:_INJECTED_PER_RUN]
+            self._injected[session_id] = merged
+            while len(self._injected) > _INJECTED_RUNS:
+                self._injected.popitem(last=False)
+
+    def injected_into(self, session_id: str, *, forget: bool = True) -> list[str]:
+        """The lesson ids :meth:`apply_to_prompt` told run ``session_id``
+        (v1.501.0) — ``[]`` when it was told none (``skip_memory``) or the
+        daemon restarted since. ``forget`` drops the entry (the outcome is
+        recorded once)."""
+        with self._injected_lock:
+            if forget:
+                return list(self._injected.pop(str(session_id), []))
+            return list(self._injected.get(str(session_id), []))
 
     def counts_by_source(self, scope: str | None = "user") -> dict[str, int]:
         """How many lessons each source holds (v1.279.0) — the Memory page's
@@ -274,7 +383,7 @@ class LearningEngine:
             return {str(src or ""): int(n) for src, n in db.exec(query)}
 
     # -- compaction ----------------------------------------------------------
-    def dedup(self) -> int:
+    def dedup(self, *, report: "list[dict] | None" = None) -> int:
         """Deterministically collapse duplicate lessons. Returns rows removed.
 
         Two collapse rules, applied only to AUTO-CAPTURED lessons (``reflection``
@@ -284,17 +393,27 @@ class LearningEngine:
         * normalized-identical text → keep the highest effective weight (newest
           on a tie);
         * "Worked well for 'X': …" echoes about the SAME task X → keep the newest.
+
+        v1.501.0: a task note a condensed lesson names is never touched (it is
+        kept until the owner answers that suggestion), and ``report`` (when
+        given) receives ``{id, text, into}`` for every row removed — the
+        record the tidy-up event publishes (:func:`tidy_pass`).
         """
+        from .preferences import named_notes
+
         removed = 0
         with session_scope(self.engine) as db:
-            rows = list(
-                db.exec(
+            named = set().union(*named_notes(db).values())
+            rows = [
+                r for r in db.exec(
                     select(LessonRecord)
                     .where(LessonRecord.source == "reflection")
                     .order_by(LessonRecord.created_at.desc())
                 )
-            )
+                if r.id not in named
+            ]
             keep_by_key: dict[str, LessonRecord] = {}
+            gone: list[tuple[LessonRecord, str]] = []
             for row in rows:  # newest first — first seen wins ties on recency
                 m = _TASK_ECHO.match(row.text or "")
                 key = f"task::{_norm(m.group('task'))}" if m else f"text::{_norm(row.text)}"
@@ -304,27 +423,37 @@ class LearningEngine:
                     continue
                 # Higher effective weight replaces the kept row (newest wins ties).
                 if row.effective_weight > best.effective_weight:
+                    gone.append((best, key))
                     db.delete(best)
                     keep_by_key[key] = row
                 else:
+                    gone.append((row, key))
                     db.delete(row)
                 removed += 1
+            if report is not None:
+                # Merged into the row its key finally kept.
+                report.extend(
+                    {"id": row.id, "text": _clip(row.text, _TIDY_TEXT), "into": keep_by_key[key].id}
+                    for row, key in gone
+                )
             if removed:
                 db.commit()
         return removed
 
     def raw_reflection_count(self) -> int:
-        """How many auto-captured, undistilled lessons are piled up."""
+        """How many auto-captured, undistilled lessons are piled up (v1.501.0:
+        a note a condensed lesson already names — waiting, kept or declined —
+        is not counted: it is never condensed again)."""
+        from .preferences import named_notes
+
         with session_scope(self.engine) as db:
-            return len(
-                list(
-                    db.exec(
-                        select(LessonRecord.id)
-                        .where(LessonRecord.source == "reflection")
-                        .where(LessonRecord.weight <= 1)
-                    )
-                )
+            named = set().union(*named_notes(db).values())
+            ids = db.exec(
+                select(LessonRecord.id)
+                .where(LessonRecord.source == "reflection")
+                .where(LessonRecord.weight <= 1)
             )
+            return sum(1 for i in ids if i not in named)
 
     async def distill(
         self,
@@ -337,22 +466,46 @@ class LearningEngine:
 
         ``complete`` is an async ``prompt -> reply`` the DAEMON supplies, wired
         to a REAL provider (never mock — a fabricated "lesson" would poison
-        every future prompt). The raw rows are replaced by ``source="distilled"``
-        weight-2 lessons. Raises when the model reply is unusable; the raw rows
-        are only deleted after the replacements are written.
+        every future prompt). Raises when the model reply is unusable.
+
+        v1.501.0 (decision D3): a condensed lesson is a model's summary, not
+        the owner's word, so each is written ``proposed`` (origin
+        ``noticed``, ``source="distilled"``, weight 2) with the task notes it
+        came from — and their runs — as evidence, and waits in Improvements
+        and on the Memory page. NOTHING is deleted here: the notes stay until
+        the owner answers (``preferences.settle_condensed``: kept, the notes
+        go; declined, they stay and are never condensed again). One batch at
+        a time: while one waits, no new pass runs. The result's
+        ``suggested`` lists ``{id, text}`` of each row made.
         """
-        with session_scope(self.engine) as db:
-            raws = list(
-                db.exec(
-                    select(LessonRecord)
-                    .where(LessonRecord.source == "reflection")
-                    .where(LessonRecord.weight <= 1)
-                    .order_by(LessonRecord.created_at.asc())
-                    .limit(batch)
-                )
-            )
+        from .preferences import _blocked, named_notes, SOURCE_DISTILLED
+
+        def _read():  # off the loop (v1.501.0: it reads the condensed rows too)
+            with session_scope(self.engine) as db:
+                waiting = db.exec(
+                    select(LessonRecord.id)
+                    .where(LessonRecord.source == SOURCE_DISTILLED)
+                    .where(LessonRecord.status == STATUS_PROPOSED)
+                    .limit(1)
+                ).first()
+                named = set().union(*named_notes(db).values())
+                raws = [
+                    r for r in db.exec(
+                        select(LessonRecord)
+                        .where(LessonRecord.source == "reflection")
+                        .where(LessonRecord.weight <= 1)
+                        .order_by(LessonRecord.created_at.asc())
+                    )
+                    if r.id not in named
+                ][:batch]
+                return waiting, raws
+
+        waiting, raws = await asyncio.to_thread(_read)
+        if waiting is not None:
+            return {"reviewed": 0, "distilled": 0, "removed": 0, "suggested": [],
+                    "note": "the lessons condensed last time still wait for your answer in Improvements"}
         if len(raws) < _DISTILL_MIN:
-            return {"reviewed": 0, "distilled": 0, "removed": 0,
+            return {"reviewed": 0, "distilled": 0, "removed": 0, "suggested": [],
                     "note": f"only {len(raws)} raw reflections — nothing to distill yet"}
 
         bullets = "\n".join(f"- {r.text}" for r in raws)
@@ -369,18 +522,37 @@ class LearningEngine:
         if not distilled:
             raise ValueError("distillation reply contained no usable lessons")
 
-        def _commit():  # v1.226.0: SQLite write off the loop
+        evidence = json.dumps([_note_evidence(r) for r in raws])
+
+        def _commit() -> list[dict]:  # v1.226.0: SQLite write off the loop
+            from .corrections import signature
+
+            made: list[dict] = []
             with session_scope(self.engine) as db:
                 for text in distilled:
-                    db.add(LessonRecord(text=text, scope="user", source="distilled", weight=2))
-                for r in raws:
-                    row = db.get(LessonRecord, r.id)
-                    if row is not None:
-                        db.delete(row)
+                    clean = without_secrets(text)
+                    sig = signature(clean)
+                    if sig and _blocked(db, sig):
+                        continue  # already kept, waiting or declined in other words
+                    row = LessonRecord(
+                        text=clean, scope="user", source=SOURCE_DISTILLED, weight=2,
+                        status=STATUS_PROPOSED, origin="noticed",
+                        evidence_json=evidence, signature=sig or None,
+                    )
+                    db.add(row)
+                    db.flush()
+                    made.append({"id": row.id, "text": _clip(row.text, _TIDY_TEXT)})
                 db.commit()
+            return made
 
-        await asyncio.to_thread(_commit)
-        return {"reviewed": len(raws), "distilled": len(distilled), "removed": len(raws)}
+        made = await asyncio.to_thread(_commit)
+        return {
+            "reviewed": len(raws), "distilled": len(made), "removed": 0, "suggested": made,
+            "note": (
+                f"the {len(made)} condensed lesson{'' if len(made) == 1 else 's'} wait in Improvements "
+                "as suggestions; the notes they came from are kept until you answer"
+            ) if made else "nothing new to suggest",
+        }
 
     # -- internals ----------------------------------------------------------
     def _add_lesson(
@@ -400,6 +572,100 @@ class LearningEngine:
             db.commit()
             db.refresh(record)
             return record
+
+
+def _clip(text: Any, cap: int) -> str:
+    one = " ".join(str(text or "").split())
+    return one if len(one) <= cap else one[: cap - 1].rstrip() + "…"
+
+
+def _run_evidence(session_id: Any, text: str) -> dict[str, Any]:
+    """``{"evidence_json": …}`` naming the run a task note came from
+    (v1.501.0), so a lesson condensed from it can name its runs; ``{}`` when
+    there is no run id."""
+    from .preferences import QUOTE_CHARS, RUN_LINK, WHERE_RUN
+
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {}
+    return {"evidence_json": json.dumps([{
+        "quote": _clip(without_secrets(text), QUOTE_CHARS),
+        "at": utcnow().isoformat(),
+        "where": WHERE_RUN,
+        "link": f"{RUN_LINK}{sid}",
+    }])}
+
+
+def _note_evidence(row: LessonRecord) -> dict[str, Any]:
+    """One evidence entry of a condensed lesson: the task note itself (its
+    words, its run's link when the note recorded one) and its id — the id is
+    what ``preferences.settle_condensed`` removes once the owner keeps it."""
+    from .preferences import QUOTE_CHARS, WHERE_RUN
+
+    link = ""
+    try:
+        first = (json.loads(row.evidence_json or "[]") or [{}])[0]
+        if isinstance(first, dict):
+            link = str(first.get("link") or "")
+    except (TypeError, ValueError, IndexError):
+        link = ""
+    created = getattr(row, "created_at", None)
+    out = {
+        "quote": _clip(row.text, QUOTE_CHARS),
+        "at": created.isoformat() if created is not None else "",
+        "where": WHERE_RUN,
+        "lesson_id": row.id,
+    }
+    if link:
+        out["link"] = link
+    return out
+
+
+async def tidy_pass(
+    learning: "LearningEngine",
+    *,
+    event_bus: Any = None,
+    complete: "Callable[[str], Awaitable[str]] | None" = None,
+    min_notes: int = 0,
+) -> dict[str, Any]:
+    """ONE lesson tidy-up pass (v1.501.0, north-star plan 1.7): dedup (off
+    the loop), then — when ``complete`` (a REAL provider) is given and at
+    least ``min_notes`` task notes are left after dedup — condense the task
+    notes into suggestions (:meth:`LearningEngine.distill`). It
+    publishes ONE ``memory.updated`` event (``kind: "lesson_tidy"``) naming
+    every note merged away (``merged: [{id, text, into}]``) and every
+    suggestion made (``suggested: [{id, text}]``), so the owner can review in
+    the record what changed; a pass that changed nothing publishes nothing.
+    A failed condensing step raises AFTER the dedup record is published."""
+    merged: list[dict] = []
+    deduped = await asyncio.to_thread(lambda: learning.dedup(report=merged))
+    result: dict[str, Any] = {"deduped": deduped, "merged": merged, "suggested": []}
+    error: BaseException | None = None
+    if complete is not None and (
+        min_notes <= 0 or await asyncio.to_thread(learning.raw_reflection_count) >= min_notes
+    ):
+        try:
+            res = await learning.distill(complete)
+            result["distill"] = res
+            result["suggested"] = list(res.get("suggested") or [])
+        except Exception as exc:  # noqa: BLE001 — the dedup record still goes out
+            error = exc
+    if (merged or result["suggested"]) and event_bus is not None:
+        from ..core.events import EventType
+
+        try:
+            await event_bus.publish(EventType.MEMORY_UPDATED, {
+                "kind": "lesson_tidy",
+                "merged": merged[:_TIDY_EVENT_ROWS],
+                "merged_count": len(merged),
+                "suggested": result["suggested"][:_TIDY_EVENT_ROWS],
+                "suggested_count": len(result["suggested"]),
+            })
+        except Exception:  # noqa: BLE001 — a bus hiccup never undoes the pass
+            log.warning("lesson tidy-up: the record could not be published", exc_info=True)
+    if error is not None:
+        raise error
+    return result
 
 
 def without_secrets(text: str) -> str:

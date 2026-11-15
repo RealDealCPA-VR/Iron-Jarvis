@@ -131,6 +131,127 @@ def trim_head_tail(text: str, limit: int = NOTEBOOK_INJECT_CHARS) -> str:
     return text[:head] + marker + (text[-tail:] if tail else "")
 
 
+# --- the notebook's folders (v1.501.0, north-star 1.3) ---------------------
+#
+# NOTES.md is per AGENT, so a note taken while working in one client's folder
+# used to ride the agent's next job for another client. A note written during
+# work in a folder now ends its first line with FOLDER_MARK (the folder as the
+# client wall keys it, ``TurnWall.folder_key``); the block a run is told keeps
+# a marked note only where ``workmap.clients.wall.may_tell`` lets that run
+# hear it, and never shows the marker. A note with no marker (written outside
+# any folder, by the owner on the agent's page, or before this change) is
+# told as before. One note = its first line plus the indented lines under it
+# (``notebook_tool.stamp_line``'s continuation).
+
+#: The marker at the end of a note's first line.
+FOLDER_MARK = "<!-- folder: {key} -->"
+_MARK_RX = re.compile(r"\s*<!-- folder: (.*?) -->\s*$")
+
+
+def _turn_folder() -> str:
+    """The folder key of the turn or run in flight ("" outside one, and on
+    the owner's own screens). Never raises."""
+    try:
+        from ..workmap.clients import wall
+
+        if wall.on_owner_screen():
+            return ""
+        turn = wall.inherited()
+        return str(turn.folder_key or "") if turn is not None else ""
+    except Exception:  # noqa: BLE001 — no wall: no folder
+        return ""
+
+
+def _marked(line: str, key: str) -> str:
+    """``line`` with ``key``'s marker at its end (a line already marked, or
+    a blank one, is left as it is)."""
+    if not key or not line.strip() or _MARK_RX.search(line):
+        return line
+    return f"{line.rstrip()} {FOLDER_MARK.format(key=key)}"
+
+
+def _is_continuation(line: str) -> bool:
+    return bool(line) and line[:1] in (" ", "\t") and bool(line.strip())
+
+
+def _notes_entries(text: str) -> list[tuple[str, list[str], list[str]]]:
+    """``[(folder key or "", lines, raw lines)]``: each note with the folder
+    its first line is marked with. ``lines`` are what a run is told (markers
+    removed); ``raw lines`` are the file's own (markers kept). Indented lines
+    belong to the note above them; an indented line with no note above (the
+    head was trimmed away) is kept under an unknown folder, so it is never
+    told."""
+    out: list[tuple[str, list[str], list[str]]] = []
+    for line in text.split("\n"):
+        if _is_continuation(line) and out:
+            out[-1][1].append(line)
+            out[-1][2].append(line)
+            continue
+        if _is_continuation(line):
+            out.append(("\0", [line], [line]))  # an orphan: nobody knows its folder
+            continue
+        m = _MARK_RX.search(line)
+        out.append((m.group(1).strip() if m else "", [line[: m.start()] if m else line], [line]))
+    return out
+
+
+def _told_verdicts(entries: list[tuple[str, list[str], list[str]]], *, engine=None) -> list[bool]:
+    """One verdict per note: may the turn in flight be told it? A note with
+    no folder is always told. A turn that failed closed keeps the notes of
+    exactly its folder; a client record that cannot be read tells no marked
+    note. Never raises: unsure tells only unmarked notes."""
+    if not any(key for key, _lines, _raw in entries):
+        return [True] * len(entries)
+    try:
+        from ..workmap.clients import store as client_store
+        from ..workmap.clients import wall
+
+        turn = wall.current()
+        try:
+            cmap = client_store.load_map(engine) if engine is not None else None
+            if not isinstance(cmap, client_store.ClientMap):
+                cmap = None
+        except Exception:  # noqa: BLE001 — unreadable: no marked note (fail closed)
+            cmap = None
+        out: list[bool] = []
+        for key, lines, _raw in entries:
+            if key == "\0":
+                out.append(False)
+            elif key and (
+                (cmap is None and turn.ok)
+                or not wall.may_tell(turn, cmap or client_store.EMPTY_MAP, folder=key,
+                                     snippet="\n".join(lines))
+            ):
+                out.append(False)
+            else:
+                out.append(True)
+        return out
+    except Exception:  # noqa: BLE001
+        log.debug("notebook: the client wall could not be read", exc_info=True)
+        return [not key for key, _lines, _raw in entries]
+
+
+def told_notes_text(text: str, *, engine=None) -> str:
+    """``text`` (a notebook) with only the notes the turn in flight may be
+    told, markers removed (module note above; :func:`_told_verdicts`)."""
+    entries = _notes_entries(text)
+    if not any(key for key, _lines, _raw in entries):
+        return text
+    verdicts = _told_verdicts(entries, engine=engine)
+    return "\n".join(ln for (_k, lines, _raw), ok in zip(entries, verdicts) if ok for ln in lines)
+
+
+def _in_model_turn() -> bool:
+    """Is a chat turn or agent run in flight (so the notebook the model sees
+    is the FILTERED one), as opposed to the owner's own page or an Undo?"""
+    try:
+        from ..workmap.clients import wall
+
+        return wall.inherited() is not None and not wall.on_owner_screen()
+    except Exception:  # noqa: BLE001 — no wall: the owner's view
+        return False
+
+
 def _atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -343,24 +464,70 @@ class AgentFiles:
         except (OSError, ValueError):
             return ""
 
-    def write_notes(self, name: str, text: str) -> str:
+    def write_notes(self, name: str, text: str, *, engine=None) -> str:
         """Replace the notebook (bounded to :data:`NOTES_CAP_BYTES`, oldest
-        lines dropped). Returns the absolute path written."""
+        lines dropped). Returns the absolute path written.
+
+        v1.501.0 (north-star 1.3): written during a turn or run (the agent's
+        ``replace``), the agent rewrote the notebook IT WAS SHOWN, which leaves
+        out the notes the client wall keeps from that run. So:
+
+        * every note the run could not be told is KEPT, word for word, ahead
+          of the new text (a replace in one client's folder never deletes
+          another client's notes);
+        * a note the run kept as it was shown gets its own marker back;
+        * a note that is NEW is marked with the run's folder, when it has one.
+
+        Written outside a turn (the owner's page, an Undo) the text is the
+        whole file: nothing is kept back and nothing is marked. ``engine``
+        reads the client record (without one, every marked note is kept)."""
         path = self._notes_path(name)
-        _atomic_write(path, _trim_to_bytes(str(text or ""), NOTES_CAP_BYTES))
+        text = str(text or "")
+        if _in_model_turn():
+            entries = _notes_entries(self.read_notes(name))
+            verdicts = _told_verdicts(entries, engine=engine)
+            hidden: list[str] = []
+            raw_of: dict[str, str] = {}
+            for (_k, lines, raw), ok in zip(entries, verdicts):
+                if ok:
+                    raw_of.setdefault(lines[0], raw[0])
+                else:
+                    hidden.extend(raw)
+            key = _turn_folder()
+            body = "\n".join(
+                ln if _is_continuation(ln) else raw_of[ln] if ln in raw_of else _marked(ln, key)
+                for ln in text.split("\n")
+            )
+            text = "\n".join([*hidden, body]) if hidden else body
+        _atomic_write(path, _trim_to_bytes(text, NOTES_CAP_BYTES))
         return str(path)
 
     def append_notes(self, name: str, line: str) -> str:
         """Add one line (or block) to the notebook; when the result is over the
-        cap the OLDEST lines go. Never raises on the cap."""
+        cap the OLDEST lines go. Never raises on the cap.
+
+        v1.501.0 (north-star 1.3): added during a turn or run in a folder, the
+        note's first line is marked with that folder (``FOLDER_MARK``)."""
         current = self.read_notes(name)
         addition = str(line or "").rstrip("\n")
+        key = _turn_folder()
+        if key:
+            head, sep, rest = addition.partition("\n")
+            addition = _marked(head, key) + sep + rest
         if current and not current.endswith("\n"):
             current += "\n"
-        return self.write_notes(name, current + addition + "\n")
+        path = self._notes_path(name)
+        _atomic_write(path, _trim_to_bytes(current + addition + "\n", NOTES_CAP_BYTES))
+        return str(path)
+
+    def told_notes(self, name: str, *, engine=None) -> str:
+        """The notebook as the turn in flight may be told it (v1.501.0,
+        north-star 1.3: :func:`told_notes_text`), markers removed. For a
+        reader on the model's side; the owner's page reads :meth:`read_notes`."""
+        return told_notes_text(self.read_notes(name), engine=engine)
 
     def notebook_block(
-        self, name: str, *, event_bus=None, session_id: "str | None" = None
+        self, name: str, *, event_bus=None, session_id: "str | None" = None, engine=None,
     ) -> str:
         """The system-prompt block for a run: ``""`` when the notebook is empty,
         else a ``# Your notebook`` section with the notes head+tail trimmed to
@@ -371,10 +538,14 @@ class AgentFiles:
         result it copied in verbatim is exactly how an attack would persist
         across runs. A flagged paragraph becomes ``[BLOCKED: …]``; the rest of
         the notebook still loads. ``event_bus``/``session_id`` (optional) let
-        the caller have the one ``context.blocked`` event published."""
+        the caller have the one ``context.blocked`` event published.
+
+        v1.501.0 (north-star 1.3): only the notes THE CLIENT WALL lets the run
+        in flight hear (:meth:`told_notes`; ``engine`` reads the client
+        record, and without one no note written in a folder is told)."""
         from ..core.promptguard import guard
 
-        notes = self.read_notes(name).strip()
+        notes = self.told_notes(name, engine=engine).strip()
         if not notes:
             return ""
         body = trim_head_tail(notes, NOTEBOOK_INJECT_CHARS)

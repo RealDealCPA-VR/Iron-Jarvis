@@ -50,13 +50,24 @@ class MemoryLayers:
             )
 
     def write(
-        self, layer: str, key: str, text: str, scope_id: str | None = None
+        self,
+        layer: str,
+        key: str,
+        text: str,
+        scope_id: str | None = None,
+        *,
+        origin: "tuple[str | None, str | None] | None" = None,
     ) -> MemoryRecord:
         """Upsert by (layer, key, scope_id): update text in place if present, else insert.
 
         v1.499.3: a secret-looking value in *text* (``sk-…``, ``password=…``,
         ``Bearer …``) is stored MASKED (``detections.redact.mask``): memory is
-        retrieved into later prompts."""
+        retrieved into later prompts.
+
+        v1.501.0 (north-star 1.2): ``origin`` = ``(origin_session,
+        origin_folder)`` stamps where the entry was written (``memory_write``
+        passes it; ``memory/origin.py`` reads it). None leaves the columns as
+        they are (every other caller: the Memory page, the CLI)."""
         self._check_layer(layer)
         from ..detections.redact import mask
 
@@ -68,13 +79,23 @@ class MemoryLayers:
                 row.text = text
                 row.embedding_json = json.dumps(self.embedder.embed(text))
                 row.created_at = utcnow()
+                if origin is not None:
+                    row.origin_session, row.origin_folder = origin
                 db.add(row)
                 db.commit()
                 db.refresh(row)  # re-load expired attrs before the session closes
                 return row
         # new record -> let the retriever embed + persist it
         record = MemoryRecord(layer=layer, scope_id=scope_id, key=key, text=text)
+        if origin is not None:
+            record.origin_session, record.origin_folder = origin
         return self.retriever.add(record)
+
+    def find(self, layer: str, key: str, scope_id: str | None = None) -> MemoryRecord | None:
+        """The one row for (layer, key, scope_id), or None (v1.501.0: the
+        undo capture and the wall read the whole row, not only its text)."""
+        self._check_layer(layer)
+        return self._find(layer, key, scope_id)
 
     def read(self, layer: str, key: str, scope_id: str | None = None) -> str | None:
         """Return the stored text for (layer, key, scope_id) or None if absent."""

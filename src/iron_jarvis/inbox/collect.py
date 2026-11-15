@@ -391,18 +391,33 @@ _WHERE_WORDS = {
 }
 
 
+#: v1.501.0: evidence from a run is NOT the owner's words — what a run was
+#: asked (a preference it guessed) or a task note (a condensed lesson).
+_RUN_WHERE = "run"
+
+
 def preference_item(view: dict[str, Any]) -> dict[str, Any]:
     pid = str(view.get("id") or "")
+    condensed = str(view.get("source") or "") == "distilled"
     said = []
     for e in view.get("evidence") or []:
         if isinstance(e, dict) and e.get("quote"):
+            if str(e.get("where") or "") == _RUN_WHERE:
+                said.append(
+                    f"From a note on an agent run: “{e.get('quote')}”" if condensed
+                    else f"Noticed during an agent run for the task: “{e.get('quote')}”"
+                )
+                continue
             where = _WHERE_WORDS.get(str(e.get("where") or ""), "in a chat")
             said.append(f"You said, {where}: “{e.get('quote')}”")
+    note = "Keeping it tells every later chat and agent to work this way."
+    if condensed:
+        note += (" Once every lesson condensed with it is answered, the agent run notes it was "
+                 "condensed from are removed.")
     return item(
         KIND_PREFERENCE, pid, title=str(view.get("text") or ""), evidence=said,
         created_at=view.get("created_at"),
-        accept=action("Keep", f"/memory/preferences/{_seg(pid)}/keep",
-                      note="Keeping it tells every later chat and agent to work this way."),
+        accept=action("Keep", f"/memory/preferences/{_seg(pid)}/keep", note=note),
         decline=action("Not this", f"/memory/preferences/{_seg(pid)}/decline"),
         home="/memory#prefs-suggested",
     )

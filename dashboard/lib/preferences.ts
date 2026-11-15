@@ -222,6 +222,10 @@ export function whereWord(where: string): string {
       return "Claude Code";
     case "codex":
       return "Codex";
+    // v1.501.0: not the owner's words. A preference an agent run guessed, or
+    // a task note a condensed lesson came from.
+    case "run":
+      return "an agent run";
     default:
       return where;
   }

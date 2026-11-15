@@ -76,7 +76,12 @@ TURN_BUDGET_S = 2.0
 SCAN_SESSIONS = 20
 
 #: v1.414.0: "code" — said in a coding session (Chat › Code).
-WHERES = ("chat", "phone", "build", "code", "claude-code", "codex")
+#: v1.501.0: "run" — NOT the owner's words: what an agent run was asked (a
+#: preference the run guessed) or a task note a lesson was condensed from.
+WHERE_RUN = "run"
+WHERES = ("chat", "phone", "build", "code", "claude-code", "codex", WHERE_RUN)
+#: Where a run's evidence opens (the dashboard's own address for a run).
+RUN_LINK = "/sessions/"
 SCAN_SOURCES = {"claude-code": "Claude Code", "codex": "Codex"}
 
 #: Sources the prompt never reads (task reflections — see learning.engine).
@@ -272,6 +277,8 @@ def keep(engine, pref_id: str, text: Any = None) -> LessonRecord:
         db.add(row)
         db.commit()
         out = _detached(db, row)
+    if out.source == SOURCE_DISTILLED:
+        settle_condensed(engine)
     _shared_changed()
     return out
 
@@ -286,7 +293,72 @@ def decline(engine, pref_id: str) -> LessonRecord:
         row.decided_at = utcnow()
         db.add(row)
         db.commit()
-        return _detached(db, row)
+        out = _detached(db, row)
+    if out.source == SOURCE_DISTILLED:
+        settle_condensed(engine)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# condensed lessons (v1.501.0, decision D3)
+# --------------------------------------------------------------------------- #
+
+#: The source of a lesson a model condensed from task notes.
+SOURCE_DISTILLED = "distilled"
+#: The source of a task note (``LearningEngine.reflect``).
+SOURCE_REFLECTION = "reflection"
+#: Most condensed rows read when working out which notes they name.
+_CONDENSED_SCAN = 2000
+
+
+def note_ids_of(row: Any) -> list[str]:
+    """The task-note ids a condensed lesson was made from (its evidence's
+    ``lesson_id``; the FULL stored list, not the five the page shows)."""
+    try:
+        data = json.loads(getattr(row, "evidence_json", None) or "[]")
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(e["lesson_id"]) for e in data if isinstance(e, dict) and e.get("lesson_id")]
+
+
+def named_notes(db) -> dict[str, set[str]]:
+    """``{status: {note id, …}}`` — the task notes each status of condensed
+    lesson names (inside ``db``). A note named by ANY condensed row is never
+    condensed again, and never merged away by dedup."""
+    out: dict[str, set[str]] = {}
+    rows = db.exec(
+        select(LessonRecord).where(LessonRecord.source == SOURCE_DISTILLED).limit(_CONDENSED_SCAN)
+    )
+    for row in rows:
+        ids = note_ids_of(row)
+        if ids:
+            out.setdefault(lesson_status(row), set()).update(ids)
+    return out
+
+
+def settle_condensed(engine) -> int:
+    """After a condensed lesson is answered: the task notes a KEPT condensed
+    lesson names go, once no condensed lesson that still WAITS names them. A
+    note only declined lessons name stays (the owner said no to the summary,
+    not to the notes). Returns the notes removed. Blocking; never raises."""
+    try:
+        with session_scope(engine) as db:
+            named = named_notes(db)
+            gone = named.get(STATUS_CONFIRMED, set()) - named.get(STATUS_PROPOSED, set())
+            removed = 0
+            for note_id in sorted(gone):
+                row = db.get(LessonRecord, note_id)
+                if row is not None and row.source == SOURCE_REFLECTION:
+                    db.delete(row)
+                    removed += 1
+            if removed:
+                db.commit()
+            return removed
+    except Exception:  # noqa: BLE001 — the answer stands; the notes wait
+        log.warning("condensed lessons: the notes could not be settled", exc_info=True)
+        return 0
 
 
 def ask_again(engine, pref_id: str) -> str:
@@ -366,26 +438,76 @@ def _shared_changed() -> None:
 def _blocked(db, sig: str) -> bool:
     """Does any existing row already cover ``sig``? Confirmed (kept or said),
     proposed (already asked) and declined (never ask again) all block."""
+    return _covering(db, sig) is not None
+
+
+def _covering(db, sig: str) -> str | None:
+    """The status of the first row whose signature covers ``sig``, or None."""
     rows = db.exec(
         select(LessonRecord.text, LessonRecord.signature, LessonRecord.status, LessonRecord.source)
         .where(LessonRecord.source.not_in(list(_NOT_PREFERENCES)))
         .limit(2000)
     )
-    for text, row_sig, _status, _source in rows:
+    for text, row_sig, status, _source in rows:
         other = row_sig if row_sig else signature(text or "")
         if similar(sig, other):
-            return True
-    return False
+            return status if status in (STATUS_PROPOSED, STATUS_DECLINED) else STATUS_CONFIRMED
+    return None
 
 
 def _open_count(db) -> int:
+    # v1.501.0: the open limit counts preference suggestions only; condensed
+    # lessons wait as their own batch (``LearningEngine.distill`` makes no new
+    # batch while one waits), so they never take a preference's place.
     return len(
         list(
             db.exec(
-                select(LessonRecord.id).where(LessonRecord.status == STATUS_PROPOSED).limit(MAX_OPEN + 1)
+                select(LessonRecord.id)
+                .where(LessonRecord.status == STATUS_PROPOSED)
+                .where(LessonRecord.source != SOURCE_DISTILLED)
+                .limit(MAX_OPEN + 1)
             )
         )
     )
+
+
+#: ``mint_noticed`` outcomes.
+NOTICED_SUGGESTED = "suggested"
+NOTICED_KEPT = "already_kept"
+NOTICED_WAITING = "already_waiting"
+NOTICED_DECLINED = "declined_before"
+NOTICED_FULL = "full"
+
+
+def mint_noticed(engine, text: str, *, evidence: list[dict[str, Any]]) -> tuple[LessonRecord | None, str]:
+    """v1.501.0 (decision D2): a preference an agent run GUESSED waits for
+    the owner — ONE ``proposed`` row, origin ``noticed``, the run as evidence
+    — never a kept one. The same never-ask-twice rule and open limit as a
+    repeated correction (:func:`mint`), under the same lock. Returns
+    ``(row, NOTICED_SUGGESTED)`` or ``(None, reason)``. Blocking."""
+    sig = signature(text)
+    with _MINT_LOCK, session_scope(engine) as db:
+        covered = _covering(db, sig) if sig else None
+        if covered is not None:
+            return None, {
+                STATUS_PROPOSED: NOTICED_WAITING,
+                STATUS_DECLINED: NOTICED_DECLINED,
+            }.get(covered, NOTICED_KEPT)
+        if _open_count(db) >= MAX_OPEN:
+            return None, NOTICED_FULL
+        row = LessonRecord(
+            text=text,
+            scope="user",
+            source="preference",
+            weight=5,
+            status=STATUS_PROPOSED,
+            origin="noticed",
+            evidence_json=json.dumps(evidence[:MAX_EVIDENCE]),
+            signature=sig or None,
+        )
+        db.add(row)
+        db.commit()
+        return _detached(db, row), NOTICED_SUGGESTED
 
 
 def mint(engine, *, quotes: list[str], sig: str, evidence: list[dict[str, Any]]) -> LessonRecord | None:
@@ -686,6 +808,24 @@ async def _publish_suggested(platform: Any, pref_id: str, text: str, count: int,
     )
 
 
+async def publish_suggested_noticed(bus: Any, row: Any, *, session_id: Any = None) -> None:
+    """``preference.suggested`` (via "run", v1.501.0) for a preference an
+    agent run guessed: the Improvements page re-reads on it; the bell shows
+    only a scan's (``via == "scan"``). Never raises."""
+    from ..core.events import EventType
+
+    if bus is None:
+        return
+    try:
+        await bus.publish(
+            EventType.PREFERENCE_SUGGESTED,
+            {"id": row.id, "text": row.text, "count": len(evidence_of(row)), "via": WHERE_RUN},
+            session_id=session_id,
+        )
+    except Exception:  # noqa: BLE001 — a bus hiccup never loses the row
+        log.debug("preference.suggested publish failed", exc_info=True)
+
+
 async def publish_kept(platform: Any, row: Any) -> None:
     from ..core.events import EventType
 
@@ -878,7 +1018,12 @@ __all__ = [
     "keep",
     "list_preferences",
     "mint",
+    "mint_noticed",
+    "named_notes",
+    "note_ids_of",
     "pref_view",
+    "publish_suggested_noticed",
+    "settle_condensed",
     "publish_declined",
     "publish_kept",
     "publish_scan",

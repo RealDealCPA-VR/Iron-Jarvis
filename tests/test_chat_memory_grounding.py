@@ -148,8 +148,9 @@ def test_chat_passes_sources_and_composed_query_to_ground(tmp_path, monkeypatch)
         got: dict = {}
 
         def fake_ground(query, k=4, *, project_id=None, sources=None,
-                        char_budget=1200):
-            got.update(query=query, project_id=project_id, sources=sources)
+                        char_budget=1200, memory_session=None):
+            got.update(query=query, project_id=project_id, sources=sources,
+                       memory_session=memory_session)
             return "\n\n# Relevant from memory\n- [note] pinned: wiring"
 
         monkeypatch.setattr(p.fabric, "ground", fake_ground)
@@ -157,6 +158,8 @@ def test_chat_passes_sources_and_composed_query_to_ground(tmp_path, monkeypatch)
             "/chat", json={"messages": [{"role": "user", "content": _QUESTION}]}
         )
         assert r.status_code == 200
+        # v1.501.0: an unsaved chat recalls the "chat" session's own entries.
+        assert got["memory_session"] == "chat"
         # Project knowledge rides separately, so "knowledge" is excluded here.
         assert got["sources"] == [
             "files", "notes", "memory", "lessons", "sessions", "chats",
@@ -172,8 +175,10 @@ def test_ground_forwards_sources_to_recall_none_means_all():
     fab = MemoryFabric()
     seen: dict = {}
 
-    def fake_recall(query, k=6, *, project_id=None, sources=None, min_score=0.0):
+    def fake_recall(query, k=6, *, project_id=None, sources=None, min_score=0.0,
+                    session_id=None):
         seen["sources"] = sources
+        seen["session_id"] = session_id
         return []
 
     fab.recall = fake_recall  # type: ignore[method-assign]
@@ -181,6 +186,8 @@ def test_ground_forwards_sources_to_recall_none_means_all():
     assert seen["sources"] == ["notes"]
     assert fab.ground("q") == ""
     assert seen["sources"] is None  # existing callers: all stores, unchanged
+    # v1.501.0 (north-star 1.2): the run's session reaches the memory store.
+    assert fab.ground("q", session_id="sess-1") == "" and seen["session_id"] == "sess-1"
 
 
 def test_ground_sources_filter_shapes_the_block(tmp_path):
@@ -287,7 +294,7 @@ def test_short_followup_reaches_ground_with_accreted_query(tmp_path, monkeypatch
         got: dict = {}
 
         def fake_ground(query, k=4, *, project_id=None, sources=None,
-                        char_budget=1200):
+                        char_budget=1200, memory_session=None):
             got["query"] = query
             return ""
 

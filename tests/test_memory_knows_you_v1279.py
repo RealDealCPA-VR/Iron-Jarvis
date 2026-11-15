@@ -66,9 +66,25 @@ def test_a_failed_task_note_is_a_reflection_too_and_stays_out(learning):
     assert "Too verbose" in out and "revisit the approach" not in out
 
 
-def test_distilled_and_user_written_lessons_still_reach_the_prompt(learning):
-    learning._add_lesson("Keep commits small", source="distilled", weight=2)
+def test_distilled_lessons_reach_the_prompt_only_once_kept_and_user_written_ones_do(learning):
+    """v1.501.0 (decision D3): a lesson the model condensed is a suggestion —
+    it waits (``proposed``) and reaches no prompt until the owner keeps it."""
+    import asyncio
+
+    from iron_jarvis.learning import preferences as prefs
+
+    for i in range(5):
+        learning.reflect(f"s{i}", task=f"task {i}", summary=f"note {i}", ok=True)
+
+    async def complete(prompt: str) -> str:
+        return json.dumps(["Keep commits small"])
+
+    res = asyncio.run(learning.distill(complete))
     learning._add_lesson("Cite the code section", source="user", weight=3)
+    out = learning.apply_to_prompt("BASE")
+    assert "Keep commits small" not in out and "Cite the code section" in out
+    [made] = res["suggested"]
+    prefs.keep(learning.engine, made["id"])
     out = learning.apply_to_prompt("BASE")
     assert "Keep commits small" in out and "Cite the code section" in out
 

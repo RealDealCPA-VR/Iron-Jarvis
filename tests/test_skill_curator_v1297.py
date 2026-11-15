@@ -192,10 +192,12 @@ def test_skill_create_tool_stamps_agent_and_session(platform, tmp_path):
 
 
 def test_skill_create_tool_never_flips_a_user_skill_to_agent_made(platform, tmp_path):
-    """REVIEW v1.297.0: `skill_create` overwrites an existing slug in place
-    (v1.90.0 contract). The provenance stamp must land on a NEW file only —
+    """REVIEW v1.297.0: the provenance stamp must land on a NEW file only —
     stamping "agent" on an overwrite would turn the user's own skill into a
-    sweep candidate the moment an agent rewrote it (and strip its pin)."""
+    sweep candidate the moment an agent rewrote it (and strip its pin).
+    v1.501.0 (north-star 1.10): `skill_create` no longer overwrites an
+    existing slug at all; it refuses and points to `skill_update`, so the
+    user's file, its provenance and its pin are untouched."""
     mine = save_skill(_root(platform), "Vendor Recon", "mine", BODY, pinned=True)
     assert read_skill_md(mine)[0].get("created_by") is None  # the user's: no key
     tool = SkillCreateTool(platform.skills, platform.config)
@@ -206,13 +208,11 @@ def test_skill_create_tool_never_flips_a_user_skill_to_agent_made(platform, tmp_
     res = asyncio.run(tool.execute(
         {"name": "Vendor Recon", "description": "rewritten", "instructions": "NEW BODY"}, ctx
     ))
-    assert res.ok, res.error
+    assert res.ok is False and "skill_update" in (res.error or "")
     meta, body = read_skill_md(mine)
-    assert body.strip() == "NEW BODY" and meta["description"] == "rewritten"
+    assert body.strip() == BODY.strip() and meta["description"] == "mine"
     assert meta.get("created_by") is None and meta.get("created_session") is None
     assert meta["pinned"] is True
-    sk = platform.skills.get("Vendor Recon")
-    assert sk is not None and sk.created_by == "user" and sk.pinned is True
     # And a brand-new slug from the same tool IS stamped (the positive control).
     res = asyncio.run(tool.execute(
         {"name": "Brand New", "description": "d", "instructions": BODY}, ctx

@@ -63,8 +63,13 @@ class RecallTool(Tool):
         k = int(args.get("k", 6))
         project_id = args.get("project_id") or None
         sources = args.get("sources") or None
+        from .origin import session_tag
+
         try:
-            hits = self.fabric.recall(query, k=k, project_id=project_id, sources=sources)
+            # v1.501.0 (north-star 1.2): this turn's own ``session`` memory
+            # entries, keyed as ``memory_write`` keys them.
+            hits = self.fabric.recall(query, k=k, project_id=project_id, sources=sources,
+                                      session_id=session_tag(ctx) or None)
         except Exception as exc:  # a recall must never crash the runtime
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 

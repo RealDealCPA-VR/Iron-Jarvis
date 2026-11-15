@@ -181,3 +181,11 @@ describe("a correction said in a coding session", () => {
     expect(whereWord("code")).toBe("coding session");
   });
 });
+
+describe("evidence that is not the owner's words (v1.501.0)", () => {
+  it("names an agent run in plain words, never the bare key", () => {
+    // A preference an agent run guessed, or a task note a condensed lesson
+    // came from, carries where: "run".
+    expect(whereWord("run")).toBe("an agent run");
+  });
+});
