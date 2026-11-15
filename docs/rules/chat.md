@@ -2665,3 +2665,10 @@ How to use this file: read the contents list, then read only the entries your ch
   the routing call (the word tables are English); languages beyond the
   seven get only the side question; Build › Code checks only missing files and give-ups; follow-up
   counts there live in memory.
+  - **A TEST THAT DRIVES BUILD › CODE WITH A RECORDED REPLY KEEPS THE FILES
+    THAT REPLY NAMES IN ITS FOLDER** (v1.499.0). Otherwise the check finds the
+    file missing and sends the reply back IN THE BACKGROUND, and the test's
+    next turn sometimes meets "still working" (409): on v1.499.0's gate
+    `test_build_app_tool_setup_v14260` passed only on CI's retry, and failed
+    3 of 13 local runs, until its folder got the `hello.txt` its replies
+    edit (0 of 15 after).

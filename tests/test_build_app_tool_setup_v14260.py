@@ -39,6 +39,12 @@ def _use(monkeypatch, scenario: str, log: Path) -> None:
 def work(tmp_path) -> Path:
     folder = tmp_path / "work"
     folder.mkdir()
+    # v1.499.0: the recorded replies say they edited hello.txt, and the CLI
+    # they were recorded on had it. Without it, v1.498.0's keep-working check
+    # (hosted/check_again) found the file missing and sent the reply back
+    # in the background, so the next turn sometimes met "still working" (a
+    # test that passed only on CI's retry).
+    (folder / "hello.txt").write_text("apple pie\n", encoding="utf-8")
     return folder
 
 
