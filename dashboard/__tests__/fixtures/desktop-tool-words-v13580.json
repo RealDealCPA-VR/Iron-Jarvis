@@ -572,6 +572,36 @@
       "desktop": "remove or reset a chat persona"
     },
     {
+      "tool": "client_answer",
+      "kind": "table",
+      "card": "say whether a name is one of your clients",
+      "desktop": "say whether a name is one of your clients"
+    },
+    {
+      "tool": "client_update",
+      "kind": "table",
+      "card": "change one of your clients",
+      "desktop": "change one of your clients"
+    },
+    {
+      "tool": "client_preference_add",
+      "kind": "table",
+      "card": "keep a preference for one client",
+      "desktop": "keep a preference for one client"
+    },
+    {
+      "tool": "client_preference_change",
+      "kind": "table",
+      "card": "change a preference kept for one client",
+      "desktop": "change a preference kept for one client"
+    },
+    {
+      "tool": "client_preference_forget",
+      "kind": "table",
+      "card": "forget a preference kept for one client",
+      "desktop": "forget a preference kept for one client"
+    },
+    {
       "tool": "night_task_add",
       "kind": "table",
       "card": "queue a coding task for tonight",

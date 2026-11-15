@@ -3769,6 +3769,12 @@ const TOOL_WORDS = {
   persona_create: "make a chat persona",
   persona_update: "change a chat persona",
   persona_delete: "remove or reset a chat persona",
+  // v1.499.0: your clients from chat (the card's own words, pinned equal).
+  client_answer: "say whether a name is one of your clients",
+  client_update: "change one of your clients",
+  client_preference_add: "keep a preference for one client",
+  client_preference_change: "change a preference kept for one client",
+  client_preference_forget: "forget a preference kept for one client",
   night_task_add: "queue a coding task for tonight",
   night_task_cancel: "cancel a task queued for tonight",
   night_task_move: "change the order of tonight's tasks",
