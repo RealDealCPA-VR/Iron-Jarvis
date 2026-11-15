@@ -45,6 +45,7 @@ import { LastNightList } from "@/components/harness/LastNightList";
 import { choosePaneNext, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import type { RailPane } from "@/components/terminal/PaneRail";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
+import { ApiError } from "@/lib/api";
 import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
 import type { BranchDraft } from "@/lib/buildNext";
 import { useHarnessKeys } from "@/lib/harnessKeys";
@@ -76,6 +77,7 @@ import {
 } from "@/lib/codeSplit";
 import {
   LAST_SESSION_KEY,
+  archiveSession,
   createSession,
   deleteSession,
   listArchivedSessions,
@@ -541,6 +543,36 @@ export function IjHarnessView({
     }
   }
 
+  // v1.500.1 (the owner: "no way to archive, or delete a session" from the
+  // list): a row's ⋯ menu, through the routes the open session's own menu
+  // uses. The session leaves the columns it is open in, as its own
+  // Archive/Delete does (onGone), and both lists are read again.
+  async function archiveRow(id: string, stopFirst: boolean): Promise<string | null> {
+    try {
+      await archiveSession(id, stopFirst);
+    } catch (e) {
+      return e instanceof ApiError && e.status === 409
+        ? "This session is still running something. Stop it first, or archive it again to stop it."
+        : e instanceof Error
+          ? e.message
+          : String(e);
+    }
+    setSplit((s) => dropSession(s, id));
+    changed();
+    return null;
+  }
+
+  async function deleteRow(id: string): Promise<string | null> {
+    try {
+      await deleteSession(id);
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+    setSplit((s) => dropSession(s, id));
+    changed();
+    return null;
+  }
+
   const beside = useCallback((id: string) => {
     pickedRef.current = true;
     setMiddle("session");
@@ -640,6 +672,8 @@ export function IjHarnessView({
       describeDefaults={describeDefaults}
       archived={archived}
       onBringBack={bringBack}
+      onArchive={archiveRow}
+      onDelete={deleteRow}
       terminals={terminals}
       onOpenTerminal={onOpenTerminal}
       newRequest={newRequest}

@@ -36,13 +36,16 @@ import {
   FolderX,
   Loader2,
   Moon,
+  MoreHorizontal,
   Pencil,
   Plus,
   Search,
   SquareTerminal,
   Sunrise,
+  Trash2,
   X,
 } from "lucide-react";
+import { ConfirmButton } from "@/components/ui";
 import { filterFolders } from "@/lib/buildNext";
 import { CODING_SESSIONS_LIST } from "@/lib/buildWords";
 import { PaneDot, stateWord } from "@/components/terminal/PaneState";
@@ -98,6 +101,8 @@ function FolderGroup({
   onOpenBeside,
   onNew,
   onRename,
+  onArchive,
+  onDelete,
   settingsOf,
   describeDefaults,
 }: {
@@ -108,6 +113,10 @@ function FolderGroup({
   onOpenBeside?: (id: string) => void;
   onNew: (folder: string) => void;
   onRename: (path: string, name: string) => Promise<string | null>;
+  /** v1.500.1: the row's ⋯ menu: archive (stopping a working session
+   *  first) and delete; each resolves to the refusal in words, or null. */
+  onArchive?: (id: string, stopFirst: boolean) => Promise<string | null>;
+  onDelete?: (id: string) => Promise<string | null>;
   /** v1.426.0 (E5): a session's settings as a folder's defaults (null: not
    *  known). Absent: no defaults button on the heading. */
   settingsOf?: (sessionId: string) => CodeDefaults | null;
@@ -116,6 +125,27 @@ function FolderGroup({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [defaultsOpen, setDefaultsOpen] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // v1.500.1: the row whose ⋯ menu is open (one at a time). A press
+  // anywhere outside that row closes it.
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const menuRowRef = useRef<HTMLLIElement | null>(null);
+  useEffect(() => {
+    if (!menuFor) return;
+    const away = (e: PointerEvent) => {
+      const row = menuRowRef.current;
+      if (row && e.target instanceof Node && row.contains(e.target)) return;
+      setMenuFor(null);
+    };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [menuFor]);
+  const hasMenu = !!(onArchive || onDelete);
+  async function rowAction(run: () => Promise<string | null>) {
+    setMenuFor(null);
+    setProblem(null);
+    const err = await run();
+    if (err) setProblem(err);
+  }
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (renaming !== null) inputRef.current?.focus();
@@ -245,7 +275,7 @@ function FolderGroup({
           // v1.406.0 part 7: the session open in the OTHER column of a split.
           const beside = !current && !!besideId && s.id === besideId;
           return (
-            <li key={s.id} className="group/row relative">
+            <li key={s.id} ref={menuFor === s.id ? menuRowRef : undefined} className="group/row relative">
               <button
                 type="button"
                 data-testid={`harness-session-row-${s.id}`}
@@ -275,7 +305,7 @@ function FolderGroup({
                       }
                     : undefined
                 }
-                className={`${ROW} ${onOpenBeside ? "pr-8" : ""} ${
+                className={`${ROW} ${onOpenBeside && hasMenu ? "pr-14" : onOpenBeside || hasMenu ? "pr-8" : ""} ${
                   current
                     ? "bg-white/[0.07] text-zinc-100"
                     : beside
@@ -296,10 +326,70 @@ function FolderGroup({
                   aria-label={`Open ${s.title} beside`}
                   title={OPEN_BESIDE_TITLE}
                   onClick={() => onOpenBeside(s.id)}
-                  className={`${GHOST} absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100`}
+                  className={`${GHOST} absolute ${hasMenu ? "right-7" : "right-1"} top-1/2 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100`}
                 >
                   <Columns2 size={13} aria-hidden />
                 </button>
+              ) : null}
+              {hasMenu ? (
+                <button
+                  type="button"
+                  data-testid={`harness-row-menu-${s.id}`}
+                  aria-label={`More for ${s.title}`}
+                  title="Archive or delete"
+                  aria-haspopup="menu"
+                  aria-expanded={menuFor === s.id}
+                  onClick={() => setMenuFor((cur) => (cur === s.id ? null : s.id))}
+                  className={`${GHOST} absolute right-1 top-1/2 -translate-y-1/2 ${
+                    menuFor === s.id
+                      ? "opacity-100"
+                      : "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+                  }`}
+                >
+                  <MoreHorizontal size={13} aria-hidden />
+                </button>
+              ) : null}
+              {menuFor === s.id ? (
+                <div
+                  role="menu"
+                  aria-label={s.title}
+                  data-testid={`harness-row-menu-list-${s.id}`}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Escape") return;
+                    e.stopPropagation();
+                    setMenuFor(null);
+                  }}
+                  className="absolute right-1 top-full z-30 mt-0.5 w-44 space-y-0.5 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
+                >
+                  {onArchive ? (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid={`harness-row-archive-${s.id}`}
+                      title={
+                        s.running
+                          ? "Stop what it is doing, then move it to Archived at the foot of the list"
+                          : "Move it to Archived at the foot of the list (Bring back puts it back)"
+                      }
+                      onClick={() => void rowAction(() => onArchive(s.id, s.running))}
+                      className="flex w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06]"
+                    >
+                      {s.running ? "Stop and archive" : "Archive"}
+                    </button>
+                  ) : null}
+                  {onDelete ? (
+                    <div role="menuitem">
+                      <ConfirmButton
+                        testId={`harness-row-delete-${s.id}`}
+                        label="Delete"
+                        confirmLabel="Delete for good"
+                        title="Delete this session and its conversation (press twice)"
+                        className="w-full justify-start"
+                        onConfirm={() => rowAction(() => onDelete(s.id))}
+                      />
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
             </li>
           );
@@ -313,18 +403,22 @@ function FolderGroup({
  * v1.418.0 (fix plan C2.8): the ARCHIVED sessions, folded at the bottom of
  * the list ("Archived (N)", as Build › Code keeps them). A row opens the
  * session (its banner offers Bring back too); its own "Bring back" press puts
- * it back in the list. Nothing here deletes.
+ * it back in the list. v1.500.1: its trash can deletes it for good (two
+ * presses), as a live row's ⋯ menu does.
  */
 function ArchivedFold({
   folders,
   selectedId,
   onSelect,
   onBringBack,
+  onDelete,
 }: {
   folders: BuildFolder[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   onBringBack: (id: string) => Promise<string | null>;
+  /** v1.500.1: delete an archived session for good (two presses). */
+  onDelete?: (id: string) => Promise<string | null>;
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -336,6 +430,12 @@ function ArchivedFold({
     setProblem(null);
     const err = await onBringBack(id);
     setBusy(null);
+    if (err) setProblem(err);
+  }
+  async function remove(id: string) {
+    if (!onDelete) return;
+    setProblem(null);
+    const err = await onDelete(id);
     if (err) setProblem(err);
   }
   return (
@@ -368,7 +468,7 @@ function ArchivedFold({
                   aria-current={s.id === selectedId ? "true" : undefined}
                   onClick={() => onSelect(s.id)}
                   title={f.noFolder ? `${s.title} (no folder)` : `${s.title} · ${f.name}`}
-                  className={`${ROW} pr-24 ${s.id === selectedId ? "bg-white/[0.07] text-zinc-200" : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"}`}
+                  className={`${ROW} ${onDelete ? "pr-32" : "pr-24"} ${s.id === selectedId ? "bg-white/[0.07] text-zinc-200" : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"}`}
                 >
                   <span className="min-w-0 flex-1 truncate">{s.title}</span>
                 </button>
@@ -378,7 +478,7 @@ function ArchivedFold({
                   disabled={busy !== null}
                   onClick={() => void bringBack(s.id)}
                   title="Put this session back in the list"
-                  className="absolute right-1 top-1/2 inline-flex h-6 -translate-y-1/2 items-center gap-1 rounded-md px-1.5 text-[11px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-50"
+                  className={`absolute ${onDelete ? "right-8" : "right-1"} top-1/2 inline-flex h-6 -translate-y-1/2 items-center gap-1 rounded-md px-1.5 text-[11px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-50`}
                 >
                   {busy === s.id ? (
                     <Loader2 size={11} aria-hidden className="animate-spin" />
@@ -387,6 +487,19 @@ function ArchivedFold({
                   )}
                   {BRING_BACK_WORDS}
                 </button>
+                {onDelete ? (
+                  <span className="absolute right-1 top-1/2 -translate-y-1/2">
+                    <ConfirmButton
+                      testId={`harness-archived-delete-${s.id}`}
+                      variant="calm"
+                      icon={<Trash2 size={12} aria-hidden />}
+                      label={`Delete ${s.title}`}
+                      confirmLabel="Delete for good"
+                      title="Delete this session and its conversation (press twice)"
+                      onConfirm={() => remove(s.id)}
+                    />
+                  </span>
+                ) : null}
               </li>
             )),
           )}
@@ -422,8 +535,16 @@ export function HarnessSidebar({
   onLastNight,
   archived = null,
   onBringBack,
+  onArchive,
+  onDelete,
   newOpen = false,
 }: {
+  /** v1.500.1 (the owner: "no way to archive, or delete a session"): each
+   *  row's ⋯ menu (both absent: no menu). Archive stops a working session
+   *  first when `stopFirst`; each resolves to the refusal in words, or null.
+   *  Delete also reaches the Archived rows. */
+  onArchive?: (id: string, stopFirst: boolean) => Promise<string | null>;
+  onDelete?: (id: string) => Promise<string | null>;
   /** v1.418.0 (C2.6): the start composer is the view in front. */
   newOpen?: boolean;
   /** v1.418.0 (C2.8): the archived sessions (null: not read / not offered). */
@@ -614,6 +735,8 @@ export function HarnessSidebar({
               onOpenBeside={onOpenBeside}
               onNew={(path) => void startIn(path)}
               onRename={onRename}
+              onArchive={onArchive}
+              onDelete={onDelete}
               settingsOf={settingsOf}
               describeDefaults={describeDefaults}
             />
@@ -630,7 +753,13 @@ export function HarnessSidebar({
           </p>
         ) : null}
         {archived && onBringBack ? (
-          <ArchivedFold folders={archived} selectedId={selectedId} onSelect={onSelect} onBringBack={onBringBack} />
+          <ArchivedFold
+            folders={archived}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            onBringBack={onBringBack}
+            onDelete={onDelete}
+          />
         ) : null}
       </div>
 

@@ -2042,6 +2042,15 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Archive or delete a coding session from the list (v1.500.1)
+
+In Chat › Code, every session in the sidebar list now has a ⋯ button (it
+shows when you point at the row). It offers **Archive**, or **Stop and
+archive** while the session is working, and **Delete**, which takes two
+presses. Archived sessions, at the foot of the list, have a trash can beside
+Bring back that deletes them for good, also with two presses. A session you
+archive or delete while it is open closes.
+
 ## One sidebar (v1.500.0)
 
 The app now has one left sidebar. The second list some pages drew beside it
