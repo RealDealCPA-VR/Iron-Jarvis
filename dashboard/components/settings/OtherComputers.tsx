@@ -27,20 +27,25 @@ import { useDaemonEpoch } from "@/lib/daemonEpoch";
 import { requestTidyRestart } from "@/lib/desktopShell";
 import { useEvents } from "@/lib/useEvents";
 import { timeAgo } from "@/lib/format";
+import { fillInFirst, whyDisabled } from "@/lib/whyDisabled";
 import { Button, Card, ConfirmButton, Field, LoaderInline } from "@/components/ui";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 import {
   ADDRESS_LABEL,
   ADDRESS_PLACEHOLDER,
+  ANSWERS_AFTER_RESTART,
   ANSWERS_CANNOT_COME_BACK,
   CALL_IT_LABEL,
   CALL_IT_PLACEHOLDER,
   CANCEL_CODE,
   CHECK,
   CODE_LABEL,
+  CODE_NOT_SIX_DIGITS,
   CODE_PLACEHOLDER,
+  CODE_TRIED_OUT,
   FIREWALL_LINE,
   NEEDS_NETWORK,
+  NEEDS_RESTART,
   NETWORK_OFF,
   NETWORK_ON,
   NETWORK_SAVED,
@@ -210,6 +215,15 @@ export function OtherComputers() {
     }
   }, [load]);
 
+  // Iron Jarvis came back (review, v1.497.0): "Restarting Iron Jarvis…" is no
+  // longer true. Only that note is taken back; a refused restart's words stay.
+  const shownEpoch = useRef(epoch);
+  useEffect(() => {
+    if (epoch === shownEpoch.current) return;
+    shownEpoch.current = epoch;
+    setNote((said) => (said === RESTARTING ? "" : said));
+  }, [epoch]);
+
   // Mount, and the daemon coming back (after the restart this card asked for).
   useEffect(() => {
     void (async () => {
@@ -230,11 +244,15 @@ export function OtherComputers() {
   // The other computer typed this one's code, or a pairing ended.
   const { events } = useEvents(5, { types: PEER_EVENT_TYPES });
   const newest = events[0]?.id ?? "";
+  const newestType = events[0]?.type ?? "";
   useEffect(() => {
     if (!newest) return;
+    // The code this computer shows was typed wrong too often (review,
+    // v1.497.0): say so, and the re-read takes the dead code down.
+    if (newestType === "peer.code_ended") setNote(CODE_TRIED_OUT);
     const t = setTimeout(() => void load(), EVENT_REREAD_MS);
     return () => clearTimeout(t);
-  }, [newest, load]);
+  }, [newest, newestType, load]);
 
   // A shown code runs out: read once at that moment, so it is not left up.
   const codeEnds = view?.code?.expiresAt ?? "";
@@ -319,8 +337,19 @@ export function OtherComputers() {
   if (!supported) return null;
 
   const net = view?.network;
+  // Saved on but not in effect yet: what is missing is the restart, not the
+  // setting (review, v1.497.0).
+  const needsNetwork = net?.saved ? NEEDS_RESTART : NEEDS_NETWORK;
   const name = thisName ?? view?.thisName ?? "";
   const canJoin = !!address.trim() && !!typedCode(code) && busy === "";
+  // A greyed-out Pair says why (Wave D, lib/whyDisabled); busy speaks for itself.
+  const missing = [!address.trim() && ADDRESS_LABEL, !code.trim() && CODE_LABEL].filter(
+    (l): l is string => !!l,
+  );
+  const pairWhy =
+    busy !== ""
+      ? null
+      : whyDisabled(fillInFirst(missing, "pair"), !typedCode(code) && CODE_NOT_SIX_DIGITS);
 
   return (
     <Card title={SECTION_LABEL} icon={<Monitor className="h-4 w-4" />}>
@@ -446,7 +475,7 @@ export function OtherComputers() {
                     size="sm"
                     data-testid="other-computers-show-code"
                     disabled={!net.applied || busy !== ""}
-                    title={net.applied ? undefined : NEEDS_NETWORK}
+                    title={net.applied ? undefined : needsNetwork}
                     onClick={() => void showCode()}
                   >
                     {busy === "code" ? "…" : SHOW_CODE}
@@ -464,7 +493,7 @@ export function OtherComputers() {
               )}
               {!view.code && !net.applied && (
                 <p data-testid="other-computers-needs-network" className="text-[12px] text-zinc-500">
-                  {NEEDS_NETWORK}
+                  {needsNetwork}
                 </p>
               )}
 
@@ -513,7 +542,7 @@ export function OtherComputers() {
                   </Field>
                   {!net.applied && (
                     <p data-testid="other-computers-no-answers" className="text-[12px] text-tone-warn">
-                      {ANSWERS_CANNOT_COME_BACK}
+                      {net.saved ? ANSWERS_AFTER_RESTART : ANSWERS_CANNOT_COME_BACK}
                     </p>
                   )}
                   <Button
@@ -522,6 +551,7 @@ export function OtherComputers() {
                     size="sm"
                     data-testid="other-computers-pair"
                     disabled={!canJoin}
+                    title={canJoin ? undefined : pairWhy ?? undefined}
                   >
                     {busy === "join" ? PAIRING : PAIR}
                   </Button>

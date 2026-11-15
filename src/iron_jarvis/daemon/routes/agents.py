@@ -2786,6 +2786,14 @@ def register(app: FastAPI, d) -> None:
                 status_code=400, detail=f"kind must be one of {', '.join(KINDS)}"
             )
         _refuse_door_kind(body.base_url, body.kind)
+        # v1.497.0 (review): a name a PAIRING holds, in any case, is refused
+        # BEFORE the token is stored: ``upsert`` below would replace the
+        # paired remote's address and credential (the same name), or make a
+        # second "@desk" chat reads case-insensitively (another case).
+        from ...peers.store import is_paired_name
+
+        if is_paired_name(d.platform, name):
+            raise HTTPException(status_code=409, detail=PAIRED_REMOTE_REFUSAL)
         secret_name: str | None = None
         if (body.token or "").strip():
             secret_name = "remote_agent_" + name
@@ -3128,6 +3136,11 @@ def register(app: FastAPI, d) -> None:
         rec = reg.get(name)
         if rec is None:
             raise HTTPException(status_code=404, detail="no such remote agent")
+        # v1.497.0 (review): a pairing chose where its answers come home (the
+        # address the other computer reached this one at); rotating here would
+        # replace it with this window's guess and leave every task in flight
+        # holding a token that no longer works.
+        _refuse_paired(name)
         url = ((body.url if body else "") or "").strip() or _inbound_url_for(request, name)
         if url and not url.lower().startswith(("http://", "https://")):
             raise HTTPException(status_code=400, detail="url must start with http:// or https://")

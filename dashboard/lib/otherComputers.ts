@@ -56,7 +56,7 @@ export const OTHER_COMPUTERS_SECTION = "connections-computers";
 export const OTHER_COMPUTERS_HREF = `/settings?focus=${NETWORK_SETTING_KEY}`;
 
 /** Events after which the list is read again. */
-export const PEER_EVENT_TYPES = ["peer.paired", "peer.removed"];
+export const PEER_EVENT_TYPES = ["peer.paired", "peer.removed", "peer.code_ended"];
 
 export const SECTION_LABEL = "Your other computers";
 export const SECTION_BLURB =
@@ -99,8 +99,15 @@ export const NO_PEERS = "No other computer is paired yet.";
 export const SHOW_CODE = "Show a pairing code";
 export const USE_CODE = "Use a pairing code";
 export const CANCEL_CODE = "Cancel";
+/** Said when the code this computer showed was typed wrong too often. */
+export const CODE_TRIED_OUT =
+  "The code was typed wrong too many times, so it stopped working. If that was not you on the other " +
+  "computer, someone else on your network tried it. Show a new code to try again.";
 export const NEEDS_NETWORK =
   "Turn on the setting above first, so the other computer can reach this one.";
+/** The same hint while the setting is saved on and waits for the restart. */
+export const NEEDS_RESTART =
+  "Restart Iron Jarvis first (above), so the other computer can reach this one.";
 
 export function codeSteps(addresses: string[]): string {
   const where = addresses.length
@@ -118,6 +125,8 @@ export const ADDRESS_LABEL = "The other computer's address";
 export const ADDRESS_PLACEHOLDER = "192.168.1.20";
 export const CODE_LABEL = "The code it shows";
 export const CODE_PLACEHOLDER = "482 917";
+/** Pair's reason while the code box holds something that is not a code. */
+export const CODE_NOT_SIX_DIGITS = "The code is the six digits the other computer shows.";
 export const CALL_IT_LABEL = "What to call it here (optional)";
 export const CALL_IT_PLACEHOLDER = "desk";
 export const THIS_NAME_LABEL = "This computer's name";
@@ -129,6 +138,10 @@ export const PAIRING = "Pairing…";
 export const ANSWERS_CANNOT_COME_BACK =
   "This computer cannot be reached yet, so the other computer's answers cannot come back here. " +
   "Turn on the setting above too.";
+/** The same note while the setting is saved on and waits for the restart. */
+export const ANSWERS_AFTER_RESTART =
+  "This computer cannot be reached until Iron Jarvis restarts, so the other computer's answers " +
+  "cannot come back here yet. Restart it above.";
 
 export const CHECK = "Check";
 export const REMOVE = "Remove";

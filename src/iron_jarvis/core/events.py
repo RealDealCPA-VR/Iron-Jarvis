@@ -319,6 +319,10 @@ class EventType:
     # Never a token, never an address.
     PEER_PAIRED = "peer.paired"
     PEER_REMOVED = "peer.removed"
+    # The code this computer was showing stopped working before it was used
+    # (review, v1.497.0): {why: "wrong_tries"} — typed wrong too often, so the
+    # card showing it takes it down and says so. Never the code.
+    PEER_CODE_ENDED = "peer.code_ended"
     # YOUR BROWSER (v1.235.0) — the user's own Chrome/Edge over /browser/ws.
     # Ambient facts about a browser, so they carry NO session_id: nothing here
     # belongs to one conversation. No payload ever carries the pairing token;

@@ -66,10 +66,34 @@ OLD_VERSION = (
     "newest version, then try again."
 )
 NO_ADDRESS = (
-    "That computer could not tell which address this one has on your network, so it cannot pair. "
-    "Turn on “Let other computers on my network reach this Iron Jarvis” here first."
+    "That computer could not tell where this pairing request came from, so it did not pair and kept "
+    "nothing. Try again, typing its address as its pairing screen shows it."
 )
 UNKNOWN_TOKEN = "This computer does not know that token."
+#: The unpair door could not read or change its list just now (review,
+#: v1.497.0): the other computer's Remove then says it could not tell this one.
+UNPAIR_FAILED = "This computer could not end the pairing just now. Try again."
+#: The computer showing the code could not keep the pairing (review,
+#: v1.497.0): said to the one typing it, in place of an internal error.
+KEEP_FAILED = (
+    "That computer could not keep the pairing, so nothing was kept on either computer. Show a new "
+    "code on it and try again."
+)
+
+
+def join_failed_words(name: str, told: bool) -> str:
+    """THIS computer could not keep a pairing the other one already kept: it
+    was told to drop its side (or could not be)."""
+    if told:
+        return (
+            f"This computer could not keep the pairing, so nothing was kept on either computer: {name} "
+            "dropped its side too. Show a new code there and try again."
+        )
+    return (
+        f"This computer could not keep the pairing, and {name} could not be told to drop its side. "
+        "Remove this computer there (Settings › Connections › Your other computers on that computer), "
+        "then show a new code there and try again."
+    )
 
 #: What this computer's screen says after a pairing it made.
 def paired_words(name: str) -> str:
@@ -213,7 +237,7 @@ def register(app: FastAPI, d: Any) -> None:
     @app.post("/peers/join")
     async def join(request: Request, body: JoinBody) -> dict[str, Any]:
         """Pair with the computer at ``address`` using the code it shows."""
-        store = _store()
+        store = await asyncio.to_thread(_store)
         try:
             address = S.normalize_address(body.address)
         except S.AddressProblem as exc:
@@ -238,13 +262,14 @@ def register(app: FastAPI, d: Any) -> None:
             raise HTTPException(status_code=409, detail=exc.words) from None
         their_name = answer["name"]
         wanted = body.name.strip() or their_name or S.FALLBACK_NAME
-        name, replaces = await asyncio.to_thread(store.free_name, wanted, address=address)
         # Where the other computer reaches THIS one: the address it saw this
         # request come from (that route is proven), else this PC's own guess.
         seen = _ip(answer.get("seen_as")) or _ip(guess)
         my_address = S.address_from(str(seen), port) if seen else S.address_from("127.0.0.1", port)
-        peer = await asyncio.to_thread(
-            lambda: store.add(
+
+        def _keep() -> Any:
+            name, replaces = store.free_name(wanted, address=address)
+            return store.add(
                 name=name,
                 their_name=their_name,
                 address=address,
@@ -253,18 +278,36 @@ def register(app: FastAPI, d: Any) -> None:
                 my_address=my_address,
                 replaces=replaces,
             )
-        )
+
+        try:
+            peer = await asyncio.to_thread(_keep)
+        except Exception:  # noqa: BLE001 — said in words below, never the exception's text
+            # All or nothing (review, v1.497.0): the other computer has
+            # already kept its side, holding a token for a pairing this one
+            # never kept. Tell it to drop that side with the token it gave
+            # this one (its unpair door checks exactly that token).
+            log.warning("pairing: this computer could not keep the pairing", exc_info=True)
+            told = await L.unpair(address, answer["door_token"])
+            raise HTTPException(
+                status_code=500,
+                detail=join_failed_words(S.peer_name(their_name) if their_name else address, told),
+            ) from None
         await _publish(EventType.PEER_PAIRED, {"name": peer.name})
-        return {"peer": S.peer_view(peer), "said": paired_words(peer.name), **_view(request)}
+        return {
+            "peer": S.peer_view(peer),
+            "said": paired_words(peer.name),
+            **(await asyncio.to_thread(_view, request)),
+        }
 
     @app.post(PEER_PAIR_PATH)
     async def pair_here(request: Request) -> dict[str, Any]:
         """The OTHER computer asks to pair, with the code this one shows.
 
         Exempt from the install token; checked by the code. In order: ten
-        tries a minute from anyone (429), a small body (413), the protocol and
-        the token's shape (400), then the code (403 none / run out / used up,
-        401 wrong). Only then is anything kept."""
+        tries a minute from anyone (429), a small body read no further than
+        its cap (413), the protocol, the token's shape and where the request
+        came from (400), then the code (403 none / run out / used up, 401
+        wrong). Only then is anything kept, all or nothing (500 in words)."""
         codes = _codes()
         if not codes.take_try():
             raise HTTPException(status_code=429, detail=TOO_MANY_TRIES)
@@ -274,11 +317,17 @@ def register(app: FastAPI, d: Any) -> None:
             declared = 0
         if declared > PAIR_MAX_BODY_BYTES:
             raise HTTPException(status_code=413, detail="That pairing request is too large.")
-        raw = await request.body()
-        if len(raw) > PAIR_MAX_BODY_BYTES:
-            raise HTTPException(status_code=413, detail="That pairing request is too large.")
+        # Read up to the cap and stop (review, v1.497.0): anyone on the network
+        # reaches this door, and a body with no length (chunked) used to be
+        # held in memory WHOLE, up to the app's 256 MB ceiling, before its size
+        # was looked at.
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > PAIR_MAX_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="That pairing request is too large.")
         try:
-            body = json.loads(raw or b"{}")
+            body = json.loads(bytes(raw) or b"{}")
         except ValueError:
             raise HTTPException(status_code=400, detail="body must be JSON") from None
         if not isinstance(body, dict):
@@ -291,35 +340,41 @@ def register(app: FastAPI, d: Any) -> None:
         port = body.get("port")
         if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
             raise HTTPException(status_code=400, detail=OLD_VERSION)
+        # Where the other computer is: the address its request CAME FROM, and
+        # nothing it says (review, v1.497.0: the first cut fell back to the
+        # body's "address", so a sender that could not be placed chose where
+        # this computer would later send its token and its tasks). Where THIS
+        # computer is, as the other one reaches it: the address it dialed (the
+        # Host guard already accepted it). Both are read BEFORE the code, so a
+        # request that cannot be placed never uses the code up.
+        client = getattr(request, "client", None)
+        seen = _ip(getattr(client, "host", "") if client else "")
+        host = (request.headers.get("host") or "").strip()
+        my_address = f"{request.url.scheme or 'http'}://{host}" if host else ""
+        if seen is None or not my_address:
+            raise HTTPException(status_code=400, detail=NO_ADDRESS)
+        their_address = S.address_from(str(seen), port)
         verdict = codes.check(body.get("code"))
         if verdict == C.NO_CODE:
             raise HTTPException(status_code=403, detail=NOT_SHOWING)
         if verdict == C.EXPIRED:
             raise HTTPException(status_code=403, detail=CODE_EXPIRED)
         if verdict == C.USED_UP:
+            # The screen showing the code is told it ended (review, v1.497.0):
+            # it would otherwise keep a dead code up for the rest of its ten
+            # minutes.
+            await _publish(EventType.PEER_CODE_ENDED, {"why": "wrong_tries"})
             raise HTTPException(status_code=403, detail=CODE_USED_UP)
         if verdict != C.OK:
             raise HTTPException(status_code=401, detail=CODE_WRONG)
-        # The code was right (and is now used up). Where the other computer
-        # is: the address its request came from, else the one it says it has.
-        client = getattr(request, "client", None)
-        seen = _ip(getattr(client, "host", "") if client else "") or _ip(body.get("address"))
-        if seen is None:
-            raise HTTPException(status_code=400, detail=NO_ADDRESS)
-        their_address = S.address_from(str(seen), port)
-        # Where THIS computer is, as the other one reaches it: the address it
-        # dialed (the Host guard already accepted it).
-        host = (request.headers.get("host") or "").strip()
-        my_address = f"{request.url.scheme or 'http'}://{host}" if host else ""
-        if not my_address:
-            raise HTTPException(status_code=400, detail=NO_ADDRESS)
-        store = _store()
+        # The code was right (and is now used up).
         their_name = S.peer_name(body.get("name"))
         in_token = _secrets.token_urlsafe(32)
 
-        def _keep() -> Any:
+        def _keep() -> tuple[Any, str]:
+            store = _store()
             name, replaces = store.free_name(their_name, address=their_address)
-            return store.add(
+            peer = store.add(
                 name=name,
                 their_name=their_name,
                 address=their_address,
@@ -328,9 +383,16 @@ def register(app: FastAPI, d: Any) -> None:
                 my_address=my_address,
                 replaces=replaces,
             )
+            return peer, store.this_name()
 
-        peer = await asyncio.to_thread(_keep)
-        this_name = await asyncio.to_thread(store.this_name)
+        try:
+            peer, this_name = await asyncio.to_thread(_keep)
+        except Exception:  # noqa: BLE001 — never the exception's text to the other computer
+            # ``add`` took back whatever it had written. The app's own 500
+            # envelope would have sent this door's caller — anyone on the
+            # network who had the code — the exception class and message.
+            log.warning("pairing: could not keep the pairing", exc_info=True)
+            raise HTTPException(status_code=500, detail=KEEP_FAILED) from None
         await _publish(EventType.PEER_PAIRED, {"name": peer.name})
         return {
             "protocol": L.PROTOCOL,
@@ -345,16 +407,29 @@ def register(app: FastAPI, d: Any) -> None:
         side too. Checked by the token this computer made for that peer."""
         if not _codes().take_try():
             raise HTTPException(status_code=429, detail=TOO_MANY_TRIES)
-        store = _store()
-        peer = await asyncio.to_thread(store.verify, _bearer(request))
+        token = _bearer(request)
+
+        def _end() -> Any:
+            store = _store()
+            peer = store.verify(token)
+            if peer is not None:
+                store.remove(peer.name)
+            return peer
+
+        try:
+            peer = await asyncio.to_thread(_end)
+        except Exception:  # noqa: BLE001 — fail closed, in words, never the exception's text
+            # This door takes no install token: the app's own 500 envelope
+            # would have handed its caller the exception's class and message.
+            log.warning("pairing: could not end a pairing the other computer ended", exc_info=True)
+            raise HTTPException(status_code=503, detail=UNPAIR_FAILED) from None
         if peer is None:
             raise HTTPException(status_code=401, detail=UNKNOWN_TOKEN)
-        await asyncio.to_thread(store.remove, peer.name)
         await _publish(EventType.PEER_REMOVED, {"name": peer.name, "by": "them"})
         return {"removed": True}
 
     async def _check_one(peer: Any) -> dict[str, Any]:
-        store = _store()
+        store = await asyncio.to_thread(_store)
         token = await asyncio.to_thread(store.out_token, peer)
         ok = False
         try:
@@ -372,14 +447,14 @@ def register(app: FastAPI, d: Any) -> None:
     async def check_all(request: Request) -> dict[str, Any]:
         """Ask every paired computer whether it still answers (all at once,
         each bounded)."""
-        peers = await asyncio.to_thread(_store().list)
+        peers = await asyncio.to_thread(lambda: _store().list())
         if peers:
             await asyncio.gather(*(_check_one(p) for p in peers))
-        return _view(request)
+        return await asyncio.to_thread(_view, request)
 
     @app.post("/peers/{name}/check")
     async def check_one(name: str) -> dict[str, Any]:
-        peer = await asyncio.to_thread(_store().get, name)
+        peer = await asyncio.to_thread(lambda: _store().get(name))
         if peer is None:
             raise HTTPException(status_code=404, detail="No paired computer has that name.")
         return await _check_one(peer)
@@ -388,7 +463,7 @@ def register(app: FastAPI, d: Any) -> None:
     async def remove_peer(name: str) -> dict[str, Any]:
         """End a pairing: tell the other computer (one bounded try), then
         remove it here whatever it answered."""
-        store = _store()
+        store = await asyncio.to_thread(_store)
         peer = await asyncio.to_thread(store.get, name)
         if peer is None:
             raise HTTPException(status_code=404, detail="No paired computer has that name.")

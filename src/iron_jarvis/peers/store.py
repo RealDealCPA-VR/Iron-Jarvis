@@ -68,6 +68,19 @@ def peer_name(raw: object) -> str:
     return text if _REMOTE_NAME.match(text or "") else FALLBACK_NAME
 
 
+_SUFFIX = re.compile(r"-([2-9]|[1-9][0-9]{1,3})$")
+
+
+def _suffixed(name: str, base: str) -> bool:
+    """Is ``name`` what :meth:`PeerStore.free_name` makes of ``base`` when
+    the plain name is taken (``base`` cut to fit, then ``-2``, ``-3`` ...)?"""
+    m = _SUFFIX.search(name or "")
+    if not m:
+        return False
+    suffix = m.group(0)
+    return name[: -len(suffix)] == base[: 40 - len(suffix)]
+
+
 def valid_token(raw: object) -> bool:
     return isinstance(raw, str) and bool(_TOKEN.match(raw))
 
@@ -90,6 +103,11 @@ def out_secret_name(peer_id: str) -> str:
 
 class AddressProblem(ValueError):
     """A typed address that cannot be a computer's address, in plain words."""
+
+
+class NameTaken(RuntimeError):
+    """A remote agent took the pairing's name between choosing it and keeping
+    the pairing; nothing was written."""
 
 
 def normalize_address(typed: object) -> str:
@@ -263,24 +281,52 @@ class PeerStore:
 
     # -- names ---------------------------------------------------------------
 
+    def taken_names(self) -> set[str]:
+        """Every name, case-folded, that "@" in chat (or on the phone) already
+        sends somewhere ELSE here: a built-in agent ("@builder"), a custom
+        agent, the words that mean Iron Jarvis itself ("@jarvis",
+        ``comm.inbound.JARVIS_MENTIONS``), and every remote agent and pairing.
+        Chat resolves a mention case-insensitively and an agent here before a
+        remote one (``agents/roster.resolve_target``), so a pairing named like
+        any of these would be told "write @builder" and never be reached by it
+        (review, v1.497.0)."""
+        from ..agents.dynamic_models import DynamicAgentRecord
+        from ..agents.remote import RemoteAgentRegistry
+        from ..comm.inbound import JARVIS_MENTIONS
+        from ..core.models import AgentType
+
+        taken = {t.value.casefold() for t in AgentType}
+        taken |= {m.casefold() for m in JARVIS_MENTIONS}
+        taken |= {p.name.casefold() for p in self.list()}
+        taken |= {r.name.casefold() for r in RemoteAgentRegistry(self.engine).list()}
+        with session_scope(self.engine) as db:
+            taken |= {str(n or "").casefold() for n in db.exec(select(DynamicAgentRecord.name))}
+        taken.discard("")
+        return taken
+
     def free_name(self, wanted: object, *, address: str = "") -> tuple[str, PeerRecord | None]:
         """A name for a new pairing, and the pairing it replaces.
 
         The same name AND the same address is the same computer pairing again:
-        that pairing is replaced. A name another pairing or a remote agent the
-        user added by hand already has gets ``-2``, ``-3`` ... so nothing the
-        user made is ever overwritten."""
-        from ..agents.remote import RemoteAgentRegistry
-
+        that pairing is replaced. A name anything here already answers to
+        (:meth:`taken_names`: another pairing, a remote agent the user added by
+        hand, an agent, Iron Jarvis itself), in any case, gets ``-2``, ``-3`` ...
+        so nothing the user made is ever overwritten and "@<name>" always
+        reaches the other computer."""
         base = peer_name(wanted)
-        peers = {p.name: p for p in self.list()}
-        remotes = {r.name for r in RemoteAgentRegistry(self.engine).list()}
-        same = peers.get(base)
-        if same is not None and address and same.address == address:
-            return base, same
+        listed = self.list()
+        if address:
+            # The same computer pairing again: at the same address, under the
+            # name it got last time — which may have been ``base-2`` (a name
+            # here was taken then). Matching the plain name alone made such a
+            # computer a NEW pairing each time and left the dead one listed.
+            for p in listed:
+                if p.address == address and (p.name == base or _suffixed(p.name, base)):
+                    return p.name, p
+        taken = self.taken_names()
         name = base
         n = 2
-        while name in peers or name in remotes:
+        while name.casefold() in taken:
             suffix = f"-{n}"
             name = base[: 40 - len(suffix)] + suffix
             n += 1
@@ -308,25 +354,63 @@ class PeerStore:
         with _LOCK:
             if replaces is not None:
                 self._remove_parts(replaces)
+            reg = RemoteAgentRegistry(self.engine)
+            # A remote agent made under this name since the name was chosen
+            # (by hand, a moment ago) is never overwritten: ``upsert`` would
+            # replace its address and its credential.
+            if reg.get(name) is not None:
+                raise NameTaken(name)
             row = PeerRecord(name=name, their_name=peer_name(their_name) if their_name else "",
                              address=address)
             row.in_secret = in_secret_name(row.id)
             row.out_secret = out_secret_name(row.id)
             row.last_ok_at = utcnow()
-            self.secrets.set(row.in_secret, in_token, kind="token",
-                             description=f"Lets {name}, a paired computer, reach this one")
-            self.secrets.set(row.out_secret, out_token, kind="token",
-                             description=f"Lets this computer reach {name}, a paired computer")
-            reg = RemoteAgentRegistry(self.engine)
-            reg.upsert(name, door_url(address), "http-task", secret_name=row.out_secret,
-                       enabled=True, timeout_s=120)
-            reg.enable_inbound(name, self.secrets.set, url=inbound_url(my_address, name))
-            with session_scope(self.engine) as db:
-                db.add(row)
-                db.commit()
-                db.refresh(row)
-                db.expunge(row)
+            try:
+                self.secrets.set(row.in_secret, in_token, kind="token",
+                                 description=f"Lets {name}, a paired computer, reach this one")
+                self.secrets.set(row.out_secret, out_token, kind="token",
+                                 description=f"Lets this computer reach {name}, a paired computer")
+                reg.upsert(name, door_url(address), "http-task", secret_name=row.out_secret,
+                           enabled=True, timeout_s=120)
+                reg.enable_inbound(name, self.secrets.set, url=inbound_url(my_address, name))
+                with session_scope(self.engine) as db:
+                    db.add(row)
+                    db.commit()
+                    db.refresh(row)
+                    db.expunge(row)
+            except BaseException:
+                # All or nothing (review, v1.497.0): a pairing half-written —
+                # two tokens and a remote agent holding a working credential
+                # with no record — is taken back before the failure goes on.
+                self._undo_half(row, name)
+                raise
             return row
+
+    def _undo_half(self, row: PeerRecord, name: str) -> None:
+        """Take back what :meth:`add` wrote before it failed. Never raises."""
+        from ..agents.remote import RemoteAgentRegistry
+
+        try:
+            reg = RemoteAgentRegistry(self.engine)
+            rec = reg.get(name)
+            if rec is not None and rec.secret_name == row.out_secret:
+                if rec.inbound_secret_name:
+                    self._forget(rec.inbound_secret_name)
+                reg.remove(name)
+        except Exception:  # noqa: BLE001
+            log.warning("paired computer: could not take back a half-made remote agent", exc_info=True)
+        # The inbound key is named by the remote's name, never by the row, so
+        # it is forgotten here too when the remote agent was not written.
+        for key in (row.in_secret, row.out_secret, f"remote_agent.inbound.{name}"):
+            self._forget(key)
+        try:
+            with session_scope(self.engine) as db:
+                kept = db.get(PeerRecord, row.id)
+                if kept is not None:
+                    db.delete(kept)
+                    db.commit()
+        except Exception:  # noqa: BLE001
+            log.warning("paired computer: could not take back a half-made record", exc_info=True)
 
     def remove(self, name: str) -> bool:
         """End a pairing here: its record, its tokens and its remote agent."""
@@ -443,5 +527,16 @@ def is_paired_remote(platform: Any, remote_name: str) -> bool:
     """Is ``remote_name`` the remote agent a pairing made? Never raises."""
     try:
         return store_for(platform).get(remote_name) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def is_paired_name(platform: Any, remote_name: str) -> bool:
+    """Does a pairing hold ``remote_name`` in any case? A NEW remote agent
+    under it would be the same "@name" in chat (mentions are read
+    case-insensitively) or would overwrite the pairing's own. Never raises."""
+    try:
+        wanted = str(remote_name or "").casefold()
+        return bool(wanted) and any(p.name.casefold() == wanted for p in store_for(platform).list())
     except Exception:  # noqa: BLE001
         return False

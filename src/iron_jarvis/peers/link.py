@@ -196,6 +196,15 @@ async def check(address: str, token: str) -> None:
             "That computer no longer knows this one: the pairing was removed there. Remove it here and pair "
             "again.", status
         )
+    if status == 403:
+        # Its Host guard turned away the address it was paired at. At pairing
+        # time that means "type another address"; here nothing is being typed
+        # (review, v1.497.0), so say what it means now.
+        raise LinkFailed(
+            f"The computer at {address} answered, but it no longer answers to that address. On that computer, "
+            "Settings › Connections › Your other computers lists the addresses it answers to now: remove it "
+            "here and pair again with one of them.", status
+        )
     raise _refused(status, text, address)
 
 
