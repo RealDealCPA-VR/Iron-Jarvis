@@ -646,7 +646,6 @@ TASK_DATA = "harness_bench/tasks/"
 ALLOWED_RAW_SPAWNS: dict[str, str] = {
     "core/procs.py": "the door itself (plus the plain taskkill fallback)",
     "terminals/backend.py": "Build panes: own ConPTY / kill-on-close Job (the Build lane)",
-    "terminals/recipes.py": "Build lane: a bounded --help probe of a CLI the pane launches",
     "mcp/client.py": "MCP packs: long-lived stdio child with its own kill-on-close Job",
     "iron_proxy/service.py": "Iron-Proxy must SURVIVE a daemon crash (re-adopted by the next one)",
     "codehost.py": ("v1.422.0 Build › Code's code host and its launcher: the host must SURVIVE a restart, so it "

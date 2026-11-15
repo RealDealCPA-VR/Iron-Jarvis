@@ -93,6 +93,7 @@ are routes the check counts as called that have no caller.
 | POST | `/code-artifacts` | KEEP (unsure) | Save a script by hand; the Artifacts page has no Save form (agents save through the code tool). By hand: the list's `GET` is called. |
 | POST | `/workflows/runs/prune` | KEEP (unsure) | Trims finished workflow-run history (the newest `keep` stay); nothing calls it. By hand: `/workflows/runs/${id}` reads as a caller. |
 | GET | `/skills/proposals` | KEEP (unsure) | The skill-proposal list; the Skills page reads proposals inside `GET /skills/learning`. By hand: `/skills/${name}` reads as a caller. |
+| GET | `/chat/threads/{thread_id}/older` | KEEP | v1.499.3: a long chat's messages past the newest 200, kept instead of deleted (`chat_append.ChatOlderMessage`). History search already reaches them; no screen shows them yet (open in `docs/rules/context.md`). |
 
 ## What this wave removed from the dashboard
 

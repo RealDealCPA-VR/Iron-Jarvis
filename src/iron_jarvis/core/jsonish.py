@@ -88,7 +88,7 @@ def first_balanced(text: str, opener: str = "{") -> str | None:
 
 def balanced_spans(text: str, opener: str = "{") -> list[tuple[int, int]]:
     """Every balanced ``{…}`` (or ``[…]``) in *text* as ``(start, end)``
-    spans (end exclusive), nested ones included, ordered by where they start
+    spans (end exclusive), top-level ones only, ordered by where they start
     (v1.499.3). ONE string-aware pass with a stack, so the cost is linear in
     ``len(text)`` however many openers it holds. Outside any bracket a quote
     is prose (an apostrophe, a quoted word) and is not tracked, exactly as
@@ -116,7 +116,13 @@ def balanced_spans(text: str, opener: str = "{") -> list[tuple[int, int]]:
         elif ch == opener:
             stack.append(i)
         elif ch == closer:
-            spans.append((stack.pop(), i + 1))
+            start = stack.pop()
+            # TOP-LEVEL spans only (v1.499.3 CI): a span nested inside an
+            # opener that never closes is a FRAGMENT of a torn value. A
+            # truncated config file read back as its inner server entry, so
+            # the importer took a broken file for a readable one.
+            if not stack:
+                spans.append((start, i + 1))
     spans.sort(key=lambda s: s[0])
     return spans
 

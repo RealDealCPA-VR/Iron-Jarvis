@@ -603,3 +603,14 @@ def test_the_older_messages_table_is_made_at_boot(tmp_path):
                          capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stderr[-2000:]
     assert out.stdout.strip().splitlines()[-1] == "True"
+
+
+def test_a_torn_value_never_reads_as_its_inner_fragment():
+    """Later openers are tried only at the TOP level (v1.499.3 CI): a
+    truncated config whose outer object never closes is unreadable, never
+    its inner server entry; two top-level candidates still work."""
+    from iron_jarvis.core.jsonish import loads_object
+
+    torn = '{"mcpServers": {"brave": {"command": "x", "env": {"K": "v"}}'
+    assert loads_object(torn) is None
+    assert loads_object('Set the {name} field like this: {"name": "Q3 report"}') == {"name": "Q3 report"}

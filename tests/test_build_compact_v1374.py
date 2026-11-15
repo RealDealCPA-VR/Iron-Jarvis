@@ -51,7 +51,11 @@ from tests.test_build_sessions_v1367 import (
 )
 
 #: A small window, pinned the way a user pins one (``model_context_windows``).
-WINDOW = 9_000
+#: v1.499.3: 12,000, not 9,000. Each completion now counts its tool
+#: definitions against the window (Build › Code sends about 5,400 tokens of
+#: them), and at 9,000 the seeded conversation plus the tools was over the
+#: window, so the turn rightly left out the oldest messages these tests read.
+WINDOW = 12_000
 
 
 @pytest.fixture()
