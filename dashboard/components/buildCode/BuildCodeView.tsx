@@ -252,6 +252,13 @@ import { HelperLines } from "@/components/buildCode/HelperLines";
 // v1.426.0 (Wave 6 lane B, E5): a folder's defaults for new sessions.
 import { FolderDefaultsButton, FolderDefaultsPanel } from "@/components/folders/FolderDefaultsPanel";
 import { toolDefaultsWords, type ToolDefaults } from "@/lib/folderDefaults";
+import {
+  BUILD_CODE_PANE_WIDTH_KEY,
+  PANE_WIDTH_CLASS,
+  PaneEdge,
+  paneWidthStyle,
+  usePaneWidth,
+} from "@/components/PaneEdge";
 /** "At the bottom" for the transcript, in pixels. */
 const BOTTOM_SLACK_PX = 48;
 
@@ -390,6 +397,9 @@ function SessionPane({
   onPickerOpen?: () => void;
 }) {
   const [session, setSession] = useState<CodeSession | null>(null);
+  // v1.500.2: the right-hand panel's width, dragged on its left edge
+  // (components/PaneEdge); null: the standard width.
+  const [paneWidth, setPaneWidth] = usePaneWidth(BUILD_CODE_PANE_WIDTH_KEY);
   /** v1.474.0 (Hand off): this session's helpers, and the session a helper
    *  belongs to. */
   const [helpers, setHelpers] = useState<CodeHelper[]>([]);
@@ -2223,8 +2233,13 @@ function SessionPane({
       <aside
         aria-label="Changes, usage, files and session"
         data-testid="code-panes-aside"
-        className="flex h-[70vh] w-full shrink-0 flex-col border-t border-white/[0.06] p-2 xl:h-auto xl:min-h-0 xl:w-[320px] xl:border-l xl:border-t-0 2xl:w-[400px]"
+        data-pane-width={paneWidth ?? undefined}
+        style={paneWidthStyle(paneWidth)}
+        className={`relative flex h-[70vh] w-full shrink-0 flex-col border-t border-white/[0.06] p-2 xl:h-auto xl:min-h-0 xl:border-l xl:border-t-0 ${
+          paneWidth !== null ? PANE_WIDTH_CLASS : "xl:w-[320px] 2xl:w-[400px]"
+        }`}
       >
+        <PaneEdge width={paneWidth} fallback={320} onCommit={setPaneWidth} testId="code-panes-edge" />
         <CodePanes
           session={session}
           tools={tools}

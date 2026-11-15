@@ -256,6 +256,35 @@ describe("the pane column collapses and has two widths", () => {
     expect(panesWidthClass({ collapsed: false, wide: false })).toContain("xl:w-[320px]");
   });
 
+  // v1.500.2 (the owner: the panel "should be draggable"): its left edge is
+  // a drag handle; a dragged width wins over the presets, is remembered, and
+  // the width button goes back to a preset. A collapsed strip has no edge.
+  it("the column's left edge drags its width; the width button goes back to a preset", async () => {
+    render(
+      <HarnessSession threadId="s1" terminal={terminal} listRunning={false} onChanged={() => {}} onGone={() => {}} />,
+    );
+    const aside = await screen.findByTestId("harness-panes-aside");
+    const edge = within(aside).getByTestId("harness-panes-edge");
+    expect(edge).toHaveAttribute("role", "separator");
+    fireEvent.pointerDown(edge, { clientX: 1000, button: 0, pointerId: 1 });
+    fireEvent.pointerMove(edge, { clientX: 800, pointerId: 1 });
+    fireEvent.pointerUp(edge, { clientX: 800, pointerId: 1 });
+    expect(aside).toHaveAttribute("data-pane-width", "520");
+    expect(aside.style.getPropertyValue("--side-w")).toBe("520px");
+    expect(aside.className).toContain("xl:w-[var(--side-w)]");
+    expect(aside.className).not.toContain("xl:w-[320px]");
+    expect(localStorage.getItem("ij.harness.side.width")).toBe("520");
+    // Wider: the preset again, the dragged width forgotten.
+    fireEvent.click(screen.getByTestId("harness-panes-width"));
+    expect(aside.getAttribute("data-panes")).toBe("wide");
+    expect(aside.hasAttribute("data-pane-width")).toBe(false);
+    expect(aside.className).toContain("xl:w-[480px]");
+    expect(localStorage.getItem("ij.harness.side.width")).toBeNull();
+    // Collapsed: the strip has no edge.
+    fireEvent.click(screen.getByTestId("harness-panes-toggle"));
+    expect(within(aside).queryByTestId("harness-panes-edge")).toBeNull();
+  });
+
   it("the split's shared pane column has no collapse or width buttons", () => {
     render(panes(view()));
     expect(screen.queryByTestId("harness-panes-toggle")).toBeNull();

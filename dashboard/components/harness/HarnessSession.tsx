@@ -112,6 +112,13 @@ import {
   type PanesLayout,
   type SessionTerminalApi,
 } from "@/components/harness/HarnessPanes";
+import {
+  CHAT_CODE_PANE_WIDTH_KEY,
+  PANE_WIDTH_CLASS,
+  PaneEdge,
+  paneWidthStyle,
+  usePaneWidth,
+} from "@/components/PaneEdge";
 import type { LiveTimelineHandle } from "@/components/harness/HarnessTimeline";
 import { createLiveTimeline } from "@/lib/buildTimeline";
 import { AccountChip, AccountLimitCard, AccountList } from "@/components/harness/HarnessAccounts";
@@ -641,10 +648,18 @@ export function HarnessSession({
   // session is drawn in the browser only (Chat › Code loads in the browser);
   // `readPanesLayout` answers the default where there is no storage.
   const [panesLayout, setPanesLayout] = useState<PanesLayout>(readPanesLayout);
-  const onPanesLayout = useCallback((next: PanesLayout) => {
-    setPanesLayout(next);
-    writePanesLayout(next);
-  }, []);
+  // v1.500.2: a width dragged on the column's left edge (components/
+  // PaneEdge) wins over the two preset widths; the width button goes back
+  // to a preset (it clears the dragged width).
+  const [paneWidth, setPaneWidth] = usePaneWidth(CHAT_CODE_PANE_WIDTH_KEY);
+  const onPanesLayout = useCallback(
+    (next: PanesLayout) => {
+      if (next.wide !== panesLayout.wide) setPaneWidth(null);
+      setPanesLayout(next);
+      writePanesLayout(next);
+    },
+    [panesLayout.wide, setPaneWidth],
+  );
   const catalog = useModels();
   // v1.384.0: WHERE THE USER WAS (lib/turnCache) — the session last read
   // and its running reply as this window last drew it (this component is
@@ -3918,8 +3933,20 @@ export function HarnessSession({
         <aside
           data-testid="harness-panes-aside"
           data-panes={panesLayout.collapsed ? "collapsed" : panesLayout.wide ? "wide" : "narrow"}
-          className={`flex w-full shrink-0 flex-col xl:h-auto xl:min-h-0 ${panesLayout.collapsed ? "h-auto" : "h-[70vh]"} ${panesWidthClass(panesLayout)}`}
+          data-pane-width={!panesLayout.collapsed && paneWidth !== null ? paneWidth : undefined}
+          style={panesLayout.collapsed ? undefined : paneWidthStyle(paneWidth)}
+          className={`relative flex w-full shrink-0 flex-col xl:h-auto xl:min-h-0 ${panesLayout.collapsed ? "h-auto" : "h-[70vh]"} ${
+            !panesLayout.collapsed && paneWidth !== null ? PANE_WIDTH_CLASS : panesWidthClass(panesLayout)
+          }`}
         >
+          {panesLayout.collapsed ? null : (
+            <PaneEdge
+              width={paneWidth}
+              fallback={panesLayout.wide ? 480 : 320}
+              onCommit={setPaneWidth}
+              testId="harness-panes-edge"
+            />
+          )}
           {panesEl}
         </aside>
       ) : panesInto ? (

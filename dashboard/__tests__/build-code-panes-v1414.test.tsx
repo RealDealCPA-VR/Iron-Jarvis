@@ -424,4 +424,30 @@ describe("in the real Build › Code view", () => {
     expect(aside.className).toContain("xl:w-[320px]");
     expect(within(row).getByTestId("code-session").className).toContain("flex-none");
   });
+
+  // v1.500.2 (the owner: the panel "should be draggable"): its left edge is
+  // a drag handle; the width is remembered and a double-click goes back.
+  it("its left edge drags its width, remembered; a double-click goes back to the standard width", async () => {
+    setGets({
+      "/build/app/harnesses": RAW_TOOLS,
+      "/build/app/sessions": { sessions: [RAW_SESSION] },
+      "/build/app/sessions/app_1": { session: RAW_SESSION, events: [], running: null, pending: [] },
+      "/profile/share": { clis: [], limit: 4000 },
+    });
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    window.localStorage.setItem("ij.buildCode.side.width", "600");
+    render(<BuildCodeView initialSession="app_1" onOpenedTerminal={() => {}} />);
+    const row = await screen.findByTestId("code-session-row");
+    const aside = within(row).getByTestId("code-panes-aside");
+    expect(aside).toHaveAttribute("data-pane-width", "600");
+    expect(aside.className).toContain("xl:w-[var(--side-w)]");
+    expect(aside.className).not.toContain("xl:w-[320px]");
+    const edge = within(aside).getByTestId("code-panes-edge");
+    fireEvent.keyDown(edge, { key: "ArrowRight" });
+    expect(aside).toHaveAttribute("data-pane-width", "584");
+    expect(window.localStorage.getItem("ij.buildCode.side.width")).toBe("584");
+    fireEvent.doubleClick(edge);
+    expect(aside.hasAttribute("data-pane-width")).toBe(false);
+    expect(aside.className).toContain("xl:w-[320px]");
+  });
 });

@@ -2042,6 +2042,17 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Resize the panel beside a coding session (v1.500.2)
+
+In Chat › Code and Build › Code, the panel on the right (plan, timeline,
+changes, usage, files and the rest) can now be made wider or narrower: drag
+its left edge. Drag left to give the panel more room, right to give the
+conversation more. Each view remembers its own width. Double-click the edge
+to go back to the standard width; in Chat › Code the wider/narrower button
+does that too. With the keyboard, Tab to the edge and use the arrow keys.
+The panel always leaves the conversation room to read. On a narrow window,
+where the panel sits under the conversation, there is no edge to drag.
+
 ## Archive or delete a coding session from the list (v1.500.1)
 
 In Chat › Code, every session in the sidebar list now has a ⋯ button (it
