@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.499.3 (2026-11-15).*
+holds itself to. Current as of v1.499.4 (2026-11-15).*
 
 ---
 
@@ -2042,11 +2042,12 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## A deep review of the whole app: fixes for privacy, safety and lost work (v1.499.3)
+## A deep review of the whole app: fixes for privacy, safety and lost work (v1.499.4)
 
 Seven reviewers read the whole app area by area; every finding below was
 reproduced or traced in the code before it was fixed, and each fix has a
-test that failed first.
+test that failed first. (These were built as v1.499.3, which never reached
+you: its own checks found six more problems, fixed here.)
 
 - **Redacting a filled PDF form now removes what was typed into its fields.**
   A value typed into a form field (an SSN on a W-9, say) was left in the

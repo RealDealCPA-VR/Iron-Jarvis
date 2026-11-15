@@ -2,7 +2,7 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
-## v1.499.3
+## v1.499.4
 
 **A deep review of the whole app: fixes for privacy, safety and lost work.** Seven reviewers read the whole app area by area; every finding below was reproduced or traced in the code before it was fixed, and each fix has a test that failed first.
 
