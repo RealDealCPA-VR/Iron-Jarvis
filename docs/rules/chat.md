@@ -2607,7 +2607,12 @@ How to use this file: read the contents list, then read only the entries your ch
   is not one), `said_no`, `asks_for_file`, `BLOCKED_WORDS` ("Bloqueado:"
   ends a loop: until_done, give_up, finish's caller, check_again),
   `covered(text)` (prose only, code stripped; mostly another script = False;
-  fewer than `MIN_WORDS` 6 words = True). Each is called BESIDE the English
+  fewer than `MIN_WORDS` 6 words = True; a Latin-script reply is False ONLY
+  on positive evidence, `_FOREIGN_WORDS` or `_FOREIGN_LETTER_RX`
+  (case-sensitive: under IGNORECASE "ı" matches "i"); no evidence = True —
+  the first branch run on CI took "There is one file, notes.txt." for
+  another language and an agent run asked a side question; pinned against
+  every English sentence of the Handbook). Each is called BESIDE the English
   reading by its owner (`chat_turn._claimed_write_names`,
   `_asked_for_a_file` — the English question check runs FIRST: French
   "prépare" matches English "prepare" —, `give_up.gives_up`,

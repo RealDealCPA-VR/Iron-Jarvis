@@ -420,6 +420,28 @@ _STOPWORDS: dict[str, frozenset[str]] = {
     "nl": frozenset("de het een niet van dat ik je met voor op zijn maar ook nog wel dit naar "
                     "is en".split()),
 }
+#: Common words of Latin-script languages these readings do NOT know. Only
+#: this positive evidence (or :data:`_FOREIGN_LETTER_RX`) makes a Latin-script
+#: reply "another language": a reply that is merely list-like ("Claude Code,
+#: Codex or Pi.") is judged as it always was.
+_FOREIGN_WORDS: dict[str, frozenset[str]] = {
+    "nordic": frozenset("jeg jag og och er är det ikke inte har den har jeg til av som på med "
+                        "nu klar".split()),
+    "fi": frozenset("ja se nyt ei olen että tämä kanssa mutta myös".split()),
+    "pl": frozenset("nie jest się że jak ale już tak dla tylko".split()),
+    "cs": frozenset("je jsem není že jak ale už pro jsou".split()),
+    "tr": frozenset("ve bir bu için ile ama çok daha olarak".split()),
+    "id": frozenset("saya sudah dan yang anda untuk dengan ini itu tidak di".split()),
+    "tl": frozenset("ang ng mga sa ay ako ko na hindi".split()),
+    "ro": frozenset("și este nu cu pentru am fost sunt care".split()),
+}
+#: Letters only languages these readings do not know use (Polish, Czech,
+#: Turkish, Nordic, Romanian, Hungarian...).
+#: Case-sensitive on purpose: under IGNORECASE the Turkish dotless "ı"
+#: matches a plain "i", and every English reply would look foreign.
+_FOREIGN_LETTER_RX = re.compile(
+    "[łąęśżźćńőűøåæşğıțșăěřůčšžďťňľĺŕđŁĄĘŚŻŹĆŃŐŰØÅÆŞĞİȚȘĂĚŘŮČŠŽĎŤŇĽĹŔĐ]"
+)
 _WORD_RX = re.compile(r"[^\W\d_]+", re.UNICODE)
 _LATIN_RX = re.compile(r"[A-Za-zÀ-ɏ]")
 #: Prose shorter than this is judged as it always was (``covered`` = True).
@@ -449,9 +471,12 @@ def covered(text: str) -> bool:
 
     True for English and the six languages, and for prose too short to tell
     (fewer than :data:`MIN_WORDS` words outside code: a short reply is judged
-    as it always was). False
-    for a reply mostly in another script, or one with words but too few known
-    ones. Never raises (cannot tell = True: nothing extra is asked)."""
+    as it always was). False only on positive evidence: a reply mostly in
+    another script, or a Latin-script one holding common words
+    (:data:`_FOREIGN_WORDS`) or letters (:data:`_FOREIGN_LETTER_RX`) of a
+    language these readings do not know. A terse or list-like English reply
+    is True (pinned against every English sentence of the Handbook). Never
+    raises (cannot tell = True: nothing extra is asked)."""
     try:
         sample = _prose(str(text or "")[: MAX_TEXT * 2])[:MAX_TEXT]
         letters = sum(1 for ch in sample if ch.isalpha())
@@ -464,7 +489,18 @@ def covered(text: str) -> bool:
         if len(words) < MIN_WORDS:
             return True
         seen = set(words)
-        return any(len(seen & stop) >= 2 for stop in _STOPWORDS.values())
+        known = max(len(seen & stop) for stop in _STOPWORDS.values())
+        foreign = max(len(seen & stop) for stop in _FOREIGN_WORDS.values())
+        if foreign >= 2 and foreign > known:
+            return False
+        if known >= 2:
+            return True
+        if _FOREIGN_LETTER_RX.search(sample):
+            return False
+        # No evidence either way: judged as it always was. An English list of
+        # names or a terse English fragment is not a foreign reply, and only
+        # positive evidence (the words or letters above) says otherwise.
+        return True
     except Exception:  # noqa: BLE001
         return True
 

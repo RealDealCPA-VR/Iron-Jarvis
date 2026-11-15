@@ -247,9 +247,43 @@ def test_a_blocked_line_in_another_language_ends_the_loop(text, monkeypatch):
     ("报告已保存到 report.xlsx 文件中，请您打开查看一下。", False),
     ("Отчёт сохранён в файле report.xlsx, проверьте его пожалуйста.", False),
     ("Raport został zapisany w pliku report.xlsx, sprawdź go proszę teraz.", False),
+    # CI on the first v1.497.0 branch run: a terse ENGLISH answer with one
+    # common word was taken for another language and an agent run asked a
+    # side question (test_agent_text_tool_call_v14210 saw an extra call).
+    ("There is one file, notes.txt.", True),
+    ("Claude Code, Codex, Pi, OpenCode, Grok or Antigravity.", True),
+    ("Settings — models, connections, automation, memory, permissions, backups.", True),
+    ("Pinned items, recent chats, starred folders, quick actions, shortcuts, "
+     "notifications, updates, reminders, drafts, templates, archives, exports.", True),
+    # Under IGNORECASE the Turkish dotless i matched a plain "i".
+    ("Pick a file in this folder with Pi and Claude, then ship it.", True),
+    # Languages these readings do not know, told by their words or letters.
+    ("Jag har sparat rapporten i din mapp och den är klar nu.", False),
+    ("Jeg har gemt rapporten i din mappe, og den er klar.", False),
+    ("Tallensin raportin kansioosi ja se on nyt valmis.", False),
+    ("Raporu kaydettim ve klasörüne koydum, her şey hazır.", False),
+    ("Saya sudah menyimpan laporan di folder kerja Anda.", False),
+    ("Na-save ko na ang ulat sa iyong folder ngayon.", False),
+    ("Am salvat raportul în dosarul tău și este gata.", False),
 ])
 def test_which_language_is_known(text, want):
     assert L.covered(text) is want
+
+
+def test_no_english_sentence_of_the_handbook_reads_as_another_language():
+    """Every English sentence of the Handbook (over ten thousand, many terse
+    or list-like) is a language the readings know: a wrong False costs the
+    user a side question on an English reply."""
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "docs" / "HANDBOOK.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+    words = re.compile(r"[A-Za-z]+")
+    sents = [
+        s for line in text.split("\n") if len(words.findall(line)) >= 6
+        for s in re.split(r"(?<=[.!?])\s+", line.strip(" -*#>")) if len(words.findall(s)) >= 6
+    ]
+    assert len(sents) > 5000
+    wrong = [s for s in sents if not L.covered(s)]
+    assert wrong == [], wrong[:5]
 
 
 def test_every_reading_is_linear_on_hostile_text():
