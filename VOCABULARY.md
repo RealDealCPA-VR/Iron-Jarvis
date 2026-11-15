@@ -52,6 +52,7 @@ PR that ships it.
 | The user's own Chrome/Edge, driven by Jarvis | **Your browser** | browser bridge, chrome extension, browser agent |
 | A Jarvis-owned browser profile (phase 2) | **Jarvis browser** | managed browser, headless browser |
 | The thing you load into Chrome so Jarvis can reach it | **browser add-on** | chrome extension, browser extension |
+| A person or business the owner works for, known by its folders and confirmed by the owner (/clients, v1.499.0); a name Iron Jarvis noticed in the folders is only a suggestion until the owner says yes ("Is Hartleys a client?") | **client**; the page is **Clients**; the Memory section is **Your clients** | customer, account (never shown for a client; "customer" stays a search alias) |
 
 Two-way is a per-destination *upgrade*, not a new noun (decided in the
 messaging plan, shipped v1.136.0): the toggle that creates one reads

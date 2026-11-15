@@ -14,6 +14,13 @@
  * after the work went quiet, checked against the work's own record), and an
  * opened folder has a two-press "Forget this folder"; forgotten folders are
  * listed at the foot with "Remember again".
+ *
+ * v1.499.0 (Phase 3, clients): a folder that belongs to a client says so
+ * ("Client: Hartleys", a link to its page), from the `client` the SERVER put
+ * on the row; a folder with no client offers "Make this a client" in one
+ * press (`POST /clients {folder}`), except where the folder rules would
+ * refuse it anyway. `EntryRow` (one piece of work) is shared with the
+ * client page.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -22,6 +29,16 @@ import { ChevronRight, FolderClosed } from "lucide-react";
 import { get, post } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
 import { failureOf, type FailureLike } from "@/lib/loadFailed";
+import {
+  CLIENTS_PATH,
+  MAKE_THIS_A_CLIENT,
+  afterYes,
+  chipWords,
+  clientHref,
+  decodeAnswer,
+  mayMakeClient,
+  pressFailed,
+} from "@/lib/clients";
 import { plainText } from "@/lib/plainText";
 import { outcomeWords, statusWords, toneTextClass } from "@/lib/statusWords";
 import {
@@ -162,6 +179,33 @@ export function WorkByFolder() {
     [read],
   );
 
+  // v1.499.0: one press makes this folder a client. The daemon's folder
+  // rules decide (a folder for many people is refused in its own words);
+  // the list is read again so the row carries its client.
+  const [making, setMaking] = useState<string | null>(null);
+  const makeClient = useCallback(
+    async (f: WorkFolder) => {
+      if (making) return;
+      setMaking(f.folder);
+      try {
+        const res = await post<unknown>(CLIENTS_PATH, { folder: f.folder });
+        if (!alive.current) return;
+        const made = decodeAnswer(res);
+        setNote({
+          words: [afterYes(made.client?.name ?? f.name), made.note].filter(Boolean).join(" "),
+          failed: false,
+        });
+        read();
+      } catch (e) {
+        if (!alive.current) return;
+        setNote({ words: pressFailed(failureOf(e), "make this folder a client"), failed: true });
+      } finally {
+        if (alive.current) setMaking(null);
+      }
+    },
+    [making, read],
+  );
+
   const remember = useCallback(
     async (f: ForgottenFolder) => {
       try {
@@ -218,9 +262,10 @@ export function WorkByFolder() {
               const mine = work[f.folder];
               return (
                 <li key={f.folder} data-testid="work-folder">
+                  <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 rounded px-1 py-2 text-left hover:bg-white/5 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-2 text-left hover:bg-white/5 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
                     aria-expanded={isOpen}
                     onClick={() => toggleFolder(f.folder, isOpen)}
                   >
@@ -240,6 +285,28 @@ export function WorkByFolder() {
                       {f.lastAt ? `, last ${timeAgo(f.lastAt)}` : ""}
                     </span>
                   </button>
+                  {/* v1.499.0: the server's own answer to "whose folder is
+                      this?" — never worked out here. */}
+                  {f.client ? (
+                    <Link
+                      href={clientHref(f.client.id)}
+                      data-testid="work-folder-client"
+                      className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[12px] text-accent-soft underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+                    >
+                      {chipWords(f.client.name)}
+                    </Link>
+                  ) : mayMakeClient(f.folder) ? (
+                    <button
+                      type="button"
+                      data-testid="work-folder-make-client"
+                      disabled={making !== null}
+                      onClick={() => void makeClient(f)}
+                      className="shrink-0 rounded px-1 py-0.5 text-[12px] text-zinc-500 underline-offset-2 hover:text-accent-soft hover:underline disabled:opacity-40 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+                    >
+                      {MAKE_THIS_A_CLIENT}
+                    </button>
+                  ) : null}
+                  </div>
                   {isOpen && (
                     <div className="pb-3 pl-8">
                       {!mine || mine.state === "loading" ? (
@@ -305,6 +372,52 @@ export function WorkByFolder() {
   );
 }
 
+/** One piece of work, as the work record shows it (v1.499.0: shared with the
+ *  client page, which lists a client's work the same way). Render it inside
+ *  a `<ul>`. */
+export function EntryRow({ entry: e }: { entry: WorkItem }) {
+  // Said only when the work did not simply finish.
+  const ended =
+    e.outcome === "failed" || e.outcome === "cancelled" ? statusWords(e.outcome) : outcomeWords(e.outcome);
+  const files = filesWords(e);
+  return (
+    <li data-testid="work-item">
+      <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
+        {e.link ? (
+          <Link href={e.link} className="text-zinc-100 underline-offset-2 hover:underline">
+            {e.title}
+          </Link>
+        ) : (
+          <span className="text-zinc-100">{e.title}</span>
+        )}
+        <span className="text-[12px] text-zinc-500">
+          {kindWords(e.kind, e.tool)}
+          {e.updatedAt ? `, ${timeAgo(e.updatedAt)}` : ""}
+          {e.localOnly ? ", Local only" : ""}
+          {e.archived ? ", archived" : ""}
+        </span>
+        {ended && <span className={`text-[12px] ${toneTextClass(ended.tone)}`}>{ended.word}</span>}
+      </div>
+      {files && <p className="text-[12px] text-zinc-500">{files}</p>}
+      {e.note && <p className="text-[12px] text-zinc-500">{plainText(e.note)}</p>}
+      {e.recap && (
+        <div className="mt-1 border-l border-white/10 pl-2" data-testid="work-recap">
+          <ul className="space-y-0.5 text-[12px] text-zinc-400">
+            {e.recap.lines.map((line, i) => (
+              <li key={i}>{plainText(line)}</li>
+            ))}
+          </ul>
+          {!e.recap.current && (
+            <p className="text-[12px] text-zinc-500" data-testid="work-recap-stale">
+              {RECAP_STALE}
+            </p>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
 function FolderWorkList({ entries, total }: { entries: WorkItem[]; total: number }) {
   if (entries.length === 0) {
     return <p className="py-1 text-sm text-zinc-500">Nothing on record in this folder any more.</p>;
@@ -312,48 +425,9 @@ function FolderWorkList({ entries, total }: { entries: WorkItem[]; total: number
   return (
     <>
       <ul className="space-y-2">
-        {entries.map((e) => {
-          // Said only when the work did not simply finish.
-          const ended =
-            e.outcome === "failed" || e.outcome === "cancelled" ? statusWords(e.outcome) : outcomeWords(e.outcome);
-          const files = filesWords(e);
-          return (
-            <li key={e.id} data-testid="work-item">
-              <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                {e.link ? (
-                  <Link href={e.link} className="text-zinc-100 underline-offset-2 hover:underline">
-                    {e.title}
-                  </Link>
-                ) : (
-                  <span className="text-zinc-100">{e.title}</span>
-                )}
-                <span className="text-[12px] text-zinc-500">
-                  {kindWords(e.kind, e.tool)}
-                  {e.updatedAt ? `, ${timeAgo(e.updatedAt)}` : ""}
-                  {e.localOnly ? ", Local only" : ""}
-                  {e.archived ? ", archived" : ""}
-                </span>
-                {ended && <span className={`text-[12px] ${toneTextClass(ended.tone)}`}>{ended.word}</span>}
-              </div>
-              {files && <p className="text-[12px] text-zinc-500">{files}</p>}
-              {e.note && <p className="text-[12px] text-zinc-500">{plainText(e.note)}</p>}
-              {e.recap && (
-                <div className="mt-1 border-l border-white/10 pl-2" data-testid="work-recap">
-                  <ul className="space-y-0.5 text-[12px] text-zinc-400">
-                    {e.recap.lines.map((line, i) => (
-                      <li key={i}>{plainText(line)}</li>
-                    ))}
-                  </ul>
-                  {!e.recap.current && (
-                    <p className="text-[12px] text-zinc-500" data-testid="work-recap-stale">
-                      {RECAP_STALE}
-                    </p>
-                  )}
-                </div>
-              )}
-            </li>
-          );
-        })}
+        {entries.map((e) => (
+          <EntryRow key={e.id} entry={e} />
+        ))}
       </ul>
       {total > entries.length && (
         <p className="pt-2 text-[12px] text-zinc-500">

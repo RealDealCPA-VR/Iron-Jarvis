@@ -208,6 +208,9 @@ import { LocalOnlyOffer } from "@/components/chat/LocalOnlyOffer";
 import { ExcelNowStrip } from "@/components/chat/ExcelNowStrip";
 import { excelNowForSend } from "@/lib/excelNow";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
+// v1.499.0 (leap 3, Phase 3): "Is Hartleys a client?" under one reply.
+import { ClientQuestion } from "@/components/chat/ClientQuestion";
+import { applySettledQuestions, decodeClientQuestion, type ChatClientQuestion } from "@/lib/clients";
 import { ReplyRating, type ReplyRatingValue } from "@/components/chat/ReplyRating";
 import { ConfigCards } from "@/components/chat/ConfigCards";
 import { SecretPasteNotice } from "@/components/chat/SecretPasteNotice";
@@ -719,6 +722,11 @@ interface ChatMessage {
    *  line under the receipt. `state` records the user's answer, so a reload
    *  renders "Remembered: …" (or "won't suggest again"), never the ask. */
   suggestion?: ChatSuggestion;
+  /** v1.499.0 (leap 3, Phase 3): a name Iron Jarvis keeps seeing in this
+   *  chat's folders, asked under the reply ("Is Hartleys a client?", the
+   *  daemon's `client_question`). `state` records the owner's answer, so a
+   *  reopened chat shows the answer, never the question again. */
+  clientQuestion?: ChatClientQuestion;
   /** Calm UI redesign S3/S4: "Setting changed … [Undo]" and secure credential
    *  cards from this turn. A card's state (undone, saved) is stored here, so a
    *  reopened chat shows what happened, never the ask again. */
@@ -978,6 +986,9 @@ interface ChatResponse {
   /** v1.305.0: null or {id, text, count, quotes, since} — decoded through
    *  decodeSuggestion (the stream lane's whitelist), never trusted raw. */
   suggestion?: unknown;
+  /** v1.499.0: null or {id, name, folders, work} — decoded through
+   *  decodeClientQuestion, never trusted raw. */
+  client_question?: unknown;
   /** Redesign S3/S4: settings cards — decoded through decodeConfigCards. */
   config_cards?: unknown;
   /** v1.298.0: trust posture of the turn (optional on the wire). */
@@ -3046,6 +3057,9 @@ export interface RowHandlers {
   /** v1.305.0: the user answered the suggestion under reply `index` — store
    *  the answer on that message and save it. */
   settleSuggestion: (index: number, next: ChatSuggestion) => void;
+  /** v1.499.0: the owner answered "Is Hartleys a client?" under reply
+   *  `index` — store the answer on that message and save it. */
+  settleClientQuestion: (index: number, next: ChatClientQuestion) => void;
   /** Redesign S3/S4: a settings card under reply `index` changed (Undo
    *  pressed, credential saved) — store it on the message and save. */
   settleConfigCard: (index: number, cardIndex: number, next: ConfigCard) => void;
@@ -3418,6 +3432,10 @@ const MessageRow = memo(function MessageRow({
     );
   }
   const suggestion = decodeSuggestion(m.suggestion);
+  // v1.499.0: decoded again, like the suggestion (a reopened thread hands
+  // back whatever the disk held). One question line at most: a preference
+  // suggestion goes first, so a reply carrying one shows no client line.
+  const clientQuestion = suggestion ? null : decodeClientQuestion(m.clientQuestion);
   // v1.351.0 (G15): an app card's `connected` (what its save did) rides
   // beside the whitelist decoder, which does not know it.
   const configCards = withAppConnected(decodeConfigCards(m.configCards), m.configCards);
@@ -3650,6 +3668,15 @@ const MessageRow = memo(function MessageRow({
         <PreferenceSuggestion
           suggestion={suggestion}
           onSettle={(next) => h.settleSuggestion(i, next)}
+        />
+      )}
+      {/* CLIENT QUESTION (v1.499.0): "Is Hartleys a client?" in the same
+          quiet voice, asked once under one reply (components/chat/
+          ClientQuestion). Its answer is stored on the message. */}
+      {clientQuestion && clientQuestion.state !== "gone" && (
+        <ClientQuestion
+          question={clientQuestion}
+          onSettle={(next) => h.settleClientQuestion(i, next)}
         />
       )}
       {/* SETTINGS CARDS (redesign S3/S4): a change made in chat, with its
@@ -5030,6 +5057,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // each save through it, so a turn that began BEFORE the press (its history
   // still holds the open ask) can never put the question back on disk.
   const settledSuggestionsRef = useRef<Map<string, ChatSuggestion>>(new Map());
+  // v1.499.0: every client question answered in this window, by id (same
+  // reason: a turn that began before the press must not put it back).
+  const settledClientQuestionsRef = useRef<Map<string, ChatClientQuestion>>(new Map());
   // Redesign S3/S4: settings cards settled in this window (same reason).
   const settledCardsRef = useRef<Map<string, ConfigCard>>(new Map());
   // Redesign S4 (AUDIT Q9): a message held because it looks like a key or
@@ -6335,6 +6365,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   ) {
     if (msgs.length === 0) return;
     msgs = applySettled(msgs, settledSuggestionsRef.current);
+    msgs = applySettledQuestions(msgs, settledClientQuestionsRef.current);
     msgs = applySettledCards(msgs, settledCardsRef.current);
     // MESSAGING threads (owner === "daemon") are the server's to write: the
     // daemon has already persisted every message, and PUT would 409. The next
@@ -9271,6 +9302,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         const doors = doorsFrom(
           (streamRes as unknown as { doors?: unknown }).doors,
         );
+        // v1.499.0 (leap 3, Phase 3): "Is Hartleys a client?" — read off the
+        // stream result defensively like doors (the hook whitelists the done
+        // frame's fields; it hands `client_question` on as `clientQuestion`).
+        // MIRROR NOTE: the POST lane's receiptPost below decodes the same key.
+        const clientQuestion = decodeClientQuestion(
+          (streamRes as unknown as { clientQuestion?: unknown }).clientQuestion,
+        );
         // Adapted (v1.202.0) — the envelope's disclosure rides the message
         // like route/doors. MIRROR NOTE: keep in step with the POST lane's
         // receiptPost below — this exact merge line is where done-frame
@@ -9317,6 +9355,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           ...(madeDocs?.length ? { documents: madeDocs } : {}),
           ...(wfRun ? { workflowRun: wfRun } : {}),
           ...(doors ? { doors } : {}),
+          // v1.499.0: the client question (decoded above). MIRROR NOTE.
+          ...(clientQuestion ? { clientQuestion } : {}),
           // v1.323.0: the reply's own details (kept last: the trust pin reads
           // the head of this object).
           ...(thinkingText ? { thinking: thinkingText } : {}),
@@ -9522,6 +9562,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       const approvedPost = decodeApproved((res as { approved?: unknown }).approved);
       // v1.406.0: MIRROR NOTE — the stream lane's `brain` above.
       const brainPost = decodeBrainReceipt((res as { brain?: unknown }).brain);
+      // v1.499.0: the POST lane's copy of the stream lane's client question
+      // (`client_question`, always present, null when nothing is asked).
+      // MIRROR NOTE: keep in step with the stream path above.
+      const clientQuestionPost = decodeClientQuestion(res.client_question);
       const receiptPost = {
         at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
         ...(thinkingPost ? { thinking: thinkingPost } : {}),
@@ -9550,6 +9594,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         ...(res.documents?.length ? { documents: res.documents } : {}),
         ...(wfRunPost ? { workflowRun: wfRunPost } : {}),
         ...(doorsPost ? { doors: doorsPost } : {}),
+        // v1.499.0: the client question. MIRROR NOTE: the stream lane's.
+        ...(clientQuestionPost ? { clientQuestion: clientQuestionPost } : {}),
         // v1.324.0: the apps' resources this turn read (whitelisted).
         ...(decodeResourceReceipts((res as { resources?: unknown }).resources).length
           ? { appResources: decodeResourceReceipts((res as { resources?: unknown }).resources) }
@@ -11854,6 +11900,18 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // save now would race that turn's start save for the same thread.
       if (!busy) queueSave(updated);
     },
+    settleClientQuestion: (index, next) => {
+      // v1.499.0: exactly like settleSuggestion — remembered for every later
+      // save, stored on its message, saved now unless a turn is running.
+      settledClientQuestionsRef.current.set(next.id, next);
+      const cur = messagesRef.current;
+      const target = cur[index];
+      if (!target || decodeClientQuestion(target.clientQuestion)?.id !== next.id) return;
+      const updated = cur.map((m, j) => (j === index ? { ...m, clientQuestion: next } : m));
+      messagesRef.current = updated;
+      setMessages(updated);
+      if (!busy) queueSave(updated);
+    },
     settleConfigCard: (index, cardIndex, next) => {
       // Like settleSuggestion: remembered for every later save, so a turn
       // that began before the press cannot write the unsettled card back.
@@ -12058,6 +12116,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       handOff: (index) => rowImplRef.current.handOff(index),
       settleSuggestion: (index, next) =>
         rowImplRef.current.settleSuggestion(index, next),
+      settleClientQuestion: (index, next) =>
+        rowImplRef.current.settleClientQuestion(index, next),
       rateReply: (index, rating) => rowImplRef.current.rateReply(index, rating),
       retryMedia: (jobId) => rowImplRef.current.retryMedia(jobId),
       settleConfigCard: (index, cardIndex, next) =>

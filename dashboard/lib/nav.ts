@@ -34,6 +34,7 @@ import {
   FolderKanban,
   SquareKanban,
   Lightbulb,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { BUILD_BLURB, CHAT_BLURB } from "@/lib/buildWords";
@@ -150,11 +151,12 @@ export const NAV: NavSectionDef[] = [
         label: "Projects",
         icon: FolderKanban,
         // People ask for the THING they are working on, not for "projects".
+        // v1.499.0: "client" moved to the Clients page (owner decision 12);
+        // "matter", "case" and "workspace" stay here.
         aliases: [
           "project",
           "context",
           "workspace",
-          "client",
           "matter",
           "case",
           "folder",
@@ -638,6 +640,26 @@ export const NON_RAIL_ENTRIES: NavEntry[] = [
     ],
     blurb:
       "Every suggestion Iron Jarvis is waiting on you to accept or decline, in one place.",
+  },
+  // v1.499.0 (vision plan leap 3, Phase 3): the people and businesses the
+  // owner works for. Not a rail row this release (owner decision 12):
+  // Everything, Ctrl K, Memory and the chat's doors reach it. "client" and
+  // "customer" find it instead of Projects.
+  {
+    href: "/clients",
+    label: "Clients",
+    icon: Users,
+    aliases: [
+      "client",
+      "customer",
+      "customers",
+      "my clients",
+      "client list",
+      "who are my clients",
+      "client folders",
+      "client preferences",
+    ],
+    blurb: "The people and businesses you do work for: each one's folders, work and preferences together.",
   },
 ];
 

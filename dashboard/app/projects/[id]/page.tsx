@@ -67,6 +67,8 @@ import { timeAgo } from "@/lib/format";
 import { missionPath } from "@/lib/mission";
 import { sessionHref } from "@/lib/missionLinks";
 import { ProjectCodingSessions } from "@/components/projects/ProjectCodingSessions";
+// v1.499.0 (leap 3, Phase 3): "Client: Hartleys" when the folder is a client's.
+import { ClientOfFolder } from "@/components/clients/ClientPage";
 import { modelPickTitle, modelPickWords } from "@/lib/onboarding";
 
 /** GET /projects/{id} → the project (plus workspace fields) and recent sessions. */
@@ -805,6 +807,10 @@ function ProjectWorkspaceInner({
                         </>
                       )}
                     </button>
+                    {/* v1.499.0: the daemon says whose folder this is
+                        (GET /clients/of); a Project is linked to a client,
+                        never made into one. */}
+                    {project.root && <ClientOfFolder folder={project.root} />}
                   </div>
                   <FilePickerModal
                     open={rootPickerOpen}

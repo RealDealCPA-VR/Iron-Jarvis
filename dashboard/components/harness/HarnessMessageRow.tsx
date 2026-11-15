@@ -30,6 +30,8 @@ import { ReplyChanges } from "@/components/chat/ReplyChanges";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
 import { decodeSuggestion } from "@/lib/preferences";
+import { ClientQuestion } from "@/components/chat/ClientQuestion";
+import { decodeClientQuestion } from "@/lib/clients";
 import { DoorsStrip } from "@/components/chat/DoorsStrip";
 import type { ChangeUndoState } from "@/components/chat/ChangedFiles";
 import { paneTurnWindow, paneWorkInput } from "@/components/terminal/paneWork";
@@ -550,6 +552,16 @@ function HarnessMessageRowImpl({
           return sug && sug.state !== "gone" ? (
             <PreferenceSuggestion key={sug.id} suggestion={sug} />
           ) : null;
+        })()}
+        {/* v1.499.0 (leap 3, Phase 3): "Is Hartleys a client?" — the chat's
+            own question line (components/chat/ClientQuestion), from the
+            reply line's `clientQuestion`. At most one question line: a
+            preference suggestion goes first. The line keeps its answer;
+            the daemon writes a coding session's lines. */}
+        {(() => {
+          if (decodeSuggestion(m.suggestion)) return null;
+          const cq = decodeClientQuestion((m as unknown as { clientQuestion?: unknown }).clientQuestion);
+          return cq && cq.state !== "gone" ? <ClientQuestion key={cq.id} question={cq} /> : null;
         })()}
         <DoorsStrip doors={m.doors} />
       </div>
