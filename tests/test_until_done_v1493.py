@@ -493,7 +493,7 @@ def test_required_files_reads_a_tasks_list_inside_the_folder_only(tmp_path):
 
 
 async def test_a_teams_reply_is_checked_again_too_and_its_lead_hands_the_fix_out(tmp_path):
-    """v1.497.0 (moved on purpose): a team's reply was never looped and got no
+    """v1.498.0 (moved on purpose): a team's reply was never looped and got no
     line. Once its reviews are done it is checked again like any other, and a
     lead that holds no coding tool is told to hand each fix to a worker."""
     check = F.FinishCheck(engine=None, home=tmp_path, event_bus=None, session_id="build:t",

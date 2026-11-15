@@ -1,4 +1,4 @@
-"""The honesty readings in six more languages (v1.497.0).
+"""The honesty readings in six more languages (v1.498.0).
 
 The check-again loop (``daemon/until_done``, v1.495.0) and the coding loop
 (``harness/finish`` + ``harness/give_up``, v1.493.0) judge a reply by four

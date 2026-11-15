@@ -628,7 +628,7 @@ async def continue_cut(svc: Any, sid: str) -> dict[str, Any]:
 
         raise Refused(W.ARCHIVED)
     if again["why"] == "check":
-        # v1.497.0: a check's follow-up (``hosted.check_again``) carries its
+        # v1.498.0: a check's follow-up (``hosted.check_again``) carries its
         # own words: the same hidden message again.
         text = next((str(ev.get("text") or "") for ev in events if isinstance(ev, dict)
                      and ev.get("type") == "user" and str(ev.get("turn") or "") == newest), "")

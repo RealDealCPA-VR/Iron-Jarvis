@@ -1,5 +1,5 @@
 /**
- * v1.497.0: Build › Code sends a reply back by itself (hosted/check_again.py).
+ * v1.498.0: Build › Code sends a reply back by itself (hosted/check_again.py).
  * The hidden follow-up is a `user` event whose `carry.why` is "check": it is
  * drawn as Iron Jarvis's own quiet line with the daemon's words, never as
  * the user's bubble; the verdict is an ordinary notice.

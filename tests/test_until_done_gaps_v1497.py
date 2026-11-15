@@ -1,4 +1,4 @@
-"""v1.497.0 — the check-again loop's gaps closed (the owner: "address those
+"""v1.498.0 — the check-again loop's gaps closed (the owner: "address those
 risks and be sure none are left without regression and the same or better end
 user experience").
 
@@ -247,7 +247,7 @@ def test_a_blocked_line_in_another_language_ends_the_loop(text, monkeypatch):
     ("报告已保存到 report.xlsx 文件中，请您打开查看一下。", False),
     ("Отчёт сохранён в файле report.xlsx, проверьте его пожалуйста.", False),
     ("Raport został zapisany w pliku report.xlsx, sprawdź go proszę teraz.", False),
-    # CI on the first v1.497.0 branch run: a terse ENGLISH answer with one
+    # CI on the first v1.498.0 branch run: a terse ENGLISH answer with one
     # common word was taken for another language and an agent run asked a
     # side question (test_agent_text_tool_call_v14210 saw an extra call).
     ("There is one file, notes.txt.", True),

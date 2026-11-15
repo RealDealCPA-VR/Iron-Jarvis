@@ -56,7 +56,7 @@ How to use this file: read the contents list, then read only the entries your ch
 - L2490: **The lookup finds a setting that holds a private value** (v1.484.0)
 - L2508: **The capability index carries EVERYDAY PHRASINGS (search words only); the lookup names a request three ways; a saved preference no longer keeps the look-first check away** (v1.482.0)
 - L2543: **A plain chat reply and an agent run's answer are CHECKED AGAIN while they can still be fixed** (v1.495.0)
-- L2598: **The check-again loop's gaps closed: six more languages, Build › Code, the browser sidebar, team replies** (v1.497.0)
+- L2598: **The check-again loop's gaps closed: six more languages, Build › Code, the browser sidebar, team replies** (v1.498.0)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -2596,7 +2596,7 @@ How to use this file: read the contents list, then read only the entries your ch
   tool stops it (the model ends on "Blocked:"); not driven in the packaged app.
 
 - **The check-again loop's gaps closed: six more languages, Build › Code,
-  the browser sidebar, team replies** (v1.497.0; the owner: "address those
+  the browser sidebar, team replies** (v1.498.0; the owner: "address those
   risks and be sure none are left without regression and the same or better
   end user experience"). LANGUAGES: `core/claim_languages.py` reads Spanish,
   French, German, Italian, Portuguese and Dutch: `saved_names`,

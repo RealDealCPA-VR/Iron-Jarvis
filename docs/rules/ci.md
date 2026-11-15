@@ -26,7 +26,7 @@ How to use this file: read the contents list, then read only the entries your ch
 - L378: **First steps off Windows: the suite runs on Linux and Mac as a TRIAL, and tests about Windows-only things are LISTED, not scattered** (v1.472.1)
 - L405: **Linux and Mac, round two: four real faults, each invisible on Windows** (v1.472.2)
 - L442: **The Linux preview is its OWN workflow, after the release, and can only ADD one file** (v1.472.3)
-- L470: **A window learned from a "too long" refusal never outlives its test** (v1.497.0)
+- L470: **A window learned from a "too long" refusal never outlives its test** (v1.498.0)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -468,7 +468,7 @@ does not need a bump, stop and bump it.
   a real Linux PC; no Mac build (needs the owner's Apple Developer membership
   as the LLC, a Developer ID certificate and notarization).
 - **A window learned from a "too long" refusal never outlives its test**
-  (v1.497.0). `chat_turn._LEARNED_WINDOWS` and `providers/reply_budget` keep
+  (v1.498.0). `chat_turn._LEARNED_WINDOWS` and `providers/reply_budget` keep
   it for the process, keyed by provider and model, and the shared scripted
   lanes all answer as one model (`tests/_fakes/harness_lane.WHO`); the
   autouse `_forget_learned_windows` in `tests/conftest.py` clears both after

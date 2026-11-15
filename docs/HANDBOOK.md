@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.497.0 (2026-11-14).*
+holds itself to. Current as of v1.498.0 (2026-11-14).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## The "keep working until it's true" check, everywhere and in more languages (v1.497.0)
+## The "keep working until it's true" check, everywhere and in more languages (v1.498.0)
 
 v1.495.0 checked chat replies and agent runs, in English. This closes what it
 left out.

@@ -314,7 +314,7 @@ AGAIN_KEEP_GOING = (
     "Keep working until this is done: find the cause and fix it with your tools. Do not end by "
     "saying it cannot be done: when one way does not work, try another."
 )
-#: v1.497.0: the same ask for a team LEAD, which holds no coding tool.
+#: v1.498.0: the same ask for a team LEAD, which holds no coding tool.
 AGAIN_KEEP_GOING_TEAM = (
     "Keep working until this is done: hand each fix to a worker now (and have it run the tests "
     "again). Do not end by saying it cannot be done: when one way does not work, try another."
@@ -2973,7 +2973,7 @@ class FinishCheck:
             )
             if second is not None or self._second_note_due:
                 return second
-            # — or, v1.493.0, the check-again loop. v1.497.0: for a team's
+            # — or, v1.493.0, the check-again loop. v1.498.0: for a team's
             # reply too, once its reviews are done (a lead's note says to hand
             # each fix to a worker: ``AGAIN_KEEP_GOING_TEAM``).
             return await self._check_again(

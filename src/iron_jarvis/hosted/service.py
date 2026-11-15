@@ -3040,7 +3040,7 @@ class HostedService:
         if live.turn is turn:
             live.turn = None
         self._room_changed()  # v1.425.0 (B7): this session may be stoppable now
-        # v1.497.0: a clean reply whose own record says it is not done (a file
+        # v1.498.0: a clean reply whose own record says it is not done (a file
         # it claims that is not in the folder, a give-up after real work) is
         # sent back ONCE more (``hosted.check_again``) — read before the queue
         # is sent, which then goes first.

@@ -5075,7 +5075,7 @@ def ask_first_overrides(
 
 
 def _asks_new_file_other_language(text: str, picked: Iterable[str], workspace: str) -> bool:
-    """v1.497.0: a message NOT in English that asks for a new file. Measured
+    """v1.498.0: a message NOT in English that asks for a new file. Measured
     live (Claude Haiku): "Resume notes.txt … y guárdalo como resumen.docx",
     the same in German and in Chinese, armed no file-writing tool (the word
     tables are English), so the model read the notes and ended with no answer
@@ -8686,7 +8686,7 @@ def until_done_for_turn(harness: Any, text_only_pick: Any) -> Any:
     """v1.495.0: the plain chat reply's check-again loop
     (``daemon/until_done.UntilDone``), or None — a coding session has its own
     (the finish check) and a text-only pick has no tool to fix anything with.
-    v1.497.0: the browser sidebar gets it too. Its turn holds only browser
+    v1.498.0: the browser sidebar gets it too. Its turn holds only browser
     tools, so the file, figure and change problems (each put only beside a
     tool that can fix it) never reach it there; a reply that gives up after
     real work on the page is sent back once, as in chat — every page action it
@@ -8716,7 +8716,7 @@ async def until_done_side_note(
     truncated: bool,
     demo: bool,
 ) -> str:
-    """v1.497.0: the check-again loop's ONE side question for a reply in a
+    """v1.498.0: the check-again loop's ONE side question for a reply in a
     language its readings do not know (``UntilDone.side_note``), or "". The
     lanes ask it with ``look_first_call(note=…)``: the reply changes only when
     the model answers with a call of its own tools. Never raises. MIRROR NOTE
@@ -8817,7 +8817,7 @@ async def until_done_note(
 
 async def note_until_done_side(platform: Any, body: Any, tool_session: str, round_index: int) -> None:
     """ONE ``autonomy.nudged`` event (``core/nudges.CHECKED_AGAIN``, ``side:
-    true``) for a reply the side question sent back (v1.497.0). Never raises.
+    true``) for a reply the side question sent back (v1.498.0). Never raises.
     MIRROR NOTE: both lanes."""
     from ..core.nudges import CHECKED_AGAIN, note_nudge
 
@@ -9433,7 +9433,7 @@ def _claimed_write_names(
         name = m.group(1)
         if name not in named:
             named.append(name)
-    # v1.497.0: the same claim in Spanish, French, German, Italian, Portuguese
+    # v1.498.0: the same claim in Spanish, French, German, Italian, Portuguese
     # and Dutch (``core/claim_languages``), so the note under a reply and the
     # check-again loop read a reply written in those languages too.
     from ..core import claim_languages as _other_langs
@@ -9508,7 +9508,7 @@ def _asked_for_a_file(body) -> bool:
         return False
     if _CREATE_INTENT_RX.search(last_user):
         return True
-    # v1.497.0: the same request in Spanish, French, German, Italian,
+    # v1.498.0: the same request in Spanish, French, German, Italian,
     # Portuguese and Dutch (``core/claim_languages``; its own question check
     # beside the English one above).
     from ..core.claim_languages import asks_for_file
@@ -12912,7 +12912,7 @@ async def run_chat_turn(
                         ))
                     msgs.append(LLMMessage(role="user", content=_dv_end))
                     continue
-                # v1.497.0: a reply in a language the loop's readings do not
+                # v1.498.0: a reply in a language the loop's readings do not
                 # know is asked ONE side question (`until_done_side_note`): it
                 # changes only when the model answers with a call of its own
                 # tools. MIRROR NOTE (lock-step): the stream lane.

@@ -1,4 +1,4 @@
-"""v1.497.0: Build › Code's reply is CHECKED AGAIN (``hosted/check_again``).
+"""v1.498.0: Build › Code's reply is CHECKED AGAIN (``hosted/check_again``).
 
 A clean reply the user started whose OWN record says it is not done — a file
 its final words say it saved that is not in the session's folder, or a reply
@@ -505,7 +505,7 @@ def test_a_claimed_name_spelled_as_a_share_is_left_alone(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# The user's no, and other languages (integration, v1.497.0)
+# The user's no, and other languages (integration, v1.498.0)
 # --------------------------------------------------------------------------- #
 
 

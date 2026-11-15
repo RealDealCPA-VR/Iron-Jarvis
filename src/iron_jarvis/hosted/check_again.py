@@ -1,5 +1,5 @@
 """Build › Code's reply is CHECKED AGAIN when its own record says it is not
-done (v1.497.0). The check-again loop of Chat › Code (v1.493.0,
+done (v1.498.0). The check-again loop of Chat › Code (v1.493.0,
 ``harness/finish``) and of plain chat and agent runs (v1.495.0,
 ``daemon/until_done``) brought to the Code view.
 

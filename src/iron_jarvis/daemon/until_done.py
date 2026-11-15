@@ -100,7 +100,7 @@ NOTE_TAIL = (
     "saying what you tried, exactly what stops you and what the user must do."
 )
 VERDICT_CARRY_ON = "Tell it to keep going and it will carry on."
-#: v1.497.0: the ONE side question for a reply in a language Iron Jarvis's own
+#: v1.498.0: the ONE side question for a reply in a language Iron Jarvis's own
 #: readings do not know (``core/claim_languages.covered``). It is asked as a
 #: separate call (``chat_turn.look_first_call``): the reply changes only when
 #: the model answers with a call of its own tools; KEEP, or any words, leaves
@@ -122,7 +122,7 @@ SIDE_FILES_MAX = 10
 
 from ..core.claim_languages import BLOCKED_WORDS as _BLOCKED_WORDS
 
-#: v1.497.0: "Blocked:" in the six other languages too ("Bloqueado:").
+#: v1.498.0: "Blocked:" in the six other languages too ("Bloqueado:").
 _BLOCKED_LINE_RX = re.compile(
     r"^[^\S\n]*(?:[-*]\s*)?(?:\*\*\s*)?" + _BLOCKED_WORDS + r"\s*(?:\*\*\s*)?:",
     re.IGNORECASE | re.MULTILINE,
@@ -164,7 +164,7 @@ def change_fixers() -> "frozenset[str]":
 
 def said_no(request: str) -> bool:
     """Does the user's message say not to use tools or write anything? In
-    English, and (v1.497.0) in the six other languages ``core/claim_languages``
+    English, and (v1.498.0) in the six other languages ``core/claim_languages``
     reads."""
     from ..core.claim_languages import said_no as _said_no_other
 
@@ -289,7 +289,7 @@ def find_problems(f: Facts) -> list[Problem]:
                     "tool, or say plainly in your answer that it was not made.",
                 ))
             elif said:
-                # v1.497.0: no tool this reply holds can make such a change,
+                # v1.498.0: no tool this reply holds can make such a change,
                 # so "make the change now" would be an order the model cannot
                 # follow (v1.495.0 then let it end only on a "Blocked:" line).
                 # It is asked only to say so: an answer that no longer claims
@@ -390,9 +390,9 @@ class UntilDone:
     open: list[str] = field(default_factory=list)
     #: The user (or the permission table) refused a call in this reply.
     declined: bool = False
-    #: v1.497.0: the side question (:meth:`side_note`) was asked.
+    #: v1.498.0: the side question (:meth:`side_note`) was asked.
     side_asked: bool = False
-    #: v1.497.0 (an agent run, which asks the side question in its own
+    #: v1.498.0 (an agent run, which asks the side question in its own
     #: transcript): the answer it had, given back when the model says KEEP.
     side_draft: str = ""
 
@@ -486,7 +486,7 @@ class UntilDone:
         low_trust: bool = False,
         truncated: bool = False,
     ) -> str:
-        """v1.497.0: the ONE side question for a reply Iron Jarvis's readings
+        """v1.498.0: the ONE side question for a reply Iron Jarvis's readings
         cannot read (:data:`SIDE_HEAD`), or "". Asked once per reply, only when
         the reply is in a language none of the readings know AND something
         certain points at a problem: a file the reply names that is not in the

@@ -44,7 +44,7 @@ export interface CarryFacts {
 
 /** What a hidden carry-on message says it was (its `carry`). */
 export interface CarryMark {
-  /** v1.497.0: "check" = Iron Jarvis sent the reply back (its own record
+  /** v1.498.0: "check" = Iron Jarvis sent the reply back (its own record
    *  said it was not done: hosted/check_again.py); `note` says why. */
   why: "restart" | "reset" | "move" | "check";
   fromAccount: string;
@@ -54,7 +54,7 @@ export interface CarryMark {
   pressed: boolean;
   /** v1.422.0 review: the user pressed Retry on a carry-on that failed. */
   retry?: boolean;
-  /** v1.497.0: the daemon's own plain line for a "check" follow-up. */
+  /** v1.498.0: the daemon's own plain line for a "check" follow-up. */
   note?: string;
 }
 

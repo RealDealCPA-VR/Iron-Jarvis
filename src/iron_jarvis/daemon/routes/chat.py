@@ -6086,7 +6086,7 @@ async def chat_stream(
                             else:
                                 yield _ev("token", {"text": _CLOSING_OFFER_SEPARATOR})
                         continue
-                    # v1.497.0: a reply in a language the loop's readings do
+                    # v1.498.0: a reply in a language the loop's readings do
                     # not know is asked ONE side question; the words on screen
                     # are taken back only when the model answers with a call of
                     # its own tools. MIRROR NOTE (lock-step): chat_turn.

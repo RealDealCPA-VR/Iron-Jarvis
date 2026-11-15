@@ -373,7 +373,7 @@ def _isolate_subscription_cli_detection():
 
 @pytest.fixture(autouse=True)
 def _forget_learned_windows():
-    """v1.497.0: a window a server named in a "prompt is too long" refusal is
+    """v1.498.0: a window a server named in a "prompt is too long" refusal is
     remembered for the PROCESS (``chat_turn._LEARNED_WINDOWS``,
     ``providers/reply_budget``), keyed by provider and model — and the shared
     scripted lanes all answer as one model (``tests/_fakes/harness_lane.WHO``).
