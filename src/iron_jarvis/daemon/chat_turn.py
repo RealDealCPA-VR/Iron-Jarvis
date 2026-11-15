@@ -864,6 +864,10 @@ def harness_context_breakdown(
         add("rules", getattr(g, "folder_rules", ""), harness_rules)
         add("memory", getattr(g, "lessons", ""), getattr(g, "index", ""), getattr(g, "fabric", ""),
             getattr(g, "connector", ""))
+        # v1.499.0 (clients): the client block (the stable head) and the work
+        # record (the query tail) are memory too — named by their part, never
+        # left to "System prompt".
+        add("memory", getattr(g, "client", ""), getattr(g, "work", ""))
         if brain is not None:
             add("memory", getattr(brain, "block", ""))
             try:
@@ -4950,6 +4954,8 @@ def settings_ask_tools(
     ask_armed: "list[str]",
     *,
     workflow_names: "list[str] | tuple[str, ...]" = (),
+    client_names: "list[str] | tuple[str, ...]" = (),
+    in_client: str = "",
 ) -> "list[str]":
     """The STREAM lane's settings and record tools for *text* — VISIBLE,
     never granted (each call renders the ordinary card). Lifted out of the
@@ -4963,7 +4969,10 @@ def settings_ask_tools(
       question);
     * the record tools the message names (``settings.records.
       record_tools_for``), with ``workflow_names`` — the saved workflows'
-      names, read off the loop by the lane only when a run verb is there.
+      names, read off the loop by the lane only when a run verb is there —
+      and (v1.499.0) ``client_names`` / ``in_client``
+      (:func:`client_arming_kw`: the live confirmed and waiting client
+      names, the turn's own confirmed client), PASSED ONLY WHEN SET.
 
     A create tool among them (``records.ASK_FIRST_CREATE_TOOLS``) is
     allow-tier by itself; the lane writes an "ask" override for it
@@ -4981,7 +4990,20 @@ def settings_ask_tools(
         names: list[str] = []
         if settings_ask(text).writers:
             names += list(ASK_CONFIG_TOOLS)
-        names += record_tools_for(text, workflow_names=workflow_names)
+        _client_kw: dict[str, Any] = {}
+        if client_names:
+            _client_kw["client_names"] = tuple(client_names)
+        if in_client:
+            _client_kw["in_client"] = str(in_client)
+        try:
+            names += record_tools_for(text, workflow_names=workflow_names, **_client_kw)
+        except TypeError:
+            if not _client_kw:
+                raise
+            # A records module without the client keywords still arms every
+            # other record tool (said in the log, never silently).
+            log.warning("record_tools_for takes no client names; the client tools are not armed")
+            names += record_tools_for(text, workflow_names=workflow_names)
         # v1.470.0: "create a skill for …" offers `skill_create` (its own tier
         # is ask, so it shows the ordinary card). Chat used to offer only the
         # workflow exit, and a request for a skill came back as a workflow.
@@ -6502,6 +6524,10 @@ def _is_office_turn(armed_names) -> bool:
 #: v1.262.0 rule). One sentence in the third person, only for a LASTING
 #: preference the user stated, never a one-off instruction, never a fact about
 #: someone else — the lesson lands under Memory where the user can forget it.
+#: v1.499.0 (clients): a STATIC rewording only — a preference for one client
+#: goes to ``client_preference_add``. The guidance that NAMES the client rides
+#: the client block, which joins the stable head BEFORE the planner; nothing
+#: client-specific is ever added here (this brief is joined after it).
 PREFERENCE_BLOCK = (
     "# Remembering how the user likes things\n"
     "When the user states a LASTING preference about how they want things done "
@@ -6510,7 +6536,8 @@ PREFERENCE_BLOCK = (
     "(\"Prefers short answers with numbered steps\"). It is honoured in every "
     "later conversation and listed under Memory, where the user can forget it. "
     "Do not record a one-off instruction for this turn, a fact about another "
-    "person, or anything the user did not actually say."
+    "person (a preference for one client goes to client_preference_add when "
+    "that tool is offered), or anything the user did not actually say."
 )
 
 
@@ -10660,12 +10687,19 @@ class _Grounding:
         "project", "project_query", "folder_rules", "folder_rules_used", "lessons", "index",
         "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
         "text_only", "apps", "apps_named", "apps_live", "apps_on", "apps_offer",
-        "harness", "apps_phone", "late", "work",
+        "harness", "apps_phone", "late", "work", "client",
     )
 
     def __init__(self) -> None:
         self.project = self.lessons = self.index = self.fabric = ""
         self.connector = self.roster = self.workflows = ""
+        #: v1.499.0 (vision plan leap 3, Phase 3): the CLIENT BLOCK — the
+        #: confirmed client whose folder this turn is in, what the owner keeps
+        #: for that client and its other folders
+        #: (``workmap.clients.block.client_block``, hop ``client``). Fixed per
+        #: conversation, so it rides :meth:`stable` right after the lessons.
+        #: "" for a turn in no client's folder (the prompt is byte-identical).
+        self.client = ""
         #: v1.420.0 (C3.7): the project block's QUERY-DEPENDENT part —
         #: "Project knowledge (reference)" (retrieved for this question) and
         #: "Recent activity in this project" — joined by :meth:`query`, after
@@ -10737,17 +10771,19 @@ class _Grounding:
         reader that wants the whole block; the lanes join :meth:`stable` and
         :meth:`query` apart since C3.7)."""
         return (
-            self.project + self.project_query + self.folder_rules + self.lessons + self.index
-            + self.work + self.fabric + self.connector + self.apps
+            self.project + self.project_query + self.folder_rules + self.lessons + self.client
+            + self.index + self.work + self.fabric + self.connector + self.apps
         )
 
     def stable(self) -> str:
         """v1.420.0 (C3.7): the grounded sections that stay the same from one
         message to the next — the project's instructions, brief and folder,
         the folder's own instruction files (right after the project block they
-        belong to), the lessons and the memory index. The lanes join it at
-        the old seam, in the prompt's stable head."""
-        return self.project + self.folder_rules + self.lessons + self.index
+        belong to), the lessons, the client block (v1.499.0: right after the
+        lessons — the client's own preferences beside the owner's) and the
+        memory index. The lanes join it at the old seam, in the prompt's
+        stable head, BEFORE compaction and the planner (both price it)."""
+        return self.project + self.folder_rules + self.lessons + self.client + self.index
 
     def query(self) -> str:
         """v1.420.0 (C3.7): the grounded sections that change with each
@@ -10782,8 +10818,39 @@ GROUNDING_SOFT_S = 2.5
 #: awaited to the end: the project block (its instructions, scanned), the
 #: project folder's own instruction files, and the connector toggles the user
 #: switched on for this chat (their tools are armed from it; both raise, and a
-#: failure is re-raised in hop order as before).
-GROUNDING_REQUIRED_HOPS = frozenset({"project", "folder_rules", "connector"})
+#: failure is re-raised in hop order as before). v1.499.0 (clients): and the
+#: client block — a client's preference ("Hartleys wants cash basis") is
+#: load-bearing, so it is never dropped at the soft deadline; with no clients
+#: it answers "" at once from the cached map. Unlike the three above it is
+#: BOUNDED (``workmap.clients.CLIENT_HOP_MAX_S``, 5 s from the gather's
+#: start): past the
+#: bound it gives "" and the receipt names it in ``context.late``, exactly
+#: like a late optional hop — never dropped in silence.
+GROUNDING_REQUIRED_HOPS = frozenset({"project", "folder_rules", "connector", "client"})
+#: v1.499.0: the required hops that are awaited only up to a bound
+#: (``workmap.clients.CLIENT_HOP_MAX_S`` seconds since the gather began,
+#: measured by :data:`_grounding_clock`; the contract's number, read at call
+#: time) instead of to the end.
+_BOUNDED_REQUIRED_HOPS = frozenset({"client"})
+#: The clock the bounded required hops are measured with — INJECTED by a test
+#: (never a sleep: on Windows ``asyncio.sleep(d)`` can measure less than d).
+_grounding_clock = _time.monotonic
+
+
+def turn_work_folder(body: Any, resolved_proj: Any) -> str:
+    """The ONE folder a chat turn is bound to (v1.491.0's work-record rule,
+    lifted in v1.499.0 so the client block, the client wall and the question
+    under a reply read the same one): the body's ``workspace_dir``, else the
+    turn's project root, else "". Text only; never raises."""
+    try:
+        folder = (getattr(body, "workspace_dir", "") or "").strip()
+        if folder:
+            return folder
+        if resolved_proj is not None:
+            return str(getattr(resolved_proj, "root", "") or "").strip()
+    except Exception:  # noqa: BLE001 — a folder read never breaks a turn
+        pass
+    return ""
 
 
 def _drop_late_hop(task: "asyncio.Future[Any]") -> None:
@@ -11123,7 +11190,7 @@ async def _gather_grounding(
     # inside a project the "in this folder" part is left to the project's own
     # recent activity (never said twice). Reads SQLite, so off the loop like
     # every hop; never raises; "" when nothing is on record.
-    _work_folder = (getattr(body, "workspace_dir", "") or "").strip() or _proj_root
+    _work_folder = turn_work_folder(body, resolved_proj)
 
     def _work() -> str:
         from ..workmap.block import work_block
@@ -11133,6 +11200,30 @@ async def _gather_grounding(
             exclude_ref=str(getattr(body, "thread_id", "") or ""),
             list_folder=resolved_proj is None,
         )
+
+    # THE CLIENT BLOCK (v1.499.0, vision plan leap 3, Phase 3): the confirmed
+    # client whose folder this turn is in — its name, what the owner keeps for
+    # it, its other folders — for the SAME folder the work record reads (a
+    # Chat › Code worktree copy is its repository's: the resolver maps it with
+    # ``keys.home_folder``). Reads SQLite (a cached map), so off the loop like
+    # every hop; ``client_block`` never raises, and anything that does here
+    # (or a block that is not text) is "" AND named on the receipt — a
+    # client's preference is never dropped in silence. The local-only scope
+    # rides into the thread (``to_thread`` copies the context), so ``local``
+    # is left to the block. Looked up at call time (a patch reaches both
+    # lanes).
+    def _client() -> "tuple[str, bool]":
+        try:
+            from ..workmap.clients import block as _client_mod
+
+            text = _client_mod.client_block(platform, folder=_work_folder)
+        except Exception:  # noqa: BLE001 — named on the receipt below
+            log.warning("the client block could not be read; this turn goes on without it",
+                        exc_info=True)
+            return "", False
+        if not isinstance(text, str):
+            return "", False
+        return (("\n\n" + text.strip("\n")) if text.strip() else ""), True
 
     hops: list[tuple[str, Any]] = []
     if resolved_proj is not None:
@@ -11145,6 +11236,10 @@ async def _gather_grounding(
         hops.append(("folder_rules", _folder_rules))
     if learning is not None:
         hops.append(("lessons", _lessons))
+    # v1.499.0: only a turn bound to a folder can be in a client's folder (no
+    # folder, no hop: the receipt and the prompt are exactly as before).
+    if getattr(platform, "engine", None) is not None and _work_folder:
+        hops.append(("client", _client))
     hops.append(("index", _index))
     if getattr(platform, "engine", None) is not None and (_work_folder or recall_query.strip()):
         hops.append(("work", _work))
@@ -11157,15 +11252,30 @@ async def _gather_grounding(
     # Every hop at once, off the loop; the turn waits at most GROUNDING_SOFT_S
     # for the optional ones (v1.418.0, C3.4) and to the end for the required
     # ones. A cancelled turn (Stop races this) cancels what it was waiting on.
+    # v1.499.0: a BOUNDED required hop (the client block) is awaited past the
+    # soft deadline too, but only up to its bound from the gather's start
+    # (the injected clock), then it is late like any other.
+    _started = _grounding_clock()
     tasks = [asyncio.ensure_future(asyncio.to_thread(fn)) for _name, fn in hops]
     try:
         await asyncio.wait(tasks, timeout=GROUNDING_SOFT_S)
         required = [
             t for (name, _fn), t in zip(hops, tasks)
-            if name in GROUNDING_REQUIRED_HOPS and not t.done()
+            if name in GROUNDING_REQUIRED_HOPS and name not in _BOUNDED_REQUIRED_HOPS
+            and not t.done()
         ]
         if required:
             await asyncio.wait(required)
+        bounded = [
+            t for (name, _fn), t in zip(hops, tasks)
+            if name in GROUNDING_REQUIRED_HOPS and name in _BOUNDED_REQUIRED_HOPS
+            and not t.done()
+        ]
+        if bounded:
+            from ..workmap import clients as _clients
+
+            left = float(_clients.CLIENT_HOP_MAX_S) - (_grounding_clock() - _started)
+            await asyncio.wait(bounded, timeout=max(0.0, left))
     except BaseException:
         for t in tasks:
             t.cancel()
@@ -11220,6 +11330,12 @@ async def _gather_grounding(
     if "folder_rules" in got:
         out.folder_rules, out.folder_rules_used = got["folder_rules"]
     out.lessons = got.get("lessons", "")
+    if "client" in got:
+        # v1.499.0: a block that could not be read is "" and NAMED on the
+        # receipt (``context.late``), like a hop past its bound.
+        out.client, _client_ok = got["client"]
+        if not _client_ok and "client" not in out.late:
+            out.late.append("client")
     out.index = got.get("index", "")
     out.work = got.get("work", "") or ""
     out.fabric = got.get("fabric", "")
@@ -11534,9 +11650,231 @@ def _local_only_turn(turn):
     return scoped
 
 
+# --------------------------------------------------------------------------- #
+# CLIENTS (v1.499.0, vision plan leap 3, Phase 3): the wall of a turn, the
+# question under a reply, the door to a named client's page and the arming
+# names. Shared by BOTH lanes (MIRROR NOTE, lock-step); each never raises.
+# --------------------------------------------------------------------------- #
+#: How long the question under a reply may take (``store.question_for_turn``,
+#: off the loop) before the reply goes out without it.
+CLIENT_QUESTION_WAIT_S = 1.0
+
+
+def _fail_closed_wall(body: Any) -> Any:
+    """The wall when the turn's own could not be worked out: ``ok=False``
+    (the work block keeps to this exact folder, memory recall drops every chat
+    passage), with the body's folder key when there is one. Text only."""
+    from ..workmap.clients import TurnWall
+
+    key = ""
+    try:
+        from ..workmap.keys import folder_key, home_folder
+
+        folder = (getattr(body, "workspace_dir", "") or "").strip()
+        key = folder_key(home_folder(folder)) if folder else ""
+    except Exception:  # noqa: BLE001 — a key is a nicety here
+        key = ""
+    return TurnWall(ok=False, folder_key=str(key or ""))
+
+
+async def client_wall_for(platform: Any, body: Any) -> Any:
+    """The CLIENT WALL of one chat turn (``workmap.clients.wall.turn_wall``):
+    the owner of the turn's folder (:func:`turn_work_folder` — the body's
+    folder, else its project's root; a Chat › Code worktree copy is its
+    repository's, mapped by ``keys.home_folder`` in the resolver) and the
+    confirmed clients the OWNER's own words name (:func:`_compose_recall_query`
+    over the user's messages — never the model's). The POST lane sets it
+    around the whole turn (:func:`_client_turn`), the stream lane around the
+    whole stream (``wall.scoped_frames`` beside ``egress.scoped_frames`` in
+    ``routes/chat.stream_chat_turn``) — MIRROR NOTE (lock-step). Off the loop
+    (a cached SQLite map) and bounded by ``workmap.clients.CLIENT_HOP_MAX_S``;
+    past the bound or on any error it FAILS CLOSED (``ok=False``). Never
+    raises."""
+    from ..workmap import clients as _clients
+
+    if getattr(platform, "engine", None) is None:
+        return _clients.NO_CLIENT
+
+    def _read() -> Any:
+        from ..workmap.clients import wall as _wall
+
+        proj = None
+        pid = (getattr(body, "project_id", "") or "").strip()
+        if pid and not (getattr(body, "workspace_dir", "") or "").strip():
+            proj = _load_project(platform, pid)
+        folder = turn_work_folder(body, proj)
+        words = _compose_recall_query(getattr(body, "messages", None) or [])
+        return _wall.turn_wall(platform.engine, folder, words)
+
+    try:
+        got = await asyncio.wait_for(
+            asyncio.to_thread(_read), timeout=float(_clients.CLIENT_HOP_MAX_S),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — a wall that cannot be read fails closed
+        log.warning("the client wall of a chat turn could not be read; it keeps to its folder",
+                    exc_info=True)
+        return _fail_closed_wall(body)
+    return got if isinstance(got, _clients.TurnWall) else _fail_closed_wall(body)
+
+
+def _client_turn(turn):
+    """Run the POST lane's WHOLE turn inside its CLIENT WALL (v1.499.0,
+    ``workmap.clients.wall.turn_scope``): the grounding, every tool round
+    (history search, the client chat tools), memory recall and every tool's
+    own model call read ``wall.current()`` and see this turn's wall. Unset, a
+    reader gets the no-client rule. A decorator for the reason
+    :func:`_local_only_turn` is one (the turn's body is read by pins with
+    ``inspect.getsource``). MIRROR NOTE (lock-step):
+    ``routes/chat.stream_chat_turn`` sets the same wall around the stream
+    (``wall.scoped_frames``)."""
+    import functools
+
+    @functools.wraps(turn)
+    async def walled(platform, personas, body, *args, **kwargs):
+        from ..workmap.clients import wall as _wall
+
+        turn_wall = await client_wall_for(platform, body)
+        with _wall.turn_scope(turn_wall):
+            return await turn(platform, personas, body, *args, **kwargs)
+
+    return walled
+
+
+async def client_question_for(
+    platform: Any, body: Any, *, folder: str, suggest_preferences: bool, suggestion: Any,
+) -> "dict[str, Any] | None":
+    """THE QUESTION UNDER A REPLY (v1.499.0): ``{id, name, folders, work}``
+    — "Is Hartleys a client?" — or None. Asked only on a dashboard turn
+    (``suggest_preferences``: never the phone, the browser sidebar or an
+    agent), only when the reply carries no preference suggestion (at most ONE
+    question line rides a reply, the preference first) and only for a turn
+    bound to a folder. ``store.question_for_turn`` decides the rest
+    (the setting, a waiting name whose home holds this folder, asked once)
+    off the loop, under :data:`CLIENT_QUESTION_WAIT_S`. ALWAYS a key on both
+    lanes' answer (null, never absent) — MIRROR NOTE (lock-step). Never
+    raises."""
+    if not suggest_preferences or suggestion is not None or not str(folder or "").strip():
+        return None
+    try:
+        from ..workmap.clients import CLIENT_ID_RE
+        from ..workmap.clients import store as _store
+
+        thread_id = str(getattr(body, "thread_id", "") or "")
+        got = await asyncio.wait_for(
+            asyncio.to_thread(
+                _store.question_for_turn, platform, folder=str(folder), thread_id=thread_id,
+            ),
+            timeout=CLIENT_QUESTION_WAIT_S,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — a question never breaks a reply
+        log.debug("the client question under a reply failed", exc_info=True)
+        return None
+    if not isinstance(got, dict) or not CLIENT_ID_RE.match(str(got.get("id") or "")):
+        return None
+    return {
+        "id": str(got["id"]),
+        "name": str(got.get("name") or ""),
+        "folders": got.get("folders"),
+        "work": got.get("work"),
+    }
+
+
+def _named_clients(platform: Any, turn: Any) -> "list[dict[str, str]]":
+    """``[{id, name}]`` of the CONFIRMED clients the turn's OWNER named
+    (``TurnWall.named``), ids checked against ``CLIENT_ID_RE``. BLOCKING (the
+    cached map); raises when the map cannot be read (the caller says
+    nothing)."""
+    from ..workmap.clients import CLIENT_ID_RE
+    from ..workmap.clients import store as _store
+
+    named = sorted(str(c) for c in (getattr(turn, "named", None) or ()) if c)
+    if not named:
+        return []
+    table = _store.load_map(platform.engine).names or {}
+    out: list[dict[str, str]] = []
+    for cid in named:
+        row = table.get(cid)
+        if row and CLIENT_ID_RE.match(cid) and str(row[0] or "").strip():
+            out.append({"id": cid, "name": str(row[0]).strip()})
+    return out
+
+
+async def with_client_door(entries: Any, platform: Any, *, dashboard: bool) -> list[Any]:
+    """The turn's door entries with the CLIENT DOOR (v1.499.0): a confirmed
+    client the OWNER's own words named (the turn's wall, ``TurnWall.named``)
+    gets ONE door to its page — ``daemon/doors.with_client_door(entries,
+    named)`` with ``named`` = ``[{id, name}]``, which builds the href only from
+    an id matching ``CLIENT_ID_RE``. Dashboard turns only (``dashboard`` =
+    the lane's ``suggest_preferences``). A link only; nothing is armed or
+    started. MIRROR NOTE (lock-step): both lanes call it at the same seam,
+    before the page door. Never raises (the entries come back unchanged)."""
+    base = list(entries or [])
+    if not dashboard:
+        return base
+    try:
+        from ..workmap.clients import wall as _wall
+
+        turn = _wall.current()
+        if not getattr(turn, "named", None):
+            return base
+        from . import doors as _doors
+
+        door = getattr(_doors, "with_client_door", None)
+        if not callable(door):
+            return base
+        named = await asyncio.wait_for(
+            asyncio.to_thread(_named_clients, platform, turn), timeout=CLIENT_QUESTION_WAIT_S,
+        )
+        if not named:
+            return base
+        return list(door(base, named))
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — no door beats no reply
+        log.debug("the client door failed", exc_info=True)
+        return base
+
+
+def client_arming_kw(platform: Any) -> "dict[str, Any]":
+    """The client keyword arguments of ``settings.records.record_tools_for``
+    (v1.499.0): ``client_names`` — the live confirmed AND waiting names (the
+    client chat tools arm on the owner's message naming one) — and
+    ``in_client`` — the name of the confirmed client whose folder this turn is
+    in (``wall.current().client``). PASSED ONLY WHEN SET (``{}`` with no
+    clients), so a PC without clients arms exactly as before. BLOCKING (the
+    cached map; the stream lane calls it in its arming thread, which copies
+    the turn's wall). Never raises (``{}``)."""
+    try:
+        from ..workmap.clients import store as _store
+        from ..workmap.clients import wall as _wall
+
+        cmap = _store.load_map(platform.engine)
+        names: list[str] = []
+        for table in (cmap.names, cmap.waiting_names):
+            for row in (table or {}).values():
+                name = str((row or ("",))[0] or "").strip()
+                if name and name not in names:
+                    names.append(name)
+        client = getattr(_wall.current(), "client", None)
+        in_client = str(getattr(client, "name", "") or "").strip() if client is not None else ""
+    except Exception:  # noqa: BLE001 — arming never breaks a turn
+        return {}
+    out: dict[str, Any] = {}
+    if names:
+        out["client_names"] = tuple(names)
+    if in_client:
+        out["in_client"] = in_client
+    return out
+
+
 @_counts_for_its_chat
 @_account_pinned_turn
 @_local_only_turn
+@_client_turn
 @_settles_its_prep
 async def run_chat_turn(
     platform, personas: dict, body, *, trust: str = "full", trust_reason: str = "",
@@ -13852,6 +14190,14 @@ async def run_chat_turn(
         if suggest_preferences
         else None
     )
+    # THE CLIENT QUESTION (v1.499.0): "Is Hartleys a client?" under ONE
+    # reply, beside the suggestion — dashboard turns only, never with a
+    # preference suggestion, off the loop under a second. Never raises.
+    # MIRROR NOTE (lock-step): the stream lane calls the SAME helper.
+    client_question = await client_question_for(
+        platform, body, folder=turn_work_folder(body, resolved_proj),
+        suggest_preferences=suggest_preferences, suggestion=suggestion,
+    )
     # CONNECT DOOR (v1.359.0, G41): an app the message named for the user's
     # own data that is not connected gets its Connect door whatever the model
     # called — unless app_connect already put its own answer up for it. Low
@@ -13867,6 +14213,12 @@ async def run_chat_turn(
     # (lock-step): routes/chat.py.
     door_entries = with_mission_offer(door_entries, body, harness=harness, escalate=escalate)
     door_entries = with_connect_door(door_entries, _grounding.apps_offer, connect_offered)
+    # CLIENT DOOR (v1.499.0): a confirmed client the OWNER named gets ONE door
+    # to its page (dashboard turns only; a link only). MIRROR NOTE
+    # (lock-step): routes/chat.py, at the same seam.
+    door_entries = await with_client_door(
+        door_entries, platform, dashboard=suggest_preferences,
+    )
     # PAGE DOOR (v1.436.0, Wave 5 B3): a step only a page can do gets ONE
     # door to the exact place — last, only with room. MIRROR NOTE
     # (lock-step): routes/chat.py. v1.455.0: with the platform (a door this PC
@@ -13976,6 +14328,10 @@ async def run_chat_turn(
         # ALWAYS present, like `remembered`. MIRROR NOTE (lock-step): the
         # stream done-frame carries the identical key — edit both or neither.
         "suggestion": suggestion,
+        # CLIENT QUESTION (v1.499.0): {id, name, folders, work} or null —
+        # ALWAYS present, like `suggestion`. MIRROR NOTE (lock-step): the
+        # stream done-frame carries the identical key — edit both or neither.
+        "client_question": client_question,
         # DOORS (v1.199.0): server-derived links into the surfaces this turn's
         # SUCCESSFUL creating tools changed — deduped by href, capped at 4,
         # ALWAYS present (possibly empty) so clients never branch on absence.

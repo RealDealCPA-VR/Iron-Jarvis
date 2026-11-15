@@ -635,6 +635,82 @@ def is_direct_workspace(config, workspace_path: str | Path | None) -> bool:
     return ws != managed and managed not in ws.parents
 
 
+def run_client_folder(config, session) -> str:
+    """The folder a run's CLIENT is decided by (v1.499.0): its own folder
+    when it runs directly in one (:func:`is_direct_workspace`), else "" — a
+    scratch folder under ``workspaces_dir`` belongs to no client. BLOCKING
+    (``Path.resolve``); never raises."""
+    try:
+        ws = str(getattr(session, "workspace_path", "") or "").strip()
+        return ws if ws and is_direct_workspace(config, ws) else ""
+    except Exception:  # noqa: BLE001 — no folder is the safe answer
+        return ""
+
+
+async def run_client_wall(platform, session):
+    """The CLIENT WALL of one agent run (v1.499.0,
+    ``workmap.clients.wall.turn_wall``): the owner of its folder
+    (:func:`run_client_folder`) and the confirmed clients its TASK names —
+    ``session.task`` is the owner's words (a chat's hand-off carries them).
+    Off the loop and bounded by ``workmap.clients.CLIENT_HOP_MAX_S``; past
+    the bound or on any error it FAILS CLOSED (``ok=False``: memory recall
+    drops every chat passage). Never raises."""
+    from ..workmap import clients as _clients
+
+    engine = getattr(platform, "engine", None)
+    if engine is None:
+        return _clients.NO_CLIENT
+
+    def _read():
+        from ..workmap.clients import wall as _wall
+
+        folder = run_client_folder(getattr(platform, "config", None), session)
+        return _wall.turn_wall(engine, folder, str(getattr(session, "task", "") or ""))
+
+    try:
+        got = await asyncio.wait_for(
+            asyncio.to_thread(_read), timeout=float(_clients.CLIENT_HOP_MAX_S),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — a wall that cannot be read fails closed
+        logging.getLogger("iron_jarvis.agents.runtime").warning(
+            "the client wall of a run could not be read; it keeps to its folder", exc_info=True,
+        )
+        return _clients.TurnWall(ok=False)
+    return got if isinstance(got, _clients.TurnWall) else _clients.TurnWall(ok=False)
+
+
+async def run_client_block(platform, session) -> str:
+    """The client block a run is told (v1.499.0,
+    ``workmap.clients.block.client_block`` for :func:`run_client_folder`,
+    the run's Local only scope copied into the thread): the confirmed client
+    whose folder it works in, what the owner keeps for it and its other
+    folders. "" for no folder, no client, past ``CLIENT_HOP_MAX_S`` (logged)
+    or on any error. Off the loop; never raises."""
+    from ..workmap import clients as _clients
+
+    def _read() -> str:
+        from ..workmap.clients import block as _block
+
+        folder = run_client_folder(getattr(platform, "config", None), session)
+        return _block.client_block(platform, folder=folder) if folder else ""
+
+    try:
+        text = await asyncio.wait_for(
+            asyncio.to_thread(_read), timeout=float(_clients.CLIENT_HOP_MAX_S),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — a client block never breaks a run
+        logging.getLogger("iron_jarvis.agents.runtime").warning(
+            "the client block of a run could not be read; the run goes on without it",
+            exc_info=True,
+        )
+        return ""
+    return text.strip("\n") if isinstance(text, str) and text.strip() else ""
+
+
 #: Cap on tool output fed into the MODEL CONTEXT (the full output still lands in the
 #: DB transcript). Without it, a large read/shell/grep result is re-sent on every
 #: subsequent step of the loop — O(n^2) token growth at full input price.
@@ -2139,10 +2215,20 @@ class AgentRuntime:
         try:
             if _acct_why:
                 return await self._refuse_run(session, agent_def, parent_id, _acct_why)
-            if not _lo:
-                return await self._run_body(session, agent_def, parent_id)
-            with _egress.local_only_scope(True):
-                return await self._run_body(session, agent_def, parent_id)
+            # CLIENTS (v1.499.0): the run's CLIENT WALL — whose folder it works
+            # in (its own folder; a scratch folder is nobody's) and which
+            # confirmed clients its TASK (the owner's words) names — set
+            # around the whole run, beside its Local only scope, so memory
+            # recall, history search, a consult and every child run awaited
+            # inside it read it. Bounded, fails closed, never raises.
+            from ..workmap.clients import wall as _client_wall
+
+            _turn_wall = await run_client_wall(self.p, session)
+            with _client_wall.turn_scope(_turn_wall):
+                if not _lo:
+                    return await self._run_body(session, agent_def, parent_id)
+                with _egress.local_only_scope(True):
+                    return await self._run_body(session, agent_def, parent_id)
         except RunStoppedByUser as stop:
             return await self._end_stopped(stop.run, session)
         except ContextTooSmall as small:
@@ -2765,6 +2851,17 @@ class AgentRuntime:
                 )
             except Exception:  # never block a run on the learning layer
                 pass
+        # THE CLIENT BLOCK (v1.499.0, vision plan leap 3, Phase 3): a run in a
+        # confirmed client's folder is told what the owner keeps for that
+        # client ("Use cash basis"), right after the owner's own preferences,
+        # the same block a chat in that folder gets. A memory injection, so
+        # gated by skip_memory like the lessons; "" in a scratch folder or a
+        # folder no confirmed client claims (byte-identical). Off the loop,
+        # bounded, never raises.
+        if not skip_memory:
+            _client_text = await run_client_block(self.p, session)
+            if _client_text:
+                system_prompt += "\n\n" + _client_text
         # THE IDENTITY SPINE (v1.144.0) — the fix for "it communicates
         # differently depending on which model/surface answered". Until now the
         # persona + the user's preferences reached CHAT ONLY: an agent run
