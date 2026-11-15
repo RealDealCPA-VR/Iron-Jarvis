@@ -116,10 +116,22 @@ def test_put_never_overwrites_an_at_the_client_supplied(client):
     assert [h.thread_id for h in hits] == [tid]
 
 
-def test_put_at_survives_the_dashboard_round_trip(client):
+def test_put_at_survives_the_dashboard_round_trip(client, monkeypatch):
     """The client GETs a thread and PUTs the same objects back (queueSave).
     The stamp written on save 1 must be the SAME after save 2 — otherwise every
-    autosave would silently re-date the whole conversation to 'now'."""
+    autosave would silently re-date the whole conversation to 'now'.
+
+    An injected clock that moves on every read (v1.499.3): Python 3.12's clock
+    on Windows ticks about every 15 ms, so two saves made close together under
+    load read the same instant and the "stamped later" check failed by chance."""
+    import itertools
+    from datetime import datetime, timedelta, timezone
+
+    from iron_jarvis.core import ids
+
+    ticks = itertools.count()
+    base = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(ids, "utcnow", lambda: base + timedelta(seconds=next(ticks)))
     tid = _put(client, [{"role": "user", "content": "first"}])
     first = client.get(f"/chat/threads/{tid}").json()["messages"]
     stamp = first[0]["at"]
@@ -290,10 +302,15 @@ def test_index_keeps_the_same_200_message_horizon_as_the_row(client):
     )
     stored = client.get(f"/chat/threads/{tid}").json()["messages"]
     docs = _docs(p.engine, thread_id=tid)
-    assert len(stored) == 200 and len(docs) == 200
+    live = [d for d in docs if d.seq >= 0]
+    assert len(stored) == 200 and len(live) == 200
     # seq indexes into the STORED array, so a deep link lands on the right row.
-    assert sorted(d.seq for d in docs) == list(range(200))
+    assert sorted(d.seq for d in live) == list(range(200))
     assert stored[0]["content"] == "message number 50"
+    # v1.499.3: the 50 that left the live window were KEPT (older messages)
+    # and stay searchable, with a negative seq (not an index into the array).
+    older = sorted((d for d in docs if d.seq < 0), key=lambda d: -d.seq)
+    assert [d.text for d in older] == [f"message number {i}" for i in range(50)]
 
 
 # --------------------------------------------------------------------------- #

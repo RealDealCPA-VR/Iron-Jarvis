@@ -57,9 +57,13 @@ KEEP_RECENT = 6
 #: Below this there is nothing worth a model call.
 MIN_COVERED = 4
 
+#: v1.499.3: "and can be reopened" is gone. A saved chat keeps every message
+#: (the newest in the chat, the older ones beside it, found by history search;
+#: ``daemon/chat_append``), but the chat does not open its older part on
+#: screen, so the header says only what is true everywhere it is used.
 _SUMMARY_HEADER = (
-    "# Earlier in this conversation (compacted — the full transcript is still "
-    "stored and can be reopened)"
+    "# Earlier in this conversation (compacted — the full conversation is "
+    "still stored)"
 )
 
 #: What the model is asked to produce. Structured on purpose: free prose invites

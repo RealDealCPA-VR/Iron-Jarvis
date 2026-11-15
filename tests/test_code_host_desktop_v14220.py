@@ -84,11 +84,20 @@ def _lifted() -> str:
 
 @requires_node
 def test_the_sweep_spares_only_the_code_hosts_pid(tmp_path):
-    out = _node(_lifted() + "\nconsole.log(JSON.stringify({a: sweepArgs(0), b: sweepArgs(4242), "
-                "c: sweepArgs(undefined), d: sweepArgs(-1)}));", tmp_path)
-    plain = ["/F", "/T", "/IM", "ironjarvis.exe"]
-    assert out["a"] == plain and out["c"] == plain and out["d"] == plain
-    assert out["b"] == plain + ["/FI", "PID ne 4242"]
+    # v1.499.x review: the sweep kills this app's own daemons BY PID (never
+    # `/IM ironjarvis.exe`); the spared code host's pid is left out of the
+    # picked list (tests/test_desktop_trust_fixes_v1499.py pins the rest).
+    own = r"C:\App\resources\daemon"
+    rows = [{"ProcessId": 10, "ExecutablePath": own + r"\ironjarvis.exe"},
+            {"ProcessId": 4242, "ExecutablePath": own + r"\ironjarvis.exe"}]
+    out = _node(_lifted() + "\n" + _lift("function pickOwnDaemonPids(") + "\n"
+                f"const rows = {json.dumps(rows)}; const own = [{json.dumps(own)}];\n"
+                "console.log(JSON.stringify({a: pickOwnDaemonPids(rows, own, 0), "
+                "b: pickOwnDaemonPids(rows, own, 4242), c: pickOwnDaemonPids(rows, own, undefined), "
+                "d: pickOwnDaemonPids(rows, own, -1), args: sweepArgs(10)}));", tmp_path)
+    assert out["a"] == [10, 4242] and out["c"] == [10, 4242] and out["d"] == [10, 4242]
+    assert out["b"] == [10]
+    assert out["args"] == ["/F", "/T", "/PID", "10"]
 
 
 @requires_node

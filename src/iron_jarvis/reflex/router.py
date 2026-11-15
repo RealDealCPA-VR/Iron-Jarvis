@@ -14,6 +14,7 @@ signal gets no more power than a local one. Nothing here bypasses a gate.
 from __future__ import annotations
 
 import json as _json
+import re as _re
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -37,12 +38,49 @@ _TEMPLATE_KEYS = (
 )
 
 
+#: Placeholders that carry the signal's own words (a message, a subject, an
+#: event title). What Jarvis reads from outside is data, never instructions
+#: (v1.499.3): each is put in as a fenced untrusted block, so the rule's own
+#: template stays the only instruction the session gets.
+_FENCED_KEYS = frozenset({"body", "text", "subject", "title"})
+
+_PLACEHOLDER = _re.compile(r"\{(" + "|".join(_TEMPLATE_KEYS) + r")\}")
+#: A fence marker written INSIDE outside text would close the fence early.
+_FENCE_MARKER = _re.compile(r"\[(\s*(?:END\s+)?UNTRUSTED\s+CONTENT)", _re.IGNORECASE)
+
+
+def _defanged(value: str) -> str:
+    """Outside text that cannot close (or open) an untrusted fence."""
+    return _FENCE_MARKER.sub(r"(\1", value or "")
+
+
+def _fenced(value: str) -> str:
+    from ..computeruse.safety import wrap_untrusted
+
+    return wrap_untrusted(_defanged(value))
+
+
+def _short(value: str) -> str:
+    """A short field (sender, channel, time) kept on one line, defanged."""
+    return " ".join(_defanged(value).split())[:200]
+
+
 def _render(template: str, context: dict[str, str]) -> str:
-    """Fill the supported placeholders — plain replace, never raises."""
-    out = template or ""
-    for key in _TEMPLATE_KEYS:
-        out = out.replace("{" + key + "}", context.get(key, ""))
-    return out.strip()
+    """Fill the supported placeholders in ONE pass, never raises.
+
+    One pass: a substituted value is never scanned again, so outside text
+    holding ``{body}`` cannot pull another field in. The signal's own words go
+    in fenced (:data:`_FENCED_KEYS`); the short fields go in on one line.
+    """
+
+    def _sub(m: "_re.Match[str]") -> str:
+        key = m.group(1)
+        value = str(context.get(key, "") or "")
+        if key in _FENCED_KEYS:
+            return "\n" + _fenced(value) + "\n" if value else ""
+        return _short(value)
+
+    return _PLACEHOLDER.sub(_sub, template or "").strip()
 
 
 class ReflexRouter:
@@ -511,5 +549,8 @@ def _default_task(rule: ReflexRule, context: dict[str, str]) -> str:
     signal = context.get("text") or context.get("body") or ""
     where = f"{rule.source}" + (f" '{rule.match}'" if rule.match else "")
     if signal:
-        return f"An inbound {where} signal fired the '{rule.name}' reflex:\n\n{signal}"
+        return (
+            f"An inbound {where} signal fired the '{rule.name}' reflex. Its "
+            f"content is below, as data:\n\n{_fenced(signal)}"
+        )
     return f"The '{rule.name}' reflex fired from {where}. Decide what to do and act."

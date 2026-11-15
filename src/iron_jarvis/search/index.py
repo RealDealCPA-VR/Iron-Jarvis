@@ -583,17 +583,71 @@ class SearchIndex:
                 return 0
             rows = self._docs_for_thread(thread_id, kind, title, project_id, entries, ref)
             with self._scope(db) as (session, owns):
+                # v1.499.3: a chat's OLDER messages (negative ``seq``, see
+                # :meth:`add_older`) are not part of the live array this call
+                # mirrors — they stay, and follow a rename or a project
+                # (un)tag so a filter never shows them under the old label.
                 self._replace(
                     session,
-                    "thread_id = :tid",
+                    "thread_id = :tid AND seq >= 0",
                     {"tid": thread_id},
                     rows,
+                )
+                session.execute(
+                    sa_text(
+                        f"UPDATE {DOC_TABLE} SET title = :title, project_id = :pid "
+                        "WHERE thread_id = :tid AND seq < 0"
+                    ),
+                    {"title": _clip(str(title or ""), 120), "pid": str(project_id or ""),
+                     "tid": thread_id},
                 )
                 if owns:
                     session.commit()
             return len(rows)
         except Exception:  # noqa: BLE001 — never break the caller's write
             log.exception("search sync_thread failed for %s", thread_id)
+            return 0
+
+    def add_older(
+        self,
+        thread_id: str,
+        kind: str,
+        title: str,
+        project_id: str,
+        entries: Iterable[dict[str, Any]],
+        *,
+        first: int,
+        db: DBSession | None = None,
+    ) -> int:
+        """Index messages that just LEFT a chat's live window (v1.499.3,
+        ``daemon/chat_append.keep_older``) — ADDED, never replacing: they are
+        written once, when they move, so a long chat's autosave never
+        re-indexes its whole past. ``first`` is the position of the first one
+        among the chat's older messages; their docs carry ``seq = -(first +
+        i + 1)`` (negative: not an index into the live array, and untouched
+        by :meth:`sync_thread`). :meth:`drop_thread` removes them with the
+        chat. Returns the docs added; 0 and a logged exception on failure."""
+        try:
+            thread_id = str(thread_id or "").strip()
+            if not thread_id:
+                return 0
+            tagged = [
+                {**e, "seq": -(int(first) + i + 1)}
+                for i, e in enumerate(x for x in (entries or []) if isinstance(x, dict))
+            ]
+            rows: list[SearchDocRecord] = []
+            # _docs_for_thread keeps a TAIL of MAX_ENTRIES; every one is wanted.
+            for at in range(0, len(tagged), MAX_ENTRIES):
+                rows += self._docs_for_thread(
+                    thread_id, kind, title, project_id, tagged[at : at + MAX_ENTRIES], None,
+                )
+            with self._scope(db) as (session, owns):
+                self._replace(session, "1 = 0", {}, rows)
+                if owns:
+                    session.commit()
+            return len(rows)
+        except Exception:  # noqa: BLE001 — never break the caller's write
+            log.exception("search add_older failed for %s", thread_id)
             return 0
 
     def sync_session(self, session_row: Any, *, db: DBSession | None = None) -> int:

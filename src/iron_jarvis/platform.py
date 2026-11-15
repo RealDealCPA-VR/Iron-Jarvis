@@ -739,6 +739,21 @@ def build_platform(
     register_protected_root(config.db_path)
     register_protected_root(Path(str(config.db_path) + "-wal"))
     register_protected_root(Path(str(config.db_path) + "-shm"))
+    # v1.499.3: the app's own backups hold the whole database (ledger, undo
+    # pre-images, every note) — no agent file tool reads them back out.
+    register_protected_root(config.home / "backups")
+    # v1.499.3: the INSTALL TOKEN. The desktop keeps it in its userData
+    # folder, the parent of the packaged state home (desktop/main.js
+    # getOrCreateToken); whoever reads it can drive this daemon. By exact
+    # file, so nothing else beside the state home is affected.
+    register_protected_root(Path(config.home).parent / "token.txt")
+    try:
+        from .daemon.client import _token_files
+
+        for token_file in _token_files():
+            register_protected_root(token_file)
+    except Exception:  # noqa: BLE001 — the line above already covers the packaged app
+        pass
 
     # Secrets vault + LLM Connections (OAuth2/PKCE + API key) — built early so the
     # provider manager resolves live credentials and reports REAL availability.

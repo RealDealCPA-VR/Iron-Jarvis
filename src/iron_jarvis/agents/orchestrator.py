@@ -556,6 +556,28 @@ class _SlotTicket:
         return True
 
 
+async def off_loop_settled(fn: Any, *args: Any) -> Any:
+    """Run a blocking write (*fn*) on a worker thread and return its result
+    (v1.499.3 review: the end of every agent run wrote SQLite ON the event
+    loop). A cancel that lands while the write runs waits for that write to
+    land before it propagates, so a later write (the cancel path's CANCELLED
+    row, the next step's row) can never be overtaken by this one; the wait is
+    bounded by the database's own busy timeout. An exception *fn* raised is
+    raised here, exactly as a direct call would."""
+    task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.wait({task})
+            except asyncio.CancelledError:
+                continue
+        if not task.cancelled():
+            task.exception()  # retrieved: the cancel is what propagates
+        raise
+
+
 def _completion_payload(session: Session, **extra: Any) -> dict:
     """The ``session.completed`` payload, the SAME keys at every publish site
     (success, ``_finalize_failed``, ``_finalize_cancelled``).
@@ -1512,7 +1534,9 @@ class Orchestrator:
                 session.input_tokens = run.input_tokens
                 session.output_tokens = run.output_tokens
                 session.finished_at = utcnow()
-                self._save(session)
+                # v1.499.3 review: off the loop (a long writer holding the
+                # file must not park the daemon), and a cancel waits for it.
+                await off_loop_settled(self._save, session)
                 # THE REPLY COMES HOME (v1.345.0, lane T) — BEFORE the
                 # completion event, so a page that re-reads the chat on
                 # ``agent.completed`` finds the line already there.
@@ -1545,7 +1569,10 @@ class Orchestrator:
             # learning/review tail is part of the run (the exact tail whose
             # slowness raced the v1.166.1 CI fix), so the governed slot and the
             # cancellable handle release only when run_session truly ends.
-            self._post_run_learning(session)
+            # v1.499.3 review: the learning tail is pure SQLite work, so it
+            # runs off the loop; it still lands BEFORE the allowance and the
+            # assignment (awaited, and a cancel waits for it).
+            await off_loop_settled(self._post_run_learning, session)
             await self._post_run_allowance(session)
             await self._post_run_assignment(session)
 

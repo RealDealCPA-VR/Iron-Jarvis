@@ -28,7 +28,8 @@ the PyInstaller frozen build with no extra wheels.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import date, datetime, time as dtime, timedelta, timezone, tzinfo
 from typing import Any, Callable
 
 from sqlalchemy import Engine, delete as sa_delete
@@ -69,12 +70,15 @@ class CalendarPoller:
         engine: Engine,
         *,
         http_get: HttpGet | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.platform = platform
         self.reflex_router = reflex_router
         self.engine = engine
         #: Injected text fetcher; when None the stdlib urllib path is used.
         self.http_get = http_get
+        #: Injected clock (aware UTC); tests pin "now" through it.
+        self.clock = clock
 
     # -- gating ------------------------------------------------------------
     def enabled(self) -> bool:
@@ -115,22 +119,19 @@ class CalendarPoller:
             log.exception("calendar trigger: parse failed")
             return []
 
-        now = utcnow()
+        now = self.clock() if self.clock is not None else utcnow()
         lead = int(getattr(self.platform.config, "calendar_lead_minutes", 15) or 15)
         window_end = now + timedelta(minutes=lead)
 
         results: list[dict[str, Any]] = []
-        for ev in events:
+        # Only occurrences coming due within [now, now + lead]; a repeating
+        # event contributes each of its occurrences (v1.499.3).
+        for key, ev, start in _due_occurrences(events, now, window_end):
             uid = ev.get("uid")
-            start = ev.get("start")
-            if not uid or start is None:
-                continue
-            # Only events coming due within [now, now + lead].
-            if not (now <= start <= window_end):
-                continue
-            # AT-MOST-ONCE: mark (insert + commit) BEFORE firing. A UID already
+            # AT-MOST-ONCE: mark (insert + commit) BEFORE firing. A key already
             # claimed (this pass' cursor, or a race) is skipped — never re-fired.
-            if not self._claim(uid):
+            # A single event's key is its UID; a repeat's is UID + occurrence.
+            if not self._claim(key):
                 continue
             try:
                 fired = await self.reflex_router.on_calendar(
@@ -246,8 +247,98 @@ def _tzid_of(params: str) -> str:
     """Extract the TZID parameter from a property name (``DTSTART;TZID=..``)."""
     for p in params.split(";")[1:]:
         if p.upper().startswith("TZID="):
-            return p.split("=", 1)[1].strip()
+            return p.split("=", 1)[1].strip().strip('"')
     return ""
+
+
+#: Used only when tzlocal's own Windows table cannot be imported: Outlook and
+#: Microsoft 365 feeds name zones the Windows way ("Eastern Standard Time").
+_WINDOWS_ZONES_FALLBACK = {
+    "Eastern Standard Time": "America/New_York",
+    "Central Standard Time": "America/Chicago",
+    "Mountain Standard Time": "America/Denver",
+    "US Mountain Standard Time": "America/Phoenix",
+    "Pacific Standard Time": "America/Los_Angeles",
+    "Alaskan Standard Time": "America/Anchorage",
+    "Hawaiian Standard Time": "Pacific/Honolulu",
+    "Atlantic Standard Time": "America/Halifax",
+    "Newfoundland Standard Time": "America/St_Johns",
+    "GMT Standard Time": "Europe/London",
+    "Greenwich Standard Time": "Atlantic/Reykjavik",
+    "W. Europe Standard Time": "Europe/Berlin",
+    "Romance Standard Time": "Europe/Paris",
+    "Central Europe Standard Time": "Europe/Budapest",
+    "Central European Standard Time": "Europe/Warsaw",
+    "FLE Standard Time": "Europe/Kiev",
+    "Russian Standard Time": "Europe/Moscow",
+    "India Standard Time": "Asia/Kolkata",
+    "China Standard Time": "Asia/Shanghai",
+    "Tokyo Standard Time": "Asia/Tokyo",
+    "Singapore Standard Time": "Asia/Singapore",
+    "AUS Eastern Standard Time": "Australia/Sydney",
+    "New Zealand Standard Time": "Pacific/Auckland",
+    "UTC": "Etc/UTC",
+}
+
+#: Each skip reason is logged once per process (a feed is polled every pass).
+_SKIP_LOGGED: set[str] = set()
+
+
+def _log_skip_once(key: str, message: str, *args: Any) -> None:
+    if key in _SKIP_LOGGED:
+        return
+    if len(_SKIP_LOGGED) < 1000:
+        _SKIP_LOGGED.add(key)
+    log.warning(message, *args)
+
+
+def _zone_for(tzid: str) -> tzinfo | None:
+    """The zone a TZID names: an IANA key, or a Windows name mapped to one."""
+    from zoneinfo import ZoneInfo
+
+    try:
+        return ZoneInfo(tzid)
+    except Exception:  # noqa: BLE001 — not an IANA key; try the Windows names
+        pass
+    try:
+        from tzlocal.windows_tz import win_tz
+    except Exception:  # noqa: BLE001 — tzlocal missing: the short table
+        win_tz = _WINDOWS_ZONES_FALLBACK
+    iana = win_tz.get(tzid) or _WINDOWS_ZONES_FALLBACK.get(tzid)
+    if not iana:
+        return None
+    try:
+        return ZoneInfo(iana)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _local_parts(params: str, value: str) -> tuple[datetime, tzinfo, bool] | None:
+    """``(naive wall clock, zone, all_day)`` for a DTSTART-style value, or None
+    when it cannot be read. A zone that cannot be named is logged and is None:
+    the old guess of UTC fired a 10:00 Eastern meeting five hours early."""
+    value = value.strip()
+    try:
+        if "VALUE=DATE" in params.upper() or (len(value) == 8 and value.isdigit()):
+            return datetime.strptime(value[:8], "%Y%m%d"), timezone.utc, True
+        if value.endswith("Z"):
+            return datetime.strptime(value[:-1], "%Y%m%dT%H%M%S"), timezone.utc, False
+        naive = datetime.strptime(value, "%Y%m%dT%H%M%S")
+    except Exception:  # noqa: BLE001 — an unparseable value
+        return None
+    tzid = _tzid_of(params)
+    if not tzid:
+        return naive, timezone.utc, False  # a "floating" time: read as UTC, as before
+    zone = _zone_for(tzid)
+    if zone is None:
+        _log_skip_once(
+            "tz:" + tzid,
+            "calendar trigger: an event uses the time zone %r, which this app "
+            "does not know, so it was skipped rather than fired at a wrong time",
+            tzid,
+        )
+        return None
+    return naive, zone, False
 
 
 def _parse_dt(params: str, value: str) -> datetime | None:
@@ -257,29 +348,30 @@ def _parse_dt(params: str, value: str) -> datetime | None:
       * ``DTSTART:YYYYMMDDTHHMMSSZ``          (explicit UTC)
       * ``DTSTART;TZID=..:YYYYMMDDTHHMMSS``   (local — localized via stdlib
         zoneinfo, so an America/New_York event fires at the right wall-clock
-        time; falls back to UTC only where no tz database is available)
+        time; a Windows zone name from Outlook / Microsoft 365 is mapped to
+        its IANA key; a zone that cannot be named gives None: skipped, logged)
       * ``DTSTART;VALUE=DATE:YYYYMMDD``       (all-day — midnight UTC)
     """
-    value = value.strip()
-    try:
-        if "VALUE=DATE" in params.upper() or (len(value) == 8 and value.isdigit()):
-            return datetime.strptime(value[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
-        if value.endswith("Z"):
-            return datetime.strptime(value[:-1], "%Y%m%dT%H%M%S").replace(
-                tzinfo=timezone.utc
-            )
-        naive = datetime.strptime(value, "%Y%m%dT%H%M%S")
-        tzid = _tzid_of(params)
-        if tzid:
-            try:
-                from zoneinfo import ZoneInfo
-
-                return naive.replace(tzinfo=ZoneInfo(tzid)).astimezone(timezone.utc)
-            except Exception:  # noqa: BLE001 — unknown zone / no tz db → treat as UTC
-                pass
-        return naive.replace(tzinfo=timezone.utc)
-    except Exception:  # noqa: BLE001 — an unparseable DTSTART → skip the event
+    parts = _local_parts(params, value)
+    if parts is None:
         return None
+    naive, zone, _all_day = parts
+    try:
+        return naive.replace(tzinfo=zone).astimezone(timezone.utc)
+    except Exception:  # noqa: BLE001 — an unconvertible DTSTART → skip the event
+        return None
+
+
+def _split_property(line: str) -> tuple[str, str] | None:
+    """``NAME;PARAMS`` and the value: the first colon OUTSIDE double quotes
+    (Outlook writes ``TZID="(UTC-05:00) Eastern Time (US & Canada)"``)."""
+    quoted = False
+    for i, ch in enumerate(line):
+        if ch == '"':
+            quoted = not quoted
+        elif ch == ":" and not quoted:
+            return line[:i], line[i + 1 :]
+    return None
 
 
 def _parse_vevents(text: str) -> list[dict[str, Any]]:
@@ -297,9 +389,12 @@ def _parse_vevents(text: str) -> list[dict[str, Any]]:
                 events.append(cur)
             cur = None
             continue
-        if cur is None or ":" not in line:
+        if cur is None:
             continue
-        name, _, value = line.partition(":")
+        split = _split_property(line)
+        if split is None:
+            continue
+        name, value = split
         key = name.split(";", 1)[0].upper()
         if key == "UID":
             cur["uid"] = value.strip()
@@ -311,7 +406,281 @@ def _parse_vevents(text: str) -> list[dict[str, Any]]:
             cur["location"] = _unescape(value)
         elif key == "DTSTART":
             cur["start"] = _parse_dt(name, value)
+            cur["_dtstart"] = (name, value.strip())
+        elif key == "RRULE":
+            cur["rrule"] = value.strip()
+        elif key == "EXDATE":
+            cur.setdefault("_exdates", []).append((name, value.strip()))
+        elif key == "RECURRENCE-ID":
+            cur["recurrence_id"] = _parse_dt(name, value)
+        elif key in ("RDATE", "EXRULE"):
+            cur["_unsupported"] = key
     return events
+
+
+# --------------------------------------------------------------------------- #
+# Repeating events (RRULE): the common shapes, expanded for the look-ahead.
+# --------------------------------------------------------------------------- #
+_WEEKDAYS = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
+_RRULE_PARTS = {"FREQ", "INTERVAL", "BYDAY", "BYMONTHDAY", "COUNT", "UNTIL", "WKST"}
+_BYDAY_RE = re.compile(r"^([+-]?\d{1,2})?(MO|TU|WE|TH|FR|SA|SU)$")
+#: Periods walked for one event before it is given up on (bounds a pass).
+_MAX_PERIODS = 20_000
+
+
+class RuleNotUnderstood(ValueError):
+    """An RRULE part this parser does not handle; the event is skipped."""
+
+
+def _parse_rrule(text: str) -> dict[str, Any]:
+    parts: dict[str, str] = {}
+    for chunk in text.split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "=" not in chunk:
+            raise RuleNotUnderstood(f"cannot read {chunk!r}")
+        k, v = chunk.split("=", 1)
+        k, v = k.strip().upper(), v.strip().upper()
+        if k not in _RRULE_PARTS:
+            raise RuleNotUnderstood(f"{k} is not supported")
+        parts[k] = v
+    freq = parts.get("FREQ")
+    if freq not in ("DAILY", "WEEKLY", "MONTHLY"):
+        raise RuleNotUnderstood(f"FREQ={freq} is not supported")
+    try:
+        interval = int(parts.get("INTERVAL", "1"))
+        count = int(parts["COUNT"]) if "COUNT" in parts else None
+    except ValueError as exc:
+        raise RuleNotUnderstood(str(exc)) from exc
+    if interval < 1 or (count is not None and count < 1):
+        raise RuleNotUnderstood("INTERVAL and COUNT must be positive")
+    if count is not None and "UNTIL" in parts:
+        raise RuleNotUnderstood("COUNT and UNTIL together")
+    byday: list[tuple[int | None, int]] = []
+    for item in filter(None, parts.get("BYDAY", "").split(",")):
+        m = _BYDAY_RE.match(item.strip())
+        if not m:
+            raise RuleNotUnderstood(f"BYDAY={item} is not supported")
+        ordinal = int(m.group(1)) if m.group(1) else None
+        if ordinal is not None and (freq != "MONTHLY" or ordinal == 0 or abs(ordinal) > 5):
+            raise RuleNotUnderstood(f"BYDAY={item} is not supported with {freq}")
+        byday.append((ordinal, _WEEKDAYS[m.group(2)]))
+    bymonthday: list[int] = []
+    for item in filter(None, parts.get("BYMONTHDAY", "").split(",")):
+        try:
+            day = int(item)
+        except ValueError as exc:
+            raise RuleNotUnderstood(f"BYMONTHDAY={item}") from exc
+        if freq != "MONTHLY" or day == 0 or abs(day) > 31:
+            raise RuleNotUnderstood(f"BYMONTHDAY={item} is not supported with {freq}")
+        bymonthday.append(day)
+    if byday and bymonthday:
+        raise RuleNotUnderstood("BYDAY with BYMONTHDAY")
+    wkst = parts.get("WKST", "MO")
+    if wkst not in _WEEKDAYS:
+        raise RuleNotUnderstood(f"WKST={wkst}")
+    return {
+        "freq": freq,
+        "interval": interval,
+        "count": count,
+        "until": parts.get("UNTIL"),
+        "byday": byday,
+        "bymonthday": bymonthday,
+        "wkst": _WEEKDAYS[wkst],
+    }
+
+
+def _month_days(year: int, month: int) -> int:
+    nxt = date(year + (month == 12), month % 12 + 1, 1)
+    return (nxt - timedelta(days=1)).day
+
+
+def _period(rule: dict[str, Any], start: datetime, p: int) -> tuple[date, list[date]]:
+    """``(first day of period p, the candidate days in it, in order)``."""
+    freq, step, t0 = rule["freq"], rule["interval"], start.date()
+    if freq == "DAILY":
+        d = t0 + timedelta(days=p * step)
+        if rule["byday"] and d.weekday() not in {wd for _o, wd in rule["byday"]}:
+            return d, []
+        return d, [d]
+    if freq == "WEEKLY":
+        week0 = t0 - timedelta(days=(t0.weekday() - rule["wkst"]) % 7)
+        ws = week0 + timedelta(days=7 * step * p)
+        wds = {wd for _o, wd in rule["byday"]} or {t0.weekday()}
+        return ws, sorted(ws + timedelta(days=(wd - rule["wkst"]) % 7) for wd in wds)
+    # MONTHLY
+    idx = t0.year * 12 + (t0.month - 1) + p * step
+    y, m0 = divmod(idx, 12)
+    m = m0 + 1
+    first, ndays = date(y, m, 1), _month_days(y, m)
+    out: set[date] = set()
+    if rule["bymonthday"]:
+        for day in rule["bymonthday"]:
+            dd = day if day > 0 else ndays + day + 1
+            if 1 <= dd <= ndays:
+                out.add(date(y, m, dd))
+    elif rule["byday"]:
+        for ordinal, wd in rule["byday"]:
+            hits = [
+                date(y, m, d) for d in range(1, ndays + 1) if date(y, m, d).weekday() == wd
+            ]
+            if ordinal is None:
+                out.update(hits)
+            elif 0 < ordinal <= len(hits):
+                out.add(hits[ordinal - 1])
+            elif ordinal < 0 and -ordinal <= len(hits):
+                out.add(hits[ordinal])
+    elif t0.day <= ndays:
+        out.add(date(y, m, t0.day))
+    return first, sorted(out)
+
+
+def _first_period(rule: dict[str, Any], start: datetime, local_from: datetime) -> int:
+    """A period index at or before ``local_from`` (a COUNT rule starts at 0)."""
+    if rule["count"] is not None or local_from <= start:
+        return 0
+    step = rule["interval"]
+    if rule["freq"] == "DAILY":
+        n = (local_from.date() - start.date()).days // step
+    elif rule["freq"] == "WEEKLY":
+        n = (local_from.date() - start.date()).days // (7 * step)
+    else:
+        months = (local_from.year - start.year) * 12 + local_from.month - start.month
+        n = months // step
+    return max(0, n - 1)
+
+
+def _until_utc(raw: str | None, zone: tzinfo) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            return datetime.strptime(raw[:-1], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+        if len(raw) == 8 and raw.isdigit():
+            day = datetime.strptime(raw, "%Y%m%d").date()
+            return (
+                datetime.combine(day, dtime(23, 59, 59))
+                .replace(tzinfo=zone)
+                .astimezone(timezone.utc)
+            )
+        return (
+            datetime.strptime(raw, "%Y%m%dT%H%M%S")
+            .replace(tzinfo=zone)
+            .astimezone(timezone.utc)
+        )
+    except ValueError as exc:
+        raise RuleNotUnderstood(f"UNTIL={raw}") from exc
+
+
+def _expand(
+    ev: dict[str, Any], window_start: datetime, window_end: datetime
+) -> list[datetime]:
+    """The UTC starts of ``ev``'s repeats inside [window_start, window_end].
+
+    Raises :class:`RuleNotUnderstood` for anything outside the simple shapes
+    (FREQ=DAILY/WEEKLY/MONTHLY with INTERVAL, BYDAY, BYMONTHDAY, COUNT, UNTIL,
+    WKST; EXDATE). Walked in the event's own zone, so a 09:00 standup stays at
+    09:00 across a daylight-saving change.
+    """
+    if ev.get("_unsupported"):
+        raise RuleNotUnderstood(f"{ev['_unsupported']} is not supported")
+    params, value = ev["_dtstart"]
+    parts = _local_parts(params, value)
+    if parts is None:
+        raise RuleNotUnderstood("its start cannot be read")
+    start, zone, _all_day = parts
+    rule = _parse_rrule(ev["rrule"])
+    until = _until_utc(rule["until"], zone)
+
+    ex_utc: set[datetime] = set()
+    ex_days: set[date] = set()
+    for ex_params, ex_value in ev.get("_exdates", []):
+        for item in filter(None, (v.strip() for v in ex_value.split(","))):
+            got = _local_parts(ex_params, item)
+            if got is None:
+                raise RuleNotUnderstood(f"EXDATE {item} cannot be read")
+            naive, ex_zone, ex_all_day = got
+            if ex_all_day:
+                ex_days.add(naive.date())
+            else:
+                ex_utc.add(naive.replace(tzinfo=ex_zone).astimezone(timezone.utc))
+
+    local_from = window_start.astimezone(zone).replace(tzinfo=None)
+    first_p = _first_period(rule, start, local_from)
+    seen = 0
+    out: list[datetime] = []
+    for p in range(first_p, first_p + _MAX_PERIODS):
+        first, days = _period(rule, start, p)
+        floor = datetime.combine(first, dtime(0, 0)).replace(tzinfo=zone)
+        if floor.astimezone(timezone.utc) > window_end:
+            return out
+        for day in days:
+            local = datetime.combine(day, start.time())
+            if local < start:
+                continue
+            seen += 1
+            if rule["count"] is not None and seen > rule["count"]:
+                return out
+            occ = local.replace(tzinfo=zone).astimezone(timezone.utc)
+            if until is not None and occ > until:
+                return out
+            if occ > window_end:
+                return out
+            if occ in ex_utc or day in ex_days:
+                continue
+            if occ >= window_start:
+                out.append(occ)
+    raise RuleNotUnderstood("it repeats too many times to walk")
+
+
+def _due_occurrences(
+    events: list[dict[str, Any]], window_start: datetime, window_end: datetime
+) -> list[tuple[str, dict[str, Any], datetime]]:
+    """``(claim key, event, start)`` for every occurrence due in the window.
+
+    A single event's key is its UID (as before); a repeat's occurrence is keyed
+    UID + its start, and a moved occurrence (RECURRENCE-ID) by UID + the start
+    it replaces, so the master's copy of it never fires as well. An event whose
+    repeat cannot be understood is skipped and logged in words, never fired at
+    a guessed time. Never raises.
+    """
+    moved: dict[str, set[datetime]] = {}
+    for ev in events:
+        if ev.get("uid") and ev.get("recurrence_id") is not None:
+            moved.setdefault(ev["uid"], set()).add(ev["recurrence_id"])
+
+    due: list[tuple[str, dict[str, Any], datetime]] = []
+    for ev in events:
+        uid = ev.get("uid")
+        start = ev.get("start")
+        if not uid or start is None:
+            continue
+        rid = ev.get("recurrence_id")
+        if rid is not None:
+            if window_start <= start <= window_end:
+                due.append((f"{uid}@{rid:%Y%m%dT%H%M%SZ}", ev, start))
+            continue
+        if not ev.get("rrule"):
+            if window_start <= start <= window_end:
+                due.append((uid, ev, start))
+            continue
+        try:
+            occurrences = _expand(ev, window_start, window_end)
+        except Exception as exc:  # noqa: BLE001 — RuleNotUnderstood or a bad value
+            _log_skip_once(
+                "rrule:" + uid,
+                "calendar trigger: the repeating event with id %r was skipped because its "
+                "repeat could not be understood (%s)",
+                uid,
+                exc,
+            )
+            continue
+        for occ in occurrences:
+            if occ in moved.get(uid, ()):
+                continue
+            due.append((f"{uid}@{occ:%Y%m%dT%H%M%SZ}", ev, occ))
+    return due
 
 
 def _iso(dt: datetime) -> str:

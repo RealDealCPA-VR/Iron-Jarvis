@@ -51,6 +51,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlmodel import Field, SQLModel
+
 from ..core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
@@ -84,8 +86,205 @@ LINE_KEYS: tuple[str, ...] = (
     "remembered",
 )
 
-#: The PUT route keeps the newest 200 messages; so does an append.
+#: The PUT route keeps the newest 200 messages LIVE; so does an append. The
+#: older ones move to :class:`ChatOlderMessage` (v1.499.3), never deleted.
 MAX_MESSAGES = 200
+
+# --------------------------------------------------------------------------- #
+# OLDER MESSAGES (v1.499.3): a long chat's oldest messages are KEPT, not deleted
+# --------------------------------------------------------------------------- #
+# The PUT route and this module keep the newest MAX_MESSAGES in
+# ``messages_json`` (the page's live window: what it loads, renders and sends
+# back). Until v1.499.3 message 201 and older were simply DELETED from the row
+# on the next save, while the compaction header told the model "the full
+# transcript is still stored". They now MOVE here, in order, in the same
+# transaction as the save, and history search keeps finding them
+# (``SearchIndex.add_older``). ``GET /chat/threads/{id}`` says how many there
+# are (``older``) and ``GET /chat/threads/{id}/older`` reads them back.
+
+
+class ChatOlderMessage(SQLModel, table=True):
+    """One message that left a saved chat's live window (v1.499.3).
+
+    A plain new table (rows are only ever added, or deleted with their chat).
+    Created on first use by :func:`ensure_older_table`, OUTSIDE any open
+    write transaction (a CREATE inside the save's transaction would wait on
+    the save's own writer slot)."""
+
+    __tablename__ = "chatoldermessage"
+
+    id: int | None = Field(default=None, primary_key=True)
+    thread_id: str = Field(default="", index=True)
+    #: Position in the chat's older messages: 0 = the very first message.
+    seq: int = 0
+    #: The message exactly as the chat stored it (the page's ``ChatMessage``).
+    message_json: str = "{}"
+    moved_at: datetime = Field(default_factory=utcnow)
+
+
+_OLDER_READY: set[int] = set()
+#: How many of the live window's FIRST messages are matched to find where the
+#: stored window sits in what the page sent (see :func:`leaving_live_window`).
+_ALIGN = 8
+
+
+def ensure_older_table(engine: Any) -> bool:
+    """Create the older-messages table if it is missing — once per engine,
+    never inside a transaction. BLOCKING (a sync route or a worker thread
+    calls it). Never raises; False when the table cannot be made."""
+    key = id(engine)
+    if key in _OLDER_READY:
+        return True
+    try:
+        ChatOlderMessage.__table__.create(bind=engine, checkfirst=True)
+        _OLDER_READY.add(key)
+        return True
+    except Exception:  # noqa: BLE001 — the save goes on; the cap then keeps as before
+        log.warning("chat older-messages table unavailable", exc_info=True)
+        return False
+
+
+def _same(a: Any, b: Any) -> bool:
+    """The same message for alignment: role and words (``at`` is restamped by
+    the page until a chat is reopened, so it cannot be compared)."""
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return False
+    return (str(a.get("role") or ""), str(a.get("content") or "")) == (
+        str(b.get("role") or ""), str(b.get("content") or ""),
+    )
+
+
+def leaving_live_window(stored: list, sent: list, keep: int = MAX_MESSAGES) -> list:
+    """The messages a save of ``sent`` pushes OUT of the live window that are
+    not kept yet (v1.499.3), oldest first.
+
+    ``stored`` is the live window on disk before this save; ``sent`` the
+    page's whole array. The page holds every message of the session, so after
+    the first overflow ``sent`` STARTS with messages that already moved. The
+    stored window's first messages are found in ``sent`` (role and words,
+    :data:`_ALIGN` of them): what sits before them already moved, and what
+    leaves now is the stored window's own head — taken from ``stored``, the
+    copy that was on disk. When the stored window cannot be found (the page
+    rewrote its start, or there was none), whatever the cap would drop is what
+    leaves. Pure; never raises."""
+    try:
+        sent = [m for m in (sent or [])]
+        drop = len(sent) - keep
+        if drop <= 0:
+            return []
+        stored = [m for m in (stored or [])]
+        if stored:
+            probe = stored[:_ALIGN]
+            for p in range(0, len(sent) - len(probe) + 1):
+                if all(_same(sent[p + i], probe[i]) for i in range(len(probe))):
+                    # sent[:p] already moved; sent[p:drop] is stored[:drop - p].
+                    return list(stored[: max(0, drop - p)])
+        return list(sent[:drop])
+    except Exception:  # noqa: BLE001 — a fault keeps nothing rather than guessing
+        log.warning("could not tell which chat messages leave the live window", exc_info=True)
+        return []
+
+
+def keep_older(db: Any, record: Any, moved: list, *, engine: Any = None, kind: str = "chat") -> int:
+    """Add ``moved`` (oldest first) to the chat's older messages in the
+    CALLER's transaction, and to history search (``add_older``). The table
+    must already exist (:func:`ensure_older_table`, before the transaction).
+    Returns how many were kept. RAISES when they cannot be kept: the caller
+    then keeps them in the live window instead (nothing is ever dropped)."""
+    rows = [m for m in (moved or []) if isinstance(m, dict)]
+    if not rows:
+        return 0
+    try:
+        from sqlalchemy import func
+        from sqlmodel import select
+
+        start = db.exec(
+            select(func.count()).select_from(ChatOlderMessage).where(
+                ChatOlderMessage.thread_id == record.id
+            )
+        ).one()
+        start = int(start[0] if isinstance(start, tuple) else start or 0)
+        for i, m in enumerate(rows):
+            db.add(ChatOlderMessage(
+                thread_id=record.id, seq=start + i, message_json=json.dumps(m),
+            ))
+        if str(getattr(record, "surface", "") or "") != "build":
+            try:
+                from ..core.db import search_index
+
+                index = search_index(engine) if engine is not None else None
+                if index is not None:
+                    index.add_older(
+                        record.id, kind, record.title or "", record.project_id or "",
+                        rows, first=start, db=db,
+                    )
+            except Exception:  # noqa: BLE001 — search never costs a message
+                log.warning("history-search could not add older messages of %s", record.id,
+                            exc_info=True)
+        return len(rows)
+    except Exception:  # noqa: BLE001
+        log.warning("could not keep older messages of chat %s", getattr(record, "id", "?"),
+                    exc_info=True)
+        raise
+
+
+def older_count(engine: Any, thread_id: str) -> int:
+    """How many older messages a chat keeps. BLOCKING. 0 on any fault."""
+    try:
+        from sqlalchemy import func
+        from sqlmodel import select
+
+        if not ensure_older_table(engine):
+            return 0
+        with session_scope(engine) as db:
+            n = db.exec(
+                select(func.count()).select_from(ChatOlderMessage).where(
+                    ChatOlderMessage.thread_id == thread_id
+                )
+            ).one()
+        return int(n[0] if isinstance(n, tuple) else n or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def read_older(engine: Any, thread_id: str, *, offset: int = 0, limit: int = 200) -> list[dict]:
+    """A page of a chat's older messages, oldest first. BLOCKING."""
+    from sqlmodel import select
+
+    if not ensure_older_table(engine):
+        return []
+    limit = max(1, min(int(limit or 200), 1000))
+    offset = max(0, int(offset or 0))
+    with session_scope(engine) as db:
+        rows = db.exec(
+            select(ChatOlderMessage)
+            .where(ChatOlderMessage.thread_id == thread_id)
+            .order_by(ChatOlderMessage.seq)
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        out: list[dict] = []
+        for r in rows:
+            try:
+                m = json.loads(r.message_json or "{}")
+            except Exception:  # noqa: BLE001 — a corrupt cell is skipped, not a 500
+                continue
+            if isinstance(m, dict):
+                out.append(m)
+    return out
+
+
+def drop_older(db: Any, thread_id: str) -> int:
+    """Delete a chat's older messages in the caller's transaction (the chat
+    is being deleted: "delete" means all of it). Never raises."""
+    try:
+        from sqlalchemy import delete
+
+        res = db.exec(delete(ChatOlderMessage).where(ChatOlderMessage.thread_id == thread_id))
+        return int(getattr(res, "rowcount", 0) or 0)
+    except Exception:  # noqa: BLE001 — no table yet: nothing to delete
+        return 0
+
 
 #: Serialises this append with the PUT route's whole-array rewrite and the comm
 #: store's appends — ONE process-wide lock (see ``core.db.CONVERSATION_WRITE_LOCK``
@@ -201,6 +400,8 @@ def append_to_chat_thread(
         return out
     stamp = utcnow().isoformat()
     cleaned = [c for c in (_clean_line(x, stamp) for x in (lines or [])) if c is not None]
+    # v1.499.3: before the transaction (a CREATE inside it would wait on it).
+    older_ok = ensure_older_table(engine)
     try:
         with _APPEND_LOCK, session_scope(engine) as db:
             r = db.get(ChatThreadRecord, thread_id)
@@ -242,7 +443,15 @@ def append_to_chat_thread(
                 out["ok"] = True
                 out["updated_at"] = r.updated_at.isoformat() if r.updated_at else None
                 return out
-            msgs = (msgs + added)[-MAX_MESSAGES:]
+            msgs = msgs + added
+            # v1.499.3: what leaves the live window is KEPT (older messages),
+            # in this transaction; if it cannot be kept, it stays live.
+            if len(msgs) > MAX_MESSAGES and older_ok:
+                try:
+                    keep_older(db, r, msgs[:-MAX_MESSAGES], engine=engine)
+                    msgs = msgs[-MAX_MESSAGES:]
+                except Exception:  # noqa: BLE001 — logged in keep_older
+                    pass
             r.messages_json = json.dumps(msgs)
             r.updated_at = _next_stamp(r.updated_at)
             # A reply un-archives (comm/threads.append's rule): a chat the user

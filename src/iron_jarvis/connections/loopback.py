@@ -31,6 +31,22 @@ log = get_logger("oauth-loopback")
 DEFAULT_TTL_SECONDS = 600
 
 
+class UnknownOAuthState(ValueError):
+    """A callback whose ``state`` is not the pending sign-in's (v1.499.3
+    review). ``on_code`` raises it (``ConnectionRegistry.complete_oauth``
+    does) for a stray or drive-by request: the listener answers it and KEEPS
+    LISTENING, so the real redirect can still finish the sign-in in progress.
+    Every other outcome (a connection, a failed exchange for the real state,
+    an expired state) ends the one-shot listener."""
+
+
+#: The page a stray callback gets: nothing posted to the opener window.
+STRAY_WORDS = (
+    "This sign-in link is not the one Iron Jarvis is waiting for. "
+    "The sign-in in progress is still open."
+)
+
+
 class OAuthLoopbackServer:
     """Bind a loopback port, catch ONE OAuth redirect, complete, shut down."""
 
@@ -99,12 +115,16 @@ class OAuthLoopbackServer:
                 qs = parse_qs(parsed.query)
                 code = (qs.get("code") or [""])[0]
                 state = (qs.get("state") or [""])[0]
+                stray = False
                 try:
                     outer.on_code(code, state)
                     ok, msg = True, f"Connected to {outer.provider}. You can close this window."
+                except UnknownOAuthState:
+                    # Not the pending sign-in's state: answer, keep listening.
+                    stray, ok, msg = True, False, STRAY_WORDS
                 except Exception as exc:  # noqa: BLE001 — surface, don't crash the thread
                     ok, msg = False, f"Connection failed: {exc}"
-                body = _result_page(outer.provider, ok, msg)
+                body = _result_page(outer.provider, ok, msg, notify=not stray)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header(
@@ -115,6 +135,10 @@ class OAuthLoopbackServer:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                if stray:
+                    # v1.499.3 review: a stray GET (a bogus or missing state)
+                    # used to stop the listener and break the real sign-in.
+                    return
                 # One-shot: tear down after the redirect. shutdown() would
                 # deadlock from THIS (serving) thread — stop from another one.
                 threading.Thread(target=outer.stop, daemon=True).start()
@@ -122,21 +146,28 @@ class OAuthLoopbackServer:
         return Handler
 
 
-def _result_page(provider: str, ok: bool, msg: str) -> bytes:
-    """Dark result page mirroring the daemon's /oauth callback (XSS-escaped)."""
+def _result_page(provider: str, ok: bool, msg: str, *, notify: bool = True) -> bytes:
+    """Dark result page mirroring the daemon's /oauth callback (XSS-escaped).
+    ``notify=False`` (a stray callback) posts nothing to the opener window,
+    so the page waiting on the real sign-in is not told it failed."""
     color = "#22d3ee" if ok else "#fb7185"
     safe_msg = _html.escape(msg)
     payload = json.dumps(
         {"type": "ironjarvis-oauth", "provider": provider, "ok": ok}
     ).replace("<", "\\u003c")
+    script = (
+        "<script>try{window.opener&&window.opener.postMessage("
+        f"JSON.parse({json.dumps(payload)}),'*');"
+        "setTimeout(()=>window.close(),1200)}catch(e){}</script>"
+        if notify
+        else ""
+    )
     html = (
         "<!doctype html><meta charset=utf-8><title>Iron Jarvis</title>"
         "<body style='background:#0a0a0f;color:#e5e7eb;font-family:system-ui;"
         "display:grid;place-items:center;height:100vh;margin:0'>"
         f"<div style='text-align:center'><div style='font-size:42px;color:{color}'>"
         f"{'&#10003;' if ok else '&#10005;'}</div><p>{safe_msg}</p></div>"
-        "<script>try{window.opener&&window.opener.postMessage("
-        f"JSON.parse({json.dumps(payload)}),'*');"
-        "setTimeout(()=>window.close(),1200)}catch(e){}</script></body>"
+        f"{script}</body>"
     )
     return html.encode("utf-8")

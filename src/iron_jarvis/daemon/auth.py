@@ -348,6 +348,10 @@ def _exempt_for(request: Request) -> bool:
     # guarded routes (DELETE /peers/{name} for a pairing called "pair").
     if path in (PEER_PAIR_PATH, PEER_UNPAIR_PATH) and request.method != "POST":
         return False
+    # The remote inbound door is a POST too (routes/agents.py); PATCH or
+    # DELETE of a remote that happens to be named "inbound" stays guarded.
+    if _is_remote_inbound(path) and request.method != "POST":
+        return False
     if path in _LOCAL_ONLY_EXEMPT and _lan_opened() and not _peer_is_this_computer(request):
         return False
     return True
@@ -542,6 +546,19 @@ def auth_enabled() -> bool:
     return bool(_configured_token())
 
 
+def _is_remote_inbound(path: str) -> bool:
+    """``/agents/remote/<name>/inbound`` with exactly one, non-empty name."""
+    parts = path.split("/")
+    return (
+        len(parts) == 5
+        and parts[0] == ""
+        and parts[1] == "agents"
+        and parts[2] == "remote"
+        and bool(parts[3])
+        and parts[4] == "inbound"
+    )
+
+
 def _is_exempt(path: str) -> bool:
     if path in _EXEMPT_EXACT:
         return True
@@ -558,7 +575,10 @@ def _is_exempt(path: str) -> bool:
     # inbound token, never the install bearer — the handler verifies it
     # fail-closed (inbound off or no vault entry = 403, wrong token = 401).
     # Exactly the ".../inbound" leaf: enable/disable beneath it stay guarded.
-    if path.startswith("/agents/remote/") and path.endswith("/inbound"):
+    # v1.499.3: EXACTLY ``/agents/remote/<name>/inbound`` (one name segment):
+    # the bare ``/agents/remote/inbound`` is a remote CALLED "inbound"
+    # (PATCH/DELETE beside it stay guarded), and a deeper path is no door.
+    if _is_remote_inbound(path):
         return True
     # Another computer running Iron Jarvis sending a task (v1.357.0): its own
     # door token, verified fail-closed in the handler. Exactly this leaf.

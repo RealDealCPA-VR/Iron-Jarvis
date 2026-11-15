@@ -34,7 +34,14 @@ class MemoryWriteTool(Tool):
         self.layers = layers
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        record = self.layers.write(args["layer"], args["key"], args["text"])
+        from ..detections.redact import mask
+        from ..ltm.tools import SECRET_LEFT_OUT
+
+        text = args["text"]
+        # v1.499.3: MemoryLayers.write keeps a secret masked; say so, as
+        # remember_preference and ltm_append do.
+        left_out = isinstance(text, str) and mask(text) != text
+        record = self.layers.write(args["layer"], args["key"], text)
         await ctx.event_bus.publish(
             EventType.MEMORY_UPDATED,
             {"layer": record.layer, "key": record.key, "id": record.id},
@@ -42,7 +49,8 @@ class MemoryWriteTool(Tool):
         )
         return ToolResult(
             ok=True,
-            output=f"stored memory '{record.key}' in layer '{record.layer}'",
+            output=f"stored memory '{record.key}' in layer '{record.layer}'"
+            + (f". {SECRET_LEFT_OUT}" if left_out else ""),
             data={"id": record.id, "layer": record.layer, "key": record.key},
         )
 
@@ -51,6 +59,9 @@ class MemoryReadTool(Tool):
     """Read a memory entry by (layer, key) (§21)."""
 
     name = "memory_read"
+    # Stored memory can carry planted content, exactly like memory_search's
+    # results (v1.499.3: this one went to the model unfenced).
+    returns_untrusted_content = True
     description = "Read a memory entry by layer and key; empty result if absent."
     permission_key = "memory_read"
     input_schema = {

@@ -52,8 +52,15 @@ class MemoryLayers:
     def write(
         self, layer: str, key: str, text: str, scope_id: str | None = None
     ) -> MemoryRecord:
-        """Upsert by (layer, key, scope_id): update text in place if present, else insert."""
+        """Upsert by (layer, key, scope_id): update text in place if present, else insert.
+
+        v1.499.3: a secret-looking value in *text* (``sk-…``, ``password=…``,
+        ``Bearer …``) is stored MASKED (``detections.redact.mask``): memory is
+        retrieved into later prompts."""
         self._check_layer(layer)
+        from ..detections.redact import mask
+
+        text = mask(text) if isinstance(text, str) else text
         existing = self._find(layer, key, scope_id)
         if existing is not None:
             with session_scope(self.engine) as db:

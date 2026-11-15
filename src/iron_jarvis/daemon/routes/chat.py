@@ -336,13 +336,18 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
     (v1.367.0). BLOCKING: a sync route runs it in the threadpool."""
     from ...core.db import search_index
     from ...core.models import ChatThreadRecord, is_build_thread
+    from ..chat_append import drop_older, ensure_older_table
 
+    older_ok = ensure_older_table(engine)  # outside the transaction
     with _THREAD_SAVE_LOCK, session_scope(engine) as db:
         r = db.get(ChatThreadRecord, thread_id)
         if r is None:
             return False
         build = is_build_thread(r)
         db.delete(r)
+        # v1.499.3: its older messages go with it — "delete" means all of it.
+        if older_ok:
+            drop_older(db, thread_id)
         try:
             index = search_index(engine)
             if index is not None:
@@ -622,6 +627,13 @@ def _turn_thread_lookup(d, turn_id: str):
             return ""
 
     return _lookup
+
+
+#: v1.499.3: named turns being STARTED right now — ``(id(logs), turn_id)`` ->
+#: a future set once the turn is in ``logs`` (or its start failed). Filled and
+#: emptied on the loop only, with no await between the check and the claim
+#: (see ``chat_stream_route``).
+_STARTING_TURNS: dict[tuple[int, str], "asyncio.Future[None]"] = {}
 
 
 def _turn_logs(d) -> "_durable.TurnLogs":
@@ -2104,6 +2116,7 @@ def register(app: FastAPI, d) -> None:
     @app.get("/chat/threads/{thread_id}")
     def chat_thread(thread_id: str) -> dict[str, Any]:
         from ...core.models import ChatThreadRecord
+        from ..chat_append import older_count
 
         with session_scope(d.platform.engine) as db:
             r = db.get(ChatThreadRecord, thread_id)
@@ -2148,6 +2161,29 @@ def register(app: FastAPI, d) -> None:
             # v1.367.0 (IJ harness Phase 4, additive, LAST): "build" for an
             # IJ harness session — it opens in Build, never in Chat.
             "surface": getattr(r, "surface", None) or "chat",
+            # v1.499.3 (additive): how many OLDER messages this chat keeps
+            # beyond its live ``messages`` (GET .../older reads them).
+            "older": older_count(d.platform.engine, r.id),
+        }
+
+    @app.get("/chat/threads/{thread_id}/older")
+    def chat_thread_older(thread_id: str, offset: int = 0, limit: int = 200) -> dict[str, Any]:
+        """A saved chat's OLDER messages, oldest first (v1.499.3): the ones a
+        long chat moved out of its live window (``messages``) instead of
+        deleting. ``total`` is how many there are; page with ``offset`` /
+        ``limit`` (at most 1,000)."""
+        from ...core.models import ChatThreadRecord
+        from ..chat_append import older_count, read_older
+
+        with session_scope(d.platform.engine) as db:
+            r = db.get(ChatThreadRecord, thread_id)
+        if r is None:
+            raise HTTPException(status_code=404, detail="no such thread")
+        return {
+            "id": thread_id,
+            "total": older_count(d.platform.engine, thread_id),
+            "offset": max(0, int(offset or 0)),
+            "messages": read_older(d.platform.engine, thread_id, offset=offset, limit=limit),
         }
 
     @app.put("/chat/threads/{thread_id}/queue")
@@ -2357,6 +2393,15 @@ def register(app: FastAPI, d) -> None:
                 )
             if expected.tzinfo is not None:  # the row is stored naive UTC
                 expected = expected.astimezone(timezone.utc).replace(tzinfo=None)
+        from ..chat_append import (
+            MAX_MESSAGES as _LIVE_MAX,
+            ensure_older_table,
+            keep_older,
+            leaving_live_window,
+        )
+
+        # v1.499.3: before the transaction (a CREATE inside it would wait on it).
+        older_ok = ensure_older_table(d.platform.engine)
         with _THREAD_SAVE_LOCK, session_scope(d.platform.engine) as db:
             r = None if thread_id == "new" else db.get(ChatThreadRecord, thread_id)
             if r is not None and expected is not None and r.updated_at is not None:
@@ -2430,7 +2475,34 @@ def register(app: FastAPI, d) -> None:
                 r.setup_json = _clean_setup(raw_setup)
             kept: list = []
             if not daemon_owned:
-                kept = list(msgs[-200:])
+                # v1.499.3: the newest _LIVE_MAX stay LIVE (what the page
+                # loads and sends back), and what a save pushes out of that
+                # window MOVES to the chat's older messages in this same
+                # transaction — it used to be deleted ("msgs[-200:]") while
+                # the compaction header told the model the whole transcript
+                # was still stored. When they cannot be kept, they stay live.
+                kept = list(msgs)
+                if len(kept) > _LIVE_MAX and older_ok:
+                    try:
+                        stored_live = json.loads(r.messages_json or "[]")
+                    except Exception:  # noqa: BLE001 — a corrupt blob: nothing to align on
+                        stored_live = []
+                    _first_stamp = _now().isoformat()
+                    for m in kept[: len(kept) - _LIVE_MAX]:
+                        if isinstance(m, dict) and not m.get("at"):
+                            m["at"] = _first_stamp
+                    try:
+                        keep_older(
+                            db, r,
+                            leaving_live_window(
+                                stored_live if isinstance(stored_live, list) else [],
+                                kept, _LIVE_MAX,
+                            ),
+                            engine=d.platform.engine,
+                        )
+                        kept = kept[-_LIVE_MAX:]
+                    except Exception:  # noqa: BLE001 — logged there; kept live instead
+                        pass
                 # Server-side `at`: stamp only what has none. The client passes
                 # unknown fields straight back, so a stamp written here survives
                 # every later autosave untouched — ONCE the client has seen it.
@@ -3022,9 +3094,10 @@ def register(app: FastAPI, d) -> None:
             for m in covered
         ]
         key = _C.prefix_key([f"{r}\x1e{t}" for r, t in pairs])
-        store = _compaction_store(d.platform)
+        # v1.499.3: the cache's table build and read run off the loop.
+        store = await asyncio.to_thread(_compaction_store, d.platform)
 
-        cached = store.get(key)
+        cached = await asyncio.to_thread(store.get, key)
         if cached is not None and cached.summary.strip():
             return {
                 "ok": True,
@@ -3070,7 +3143,8 @@ def register(app: FastAPI, d) -> None:
                     else "the model returned no summary"
                 ),
             )
-        store.put(
+        await asyncio.to_thread(
+            store.put,
             key,
             summary=out.summary,
             covers=len(covered),
@@ -3158,23 +3232,43 @@ def register(app: FastAPI, d) -> None:
         turn_id = str(getattr(body, "turn_id", "") or "").strip()
         if turn_id:
             logs = _turn_logs(d)
-            existing = logs.get(turn_id)
             # Readiness 12B (G05): the ``X-IJ-Viewer`` header names the chat
             # page following (it says so when it leaves the screen:
             # /chat/turns/{id}/away). Absent: every other follower, as before.
             viewer = _viewer_of(request)
-            if existing is not None:
-                return _follow_response(existing.follow(viewer=viewer))
-            holder: dict[str, Any] = {}
-            gen = await stream_chat_turn(
-                d.platform,
-                d._PERSONAS,
-                body,
-                should_stop=_durable.stop_predicate(lambda: holder.get("log")),
-                suggest_preferences=suggest,
-            )
-            lg = logs.start(turn_id, str(getattr(body, "thread_id", "") or "").strip()[:80], gen)
-            holder["log"] = lg
+            # v1.499.3: the id is RESERVED before the first await. The check
+            # used to be ``logs.get`` here and ``logs.start`` after the
+            # awaited preparation, so two sends of one id that both arrived
+            # before the first had started BOTH started (the same message
+            # answered twice). The check and the reservation below run with
+            # no await between them, so on one loop only one send can own an
+            # id; a second one waits for the first to start, then follows it.
+            while True:
+                existing = logs.get(turn_id)
+                if existing is not None:
+                    return _follow_response(existing.follow(viewer=viewer))
+                starting = _STARTING_TURNS.get((id(logs), turn_id))
+                if starting is None:
+                    break
+                # The first send's start (or its failure: then this one tries).
+                await asyncio.shield(starting)
+            starting = asyncio.get_running_loop().create_future()
+            _STARTING_TURNS[(id(logs), turn_id)] = starting
+            try:
+                holder: dict[str, Any] = {}
+                gen = await stream_chat_turn(
+                    d.platform,
+                    d._PERSONAS,
+                    body,
+                    should_stop=_durable.stop_predicate(lambda: holder.get("log")),
+                    suggest_preferences=suggest,
+                )
+                lg = logs.start(turn_id, str(getattr(body, "thread_id", "") or "").strip()[:80], gen)
+                holder["log"] = lg
+            finally:
+                _STARTING_TURNS.pop((id(logs), turn_id), None)
+                if not starting.done():
+                    starting.set_result(None)
             return _follow_response(lg.follow(viewer=viewer))
         gen = await stream_chat_turn(
             d.platform,
@@ -3715,7 +3809,7 @@ async def stream_chat_turn(
             # v1.392.0: passed only when set (a lane double that predates the
             # cap sees the call it always saw).
             **({"reply_cap": reply_cap} if reply_cap is not None else {}),
-        ), _prep), _lo_scope), _turn_wall), _owner_words))
+        ), _prep), _lo_scope), _turn_wall), _owner_words), handle=handle)
     if _acct_pin is not None:
         inner = _chat_turn.account_pinned_frames(inner, _acct_pin)
     if thread_turn is not None:
@@ -3826,7 +3920,23 @@ _PREP_FAILED = (
 _PREP_FAILED_TITLE = "Iron Jarvis couldn't get ready to answer"
 
 
-async def _honest_failures(frames):
+def _with_unread_steers(payload: dict, handle) -> dict:
+    """An ``error`` frame's payload with the turn's unread steer notes
+    (v1.499.3): a note accepted while the turn ran and never read comes back
+    on the failure exactly as it does on ``done`` (``unread_steers``, present
+    ONLY when there is one), so the page puts it back in the box. The
+    REGISTRY's queue only (``TurnHandle.owed_steers``), never a caller's own
+    source. Never raises."""
+    try:
+        owed = handle.owed_steers() if handle is not None else []
+    except Exception:  # noqa: BLE001 — the failure is still reported
+        owed = []
+    if owed:
+        return {**payload, "unread_steers": owed}
+    return payload
+
+
+async def _honest_failures(frames, handle=None):
     """``frames``, with a failure that escapes them turned into ONE ``error``
     frame instead of a cut stream (v1.312.0).
 
@@ -3847,13 +3957,13 @@ async def _honest_failures(frames):
                     started = True
                 yield chunk
     except HTTPException as exc:
-        yield _sse("error", {"detail": str(exc.detail)})
+        yield _sse("error", _with_unread_steers({"detail": str(exc.detail)}, handle))
     except Exception as exc:  # noqa: BLE001 — an honest error, never a cut stream
         _refused = _egress.refusal_of(exc)
         if _refused is not None:
             # LOCAL ONLY (v1.332.0): nothing was sent; the frame carries the
             # keys the page offers "send once" from (detail kept).
-            yield _sse("error", _refused.payload())
+            yield _sse("error", _with_unread_steers(_refused.payload(), handle))
             return
         log.warning("chat turn failed inside its stream", exc_info=True)
         detail = _error_detail(exc)
@@ -3868,7 +3978,8 @@ async def _honest_failures(frames):
         if not started and _is_generic_title(payload.get("title")):
             payload["title"] = _PREP_FAILED_TITLE
             payload["fix"] = "Send your message again to retry."
-        yield _sse("error", payload)
+        # v1.499.3: a note sent while it was getting ready comes back too.
+        yield _sse("error", _with_unread_steers(payload, handle))
 
 
 async def chat_stream(
@@ -4371,7 +4482,7 @@ async def chat_stream(
             # between that check and here (the registry repopulates in place)
             # — or (v1.417.0) a folder skill the eager check could not read
             # without blocking — is said in the stream, in the same words.
-            yield _sse("error", {"detail": f"no such skill: {body.skill}"})
+            yield _sse("error", _with_unread_steers({"detail": f"no such skill: {body.skill}"}, handle))
             return
         # v1.298.0: an external-root or agent/proposal-made skill is SCANNED
         # (skills/framework.guarded_instructions — the inject rule); the
@@ -5678,8 +5789,11 @@ async def chat_stream(
                     "round", {"round": _round, **({"steer": _note} if _note else {})}
                 )
                 final_resp = None
+                # v1.499.3: the tool definitions sent beside it are priced
+                # too. MIRROR NOTE (lock-step): chat_turn's round call.
                 _send, _send_system = _fit_turn_transcript(
-                    d, _eff_msgs, _eff_system, provider_choice, model_choice, head=_head
+                    d, _eff_msgs, _eff_system, provider_choice, model_choice, head=_head,
+                    tools=tool_specs,
                 )
                 _call_t0 = time.perf_counter()  # v1.390.0: this call's start (Timeline)
 
@@ -5691,7 +5805,7 @@ async def chat_stream(
                         # (lock-step: chat_turn's _complete_refitting).
                         refit=_chat_turn._overflow_refit(
                             d, _eff_msgs, _eff_system, provider_choice, model_choice, head=_head,
-                            record=_refit_note,
+                            record=_refit_note, tools=tool_specs,
                         ),
                         provider=provider_choice or None,
                         model=model_choice or None,
@@ -5809,7 +5923,9 @@ async def chat_stream(
                     _persist_once(AgentState.FAILED)
                     yield _sse(
                         "error",
-                        {"detail": "stream ended without a final response"},
+                        _with_unread_steers(
+                            {"detail": "stream ended without a final response"}, handle,
+                        ),
                     )
                     return
                 reply_text = final_resp.text or ""
@@ -7893,14 +8009,17 @@ async def chat_stream(
             # 502 carries the same keys from the same `error_payload`.
             yield _sse(
                 "error",
-                _refused.payload() if _refused is not None
-                else {
-                    **_chat_turn.error_payload(d, body, exc),
-                    # v1.422.0 review: a LOW-trust turn says so — a coding
-                    # session's failed reply is continued at low trust
-                    # (lock-step: chat_turn's 502).
-                    **_chat_turn.failed_trust_keys(_trust_state),
-                },
+                _with_unread_steers(
+                    _refused.payload() if _refused is not None
+                    else {
+                        **_chat_turn.error_payload(d, body, exc),
+                        # v1.422.0 review: a LOW-trust turn says so — a coding
+                        # session's failed reply is continued at low trust
+                        # (lock-step: chat_turn's 502).
+                        **_chat_turn.failed_trust_keys(_trust_state),
+                    },
+                    handle,
+                ),
             )
             return
         except BaseException:
@@ -8503,6 +8622,10 @@ async def chat_stream(
         if escalate:
             done_frame["prior_tool_results"] = cap_prior_tool_results(_prior_results, platform)
         # v1.287.0: present ONLY when a note was left unread (see above).
+        # v1.499.3: read as OWED (the notes closed above, handed over once) —
+        # read here, right before the frame goes, so a failure between the
+        # close and this frame hands them back on its error frame instead.
+        unread_steers = handle.owed_steers() if handle is not None else []
         if unread_steers:
             done_frame["unread_steers"] = unread_steers
         # THE FINISH CHECK (part 3, Phase 2): {tests, command, removed, kept,

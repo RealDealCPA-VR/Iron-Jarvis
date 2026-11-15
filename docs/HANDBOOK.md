@@ -2042,6 +2042,49 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## A deep review of the whole app: fixes for privacy, safety and lost work (v1.499.3)
+
+Seven reviewers read the whole app area by area; every finding below was
+reproduced or traced in the code before it was fixed, and each fix has a
+test that failed first.
+
+- **Redacting a filled PDF form now removes what was typed into its fields.**
+  A value typed into a form field (an SSN on a W-9, say) was left in the
+  "redacted" file while the note said it was verified gone. Jarvis now reads
+  form fields and notes too, clears what it found there, and checks every
+  part of the file before it says so. A PDF with nothing to redact comes
+  back as an exact copy.
+- **Local only now holds for remote agents too.** Handing work to a remote
+  agent on the internet from a Local only chat sent the task out anyway. It
+  is now refused, in words, and nothing is sent.
+- **A settings save can no longer wipe your settings.** If the settings file
+  could not be read at that moment (an antivirus scan holding it), a save
+  rewrote it with only the changed setting. Jarvis now waits, tries again,
+  and otherwise says it could not save, leaving the file as it was.
+- **Schedules fire when they should.** A one-time task could fire hours early
+  after a restart, and an "every day" task could keep sliding and never run
+  if the app restarted more often than that. Both are fixed. Calendar
+  meetings from Outlook fire at the right time, and repeating meetings fire
+  every time.
+- **An email is acted on only when your mail provider vouches for the
+  sender.** Anyone could write your address into an email. Jarvis now needs
+  the receiving provider's proof before it treats a message as yours.
+  Messages your provider cannot vouch for are not acted on.
+- **Long chats keep every message.** A chat past 200 messages used to lose
+  its oldest ones. They are now kept with the chat, and history search still
+  finds them.
+- **Secrets stay out of memory.** A password or key in something you asked
+  Jarvis to remember is kept as `***`, and Jarvis says so.
+- **The desktop app keeps its access key to itself.** A web page you preview
+  in Chat › Code's Browser pane could use the app's own access; it no longer
+  can. The key is no longer written into the app's log files, and updating
+  the app no longer stops other copies of Iron Jarvis it did not start.
+- **Smaller things.** A note you typed while a reply was being written comes
+  back if the reply fails. Two files you upload with the same name no longer
+  replace each other. A sign-in that was left open is not ended by a stray
+  page load, and an old one is refused. Pages Jarvis reads in its browser are
+  treated as data in full, including button labels.
+
 ## The rest of the review: clients, terminal help and pairing (v1.499.2)
 
 - **Your answer about a client is never undone by Jarvis.** When you pressed

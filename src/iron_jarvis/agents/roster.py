@@ -785,6 +785,15 @@ def _remote_entries(
                     healthy = enabled
             kind = _one_line(getattr(record, "kind", "")) or "http-task"
             entry_name = f"remote:{name}"
+            # v1.499.3 review: a remote whose machine is not on this network
+            # leaves it, so a Local only planner is not offered it
+            # (``roster_block``); the doors refuse it in words too.
+            try:
+                from ..providers.egress import private_host
+
+                off_network = not private_host(str(getattr(record, "base_url", "") or ""))
+            except Exception:  # noqa: BLE001 — cannot judge: off the network
+                off_network = True
             entries.append(
                 RosterEntry(
                     name=entry_name,
@@ -799,6 +808,7 @@ def _remote_entries(
                     # this exact key. None until one is recorded.
                     stats=_stat_for(stats_by_name, entry_name),
                     activity=activity.get(_norm(entry_name), _UNKNOWN),
+                    leaves_network=off_network,
                 )
             )
         except Exception:  # noqa: BLE001 — skip one bad record, keep the rest

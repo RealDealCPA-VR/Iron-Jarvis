@@ -816,7 +816,11 @@ class SpawnAgentTool(Tool):
             # too (evaluate -> record outcome -> reflect). Best-effort so a learning
             # failure never breaks the spawn.
             try:
-                orch._post_run_learning(child_session)
+                # v1.499.3 review: pure SQLite work, off the event loop; it
+                # still lands before the allowance below.
+                from .orchestrator import off_loop_settled
+
+                await off_loop_settled(orch._post_run_learning, child_session)
             except Exception:  # noqa: BLE001
                 pass
             await orch._post_run_allowance(child_session)

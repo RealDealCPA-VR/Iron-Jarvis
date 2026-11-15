@@ -125,7 +125,7 @@ class TurnHandle:
 
     __slots__ = (
         "turn_id", "_stopped", "_steers", "_steer_lock", "_steers_closed",
-        "_wake", "_loop", "_held_steers",
+        "_wake", "_loop", "_held_steers", "_owed_steers",
     )
 
     def __init__(self, turn_id: str) -> None:
@@ -146,6 +146,9 @@ class TurnHandle:
         # v1.435.0 review: notes queued before :meth:`hold_steers` — never
         # read by this turn, handed back by :meth:`close_steers`.
         self._held_steers: list[str] = []
+        # v1.499.3: notes :meth:`close_steers` took out of the queue and the
+        # runner has not yet handed to the caller (see :meth:`owed_steers`).
+        self._owed_steers: list[str] = []
 
     @property
     def stopped(self) -> bool:
@@ -219,7 +222,22 @@ class TurnHandle:
             left = self._held_steers + self._steers
             self._held_steers = []
             self._steers.clear()
+            self._owed_steers.extend(left)
         return left
+
+    def owed_steers(self) -> list[str]:
+        """Every note this turn will never read and has not handed back yet,
+        ONCE (v1.499.3) — what the turn's LAST frame carries, ``done`` or
+        ``error``. Closes the queue first (a later note is refused), so a turn
+        that fails before its loop ended loses no note either: the failure
+        used to answer without them and the release threw them away. The
+        notes :meth:`close_steers` already took count too, so a failure after
+        the queue closed still returns them."""
+        self.close_steers()
+        with self._steer_lock:
+            owed = self._owed_steers[:]
+            self._owed_steers.clear()
+        return owed
 
     def hold_steers(self) -> None:
         """No more notes for THIS turn, and none of the queued ones read by it

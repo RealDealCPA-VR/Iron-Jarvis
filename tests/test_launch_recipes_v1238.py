@@ -136,23 +136,30 @@ def test_detect_degrades_to_unknown_when_the_spawn_itself_raises(monkeypatch, cl
     # Put the REAL chokepoint back over conftest's session-wide stub, then break
     # the thing it calls. Nothing here returns the value being asserted.
     monkeypatch.setattr(recipes, "_run_probe", recipes._run_probe_real)
-    monkeypatch.setattr(recipes.subprocess, "run", _explode)
+    # v1.499.3: the probe runs through core/procs (bounded, tree-killed).
+    monkeypatch.setattr(recipes._procs, "run", _explode)
     recipes.clear_probe_cache()
 
     with pytest.raises(OSError):  # the failure is real
-        recipes.subprocess.run(["/fake/bin/claude", "--version"])
+        recipes._procs.run(["/fake/bin/claude", "--version"], timeout=1)
     assert claude.detect() == ""
     assert claude.inspect().ok is False, "and an unknown build is refused, not guessed"
 
 
 def test_run_probe_swallows_every_subprocess_failure(monkeypatch):
-    """The chokepoint itself, driven against a real ``subprocess.run`` failure."""
-    import subprocess
+    """The chokepoint itself, driven against a real ``procs.run`` failure
+    (v1.499.3: the probe runs through core/procs), and a timed-out run."""
+    from iron_jarvis.core.procs import Result
 
     def _explode(*args, **kw):
-        raise subprocess.TimeoutExpired(cmd="claude", timeout=0.1)
+        raise OSError("the binary went away")
 
-    monkeypatch.setattr(recipes.subprocess, "run", _explode)
+    monkeypatch.setattr(recipes._procs, "run", _explode)
+    assert recipes._run_probe_real(["/fake/bin/claude", "--version"]) == ""
+    monkeypatch.setattr(
+        recipes._procs, "run",
+        lambda *a, **kw: Result(-1, b"partial", b"", timed_out=True),
+    )
     assert recipes._run_probe_real(["/fake/bin/claude", "--version"]) == ""
     assert recipes._run_probe_real([]) == ""
 
@@ -166,12 +173,13 @@ def test_detect_reports_the_first_line_verbatim(probe, claude):
 def test_detect_reads_a_version_printed_on_stderr(monkeypatch, claude):
     """CLIs disagree about which stream a version belongs on; both are read."""
 
-    class _Proc:
-        stdout = b""
-        stderr = b"claude 9.9.9\n"
+    from iron_jarvis.core.procs import Result
 
     monkeypatch.setattr(recipes, "_run_probe", recipes._run_probe_real)
-    monkeypatch.setattr(recipes.subprocess, "run", lambda *a, **kw: _Proc())
+    # v1.499.3: the probe runs through core/procs (bounded, tree-killed).
+    monkeypatch.setattr(
+        recipes._procs, "run", lambda *a, **kw: Result(0, b"", b"claude 9.9.9\n")
+    )
     monkeypatch.setattr(recipes, "_find", lambda command: "/fake/bin/claude")
     recipes.clear_probe_cache()
     assert claude.detect() == "claude 9.9.9"

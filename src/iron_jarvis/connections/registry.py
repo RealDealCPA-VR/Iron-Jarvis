@@ -370,10 +370,25 @@ class ConnectionRegistry:
         if "#" in code and not state:
             code, _, state = code.partition("#")
             code, state = code.strip(), state.strip()
+        from .loopback import UnknownOAuthState
+
         with self._lock:
-            pending = self._pending.pop(state, None)
+            pending = self._pending.pop(state, None) if state else None
         if pending is None or pending.get("provider") != provider:
-            raise ValueError("unknown or expired OAuth state")
+            # A stray or drive-by callback: the loopback listener keeps
+            # listening for the real one (``UnknownOAuthState`` is a
+            # ValueError, so every route still answers 400).
+            raise UnknownOAuthState("unknown or expired OAuth state")
+        # v1.499.3 review: the 10-minute limit was enforced only by pruning
+        # on the NEXT start, so an old state still completed. Checked here,
+        # on the popped entry (it is gone either way).
+        created = pending.get("created_at")
+        if not created or created < utcnow() - self._OAUTH_PENDING_TTL:
+            minutes = int(self._OAUTH_PENDING_TTL.total_seconds() // 60)
+            raise ValueError(
+                f"This sign-in expired: it was started more than {minutes} minutes "
+                "ago. Start the sign-in again."
+            )
         app = self._oauth_app(provider) or {}
         client_id = app.get("client_id") or spec.oauth_client_id
         http = self._http_factory()

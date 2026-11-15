@@ -79,6 +79,32 @@ def _workspace_rel(path: Path, ctx: ToolContext) -> str:
     )
 
 
+#: What a blanked secret reads as in the tool ledger.
+_REDACTED = "***REDACTED***"
+
+
+def _blank_passwords(args: dict[str, Any]) -> dict[str, Any]:
+    """A copy of *args* with every PDF password blanked (v1.499.3).
+
+    The tool ledger is stored at rest, returned by session export and kept in
+    backups; a secret is never a tool argument there. The call itself still
+    receives the real values, because the registry redacts a COPY.
+    """
+    red = dict(args)
+    for key in ("password", "encrypt_password"):
+        if red.get(key):
+            red[key] = _REDACTED
+    inputs = red.get("inputs")
+    if isinstance(inputs, list):
+        red["inputs"] = [
+            {**item, "password": _REDACTED}
+            if isinstance(item, dict) and item.get("password")
+            else item
+            for item in inputs
+        ]
+    return red
+
+
 class PdfArrangeTool(Tool):
     name = "pdf_arrange"
     reversibility = Reversibility.REVERSIBLE  # TX-01: only the NEW output file
@@ -158,6 +184,9 @@ class PdfArrangeTool(Tool):
         },
         "required": ["inputs", "output"],
     }
+
+    def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        return _blank_passwords(args)
 
     async def capture_undo(
         self, args: dict[str, Any], ctx: ToolContext
@@ -338,6 +367,9 @@ class PdfSplitTool(Tool):
 
     def _out_dir(self, args: dict[str, Any], ctx: ToolContext) -> Path:
         return safe_path(ctx.workspace, str(args.get("out_dir") or "").strip() or ".")
+
+    def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        return _blank_passwords(args)
 
     async def capture_undo(
         self, args: dict[str, Any], ctx: ToolContext

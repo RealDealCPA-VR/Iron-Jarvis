@@ -19,7 +19,7 @@ import inspect
 import json
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy import Engine
@@ -88,11 +88,31 @@ def _date_trigger(run_at: datetime, timezone=None):
     return DateTrigger(run_date=run_at, timezone=timezone)
 
 
-def _interval_trigger(seconds: int, timezone=None):
-    """Build a recurring ``IntervalTrigger`` firing every ``seconds`` seconds."""
+def _interval_trigger(seconds: int, timezone=None, start_date: datetime | None = None):
+    """Build a recurring ``IntervalTrigger`` firing every ``seconds`` seconds.
+
+    ``start_date`` ANCHORS the repeat (v1.499.3): with none, APScheduler counts
+    from the moment the trigger is built, so every restart moved the next fire
+    to boot + interval and a daily task on a PC restarted more often than daily
+    never fired at all. Anchored on the last run (or the creation time), a
+    restart keeps the same next fire.
+    """
     from apscheduler.triggers.interval import IntervalTrigger
 
-    return IntervalTrigger(seconds=seconds, timezone=timezone)
+    return IntervalTrigger(seconds=seconds, start_date=start_date, timezone=timezone)
+
+
+def _naive_in_zone(dt: datetime | None, tz) -> datetime | None:
+    """A one-time ``run_at`` as it is STORED: the scheduler zone's wall clock.
+
+    SQLite drops the zone, and the trigger reads a stored naive ``run_at`` in
+    the scheduler's zone, so an aware input is converted to that zone first
+    (``...Z`` from the page is 17:00 UTC = 12:00 in New York, stored 12:00).
+    A naive input already is that zone's wall clock and is kept as given.
+    """
+    if dt is None or dt.tzinfo is None:
+        return dt
+    return dt.astimezone(tz).replace(tzinfo=None)
 
 
 def _parse_datetime(value: datetime | str) -> datetime:
@@ -214,7 +234,17 @@ class Scheduler:
         if rec.trigger_type == "date":
             return _date_trigger(rec.run_at, tz)
         if rec.trigger_type == "interval":
-            return _interval_trigger(rec.interval_seconds, tz)
+            # last_run / created_at are UTC (SQLite drops the zone).
+            # The FIRST fire is one interval after the anchor (as APScheduler's
+            # own default is one interval after "now"): a start_date equal to
+            # "now" would make the trigger due at once.
+            anchor = rec.last_run or rec.created_at
+            first = None
+            if anchor is not None:
+                first = _aware(anchor, timezone.utc) + timedelta(
+                    seconds=int(rec.interval_seconds)
+                )
+            return _interval_trigger(rec.interval_seconds, tz, first)
         return _cron_trigger(rec.cron, tz)
 
     def _next_run_for_record(self, rec: ScheduledTaskRecord) -> datetime | None:
@@ -262,7 +292,7 @@ class Scheduler:
             _cron_trigger(cron, self.scheduler.timezone)  # validate — raises ValueError on a bad expression
             trigger_type = "cron"
         elif run_at is not None:
-            run_at_dt = _parse_datetime(run_at)
+            run_at_dt = _naive_in_zone(_parse_datetime(run_at), self.scheduler.timezone)
             trigger_type = "date"
         else:
             interval = int(interval_seconds)
@@ -326,7 +356,12 @@ class Scheduler:
             _cron_trigger(cron, self.scheduler.timezone)
             new_trigger = ("cron", cron, None, None)
         elif run_at is not None:
-            new_trigger = ("date", "", _parse_datetime(run_at), None)
+            new_trigger = (
+                "date",
+                "",
+                _naive_in_zone(_parse_datetime(run_at), self.scheduler.timezone),
+                None,
+            )
         elif interval_seconds is not None:
             interval = int(interval_seconds)
             if interval <= 0:
@@ -467,9 +502,11 @@ class Scheduler:
                 or task.last_run is not None  # already fired — never double-fire
             ):
                 continue
-            run_at = task.run_at
-            if run_at.tzinfo is None:  # SQLite round-trips datetimes as naive
-                run_at = run_at.replace(tzinfo=timezone.utc)
+            # A stored naive run_at is the scheduler zone's wall clock — the
+            # SAME reading the DateTrigger makes (v1.499.3). Read as UTC here,
+            # a restart on a UTC-5 PC fired a task 2 h in the future at once
+            # and then disabled it.
+            run_at = _aware(task.run_at, self.scheduler.timezone)
             if run_at >= now:
                 continue  # still in the future — APScheduler owns this one
             late = (now - run_at).total_seconds()

@@ -181,9 +181,18 @@ def _atomic(p: Path):
         raise
 
 
+def _one_newline(text: str) -> str:
+    """CRLF and lone CR line endings as ``\\n`` (v1.499.3).
+
+    Text read from a Windows file keeps its ``\\r\\n``; written in text mode,
+    each ``\\n`` became the platform's line ending again, so every line ended
+    ``\\r\\r\\n``, and a CSV cell kept a trailing ``\\r``."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _atomic_text(p: Path, data: str) -> None:
     with _atomic(p) as tmp:
-        Path(tmp).write_text(data, encoding="utf-8")
+        Path(tmp).write_text(_one_newline(data), encoding="utf-8")
 
 
 # --- helpers ------------------------------------------------------------------
@@ -224,7 +233,7 @@ def _as_text(content: Any) -> str:
 
 
 def _as_lines(content: Any) -> list[str]:
-    return _as_text(content).split("\n")
+    return _one_newline(_as_text(content)).split("\n")
 
 
 def _run_parts(r: Any) -> tuple[str, bool, bool, bool, str | None, bool]:
@@ -689,6 +698,49 @@ def _markdown_table_rows(text: str) -> "list[list[Any]] | None":
     return rows
 
 
+#: Delimiters a text table may use.
+_TEXT_DELIMITERS = "\t,;|"
+
+#: A text cell with this many words or more reads as a sentence, not a value.
+_PROSE_WORDS = 6
+
+
+def _delimited_rows(text: str) -> "list[list[str]] | None":
+    """Rows for comma-, tab-, semicolon- or bar-separated TEXT, else None
+    (v1.499.3: "a,b" then "1,2" written to a workbook was ONE column of text).
+
+    ``csv.Sniffer`` picks the delimiter, and guards keep prose whole: at
+    least two lines, the SAME number of cells (two or more) on every line,
+    and, for any delimiter but a tab, no line that reads as a sentence (a
+    cell of many words, or a line ending in . ! or ?).
+    """
+    lines = [ln for ln in _one_newline(text).split("\n") if ln.strip()]
+    if len(lines) < 2:
+        return None
+    sample = "\n".join(lines[:50])
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=_TEXT_DELIMITERS)
+    except csv.Error:
+        return None
+    delim = dialect.delimiter
+    if delim not in _TEXT_DELIMITERS:
+        return None
+    try:
+        rows = list(csv.reader(lines, delimiter=delim, quotechar='"'))
+    except csv.Error:
+        return None
+    width = len(rows[0])
+    if width < 2 or any(len(r) != width for r in rows):
+        return None
+    if delim != "\t":
+        for line, row in zip(lines, rows):
+            if line.rstrip().endswith((".", "!", "?")):
+                return None
+            if any(len(cell.split()) >= _PROSE_WORDS for cell in row):
+                return None
+    return [[cell.strip() for cell in row] for row in rows]
+
+
 def _spreadsheet_content(content: Any) -> tuple[Any, bool]:
     """The table a model MEANT, for .xlsx/.csv — ``(content, recovered)``.
 
@@ -724,7 +776,10 @@ def _spreadsheet_content(content: Any) -> tuple[Any, bool]:
             value, recovered = parsed, True
         else:
             md = _markdown_table_rows(value)
-            return (md, True) if md else (content, False)
+            if md:
+                return md, True
+            delimited = _delimited_rows(value)
+            return (delimited, True) if delimited else (content, False)
     if _is_records(value):
         return _records_to_rows(value), True
     one = _one_table(value)
@@ -1648,7 +1703,10 @@ def _write_csv(p: Path, content: Any) -> None:
                     else:
                         writer.writerow([row])
             else:
-                for line in _as_lines(content):
+                lines = _as_lines(content)
+                if len(lines) > 1 and lines[-1] == "":
+                    lines.pop()  # the text's final line break, not an empty row
+                for line in lines:
                     writer.writerow([line])
 
 

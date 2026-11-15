@@ -4078,7 +4078,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   const [pendingSteers, setPendingSteers] = useState<string[]>([]);
   // v1.287.0: set when the turn finished before reading a steer note — the
   // note is back in the box and this line says why. Cleared by the next turn.
-  const [steerBack, setSteerBack] = useState(false);
+  // v1.499.3: "failed" when the turn FAILED before reading it (the line must
+  // not say it finished).
+  const [steerBack, setSteerBack] = useState<false | "finished" | "failed">(false);
   // v1.325.0: "Try again with…" — the model ONE turn runs on ("provider::model");
   // null = the conversation's own choice. Set by completeChat, cleared after.
   const turnChoiceRef = useRef<string | null>(null);
@@ -9277,7 +9279,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         if (unread.length) {
           const typed = composer.get().text.trim();
           composer.setText([...unread, ...(typed ? [typed] : [])].join("\n"));
-          setSteerBack(true);
+          setSteerBack("finished");
         }
         // One tick so the final tool_call frame's state flush lands before the
         // cards are read for source extraction (this resolve microtask can
@@ -9524,6 +9526,15 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           // v1.355.0 (G29): the line says the message is back in the box.
           if (restoreComposerDraft(history)) {
             errorTechRef.current = { ...errorTechRef.current, draftBack: true };
+          }
+          // v1.499.3: a steer note the FAILED turn never read goes back in the
+          // box too (after the restored message), as it does after a finished
+          // turn. A failure used to drop it.
+          const unreadOnFail = se?.unreadSteers ?? [];
+          if (unreadOnFail.length) {
+            const inBox = composer.get().text.trim();
+            composer.setText([...(inBox ? [inBox] : []), ...unreadOnFail].join("\n"));
+            setSteerBack("failed");
           }
           return;
         }
@@ -13641,7 +13652,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                             data-testid="steer-unread"
                             className="min-w-0 flex-1 text-[12px] text-zinc-400"
                           >
-                            Jarvis finished before reading this. Press Enter to send it.
+                            {steerBack === "failed"
+                              ? "Jarvis stopped before reading this. Press Enter to send it."
+                              : "Jarvis finished before reading this. Press Enter to send it."}
                           </div>
                         )}
                         {/* v1.329.0 (calm chat J1): the turn's error is ONE calm

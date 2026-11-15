@@ -12,9 +12,10 @@ import logging
 import os
 import tempfile
 import threading
+import time
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -1388,16 +1389,88 @@ def atomic_write_toml(path: Path, doc: dict[str, Any]) -> None:
         raise
 
 
-def persist_config_values(home: str | Path, values: dict[str, Any]) -> None:
+class ConfigUnreadableError(OSError):
+    """``config.toml`` exists but could not be read or understood, so a save
+    was REFUSED rather than written over it (the message is plain words)."""
+
+
+#: A settings save re-reads ``config.toml`` this many times before refusing:
+#: antivirus and the search indexer hold a just-written file for a moment.
+_PERSIST_READ_ATTEMPTS = 5
+_PERSIST_READ_PAUSE_S = 0.2
+
+
+def _keep_corrupt_copy(path: Path, raw: bytes) -> Path | None:
+    """Copy a config that cannot be parsed beside it, once per content."""
+    import hashlib
+
+    bak = path.with_name(
+        f"{path.name}.unreadable-{hashlib.sha1(raw).hexdigest()[:8]}.bak"
+    )
+    try:
+        if not bak.exists():
+            bak.write_bytes(raw)
+        return bak
+    except OSError as exc:
+        _log.error("could not keep a copy of the unreadable config %s: %s", path, exc)
+        return None
+
+
+def _read_toml_for_update(path: Path, sleep: Callable[[float], None]) -> dict[str, Any]:
+    """The base a save merges onto (v1.499.3). Unlike boot's tolerant
+    :func:`_read_toml`, an EXISTING file that cannot be read or parsed is
+    never treated as empty: one sharing violation from antivirus during a
+    settings save used to rewrite config.toml with only the new keys, erasing
+    Local only, the phone channels and every app. Retries briefly, then
+    raises :class:`ConfigUnreadableError`; a file that does not parse is
+    copied to a ``.bak`` first."""
+    if not path.exists():
+        return {}
+    last: Exception | None = None
+    raw = b""
+    for attempt in range(_PERSIST_READ_ATTEMPTS):
+        if attempt:
+            sleep(_PERSIST_READ_PAUSE_S)
+        try:
+            with path.open("rb") as fh:
+                raw = fh.read()
+            return tomllib.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            last = exc
+    if isinstance(last, OSError):
+        _log.error("config %s could not be read for a save: %s", path, last)
+        raise ConfigUnreadableError(
+            f"The settings were not saved: the settings file {path} could not be "
+            "read (another program may be holding it). Nothing was changed; "
+            "try again in a moment."
+        ) from last
+    bak = _keep_corrupt_copy(path, raw)
+    _log.error("config %s is not valid TOML; a save was refused: %s", path, last)
+    kept = f" A copy was kept at {bak}." if bak is not None else ""
+    raise ConfigUnreadableError(
+        f"The settings were not saved: the settings file {path} is damaged and "
+        f"could not be understood, so it was left as it is.{kept}"
+    ) from last
+
+
+def persist_config_values(
+    home: str | Path,
+    values: dict[str, Any],
+    *,
+    _sleep: Callable[[float], None] = time.sleep,
+) -> None:
     """Merge ``values`` into ``<home>/config.toml`` atomically AND concurrency-safely.
 
     The whole read-merge-write is held under a process lock so two overlapping
     persisters (e.g. a settings save racing the kill-switch persist) can't read the
     same base and drop one another's keys — without it, a lost kill-switch write
-    would silently re-enable autonomy on the next boot."""
+    would silently re-enable autonomy on the next boot. An existing file that
+    cannot be read or parsed raises :class:`ConfigUnreadableError` and is left
+    untouched (never merged onto an empty base). ``_sleep`` is the retry pause,
+    injected by tests."""
     path = Path(home) / "config.toml"
     with _CONFIG_WRITE_LOCK:
-        doc = _read_toml(path)
+        doc = _read_toml_for_update(path, _sleep)
         doc.update(values)
         atomic_write_toml(path, doc)
 

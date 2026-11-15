@@ -77,7 +77,6 @@ import asyncio
 import json
 import os
 import re
-import subprocess
 import sys
 import threading
 import time
@@ -86,6 +85,7 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from ..browser.panetokens import MCP_TOKEN_ENV, MCP_URL_ENV, normalise_capabilities
+from ..core import procs as _procs
 from ..core.logging import get_logger
 from .ai_clis import _find
 
@@ -232,15 +232,17 @@ def _run_probe(argv: list[str], *, timeout: float = PROBE_TIMEOUT_S) -> str:
     if not argv:
         return ""
     try:
-        proc = subprocess.run(  # noqa: S603 - argv[0] is a path we resolved
-            argv,
-            capture_output=True,
-            timeout=timeout,
-            shell=False,
-            stdin=subprocess.DEVNULL,
-        )
-    except Exception:  # missing binary, timeout, OSError, permission — all unknown
+        # v1.499.3 review: through ``core/procs`` (the daemon's one door for a
+        # child), not ``subprocess.run``: on Windows a ``.cmd`` shim's node
+        # child kept the pipes open past the timeout kill and parked this
+        # probe's thread; here a timeout kills the TREE and the drain after it
+        # is bounded. stdin is DEVNULL there too.
+        proc = _procs.run(argv, timeout=timeout, shell=False)
+    except Exception:  # missing binary, OSError, permission — all unknown
         logger.debug("launch-recipe probe failed: %s", argv[:1], exc_info=True)
+        return ""
+    if proc.timed_out:
+        logger.debug("launch-recipe probe timed out: %s", argv[:1])
         return ""
     out = b"".join(x for x in (proc.stdout, proc.stderr) if x)
     return out.decode("utf-8", "replace")

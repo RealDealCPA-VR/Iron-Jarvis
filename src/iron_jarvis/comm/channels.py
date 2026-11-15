@@ -10,6 +10,7 @@ touched in tests. Missing token / url / chat-id yields ``ok=False`` with a clear
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ..core.logging import get_logger
@@ -423,6 +424,99 @@ def _email_body(em: Any) -> str:
     return ""
 
 
+#: The sender id of an inbound email whose From address the receiving provider
+#: did not vouch for (v1.499.3). It never matches an allowlist entry.
+UNVERIFIED_PREFIX = "unverified:"
+
+#: Senders already logged as unproven (once per address per run, bounded).
+_UNPROVEN_LOGGED: set[str] = set()
+
+
+def _log_unproven_once(sender: str, how: str) -> None:
+    key = (sender or "").lower()
+    if key in _UNPROVEN_LOGGED:
+        return
+    if len(_UNPROVEN_LOGGED) < 1000:
+        _UNPROVEN_LOGGED.add(key)
+    _log.warning(
+        "email: a message claiming to be from %r was not acted on: the mail "
+        "provider did not confirm the sender (%s)",
+        sender,
+        how,
+    )
+
+
+def _domain_of(value: str) -> str:
+    v = (value or "").strip().strip("<>").lower().rstrip(".")
+    return v.rsplit("@", 1)[-1] if "@" in v else v
+
+
+def _aligned(domain: str, from_domain: str) -> bool:
+    """Relaxed alignment: the same domain, or one a sub-domain of the other
+    (never a bare top-level name such as ``com``)."""
+    if not domain or not from_domain or "." not in domain:
+        return False
+    return (
+        domain == from_domain
+        or from_domain.endswith("." + domain)
+        or domain.endswith("." + from_domain)
+    )
+
+
+_RESULT_RE = re.compile(r"^\s*([a-z0-9-]+)\s*=\s*([a-z]+)", re.IGNORECASE)
+_PROP_RE = re.compile(r"([a-z0-9-]+\.[a-z0-9-]+)\s*=\s*([^\s;]+)", re.IGNORECASE)
+
+
+def _auth_results(header: str) -> list[tuple[str, str, dict[str, str]]]:
+    """``[(method, result, {property: value})]`` from one Authentication-Results
+    header (RFC 8601; Microsoft's form without an authserv-id is read too)."""
+    text = re.sub(r"\([^()]*\)", " ", header or "")  # drop comments
+    out: list[tuple[str, str, dict[str, str]]] = []
+    for part in text.split(";"):
+        m = _RESULT_RE.match(part)
+        if not m:
+            continue  # the authserv-id, or noise
+        props = {k.lower(): v.strip('"') for k, v in _PROP_RE.findall(part[m.end():])}
+        out.append((m.group(1).lower(), m.group(2).lower(), props))
+    return out
+
+
+def sender_proof(em: Any, sender: str) -> tuple[bool, str]:
+    """Whether the receiving provider vouched for the From address.
+
+    Only the TOPMOST Authentication-Results header counts (the receiving
+    provider adds it above anything the sender wrote). Proof is dkim=pass with
+    ``header.d`` / ``header.i`` aligned to the From domain, dmarc=pass (for that
+    From domain), or spf=pass with ``smtp.mailfrom`` aligned. Returns
+    ``(proven, words)``; never raises.
+    """
+    try:
+        from_domain = _domain_of(sender)
+        if not from_domain:
+            return False, "the message has no From address"
+        headers = em.get_all("Authentication-Results") or []
+        if not headers:
+            return False, "the message carries no Authentication-Results"
+        results = _auth_results(str(headers[0]))
+        for method, result, props in results:
+            if result != "pass":
+                continue
+            if method == "dkim":
+                signer = props.get("header.d") or _domain_of(props.get("header.i", ""))
+                if _aligned(_domain_of(signer), from_domain):
+                    return True, "dkim"
+            elif method == "dmarc":
+                said = _domain_of(props.get("header.from", ""))
+                if not said or said == from_domain:
+                    return True, "dmarc"
+            elif method == "spf":
+                if _aligned(_domain_of(props.get("smtp.mailfrom", "")), from_domain):
+                    return True, "spf"
+        return False, "no aligned dkim, dmarc or spf pass"
+    except Exception:  # noqa: BLE001 — unreadable proof is no proof
+        return False, "the proof could not be read"
+
+
 class EmailChannel(Channel):
     """Email via SMTP (outbound) + IMAP (inbound trigger, CX-05).
 
@@ -452,9 +546,13 @@ class EmailChannel(Channel):
     def is_authorized(self, sender_id: Any) -> bool:
         """FAIL-CLOSED From-address allowlist, matched case-insensitively (email
         addresses are effectively case-insensitive, so ``Boss@Acme.com`` in the
-        list must still authorize a ``boss@acme.com`` From). Empty list = nobody."""
+        list must still authorize a ``boss@acme.com`` From). Empty list = nobody.
+        A sender :meth:`poll` could not prove (``unverified:…``) is nobody too."""
+        sid = str(sender_id).strip().lower()
+        if sid.startswith(UNVERIFIED_PREFIX):
+            return False
         allow = {str(a).strip().lower() for a in self.allowed_senders()}
-        return bool(allow) and str(sender_id).strip().lower() in allow
+        return bool(allow) and sid in allow
 
     def send(self, message: str, **kw: Any) -> dict[str, Any]:
         cfg = self.config
@@ -555,14 +653,25 @@ class EmailChannel(Channel):
                 sender = parseaddr(em.get("From", ""))[1]
                 subject = _decode_mime_header(em.get("Subject", ""))
                 body = _email_body(em)
+                # v1.499.3: the From header alone is the sender's CLAIM; the
+                # receiving provider's proof decides whether it is the sender.
+                verified, how = sender_proof(em, sender)
+                if not verified:
+                    _log_unproven_once(sender, how)
                 messages.append(
                     InboundMessage(
-                        sender_id=sender,
+                        # An unproven sender never matches the allowlist, so it
+                        # gets no commands, approvals, rules or sessions.
+                        sender_id=sender if verified else UNVERIFIED_PREFIX + sender,
                         text=subject + "\n" + body,
                         update_id=int(uid),
                         reply_to=sender,
                         is_bot=False,
-                        raw={"subject": subject, "from": sender},
+                        raw={
+                            "subject": subject,
+                            "from": sender,
+                            "sender_verified": verified,
+                        },
                     )
                 )
             next_offset = (

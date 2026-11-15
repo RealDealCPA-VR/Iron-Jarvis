@@ -489,6 +489,41 @@ def replay_safe(tool: Any) -> bool:
     return rev == Reversibility.READONLY or rev == Reversibility.READONLY.value
 
 
+def _network_spelling(text: str) -> bool:
+    r"""Is *text* spelled as a place on another computer or a device:
+    ``\\host\share``, ``//host/share``, ``\\?\UNC\host``, ``\\.\pipe\x``,
+    ``\??\UNC\host``? Read from the TEXT only: nothing is opened. A local drive
+    behind a long-path prefix (``\\?\C:\x``, ``\\.\C:\x``, ``\??\C:\x``) is not."""
+    import re
+
+    s = str(text or "").strip().replace("/", "\\")
+    if s.startswith("\\??\\"):
+        return re.match(r"^\\\?\?\\[A-Za-z]:(\\|$)", s) is None
+    if not s.startswith("\\\\"):
+        return False
+    return re.match(r"^\\\\[?.]\\[A-Za-z]:(\\|$)", s) is None
+
+
+def _inside_share_workspace(spelled: str, workspace: Path, root: Path) -> bool:
+    """True when the workspace itself is on a share and *spelled* lies inside
+    it, compared as TEXT (case-insensitive, ``..`` folded). Nothing is opened."""
+
+    def key(value: Any) -> str:
+        return os.path.normcase(os.path.normpath(str(value).replace("/", "\\"))).rstrip("\\")
+
+    try:
+        target = key(spelled)
+        if "\\..\\" in target + "\\" or target.endswith("\\.."):
+            return False
+        for home in (workspace, root):
+            base = key(home)
+            if _network_spelling(base) and (target == base or target.startswith(base + "\\")):
+                return True
+    except (TypeError, ValueError):
+        return False
+    return False
+
+
 def safe_path(workspace: Path, rel: str) -> Path:
     """Resolve ``rel`` under the workspace, enforcing filesystem=workspace_only (§17)."""
     # v1.464.0: on Windows a ":" inside a file name is not a name at all. It
@@ -506,6 +541,22 @@ def safe_path(workspace: Path, rel: str) -> Path:
 
     rel = remap(rel, workspace)
     root = workspace.resolve()
+    # v1.499.3: ANOTHER COMPUTER is refused by the TEXT, before anything is
+    # resolved. ``resolve()`` opens the path, and opening ``\\host\share\x``
+    # makes Windows connect to that host and offer it this PC's sign-in, so
+    # the escape check below came one connection too late. An absolute
+    # argument REPLACES the root when joined, so the joined spelling is read
+    # too. A path inside a workspace that is itself on a share is untouched
+    # (a firm whose client folders live on a share works there all day).
+    if os.name == "nt":
+        rel_text = os.fspath(rel)
+        joined = os.path.join(os.fspath(workspace), rel_text)
+        for spelled in (rel_text, joined):
+            if _network_spelling(spelled) and not _inside_share_workspace(spelled, workspace, root):
+                raise PermissionError(
+                    f"path '{rel_text[:120]}' is on another computer; Iron Jarvis opens "
+                    "files in the session workspace on this PC only"
+                )
     target = (root / rel).resolve()
     if target != root and not target.is_relative_to(root):
         # v1.481.0: a task's scratch folder (outside the task folder, so a

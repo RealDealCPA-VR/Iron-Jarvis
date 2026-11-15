@@ -135,17 +135,21 @@ class BrowseTool(_GatedTool):
         if not decision.allowed:
             return ToolResult(ok=False, error=f"policy denied: {decision.reason}")
         page = await self.cu.browser.navigate(url)
-        injection = detect_injection(page.text)
+        # v1.499.3 review: the PAGE writes its accessibility names (aria
+        # labels, button names) and decides the URL it lands on (a redirect),
+        # so both are scanned and fenced with the text — only page.text was.
+        fetched = (
+            f"URL: {page.url}\n\nACCESSIBILITY:\n{page.a11y_summary()}\n\n"
+            f"TEXT:\n{page.text}"
+        )
+        injection = detect_injection(fetched)
         if injection["flagged"]:
             return ToolResult(
                 ok=False,
                 error=f"stopped: {injection['reason']}",
                 data={"injection": injection, "url": page.url},
             )
-        body = (
-            f"URL: {page.url}\n\nACCESSIBILITY:\n{page.a11y_summary()}\n\n"
-            f"{wrap_untrusted(page.text)}"
-        )
+        body = wrap_untrusted(fetched)
         await self.cu.snap()  # refresh the dashboard live view
         return ToolResult(
             ok=True,

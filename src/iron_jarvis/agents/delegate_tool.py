@@ -946,7 +946,11 @@ class DelegateTool(Tool):
             # system too (evaluate -> record outcome -> reflect). Best-effort so a
             # learning failure never breaks delegation.
             try:
-                orch._post_run_learning(child_session)
+                # v1.499.3 review: pure SQLite work, off the event loop; it
+                # still lands before the allowance below.
+                from .orchestrator import off_loop_settled
+
+                await off_loop_settled(orch._post_run_learning, child_session)
             except Exception:  # noqa: BLE001
                 pass
             await orch._post_run_allowance(child_session)
@@ -1095,6 +1099,21 @@ class DelegateTool(Tool):
                 ok=False,
                 output="",
                 error=f"remote agent '{name}' is not available right now",
+            )
+        # LOCAL ONLY (v1.499.3 review): ``delegate_remote`` is held back by
+        # the egress gate, but this path (delegate's remote branch AND
+        # ``consult``, which reuses it) sent the task to the remote's address
+        # whatever it was. A machine that is not on this network is refused in
+        # the panel's own sentence, BEFORE a room is opened or a byte is sent.
+        from .threads import remote_local_only_words
+
+        sat_out = remote_local_only_words(name, str(getattr(record, "base_url", "") or ""))
+        if sat_out:
+            return ToolResult(
+                ok=False,
+                output="",
+                error=f"{sat_out} Nothing was sent to it.",
+                data={"target": entry.name, "kind": record.kind, "local_only": True},
             )
         from .remote import (
             accepted_no_reply_words,

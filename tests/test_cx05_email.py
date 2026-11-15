@@ -22,6 +22,12 @@ from iron_jarvis.comm.channels import EmailChannel
 # --------------------------------------------------------------------------- #
 def _raw_email(sender: str, subject: str, body: str) -> bytes:
     msg = EmailMessage()
+    # v1.499.3: the receiving provider's proof of the sender — without it an
+    # email's From is only a claim and the sender is never authorised.
+    domain = sender.rsplit("@", 1)[-1].rstrip(">")
+    msg["Authentication-Results"] = (
+        f"mx.example.com; dkim=pass header.d={domain}; spf=pass smtp.mailfrom={domain}"
+    )
     msg["From"] = sender
     msg["To"] = "jarvis@example.com"
     msg["Subject"] = subject
@@ -121,7 +127,11 @@ def test_poll_returns_parsed_messages_and_advances_offset(monkeypatch):
     assert first.sender_id == "alice@example.com"
     assert first.reply_to == "alice@example.com"
     assert first.is_bot is False
-    assert first.raw == {"subject": "Deploy failed", "from": "alice@example.com"}
+    assert first.raw == {
+        "subject": "Deploy failed",
+        "from": "alice@example.com",
+        "sender_verified": True,
+    }
     # text = subject + "\n" + body.
     assert "Deploy failed" in first.text
     assert "nightly deploy failed on staging" in first.text

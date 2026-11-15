@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.499.3
+
+**A deep review of the whole app: fixes for privacy, safety and lost work.** Seven reviewers read the whole app area by area; every finding below was reproduced or traced in the code before it was fixed, and each fix has a test that failed first.
+
 ## v1.499.2
 
 **The rest of the review: clients, terminal help and pairing.** **Your answer about a client is never undone by Jarvis.** When you pressed Yes or No on a name at the same moment Jarvis was looking through your folders again, that look could delete the name you had just answered about.
@@ -77,7 +81,3 @@
 ## v1.488.0
 
 **Asked once, decided on the card.** **Settings changes: no second "are you sure?" in words.** When you ask Jarvis to change a setting and it's clear which value you mean, it now makes the change instead of asking "Would you like me to…?" first.
-
-## v1.487.0
-
-**Four everyday ways of asking, understood.** **"Keep this chat just on my computer"** now turns on Local only for the chat.

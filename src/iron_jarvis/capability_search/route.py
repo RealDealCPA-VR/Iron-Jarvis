@@ -29,7 +29,6 @@ was. Nothing here is a way round a card.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 import time
@@ -254,19 +253,27 @@ def short_list(text: str, by_id: dict, only: Any) -> tuple[str, dict]:
     return "\n".join(lines), {i: e for i, e in by_id.items() if i in keep}
 
 
+def _first_list(text: Any) -> "list | None":
+    """The routing call's answer as a list, read through the ONE recovery
+    ladder (``core.jsonish``, v1.499.3): a fenced list, a trailing comma,
+    single quotes and a placeholder in brackets before the real list are
+    read, not taken for "nothing". A list holding a list is not an answer
+    (the shape the call is asked for is a flat list of ids). None when no
+    list can be read. Bounded: the first 4,000 characters, and the ladder is
+    linear."""
+    from ..core.jsonish import loads_lenient
+
+    picked = loads_lenient(str(text or "")[:4000], want=list)
+    if not isinstance(picked, list) or any(isinstance(i, list) for i in picked):
+        return None
+    return picked
+
+
 def answered_nothing(text: Any) -> bool:
     """Did the call answer with a readable EMPTY list ("[]")? An answer
     that cannot be read, or that names anything at all, is not "nothing".
     Linear."""
-    raw = str(text or "")[:4000]
-    start = raw.find("[")
-    end = raw.find("]", start + 1) if start >= 0 else -1
-    if start < 0 or end < 0:
-        return False
-    try:
-        picked = json.loads(raw[start : end + 1])
-    except ValueError:
-        return False
+    picked = _first_list(text)
     return isinstance(picked, list) and not picked
 
 
@@ -281,15 +288,7 @@ UNASKED = "unasked"
 def said_unasked(text: Any) -> bool:
     """Does the call's answer (its first JSON list) carry the
     :data:`UNASKED` mark? An answer that cannot be read does not. Linear."""
-    raw = str(text or "")[:4000]
-    start = raw.find("[")
-    end = raw.find("]", start + 1) if start >= 0 else -1
-    if start < 0 or end < 0:
-        return False
-    try:
-        picked = json.loads(raw[start : end + 1])
-    except ValueError:
-        return False
+    picked = _first_list(text)
     return isinstance(picked, list) and any(
         isinstance(item, str) and item.strip().lower() == UNASKED for item in picked
     )
@@ -298,15 +297,7 @@ def said_unasked(text: Any) -> bool:
 def parse_ids(text: Any, known: Any) -> list[str]:
     """The ids in the call's answer: the first JSON list of text in it, only
     ids in *known*, each once, at most :data:`MAX_PICKS`. Linear."""
-    raw = str(text or "")[:4000]
-    start = raw.find("[")
-    end = raw.find("]", start + 1) if start >= 0 else -1
-    if start < 0 or end < 0:
-        return []
-    try:
-        picked = json.loads(raw[start : end + 1])
-    except ValueError:
-        return []
+    picked = _first_list(text)
     out: list[str] = []
     for item in picked if isinstance(picked, list) else []:
         if isinstance(item, str) and item in known and item not in out:

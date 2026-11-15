@@ -27,7 +27,7 @@ import re
 from typing import Any
 
 from ..ltm.base import CHANGE_ACTIONS, NoteOpUnsupported, slugify
-from ..ltm.tools import LTMAppendTool
+from ..ltm.tools import SECRET_LEFT_OUT, LTMAppendTool, _without_secrets
 from ..tools.base import Reversibility, SpendCheck, Tool, ToolContext, ToolResult
 from .profiles import ActiveBrain, base_label, resolve
 
@@ -360,7 +360,14 @@ def write_note(platform: Any, active: ActiveBrain, conn: Any, title: str, conten
     ``{ok, kind, action, ref, verified, error}``; raises nothing. ``kind``:
     saved | setup (an MCP base whose tools the user has not confirmed —
     nothing was sent) | unconfirmed (it answered, the note is not there) |
-    refused (it answered no) | unreachable (not reached — keep it)."""
+    refused (it answered no) | unreachable (not reached — keep it).
+
+    v1.499.3: a secret in the title or text is kept as *** (memory is read
+    into later chats); masking is idempotent, so a caller that masked first
+    reads back the same text."""
+    from ..detections.redact import mask
+
+    title, content = mask(title), mask(content)
     setup = getattr(conn, "setup_needed", None)
     if callable(setup):
         sentence = setup("create")
@@ -452,6 +459,8 @@ class BrainSaveTool(_BrainTool, LTMAppendTool):
         conn = self._conn(active)
         if conn is None or getattr(conn, "dir", None) is None:
             return {"kind": "memory_external", "reversible": False, "tool": self.name}
+        # The same masked text execute writes (v1.499.3), or Undo's hash misses.
+        args, _left_out = _without_secrets(args)
         target = await asyncio.to_thread(_plan_target, self.platform, active, str(args.get("title") or ""))
         # The text exactly as execute writes it (stripped), or the predicted
         # after-hash never matches and Undo refuses a change it made.
@@ -470,6 +479,9 @@ class BrainSaveTool(_BrainTool, LTMAppendTool):
         )
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        # v1.499.3: a secret is never kept in memory (it is read into later
+        # chats): kept as ***, and the result says so.
+        args, left_out = _without_secrets(args)
         active = await asyncio.to_thread(self._active, ctx)
         if active is None:
             return ToolResult(ok=False, error=NO_PROFILE)
@@ -496,7 +508,8 @@ class BrainSaveTool(_BrainTool, LTMAppendTool):
                 f"{label} cannot be read back, so it is saved but not confirmed")
             return ToolResult(
                 ok=True,
-                output=f"{verb} “{title}” in {label} ({confirm}). ref: {res['ref']}",
+                output=f"{verb} “{title}” in {label} ({confirm}). ref: {res['ref']}"
+                + (f" {SECRET_LEFT_OUT}" if left_out else ""),
                 data={"ref": res["ref"], "source": active.base, "brain": {
                     "kind": "saved", "title": title, "ref": res["ref"],
                     "action": res["action"], "verified": bool(res["verified"]), "base": label,

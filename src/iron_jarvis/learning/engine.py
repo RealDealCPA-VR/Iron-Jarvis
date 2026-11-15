@@ -134,7 +134,9 @@ class LearningEngine:
         a later repeated correction of the same thing is never proposed."""
         from .corrections import signature
 
-        clean = (text or "").strip()
+        # v1.499.3: a preference reaches EVERY later prompt, so a key or a
+        # password typed into one is kept masked (``sk-***``), never verbatim.
+        clean = without_secrets((text or "").strip())
         row = self._add_lesson(
             clean, scope="user", source="preference", weight=5,
             status=STATUS_CONFIRMED, origin="said", signature=signature(clean) or None,
@@ -392,12 +394,23 @@ class LearningEngine:
     ) -> LessonRecord:
         with session_scope(self.engine) as db:
             record = LessonRecord(
-                text=text, scope=scope, source=source, weight=weight, **extra
+                text=without_secrets(text), scope=scope, source=source, weight=weight, **extra
             )
             db.add(record)
             db.commit()
             db.refresh(record)
             return record
+
+
+def without_secrets(text: str) -> str:
+    """*text* with every secret-looking value masked (``detections.redact.mask``:
+    ``sk-***``, ``password=***``, ``Bearer ***``) — what a lesson keeps, since a
+    lesson is injected into later prompts (v1.499.3)."""
+    if not isinstance(text, str) or not text:
+        return text
+    from ..detections.redact import mask
+
+    return mask(text)
 
 
 def confirmed_clause():

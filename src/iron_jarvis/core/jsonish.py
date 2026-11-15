@@ -11,8 +11,12 @@ One recovery ladder, in one place, so every caller degrades the same way:
 
 1. ``json.loads`` as-is;
 2. the first fenced block that parses;
-3. the FIRST balanced ``{…}`` or ``[…]``, found with a string-aware scan
-   (braces inside strings do not count; an unterminated object fails);
+3. the balanced ``{…}`` / ``[…]`` slices, FIRST first, found with a
+   string-aware scan (braces inside strings do not count; an unterminated
+   object fails). A slice that does not parse no longer ends the search
+   (v1.499.3): "Set the {name} field: {\"name\": \"Q3\"}" reads the object
+   after the placeholder. One pass per bracket kind and at most
+   :data:`MAX_BALANCED` slices tried, so hostile text stays linear;
 4. the same candidates after the two repairs models actually make —
    trailing commas before ``}``/``]`` and single-quoted keys/strings.
 
@@ -31,10 +35,18 @@ _TRAILING_COMMA = re.compile(r",\s*([}\]])")
 _SINGLE_QUOTED = re.compile(r"'([^'\\\n]*(?:\\.[^'\\\n]*)*)'")
 
 
+#: How many balanced slices :func:`loads_lenient` tries, per text (v1.499.3).
+#: Each try parses at most the whole text, so the work is bounded by this
+#: many passes however many braces a hostile reply holds.
+MAX_BALANCED = 16
+
+
 def _try(text: str) -> Any | None:
     try:
         return json.loads(text)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
+        # RecursionError: a deeply nested "[[[[…" is not a value we can use,
+        # and must never escape the one parser every caller trusts.
         return None
 
 
@@ -74,6 +86,41 @@ def first_balanced(text: str, opener: str = "{") -> str | None:
     return None
 
 
+def balanced_spans(text: str, opener: str = "{") -> list[tuple[int, int]]:
+    """Every balanced ``{…}`` (or ``[…]``) in *text* as ``(start, end)``
+    spans (end exclusive), nested ones included, ordered by where they start
+    (v1.499.3). ONE string-aware pass with a stack, so the cost is linear in
+    ``len(text)`` however many openers it holds. Outside any bracket a quote
+    is prose (an apostrophe, a quoted word) and is not tracked, exactly as
+    :func:`first_balanced` reads it."""
+    closer = "}" if opener == "{" else "]"
+    spans: list[tuple[int, int]] = []
+    stack: list[int] = []
+    in_str = escape = False
+    for i, ch in enumerate(text):
+        if not stack:
+            if ch == opener:
+                stack.append(i)
+                in_str = escape = False
+            continue
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+        elif in_str:
+            if ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == opener:
+            stack.append(i)
+        elif ch == closer:
+            spans.append((stack.pop(), i + 1))
+    spans.sort(key=lambda s: s[0])
+    return spans
+
+
 def loads_lenient(text: Any, *, want: type | tuple[type, ...] = (dict, list)) -> Any | None:
     """Recover a JSON value of type *want* from model text, or None."""
     if isinstance(text, want):
@@ -82,10 +129,13 @@ def loads_lenient(text: Any, *, want: type | tuple[type, ...] = (dict, list)) ->
         return None
     candidates: list[str] = [text.strip()]
     candidates += [m.group(1).strip() for m in _FENCE.finditer(text)]
-    for opener in ("{", "["):
-        raw = first_balanced(text, opener)
-        if raw:
-            candidates.append(raw)
+    # v1.499.3: every balanced slice, in the order they START, not only the
+    # first of each kind — a placeholder like "{name}" before the real object
+    # no longer hides it. Bounded: at most MAX_BALANCED slices are tried.
+    spans = sorted(
+        (*balanced_spans(text, "{"), *balanced_spans(text, "[")), key=lambda s: s[0],
+    )
+    candidates += [text[a:b] for a, b in spans[:MAX_BALANCED]]
     for cand in candidates:
         for attempt in (cand, _repaired(cand)):
             obj = _try(attempt)

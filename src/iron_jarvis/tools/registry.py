@@ -38,7 +38,7 @@ from .base import (
     safe_path,
 )
 from .permissions import PermissionDecision, PermissionEngine
-from .undo import make_file_descriptor
+from .undo import make_file_descriptor, sha256_target
 from .undo import finalize_post_hash
 
 _log = logging.getLogger("iron_jarvis.tools.registry")
@@ -2001,16 +2001,23 @@ class ToolRegistry:
                     continue
             desc = None
             try:
+                # v1.499.3: each created file is HASHED as the row is written,
+                # so Undo can tell the file the tool made from one edited
+                # since (`guard_unchanged`) instead of deleting either. This
+                # runs on the worker thread `_record` is always called on.
+                ws_root = Path(ctx.workspace).resolve()
+                made = {r: sha256_target(ws_root / r, "raw") for r in rels}
                 if len(rels) == 1:
                     desc = make_file_descriptor(
-                        ctx.config.home, kind="file_delete", path=rels[0], mode="raw"
+                        ctx.config.home, kind="file_delete", path=rels[0], mode="raw",
+                        post_sha256=made[rels[0]],
                     )
                 elif rels:
                     desc = {
                         "kind": "files_delete",
                         "reversible": True,
                         "pre_ref": None,
-                        "pre_inline": dumps({"paths": rels, "mode": "raw"}),
+                        "pre_inline": dumps({"paths": rels, "mode": "raw", "sha256": made}),
                         "pre_sha256": None,
                         "post_sha256": None,
                     }

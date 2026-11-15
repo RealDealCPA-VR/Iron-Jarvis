@@ -259,6 +259,7 @@ _LATE_MODEL_MODULES = (
     "..agents.team_notes",    # TeamNote + TeamNoteState — a member's accepted working habits (v1.423.0)
     "..workmap.models",       # WorkEntry — the work record: what was done, in which folder (v1.491.0)
     "..peers.models",         # PeerRecord — another computer paired with this one (v1.497.0)
+    "..daemon.chat_append",   # ChatOlderMessage — a chat's messages past the live window (v1.499.3)
 )
 
 
@@ -397,9 +398,12 @@ def init_db(engine: Engine) -> None:
 
 
 def quarantine_db(db_path: str | Path, reason: str) -> "Path | None":
-    """Rename a corrupt DB (and drop its -wal/-shm) so a fresh one can take its
-    place. Returns the quarantine path. The corrupt file is KEPT (never deleted)
-    so data can be salvaged / restored later."""
+    """Rename a corrupt DB so a fresh one can take its place. Returns the
+    quarantine path. The corrupt file is KEPT (never deleted) so data can be
+    salvaged / restored later, and so are its -wal/-shm sidecars: they MOVE
+    beside it as ``<dead>-wal`` / ``<dead>-shm`` (v1.499.3) — the WAL holds
+    every transaction since the last checkpoint, and opening the quarantined
+    copy replays it."""
     from .ids import utcnow
 
     path = Path(db_path)
@@ -412,9 +416,9 @@ def quarantine_db(db_path: str | Path, reason: str) -> "Path | None":
         if path.exists():
             path.replace(dead)
         for sfx in ("-wal", "-shm"):
-            s = Path(str(path) + sfx)
-            if s.exists():
-                s.unlink()
+            side = Path(str(path) + sfx)
+            if side.exists():
+                side.replace(Path(str(dead) + sfx))
     except OSError:
         return None
     logger.error(
@@ -438,10 +442,13 @@ def _db_is_corrupt(db_path: str | Path) -> bool:
         finally:
             con.close()
         return not row or row[0] != "ok"
-    except sqlite3.DatabaseError:
-        return True  # "file is not a database" / header corruption
+    # OperationalError SUBCLASSES DatabaseError, so it must be caught FIRST
+    # (v1.499.3): in the other order a locked or cannot-open file read as
+    # corruption and a healthy database was quarantined.
     except sqlite3.OperationalError:
         return False  # locked / busy / cannot-open — environmental, NOT corruption
+    except sqlite3.DatabaseError:
+        return True  # "file is not a database" / header corruption
 
 
 #: A valid SQLite database (or a 0-byte new file) begins with this 16-byte magic.

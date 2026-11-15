@@ -100,6 +100,31 @@ class LTMSearchTool(Tool):
         )
 
 
+#: Said in the tool result when a note carried a secret (v1.499.3).
+SECRET_LEFT_OUT = (
+    "A password, key or token in it was left out (kept as ***): memory is read "
+    "into later chats, so secrets are never kept there. Keep a secret in "
+    "Settings, where it is stored locked."
+)
+
+
+def _without_secrets(args: dict[str, Any]) -> "tuple[dict[str, Any], bool]":
+    """*args* with the note's title and text masked (``detections.redact.mask``)
+    and whether anything was. Masking is idempotent, so capture and execute
+    agree however often it runs."""
+    from ..detections.redact import mask
+
+    out = dict(args)
+    changed = False
+    for key in ("title", "content"):
+        value = out.get(key)
+        if isinstance(value, str):
+            masked = mask(value)
+            changed = changed or masked != value
+            out[key] = masked
+    return out, changed
+
+
 class LTMAppendTool(Tool):
     """Append a note/page to a long-term memory store."""
 
@@ -150,6 +175,7 @@ class LTMAppendTool(Tool):
         if directory is None:
             # No local file to restore/delete — be honest, not fake.
             return {"kind": "memory_external", "reversible": False, "tool": self.name}
+        args = _without_secrets(args)[0]
         path = Path(directory) / f"{slugify(args['title'])}.md"
         content = args["content"]
 
@@ -258,13 +284,16 @@ class LTMAppendTool(Tool):
             conn = self.manager.get(source)
             if conn is not None and not _egress.ltm_connector_is_local(conn):
                 return ToolResult(ok=False, error=_local_only_refusal(source, "written to"))
+        # v1.499.3: the SAME masked text capture_undo predicted from, so the
+        # Undo's "changed since" hash still matches what was written.
+        args, left_out = _without_secrets(args)
         try:
             ref = self.manager.append(args["title"], args["content"], source)
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
         return ToolResult(
             ok=True,
-            output=f"appended to {source}: {ref}",
+            output=f"appended to {source}: {ref}" + (f" {SECRET_LEFT_OUT}" if left_out else ""),
             data={"ref": ref, "source": source},
         )
 

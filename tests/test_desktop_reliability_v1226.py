@@ -1169,7 +1169,12 @@ console.log(JSON.stringify(sinks));
 
 @requires_node
 def test_desktop_log_writes_both_sinks(tmp_path):
-    out = _run(_LOG_HARNESS.replace("__LIFTED__", _lift("function desktopLog", "function desktopLog")), tmp_path, "log")
+    # v1.499.x review: desktopLog redacts through redactSecrets with the live
+    # token (tests/test_desktop_trust_fixes_v1499.py), so both are lifted too.
+    lifted = "let authToken = null;\n" + _lift("function desktopLog", "function desktopLog") + "\n" + _lift(
+        "function redactSecrets", "function redactSecrets"
+    )
+    out = _run(_LOG_HARNESS.replace("__LIFTED__", lifted), tmp_path, "log")
     assert [c[1] for c in out["console"]] == ["[update] check failed: boom", "[hotkey] taken", "[x] err: Error: with a stack"]
     assert [c[0] for c in out["console"]] == ["error", "warn", "error"]
     assert all(label == "desktop" for label, _ in out["file"]), out["file"]

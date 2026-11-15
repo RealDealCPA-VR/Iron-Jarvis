@@ -678,8 +678,10 @@ def test_the_check_is_fitted_to_the_models_window_like_every_call(desk, monkeypa
     d = type("D", (), {"platform": app.state.platform})()
     seen = {}
 
-    def fit(_d, msgs, system, provider, model, *, head):
+    def fit(_d, msgs, system, provider, model, *, head, tools=None):
+        # v1.499.3: the check's tool definitions are handed over to be priced.
         seen["fit"] = (len(msgs), head, provider, model)
+        seen["tools"] = tools
         return ["FITTED"], "FITTED SYSTEM"
 
     async def complete(**kw):
@@ -690,9 +692,10 @@ def test_the_check_is_fitted_to_the_models_window_like_every_call(desk, monkeypa
     app.state.platform.router.complete = complete
     asyncio.run(CT.look_first_call(
         d, msgs=[LLMMessage(role="user", content="q")], system="s", provider="pp", model="mm",
-        head=1, tools=[], reply="draft",
+        head=1, tools=[{"name": "find_capability"}], reply="draft",
     ))
     assert seen["fit"] == (3, 1, "pp", "mm"), seen
+    assert seen["tools"] == [{"name": "find_capability"}], seen
     assert seen["sent"] == (["FITTED"], "FITTED SYSTEM")
 
 

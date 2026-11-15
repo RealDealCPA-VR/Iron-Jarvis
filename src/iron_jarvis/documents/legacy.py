@@ -34,12 +34,15 @@ import base64
 import datetime as _dt
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from collections import OrderedDict
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from ..core import procs
 
@@ -280,9 +283,71 @@ def read_xls_workbook(path: Path, sheet: str | None, cell_range: str | None) -> 
 
 
 def _cache_dir() -> Path:
+    """The parent of the SHORT-LIVED folders a .doc is converted in.
+
+    Nothing stays here (v1.499.3): each read converts into its own folder,
+    reads it and removes it. Up to v1.499.2 this held ``<hash>.docx`` for
+    every .doc ever read, forever — a full copy of a client file in %TEMP%.
+    """
     d = Path(tempfile.gettempdir()) / "ironjarvis-legacy"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+#: Text of recently read .doc files, keyed by a hash of their bytes, held IN
+#: MEMORY only — Word takes seconds to start, and the second read of the same
+#: bytes should not pay for it again. Bounded both ways.
+_TEXT_MEMO: "OrderedDict[str, str]" = OrderedDict()
+_MEMO_ENTRIES = 16
+_MEMO_CHARS = 8_000_000
+
+#: A work folder that is not one of this process's own is removed once it is
+#: older than this (a read in another process may still be using a younger one).
+_STALE_WORK_S = max(600, 2 * DOC_CONVERT_TIMEOUT_S)
+
+#: This process's work folders that are in use right now.
+_ACTIVE: set[str] = set()
+
+
+def _sweep(base: Path, *, now: float) -> None:
+    """Remove what earlier versions and crashed reads left in *base*: every
+    loose ``.docx`` (the old forever-cache) and any stale work folder. Never
+    raises; a file Word still holds is tried again next time."""
+    try:
+        entries = list(base.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.is_file() and entry.suffix.lower() == ".docx":
+                entry.unlink()
+            elif (
+                entry.is_dir()
+                and entry.name.startswith("read-")
+                and str(entry) not in _ACTIVE
+                and now - entry.stat().st_mtime > _STALE_WORK_S
+            ):
+                shutil.rmtree(entry, ignore_errors=True)
+        except OSError:
+            continue
+
+
+@contextmanager
+def _converted(src: Path) -> Iterator[Path]:
+    """*src* converted to .docx in a folder of its own, removed on exit —
+    success or failure."""
+    base = _cache_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    _sweep(base, now=time.time())
+    work = Path(tempfile.mkdtemp(prefix="read-", dir=str(base)))
+    _ACTIVE.add(str(work))
+    try:
+        out = work / "converted.docx"
+        convert_doc_to_docx(src, out)
+        yield out
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        _ACTIVE.discard(str(work))
 
 
 def _stop_started_word(stdout: bytes | None, started: float) -> int | None:
@@ -368,18 +433,24 @@ def convert_doc_to_docx(src: Path, dst: Path, *, timeout: float = DOC_CONVERT_TI
     raise LegacyReadError(f"Microsoft Word could not convert {src.name}: {reason[:300]}")
 
 
-def doc_as_docx(src: Path) -> Path:
-    """A cached .docx conversion of *src* (keyed by its bytes)."""
-    digest = hashlib.sha256(src.read_bytes()).hexdigest()[:32]
-    out = _cache_dir() / f"{digest}.docx"
-    if out.is_file() and out.stat().st_size > 0:
-        return out
-    convert_doc_to_docx(src, out)
-    return out
-
-
 def doc_text(src: Path) -> str:
-    """The text of a legacy .doc, read through Word's own conversion."""
+    """The text of a legacy .doc, read through Word's own conversion.
+
+    The converted .docx exists only while it is read; the text is kept in
+    memory (:data:`_TEXT_MEMO`) so the same bytes are not converted twice."""
     from .readers import _read_docx
 
-    return _read_docx(doc_as_docx(src))
+    digest = hashlib.sha256(src.read_bytes()).hexdigest()
+    hit = _TEXT_MEMO.get(digest)
+    if hit is not None:
+        _TEXT_MEMO.move_to_end(digest)
+        return hit
+    with _converted(src) as docx_path:
+        text = _read_docx(docx_path)
+    if len(text) <= _MEMO_CHARS:
+        _TEXT_MEMO[digest] = text
+        while len(_TEXT_MEMO) > _MEMO_ENTRIES or (
+            sum(len(v) for v in _TEXT_MEMO.values()) > _MEMO_CHARS
+        ):
+            _TEXT_MEMO.popitem(last=False)
+    return text

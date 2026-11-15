@@ -97,6 +97,14 @@ def client_guard(engine: Any, text: Any) -> tuple[str, str]:
         return ("Your clients could not be read, so this preference was not kept; try again in a moment.", "")
 
 
+#: Said in the tool result when a preference carried a secret (v1.499.3).
+SECRET_LEFT_OUT = (
+    "A password, key or token in it was left out (kept as ***): a preference is "
+    "read into every later chat, so secrets are never kept in one. Keep a secret "
+    "in Settings, where it is stored locked."
+)
+
+
 class RememberPreferenceTool(Tool):
     """Record a durable user preference the agent inferred mid-conversation."""
 
@@ -122,7 +130,11 @@ class RememberPreferenceTool(Tool):
         refusal, note = await asyncio.to_thread(client_guard, getattr(self.learning, "engine", None), args.get("text"))
         if refusal:
             return ToolResult(ok=False, error=refusal)
-        record = self.learning.note_preference(args["text"])
+        from .engine import without_secrets
+
+        said = str(args.get("text") or "").strip()
+        left_out = without_secrets(said) != said
+        record = self.learning.note_preference(said)
         await ctx.event_bus.publish(
             EventType.MEMORY_UPDATED,
             {"kind": "preference", "id": record.id, "weight": record.weight},
@@ -130,7 +142,9 @@ class RememberPreferenceTool(Tool):
         )
         return ToolResult(
             ok=True,
-            output=f"remembered preference: {record.text}" + (f" {note}" if note else ""),
+            output=f"remembered preference: {record.text}"
+            + (f" {SECRET_LEFT_OUT}" if left_out else "")
+            + (f" {note}" if note else ""),
             data={
                 "id": record.id,
                 "weight": record.weight,

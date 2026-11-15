@@ -305,6 +305,9 @@ export type SSEEvent =
        *  typed facts as the headline (`chat_turn.fix_action`). */
       fix_kind?: string;
       fix_provider?: string;
+      /** v1.499.3: steer notes the turn accepted and never read before it
+       *  FAILED — handed back like the done frame's. Absent when none. */
+      unread_steers?: string[];
     }
   /** v1.324.0: an installed app asks the USER something (MCP elicitation)
    *  or asks to use the turn's model (MCP sampling) — the decoded ask. */
@@ -920,6 +923,13 @@ export function sseEventFrom(
       // v1.355.0 (G29): the press that fixes it, beside the words.
       if (str(data.fix_kind)) ev.fix_kind = str(data.fix_kind);
       if (str(data.fix_provider)) ev.fix_provider = str(data.fix_provider);
+      // v1.499.3: whitelisted exactly like the done frame's copy.
+      if (Array.isArray(data.unread_steers)) {
+        const unread = (data.unread_steers as unknown[]).filter(
+          (x): x is string => typeof x === "string" && x.trim().length > 0,
+        );
+        if (unread.length) ev.unread_steers = unread;
+      }
       return ev;
     }
     // v1.324.0: apps that talk back. Each decoder WHITELISTS (lib/mcpInteract)
@@ -1330,6 +1340,9 @@ export class StreamError extends ApiError {
    *  and the provider it is for ("" when none) — lib/failureActions. */
   readonly fixKind: string;
   readonly fixProvider: string;
+  /** v1.499.3: steer notes the failed turn never read ([] when none) — the
+   *  caller puts them back in the box, as it does after a finished turn. */
+  readonly unreadSteers: string[];
   constructor(
     message: string,
     status: number,
@@ -1345,6 +1358,7 @@ export class StreamError extends ApiError {
       technical?: string;
       fix_kind?: string;
       fix_provider?: string;
+      unread_steers?: string[];
     } = {},
   ) {
     super(message, status);
@@ -1360,6 +1374,7 @@ export class StreamError extends ApiError {
     this.technical = refusal.technical ?? "";
     this.fixKind = refusal.fix_kind ?? "";
     this.fixProvider = refusal.fix_provider ?? "";
+    this.unreadSteers = [...(refusal.unread_steers ?? [])];
   }
 }
 
@@ -2194,6 +2209,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                   technical: ev.technical,
                   fix_kind: ev.fix_kind,
                   fix_provider: ev.fix_provider,
+                  unread_steers: ev.unread_steers,
                 },
               );
             default:

@@ -149,22 +149,24 @@ def test_the_conversion_is_CACHED_by_content(tmp_path, monkeypatch):
         return real(src, dst, **kw)
 
     monkeypatch.setattr(legacy, "convert_doc_to_docx", counted)
+    # v1.499.3: the cache is the TEXT, held in memory; no converted copy stays
+    # on disk (tests/test_review_fixes_documents_v1499_3.py pins that).
+    monkeypatch.setattr(legacy, "_TEXT_MEMO", type(legacy._TEXT_MEMO)())
 
-    first = legacy.doc_as_docx(DOC)
-    second = legacy.doc_as_docx(DOC)
+    first = legacy.doc_text(DOC)
+    second = legacy.doc_text(DOC)
 
     assert first == second
     assert calls["n"] == 1, f"Word was started {calls['n']} times for one document"
+    assert not any((tmp_path / "cache").rglob("*.docx")), "a converted copy stayed"
 
     # Different bytes, different cache entry — never the first answer again.
     other = tmp_path / "other.doc"
     other.write_bytes(DOC.read_bytes() + b"\x00")
     try:
-        third = legacy.doc_as_docx(other)
+        legacy.doc_text(other)
     except LegacyReadError:
         pass  # Word may reject the altered bytes; the key is that it TRIED
-    else:
-        assert third != first
     assert calls["n"] == 2
 
 
@@ -265,6 +267,7 @@ def test_the_unattended_folder_sweep_still_declines_dot_doc():
 
 def test_with_no_word_the_refusal_names_WORD_and_not_a_chore(tmp_path, monkeypatch):
     monkeypatch.setattr(legacy, "_cache_dir", lambda: tmp_path / "cache")
+    monkeypatch.setattr(legacy, "_TEXT_MEMO", type(legacy._TEXT_MEMO)())
     monkeypatch.setattr(legacy, "word_available", lambda: False)
 
     with pytest.raises(LegacyReadError) as err:

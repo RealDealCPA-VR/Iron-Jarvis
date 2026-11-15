@@ -136,6 +136,48 @@ def _sentence(text: str) -> str:
     return t[:1].upper() + t[1:] if t else t
 
 
+#: How many "-2", "-3" … names an upload tries before giving up.
+_MAX_UPLOAD_NAMES = 1000
+
+
+def _unique_upload(uploads: Path, name: str, data: bytes) -> Path:
+    """Store *data* under *name* in *uploads* WITHOUT replacing another file
+    (v1.499.3) and return where it landed.
+
+    Two uploads with the same name used to share one path, so the second
+    silently replaced the first while a chat still pointed at it. Now the
+    same bytes again reuse the existing file, and different bytes get the
+    next free ``<stem>-2<ext>`` name — the original name stays readable and
+    the file stays directly in ``uploads`` (a bare name is still found there).
+    Each name is claimed with an exclusive create, so two uploads at once
+    cannot take the same one.
+    """
+    stem, ext = Path(name).stem or "upload", Path(name).suffix
+    for n in range(1, _MAX_UPLOAD_NAMES + 1):
+        candidate = uploads / (name if n == 1 else f"{stem}-{n}{ext}")
+        try:
+            f = open(candidate, "xb")
+        except FileExistsError:
+            try:
+                if candidate.is_file() and candidate.stat().st_size == len(data) \
+                        and candidate.read_bytes() == data:
+                    return candidate  # the same file uploaded again
+            except OSError:
+                pass
+            continue
+        try:
+            with f:
+                f.write(data)
+        except BaseException:
+            candidate.unlink(missing_ok=True)  # never a half-written upload
+            raise
+        return candidate
+    raise HTTPException(
+        status_code=409,
+        detail=f"too many uploads named {name}; rename the file and try again",
+    )
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.post("/documents/upload")
@@ -159,13 +201,12 @@ def register(app: FastAPI, d) -> None:
         name = re.sub(r"[^A-Za-z0-9._-]", "_", body.filename).strip("._") or "upload"
         uploads = d.platform.config.home / "uploads"
         uploads.mkdir(parents=True, exist_ok=True)
-        target = uploads / name
         try:
             data = base64.b64decode(body.content_b64, validate=False)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
-        target.write_bytes(data)
-        return {"path": str(target), "name": name, "bytes": len(data)}
+        target = _unique_upload(uploads, name, data)
+        return {"path": str(target), "name": target.name, "bytes": len(data)}
 
     @app.post("/documents/workfolder")
     def documents_workfolder(body: WorkfolderBody) -> dict[str, Any]:
@@ -903,7 +944,28 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=403, detail="destination is a protected path")
         if not dest_dir.is_dir():
             raise HTTPException(status_code=404, detail=f"no such folder: {body.dest_dir}")
-        target = dest_dir / (body.name.strip() or src.name)
+        # The NAME is a file name, never a path (v1.499.3): "..\\..\\x" was
+        # joined unchecked and escaped the folder just checked above.
+        name = body.name.strip() or src.name
+        if (
+            any(sep in name for sep in ("/", "\\", ":", "\x00"))
+            or name in (".", "..")
+            or Path(name).is_absolute()
+            or Path(name).name != name
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="the name must be a file name only, without a folder or drive",
+            )
+        target = dest_dir / name
+        try:
+            inside = target.resolve().parent == dest_dir.resolve()
+        except OSError:
+            inside = False
+        if not inside:
+            raise HTTPException(
+                status_code=400, detail="the copy must go in the folder that was picked"
+            )
         if target.resolve() == src.resolve():
             raise HTTPException(status_code=400, detail="that is where the file already is")
         if target.exists() and not body.overwrite:

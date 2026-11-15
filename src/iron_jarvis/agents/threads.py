@@ -449,6 +449,58 @@ PROJECT_ROOM_PRIVATE_NOTE = "Other seats' replies are not shared with you in a p
 LOCAL_ONLY_SAT_OUT = "{agent} sat this one out: this chat is local only and {agent} runs on {where}."
 
 
+class SeatModelDown(RuntimeError):
+    """A seat held on its OWN model whose model did not answer (v1.499.3
+    review). Its text is the room line's plain sentence; the provider's own
+    error rides as ``__cause__``. Never moved to another provider."""
+
+
+def _answered_or_ours(exc: BaseException) -> bool:
+    """True when *exc* (or what it was raised from) is a provider's SAFETY
+    REFUSAL or a Local only refusal — not the model failing to answer.
+    Never raises."""
+    try:
+        from ..providers.adapters.base import refusal_of
+        from ..providers.egress import LocalOnlyRefused
+
+        seen = 0
+        cur: BaseException | None = exc
+        while cur is not None and seen < 6:
+            if isinstance(cur, LocalOnlyRefused) or refusal_of(cur) is not None:
+                return True
+            cur = cur.__cause__ or cur.__context__
+            seen += 1
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
+def remote_local_only_words(name: str, base_url: str) -> str:
+    """The panel's local-only sentence for a REMOTE agent whose machine is
+    not on this network, or ``""`` when it may be reached (the scope is off,
+    or its address is private). ONE judgement for the panel seat, ``delegate``
+    and ``consult`` (v1.499.3 review: the two tools sent the task to a public
+    address under Local only). Never raises; an address that cannot be read
+    is off the network (fail closed)."""
+    from ..providers import egress as _egress
+
+    try:
+        if not _egress.current_scope().on:
+            return ""
+    except Exception:  # noqa: BLE001 — an unreadable scope is not Local only
+        return ""
+    url = str(base_url or "")
+    if _egress.private_host(url):
+        return ""
+    try:
+        from urllib.parse import urlsplit
+
+        where = urlsplit(url if "://" in url else "http://" + url).hostname or "another machine"
+    except Exception:  # noqa: BLE001
+        where = "another machine"
+    return LOCAL_ONLY_SAT_OUT.format(agent=str(name or "This agent"), where=where)
+
+
 def ungrounded_reason(provider: str) -> str:
     """The phrase a withheld seat's message carries (``ungrounded_reason``);
     the UI puts it after "not given the project's files —"."""
@@ -673,7 +725,11 @@ def seat_error_words(exc: BaseException | None, *, manager: Any = None) -> str:
     (``failure_words.friendly_error`` — the classifier every chat failure
     reads, never a second one), the fix said for a seat (``_SEAT_FIX_WORDS``).
     Never the exception's own text: that stays in the stored ``error`` for
-    the Agents page's room transcript. Never raises; never empty."""
+    the Agents page's room transcript. Never raises; never empty. A seat
+    held on its own model whose model did not answer (:class:`SeatModelDown`,
+    v1.499.3) already IS that sentence, written for the seat."""
+    if isinstance(exc, SeatModelDown) and str(exc).strip():
+        return str(exc).strip()
     try:
         from ..providers import failure_words as fw
 
@@ -1114,12 +1170,9 @@ class AgentThreads:
         name = str(p.get("name") or "This agent")
         try:
             if p.get("source") == "remote":
-                url = str(getattr(remote_record, "base_url", "") or "")
-                if _egress.private_host(url):
-                    return ""
-                from urllib.parse import urlsplit
-
-                where = urlsplit(url if "://" in url else "http://" + url).hostname or "another machine"
+                return remote_local_only_words(
+                    name, str(getattr(remote_record, "base_url", "") or "")
+                )
             else:
                 provider, _model = cls._provider_model_for(seat, d)
                 mgr = getattr(d.platform, "providers", None)
@@ -1650,16 +1703,62 @@ class AgentThreads:
         if p["source"] == "builtin" and str(p["name"]).strip().lower() == "guide":
             system += await self._guide_material(transcript, d)
 
-        resp, _p, _m = await d._one_shot_complete(
-            provider,
-            adapter,
-            system=system,
-            messages=[LLMMessage(role="user", content=transcript or "(no messages yet)")],
-        )
+        # A SEAT ON ITS OWN MODEL IS HELD THERE (v1.499.3 review, the
+        # v1.394.0 rule "a member whose provider is down is refused, never
+        # moved"): the one-shot path fails over sideways on a transient error,
+        # and the reply was then credited to this seat with no notice. Under a
+        # hold ``_one_shot_complete`` raises instead of moving
+        # (``_pin_armed``), and the room line says the seat's model did not
+        # answer. A seat on the configured default keeps its failover.
+        own = self._own_provider(p, d)
+        held = bool(own) and own != "auto"
+        token = None
+        if held:
+            from ..providers.hold import set_hold
+
+            token = set_hold(provider, model, who=f"member:{p['name']}")
+        try:
+            resp, _p, _m = await d._one_shot_complete(
+                provider,
+                adapter,
+                system=system,
+                messages=[LLMMessage(role="user", content=transcript or "(no messages yet)")],
+            )
+        except Exception as exc:  # noqa: BLE001 — re-raised in the seat's words
+            # A safety refusal is an ANSWER and a Local only refusal is ours:
+            # both keep their own words. Anything else is the model not
+            # answering.
+            if held and not _answered_or_ours(exc):
+                raise SeatModelDown(self._seat_model_down_words(p, provider, d)) from exc
+            raise
+        finally:
+            if token is not None:
+                from ..providers.hold import reset_hold
+
+                reset_hold(token)
+        if held and _p and str(_p) != str(provider):
+            # Belt and braces: a caller's one-shot that moved anyway is never
+            # credited to a seat held on its own model.
+            raise SeatModelDown(self._seat_model_down_words(p, provider, d))
         text = (resp.text or "").strip()
         if not text:
             raise RuntimeError("the model returned an empty reply")
         return text
+
+    @staticmethod
+    def _seat_model_down_words(p: dict[str, str], provider: str, d: Any) -> str:
+        """One sentence for a held seat whose own model did not answer."""
+        name = str(p.get("name") or "This agent")
+        try:
+            from ..providers import egress as _egress
+
+            where = _egress.friendly_name(provider, getattr(d.platform, "providers", None))
+        except Exception:  # noqa: BLE001 — the id still names it
+            where = provider
+        return (
+            f"{name}'s own model ({where or provider}) did not answer, so {name} was "
+            "not moved to another model. Ask again in a minute, or change its model."
+        )
 
     @staticmethod
     async def _guide_material(transcript: str, d: Any) -> str:

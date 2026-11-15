@@ -356,7 +356,38 @@ def scan_document(
     if text is None:
         text = extract_text(path)
         _refuse_if_no_text_layer(Path(path), text)
+    if Path(path).suffix.lower() == ".pdf":
+        # Filled FORM FIELDS and notes live outside the page text (v1.499.3):
+        # a typed SSN in a W-9 field was never scanned, so the list said
+        # nothing about it. Read on every scan, supplied text or not.
+        text = _with_pdf_form_text(Path(path), text)
     return scan_text(text, extra_terms=extra_terms, categories=categories)
+
+
+#: Said when a PDF's filled fields or notes cannot be read: the page text may
+#: have been scanned, but a field is where a typed SSN lives, so an empty list
+#: here would be a false "clean".
+FORM_UNREADABLE_ERROR = (
+    "the filled form fields and notes in this PDF could not be read, so it was "
+    "NOT fully checked for personal data — an empty list would not mean clean. "
+    "Print it to a new PDF (which flattens the form) and try again, or review "
+    "the form by eye"
+)
+
+
+def _with_pdf_form_text(path: Path, text: str) -> str:
+    """*text* plus the PDF's form-field values and note text, one per line.
+    Refuses in words (ValueError) when the fields cannot be read."""
+    try:
+        from .pdf_redact import UnsupportedPdf
+        from . import pdf_redact
+    except ImportError as exc:  # pikepdf missing: the fields were never read
+        raise ValueError(f"{FORM_UNREADABLE_ERROR} ({exc})") from exc
+    try:
+        extra = pdf_redact.pdf_form_text(path)
+    except UnsupportedPdf as exc:
+        raise ValueError(f"{FORM_UNREADABLE_ERROR} ({exc})") from exc
+    return f"{text}\n{extra}" if extra else text
 
 
 # -------------------------------------------------------- format redactors ---
@@ -541,13 +572,36 @@ def _redact_pdf(src: Path, dst: Path, spans_for) -> tuple[dict[str, int], str]:
     # AND leave the original pixels in whatever the user shares next.
     text = extract_text(src, use_ocr_cache=False)
     _refuse_if_no_text_layer(src, text)
+    # Filled form fields and notes are scanned too (v1.499.3): the in-place
+    # path removes a found value from them, and the rebuild below writes the
+    # masked field text rather than dropping it. When they cannot be read the
+    # in-place path is not offered (its verification would be about the page
+    # only); the rebuild carries no fields at all, so nothing can leak.
+    form_unreadable = ""
+    try:
+        text = _with_pdf_form_text(src, text)
+    except ValueError as exc:
+        form_unreadable = str(exc)
     spans = spans_for(text)
     masked, counts = _apply_spans(text, spans)
 
     # The exact strings the caller's rules matched — the same values the
     # in-place path must remove and then fail to find.
     values = sorted({text[s:e] for s, e, _cat, _repl in spans if e > s}, key=len, reverse=True)
-    if values:
+    if not values and not form_unreadable:
+        # NOTHING FOUND: hand back the file itself, byte for byte (v1.499.3).
+        # This used to fall through to the rebuild — a legal-size page came
+        # back A4 — while the tool told the user "identical copy".
+        import shutil
+
+        shutil.copyfile(src, dst)
+        return counts, (
+            "nothing was found to remove, so the copy is identical to the "
+            "original, byte for byte."
+        )
+    if form_unreadable:
+        reason = form_unreadable
+    elif values:
         try:
             from .pdf_redact import RedactionUnverified, UnsupportedPdf, redact_pdf
 
@@ -639,5 +693,17 @@ def redact_file(
             f"unsupported format for redaction: {suffix or '(no extension)'} — "
             "supported: .docx .xlsx .pptx .pdf and text formats "
             "(.txt .md .csv .tsv .html .json …)"
+        )
+    if not counts and suffix != ".pdf":
+        # Nothing was changed: the copy is the original file itself (v1.499.3),
+        # never a re-save through a library that can drop what it does not
+        # model (an Excel chart, a Word field). The PDF path decides this
+        # itself, because there an unread form is not "nothing found".
+        import shutil
+
+        shutil.copyfile(src, dst)
+        note = (
+            "nothing was found to remove, so the copy is identical to the "
+            "original, byte for byte."
         )
     return counts, note

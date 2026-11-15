@@ -451,10 +451,53 @@ function getOrCreateToken() {
   return token;
 }
 
-// Inject the bearer token on every HTTP/WS request to the daemon origin. This
-// is the belt-and-suspenders for HTTP: requests are authorized even before the
+// Inject the bearer token on the DASHBOARD's HTTP requests to the daemon (see
+// shouldInjectAuth). This is the belt-and-suspenders for HTTP: the dashboard's
+// requests are authorized even before the
 // renderer's localStorage is populated (the WS guard still relies on the
 // localStorage-driven ?token= query, which the preload sets pre-bundle).
+//: v1.499.x review: WHO may have the token added. Pure (pinned under node,
+//: tests/test_desktop_trust_fixes_v1499.py). The request must go to OUR daemon
+//: (http, 127.0.0.1/localhost, the daemon's port) and carry no Authorization of
+//: its own; then the browser-set Origin decides (only a dashboard origin — a
+//: previewed dev page on localhost:5173 or a sandboxed "null" never gets it).
+//: With no Origin (a plain GET: an <img>, an iframe's page) the referrer must
+//: be the dashboard and the requesting frame, when known, must not be someone
+//: else's page; with neither referrer nor a dashboard frame: no. Doubt says no.
+function shouldInjectAuth(details, dashboardOrigins, daemonPort) {
+  const originOf = (u) => {
+    try {
+      const o = new URL(String(u)).origin;
+      return o && o !== "null" ? o : "";
+    } catch {
+      return "";
+    }
+  };
+  let target;
+  try {
+    target = new URL(String((details && details.url) || ""));
+  } catch {
+    return false;
+  }
+  if (target.protocol !== "http:") return false;
+  if (target.hostname !== "127.0.0.1" && target.hostname !== "localhost") return false;
+  if (target.port !== String(daemonPort)) return false;
+  const headers = (details && details.requestHeaders) || {};
+  let origin = null;
+  for (const k of Object.keys(headers)) {
+    const lk = k.toLowerCase();
+    if (lk === "authorization") return false; // the page's own header stands
+    if (lk === "origin") origin = String(headers[k] || "");
+  }
+  if (origin) return dashboardOrigins.has(origin);
+  const frame = String((details && details.frameUrl) || "");
+  const frameOrigin = /^https?:/i.test(frame) ? originOf(frame) : "";
+  if (frameOrigin && !dashboardOrigins.has(frameOrigin)) return false;
+  const referrer = String((details && details.referrer) || "");
+  if (referrer) return dashboardOrigins.has(originOf(referrer));
+  return Boolean(frameOrigin) && dashboardOrigins.has(frameOrigin);
+}
+
 function installAuthHeaderInjection() {
   if (!authToken) return;
   // A webRequest match pattern matches ANY port on the host and must NOT contain a
@@ -465,13 +508,17 @@ function installAuthHeaderInjection() {
     session.defaultSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
       const headers = details.requestHeaders || {};
       // SCOPE: the pattern above matches ANY loopback port (Electron rejects
-      // ports in match patterns), but the bearer token must ONLY ever reach
-      // OUR daemon — attaching it to some other local app's port leaks it.
-      const url = details.url || "";
-      const isDaemon =
-        url.startsWith(`http://127.0.0.1:${DAEMON_PORT}/`) ||
-        url.startsWith(`http://localhost:${DAEMON_PORT}/`);
-      if (isDaemon && !headers.Authorization && !headers.authorization) {
+      // ports in match patterns), and this session also shows OTHER pages
+      // (Chat › Code's Browser pane iframes any local dev page). The token goes
+      // only to OUR daemon and only with a request the DASHBOARD made.
+      let frameUrl = "";
+      try {
+        frameUrl = (details.frame && details.frame.url) || "";
+      } catch {
+        /* a frame that is gone has no url: unknown, decided by the rest */
+      }
+      const ask = { url: details.url, requestHeaders: headers, referrer: details.referrer, frameUrl };
+      if (shouldInjectAuth(ask, DASHBOARD_ORIGINS, DAEMON_PORT)) {
         headers.Authorization = `Bearer ${authToken}`;
       }
       callback({ requestHeaders: headers });
@@ -1236,10 +1283,26 @@ function desktopLog(level, ...args) {
         }
       })
       .join(" ");
-    fileLogger("desktop")(`${new Date().toISOString()} [${level}] ${text}\n`);
+    const safe = redactSecrets(text, authToken ? [authToken] : []);
+    fileLogger("desktop")(`${new Date().toISOString()} [${level}] ${safe}\n`);
   } catch {
     /* never throw from a logger */
   }
+}
+
+//: v1.499.x review: a log line never carries the install token. A failed
+//: event socket prints `ws://127.0.0.1:8787/events?token=<hex>` to the console
+//: (renderer.log), and the logs are what the user attaches to a bug report.
+//: Masks `?token=`/`&token=` values, a `Bearer` value, and any of `secrets`
+//: (16+ characters) wherever it appears. Pure (pinned under node).
+function redactSecrets(text, secrets) {
+  let out = String(text == null ? "" : text)
+    .replace(/([?&]token=)[^&\s'"]+/gi, "$1***")
+    .replace(/(\bBearer\s+)[^\s'",;]+/gi, "$1***");
+  for (const s of secrets || []) {
+    if (typeof s === "string" && s.length >= 16) out = out.split(s).join("***");
+  }
+  return out;
 }
 
 // --- Child process helpers ----------------------------------------------
@@ -1974,9 +2037,10 @@ function waitForDaemonPortClosed(timeoutMs) {
   });
 }
 
-// Quit-time sweep (contract C2 as amended, v1.226.0): taskkill by image name
-// hits EVERY ironjarvis.exe on the machine — including a dev `uv run
-// ironjarvis serve` (.venv/Scripts/ironjarvis.exe) on any port. So never
+// Quit-time sweep (contract C2 as amended, v1.226.0): the sweep used to kill
+// by image name, EVERY ironjarvis.exe on the machine — including a dev `uv run
+// ironjarvis serve` (.venv/Scripts/ironjarvis.exe) on any port. It now ends
+// only this app's own daemon folder's processes (v1.499.x), and still never
 // blind: sweep only when this session adopted or swept a daemon (it is ours),
 // or when /health still answers AND the ownership probe says ours. Resolves
 // whether a sweep ran; never rejects.
@@ -2452,28 +2516,115 @@ function verifyInstallIntegrity() {
 
 // Orphaned frozen daemons (a crashed session's child that never died) hold
 // file locks inside resources/daemon — NSIS then can't replace those files and
-// the next boot comes up half-installed. The image name is unique to Iron
-// Jarvis, so force-killing every instance is safe. Best-effort, synchronous
-// (the installer must not start until the locks are gone).
+// the next boot comes up half-installed. v1.499.x review: the image name is
+// NOT unique to this install — a dev daemon (.venv\Scripts\ironjarvis.exe) and
+// another install are ironjarvis.exe too — so the sweep ends only processes
+// whose executable is in THIS app's own daemon folder, each by pid. A listing
+// that fails falls back to the daemon this app started, never to everything.
+// Best-effort, synchronous (the installer must not start until the locks are
+// gone), the listing bounded by SWEEP_LIST_TIMEOUT_MS.
 function sweepOrphanDaemons(opts = {}) {
   if (process.platform !== "win32") return;
   // v1.422.0: a RESTART-type sweep (a wedged adopted daemon) spares the code
   // host — it runs Build › Code's tools on purpose and the next daemon takes
   // them back. A Quit or an update sweep (no options) ends it like the rest.
   const spare = opts.spareCodeHost ? (codeHostRecord(codeHostHome()) || {}).pid : 0;
-  try {
-    spawnSync("taskkill", sweepArgs(spare), { windowsHide: true });
-  } catch {
-    /* best effort */
+  const rows = listDaemonProcesses();
+  let pids;
+  if (rows) {
+    pids = pickOwnDaemonPids(rows, ownDaemonDirs(), spare);
+  } else {
+    pids = knownDaemonPids().filter((pid) => pid !== spare);
+    desktopLog("warn", `[daemon] could not list the running daemons — sweeping only the one this app started (${pids.join(", ") || "none"})`);
+  }
+  for (const pid of pids) {
+    try {
+      spawnSync("taskkill", sweepArgs(pid), { windowsHide: true });
+    } catch {
+      /* best effort */
+    }
   }
 }
 
-//: v1.422.0: the sweep's taskkill arguments — every ironjarvis.exe, but the
-//: code host's pid when one is spared. Pure (pinned under node).
-function sweepArgs(spareHostPid) {
-  const args = ["/F", "/T", "/IM", "ironjarvis.exe"];
-  if (Number.isInteger(spareHostPid) && spareHostPid > 0) args.push("/FI", `PID ne ${spareHostPid}`);
-  return args;
+const SWEEP_LIST_TIMEOUT_MS = 10000;
+//: The listing: every ironjarvis.exe with its executable path, as a JSON list
+//: (-InputObject keeps a one-process answer a list). It is sent as
+//: -EncodedCommand, so no command-line quoting can break it.
+const SWEEP_LIST_PS = [
+  "$ErrorActionPreference = 'Stop'",
+  "$p = @(Get-CimInstance Win32_Process -Filter \"Name='ironjarvis.exe'\" | Select-Object ProcessId, ExecutablePath)",
+  "ConvertTo-Json -Compress -InputObject $p",
+].join("; ");
+
+/** The running ironjarvis.exe processes as [{ProcessId, ExecutablePath}], or null when they could not be listed. */
+function listDaemonProcesses() {
+  try {
+    const res = spawnSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(SWEEP_LIST_PS, "utf16le").toString("base64")],
+      { windowsHide: true, timeout: SWEEP_LIST_TIMEOUT_MS, encoding: "utf8" }
+    );
+    if (!res || res.error || res.status !== 0) return null;
+    return parseProcessRows(res.stdout);
+  } catch {
+    return null;
+  }
+}
+
+/** The pids this app itself started and knows are alive (the sweep's fallback). */
+function knownDaemonPids() {
+  const p = daemonProc;
+  if (!p || p.exitCode !== null || p.signalCode !== null) return [];
+  return Number.isInteger(p.pid) && p.pid > 0 ? [p.pid] : [];
+}
+
+//: The folders that hold THIS app's own daemon: resources\daemon, and for a
+//: dev run (never the packaged app) its own checkout's venv.
+function ownDaemonDirs() {
+  const dirs = [path.dirname(DAEMON_EXE)];
+  if (!IS_PACKAGED) dirs.push(path.join(REPO_ROOT, ".venv", "Scripts"));
+  return dirs;
+}
+
+//: Pure (pinned under node): PowerShell's JSON → rows. Empty output is no
+//: process ([]); a single process prints as an object; anything unreadable
+//: is a FAILED listing (null), never an empty one.
+function parseProcessRows(stdout) {
+  const text = String(stdout || "").trim();
+  if (!text) return [];
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (data && !Array.isArray(data) && typeof data === "object") data = [data];
+  return Array.isArray(data) ? data.filter((r) => r && typeof r === "object") : null;
+}
+
+//: Pure (pinned under node): the pids whose executable is INSIDE one of the
+//: app's own daemon folders (case-insensitive, slashes and ".." normalised),
+//: but the code host's when it is spared. A row with no path (another user's
+//: or an elevated process) is unknown and left alone.
+function pickOwnDaemonPids(rows, ownDirs, spareHostPid) {
+  const norm = (p) => path.win32.normalize(String(p).replace(/\//g, "\\")).replace(/\\+$/, "").toLowerCase();
+  const dirs = (ownDirs || []).filter(Boolean).map((d) => norm(d) + "\\");
+  const out = [];
+  for (const r of rows || []) {
+    const pid = Number(r && r.ProcessId);
+    const exe = r && r.ExecutablePath;
+    if (!Number.isInteger(pid) || pid <= 0 || typeof exe !== "string" || !exe) continue;
+    if (Number.isInteger(spareHostPid) && spareHostPid > 0 && pid === spareHostPid) continue;
+    const e = norm(exe);
+    if (dirs.some((d) => e.startsWith(d))) out.push(pid);
+  }
+  return out;
+}
+
+//: v1.499.x: the sweep's taskkill arguments for ONE pid (its tree). Never an
+//: image name. Pure (pinned under node).
+function sweepArgs(pid) {
+  return ["/F", "/T", "/PID", String(pid)];
 }
 
 // v1.422.0: Build › Code's CODE HOST (iron_jarvis/codehost.py) runs the
@@ -6553,7 +6704,7 @@ let _wdUnresponsiveTimer = null;
 
 function rendererLog(line) {
   const stamp = new Date().toISOString();
-  fileLogger("renderer")(`${stamp} ${line}\n`);
+  fileLogger("renderer")(`${stamp} ${redactSecrets(line, authToken ? [authToken] : [])}\n`);
 }
 
 // Fire-and-forget incident record into the daemon's event log — makes freezes

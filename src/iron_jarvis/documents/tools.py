@@ -284,8 +284,13 @@ class ReadDocumentTool(Tool):
     }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        path = _resolve_read_path(args["path"], ctx)
-        allowed, reason = fs_read_ok(path)
+        def _gate() -> "tuple[Path, tuple[bool, str]]":
+            p = _resolve_read_path(args["path"], ctx)
+            return p, fs_read_ok(p)
+
+        # OFF THE LOOP (v1.499.3): the read gate resolves the path, and a path
+        # on a sleeping network share can hold that for seconds.
+        path, (allowed, reason) = await asyncio.to_thread(_gate)
         if not allowed:
             return ToolResult(ok=False, error=reason)
         try:
@@ -1179,7 +1184,9 @@ class RedactPiiTool(Tool):
         summary = (
             ", ".join(f"{cat}: {n}" for cat, n in sorted(counts.items()))
             if counts
-            else "no PII found (output is an identical copy)"
+            # The note says whether the copy is identical (v1.499.3): a PDF
+            # whose form could not be read is rebuilt even with nothing found.
+            else "no PII found"
         )
         # REPORT THE ABSOLUTE PATH (v1.153.2). This said `rel` — a
         # WORKSPACE-relative path — and for a source outside the workspace (an

@@ -344,8 +344,10 @@ async def _apply_compaction(
         for m in covered
     ]
     key = _C.prefix_key([f"{r}\x1e{t}" for r, t in pairs])
-    store = _compaction_store(d.platform)
-    rec = store.get(key)
+    # v1.499.3: the cache is a database table — building it (CREATE TABLE on
+    # first use) and reading it run OFF the loop, like `standing` below.
+    store = await asyncio.to_thread(_compaction_store, d.platform)
+    rec = await asyncio.to_thread(store.get, key)
     if rec is None:
         # v1.420.0 (C3.5) — THE RE-SUMMARY LOOP: the exact key above covers
         # every message but the newest KEEP_RECENT, so each new message moved
@@ -394,7 +396,8 @@ async def _apply_compaction(
         if complete is not None:
             out = await _C.compact_messages(pairs, complete=complete, trigger="auto")
             if out.ok:
-                rec = store.put(
+                rec = await asyncio.to_thread(
+                    store.put,
                     key,
                     summary=out.summary,
                     covers=len(covered),
@@ -562,7 +565,24 @@ def _plan_context(d, body, system: str, provider: str, model: str, messages=None
         )
 
 
-def _fit_turn_transcript(d, msgs, system: str, provider: str, model: str, *, head: int):
+def _tool_spec_tokens(tools, ratio: "float | None" = None) -> int:
+    """What the tool definitions sent beside a completion cost, in tokens
+    (v1.499.3) — the agent loop's estimate (``agents/runtime``: the specs as
+    sorted JSON, through the same estimator). 0 for no tools or any fault."""
+    if not tools:
+        return 0
+    try:
+        from ..context.budget import estimate_tokens
+
+        blob = _json.dumps(list(tools), ensure_ascii=False, sort_keys=True, default=str)
+        return estimate_tokens(blob, ratio)
+    except Exception:  # noqa: BLE001 — an estimate never breaks a turn
+        return 0
+
+
+def _fit_turn_transcript(
+    d, msgs, system: str, provider: str, model: str, *, head: int, tools=None,
+):
     """Fit the tool loop's GROWING transcript to the window, every completion.
 
     ``_plan_context`` fits the HISTORY once, before round 0. Each tool round
@@ -586,10 +606,68 @@ def _fit_turn_transcript(d, msgs, system: str, provider: str, model: str, *, hea
 
     Shared by both lanes so they can never disagree. MIRROR NOTE (lock-step):
     every completion in chat_turn's loop AND the stream lane's goes through it.
+
+    v1.499.3 — EVERYTHING SENT IS PRICED, ROUND 0 INCLUDED. ``tools`` (the
+    completion's tool definitions) are counted against the window as
+    ``fixed_tokens``, like the agent loop does, and ``system`` is the prompt
+    AS SENT (everything added after the history planner ran). The history
+    was planned without either, so when the whole request is still over the
+    window, the OLDEST history messages are left out (from a user message
+    on, the question and this turn's rounds never), and the model is told
+    (``OVERFLOW_NOTE``). Before, round 0 was sent as-is and the tools were
+    never counted: a local model with a known window was sent more than it
+    holds and refused it.
     """
     try:
         window = _context_window(d, provider, model)
-        if not window or head <= 0 or len(msgs) <= head:
+        if not window or head <= 0:
+            return msgs, system
+        fixed = _tool_spec_tokens(tools, _history_ratio(d, provider, model))
+        sent, sent_system = _fit_rounds(
+            d, msgs, system, provider, model, head=head, window=window, fixed=fixed,
+        )
+        reserve = _answer_reserve(d, provider, model, window)
+        from ..context.budget import output_reserve
+
+        budget = window - (output_reserve(window) if reserve is None else reserve) - fixed
+        if _tokens_of(sent, sent_system, d, provider, model) <= budget:
+            return sent, sent_system
+        q = min(head, len(msgs)) - 1
+        while q >= 0 and getattr(msgs[q], "role", "") != "user":
+            q -= 1
+        if q <= 0:
+            return sent, sent_system
+        system2 = system + "\n\n" + OVERFLOW_NOTE
+        keep_from = 0
+        while keep_from < q:
+            keep_from += 1
+            while keep_from < q and getattr(msgs[keep_from], "role", "") != "user":
+                keep_from += 1
+            kept = msgs[keep_from:]
+            sent2, system3 = _fit_rounds(
+                d, kept, system2, provider, model, head=head - keep_from,
+                window=window, fixed=fixed,
+            )
+            if _tokens_of(sent2, system3, d, provider, model) <= budget:
+                return sent2, system3
+        # Even the question and this turn's rounds alone do not fit: send what
+        # was sent before (the provider's refusal is shrunk and retried once).
+        return sent, sent_system
+    except Exception:  # noqa: BLE001 — a budget refinement never breaks a turn
+        log.warning("in-turn context fitting failed; sending as-is", exc_info=True)
+        return msgs, system
+
+
+def _fit_rounds(
+    d, msgs, system: str, provider: str, model: str, *, head: int, window: int, fixed: int = 0,
+):
+    """The tool rounds' half of :func:`_fit_turn_transcript` (the ladder
+    described there), against a known ``window`` with ``fixed`` tokens of tool
+    definitions priced beside it. ``(msgs, system)`` untouched when there is
+    no round yet, it all fits, or a plan would lose the question or the
+    newest round."""
+    try:
+        if head <= 0 or len(msgs) <= head:
             return msgs, system
         q = head - 1
         while q >= 0 and getattr(msgs[q], "role", "") != "user":
@@ -599,16 +677,18 @@ def _fit_turn_transcript(d, msgs, system: str, provider: str, model: str, *, hea
         from ..context.agent_window import blocks_of, plan_agent_transcript
 
         tail = list(msgs[head:])
-        fixed = "\n".join(getattr(m, "content", "") or "" for m in msgs[:q])
-        fixed += "\n".join(getattr(m, "content", "") or "" for m in msgs[q + 1 : head])
+        history = "\n".join(getattr(m, "content", "") or "" for m in msgs[:q])
+        history += "\n".join(getattr(m, "content", "") or "" for m in msgs[q + 1 : head])
         plan = plan_agent_transcript(
             [msgs[q], *tail],
             window=window,
-            system_text=system + "\n" + fixed,
+            system_text=system + "\n" + history,
             chars_per_token=_history_ratio(d, provider, model),
             # v1.387.0: the local reply budget's reserve (lock-step with
             # `_plan_context`; omitted for every other provider).
             **_reserve_kw(d, provider, model, window),
+            # v1.499.3: the tool definitions, priced like the agent loop's.
+            **({"fixed_tokens": fixed} if fixed else {}),
         )
         if not plan.changed:
             return msgs, system
@@ -748,7 +828,9 @@ def _tokens_of(msgs, system: str, d, provider: str, model: str) -> int:
     return total
 
 
-def _shrink_to_window(d, msgs, system: str, provider: str, model: str, *, head: int, window: int):
+def _shrink_to_window(
+    d, msgs, system: str, provider: str, model: str, *, head: int, window: int, tools=None,
+):
     """``(messages, system, dropped)`` that fit ``window`` — ``dropped`` is
     how many older messages were left out — or None when even the
     question and the current tool round cannot. Drops the OLDEST history
@@ -765,7 +847,12 @@ def _shrink_to_window(d, msgs, system: str, provider: str, model: str, *, head: 
     # v1.387.0: the answer's room is the local reply budget's reserve when the
     # answering endpoint has one (the planners' rule), else the classic one.
     _reserve = _answer_reserve(d, provider, model, window)
-    budget = int(window * 0.9) - (output_reserve(window) if _reserve is None else _reserve)
+    # v1.499.3: the tool definitions ride every request and no shrink can
+    # make them smaller — they come off the budget first.
+    _fixed = _tool_spec_tokens(tools, _history_ratio(d, provider, model))
+    budget = (
+        int(window * 0.9) - (output_reserve(window) if _reserve is None else _reserve) - _fixed
+    )
     system2 = system + "\n\n" + OVERFLOW_NOTE
     keep_from = 0
     while keep_from < q and _tokens_of(msgs[keep_from:], system2, d, provider, model) > budget:
@@ -779,18 +866,20 @@ def _shrink_to_window(d, msgs, system: str, provider: str, model: str, *, head: 
     # turn's own tool results (dropped 0) used to carry the note anyway,
     # while the user's receipt says "No messages were left out".
     fit_system = system2 if keep_from > 0 else system
-    sent, sent_system = _fit_turn_transcript(d, kept, fit_system, provider, model, head=new_head)
+    sent, sent_system = _fit_turn_transcript(
+        d, kept, fit_system, provider, model, head=new_head, tools=tools,
+    )
     # Still too big — including when nothing could be taken out, since an
     # unchanged request is over the learned window by construction: a retry
     # would be the same refusal again.
-    if _tokens_of(sent, sent_system, d, provider, model) > int(window * 0.98):
+    if _tokens_of(sent, sent_system, d, provider, model) + _fixed > int(window * 0.98):
         return None
     return sent, sent_system, keep_from
 
 
 def _overflow_refit(
     d, msgs, system: str, provider: str, model: str, *, head: int,
-    record: "dict[str, int] | None" = None,
+    record: "dict[str, int] | None" = None, tools=None,
 ):
     """The ``refit`` both lanes hand their model call (lock-step): on a
     too-long refusal, learn the window (the one the refusal names, else 3/4
@@ -807,13 +896,14 @@ def _overflow_refit(
     def refit(exc: BaseException, sent, sent_system: str):
         try:
             window = overflow_limit(exc) or int(
-                _tokens_of(sent, sent_system, d, provider, model) * 0.75
+                (_tokens_of(sent, sent_system, d, provider, model)
+                 + _tool_spec_tokens(tools, _history_ratio(d, provider, model))) * 0.75
             )
             if window < _MIN_REFIT_WINDOW:
                 return None
             learn_window(d, provider, model, window)
             fitted = _shrink_to_window(
-                d, msgs, system, provider, model, head=head, window=window
+                d, msgs, system, provider, model, head=head, window=window, tools=tools,
             )
             if fitted is None:
                 return None
@@ -7232,7 +7322,7 @@ async def look_first_call(
     started = _time.perf_counter()
     try:
         send, send_system = _fit_turn_transcript(
-            d, [*msgs, *asked], system, provider, model, head=head
+            d, [*msgs, *asked], system, provider, model, head=head, tools=tools,
         )
         async with asyncio.timeout(LOOK_FIRST_TIMEOUT_S):
             route = await d.platform.router.complete(
@@ -10117,6 +10207,17 @@ def _vision_unavailable_reason(d, provider: str, model: str) -> str:
         return ""
 
 
+def _attachable_file(p: "Path") -> bool:
+    """May this turn read ``p``, and is it a file? The read policy
+    (``fs_read_ok``) and the disk check together, BLOCKING — callers on the
+    loop run it in ``asyncio.to_thread`` (v1.499.3). Never raises."""
+    try:
+        ok, _why = fs_read_ok(str(p))
+        return bool(ok) and p.is_file()
+    except Exception:  # noqa: BLE001 — an unreadable path is not attached
+        return False
+
+
 async def _prepare_attachments(
     d,
     body,
@@ -10338,8 +10439,10 @@ async def _prepare_attachments(
         p = Path(raw)
         if not p.is_absolute():
             p = d.platform.config.home / "uploads" / p.name
-        ok, _reason = fs_read_ok(str(p))
-        if not ok or not p.is_file():
+        # v1.499.3: the read policy and the disk check, ONE trip off the loop
+        # (both touch the file system; a slow or sleeping drive must not
+        # stall every other request while a turn gets ready).
+        if not await asyncio.to_thread(_attachable_file, p):
             continue
         suffix = p.suffix.lower()
         if suffix in _ATTACH_IMAGE_TYPES:
@@ -10514,8 +10617,8 @@ async def _prepare_attachments(
             p = d.platform.config.home / "uploads" / p.name
         if p.name.lower() in _seen_here:
             continue
-        ok, _why = fs_read_ok(str(p))
-        if not ok or not p.is_file():
+        # v1.499.3: off the loop, like the attachments above.
+        if not await asyncio.to_thread(_attachable_file, p):
             continue  # moved, deleted, or outside the read policy: say nothing
         carried.append(p)
     if carried:
@@ -13003,8 +13106,11 @@ async def run_chat_turn(
                 _harness, d.platform, armed=armed, ask_armed=[], tool_specs=tool_specs,
                 overrides=overrides, armed_grant=armed_grant, trust_state=_trust_state,
             )
+            # v1.499.3: the tool definitions sent beside it are priced too.
+            # MIRROR NOTE (lock-step): the stream lane's round call.
             _send, _send_system = _fit_turn_transcript(
-                d, msgs, system, provider_choice, model_choice, head=_head
+                d, msgs, system, provider_choice, model_choice, head=_head,
+                tools=tool_specs,
             )
             # v1.335.0: a "too long for this model" refusal is shrunk and
             # tried ONCE more (lock-step: the stream lane's _router_frames).
@@ -13020,7 +13126,7 @@ async def run_chat_turn(
                     d.platform.router,
                     refit=_overflow_refit(
                         d, msgs, system, provider_choice, model_choice, head=_head,
-                        record=_refit_note,
+                        record=_refit_note, tools=tool_specs,
                     ),
                     provider=provider_choice or None,
                     model=model_choice or None,
@@ -14477,9 +14583,12 @@ async def run_chat_turn(
     # UNREAD STEER NOTES (v1.287.0) — the stream done-frame's conditional
     # `unread_steers` key is ABSENT here by construction, not by omission:
     # this lane never registers a turn (TURNS), so no steer note can be
-    # queued for it and none can be left unread. MIRROR NOTE (lock-step): a
-    # change that makes POST /chat steerable must close the queue and add
-    # the key exactly as routes/chat.py's stream lane does.
+    # queued for it and none can be left unread — on success OR on the 502
+    # (v1.499.3: the stream lane's error frames carry the key too, from
+    # `TurnHandle.owed_steers`). MIRROR NOTE (lock-step): a change that makes
+    # POST /chat steerable must close the queue and add the key to this
+    # answer AND to `ChatTurnFailed.body()` exactly as routes/chat.py's
+    # stream lane does.
     # THE FINISH CHECK (part 3, Phase 2): LAST, and present ONLY when the
     # check ran this reply. MIRROR NOTE (lock-step): the stream done-frame
     # carries the same conditional key.

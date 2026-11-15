@@ -58,7 +58,13 @@ def sha256_target(path: str | Path, mode: str = "raw") -> str | None:
         except (FileNotFoundError, IsADirectoryError, OSError, UnicodeDecodeError):
             return None
     try:
-        return sha256_bytes(p.read_bytes())
+        # Streamed (v1.499.3): the same digest as hashing the whole bytes,
+        # without holding a large created file in memory.
+        digest = hashlib.sha256()
+        with p.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
     except (FileNotFoundError, IsADirectoryError, OSError):
         return None
 
@@ -245,6 +251,25 @@ class RevertConflict(Exception):
     """Raised when a revert would clobber a change made since the action."""
 
 
+def move_to_trash(home: str | Path, target: Path, rel: str) -> Path:
+    """MOVE a created file into ``<home>/trash/<stamp>/undo/<rel>`` instead of
+    deleting it (the v1.256.0 rule: the move IS the recoverability). Used when
+    Undo cannot PROVE the file is still the one the tool made. Raises
+    ``OSError`` when it cannot be moved (the caller then removes nothing)."""
+    import os
+    import shutil
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    parts = [p for p in str(rel).replace("\\", "/").split("/") if p not in ("", ".", "..")]
+    dest = Path(home) / "trash" / stamp / "undo" / Path(*(parts or [target.name]))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        dest = dest.with_name(f"{dest.name}.{os.getpid()}-{new_id('t')[-6:]}")
+    shutil.move(str(target), str(dest))
+    return dest
+
+
 async def revert_workspace_file(
     undo: dict[str, Any], ctx: ToolContext
 ) -> ToolResult:
@@ -279,24 +304,44 @@ async def revert_workspace_file(
             paths = meta.get("paths")
             if not isinstance(paths, list) or not paths:
                 return ToolResult(ok=False, error="undo: no target paths recorded")
-            removed: list[str] = []
-            missing: list[str] = []
+            # v1.499.3: each file's hash, taken as the row was written. ALL
+            # are checked before ANY is touched: one file edited since
+            # refuses the whole Undo (it would remove a newer change). A row
+            # from before the hashes (or a file that could not be hashed)
+            # proves nothing, so its file is MOVED to the trash, not deleted.
+            made = meta.get("sha256") if isinstance(meta.get("sha256"), dict) else {}
+            targets: list[tuple[str, Path]] = []
             for p in paths:
                 try:
-                    target = safe_path(ctx.workspace, str(p))
+                    targets.append((str(p), safe_path(ctx.workspace, str(p))))
                 except Exception as exc:  # path escaped the workspace
                     return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
+            for p, target in targets:
+                if target.exists():
+                    conflict = guard_unchanged(sha256_target(target, "raw"), made.get(p))
+                    if conflict is not None:
+                        raise RevertConflict(f"{p}: {conflict}")
+            removed: list[str] = []
+            missing: list[str] = []
+            trashed: list[str] = []
+            for p, target in targets:
                 try:
-                    if target.exists():
+                    if not target.exists():
+                        missing.append(p)
+                        continue
+                    if made.get(p):
                         target.unlink()
-                        removed.append(str(p))
                     else:
-                        missing.append(str(p))
+                        move_to_trash(home, target, p)
+                        trashed.append(p)
+                    removed.append(p)
                 except OSError as exc:
                     return ToolResult(
                         ok=False, error=f"undo: could not remove {p}: {exc}"
                     )
             note = f"undo: removed {len(removed)} created file(s)"
+            if trashed:
+                note += f" ({len(trashed)} moved to the trash, in {Path(home) / 'trash'})"
             if missing:
                 note += f" ({len(missing)} already gone)"
             return ToolResult(ok=True, output=note)
@@ -346,12 +391,23 @@ async def revert_workspace_file(
             raise RevertConflict(conflict)
 
         if kind == "file_delete":
+            # v1.499.3: unlinked only when the hash above PROVED it is the
+            # file the action made; with no hash (a row from before hashes
+            # were taken) it is moved to the trash, never deleted unchecked.
+            moved: "Path | None" = None
             try:
                 if target.exists():
-                    target.unlink()
+                    if undo.get("post_sha256") is not None:
+                        target.unlink()
+                    else:
+                        moved = move_to_trash(home, target, str(rel))
             except OSError as exc:
                 return ToolResult(ok=False, error=f"undo: could not remove {rel}: {exc}")
             delete_preimage(home, undo.get("pre_ref"))
+            if moved is not None:
+                return ToolResult(
+                    ok=True, output=f"undo: removed created file {rel} (moved to the trash: {moved})"
+                )
             return ToolResult(ok=True, output=f"undo: removed created file {rel}")
 
         if kind == "file_restore":

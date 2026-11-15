@@ -95,7 +95,49 @@ def _canon_args(args: Any) -> dict:
     disagree about the same call."""
     if not isinstance(args, dict):
         return {}
-    return {str(k): v for k, v in args.items() if not str(k).startswith("_")}
+    out = {str(k): v for k, v in args.items() if not str(k).startswith("_")}
+    # A SCRIPT'S KEPT VALUE (v1.499.3 review). ``_from_script`` is the one
+    # underscore key the MODEL writes, and it carries the call's DATA: an
+    # "always allow exactly this" grant must not cover a different kept
+    # value written to the same path. Its identity (each argument's kept
+    # name and the value's fingerprint) is hashed; the one-line summary is
+    # wording only and is left out.
+    if FROM_SCRIPT_ARG in args:
+        out[FROM_SCRIPT_ARG] = _kept_identity(args.get(FROM_SCRIPT_ARG))
+    return out
+
+
+#: ``tools.script_values.ARG``, spelled here so this module imports nothing
+#: from the tool layer (pinned equal by tests/test_review_fixes_tools_v1499_3.py).
+FROM_SCRIPT_ARG = "_from_script"
+
+
+def _kept_identity(spec: Any) -> Any:
+    """``{argument: {"name": kept name, "sha": fingerprint}}`` for a kept-value
+    reference in either spelling: the model's ``{"content": "rows"}`` (no
+    fingerprint yet: ``sha`` "") or the registry's filled record
+    ``{"content": {"name": "rows", "sha": "...", "what": "..."}}``."""
+    if not isinstance(spec, dict):
+        return spec
+    out: dict[str, Any] = {}
+    for arg, ref in spec.items():
+        if isinstance(ref, dict):
+            out[str(arg)] = {"name": str(ref.get("name") or ""), "sha": str(ref.get("sha") or "")}
+        else:
+            out[str(arg)] = {"name": str(ref or "").strip(), "sha": ""}
+    return out
+
+
+def _unpinned_kept_value(args: Any) -> bool:
+    """True when *args* name a kept value whose fingerprint is not known (the
+    model's own spelling, before the registry fills it). No EXACT grant can
+    cover that call: what it would write is not known yet."""
+    if not isinstance(args, dict) or FROM_SCRIPT_ARG not in args:
+        return False
+    spec = _kept_identity(args.get(FROM_SCRIPT_ARG))
+    if not isinstance(spec, dict) or not spec:
+        return True
+    return any(not (isinstance(v, dict) and v.get("sha")) for v in spec.values())
 
 
 def args_hash(tool: str, args: dict | None) -> str:
@@ -466,7 +508,10 @@ class GrantStore:
 
         floor = bool(wanted & DENY_FLOOR_TOOLS)
         now = utcnow()
-        hashes = {args_hash(name, args) for name in wanted}
+        # v1.499.3: a call naming a kept value whose fingerprint is not known
+        # yet (the card's peek at the model's own arguments) matches no EXACT
+        # grant; the registry's check, on the filled record, decides.
+        hashes = set() if _unpinned_kept_value(args) else {args_hash(name, args) for name in wanted}
         live = self._ensure_loaded()
         exact: StandingGrantRecord | None = None
         any_args: StandingGrantRecord | None = None

@@ -106,6 +106,15 @@ JARVIS_MENTIONS = frozenset({"jarvis", "ironjarvis", "iron jarvis", "iron-jarvis
 _REMOTE_CHAT_ROWS = 60
 
 
+def _sender_proven(msg: InboundMessage) -> bool:
+    """False when the channel read the message but could not prove who sent it
+    (``raw["sender_verified"] is False`` — the email channel: no aligned DKIM,
+    DMARC or SPF pass in the receiving provider's Authentication-Results). Such
+    a sender is refused even when the claimed address is on the allowlist."""
+    raw = msg.raw if isinstance(msg.raw, dict) else {}
+    return raw.get("sender_verified") is not False
+
+
 def _failure_words_for_phone(exc: HTTPException) -> str:
     """What the phone hears after "I hit a problem: " (v1.354.0 re-review,
     G28). A failed ANSWER carries the chat's plain words
@@ -854,7 +863,7 @@ class InboundPoller:
         # v1.333.0 (D9): a sender the allowlist refuses never mints a lock —
         # one lock per (channel, sender) is kept for the daemon's life, and a
         # spammed bot used to add one per stranger. `_dispatch` refuses it.
-        if not ch.is_authorized(msg.sender_id):
+        if not ch.is_authorized(msg.sender_id) or not _sender_proven(msg):
             return await self._dispatch(name, ch, msg)
         async with self._identity_lock(name, msg.sender_id):
             return await self._dispatch(name, ch, msg)
@@ -865,7 +874,10 @@ class InboundPoller:
         """The body of :meth:`_handle`, under its identity lock."""
 
         # FAIL-CLOSED allowlist. An unauthorized sender spawns NOTHING.
-        if not ch.is_authorized(msg.sender_id):
+        # Neither does one whose channel could not prove the sender (an email
+        # whose From the receiving provider did not vouch for, v1.499.3): it
+        # never reaches a command, the bare "approve", a rule or a session.
+        if not ch.is_authorized(msg.sender_id) or not _sender_proven(msg):
             log.warning(
                 "inbound: rejected unauthorized sender %r on channel %r",
                 msg.sender_id,
