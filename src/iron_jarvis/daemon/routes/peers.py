@@ -29,6 +29,7 @@ import asyncio
 import ipaddress
 import json
 import secrets as _secrets
+import threading
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -41,6 +42,7 @@ from ...peers import link as L
 from ...peers import store as S
 
 log = get_logger("daemon.routes.peers")
+_CODES_LOCK = threading.Lock()
 
 #: The most a pairing request may carry (it holds a code, two names, a port
 #: and a token).
@@ -174,14 +176,18 @@ def register(app: FastAPI, d: Any) -> None:
         return S.store_for(d.platform)
 
     def _codes() -> C.PairingCodes:
-        codes = getattr(d.platform, "_pairing_codes", None)
-        if not isinstance(codes, C.PairingCodes):
-            codes = C.PairingCodes()
-            try:
-                setattr(d.platform, "_pairing_codes", codes)
-            except Exception:  # noqa: BLE001
-                pass
-        return codes
+        # Made once, under a lock: ``_view`` reaches this from a worker thread
+        # while a handler on the loop may make a code, and two holders made at
+        # once would lose the code shown.
+        with _CODES_LOCK:
+            codes = getattr(d.platform, "_pairing_codes", None)
+            if not isinstance(codes, C.PairingCodes):
+                codes = C.PairingCodes()
+                try:
+                    setattr(d.platform, "_pairing_codes", codes)
+                except Exception:  # noqa: BLE001
+                    pass
+            return codes
 
     async def _publish(kind: str, payload: dict[str, Any]) -> None:
         try:

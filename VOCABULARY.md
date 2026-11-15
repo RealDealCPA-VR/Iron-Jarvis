@@ -43,6 +43,7 @@ PR that ships it.
 | One machine or program on your network that serves AI models (Ollama, LM Studio, vLLM, a LiteLLM proxy, the custom address in Settings; v1.455.0) | **model server**; in the model menu and receipts, **your model server** until you name it | endpoint, custom endpoint, node, fleet node |
 | The page that lists every task an agent ran, step by step (/sessions, owner decision 34, v1.455.0) | the page is **Agent runs**; one of them is an **agent run** ("sessions" still finds it) | Sessions (as the page's name) |
 | Something Iron Jarvis offers and then waits for your answer on: a preference it noticed, a skill draft, a change to an agent's instructions, a lesson, a memory tidy-up, a tool an agent asked for (v1.496.0) | **suggestion**; the page that lists them all is **Improvements** | inbox (a search alias only); older screens still say proposal in places |
+| Another PC running Iron Jarvis that this one is linked to, so each can hand the other tasks (Settings › Connections › Your other computers, v1.497.0) | **paired computer**; the card is **Your other computers**; linking them is **pairing**, with a six-digit **pairing code** | peer (never shown) |
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |
 | A destination you can talk back to | **two-way destination** | gateway, messaging platform |
 | The one-tap connect gallery | **Directory** | marketplace |

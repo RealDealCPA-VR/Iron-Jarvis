@@ -177,10 +177,23 @@ coding session.
 
 ### Phases
 
-- **Phase 1: pairing.** "Pair with another Jarvis": one PC shows a short
+- **Phase 1: pairing (shipped in v1.497.0).** "Pair with another Jarvis": one PC shows a short
   code, the other types it, and both sides are set up in one step (each gets
   its own token for the other, each a name). A Peers list shows who is
   paired, when each last answered, and a Remove press.
+
+  As built: the card is **Your other computers** in Settings › Connections.
+  One computer shows a six-digit code (10 minutes, once, five wrong tries end
+  it, ten tries a minute); the other types that computer's address and the
+  code. Each side then keeps its own token for the other in the vault and a
+  remote agent named for the other computer, so "@desk" in chat reaches it
+  through the task door that already existed, and the answer comes home
+  the way it already did. Removing a pairing tells the other computer and
+  forgets both tokens. Both decisions below were taken as recommended: the
+  card turns the network setting on with one confirmation and restarts Iron
+  Jarvis, and Tailscale is the documented way between offices. Not done
+  (Phase 2): a switch per peer for what it may do; in Phase 1 a paired
+  computer may send tasks, which run at low trust as the task door's do.
 - **Phase 2: permissions per peer.** For each peer: may it send tasks, may it
   read the work record (which folders), may it ask questions back. Everything
   is off until switched on.

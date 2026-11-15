@@ -260,7 +260,9 @@ export function OtherComputers() {
     if (!codeEnds) return;
     const wait = Date.parse(codeEnds) - Date.now();
     if (!Number.isFinite(wait)) return;
-    const t = setTimeout(() => void load(), Math.max(0, wait) + 500);
+    // A browser fires a timer longer than 2^31-1 ms at once; a code lives ten
+    // minutes, so the cap only matters for a clock far off.
+    const t = setTimeout(() => void load(), Math.min(Math.max(0, wait) + 500, 2_147_483_647));
     return () => clearTimeout(t);
   }, [codeEnds, load]);
 

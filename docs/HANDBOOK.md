@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.496.1 (2026-11-14).*
+holds itself to. Current as of v1.497.0 (2026-11-14).*
 
 ---
 
@@ -2041,6 +2041,73 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Pair two computers in one step (v1.497.0)
+
+- **What it is.** If you run Iron Jarvis on two computers (an office PC and
+  a laptop, or two offices), you can pair them. Each can then hand the other
+  a task: in chat, write "@" and the other computer's name, then the task
+  ("@desk read the Q3 notes and list the action items"). The task runs on
+  that computer, with its files, models and accounts, and the answer comes
+  back to the chat you asked in.
+- **Where.** Settings › Connections › **Your other computers**.
+- **Step 1: let the computers reach each other.** Pairing needs "Let other
+  computers on my network reach this Iron Jarvis" on both computers. The
+  card turns it on with one confirmation and restarts Iron Jarvis to apply
+  it (in a browser tab it asks you to quit and reopen instead). Once it is
+  on, the card lists this computer's addresses on your network. Windows may
+  ask once whether Iron Jarvis may use your network: choose Allow.
+- **Step 2: pair.** On one computer, press **Show a pairing code**. It shows
+  six digits and this computer's address. On the other computer, press
+  **Use a pairing code**, type that address and the six digits, and press
+  **Pair**. Both computers now list each other. You can also type what to
+  call the other computer here (for example "desk"); otherwise it uses the
+  name that computer gives itself. A name never clashes with something "@"
+  already reaches here: if the other computer is called "builder" (like the
+  Builder agent) or "jarvis", it becomes "builder-2", so "@builder" still
+  means the agent.
+- **How the code protects you.** A code works for 10 minutes and only once.
+  Five wrong tries end it, and the pairing door takes at most ten tries a
+  minute from anyone, so someone on your network cannot guess it. When a
+  code is tried out like that, the computer showing it takes it down and
+  says so: if that was not you, someone else on your network tried it. A
+  code is never saved to disk: restarting Iron Jarvis forgets it.
+- **All or nothing.** If either computer cannot keep the pairing, neither
+  keeps it, and the screen says to show a new code and try again. In the
+  rare case the other computer cannot be told, the screen says so and asks
+  you to remove this computer there.
+- **What pairing sets up.** Each computer makes its own token for the other
+  and keeps both tokens in its encrypted vault. Neither token is ever shown
+  on screen, and you never copy anything. Each computer also adds the other
+  as a remote agent, which is what "@desk" uses. That remote agent says
+  **paired** in Agents › Your team; it is changed or removed only on the
+  Your other computers card.
+- **What a task from the other computer can do.** The same as a task sent
+  through the task door by hand: it runs on its own, at low trust. Anything
+  that would need your OK on that computer is not done, Emergency stop on
+  that computer refuses and stops it, and a task from a chat kept Local
+  only is never answered there by a model off that computer's network.
+- **The list.** Each paired computer shows its name, its address, and when
+  it was last heard from. The card asks each one when it opens. **Check**
+  asks again. If a computer did not answer, the line says why (for example
+  that no computer answered at that address, or that the other computer
+  removed the pairing).
+- **Removing.** **Remove** (two presses) ends the pairing on both computers:
+  this one tells the other, and both forget the tokens at once. If the other
+  computer cannot be reached, this one still removes it and says so; the
+  other can no longer reach this one either way, and you remove this
+  computer there when you can.
+- **In another office.** Put both computers on Tailscale and use the
+  address it gives (it starts with 100.). There is no cloud relay: the two
+  computers talk to each other directly.
+- **On the same network, the traffic is not encrypted.** Tasks, answers and
+  tokens go between the two computers as plain web traffic, as with the
+  door set up by hand. Pair only on a network you trust (your office, not
+  a café's Wi-Fi). Tailscale encrypts everything, so it is also the safer
+  choice inside one office.
+- **The old way still works.** Agents › Your team › Another computer
+  running Jarvis (the door with a token you copy by hand) is still there,
+  for a tunnel or a reverse proxy. It now points to pairing first.
 
 ## The rules for AI helpers working on Iron Jarvis were reorganized (v1.496.1)
 
