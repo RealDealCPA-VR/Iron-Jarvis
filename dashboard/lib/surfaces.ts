@@ -102,6 +102,8 @@ const GROUP_OF: Readonly<Record<string, SurfaceGroup>> = {
   "/memory": "knowledge",
   "/skills": "knowledge",
   "/improvements": "knowledge",
+  // v1.499.0 (leap 3, Phase 3): the client pages.
+  "/clients": "knowledge",
   "/artifacts": "knowledge",
   "/you": "knowledge",
   "/train": "knowledge",

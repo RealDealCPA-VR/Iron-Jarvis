@@ -93,6 +93,8 @@ const ACCEPTED_WORDS: Record<string, string> = {
   memory: "Done. The notes were changed.",
   tool: "The tool was created.",
   wants: "Started. It is running now.",
+  // v1.499.0 (leap 3, Phase 3): a name Iron Jarvis noticed in your folders.
+  client: "It is a client now. Its page is on Clients, and chats are told about it only in its own folders.",
 };
 
 export function acceptedWords(kind: string): string {
@@ -119,6 +121,10 @@ export const IMPROVEMENT_EVENT_TYPES = [
   "preference.declined",
   "autonomy.proposed",
   "skill.proposal_created",
+  // v1.499.0: a name noticed in your folders, and its answer from anywhere.
+  "client.suggested",
+  "client.confirmed",
+  "client.declined",
 ];
 
 /**
@@ -132,7 +138,12 @@ export const IMPROVEMENT_EVENT_TYPES = [
  * posted to another route altogether.
  */
 const ID = "[A-Za-z0-9_-]+";
+/** v1.499.0: a client's id is narrower still (`client_` and 12 hex, the
+ *  daemon's `CLIENT_ID_RE`): a name never fits, so no client's name can
+ *  become part of an address this page posts to. */
+const CLIENT_ID = "client_[0-9a-f]{12}";
 const DECISION_PATHS: RegExp[] = [
+  new RegExp(`^/clients/${CLIENT_ID}/(confirm|decline)$`),
   new RegExp(`^/coach/proposals/${ID}/(accept|decline)$`),
   new RegExp(`^/build/library/${ID}/(accept|decline)$`),
   new RegExp(`^/skills/proposals/${ID}/(approve|reject)$`),

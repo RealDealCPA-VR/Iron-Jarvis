@@ -14,6 +14,21 @@ export interface WorkFolder {
   name: string;
   count: number;
   lastAt: string | null;
+  /** v1.499.0: the client this folder belongs to, as the SERVER computed it
+   *  (`GET /work-record/folders` rows carry `client: {id, name} | null`).
+   *  The dashboard never works it out itself; absent when there is none. */
+  client?: { id: string; name: string };
+}
+
+/** v1.499.0: a client's id (lib/clients CLIENT_ID_RE; kept here too so this
+ *  module imports nothing). A chip links only to an id this matches. */
+const FOLDER_CLIENT_ID = /^client_[0-9a-f]{12}$/;
+
+function folderClient(v: unknown): { id: string; name: string } | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const name = typeof o.name === "string" ? o.name.trim().slice(0, 80) : "";
+  return typeof o.id === "string" && FOLDER_CLIENT_ID.test(o.id) && name ? { id: o.id, name } : null;
 }
 
 export interface WorkFile {
@@ -103,11 +118,13 @@ export function decodeFolders(raw: unknown): {
     const o = r as Record<string, unknown>;
     const folder = text(o.folder);
     if (!folder) continue;
+    const client = folderClient(o.client);
     folders.push({
       folder,
       name: text(o.name) || folder,
       count: count(o.count),
       lastAt: text(o.last_at) || null,
+      ...(client ? { client } : {}),
     });
   }
   const forgotten: ForgottenFolder[] = [];

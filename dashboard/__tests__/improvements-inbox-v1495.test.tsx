@@ -491,6 +491,79 @@ describe("answering", () => {
   });
 });
 
+/** v1.499.0: a client item exactly as the daemon's inbox builds it
+ *  (inbox/collect.client_item): its buttons are the client's own routes. */
+const CLIENT = {
+  id: "client:client_ab12cd34ef56",
+  kind: "client",
+  ref: "client_ab12cd34ef56",
+  title: "Is Hartleys a client?",
+  about: "2 folders, 9 pieces of work",
+  why: "Iron Jarvis saw this name in your folder names. Saying yes gives Hartleys a page and lets you keep preferences for Hartleys only; chats in other clients' folders are never told about it. Nothing was sent anywhere to notice it. You can answer many at once on the Clients page.",
+  evidence: ["Clients › Hartleys › 2025: 6 pieces of work, last 3 days ago", "Clients › Hartleys › 2026: 3 pieces of work"],
+  created_at: "2026-11-14T10:00:00",
+  detail: null,
+  accept: {
+    label: "Yes, a client",
+    method: "POST",
+    path: "/clients/client_ab12cd34ef56/confirm",
+    body: {},
+    note: "Gives Hartleys a page and keeps its folders, work and preferences together. Chats are told about Hartleys only in Hartleys' folders.",
+    confirm: false,
+    blocked: "",
+  },
+  decline: {
+    label: "Not a client",
+    method: "POST",
+    path: "/clients/client_ab12cd34ef56/decline",
+    body: {},
+    note: "Iron Jarvis won't ask about Hartleys again.",
+    confirm: false,
+    blocked: "",
+  },
+  home: { href: "/clients#waiting", label: "Open where it lives" },
+  extra: {},
+};
+
+describe("a client Iron Jarvis noticed (v1.499.0)", () => {
+  it("a real client item has BOTH buttons, never only a link", async () => {
+    await shown([PREF, CLIENT as ReturnType<typeof wire>]);
+    const card = await screen.findByTestId("improvement-client:client_ab12cd34ef56");
+    expect(within(card).getByText("Is Hartleys a client?")).toBeTruthy();
+    expect(within(card).getByTestId("improvement-accept").textContent).toBe("Yes, a client");
+    expect(within(card).getByTestId("improvement-decline").textContent).toBe("Not a client");
+    expect(within(card).getByTestId("improvement-evidence").textContent).toContain("Clients › Hartleys › 2025");
+    expect(within(card).getByTestId("improvement-home").getAttribute("href")).toBe("/clients#waiting");
+    expect(within(card).queryByTestId("improvement-offer-only")).toBeNull();
+  });
+
+  it("Yes is one press on the client's own confirm, and No on its own decline", async () => {
+    H.postAnswer = { ok: true, client: { id: "client_ab12cd34ef56", name: "Hartleys" }, note: "" };
+    await shown([CLIENT as ReturnType<typeof wire>]);
+    const card = await screen.findByTestId("improvement-client:client_ab12cd34ef56");
+    await act(async () => {
+      fireEvent.click(within(card).getByTestId("improvement-accept"));
+    });
+    expect(H.posts).toEqual([{ path: "/clients/client_ab12cd34ef56/confirm", body: {} }]);
+    await waitFor(() => expect(screen.getByTestId("improvements-note").textContent).toBe(acceptedWords("client")));
+    expect(acceptedWords("client")).not.toBe("Accepted.");
+    cleanup();
+    H.posts = [];
+    await shown([CLIENT as ReturnType<typeof wire>]);
+    const again = await screen.findByTestId("improvement-client:client_ab12cd34ef56");
+    await act(async () => {
+      fireEvent.click(within(again).getByTestId("improvement-decline"));
+    });
+    expect(H.posts).toEqual([{ path: "/clients/client_ab12cd34ef56/decline", body: {} }]);
+  });
+
+  it("the list is read again when a client is noticed or answered anywhere", () => {
+    for (const t of ["client.suggested", "client.confirmed", "client.declined"]) {
+      expect(IMPROVEMENT_EVENT_TYPES).toContain(t);
+    }
+  });
+});
+
 describe("an offer to stop asking", () => {
   it("is listed with a link and no buttons", async () => {
     await shown([OFFER]);
@@ -632,8 +705,31 @@ describe("what comes off the wire is checked", () => {
       "/memory/review/m/dismiss",
       "/memory/preferences/p/keep",
       "/proposals/w/approve",
+      // v1.499.0: a name noticed in the folders (the client's own routes).
+      "/clients/client_ab12cd34ef56/confirm",
+      "/clients/client_ab12cd34ef56/decline",
     ]) {
       expect(isDecisionPath(ok), ok).toBe(true);
+    }
+    // v1.499.0: a client's decision carries a CLIENT id and nothing else — a
+    // name, a dot segment, a backslash or another verb is not a decision.
+    for (const bad of [
+      "/clients/../confirm",
+      "/clients/Hartley%27s/confirm",
+      "/clients/Hartleys/confirm",
+      "/clients/a\\b/confirm",
+      "/clients/x/delete",
+      "/clients/x/confirm",
+      "/clients/client_ab12cd34ef56/delete",
+      "/clients/client_ab12cd34ef56/ask-again",
+      "/clients/client_ab12cd34ef56/restore",
+      "/clients/client_AB12CD34EF56/confirm",
+      "/clients/client_ab12cd34ef5/confirm",
+      "/clients/client_ab12cd34ef56/confirm/../../shutdown",
+      "/clients/confirm-many",
+      "/clients/client_ab12cd34ef56/folders",
+    ]) {
+      expect(isDecisionPath(bad), bad).toBe(false);
     }
     for (const bad of [
       "/settings/values",
