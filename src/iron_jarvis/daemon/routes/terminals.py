@@ -1081,6 +1081,36 @@ def register(app: FastAPI, d) -> None:
             return ""
         return "\n\nThis pane is " + ", ".join(parts) + "."
 
+    async def _client_block_for_pane(cwd: str) -> str:
+        """v1.499.0: the client block for a pane's folder
+        (``workmap.clients.block.client_block``), ready to append ("\\n\\n"
+        + the block), or "" — no folder, no confirmed client there, past
+        ``CLIENT_HOP_MAX_S`` or any error (logged). A SQLite read, so off the
+        loop. Never raises."""
+        folder = str(cwd or "").strip()
+        if not folder or getattr(d.platform, "engine", None) is None:
+            return ""
+        try:
+            from ...workmap import clients as _clients
+            from ...workmap.clients import block as _client_block
+
+            text = await asyncio.wait_for(
+                asyncio.to_thread(_client_block.client_block, d.platform, folder=folder),
+                timeout=float(_clients.CLIENT_HOP_MAX_S),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — a client block never breaks assist
+            import logging
+
+            logging.getLogger("iron_jarvis.terminals").warning(
+                "the client block of a terminal assist could not be read", exc_info=True,
+            )
+            return ""
+        if not isinstance(text, str) or not text.strip():
+            return ""
+        return "\n\n" + text.strip("\n")
+
     @app.post("/terminals/{term_id}/ai")
     async def terminal_ai(term_id: str, body: TerminalAIBody) -> dict[str, Any]:
         """Per-terminal AI assist with a PER-PANE model choice.
@@ -1129,6 +1159,12 @@ def register(app: FastAPI, d) -> None:
             system = d.platform.learning.apply_to_prompt(system)
         except Exception:  # noqa: BLE001 — lessons must never break assist
             pass
+        # THE CLIENT BLOCK (v1.499.0, vision plan leap 3, Phase 3): a pane in
+        # a confirmed client's folder is told what the owner keeps for that
+        # client, right after the owner's own lessons — the same block a chat
+        # there gets, for the pane's folder (``session.cwd``). "" anywhere
+        # else (byte-identical). Off the loop, bounded, never raises.
+        system += await _client_block_for_pane(getattr(session, "cwd", "") or "")
         # Skills: make the WHOLE discovered library (builtin + user + Claude +
         # Codex) usable by ANY provider — as prompt injection, not tool calls,
         # so it works identically on models with weak/no tool support.

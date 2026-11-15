@@ -3666,6 +3666,16 @@ async def stream_chat_turn(
     # stream exactly as before. MIRROR NOTE (lock-step):
     # chat_turn.run_chat_turn (`_account_pinned_turn`).
     _acct_pin = await _chat_turn.account_pin_for(platform, body)
+    # CLIENTS (v1.499.0): the turn's CLIENT WALL — whose folder this is and
+    # which confirmed clients the owner's own words name — decided HERE (off
+    # the loop, bounded, fails closed, never raises) and set around the WHOLE
+    # stream by `wall.scoped_frames`, beside `egress.scoped_frames`, in the
+    # task that iterates it: the grounding, every tool round (history search,
+    # the client tools) and memory recall read it. MIRROR NOTE (lock-step):
+    # chat_turn.run_chat_turn runs inside the same wall (`_client_turn`).
+    from ...workmap.clients import wall as _client_wall
+
+    _turn_wall = await _chat_turn.client_wall_for(platform, body)
     turn_id = str(getattr(body, "turn_id", "") or "").strip()
     handle = TURNS.register(turn_id) if turn_id else None
     if handle is not None and steer_source is None:
@@ -3688,18 +3698,19 @@ async def stream_chat_turn(
     # connection leaves no step running. MIRROR NOTE (lock-step):
     # chat_turn.run_chat_turn closes its own through `_settles_its_prep`.
     _prep = _chat_turn._PrepGroup()
-    inner = _honest_failures(_egress.scoped_frames(_chat_turn._prep_settled_frames(chat_stream(
-        platform, personas, body, should_stop=should_stop,
-        steer_source=steer_source, handle=handle, tool_ceiling=tool_ceiling,
-        arm_family=arm_family, trust=trust, trust_reason=trust_reason,
-        suggest_preferences=suggest_preferences, thread_turn=thread_turn,
-        prep=_prep, round_budget=round_budget, stay_in_chat=stay_in_chat,
-        harness=harness, session_id=session_id, plan_mode=plan_mode,
-        reply_record=reply_record,
-        # v1.392.0: passed only when set (a lane double that predates the cap
-        # sees the call it always saw).
-        **({"reply_cap": reply_cap} if reply_cap is not None else {}),
-    ), _prep), _lo_scope))
+    inner = _honest_failures(_client_wall.scoped_frames(_egress.scoped_frames(
+        _chat_turn._prep_settled_frames(chat_stream(
+            platform, personas, body, should_stop=should_stop,
+            steer_source=steer_source, handle=handle, tool_ceiling=tool_ceiling,
+            arm_family=arm_family, trust=trust, trust_reason=trust_reason,
+            suggest_preferences=suggest_preferences, thread_turn=thread_turn,
+            prep=_prep, round_budget=round_budget, stay_in_chat=stay_in_chat,
+            harness=harness, session_id=session_id, plan_mode=plan_mode,
+            reply_record=reply_record,
+            # v1.392.0: passed only when set (a lane double that predates the
+            # cap sees the call it always saw).
+            **({"reply_cap": reply_cap} if reply_cap is not None else {}),
+        ), _prep), _lo_scope), _turn_wall))
     if _acct_pin is not None:
         inner = _chat_turn.account_pinned_frames(inner, _acct_pin)
     if thread_turn is not None:
@@ -4688,8 +4699,12 @@ async def chat_stream(
 
             def _settings_and_records(text: str, armed_now: list, ask_now: list) -> list:
                 names = saved_workflow_names(d.platform) if wants_workflow_names(text) else []
+                # v1.499.0 (clients): the live client names and this turn's
+                # own client (its wall rides into this thread), passed only
+                # when there are any. STREAM LANE ONLY, like the arming.
                 return _chat_turn.settings_ask_tools(
                     d, text, armed_now, ask_now, workflow_names=names,
+                    **_chat_turn.client_arming_kw(d.platform),
                 )
 
             ask_armed += await asyncio.to_thread(
@@ -8265,6 +8280,14 @@ async def chat_stream(
             if suggest_preferences
             else None
         )
+        # THE CLIENT QUESTION (v1.499.0): the lock-step copy of chat_turn's —
+        # "Is Hartleys a client?" under ONE reply, beside the suggestion,
+        # dashboard turns only, never with a preference suggestion. Never
+        # raises; off the loop under a second.
+        client_question = await _chat_turn.client_question_for(
+            platform, body, folder=_chat_turn.turn_work_folder(body, resolved_proj),
+            suggest_preferences=suggest_preferences, suggestion=suggestion,
+        )
         # CONNECT DOOR (v1.359.0, G41): an app the message named for the
         # user's own data that is not connected gets its Connect door
         # whatever the model called — unless app_connect already put its own
@@ -8286,6 +8309,12 @@ async def chat_stream(
             door_entries, body, harness=harness, escalate=escalate, sidebar=arm_family is not None,
         )
         door_entries = with_connect_door(door_entries, _grounding.apps_offer, connect_offered)
+        # CLIENT DOOR (v1.499.0): the lock-step copy of chat_turn's — a
+        # confirmed client the OWNER named gets ONE door to its page
+        # (dashboard turns only; a link only).
+        door_entries = await _chat_turn.with_client_door(
+            door_entries, d.platform, dashboard=suggest_preferences,
+        )
         # PAGE DOOR (v1.436.0, Wave 5 B3): the lock-step copy of chat_turn's —
         # one door to the place a page-only step is done, last, only with room.
         # v1.455.0: with the platform, so a door this PC no longer needs (a
@@ -8376,6 +8405,10 @@ async def chat_stream(
             # null — ALWAYS present. MIRROR NOTE (lock-step): chat_turn.py's
             # response carries the identical key — edit both or neither.
             "suggestion": suggestion,
+            # CLIENT QUESTION (v1.499.0): {id, name, folders, work} or null —
+            # ALWAYS present. MIRROR NOTE (lock-step): chat_turn.py's
+            # response carries the identical key — edit both or neither.
+            "client_question": client_question,
             # DOORS (v1.199.0): server-derived links into the surfaces
             # this turn's SUCCESSFUL creating tools changed — deduped by
             # href, capped at 4, ALWAYS present (possibly empty). Files
