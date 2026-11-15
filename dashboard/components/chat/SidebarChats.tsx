@@ -26,10 +26,14 @@
 // said in it, and shows that answer (with the matched words) in the list's
 // place. When that search cannot be reached the title filter stays and one
 // quiet line says so. A list of 100 chats ends in "Show older chats".
+//
+// v1.500.0 (ONE sidebar): the list's foot carries "Archived chats", the way
+// to the chat page's Archived view (`/chat?archived=1`), so the archive is
+// one press away from every page, not only from Chat.
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Search } from "lucide-react";
+import { Archive, Search } from "lucide-react";
 
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 import ThreadGroups, { GROUP_LIMIT, ShowOlderChats, ThreadSnippet } from "@/components/chat/ThreadGroups";
@@ -42,6 +46,27 @@ import {
   type ChatSearchRow,
 } from "@/lib/chatList";
 import { readLastViewed, threadStatuses } from "@/lib/threadStatus";
+
+/** The quiet foot row that opens the chat page's Archived view. */
+export const ARCHIVED_CHATS_HREF = "/chat?archived=1";
+
+function ArchivedChatsLink({ onNavigate }: { onNavigate?: () => void }) {
+  const router = useRouter();
+  return (
+    <button
+      type="button"
+      data-testid="sidebar-archived-chats"
+      onClick={() => {
+        onNavigate?.();
+        router.push(ARCHIVED_CHATS_HREF);
+      }}
+      className="mt-1 flex h-7 w-full items-center gap-1.5 rounded-[10px] px-2.5 text-left text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+    >
+      <Archive size={12} aria-hidden="true" className="shrink-0" />
+      Archived chats
+    </button>
+  );
+}
 
 export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }) {
   const router = useRouter();
@@ -85,9 +110,12 @@ export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }
       );
     }
     return (
-      <p data-testid="sidebar-recent-chats" className="px-2.5 py-1 text-[12px] text-zinc-500">
-        Your chats appear here.
-      </p>
+      <div data-testid="sidebar-recent-chats" className="min-w-0">
+        <p data-testid="sidebar-chats-empty" className="px-2.5 py-1 text-[12px] text-zinc-500">
+          Your chats appear here.
+        </p>
+        <ArchivedChatsLink onNavigate={onNavigate} />
+      </div>
     );
   }
   return (
@@ -159,6 +187,7 @@ export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }
           }}
         />
       ) : null}
+      <ArchivedChatsLink onNavigate={onNavigate} />
     </div>
   );
 }

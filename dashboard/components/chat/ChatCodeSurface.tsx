@@ -29,7 +29,7 @@
  * (`--ij-switch-h`), as every full-height module subtracts the demo strip.
  */
 
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, type CSSProperties, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { Code2, Loader2, MessageSquare } from "lucide-react";
 import {
@@ -90,7 +90,11 @@ export function ChatCodeSurface({ renderChat }: { renderChat: (hidden: boolean) 
   const [linkNight, setLinkNight] = useState<{ night: string; n: number } | null>(null);
   const slot = useChatSlot();
 
-  useEffect(() => {
+  // v1.500.0: a LAYOUT effect, so the address is read before the chat's own
+  // mount effect strips its link parameters (`?thread=`, `?archived=` …):
+  // passive effects run child first, so a chat row pressed in the sidebar on
+  // another page landed on Code in a window that last showed Code.
+  useLayoutEffect(() => {
     let fromAddress: ChatSurfaceView | null = null;
     try {
       fromAddress = viewFromSearch(window.location.search);

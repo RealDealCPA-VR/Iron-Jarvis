@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.500.0
+
+**One sidebar.** The app now has one left sidebar.
+
 ## v1.499.4
 
 **A deep review of the whole app: fixes for privacy, safety and lost work.** Seven reviewers read the whole app area by area; every finding below was reproduced or traced in the code before it was fixed, and each fix has a test that failed first.
@@ -77,7 +81,3 @@
 ## v1.489.0
 
 **Jarvis asks on a card, and finds the right tool first.** **A missing detail is asked on a card, not in chat.** When you ask Jarvis to add your model server, a memory base, a notification destination, an extension, a web service, a folder watcher or a task for tonight, and one detail only you have is missing (the server's address, which folder), a small question card shows first.
-
-## v1.488.0
-
-**Asked once, decided on the card.** **Settings changes: no second "are you sure?" in words.** When you ask Jarvis to change a setting and it's clear which value you mean, it now makes the change instead of asking "Would you like me to…?" first.

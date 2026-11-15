@@ -2042,6 +2042,26 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## One sidebar (v1.500.0)
+
+The app now has one left sidebar. The second list some pages drew beside it
+is gone, and everything it did now lives in the app sidebar.
+
+- **Below Settings, the sidebar shows the page you are on.** In Chat it
+  lists your chats; in Chat › Code it lists your coding sessions. In Build ›
+  Terminal it lists your terminal sessions, and in Build › Code your coding
+  sessions, with everything those lists could do before (open, rename,
+  close or archive, start a new one). Everywhere else it shows your recent chats.
+- **Archived chats are one click away.** "Archived chats" at the foot of
+  the recent chats opens Chat on its Archived view.
+- **Hiding the sidebar gives the room back.** Press "Hide the sidebar" at
+  its top; the page then fills the whole width, with no narrow strip left
+  behind. "Show the sidebar" in the title bar brings it
+  back. Each window remembers your choice, and a new window starts the way
+  you last left it.
+- **On a phone** the same lists open from the ☰ menu, and the menu closes
+  itself when you pick a row.
+
 ## A deep review of the whole app: fixes for privacy, safety and lost work (v1.499.4)
 
 Seven reviewers read the whole app area by area; every finding below was

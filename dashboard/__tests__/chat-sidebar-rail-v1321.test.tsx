@@ -173,13 +173,29 @@ describe("Chat's thread list in the app sidebar (redesign S7, AUDIT Q5)", () => 
   });
 
   // v1.329.0 (calm chat W4 F2): with no slot the rail sits beside the chat
-  // from md up only (a pop-out, a collapsed sidebar); a phone reaches it in
-  // the nav drawer (sidebar-chats-v1329.test.tsx pins both halves).
-  it("without a slot (a pop-out, a collapsed sidebar) the rail stays in the page", async () => {
+  // from md up only; a phone reaches it in the nav drawer
+  // (sidebar-chats-v1329.test.tsx pins both halves). v1.500.0 (one sidebar,
+  // moved on purpose): a HIDDEN sidebar keeps its slot, so "no slot" is now
+  // only a pop-out window (it has no sidebar) — one-sidebar-v1500 pins that.
+  it("without a slot (a pop-out window) the rail stays in the page", async () => {
     render(<ChatPage />);
     const rail = await screen.findByTestId("chat-thread-rail");
     expect(rail.getAttribute("data-in-sidebar")).toBeNull();
     expect(rail.closest("aside")).not.toBeNull();
+  });
+
+  // v1.500.0 (one sidebar): the sidebar's "Archived chats" on every other
+  // page lands here with the list on its Archived view, and the address is
+  // cleaned so a reload shows the chats again.
+  it("?archived=1 opens the Archived view and is stripped", async () => {
+    H.api.getResponses["/chat/threads?archived=only"] = {
+      threads: [{ id: "a1", title: "Old ledger chat", updated_at: "2026-10-01T10:00:00", archived: true }],
+    };
+    window.history.replaceState({}, "", "/chat?archived=1");
+    render(<ChatPage />);
+    const view = await screen.findByTestId("thread-archived-view");
+    expect(await within(view).findByText("Old ledger chat")).toBeTruthy();
+    expect(window.location.search).toBe("");
   });
 
   it("the sidebar's New chat clears the conversation in place", async () => {

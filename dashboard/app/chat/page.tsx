@@ -5399,6 +5399,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // v1.325.0: "Ask Jarvis about this page" — the palette stashed the page
       // it was opened on; it becomes a chip on the next message (one-shot).
       const about = params.get("about") === "page";
+      // v1.500.0: the sidebar's "Archived chats" (on every page but Chat)
+      // lands here with the list showing the Archived view.
+      const archived = params.get("archived") === "1";
+      if (archived) {
+        setArchivedView(true);
+        void refreshArchived();
+      }
       if (about) {
         const ctx = takePageContext();
         if (ctx) setPageCtx(ctx);
@@ -5427,7 +5434,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         const open = readOpenThread();
         if (open && open.project === wantedProjectId()) void openThread(open.id, { restore: true });
       }
-      if (ask || skill || thread || wantPersona || fresh || openModels || about) {
+      if (ask || skill || thread || wantPersona || fresh || openModels || about || archived) {
         // Strip the params so a refresh doesn't resurrect stale state over
         // whatever the user has done since.
         const url = new URL(window.location.href);
@@ -5438,6 +5445,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         url.searchParams.delete("new");
         url.searchParams.delete("model");
         url.searchParams.delete("about");
+        url.searchParams.delete("archived");
         window.history.replaceState(null, "", url.toString());
       }
     } catch {
@@ -12207,7 +12215,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               data-in-sidebar={chatSlot ? "true" : undefined}
               className={
                 // v1.329.0: no card around it beside the chat either (a
-                // pop-out, a collapsed sidebar): one hairline divides it.
+                // pop-out window, the only place it still sits in the page
+                // since v1.500.0): one hairline divides it.
                 slotFlows
                   ? "flex flex-col"
                   : chatSlot
@@ -12696,7 +12705,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         >
           {/* Threads: in the app sidebar on a wide screen (redesign S7) and
               in the phone nav drawer while it is open (v1.329.0, calm chat W4
-              F2), portaled. With no slot (a pop-out, a collapsed sidebar) the
+              F2), portaled. v1.500.0 (ONE sidebar): a HIDDEN sidebar keeps
+              its slot (it stays mounted, display:none), so the list never
+              drops back here as a second column. With no slot at all (a
+              pop-out window, which has no sidebar) the
               rail sits beside the chat from md up; on a phone it never sits
               in the page: the top bar's Chats opens the drawer, which holds
               this same list (one list, not two). */}

@@ -619,7 +619,10 @@ export function PaneRail({
                       role="dialog"
                       aria-label={`Capabilities for ${p.label}`}
                       data-testid={`rail-caps-panel-${p.id}`}
-                      className="absolute right-1 top-full z-40 mt-1 w-72 rounded-xl border border-white/10 bg-ink-900/95 p-2 shadow-card backdrop-blur"
+                      // v1.500.0 (one sidebar): the rail sits in the app
+                      // sidebar now, a scroll box 16rem wide; a fixed w-72
+                      // panel ran off its left edge. It spans the row.
+                      className="absolute inset-x-0 top-full z-40 mt-1 rounded-xl border border-white/10 bg-ink-900/95 p-2 shadow-card backdrop-blur"
                     >
                       <p className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
                         Capabilities

@@ -58,6 +58,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MutableRefObject,
 } from "react";
+import { createPortal } from "react-dom";
+import { closeChatSlot, useChatSlot } from "@/lib/sidebarSlot";
 import {
   AlertTriangle,
   Archive,
@@ -2260,6 +2262,15 @@ export function BuildCodeView({
   onOpenedTerminal: (terminalId: string) => void;
 }) {
   const [sessions, setSessions] = useState<CodeSession[] | null>(null);
+  // v1.500.0 (ONE sidebar): the session list lives in the app sidebar
+  // (lib/sidebarSlot, the slot Chat's list uses), never in a second column
+  // here. With no slot (a pop-out window, or a phone while the ☰ drawer is
+  // shut) it stays in the page as before. A row (or a New session) shuts the
+  // phone drawer; the wide sidebar has no close.
+  const listSlot = useChatSlot();
+  const leaveList = useCallback(() => {
+    if (listSlot) closeChatSlot();
+  }, [listSlot]);
   const [listError, setListError] = useState<string | null>(null);
   const [tools, setTools] = useState<CodingTool[] | null>(null);
   const [toolsError, setToolsError] = useState<string | null>(null);
@@ -2715,7 +2726,10 @@ export function BuildCodeView({
         data-source={s.source || undefined}
         data-archived={archivedRow ? "true" : undefined}
         aria-current={openId === s.id ? "true" : undefined}
-        onClick={() => open(s.id)}
+        onClick={() => {
+          open(s.id);
+          leaveList();
+        }}
         className={`flex w-full flex-col rounded-lg py-1.5 pl-2 pr-8 text-left transition-colors ${
           openId === s.id ? "bg-white/[0.07]" : "hover:bg-white/[0.04]"
         }`}
@@ -2896,7 +2910,10 @@ export function BuildCodeView({
                   <button
                     type="button"
                     data-testid={`code-disk-${d.toolSessionId}`}
-                    onClick={() => void openSaved(d)}
+                    onClick={() => {
+                      void openSaved(d);
+                      leaveList();
+                    }}
                     title={`Open this conversation here (${toolLabel(d.tool, tools)} keeps it in its own saved sessions)`}
                     className="flex w-full flex-col rounded-lg py-1 pl-2 pr-2 text-left hover:bg-white/[0.04]"
                   >
@@ -2914,12 +2931,16 @@ export function BuildCodeView({
     );
   };
 
-  return (
-    <div data-testid="build-code-view" className="flex flex-col gap-4 lg:flex-row">
+  const sessionList = (
       <nav
         aria-label="Sessions"
         data-testid="code-session-list"
-        className="flex w-full max-h-64 shrink-0 flex-col rounded-2xl bg-ink-900/40 lg:w-64 lg:max-h-none lg:h-[calc(100vh-12rem-var(--ij-strip-h,0px))] lg:min-h-[480px]"
+        data-in-sidebar={listSlot ? "true" : undefined}
+        className={
+          listSlot
+            ? "flex min-h-0 flex-1 flex-col"
+            : "flex w-full max-h-64 shrink-0 flex-col rounded-2xl bg-ink-900/40 lg:w-64 lg:max-h-none lg:h-[calc(100vh-12rem-var(--ij-strip-h,0px))] lg:min-h-[480px]"
+        }
       >
         <div className="flex shrink-0 items-center gap-2 px-3 pb-1 pt-3">
           <span className="flex-1 text-[13px] text-zinc-400">{showArchived ? "Archived" : "Sessions"}</span>
@@ -2927,7 +2948,10 @@ export function BuildCodeView({
             <button
               type="button"
               data-testid="code-new"
-              onClick={() => startNew(null)}
+              onClick={() => {
+                startNew(null);
+                leaveList();
+              }}
               className={QUIET_BTN}
             >
               <Plus size={13} aria-hidden="true" />
@@ -3008,7 +3032,10 @@ export function BuildCodeView({
                     aria-label={g.noFolder ? "New session with no folder" : `New session in ${g.name}`}
                     title={g.noFolder ? "New session with no folder" : `New session in ${g.folder}`}
                     data-testid={g.noFolder ? "code-new-in-no-folder" : `code-new-in-${folderKey(g.folder)}`}
-                    onClick={() => startNew(g.noFolder ? null : g.folder)}
+                    onClick={() => {
+                      startNew(g.noFolder ? null : g.folder);
+                      leaveList();
+                    }}
                     className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
                   >
                     <Plus size={12} aria-hidden="true" />
@@ -3069,6 +3096,11 @@ export function BuildCodeView({
           </button>
         </div>
       </nav>
+  );
+
+  return (
+    <div data-testid="build-code-view" className="flex flex-col gap-4 lg:flex-row">
+      {listSlot ? createPortal(sessionList, listSlot) : sessionList}
 
       <section
         aria-label="Session"

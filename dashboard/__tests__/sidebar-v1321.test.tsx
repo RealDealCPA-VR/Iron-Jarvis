@@ -38,6 +38,7 @@ import { NavDrawer } from "@/components/Sidebar";
 import { TitleBar } from "@/components/TitleBar";
 import { NEW_CHAT_EVENT, setChatSlot, useChatSlot } from "@/lib/sidebarSlot";
 import { PIN_KEY } from "@/lib/surfaces";
+import { resetSidebarHidden } from "@/lib/sidebarState";
 
 function setWide(wide: boolean) {
   window.matchMedia = ((q: string) => ({
@@ -59,6 +60,8 @@ function SlotProbe() {
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.sessionStorage.clear();
+  resetSidebarHidden();
   nav.pathname = "/usage";
   nav.push.mockReset();
   setWide(true);
@@ -86,11 +89,13 @@ describe("the four items", () => {
     expect(screen.getByTestId("sidebar-nav-usage").getAttribute("aria-current")).toBe("page");
   });
 
-  it("collapses to icons and remembers it", () => {
+  // v1.500.0 (one sidebar, moved on purpose): hiding no longer leaves an
+  // icon strip; the whole column goes (one-sidebar-v1500 pins the rest).
+  it("hides entirely and remembers it", () => {
     render(<AppSidebar />);
-    fireEvent.click(screen.getByLabelText("Collapse the sidebar"));
-    expect(screen.getByTestId("sidebar-nav-terminals").textContent).toBe("");
-    expect(screen.getByTestId("sidebar-nav-terminals").getAttribute("title")).toBe("Build");
+    fireEvent.click(screen.getByLabelText("Hide the sidebar"));
+    expect(screen.getByTestId("app-sidebar").getAttribute("data-hidden")).toBe("true");
+    expect(screen.getByTestId("sidebar-nav-terminals").textContent).toBe("Build");
     expect(window.localStorage.getItem("ij_sidebar_collapsed")).toBe("1");
   });
 });

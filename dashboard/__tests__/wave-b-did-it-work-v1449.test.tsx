@@ -334,7 +334,12 @@ describe("a chat list whose first read failed says so (v1.449.0, item 16)", () =
       release();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect((await screen.findByTestId("sidebar-recent-chats")).textContent).toBe(EMPTY_SIDEBAR);
+    // v1.500.0 (moved on purpose): the empty list also offers "Archived
+    // chats" (every chat archived is exactly when it is needed); the words
+    // are their own line.
+    const list = await screen.findByTestId("sidebar-recent-chats");
+    expect(screen.getByTestId("sidebar-chats-empty").textContent).toBe(EMPTY_SIDEBAR);
+    expect(within(list).getByRole("button", { name: "Archived chats" })).toBeTruthy();
     expect(screen.queryByTestId("sidebar-chats-failed")).toBeNull();
   });
 

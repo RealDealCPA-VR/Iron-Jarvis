@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, Search, AppWindow } from "lucide-react";
+import { Menu, PanelLeftOpen, Search, AppWindow } from "lucide-react";
 import { labelForPath } from "@/lib/nav";
 import { popoutBridge, type PopoutBridge } from "@/lib/desktopShell";
+import { toggleSidebarFromButton, useSidebarHidden } from "@/lib/sidebarState";
 
 /** The desktop bridge surface this component uses (preload.js exposes it). */
 interface DesktopBridge {
@@ -113,6 +114,9 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
   // is mounted once, and would otherwise become a second source of truth that
   // drifts from the drawer's own Escape/route-change closes.
   const openNav = () => window.dispatchEvent(new CustomEvent("ij:toggle-nav"));
+  // v1.500.0: the one way back to a hidden sidebar (md and up; a pop-out
+  // window has no sidebar). Shown only while it is hidden.
+  const sidebarHidden = useSidebarHidden();
 
   // Same shape for search: the command palette owns the query, the results, and
   // the open state. We only knock on its door.
@@ -173,6 +177,19 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
     >
       <div className="flex h-full w-full items-center gap-2 px-2">
         {/* Left cluster: nav trigger · brand · you-are-here. */}
+        {sidebarHidden && !isPopout && (
+          <button
+            type="button"
+            onClick={() => toggleSidebarFromButton(false)}
+            aria-label="Show the sidebar"
+            title="Show the sidebar"
+            data-testid="titlebar-show-sidebar"
+            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+            className={`hidden ${BAR_CONTROL_H} min-w-8 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 md:flex`}
+          >
+            <PanelLeftOpen size={16} strokeWidth={2} aria-hidden />
+          </button>
+        )}
         <button
           type="button"
           onClick={openNav}

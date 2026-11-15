@@ -9,8 +9,14 @@ import { useSyncExternalStore } from "react";
  * the sidebar through a portal (layout only; behaviour unchanged). A sidebar
  * publishes its slot element here only while it is on screen: the persistent
  * rail from md up, and (v1.329.0, calm chat W4 F2) the phone nav drawer while
- * it is open. The chat page reads it; with no slot (a pop-out, a collapsed
- * sidebar, a test) it keeps its rail in the page, from md up only.
+ * it is open. The chat page reads it; with no slot (a pop-out window, a
+ * test) it keeps its rail in the page, from md up only.
+ *
+ * v1.500.0 (ONE sidebar): the slot holds the CURRENT module's list, not only
+ * Chat's: Build's terminals (Build › Terminal) and Build › Code's sessions are
+ * portaled into it too (app/terminals/page.tsx, BuildCodeView). A hidden
+ * sidebar keeps its slot (it stays mounted, display:none, lib/sidebarState),
+ * so no list ever drops back into a page as a second column.
  *
  * A slot can carry a `close` callback: the phone drawer's. The chat page calls
  * `closeChatSlot()` after a row opens a chat, so the drawer gets out of the

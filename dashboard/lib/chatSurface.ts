@@ -60,6 +60,8 @@ export const CHAT_LINK_PARAMS: readonly string[] = [
   "model",
   "about",
   "project",
+  // v1.500.0: the sidebar's "Archived chats" (the Archived list is Chat's).
+  "archived",
 ];
 
 /** The view an address asks for, or null (the address says nothing).

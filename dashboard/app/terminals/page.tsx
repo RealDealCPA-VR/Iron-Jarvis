@@ -15,6 +15,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import {
   Code2,
@@ -87,6 +88,7 @@ import {
 } from "@/lib/buildApp";
 import { codeViewOfferFor, codeViewOfferWords } from "@/lib/buildCodeOffer";
 import { decodeRestoreFailed, restoreFailedWords, type RestoreFailed } from "@/lib/restoreFailed";
+import { closeChatSlot, useChatSlot } from "@/lib/sidebarSlot";
 
 // xterm only runs in the browser — never during SSR / `next build`.
 const TerminalPane = dynamic(
@@ -176,6 +178,11 @@ const BUILD_PANEL_TABS = [
 
 export default function TerminalsPage() {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
+  // v1.500.0 (ONE sidebar): the terminals list lives in the app sidebar
+  // (lib/sidebarSlot, the slot Chat's list uses), never in a second column
+  // here. With no slot (a pop-out window, or a phone while the ☰ drawer is
+  // shut) it stays in the page as before.
+  const listSlot = useChatSlot();
   // v1.406.0 (part 6 follow-up): panes the daemon is still reopening after a
   // restart (`GET /terminals` → `restoring`), kept current by the re-reads.
   const [restoringIds, setRestoringIds] = useState<string[]>([]);
@@ -1314,12 +1321,17 @@ export default function TerminalsPage() {
               (max-h-56; PaneRail's own list scrolls inside it); the full
               height — minus the demo strip, like every full-height module —
               is lg-only. Layout only: no terminal behaviour changes. */}
-          {!loading && (
-            <div className="flex w-full max-h-56 shrink-0 flex-col lg:w-56 lg:max-h-none lg:h-[calc(100vh-12rem-var(--ij-strip-h,0px))] lg:min-h-[480px] xl:w-64">
+          {!loading && (() => {
+            const rail = (
               <PaneRail
                 panes={railPanes}
                 focusedId={activeId}
-                onFocus={bringToFront}
+                onFocus={(id) => {
+                  bringToFront(id);
+                  // The phone drawer gets out of the way (the wide sidebar
+                  // has no close; nothing happens there).
+                  if (listSlot) closeChatSlot();
+                }}
                 onClose={(id) => setPendingClose(id)}
                 onRename={renamePane}
                 onNew={() => addTerminal(newFolder)}
@@ -1327,8 +1339,23 @@ export default function TerminalsPage() {
                 reopening={restoringIds.length}
                 restoreFailed={restoreFailed ? restoreFailedWords(restoreFailed) : undefined}
               />
-            </div>
-          )}
+            );
+            return listSlot ? (
+              createPortal(
+                <div data-testid="build-rail-in-sidebar" className="flex min-h-0 flex-1 flex-col">
+                  {rail}
+                </div>,
+                listSlot,
+              )
+            ) : (
+              <div
+                data-testid="build-rail-in-page"
+                className="flex w-full max-h-56 shrink-0 flex-col lg:w-56 lg:max-h-none lg:h-[calc(100vh-12rem-var(--ij-strip-h,0px))] lg:min-h-[480px] xl:w-64"
+              >
+                {rail}
+              </div>
+            );
+          })()}
 
           {/* The workspace: one box that every pane fills, with the focused
               one visible. */}

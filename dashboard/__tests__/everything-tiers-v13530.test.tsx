@@ -195,7 +195,10 @@ describe("Everything: everyday entries first, developer pages under More", () =>
 /* ------------------------------------------------------- the sidebar */
 
 describe("the sidebar: hovering Build says what it is", () => {
-  it("an expanded row's title is its one line; collapsed it stays the name", () => {
+  // v1.500.0 (one sidebar, moved on purpose): there is no icon-only state any
+  // more (hiding takes the whole column away), so the row's title is always
+  // its one line.
+  it("a row's title is its one line", () => {
     render(<AppSidebar />);
     const build = screen.getByTestId("sidebar-nav-terminals");
     const blurb = NAV_ENTRIES.find((e) => e.href === "/terminals")!.blurb;
@@ -203,8 +206,6 @@ describe("the sidebar: hovering Build says what it is", () => {
     // Moved on purpose (v1.406.0 part 1): Build is the terminals only.
     expect(blurb).toMatch(/Terminals for your own coding tools — Claude Code, Codex or any command line/);
     expect(screen.getByTestId("sidebar-nav-everything").getAttribute("title")).toBe(surfaceFor("/everything")!.blurb);
-    fireEvent.click(screen.getByLabelText("Collapse the sidebar"));
-    expect(screen.getByTestId("sidebar-nav-terminals").getAttribute("title")).toBe("Build");
   });
 });
 

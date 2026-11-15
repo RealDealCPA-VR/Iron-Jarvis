@@ -5,13 +5,12 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   AppWindow,
-  ChevronsLeft,
-  ChevronsRight,
   Code2,
   FolderKanban,
   HelpCircle,
   MessageSquare,
   MoveUpRight,
+  PanelLeftClose,
   Plus,
 } from "lucide-react";
 import { recordOpen } from "@/lib/appTiles";
@@ -27,6 +26,7 @@ import { RunningNow } from "@/components/RunningNow";
 import SidebarChats from "@/components/chat/SidebarChats";
 import { announceChatView, useChatSurfaceView } from "@/lib/chatSurface";
 import { CODING_SESSIONS_LIST } from "@/lib/buildWords";
+import { toggleSidebarFromButton, useSidebarHidden } from "@/lib/sidebarState";
 
 /**
  * THE CALM SIDEBAR (calm UI redesign S7, AUDIT §4.2, wireframe sidebar.md).
@@ -37,9 +37,12 @@ import { CODING_SESSIONS_LIST } from "@/lib/buildWords";
  *   ( + New chat )                     the sidebar's one primary action
  *   Chat · Build · Projects · Everything · Settings     five items, never more
  *   (your pins, up to three)           added on Everything; none by default
- *   CHATS                              on the chat surface: Chat's own thread
+ *   THE MODULE'S LIST                  on the chat surface: Chat's own thread
  *                                      list (portaled in, the drawer too);
  *                                      CODING SESSIONS in its Code view;
+ *                                      on Build: the terminals (Terminal
+ *                                      view) or the sessions (Code view),
+ *                                      the page's own list portaled in;
  *                                      elsewhere the same grouped chat list
  *                                      (SidebarChats: projects, dots, ages)
  *   PROJECTS
@@ -50,11 +53,21 @@ import { CODING_SESSIONS_LIST } from "@/lib/buildWords";
  * surface manifest (lib/surfaces.ts), never a copy here. v1.406.0 (part 1 +
  * 5): Chat is a row (its Code switch holds the coding sessions), Build is the
  * terminals; every automation and admin page is on Everything and in Ctrl K.
+ *
+ * v1.500.0 (ONE sidebar, the owner's request): this is the app's only left
+ * column. A module's own list (Chat's chats, Chat › Code's sessions, Build's
+ * terminals or sessions) lives HERE, never in a second column inside the
+ * page. Hiding the sidebar takes it off the screen entirely (no icon strip);
+ * it stays mounted, display:none, so the list keeps its state and the page
+ * never draws its own copy. The title bar's "Show the sidebar" brings it back
+ * (lib/sidebarState: per window).
  */
 
-const COLLAPSE_KEY = "ij_sidebar_collapsed";
 /** Routes that render the chat surface (S8: home is a chat). */
 export const CHAT_PATHS = ["/", "/chat"];
+/** v1.500.0: Build's route. Its own list (terminals or sessions) fills the
+ *  sidebar's list space; it never falls back to the recent chats. */
+export const BUILD_PATHS = ["/terminals"];
 
 /** The arc-reactor brand mark. */
 export function ArcMark({ size = "h-8 w-8" }: { size?: string }) {
@@ -116,19 +129,17 @@ function usePins(): string[] {
   return pins;
 }
 
-/** One nav row: icon + words (icons only when collapsed), with the desktop
+/** One nav row: icon + words, with the desktop
  *  shell's "open in its own window" door (v1.283.0). */
 function NavRow({
   s,
   active,
-  collapsed,
   popout,
   onNavigate,
   pinned = false,
 }: {
   s: Surface;
   active: boolean;
-  collapsed: boolean;
   popout: PopoutBridge | null;
   onNavigate?: () => void;
   pinned?: boolean;
@@ -151,16 +162,13 @@ function NavRow({
         }}
         // v1.353.0 (G66): hovering a row says what the place is for (its
         // one line from lib/nav) — "Build" alone told a new user nothing.
-        // Collapsed to icons, the name is the only words, so it stays.
-        title={collapsed ? s.label : s.blurb}
-        className={`relative flex items-center rounded-lg py-2 text-sm transition-colors ${
-          collapsed ? "justify-center px-0" : "gap-3 px-2.5"
-        } ${active ? "bg-accent/[0.08] text-accent-soft" : "text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100"}`}
+        title={s.blurb}
+        className={`relative flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm transition-colors ${active ? "bg-accent/[0.08] text-accent-soft" : "text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100"}`}
       >
         <Icon size={16} strokeWidth={2} className={active ? "text-accent" : "text-zinc-500"} aria-hidden />
-        {!collapsed && <span className="font-medium">{s.label}</span>}
+        <span className="font-medium">{s.label}</span>
       </Link>
-      {popout && !collapsed && (
+      {popout && (
         <button
           type="button"
           data-testid={`popout-row-${s.href.slice(1)}`}
@@ -225,7 +233,7 @@ function SidebarProjects({ onNavigate }: { onNavigate?: () => void }) {
  *  (components/RunningNow.tsx) on the Help menu's surface. One popover at a
  *  time; Escape or a press outside closes it (Escape gives focus back to the
  *  orb); following a row closes it (and the phone drawer). */
-function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
+function SidebarFooter({ onNavigate }: { onNavigate?: () => void }) {
   const { online, health } = useDaemon();
   const version = health?.version;
   const [helpOpen, setHelpOpen] = useState(false);
@@ -269,7 +277,7 @@ function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNaviga
   ];
   return (
     <div ref={footerRef} className="relative border-t border-white/[0.06] px-2 py-2">
-      <div className={`flex items-center gap-2 ${collapsed ? "flex-col" : ""}`}>
+      <div className="flex items-center gap-2">
         <Link
           href="/everything#status"
           onClick={() => {
@@ -287,12 +295,10 @@ function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNaviga
             }`}
             aria-hidden
           />
-          {!collapsed && (
-            <span className="truncate">
-              <span className={online ? "text-zinc-300" : "text-zinc-500"}>{online ? "Ready" : "Not running"}</span>
-              <span className="font-mono text-zinc-600">{version ? ` · v${version}` : ""}</span>
-            </span>
-          )}
+          <span className="truncate">
+            <span className={online ? "text-zinc-300" : "text-zinc-500"}>{online ? "Ready" : "Not running"}</span>
+            <span className="font-mono text-zinc-600">{version ? ` · v${version}` : ""}</span>
+          </span>
         </Link>
         <MoodOrb
           onPress={() => {
@@ -325,9 +331,7 @@ function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNaviga
           aria-labelledby={runningHeadingId}
           tabIndex={-1}
           data-testid="running-now-popover"
-          className={`absolute z-50 max-h-[60vh] overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-1 shadow-xl outline-none backdrop-blur-xl ${
-            collapsed ? "bottom-2 left-full ml-2 w-72" : "bottom-12 left-2 right-2"
-          }`}
+          className="absolute bottom-12 left-2 right-2 z-50 max-h-[60vh] overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-1 shadow-xl outline-none backdrop-blur-xl"
         >
           <RunningNow
             headingId={runningHeadingId}
@@ -379,11 +383,9 @@ function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNaviga
 /** Everything the rail and the drawer share. */
 export function SidebarBody({
   variant,
-  collapsed = false,
   onNavigate,
 }: {
   variant: "rail" | "drawer";
-  collapsed?: boolean;
   onNavigate?: () => void;
 }) {
   const pathname = usePathname() ?? "";
@@ -391,6 +393,11 @@ export function SidebarBody({
   const popout = usePopout();
   const pins = usePins();
   const onChat = CHAT_PATHS.includes(pathname);
+  // v1.500.0: Build's list (terminals or sessions) is the page's own, portaled
+  // into the same slot as Chat's; the sidebar draws no heading over it (the
+  // list names itself and carries its own New button and count).
+  const onBuild = BUILD_PATHS.includes(pathname);
+  const pageList = onChat || onBuild;
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
   // v1.406.0 (part 1): the Chat row is lit on the chat page (home is a chat),
   // in either of its views.
@@ -406,7 +413,9 @@ export function SidebarBody({
   // in the persistent rail while the screen is wide, and (v1.329.0, calm chat
   // W4 F2) in the phone drawer while it is open, so a phone has ONE chat list
   // too. The drawer's slot carries its close, so opening a chat shuts it.
-  // Elsewhere the space is SidebarChats: the same grouped list, read-only.
+  // v1.500.0: on Build the same slot takes Build's list (the terminals, or
+  // Build › Code's sessions). Elsewhere the space is SidebarChats: the same
+  // grouped chat list, read-only, with the way to the archived chats.
   const [slotEl, setSlotEl] = useState<HTMLDivElement | null>(null);
   const navigateRef = useRef(onNavigate);
   navigateRef.current = onNavigate;
@@ -440,34 +449,39 @@ export function SidebarBody({
 
   return (
     <>
-      <div className={`shrink-0 px-2 pt-2 ${collapsed ? "" : "space-y-1.5"}`}>
+      <div className="shrink-0 space-y-1.5 px-2 pt-2">
         {/* AUDIT §8: the sidebar's ONE solid primary action. */}
         <Button
           variant="primary"
           onClick={newChat}
           data-testid="sidebar-new-chat"
           title="New chat"
-          aria-label={collapsed ? "New chat" : undefined}
-          className={`w-full ${collapsed ? "justify-center !px-0" : "justify-start"}`}
+          className="w-full justify-start"
         >
           <Plus size={15} aria-hidden />
-          {!collapsed && "New chat"}
+          New chat
         </Button>
       </div>
       <nav aria-label="Main" className="shrink-0 space-y-0.5 px-2 pt-2" data-testid="sidebar-nav">
         {four.map((s) => (
-          <NavRow key={s.href} s={s} active={rowActive(s.href)} collapsed={collapsed} popout={popout} onNavigate={onNavigate} />
+          <NavRow key={s.href} s={s} active={rowActive(s.href)} popout={popout} onNavigate={onNavigate} />
         ))}
         {pinned.length > 0 && (
           <div className="mt-1 space-y-0.5 border-t border-white/[0.05] pt-1" data-testid="sidebar-pins">
             {pinned.map((s) => (
-              <NavRow key={s.href} s={s} active={rowActive(s.href)} collapsed={collapsed} popout={popout} onNavigate={onNavigate} pinned />
+              <NavRow key={s.href} s={s} active={rowActive(s.href)} popout={popout} onNavigate={onNavigate} pinned />
             ))}
           </div>
         )}
       </nav>
-      {!collapsed && (
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2" data-testid="sidebar-lists">
+      <div
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2"
+        data-testid="sidebar-lists"
+        data-list={onBuild ? "build" : onChat ? (codeList ? "code" : "chat") : "chats"}
+      >
+          {onBuild ? (
+            <div className="pt-2" />
+          ) : (
           <div
             data-testid="sidebar-list-heading"
             className="flex items-center gap-1.5 px-2.5 pb-1 pt-3 text-[12px] font-medium text-zinc-500"
@@ -482,7 +496,8 @@ export function SidebarBody({
               </>
             )}
           </div>
-          {onChat ? (
+          )}
+          {pageList ? (
             // v1.329.0 (calm chat W5 G3): the phone drawer scrolls as ONE
             // column. Its slot takes the chat list at full height
             // (`data-flow="column"` tells the chat page not to make the list
@@ -499,9 +514,7 @@ export function SidebarBody({
             <SidebarChats onNavigate={onNavigate} />
           )}
           <SidebarProjects onNavigate={onNavigate} />
-        </div>
-      )}
-      {collapsed && <div className="flex-1" />}
+      </div>
       {variant === "drawer" && (
         // v1.313.0: the theme row lives in the drawer too — a phone has no
         // other quick way to change the look.
@@ -509,62 +522,48 @@ export function SidebarBody({
           <ThemeSwitcher variant="drawer" />
         </div>
       )}
-      <SidebarFooter collapsed={collapsed} onNavigate={onNavigate} />
+      <SidebarFooter onNavigate={onNavigate} />
     </>
   );
 }
 
-/** The persistent sidebar on a wide screen (md and up). Collapsible to icons. */
+/** The persistent sidebar on a wide screen (md and up). Hidden, it leaves
+ *  the screen entirely (v1.500.0): no icon strip, the content takes the room,
+ *  and the title bar's "Show the sidebar" brings it back. It stays MOUNTED
+ *  while hidden (display:none), so a module's list portaled into it keeps its
+ *  state and never drops back into the page as a second column. */
 export function AppSidebar() {
-  const [collapsed, setCollapsed] = useState(false);
-  useEffect(() => {
-    try {
-      setCollapsed(window.localStorage.getItem(COLLAPSE_KEY) === "1");
-    } catch {
-      /* storage blocked */
-    }
-  }, []);
+  const hidden = useSidebarHidden();
   // A pop-out window is one module, not the whole app: no sidebar there.
   const [isPopout, setIsPopout] = useState(false);
   useEffect(() => {
     setIsPopout(popoutBridge()?.isPopout === true);
   }, []);
   if (isPopout) return null;
-  const toggle = () => {
-    setCollapsed((c) => {
-      try {
-        window.localStorage.setItem(COLLAPSE_KEY, c ? "0" : "1");
-      } catch {
-        /* storage blocked */
-      }
-      return !c;
-    });
-  };
   return (
     <aside
       data-testid="app-sidebar"
+      data-hidden={hidden ? "true" : undefined}
       aria-label="Sidebar"
-      className={`hidden shrink-0 flex-col border-r border-white/[0.06] bg-ink-950/40 md:flex ${collapsed ? "w-14" : "w-64"}`}
+      className={`w-64 shrink-0 flex-col border-r border-white/[0.06] bg-ink-950/40 ${hidden ? "hidden" : "hidden md:flex"}`}
     >
-      <div className={`flex shrink-0 items-center px-2 pt-2 ${collapsed ? "justify-center" : "justify-between"}`}>
-        {!collapsed && (
-          <Link href="/" className="flex items-center gap-2 rounded-lg px-1 py-1 text-zinc-100" aria-label="Iron Jarvis — home">
-            <ArcMark size="h-6 w-6" />
-            <span className="text-sm font-semibold tracking-tight">Iron Jarvis</span>
-          </Link>
-        )}
+      <div className="flex shrink-0 items-center justify-between px-2 pt-2">
+        <Link href="/" className="flex items-center gap-2 rounded-lg px-1 py-1 text-zinc-100" aria-label="Iron Jarvis — home">
+          <ArcMark size="h-6 w-6" />
+          <span className="text-sm font-semibold tracking-tight">Iron Jarvis</span>
+        </Link>
         <button
           type="button"
-          onClick={toggle}
-          aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
-          aria-pressed={collapsed}
-          title={collapsed ? "Expand" : "Collapse"}
-          className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200"
+          onClick={() => toggleSidebarFromButton(true)}
+          aria-label="Hide the sidebar"
+          title="Hide the sidebar"
+          data-testid="sidebar-hide"
+          className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
         >
-          {collapsed ? <ChevronsRight size={15} /> : <ChevronsLeft size={15} />}
+          <PanelLeftClose size={15} aria-hidden />
         </button>
       </div>
-      <SidebarBody variant="rail" collapsed={collapsed} />
+      <SidebarBody variant="rail" />
     </aside>
   );
 }
