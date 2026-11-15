@@ -677,9 +677,38 @@ class MemoryFabric:
         score, and ``status`` in ``extra``.
         """
         indexed = self._sessions_indexed(query, k)
-        if indexed:
-            return indexed
-        return self._sessions_lexical(k, qtokens)
+        hits = indexed if indexed else self._sessions_lexical(k, qtokens)
+        if not hits:
+            return hits
+        # THE CLIENT WALL (v1.499.0): a past run in another client's folder
+        # is not recalled into this turn (``_walled``).
+        from ..workmap.clients.wall import PASSAGE_RUN
+
+        verdicts = self._walled([(PASSAGE_RUN, h.ref, h.title, h.snippet) for h in hits])
+        if verdicts is None:
+            return []
+        return [h for h, ok in zip(hits, verdicts) if ok]
+
+    def _walled(self, passages: "list[tuple[str, str, str, str]]") -> "list[bool] | None":
+        """THE CLIENT WALL (v1.499.0) over chat and run passages: one verdict
+        per ``(kind, id, title, snippet)`` for the turn in flight
+        (``workmap.clients.wall.current()``: the lanes and the agent runtime
+        set it; unset is the no-client rule, so another client's passage is
+        recalled only when the owner's own words named that client). The
+        owner's own screens (``wall.owner_screen()``: the Memory page's
+        recall, the search palette) are not walled. ``None`` = the client
+        record or the passages' folders cannot be read: the caller drops
+        EVERY chat and run passage (fail closed). Runs in the store's job
+        thread, which carries the caller's context. Never raises."""
+        try:
+            from ..workmap.clients import wall
+
+            if wall.on_owner_screen():
+                return [True] * len(passages)
+            return wall.tell_passages(self.engine, wall.current(), passages)
+        except Exception:  # noqa: BLE001 — unsure: nothing from past work
+            log.debug("memory fabric: the client wall could not be read", exc_info=True)
+            return None
 
     def _sessions_indexed(self, query: str, k: int) -> list[FabricHit]:
         """Session hits from the history index, enriched with live status.
@@ -825,6 +854,11 @@ class MemoryFabric:
         would make a project chat unable to recall the conversation where the
         user explained what they wanted. The owning project rides along in
         ``extra`` so a caller can still tell.
+
+        WALLED BY CLIENT (v1.499.0, ``_walled``): a conversation whose folder
+        belongs to another client (or that names one, when its folder has no
+        owner) is left out of the turn in flight; if that cannot be read,
+        every conversation is.
         """
         index = self._index()
         if index is None:
@@ -841,7 +875,7 @@ class MemoryFabric:
         raw = self._index_search(
             index, query, list(_CHAT_KINDS), max(k, 4) * _CHAT_OVERSCAN
         )
-        out: list[FabricHit] = []
+        picked: list[tuple[str, Any]] = []
         seen: set[str] = set()
         for h in raw:
             ref = h.ref or h.thread_id
@@ -852,6 +886,25 @@ class MemoryFabric:
             ):
                 continue
             seen.add(ref)
+            picked.append((ref, h))
+        if not picked:
+            return []
+        # THE CLIENT WALL (v1.499.0): NOT project-filtered still, but a
+        # conversation in another client's folder is not recalled into this
+        # turn, and when the wall cannot be read no conversation is.
+        from ..workmap.clients.wall import PASSAGE_CHAT
+
+        verdicts = self._walled([
+            (PASSAGE_CHAT if h.kind in ("chat", "comm") else str(h.kind or ""),
+             str(h.thread_id or ref), str(h.title or ""), str(h.snippet or ""))
+            for ref, h in picked
+        ])
+        if verdicts is None:
+            return []
+        out: list[FabricHit] = []
+        for (ref, h), ok in zip(picked, verdicts):
+            if not ok:
+                continue
             out.append(
                 FabricHit(
                     source="chats",

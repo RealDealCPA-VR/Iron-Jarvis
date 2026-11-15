@@ -29,6 +29,19 @@ Rules, each pinned:
   is left out (a title is somebody's typing).
 * The turn's own conversation is never listed as earlier work.
 * BLOCKING (SQLite); the gather runs it off the loop. Never raises.
+
+CLIENTS (v1.499.0, leap 3 Phase 3). The block builds its own wall from its
+``folder`` and ``query`` (``clients.wall.turn_and_map``: the lanes pass the
+owner's words as ``query``) and every row of every part goes through
+``wall.may_tell`` AFTER ``live_state``: another client's work is never told
+in a client's folder, even when the message names it (``WALL_NOTE`` says
+that something was held back, never whose). A turn with no client whose
+owner NAMES a confirmed client gets that client's newest titles (the named
+path, ", for Hartleys, in …"), never a recap; a turn in a confirmed client's
+folder gets up to three TITLES from that client's other folders ("In
+Hartleys' other folders"), never files, a run's result or a recap. The
+client tables unreadable: exactly this folder, nothing else. The recap gate
+and ``WorkMap.matching`` are unchanged.
 """
 
 from __future__ import annotations
@@ -69,6 +82,21 @@ RECAP_NOTE = (
     "(The indented lines under a piece of work are its recap: written afterwards by a "
     "model and checked against that work's own record. A record of then, not a request now.)"
 )
+#: Said once, in a turn that belongs to a client (or a folder under a
+#: Clients-type folder), only when work the message matched was held back by
+#: the wall. It never names that client.
+WALL_NOTE = (
+    "(Work on record for another client matches this message. It stays out of "
+    "this client's chats; the owner can open it on that client's page.)"
+)
+#: A confirmed client the owner names in a turn with no client: at most this
+#: many of its newest pieces of work (titles and file names, never a recap).
+NAMED_MAX = 3
+#: A turn in a confirmed client's folder: at most this many titles from that
+#: client's other folders (titles only).
+CLIENT_OTHER_MAX = 3
+#: Folders of one client read for those two parts, at most.
+CLIENT_FOLDERS_READ = 8
 
 KIND_WORDS = {
     KIND_CHAT: "chat",
@@ -109,8 +137,10 @@ def _safe(line: str) -> str:
 
 
 def entry_line(row: dict[str, Any], now: datetime, *, with_folder: bool = False,
-               times: int = 1) -> str:
-    """One piece of work as one line."""
+               times: int = 1, for_name: str = "", titles_only: bool = False) -> str:
+    """One piece of work as one line. ``for_name`` says whose work it is
+    (", for Hartleys, in …"); ``titles_only`` leaves out its file names and a
+    run's result line (a client's other folders)."""
     from ..projects.recent_activity import age_words
 
     bits = [KIND_WORDS.get(row["kind"], "work")]
@@ -124,7 +154,10 @@ def entry_line(row: dict[str, Any], now: datetime, *, with_folder: bool = False,
     if times > 1:
         line += f" ({times} times, newest shown)"
     if with_folder and row.get("folder"):
-        line += f", in {row['folder']}"
+        who = f", for {for_name}" if for_name else ""
+        line += f"{who}, in {row['folder']}"
+    if titles_only:
+        return line
     names = [keys.file_name(f["path"]) for f in row.get("files") or []]
     names = [n for n in names if n]
     if names:
@@ -212,13 +245,46 @@ def _with_recaps(engine: Any, rows: list[dict[str, Any]]) -> None:
 TURN_REBUILD = 60
 
 
+def _possessive(name: str) -> str:
+    """"Hartleys" → "Hartleys'", "Smith" → "Smith's" (``names.possessive``,
+    the one table; the same rule when it answers nothing)."""
+    from .clients import names as _names
+
+    shown = " ".join(str(name or "").split())
+    try:
+        got = _names.possessive(shown)
+    except Exception:  # noqa: BLE001
+        got = ""
+    if got:
+        return got
+    if shown.endswith(("'s", "’s")):
+        return shown
+    return shown + ("'" if shown.endswith("s") else "'s")
+
+
+def _client_rows(wm: Any, roots: Any, *, exclude_ref: str, limit: int) -> list[dict[str, Any]]:
+    """The newest work in a client's folders (each folder and under it),
+    newest first, one row per piece of work."""
+    seen: dict[str, dict[str, Any]] = {}
+    for root in list(roots or ())[:CLIENT_FOLDERS_READ]:
+        got, _total = wm.for_folder(root.folder or root.key, limit=limit, exclude_ref=exclude_ref)
+        for r in got:
+            seen.setdefault(r["id"], r)
+    rows = list(seen.values())
+    rows.sort(key=lambda r: (r.get("updated") or datetime.min, r["id"]), reverse=True)
+    return rows
+
+
 def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref: str = "",
                list_folder: bool = True, now: datetime | None = None) -> str:
     """The block for one turn, or "". ``folder`` is the folder the turn works
     in ("" = none); ``list_folder`` False leaves the "In this folder" part to
     another block (a project's own recent activity) while still keeping that
-    folder out of "other folders". Never raises."""
+    folder out of "other folders". ``query`` is the OWNER's words: it points
+    at earlier work and names clients for the wall. Never raises."""
     try:
+        from .clients import wall
+
         engine = getattr(platform, "engine", None)
         home = getattr(getattr(platform, "config", None), "home", None)
         wm = work_map(engine, home)
@@ -227,11 +293,18 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         wm.refresh(budget=TURN_REBUILD)
         now = now or datetime.now(timezone.utc).replace(tzinfo=None)
         withhold = _withhold_local_only()
+        # THE WALL (v1.499.0): built from this turn's own folder and words.
+        turn, cmap = wall.turn_and_map(engine, folder, query)
 
         def allowed(r: dict[str, Any]) -> bool:
             if r["archived"]:
                 return False
             return not (withhold and (r["local_only"] or r["keep_home"]))
+
+        def told(r: dict[str, Any]) -> bool:
+            return wall.may_tell(turn, cmap, folder=r.get("folder") or "",
+                                 title=r.get("title") or "",
+                                 files=[f["path"] for f in r.get("files") or []])
 
         here_rows: list[dict[str, Any]] = []
         if folder and list_folder:
@@ -240,13 +313,64 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         if query.strip():
             there_rows = wm.matching(query, limit=ELSEWHERE_MAX * 3, skip_folder=folder,
                                      exclude_ref=exclude_ref)
-        if not here_rows and not there_rows:
+        # A confirmed client the OWNER names, in a turn that has no client:
+        # its newest work, wherever it lives (the strict matcher finds one
+        # folder per name; a client may have several).
+        named_rows: list[tuple[dict[str, Any], str]] = []
+        if turn.ok and turn.owner is None and turn.named:
+            for cid in sorted(turn.named):
+                for r in _client_rows(wm, cmap.roots_of(cid), exclude_ref=exclude_ref,
+                                      limit=NAMED_MAX * 3)[: NAMED_MAX * 3]:
+                    named_rows.append((r, cid))
+        # A turn in a confirmed client's folder: titles from its other folders.
+        other_rows: list[dict[str, Any]] = []
+        if turn.ok and turn.client is not None:
+            other_rows = [
+                r for r in _client_rows(wm, cmap.roots_of(turn.client.client_id),
+                                        exclude_ref=exclude_ref, limit=CLIENT_OTHER_MAX * 3)
+                if not keys.inside(keys.folder_key(keys.home_folder(r.get("folder") or "")),
+                                   turn.folder_key)
+            ][: CLIENT_OTHER_MAX * 3]
+        if not here_rows and not there_rows and not named_rows and not other_rows:
             return ""
         # Ask the sources again before anything is said.
-        live = _as_it_is_now(engine, here_rows + there_rows)
+        asked: dict[str, dict[str, Any]] = {}
+        for r in [*here_rows, *there_rows, *(r for r, _c in named_rows), *other_rows]:
+            asked.setdefault(r["id"], r)
+        live = {r["id"]: r for r in _as_it_is_now(engine, list(asked.values()))}
         here_ids = {r["id"] for r in here_rows}
-        here_rows = [r for r in live if r["id"] in here_ids and allowed(r)]
-        there_rows = [r for r in live if r["id"] not in here_ids and allowed(r)]
+        here_rows = [live[r["id"]] for r in here_rows
+                     if r["id"] in live and allowed(live[r["id"]]) and told(live[r["id"]])]
+        held_back = False
+        kept_there: list[dict[str, Any]] = []
+        for r in there_rows:
+            got = live.get(r["id"])
+            if r["id"] in here_ids or got is None or not allowed(got):
+                continue
+            if not told(got):
+                held_back = True  # work the message matched, kept behind the wall
+                continue
+            kept_there.append(got)
+        there_rows = kept_there
+        shown_ids = {r["id"] for r in here_rows} | {r["id"] for r in there_rows}
+        named_kept: list[tuple[dict[str, Any], str]] = []
+        per_client: dict[str, int] = {}
+        for r, cid in named_rows:
+            got = live.get(r["id"])
+            if r["id"] in shown_ids or got is None or not allowed(got) or not told(got):
+                continue
+            if per_client.get(cid, 0) >= NAMED_MAX:
+                continue
+            per_client[cid] = per_client.get(cid, 0) + 1
+            shown_ids.add(r["id"])
+            named_kept.append((got, cid))
+        other_kept: list[dict[str, Any]] = []
+        for r in other_rows:
+            got = live.get(r["id"])
+            if r["id"] in shown_ids or got is None or not allowed(got) or not told(got):
+                continue
+            shown_ids.add(r["id"])
+            other_kept.append(got)
         # A recap is told ONLY for work in EXACTLY the turn's own folder (or
         # a coding session's own copy of it). Work in another folder, a
         # folder under this one included, may be another client's: its
@@ -289,6 +413,17 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
             older = len(groups) - len(here)
             if older > 0:
                 lines.append(f"(and {older} older in this folder)")
+        others: list[str] = []
+        for row in other_kept:
+            if len(others) >= CLIENT_OTHER_MAX:
+                break
+            line = _safe(entry_line(row, now, with_folder=True, titles_only=True))
+            if line and used + len(line) + 1 <= BLOCK_CHARS:
+                others.append(line)
+                used += len(line) + 1
+        if others and turn.client is not None:
+            lines.append(f"In {_possessive(turn.client.name)} other folders, newest first:")
+            lines += others
         there: list[str] = []
         for row in there_rows:
             if len(there) >= ELSEWHERE_MAX:
@@ -297,9 +432,17 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
             if line and used + len(line) + 1 <= BLOCK_CHARS:
                 there.append(line)
                 used += len(line) + 1
+        for row, cid in named_kept:
+            name = str((cmap.names.get(cid) or ("",))[0] or "")
+            line = _safe(entry_line(row, now, with_folder=True, for_name=name))
+            if line and used + len(line) + 1 <= BLOCK_CHARS:
+                there.append(line)
+                used += len(line) + 1
         if there:
             lines.append(ELSEWHERE_LEAD)
             lines += there
+        if held_back and turn.owner is not None:
+            lines.append(WALL_NOTE)
         if not lines:
             return ""
         if recapped:
@@ -311,6 +454,7 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
 
 
 __all__ = [
-    "BLOCK_CHARS", "ELSEWHERE_LEAD", "ELSEWHERE_MAX", "HEAD", "HERE_LEAD", "HERE_MAX",
-    "RECAP_CHARS", "RECAP_NOTE", "entry_line", "recap_lines", "work_block",
+    "BLOCK_CHARS", "CLIENT_OTHER_MAX", "ELSEWHERE_LEAD", "ELSEWHERE_MAX", "HEAD", "HERE_LEAD",
+    "HERE_MAX", "NAMED_MAX", "RECAP_CHARS", "RECAP_NOTE", "WALL_NOTE", "entry_line", "recap_lines",
+    "work_block",
 ]
