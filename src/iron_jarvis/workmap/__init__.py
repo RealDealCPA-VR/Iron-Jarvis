@@ -10,7 +10,12 @@ earlier work that its message names lives.
 * ``keys``    folder keys and search words (pure text);
 * ``collect`` the sources → rows;
 * ``index``   :class:`WorkMap`: refresh and reads (:func:`work_map`);
-* ``block``   what a chat turn is told (:func:`work_block`).
+* ``block``   what a chat turn is told (:func:`work_block`);
+* ``recap``   recaps of finished work (v1.492.0, Phase 2);
+* ``clients`` the owner's clients, known by their folders and confirmed by
+  the owner (v1.499.0, Phase 3; its ``__init__`` is the contract). Import
+  its modules from the package (``from iron_jarvis.workmap.clients import
+  store``); nothing of it is re-exported here.
 """
 
 from .block import work_block

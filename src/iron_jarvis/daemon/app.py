@@ -1906,6 +1906,25 @@ def create_app(project_root: str | None = None) -> FastAPI:
             )
         )
 
+        # CLIENTS IN YOUR FOLDERS (v1.499.0, vision plan leap 3, Phase 3):
+        # names in the work record's own folder names that look like clients
+        # wait for ONE answer each (workmap/clients/detect). No model call, no
+        # file read. The first pass 120 s after start, then every 30 min, off
+        # the loop; time from an injected clock and sleep. Each pass reports
+        # ITS OWN outcome on loop_health["work_clients"]; switched off pops
+        # the row. It never raises.
+        from ..workmap.clients.detect import clients_loop as _clients_loop
+
+        bg_tasks["work_clients"] = asyncio.create_task(
+            _clients_loop(
+                platform,
+                clock=time.monotonic,
+                sleep=asyncio.sleep,
+                on_tick=lambda ok, exc: _tick("work_clients", ok, exc),
+                on_off=lambda: loop_health.pop("work_clients", None),
+            )
+        )
+
         # SHARE MY PROFILE WITH BUILD (v1.306.0): when a switch is on, bring
         # its block up to date — on a timer THREAD (poke returns at once), so
         # boot never waits on a file write.
@@ -3898,6 +3917,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import work_map as _work_map_routes
 
     _work_map_routes.register(app, d)
+    # Your clients (v1.499.0, vision plan leap 3, Phase 3): the people and
+    # businesses the owner works for, known by their folders and confirmed by
+    # the owner; the list, each client's page, the answers and preferences.
+    from .routes import clients as _clients_routes
+
+    _clients_routes.register(app, d)
     # The Improvements inbox (v1.495.0, vision plan leap 5): every
     # suggestion that is waiting for an answer, in one read.
     from .routes import improvements as _improvements_routes
