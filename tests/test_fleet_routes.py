@@ -818,7 +818,11 @@ def test_put_code_route_persists_and_explains_itself(tmp_path, monkeypatch):
     assert out["task_classes"] == ["builder", "maintainer"]
     assert out["effective"]["provider"] == "fleet-tower"
     assert out["effective"]["model"] == "qwen3-coder"
-    assert "fleet-tower:qwen3-coder" in out["effective"]["why"]
+    # v1.514.0 (second review F2): the sentence says what the orchestrator
+    # does, in the kinds of work the setting takes.
+    assert out["effective"]["why"] == (
+        "Builder and maintainer agents with no model of their own use fleet-tower (qwen3-coder)."
+    )
 
     cfg = _reload(d)  # survives a restart
     assert cfg.fleet_code_route_enabled is True

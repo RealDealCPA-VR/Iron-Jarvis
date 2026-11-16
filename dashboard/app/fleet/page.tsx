@@ -833,6 +833,7 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
   // provider:model id stays in the title — it is what the estimate priced.
   const baselineWords = baselineName(provider, model);
   const cloudCost = num(usage?.cloud_cost_usd);
+  const cloudUnknown = num(usage?.cloud_cost_unknown_tokens);
   const byNode = (usage?.by_node ?? []).filter((n) => num(n.est_avoided_usd) !== null);
 
   // The split bar needs BOTH sides. With one unread, any proportion we drew
@@ -869,6 +870,18 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
               cloud {fmtTokens(cloud)} tok
               {cloudCost !== null && (
                 <span className="text-zinc-600"> · {fmtUsd(cloudCost)} billed</span>
+              )}
+              {/* v1.514.0: tokens one of your own model servers passed on to a
+                  cloud service are cloud; their price is not known, so they
+                  are never "$0" and never avoided spend. */}
+              {(cloudUnknown ?? 0) > 0 && (
+                <span
+                  className="text-zinc-600"
+                  data-testid="fleet-cloud-cost-unknown"
+                  title="One of your model servers passed these on to a cloud service. Iron Jarvis has no price for them."
+                >
+                  {" "}· cost not known for {fmtTokens(cloudUnknown)} tok
+                </span>
               )}
             </span>
           </div>

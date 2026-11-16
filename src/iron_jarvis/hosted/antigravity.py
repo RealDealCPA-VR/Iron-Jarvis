@@ -871,10 +871,14 @@ class AntigravityDriver(AcpDriver):
                                      {"sessionId": self.session_id, "configId": "model", "value": model})
         except ControlRefused as exc:
             raise ControlRefused(f"Antigravity refused that model: {exc}") from None
-        self._take_options((got or {}).get("configOptions") if isinstance(got, dict) else None)
+        config = (got or {}).get("configOptions") if isinstance(got, dict) else None
+        self._take_options(config)
+        # v1.514.0 (A13): the model Antigravity ANSWERED is the one shown; the
+        # model asked for only when its answer names none.
+        answered = clip(str(_config(config, "model").get("currentValue") or ""), 120)
         opt = _config(self.options, "model")
         if opt:
-            opt["currentValue"] = model
+            opt["currentValue"] = answered or model
 
     async def _set_effort(self, effort: str) -> None:
         try:
@@ -1212,15 +1216,19 @@ class AntigravityDriver(AcpDriver):
     def end_turn_tools(self) -> None:
         """A step Antigravity said no more about by the turn's end: a Stop's is
         drawn stopped; otherwise (measured in Full access: a command's row got
-        no update after it started) it is drawn ended, saying its result was
-        not reported — a row never spins after its reply ended."""
+        no update after it started) it is closed saying its result was not
+        reported — a row never spins after its reply ended. v1.514.0 (A13):
+        closed ``stopped`` (the state of a step whose end never came,
+        :mod:`.open_steps`), never ``done``: an edit drawn that way is not
+        counted as a changed file."""
         from .acp import _input_line
+        from .open_steps import STOPPED
 
         for tid, (name, acp_kind, args) in list(self._tools.items()):
             kind = self.tool_kind(name, acp_kind)
             self.emit(make("tool", item=tid, kind=kind, name=clip(name, 120),
                            title=self.tool_title(name, kind, args), input=_input_line(args),
-                           status="failed" if self._interrupting else "done",
+                           status="failed" if self._interrupting else STOPPED,
                            output=STOPPED_TOOL if self._interrupting else UNREPORTED_TOOL))
         self._tools.clear()
 

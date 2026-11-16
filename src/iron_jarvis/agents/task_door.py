@@ -862,7 +862,133 @@ def _answered_by_demo(session: Any) -> bool:
     )
 
 
-def _reply_message(session: Any, caller: str = "") -> str:
+#: HOW THE RUN ENDED, on the wire (v1.514.0, second review F4). The answer
+#: keeps ``kind: "done"`` (an Iron Jarvis from before this release checks
+#: ``kind`` against the four it knows and would refuse a fifth) and carries
+#: ``outcome`` beside it, one of these words, read from this computer's own
+#: record of the run (``outcome.run_ending``): ``done`` (the job was done),
+#: ``part_failed`` / ``needs_you`` / ``did_nothing`` (it finished short, the
+#: ledger's verdicts), ``failed``, ``stopped``. A receiver from before this
+#: release ignores the field (its message-back door reads only the keys it
+#: knows), and the message itself opens with the sentence, so it still reads
+#: the truth.
+REPLY_OUTCOMES = ("done", "part_failed", "needs_you", "did_nothing", "failed", "stopped")
+#: ``Session.outcome`` verdict -> its wire word (a completed run).
+_VERDICT_WIRE = {
+    "completed_with_failures": "part_failed",
+    "needs_you": "needs_you",
+    "did_nothing": "did_nothing",
+}
+#: Wire word -> ``(status, verdict)``, so a receiver reads the SAME helper's
+#: words and badge for it (:func:`ending_of_outcome`).
+_WIRE_ENDING = {
+    "done": ("completed", None),
+    "part_failed": ("completed", "completed_with_failures"),
+    "needs_you": ("completed", "needs_you"),
+    "did_nothing": ("completed", "did_nothing"),
+    "failed": ("failed", None),
+    "stopped": ("cancelled", None),
+}
+#: The bounds of the words beside the outcome (both sides cut to them).
+REPLY_OUTCOME_WORDS_CHARS = 300
+REPLY_MODEL_CHARS = 120
+#: A task from another computer runs unattended here, so every tool that
+#: needed an OK was refused (``runtime.ASKING_ORIGINS`` does not hold it).
+#: When that is ALL that was asked, the answer says so in these words rather
+#: than "some of its steps failed" (the first plan's 3.11 keeps a remote run
+#: out of the ``did_nothing`` verdict, whose rules stay as they are).
+NOTHING_ALLOWED_WORDS = "Nothing that needed an OK on that computer was done."
+
+
+def ending_of_outcome(outcome: object) -> Any:
+    """The ``outcome.run_ending`` reading of a wire outcome word, or None for
+    a word not in :data:`REPLY_OUTCOMES`. Pure."""
+    from .outcome import run_ending
+
+    pair = _WIRE_ENDING.get(str(outcome or "").strip().lower())
+    if pair is None:
+        return None
+    return run_ending(pair[0], pair[1])
+
+
+def _one_line(raw: object, cap: int) -> str:
+    """``raw`` masked, on one line, cut to ``cap``."""
+    from ..detections.redact import mask
+
+    text = " ".join(str(mask(str(raw or "")) or "").split())
+    return text[:cap].rstrip()
+
+
+def _refused_every_ask(engine: Any, session_id: str) -> bool:
+    """Did this run ask for at least one OK and get none? (The ledger rows
+    whose verdict was ``ask``: none succeeded.) BLOCKING; False on any error."""
+    try:
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..core.models import ToolInvocation
+
+        with session_scope(engine) as db:
+            rows = db.exec(
+                select(ToolInvocation.verdict, ToolInvocation.ok).where(
+                    ToolInvocation.session_id == session_id,
+                    ToolInvocation.undo_of.is_(None),  # type: ignore[union-attr]
+                )
+            ).all()
+        asked = [bool(ok) for verdict, ok in rows
+                 if str(getattr(verdict, "value", verdict) or "").lower() == "ask"]
+        return bool(asked) and not any(asked)
+    except Exception:  # noqa: BLE001 — a reading, never the answer
+        return False
+
+
+def reply_ending(engine: Any, session: Any) -> dict[str, str]:
+    """How this run REALLY ended, for the answer's body (v1.514.0, F4):
+    ``{"outcome", "outcome_words"?, "provider"?, "model"?}``. Read from this
+    computer's own record only (``outcome.run_ending`` over the row's status
+    and ``Session.outcome``, the ledger, the served provider and model) —
+    never from the model's closing words, and nothing else about this
+    computer. ``provider`` / ``model`` only when the run's work reached that
+    model (``outcome.reached_a_model``; a demo run only when it completed,
+    since the row's provider reads "mock" before anything ran). No cost: this
+    computer does not show a run's own cost to its user. BLOCKING."""
+    from .outcome import reached_a_model, run_ending
+
+    sid = str(getattr(session, "id", "") or "")
+    end = run_ending(session)
+    if end.status == "completed":
+        outcome = _VERDICT_WIRE.get(str(end.outcome or ""), "done")
+    elif end.status == "cancelled":
+        outcome = "stopped"
+    else:
+        outcome = "failed"
+    words = "" if outcome == "done" else end.reason
+    if end.status == "completed" and sid and _refused_every_ask(engine, sid):
+        words = NOTHING_ALLOWED_WORDS
+        if outcome == "done":
+            outcome = "part_failed"
+    out: dict[str, str] = {"outcome": outcome}
+    words = _one_line(words, REPLY_OUTCOME_WORDS_CHARS)
+    if words:
+        out["outcome_words"] = words
+    provider = _one_line(getattr(session, "provider", ""), REPLY_MODEL_CHARS)
+    model = _one_line(getattr(session, "model", ""), REPLY_MODEL_CHARS)
+    if provider and not (provider == "mock" and end.status != "completed"):
+        try:
+            from ..core.db import session_scope
+
+            with session_scope(engine) as db:
+                reached = reached_a_model(db, sid, provider)
+        except Exception:  # noqa: BLE001 — unknown: say nothing rather than guess
+            reached = False
+        if reached:
+            out["provider"] = provider
+            if model:
+                out["model"] = model
+    return out
+
+
+def _reply_message(session: Any, caller: str = "", lead: str = "") -> str:
     """The answer, in the words the sender's chat would show for this run
     (``chat_delivery.content_for_session``), secrets masked, cut to what the
     receiving door accepts — and, when the demo model wrote it, saying so
@@ -870,7 +996,11 @@ def _reply_message(session: Any, caller: str = "") -> str:
 
     v1.510.0: this computer's own lines about sending it (``retry_note`` /
     ``waiting_note``, written on the run while it is owed) are left out: they
-    are about the answer, not part of it."""
+    are about the answer, not part of it.
+
+    v1.514.0 (F4): ``lead`` (the run did not end as plain done: this
+    computer's own sentence for how it ended, :func:`reply_ending`) opens the
+    message, so a receiver that reads only ``message`` still shows it."""
     from ..detections.redact import mask
     from .chat_delivery import content_for_session
 
@@ -878,6 +1008,9 @@ def _reply_message(session: Any, caller: str = "") -> str:
     if caller:
         text = _with_note(text, caller, "")
     text = str(mask(text) or "").strip()
+    lead = str(lead or "").strip()
+    if lead:
+        text = lead if (not text or text == lead) else f"{lead}\n\n{text}"
     demo = ("\n\n" + _demo_note_for(text)) if _answered_by_demo(session) else ""
     room = REPLY_MESSAGE_CHARS - len(demo)
     if len(text) > room:
@@ -1123,7 +1256,14 @@ async def _send_once(
     if not target:
         detail = why
     else:
-        message = _reply_message(session, caller)
+        # v1.514.0 (F4): how the run really ended, from this computer's own
+        # record; the message opens with it when it was not plain done.
+        try:
+            ending = await asyncio.to_thread(reply_ending, engine, session)
+        except Exception:  # noqa: BLE001 — the answer still goes, as before
+            log.warning("task %s: how the run ended could not be read", sid, exc_info=True)
+            ending = {}
+        message = _reply_message(session, caller, ending.get("outcome_words", ""))
         files, left = await asyncio.to_thread(_reply_files, engine, sid)
         if left:
             message += "\n\nAlso made on this computer, not sent: " + ", ".join(left)
@@ -1136,6 +1276,9 @@ async def _send_once(
             # v1.510.0: which run this answers, so the other computer takes a
             # repeat (a try whose 2xx was lost on the way back) only once.
             "answer_id": sid,
+            # v1.514.0 (F4): beside ``kind`` (which stays "done" for an older
+            # receiver): ``outcome``, ``outcome_words``, ``provider``, ``model``.
+            **ending,
         }
         if files:
             body["files"] = files

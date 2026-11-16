@@ -78,6 +78,8 @@ COORDINATOR = "Jarvis"
 #: The origin the mission door stamps on its coordinator. ONE definition:
 #: ``agents/team.py`` owns it (and the teammates' ``job:mission-member``).
 from .team import MISSION_ORIGIN  # noqa: E402
+# v1.514.0 (F4): the badge words a remote report that finished short shows.
+from .outcome import WORD_DID_NOTHING, WORD_NEEDS_YOU, WORD_PART_FAILED  # noqa: E402
 
 #: Route changes the view reads for its ``route_note`` (v1.309.0,
 #: mission-no-route-receipt) — a separate, small read, so a busy mission's
@@ -1639,11 +1641,34 @@ def _remote_reports(
             at = str(report.get("at") or "")
             if at.endswith("+00:00"):  # the event rows' naive UTC spelling
                 at = at[: -len("+00:00")]
-            slot["status"] = "done"
+            # v1.514.0 (second review F4): the member ends from how the run
+            # REALLY ended on that computer (the line's ``outcome``), never
+            # from its kind: done only for "done"; a report with no outcome
+            # (an older Iron Jarvis) is done, as before.
+            outcome = str(report.get("outcome") or "")
+            status, label = _REPORT_STATUS.get(outcome, ("done", ""))
+            slot["status"] = status
+            if label:
+                slot["outcome_label"] = label
             slot["result"] = _short(display_unfenced(report.get("content") or ""), _RESULT_CHARS)
             slot["finished_at"] = at or None
-            out.append({"agent": who, "at": at or None})
+            out.append({"agent": who, "at": at or None, "status": status, "label": label})
     return out
+
+
+#: A report's ``outcome`` -> ``(the member's state, its bar label)``: states
+#: the card already draws (``dashboard/lib/mission.ts`` MemberStatus). A run
+#: that finished short ("Part failed", "Did nothing", "Needs you") needs the
+#: user's look: "needs you", with the outcome's own badge word as its label
+#: (``outcome.WORD_*``, the words every status badge says).
+_REPORT_STATUS = {
+    "done": ("done", ""),
+    "failed": ("failed", ""),
+    "stopped": ("cancelled", ""),
+    "part_failed": ("waiting_you", WORD_PART_FAILED),
+    "needs_you": ("waiting_you", WORD_NEEDS_YOU),
+    "did_nothing": ("waiting_you", WORD_DID_NOTHING),
+}
 
 
 def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
@@ -1902,11 +1927,19 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
                 "text": text, "tone": tone,
             })
     for rep in reported:
+        agent = display_name(str(rep.get("agent") or ""))
+        # v1.514.0 (F4): the line says how it ended when it was not done.
+        st = rep.get("status") or "done"
+        if st == "failed":
+            text, tone = f"{agent} reported back: it could not finish", "warn"
+        elif st == "cancelled":
+            text, tone = f"{agent} reported back: it was stopped", "warn"
+        elif st == "waiting_you":
+            text, tone = f"{agent} reported back: {str(rep.get('label') or '').lower()}", "ask"
+        else:
+            text, tone = f"{agent} reported back to {COORDINATOR}", "ok"
         lines.append({
-            "at": rep.get("at"), "who": display_name(str(rep.get("agent") or "")),
-            "session_id": None,
-            "text": f"{display_name(str(rep.get('agent') or ''))} reported back to {COORDINATOR}",
-            "tone": "ok",
+            "at": rep.get("at"), "who": agent, "session_id": None, "text": text, "tone": tone,
         })
     for slot in silent:
         agent = display_name(str(slot.get("agent") or ""))
@@ -1968,6 +2001,9 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
                 # v1.510.0 (F3): its own label, never "Waiting for your OK".
                 {"pct": None, "label": NOT_REPORTED_LABEL, "basis": "remote_silent"}
                 if rec.get("silent") and st == "waiting_you"
+                # v1.514.0 (F4): a report that finished short says how.
+                else {"pct": None, "label": rec["outcome_label"], "basis": "remote_outcome"}
+                if rec.get("outcome_label") and st == "waiting_you"
                 else progress_for(st, 0, (0, 0, ""))
             ),
             "activity": "",

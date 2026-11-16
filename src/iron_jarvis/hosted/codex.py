@@ -492,6 +492,9 @@ TERMINALS_MAX = 50
 TERMINAL_ALREADY_ENDED = "That command already ended."
 SIGNED_IN_WORDS = "Signed in to {name}. Codex starts it again now."
 SIGN_IN_FAILED_WORDS = "Signing in to {name} did not finish: {why}"
+#: v1.514.0 (A9): Codex moved a turn to another model (``model/rerouted``).
+REROUTED_WORDS = "Codex moved this turn to another model."
+REROUTED_TO_WORDS = "Codex moved this turn to another model: {model} answers it."
 
 
 def terminal_rows(result: Any) -> list[dict[str, Any]]:
@@ -922,6 +925,15 @@ class CodexDriver(Driver):
     async def send_user(self, text: str, files: list[str]) -> None:
         from .tool_setup import CODEX_COMPACT_TEXT
 
+        if getattr(self, "_rerouted_turn", False):
+            # v1.514.0 (A9): Codex moved the LAST turn to another model; this
+            # one starts on the model chosen (its receipt names that one
+            # unless Codex says it moved this turn too).
+            self._rerouted_turn = False
+            chosen = self.model or getattr(self, "_thread_model", "")
+            if chosen:
+                self._session_model(chosen)
+
         if text.strip() == CODEX_COMPACT_TEXT and not files:
             # v1.426.0 (E4): Codex's OWN compact (measured on 0.157.0:
             # ``thread/compact/start`` answers ``{}`` and runs as a turn of its
@@ -1323,7 +1335,41 @@ class CodexDriver(Driver):
         except Exception:  # noqa: BLE001 — a gone process: nothing to answer
             pass
 
+    def _other_thread(self, p: dict[str, Any]) -> bool:
+        """v1.514.0 (A7): a frame that names ANOTHER thread (Codex has
+        sub-agent threads) is not this conversation's. A frame naming no
+        thread is taken, as before."""
+        thread = str(p.get("threadId") or "")
+        return bool(thread and self.session_id and thread != self.session_id)
+
+    def _other_turn(self, turn_id: Any) -> bool:
+        """v1.514.0 (A7): a turn's end or error that names another turn than
+        the one this reply runs (both known) is not this reply's."""
+        turn_id = str(turn_id or "")
+        return bool(turn_id and self.turn_id and turn_id != self.turn_id)
+
+    #: v1.514.0 (A7): the frames that END a reply, or write its own words,
+    #: plan or model, are read only when they are THIS thread's
+    #: (``_other_thread``). Lead review: a sub-agent thread's STEPS
+    #: (``item/started`` / ``item/completed`` and a command's output) are
+    #: still drawn into the reply, as before: they are work done for this
+    #: reply (a file a sub-agent changed belongs in its receipt), and hiding
+    #: them would leave a helper's changes unreported.
+    _THREAD_FRAMES = frozenset({
+        "item/agentMessage/delta", "item/plan/delta", "item/reasoning/summaryTextDelta",
+        "item/reasoning/textDelta", "turn/plan/updated", "error", "turn/completed", "model/rerouted",
+    })
+
     def _on_notification(self, method: str, p: dict[str, Any]) -> None:
+        if method in self._THREAD_FRAMES and self._other_thread(p):
+            return
+        if method in ("item/started", "item/completed") and self._other_thread(p):
+            # Lead review of A7: a sub-agent's STEP (a command, a file change,
+            # a tool call) is drawn; its own words, plan, notes and compaction
+            # are not this reply's.
+            kind = (p.get("item") or {}).get("type")
+            if kind in ("agentMessage", "plan", "userMessage", "contextCompaction", "reasoning"):
+                return
         if method == "item/started":
             self._item_started(p.get("item") or {})
         elif method == "item/completed":
@@ -1352,9 +1398,12 @@ class CodexDriver(Driver):
             for k in self._usage:
                 self._usage[k] += last[k]
         elif method == "error":
-            self._on_error(p)
+            if not self._other_turn(p.get("turnId")):
+                self._on_error(p)
         elif method == "turn/completed":
-            self._turn_completed(p.get("turn") or {})
+            turn = p.get("turn") if isinstance(p.get("turn"), dict) else {}
+            if not self._other_turn(turn.get("id")):
+                self._turn_completed(turn)
         elif method == "turn/started":
             # v1.426.0 (E4): a compaction's turn has no ``turn/start`` answer to
             # name it (Stop needs its id); for any other turn it is the same id.
@@ -1385,7 +1434,7 @@ class CodexDriver(Driver):
         elif method == "thread/compacted":
             self.emit(make("notice", text="Codex compacted the conversation to make room."))
         elif method == "model/rerouted":
-            self.emit(make("notice", text="Codex moved this turn to another model."))
+            self._rerouted(p)
         elif method in CODEX_NOTICES:
             # v1.439.0: Codex's own warnings and a hook that did not go well,
             # one masked line each (a hook that ran and said nothing: none).
@@ -1509,6 +1558,27 @@ class CodexDriver(Driver):
                         title="Hand a task to a helper", input=clip(item.get("prompt") or "", INPUT_CHARS),
                         status=status)
         return None
+
+    def _rerouted(self, p: dict[str, Any]) -> None:
+        """v1.514.0 (A9): ``model/rerouted`` {threadId, turnId, fromModel,
+        toModel, reason} (codex's own ``ModelReroutedNotification``): the
+        model that answers is named, and a ``session`` event carries it so
+        the reply's receipt ("answered by") names the model that answered,
+        not the one that was chosen. A notice naming no model keeps the
+        plain sentence."""
+        if self._other_turn(p.get("turnId")):
+            return
+        to = one_line(p.get("toModel") or "", 120) if isinstance(p.get("toModel"), str) else ""
+        if not to:
+            self.emit(make("notice", text=REROUTED_WORDS))
+            return
+        self.emit(make("notice", text=REROUTED_TO_WORDS.format(model=to)))
+        self._session_model(to)
+        self._rerouted_turn = True
+
+    def _session_model(self, model: str) -> None:
+        self.emit(make("session", harness=HARNESS, harness_session_id=self.session_id, model=clip(model, 120),
+                       cwd=clip(self.cwd, 500), mode=self.mode))
 
     def _on_error(self, p: dict[str, Any]) -> None:
         err = p.get("error") or {}

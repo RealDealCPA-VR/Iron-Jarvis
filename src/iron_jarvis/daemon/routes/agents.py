@@ -3360,7 +3360,15 @@ def register(app: FastAPI, d) -> None:
 
             documents = await asyncio.to_thread(_land)
 
-        text = message
+        # v1.514.0 (second review F4): how another Iron Jarvis says its run
+        # ended (``outcome`` beside ``kind: "done"``), validated and bounded
+        # (a junk or missing outcome reads as an older peer: as before); the
+        # line opens with it when it was not plain done and says who answered.
+        from ...agents.chat_delivery import remote_report_text
+        from ...agents.threads import report_ending
+
+        ending = report_ending(body, kind)
+        text = remote_report_text(message, name, ending)
         if documents:
             listed = "\n".join(f"- {p}" for p in documents)
             text = (text + "\n\n" if text else "") + f"Files from {name}:\n{listed}"
@@ -3372,7 +3380,7 @@ def register(app: FastAPI, d) -> None:
         try:
             count = await threads.add_inbound_entry(
                 room.id, who, text, d, kind=kind, documents=documents or None,
-                answer_id=answer_id,
+                answer_id=answer_id, ending=ending or None,
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="no such conversation")

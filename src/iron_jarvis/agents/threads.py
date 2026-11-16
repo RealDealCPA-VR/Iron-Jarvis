@@ -786,6 +786,39 @@ class RepeatAnswer(Exception):
     a try whose 2xx was lost on the way back. The door answers it as taken."""
 
 
+#: The keys a report's ending is kept under on its room line (v1.514.0, F4).
+REPORT_ENDING_KEYS = ("outcome", "outcome_words", "answered_provider", "answered_model")
+
+
+def report_ending(body: Any, kind: str) -> dict[str, str]:
+    """How another Iron Jarvis says its run ended, as this room line keeps it
+    (v1.514.0, second review F4): ``{"outcome", "outcome_words"?,
+    "answered_provider"?, "answered_model"?}``, or ``{}`` — read as a report
+    from an older Iron Jarvis, exactly as before — when ``kind`` is not
+    ``done`` or ``outcome`` is not one of ``task_door.REPLY_OUTCOMES``. Every
+    word is OUTSIDE TEXT from another computer: masked, on one line, cut to
+    the sender's own bounds, kept as data (it reaches a model only inside an
+    agent's fenced chat line, ``chat_refs.fence_agent_lines``). Pure."""
+    from .task_door import REPLY_MODEL_CHARS, REPLY_OUTCOME_WORDS_CHARS, REPLY_OUTCOMES, _one_line
+
+    if kind != "done" or not isinstance(body, dict):
+        return {}
+    outcome = body.get("outcome")
+    if not isinstance(outcome, str) or outcome.strip().lower() not in REPLY_OUTCOMES:
+        return {}
+    out = {"outcome": outcome.strip().lower()}
+    for key, field, cap in (
+        ("outcome_words", "outcome_words", REPLY_OUTCOME_WORDS_CHARS),
+        ("answered_provider", "provider", REPLY_MODEL_CHARS),
+        ("answered_model", "model", REPLY_MODEL_CHARS),
+    ):
+        raw = body.get(field)
+        value = _one_line(raw, cap) if isinstance(raw, str) else ""
+        if value:
+            out[key] = value
+    return out
+
+
 #: When each platform's rooms were last read for overdue waits.
 _SWEPT_AT: dict[int, datetime] = {}
 
@@ -2116,6 +2149,7 @@ class AgentThreads:
         kind: str = "message",
         documents: list[str] | None = None,
         answer_id: str = "",
+        ending: dict[str, str] | None = None,
     ) -> int:
         """A remote MESSAGED BACK (v1.285.0): land its line in the room as an
         entry of its own — ``inbound: True`` and ``kind`` (message / progress /
@@ -2127,7 +2161,10 @@ class AgentThreads:
         Jarvis answers with) is kept on the line, and a line carrying an
         ``answer_id`` this remote already landed here is NOT landed again:
         :class:`RepeatAnswer` is raised instead (checked under the append's
-        own lock, so two tries arriving together land once)."""
+        own lock, so two tries arriving together land once).
+
+        v1.514.0 (F4): ``ending`` (:func:`report_ending`) is kept on the line
+        under :data:`REPORT_ENDING_KEYS` only."""
         if self.get(thread_id) is None:
             raise KeyError(thread_id)
         entry: dict[str, Any] = {
@@ -2144,6 +2181,10 @@ class AgentThreads:
         answer_id = str(answer_id or "").strip()[:200]
         if answer_id:
             entry["answer_id"] = answer_id
+        for key in REPORT_ENDING_KEYS:
+            value = (ending or {}).get(key)
+            if isinstance(value, str) and value:
+                entry[key] = value
         # The append is a locked read-modify-write on SQLite — off the loop
         # (v1.153.1 rule), because a third party can call this 60×/min.
         if answer_id:

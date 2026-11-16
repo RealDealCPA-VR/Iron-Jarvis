@@ -529,6 +529,7 @@ it did (15 to 17 minutes), so the suite did not slow down.
 | group 5, branch | `test_records_projects_v14350::test_agent_pause_and_undo_puts_back_the_day_off_exactly` | 12 of 12 locally. GitHub keeps no trace of a first try, so the cause is unknown. Not changed |
 | group 9, branch (2nd run) | `test_north_star_lesson_tidy_v1501::test_a_tidy_pass_publishes_one_event_naming_what_it_merged` | Fixed in v1.510.0: two notes written in the same clock tick tied on their time, so either could be merged into the other. The later row now always counts as newer (`learning/engine.dedup`), pinned by a test that gives both notes one time |
 | group 9, branch (1st run) | no test named: shard 6 ran 30 minutes (others 9 to 15) and was cancelled; GitHub kept no log | Not reproduced: the same files passed here (2,281 in 8 minutes) and the second run's shard 6 took 15 minutes. Cause unknown. If a shard hangs again, let it reach its 45-minute limit so the log is kept |
+| v1.513.0 release | `test_harness_bench_product_path_review_v14250::test_a_turn_cut_off_after_its_stop_leaves_nothing_a_daemon_would_carry_on` (real time: a 4 s task limit, a 1 s grace, a real program) | Not reproduced: 6 of 6 here on a loaded PC, and it had passed in the branch run of the same commit and in the four releases before. GitHub keeps no first failure, so the cause is unknown. Not changed |
 
 To find the cause of an unexplained one, the test run would need to print
 a retried test's first failure (`-rR` shows only its name); that is a change
@@ -590,7 +591,7 @@ Severity counts: 12 high, 40 medium, 46 low.
   posted back. Fix: `skip_memory` and an empty named set for a `remote:`
   run, and keep the cross-PC readers away until the owner can choose per
   computer.
-- [ ] **F2 (1, high, checked). "Send coding work to a model server" has no
+- [x] **F2 (1, high, checked). "Send coding work to a model server" has no
   reader.** Only `daemon/routes/fleet.py:581-668` (the view and the writer),
   the schema and the config field mention it; the page says "Coding work
   goes to <server>". Fix: wire it in the router (refuse by name when the
@@ -599,7 +600,7 @@ Severity counts: 12 high, 40 medium, 46 low.
   once.** `agents/task_door.py:504-516` deletes the answer key before the
   POST; `666-673` allows one attempt; the asking chat and mission card wait
   for ever (`agents/threads.py:1941-1947`, `agents/mission.py:1582-1621`).
-- [ ] **F4 (1, medium, checked). A failed or stopped task comes home marked
+- [x] **F4 (1, medium, checked). A failed or stopped task comes home marked
   "done".** `task_door.py:703-707` always sends `"kind": "done"`; no outcome,
   model or cost is sent. `tests/test_another_jarvis_v13570.py:488` pins it.
 - [x] **F5 (2, medium, checked). Removing a pairing does not stop its running
@@ -614,7 +615,7 @@ Severity counts: 12 high, 40 medium, 46 low.
 - [ ] **F8 (4, medium, checked).** Refresh on the Model servers page does not
   force a re-check (`routes/fleet.py:721-722` calls `sample_once` without
   `force=True`); a server that came back is refused for up to ten minutes.
-- [ ] **F9 (1, medium, pass only).** Tokens a proxy sent to the cloud are
+- [x] **F9 (1, medium, pass only).** Tokens a proxy sent to the cloud are
   counted as "local" and "avoided spend" (`routes/fleet.py:1147-1162`).
 - [x] **F10 (2, low, pass only).** With network access on, the daemon listens
   on every network the PC joins; the filter is the Host header
@@ -688,14 +689,14 @@ or types on the Windows desktop.
 - [x] **H3 (4, medium, checked).** Emergency stop skips a reply Jarvis
   started by itself once it was adopted across a restart
   (`hosted/adopt.py:482-501`, `hosted/carry_on.py:1231-1245`).
-- [ ] **H4 (1, medium, checked).** A helper that was stopped or cut off is
+- [x] **H4 (1, medium, checked).** A helper that was stopped or cut off is
   listed "done" after ten minutes or a restart (`hosted/handoff.py:195-210`).
 - [x] **H5 (3, medium, checked).** Revert in the Changes pane overwrites a
   file with no copy and no record (`hosted/panes.py:1137-1150`).
 - [x] **H6 (3, medium, checked).** A failed write of the session log drops
   that batch for good (`hosted/events.py:335-354`); a lost "done" can make
   the next start carry on a reply that had finished.
-- [ ] **H7-H14 (low; H7 and H9 fixed in v1.511.0, H8, H13 and H14 in v1.512.0; H10, H11, H12 wait for groups 14 to 16).** A PATCH applies the tool's mode before the rest of
+- [ ] **H7-H14 (low; H7 and H9 fixed in v1.511.0, H8, H13 and H14 in v1.512.0, H10 in v1.514.0; H11 and H12 wait for groups 15 and 16).** A PATCH applies the tool's mode before the rest of
   the request is checked (`service.py:2211-2296`); a Stop as the start
   completes can still deliver the message (`service.py:3607`, checked); a
   branch copies Full access and the tool boxes without asking
@@ -733,13 +734,13 @@ or types on the Windows desktop.
 - [ ] **A6 (2, medium, suspected).** A session on this PC's own login
   inherits the user's API keys; the tool may bill the key while the receipt
   says list price on the subscription (`hosted/process.py:81-86`).
-- [ ] **A7 (1, medium, suspected).** A Codex `turn/completed` from another
+- [x] **A7 (1, medium, suspected).** A Codex `turn/completed` from another
   thread ends the user's reply as done (`hosted/codex.py:1312-1315`; the
   guard exists only for `turn/started`).
 - [ ] **A8 (2, medium, checked).** With every account of a provider turned
   off, chat runs on this PC's own login with nothing said
   (`iron_proxy/accounts.py:889-894`).
-- [ ] **A9-A13 (low; A12 fixed in v1.511.0, A11 in v1.512.0).** Codex's move to another model is said without the
+- [ ] **A9-A13 (low; A12 fixed in v1.511.0, A11 in v1.512.0, A9 and A13's three status lines in v1.514.0).** Codex's move to another model is said without the
   model's name (`codex.py:1345-1346`); the usage check hands the vendor's
   program the daemon's whole environment, install token included
   (`iron_proxy/usage_read.py:286-299`, checked); Stop before Codex names the
@@ -1107,3 +1108,30 @@ Left open:
   re-read only at the end.
 - A commit the auto-fix made with files left out stays on the branch, not
   pushed and not undone; the message says so.
+
+### Group 14 as built (v1.514.0)
+
+Fixed: H4, H10, F2, F4, F9, A7, A9 and the three status lines of A13.
+
+Where it differs from the plan:
+
+- **E7 (F2) was wired**, in the orchestrator where a run's model is chosen
+  (the router cannot tell "no model of its own": the default is filled in
+  before it). Checked read-only on the owner's PC: the setting is off there
+  and the default model is already the owner's own server.
+- **F4 sends no cost.** This app shows no per-run cost to its own user, so
+  none is sent to another computer either.
+- **A7** keeps a Codex sub-agent's steps in the reply (lead's review: the
+  implementer had dropped them with its words, which would have left a
+  helper's file changes out of the receipt).
+- **H4's second half was not a defect**: `check_again` already stops on the
+  row's `handed_from`, which survives a restart.
+
+Left open:
+
+- With "Send coding work to a model server" on, a run started with no agent
+  type is a builder and goes to the server.
+- No cost comes home with an answer from another computer.
+- A Codex sub-agent thread's token use is still added to the reply.
+- A run cut off by a restart comes home as "failed"; there is no separate
+  word for "cut off".

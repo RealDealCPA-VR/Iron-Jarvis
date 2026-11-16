@@ -275,9 +275,14 @@ def _running(svc: Any, sid: str) -> bool:
     return bool(live is not None and live.turn is not None and live.turn.running)
 
 
-def helper_state(svc: Any, row: Any) -> str:
+def helper_state(svc: Any, row: Any, logged: str = "") -> str:
     """``working`` | ``waiting`` (a card or question open) | ``done`` |
-    ``failed`` | ``idle`` (not started yet, or its process stopped)."""
+    ``failed`` | ``stopped`` | ``idle`` (not started yet).
+
+    ``logged``: the last piece's ending as the helper's own log says it
+    (:func:`logged_piece_state`, read off the loop by the caller) — the
+    answer once the turn has left memory (ten minutes after it ended, or at
+    once after a restart)."""
     live = svc.live.get(row.id)
     if live is not None and live.turn is not None and live.turn.running:
         return "waiting" if live.asks else "working"
@@ -288,6 +293,11 @@ def helper_state(svc: Any, row: Any) -> str:
     turn = svc.turns.get(turn_id) if turn_id else None
     if turn is not None and not turn.running:
         return _TURN_STATES.get(turn.status, "failed")
+    # v1.514.0 (H4): the turn is gone from memory. A piece the user stopped,
+    # Emergency stop stopped or a crash cut leaves the row's error empty, so
+    # the row alone read "done": the helper's own log says how it ended.
+    if logged:
+        return logged
     if (row.last_error or "").strip():
         return "failed"
     return "done" if (row.harness_session_id or "") else "idle"
@@ -298,13 +308,95 @@ _TURN_STATES = {"done": "done", "completed": "done", "interrupted": "stopped",
                 "max_turns": "stopped", "failed": "failed"}
 
 
+def _turn_gone(svc: Any, row: Any) -> bool:
+    """The helper's last piece is not running and its turn is no longer in
+    memory: only its log can say how it ended (:func:`helper_state`)."""
+    live = svc.live.get(row.id)
+    if live is not None and live.turn is not None and live.turn.running:
+        return False
+    turn_id = svc.handoff_turns.get(row.id)
+    turn = svc.turns.get(turn_id) if turn_id else None
+    return turn is None or bool(turn.running)
+
+
+#: v1.514.0 (H4): one log read per helper while its log does not change
+#: (``helpers_view`` runs on every read of the starting session's view).
+_LOGGED: dict[str, tuple[int, int, str, str]] = {}
+_LOGGED_MAX = 256
+
+
+def _last_piece(events: list[dict[str, Any]]) -> str:
+    """The newest hand-off piece's turn id in a helper's log ("" = none)."""
+    from .carry_on import HANDOFF_TURN_PREFIX
+
+    for ev in reversed(events):
+        turn = str(ev.get("turn") or "")
+        if turn.startswith(HANDOFF_TURN_PREFIX):
+            return turn
+    return ""
+
+
+def logged_piece_state(home: Any, sid: str, turn_id: str = "") -> str:
+    """BLOCKING (one file read, cached by the log's size and time). v1.514.0
+    (H4): how the helper's last hand-off piece (``turn_id`` when known) ended,
+    read the way ``check`` reads it (:func:`summarize`): its ``done`` mapped
+    onto the page's states (:data:`_TURN_STATES`); a piece with NO ``done``
+    in the log was cut (a crash, a restart) and is ``stopped``, never done.
+    "" = the log names no piece (the row's own facts decide)."""
+    import os
+
+    from .events import session_dir
+    from .history import _read_events
+
+    path = session_dir(home, sid) / "events.jsonl"
+    try:
+        st = os.stat(path)
+    except OSError:
+        return ""
+    key = str(path)
+    hit = _LOGGED.get(key)
+    if hit is not None and hit[:3] == (st.st_size, st.st_mtime_ns, turn_id):
+        return hit[3]
+    events = _read_events(path)
+    piece = turn_id or _last_piece(events)
+    state = ""
+    if piece and any(ev.get("turn") == piece for ev in events):
+        status = summarize(events, piece)["status"]
+        state = _TURN_STATES.get(status, "failed") if status else "stopped"
+    if len(_LOGGED) >= _LOGGED_MAX:
+        _LOGGED.pop(next(iter(_LOGGED)))
+    _LOGGED[key] = (st.st_size, st.st_mtime_ns, turn_id, state)
+    return state
+
+
+async def logged_states(svc: Any, rows: list[Any]) -> dict[str, str]:
+    """:func:`logged_piece_state` for each helper whose turn left memory,
+    read in one worker thread (never on the event loop)."""
+    gone = [(r.id, str(svc.handoff_turns.get(r.id) or "")) for r in rows if _turn_gone(svc, r)]
+    if not gone:
+        return {}
+    home = svc.home
+
+    def read() -> dict[str, str]:
+        out: dict[str, str] = {}
+        for sid, turn_id in gone:
+            try:
+                out[sid] = logged_piece_state(home, sid, turn_id)
+            except Exception:  # noqa: BLE001 — unknown: the row's own facts decide
+                log.debug("could not read a helper's log", exc_info=True)
+        return out
+
+    return await asyncio.to_thread(read)
+
+
 async def helpers_view(svc: Any, parent: str) -> list[dict[str, Any]]:
     """The starting session's helpers, newest first (names only)."""
     from . import words as W
 
     rows = await asyncio.to_thread(_helper_rows, svc, parent)
+    logged = await logged_states(svc, rows)
     return [{"id": r.id, "title": r.title, "harness": r.harness, "label": W.label(r.harness),
-             "state": helper_state(svc, r)} for r in rows]
+             "state": helper_state(svc, r, logged.get(r.id, ""))} for r in rows]
 
 
 async def _available(svc: Any) -> list[dict[str, Any]]:
@@ -521,7 +613,8 @@ async def check(svc: Any, parent: str, helper: str, wait_s: float = CHECK_WAIT_M
         except asyncio.TimeoutError:
             pass
     facts = summarize(await _turn_events(svc, crow.id, turn_id), turn_id)
-    state = helper_state(svc, crow)
+    logged = await logged_states(svc, [crow])
+    state = helper_state(svc, crow, logged.get(crow.id, ""))
     if turn is not None and turn.running:
         facts["status"] = ""
     return {"helper": crow.id, "state": state, **facts}

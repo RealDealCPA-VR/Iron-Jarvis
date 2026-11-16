@@ -1052,6 +1052,8 @@ def build_platform(
         # Live (v1.228.0): a LOCAL primary that answered with an error refuses
         # by name unless the user chose "failover" in Settings. No restart.
         local_policy=lambda: str(getattr(config, "local_primary_policy", "refuse") or "refuse"),
+        # Live (v1.514.0, F2): "Send coding work to a model server" words.
+        code_route=lambda: config,
     )
     registry = default_registry()
 

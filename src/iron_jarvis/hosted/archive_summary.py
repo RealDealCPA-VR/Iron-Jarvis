@@ -124,7 +124,12 @@ def build_summary(row: Any, events: list[dict[str, Any]], *, dropped: int = 0, e
     folder = str(getattr(row, "folder", "") or "")
     title = _one(getattr(row, "title", "") or "", 120) or "Untitled session"
     own = [e for e in events if isinstance(e, dict) and not e.get("parent")]
-    asks = [e for e in own if e.get("type") == "user" and str(e.get("text") or "").strip()]
+    # v1.514.0 (H10): a message Iron Jarvis sent by itself to carry the work
+    # on (a restart, a check-again; ``carry`` on the event, as
+    # ``branching._index_of`` reads it) is not one of the user's asks.
+    asks = [e for e in own if e.get("type") == "user" and str(e.get("text") or "").strip()
+            and not e.get("carry")]
+    carried = sum(1 for e in own if e.get("type") == "user" and e.get("carry"))
     replies = [e for e in own if e.get("type") == "done"]
     git = _git_facts(folder, _created(row)) if folder else {"state": "no_folder"}
 
@@ -165,6 +170,8 @@ def build_summary(row: Any, events: list[dict[str, Any]], *, dropped: int = 0, e
                 out.append(f"  - {_one(ev.get('text'), ASK_CHARS)}")
             if len(later) > MAX_ASKS:
                 out.append(f"  - …and {len(later) - MAX_ASKS} earlier")
+    if carried:
+        out.append(f"- Iron Jarvis carried it on {carried} time{'s' if carried != 1 else ''}.")
     out.extend(_files_lines(git, own, folder))
     out.extend(_commit_lines(git))
     out.extend(_check_lines(own))

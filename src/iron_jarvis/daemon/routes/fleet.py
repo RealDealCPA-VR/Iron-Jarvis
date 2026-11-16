@@ -37,10 +37,9 @@ from ...core.failures import plain_failure
 #: response carries the comparison provider+model back to the UI.
 _DEFAULT_BASELINE = "anthropic:claude-opus-4-8"
 
-#: Agent types that count as "coding work" for code routing. Wave 2 owns the
-#: real set + the routing hook; this is the Wave 1 default so /fleet/code-route
-#: can answer honestly (and "off") before that lands.
-_DEFAULT_CODE_TASK_CLASSES = ("builder", "maintainer", "reviewer")
+#: Agent types that count as "coding work" for code routing: ONE definition,
+#: ``providers.router.CODE_TASK_CLASSES``, beside the decision the
+#: orchestrator applies (v1.514.0, F2); read by ``_code_route_view``.
 
 #: The tiny tool a /verify completion is asked to call. Deliberately trivial —
 #: we are testing whether the server emits a tool call AT ALL, not reasoning.
@@ -681,41 +680,37 @@ def register(app: FastAPI, d) -> None:
         coding work going to the local box?"), and every field it reports is
         read live — a target pointing at a deleted node says so instead of
         looking configured.
+
+        v1.514.0 (second review F2): it says what the orchestrator DOES, from
+        the same decision (``providers.router.code_route_target``) and the
+        same kinds of work (``code_task_classes``): which agents with no
+        model of their own go where, that a target which is not available
+        refuses those runs, and, when the setting is on but cannot apply,
+        that it is NOT in effect and why (``in_effect``).
         """
-        cfg = d.platform.config
-        enabled = bool(getattr(cfg, "fleet_code_route_enabled", False))
-        target = (getattr(cfg, "fleet_code_target", "") or "").strip()
-        raw_classes = (getattr(cfg, "fleet_code_task_classes", "") or "").strip()
-        classes = (
-            [c.strip() for c in raw_classes.split(",") if c.strip()]
-            if raw_classes
-            else list(_DEFAULT_CODE_TASK_CLASSES)
+        from ...providers import egress as _egress
+        from ...providers.router import (
+            CODE_ROUTE_NONE,
+            CODE_ROUTE_PLACE,
+            CODE_ROUTE_REFUSE,
+            code_route_target,
+            code_task_classes,
         )
 
-        provider = model = ""
+        cfg = d.platform.config
+        mgr = getattr(d.platform, "providers", None)
+        enabled = bool(getattr(cfg, "fleet_code_route_enabled", False))
+        target = (getattr(cfg, "fleet_code_target", "") or "").strip()
+        classes = code_task_classes(cfg)
+        route = code_route_target(cfg, mgr)
+        provider, model = route.provider, route.model
+
         available: bool | None = None
         circuit = "unknown"
         tool_use: bool | None = None
-        if target:
-            from ...providers.routing import parse_pm
-
-            pm = parse_pm(target)
-            if pm:
-                provider, model = pm
-
-        if not enabled:
-            why = "code routing is off"
-        elif not target:
-            why = "code routing is on but no target model is set"
-        elif not provider:
-            why = f"target {target!r} isn't a provider:model pair"
-        else:
-            node = _node_for_provider(provider)
-            mgr = getattr(d.platform, "providers", None)
-            try:
-                available = bool(mgr.available(provider)) if mgr else None
-            except Exception:  # noqa: BLE001 — availability must never 500 a GET
-                available = None
+        in_effect = route.kind != CODE_ROUTE_NONE and bool(classes)
+        if route.kind != CODE_ROUTE_NONE:
+            available = route.kind != CODE_ROUTE_REFUSE
             health = getattr(getattr(d.platform, "router", None), "health", None)
             if health is not None:
                 try:
@@ -725,34 +720,52 @@ def register(app: FastAPI, d) -> None:
             # v1.424.0 (D8): the TARGET MODEL's own answer (a live check of
             # it, its server's statement, the node record for its default
             # model) — the node's one flag spoke for every model behind it.
+            node = _node_for_provider(provider)
             tool_use = _target_tool_use(provider, model, node) if node is not None else None
-            if node is None:
-                why = f"{provider} isn't a routable fleet node"
-            elif available is not True:
-                # False AND None both land here on purpose: if we cannot CONFIRM
-                # the target is available, saying "coding work goes there" is a
-                # claim we haven't earned. Unknown is reported as unknown.
-                why = (
-                    f"{provider} is configured but not currently available"
-                    if available is False
-                    else f"{provider} is configured but not currently available "
-                    "(availability couldn't be checked)"
+
+        name = _egress.friendly_name(provider, mgr) if provider else ""
+        shown = f"{name} ({model})" if model else name
+        who = _code_agents_words(classes)
+        own = "so each run keeps its own model"
+        if not enabled:
+            why = "code routing is off"
+        elif route.reason == "no_target":
+            why = f"Not in effect: no model server is chosen for coding work, {own}."
+        elif route.reason == "unparsed":
+            why = f"Not in effect: {target} is not written as server:model, {own}."
+        elif route.reason == "not_a_server":
+            why = f"Not in effect: {provider} is not one of your model servers, {own}."
+        elif not classes:
+            why = (
+                "Not in effect: none of the kinds of coding work listed is a kind"
+                f" of agent, {own}."
+            )
+        elif route.kind == CODE_ROUTE_REFUSE:
+            why = (
+                f"{who} with no model of their own are set to use {shown}, which"
+                " is not currently available, so those runs are refused until it"
+                f" is back. Change this in {CODE_ROUTE_PLACE}."
+            )
+        else:
+            why = f"{who} with no model of their own use {shown}."
+            if circuit == "open":
+                why += (
+                    " It failed several times in a row, so those runs are refused"
+                    " until it recovers."
                 )
-            elif circuit == "open":
-                why = f"{provider}'s circuit is open after repeated failures"
             elif tool_use is False:
-                why = f"{model or provider} can't call tools, so coding work would fail"
-            else:
-                unverified = (
-                    (f" (tool use unverified for {model})" if model else " (tool use unverified)")
-                    if tool_use is None else ""
+                why += f" {model or name} can't call tools, so coding work would fail."
+            elif tool_use is None:
+                why += (
+                    f" Its tool use is unverified for {model}."
+                    if model else " Its tool use is unverified."
                 )
-                why = f"coding work goes to {target}{unverified}"
 
         return {
             "enabled": enabled,
             "target": target,
             "task_classes": classes,
+            "in_effect": bool(enabled and in_effect),
             "effective": {
                 "provider": provider,
                 "model": model,
@@ -762,6 +775,17 @@ def register(app: FastAPI, d) -> None:
                 "why": why,
             },
         }
+
+    def _code_agents_words(classes: list[str]) -> str:
+        """"Builder, maintainer and reviewer agents": the kinds of work the
+        setting takes, as a sentence's subject."""
+        names = [c.strip() for c in classes if c.strip()]
+        if not names:
+            return "Coding agents"
+        text = names[0] if len(names) == 1 else (
+            ", ".join(names[:-1]) + " and " + names[-1]
+        )
+        return text[:1].upper() + text[1:] + " agents"
 
     def _auth_kw(node) -> dict[str, Any]:
         return fleet_auth_kw(d.fleet, node)
@@ -1213,7 +1237,11 @@ def register(app: FastAPI, d) -> None:
 
         Rides the existing usage rollup (no new store): ``by_model`` rows whose
         provider is a fleet node (or the two legacy local slots) are LOCAL and
-        cost nothing; everything else is cloud. The saving is what those local
+        cost nothing; everything else is cloud. Since v1.514.0 (second review
+        F9) each row is judged per MODEL (``usage_view.usage_row_is_local``):
+        a name the user's own proxy passes on to a cloud service is cloud,
+        adds nothing to the avoided spend, and is counted in
+        ``cloud_cost_unknown_tokens`` when no price is known. The saving is what those local
         tokens WOULD have cost on a named baseline model — the response always
         carries ``comparison_provider``/``comparison_model``/``basis`` so the
         UI can never present a bare, unattributed savings number.
@@ -1240,27 +1268,39 @@ def register(app: FastAPI, d) -> None:
         # has folded in since v1.94.0 — measured live, it reported 141,623 local
         # tokens against a true 53,994,582, which reads as "my hardware is idle"
         # when it is doing almost all the work.
-        from ...eval.usage_view import is_local_provider, merged_usage
+        from ...eval import usage_view as _usage_view
+        from ...eval.usage_view import is_local_provider
 
-        summary = merged_usage(d.platform, days) or {}
+        summary = _usage_view.merged_usage(d.platform, days) or {}
         labels = {getattr(n, "id", ""): getattr(n, "label", "") for n in d.fleet.nodes()}
         live_ids = set(labels)
+        manager = getattr(d.platform, "providers", None)
 
         by_node: dict[str, dict[str, Any]] = {}
-        local_tokens = cloud_tokens = 0
+        local_tokens = cloud_tokens = cloud_cost_unknown_tokens = 0
         cloud_cost_usd = est_avoided_usd = 0.0
         for row in summary.get("by_model") or []:
             provider = str(row.get("provider") or "")
             in_tok = int(row.get("input_tokens") or 0)
             out_tok = int(row.get("output_tokens") or 0)
-            is_local = is_local_provider(provider)
+            # v1.514.0 (second review F9): judged per MODEL. A name the
+            # user's own model proxy passes on to a cloud service was billed:
+            # cloud, never "local", never avoided spend.
+            is_local = _usage_view.usage_row_is_local(
+                provider, str(row.get("model") or ""), manager
+            )
             if not is_local:
                 cloud_tokens += in_tok + out_tok
+                cost = float(row.get("cost_usd") or 0.0)
                 # v1.300.0: a subscription's list-price EQUIVALENT (the row
                 # carries `list_price_equivalent`) is not cloud SPEND — the
                 # tokens count, the dollars do not.
                 if not row.get("list_price_equivalent"):
-                    cloud_cost_usd += float(row.get("cost_usd") or 0.0)
+                    cloud_cost_usd += cost
+                # Sent on by one of the user's own servers at a price nobody
+                # knows: said as not known, never as $0.
+                if is_local_provider(provider) and cost <= 0.0:
+                    cloud_cost_unknown_tokens += in_tok + out_tok
                 continue
             local_tokens += in_tok + out_tok
             avoided = cost_for(comparison_provider, comparison_model, in_tok, out_tok)
@@ -1325,6 +1365,9 @@ def register(app: FastAPI, d) -> None:
             "local_tokens": local_tokens,
             "cloud_tokens": cloud_tokens,
             "cloud_cost_usd": round(cloud_cost_usd, 6),
+            # v1.514.0 (F9): cloud tokens one of the user's own model servers
+            # passed on, with no known price (their cost is not in the sum).
+            "cloud_cost_unknown_tokens": cloud_cost_unknown_tokens,
             "est_avoided_usd": round(est_avoided_usd, 6) if baseline_priced else None,
             "baseline_priced": baseline_priced,
             "comparison_provider": comparison_provider,

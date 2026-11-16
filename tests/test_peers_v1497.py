@@ -476,7 +476,10 @@ async def test_desk_does_the_laptops_task_and_the_answer_comes_home(tmp_path, la
 
         thread = (await ca.get(f"/chat/threads/{tid}")).json()
         homed = [m for m in thread["messages"] if m.get("panelWho") == "remote:desk"]
-        assert homed and homed[-1]["content"] == "Desk read the notes: three action items."
+        # v1.514.0 (F4): the line ends by saying who answered, on which computer.
+        assert homed and homed[-1]["content"] == (
+            "Desk read the notes: three action items.\n\nAnswered by gpt-5 on desk."
+        )
 
     # Each computer heard from the other.
     (pa,) = _peers(a)

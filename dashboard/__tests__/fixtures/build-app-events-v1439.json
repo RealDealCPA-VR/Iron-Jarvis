@@ -1116,7 +1116,7 @@
     "name": "run_command",
     "title": "Run echo hello-from-agy",
     "input": "{\"CommandLine\": \"echo hello-from-agy\", \"WaitMsBeforeAsync\": 3000, \"command\": \"echo hello-from-agy\", \"toolSummary\": \"echo test\"}",
-    "status": "done",
+    "status": "stopped",
     "output": "Antigravity did not report this step's result.",
     "turn": "turn-1"
    },

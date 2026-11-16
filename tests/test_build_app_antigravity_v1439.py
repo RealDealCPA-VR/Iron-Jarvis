@@ -405,8 +405,10 @@ async def test_stop_is_its_cancel_and_a_step_it_said_no_more_about_is_drawn_stop
 async def test_full_access_never_leaves_a_step_spinning(tmp_path, monkeypatch):
     evs, _s, _w, _log, _v, _a = await run_agy(tmp_path, monkeypatch, "antigravity_full_access")
     rows = [e for e in evs if e["type"] == "tool"]
-    assert rows[-1]["status"] == "done" and rows[-1]["output"] == A.UNREPORTED_TOOL, \
-        "measured: in Full access its command row got no end — drawn ended, its result said not reported"
+    # v1.514.0 (A13): closed "stopped" (did not finish), never "done": its
+    # result was never reported, so it is not claimed as a success.
+    assert rows[-1]["status"] == "stopped" and rows[-1]["output"] == A.UNREPORTED_TOOL, \
+        "measured: in Full access its command row got no end — closed, its result said not reported"
 
 
 async def test_a_failed_reply_is_a_failure_naming_antigravity_with_its_own_logs_reason(tmp_path, monkeypatch):

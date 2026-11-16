@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.513.0 (2026-11-15).*
+holds itself to. Current as of v1.514.0 (2026-11-15).*
 
 ---
 
@@ -2041,6 +2041,47 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## What helpers, tools and servers report (v1.514.0)
+
+The sixth of eight releases from the second review. Iron Jarvis answers for
+work done by helpers, other coding tools and other computers, so what they
+report back has to be true.
+
+- **A task sent to another computer says how it really ended.** It used to
+  come home as "done" whatever happened. The answer now says when the run
+  failed, was stopped, finished only in part, or did nothing that needed an
+  OK ("Nothing that needed an OK on that computer was done."), and it names
+  the model that answered ("Answered by <model> on <computer>."). The
+  mission card shows Failed, Stopped or Needs you to match. A computer still
+  on an older version is understood as before.
+- **"Send coding work to a model server" now does what it says.** With the
+  setting on, a builder, maintainer or reviewer agent that has no model of
+  its own uses the server and model you chose. A model you picked for an
+  agent, a session or a chat always wins. If that server is not available
+  the run is refused by name, and nothing else is used in its place. The
+  Model servers page says exactly this, and says "Not in effect" with the
+  reason when it cannot apply. One thing to know before turning it on:
+  "builder" is also the kind of agent a run gets when nothing else is
+  chosen, so most background runs with no model of their own will go to
+  that server. The setting is off unless you turn it on.
+- **Tokens passed on to the cloud are not "local".** If one of your own
+  model servers is a proxy that sends some models to a cloud service, those
+  tokens are now counted as cloud on the Model servers page, never as
+  "avoided spend", and marked "cost not known" where no price is known.
+- **A helper that was stopped is not listed as done.** A coding helper whose
+  piece was stopped, failed or was cut off used to read "done" ten minutes
+  later, or straight after a restart. Its state is now read from its own
+  record.
+- **Codex.** A sub-agent finishing its own piece no longer ends your reply
+  as done; its steps still show in the reply. When Codex moves a turn to
+  another model, the notice names the model and the receipt shows it.
+- **Smaller ones.** The archive summary of a coding session no longer lists
+  Iron Jarvis's own "carry on" messages as things you asked for. A reply
+  from Antigravity, Grok or OpenCode that ends in a way Iron Jarvis does not
+  know reads as failed, not completed. A step Antigravity never reported on
+  is not shown as done or counted as a changed file, and the model shown
+  after a switch is the one Antigravity confirmed.
 
 ## "Done" means done in a coding session (v1.513.0)
 

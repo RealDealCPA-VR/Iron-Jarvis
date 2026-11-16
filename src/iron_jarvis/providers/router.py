@@ -561,6 +561,155 @@ def _retry_words() -> str:
     return "retry"
 
 
+# --------------------------------------------------------------------------- #
+# "Send coding work to a model server" (v1.514.0, second review F2, E7).
+# --------------------------------------------------------------------------- #
+# The three settings (``fleet_code_route_enabled``, ``fleet_code_target`` =
+# "provider:model", ``fleet_code_task_classes``) had no reader: the Model
+# servers page said "Coding work goes to <server>" while every run went to
+# the default model. The decision is HERE, pure, and read by the three places
+# that need it: ``Orchestrator.create_session`` (the one point every agent run
+# passes, where "the run has no model of its own" can still be told: by the
+# time a call reaches this router the session always names a provider), the
+# router's not-available refusal (the words), and the Model servers page's
+# view (``routes/fleet._code_route_view``).
+
+#: The agent types that count as coding work when ``fleet_code_task_classes``
+#: is empty. ONE definition: the page shows it, the orchestrator applies it.
+CODE_TASK_CLASSES: tuple[str, ...] = ("builder", "maintainer", "reviewer")
+
+#: Where the setting is changed, named in every sentence about it.
+CODE_ROUTE_PLACE = "Settings › Models › Model servers"
+
+CODE_ROUTE_USE = "use"
+CODE_ROUTE_REFUSE = "refuse"
+CODE_ROUTE_NONE = "none"
+
+
+@dataclasses.dataclass(frozen=True)
+class CodeRoute:
+    """What the coding-work setting decides for one run (or, from
+    :func:`code_route_target`, for the setting as a whole).
+
+    ``kind``: :data:`CODE_ROUTE_USE` (run on ``provider``/``model``),
+    :data:`CODE_ROUTE_REFUSE` (the target is set but not available: the run
+    is refused by name, never moved) or :data:`CODE_ROUTE_NONE` (not
+    applicable). ``reason`` says why in one word: ``off``, ``no_target``,
+    ``unparsed``, ``not_a_server``, ``unavailable``, ``named``,
+    ``not_coding`` or ``""``."""
+
+    kind: str
+    provider: str = ""
+    model: str = ""
+    reason: str = ""
+
+
+def code_task_classes(config: Any) -> list[str]:
+    """The agent types the setting takes, as the orchestrator applies them:
+    the user's comma-separated list (lower case, known agent types only,
+    never ``chat``), else :data:`CODE_TASK_CLASSES`. Never raises."""
+    try:
+        from ..core.models import AgentType
+
+        known = {t.value for t in AgentType}
+        raw = str(getattr(config, "fleet_code_task_classes", "") or "").strip()
+    except Exception:  # noqa: BLE001 — the built-in set
+        return list(CODE_TASK_CLASSES)
+    if not raw:
+        return list(CODE_TASK_CLASSES)
+    out: list[str] = []
+    for part in raw.split(","):
+        c = part.strip().lower()
+        if c and c in known and c not in out:
+            out.append(c)
+    return out
+
+
+def _is_model_server(provider: str) -> bool:
+    """A model server the user added: a ``fleet-<id>`` node or one of the two
+    own-server slots (``ollama``, ``custom``). Never a cloud API, a
+    subscription CLI, OpenCode or the demo model."""
+    p = (provider or "").strip().lower()
+    return p in ("ollama", "custom") or (p.startswith("fleet-") and len(p) > len("fleet-"))
+
+
+def code_route_target(config: Any, manager: Any) -> CodeRoute:
+    """What the setting itself says right now (no particular run): off, not
+    in effect (no target, not "provider:model", not a model server), set to
+    a server that is not available (``refuse``), or ``use``. Reads only the
+    config and ``manager.available`` (cached answers, no request). Never
+    raises."""
+    try:
+        if not bool(getattr(config, "fleet_code_route_enabled", False)):
+            return CodeRoute(CODE_ROUTE_NONE, reason="off")
+        target = str(getattr(config, "fleet_code_target", "") or "").strip()
+        if not target:
+            return CodeRoute(CODE_ROUTE_NONE, reason="no_target")
+        pm = _routing.parse_pm(target)
+        if not pm or not pm[0]:
+            return CodeRoute(CODE_ROUTE_NONE, reason="unparsed")
+        provider, model = pm[0].strip(), (pm[1] or "").strip()
+        if not _is_model_server(provider):
+            return CodeRoute(CODE_ROUTE_NONE, provider, model, reason="not_a_server")
+        try:
+            available = bool(manager.available(provider)) if manager is not None else False
+        except Exception:  # noqa: BLE001 — not known to be available: refused, never moved
+            available = False
+        if not available:
+            return CodeRoute(CODE_ROUTE_REFUSE, provider, model, reason="unavailable")
+        return CodeRoute(CODE_ROUTE_USE, provider, model)
+    except Exception:  # noqa: BLE001 — a fault never routes anything
+        return CodeRoute(CODE_ROUTE_NONE, reason="off")
+
+
+def code_route_decision(
+    config: Any, task_class: "str | None", *, named: bool, manager: Any
+) -> CodeRoute:
+    """THE decision for one agent run (pure): ``use`` the target, ``refuse``
+    (the target is set but not available), or ``none``.
+
+    It applies only when the setting is on and in effect
+    (:func:`code_route_target`), the run's agent type is one of
+    :func:`code_task_classes`, and the run has NO model of its own
+    (*named* False: neither the agent's definition, the session, the caller
+    nor a held coding session or account named a provider or a model; an
+    explicit choice always wins). Never a chat turn. Never raises."""
+    if named:
+        return CodeRoute(CODE_ROUTE_NONE, reason="named")
+    tc = str(task_class or "").strip().lower()
+    if not tc or tc == "chat" or tc not in code_task_classes(config):
+        return CodeRoute(CODE_ROUTE_NONE, reason="not_coding")
+    return code_route_target(config, manager)
+
+
+def code_route_refusal_words(label: str, model: str = "") -> str:
+    """The sentence a coding run is refused with when the model server its
+    work is set to go to is not available: by name, where to change it, and
+    that nothing stood in."""
+    name = (label or "").strip() or _failure_words.MODEL_SERVER_WORDS
+    which = f" ({model})" if (model or "").strip() else ""
+    return (
+        f"Coding work is set to go to {name}{which}, and it isn't available right"
+        f" now, so this run was not answered.{_NO_STAND_IN} Bring that model"
+        f" server back up, or change where coding work goes in {CODE_ROUTE_PLACE}"
+        " or on the Model servers page, and run it again."
+    )
+
+
+class CodeRouteUnavailable(ProviderError):
+    """A coding run whose work is set to go to a model server that is not
+    available (v1.514.0, F2). Worded for a person (``plain_words``), never
+    failed over, never retried."""
+
+    no_failover = True
+    plain_words = True
+
+    def __init__(self, provider: str, model: str, words: str) -> None:
+        super().__init__(words, transient=False)
+        self.failed_provider = provider
+        self.model = model
+
+
 def _short_detail(text: str, wanted: str, status: "int | None") -> str:
     """The endpoint's own error detail for the answered-error refusal, minus
     the adapter's ``"<provider> API error <status>:"`` prefix (the refusal
@@ -838,8 +987,13 @@ class ModelRouter:
         deadline_s: float = 180.0,
         strict_pin: "Callable[[], bool] | None" = None,
         local_policy: "Callable[[], str] | None" = None,
+        code_route: "Callable[[], Any] | None" = None,
     ) -> None:
         self.manager = manager
+        #: Live config reader for "Send coding work to a model server"
+        #: (v1.514.0, F2): only its refusal words are read here
+        #: (:meth:`_code_route_refusal`). None (a bare test router) = inert.
+        self._code_route: "Callable[[], Any] | None" = code_route
         # Auto routing (opt-in): consulted only when the resolved provider is
         # "auto". None (default) => the "auto" pseudo-provider is never selected,
         # so this is inert and routing is identical to before.
@@ -1162,6 +1316,29 @@ class ModelRouter:
                 f" connection or {other}."
             )
         return self._tag_refusal(ProviderError(detail + fix), kind, wanted, partial=partial)
+
+    def _code_route_refusal(
+        self, wanted: str, task_class: "str | None"
+    ) -> "CodeRouteUnavailable | None":
+        """The refusal for a coding run whose work is SET to go to a model
+        server that is not available (v1.514.0, F2), or None. Read at the
+        not-connected seam of both lanes, so the run is still refused by name
+        and never moved; this only says WHY it went there and where to
+        change it. Applies when the call's provider IS the setting's target
+        and its agent type is one the setting takes. Never raises."""
+        getter = self._code_route
+        if getter is None:
+            return None
+        try:
+            route = code_route_decision(getter(), task_class, named=False, manager=self.manager)
+            if route.kind != CODE_ROUTE_REFUSE:
+                return None
+            if (wanted or "").strip().lower() != route.provider.lower():
+                return None
+            words = code_route_refusal_words(self._endpoint_label(route.provider), route.model)
+            return CodeRouteUnavailable(route.provider, route.model, words)
+        except Exception:  # noqa: BLE001 — wording only; the plain refusal stands
+            return None
 
     @staticmethod
     def _tag_refusal(
@@ -2232,7 +2409,12 @@ class ModelRouter:
         )
         if downgraded:
             await self._publish_not_connected(wanted, session_id)
-            raise self._unavailable_error(wanted, pinned, kind=self._unavailable_kind(wanted))
+            # CODING WORK SET TO A MODEL SERVER (v1.514.0, F2): the same
+            # refusal by name, worded for why the run went there. MIRROR
+            # NOTE (lock-step): complete() and stream().
+            raise self._code_route_refusal(wanted, task_class) or self._unavailable_error(
+                wanted, pinned, kind=self._unavailable_kind(wanted)
+            )
 
         # CAPABILITY-AWARE ROUTING. Tools (v1.131.0): a tool-carrying request
         # that resolved to a text-only adapter is WRAPPED in the prompted-tools
@@ -2781,7 +2963,11 @@ class ModelRouter:
         )
         if downgraded:
             await self._publish_not_connected(wanted, session_id)
-            raise self._unavailable_error(wanted, pinned, kind=self._unavailable_kind(wanted))
+            # CODING WORK SET TO A MODEL SERVER (v1.514.0, F2). MIRROR NOTE
+            # (lock-step): complete() and stream().
+            raise self._code_route_refusal(wanted, task_class) or self._unavailable_error(
+                wanted, pinned, kind=self._unavailable_kind(wanted)
+            )
 
         # Capability-aware routing — same contract as complete(): a tool
         # request on a text-only adapter is wrapped in the prompted-tools

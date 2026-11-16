@@ -496,7 +496,13 @@ async def test_emergency_stop_stops_a_running_remote_task_and_the_sender_hears_i
     replies = [c for c in net.calls if c["url"].endswith("/agents/remote/desk/inbound")]
     assert len(replies) == 1
     sent = json.loads(replies[0]["body"])
+    # v1.514.0 (second review F4): ``kind`` stays "done" (an older receiver
+    # checks it against the four it knows); the fields beside it say how the
+    # run really ended, and the message opens with that sentence.
     assert sent["kind"] == "done" and "Emergency stop" in sent["message"]
+    assert sent["outcome"] == "stopped"
+    assert sent["outcome_words"] == "The run was stopped before it finished."
+    assert sent["message"].startswith(sent["outcome_words"])
 
 
 # --------------------------------------------------------------------------- #
@@ -585,7 +591,10 @@ async def test_two_computers_desk_does_the_task_and_the_answer_comes_home(tmp_pa
         thread = (await ca.get(f"/chat/threads/{tid}")).json()
         homed = [m for m in thread["messages"] if m.get("panelWho") == "remote:desk"]
         assert homed, thread["messages"]
-        assert homed[-1]["content"] == "Desk read the notes: three action items."
+        # v1.514.0 (F4): the line ends by saying who answered, on which computer.
+        assert homed[-1]["content"] == (
+            "Desk read the notes: three action items.\n\nAnswered by gpt-5 on desk."
+        )
         assert homed[-1]["panelKind"] == "done"
         # ...and the room has the inbound line.
         room = AgentThreads(a.state.platform.engine).get(room_id)
@@ -702,7 +711,11 @@ def test_a_restart_cut_task_still_tells_the_sender(tmp_path, lan):
     asyncio.run(td.drain_replies())
     replies = [c for c in net.calls if c["url"].endswith("/agents/remote/desk/inbound")]
     assert len(replies) == 1
-    assert json.loads(replies[0]["body"])["message"] == RESTART_SUMMARY
+    # v1.514.0 (F4): a run a restart cut off comes home "failed", and its
+    # message opens with this computer's sentence for that ending.
+    sent = json.loads(replies[0]["body"])
+    assert (sent["kind"], sent["outcome"]) == ("done", "failed")
+    assert sent["message"] == f"{sent['outcome_words']}\n\n{RESTART_SUMMARY}"
 
 
 async def test_a_run_with_no_reply_address_sends_nothing(tmp_path, lan):
@@ -971,7 +984,12 @@ async def test_a_run_that_crashes_still_tells_the_sender(tmp_path, lan, monkeypa
     assert len(replies) == 1, "a crashed run still answers the computer that asked"
     sent = json.loads(replies[0]["body"])
     assert sent["kind"] == "done" and sent["conversation_id"] == "athr_f"
-    assert sent["message"] and (rows[0].summary or "").startswith(sent["message"])
+    # v1.514.0 (F4): "failed" beside it, and the message opens with that
+    # sentence, followed by the run's own failure sentence.
+    assert sent["outcome"] == "failed"
+    lead = sent["outcome_words"] + "\n\n"
+    assert sent["message"].startswith(lead)
+    assert (rows[0].summary or "").startswith(sent["message"][len(lead):])
 
 
 async def test_the_answer_is_masked_on_the_way_home(tmp_path, lan):

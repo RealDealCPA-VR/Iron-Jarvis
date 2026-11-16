@@ -47,6 +47,9 @@ AUTH = {"Authorization": f"Bearer {INSTALL}"}
 A_IP, B_IP = "10.0.0.1", "10.0.0.2"
 A_HOST, B_HOST = f"{A_IP}:8787", f"{B_IP}:8787"
 INBOUND = f"http://{A_HOST}/agents/remote/desk/inbound"
+#: v1.514.0 (F4): desk's answer as it lands in the chat: the message, then
+#: who answered on which computer.
+HOMED = "Desk read the notes.\n\nAnswered by gpt-5 on desk."
 
 
 # --------------------------------------------------------------------------- #
@@ -255,7 +258,7 @@ async def test_a_failed_answer_keeps_its_key_and_a_later_try_delivers_it_once(tm
         clock_b.ahead(seconds=10)
         await _pass(b)
         assert len(_answers(net)) == 2
-        assert [m["content"] for m in _homed(a, tid)] == ["Desk read the notes."]
+        assert [m["content"] for m in _homed(a, tid)] == [HOMED]
         assert not _key_kept(b, row.id), "the key outlived the delivered answer"
         summary = _row(b, row.id).summary or ""
         assert td.retry_note("laptop", "").split(":")[0] not in summary
@@ -319,7 +322,7 @@ async def test_after_the_last_try_the_answer_waits_and_goes_when_the_other_compu
         assert r.status_code == 200, r.text
         await td.drain_replies()
         assert len(_answers(net)) == td.REPLY_TRIES + 1
-        assert [m["content"] for m in _homed(a, tid)] == ["Desk read the notes."]
+        assert [m["content"] for m in _homed(a, tid)] == [HOMED]
         assert not _key_kept(b, row.id)
         summary = _row(b, row.id).summary or ""
         assert td.waiting_note("laptop", "").split(":")[0] not in summary
@@ -339,7 +342,7 @@ async def test_an_owed_answer_goes_when_this_computer_presses_check_too(tmp_path
         assert r.status_code == 200, r.text
         await td.drain_replies()
         assert len(_answers(net)) == 2
-        assert [m["content"] for m in _homed(a, tid)] == ["Desk read the notes."]
+        assert [m["content"] for m in _homed(a, tid)] == [HOMED]
         assert not _key_kept(b, row.id)
 
 
@@ -359,7 +362,7 @@ async def test_a_restart_in_between_still_delivers(tmp_path, lan):
     b2.state.platform.reply_clock = clock_b2
     await _pass(b2)
     assert len(_answers(net)) == 2
-    assert [m["content"] for m in _homed(a, tid)] == ["Desk read the notes."]
+    assert [m["content"] for m in _homed(a, tid)] == [HOMED]
     assert not _key_kept(b2, row.id)
 
 

@@ -1197,6 +1197,10 @@ class Orchestrator:
             options[PERSON_STARTED_OPTION] = True
         else:
             options.pop(PERSON_STARTED_OPTION, None)
+        # CODING WORK TO A MODEL SERVER (v1.514.0, second review F2): a coding
+        # run with NO model of its own takes the setting's target, as if the
+        # user had picked it, BEFORE the Local only check below judges it.
+        provider, model = self._code_routed(agent_type, provider, model, options)
         if options.get("local_only") is True or _egress.current_scope().on:
             options["local_only"] = True
             _lo_provider = provider or self.p.config.default_provider
@@ -1362,6 +1366,45 @@ class Orchestrator:
             await self._settle_never_started(session)
             raise
         return session
+
+    def _code_routed(
+        self, agent_type: Any, provider: "str | None", model: "str | None", options: dict
+    ) -> "tuple[str | None, str | None]":
+        """``(provider, model)`` for a new run under "Send coding work to a
+        model server" (v1.514.0, F2): the setting's target when
+        ``providers.router.code_route_decision`` applies it (on, a model
+        server, a coding agent type, and nothing named a model: not the
+        caller, not the agent's definition, not a held coding session or
+        model team member, not an account the work was handed over on),
+        else the caller's own values unchanged. A target that is not
+        available is still the run's model: its first call is refused by
+        name, never moved to the default. The row says so
+        (``options["code_route"]``). Never raises."""
+        try:
+            from ..providers.hold import current_hold
+            from ..providers.router import CODE_ROUTE_NONE, code_route_decision
+
+            hold = current_hold()
+            named = bool(
+                (provider or "").strip()
+                or (model or "").strip()
+                or (hold is not None and (hold.provider or "").strip())
+                or str(options.get("account") or "").strip()
+            )
+            kind = getattr(agent_type, "value", agent_type)
+            route = code_route_decision(
+                self.p.config, str(kind or ""), named=named,
+                manager=getattr(self.p, "providers", None),
+            )
+            if route.kind == CODE_ROUTE_NONE:
+                return provider, model
+            options["code_route"] = (
+                f"{route.provider}:{route.model}" if route.model else route.provider
+            )
+            return route.provider, (route.model or None)
+        except Exception:  # noqa: BLE001 — the setting never breaks a start
+            log.warning("could not read where coding work goes", exc_info=True)
+            return provider, model
 
     async def _settle_never_started(self, session: Session) -> None:
         """Mark a run that was stopped before anyone could start it CANCELLED

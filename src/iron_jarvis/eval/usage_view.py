@@ -70,6 +70,30 @@ def is_local_provider(provider: str) -> bool:
     return False
 
 
+def usage_row_is_local(provider: str, model: str = "", manager: Any = None) -> bool:
+    """True when one USAGE ROW's tokens (*provider*, *model*) stayed on the
+    user's own hardware (v1.514.0, second review F9).
+
+    :func:`is_local_provider` judges the provider NAME; a model proxy the user
+    runs (a ``fleet-<gateway>``) can pass some names on to a cloud service
+    (``fleet/upstreams``), and those tokens were billed. So a local name is
+    asked once more, per model, of the proxy's own routing table through the
+    manager's cached oracle (``egress.proxy_routes_to_cloud``: never a network
+    request; a fault reads as cloud). No manager, or no table describing the
+    provider (not a proxy, not read yet, a removed server): the name decides,
+    as before. Never raises."""
+    if not is_local_provider(provider):
+        return False
+    if manager is None:
+        return True
+    try:
+        from ..providers.egress import proxy_routes_to_cloud
+
+        return not proxy_routes_to_cloud(provider, model, manager)
+    except Exception:  # noqa: BLE001 — a privacy question fails closed
+        return False
+
+
 def _fold(out: dict[str, Any], src: dict[str, Any]) -> None:
     """Merge one external source's ``totals``/``by_model``/``by_day`` into the
     rollup, in place. Same-day rows merge rather than duplicating."""

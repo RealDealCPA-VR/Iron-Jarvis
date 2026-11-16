@@ -239,6 +239,49 @@ def deliver_session_line(
         }
 
 
+def remote_report_text(message: str, computer: str, ending: Any) -> str:
+    """The words a report from another Iron Jarvis lands with — in the room,
+    the chat it was asked in and the phone (v1.514.0, second review F4).
+
+    ``ending`` is ``threads.report_ending``'s reading of the report. Empty (an
+    older Iron Jarvis, a message that is not a report, a junk outcome): the
+    message exactly as it came. Otherwise, when the run did not end as plain
+    done, the line OPENS with how it ended, in that computer's own sentence
+    (``outcome_words``, else ``outcome.run_ending``'s for the outcome word),
+    said once even though that computer's message already opens with it; and
+    it ENDS by saying who answered: "Answered by <model> on <computer>." ("Tried
+    …" for a run that failed or was stopped; "the demo model" for the demo).
+    Every word but ours is that computer's, and it stays inside the agent's
+    fenced line when it reaches a model. Pure; never raises."""
+    text = str(message or "").strip()
+    try:
+        if not isinstance(ending, dict) or not ending.get("outcome"):
+            return text
+        from .task_door import ending_of_outcome
+
+        outcome = str(ending.get("outcome") or "")
+        read = ending_of_outcome(outcome)
+        if read is None:
+            return text
+        if outcome != "done":
+            lead = str(ending.get("outcome_words") or "").strip() or read.reason
+            if lead and text.startswith(lead):
+                text = text[len(lead):].strip()
+            if lead:
+                text = f"{lead}\n\n{text}" if text else lead
+        provider = str(ending.get("answered_provider") or "").strip()
+        model = str(ending.get("answered_model") or "").strip() or provider
+        if provider == "mock":
+            model = "the demo model"
+        name = " ".join(str(computer or "").split())
+        if model and name:
+            verb = "Tried" if outcome in ("failed", "stopped") else "Answered by"
+            text = f"{text}\n\n{verb} {model} on {name}." if text else f"{verb} {model} on {name}."
+        return text
+    except Exception:  # noqa: BLE001 — wording never loses the message
+        return str(message or "").strip()
+
+
 def say_in_chat(engine: Any, thread_id: str, words: str, *, event_bus: Any = None) -> dict[str, Any]:
     """Add ONE line of Iron Jarvis's own to a chat (v1.510.0): what this
     computer knows, with no agent's name on it (a wait for another computer

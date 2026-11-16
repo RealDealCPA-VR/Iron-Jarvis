@@ -184,6 +184,8 @@ export interface FleetCodeRoute {
   /** "provider:model", e.g. "fleet-vllm:deepseek-v4-flash-dspark". */
   target?: string | null;
   task_classes?: string[] | null;
+  /** v1.514.0: false when the setting is on but cannot apply (`why` says why). */
+  in_effect?: boolean | null;
   effective?: {
     provider?: string | null;
     model?: string | null;
@@ -209,6 +211,11 @@ export interface FleetUsage {
   local_tokens?: number | null;
   cloud_tokens?: number | null;
   cloud_cost_usd?: number | null;
+  /**
+   * v1.514.0: cloud tokens one of the user's own model servers passed on to a
+   * cloud service, with no known price (not in `cloud_cost_usd`).
+   */
+  cloud_cost_unknown_tokens?: number | null;
   /** What the LOCAL tokens would have cost on the comparison model. */
   est_avoided_usd?: number | null;
   /** The baseline the estimate is priced against — required to show any $. */

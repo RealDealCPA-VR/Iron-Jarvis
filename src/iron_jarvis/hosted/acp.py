@@ -69,6 +69,9 @@ IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".webp": "image/webp"}
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_IMAGES = 8
+#: v1.514.0 (A13): a ``stopReason`` Iron Jarvis does not know.
+UNKNOWN_STOP_TITLE = "{label} ended this reply in a way Iron Jarvis does not know: {reason}"
+UNKNOWN_STOP_FIX = "What it did before that is shown above. Send the message again to carry on."
 
 
 # --------------------------------------------------------------------------- #
@@ -460,9 +463,23 @@ class AcpDriver(Driver):
             self._end(self._stop or "completed")
 
     def stop_of(self, stop: str, result: dict[str, Any]) -> str:
-        """The Code view's stop for the tool's ``stopReason``."""
-        return {"end_turn": "completed", "cancelled": "interrupted", "max_tokens": "completed",
-                "max_turn_requests": "max_turns", "refusal": "failed"}.get(stop, "completed")
+        """The Code view's stop for the tool's ``stopReason``.
+
+        v1.514.0 (A13): an ending Iron Jarvis does not know never reads as
+        success: it is the failed ending, said in plain words with the
+        tool's own reason (bounded). After the user's Stop it is that stop."""
+        known = {"end_turn": "completed", "cancelled": "interrupted", "max_tokens": "completed",
+                 "max_turn_requests": "max_turns", "refusal": "failed"}
+        if stop in known:
+            return known[stop]
+        if self._interrupting:
+            return "interrupted"
+        if not self._errored:
+            self._errored = True
+            reason = one_line(str(stop or "").replace("_", " "), 80) or "no reason given"
+            self.emit(W.error(UNKNOWN_STOP_TITLE.format(label=self.LABEL, reason=reason), UNKNOWN_STOP_FIX,
+                              one_line(stop, 200)))
+        return "failed"
 
     async def answer(self, ask: Ask, decision: str, message: str, answers: Any) -> str:
         await self.write(self.prepare_answer(ask, decision, message, answers))
