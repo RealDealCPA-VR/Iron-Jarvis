@@ -98,7 +98,10 @@ async def test_the_finish_reviewers_task_carries_the_form_then_the_verdict_last(
     world.reviewer = ["R1. app.py:1 — fine — nothing\nVERDICT: approved"]
     await stream(world.p, body(world.ws))
     task = reviewer_calls(world)[0]["task"]
-    assert task.startswith(F.REVIEW_BRIEF_LEAD)
+    # v1.508.0: a folder outside any git repository gets the lead without git.
+    from iron_jarvis.harness.git_read import in_repository
+
+    assert task.startswith(F.review_lead(in_repository(world.ws)))
     assert task.rstrip().endswith(F.REVIEW_FINDINGS_ASK + "\n\n" + TR.VERDICT_ASK)
 
 

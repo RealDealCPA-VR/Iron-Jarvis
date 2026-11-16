@@ -247,6 +247,29 @@ KIND_TABLE: dict[str, dict[str, Any]] = {
         ),
         "owners": ("src/iron_jarvis/tools/registry.py",),
     },
+    # v1.508.0 (``harness/failure_kind``): a failed call that was the MODEL's
+    # mistake (text not in the file, a helper not on the team, a command in
+    # the wrong shell's words) is listed ONLY when the model never put it
+    # right — a later call of the same tool on the same target that worked
+    # is the system working, and is counted as left out instead.
+    "model_mistake": {
+        "title": "A model's mistake it did not put right",
+        "expected": (
+            "When a call fails because of how the model called it, the error tells it exactly what "
+            "to change, and its next call on the same file, program or helper works."
+        ),
+        "owners": ("src/iron_jarvis/harness/failure_kind.py", "src/iron_jarvis/tools/registry.py"),
+    },
+    # v1.508.0: the PC or the folder was not what the call assumed (no git
+    # repository, a file another program holds, a program not installed).
+    "environment_mismatch": {
+        "title": "A call that did not fit this PC or folder",
+        "expected": (
+            "A tool that cannot work in this folder or on this PC is not offered there, or its "
+            "answer says what to use instead, and the model does not call it again."
+        ),
+        "owners": ("src/iron_jarvis/harness/failure_kind.py", "src/iron_jarvis/harness/helpers.py"),
+    },
     "tool_not_given": {
         "title": "A tool the model was not given, or called with the wrong arguments",
         "expected": "A model calls only the tools it was given, with the arguments they require.",
@@ -1200,6 +1223,13 @@ class Gathered:
     #: row kept its trust, or a call no row's time span holds). Fail closed.
     attempts_low_left_out: int = 0
     attempts_unknown_left_out: int = 0
+    #: v1.508.0 (``harness/failure_kind``): failed calls left out because the
+    #: model put its own mistake right (a later call of the same tool on the
+    #: same target worked), and intentional negative tests (a placeholder
+    #: meant to fail). ``model_mistakes`` counts every model mistake read.
+    model_mistakes: int = 0
+    recovered_left_out: int = 0
+    probes_left_out: int = 0
     unreadable: list[str] = field(default_factory=list)
     problems: list[Problem] = field(default_factory=list)
 
@@ -1529,20 +1559,27 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
 
     # ---- every call in scope (the "N of M" totals) ----------------------- #
     totals: Counter[tuple[str, str, str]] = Counter()
+    # v1.508.0: each session's successful calls — (when, tool, target) — so a
+    # model's mistake that a later call put right is not listed as a problem.
+    from ..harness import failure_kind as _fk
+
+    worked: dict[str, list[tuple[datetime, str, str]]] = {}
     try:
         got = _rows(
             engine,
             "SELECT t.session_id, t.tool, t.created_at, s.origin, s.agent_name, s.agent_type, "
             "s.provider, s.model, s.trust, CASE WHEN json_valid(s.options_json) "
-            "THEN json_extract(s.options_json, '$.build_session') END, t.called_as "
+            "THEN json_extract(s.options_json, '$.build_session') END, t.called_as, t.ok, t.args_json "
             "FROM toolinvocation AS t LEFT JOIN session AS s ON s.id = t.session_id "
             f"WHERE t.created_at >= :lo AND t.created_at <= :hi AND {clause} "
             "ORDER BY t.created_at DESC LIMIT :n",
             lo=s_lo, hi=s_hi, n=MAX_LEAD_CALLS, **params,
         )
-        for sid, tool, created, origin, aname, atype, prov, model, trust, build, called in got:
+        for sid, tool, created, origin, aname, atype, prov, model, trust, build, called, ok, a_json in got:
             sid = str(sid or "")
             at = _utc(created)
+            if ok in (1, True, "1"):
+                worked.setdefault(sid, []).append((at, str(tool), _fk.target_of(str(tool), a_json)))
             if str(called or "") == REVIEW_CALLED_AS:
                 continue  # the team review's own call: read off the reply line
             if sid.startswith("build:"):
@@ -1622,6 +1659,24 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
             if verdict is None:
                 continue
             kind, line = verdict
+            if kind == "tool_failed":
+                # v1.508.0: whose failure it is (``harness/failure_kind``).
+                fk = _fk.classify(tool, args_json, output)
+                if fk == _fk.POLICY:
+                    continue
+                if fk == _fk.PROBE:
+                    out.probes_left_out += 1
+                    continue
+                if fk == _fk.MODEL:
+                    out.model_mistakes += 1
+                    target = _fk.target_of(tool, args_json)
+                    if any(w_at > at and w_tool == tool and w_target == target
+                           for w_at, w_tool, w_target in worked.get(sid, ())):
+                        out.recovered_left_out += 1
+                        continue
+                    kind = "model_mistake"
+                elif fk == _fk.ENVIRONMENT:
+                    kind = "environment_mismatch"
             # A command that could not run is shown by the lines that SHOW it,
             # never by the rest of its output (the user's own data).
             words = command_failure_words(output) if tool in COMMAND_TOOLS else failure_example(output)
@@ -2304,6 +2359,17 @@ def render_listed(g: Gathered, *, max_problems: int = MAX_PROBLEMS,
         facts.append(f"- Left out: {_attempts_low_words(g.attempts_low_left_out)}")
     if g.attempts_unknown_left_out:
         facts.append(f"- Left out: {_attempts_unknown_words(g.attempts_unknown_left_out)}")
+    if g.recovered_left_out:
+        # v1.508.0: recovery is tracked, not every refused call a defect.
+        facts.append(
+            f"- Left out: {_plural(g.recovered_left_out, 'failed call')} the model put right itself "
+            f"({g.recovered_left_out} of {_plural(g.model_mistakes, 'model mistake')} recovered)"
+        )
+    if g.probes_left_out:
+        facts.append(
+            f"- Left out: {_plural(g.probes_left_out, 'intentional negative test')} (a call meant "
+            "to fail, such as a placeholder text)"
+        )
     if g.unreadable:
         facts.append(f"- Could not read: {', '.join(g.unreadable)}")
     head = "\n".join([TITLE, "", INSTRUCTION, "", *facts])

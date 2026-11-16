@@ -368,7 +368,12 @@ WINDOWS_SWITCH_PROGRAMS = frozenset({
 })
 #: Names that are GNU programs in Git's bash (no path conversion happens:
 #: the switch IS the file name it reads) — with what a cmd user meant.
-GNU_NAMESAKES = {"dir": "ls", "find": "find (GNU's)", "sort": "sort (GNU's)", "timeout": "sleep"}
+GNU_NAMESAKES = {
+    "dir": "ls", "find": "find (GNU's)", "sort": "sort (GNU's)", "timeout": "sleep",
+    # v1.508.0: the ledger's `rmdir /s /q a && rmdir /s /q b && dir /b` was
+    # told only about `dir`.
+    "rmdir": "rm -rf <folder>",
+}
 #: `start`'s own switches (``start /?``).
 _START_SWITCHES = frozenset({
     "b", "min", "max", "wait", "d", "i", "low", "normal", "high", "realtime", "abovenormal",
@@ -432,6 +437,90 @@ def switch_refusal(command: object) -> str:
     except Exception:  # noqa: BLE001 — a guard that crashes must not stop a turn
         return ""
     return ""
+
+
+#: v1.508.0 — cmd.exe's folder-removal switches. GNU ``rmdir`` (which is
+#: what ``rmdir`` and, through Git's aliases, nothing else is in bash) takes
+#: ``/s`` and ``/q`` as folder names and STILL removes any EMPTY folder named
+#: after them: a call that meant "delete this tree" does something else.
+_RMDIR_SWITCHES = frozenset({"s", "q"})
+_RMDIR_PROGRAMS = frozenset({"rmdir", "rd"})
+
+
+def _rmdir_refusal(command: str) -> str:
+    for words in _commands(command):
+        if _program(words[0]) not in _RMDIR_PROGRAMS:
+            continue
+        sw = next((w for w in words[1:]
+                   if (m := _SWITCH_RX.match(w)) and m.group(1).lower() in _RMDIR_SWITCHES), "")
+        if sw:
+            return (
+                f"This shell is Git for Windows' bash: `{_program(words[0])} {sw}` is cmd.exe's "
+                f"way to delete a folder tree, and here `{sw}` is read as a folder name. Nothing "
+                "was run; in bash write rm -rf <folder>."
+            )
+    return ""
+
+
+#: v1.508.0 — PowerShell code inside a DOUBLE-QUOTED ``-Command`` written in
+#: bash. Bash expands ``$`` inside double quotes before PowerShell starts:
+#: the ledger's ``ForEach-Object { ... $_.ProcessId }`` reached PowerShell
+#: as ``IJ_BASH_COMMAND.ProcessId`` (bash's ``$_``) and failed to parse —
+#: five times, in three helpers. Only names that are PowerShell's own are
+#: looked for, so a bash variable passed in on purpose still runs.
+_PS_CALL_RX = re.compile(
+    r"\b(?:powershell|pwsh)(?:\.exe)?\b[^\"\n]*?\s-(?:c|command)\s+\"",
+    re.IGNORECASE,
+)
+_PS_VAR_RX = re.compile(r"\$(?:_(?![A-Za-z0-9_])|PSItem\b|env:|true\b|false\b|null\b|args\b|input\b)",
+                        re.IGNORECASE)
+
+
+def _double_quoted_from(command: str, start: int) -> str:
+    """The body of the double-quoted bash word whose opening quote is just
+    before ``start``, with ``\\$`` escapes removed (they are safe)."""
+    out: list[str] = []
+    i = start
+    while i < len(command):
+        ch = command[i]
+        if ch == "\\" and i + 1 < len(command):
+            nxt = command[i + 1]
+            out.append("" if nxt == "$" else ch + nxt)
+            i += 2
+            continue
+        if ch == '"':
+            break
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _powershell_dollar_refusal(command: str) -> str:
+    for m in _PS_CALL_RX.finditer(command):
+        body = _double_quoted_from(command, m.end())
+        var = _PS_VAR_RX.search(body)
+        if var:
+            word = var.group(0)
+            return (
+                "This shell is Git for Windows' bash: inside double quotes it replaces "
+                f"`{word}` with its own value before PowerShell reads the script, so the "
+                "PowerShell code would break. Nothing was run. Put the PowerShell code in single "
+                f"quotes (powershell -NoProfile -Command '...'), write `\\{word}`, or save it to a "
+                ".ps1 file and run powershell -NoProfile -File <file>."
+            )
+    return ""
+
+
+def bash_refusal(command: object) -> str:
+    """The refusal for a bash command that would not do what it was written
+    to do, before anything runs (v1.508.0): ``start /b`` (:func:`switch_refusal`),
+    ``rmdir /s /q`` and PowerShell's ``$_`` inside a double-quoted
+    ``-Command``. "" for anything else. Pure, never raises."""
+    try:
+        text = str(command or "")
+        return switch_refusal(text) or _rmdir_refusal(text) or _powershell_dollar_refusal(text)
+    except Exception:  # noqa: BLE001 — a guard that crashes must not stop a turn
+        return ""
 
 
 def windows_command_hint(command: object, output: str = "") -> str:
@@ -500,6 +589,6 @@ def hidden_console() -> Any:
 
 
 __all__ = [
-    "COMMAND_VAR", "ENV_OVERRIDE", "GitBash", "RUNNER", "bash_path_for", "candidates", "find",
+    "COMMAND_VAR", "ENV_OVERRIDE", "GitBash", "RUNNER", "bash_path_for", "bash_refusal", "candidates", "find",
     "forget", "hidden_console", "invocation", "is_wsl_launcher",
 ]

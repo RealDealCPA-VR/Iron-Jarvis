@@ -251,7 +251,11 @@ async def test_a_folder_that_is_no_repository_is_one_sentence(tmp_path):
     # (A temp folder inside a repository would answer; this one is not.)
     if res.ok:
         pytest.skip("the temp folder sits inside a git repository on this machine")
-    assert res.error == "This folder is not in a git repository."
+    # v1.508.0: the sentence goes on to say what to use instead, and the
+    # data marks it an environment fact, never the tool's fault.
+    assert res.error == G.NOT_A_REPO
+    assert res.error.startswith("This folder is not in a git repository")
+    assert res.data["not_a_repo"] is True
 
 
 async def test_a_refused_call_runs_nothing(tmp_path, monkeypatch):

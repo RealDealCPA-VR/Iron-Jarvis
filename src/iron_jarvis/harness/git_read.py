@@ -1060,6 +1060,40 @@ def git_read_env() -> dict[str, str]:
     return env
 
 
+#: v1.508.0 — what git_read answers in a folder with no git history. The
+#: ledger (v1.500.2) had two reviewers start with ``git_read status`` in such
+#: a folder and get one bare sentence; the answer now says what to use
+#: instead, and its ``data`` marks it an environment fact
+#: (``harness/failure_kind``), never a fault of the tool.
+NOT_A_REPO = (
+    "This folder is not in a git repository, so git has no history or changes to show here and "
+    "git_read cannot help in it. Do not call git_read again in this folder: read the files with "
+    "read_file and search them with grep (compare against a backup copy if the task names one)."
+)
+#: How many folders up :func:`in_repository` looks for ``.git``.
+_REPO_WALK = 64
+
+
+def in_repository(folder: Any) -> bool:
+    """True when ``folder`` or a folder above it holds ``.git`` (a folder, or
+    the file a worktree has). BLOCKING (bounded stat walk); never raises."""
+    try:
+        here = os.path.abspath(str(folder))
+    except (TypeError, ValueError):
+        return False
+    for _ in range(_REPO_WALK):
+        try:
+            if os.path.exists(os.path.join(here, ".git")):
+                return True
+        except OSError:
+            return False
+        up = os.path.dirname(here)
+        if up == here:
+            return False
+        here = up
+    return False
+
+
 def _masked(text: str) -> str:
     try:
         from ..detections.redact import mask
@@ -1097,7 +1131,7 @@ def run(cwd: Any, command: str, args: list[str]) -> ToolResult:
     if got.code != 0:
         err = _masked(str(got.err or got.out or "").strip())
         if "not a git repository" in err.lower():
-            return ToolResult(ok=False, error="This folder is not in a git repository.", data={"command": command})
+            return ToolResult(ok=False, error=NOT_A_REPO, data={"command": command, "not_a_repo": True})
         if len(err) > ERROR_CHARS:
             err = err[:ERROR_CHARS].rstrip() + " […]"
         return ToolResult(ok=False, error=f"{label} failed: {err or 'it gave no reason'}",
@@ -1175,5 +1209,6 @@ def git_read_tools() -> list[Tool]:
 
 __all__ = [
     "ALLOWED", "GIT_READ_TIMEOUT_S", "GitReadTool", "NAME", "OPTIONS", "OUTPUT_CHARS",
-    "allowed_options", "git_read_env", "git_read_tools", "refusal", "run", "safe_argv",
+    "NOT_A_REPO", "allowed_options", "git_read_env", "git_read_tools", "in_repository", "refusal",
+    "run", "safe_argv",
 ]

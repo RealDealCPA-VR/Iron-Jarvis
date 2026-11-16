@@ -2042,6 +2042,37 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## A coding session recovers from its own mistakes (v1.508.0)
+
+Read off a real coding session with a team, where helpers kept repeating
+failed steps. None of this changes what you do; the models working for you
+get clearer answers, and you get fewer false alarms.
+
+- **A failed change shows what the file holds now.** When a model tries to
+  change text that is not in a file, Iron Jarvis shows it the lines around
+  the closest match (and, when only the spacing differs, the exact text to
+  copy) instead of one line. It still never changes a near match. It also
+  says when the model never read the file, or when someone else changed it
+  since. After three failed changes to one file in a row, the next waits
+  until the model reads the file again.
+- **Commands in the right shell's words.** In Git's bash, cmd.exe's
+  `rmdir /s /q` and PowerShell code in double quotes (whose `$_` bash would
+  swap out) are stopped before they run, with the way to write them.
+- **Folders without git history.** A helper that asks git about such a folder
+  is told to read the files instead, and the end-of-reply review no longer
+  points the reviewer at git there.
+- **The lead knows its team.** In a session with a team, the list of agents
+  starts with that team and marks everyone else; asking for a model that is
+  not on it says to tell you, so you can add it.
+- **Three tries on the same file get a nudge.** A helper that fails three
+  times in a row on one file or program, each time differently, is told to
+  stop guessing and look first.
+- **Fewer false alarms.** "Copy as a fix request" and the daily "Find out why
+  … keeps failing" suggestion no longer count a model's mistake that it put
+  right itself, a deliberate test meant to fail, or a folder that simply had
+  no git history. The report says how many it left out, and lists the rest
+  under their own headings instead of as faults in the app.
+
 ## It learns from what went wrong (v1.507.1)
 
 The last part of the review fixes: Iron Jarvis now notices when something

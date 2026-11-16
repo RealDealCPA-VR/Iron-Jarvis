@@ -327,7 +327,10 @@ async def test_on_the_finish_hands_the_change_to_the_reviewer_who_only_reads(wor
     args = json.loads(rows[0].args_json)
     assert args["role"] == "review" and args["piece"] == F.REVIEW_PIECE
     task = args["task"]
-    assert task.startswith(F.REVIEW_BRIEF_LEAD)
+    # v1.508.0: a folder outside any git repository gets the lead without git.
+    from iron_jarvis.harness.git_read import in_repository
+
+    assert task.startswith(F.review_lead(in_repository(world.ws)))
     assert REQUEST in task and "I set X to 2 in app.py." in task
     assert "--- a/app.py" in task and "+++ b/app.py" in task
     assert "-X = 1" in task and "+X = 2" in task

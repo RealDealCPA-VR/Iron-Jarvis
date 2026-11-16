@@ -205,6 +205,22 @@ class ListAgentsTool(Tool):
                 row["team"] = _model_team.facts_words(self.platform, facts)
             dynamic.append(row)
         lines = ["Built-in agents: " + ", ".join(builtin)]
+        # A CODING SESSION'S TEAM (v1.508.0). The ledger (v1.500.2): a team
+        # lead called list_agents, read every model-team member marked
+        # "[team member: ...]", and three minutes later handed a piece to
+        # one that was NOT on the session's team — refused by the helper
+        # door. In a team turn the listing says, first, who the session's
+        # team is, and marks every other agent as refused for this session.
+        from ..harness import helpers as _helpers
+
+        _hp = _helpers.parent_for(ctx)
+        _st = getattr(getattr(_hp, "team", None), "team", None) if _hp is not None else None
+        if _st is not None:
+            from ..harness.team import session_team_line
+
+            lines.insert(0, session_team_line(_st))
+            for row in dynamic:
+                row["on_session_team"] = bool(_st.is_worker(row["name"]) or _st.is_reviewer(row["name"]))
         if dynamic:
             # THE ROSTER GOES IN THE TEXT, not only in `data` (v1.185.0). The
             # runtime hands the model `result.output` and nothing else, so a
@@ -216,6 +232,8 @@ class ListAgentsTool(Tool):
                 head = f"  - {row['name']} (base={row['base_type']})"
                 if row.get("team"):
                     head += f" [team member: {row['team']}]"
+                if row.get("on_session_team") is False:
+                    head += " [NOT on this session's team: a piece handed to it is refused]"
                 tools = row.get("effective_tools")
                 if tools is None:
                     # UNKNOWN, said as unknown. "no tools" here would read as a

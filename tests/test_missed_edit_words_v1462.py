@@ -33,7 +33,11 @@ async def test_nothing_close_says_read_the_file_again(tmp_path):
         _ctx(tmp_path),
     )
     assert res.ok is False
-    assert res.error == "`old` text was not found in config.ts." + T.NOTHING_CLOSE
+    # v1.508.0: the session's own note follows on its own line (this session
+    # never read config.ts — ``harness/edit_memory``).
+    head, _, note = res.error.partition("\n")
+    assert head == "`old` text was not found in config.ts." + T.NOTHING_CLOSE
+    assert note.startswith("This session has not read config.ts")
     assert "Read the file again" in res.error and COPY not in res.error
     assert (tmp_path / "config.ts").read_text(encoding="utf-8") == "export const port = 3000;\n"
 
@@ -44,7 +48,11 @@ async def test_a_near_miss_still_names_the_closest_line_and_says_copy(tmp_path):
         {"path": "config.ts", "old": "export const port = 3001;", "new": "y"}, _ctx(tmp_path)
     )
     assert "The closest line in the file is line 1" in res.error
-    assert res.error.endswith(COPY) and "Read the file again" not in res.error
+    # v1.508.0: the refusal goes on to show the file's lines around it.
+    head = res.error.split("\n", 1)[0]
+    assert head.endswith(COPY + " Lines 1-2 of the file now:")
+    assert "  1| export const port = 3000;" in res.error
+    assert "Read the file again" not in res.error
 
 
 def test_a_file_past_the_scan_bound_never_claims_nothing_is_close(monkeypatch):

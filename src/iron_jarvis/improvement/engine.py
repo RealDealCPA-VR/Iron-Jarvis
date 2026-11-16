@@ -45,6 +45,7 @@ from ..core.db import session_scope
 from ..core.ids import utcnow
 from ..core.logging import get_logger
 from ..core.models import Session, ToolInvocation
+from ..harness import failure_kind as FK
 from ..learning.engine import STATED_SOURCES
 from ..learning.models import LessonRecord
 from .models import AgentStatRecord, LessonStatRecord, OutcomeRecord
@@ -889,10 +890,39 @@ class ImprovementEngine:
                     inv = None
                 if inv:
                     refused.add(str(inv))
+            # v1.508.0 (``harness/failure_kind``): the successful calls of the
+            # same sessions and tools, so a model's mistake that a later call
+            # on the same file / program / helper put right is not counted.
+            worked: dict[str, list[tuple[datetime, str, str]]] = {}
+            if rows:
+                ok_rows = db.exec(
+                    select(ToolInvocation.session_id, ToolInvocation.tool, ToolInvocation.args_json,
+                           ToolInvocation.created_at)
+                    .where(ToolInvocation.ok == True)  # noqa: E712 - SQL boolean
+                    .where(ToolInvocation.created_at >= since)
+                    .where(ToolInvocation.created_at <= moment)
+                    .where(ToolInvocation.tool.in_({r.tool for r in rows if r.tool}))  # type: ignore[attr-defined]
+                    .where(ToolInvocation.session_id.in_({r.session_id for r in rows}))  # type: ignore[attr-defined]
+                    .limit(max(1, int(window)) * 10)
+                ).all()
+                for sid, t, args_json, at in ok_rows:
+                    worked.setdefault(str(sid), []).append((at, str(t), FK.target_of(str(t), args_json)))
         failed: dict[str, list[ToolInvocation]] = {}
         for r in rows:
             if not r.tool or r.id in refused or r.verdict == PermissionMode.DENY:
                 continue
+            # v1.508.0: whose failure it was. A person's or a rule's decision,
+            # an intentional negative test, and a folder or PC that did not fit
+            # the call are not the app's to fix; nor is a model's mistake it
+            # put right itself. A mistake never put right still counts.
+            kind = FK.classify(r.tool, r.args_json, r.output)
+            if kind in (FK.POLICY, FK.PROBE, FK.ENVIRONMENT):
+                continue
+            if kind == FK.MODEL:
+                target = FK.target_of(r.tool, r.args_json)
+                if any(at > r.created_at and t == r.tool and tg == target
+                       for at, t, tg in worked.get(str(r.session_id), ())):
+                    continue
             failed.setdefault(r.tool, []).append(r)
         self_dev = bool(getattr(self.p.config, "self_dev_enabled", False))
         out: list[dict] = []

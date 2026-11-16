@@ -170,6 +170,9 @@ def _user_facing_tool_output(name: str, content: str) -> str:
     again``) becomes plain words; the untrusted fence keeps only its body; the
     repeat note goes; a head-cut says it was cut."""
     text = str(content or "")
+    # v1.508.0: the loop's notes go FIRST — a note after a fence (the
+    # same-target note, ``target_streak_note``) kept the fence from matching.
+    text = _LOOP_NOTE.sub("", text)
     m = _FENCE.match(text.strip())
     if m:
         # v1.502.0: unwrapped FIRST — a refusal of an outside-text tool
@@ -785,6 +788,26 @@ _MAX_STEP_STREAM_CHARS = 200_000
 #: third time.
 _BREAKER_NOTE_AT = 2    # ...failures of the same call earn an honest note
 _BREAKER_REFUSE_AT = 3  # ...and the next identical attempt is refused
+#: v1.508.0 — the SAME TOOL failing on the SAME TARGET (a file, a program, a
+#: helper) with DIFFERENT arguments every time: the identical-call breaker
+#: never sees it. The v1.500.2 ledger had a worker send eleven refused edits
+#: of two files, each `old` a little different. Every this-many failures in a
+#: row earn a note (never a refusal: a new argument may be the right one).
+_TARGET_NOTE_EVERY = 3
+
+
+def target_streak_note(tool: str, target: str, streak: int) -> str:
+    """The note a result carries when ``tool`` has failed ``streak`` times in
+    a row on ``target`` with different arguments ("" between notes). It
+    starts like the repeat note, so the user-facing copy drops it
+    (:data:`_LOOP_NOTE`)."""
+    if not target or streak < _TARGET_NOTE_EVERY or streak % _TARGET_NOTE_EVERY:
+        return ""
+    return (
+        f"\n\n[repeat — this is failure {streak} in a row of `{tool}` on {target}, each time "
+        "with different arguments. Stop guessing: look at what is there now (read the file, or "
+        "the command's error), then change the approach, or report what is blocking you.]"
+    )
 
 
 #: Cap on tools armed FOR THE TASK on top of a definition's static roster
@@ -4412,6 +4435,8 @@ class AgentRuntime:
         _bstate = breaker_state if breaker_state is not None else {}
         fail_streaks: dict[str, int] = _bstate.setdefault("fail_streaks", {})
         broken_calls: dict[str, str] = _bstate.setdefault("broken_calls", {})
+        # v1.508.0: failures in a row per (tool, target), any arguments.
+        target_streaks: dict[tuple[str, str], int] = _bstate.setdefault("target_streaks", {})
         # COMPACTION STATE (v1.153.0). An agent loop has no one to ask mid-run,
         # so unlike chat it never offers the choice — it compacts on its own at
         # the ceiling and reports it. `_cpt_covers` counts messages consumed
@@ -5161,10 +5186,22 @@ class AgentRuntime:
                     result.ok if not isinstance(result, BaseException) else False
                 )
                 signature = call_signature(tc.name, tc.arguments)
+                from ..harness.failure_kind import target_of as _target_of
+
+                _target = _target_of(tc.name, tc.arguments)
                 if call_ok:
                     fail_streaks.pop(signature, None)
                     broken_calls.pop(signature, None)
+                    target_streaks.pop((tc.name, _target), None)
                 else:
+                    _tstreak = target_streaks.get((tc.name, _target), 0) + 1
+                    if _target:
+                        target_streaks[(tc.name, _target)] = _tstreak
+                    if (fail_streaks.get(signature, 0) + 1 != _BREAKER_NOTE_AT
+                            and signature not in broken_calls):
+                        # (the identical-call note below, or the breaker's
+                        # own refusal, says it louder)
+                        content += target_streak_note(tc.name, _target, _tstreak)
                     streak = fail_streaks.get(signature, 0) + 1
                     fail_streaks[signature] = streak
                     if streak >= _BREAKER_NOTE_AT:

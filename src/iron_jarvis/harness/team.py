@@ -438,6 +438,17 @@ OFF_TEAM = (
     "'{who}' is not on this session's team. Hand this piece to a worker ({workers}), or ask "
     "for role:code, role:test or role:read{reviewer}."
 )
+#: v1.508.0: what an off-team refusal adds, so a lead that was ASKED for that
+#: model by the user says so instead of trying another door.
+OFF_TEAM_ASKED = (
+    " If the user asked for '{who}' by name, tell them it is not on this session's team; they "
+    "can add it to the session's team and ask again."
+)
+#: v1.508.0: the first line of ``list_agents`` in a team turn.
+SESSION_TEAM_LINE = (
+    "This coding session's team (hand pieces ONLY to these; any other agent is refused): "
+    "workers {workers}{reviewer}. Or ask for role:code, role:test or role:read."
+)
 NO_REVIEWER_REFUSAL = (
     "This session's team has no reviewer. Read the change yourself, or add a reviewer to the "
     "session's team."
@@ -450,9 +461,20 @@ WORKER_RULES = (
     "- Do only the piece you were given. Touch only the files the piece names; if it needs "
     "more, change them and say so in your report.\n"
     "- Run the tests the piece names, and say what they showed.\n"
+    "- When a tool call fails, read the error before anything else: it often shows the file's "
+    "current lines or names the right command. Change the call before you try again, and read a "
+    "file before you edit it; never send the same failing call twice.\n"
     "- End with a report: the files you changed, the tests you ran with their results, and "
     "anything you left undone."
 )
+
+
+def session_team_line(team: "SessionTeam") -> str:
+    """``list_agents``'s first line in a team turn (v1.508.0): the session's
+    workers and reviewer, the only valid hand-off targets."""
+    rev = f"; reviewer {_roster(team.reviewer)}" if team.reviewer else "; no reviewer"
+    return SESSION_TEAM_LINE.format(workers=", ".join(_roster(w) for w in team.workers) or "(none)",
+                                    reviewer=rev)
 
 
 def worker_rules() -> str:
@@ -586,8 +608,9 @@ class TeamTurn:
         if self.team.is_worker(name) or self.team.is_reviewer(name):
             return ""
         rev = f"; the reviewer is {_roster(self.team.reviewer)}" if self.team.reviewer else ""
-        return OFF_TEAM.format(who=name or "that helper",
+        said = OFF_TEAM.format(who=name or "that helper",
                                workers=", ".join(_roster(w) for w in self.team.workers), reviewer=rev)
+        return said + (OFF_TEAM_ASKED.format(who=name) if name else "")
 
     def no_worker(self, role: str, refusal: Any, reason: Any = "") -> str:
         """A worker piece (code / test / read) the router could not place:

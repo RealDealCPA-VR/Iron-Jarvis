@@ -178,6 +178,132 @@ def nearest_line_hint(text: str, old: str) -> str:
     return f"The closest line in the file is line {best_no}: {shown!r}."
 
 
+#: v1.508.0 — what a missed edit SHOWS of the file as it is now. The ledger
+#: (v1.500.2) had a worker send eleven refused edits of two test files in a
+#: row, between grep calls: each refusal named one line and the model guessed
+#: again. A refusal that shows the lines around the closest one (and, for text
+#: that differs only in spacing, the exact text there) makes the next call a
+#: copy instead of a guess. The engine still REFUSES: nothing is applied on a
+#: loose match (``parity.py``: "strict: unique match or refuse").
+_WINDOW_BEFORE = 3
+_WINDOW_AFTER = 3
+_WINDOW_LINE_CHARS = 160
+#: The exact text of a spacing-only match is shown up to this size; past it
+#: the refusal names the lines to read instead.
+_LOOSE_SHOW_LINES = 30
+_LOOSE_SHOW_CHARS = 3000
+
+
+def numbered_window(text: str, first: int, last: "int | None" = None, *,
+                    before: int = _WINDOW_BEFORE, after: int = _WINDOW_AFTER) -> str:
+    """Lines ``first``..``last`` (1-based) of ``text`` with ``before`` /
+    ``after`` lines of context, each as ``"  N| line"`` (long lines cut).
+    "" for a line outside the file. Pure, bounded."""
+    lines = text.split("\n")
+    last = first if last is None else last
+    if first < 1 or first > len(lines):
+        return ""
+    lo = max(1, first - before)
+    hi = min(len(lines), last + after)
+    width = len(str(hi))
+    out = []
+    for no in range(lo, hi + 1):
+        line = lines[no - 1]
+        if len(line) > _WINDOW_LINE_CHARS:
+            line = line[: _WINDOW_LINE_CHARS - 1] + "…"
+        out.append(f"  {str(no).rjust(width)}| {line}")
+    return "\n".join(out)
+
+
+def _nearest_line_no(hint: str) -> int:
+    """The 1-based line a :func:`nearest_line_hint` sentence names, or 0."""
+    import re
+
+    m = re.search(r"is line (\d+):", hint or "")
+    return int(m.group(1)) if m else 0
+
+
+def loose_matches(text: str, old: str, limit: int = 3) -> list[tuple[int, int]]:
+    """Where ``old`` matches WHOLE LINES of ``text`` when each line's leading
+    and trailing spacing is ignored: up to ``limit`` ``(first, last)`` 1-based
+    line spans. Blank lines at either end of ``old`` are not compared. Pure,
+    bounded (:data:`_HINT_MAX_LINES`)."""
+    probe = [ln.strip() for ln in normalize_newlines(old).split("\n")]
+    while probe and not probe[0]:
+        probe.pop(0)
+    while probe and not probe[-1]:
+        probe.pop()
+    if not probe:
+        return []
+    lines = [ln.strip() for ln in text.split("\n")[:_HINT_MAX_LINES]]
+    n = len(probe)
+    found: list[tuple[int, int]] = []
+    for i in range(0, len(lines) - n + 1):
+        if lines[i] == probe[0] and lines[i:i + n] == probe:
+            found.append((i + 1, i + n))
+            if len(found) >= limit:
+                break
+    return found
+
+
+def occurrence_lines(text: str, old: str, limit: int = 5) -> list[int]:
+    """The 1-based line each of the first ``limit`` occurrences of ``old``
+    starts on. Pure."""
+    out: list[int] = []
+    start = 0
+    while old and len(out) < limit:
+        at = text.find(old, start)
+        if at < 0:
+            break
+        out.append(text.count("\n", 0, at) + 1)
+        start = at + len(old)
+    return out
+
+
+def _lines_words(nos: list[int]) -> str:
+    words = [str(n) for n in nos]
+    if len(words) <= 1:
+        return "line " + "".join(words)
+    return "lines " + ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def _not_found_message(text: str, old_n: str, where: str) -> str:
+    """The refusal for ``old`` text that is not in the file, with what the
+    file holds now (v1.508.0)."""
+    msg = f"`old` text was not found in {where}."
+    total = len(text.split("\n"))
+    if total > _HINT_MAX_LINES:
+        return msg + " Copy the text exactly, including indentation."
+    loose = loose_matches(text, old_n)
+    if len(loose) == 1:
+        first, last = loose[0]
+        span = f"line {first}" if first == last else f"lines {first}-{last}"
+        exact = "\n".join(text.split("\n")[first - 1:last])
+        said = (f"{msg} It matches {span} only when the spacing at the start and end of each "
+                "line is ignored.")
+        if last - first + 1 <= _LOOSE_SHOW_LINES and len(exact) <= _LOOSE_SHOW_CHARS:
+            return (f"{said} The file holds exactly this there; copy it as `old`, with its "
+                    f"indentation:\n<<<\n{exact}\n>>>")
+        return (f"{said} Read {span} (read_file with offset and numbered: true) and copy the "
+                "text exactly.")
+    if len(loose) > 1:
+        return (f"{msg} When spacing is ignored it matches {len(loose)} places "
+                f"({_lines_words([a for a, _b in loose])}): copy the exact text of the one you "
+                "mean, with a line around it that makes it unique.")
+    hint = nearest_line_hint(text, old_n)
+    no = _nearest_line_no(hint)
+    if no:
+        lo, hi = max(1, no - _WINDOW_BEFORE), min(total, no + _WINDOW_AFTER)
+        return (f"{msg} {hint} Copy the text exactly, including "
+                f"indentation. Lines {lo}-{hi} of the file now:\n{numbered_window(text, no)}")
+    # v1.462.0. Read off the live ledger: 83 of 101 failed edits by team
+    # workers had NO line of the file close to `old` (the text was written
+    # from memory, or the file had changed). "Copy the text exactly" is the
+    # wrong advice for that: there is nothing to copy until the file is read
+    # again.
+    return msg + NOTHING_CLOSE
+
+
 def apply_exact_edit(text: str, old: str, new: str, *, replace_all: bool = False,
                      where: str = "the file") -> tuple[str, int]:
     """``(new_text, replacements)`` or :class:`EditError` in one sentence.
@@ -196,23 +322,14 @@ def apply_exact_edit(text: str, old: str, new: str, *, replace_all: bool = False
         raise EditError("`old` and `new` are the same — there is nothing to change")
     count = text.count(old_n)
     if count == 0:
-        hint = nearest_line_hint(text, old_n)
-        msg = f"`old` text was not found in {where}."
-        if hint:
-            raise EditError(f"{msg} {hint} Copy the text exactly, including indentation.")
-        if len(text.splitlines()) <= _HINT_MAX_LINES:
-            # v1.462.0. Read off the live ledger: 83 of 101 failed edits by
-            # team workers had NO line of the file close to `old` (the text
-            # was written from memory, or the file had changed). "Copy the
-            # text exactly" is the wrong advice for that: there is nothing to
-            # copy until the file is read again.
-            raise EditError(msg + NOTHING_CLOSE)
-        raise EditError(msg + " Copy the text exactly, including indentation.")
+        raise EditError(_not_found_message(text, old_n, where))
     if count > 1 and not replace_all:
+        at = occurrence_lines(text, old_n)
+        more = "" if len(at) >= count else " and more"
         raise EditError(
-            f"`old` text occurs {count} times in {where} — add surrounding lines "
-            "so it matches exactly one place, or pass replace_all: true to change "
-            "every occurrence"
+            f"`old` text occurs {count} times in {where} ({_lines_words(at)}{more}) — add "
+            "surrounding lines so it matches exactly one place, or pass replace_all: true to "
+            "change every occurrence"
         )
     if replace_all:
         return text.replace(old_n, new_n), count

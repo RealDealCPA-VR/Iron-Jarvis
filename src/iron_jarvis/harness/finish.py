@@ -2039,6 +2039,16 @@ def _named_in(rel: str, request: str) -> bool:
 #: v1.421.0 (Wave 1, A4, the owner's decision): the reviewer may also ask GIT
 #: about the folder (``harness/git_read`` — read-only; it runs no tests), and
 #: lists its findings in ONE form (:data:`REVIEW_FINDINGS_ASK`).
+#: v1.508.0: the git words of :data:`REVIEW_BRIEF_LEAD`, and what replaces
+#: them when the folder is not in a git repository.
+REVIEW_GIT_WORDS = (
+    ", and ask git about the folder with git_read (status, diff, log, show, blame and other "
+    "read-only git commands)"
+)
+REVIEW_NO_GIT_WORDS = (
+    "; this folder is not in a git repository, so there is no git history: the change below is "
+    "all there is to compare against"
+)
 REVIEW_BRIEF_LEAD = (
     "Review a change another model just made in this folder for the user. You can read any file "
     "here with your tools, and ask git about the folder with git_read (status, diff, log, show, "
@@ -2272,8 +2282,14 @@ def who_changed_lines(who: "Iterable[tuple[str, str]]") -> list[str]:
     return lines
 
 
+def review_lead(git: bool = True) -> str:
+    """The brief's first words: :data:`REVIEW_BRIEF_LEAD`, or (v1.508.0)
+    the same words without git for a folder that is not in a repository."""
+    return REVIEW_BRIEF_LEAD if git else REVIEW_BRIEF_LEAD.replace(REVIEW_GIT_WORDS, REVIEW_NO_GIT_WORDS)
+
+
 def review_brief(request: str, draft: str, change: str,
-                 who: "Iterable[tuple[str, str]]" = ()) -> str:
+                 who: "Iterable[tuple[str, str]]" = (), *, git: bool = True) -> str:
     """The task the team's reviewer is handed (``team_record.VERDICT_ASK`` is
     added by the helper door itself, ``model_team.review_task``). Every part
     the user, the coder or the folder wrote is masked
@@ -2298,7 +2314,10 @@ def review_brief(request: str, draft: str, change: str,
     # Review: masked BEFORE the cut (the v1.349.0 step-detail rule) — a cut
     # through a key leaves a piece the mask's shapes no longer recognise.
     asked = cut(mask(str(request or "")), MAX_REVIEW_REQUEST_CHARS)
-    parts = [REVIEW_BRIEF_LEAD, "## The user's request\n" + (asked or "(none)")]
+    # v1.508.0: in a folder with no git history the brief does not send the
+    # reviewer to git_read (the ledger's reviewers opened with `git status`
+    # there and were refused).
+    parts = [review_lead(git), "## The user's request\n" + (asked or "(none)")]
     said = cut(mask(str(draft or "")), MAX_REVIEW_DRAFT_CHARS)
     if said:
         parts.append("## What the coder says it did (check it; do not take it on trust)\n" + said)
@@ -3500,7 +3519,10 @@ class FinishCheck:
             publish_blocked(self.event_bus, self.session_id, scanned)
         # v1.421.0 (A4): who changed what, so each finding can be routed.
         self._who = who_changed_what(self.engine, self.session_id, self.mark)
-        return review_brief(self.request, self.draft, scanned.text, self._who)
+        from .git_read import in_repository
+
+        return review_brief(self.request, self.draft, scanned.text, self._who,
+                            git=in_repository(self.folder))
 
     async def _folder_changes(self) -> Any:
         """What the folder says this reply changed (``folder_changes.Changes``),

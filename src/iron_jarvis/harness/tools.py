@@ -211,6 +211,13 @@ class MultiEditTool(Tool):
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
 
+        from . import edit_memory
+
+        # v1.508.0: the same gate and notes as edit_file (`edit_memory`).
+        gated = edit_memory.gate(ctx, path, label)
+        if gated:
+            return ToolResult(ok=False, error=gated, data={"path": label, "gated": True})
+
         def _apply() -> int:
             tf, new_text, total = _multi_plan(path, label, edits)
             atomic_write_bytes(path, tf.encode(new_text))  # v1.504.0 (4.4)
@@ -218,10 +225,14 @@ class MultiEditTool(Tool):
 
         try:
             total = await asyncio.to_thread(_apply)
-        except (TextFileError, EditError) as exc:
+        except EditError as exc:
+            note = await asyncio.to_thread(edit_memory.note_failed_edit, ctx, path, label)
+            return ToolResult(ok=False, error=edit_memory.with_note(str(exc), note))
+        except TextFileError as exc:
             return ToolResult(ok=False, error=str(exc))
         except PermissionError as exc:
             return ToolResult(ok=False, error=unwritable_workspace_error(exc, ctx.workspace))
+        await asyncio.to_thread(edit_memory.note_seen, ctx, path)
         check = await check_line(path)
         data: dict[str, Any] = {
             "path": label,

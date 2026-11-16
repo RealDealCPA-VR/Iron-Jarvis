@@ -594,9 +594,9 @@ class ProcessStartTool(Tool):
             if bash is not None:
                 # v1.386.0 review: `start /b x` in bash opens an error window
                 # on the user's screen (`git_bash.switch_refusal`).
-                from ..sandbox.git_bash import switch_refusal
+                from ..sandbox.git_bash import bash_refusal
 
-                refused = switch_refusal(command)
+                refused = bash_refusal(command)
                 if refused:
                     return ToolResult(ok=False, error=refused, data={"shell": "bash", "refused": "bash"})
         if bash is None and os.name == "nt":

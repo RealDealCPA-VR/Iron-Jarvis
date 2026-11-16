@@ -288,7 +288,10 @@ def _capture_files() -> set[str]:
     import glob
     import tempfile
 
-    return set(glob.glob(os.path.join(tempfile.gettempdir(), "ij-out-*")))
+    # v1.508.0: only THIS process's files (``procs`` names them
+    # ``ij-out-<pid>-…``). The temp folder is shared, so with -n 4 another
+    # worker's capture file for a job still running read as "outlived".
+    return set(glob.glob(os.path.join(tempfile.gettempdir(), f"ij-out-{os.getpid()}-*")))
 
 
 def _pid_alive(pid: int) -> bool:

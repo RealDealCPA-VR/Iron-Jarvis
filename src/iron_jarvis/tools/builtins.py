@@ -794,6 +794,22 @@ class ReadFileTool(Tool):
         self._router_resolver = router_resolver
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        result = await self._execute(args, ctx)
+        if result.ok and args.get("paths") is None and args.get("path"):
+            # v1.508.0: the file as this session has now seen it, so a later
+            # refused edit can say whether its `old` text can be current
+            # (`harness/edit_memory`).
+            from ..harness import edit_memory
+
+            try:
+                seen = safe_path(ctx.workspace, args["path"])
+            except Exception:  # noqa: BLE001 — the read itself succeeded
+                seen = None
+            if seen is not None:
+                await asyncio.to_thread(edit_memory.note_seen, ctx, seen)
+        return result
+
+    async def _execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if args.get("paths") is not None:
             return await self._read_many(args, ctx)
         result = await self._read_one(args, ctx)
@@ -1074,6 +1090,10 @@ class WriteFileTool(Tool):
             return ToolResult(
                 ok=False, error=unwritable_workspace_error(exc, ctx.workspace)
             )
+        from ..harness import edit_memory
+
+        # v1.508.0: what this session wrote is what it knows the file holds.
+        await asyncio.to_thread(edit_memory.note_seen, ctx, path)
         data: dict[str, Any] = {"path": args["path"], "bytes": len(content)}
         # v1.364.0 (IJ harness): a CODE file gets one syntax-check line; any
         # other file's output and data are exactly what they were.
@@ -1193,6 +1213,13 @@ class EditFileTool(Tool):
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
         where = str(args["path"])
+        from ..harness import edit_memory
+
+        # v1.508.0: after EDIT_FAIL_GATE refused edits of this file in a row,
+        # the next one is not tried until the file is read again.
+        gated = edit_memory.gate(ctx, path, where)
+        if gated:
+            return ToolResult(ok=False, error=gated, data={"path": where, "gated": True})
 
         def _edit() -> int:
             tf = load_text(path, where)
@@ -1202,7 +1229,11 @@ class EditFileTool(Tool):
 
         try:
             count = await asyncio.to_thread(_edit)
-        except (TextFileError, EditError) as exc:
+        except EditError as exc:
+            # v1.508.0: say whether this session's text can be current.
+            note = await asyncio.to_thread(edit_memory.note_failed_edit, ctx, path, where)
+            return ToolResult(ok=False, error=edit_memory.with_note(str(exc), note))
+        except TextFileError as exc:
             return ToolResult(ok=False, error=str(exc))
         except PermissionError as exc:  # v1.228.0: name the folder (audit T3)
             return ToolResult(
@@ -1215,6 +1246,7 @@ class EditFileTool(Tool):
         # text is unchanged. Deliberately NOT `created_paths`: that field
         # means CREATED (the registry, the workflow engine and the run card
         # all read it that way), and this file existed before the call.
+        await asyncio.to_thread(edit_memory.note_seen, ctx, path)
         data: dict[str, Any] = {"path": where, "abs_path": str(path)}
         output = f"edited {where}"
         if replace_all:

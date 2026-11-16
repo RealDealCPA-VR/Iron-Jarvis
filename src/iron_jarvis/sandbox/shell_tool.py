@@ -419,13 +419,15 @@ class SandboxedShellTool(Tool):
         def _native_run(sandbox: Sandbox) -> SandboxResult | None:
             bash = None
             if bash_written:
-                from .git_bash import find, switch_refusal
+                from .git_bash import bash_refusal, find
 
                 bash = find()
                 # v1.386.0 review: `start /b x` in bash hands `start` the path
                 # B:/ and Windows opens an error window that stays on the
-                # user's screen — refused before anything runs.
-                refused = switch_refusal(args["command"]) if bash is not None else ""
+                # user's screen — refused before anything runs. v1.508.0:
+                # so are `rmdir /s /q` and PowerShell's `$_` inside a
+                # double-quoted -Command (`git_bash.bash_refusal`).
+                refused = bash_refusal(args["command"]) if bash is not None else ""
                 if refused:
                     ran["refused"], ran["shell"] = refused, "bash"
                     return None
