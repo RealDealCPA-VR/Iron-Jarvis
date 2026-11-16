@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.510.0
+
+**Nothing is lost, part two.** The second of eight releases from the second review.
+
 ## v1.509.0
 
 **Other computers and web pages stay outside.** A second review read the parts of Iron Jarvis the first one skipped (coding sessions, the browser, your other computers) and found 98 more things to fix.
@@ -77,7 +81,3 @@
 ## v1.496.1
 
 **The rules for AI helpers working on Iron Jarvis were reorganized.** Nothing changes in the app.
-
-## v1.496.0
-
-**One page for everything Jarvis suggests.** **A new page, Improvements.** It lists every suggestion Iron Jarvis is waiting on you to accept or decline, in one place.
