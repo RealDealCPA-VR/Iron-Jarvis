@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.508.0 (2026-11-15).*
+holds itself to. Current as of v1.509.0 (2026-11-15).*
 
 ---
 
@@ -2041,6 +2041,59 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Other computers and web pages stay outside (v1.509.0)
+
+A second review read the parts of Iron Jarvis the first one skipped (coding
+sessions, the browser, your other computers) and found 98 more things to fix.
+This is the first of eight releases that fix them. It closes the ways another
+computer, or a web page, could get at more than it should.
+
+- **A task from a paired computer works in its own folder, with nothing of
+  yours.** It is given none of this computer's memory, lessons, profile or
+  notes, and it names no client. It can use only a short list of tools: files
+  in its own folder, the web, and its own helpers. It cannot list or read
+  your folders, read your browser's tabs, your terminals, your connected
+  apps or your settings, or search memory or past chats. A refused step is
+  recorded on the run like any other. This stays until you can choose, per
+  computer, what a paired computer may do.
+- **Removing a paired computer stops the tasks it sent.** They used to keep
+  running, and their answers were then sent to whatever address the task
+  named. Now Remove says how many it stopped, and nothing is sent.
+- **A paired computer whose address changed.** The card says "<name> now
+  reaches this computer from <address>, not the address it was paired at.
+  Pair again if it moved." Its answer is held back, not sent to the old
+  address (another device may hold it now). The address is never changed by
+  itself: that would hand answers to anyone who had captured the pairing's
+  key.
+- **Only files from the task's own folder go back** with an answer.
+- **Too many tries from one address are turned away early**, before
+  anything is looked up, and one computer can no longer use up another's
+  allowance of tasks.
+- **Another agent's answer in a chat is read as outside text.** An answer
+  from a paired computer (or any agent you @-mention) used to come back to
+  the model on the next turn as if Iron Jarvis had said it. It now arrives
+  marked as someone else's words. What you see in the chat is unchanged.
+- **A web page cannot end the "outside text" marking itself.** A page, a
+  tab's title or a button's label that carries the marker's own closing
+  words is shown to the model with those words changed, so hidden text after
+  it can no longer read as Iron Jarvis's own. The same now covers a
+  downloaded file's name (the website chooses it) and a line printed in a
+  Build terminal.
+- **Model servers.** An address with a name and password in it, or a `?` or
+  `#` part, is refused: save the key separately. A key is not saved for a
+  server outside your network whose address starts with `http://`, because
+  it would travel unencrypted; use its `https://` address. A server you
+  saved before is not touched, and a password in an old address is no longer
+  shown. An address that a proxy reports is only checked when it is on your
+  network. A proxy that lists more than 500 models can no longer make a
+  cloud model read as local under Local only.
+- **"Let other computers on my network reach this Iron Jarvis".** A request
+  is now answered only if it arrived on one of this PC's own addresses as
+  they were when Iron Jarvis started. Naming an allowed address in the
+  request is no longer enough, so a network you join later (a café's) cannot
+  reach it. Restart Iron Jarvis after moving to a network you do want to
+  share with.
 
 ## A coding session recovers from its own mistakes (v1.508.0)
 

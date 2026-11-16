@@ -103,6 +103,11 @@ class PaneListTool(_PaneTool):
     )
     input_schema = {"type": "object", "properties": {}}
     reversibility = Reversibility.READONLY
+    #: v1.509.0 (second review B14): each pane's ``state_line`` is a line a
+    #: program PRINTED in that terminal (``terminals/agent_state.classify``
+    #: keeps the output line its decision was made from), so this answer is
+    #: outside text like ``pane_read``'s: fenced and scanned by every lane.
+    returns_untrusted_content = True
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         mgr = self.mgr
@@ -236,6 +241,9 @@ class PaneSendTool(_PaneTool):
         "required": ["pane", "text"],
     }
     reversibility = Reversibility.IRREVERSIBLE
+    #: v1.509.0 (second review B14): the wait answer prints the pane's
+    #: evidence line, which a program printed (see ``PaneListTool``).
+    returns_untrusted_content = True
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         mgr = self.mgr
@@ -319,6 +327,9 @@ class PaneWaitTool(_PaneTool):
         "required": ["pane"],
     }
     reversibility = Reversibility.READONLY
+    #: v1.509.0 (second review B14): the answer prints the pane's evidence
+    #: line, which a program printed (see ``PaneListTool``).
+    returns_untrusted_content = True
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         mgr = self.mgr

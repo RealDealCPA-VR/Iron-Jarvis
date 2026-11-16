@@ -173,11 +173,19 @@ class RouteTable:
 
     entries: tuple[Upstream, ...]
     read_at: float = 0.0
+    #: Second review F12: the proxy listed more names than
+    #: :data:`MAX_ENTRIES`, so the names past the cut are not in this table. A
+    #: name the table does not list may then be one of them (a cloud one), so
+    #: :meth:`place` answers cloud for it, never "local because every LISTED
+    #: upstream is".
+    truncated: bool = False
 
     def place(self, model: str) -> str | None:
         """Where a request for *model* goes: :data:`PLACE_LOCAL`,
         :data:`PLACE_CLOUD`, or ``None`` when the table says nothing (it lists
-        no names at all — the address then decides). Never raises."""
+        no names at all — the address then decides). Never raises. In a
+        :attr:`truncated` table only a name it lists by its exact name keeps
+        its verdict; a wildcard match or an unlisted name is cloud."""
         try:
             if not self.entries:
                 return None
@@ -185,6 +193,8 @@ class RouteTable:
             for e in self.entries:
                 if name and e.alias == name:
                     return e.place
+            if self.truncated:
+                return PLACE_CLOUD
             wild = [e for e in self.entries if "*" in e.alias]
             hits = [e for e in wild if name and fnmatch.fnmatchcase(name, e.alias)]
             if hits:
@@ -221,10 +231,12 @@ class RouteTable:
 
     def signature(self) -> tuple[tuple[Any, ...], ...]:
         """What the verdicts depend on (the read time is not part of it)."""
-        return tuple(
+        rows = tuple(
             (e.alias, e.model, e.place, e.vision, e.tool_use, e.context_window, e.max_output)
             for e in self.entries
         )
+        # F12: a table that became (or stopped being) cut changes verdicts.
+        return rows + ((("<truncated>",),) if self.truncated else ())
 
     def cloud_names(self) -> list[str]:
         return [e.alias for e in self.entries if e.place != PLACE_LOCAL]
@@ -239,7 +251,10 @@ class RouteTable:
                 if value is not None:
                     row[key] = value
             rows.append(row)
-        return {"read_at": self.read_at, "entries": rows}
+        out: dict[str, Any] = {"read_at": self.read_at, "entries": rows}
+        if self.truncated:
+            out["truncated"] = True  # F12: kept across a restart
+        return out
 
     @classmethod
     def from_json(cls, raw: Any) -> "RouteTable | None":
@@ -265,7 +280,10 @@ class RouteTable:
             read_at = float(raw.get("read_at") or 0.0)
         except (TypeError, ValueError):
             read_at = 0.0
-        return cls(entries=tuple(out), read_at=read_at)
+        # F12: a saved cut stays a cut, and so does a file holding more rows
+        # than one table keeps.
+        truncated = raw.get("truncated") is True or len(raw["entries"]) > MAX_ENTRIES
+        return cls(entries=tuple(out), read_at=read_at, truncated=truncated)
 
 
 #: What :func:`read_routes` answers besides a table.
@@ -285,13 +303,19 @@ def parse_model_info(payload: Any) -> RouteTable | None:
         return None
     out: list[Upstream] = []
     seen: dict[str, int] = {}
+    truncated = False
     for e in data:
-        if len(out) >= MAX_ENTRIES:
-            break
         if not isinstance(e, dict):
             continue
         alias = str(e.get("model_name") or "").strip()
         if not alias:
+            continue
+        if len(out) >= MAX_ENTRIES and alias not in seen:
+            # F12: no new NAME past the cut (the table stays bounded), and the
+            # cut is recorded so an unlisted name reads cloud. A further
+            # deployment of a name already kept is still merged below: a
+            # cloud one past the cut makes that name cloud.
+            truncated = True
             continue
         params = e.get("litellm_params") if isinstance(e.get("litellm_params"), dict) else {}
         model = str(params.get("model") or "")
@@ -333,7 +357,7 @@ def parse_model_info(payload: Any) -> RouteTable | None:
                 max_output=out_cap,
             )
         )
-    return RouteTable(entries=tuple(out), read_at=time.time())
+    return RouteTable(entries=tuple(out), read_at=time.time(), truncated=truncated)
 
 
 def read_routes(

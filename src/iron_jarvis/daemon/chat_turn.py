@@ -538,8 +538,12 @@ def _plan_context(d, body, system: str, provider: str, model: str, messages=None
     that 500s is not.
     """
     from ..context import plan_history
+    from .chat_refs import fence_agent_lines
 
     items = list(body.messages or []) if messages is None else list(messages)
+    # v1.509.0: another agent's line (a paired computer's answer) reaches the
+    # model fenced as outside data, never as Iron Jarvis's own turn.
+    items = fence_agent_lines(items)
     try:
         _win = _context_window(d, provider, model)
         return plan_history(

@@ -112,14 +112,31 @@ def paired_words(name: str) -> str:
     return f"Paired with {name}. In chat, write “@{name}” and a task to hand it to that computer."
 
 
-def removed_words(name: str, told: bool) -> str:
+def removed_words(name: str, told: bool, stopped: int = 0) -> str:
     if told:
-        return f"Removed. {name} removed this computer from its list too."
-    return (
-        f"Removed here. {name} could not be told, so remove this computer there too (Settings › "
-        "Connections › Your other computers on that computer). It cannot reach this one any more "
-        "either way."
-    )
+        said = f"Removed. {name} removed this computer from its list too."
+    else:
+        said = (
+            f"Removed here. {name} could not be told, so remove this computer there too (Settings › "
+            "Connections › Your other computers on that computer). It cannot reach this one any more "
+            "either way."
+        )
+    return said + stopped_words(name, stopped)
+
+
+def stopped_words(name: str, stopped: int) -> str:
+    """v1.509.0 (second review F5): what Remove did to the tasks that
+    computer had sent and that were still running here ("" for none)."""
+    if stopped <= 0:
+        return ""
+    if stopped == 1:
+        return f" The task {name} sent that was still running here was stopped."
+    return f" The {stopped} tasks {name} sent that were still running here were stopped."
+
+
+#: The summary a run that Remove stopped is left with (v1.509.0, F5).
+def removed_stop_summary(name: str) -> str:
+    return f"Stopped: {name} was removed from your other computers."
 
 
 class CodeBody(BaseModel):
@@ -464,6 +481,8 @@ def register(app: FastAPI, d: Any) -> None:
             raise HTTPException(status_code=503, detail=UNPAIR_FAILED) from None
         if peer is None:
             raise HTTPException(status_code=401, detail=UNKNOWN_TOKEN)
+        # v1.509.0 (F5): its tasks still running here stop too.
+        await asyncio.to_thread(_stop_runs_of, peer)
         await _publish(EventType.PEER_REMOVED, {"name": peer.name, "by": "them"})
         return {"removed": True}
 
@@ -509,5 +528,57 @@ def register(app: FastAPI, d: Any) -> None:
         token = await asyncio.to_thread(store.out_token, peer)
         told = await L.unpair(peer.address, token) if token else False
         await asyncio.to_thread(store.remove, name)
+        # v1.509.0 (F5): the tasks it sent that still run here stop, after
+        # the pairing is gone (so their answer is never sent: the reply finds
+        # no pairing and records why).
+        stopped = await asyncio.to_thread(_stop_runs_of, peer)
         await _publish(EventType.PEER_REMOVED, {"name": name, "by": "here"})
-        return {"removed": True, "told": told, "said": removed_words(name, told)}
+        return {
+            "removed": True,
+            "told": told,
+            "stopped": len(stopped),
+            "said": removed_words(name, told, len(stopped)),
+        }
+
+    def _stop_runs_of(peer: Any, *, limit: int = 500) -> list[str]:
+        """Stop every live run a task from ``peer`` started here
+        (``options["remote_peer"]`` is its id, written at the task door),
+        through the orchestrator's one stop path (``cancel_session``, cross-
+        loop safe, the way Emergency stop's ``stop_unattended`` reaches a
+        run), its summary saying why. BLOCKING; returns the ids stopped;
+        never raises."""
+        from sqlmodel import select
+
+        from ...agents.task_door import REMOTE_PEER_OPTION, REMOTE_TASK_ORIGIN
+        from ...core.db import session_scope
+        from ...core.models import Session, SessionStatus
+
+        orch = getattr(d, "orchestrator", None)
+        if orch is None or not getattr(peer, "id", ""):
+            return []
+        try:
+            with session_scope(d.platform.engine) as db:
+                rows = db.exec(
+                    select(Session.id, Session.options_json)
+                    .where(
+                        Session.status.in_(  # type: ignore[attr-defined]
+                            [SessionStatus.ACTIVE, SessionStatus.QUEUED]
+                        )
+                    )
+                    .where(Session.origin.startswith(f"{REMOTE_TASK_ORIGIN}:"))  # type: ignore[union-attr]
+                    .limit(max(int(limit), 1))
+                ).all()
+        except Exception:  # noqa: BLE001
+            log.warning("pairing: the runs of a removed computer could not be read", exc_info=True)
+            return []
+        stopped: list[str] = []
+        for sid, options_json in rows:
+            try:
+                opts = json.loads(options_json) if isinstance(options_json, str) else options_json
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(opts, dict) or opts.get(REMOTE_PEER_OPTION) != peer.id:
+                continue
+            if orch.stop_with_reason(sid, removed_stop_summary(peer.name)):
+                stopped.append(sid)
+        return stopped

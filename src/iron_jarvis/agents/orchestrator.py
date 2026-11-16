@@ -2598,6 +2598,24 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 log.exception("worktree cleanup failed after cancelling %s", session.id)
 
+    def stop_with_reason(self, session_id: str, reason: str) -> bool:
+        """Stop ONE live run with ``reason`` as its summary (v1.509.0): the
+        stop ``stop_unattended`` gives each run, for a caller outside this
+        class (removing a paired computer stops the tasks it sent). Through
+        ``cancel_session``, so it is cross-loop safe; BLOCKING like it.
+        False when the run had finished or is gone; never raises."""
+        self._stop_reasons[session_id] = reason
+        try:
+            self.cancel_session(session_id)
+        except (KeyError, ValueError):  # finished between the read and the stop
+            self._stop_reasons.pop(session_id, None)
+            return False
+        except Exception:  # noqa: BLE001 — one stuck run must not keep the rest going
+            self._stop_reasons.pop(session_id, None)
+            log.exception("could not stop session %s", session_id)
+            return False
+        return True
+
     def cancel_session(self, session_id: str) -> Session:
         """Stop a running session. Raises KeyError if unknown, ValueError if
         already finished. Cancelling an in-flight background run unwinds it to

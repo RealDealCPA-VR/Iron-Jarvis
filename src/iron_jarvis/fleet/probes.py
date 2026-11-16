@@ -291,6 +291,18 @@ def _is_private_host(host: str) -> bool:
     return addr.is_private or addr.is_loopback or addr.is_link_local
 
 
+def _child_on_this_network(url: str) -> bool:
+    """May a proxy-reported address be called from here (second review F11)?
+    Only when it is on this network, by the one test Local only uses
+    (``egress.private_host``). Never raises; anything unreadable is not."""
+    try:
+        from ..providers.egress import private_host
+
+        return private_host(url)
+    except Exception:  # noqa: BLE001 — fail closed: never called
+        return False
+
+
 def _serve_model(default_model: str) -> str:
     """The model id as the SERVER knows it (LiteLLM prefixes its routing
     provider onto the real id)."""
@@ -309,7 +321,8 @@ def _bind_hint(node: FleetNode) -> dict[str, Any] | None:
     Saying "connection refused" about it would be a lie.
     """
     base = (node.base_url or "").strip()
-    if not base:
+    if not base or not _child_on_this_network(base):
+        # F11: an address outside this network is a remote provider's too.
         return {
             "text": (
                 "This model runs at a remote provider and is reached "
@@ -734,7 +747,11 @@ def probe_node(
     get = _keyed(get, headers)
     started = time.perf_counter()
     root = normalize_root(node.base_url)
-    if not root:
+    if not root or (node.parent_id and not _child_on_this_network(root)):
+        # Second review F11: a topology child's address is one a PROXY wrote
+        # (its ``api_base``), so it is called only when it is on this
+        # network. Any other child is served at a remote provider through the
+        # proxy, exactly like a child with no address, and is never called.
         # A topology child with no upstream URL (an alias the proxy serves from
         # a remote provider). Not a failure: no error text, just the honest
         # explanation in the hint.

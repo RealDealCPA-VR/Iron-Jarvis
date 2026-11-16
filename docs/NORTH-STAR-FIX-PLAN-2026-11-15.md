@@ -564,4 +564,417 @@ to `.github/workflows`, left for the owner.
 The inside of coding sessions and the night shift (`harness/`, `hosted/`),
 browser and computer-use tools, `fleet/` and `iron_proxy/`, shared computers
 beyond the task door, and a line-by-line comparison of the two chat lanes. A
-second review of these follows group 8.
+second review of these was done on 2026-11-16: see "Second review"
+below, which also lists what is still not read.
+
+## Second review (2026-11-16, at v1.507.1)
+
+Eight read-only passes over the areas the first review skipped; nothing was
+run and nothing was changed. 98 findings. **Checked** means the lead read the
+lines and found no guard; **pass only** means the pass reported it as
+confirmed and the lead has not re-read it; **suspected** means a step on the
+path was not verified. The number in brackets is the north-star behaviour it
+breaks. The fixes are planned in "Second fix plan" at the end of this file.
+
+Severity counts: 12 high, 40 medium, 46 low.
+
+### Other computers (`fleet/`, `peers/`, the task door)
+
+- [x] **F1 (2, high, checked). A task from another computer gets this PC's
+  memory.** `daemon/routes/agents.py:3622-3645` starts the run with no
+  `skip_memory`; `agents/runtime.py:705-717` builds the client wall from
+  `session.task`, which is the sender's text; `recall`, `ltm_search`,
+  `history_search` are not in `core/trust.LOW_TRUST_DENY`. The answer is
+  posted back. Fix: `skip_memory` and an empty named set for a `remote:`
+  run, and keep the cross-PC readers away until the owner can choose per
+  computer.
+- [ ] **F2 (1, high, checked). "Send coding work to a model server" has no
+  reader.** Only `daemon/routes/fleet.py:581-668` (the view and the writer),
+  the schema and the config field mention it; the page says "Coding work
+  goes to <server>". Fix: wire it in the router (refuse by name when the
+  server is down) or say it is not in effect.
+- [ ] **F3 (3, high, checked). An answer from another computer is sent
+  once.** `agents/task_door.py:504-516` deletes the answer key before the
+  POST; `666-673` allows one attempt; the asking chat and mission card wait
+  for ever (`agents/threads.py:1941-1947`, `agents/mission.py:1582-1621`).
+- [ ] **F4 (1, medium, checked). A failed or stopped task comes home marked
+  "done".** `task_door.py:703-707` always sends `"kind": "done"`; no outcome,
+  model or cost is sent. `tests/test_another_jarvis_v13570.py:488` pins it.
+- [x] **F5 (2, medium, checked). Removing a pairing does not stop its running
+  tasks**, and with the pairing gone the answer goes to the address the task
+  named (`task_door.py:456-458`; `daemon/routes/peers.py:501-513`).
+- [x] **F6 (2, medium, pass only).** A paired computer is remembered by the
+  address it had when it paired (`routes/peers.py:366-372`,
+  `task_door.py:427-441`).
+- [x] **F7 (2, medium, pass only).** A model server's key is sent over plain
+  http to any address, and an address with a password in it is accepted
+  (`routes/fleet.py:375-402`, `fleet/endpoint_auth.py:45-56`).
+- [ ] **F8 (4, medium, checked).** Refresh on the Model servers page does not
+  force a re-check (`routes/fleet.py:721-722` calls `sample_once` without
+  `force=True`); a server that came back is refused for up to ten minutes.
+- [ ] **F9 (1, medium, pass only).** Tokens a proxy sent to the cloud are
+  counted as "local" and "avoided spend" (`routes/fleet.py:1147-1162`).
+- [x] **F10 (2, low, pass only).** With network access on, the daemon listens
+  on every network the PC joins; the filter is the Host header
+  (`desktop/main.js:190-200`, `daemon/auth.py:62-69`).
+- [ ] **F11-F15 (low, pass only; F11, F12 and F14 fixed in v1.509.0).** The sampler probes addresses a proxy
+  reported (`fleet/probes.py:597-617`); over 500 proxy names an unlisted
+  name can read as local (`fleet/upstreams.py:289-290`); exception names on
+  the Model servers page (`routes/fleet.py:282-284`, pinned by a test); the
+  task door reads the database and the vault before any limit
+  (`routes/agents.py:3527-3552`); a probe has no total time limit
+  (`fleet/probes.py:65-70`, suspected).
+- Not closed: a peer's answer is added to the owner's chat with no fence
+  (`routes/agents.py:3380-3403`); `_reply_files` sends every path in the
+  run's documents without re-checking the folder (`task_door.py:582-618`);
+  `message_agent`, `blackboard_post` and `consult` are not kept from a
+  low-trust run.
+
+### Browser add-on, sidebar and the isolated browser (`browser/`, `computeruse/`, `extensions/chrome/`)
+
+`computeruse/` drives a separate headless browser; nothing in the code clicks
+or types on the Windows desktop.
+
+- [x] **B1 (2, high, checked). A page can close the "untrusted data" fence.**
+  `computeruse/safety.py:94-109` (`wrap_untrusted`) does not neutralise the
+  closing marker; every browser read uses it (`browser/tools.py:309`). The
+  cure exists in `memory/steward.py:352-362` (`_defang`).
+- [ ] **B2 (4, high, checked). Enter submits a form unjudged.**
+  `browser/tools.py:1075-1085` never passes `press_enter` or the key to the
+  risk check; the add-on then calls `form.requestSubmit()`
+  (`extensions/chrome/src/content/actions.ts:763-780`).
+- [ ] **B3 (1, medium, checked).** When the answer to a click is lost the
+  model is told to retry, so the action can run twice
+  (`browser/errors.py:115-118, 149-153`; `browser/tools.py:1094-1101`).
+- [ ] **B4 (2, medium, checked).** Every tab switch, page load and download
+  is stored as an event with its full address for 90 days, whether or not
+  Jarvis was asked anything (`extensions/chrome/src/background/index.ts:490-597`,
+  `browser/extension_backend.py:1456-1528`).
+- [ ] **B5 (2, medium, checked).** Text typed through `web_action` into a
+  sensitive field is stored in plain text in the approvals table and shown
+  on the card (`computeruse/tools.py:240-245, 278`; `approvals.py:60`).
+- [ ] **B6 (4, medium, pass only).** A risk approval nobody could be asked
+  about stays pending; approving it later lets the next identical call run
+  on another page (`browser/tools.py:1245-1274, 1351-1366`).
+- [ ] **B7 (2, medium, pass only).** The isolated browser's site list is
+  checked on the typed address only, not after a redirect or a click
+  (`computeruse/tools.py:132-137`).
+- [ ] **B8-B14 (low; B8, B11 and B14 fixed in v1.509.0).** A download's name reaches the model unfenced
+  (`tools/download_tools.py:201-221`); after an approved card a click by
+  role and name runs on whatever page the tab then shows (suspected);
+  nothing stops Jarvis being sent to the app's own pages, the daemon's port
+  or `file:` (`browser/protocol.py:478-494`); an unpaired local program's
+  text shows in `browser_get_status`; exception text on screen
+  (`browser/panel.py:1710`, `computeruse/tools.py:395`); `web_action` does
+  database work on the event loop (`computeruse/tools.py:257-311`); a
+  terminal's line reaches the model unfenced from three pane tools
+  (`tools/pane_tools.py:114-121`, suspected).
+
+### The service that runs other coding tools (`hosted/`)
+
+- [ ] **H1 (4, high, checked). A coding tool that ignores its own interrupt
+  cannot be stopped from the app.** `hosted/service.py:3859-3860` gives up
+  after the wait; Close, Archive, Delete and Open in terminal are all
+  refused while the turn runs (`3959-3968`, `1281-1286`). Fix: after a bound
+  or a second Stop, `_stop_process` (the tree kill) and say so.
+- [ ] **H2 (3, medium, checked). A stop is not serialized with a start.**
+  `_stop_process` (`service.py:2901-2924`) never takes `live.lock` and reads
+  `live.turn` after its awaits: a message sent during an idle stop gets a
+  second process and is then ended "Stopped"; Stop during a start followed
+  by Delete leaves a tool running that nothing tracks. Same family as the
+  open shutdown item. Needs checking on the packaged build.
+- [ ] **H3 (4, medium, checked).** Emergency stop skips a reply Jarvis
+  started by itself once it was adopted across a restart
+  (`hosted/adopt.py:482-501`, `hosted/carry_on.py:1231-1245`).
+- [ ] **H4 (1, medium, checked).** A helper that was stopped or cut off is
+  listed "done" after ten minutes or a restart (`hosted/handoff.py:195-210`).
+- [ ] **H5 (3, medium, checked).** Revert in the Changes pane overwrites a
+  file with no copy and no record (`hosted/panes.py:1137-1150`).
+- [ ] **H6 (3, medium, checked).** A failed write of the session log drops
+  that batch for good (`hosted/events.py:335-354`); a lost "done" can make
+  the next start carry on a reply that had finished.
+- [ ] **H7-H14 (low).** A PATCH applies the tool's mode before the rest of
+  the request is checked (`service.py:2211-2296`); a Stop as the start
+  completes can still deliver the message (`service.py:3607`, checked); a
+  branch copies Full access and the tool boxes without asking
+  (`hosted/branching.py:684-696`); the archive summary lists Jarvis's own
+  carry-on messages as the user's asks (`hosted/archive_summary.py:126-127`);
+  exception names on screen (`service.py:2755-2761`); "on this network"
+  judged from Jarvis's own address (suspected); a tool being stopped when
+  the code-host link breaks is left running (suspected); a rewind or branch
+  can leave a cut reply to be carried on at the next start (suspected).
+
+### Coding-tool adapters and the accounts proxy (`hosted/<tool>.py`, `iron_proxy/`)
+
+- [ ] **A1 (3, high, checked). Removing an account deletes its whole folder
+  for good.** `daemon/routes/iron_proxy.py:633-640` calls the bundled
+  manager's `deleteProfile`, which removes the account's home recursively
+  (`desktop/vendor/iron-proxy/iron-proxy.mjs:4726-4741`): its sign-in and
+  every conversation kept on it. No trash, no check for a running session.
+- [ ] **A2 (1, high, checked in code and a recorded exchange). Claude Code's
+  "Allow for this session" is saved for good.** `hosted/claude.py:656-671`
+  passes Claude Code's own suggestion back whole, destination
+  `localSettings` included, while the card says "for the rest of this
+  session" (`682-700`, `1154-1158`). Fix: rewrite the destination to
+  `session`. Claude Code's write to disk was not observed.
+- [ ] **A3 (2, medium, checked).** The account manager prints its access
+  token on start, and Jarvis sends that output to `logs/iron-proxy.log`,
+  which every backup carries (`iron_proxy/service.py:834-847`).
+- [ ] **A4 (2, medium, checked in the bundle).** The account manager's model
+  routes need no token on this PC, so any local program can spend the
+  subscriptions through it (`iron-proxy.mjs:5567-5576, 6316`). Fix is in
+  the bundled program plus a switch at start.
+- [ ] **A5 (4, medium, checked).** A session in Ask first or Plan can hand
+  work to a Pi or Antigravity helper that asks nothing
+  (`hosted/handoff.py:324-327`, `hosted/service.py:308-311`); the card does
+  not name the tool.
+- [ ] **A6 (2, medium, suspected).** A session on this PC's own login
+  inherits the user's API keys; the tool may bill the key while the receipt
+  says list price on the subscription (`hosted/process.py:81-86`).
+- [ ] **A7 (1, medium, suspected).** A Codex `turn/completed` from another
+  thread ends the user's reply as done (`hosted/codex.py:1312-1315`; the
+  guard exists only for `turn/started`).
+- [ ] **A8 (2, medium, checked).** With every account of a provider turned
+  off, chat runs on this PC's own login with nothing said
+  (`iron_proxy/accounts.py:889-894`).
+- [ ] **A9-A13 (low).** Codex's move to another model is said without the
+  model's name (`codex.py:1345-1346`); the usage check hands the vendor's
+  program the daemon's whole environment, install token included
+  (`iron_proxy/usage_read.py:286-299`, checked); Stop before Codex names the
+  turn does nothing (`codex.py:1118-1131`); Pi keeps `--approve` after the
+  user later declines the folder (`service.py:2795`); an unknown stop reason
+  reads "completed" (`hosted/acp.py:464-465`), an unreported step is drawn
+  "done" (`hosted/antigravity.py:1219-1224`), exception names on screen
+  (`iron_proxy/service.py:793`, `client.py:199`).
+
+### How a coding reply ends (`harness/finish.py`, `ci_fix.py`, `attempts.py`)
+
+- [ ] **D1 (1, high, checked). The pull-request auto-fix says "Pushed the
+  reviewed fix" when its commit left files out or committed nothing.**
+  `daemon/routes/ci_watch.py:774-803` never reads `left_out`;
+  `harness/ci_fix.py:807-813` turns "nothing to commit" into `None`.
+- [ ] **D2 (1, high, checked). A carried-on reply can be recorded "tests
+  passed" for a run that failed.** `harness/finish.py:4842` adds the cut
+  part's commands to `_commands` with no entry in `_cmd_meta` (appended only
+  at `2794`), so `_reusable` (`2855-2867`) pairs a command with a later
+  command's result.
+- [ ] **D3 (1, medium, checked).** A reply resumed after a restart whose cut
+  part held the finish note ends with every "until done" guard off and no
+  verdict (`daemon/chat_turn.py:8839-8840`, `finish.py:2983-2985, 3321`).
+- [ ] **D4 (1, medium, checked).** The auto-fix reviews and pushes a fix
+  whose own finish check recorded failing tests
+  (`routes/ci_watch.py:594-666` never reads the line's finish record).
+- [ ] **D5 (4, medium, checked for the test).** A whole Maven, Gradle, tox
+  or nox line counts as "the tests", so `mvn test deploy` can be run a
+  second time by the check (`finish.py:885-886, 923-924`).
+- [ ] **D6 (4, medium, pass only).** Stop is not honoured while the check
+  waits for a long test run on a GPT model (`finish.py:3839-3857`).
+- [ ] **D7-D11 (low).** "reviewed by <member>" over a review that reached
+  nobody (`finish.py:3984-3999`); ESLint "no problems in <file>" for a file
+  it ignored (`harness/checkers.py:410-412`, checked); a watch whose
+  worktree folder is gone stays "fixing" for ever (`ci_watch.py:623`);
+  exception names on screen (`harness/helpers.py:1233-1236`,
+  `attempts.py:1649, 1660`); an attempt cut at the step limit reads
+  "Finished" (`attempts.py:1291-1308`).
+
+### A coding session's tools, git, rewind and the night shift
+
+- [ ] **T1 (4, high, checked). A night task cancelled while it is starting
+  is recorded "You stopped it" and then runs.**
+  `daemon/routes/night.py:1154-1159` stops a turn only if one exists;
+  `start_task` (`882-885`) never re-reads the task; `settle_running` reads
+  the stop note only after the turn is over (`622-624`, `661`).
+- [ ] **T2 (4, high, checked; the owner's call). The git guard is off when a
+  session works in the folder directly**, the composer's default
+  (`harness/git_guard.py:640-641, 662-663`;
+  `dashboard/components/harness/HarnessStartComposer.tsx:294`). After one
+  "allow commands for this session", a push, force push, `reset --hard` or
+  `clean` runs with no card on the user's own checkout.
+- [ ] **T3 (3, medium, checked).** Rewind does not put back files changed by
+  a session's helpers, and answers that it rewound
+  (`harness/rewind.py:202-221, 518`).
+- [ ] **T4 (3, medium, checked).** A patch over several files loses its Undo
+  and its saved copies when it is cut off or the app dies while it writes
+  (`tools/undo.py:330-336`); its writes are not atomic
+  (`harness/tools.py:427-455`).
+- [ ] **T5 (1, medium, checked).** A night task's "Done" or "Needs you" is
+  read from the finish check's first answer, not from what was still open
+  at the end (`harness/night.py:1083-1099`; `finish.py:4496-4518`).
+- [ ] **T6 (1, medium, checked).** The reason for open points is filed as
+  "info" because "unmet" is not in `NOTE_KINDS` (`night.py:92-96, 543`), so
+  a "Needs you" row carries no reason.
+- [ ] **T7 (1, low, pass only).** A night task that changed nothing and ran
+  no check is announced "Done" (`night.py:1050-1051`).
+- [ ] **T8 (3, medium, checked for checkout and stash).** On its own branch
+  the guard misses `git remote set-url`, `git reset <branch>`,
+  `git checkout <file>`, `git stash pop` and a separator inside a quoted
+  message (`git_guard.py:72, 414, 488, 502`).
+- [ ] **T9-T10 (low).** `process_start` works out its environment on the
+  event loop (`harness/process.py:676`, checked); "Night tasks run now,
+  until 7:00 AM" although a started task runs past it
+  (`harness/night_window.py:104-105`).
+
+### A coding session's stored sessions, compaction and page browser
+
+- [ ] **S1 (2, medium, checked).** The one-shot screenshot browser has no
+  address guard, and the agent's browser judges only top-level pages, never
+  frames (`harness/page_shot.py:110-130`, `page_browser.py:1146-1163`): a
+  local page can show the model another local app's page.
+- [ ] **S2 (1, medium, checked).** A failed transcript write at a reply's
+  end is swallowed (`daemon/routes/build.py:2017-2026`); the reply is gone
+  from the session and the kept copy is deleted (`2328-2330`).
+- [ ] **S3 (1, medium, checked on the daemon side).** A file in the folder
+  (`.ironjarvis/harness/finish.toml`) can turn the finish check off and
+  nothing on screen says so (`harness/components.py:545-557`,
+  `finish.py:4787-4790`).
+- [ ] **S4 (4, medium, checked in code, not run).** One search pattern can
+  freeze the app: the search's time limit is read only between files
+  (`harness/search.py:188-191, 233-235`).
+- [ ] **S5 (1, medium, pass only).** A reply's failure marks never reach the
+  next model or the summarizer (`harness/sessions.py:998-1022`,
+  `compact.py:282-322`).
+- [ ] **S6-S12 (low).** Typing with "submit" sends a form with no risky-click
+  check (`page_browser.py:1921-1931`, suspected; the twin of B2); a lesson's
+  first line goes into an event unmasked (`harness/library.py:1292-1304`,
+  suspected); Delete stops a session's programs before it refuses, and
+  Choose account writes the account before the turn is refused
+  (`routes/build.py:4808-4814, 5362-5378`); page screenshots outlive their
+  session in one shared folder (`page_shot.py:350`); a turn can start on any
+  free account when the list could not be read (`routes/build.py:744-759`,
+  suspected); accepting a suggested edit writes a file outside the undo
+  journal (`library.py:1699-1720`); the 200-line cap cuts a transcript in
+  the middle of a turn (`sessions.py:697`).
+
+### The two chat lanes, side by side
+
+The lanes match stage by stage wherever one shared helper does the work. The
+differences are at the edges.
+
+- [ ] **L1 (3, medium, checked).** Both phone doors run a turn without its
+  chat id (`comm/inbound.py:1246`, `daemon/routes/comm.py:823`): the chat's
+  own usage total stays at zero and its notes are keyed with every other
+  phone conversation's (`memory/origin.py:47`).
+- [ ] **L2 (2, medium, checked).** A reply typed at the desk into a phone
+  conversation has no project and runs at full trust
+  (`routes/comm.py:823`, against `inbound.py:1245-1257`).
+- [ ] **L3 (8, medium, checked).** The automatic summary of a long chat is a
+  paid model call that is on no receipt (`daemon/app.py:3409` drops the
+  usage; `chat_turn.py:373-410`).
+- [ ] **L4 (1, medium, pass only).** A turn that fails after its tools ran
+  says only that it failed; on the phone that is the whole message
+  (`chat_turn.py:14547-14583`, `routes/chat.py:8093-8119`).
+- [ ] **L5 (1, low, checked).** On a reply that ends in a workflow card the
+  plain lane drops four honesty notes the streaming lane adds
+  (`chat_turn.py:14716-14836` against `routes/chat.py:8457-8484`).
+- [ ] **L6 (3, low, checked).** A cancelled plain-lane turn leaves no usage
+  row and no safety scan (`chat_turn.py:14547`; the streaming lane has
+  `except BaseException` at `routes/chat.py:8120`).
+- [ ] **L7 (4, low, checked).** The plain lane does not honour "Ask before
+  every action" (`chat_turn.py:13462, 14041`); only a direct caller of the
+  route reaches it today.
+- [ ] **L8 (7, low, pass only).** Engine words in replies: "stopped after 7
+  tool rounds", raw tool names, a Python exception as a step's output.
+- [ ] **L9 (4, low, checked).** The language rewrite has no time limit in
+  either lane (`chat_turn.py:2443-2456`).
+
+### Still not read
+
+Each pass listed what it did not read. The larger pieces: the browser
+sidebar's own code (`extensions/chrome/src/sidepanel/sidepanel.ts`) and
+`browser/panel.py`, `snapshot.py`, `screenshot.py`, `pairing.py`,
+`panetokens.py`; the door that gives coding tools Jarvis's own tools
+(`mcpserver/`); `codehost.py`; most of `daemon/routes/build.py`
+(`_ReplyWatch`, the resume pass); `harness/attempts.py` at night;
+`tools/permissions.py` and `sandbox/cmd_guard.py`; the bundled account
+manager beyond its server and delete code; how a reply is saved to its chat
+and `daemon/durable_turns.py`; `terminals/`.
+
+## Second fix plan (groups 9 to 16)
+
+The owner said "Yes, plan and fix" on 2026-11-16. The 98 findings above are
+fixed the way the first plan's were ("How the fixes are made", points 2, 4
+and 5): one release per group, Opus 5.5 at high effort implementing, the lead
+reading every diff and proving each new test red before green. A finding
+marked "pass only" or "suspected" is first proven with a failing test; one
+that cannot be made to fail is marked "not a defect" here with the reason,
+and not changed.
+
+**The shared causes this time**
+
+| Cause | The one piece | Closes |
+|---|---|---|
+| A run started for another computer treated as the owner's | one "remote run" reading (`task_door.is_remote_task_origin`) that the memory injections, the wall and the tool roster all ask | F1, F5, F14 |
+| Outside text closing its own fence | the marker is neutralised inside `wrap_untrusted`, so every caller is covered | B1, B8, B11, B14 |
+| A stop that races a start | every stop of a coding tool takes the session's lock; a claim is refused while a start is in flight | H2, H8, the open shutdown item |
+| An ending read from the wrong field | one reading of a finish record (`night.finish_needs_you`) that the night, the auto-fix and the day's notice share | T5, T6, T7, D4 |
+| A second way to submit or discard that the gate does not see | the gate judges the effect (a submit, a discard, a push), not the spelling | B2, S6, T2, T8, D5 |
+| A raw exception on screen | `core.failures.plain_failure` | L8, B12, H11, F13, D10, A13 |
+
+**Order.** Data crossing to another computer or out of a fence first, then
+loss, then consent, then Stop, then false "done", then secrets at rest, then
+stalls, costs and wording.
+
+| Group | Theme | Findings |
+|---|---|---|
+| 9 | Outside text stays data, other computers stay outside | F1, F5, F6, F7, F10, F11, F12, F14, B1, B8, B11, B14, and the three "not closed" lines under other computers |
+| 10 | Nothing is lost | A1, F3, H5, H6, S2, S8, S11, S12, T3, T4, L4, L6, B3 |
+| 11 | Every gate judges what will happen | B2, S6, T2, T8, A2, A5, A12, H7, H9, B6, B9, B10, L7, D5 |
+| 12 | Stop means stopped | H1, H2, H3, H8, H13, H14, T1, A11, D6, D9, the open shutdown item and the open `continue_session` window |
+| 13 | Done means done in a coding session | D1, D2, D3, D4, D7, D8, D11, T5, T6, T7, T10, S3, S5, L5 |
+| 14 | What helpers, tools and servers report | H4, H10, F2, F4, F9, A7, A9, and the three status lines of A13 |
+| 15 | Secrets at rest and what leaves the PC | A3, A4, A6, A8, A10, B4, B5, B7, S1, S7, S9, S10, L1, L2, H12, the `proxy.json` line of A13, and the Settings model-server slot left open by group 9 |
+| 16 | Never stalls, every cost counted, plain words | S4, L9, T9, B13, F8, F15, L3, L8, B12, H11, F13, D10, the wording line of A13 |
+
+**Decisions taken as recommended.** Each changes something the owner will
+notice. Say so to change any of them.
+
+| # | Decision | Taken |
+|---|---|---|
+| E1 | A task from a paired computer (F1) | Runs with none of this PC's memory, lessons, profile or notes, and cannot search memory, history or files outside its own folder, until a per-computer choice exists |
+| E2 | Removing an account (A1) | Its folder is moved to Iron Jarvis's trash, never deleted; refused while a session or terminal runs on it; the button says what goes |
+| E3 | Git commands in a session that works in the folder directly (T2) | A push, a force push, and anything that throws work away (`reset --hard`, `clean`, `checkout` of files, deleting a branch) ask every time, even after "allow commands for this session" and under "Don't ask". A commit does not ask |
+| E4 | Enter in a form field (B2, S6) | Judged as a submit: it asks unless the form's own submit button is known and reads as harmless |
+| E5 | Claude Code's "Allow for this session" (A2) | Kept for the session only; nothing is written to the folder's settings |
+| E6 | A helper on a tool that cannot ask (A5) | Refused in words when the parent session is in Ask first or Plan |
+| E7 | "Send coding work to a model server" (F2) | Decided when group 14 reads the setting: wired if its meaning is defined in code, else the page says plainly that it is not in effect |
+| E8 | Raw error text on the Model servers page (F13) | A plain sentence on screen; the raw text stays under Details |
+| E9 | The bundled account manager's open model routes (A4) | Closed from the Iron Jarvis side if the bundle allows it; a change to the bundle itself is the owner's to release |
+| E10 | A paired computer whose address changed (F6) | Its address is never updated by itself. The card says it changed, and its answer is held back rather than sent to the old address, until the two are paired again |
+
+### Group 9 as built (v1.509.0)
+
+Fixed: F1, F5, F6, F7, F10, F11, F12, F14, B1, B8, B11, B14, and two of the
+three "not closed" lines (a peer's answer is fenced; only files inside the
+run's folder are sent). The third (`message_agent`, `blackboard_post`,
+`consult`) was not a defect: a remote task's board is its own, and a consult
+gives the consulted agent no tools.
+
+Where it differs from the plan:
+
+- **F1 became an allow list.** The implementer's ten-name deny list closed
+  the memory tools. The lead's review found the allow tier also held
+  `list_folder` and `read_document` (any folder on this PC), the owner's
+  browser tabs, terminals, connected apps and settings, 99 tools in all. A
+  remote run now keeps only `core/trust.REMOTE_RUN_KEEP`, and its reads are
+  confined to its own folder in `core/fs_policy`. `consult` and
+  `spawn_agent` are off the list on purpose.
+- **F6 holds the answer back** instead of updating the address (decision
+  taken by the lead: an address updated from a request would hand answers
+  to anyone holding a captured token).
+- **F7** reuses the rules of `peers.store.normalize_address`, not the
+  function (a model server's address needs a path such as `/v1`).
+
+Left open (group 15 takes the first):
+
+- The Settings "your own model server" slot can still send a key over plain
+  http to an address outside the network.
+- The dashboard's add form saves a key to the vault before the edit that is
+  then refused; the server is left saved with no key.
+- A pairing kept under a host name cannot be compared with a source
+  address, so it is never read as moved.
+- `/chat/compact` builds its own history and still sees an agent's line
+  unfenced.
+- Four older copies of the fence-marker pattern still stand beside the
+  shared one.
+- The link part of the "only files inside the folder" test is skipped where
+  the test machine cannot make links.

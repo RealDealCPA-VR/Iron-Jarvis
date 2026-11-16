@@ -44,3 +44,10 @@ class PeerRecord(SQLModel, table=True):
     #: Why the last check did not get an answer, in plain words ("" = it did).
     last_error: str = ""
     last_error_at: datetime | None = None
+    #: v1.509.0 (second review F6): the address the other computer last
+    #: reached this one from, when it is NOT the one it was paired at ("" =
+    #: the paired address). The pairing's address is never changed by it: a
+    #: reply goes only where the two were paired. Additive columns
+    #: (``core.db._reconcile_additive_columns`` adds them to an older table).
+    heard_from: str | None = None
+    heard_from_at: datetime | None = None

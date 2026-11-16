@@ -220,10 +220,93 @@ TAINTED_DENY: frozenset[str] = frozenset(
 )
 
 
-def deny_names(tainted: bool) -> frozenset[str]:
+#: v1.509.0 (second review F1, decision E1): the tools that READ ACROSS THIS
+#: COMPUTER — its memory, lessons, notes, memory base, past chats and runs,
+#: clients, and files outside the run's own folder — kept away from a run
+#: that a task from ANOTHER COMPUTER started (``task_door.
+#: is_remote_task_origin``) and from every run started inside it. Its answer
+#: is posted back to that computer, so what these read would leave this one.
+#: Kept apart from ``LOW_TRUST_DENY``: a phone message's run is low too and
+#: keeps them (its answer stays on the owner's own phone). ``file_search``
+#: is kept away whole: with no root it searches the chat files, every
+#: project's folder and the owner's added folders, and the run's own folder
+#: is searched by ``grep`` / ``glob``. Read through :func:`deny_names`.
+REMOTE_RUN_DENY: frozenset[str] = frozenset(
+    {
+        "recall",
+        "recall_lessons",
+        "ltm_search",
+        "history_search",
+        "memory_read",
+        "memory_search",
+        "brain_read",
+        "brain_search",
+        "client_list",
+        "file_search",
+    }
+)
+
+
+def deny_names(tainted: bool, remote: bool = False) -> frozenset[str]:
     """The names kept away from a low run NOW: ``LOW_TRUST_DENY``, plus
-    ``TAINTED_DENY`` once the run has read flagged content."""
-    return (LOW_TRUST_DENY | TAINTED_DENY) if tainted else LOW_TRUST_DENY
+    ``TAINTED_DENY`` once the run has read flagged content, plus
+    ``REMOTE_RUN_DENY`` for a run another computer's task started."""
+    names = (LOW_TRUST_DENY | TAINTED_DENY) if tainted else LOW_TRUST_DENY
+    return (names | REMOTE_RUN_DENY) if remote else names
+
+
+#: v1.509.0 (lead review of F1): the ONLY tools a run another computer's
+#: task started may call. A deny list cannot keep up: the allow tier also
+#: holds the owner's open browser tabs (``browser_read_page``), terminals
+#: (``pane_read``), connected apps (``mcp_read_resource``), settings and
+#: every app pack's tools, and a new tool would be open until someone
+#: remembered to list it. So the question is asked the other way: is the tool
+#: on this list? Each one works on the run's OWN folder (the file tools are
+#: confined to it by ``safe_path``; the readers that take an absolute path go
+#: through ``core.fs_policy``, which confines such a run's reads), is pure,
+#: reaches the public web, or works with the run's own helpers. Everything
+#: else is refused with :func:`remote_run_refusal` until the owner can choose
+#: per computer what a paired computer may do. Pinned by
+#: ``tests/test_second_review_remote_run_v1509.py`` (each reader on it is
+#: driven at a path outside the run's folder and must refuse).
+REMOTE_RUN_KEEP: frozenset[str] = frozenset(
+    {
+        # the run's own folder
+        "read_file", "write_file", "edit_file", "multi_edit", "apply_patch",
+        "rename_file", "list_files", "glob", "grep",
+        # documents: reads are confined by core.fs_policy, the writer by safe_path
+        "read_document", "extract_pdf", "list_folder", "write_document",
+        "excel_read", "excel_query", "excel_profile",
+        # pure
+        "calculate", "plan_update",
+        # its own helpers (each inherits all of this). Not consult (it can
+        # ask an agent on a THIRD computer) and not spawn_agent (it adds
+        # an agent to this computer's own list).
+        "delegate", "list_agents",
+        "blackboard_post", "blackboard_read", "message_agent",
+        # the public web (taken away once the run has read flagged content)
+        "web_search", "web_fetch", "browse", "web_extract", "web_look",
+        # the product's own handbook
+        "guide_read", "guide_search",
+    }
+)
+
+
+def remote_run_keeps(tool: str) -> bool:
+    """May a run another computer's task started call ``tool``? Only a tool
+    on :data:`REMOTE_RUN_KEEP` that is not a cross-computer reader
+    (:data:`REMOTE_RUN_DENY` wins, so a name can never be on both)."""
+    return tool in REMOTE_RUN_KEEP and tool not in REMOTE_RUN_DENY
+
+
+def remote_run_refusal(tool: str) -> str:
+    """The sentence a call is refused with in a run another computer's task
+    started (v1.509.0, decision E1)."""
+    return (
+        f"this task came from another computer, so {tool} is not available "
+        "to it: it works in its own folder only, with none of what this "
+        "computer keeps"
+    )
 
 
 #: The ONE sentence a run that starts low reads in its system prompt. A run

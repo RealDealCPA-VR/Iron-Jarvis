@@ -716,7 +716,9 @@ async def test_remove_ends_it_on_both_computers(tmp_path, lan):
         b_to_a = _secret(b, pb.out_secret)
 
         out = (await ca.delete("/peers/desk")).json()
-        assert out == {"removed": True, "told": True, "said": R.removed_words("desk", True)}
+        # v1.509.0 (F5): the answer also says how many of its tasks stopped.
+        assert out == {"removed": True, "told": True, "stopped": 0,
+                       "said": R.removed_words("desk", True)}
         _nothing_kept(a, b)
         removed_b = [e.payload for e in b.state.platform.event_bus.history if e.type == "peer.removed"]
         assert removed_b == [{"name": "laptop", "by": "them"}]

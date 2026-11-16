@@ -251,6 +251,17 @@ class PeerStore:
                 db.expunge(row)
             return row
 
+    def get_by_id(self, peer_id: str) -> PeerRecord | None:
+        """The pairing with this id (v1.509.0: a task's reply names the
+        pairing it came from by id, never by name). None for "" or gone."""
+        if not peer_id:
+            return None
+        with session_scope(self.engine) as db:
+            row = db.get(PeerRecord, peer_id)
+            if row is not None:
+                db.expunge(row)
+            return row
+
     def names(self) -> set[str]:
         return {r.name for r in self.list()}
 
@@ -459,9 +470,30 @@ class PeerStore:
         except Exception:  # noqa: BLE001 — bookkeeping only
             log.warning("paired computer: could not record what happened", exc_info=True)
 
-    def note_heard(self, peer_id: str) -> None:
-        """The peer reached this computer (a task, an answer)."""
-        self._touch(peer_id, last_heard_at=utcnow())
+    def note_heard(self, peer_id: str, source: str | None = None) -> None:
+        """The peer reached this computer (a task, an answer). v1.509.0 (F6):
+        with ``source`` (the TCP client's host), a request from another
+        address than the one the pairing keeps is recorded as
+        ``heard_from`` (and cleared once it comes from that address again);
+        the pairing's address itself never changes here."""
+        if source is None:
+            self._touch(peer_id, last_heard_at=utcnow())
+            return
+        from ..agents.task_door import address_host, came_from_elsewhere, plain_address
+
+        now = utcnow()
+        try:
+            peer = self.get_by_id(peer_id)
+        except Exception:  # noqa: BLE001 — bookkeeping only
+            peer = None
+        if peer is None:
+            return
+        if came_from_elsewhere(source, peer.address):
+            self._touch(peer_id, last_heard_at=now, heard_from=plain_address(source), heard_from_at=now)
+        elif peer.heard_from and plain_address(source) == address_host(peer.address):
+            self._touch(peer_id, last_heard_at=now, heard_from="", heard_from_at=None)
+        else:
+            self._touch(peer_id, last_heard_at=now)
 
     def note_ok(self, peer_id: str) -> None:
         """The peer answered this computer."""
@@ -471,15 +503,16 @@ class PeerStore:
         """The peer did not answer this computer, and why."""
         self._touch(peer_id, last_error=str(words or "")[:300], last_error_at=utcnow())
 
-    def note_heard_by_remote(self, remote_name: str) -> None:
+    def note_heard_by_remote(self, remote_name: str, source: str | None = None) -> None:
         """The remote agent ``remote_name`` messaged back: when it is a paired
-        computer, it was heard from. Never raises."""
+        computer, it was heard from (from ``source``, see :meth:`note_heard`).
+        Never raises."""
         try:
             peer = self.get(remote_name)
         except Exception:  # noqa: BLE001
             peer = None
         if peer is not None:
-            self.note_heard(peer.id)
+            self.note_heard(peer.id, source)
 
 
 def iso(value: Any) -> str | None:
@@ -507,6 +540,10 @@ def peer_view(peer: PeerRecord) -> dict[str, Any]:
         "last_heard_at": iso(peer.last_heard_at),
         "last_error": peer.last_error or "",
         "last_error_at": iso(peer.last_error_at),
+        # v1.509.0 (F6): where it last reached this computer from, when that
+        # is not the address it was paired at ("" otherwise).
+        "heard_from": peer.heard_from or "",
+        "heard_from_at": iso(peer.heard_from_at) if peer.heard_from else None,
     }
 
 

@@ -35,6 +35,7 @@ Three layers:
 
 from __future__ import annotations
 
+import contextvars
 import os
 import stat
 import tempfile
@@ -370,9 +371,63 @@ def allowlist_roots() -> list[Path]:
     return both or [NOTHING_READABLE]
 
 
+#: v1.509.0 (lead review of second-review F1): the folders a run's reads
+#: are CONFINED to, or None (every other run: no extra limit). Set by the
+#: agent runtime around a run another computer's task started, so the
+#: readers that take an absolute path (``list_folder``, ``read_document``,
+#: ``extract_pdf``, the spreadsheet readers) cannot list or read this
+#: computer's folders for a computer that will be sent the answer. A context
+#: value, so a helper awaited inside the run and a worker thread started by
+#: one of its tools (``asyncio.to_thread`` copies the context) are confined
+#: too. A daemon route never sets it.
+_CONFINED: "contextvars.ContextVar[tuple[Path, ...] | None]" = contextvars.ContextVar(
+    "iron_jarvis_reads_confined", default=None
+)
+
+CONFINED_REFUSAL = (
+    "This task came from another computer, so it may read only its own folder."
+)
+
+
+def confine_reads(roots: "list[str | Path]") -> "contextvars.Token":
+    """Confine this context's reads to *roots* PLUS whatever it is already
+    confined to (a helper's own folder is added to its parent's, never
+    swapped for it). A root that cannot be resolved is left out, so an
+    unreadable list confines to nothing rather than to everything. Returns
+    the token for :func:`release_reads`."""
+    kept: list[Path] = list(_CONFINED.get() or ())
+    for root in roots or []:
+        try:
+            if str(root or "").strip():
+                kept.append(_canonical(root))
+        except Exception:  # noqa: BLE001 — left out: fail closed
+            continue
+    return _CONFINED.set(tuple(kept))
+
+
+def release_reads(token: "contextvars.Token") -> None:
+    """Undo :func:`confine_reads`. Never raises."""
+    try:
+        _CONFINED.reset(token)
+    except (ValueError, LookupError, RuntimeError):  # another context's token
+        _CONFINED.set(None)
+
+
+def reads_confined() -> bool:
+    """Is this context's reading confined (:func:`confine_reads`)?"""
+    return _CONFINED.get() is not None
+
+
 def _read_refusal(path: str | Path) -> str:
     """``""`` when the folder layers allow *path*, else the sentence that says
     which limit refused it. The protected layer is NOT checked here."""
+    confined = _CONFINED.get()
+    if confined is not None:
+        try:
+            if not _within_any(_canonical(path), list(confined)):
+                return CONFINED_REFUSAL
+        except Exception:  # noqa: BLE001 — unreadable: refuse
+            return CONFINED_REFUSAL
     env = _env_roots()
     setting = _setting_roots()
     if env is None and setting is None:

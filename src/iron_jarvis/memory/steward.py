@@ -174,7 +174,6 @@ House rules honoured here
 from __future__ import annotations
 
 import json
-import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -218,12 +217,20 @@ except Exception:  # noqa: BLE001
 #: covers this lane too. Imported defensively because :meth:`build_task` must
 #: never raise; :func:`_fence` falls back to an equivalent local fence.
 try:  # pragma: no cover - fallback only fires on a broken computeruse package
+    from ..computeruse.safety import _FENCE_MARKER
+    from ..computeruse.safety import defang_fence_markers as _defang
     from ..computeruse.safety import detect_injection as _detect_injection
     from ..computeruse.safety import wrap_untrusted as _wrap_untrusted
 except Exception:  # noqa: BLE001
     log.warning("SEC-1 helpers unavailable; the steward uses its local fence", exc_info=True)
     _detect_injection = None  # type: ignore[assignment]
     _wrap_untrusted = None  # type: ignore[assignment]
+    _FENCE_MARKER = None  # type: ignore[assignment]
+
+    def _defang(text: str) -> str:  # type: ignore[misc]
+        """Fail closed without the shared defang: every ``[`` becomes ``(``,
+        so no fence marker can survive in the embedded text."""
+        return (text or "").replace("[", "(")
 
 #: Conversations one review session is asked to read. Forty is a session's worth
 #: of reading, not a corpus — the steward is meant to run OFTEN and shallowly.
@@ -346,20 +353,13 @@ def _clip(value: str, limit: int) -> str:
     return value if len(value) <= limit else value[: limit - 1].rstrip() + "…"
 
 
-#: Any spelling of the untrusted-content fence markers, wherever they occur in
-#: embedded text. A thread titled ``[END UNTRUSTED CONTENT]`` would otherwise
-#: close the fence and let the rest of that message read as trusted prompt.
-_FENCE_MARKER = re.compile(r"\[\s*(?:/\s*)?(?:END\s+)?UNTRUSTED\s+CONTENT", re.IGNORECASE)
-
-
-def _defang(text: str) -> str:
-    """Neutralize fence markers inside untrusted text (DECISION 3).
-
-    Replaces the opening ``[`` with ``(`` so the marker still READS as what the
-    author wrote (nothing is hidden from the reviewing session) while ceasing to
-    be a delimiter the fence parser — or the model — can mistake for ours.
-    """
-    return _FENCE_MARKER.sub(lambda m: "(" + m.group(0)[1:], text or "")
+#: ``_FENCE_MARKER`` / ``_defang`` (DECISION 3): any spelling of the
+#: untrusted-content fence markers, neutralised wherever it occurs in embedded
+#: text — a thread titled ``[END UNTRUSTED CONTENT]`` would otherwise close the
+#: fence and let the rest of that message read as trusted prompt. The ``[``
+#: becomes ``(``, so the marker still READS as what the author wrote. Since
+#: v1.509.0 this is the ONE implementation in ``computeruse/safety`` (imported
+#: above), which ``wrap_untrusted`` itself now applies to every caller.
 
 
 def _fence(body: str) -> str:

@@ -239,6 +239,10 @@ def _node_rows(sampler: Any, fleet: Any = None) -> list[Any]:
         row = _dump(snap)
         if isinstance(row, dict):
             row["checked"] = bool(checked)
+            # Second review F7: a name and password saved in an address
+            # before they were refused are never shown.
+            if isinstance(row.get("node"), dict) and "base_url" in row["node"]:
+                row["node"]["base_url"] = _shown_address(row["node"]["base_url"])
             # v1.424.0 (D8): each model's own capability.
             row = _with_capabilities(row, snap, fleet)
         rows.append(row)
@@ -363,6 +367,96 @@ def fleet_auth_kw(fleet: Any, node: Any) -> dict[str, Any]:
     return {"headers": headers} if headers else {}
 
 
+#: Second review F7: the sentences a refused model server address gets.
+ADDRESS_NOT_AN_ADDRESS = (
+    "That is not a model server's address. Type it as it is shown, for example "
+    "http://192.168.1.20:11434."
+)
+ADDRESS_HAS_A_NAME = (
+    "Type the model server's address alone, with no name or password in it. "
+    "Save its key separately."
+)
+ADDRESS_HAS_MORE = "Type the model server's address with nothing after it: no ? or # part."
+KEY_WOULD_TRAVEL_UNENCRYPTED = (
+    "This model server is outside your network and its address starts with "
+    "http://, so its key would travel unencrypted. Use its https:// address "
+    "to save a key for it."
+)
+
+
+def model_server_address_problem(base_url: str, *, keyed: bool = False) -> str:
+    """Why a model server address cannot be saved (or probed), in one plain
+    sentence, or ``""`` (second review F7). The rules
+    ``peers.store.normalize_address`` applies to a computer's address that
+    also fit a model server's (whose address may carry a path such as
+    ``/v1``): no backslash or control character, no name or password, no
+    query string or fragment. With *keyed* (a key is saved for it), a plain
+    http address must be on this network (``egress.private_host``): https to
+    any host, and http on this network, are accepted as before. An address
+    the parser cannot read is left to the probe's own answer, as before."""
+    from urllib.parse import urlsplit
+
+    text = (base_url or "").strip()
+    if "\\" in text or any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+        return ADDRESS_NOT_AN_ADDRESS
+    try:
+        parts = urlsplit(text if "://" in text else f"http://{text}")
+        has_name = parts.username is not None or parts.password is not None
+    except ValueError:
+        return ""
+    if has_name or "@" in parts.netloc:
+        return ADDRESS_HAS_A_NAME
+    if parts.query or parts.fragment or "?" in text or "#" in text:
+        return ADDRESS_HAS_MORE
+    if keyed and key_would_travel_unencrypted(text):
+        return KEY_WOULD_TRAVEL_UNENCRYPTED
+    return ""
+
+
+def key_would_travel_unencrypted(base_url: str) -> bool:
+    """True when a key sent to *base_url* would cross a network that is not
+    the user's own in clear text: a plain http address (or one typed with no
+    scheme, which is read as http) whose host is not on this network
+    (``egress.private_host``). Never raises; an unreadable address is not
+    judged here."""
+    from urllib.parse import urlsplit
+
+    from ...providers.egress import private_host
+
+    text = (base_url or "").strip()
+    if not text:
+        return False
+    try:
+        scheme = urlsplit(text if "://" in text else f"http://{text}").scheme.lower()
+    except ValueError:
+        return False
+    return scheme == "http" and not private_host(text)
+
+
+def _address_or_400(base_url: str, *, keyed: bool) -> None:
+    problem = model_server_address_problem(base_url, keyed=keyed)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+
+
+def _shown_address(url: Any) -> Any:
+    """An address as ``GET /fleet`` shows it: a name and password a server
+    saved before second review F7 carried are hidden (``http://***@host``).
+    The saved address itself is never rewritten. Never raises."""
+    if not isinstance(url, str) or "@" not in url:
+        return url
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+
+        parts = urlsplit(url)
+        if "@" not in parts.netloc:
+            return url
+        host = parts.netloc.rsplit("@", 1)[1]
+        return urlunsplit((parts.scheme, f"***@{host}", parts.path, parts.query, parts.fragment))
+    except Exception:  # noqa: BLE001 — hide it all rather than show a password
+        return "***"
+
+
 async def add_fleet_node(d: Any, body: "FleetNodeBody") -> dict[str, Any]:
     """Add a node: detect what it is, probe it once, persist it.
 
@@ -375,6 +469,8 @@ async def add_fleet_node(d: Any, body: "FleetNodeBody") -> dict[str, Any]:
     base_url = (body.base_url or "").strip()
     if not base_url:
         raise HTTPException(status_code=400, detail="base_url is required")
+    # Second review F7: refused before anything is asked of the address.
+    _address_or_400(base_url, keyed=bool((body.api_key_name or "").strip()))
     protocol = _protocol_or_400(body.protocol or "openai", base_url) or "openai"
 
     # The gateway-key fix: detection is asked WITH the key the node is
@@ -777,6 +873,12 @@ def register(app: FastAPI, d) -> None:
             fields["protocol"] = _protocol_or_400(
                 fields["protocol"], getattr(current, "base_url", "") or ""
             )
+        if str(fields.get("api_key_name") or "").strip():
+            # Second review F7: a key saved for a plain http server outside
+            # this network would travel unencrypted. Only the key rule: the
+            # saved address itself is not re-judged by an edit.
+            if key_would_travel_unencrypted(getattr(current, "base_url", "") or ""):
+                raise HTTPException(status_code=400, detail=KEY_WOULD_TRAVEL_UNENCRYPTED)
         if not fields:
             return {"node": _dump(d.fleet.get(node_id))}
         from ...fleet.registry import ChildNodeError
@@ -1068,6 +1170,9 @@ def register(app: FastAPI, d) -> None:
         base_url = (body.base_url or "").strip()
         if not base_url:
             raise HTTPException(status_code=400, detail="base_url is required")
+        # Second review F7: the add route's refusals, before the form's key
+        # (``api_key_name``) is sent anywhere.
+        _address_or_400(base_url, keyed=bool((body.api_key_name or "").strip()))
         try:
             from ...fleet.models import FleetNode
             from ...fleet.probes import detect_kind, probe_node

@@ -86,6 +86,24 @@ def _ago(at: str) -> str:
     return f"{secs // 86400} d ago"
 
 
+def _one_line(value: Any) -> str:
+    """A website-chosen value on one line, with no backtick to pose as code."""
+    return " ".join(str(value or "").split()).replace("`", "'")
+
+
+def _said(words: str) -> str:
+    """A sentence of ``download_manage`` that names a file (v1.509.0, second
+    review B8). The name is the website's choice and this answer is not
+    fenced, so a fence marker in it is defanged; the exact path stays in
+    ``data`` and the file is still reached by its id."""
+    from ..computeruse.safety import defang_fence_markers
+
+    safe = defang_fence_markers(words)
+    if safe == words:
+        return words
+    return safe + " (The file's name is shown changed here; use its id.)"
+
+
 def _network_or_device(raw: str) -> bool:
     try:
         from ..harness.code_editor import _network_or_device as check
@@ -163,6 +181,12 @@ class DownloadsListTool(Tool):
         "or read_document."
     )
     reversibility = Reversibility.READONLY
+    #: v1.509.0 (second review B8): a download's file name, and so its path,
+    #: is chosen by the website it came from, and the site is a website's
+    #: address. The whole list is outside text: every lane fences it and scans
+    #: it (``wrap_untrusted`` defangs a fence marker in a name). The path is
+    #: printed exactly inside the fence; ``data`` keeps every value as is.
+    returns_untrusted_content = True
     input_schema = {
         "type": "object",
         "properties": {
@@ -200,9 +224,11 @@ class DownloadsListTool(Tool):
         shown = rows[:limit]
         lines = []
         for r in shown:
-            bits = [r["id"], r.get("name", ""), _size(r.get("bytes"))]
+            # The name and the site are the website's words: one line each, so
+            # neither can start a line of its own (the path stays exact below).
+            bits = [r["id"], _one_line(r.get("name", "")), _size(r.get("bytes"))]
             if r.get("site"):
-                bits.append(f"from {r['site']}")
+                bits.append(f"from {_one_line(r['site'])}")
             ago = _ago(r.get("at", ""))
             if ago:
                 bits.append(ago)
@@ -368,7 +394,7 @@ class DownloadManageTool(Tool):
             work_note = " The copy is in this chat's work folder; edit it there."
         return ToolResult(
             ok=True,
-            output=f"{verb} {src.name} to {dst}{note}.{ext_note}{work_note} Reversible from the receipt.",
+            output=_said(f"{verb} {src.name} to {dst}{note}.{ext_note}{work_note} Reversible from the receipt."),
             data={"action": action, "from": str(src), "abs_path": str(dst),
                   "download": plan["entry"]["id"]},
         )
@@ -392,7 +418,7 @@ class DownloadManageTool(Tool):
                 trash = Path(ctx.config.home) / "trash" / stamp / "downloads"
                 trash.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(dst_p), str(free_name(trash, dst_p.name)))
-                return ToolResult(ok=True, output=f"undo: moved the copy {dst_p.name} to Iron Jarvis's trash")
+                return ToolResult(ok=True, output=_said(f"undo: moved the copy {dst_p.name} to Iron Jarvis's trash"))
             if src_p.exists():
                 return ToolResult(ok=False, error=(
                     f"undo: {src_p.name} exists again in {src_p.parent}; putting the "
@@ -402,7 +428,7 @@ class DownloadManageTool(Tool):
             entry = meta.get("entry")
             if entry:
                 self.ledger.moved(str(entry), str(src_p))
-            return ToolResult(ok=True, output=f"undo: put {src_p.name} back in {src_p.parent}")
+            return ToolResult(ok=True, output=_said(f"undo: put {src_p.name} back in {src_p.parent}"))
 
         try:
             return await asyncio.to_thread(_do)

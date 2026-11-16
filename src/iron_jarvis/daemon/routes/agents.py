@@ -3200,6 +3200,14 @@ def register(app: FastAPI, d) -> None:
         from ...agents.threads import AgentThreads
 
         reg = _remote_reg()
+        # v1.509.0 (second review F14): FIRST one try from the source address
+        # (memory only), so junk tokens past the budget cost no database or
+        # vault read — the pairing doors' ``take_try`` rule.
+        _source = _source_of(request)
+        if not _task_door().address_ok(_source, "inbound"):
+            raise HTTPException(
+                status_code=429, detail="too many tries from that address — wait a minute"
+            )
         # DB + vault reads off the loop: a third party drives this route.
         rec = await asyncio.to_thread(reg.get, name)
         # A DISABLED remote is disabled in both directions: the user's one
@@ -3221,7 +3229,7 @@ def register(app: FastAPI, d) -> None:
         try:
             from ...peers.store import store_for
 
-            await asyncio.to_thread(store_for(d.platform).note_heard_by_remote, name)
+            await asyncio.to_thread(store_for(d.platform).note_heard_by_remote, name, _source)
         except Exception:  # noqa: BLE001 — bookkeeping only
             pass
         if not _inbound_rate_ok(name):
@@ -3524,16 +3532,29 @@ def register(app: FastAPI, d) -> None:
         header = request.headers.get("authorization") or ""
         return header[7:].strip() if header.lower().startswith("bearer ") else ""
 
+    def _source_of(request: Request) -> str:
+        """The TCP client's host (never anything the request says)."""
+        client = getattr(request, "client", None)
+        return str(getattr(client, "host", "") or "") if client else ""
+
     async def _door_check(request: Request):
         """The door's locks, fail-closed and off the loop. A PAIRED computer
         (v1.497.0, ``peers/``) shows the token this computer made for it and
         is let in whether or not the hand-made door is on. Anyone else needs
         the hand-made door on (else 403, in words) and its token (else 401).
-        Returns ``(door, peer)``; ``peer`` is None for the hand-made door."""
+        Returns ``(door, peer)``; ``peer`` is None for the hand-made door.
+
+        v1.509.0 (second review F14): FIRST one try from the request's source
+        address (``TaskDoor.address_ok``, memory only): an address past its
+        budget is refused (429) before any database or vault read."""
         from ...agents.task_door import DOOR_OFF
         from ...peers.store import store_for
 
         door = _task_door()
+        if not door.address_ok(_source_of(request), "task"):
+            raise HTTPException(
+                status_code=429, detail="too many tries from that address — wait a minute"
+            )
         token = _door_bearer(request)
         try:
             peer = await asyncio.to_thread(store_for(d.platform).verify, token)
@@ -3560,7 +3581,9 @@ def register(app: FastAPI, d) -> None:
         if peer is not None:
             from ...peers.store import store_for
 
-            await asyncio.to_thread(store_for(d.platform).note_heard, peer.id)
+            await asyncio.to_thread(
+                store_for(d.platform).note_heard, peer.id, _source_of(request)
+            )
         return {"ok": True, "takes_tasks": True}
 
     @app.post(_TASK_DOOR_PATH, status_code=202)
@@ -3581,7 +3604,12 @@ def register(app: FastAPI, d) -> None:
         from ...agents import task_door as td
 
         door, peer = await _door_check(request)
-        if not door.rate_ok():
+        # A paired computer is called by the name this computer gave it; the
+        # hand-made door by the one name its card set. The task window is
+        # per caller (v1.509.0, F14): one computer cannot use up another's.
+        caller = peer.name if peer is not None else await asyncio.to_thread(door.caller)
+        source = _source_of(request)
+        if not door.rate_ok(caller):
             raise HTTPException(
                 status_code=429, detail="too many tasks this minute — try again shortly"
             )
@@ -3614,17 +3642,26 @@ def register(app: FastAPI, d) -> None:
                 detail="reply_to must be another Iron Jarvis's inbound address",
             )
         reply_token = str(body.get("reply_token") or "").strip()
-        # A paired computer is called by the name this computer gave it; the
-        # hand-made door by the one name its card set.
-        caller = peer.name if peer is not None else await asyncio.to_thread(door.caller)
         origin = td.remote_origin(caller)
         orchestrator = d.orchestrator
-        options: dict[str, Any] = {}
+        # v1.509.0 (second review F1, decision E1): a task from another
+        # computer runs with NONE of this computer's memory (the runtime also
+        # reads the origin, ``runtime.run_is_remote``, for the profile, notes
+        # and the cross-computer readers); stamped here so the row says so.
+        options: dict[str, Any] = {"skip_memory": True}
+        if peer is not None:
+            # F5: the pairing it came from, so removing it stops this run.
+            options[td.REMOTE_PEER_OPTION] = peer.id
         if reply_to:
+            # F5 / F6: the pairing (by id), its address as it is now, and the
+            # address the task came from decide where the answer goes.
             options[td.REPLY_OPTION] = td.reply_spec(
                 reply_to=reply_to,
                 conversation_id=str(body.get("conversation_id") or ""),
                 caller=caller,
+                peer_id=peer.id if peer is not None else "",
+                address=peer.address if peer is not None else "",
+                came_from=source if peer is not None else "",
             )
         # LOCAL ONLY (v1.332.0) crosses the wire: the sender's chat is local
         # only, so this run is too — ``create_session`` refuses it when the
@@ -3678,7 +3715,7 @@ def register(app: FastAPI, d) -> None:
         if peer is not None:
             from ...peers.store import store_for
 
-            await asyncio.to_thread(store_for(d.platform).note_heard, peer.id)
+            await asyncio.to_thread(store_for(d.platform).note_heard, peer.id, source)
         else:
             await asyncio.to_thread(door.note_task, session.id)
         d._spawn_bg(session.id, orchestrator.run_session(session.id))

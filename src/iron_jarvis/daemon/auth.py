@@ -69,6 +69,53 @@ def _host_ok(host: str) -> bool:
     return label in {a.strip().lower() for a in allow.split(",") if a.strip()}
 
 
+def _plain_address(text: str) -> str:
+    """An address as one spelling: brackets and an IPv6 zone dropped, an
+    IPv4-mapped IPv6 address as its IPv4, an IP in its compressed form.
+    Anything that is not an IP comes back lower-cased as written."""
+    h = (text or "").strip().strip("[]").split("%", 1)[0].lower()
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return h
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return str(mapped or ip)
+
+
+def _arrived_ok(scope) -> bool:
+    """Second review F10: did this request ARRIVE on an address this daemon
+    serves? Asked only when the desktop opened the network on purpose
+    (``IRONJARVIS_LAN_ACCESS=1``: listening on ``0.0.0.0`` with this PC's
+    private addresses in ``IRONJARVIS_HOST_ALLOWLIST``, ``desktop/main.js``
+    ``daemonNetwork``). The Host header is the caller's to write; the local
+    address (ASGI ``scope["server"]``) is the socket's, so a computer on
+    another network the PC joined later cannot reach it by naming an allowed
+    host. Loopback and the allowlist's addresses pass; a missing or
+    unreadable local address fails closed. With the network not opened the
+    answer is always True: the loopback-only default is unchanged.
+    ``testserver`` is Starlette's TestClient (the ``_LOOPBACK_HOSTS`` rule:
+    a real socket's local address is always an IP)."""
+    if not _lan_opened():
+        return True
+    try:
+        server = scope.get("server")
+        local = str(server[0] or "") if server else ""
+    except Exception:  # noqa: BLE001 — unreadable: fail closed
+        return False
+    plain = _plain_address(local)
+    if not plain:
+        return False
+    if plain == "testserver":
+        return True
+    try:
+        if ipaddress.ip_address(plain).is_loopback:
+            return True
+    except ValueError:
+        return False  # not an IP: no socket of ours has that local address
+    allow = (os.environ.get("IRONJARVIS_HOST_ALLOWLIST") or "").strip()
+    return plain in {_plain_address(a) for a in allow.split(",") if a.strip()}
+
+
 def _origin_ok(origin: str) -> bool:
     o = (origin or "").strip().rstrip("/")
     if not o:
@@ -198,6 +245,8 @@ class HostOriginGuardMiddleware:
             }
             if not _host_ok(headers.get("host", "")):
                 return await self._reject(scope, receive, send, "host not allowed")
+            if not _arrived_ok(scope):
+                return await self._reject(scope, receive, send, "address not allowed")
             origin = headers.get("origin", "")
             # The extension exception is checked ONLY after `_origin_ok` has
             # already refused, so the ordinary loopback rule is untouched and the

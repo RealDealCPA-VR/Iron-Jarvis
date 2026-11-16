@@ -31,6 +31,9 @@ export interface Peer {
   lastHeardAt: string | null;
   lastError: string;
   lastErrorAt: string | null;
+  /** v1.509.0: the address it last reached this computer from, when that is
+   *  not the one it was paired at ("" otherwise). */
+  heardFrom: string;
 }
 
 export interface PeersView {
@@ -185,7 +188,17 @@ function decodePeer(raw: unknown): Peer | null {
     lastHeardAt: time(r.last_heard_at),
     lastError: text(r.last_error, 400),
     lastErrorAt: time(r.last_error_at),
+    heardFrom: text(r.heard_from, 80),
   };
+}
+
+/** v1.509.0 (second review F6): said under a pairing whose computer now
+ *  reaches this one from another address. Its answers are not sent to the
+ *  old address; pairing again is the way to follow it. "" when it has not
+ *  moved. */
+export function movedWords(peer: Peer): string {
+  if (!peer.heardFrom) return "";
+  return `${peer.name} now reaches this computer from ${peer.heardFrom}, not the address it was paired at. Pair again if it moved.`;
 }
 
 /** A defensive read of `GET /peers` (and the answers that return the same view). */

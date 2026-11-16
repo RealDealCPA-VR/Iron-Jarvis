@@ -363,7 +363,12 @@ async def test_a_task_becomes_one_unattended_low_trust_session(tmp_path, monkeyp
         "to": "http://a-pc:8787/agents/remote/desk/inbound",
         "conversation_id": "athr_1",
         "caller": "laptop",
+        # v1.509.0 (F5): which door it came in by; the hand-made door names
+        # no pairing, so its answer keeps the address the task named.
+        "door": "hand",
     }
+    # v1.509.0 (F1): none of this computer's memory for another computer's task.
+    assert opts["skip_memory"] is True
     assert "the-callers-inbound-key" not in row.options_json
     # the model saw the task (the real runtime ran it)
     assert seen and "summarise the notes" in json.dumps(

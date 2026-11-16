@@ -95,6 +95,22 @@ STATE_FILE = "task-door.json"
 TASK_RATE_MAX = 20
 TASK_RATE_WINDOW_S = 60.0
 
+#: v1.509.0 (second review F14): tries a minute from ONE source address,
+#: taken BEFORE any token is read (the pairing doors' ``take_try`` rule), so
+#: junk tokens from an address past its budget cost no database or vault read.
+#: The task door: three times one computer's task budget (a Check, a task and
+#: its retries fit). The message-back door (``/agents/remote/<name>/inbound``):
+#: four times one remote's 60 messages a minute.
+ADDRESS_TRIES_MAX = 60
+INBOUND_ADDRESS_TRIES_MAX = 240
+ADDRESS_WINDOW_S = 60.0
+#: Addresses remembered at once (the oldest is dropped past it).
+ADDRESSES_KEPT = 2048
+
+#: The run option naming the pairing a task came from (``PeerRecord.id``),
+#: so removing that pairing finds and stops its runs (v1.509.0, F5).
+REMOTE_PEER_OPTION = "remote_peer"
+
 #: The task text's cap — the inbound door's message cap, the same number.
 TASK_MAX_CHARS = 12_000
 
@@ -191,6 +207,52 @@ def door_address(url: object) -> str:
     return parsed._replace(path=(parsed.path or "").rstrip("/")).geturl()
 
 
+def plain_address(host: object) -> str:
+    """A source or stored host as one comparable spelling (v1.509.0, F6):
+    an IP address without brackets, an IPv4-mapped IPv6 address as its IPv4
+    (``::ffff:10.0.0.1`` is ``10.0.0.1``), anything else (a name) lower case.
+    The port is never part of it. ``""`` for nothing."""
+    import ipaddress
+
+    text = str(host or "").strip().strip("[]")
+    if not text:
+        return ""
+    try:
+        ip = ipaddress.ip_address(text)
+    except ValueError:
+        return text.lower()
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return str(mapped or ip)
+
+
+def address_host(address: object) -> str:
+    """The :func:`plain_address` of a stored ``scheme://host:port``."""
+    try:
+        return plain_address(urlparse(str(address or "").strip()).hostname or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def came_from_elsewhere(source: object, address: object) -> bool:
+    """Did a request from ``source`` (the TCP client's host) come from
+    somewhere other than the pairing's stored ``address``? Only an IP can be
+    compared like for like: a pairing kept under a NAME (the joining side
+    keeps the address as the person typed it) or a source that cannot be read
+    is never called "elsewhere" (said in the report: it cannot be told)."""
+    import ipaddress
+
+    seen = plain_address(source)
+    kept = address_host(address)
+    if not seen or not kept:
+        return False
+    try:
+        ipaddress.ip_address(seen)
+        ipaddress.ip_address(kept)
+    except ValueError:
+        return False
+    return seen != kept
+
+
 def valid_reply_to(url: object) -> bool:
     """Is ``url`` a place this computer may send an answer to — another Iron
     Jarvis's inbound door over http(s)? Anything else is refused at the door."""
@@ -218,11 +280,17 @@ class TaskDoor:
     them off the loop. Nothing here raises to a caller: a broken state file
     reads as "off" (the fail-closed direction)."""
 
-    def __init__(self, home: str | Path, secrets: Any) -> None:
+    def __init__(self, home: str | Path, secrets: Any, clock: Any = None) -> None:
         self.home = Path(home)
         self.secrets = secrets
         self._lock = threading.Lock()
-        self._hits: deque[float] = deque()
+        #: The time source of both limits (injected by tests; never a sleep).
+        self._clock = clock or time.monotonic
+        #: Tasks per CALLER (v1.509.0, F14: one window per computer, not one
+        #: shared by all of them).
+        self._hits: dict[str, deque[float]] = {}
+        #: Tries per source address, per door ("task" / "inbound").
+        self._address_hits: dict[str, dict[str, deque[float]]] = {}
 
     # -- state ---------------------------------------------------------------
 
@@ -316,17 +384,41 @@ class TaskDoor:
 
         return token_matches(str(candidate), str(expected))
 
-    def rate_ok(self) -> bool:
-        """``TASK_RATE_MAX`` tasks per ``TASK_RATE_WINDOW_S``; past it, False
-        (nothing is counted then)."""
-        now = time.monotonic()
+    def _take(self, table: dict[str, deque[float]], key: str, limit: int, window_s: float) -> bool:
+        """One try for ``key`` in ``table``: False past ``limit`` in
+        ``window_s`` (nothing counted then). Under ``self._lock``."""
+        now = self._clock()
+        q = table.get(key)
+        if q is None:
+            if len(table) >= ADDRESSES_KEPT:
+                table.pop(next(iter(table)))
+            q = table[key] = deque()
+        while q and now - q[0] > window_s:
+            q.popleft()
+        if len(q) >= limit:
+            return False
+        q.append(now)
+        return True
+
+    def rate_ok(self, caller: object = "") -> bool:
+        """``TASK_RATE_MAX`` tasks per ``TASK_RATE_WINDOW_S`` from ONE caller
+        (a paired computer by its name, the hand-made door by its one name);
+        past it, False (nothing is counted then)."""
         with self._lock:
-            while self._hits and now - self._hits[0] > TASK_RATE_WINDOW_S:
-                self._hits.popleft()
-            if len(self._hits) >= TASK_RATE_MAX:
-                return False
-            self._hits.append(now)
-            return True
+            return self._take(
+                self._hits, clean_caller(caller), TASK_RATE_MAX, TASK_RATE_WINDOW_S
+            )
+
+    def address_ok(self, source: object, door: str = "task") -> bool:
+        """One try from ``source`` (the TCP client's host) at ``door``
+        ("task": the task door, ``ADDRESS_TRIES_MAX``; "inbound": the
+        message-back door, ``INBOUND_ADDRESS_TRIES_MAX``) per
+        ``ADDRESS_WINDOW_S``. Taken FIRST, before any token is read; past it,
+        False. Pure memory, never blocks."""
+        limit = INBOUND_ADDRESS_TRIES_MAX if door == "inbound" else ADDRESS_TRIES_MAX
+        with self._lock:
+            table = self._address_hits.setdefault(door, {})
+            return self._take(table, plain_address(source), limit, ADDRESS_WINDOW_S)
 
     # -- what happened -------------------------------------------------------
 
@@ -441,30 +533,94 @@ def pinned_reply_to(peer: Any, reply_to: str) -> str:
     return address + path
 
 
-def _paired_reply_to(platform: Any, spec: dict[str, str]) -> tuple[bool, str]:
-    """``(paired, address)`` for a session's reply (BLOCKING: one row read).
-    A task from a paired computer (its caller is the pairing's name) answers
-    only at :func:`pinned_reply_to`; any other task keeps the address it
-    named (the hand-made door: no address of the sender is stored here)."""
+#: Which door a task came in by, kept in its reply spec (v1.509.0, F5): a
+#: paired computer's ("peer", with the pairing's id) or the hand-made door's
+#: ("hand"). A spec from before has neither ("").
+DOOR_PEER = "peer"
+DOOR_HAND = "hand"
+
+#: Why a paired computer's answer was not sent (v1.509.0, F5 / F6). Read on
+#: the run after "Could not send this answer back to <name>: ".
+PAIRING_REMOVED = (
+    "it was removed from your other computers before the answer was ready, so "
+    "nothing was sent"
+)
+
+
+def moved_words(came_from: str, paired_at: str) -> str:
+    """The task came from another address than the one the pairing keeps:
+    the answer is not sent to the old one (v1.509.0, F6)."""
+    return (
+        f"the task came from {came_from}, not the address it was paired at "
+        f"({paired_at}), so the answer was not sent there. Pair the two "
+        "computers again if it moved"
+    )
+
+
+def _paired_reply_to(platform: Any, spec: dict[str, str]) -> tuple[bool, str, str]:
+    """``(paired, address, why)`` for a session's reply (BLOCKING: one row
+    read). ``why`` is the plain reason nothing is sent when ``address`` is
+    "".
+
+    v1.509.0 (F5): THE SPEC'S PAIRING DECIDES, never the caller's name. A
+    task a paired computer sent answers only at :func:`pinned_reply_to` of
+    THAT pairing (its id, written at the door); a pairing removed since sends
+    nothing. A task from the hand-made door keeps the address it named (no
+    address of the sender is stored here), even when its name is a
+    pairing's. (F6) A paired task that came from another address than the
+    pairing keeps is not answered at the old one.
+
+    A spec from before v1.509.0 has no door: it keeps the old reading (the
+    pairing of the caller's name)."""
+    door = spec.get("door") or ""
+    if door == DOOR_HAND:
+        return False, spec["to"], ""
     try:
         from ..peers.store import store_for
 
-        peer = store_for(platform).get(spec["caller"])
+        store = store_for(platform)
+        peer = (
+            store.get_by_id(spec.get("peer_id") or "")
+            if door == DOOR_PEER
+            else store.get(spec["caller"])
+        )
     except Exception:  # noqa: BLE001 — unreadable: fail closed, nothing is sent
         log.warning("task door: the paired computers could not be read", exc_info=True)
-        return True, ""
+        return True, "", "this computer could not read its paired computers, so nothing was sent"
     if peer is None:
-        return False, spec["to"]
-    return True, pinned_reply_to(peer, spec["to"])
+        if door == DOOR_PEER:
+            return True, "", PAIRING_REMOVED
+        return False, spec["to"], ""
+    came_from = spec.get("from") or ""
+    if came_from and came_from_elsewhere(came_from, peer.address):
+        return True, "", moved_words(came_from, address_host(peer.address))
+    return True, pinned_reply_to(peer, spec["to"]), ""
 
 
-def reply_spec(*, reply_to: str, conversation_id: str, caller: str) -> dict[str, str]:
-    """The run option a task carries when its answer has somewhere to go."""
-    return {
+def reply_spec(
+    *,
+    reply_to: str,
+    conversation_id: str,
+    caller: str,
+    peer_id: str = "",
+    address: str = "",
+    came_from: str = "",
+) -> dict[str, str]:
+    """The run option a task carries when its answer has somewhere to go.
+    v1.509.0: which door it came in by, and for a paired computer the
+    pairing's id, its stored address as it was then, and the address the
+    task came from (``from``)."""
+    spec = {
         "to": str(reply_to or "").strip(),
         "conversation_id": str(conversation_id or "").strip(),
         "caller": clean_caller(caller),
+        "door": DOOR_PEER if peer_id else DOOR_HAND,
     }
+    if peer_id:
+        spec["peer_id"] = str(peer_id)
+        spec["address"] = str(address or "")
+        spec["from"] = plain_address(came_from)
+    return spec
 
 
 def reply_spec_of(session: Any) -> dict[str, str] | None:
@@ -481,11 +637,16 @@ def reply_spec_of(session: Any) -> dict[str, str] | None:
     to = str(spec.get("to") or "").strip()
     if not to or not valid_reply_to(to):
         return None
-    return {
+    out = {
         "to": to,
         "conversation_id": str(spec.get("conversation_id") or "").strip(),
         "caller": clean_caller(spec.get("caller")),
     }
+    # v1.509.0 (F5 / F6): the door, the pairing and where the task came from.
+    for key in ("door", "peer_id", "address", "from"):
+        if isinstance(spec.get(key), str) and spec.get(key):
+            out[key] = str(spec[key])
+    return out
 
 
 def store_reply_token(secrets: Any, session_id: str, token: str, caller: str) -> None:
@@ -579,9 +740,53 @@ def _reply_message(session: Any) -> str:
     return text + demo
 
 
+def _team_folders(engine: Any, session_id: str) -> list[Path]:
+    """The folders the run and its workers worked in (BLOCKING): the run's
+    own ``workspace_path`` and each delegated member's (``mission._walk``,
+    the same tree ``session_result(team=True)`` reads its files from).
+    ``[]`` on any error (then nothing is sent)."""
+    try:
+        from ..core.db import session_scope
+        from ..core.models import Session
+        from .mission import _walk
+
+        with session_scope(engine) as db:
+            root = db.get(Session, session_id)
+            members, _runs = _walk(db, session_id)
+            rows = ([root] if root is not None else []) + list(members)
+            spelled = [str(getattr(r, "workspace_path", "") or "").strip() for r in rows]
+    except Exception:  # noqa: BLE001 — unreadable: no folder, nothing sent
+        log.warning("task door: the run's folders could not be read", exc_info=True)
+        return []
+    out: list[Path] = []
+    for text in spelled:
+        if text and Path(text) not in out:
+            out.append(Path(text))
+    return out
+
+
+def _inside_a_folder(raw: str, folders: list[Path]) -> Path | None:
+    """``raw`` resolved (links followed) when it is inside one of
+    ``folders``, else None — the workspace check every file tool uses
+    (``tools.base.safe_path``). Never raises."""
+    from ..tools.base import safe_path
+
+    for folder in folders:
+        try:
+            return safe_path(folder, raw)
+        except Exception:  # noqa: BLE001 — outside this one (or unreadable)
+            continue
+    return None
+
+
 def _reply_files(engine: Any, session_id: str) -> tuple[list[dict[str, str]], list[str]]:
     """What the run made, as ``[{name, content_b64}]`` within the caps, and the
-    names left behind (BLOCKING). Never raises."""
+    names left behind (BLOCKING). Never raises.
+
+    v1.509.0 (second review, "not closed" b): only a file INSIDE the folder
+    the run (or one of its workers) worked in is sent, its path resolved and
+    any link followed first; a path outside is left out and named with the
+    rest of what was not sent."""
     files: list[dict[str, str]] = []
     left: list[str] = []
     try:
@@ -593,10 +798,15 @@ def _reply_files(engine: Any, session_id: str) -> tuple[list[dict[str, str]], li
         docs = [str(p) for p in (result.get("documents") or []) if p] if isinstance(result, dict) else []
     except Exception:  # noqa: BLE001
         return [], []
+    folders = _team_folders(engine, session_id) if docs else []
     total = 0
     for raw in docs:
-        path = Path(raw)
-        name = safe_filename(path.name)
+        name = safe_filename(Path(raw).name)
+        inside = _inside_a_folder(raw, folders)
+        if inside is None:
+            left.append(name)
+            continue
+        path = inside
         try:
             size = path.stat().st_size
         except OSError:
@@ -689,9 +899,11 @@ async def send_reply(platform: Any, session: Any) -> dict[str, Any]:
     # A PAIRED COMPUTER'S ANSWER GOES TO ITS STORED ADDRESS (v1.502.0,
     # north-star 2.16): the answer and the files the run made never go to a
     # host the task named instead.
-    _paired, target = await asyncio.to_thread(_paired_reply_to, platform, spec)
+    _paired, target, why = await asyncio.to_thread(_paired_reply_to, platform, spec)
     if not target:
-        detail = "this computer does not know that paired computer's address any more (pair them again)"
+        detail = why or (
+            "this computer does not know that paired computer's address any more (pair them again)"
+        )
         await _record_reply(platform, session, ok=False, detail=detail, caller=caller)
         return {"ok": False, "sent": False, "detail": detail}
     message = _reply_message(session)

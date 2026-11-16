@@ -103,6 +103,62 @@ def _speaker(m: dict) -> str | None:
     name = " ".join(name.split())[:_AGENT_NAME_CHARS]
     return f"Agent {name} (not Jarvis)" if name else "Another agent (not Jarvis)"
 
+#: The words another agent's line in a chat's history opens with — the SAME
+#: words ``comm.threads.agent_line_label`` and the page's
+#: ``toRequestMessages`` put first (``change_claims._AGENT_LINE_PREFIX``).
+AGENT_LINE_PREFIX = "[Reply from the agent "
+
+
+def _fenced_agent_text(content: str) -> str | None:
+    """``content`` with everything after its agent label fenced as outside
+    data (``computeruse.safety.wrap_untrusted``), or None when it is not an
+    agent's line or is fenced already. The label stays the first line."""
+    if not isinstance(content, str) or not content.startswith(AGENT_LINE_PREFIX):
+        return None
+    label, sep, rest = content.partition("\n")
+    if not sep or not label.endswith("]"):
+        return None
+    from ..computeruse.safety import _FENCE_TOP, wrap_untrusted
+
+    if rest.lstrip().startswith(_FENCE_TOP):
+        return None
+    return f"{label}\n{wrap_untrusted(rest)}"
+
+
+def fence_agent_lines(messages: Any) -> list[Any]:
+    """The chat's history with ANOTHER AGENT's lines fenced (v1.509.0, second
+    review "not closed" a).
+
+    A paired computer's answer, a remote agent's message and an @-agent's
+    reply are stored in the owner's chat as assistant lines (``panelWho``)
+    and come back to the model on the next turn labelled, but as plain
+    assistant text: the other computer's words read as Iron Jarvis's own
+    turn, instructions and all. Both chat lanes plan their history through
+    ``chat_turn._plan_context``, which calls this first: an assistant line
+    that opens with :data:`AGENT_LINE_PREFIX` keeps its label and gets the
+    rest fenced as outside data, the fence every other outside text gets.
+    What the USER sees is untouched (the stored chat is not changed; this
+    is a copy of the request's messages). A user's line is never changed.
+    Never raises (the messages as they came)."""
+    items = list(messages or [])
+    try:
+        out: list[Any] = []
+        for m in items:
+            role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
+            fenced = _fenced_agent_text(content) if role == "assistant" else None
+            if fenced is None:
+                out.append(m)
+            elif isinstance(m, dict):
+                out.append({**m, "content": fenced})
+            else:
+                out.append(m.model_copy(update={"content": fenced}))
+        return out
+    except Exception:  # noqa: BLE001 — a fence never takes out a turn
+        log.warning("could not fence another agent's lines in the history", exc_info=True)
+        return items
+
+
 NOTE_NOT_FOUND = "No saved chat was found for this reference."
 NOTE_CURRENT = "This is the chat you are in, so it was not added again."
 NOTE_TOO_MANY = f"Only {THREAD_REFS_MAX} earlier chats can be added to one message."

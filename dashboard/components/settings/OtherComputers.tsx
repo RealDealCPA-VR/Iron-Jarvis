@@ -71,6 +71,7 @@ import {
   codeEndsWords,
   codeSteps,
   decodePeers,
+  movedWords,
   peerStatusLine,
   removeTitle,
   typedCode,
@@ -98,6 +99,7 @@ function PeerRow({
   const [checking, setChecking] = useState(false);
   const [problem, setProblem] = useState("");
   const status = peerStatusLine(peer, timeAgo);
+  const moved = movedWords(peer);
   const name = encodeURIComponent(peer.name);
 
   async function check() {
@@ -156,6 +158,11 @@ function PeerRow({
       >
         {status.words}
       </p>
+      {moved && (
+        <p data-testid={`peer-moved-${peer.name}`} className="mt-1 text-[12px] leading-relaxed text-tone-warn">
+          {moved}
+        </p>
+      )}
       {problem && (
         <p role="alert" className="mt-1 text-[12px] text-tone-danger">
           {problem}

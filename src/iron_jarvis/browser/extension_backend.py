@@ -171,6 +171,12 @@ CLOSE_PROTOCOL_ERROR = 1002
 #: generous by an order of magnitude and still ends the flood.
 MAX_UNPAIRED_FRAMES = 20
 
+#: What ``last_error`` says when an UNPAIRED socket sends a frame it may not send
+#: (v1.509.0, second review B11). Fixed words, never the frame's own text: the
+#: socket holds no credential, and ``last_error`` reaches the Your browser card
+#: and ``browser_get_status`` (which a model reads).
+UNPAIRED_FRAME_NOTE = "an unpaired browser sent a message it may not send"
+
 #: Faults kept by :meth:`ExtensionBackend.error_ledger`. ``last_error`` is ONE
 #: string and a successful round trip retires it, which is right for the card's
 #: "Last problem" line and wrong for the question a user with a flaky browser
@@ -1237,13 +1243,12 @@ class ExtensionBackend:
         """
         kind = str(frame.get("type") or "")
         if conn.restricted and kind not in P.RESTRICTED_INBOUND_FRAMES:
-            # `kind` is CALLER-CONTROLLED, so it is clipped BEFORE the sentence is
-            # built. Clipping only inside note_error would still format a
-            # caller-sized string on the event loop first, which is most of the
-            # cost this bound exists to deny.
-            self.note_error(
-                f"an unpaired browser sent {clip_detail(kind) or 'an unnamed frame'}"
-            )
+            # `kind` is CALLER-CONTROLLED and this socket has no credential, so
+            # none of it is quoted (v1.509.0, second review B11): `last_error`
+            # is shown on the Your browser card and read to the model by
+            # browser_get_status, and a local program that is not the paired
+            # add-on must not be able to write a sentence there. Fixed words.
+            self.note_error(UNPAIRED_FRAME_NOTE)
             logger.warning("closing unpaired browser socket: %s", self.last_error)
             await conn.close(1008)
             if conn.pairing_request_id:

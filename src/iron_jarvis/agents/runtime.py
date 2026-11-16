@@ -35,11 +35,14 @@ from ..core.grants import grant_label as _grant_label
 from ..core.grants import pick_scope as _pick_scope
 from ..core.trust import (
     LOW_TRUST_PROMPT,
+    REMOTE_RUN_DENY,
     TRUST_LOW,
     deny_names,
     effective_trust,
     low_trust_overrides,
     low_trust_refusal,
+    remote_run_keeps,
+    remote_run_refusal,
     taint_reason,
 )
 from ..envelope.profile import CapabilityProfile
@@ -668,10 +671,40 @@ SKIP_MEMORY: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
 )
 
 
+#: A TASK FROM ANOTHER COMPUTER SPREADS DOWN (v1.509.0, second review F1,
+#: decision E1): True inside a run whose origin is ``remote:<caller>``
+#: (``task_door.is_remote_task_origin``). A child run awaited inside it (a
+#: ``delegate`` helper, a ``spawn_agent`` worker) has no ``remote:`` origin
+#: of its own, so it reads this, the way :data:`SKIP_MEMORY` reaches it. Set
+#: and reset around the run body (``run``), never past it.
+REMOTE_RUN: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "iron_jarvis_remote_run", default=False
+)
+
+
+def run_is_remote(session) -> bool:
+    """Did a task from ANOTHER COMPUTER start ``session``, or the run it was
+    started inside (:data:`REMOTE_RUN`)? Such a run is told none of this
+    computer's memory, lessons, profile or notes, names no client, and the
+    cross-computer readers (``core.trust.REMOTE_RUN_DENY``) are refused.
+    Never raises (unsure reads its own origin)."""
+    try:
+        from .task_door import is_remote_task_origin
+
+        own = is_remote_task_origin(getattr(session, "origin", ""))
+    except Exception:  # noqa: BLE001
+        own = False
+    try:
+        return own or REMOTE_RUN.get() is True
+    except Exception:  # noqa: BLE001
+        return own
+
+
 def run_skips_memory(session) -> bool:
     """Does ``session`` run without the memory injections: its own options
     say ``skip_memory``, or the run it was started inside does
-    (:data:`SKIP_MEMORY`)? Never raises (unsure reads its own options)."""
+    (:data:`SKIP_MEMORY`), or another computer's task started it
+    (:func:`run_is_remote`)? Never raises (unsure reads its own options)."""
     from ..scheduling.knobs import session_options as _session_options
 
     try:
@@ -679,7 +712,7 @@ def run_skips_memory(session) -> bool:
     except Exception:  # noqa: BLE001 — an unreadable row has no options
         own = False
     try:
-        return own or SKIP_MEMORY.get() is True
+        return own or SKIP_MEMORY.get() is True or run_is_remote(session)
     except Exception:  # noqa: BLE001
         return own
 
@@ -712,12 +745,16 @@ async def _own_client_wall(platform, session):
     engine = getattr(platform, "engine", None)
     if engine is None:
         return _clients.NO_CLIENT
+    # v1.509.0 (second review F1): a task from ANOTHER COMPUTER is that
+    # computer's words, never the owner's, so it names no client (the wall's
+    # own "nothing named": ``named`` empty, the folder's owner still read).
+    owner_words = "" if run_is_remote(session) else str(getattr(session, "task", "") or "")
 
     def _read():
         from ..workmap.clients import wall as _wall
 
         folder = run_client_folder(getattr(platform, "config", None), session)
-        return _wall.turn_wall(engine, folder, str(getattr(session, "task", "") or ""))
+        return _wall.turn_wall(engine, folder, owner_words)
 
     try:
         got = await asyncio.wait_for(
@@ -1657,17 +1694,37 @@ class AgentRuntime:
     # TRUST (v1.298.0) — the posture a call runs under, and how it lowers
     # ------------------------------------------------------------------ #
 
-    def _low_trust_keys(self, tainted: bool = False) -> frozenset[str]:
+    def _low_trust_keys(self, tainted: bool = False, remote: bool = False) -> frozenset[str]:
         """``LOW_TRUST_DENY`` (plus the web tools once the run is TAINTED,
-        ``core.trust.deny_names``) and each listed tool's permission KEY —
-        the engine authorises on ``perm_key()``, so a grouped tool's key must
-        be denied beside its name."""
-        names = deny_names(tainted)
+        and the cross-computer readers for a run another computer's task
+        started, ``core.trust.deny_names``) and each listed tool's permission
+        KEY — the engine authorises on ``perm_key()``, so a grouped tool's key
+        must be denied beside its name."""
+        names = deny_names(tainted, remote)
         keys = set(names)
         for name in names:
             tool = self.p.registry.get(name)
             if tool is not None:
                 keys.add(tool.perm_key())
+        if remote:
+            # v1.509.0 (lead review of F1): a run another computer's task
+            # started keeps ONLY ``core.trust.REMOTE_RUN_KEEP``; every other
+            # registered tool is kept away by NAME (the call-time refusal in
+            # ``_low_trust_refusal_for`` is by name too). A permission key a
+            # kept tool shares is not denied here, or the kept tool would go
+            # with it.
+            try:
+                registered = list(self.p.registry.names())
+            except Exception:  # noqa: BLE001 — the call-time refusal still holds
+                registered = []
+            kept_keys = set()
+            for name in registered:
+                if remote_run_keeps(name):
+                    tool = self.p.registry.get(name)
+                    kept_keys.add(tool.perm_key() if tool is not None else name)
+            for name in registered:
+                if not remote_run_keeps(name) and name not in kept_keys:
+                    keys.add(name)
         return frozenset(keys)
 
     def _closing_offer_wanted(
@@ -1828,17 +1885,29 @@ class AgentRuntime:
         definition's own, NARROWED by ``low_trust_overrides`` when the run's
         effective trust is low. Deny wins; nothing is ever widened."""
         base = agent_def.permission_overrides
-        if self._effective_trust(session) != TRUST_LOW:
+        # v1.509.0 (F1): a run another computer's task started loses the
+        # cross-computer readers whatever its trust says.
+        remote = run_is_remote(session)
+        if self._effective_trust(session) != TRUST_LOW and not remote:
             return base
-        return low_trust_overrides(base, self._low_trust_keys(self._has_read_flagged(session)))
+        return low_trust_overrides(
+            base, self._low_trust_keys(self._has_read_flagged(session), remote)
+        )
 
     def _low_trust_refusal_for(self, session: Session, name: str) -> str:
-        """The sentence a kept-away call is refused with under low trust, or
-        ``""`` when the call is not kept away (or the run is full)."""
-        if self._effective_trust(session) != TRUST_LOW:
-            return ""
+        """The sentence a kept-away call is refused with under low trust (or
+        in a run another computer's task started), or ``""`` when the call is
+        not kept away (or the run is full)."""
         tool = self.p.registry.get(name)
         perm = tool.perm_key() if tool is not None else name
+        if run_is_remote(session) and (
+            not remote_run_keeps(name) or name in REMOTE_RUN_DENY or perm in REMOTE_RUN_DENY
+        ):
+            # v1.509.0 (lead review of F1): everything off the keep list,
+            # an app pack's tools and a tool added tomorrow included.
+            return remote_run_refusal(name)
+        if self._effective_trust(session) != TRUST_LOW:
+            return ""
         names = deny_names(self._has_read_flagged(session))
         if name in names or perm in names:
             return low_trust_refusal(name, bool(self._tainted.get(session.id)))
@@ -2328,6 +2397,20 @@ class AgentRuntime:
             from ..workmap.clients import wall as _client_wall
 
             _turn_wall = await run_client_wall(self.p, session)
+            # A TASK FROM ANOTHER COMPUTER (v1.509.0, F1): set for the run body
+            # so every child run awaited inside it is one too.
+            _remote_token = REMOTE_RUN.set(run_is_remote(session))
+            # …and its READS are confined to its own folder (v1.509.0, lead
+            # review): ``list_folder`` and the document readers take an
+            # absolute path anywhere on this computer. A helper adds its own
+            # folder to the one it was started inside (core.fs_policy).
+            _confine_token = None
+            if REMOTE_RUN.get():
+                from ..core import fs_policy as _fs_policy
+
+                _confine_token = _fs_policy.confine_reads(
+                    [getattr(session, "workspace_path", "") or ""]
+                )
             # SKIP MEMORY (v1.501.0, north-star 1.4): set for the run body so
             # every child run awaited inside it skips memory too.
             _skip_token = SKIP_MEMORY.set(run_skips_memory(session))
@@ -2342,6 +2425,12 @@ class AgentRuntime:
                     SKIP_MEMORY.reset(_skip_token)
                 except (ValueError, LookupError, RuntimeError):  # another context's token
                     SKIP_MEMORY.set(False)
+                if _confine_token is not None:
+                    _fs_policy.release_reads(_confine_token)
+                try:
+                    REMOTE_RUN.reset(_remote_token)
+                except (ValueError, LookupError, RuntimeError):  # another context's token
+                    REMOTE_RUN.set(False)
         except RunStoppedByUser as stop:
             return await self._end_stopped(stop.run, session)
         except ContextTooSmall as small:
@@ -2817,6 +2906,11 @@ class AgentRuntime:
         _run_options = _session_options(session)
         # v1.501.0 (north-star 1.4): or the run this one was started inside.
         skip_memory = run_skips_memory(session)
+        # v1.509.0 (second review F1, decision E1): a task from ANOTHER
+        # COMPUTER (or a run started inside one) is told none of this
+        # computer's memory: on top of skip_memory, no profile, no agent
+        # notebook and no team habits. Its answer is posted to that computer.
+        remote_run = run_is_remote(session)
         # RESUME (v1.337.0): Continue on a job a restart cut off names the
         # run it continues (`options.resume_run`). When that run kept its
         # conversation (`agents/transcript`), this run starts FROM it — the
@@ -2898,7 +2992,8 @@ class AgentRuntime:
         # trimmed to NOTEBOOK_INJECT_CHARS by `AgentFiles.notebook_block`.
         # A small file read, but a read: off the loop like the budget read.
         # Lands BEFORE the planner runs so its cost is counted (v1.152.0).
-        if notebook_slug:
+        # Never in a run another computer's task started (v1.509.0, F1).
+        if notebook_slug and not remote_run:
             notebook = await asyncio.to_thread(
                 self._notebook_block, notebook_slug, session.id
             )
@@ -2992,7 +3087,9 @@ class AgentRuntime:
             from ..profile import profile_block
 
             system_prompt += voice_section(self.p)
-            _profile = profile_block(self.p)
+            # v1.509.0 (F1): the owner's profile never goes to another
+            # computer's task (its answer is posted back there).
+            _profile = "" if remote_run else profile_block(self.p)
             if _profile:
                 system_prompt += "\n\n" + _profile
         except Exception:  # noqa: BLE001 — identity must never break a run
