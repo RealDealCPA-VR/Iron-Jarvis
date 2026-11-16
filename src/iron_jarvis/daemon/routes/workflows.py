@@ -271,6 +271,13 @@ def register(app: FastAPI, d) -> None:
                 d.orchestrator.cancel_session(current)
             except Exception:  # noqa: BLE001 — best-effort; the pre-step check still stops it
                 pass
+        if status == "cancelling":
+            # v1.505.0 (north-star 5.1): a TOOL step has no session to cancel;
+            # its call in flight is stopped on its own loop, and the run ends
+            # Stopped instead of waiting for the call to answer.
+            from ...workflows.engine import cancel_tool_steps
+
+            cancel_tool_steps(run_id)
         return {"id": run_id, "status": status}
 
     @app.post("/workflows/runs/{run_id}/answer")
@@ -381,11 +388,27 @@ def register(app: FastAPI, d) -> None:
     # Saved workflow definitions (agents author these; the editor loads/saves them).
     @app.get("/workflows")
     def list_workflows() -> dict[str, Any]:
+        from ...workflows.engine import workflow_grant_scope_id
         from ...workflows.store import WorkflowStore
 
-        return {
-            "workflows": [w.model_dump() for w in WorkflowStore(d.platform.engine).list()]
-        }
+        # v1.505.0 (north-star 5.2, D10): each saved workflow's LIVE standing
+        # grants ("Always for this workflow"), keyed the way its step runs'
+        # origin stamp carries the name, so its row shows them with a Remove
+        # press. One read; a store fault lists none.
+        held: dict[str, list[dict[str, Any]]] = {}
+        store = getattr(d.platform, "grants", None)
+        if store is not None:
+            try:
+                for g in store.list("workflow"):
+                    held.setdefault(g.scope_id, []).append(store.as_dict(g))
+            except Exception:  # noqa: BLE001
+                held = {}
+        out = []
+        for w in WorkflowStore(d.platform.engine).list():
+            row = w.model_dump()
+            row["standing_grants"] = held.get(workflow_grant_scope_id(w.name), [])
+            out.append(row)
+        return {"workflows": out}
 
     def _tool_missing(tool_name: str) -> bool:
         """True when the live registry has NO tool of that name. An unreadable

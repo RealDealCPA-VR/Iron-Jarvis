@@ -105,6 +105,18 @@ def _waiting_on(d, session_id: str) -> dict[str, Any] | None:
     if isinstance(_cost, str) and _cost.strip():
         out["cost_note"] = _cost
     out.update(_ask_words(first))
+    # v1.505.0 (north-star 5.2): a FLAG, a WORD and a HASH, never the
+    # arguments: may this ask be answered "Always", where the grant is
+    # kept ("schedule" | "workflow": the card then says "Always for this
+    # schedule"), and the exact call's identity the page sends back. The
+    # page has read ``can_always`` and ``args_hash`` off this row since
+    # v1.299.0; nothing ever put them here.
+    if first.get("can_always") is True:
+        out["can_always"] = True
+        if first.get("always_scope") in ("schedule", "workflow"):
+            out["always_scope"] = first["always_scope"]
+        if first.get("args_hash"):
+            out["args_hash"] = str(first["args_hash"])
     return out
 
 

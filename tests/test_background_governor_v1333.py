@@ -368,10 +368,19 @@ async def test_a_queued_door_run_waits_its_turn_behind_spawn_managed_work(platfo
     # The goal engine's own shape: ensure_future + register_running.
     t = asyncio.ensure_future(orch.run_session(goal.id))
     orch.register_running(goal.id, t)
-    await _until(lambda: orch.get_session(goal.id).status is SessionStatus.QUEUED, "goal parked")
+
+    def _queued_events() -> list[dict]:
+        return [
+            e.payload for e in platform.event_bus.history
+            if e.type == EventType.SESSION_QUEUED and e.session_id == goal.id
+        ]
+
+    # v1.505.0: the QUEUED row is written off the loop BEFORE the entry joins
+    # the queue and the event goes out, so wait for the event itself.
+    await _until(lambda: bool(_queued_events()), "goal parked")
+    assert orch.get_session(goal.id).status is SessionStatus.QUEUED
     assert goal.id not in fake.started
-    queued = [e.payload for e in platform.event_bus.history if e.type == EventType.SESSION_QUEUED]
-    assert queued and queued[-1]["position"] == 1
+    assert _queued_events()[-1]["position"] == 1
     fake.gate(a.id).set()
     await _until(lambda: goal.id in fake.started, "the goal got the freed slot")
     fake.gate(goal.id).set()

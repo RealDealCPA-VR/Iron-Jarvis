@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
+from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, create_engine
 
 from iron_jarvis.triggers import models as trigger_models  # registers the table
@@ -54,7 +55,12 @@ class _RecordingRouter:
 
 
 def _engine():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    # ONE shared connection (v1.505.0): the poller writes its cursor on a
+    # worker thread now, and an in-memory SQLite database is per connection —
+    # the default per-thread pool would hand that thread an empty database.
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
     SQLModel.metadata.create_all(engine)
     return engine
 

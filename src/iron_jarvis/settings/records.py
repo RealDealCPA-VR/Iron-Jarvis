@@ -1792,6 +1792,14 @@ def resolve_grant(platform: Any, ref: str) -> tuple[str, str]:
     if store.get(ref) is not None:
         return ref, ""
     live = [g for g in store.list() if g.tool == ref]
+    if not live:
+        # v1.505.0 (north-star 5.2, D10): "take back the always-allow on the
+        # rent-list schedule" — a schedule's or a workflow's own grants, by
+        # the name its row shows.
+        live = [
+            g for g in store.list()
+            if g.scope_kind in ("schedule", "workflow") and g.scope_id == ref
+        ]
     if len(live) == 1:
         return live[0].id, ""
     if not live:
@@ -3550,7 +3558,8 @@ class GrantRevokeTool(_RecordTool):
     RECORD = "grant"
     description = (
         "Take back an \"always allow\" (a standing grant): `grant` is its id, or the tool's "
-        "name when only one always-allow covers that tool. From then on that call asks again. "
+        "name when only one always-allow covers that tool, or a schedule's or workflow's name "
+        "when it holds only one. From then on that call asks again. "
         "Undo puts the always-allow back."
     )
     input_schema = {"type": "object", "properties": {"grant": {"type": "string"}}, "required": ["grant"]}

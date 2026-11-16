@@ -44,9 +44,12 @@ from typing import Any
 from ..core.db import dumps, session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
+from ..core.logging import get_logger
 from ..core.models import AgentType, Project, SessionStatus
 from .models import WorkflowRunRecord
 from .step_outcome import ended_by_session, step_failures
+
+log = get_logger("workflows.engine")
 
 #: Context-chaining bounds: each earlier-step summary is clipped, and the whole
 #: injected block is capped so a long-running workflow can't blow up the prompt.
@@ -78,6 +81,83 @@ _ORIGIN_BAD_RX = re.compile(r"[^A-Za-z0-9:_\-. ]")
 #: ``WorkflowRunRecord.started_by`` for a run a PERSON started (v1.352.0).
 STARTED_BY_PERSON = "person"
 
+#: v1.505.0 (north-star 5.1): a tool step Cancel stopped while it ran.
+TOOL_STEP_STOPPED = (
+    "Stopped: the run was cancelled while this step was running. "
+    "What the step was doing may already have happened."
+)
+
+#: v1.505.0 (north-star 5.1): the tool-step calls IN FLIGHT, per run id, as
+#: ``(loop, task)`` pairs. Process-wide, not per engine: a person's run drives
+#: on the daemon's loop, a schedule's fire under ``asyncio.run`` on the
+#: scheduler's thread, and the cancel route builds no engine of its own. A
+#: tool step has no session, so the route's ``cancel_session`` never reached
+#: one and Cancel waited on the call (``cancel_tool_steps``).
+_TOOL_CALLS: dict[str, set[tuple[asyncio.AbstractEventLoop, asyncio.Future]]] = {}
+_TOOL_CALLS_LOCK = threading.Lock()
+
+
+def cancel_tool_steps(run_id: str) -> int:
+    """Cancel every tool-step call of *run_id* in flight, each on its OWN loop
+    (``call_soon_threadsafe``: the cancel route is a sync handler on a worker
+    thread, and a scheduled run's loop is another thread's). The registry's
+    own cancel path ledgers the call; the step reads ``cancelled`` and the run
+    ends Stopped. Returns how many calls were asked to stop. Never raises."""
+    with _TOOL_CALLS_LOCK:
+        live = list(_TOOL_CALLS.get(str(run_id or ""), ()))
+    asked = 0
+    for loop, task in live:
+        if task.done():
+            continue
+        try:
+            loop.call_soon_threadsafe(task.cancel)
+            asked += 1
+        except RuntimeError:  # that loop is closed: nothing left to stop
+            pass
+    return asked
+
+
+#: v1.505.0 (north-star 5.3): a failed driver's end, written in its own task
+#: (held here so it is never collected before it lands).
+_SETTLE_JOBS: set[asyncio.Future] = set()
+
+#: v1.505.0 (north-star 5.3): the database was busy past SQLite's wait.
+DRIVER_DB_BUSY = (
+    "The run stopped because Iron Jarvis could not save its progress: the "
+    "database was busy, perhaps during Compact or a backup. Run it again."
+)
+
+
+def driver_failure_words(exc: BaseException) -> str:
+    """The ONE sentence a run whose driver raised ends with (its notes, the
+    ``workflow.completed`` notice): the busy database by name, else the run's
+    own plain rule (``failure_words.plain_reason``). Never the exception's
+    class or its raw text. Never raises."""
+    text = str(exc or "").lower()
+    if "database is locked" in text or "database is busy" in text:
+        return DRIVER_DB_BUSY
+    try:
+        from ..providers.failure_words import plain_reason
+
+        reason = plain_reason(exc)
+    except Exception:  # noqa: BLE001 — wording only
+        reason = ""
+    return f"The run failed: {reason}" if reason else "The run failed."
+
+
+def _track_tool_call(run_id: str, loop, task) -> None:
+    with _TOOL_CALLS_LOCK:
+        _TOOL_CALLS.setdefault(run_id, set()).add((loop, task))
+
+
+def _untrack_tool_call(run_id: str, loop, task) -> None:
+    with _TOOL_CALLS_LOCK:
+        calls = _TOOL_CALLS.get(run_id)
+        if calls is not None:
+            calls.discard((loop, task))
+            if not calls:
+                _TOOL_CALLS.pop(run_id, None)
+
 
 #: v1.446.0 (ease-of-use review item 22): a run that FINISHED, but a step set
 #: to "skip if it fails" failed on the way. It used to finish "completed", so
@@ -98,6 +178,14 @@ def _workflow_origin(name: str) -> str:
     """The Session origin stamp for a workflow-spawned step session: charset-
     laundered (out-of-charset characters become ``_``) and length-clipped."""
     return _ORIGIN_BAD_RX.sub("_", f"workflow:{name}")[:_ORIGIN_MAX]
+
+
+def workflow_grant_scope_id(name: str) -> str:
+    """The ``scope_id`` of a workflow's standing grants (v1.505.0, D10): the
+    name as its step runs' origin stamp carries it (laundered, clipped), since
+    the runtime reads the scope off that stamp. The workflow's row lists its
+    grants by this id."""
+    return _workflow_origin(name)[len("workflow:"):]
 
 #: What a step IS (v1.121.0). Unknown values coerce to "agent".
 STEP_KINDS: tuple[str, ...] = ("agent", "tool", "ask", "notify")
@@ -503,6 +591,121 @@ class WorkflowEngine:
         session_ids: list[str] | None = None,
         inputs: dict[str, str] | None = None,
     ) -> WorkflowRunRecord:
+        """Drive *workflow*'s steps (:meth:`_drive_record`); a driver that
+        RAISES outside a step ends the run Failed with the reason before the
+        exception goes on (v1.505.0, :meth:`_settled_on_raise`)."""
+        return await self._settled_on_raise(
+            record.id,
+            workflow.name,
+            self._drive_record(
+                record, workflow, start_index, outputs, session_ids, inputs
+            ),
+        )
+
+    async def _settled_on_raise(self, run_id: str, workflow_name: str, coro):
+        """Await *coro*; when it raises, end the run's row honestly, then
+        re-raise (v1.505.0, north-star 5.3).
+
+        A step that raises is already a failed step (``_exec_step``); what was
+        left was the DRIVER itself: a record write or read ("database is
+        locked" once SQLite's busy wait runs out during Compact or a backup),
+        the folder look-up, a publish. The only handler was the orchestrator's
+        done-callback log line, so the row read "running" (or "resuming") until
+        the next start-up. Now the row ends ``failed`` (``cancelled`` when the
+        user had asked it to stop) with the reason in its notes, and
+        ``workflow.completed`` is published, so the bell, the Schedules row and
+        the run page all hear it. Off the loop and shielded from a cancel.
+        A cancellation is NOT settled here: a restart's cancel leaves the row
+        for the start-up reconcile, which marks it resumable. Settled ONCE per
+        exception (an answer's resume drives :meth:`run_record` inside it)."""
+        try:
+            return await coro
+        except Exception as exc:
+            if not getattr(exc, "_ij_workflow_settled", False):
+                job = asyncio.ensure_future(
+                    self._settle_raised(run_id, workflow_name, exc)
+                )
+                _SETTLE_JOBS.add(job)
+                job.add_done_callback(_SETTLE_JOBS.discard)
+                try:
+                    await asyncio.shield(job)
+                except asyncio.CancelledError:
+                    pass  # the job still lands; the exception still goes on
+                except Exception:  # noqa: BLE001 — never masks the driver's own fault
+                    pass
+                try:
+                    exc._ij_workflow_settled = True  # type: ignore[attr-defined]
+                except Exception:  # noqa: BLE001 — a slotted exception: settled twice at worst
+                    pass
+            raise
+
+    async def _settle_raised(self, run_id: str, workflow_name: str, exc: BaseException) -> None:
+        reason = driver_failure_words(exc)
+        seq = next(_WRITE_SEQ)
+        ended: str | None = None
+        for _attempt in range(3):  # each attempt waits out SQLite's busy timeout
+            try:
+                ended = await asyncio.to_thread(self._write_driver_end, run_id, reason, seq)
+                break
+            except Exception:  # noqa: BLE001 — still busy: try again, then log
+                ended = None
+        else:
+            log.error("workflow run %s: its driver failed and the end was not saved", run_id)
+            return
+        if not ended:
+            return  # the row had already ended (or is parked): it is honest
+        try:
+            await self.platform.event_bus.publish(
+                EventType.WORKFLOW_COMPLETED,
+                {
+                    "workflow": workflow_name,
+                    "status": ended,
+                    "run_id": run_id,
+                    "sessions": [],
+                    "failed_session": "",
+                    "reason": reason,
+                },
+            )
+        except Exception:  # noqa: BLE001 — the row is right; the notice is best effort
+            log.debug("workflow.completed for a failed driver not published", exc_info=True)
+
+    def _write_driver_end(self, run_id: str, reason: str, seq: int) -> str:
+        """End a row its driver left live (blocking: callers hop off the loop).
+        ``running``/``resuming`` -> ``failed``, ``cancelling`` -> ``cancelled``,
+        the reason appended to the notes; any other status (finished, parked)
+        is left as it is and ``""`` is returned."""
+        with _WRITE_LOCK:
+            with session_scope(self.platform.engine) as db:
+                rec = db.get(WorkflowRunRecord, run_id)
+                if rec is None or rec.status not in ("running", "resuming", "cancelling"):
+                    return ""
+                ended = "cancelled" if rec.status == "cancelling" else "failed"
+                try:
+                    notes = json.loads(rec.notes_json or "[]")
+                except (TypeError, ValueError):
+                    notes = []
+                if not isinstance(notes, list):
+                    notes = []
+                rec.status = ended
+                rec.notes_json = dumps([*notes, reason])
+                rec.current_session_id = None
+                rec.waiting_json = ""
+                rec.finished_at = utcnow()
+                db.add(rec)
+                db.commit()
+            if seq > _LAST_SEQ.get(run_id, -1):
+                _LAST_SEQ[run_id] = seq
+            return ended
+
+    async def _drive_record(
+        self,
+        record: WorkflowRunRecord,
+        workflow: WorkflowDef,
+        start_index: int = 0,
+        outputs: dict[str, Any] | None = None,
+        session_ids: list[str] | None = None,
+        inputs: dict[str, str] | None = None,
+    ) -> WorkflowRunRecord:
         """Drive *workflow*'s steps, updating *record* in place as it goes.
 
         After each step: ``outputs[name] = {session_id?, status, summary, …}``.
@@ -539,7 +742,10 @@ class WorkflowEngine:
         person_started = (getattr(record, "started_by", "") or "") == STARTED_BY_PERSON
         # Resolve the pinned project's folder ONCE for the whole run (None when
         # unpinned, or when the folder is missing on disk — see the helper).
-        workspace_root, folder_note = self._project_folder(workflow.project_id)
+        # v1.505.0 (5.4): a SELECT and a disk check — off the loop.
+        workspace_root, folder_note = await asyncio.to_thread(
+            self._project_folder, workflow.project_id
+        )
         # Said ON THE RECORD, before the first step, so a run the user opens
         # mid-way already explains where its files are going — and written
         # UNCONDITIONALLY (v1.231.0, AE16): a resume whose folder is back
@@ -583,7 +789,8 @@ class WorkflowEngine:
         for batch in self._batches(steps, start_index):
             # Cancellation is cooperative: re-read the authoritative status
             # the cancel route wrote before starting each batch.
-            current = self._get_record(run_id)
+            # v1.505.0 (5.4): every record read in the run hops off the loop.
+            current = await asyncio.to_thread(self._get_record, run_id)
             if current is not None and current.status == "cancelling":
                 final_status = "cancelled"
                 for s in (steps[i] for i in range(batch[0], len(steps))):
@@ -655,7 +862,7 @@ class WorkflowEngine:
             )
 
             if ask is not None:
-                latest = self._get_record(run_id)
+                latest = await asyncio.to_thread(self._get_record, run_id)
                 if latest is not None and latest.status == "cancelling":
                     # A cancel landed while the ask batch executed — honor
                     # it instead of parking (and notifying) a dead run.
@@ -694,7 +901,7 @@ class WorkflowEngine:
                     # question again. Where it did not go out, this line does.
                     skip_asked=run_id,
                 )
-                refreshed = self._get_record(run_id)
+                refreshed = await asyncio.to_thread(self._get_record, run_id)
                 return refreshed if refreshed is not None else record
 
             if batch_cancelled:
@@ -712,7 +919,7 @@ class WorkflowEngine:
         # A cancel that arrived during the final batch has no later pre-batch
         # check to catch it — re-read so "cancelling" can never finalize as a
         # success.
-        latest = self._get_record(run_id)
+        latest = await asyncio.to_thread(self._get_record, run_id)
         if latest is not None and latest.status == "cancelling":
             final_status = "cancelled"
         # v1.446.0 (review item 22): it finished, but a step it was told to
@@ -766,6 +973,17 @@ class WorkflowEngine:
     async def resume_after_answer(
         self, record: WorkflowRunRecord, answer: str
     ) -> WorkflowRunRecord:
+        """:meth:`_resume_after_answer`, ended honestly when it raises
+        (v1.505.0, :meth:`_settled_on_raise`)."""
+        return await self._settled_on_raise(
+            record.id,
+            record.workflow_name,
+            self._resume_after_answer(record, answer),
+        )
+
+    async def _resume_after_answer(
+        self, record: WorkflowRunRecord, answer: str
+    ) -> WorkflowRunRecord:
         """Resume a ``waiting`` run: fold the user's answer into the parked
         ``ask`` step's output and drive the remaining steps. Everything is
         rebuilt from the database — a parked run survives daemon restarts.
@@ -804,7 +1022,7 @@ class WorkflowEngine:
             "kind": "ask",
         }
         session_ids = json.loads(record.session_ids_json or "[]")
-        latest = self._get_record(record.id)
+        latest = await asyncio.to_thread(self._get_record, record.id)
         if latest is not None and latest.status in ("cancelling", "cancelled"):
             # The user cancelled between answering and the resume starting —
             # the answer must not resurrect the run.
@@ -851,7 +1069,7 @@ class WorkflowEngine:
                         f"the answer didn't satisfy the gate ({problem}). "
                         f"{question}",
                     )
-                    refreshed = self._get_record(record.id)
+                    refreshed = await asyncio.to_thread(self._get_record, record.id)
                     return refreshed if refreshed is not None else record
                 folded = {
                     "status": "failed",
@@ -961,6 +1179,13 @@ class WorkflowEngine:
         return wf, outputs, session_ids, start
 
     async def resume_interrupted(self, record: WorkflowRunRecord) -> WorkflowRunRecord:
+        """:meth:`_resume_interrupted`, ended honestly when it raises
+        (v1.505.0, :meth:`_settled_on_raise`)."""
+        return await self._settled_on_raise(
+            record.id, record.workflow_name, self._resume_interrupted(record)
+        )
+
+    async def _resume_interrupted(self, record: WorkflowRunRecord) -> WorkflowRunRecord:
         """Resume an ``interrupted`` run from its first non-completed step —
         the ONE engine call the resume route spawns (v1.170.0, contract 4).
 
@@ -975,7 +1200,7 @@ class WorkflowEngine:
         unreconstructable record.
         """
         wf, outputs, session_ids, start = self.rebuild_run(record)
-        latest = self._get_record(record.id)
+        latest = await asyncio.to_thread(self._get_record, record.id)
         if latest is not None and latest.status in ("cancelling", "cancelled"):
             # A cancel must never be resurrected by a queued resume.
             if latest.status == "cancelling":
@@ -985,7 +1210,7 @@ class WorkflowEngine:
                     finished_at=utcnow(),
                     waiting_json="",
                 )
-            return self._get_record(record.id) or latest
+            return await asyncio.to_thread(self._get_record, record.id) or latest
         await self._persist(
             record.id, status="running", finished_at=None, waiting_json=""
         )
@@ -1295,15 +1520,40 @@ class WorkflowEngine:
             event_bus=self.platform.event_bus,
             engine=self.platform.engine,
         )
-        try:
-            result = await self.platform.registry.invoke(
+        # v1.505.0 (north-star 5.1): the SAME per-call deadline an agent run
+        # and both chat lanes pass (``config.tool_call_timeout_s``, read live),
+        # so a call that never answers is a failed step in the registry's
+        # words, never a run (or a schedule's thread) held for ever. And the
+        # call is its OWN task, registered under the run id, so Cancel can
+        # stop it mid-call (``cancel_tool_steps``); the registry's cancel
+        # path ledgers it.
+        from ..agents.runtime import _tool_deadline
+
+        loop = asyncio.get_running_loop()
+        call = asyncio.ensure_future(
+            self.platform.registry.invoke(
                 step.tool,
                 rendered,
                 ctx,
                 self.platform.permissions,
                 None,
                 session_allow=grant,
+                deadline_s=_tool_deadline(self.platform.config),
             )
+        )
+        _track_tool_call(run_id, loop, call)
+        try:
+            result = await call
+        except asyncio.CancelledError:
+            me = asyncio.current_task()
+            if me is not None and me.cancelling():
+                raise  # the RUN itself is being stopped (a restart): unwind
+            return {
+                "status": "cancelled",
+                "summary": TOOL_STEP_STOPPED,
+                "tool": step.tool,
+                "kind": "tool",
+            }
         except Exception as exc:  # noqa: BLE001 — a crashed tool is a failed step
             return {
                 "status": "failed",
@@ -1311,6 +1561,8 @@ class WorkflowEngine:
                 "tool": step.tool,
                 "kind": "tool",
             }
+        finally:
+            _untrack_tool_call(run_id, loop, call)
         out = {
             "status": "completed" if result.ok else "failed",
             "summary": (result.output if result.ok else (result.error or "tool error"))[

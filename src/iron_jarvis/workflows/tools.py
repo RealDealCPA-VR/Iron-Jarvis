@@ -23,6 +23,7 @@ Each tool is constructed with the assembled ``platform`` (like
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 from typing import Any
 
@@ -334,7 +335,10 @@ class WorkflowRunTool(Tool):
         # throwaway one — same split as the scheduler's workflow dispatch.
         engine = WorkflowEngine(self.platform, self.platform.orchestrator)
         try:
-            rec = engine.create_record(wf, **kwargs)
+            # v1.505.0 (north-star 5.4): the INSERT may wait behind a long
+            # writer (Compact, a backup) for SQLite's busy timeout — off the
+            # loop, as POST /workflows/run does.
+            rec = await asyncio.to_thread(engine.create_record, wf, **kwargs)
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
         task = self._launch(engine.run_record(rec, wf, **kwargs), rec.id)
@@ -355,7 +359,9 @@ class WorkflowRunTool(Tool):
                 "__launch__",
                 {"status": "failed", "summary": detail, "kind": "system"},
             )
-            engine._update_record(
+            # v1.505.0 (north-star 5.4): through the engine's ordered write,
+            # off the loop (never a bare ``to_thread(_update_record)``).
+            await engine._persist(
                 rec.id, status="failed", outputs=outs, finished_at=utcnow()
             )
             return ToolResult(ok=False, error=detail)
@@ -381,8 +387,6 @@ class WorkflowRunTool(Tool):
         spawn = getattr(self.platform.orchestrator, "spawn_managed", None)
         if callable(spawn):
             return spawn(run_id, coro)
-        import asyncio
-
         return asyncio.ensure_future(coro)
 
 

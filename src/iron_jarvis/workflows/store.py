@@ -17,6 +17,9 @@ keep loading unchanged, with no migration.
 from __future__ import annotations
 
 import json
+import logging
+import weakref
+from typing import Callable
 from datetime import timedelta
 
 from sqlalchemy import Engine, delete as sqla_delete
@@ -27,6 +30,17 @@ from ..core.db import dumps, session_scope
 from ..core.ids import utcnow
 from .engine import WorkflowDef, load_workflow
 from .models import WorkflowRecord
+
+#: v1.505.0 (north-star 5.2): what must go WITH a removed workflow, per
+#: database (the platform registers its grant store here: a saved
+#: workflow's standing OKs are revoked when it is removed). Keyed weakly by
+#: the engine, since a ``WorkflowStore`` is made wherever one is needed.
+_ON_REMOVED: "weakref.WeakKeyDictionary[Engine, Callable[[str], None]]" = weakref.WeakKeyDictionary()
+
+
+def on_removed(engine: Engine, callback: "Callable[[str], None]") -> None:
+    """Register what runs after a saved workflow is removed from ``engine``."""
+    _ON_REMOVED[engine] = callback
 
 
 class WorkflowPinRecord(SQLModel, table=True):
@@ -257,7 +271,14 @@ class WorkflowStore:
                 db.delete(pin_row)  # a pin never outlives its def
             db.delete(row)
             db.commit()
-            return True
+        hook = _ON_REMOVED.get(self.engine)
+        if hook is not None:
+            try:
+                hook(name)
+            except Exception:  # noqa: BLE001 — best-effort: the removal stands
+                logging.getLogger(__name__).warning(
+                    "workflows: the removal hook failed for %r", name, exc_info=True)
+        return True
 
 
 #: Run statuses with nothing left to execute. ``waiting`` (parked at a human

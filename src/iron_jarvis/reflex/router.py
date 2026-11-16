@@ -1,8 +1,9 @@
 """The Reflex Router — turn an inbound signal into a running action.
 
 Given a matched :class:`ReflexRule`, it starts the bound work: a saved workflow,
-a remote agent, or a supervised session. The *creating* step is synchronous (so
-a caller/test immediately has a run-record or session id), while the long-running
+a remote agent, or a supervised session. The *creating* step is awaited (so
+a caller/test immediately has a run-record or session id; its write runs off the
+event loop since v1.505.0), while the long-running
 part is launched in the background via the injected ``spawn_bg`` (the daemon's
 task launcher) — a webhook POST never blocks on a multi-minute run.
 
@@ -13,6 +14,7 @@ signal gets no more power than a local one. Nothing here bypasses a gate.
 
 from __future__ import annotations
 
+import functools
 import json as _json
 import re as _re
 from typing import Any, Callable
@@ -28,6 +30,15 @@ log = get_logger("reflex")
 
 #: A launcher: ``(session_id, coro) -> Task``. The daemon passes ``_spawn_bg``.
 SpawnBg = Callable[[str, Any], Any]
+
+
+async def _off_loop(fn: Any, *args: Any) -> Any:
+    """A blocking SQLite write on a worker thread (v1.505.0, north-star 5.4):
+    the orchestrator's ``off_loop_settled``, so a cancel waits for the write in
+    flight. Lazy import, by import direction (the agent layer is heavy)."""
+    from ..agents.orchestrator import off_loop_settled
+
+    return await off_loop_settled(fn, *args)
 
 
 #: Placeholders a rule's task_template can reference; filled from the triggering
@@ -234,7 +245,7 @@ class ReflexRouter:
                 trust = self._signal_trust(rule, attended=attended)
                 trust_kw = {"trust": trust} if trust else {}
                 if rule.action == "workflow":
-                    result = self._run_workflow(rule, context, **trust_kw)
+                    result = await self._run_workflow(rule, context, **trust_kw)
                 elif rule.action == "remote_agent":
                     result = self._run_remote(rule, context)
                 elif rule.action == "session":
@@ -255,12 +266,16 @@ class ReflexRouter:
             # both say it (never "Fired session · session <id>").
             words, href = result_words(result)
             result = {**result, "words": words, "href": href}
-        self.store.mark_result(
+        # v1.505.0 (north-star 5.4): off the loop — a webhook's fire must not
+        # park the daemon behind a long writer — and still BEFORE the fire is
+        # announced (a page that re-reads the row on ``reflex.fired`` finds it).
+        await _off_loop(functools.partial(
+            self.store.mark_result,
             rule.id,
             ok=bool(result.get("ok")),
             detail=str(result.get("error") or result.get("words") or _result_detail(result)),
             href=str(result.get("href") or "") if result.get("ok") else "",
-        )
+        ))
         await self._publish(rule, result)
         if not result.get("ok"):
             await self._announce_failure(
@@ -285,7 +300,7 @@ class ReflexRouter:
             return {}
         return {"trust": "low", "trust_reason": f"started by {label} (rule {rule.name})"}
 
-    def _run_workflow(
+    async def _run_workflow(
         self, rule: ReflexRule, context: dict[str, str], *, trust: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         from ..workflows.engine import WorkflowEngine
@@ -307,7 +322,9 @@ class ReflexRouter:
         if wf.project_id is None and rule.project_id:
             wf.project_id = rule.project_id
         engine = WorkflowEngine(self.p, self.orch)
-        run = engine.create_record(wf)  # synchronous: persists a run record now
+        # Persists the run record now — off the loop (v1.505.0, north-star
+        # 5.4), and awaited, so the record exists before its run is launched.
+        run = await _off_loop(engine.create_record, wf)
         # v1.122.0: the signal's payload used to be DROPPED for workflow
         # actions. It now rides the run as a synthetic "Trigger" output, so any
         # step can reference {{Trigger}} in its task/args/message — the webhook
@@ -367,7 +384,7 @@ class ReflexRouter:
                 return out
             detail = str(out.get("detail") or "") if isinstance(out, dict) else ""
             error = f"remote agent '{rule.target}' failed: {detail or 'no answer'}"
-            self.store.mark_result(rule.id, ok=False, detail=error)
+            await _off_loop(functools.partial(self.store.mark_result, rule.id, ok=False, detail=error))
             await self._announce_failure(
                 rule,
                 _remote_words(rule.target, detail),

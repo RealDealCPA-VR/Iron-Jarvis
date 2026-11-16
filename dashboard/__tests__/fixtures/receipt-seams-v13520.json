@@ -9,7 +9,9 @@
       "why": "it is not in this run's grants yet"
     },
     "pending_row": {
+      "always_scope": "schedule",
       "asker": "model",
+      "can_always": true,
       "id": "apr_fixture",
       "mission_id": null,
       "origin": "schedule:nightly-brief",
@@ -23,10 +25,11 @@
       "why": "it is not in this run's grants yet"
     },
     "requested": {
+      "always_scope": "schedule",
       "approval_id": "apr_fixture",
       "args_hash": "<args_hash>",
       "asker": "model",
-      "can_always": false,
+      "can_always": true,
       "quarantined": false,
       "reversible": true,
       "timeout_s": 300,
@@ -50,8 +53,11 @@
       "why": "you chose to approve every action"
     },
     "waiting_on": {
+      "always_scope": "schedule",
       "approval_id": "apr_fixture",
+      "args_hash": "<args_hash>",
       "asker": "model",
+      "can_always": true,
       "reversible": true,
       "tool": "write_file",
       "why": "it is not in this run's grants yet"

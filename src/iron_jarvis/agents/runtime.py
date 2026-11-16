@@ -1828,16 +1828,27 @@ class AgentRuntime:
     @staticmethod
     def grant_scopes(session) -> list[tuple[str, str]]:
         """The scopes a standing grant may cover THIS run under, read from
-        the row: ``("goal", id)`` when the origin is a goal's stamp,
+        the row: ``("goal", id)`` when the origin is a goal's stamp (and,
+        v1.505.0, ``("schedule", name)`` / ``("workflow", name)`` for those
+        stamps),
         ``("agent", roster name)`` when the session names one, ``("project",
-        id)`` when grounded. ``core.grants.pick_scope`` ranks them (agent >
-        project > goal) when an "always" answer must choose ONE to mint in.
+        id)`` when grounded. ``core.grants.pick_scope`` ranks them (schedule
+        / workflow > agent > project > goal) when an "always" answer must
+        choose ONE to mint in.
         An unattributed run (none of the three) has no scope: a grant never
         covers it and its card carries ``can_always: false``."""
         scopes: list[tuple[str, str]] = []
         origin = str(getattr(session, "origin", "") or "")
-        if origin.startswith("goal:") and origin[len("goal:"):]:
-            scopes.append(("goal", origin[len("goal:"):]))
+        # v1.505.0 (north-star 5.2, D10): a schedule's fire
+        # (``schedule:<name>``) and a workflow's agent step
+        # (``workflow:<name>``) are scopes of their own, read off the SAME
+        # stamp the door wrote, so "Always for this schedule" is kept on the
+        # schedule and its next fire reads it.
+        from ..core.grants import ORIGIN_SCOPES as _ORIGIN_SCOPES
+
+        kind, sep, ident = origin.partition(":")
+        if sep and kind in _ORIGIN_SCOPES and ident:
+            scopes.append((kind, ident))
         agent = str(getattr(session, "agent_name", "") or "")
         if agent:
             scopes.append(("agent", agent))
@@ -3882,6 +3893,26 @@ class AgentRuntime:
             requested["can_always"] = False
             if getattr(spend, "reason", ""):
                 requested["once_reason"] = spend.reason
+        # v1.505.0 (north-star 5.2, D10): WHERE "Always" keeps the grant, as a
+        # word the card says ("Always for this schedule" / "... workflow").
+        # Additive and ONLY for those two scopes, so every other card's event
+        # is the shape it was.
+        _always_at = _pick_scope(_grant_scopes)
+        if requested["can_always"] and _always_at is not None and _always_at[0] in (
+            "schedule", "workflow",
+        ):
+            requested["always_scope"] = _always_at[0]
+        # The registry keeps the same verdict beside the ask, so the run's
+        # own page (``routes/sessions._waiting_on``) offers what this event
+        # offers. Before v1.505.0 that page read ``can_always`` off a row
+        # that never carried it, so it never offered "Always" at all.
+        _note_always = getattr(approvals, "note_always", None)
+        if _note_always is not None:
+            _note_always(
+                approval_id, can_always=bool(requested["can_always"]),
+                always_scope=str(requested.get("always_scope") or ""),
+                args_hash=str(requested.get("args_hash") or ""),
+            )
         if spend is not None:
             # v1.346.0: what this call would spend, in the service's words —
             # the card's one quiet line (lock-step with the chat lane's frame).

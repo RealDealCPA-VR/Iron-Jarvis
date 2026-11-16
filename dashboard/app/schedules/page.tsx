@@ -42,6 +42,7 @@ import {
 import { usePolledApi, useApi } from "@/lib/useApi";
 import type { Schedule, ScheduleScript } from "@/lib/types";
 import { Modal } from "@/components/Modal";
+import { HeldOks } from "@/components/workflow/HeldOks";
 import { CHOOSE_FOLDER_WORDS, useFolderPicker } from "@/components/folders/FolderChip";
 import {
   Card,
@@ -1106,6 +1107,14 @@ export default function SchedulesPage() {
                                     {nameOf(scheduleAgent(s))}
                                   </span>
                                 )}
+                                {/* v1.505.0 (D10): what "Always for this
+                                    schedule" let it do, each with Remove. */}
+                                <HeldOks
+                                  grants={s.standing_grants}
+                                  place="schedule"
+                                  name={s.name}
+                                  onRemoved={reload}
+                                />
                               </span>
                             </span>
                           </td>

@@ -361,18 +361,41 @@ settles it; the sleep fix was not run on a sleeping PC or the frozen build.
 
 Area rules: `docs/rules/automations.md`, `daemon.md`, `tools.md`.
 
-- [ ] **5.1 A workflow tool step has a time limit and can be cancelled.**
+**Shipped in v1.505.0.** As built, where it differs from the lines below:
+5.1 Cancel stops the tool call itself (a table of calls in flight kept by
+the engine, by run id), not the run's driver task: a scheduled workflow's
+driver is not registered anywhere to cancel, and cancelling it would write no
+result. 5.2 the OK is the existing kind (this tool, exactly these details,
+30 days), now kept on the schedule or workflow; "Always" also reaches the
+bell and the run's own page, which never offered it before, and a removed
+schedule or workflow drops its OKs (both the lead's additions). 5.4 the
+session start, a continued run, the queue's "queued" write, a helper's
+settle, a failed run's record, a rule's fire, an autonomy booking, a
+schedule made from chat and the calendar trigger's claim are off the loop;
+the workflow engine's reads too.
+Left open, for the owner: an OK for a schedule covers one exact step. A
+scheduled job whose steps differ each run (code a model writes) will still
+ask each time; an OK for "this tool, any details, on this schedule" is a
+wider permission and is the owner's call. The 30 days are the owner's call
+too. Also open: a workflow's TOOL steps take no standing OK; writes still on
+the loop in `goals/engine.py`, `spawn_managed`, `_dequeue_next`, the
+post-run review build, `agents/threads.py` and several page routes (listed
+in the group's report); a few child-process sites (the developer `up`
+command, the placeholder shell) are bounded but not tree-killed, and say so
+in the scan test's allow list.
+
+- [x] **5.1 A workflow tool step has a time limit and can be cancelled.**
   `workflows/engine.py:1247`, `daemon/routes/workflows.py:251`.
-- [ ] **5.2 A schedule or workflow can be approved once (D10).**
+- [x] **5.2 A schedule or workflow can be approved once (D10).**
   `platform.py:2367`, `workflows/engine.py:1075`, `agents/runtime.py:1784`.
   New grant scopes; the schedule fire passes its agent's name.
-- [ ] **5.3 A workflow whose driver raises ends Failed.**
+- [x] **5.3 A workflow whose driver raises ends Failed.**
   `agents/orchestrator.py:854`, `workflows/engine.py` `run_record`.
-- [ ] **5.4 Database writes leave the event loop.**
+- [x] **5.4 Database writes leave the event loop.**
   `agents/orchestrator.py:1292, 1641, 2068, 2393`, `reflex/router.py:218,
   239, 276`, `motivation/engine.py:656`, `workflows/tools.py:337, 358`,
   `scheduling/tools.py:109`.
-- [ ] **5.5 A scan test for child processes.** Every `subprocess` or
+- [x] **5.5 A scan test for child processes.** Every `subprocess` or
   `os.startfile` outside `core/procs` is on an explicit allow list.
 
 ## Group 6. Chat reaches everything

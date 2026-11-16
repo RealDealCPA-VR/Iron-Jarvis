@@ -307,7 +307,7 @@ path assembled from pieces, so search before you delete a route.
 | `/fleet` | `daemon/routes/fleet.py` | app/fleet, app/usage, components/connections, components/settings, lib |
 | `/fs` | `daemon/routes/fsbrowse.py` | app/creative, components, components/terminal, lib |
 | `/goals` | `daemon/routes/goals.py` | app/autonomy, components, components/chat |
-| `/grants` | `daemon/routes/grants.py` | app/autonomy, components, components/settings |
+| `/grants` | `daemon/routes/grants.py` | app/autonomy, components, components/settings, components/workflow |
 | `/guide` | `daemon/routes/guide.py` | app/help |
 | `/health` | `daemon/routes/system.py` | components, components/browser, components/settings, components/terminal, lib |
 | `/helpdocs` | `daemon/routes/helpdocs.py` | app/help |

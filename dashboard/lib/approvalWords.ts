@@ -44,6 +44,35 @@ export const ALLOW_TAB = "Allow for this tab";
 /** A standing grant on the EXACT arguments (offered only by the daemon). */
 export const ALWAYS_EXACT = "Always allow exactly this";
 
+/** v1.505.0 (north-star 5.2, D10): "Always" on a schedule's or a workflow's
+ *  run keeps the grant ON that schedule / workflow (the daemon's
+ *  `always_scope`), and the button says where. Its row on the Schedules /
+ *  Workflows page lists it with a Remove press. */
+export const ALWAYS_SCHEDULE = "Always for this schedule";
+export const ALWAYS_WORKFLOW = "Always for this workflow";
+
+/** Where the daemon keeps an "Always" it names: only these two say so. */
+export type AlwaysScope = "schedule" | "workflow";
+
+/** The daemon's `always_scope`, or null for anything else (absent, unknown). */
+export function alwaysScopeOf(raw: unknown): AlwaysScope | null {
+  return raw === "schedule" || raw === "workflow" ? raw : null;
+}
+
+/** The "Always" button's words: the place when the daemon named one, else
+ *  the v1.299.0 words. */
+export function alwaysLabel(raw: unknown): string {
+  const scope = alwaysScopeOf(raw);
+  if (scope === "schedule") return ALWAYS_SCHEDULE;
+  if (scope === "workflow") return ALWAYS_WORKFLOW;
+  return ALWAYS_EXACT;
+}
+
+/** The page whose row lists a placed "Always" (its Remove press). */
+export function alwaysPage(scope: AlwaysScope): string {
+  return scope === "schedule" ? "Schedules" : "Workflows";
+}
+
 /** v1.433.0 (A16): the one line on a card for a tool that is new (or
  *  changed) in its app since the user added the app — the daemon's
  *  `quarantined: true` (mcp/manifest.py holds both). Such a card never

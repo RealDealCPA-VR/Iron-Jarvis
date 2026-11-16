@@ -299,6 +299,7 @@ import asyncio  # noqa: E402
 import logging  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
+from sqlalchemy.pool import StaticPool  # noqa: E402
 from sqlmodel import SQLModel, create_engine  # noqa: E402
 
 from iron_jarvis.triggers import calendar as calmod  # noqa: E402
@@ -320,7 +321,11 @@ class _CalSecrets:
 
 
 def _cal_engine():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    # ONE shared connection (v1.505.0): the poller writes its cursor on a
+    # worker thread, and an in-memory database is per connection.
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
     SQLModel.metadata.create_all(engine)
     return engine
 

@@ -109,6 +109,9 @@ import {
   ALLOW_ONCE,
   ALLOW_TAB,
   ALWAYS_EXACT,
+  alwaysLabel,
+  alwaysPage,
+  alwaysScopeOf,
   answersOnlyOnce,
   askerSubject,
   DENY,
@@ -143,7 +146,13 @@ export {
 /** The ask as this card reads it: the stream's pending approval, plus the
  *  daemon's `reversible` flag (G25; absent on an older daemon and for a
  *  read-only tool). */
-export type ApprovalAsk = PendingApproval & { reversible?: boolean };
+export type ApprovalAsk = PendingApproval & {
+  reversible?: boolean;
+  /** v1.505.0 (D10): where "Always" keeps the grant, when the daemon names
+   *  the place (`always_scope`: "schedule" | "workflow"). Absent = the
+   *  v1.299.0 words, byte for byte. */
+  alwaysScope?: string;
+};
 
 /** One example call of a batch, on one compact line. Strings are verbatim (a
  *  path is the record); a nested value is summarised, never raw JSON. */
@@ -252,6 +261,8 @@ export function ApprovalCard({
   // v1.299.0: offered by the daemon, never inferred here — a batch has no
   // single argument set to key a grant on, and the daemon says so by omission.
   const canAlways = approval.canAlways === true && !onlyOnce;
+  // v1.505.0 (D10): a schedule's / workflow's run keeps its "Always" there.
+  const alwaysAt = alwaysScopeOf(approval.alwaysScope);
   // v1.417.0 (C1.7): the daemon said why it asks — the compact card.
   const why = typeof approval.why === "string" ? approval.why.trim() : "";
   const compact = why !== "";
@@ -583,7 +594,14 @@ export function ApprovalCard({
         </p>
       )}
 
-      {canAlways && (
+      {canAlways && alwaysAt && (
+        <p data-testid="approval-always-note" className="text-[11px] leading-relaxed text-zinc-400">
+          “{alwaysLabel(alwaysAt)}” runs it now and keeps allowing {approval.tool} with
+          exactly these arguments on this {alwaysAt} for 30 days. Different arguments still
+          ask. Remove it any time on the {alwaysPage(alwaysAt)} page.
+        </p>
+      )}
+      {canAlways && !alwaysAt && (
         <p data-testid="approval-always-note" className="text-[11px] leading-relaxed text-zinc-400">
           “Always allow exactly this” runs it now and keeps allowing {approval.tool} with
           exactly these arguments here for 30 days. Different arguments still ask. Revoke
@@ -654,13 +672,15 @@ export function ApprovalCard({
             onClick={() => void decide("always")}
             disabled={!!sent}
             title={
-              compact
+              alwaysAt
+                ? `Runs it now and keeps allowing ${approval.tool} with exactly these arguments on this ${alwaysAt} for 30 days. Different arguments still ask; remove it on the ${alwaysPage(alwaysAt)} page.`
+                : compact
                 ? `Runs it now and keeps allowing ${approval.tool} with exactly these arguments here for 30 days. Different arguments still ask; revoke it on the Autonomy page.`
                 : `Allow ${approval.tool} with exactly these arguments here for 30 days`
             }
             className="btn-ghost text-xs"
           >
-            {sent === "always" ? <LoaderInline label="Allowing…" /> : ALWAYS_EXACT}
+            {sent === "always" ? <LoaderInline label="Allowing…" /> : alwaysLabel(alwaysAt)}
           </button>
         )}
         <button

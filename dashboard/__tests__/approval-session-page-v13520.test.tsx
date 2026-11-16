@@ -160,7 +160,7 @@ const OLDER_ROW = (() => {
   return rest;
 })();
 import SessionDetailPage from "@/app/sessions/[id]/page";
-import { APPROVAL_LABELS, undoLine } from "@/lib/approvalWords";
+import { ALWAYS_SCHEDULE, APPROVAL_LABELS, undoLine } from "@/lib/approvalWords";
 import type { SessionView } from "@/lib/types";
 import { RUN_REDIRECT_KEPT } from "@/lib/askWhy";
 
@@ -201,7 +201,13 @@ describe("sessions/[id] — a paused run's ask", () => {
     await act(async () => {});
     const card = within(screen.getByTestId("session-approval")).getByTestId("chat-approval-card");
     const names = within(card).getAllByRole("button").map((b) => (b.textContent ?? "").trim());
-    expect(names).toEqual([APPROVAL_LABELS.once, APPROVAL_LABELS.run, APPROVAL_LABELS.deny]);
+    // v1.505.0 (moved on purpose): the daemon's row for a SCHEDULED run now
+    // carries its "Always" offer and where it is kept (`can_always`,
+    // `always_scope`), so the run's own page offers what the bell offers.
+    // It used to read `can_always` off a row that never carried it.
+    expect([...names].sort()).toEqual(
+      [APPROVAL_LABELS.once, APPROVAL_LABELS.run, ALWAYS_SCHEDULE, APPROVAL_LABELS.deny].sort(),
+    );
     expect(card.textContent).not.toMatch(/conversation/);
     expect(within(card).getByTestId("approval-undo").textContent).toBe(undoLine(true));
   });

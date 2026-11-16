@@ -22,6 +22,7 @@ SAFETY (see the daemon report for the full model):
 from __future__ import annotations
 
 import asyncio
+import functools
 import inspect
 import json
 from datetime import datetime, timedelta
@@ -61,6 +62,15 @@ _DIAL_AUTOEXEC: dict[str, set[str]] = {
 #: Cap on pending (un-acted) proposals per goal so suggest-mode ticks can't pile
 #: up an unbounded backlog; once full, a tick reuses the existing queue.
 _MAX_PENDING_PER_GOAL = 5
+
+
+async def _off_loop(fn: Any, *args: Any) -> Any:
+    """A blocking SQLite write on a worker thread (v1.505.0, north-star 5.4):
+    the orchestrator's ``off_loop_settled``, so a cancel waits for the write in
+    flight. Lazy import, by import direction."""
+    from ..agents.orchestrator import off_loop_settled
+
+    return await off_loop_settled(fn, *args)
 
 
 def _level_rank(level: str) -> int:
@@ -653,7 +663,12 @@ class IntentEngine:
         )
         # Book the action against the budget NOW (before the run finishes) so a
         # concurrent tick can't double-spend; mark the proposal executed durably.
-        self._book(proposal.id, goal.id, session.id, tokens=0)
+        # v1.505.0 (north-star 5.4): off the loop, still awaited (the callers
+        # hold ``_exec_lock``, an asyncio lock, across it) and still before
+        # ``autonomy.executed`` is published.
+        await _off_loop(
+            functools.partial(self._book, proposal.id, goal.id, session.id, tokens=0)
+        )
         await self.p.event_bus.publish(
             EventType.AUTONOMY_EXECUTED,
             {"proposal_id": proposal.id, "goal_id": goal.id, "session_id": session.id},
@@ -667,7 +682,7 @@ class IntentEngine:
                 tokens = int(getattr(ran, "input_tokens", 0)) + int(
                     getattr(ran, "output_tokens", 0)
                 )
-                self._reconcile_tokens(proposal.id, goal.id, tokens)
+                await _off_loop(self._reconcile_tokens, proposal.id, goal.id, tokens)
             except Exception:  # noqa: BLE001 - a failed autonomous run still counts
                 log.exception("autonomous session %s failed", session.id)
         else:
@@ -676,7 +691,8 @@ class IntentEngine:
             async def _run_and_book(_sid=session.id, _pid=proposal.id, _gid=goal.id):
                 try:
                     ran = await self.orchestrator.run_session(_sid)
-                    self._reconcile_tokens(
+                    await _off_loop(
+                        self._reconcile_tokens,
                         _pid, _gid,
                         int(getattr(ran, "input_tokens", 0))
                         + int(getattr(ran, "output_tokens", 0)),
@@ -782,7 +798,9 @@ class IntentEngine:
         # the proposal atomically, so a double-clicked/retried/two-tab Approve runs
         # it exactly ONCE instead of spawning two sessions + double-booking budget.
         async with self._exec_lock:
-            if not self._claim_for_execution(proposal_id):
+            # v1.505.0: the claim's write is off the loop; the asyncio lock
+            # still holds the whole claim→execute span.
+            if not await _off_loop(self._claim_for_execution, proposal_id):
                 current = self.get_proposal(proposal_id)
                 raise ValueError(
                     f"proposal is already {current.status if current else 'gone'}"
@@ -796,7 +814,7 @@ class IntentEngine:
             except PermissionError as exc:
                 # A maintainer (self-mod) proposal when self_dev_enabled is off:
                 # release the claim back to pending and tell the approver.
-                self._reset_proposal_status(proposal_id, "pending")
+                await _off_loop(self._reset_proposal_status, proposal_id, "pending")
                 raise PermissionError(
                     f"cannot run this self-modifying proposal: {exc}. "
                     "Enable self_dev_enabled in Settings to let the Maintainer patch "
@@ -805,7 +823,7 @@ class IntentEngine:
             except Exception:
                 # Any other failure before _book durably marked it executed: release
                 # the claim so the proposal is retryable, not stuck 'executing'.
-                self._reset_proposal_status(proposal_id, "pending")
+                await _off_loop(self._reset_proposal_status, proposal_id, "pending")
                 raise
 
     def reject(self, proposal_id: str) -> ProposalRecord | None:

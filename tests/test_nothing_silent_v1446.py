@@ -136,7 +136,7 @@ async def test_a_raised_start_error_reads_in_plain_words_never_a_class_name(tmp_
     router = ReflexRouter(platform, _Orch())
     rule = router.store.add(name="boom", source="webhook", match="x", action="workflow", target="w")
 
-    def explode(*a, **kw):
+    async def explode(*a, **kw):  # v1.505.0: ``_run_workflow`` is awaited
         raise KeyError("query")
 
     monkeypatch.setattr(router, "_run_workflow", explode)
@@ -150,8 +150,12 @@ async def test_a_successful_fire_stays_quiet(tmp_path, monkeypatch):
     router = ReflexRouter(platform, _Orch())
     rule = router.store.add(name="ok", source="webhook", match="x", action="workflow", target="w")
     # v1.502.0 (north-star 2.8): a webhook rule's run is handed its low trust
-    # (``trust=``), so the double takes keywords.
-    monkeypatch.setattr(router, "_run_workflow", lambda r, c, **kw: {"ok": True, "kind": "workflow", "run_id": "wfr"})
+    # (``trust=``), so the double takes keywords. v1.505.0: it is awaited (its
+    # run record is written off the loop).
+    async def started(r, c, **kw):
+        return {"ok": True, "kind": "workflow", "run_id": "wfr"}
+
+    monkeypatch.setattr(router, "_run_workflow", started)
     out = await router.execute(router.store.get(rule.id), {})
     assert out["ok"] is True and _failed(platform) == []
 

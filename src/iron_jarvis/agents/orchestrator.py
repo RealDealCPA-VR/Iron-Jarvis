@@ -1289,7 +1289,10 @@ class Orchestrator:
             else:
                 workspace.mkdir(parents=True, exist_ok=True)
         session.workspace_path = str(workspace)
-        self._save(session)
+        # v1.505.0 (north-star 5.4): off the loop, like the finish's save (a
+        # long writer holding the file must not park every door's start); the
+        # row still lands BEFORE anyone is told the session exists.
+        await off_loop_settled(self._save, session)
         await self.p.event_bus.publish(
             EventType.SESSION_CREATED,
             {"task": task, "agent": agent_type.value, "workspace": session.workspace_path},
@@ -1635,13 +1638,32 @@ class Orchestrator:
                 return session
             if self._draining:
                 return None
-            ticket = _SlotTicket(loop)
-            # The row says QUEUED BEFORE the entry is visible: a promotion
-            # skips an entry whose row is not QUEUED as cancelled-while-parked.
-            session.status = SessionStatus.QUEUED
-            self._save(session)
-            self._queued.append((session_id, ticket, True))
-            position = len(self._queued)
+        # The row says QUEUED BEFORE the entry is visible: a promotion skips
+        # an entry whose row is not QUEUED as cancelled-while-parked.
+        # v1.505.0 (north-star 5.4): that write runs off the loop and OUTSIDE
+        # ``_gov_lock`` (a threading lock held across an await lets another
+        # coroutine on this thread re-enter it, and parks a scheduler thread
+        # behind the database), so the slot is asked for AGAIN once the row
+        # has landed: a run that finished meanwhile served a queue this entry
+        # was not in yet, and nothing would ever promote it. A cancel during
+        # the write waits for it, then propagates with no entry to remove.
+        session.status = SessionStatus.QUEUED
+        await off_loop_settled(self._save, session)
+        with self._gov_lock:
+            limit = self._session_limit()
+            freed = limit <= 0 or len(self._governed) < limit
+            if freed:
+                self._governed.add(session_id)
+            elif self._draining:
+                return None
+            else:
+                ticket = _SlotTicket(loop)
+                self._queued.append((session_id, ticket, True))
+                position = len(self._queued)
+        if freed:
+            session.status = SessionStatus.ACTIVE  # as a promotion stamps it
+            await off_loop_settled(self._save, session)
+            return session
         try:
             try:
                 await self.p.event_bus.publish(
@@ -2074,7 +2096,7 @@ class Orchestrator:
         except Exception:  # noqa: BLE001 — bookkeeping never fails a delegation
             log.exception("child settle failed for %s", child_session.id)
         child_session.finished_at = utcnow()
-        self._save(child_session)
+        await off_loop_settled(self._save, child_session)  # v1.505.0: off the loop
         return False
 
     async def _claimed_change_note(self, session_id: str, summary: Any, tools_used: list[str]) -> str:
@@ -2442,7 +2464,9 @@ class Orchestrator:
         except Exception:  # noqa: BLE001 - never block teardown on bookkeeping
             log.exception("failed to settle the ledger for %s", session.id)
         try:
-            self._save(session)
+            # v1.505.0: off the loop; it still lands before the chat line
+            # and the completion event below.
+            await off_loop_settled(self._save, session)
         except Exception:  # noqa: BLE001 - never block teardown on persistence
             log.exception("failed to persist FAILED state for %s", session.id)
         # v1.345.0 (lane T): the failure sentence lands in the chat it was
@@ -2907,7 +2931,9 @@ class Orchestrator:
                 ws = str(self.p.config.workspaces_dir / session.id)
             Path(ws).mkdir(parents=True, exist_ok=True)
             session.workspace_path = ws
-            self._save(session)
+            # v1.505.0: off the loop, still inside ``_continue_lock`` (an
+            # asyncio lock, so a second continue waits for this row).
+            await off_loop_settled(self._save, session)
         await self.p.event_bus.publish(
             EventType.SESSION_CREATED,
             {"task": message, "agent": session.agent_type.value, "workspace": ws},

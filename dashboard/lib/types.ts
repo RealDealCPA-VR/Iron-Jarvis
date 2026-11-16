@@ -114,6 +114,8 @@ export interface SessionWaitingOn {
    *  allowing exactly these arguments in this run's scope for 30 days.
    *  Absent/false = the three answers of today. */
   can_always?: boolean;
+  /** v1.505.0: "schedule" | "workflow" when "Always" is kept on one. */
+  always_scope?: string;
   /** v1.299.0: sha256 over tool + canonical args (never the redacted display). */
   args_hash?: string;
   /** v1.352.0 (G25): can the action be undone (the daemon's verdict, the

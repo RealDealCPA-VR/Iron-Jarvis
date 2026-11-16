@@ -106,7 +106,10 @@ class ScheduleCreateTool(Tool):
         except _knobs.KnobError as exc:
             return ToolResult(ok=False, error=exc.detail)
         try:
-            rec = self.platform.scheduler.add_task(
+            # v1.505.0 (north-star 5.4): the row's write is off the loop too
+            # (the scheduler is APScheduler's thread-safe BackgroundScheduler).
+            rec = await asyncio.to_thread(
+                self.platform.scheduler.add_task,
                 args.get("name") or "",
                 args.get("cron"),
                 run_at=args.get("run_at"),

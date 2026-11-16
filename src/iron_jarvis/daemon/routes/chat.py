@@ -1887,6 +1887,16 @@ def register(app: FastAPI, d) -> None:
             # absent for a read-only tool), so the bell says it too.
             if isinstance(payload.get("reversible"), bool):
                 meta[aid]["reversible"] = payload["reversible"]
+            # v1.505.0 (north-star 5.2, D10) — a FLAG and a WORD, never args:
+            # the run's card may answer "Always" (``can_always``) and where it
+            # keeps the grant (``always_scope``: "schedule" | "workflow").
+            # The bell read ``can_always`` off these rows since v1.299.0 and
+            # this listing dropped it, so no unattended run's ask could be
+            # answered "Always" from the bell, where a schedule's is answered.
+            if payload.get("can_always") is True:
+                meta[aid]["can_always"] = True
+                if payload.get("always_scope") in ("schedule", "workflow"):
+                    meta[aid]["always_scope"] = payload["always_scope"]
             # Readiness 0j.5 item 13 — WORDS, never args: who asks and why
             # (the runtime's `card_why`), so the bell and a reloaded page can
             # draw the short card. Re-masked and cut here: this listing fans

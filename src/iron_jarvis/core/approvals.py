@@ -260,6 +260,25 @@ class ChatApprovals:
             self._meta[approval_id]["asker"] = str(asker)
         return approval_id, fut
 
+    def note_always(self, approval_id: str, *, can_always: bool, always_scope: str = "",
+                    args_hash: str = "") -> None:
+        """Record, beside a filed ask, whether it may be answered "Always"
+        and where that grant is kept (v1.505.0, north-star 5.2): the asker
+        decides it AFTER filing (it needs the approval id for its event).
+        ``always_scope`` is "schedule" | "workflow" | "" and ``args_hash``
+        the exact call's identity (a hash, never the arguments), which a
+        page sends back with "always". ``pending_for`` hands them on, so
+        the run's own page can offer what the ask's event offered. An
+        unknown id (already answered) is ignored. Never raises."""
+        meta = self._meta.get(str(approval_id or ""))
+        if meta is None:
+            return
+        meta["can_always"] = bool(can_always)
+        if can_always and always_scope in ("schedule", "workflow"):
+            meta["always_scope"] = always_scope
+        if can_always and args_hash:
+            meta["args_hash"] = str(args_hash)
+
     def pending_for(self, session_id: str | None) -> list[dict[str, Any]]:
         """The asks a session is currently waiting on, oldest first (v1.227.0).
 
@@ -291,6 +310,11 @@ class ChatApprovals:
                 # Readiness 0j.5 item 13: present only when the asker said.
                 **({"why": m["why"]} if m.get("why") else {}),
                 **({"asker": m["asker"]} if m.get("asker") else {}),
+                # v1.505.0: present only when the asker said "Always" may
+                # answer it (``note_always``).
+                **({"can_always": True} if m.get("can_always") is True else {}),
+                **({"always_scope": m["always_scope"]} if m.get("always_scope") else {}),
+                **({"args_hash": m["args_hash"]} if m.get("args_hash") else {}),
             }
             for m in self._meta.values()
             if m.get("session_id") == sid

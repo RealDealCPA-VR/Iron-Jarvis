@@ -684,6 +684,18 @@ def register(app: FastAPI, d) -> None:
         # json.loads produced, and VALID-but-non-object JSON ("[]", '"x"',
         # "3") has no .get — one such row must not 500 the whole list.
         rows: list[dict[str, Any]] = []
+        # v1.505.0 (north-star 5.2, D10): what each schedule may already do
+        # without asking — its LIVE standing grants ("Always for this
+        # schedule"), the store's own dicts (labels redacted, never the
+        # arguments), so its row shows them with a Remove press. One read.
+        held: dict[str, list[dict[str, Any]]] = {}
+        store = getattr(d.platform, "grants", None)
+        if store is not None:
+            try:
+                for g in store.list("schedule"):
+                    held.setdefault(g.scope_id, []).append(store.as_dict(g))
+            except Exception:  # noqa: BLE001 — a store fault lists none, never breaks the page
+                held = {}
         for t in d.platform.scheduler.list():
             row = t.model_dump()
             payload = t.decoded_payload()
@@ -698,6 +710,7 @@ def register(app: FastAPI, d) -> None:
             # skills / workspace_root / context_from / script (command,
             # timeout, cwd — never any output) / skip_memory.
             row.update(_knobs.decode_knobs(payload))
+            row["standing_grants"] = held.get(t.name, [])
             rows.append(row)
         return {"schedules": rows}
 

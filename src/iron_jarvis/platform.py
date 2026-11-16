@@ -2242,6 +2242,12 @@ def build_platform(
             model = payload.get("model") or None
             fire_max_steps = None
             fire_approval = None
+            # v1.505.0 (north-star 5.2): the CUSTOM agent's roster name
+            # (``custom:<name>``, as its spawn route credits it) — so its own
+            # standing grants apply to the fire and the run is credited to it.
+            # None for a builtin: a builtin's name as a grant scope would let
+            # one "Always" cover every builder run anywhere.
+            fire_agent_name = None
             # v1.395.0: a MODEL TEAM MEMBER's fire runs HELD to its own model
             # (``model_team.run_as_member``), like every door that starts it.
             fire_member = None
@@ -2311,6 +2317,8 @@ def build_platform(
                     # The job card's posture and step budget (v1.295.0).
                     fire_max_steps = (rec.max_steps or None) if rec else None
                     fire_approval = (rec.approval_mode or None) if rec else None
+                    if rec is not None and str(getattr(rec, "name", "") or "").strip():
+                        fire_agent_name = f"custom:{rec.name}"
                 else:
                     try:
                         agent_type = _AgentType(agent_name)
@@ -2386,6 +2394,9 @@ def build_platform(
                 max_steps=fire_max_steps,
                 approval_mode=fire_approval,
                 options=fire_options or None,
+                # v1.505.0: passed ONLY for a custom agent, so a builtin's
+                # fire (and a test double's create_session) is byte-identical.
+                **({"agent_name": fire_agent_name} if fire_agent_name else {}),
             )
             fired["session_id"] = session.id
             # THE PROMPT EXTRAS (v1.299.0): an earlier job's result and the
@@ -2834,6 +2845,19 @@ def build_platform(
     platform.goal_engine = GoalEngine(platform)
 
     platform.scheduler = Scheduler(engine, _run_scheduled)
+    # v1.505.0 (north-star 5.2): a REMOVED schedule or saved workflow drops
+    # the standing OKs kept on it, so one made later under the same name
+    # starts with none. Set here, once both the scheduler and the grant
+    # store exist.
+    _grants = getattr(platform, "grants", None)
+    if _grants is not None:
+        from .workflows import store as _wf_store
+        from .workflows.engine import workflow_grant_scope_id as _wf_scope
+
+        platform.scheduler.on_removed = lambda name: _grants.revoke_scope("schedule", str(name))
+        _wf_store.on_removed(
+            platform.engine, lambda name: _grants.revoke_scope("workflow", _wf_scope(str(name)))
+        )
 
     # v1.433.0 (W1): a schedule of kind "event" publishes a name of the user's
     # OWN (`payload.type`, "schedule.fired" by default — see the event branch

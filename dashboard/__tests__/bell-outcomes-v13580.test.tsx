@@ -251,5 +251,26 @@ describe("(7) the bell's approval buttons name the tool in words, never its raw 
       expect(title).toContain("save a file");
       expect(title).not.toContain("write_file");
     }
+    // No place was named, so the words are the v1.299.0 ones.
+    expect(always.textContent).toBe("Always allow exactly this");
+  });
+
+  it("a schedule's ask says where Always is kept, and where to take it back (v1.505.0)", async () => {
+    // A schedule's ask is answered HERE: nobody is watching its run page.
+    H.approvals = [
+      {
+        id: "apr_2", tool: "write_file", session_id: "session_7e5621fb449b",
+        requested_at: "2026-10-19T07:00:00Z", can_always: true, always_scope: "schedule",
+      },
+    ];
+    render(<NotificationBell />);
+    fireEvent.click(await screen.findByRole("button", { name: /notification/i }));
+    const rowEl = await screen.findByTestId("bell-agent-approval");
+    const always = within(rowEl).getByTestId("bell-approval-always");
+    expect(always.textContent).toBe("Always for this schedule");
+    const title = always.getAttribute("title") ?? "";
+    expect(title).toContain("on this schedule");
+    expect(title).toContain("Schedules page");
+    expect(title).not.toContain("Autonomy page");
   });
 });

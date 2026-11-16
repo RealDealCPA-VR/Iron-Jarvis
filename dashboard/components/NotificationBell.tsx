@@ -73,7 +73,10 @@ import { REMOTE_KIND, remoteTaskSubject } from "@/lib/remoteTask";
 // v1.352.0 (G24/G25): the chat card's own answer words, dependency-free.
 import {
   ALLOW_ONCE,
-  ALWAYS_EXACT,
+  alwaysLabel,
+  alwaysPage,
+  alwaysScopeOf,
+  type AlwaysScope,
   ANSWERED_LINGER_MS,
   DENY,
   answeredLine,
@@ -1524,6 +1527,8 @@ interface PendingAgentApproval {
   /** v1.299.0: the daemon offers "always" — this call AND exactly these
    *  arguments in the run's scope for 30 days. Absent = not offered. */
   canAlways?: boolean;
+  /** v1.505.0: "schedule" | "workflow" when "Always" is kept on one. */
+  alwaysScope?: AlwaysScope;
   /** v1.310.0 (W2-5): the mission ROOT this ask belongs to (a coordinator's
    *  own ask or a teammate's), and the project its screen lives in — so the
    *  row can open the mission and the user answers IN CONTEXT. Absent for a
@@ -1672,6 +1677,8 @@ function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
     count: typeof r.count === "number" && r.count > 1 ? r.count : 1,
     ...(typeof r.timeout_s === "number" ? { timeoutS: r.timeout_s } : {}),
     ...(r.can_always === true ? { canAlways: true } : {}),
+    // v1.505.0: where "Always" keeps the grant (a schedule, a workflow).
+    ...(alwaysScopeOf(r.always_scope) ? { alwaysScope: alwaysScopeOf(r.always_scope)! } : {}),
     ...(typeof r.mission_id === "string" && r.mission_id ? { missionId: r.mission_id } : {}),
     ...(typeof r.project_id === "string" && r.project_id ? { projectId: r.project_id } : {}),
     ...(r.once_only === true ? { onceOnly: true } : {}),
@@ -1944,10 +1951,14 @@ function AgentApprovalRow({
                 data-testid="bell-approval-always"
                 onClick={() => void answer("always")}
                 disabled={busy !== null}
-                title={`Always let it ${askPhrase(ask.tool)} with exactly these details, in this run's scope, for 30 days. You can take it back on the Autonomy page.`}
+                title={
+                  ask.alwaysScope
+                    ? `Always let it ${askPhrase(ask.tool)} with exactly these details on this ${ask.alwaysScope}, for 30 days. You can take it back on the ${alwaysPage(ask.alwaysScope)} page.`
+                    : `Always let it ${askPhrase(ask.tool)} with exactly these details, in this run's scope, for 30 days. You can take it back on the Autonomy page.`
+                }
                 className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50"
               >
-                {busy === "always" ? "Allowing…" : ALWAYS_EXACT}
+                {busy === "always" ? "Allowing…" : alwaysLabel(ask.alwaysScope)}
               </button>
             )}
             <button

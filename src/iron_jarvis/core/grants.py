@@ -63,8 +63,16 @@ from .logging import get_logger
 log = get_logger("core.grants")
 
 #: Where a grant applies. ``scope_id`` is the goal id / the roster name /
-#: the project id / the literal ``"chat"``.
-SCOPE_KINDS: tuple[str, ...] = ("goal", "agent", "project", "chat")
+#: the project id / the literal ``"chat"`` / the schedule's name / the
+#: workflow's name as its runs' origin stamp carries it
+#: (``workflows.engine.workflow_grant_scope_id``). v1.505.0 (north-star 5.2,
+#: D10): ``schedule`` and ``workflow`` — a schedule or a workflow is approved
+#: ONCE; its runs read the scope off their origin (``schedule:<name>``,
+#: ``workflow:<name>``), never from anything the model wrote.
+SCOPE_KINDS: tuple[str, ...] = ("goal", "agent", "project", "chat", "schedule", "workflow")
+
+#: The origin prefixes a run's own stamp turns into a scope (v1.505.0).
+ORIGIN_SCOPES: tuple[str, ...] = ("goal", "schedule", "workflow")
 
 #: How long a card-minted grant lives. The ladder may pass ``None`` (never)
 #: for a GOAL-scoped grant only — a goal is the one scope with its own
@@ -83,7 +91,12 @@ HASH_LEN = 64
 #: Runs: agent > project > goal. Chat lanes: agent > project > chat (a chat
 #: lane never has an agent, so project > chat in practice). ONE table, so
 #: the two lanes and the runtime cannot disagree about which row they mint.
-SCOPE_PRECEDENCE: tuple[str, ...] = ("agent", "project", "goal", "chat")
+#: v1.505.0 (D10): a schedule's or a workflow's run keeps its "Always" ON the
+#: schedule / workflow ("Always for this schedule"), ahead of the agent it
+#: runs and the project it is grounded in: the card names that place, its row
+#: shows the grant with a Remove press, and it covers nothing else. (A run
+#: has one origin, so the two never meet a goal's scope.)
+SCOPE_PRECEDENCE: tuple[str, ...] = ("schedule", "workflow", "agent", "project", "goal", "chat")
 
 
 def _canon_args(args: Any) -> dict:
@@ -450,6 +463,25 @@ class GrantStore:
         if not already:
             self._publish(EventType.GRANT_REVOKED, self._event_payload(rec))
         return rec
+
+    def revoke_scope(self, scope_kind: str, scope_id: str) -> int:
+        """Revoke every live grant kept on one scope; returns how many
+        (v1.505.0, north-star 5.2). Called when a schedule or a saved
+        workflow is REMOVED: its standing OKs go with it, so one made later
+        under the same name starts with none and asks again. (An Undo of
+        the removal brings the schedule back without them, which is the
+        safe side.) Never raises."""
+        kind, sid = str(scope_kind or ""), str(scope_id or "")
+        if not kind or not sid:
+            return 0
+        done = 0
+        try:
+            for rec in self.list(scope_kind=kind, scope_id=sid, live_only=True):
+                if self.revoke(rec.id) is not None:
+                    done += 1
+        except Exception:  # noqa: BLE001 — a grant we could not revoke lapses by itself
+            log.warning("grants: could not revoke the %s scope %r", kind, sid, exc_info=True)
+        return done
 
     # -- reads ------------------------------------------------------------- #
 

@@ -2042,6 +2042,41 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## It keeps going, and asks once (v1.505.0)
+
+The fifth part of the review fixes: places where work could hang with nobody
+told, and places where Iron Jarvis asked the same question again and again.
+
+- **"Always for this schedule" and "Always for this workflow".** When a
+  scheduled job or a saved workflow needs your OK for a step, the question
+  (in the bell, or on the run's page) now offers **Always for this
+  schedule**. The OK is kept on that schedule for 30 days, for exactly that
+  step with exactly those details; anything different still asks. The
+  schedule's row on the Schedules page (and the workflow's on Workflows)
+  lists what it may do without asking, with **Remove**. Before, a weekly
+  job that needed an OK asked every single week.
+- **The run's own page can answer "Always".** A run waiting for your OK
+  showed only Allow and Deny on its page. It now offers Always wherever the
+  bell does.
+- **Removing a schedule or a workflow removes its standing OKs.** One made
+  later under the same name starts with none.
+- **A workflow step that calls a tool can no longer hang forever.** It has
+  the same time limit a step in chat has, and **Cancel** now stops it. A
+  stuck step used to leave the run "running" for good, and a schedule that
+  fired it then skipped every later run.
+- **A workflow that hits a problem ends as Failed, with the reason.** If
+  Iron Jarvis could not save a run's progress (the database was busy during
+  Compact or a backup), the run used to stay "running" until the next
+  restart. It now ends, and says: "The run stopped because Iron Jarvis could
+  not save its progress … Run it again."
+- **Starting work no longer freezes the app while the database is busy.**
+  Starting a run, firing a rule, a calendar trigger and making a schedule
+  from chat now save in the background, so the app keeps answering during
+  Compact or a backup.
+- **A scheduled job that runs one of your own agents is credited to that
+  agent**: it counts toward the agent's monthly allowance and track record,
+  and the agent's own standing OKs apply.
+
 ## Nothing is lost (v1.504.0)
 
 The fourth part of the review fixes: the places where your work, or the

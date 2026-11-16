@@ -77,8 +77,18 @@ def reply(svc, sid, text, *, stop="completed", step=True):
 async def settle(svc, sid, wait=0.1):
     """Until the reply has ended and every check of it has finished. A
     follow-up a check started is then still RUNNING (the fake tool never ends
-    a turn by itself), so :func:`quiet` can tell."""
-    await asyncio.sleep(wait)
+    a turn by itself), so :func:`quiet` can tell.
+
+    v1.505.0: the wait is for the reply's OWN TURN to be over (it ends on the
+    service's task, after the ``done`` just emitted), not a fixed sleep. A
+    0.1 s sleep let a slow runner ask :func:`quiet` before the reply's end had
+    been handled: one test here passed only on CI's retry."""
+    live = svc.live[sid]
+    replied = live.turn
+    if replied is not None:
+        await until(lambda: live.turn is not replied)
+    for _ in range(20):  # let the turn's end hook start its check
+        await asyncio.sleep(0)
     await until(lambda: not CA.judging(svc))
     await asyncio.sleep(wait)
 

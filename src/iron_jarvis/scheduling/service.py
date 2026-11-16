@@ -406,6 +406,15 @@ class Scheduler:
             db.delete(rec)
             db.commit()
         self._unschedule_job(name)
+        # v1.505.0 (north-star 5.2): what must go WITH a removed schedule
+        # (the platform sets this to revoke its standing OKs). Best-effort:
+        # the removal stands.
+        hook = getattr(self, "on_removed", None)
+        if hook is not None:
+            try:
+                hook(name)
+            except Exception:  # noqa: BLE001
+                log.warning("scheduler: the removal hook failed for %r", name, exc_info=True)
         return True
 
     def enable(self, name: str, enabled: bool) -> ScheduledTaskRecord | None:

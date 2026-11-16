@@ -788,6 +788,9 @@ export default function SessionDetailPage({
                     // v1.299.0: the daemon's "always" offer rides the row too;
                     // absent on an older daemon = the three answers of today.
                     canAlways: session.waiting_on.can_always === true,
+                    // v1.505.0: where "Always" keeps the grant, so the card
+                    // says "Always for this schedule" / "... workflow".
+                    alwaysScope: session.waiting_on.always_scope,
                     argsHash: session.waiting_on.args_hash,
                     // v1.352.0 (G25): the undo line, when the daemon said.
                     ...(typeof session.waiting_on.reversible === "boolean"

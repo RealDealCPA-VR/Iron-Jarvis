@@ -25,6 +25,7 @@ import { Empty, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
 import { IconButton } from "@/components/IconButton";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { CalmSection, WF_DANGER_SM, WF_GHOST_SM } from "./calm";
+import { HeldOks } from "./HeldOks";
 
 /** One row of GET /workflows (project_id is omitted by the list route). */
 export interface SavedWorkflowDef {
@@ -33,6 +34,8 @@ export interface SavedWorkflowDef {
   description?: string;
   steps_json?: string;
   created_at?: string;
+  /** v1.505.0 (D10): its live standing grants (absent on an older daemon). */
+  standing_grants?: unknown;
 }
 
 /** GET /workflows/{name}/references — automations that fire this def by name. */
@@ -226,6 +229,14 @@ export function SavedWorkflows() {
                       {n} step{n === 1 ? "" : "s"}
                       {d.description ? ` · ${d.description}` : ""}
                     </div>
+                    {/* v1.505.0 (D10): what "Always for this workflow" let
+                        it do, each with Remove. */}
+                    <HeldOks
+                      grants={d.standing_grants}
+                      place="workflow"
+                      name={d.name}
+                      onRemoved={reload}
+                    />
                   </div>
                   <button
                     type="button"

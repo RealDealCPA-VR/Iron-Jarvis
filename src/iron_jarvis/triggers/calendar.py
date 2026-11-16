@@ -131,7 +131,9 @@ class CalendarPoller:
             # AT-MOST-ONCE: mark (insert + commit) BEFORE firing. A key already
             # claimed (this pass' cursor, or a race) is skipped — never re-fired.
             # A single event's key is its UID; a repeat's is UID + occurrence.
-            if not self._claim(key):
+            # v1.505.0 (north-star 5.4): the mark is written off the loop and
+            # awaited, so it still lands before the fire.
+            if not await asyncio.to_thread(self._claim, key):
                 continue
             try:
                 fired = await self.reflex_router.on_calendar(
@@ -151,7 +153,7 @@ class CalendarPoller:
                 }
             )
 
-        self._prune()
+        await asyncio.to_thread(self._prune)  # v1.505.0: a delete, off the loop
         return results
 
     # -- fetch -------------------------------------------------------------
