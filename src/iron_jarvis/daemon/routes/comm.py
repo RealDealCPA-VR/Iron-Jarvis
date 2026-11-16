@@ -817,10 +817,22 @@ def register(app: FastAPI, d) -> None:
         from ...comm.inbound import _failure_words_for_phone
         from ...providers.failure_words import phone_surface
 
+        # v1.515.0 (second review L1, L2): the same body the phone door builds
+        # (``comm/inbound._handle_chat``): the chat's project, so a reply typed
+        # here is grounded in it exactly as one sent from the phone, and the
+        # chat's id, so the turn bills, runs and keeps its notes as this chat.
+        # Trust is NOT lowered here: ``docs/rules/tools.md`` keeps this door
+        # full trust on purpose (the owner typed the message).
+        desk_body = ChatBody(
+            messages=history,
+            auto_tools=True,
+            project_id=str(getattr(rec, "project_id", "") or ""),
+            thread_id=thread_id,
+        )
         try:
             # v1.378.0 review: the reply goes to the PHONE — worded for it.
             with phone_surface():
-                result = await turn(d.platform, personas, ChatBody(messages=history, auto_tools=True))
+                result = await turn(d.platform, personas, desk_body)
         except HTTPException as exc:
             # Mirror the inbound pipeline: the honest error IS the reply —
             # appended to the thread, delivered to the phone, rendered by the

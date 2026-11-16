@@ -20,8 +20,6 @@ from __future__ import annotations
 
 import base64
 import json
-import sys
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -147,59 +145,100 @@ async def test_no_browser_says_so(tmp_path, monkeypatch):
     assert res.ok is False and res.error == PS.NO_BROWSER
 
 
-def _fake_browser(tmp_path: Path, *, writes: bool) -> Path:
-    script = tmp_path / "fake_browser.py"
-    body = f"""
-        import sys, base64
-        out = next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--screenshot="))
-        if {writes!r}:
-            open(out, "wb").write(base64.b64decode({base64.b64encode(PNG_1X1).decode()!r}))
-        else:
-            sys.stderr.write("could not load the page\\n")
-    """
-    script.write_text(textwrap.dedent(body), encoding="utf-8")
-    return script
+class _ShotBackend:
+    """v1.515.0 (second review S1): the one-shot picture is taken through the
+    agent browser's backend (``page_browser.AgentBrowsers.one_shot``); this
+    stands in for it and records what it was asked."""
+
+    def __init__(self, *, edge, work, guard, note, background=False, extra_args=(), **kw):
+        self.edge, self.work, self.guard, self.kw = edge, Path(work), guard, kw
+        self._url = "about:blank"
+        self.size = None
+        self.killed = self.closed = False
+        self.picture = PNG_1X1
+        self.fail = ""
+        self.hang = None
+        self.prefs = None
+
+    async def start(self):
+        # What the throwaway profile was seeded with (read while it exists).
+        self.prefs = json.loads((self.work / "profile" / "Default" / "Preferences").read_text(encoding="utf-8"))
+
+    async def close(self):
+        self.closed = True
+
+    def kill(self):
+        self.killed = True
+        return []
+
+    def pids(self):
+        return []
+
+    async def resize(self, width, height):
+        self.size = (width, height)
+
+    async def goto(self, url, timeout_s):
+        if self.hang is not None:
+            await self.hang.wait()
+        self._url = url
+
+    async def quiet(self):
+        return None
+
+    def url(self):
+        return self._url
+
+    async def screenshot(self, *, jpeg):
+        if self.fail:
+            raise RuntimeError(self.fail)
+        return self.picture
 
 
-async def test_a_screenshot_comes_back_as_a_picture_and_a_saved_file(tmp_path, monkeypatch):
-    script = _fake_browser(tmp_path, writes=True)
-    monkeypatch.setattr(PS, "browser_executable", lambda: sys.executable)
-    seen: dict = {}
+@pytest.fixture()
+def shots(monkeypatch):
+    from iron_jarvis.harness import page_browser as PB
 
-    def argv(binary, url, out, profile, w, h, ms):
-        seen.update(url=url, w=w, h=h, ms=ms, profile=profile)
-        return [sys.executable, str(script), f"--screenshot={out}", url]
+    made: list[_ShotBackend] = []
+    setup: dict = {}
 
-    monkeypatch.setattr(PS, "browser_argv", argv)
+    def factory(**kw):
+        b = _ShotBackend(**kw)
+        for key, value in setup.items():
+            setattr(b, key, value)
+        made.append(b)
+        return b
+
+    inst = PB.AgentBrowsers(backend_factory=factory)
+    inst.made = made  # type: ignore[attr-defined]
+    inst.setup = setup  # type: ignore[attr-defined]
+    monkeypatch.setattr(PB, "BROWSERS", inst)
+    monkeypatch.setattr(PS, "browser_executable", lambda: "edge.exe")
+    yield inst
+    inst.shutdown()
+
+
+async def test_a_screenshot_comes_back_as_a_picture_and_a_saved_file(tmp_path, shots):
     res = await PS.PageScreenshotTool().execute(
         {"url": "http://0.0.0.0:5173/", "width": 99999, "wait_ms": -5}, _Ctx(tmp_path / "home"),
     )
     assert res.ok, res.error
-    assert seen["url"] == "http://localhost:5173/"  # 0.0.0.0 is this PC
-    assert seen["w"] == PS.MAX_WIDTH and seen["ms"] == 0  # clamped
-    assert not Path(seen["profile"]).exists()  # the throwaway profile is gone
+    b = shots.made[0]
+    assert b.edge == "edge.exe" and b._url == "http://localhost:5173/"  # 0.0.0.0 is this PC
+    assert b.size == (PS.MAX_WIDTH, PS.DEFAULT_HEIGHT)  # clamped
+    assert b.killed and not b.work.exists()  # ended; the throwaway profile is gone
     saved = Path(res.data["file"])
-    assert saved.is_file() and saved.parent == tmp_path / "home" / "page-screenshots"
+    # v1.515.0 (second review S9): in the session's own folder.
+    assert saved.is_file() and saved.parent == tmp_path / "home" / "page-screenshots" / "chat"
     assert res.images == [{"media_type": "image/png", "data_b64": base64.b64encode(PNG_1X1).decode()}]
     assert "picture is attached" in res.output and str(saved) in res.output
     assert "view_image" in res.output  # the way for a model that cannot see it
 
 
-async def test_a_browser_that_wrote_nothing_is_a_failure_with_its_words(tmp_path, monkeypatch):
-    script = _fake_browser(tmp_path, writes=False)
-    monkeypatch.setattr(PS, "browser_executable", lambda: sys.executable)
-    monkeypatch.setattr(PS, "browser_argv",
-                        lambda b, u, o, p, w, h, ms: [sys.executable, str(script), f"--screenshot={o}", u])
+async def test_a_browser_that_wrote_nothing_is_a_failure_with_its_words(tmp_path, shots):
+    shots.setup["fail"] = "could not load the page"
     res = await PS.PageScreenshotTool().execute({"url": "http://localhost:5173"}, _Ctx(tmp_path))
-    assert res.ok is False and "wrote no picture" in res.error and "could not load the page" in res.error
-
-
-def test_the_browser_runs_headless_on_a_throwaway_profile(tmp_path):
-    argv = PS.browser_argv("edge.exe", "http://localhost:5173", tmp_path / "o.png", tmp_path / "p",
-                           1280, 800, 1500)
-    assert "--headless=new" in argv and "--disable-extensions" in argv
-    assert f"--user-data-dir={tmp_path / 'p'}" in argv
-    assert argv[-1] == "http://localhost:5173"
+    assert res.ok is False and "could not take a screenshot" in res.error
+    assert "could not load the page" in res.error
 
 
 def test_old_screenshots_are_pruned(tmp_path):
@@ -472,108 +511,53 @@ def test_codex_says_it_takes_pictures_so_a_screenshot_does_not_move_the_turn(mon
 # --------------------------------------------------------------------------- #
 # Review (v1.371.0): where the browser runs, Stop, Local only, a picture alone
 # --------------------------------------------------------------------------- #
-def _recording_browser(tmp_path: Path, *, sleep_s: float = 0.0) -> Path:
-    """A stand-in browser that takes the REAL command line (browser_argv's
-    flags), writes down where it was told to keep its profile and picture
-    and what the profile's preferences said, then (after ``sleep_s``) writes
-    the picture."""
-    script = tmp_path / "recording_browser.py"
-    seen = tmp_path / "seen.json"
-    body = f"""
-        import json, os, sys, time, base64, pathlib
-        flags = dict(a.split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
-        prof = pathlib.Path(flags["--user-data-dir"])
-        prefs = json.loads((prof / "Default" / "Preferences").read_text(encoding="utf-8"))
-        pathlib.Path({str(seen)!r}).write_text(json.dumps({{
-            "profile": str(prof), "shot": flags["--screenshot"], "prefs": prefs, "pid": os.getpid(),
-        }}), encoding="utf-8")
-        time.sleep({sleep_s!r})
-        open(flags["--screenshot"], "wb").write(base64.b64decode({base64.b64encode(PNG_1X1).decode()!r}))
-    """
-    script.write_text(textwrap.dedent(body), encoding="utf-8")
-    return script
-
-
-def _use(monkeypatch, script: Path) -> None:
-    real = PS.browser_argv
-    monkeypatch.setattr(PS, "browser_executable", lambda: sys.executable)
-    monkeypatch.setattr(
-        PS, "browser_argv",
-        lambda b, u, o, p, w, h, ms: [sys.executable, str(script), *real(b, u, o, p, w, h, ms)[1:]],
-    )
-
-
-async def test_the_browser_works_outside_the_home_and_a_download_stays_in_its_folder(tmp_path, monkeypatch):
+async def test_the_browser_works_outside_the_home_and_a_download_stays_in_its_folder(tmp_path, shots):
     """A backup walks the whole home and fails on a file it cannot read; a
     running browser locks ~60 files of its profile (measured with Edge). And
     a page can start a download with no click, which a fresh profile saves to
     the user's own Downloads folder (measured). So the profile, the picture
     being written and any download all live in a throwaway folder OUTSIDE the
-    home, removed after; only the finished picture moves in."""
-    script = _recording_browser(tmp_path)
-    _use(monkeypatch, script)
+    home, removed after; only the finished picture moves in. v1.515.0: the
+    one-shot's throwaway folder is the agent browser's
+    (``page_browser._new_work``)."""
     home = tmp_path / "home"
     res = await PS.PageScreenshotTool().execute({"url": "http://localhost:5173"}, _Ctx(home))
     assert res.ok, res.error
-    seen = json.loads((tmp_path / "seen.json").read_text(encoding="utf-8"))
-    profile, shot = Path(seen["profile"]), Path(seen["shot"])
-    for p in (profile, shot):
-        assert home not in p.parents, f"{p} is inside the home a backup walks"
-    work = profile.parent
-    assert shot.parent == work
-    downloads = Path(seen["prefs"]["download"]["default_directory"])
+    b = shots.made[0]
+    work = b.work
+    assert home not in work.parents, f"{work} is inside the home a backup walks"
+    downloads = Path(b.prefs["download"]["default_directory"])
     assert downloads.parent == work  # never the user's Downloads folder
-    assert seen["prefs"]["download"]["prompt_for_download"] is False
+    assert b.prefs["download"]["prompt_for_download"] is False
     assert not work.exists()  # the throwaway folder is gone
-    assert Path(res.data["file"]).parent == home / "page-screenshots"
+    assert Path(res.data["file"]).parent == home / "page-screenshots" / "chat"
 
 
-def _wait_dead(pid: int, timeout: float) -> bool:
-    import psutil
-
-    try:
-        psutil.Process(pid).wait(timeout=timeout)
-        return True
-    except psutil.NoSuchProcess:
-        return True
-    except psutil.TimeoutExpired:
-        return False
-
-
-async def test_stop_kills_the_browser_and_removes_its_folder(tmp_path, monkeypatch):
+async def test_stop_kills_the_browser_and_removes_its_folder(tmp_path, shots):
     """A cancelled ``to_thread`` does not stop its thread (the v1.228.0 trap):
-    a Stop used to leave the browser running to its own 45 s bound."""
+    a Stop used to leave the browser running to its own 45 s bound. v1.515.0:
+    a Stop ends the one-shot's browser (its job) and removes its folder."""
     import asyncio
 
-    import psutil
-
-    script = _recording_browser(tmp_path, sleep_s=30.0)
-    _use(monkeypatch, script)
-    seen_file = tmp_path / "seen.json"
+    hang = asyncio.Event()
+    shots.setup["hang"] = hang
     task = asyncio.ensure_future(
         PS.PageScreenshotTool().execute({"url": "http://localhost:5173"}, _Ctx(tmp_path / "home"))
     )
-    for _ in range(300):  # the stand-in started (≤ 30 s on a loaded runner)
-        if seen_file.exists():
+    for _ in range(3000):  # the stand-in is loading the page
+        if shots.made and shots.made[0].size is not None:
             break
-        await asyncio.sleep(0.1)
-    seen = json.loads(seen_file.read_text(encoding="utf-8"))
+        await asyncio.sleep(0.01)
+    assert shots.made, "the one-shot never started"
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    try:
-        assert await asyncio.to_thread(_wait_dead, seen["pid"], 15.0), "the browser outlived the Stop"
-    finally:
-        try:
-            psutil.Process(seen["pid"]).kill()
-        except psutil.Error:
-            pass
-    work = Path(seen["profile"]).parent
-    for _ in range(100):
-        if not work.exists():
+    b = shots.made[0]
+    for _ in range(1000):
+        if b.killed and not b.work.exists():
             break
-        await asyncio.sleep(0.1)
-    assert not work.exists()
+        await asyncio.sleep(0.01)
+    assert b.killed and not b.work.exists()
 
 
 def test_a_local_only_session_asks_before_every_screenshot(tmp_path):
@@ -695,11 +679,7 @@ async def test_a_tools_picture_never_moves_the_turn_to_another_provider():
     assert caught.value.provider == "anthropic" and vision.calls == 0
 
 
-async def test_a_picture_too_big_for_any_model_is_named_not_attached(tmp_path, monkeypatch):
-    script = _fake_browser(tmp_path, writes=True)
-    monkeypatch.setattr(PS, "browser_executable", lambda: sys.executable)
-    monkeypatch.setattr(PS, "browser_argv",
-                        lambda b, u, o, p, w, h, ms: [sys.executable, str(script), f"--screenshot={o}", u])
+async def test_a_picture_too_big_for_any_model_is_named_not_attached(tmp_path, monkeypatch, shots):
     monkeypatch.setattr(PS, "_fit", lambda raw: (b"x" * (PS.HARD_IMAGE_BYTES + 1), "image/png"))
     res = await PS.PageScreenshotTool().execute({"url": "http://localhost:5173"}, _Ctx(tmp_path / "home"))
     assert res.ok and not res.images

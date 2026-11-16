@@ -288,16 +288,17 @@ async def test_browser_tab_activated_fires_with_its_documented_payload():
     payload = bus.of("browser.tab_activated")[0]
     missing = documented_keys("BROWSER_TAB_ACTIVATED") - set(payload)
     assert not missing, f"the add-on's tab_activated did not survive with {sorted(missing)}"
-    assert payload["tab_id"] == 42 and payload["title"] == "IRS"
+    # v1.515.0 (second review B4): the tab and its site, never the title or address.
+    assert payload == {"tab_id": 42, "site": "https://irs.gov"}
 
 
 async def test_browser_navigation_completed_fires_and_survives_the_daemons_merge():
-    """The daemon caches and invalidates around this one; the PAYLOAD passes through.
+    """The daemon caches and invalidates around this one; the bus gets the SITE.
 
     ``_handle_event`` merges the navigation onto its active-tab cache and drops the
-    stale keys the new document did not restate. That is about the CACHE. What the
-    bus sees must still be what the add-on reported, or a consumer of the stream and
-    the ambient block disagree about the same navigation.
+    stale keys the new document did not restate. That is about the CACHE. Since
+    v1.515.0 (second review B4) the bus gets the tab id and the site only: an
+    event is stored and backed up, and an address carries sign-in codes.
     """
     bus = RecordingBus()
     backend = backend_with(bus)
@@ -309,7 +310,7 @@ async def test_browser_navigation_completed_fires_and_survives_the_daemons_merge
         conn, P.event_frame("evt_2", P.EVENT_NAVIGATION_COMPLETED, dict(reported))
     )
 
-    assert bus.of("browser.navigation_completed") == [reported]
+    assert bus.of("browser.navigation_completed") == [{"tab_id": 42, "site": "https://irs.gov"}]
 
 
 async def test_browser_download_completed_fires_with_its_documented_payload():

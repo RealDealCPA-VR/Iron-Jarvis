@@ -144,6 +144,18 @@ def child_env(base: "dict[str, str] | None" = None) -> dict[str, str]:
     from ..core.claude_markers import drop_claude_session_markers
 
     drop_claude_session_markers(env)
+    # v1.515.0 (lead review of second-review A10): never the daemon's OWN
+    # credentials either (the install bearer and the MCP bearer). A Build
+    # terminal already loses them (``terminals/manager._DAEMON_ONLY_ENV``);
+    # chat's Claude Code child and the model-list read inherited both. A
+    # caller that means to hand its child one sets it on the RESULT.
+    # Case-blind: Windows environment names are.
+    from ..terminals.manager import _DAEMON_ONLY_ENV
+
+    daemon_only = {name.upper() for name in _DAEMON_ONLY_ENV}
+    for key in list(env):
+        if key.upper() in daemon_only:
+            env.pop(key, None)
     env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
     return env
 

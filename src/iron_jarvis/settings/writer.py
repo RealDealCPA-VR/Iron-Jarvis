@@ -76,6 +76,30 @@ class SettingError(ValueError):
     """A change was refused; ``str()`` is one plain sentence naming the key."""
 
 
+#: v1.515.0: the provider whose key belongs to the "your own model server"
+#: slot (``custom_base_url``; vault ``custom_api_key``).
+SLOT_PROVIDER = "custom"
+
+
+def slot_key_problem(platform: Any, provider: str) -> str:
+    """Why a key for *provider* cannot be saved now, in the Model servers
+    page's sentence, or "" (v1.515.0, second review: the slot group 9 left
+    open). Only the slot's own key is judged: while ``custom_base_url`` is a
+    plain http address off this network the key would travel unencrypted
+    (``routes/fleet.key_would_travel_unencrypted``). Every door that saves the
+    slot's key asks this BEFORE the key is tested or stored (the test itself
+    would send it). Never raises."""
+    if str(provider or "").strip().lower() != SLOT_PROVIDER:
+        return ""
+    try:
+        from ..daemon.routes.fleet import KEY_WOULD_TRAVEL_UNENCRYPTED, key_would_travel_unencrypted
+
+        base = str(getattr(getattr(platform, "config", None), "custom_base_url", "") or "")
+        return KEY_WOULD_TRAVEL_UNENCRYPTED if key_would_travel_unencrypted(base) else ""
+    except Exception:  # noqa: BLE001 — a reading fault never blocks a save
+        return ""
+
+
 @dataclass
 class ChangeSet:
     updated: list[str] = field(default_factory=list)
@@ -230,6 +254,22 @@ class ConfigWriter:
             problem = mirror_dir_problem(cfg.home, clean["backup_mirror_dir"])
             if problem:
                 raise SettingError(f"backup copy folder: {problem}")
+        if clean.get("custom_base_url") and clean["custom_base_url"] != self.current("custom_base_url"):
+            # v1.515.0 (second review, the slot group 9 left open): the "your
+            # own model server" slot refuses what the Model servers page
+            # refuses, in its words (``routes/fleet.model_server_address_
+            # problem``): a name, password, ``?`` or ``#`` in the address, and
+            # — while a key is saved for the slot — a plain http address off
+            # this network, where the key would travel unencrypted. Only a
+            # CHANGE is judged: an address saved before is not re-judged (a
+            # full Settings save sends it back unchanged), nor at start-up.
+            from ..daemon.routes.fleet import model_server_address_problem
+
+            problem = model_server_address_problem(
+                str(clean["custom_base_url"]), keyed=self._slot_keyed()
+            )
+            if problem:
+                raise SettingError(f"{_label('custom_base_url')}: {problem}")
         if clean.get("readable_folders"):
             # v1.356.0 (G81): every folder through the file policy's own door
             # (fs_policy.read_root_problem = root_problem for READING), at
@@ -289,6 +329,18 @@ class ConfigWriter:
                         "so there is nothing to share with."
                     )
         return clean
+
+    def _slot_keyed(self) -> bool:
+        """Is a key saved for the "your own model server" slot? A vault that
+        cannot be read counts as keyed (the stricter rule). Blocking."""
+        conns = getattr(self.platform, "connections", None)
+        has = getattr(conns, "has_credential", None)
+        if not callable(has):
+            return False
+        try:
+            return bool(has(SLOT_PROVIDER))
+        except Exception:  # noqa: BLE001 — unreadable: judge as keyed
+            return True
 
     def _project_problem(self, project_id: str) -> str:
         """Why ``project_id`` cannot be the focused project, in the activate

@@ -49,7 +49,12 @@ class TraceRecorder:
 
     # -- recording API ------------------------------------------------------
     def record_action(self, action: Action, *, checkpoint: str | None = None) -> None:
-        self._append("action", checkpoint=checkpoint, action=action.to_dict())
+        # v1.515.0 (lead review of B5): the trace is stored on the run and
+        # returned by GET /computeruse/runs/{id}; typed text is never kept in
+        # it (the same stand-in the approval queue stores).
+        from .approvals import stored_action
+
+        self._append("action", checkpoint=checkpoint, action=stored_action(action).to_dict())
 
     def record_result(self, result: ActionResult) -> None:
         self._append("result", **result.to_dict())

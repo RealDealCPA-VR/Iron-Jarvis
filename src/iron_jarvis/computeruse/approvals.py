@@ -8,7 +8,9 @@ injected ``approval_resolver`` decides synchronously in tests.
 
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import replace
 from datetime import timezone
 
 from sqlalchemy import Engine
@@ -41,6 +43,52 @@ from .models import ApprovalRequest
 #: user is asked again, which is the one outcome nobody can be harmed by.
 APPROVAL_MAX_AGE_S = 15 * 60
 
+#: What stands in for typed text in a stored approval (v1.515.0, second review
+#: B5). The same marker ``browser/tools._approval_action`` writes, followed by
+#: a short digest of the text.
+TYPED_MARKER = "***REDACTED***"
+
+
+def typed_stand_in(text: str) -> str:
+    """The marker plus a short one-way digest of ``text``.
+
+    Specific to the text, so approving one string does not authorise another,
+    and readable by nobody. Already-redacted text (the browser tools build
+    their own) is returned as it is, so both doors write the same row."""
+    raw = str(text or "")
+    if raw.startswith(TYPED_MARKER):
+        return raw
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return f"{TYPED_MARKER} (sha256:{digest})"
+
+
+def stored_action(action: Action) -> Action:
+    """The action as it is KEPT: a ``type`` action's text never is.
+
+    v1.515.0 (second review B5). Only typing the policy calls sensitive (a
+    password, a card number, personal data) creates an approval row, so a
+    plain value here meant exactly the sensitive values were saved, in a table
+    that is never pruned and is in every backup. Both :meth:`ApprovalQueue.
+    create_request` and :meth:`ApprovalQueue.approved_unconsumed` go through
+    this, so a stored approval still matches the same typed text. The live
+    call types the value from its own arguments, never from a row."""
+    if action.kind != "type" or not action.value:
+        return action
+    return replace(action, value=typed_stand_in(action.value))
+
+
+def masked_action_json(action_json: str) -> str:
+    """``action_json`` as a screen may show it: the ``value`` of a ``type``
+    action masked. For rows kept by a version before :func:`stored_action`."""
+    try:
+        data = json.loads(action_json or "{}")
+    except (TypeError, ValueError):
+        return action_json
+    if not isinstance(data, dict) or data.get("kind") != "type" or not data.get("value"):
+        return action_json
+    data["value"] = typed_stand_in(str(data["value"]))
+    return json.dumps(data, default=str)
+
 
 class ApprovalQueue:
     """Persistence-backed queue of human-approval requests."""
@@ -57,7 +105,7 @@ class ApprovalQueue:
         human approves with eyes on the actual screen."""
         req = ApprovalRequest(
             run_id=run_id,
-            action_json=json.dumps(action.to_dict(), default=str),
+            action_json=json.dumps(stored_action(action).to_dict(), default=str),
             reason=reason,
             status="pending",
             screenshot_b64=screenshot_b64,
@@ -114,7 +162,7 @@ class ApprovalQueue:
         naive column against an aware ``utcnow()`` is exactly the silent
         always-true / always-false comparison an expiry must not have.
         """
-        signature = json.dumps(action.to_dict(), default=str)
+        signature = json.dumps(stored_action(action).to_dict(), default=str)
         with session_scope(self.engine) as db:
             rows = db.exec(
                 select(ApprovalRequest)

@@ -12510,7 +12510,11 @@ async def client_question_for(
         )
     except asyncio.CancelledError:
         raise
-    except Exception:  # noqa: BLE001 — a question never breaks a reply
+    except Exception as exc:  # noqa: BLE001 — a question never breaks a reply
+        # v1.515.0: said at INFO with the reason's name (a TimeoutError is the
+        # lane's own wait running out), so a reply without its question can
+        # be told from a reply with nothing to ask.
+        log.info("the client question under a reply was skipped (%s)", type(exc).__name__)
         log.debug("the client question under a reply failed", exc_info=True)
         return None
     if not isinstance(got, dict) or not CLIENT_ID_RE.match(str(got.get("id") or "")):

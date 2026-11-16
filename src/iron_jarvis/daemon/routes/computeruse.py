@@ -82,9 +82,17 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/computeruse/approvals")
     def computeruse_approvals() -> dict[str, Any]:
-        return {
-            "approvals": [a.model_dump() for a in d.platform.computeruse.approvals.pending()]
-        }
+        # v1.515.0 (second review B5): no typed text leaves here. New rows keep
+        # none (``computeruse.approvals.stored_action``); a row kept by an
+        # older version is masked on the way out, never shown.
+        from ...computeruse.approvals import masked_action_json
+
+        rows = []
+        for a in d.platform.computeruse.approvals.pending():
+            row = a.model_dump()
+            row["action_json"] = masked_action_json(str(row.get("action_json") or ""))
+            rows.append(row)
+        return {"approvals": rows}
 
     @app.post("/computeruse/approvals/{approval_id}/approve")
     def computeruse_approve(approval_id: str) -> dict[str, Any]:

@@ -110,6 +110,7 @@ from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.logging import get_logger
 from . import protocol as P
+from .downloads import site_of
 from .errors import BrowserError, BrowserErrorCode
 from .panel import PANEL_ACCESS_ALLOWED
 
@@ -312,6 +313,44 @@ def download_bus_payload(reported: Any) -> tuple[dict[str, Any], str]:
         )
     payload["local_path"] = verified
     return payload, ""
+
+
+def bus_payload(event: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """What an add-on event PUBLISHES, as opposed to what the backend keeps.
+
+    v1.515.0 (second review B4). The bus is not a private channel: every event
+    is stored for ``event_retention_days``, copied into backups and pushed to
+    every ``/events`` subscriber, and the add-on reports a tab switch, a page
+    load and a download whether or not Iron Jarvis was asked anything. Full
+    addresses carry password-reset links, sign-in codes and signed download
+    links in their query. So:
+
+    * a tab switch or a page load publishes the tab id and at most the SITE
+      (scheme and host, :func:`~iron_jarvis.browser.protocol.page_origin`):
+      never the path, the query, the fragment or the page's title. The tools
+      read the full address of the active tab from :attr:`ExtensionBackend.
+      active_tab`, in memory, never from a stored event;
+    * a download publishes its addresses with the query and fragment removed
+      (:func:`~iron_jarvis.browser.downloads.site_of`, the kept list's own
+      rule); ``filename`` and ``local_path`` stay exact, the file tools read
+      them.
+
+    Anything else passes through unchanged (``tab_removed`` is a tab id).
+    """
+    if event in (P.EVENT_TAB_ACTIVATED, P.EVENT_NAVIGATION_COMPLETED):
+        out: dict[str, Any] = {}
+        if "tab_id" in payload:
+            out["tab_id"] = payload.get("tab_id")
+        site = P.page_origin(str(payload.get("url") or ""))
+        if site:
+            out["site"] = site
+        return out
+    out = dict(payload)
+    if event == P.EVENT_DOWNLOAD_COMPLETED:
+        for key in ("source_url", "final_url"):
+            if key in out:
+                out[key] = site_of(out[key])
+    return out
 
 
 class ExtensionConnection:
@@ -1463,7 +1502,8 @@ class ExtensionBackend:
 
         No second bus, and no session id: browser events are ambient. The active
         tab is cached on the way through so a later prompt assembly can name the
-        tab without a round trip.
+        tab without a round trip. What is PUBLISHED is :func:`bus_payload` of
+        the event (v1.515.0, B4): the site, never the full address or title.
         """
         name = str(frame.get("event") or "")
         payload = frame.get("payload")
@@ -1530,7 +1570,7 @@ class ExtensionBackend:
             # a ``local_path`` of its own and having the whole application treat it
             # as verified.
             payload = self.record_download(payload)
-        await self._publish(bus_name, payload)
+        await self._publish(bus_name, bus_payload(name, payload))
 
     def _invalidate_snapshots(self, tab_id: Any) -> None:
         """Tell the runtime to forget a tab's snapshot; ``None`` means every tab.
@@ -1585,5 +1625,6 @@ __all__ = [
     "ExtensionBackend",
     "ExtensionConnection",
     "absolute_local_path",
+    "bus_payload",
     "download_bus_payload",
 ]

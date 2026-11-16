@@ -340,6 +340,9 @@ def _browse(page_kw: dict):
 
     class _Policy:
         enabled = True
+        # v1.515.0 (B7): browse reads the site list to judge where it landed;
+        # an empty one keeps this stub's behaviour unchanged.
+        domain_allowlist: list = []
 
         def check(self, a, p):
             return types.SimpleNamespace(allowed=True, reason="")

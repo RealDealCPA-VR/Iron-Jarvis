@@ -18,11 +18,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..core import risk_door as _risk_door
 from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 from .approvals import ApprovalQueue
-from .base import Action, Browser, PolicyDenied, Selector
+from .base import Action, Browser, Selector
 from .harness import ApprovalResolver, ComputerUseHarness
 from .policy import ComputerUsePolicy
 from .safety import detect_injection, wrap_untrusted
@@ -88,6 +89,87 @@ class CUContext:
             return None
 
 
+#: Where the browser is sent when it lands somewhere it may not be (B7).
+_BLANK_PAGE = "about:blank"
+
+
+def _off_list_where(policy: ComputerUsePolicy, url: str | None) -> str:
+    """The words for where the browser is, when that is OFF the site list.
+
+    v1.515.0 (second review B7): the list used to be checked on the address
+    Jarvis was GIVEN, and a redirect or a clicked link took the browser
+    anywhere. Every tool now asks this of the page's ACTUAL address. ``""``
+    means "nothing to refuse": no list is set (behaviour unchanged), the page
+    is blank, or its host is on the list. Never the path or the query.
+    """
+    if not policy.domain_allowlist:
+        return ""
+    text = str(url or "").strip()
+    if not text or text == _BLANK_PAGE:
+        return ""
+    if policy.domain_allowed(text):
+        return ""
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return "another site"
+    if parts.scheme in ("http", "https") and parts.hostname:
+        return parts.hostname.lower()
+    if parts.scheme == "file":
+        return "a file on this computer"
+    return f"a {parts.scheme}: page" if parts.scheme else "another site"
+
+
+async def _leave_page(cu: "CUContext") -> None:
+    """Leave an off-list page so the next call does not start there. Never
+    raises: the refusal is the answer whether or not the browser could move."""
+    try:
+        await cu.browser.navigate(_BLANK_PAGE)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _not_on_list(where: str, how: str) -> ToolResult:
+    words = f"{how} {where}, which is not on your list of allowed sites, {_TAIL[how]}"
+    return ToolResult(ok=False, error=words, data={"off_list_site": where})
+
+
+#: The sentence's opening -> its ending.
+_SENT_ON = "That page sent the browser on to"
+_CLICK_TOOK = "The click was made, but it took the browser to"
+_TYPE_TOOK = "The text was typed, but the page then took the browser to"
+_IS_ON_READ = "The browser is on"
+_IS_ON_ACT = "The browser is on a page from"
+_TAIL = {
+    _SENT_ON: "so it was not read.",
+    _CLICK_TOOK: "so that page was not read and the browser left it.",
+    _TYPE_TOOK: "so that page was not read and the browser left it.",
+    _IS_ON_READ: "so it was not read.",
+    _IS_ON_ACT: "so nothing was done there.",
+}
+
+
+async def _refuse_where_it_is(cu: "CUContext", url: str | None, how: str) -> ToolResult | None:
+    """Refuse (and leave) when ``url`` is off the list; ``None`` otherwise."""
+    where = _off_list_where(cu.policy, url)
+    if not where:
+        return None
+    await _leave_page(cu)
+    return _not_on_list(where, how)
+
+
+async def _recheck_current(cu: "CUContext", how: str) -> ToolResult | None:
+    """Re-check the page the browser is on before a read or an action. Only
+    when a list is set, so nothing changes (not even a read) without one."""
+    if not cu.policy.domain_allowlist:
+        return None
+    try:
+        url = (await cu.browser.read()).url
+    except Exception:  # noqa: BLE001 — nothing readable is nothing to refuse
+        return None
+    return await _refuse_where_it_is(cu, url, how)
+
+
 def _selector_from_args(args: dict[str, Any]) -> Selector:
     if "selector" in args and isinstance(args["selector"], (dict, str)):
         return Selector.coerce(args["selector"]) or Selector()
@@ -135,6 +217,11 @@ class BrowseTool(_GatedTool):
         if not decision.allowed:
             return ToolResult(ok=False, error=f"policy denied: {decision.reason}")
         page = await self.cu.browser.navigate(url)
+        # v1.515.0 (B7): judged where it LANDED (a redirect), not only where
+        # it was sent; an off-list page's content is never returned.
+        off = await _refuse_where_it_is(self.cu, page.url, _SENT_ON)
+        if off is not None:
+            return off
         # v1.499.3 review: the PAGE writes its accessibility names (aria
         # labels, button names) and decides the URL it lands on (a redirect),
         # so both are scanned and fenced with the text — only page.text was.
@@ -188,6 +275,9 @@ class WebExtractTool(_GatedTool):
         decision = self.cu.policy.check(Action(kind="extract", selector=selector), None)
         if not decision.allowed:
             return ToolResult(ok=False, error=f"policy denied: {decision.reason}")
+        off = await _recheck_current(self.cu, _IS_ON_READ)  # v1.515.0 (B7)
+        if off is not None:
+            return off
         try:
             text = await self.cu.browser.extract(selector)
         except Exception as exc:  # noqa: BLE001
@@ -244,6 +334,10 @@ class WebActionTool(_GatedTool):
             fallback=bool(args.get("fallback", False)),
         )
         page = await self.cu.browser.read()
+        # v1.515.0 (B7): never act (nor type) on a page off the site list.
+        off = await _refuse_where_it_is(self.cu, page.url, _IS_ON_ACT)
+        if off is not None:
+            return off
         decision = self.cu.policy.check(action, page)
         if not decision.allowed:
             return ToolResult(ok=False, error=f"policy denied: {decision.reason}")
@@ -274,8 +368,12 @@ class WebActionTool(_GatedTool):
                 # "Pending approval id" words were a dead end from chat).
                 resolver = _risk_door.resolver_for(ctx, self.cu.approval_resolver)
                 try:
+                    # v1.515.0 (second review B5): the card gets the redacted
+                    # arguments (the browser door's rule); the typing below
+                    # still uses the live value from this call's own args.
                     granted, tail = await _risk_door.consult(
-                        resolver, req, ctx, name=self.name, args=dict(args or {})
+                        resolver, req, ctx, name=self.name,
+                        args=self.redact_args(dict(args or {})),
                     )
                 except BaseException:
                     # v1.449.0 review: a cancel while the card waits must not
@@ -325,6 +423,12 @@ class WebActionTool(_GatedTool):
                 )
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, error=f"action failed: {exc}")
+        # v1.515.0 (B7): a click (or typing) can navigate; judge where it landed.
+        off = await _refuse_where_it_is(
+            self.cu, page.url, _TYPE_TOOK if kind == "type" else _CLICK_TOOK
+        )
+        if off is not None:
+            return off
         await self.cu.snap()  # refresh the dashboard live view
         return ToolResult(ok=True, output=f"{kind} ok @ {page.url}", data={"url": page.url})
 
@@ -366,6 +470,9 @@ class WebLookTool(_GatedTool):
             return ToolResult(
                 ok=False, error="vision is not wired on this platform (no router)"
             )
+        off = await _recheck_current(self.cu, _IS_ON_READ)  # v1.515.0 (B7)
+        if off is not None:
+            return off
         b64 = await self.cu.snap()
         if not b64:
             return ToolResult(ok=False, error="could not capture a screenshot")

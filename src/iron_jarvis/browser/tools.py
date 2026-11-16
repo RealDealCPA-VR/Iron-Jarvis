@@ -1308,6 +1308,15 @@ class _ActingTool(_BrowserTool):
             data["download"] = (
                 dict(record(download, claimed=True)) if record is not None else dict(download)
             )
+            # v1.515.0 (lead review of B4): this result is stored in the ledger
+            # and read by the model. A download link carries access tokens in
+            # its query, so the two addresses are kept as the downloads list
+            # keeps them (no query, no fragment). The local path stays exact.
+            from .downloads import site_of
+
+            for key in ("source_url", "final_url"):
+                if data["download"].get(key):
+                    data["download"][key] = site_of(data["download"][key])
         return data
 
     def _approval_action(

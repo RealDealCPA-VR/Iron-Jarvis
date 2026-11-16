@@ -735,6 +735,8 @@ def turn_account(platform: Any, thread_id: str, setup: dict[str, Any]) -> "tuple
       is STORED on the session and pinned — a session never runs
       "first free, rotating" (that would land on an account nobody picked);
       no account for the vendor (or a local model / an API key): Phase 4.
+      Second review S10: the accounts list still not read after one try is
+      a 409 in words (``NOT_READ_NOTE``), never an unpinned start.
     * an account: pinned; the provider is that account's vendor's CLI.
       Iron-Proxy off: a 409 in words (the session's account cannot be
       reached; nothing runs on another login)."""
@@ -758,6 +760,11 @@ def turn_account(platform: Any, thread_id: str, setup: dict[str, Any]) -> "tuple
             with contextlib.suppress(Exception):
                 if svc.check():
                     svc.refresh_accounts()
+            if BA.snapshot(svc) is None:
+                # Second review S10: still not read (the account manager did
+                # not answer). Starting now would run "first free, rotating"
+                # on an account nobody chose: refused in words instead.
+                raise HTTPException(status_code=409, detail=BA.NOT_READ_NOTE)
         row = BA.default_for(svc, vendor)
         if row is None:
             return None, ""
@@ -4992,6 +4999,13 @@ def register(app: FastAPI, d: Any) -> None:
         from ...harness import reply_record as _RR
 
         _RR.drop_failed(engine_of(), S.session_id_for(thread_id))
+        # Second review S9: the session's page screenshots (they can show
+        # another program's data) go to the app's trash with it — moved,
+        # never deleted. Pictures kept before v1.515.0 in the shared folder
+        # stay where they are.
+        from ...harness.page_shot import trash_session_shots
+
+        trash_session_shots(d.platform.config.home, thread_id)
         out: dict[str, Any] = {"deleted": thread_id}
         if moved is not None:
             out["worktree"] = {**moved, "branch": facts.get("branch", "")}

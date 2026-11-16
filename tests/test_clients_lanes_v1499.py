@@ -650,12 +650,21 @@ async def test_a_chat_code_turn_in_its_own_copy_gets_its_client(scene, monkeypat
     assert scene.clients.walls[-1].client.client_id == scene.hid
 
 
-async def test_a_chat_code_reply_keeps_its_client_question_and_reads_its_answer(scene):
+async def test_a_chat_code_reply_keeps_its_client_question_and_reads_its_answer(scene, monkeypatch):
     """A Chat › Code turn in a waiting name's folder carries the question on
     its done frame AND on the reply line the daemon writes
     (``clientQuestion``, a line key on both sides); the session's view folds
     in the CURRENT answer from the record, so a reopened session never asks
-    again."""
+    again.
+
+    v1.515.0: this is the one test that takes the REAL question through a
+    lane, so it raced the lane's real one-second wait: v1.514.0's release run
+    failed it twice on a busy runner (the first run where the OCR tests shared
+    its shard) and no installer was published. What it pins is what rides the
+    reply, not the wait, so it gets a wait a busy runner cannot beat. The wait
+    itself is pinned with explicit deadlines in test_clients_notice_v1499."""
+    monkeypatch.setattr(CT, "CLIENT_QUESTION_WAIT_S", 60.0)
+    monkeypatch.setattr(store_mod, "QUESTION_LOCK_S", 60.0)
     from iron_jarvis.core.db import session_scope
     from iron_jarvis.core.ids import new_id
     from iron_jarvis.harness import sessions as S

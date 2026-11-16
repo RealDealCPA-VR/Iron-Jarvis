@@ -727,7 +727,8 @@ async def test_page_screenshot_sees_the_page_the_agent_is_on(tmp_path, fake):
     assert res.ok, res.error
     assert res.images and res.data["browser"] == "agent"
     saved = Path(res.data["file"])
-    assert saved.is_file() and saved.parent == tmp_path / "home" / "page-screenshots"
+    # v1.515.0 (second review S9): in the session's own folder.
+    assert saved.is_file() and saved.parent == tmp_path / "home" / "page-screenshots" / "s1"
 
 
 async def test_a_failed_screenshot_of_the_agents_page_is_said_in_words(tmp_path, fake):

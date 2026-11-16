@@ -1536,9 +1536,11 @@ _CLOUD_PREFIXES: frozenset[str] = frozenset(
 )
 
 #: A Pi / OpenCode provider prefix that names a model server of the user's
-#: own, mapped onto Iron Jarvis's provider id of the same server — read
-#: through ``egress.stays_on_this_network`` (the chat receipt's own rule), so
-#: the answer is the address Iron Jarvis knows for it, never a guess. A3
+#: own, mapped onto Iron Jarvis's provider id of the same server. v1.515.0
+#: (second review H12): no longer judged by Iron Jarvis's address for it — the
+#: tool's own settings say where its copy answers — so it reads "not known"
+#: with words (:func:`where_view`). Before v1.515.0 it was read through
+#: ``egress.stays_on_this_network`` with Iron Jarvis's own address. A3
 #: review: ONLY a server Iron Jarvis can hold an address for. LM Studio and
 #: llama.cpp are detected (providers/local_servers_seen), never configured as
 #: a provider, so ``egress`` knows no address for them and would read them
@@ -1558,18 +1560,28 @@ _OWN_SERVER_PREFIXES: frozenset[str] = frozenset(
 WHERE_CLOUD = "cloud"
 WHERE_NETWORK = "on this network"
 
+#: v1.515.0 (second review H12): the tool's name in the "not known" sentence.
+_TOOL_NAMES: dict[str, str] = {"pi": "Pi", "opencode": "OpenCode"}
+
+
+def _not_known_words(harness: str) -> str:
+    """The "not known" sentence for a tool's own model server (H12)."""
+    return f"Iron Jarvis cannot tell where {_TOOL_NAMES.get(harness, 'this tool')} sends this model."
+
 
 def where_view(row: Any, platform: Any = None) -> dict[str, Any]:
     """v1.448.0 (Wave A, A3): ``{on_this_network: bool | None, words}`` for a
     session's tool and model. Claude Code, Codex, Grok and Antigravity run
     their models on the vendor's service: ``cloud`` whatever the pick. Pi and
     OpenCode name a ``provider/model`` of their own: a cloud provider's prefix
-    is ``cloud``; a model server of the user's that Iron Jarvis holds an
-    address for (Ollama) is judged by THAT address through
-    ``providers.egress.stays_on_this_network``; anything else — a prefix not
-    known, LM Studio / llama.cpp (no address of ours), an Ollama Iron Jarvis
-    has no address for, no model, no platform to ask — is ``None`` ("not
-    known") and the tab draws nothing. Never raises."""
+    is ``cloud``; anything else — a prefix not known, LM Studio / llama.cpp,
+    no model — is ``None`` ("not known") and the tab draws nothing.
+    v1.515.0 (second review H12): an ``ollama/...`` model is ``None`` too,
+    with the words "Iron Jarvis cannot tell where Pi sends this model.": the
+    tool's OWN provider address decides where it answers, Iron Jarvis does
+    not read it, and its own Ollama address says nothing about it.
+    ``platform`` is kept for the caller's shape; it is not consulted. Never
+    raises."""
     try:
         harness = str(getattr(row, "harness", "") or "").strip().lower()
         if harness in CLOUD_TOOLS:
@@ -1584,21 +1596,15 @@ def where_view(row: Any, platform: Any = None) -> dict[str, Any]:
             return {"on_this_network": False, "words": WHERE_CLOUD}
         if prefix in _OWN_SERVER_PREFIXES:
             return {"on_this_network": None, "words": ""}
-        ours = _LOCAL_PREFIXES.get(prefix)
-        if ours is None or platform is None:
-            return {"on_this_network": None, "words": ""}
-        from ..providers import egress
-
-        manager = getattr(platform, "providers", None)
-        config = getattr(platform, "config", None)
-        # A3 review: Iron Jarvis holding NO address for that server says
-        # nothing about where Pi's or OpenCode's copy of it answers (a fresh
-        # install with Pi on a local Ollama read "cloud"): not known. Only an
-        # address Iron Jarvis knows is judged, by the receipt's own rule.
-        if not egress.endpoint_url(ours, manager, config):
-            return {"on_this_network": None, "words": ""}
-        local = bool(egress.stays_on_this_network(ours, manager, config))
-        return {"on_this_network": local, "words": WHERE_NETWORK if local else WHERE_CLOUD}
+        if prefix in _LOCAL_PREFIXES:
+            # v1.515.0 (second review H12): Pi's and OpenCode's own provider
+            # settings (Pi's models.json, OpenCode's config) say where THEIR
+            # copy of that server answers, and they can point at another
+            # machine or a hosted service while Iron Jarvis's own Ollama is
+            # on this PC. Iron Jarvis does not read the tool's address, so it
+            # never says "on this network" from the name and its own address.
+            return {"on_this_network": None, "words": _not_known_words(harness)}
+        return {"on_this_network": None, "words": ""}
     except Exception:  # noqa: BLE001 — a reading never breaks the tab
         return {"on_this_network": None, "words": ""}
 

@@ -1323,6 +1323,14 @@ async def fetch_endpoint_models(d: Any, base_url: str, protocol: str = "openai",
     # key, so "Fetch available models" on a saved keyed gateway used to
     # 401). A typed key always wins. Off the loop: a vault read.
     key, ollama_ok = await asyncio.to_thread(_saved_endpoint_auth, d, url, key)
+    if key:
+        # v1.515.0 (lead review, the same rule as the Model servers page and
+        # the Settings slot): a key, typed or saved, is never sent over plain
+        # http to an address outside this network. Refused before the request.
+        from .fleet import KEY_WOULD_TRAVEL_UNENCRYPTED, key_would_travel_unencrypted
+
+        if key_would_travel_unencrypted(url):
+            raise HTTPException(status_code=400, detail=KEY_WOULD_TRAVEL_UNENCRYPTED)
     if protocol == "anthropic":
         probe = _probe_anthropic_models
         kw: dict[str, Any] = {}
@@ -1437,6 +1445,14 @@ def register(app: FastAPI, d) -> None:
         one explicit press (``POST /onboarding/use-model``), so a wrong key
         changes nothing and its reason stays on screen. The answer carries
         ``saved`` and the ``test`` result in the Test route's words."""
+        # v1.515.0 (second review): the "your own model server" slot's key is
+        # refused while its address is plain http off this network — before
+        # the check below, which would itself send the key there.
+        from ...settings.writer import slot_key_problem
+
+        refusal = slot_key_problem(d.platform, provider)
+        if refusal:
+            raise HTTPException(status_code=400, detail=refusal)
         tested: dict[str, Any] | None = None
         if check:
             tested = check_key_first(d, provider, body.key)

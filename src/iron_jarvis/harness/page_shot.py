@@ -20,10 +20,22 @@ opened it. Any OTHER local address asks first (:meth:`spend_check` →
 model, and a local page can be another app's admin page with client names
 on it. Under low trust the tool is refused (``core/trust.LOW_TRUST_DENY``).
 
-The browser runs through ``core/procs`` (its own Job, a hard bound, the tree
-killed on timeout or cancel — :func:`procs.run_async`) in a throwaway folder
-in the SYSTEM temp folder (profile, picture, any download), deleted after;
-saved pictures live in ``<home>/page-screenshots`` (newest :data:`KEEP_SHOTS`).
+Second review S1 (v1.515.0): the one-shot picture is taken through the
+AGENT browser's backend (``page_browser.AgentBrowsers.one_shot``), started for
+that picture alone and ended after it. The bare ``--screenshot`` command line
+it replaced judged nothing after the first address: a page could send itself
+(a meta refresh, a script, a redirect) or draw a frame of another program's
+page, and the picture of THAT went to the model; it could not even say where
+the page had ended up, and in a Local only session nothing stopped a public
+address. The backend holds the address rules on every navigation, frames
+included, and the Local only proxy; a page that moved gives no picture. Its
+processes live in a kill-on-close Job (``procs.adopt``), its profile in a
+throwaway folder in the SYSTEM temp folder, removed after; a Stop ends it.
+
+Saved pictures live in ``<home>/page-screenshots/<session>/`` (second review
+S9: per session, newest :data:`KEEP_SHOTS` each), and go to the app's trash
+when the session is deleted (:func:`trash_session_shots`). Pictures saved
+before v1.515.0 in the shared ``<home>/page-screenshots`` stay where they are.
 """
 
 from __future__ import annotations
@@ -32,18 +44,14 @@ import asyncio
 import base64
 import importlib
 import io
-import json
 import os
 import shutil
-import tempfile
-import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from ..core import procs
 from ..core.logging import get_logger
 from ..tools.base import (
     Reversibility,
@@ -64,7 +72,8 @@ MIN_HEIGHT, MAX_HEIGHT = 240, 1600
 DEFAULT_WAIT_MS, MAX_WAIT_MS = 1500, 10_000
 #: The whole browser run (start, load, settle, write the picture).
 RUN_TIMEOUT_S = 45.0
-#: Pictures kept in ``<home>/page-screenshots`` (oldest removed first).
+#: Pictures kept per session in ``<home>/page-screenshots/<session>``
+#: (oldest removed first).
 KEEP_SHOTS = 50
 #: A picture bigger than this is re-encoded as JPEG (Claude takes ≤ 5 MB).
 MAX_IMAGE_BYTES = 3_500_000
@@ -107,29 +116,6 @@ def browser_executable() -> str:
     return ""
 
 
-def browser_argv(binary: str, url: str, out: Path, profile: Path,
-                 width: int, height: int, wait_ms: int) -> list[str]:
-    """The one command line. ``--headless=new`` never shows a window;
-    ``--user-data-dir`` is a fresh folder, so none of the user's cookies,
-    logins or extensions are in it."""
-    return [
-        binary,
-        "--headless=new",
-        "--disable-gpu",
-        "--hide-scrollbars",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-extensions",
-        "--disable-sync",
-        "--mute-audio",
-        f"--user-data-dir={profile}",
-        f"--window-size={width},{height}",
-        f"--virtual-time-budget={wait_ms}",
-        f"--screenshot={out}",
-        url,
-    ]
-
-
 def _shot_name(url: str) -> str:
     parts = urlsplit(url)
     host = "".join(c if c.isalnum() else "-" for c in (parts.hostname or "page"))[:40]
@@ -169,92 +155,51 @@ def _fit(data: bytes) -> tuple[bytes, str]:
     return data, "image/png"
 
 
-def _new_work() -> Path:
-    """BLOCKING: the run's throwaway folder, in the SYSTEM temp folder — never
-    in Iron Jarvis's home (v1.371.0 review). While the browser runs, ~60 files
-    of its profile are locked (measured: ``lockfile``, the shader caches), and
-    a backup walks the whole home and fails on the first file it cannot read
-    (``maintenance.create_backup``, the v1.337.1 class). The picture is
-    written here too and moved into ``<home>/page-screenshots`` only after
-    the browser has exited.
-
-    The profile is seeded so a DOWNLOAD lands in this folder too: a page can
-    start one with no click (a redirect to an attachment), and a fresh
-    profile saves it to the user's own Downloads folder (measured with
-    Edge 153 ``--headless=new``)."""
-    work = Path(tempfile.mkdtemp(prefix="ij-page-shot-"))
-    default = work / "profile" / "Default"
-    default.mkdir(parents=True, exist_ok=True)
-    (default / "Preferences").write_text(
-        json.dumps({"download": {
-            "default_directory": str(work / "downloads"),
-            "prompt_for_download": False,
-            "directory_upgrade": True,
-        }}),
-        encoding="utf-8",
-    )
-    return work
+#: The folder (under the app's home) a session's pictures are kept in, one
+#: sub-folder per session (second review S9).
+SHOTS_DIRNAME = "page-screenshots"
 
 
-def _remove_work(work: Path) -> None:
-    """BLOCKING: delete the throwaway folder. Files of a browser that was
-    just stopped can stay locked for a moment, so a few tries."""
-    for _ in range(10):
-        shutil.rmtree(work, ignore_errors=True)
-        if not work.exists():
-            return
-        time.sleep(0.2)
+def _session_dirname(thread_or_session: str) -> str:
+    """A session's own sub-folder name: its thread id (``build:<id>`` read
+    as ``<id>``), letters, digits, ``-`` and ``_`` only."""
+    raw = str(thread_or_session or "")
+    if raw.startswith("build:"):
+        raw = raw[len("build:"):]
+    return "".join(c for c in raw if c.isalnum() or c in "-_")[:80] or "session"
 
 
-def _keep(shot: Path, folder: Path, url: str) -> Path:
-    """BLOCKING: move the finished picture into ``<home>/page-screenshots``."""
-    folder.mkdir(parents=True, exist_ok=True)
-    dest = folder / _shot_name(url)
-    shutil.move(str(shot), str(dest))
-    _prune(folder)
-    return dest
+def shots_folder(home: Any, ctx: Any) -> Path:
+    """Where a tool call's picture is kept: ``<home>/page-screenshots/<the
+    session's thread id>/`` — a helper's call keeps it in ITS session's
+    folder (the agent browser's own key, ``page_browser.browser_key``)."""
+    from . import page_browser as PB
+
+    return Path(home) / SHOTS_DIRNAME / _session_dirname(PB.browser_key(ctx))
 
 
-def _shot_problem(shot: Path, res: Any) -> str:
-    """BLOCKING: "" when the browser wrote a picture, else why not."""
-    if res.timed_out:
-        return f"the browser did not finish within {RUN_TIMEOUT_S:g} s"
-    if not shot.is_file() or shot.stat().st_size == 0:
-        tail = (res.stderr or b"").decode("utf-8", "replace").strip().splitlines()[-3:]
-        why = f" ({' | '.join(tail)[:300]})" if tail else ""
-        return f"the browser wrote no picture (exit {res.returncode}){why}"
-    return ""
+def trash_session_shots(home: Any, thread_id: str) -> str:
+    """BLOCKING: MOVE a deleted session's pictures (they can show another
+    program's data) to ``<home>/trash/<stamp>/page-screenshots/<thread id>``
+    — never delete them. Returns where they went ("" when the session had
+    none, or they could not be moved: said in the log, nothing deleted).
+    Never raises."""
+    from ..maintenance import TRASH_DIRNAME, trash_stamp
 
-
-async def _capture(binary: str, url: str, folder: Path, width: int, height: int,
-                   wait_ms: int) -> "tuple[Path | None, str]":
-    """Run the browser once. ``(picture path, problem)``.
-
-    Through :func:`procs.run_async`, so a Stop or a deadline KILLS the
-    browser's tree (a cancelled ``to_thread`` would have let it run to its own
-    45 s bound). The throwaway folder goes on every path: awaited on success
-    and on an ordinary failure, from a thread of its own when the call was
-    cancelled (an ``await`` in a cancelled task can be cancelled again)."""
-    work = await asyncio.to_thread(_new_work)
+    name = _session_dirname(thread_id)
+    src = Path(home) / SHOTS_DIRNAME / name
     try:
-        shot = work / "shot.png"
-        res = await procs.run_async(
-            browser_argv(binary, url, shot, work / "profile", width, height, wait_ms),
-            timeout=RUN_TIMEOUT_S,
-            # v1.463.0: Edge 157's own process returns at once and the
-            # browser it started writes the picture afterwards. Without the
-            # wait every screenshot ended "the browser wrote no picture".
-            wait_tree=True,
-        )
-        problem = await asyncio.to_thread(_shot_problem, shot, res)
-        kept = None if problem else await asyncio.to_thread(_keep, shot, folder, url)
-    except BaseException:
-        threading.Thread(
-            target=_remove_work, args=(work,), name="page-shot-cleanup", daemon=True,
-        ).start()
-        raise
-    await asyncio.to_thread(_remove_work, work)
-    return kept, problem
+        if not src.is_dir():
+            return ""
+        dest = Path(home) / TRASH_DIRNAME / trash_stamp() / SHOTS_DIRNAME / name
+        if dest.exists():
+            dest = dest.with_name(f"{name}-{uuid.uuid4().hex[:6]}")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+        return str(dest)
+    except OSError:
+        log.warning("a deleted coding session's screenshots could not be moved to the trash", exc_info=True)
+        return ""
 
 
 def _session_page(args: dict[str, Any], ctx: Any) -> str:
@@ -347,17 +292,30 @@ class PageScreenshotTool(Tool):
         binary = await asyncio.to_thread(browser_executable)
         if not binary:
             return ToolResult(ok=False, error=NO_BROWSER)
-        folder = Path(ctx.config.home) / "page-screenshots"
+        from . import page_browser as PB
+        from .preview import current_preview
+
+        # Second review S1: through the agent browser's backend, for this
+        # picture alone (the address rules on every navigation, frames
+        # included; Local only behind the refusing proxy; no picture of a
+        # page that moved).
         try:
-            path, problem = await _capture(binary, url, folder, width, height, wait_ms)
-        except OSError as exc:
-            return ToolResult(ok=False, error=f"could not start the browser: {exc}")
-        if path is None:
-            return ToolResult(ok=False, error=f"could not take a screenshot of {url}: {problem}")
-        raw = await asyncio.to_thread(path.read_bytes)
+            shot = await PB.BROWSERS.one_shot(
+                url, edge=binary, preview=current_preview(), width=width, height=height,
+                wait_ms=wait_ms, limit_s=RUN_TIMEOUT_S,
+            )
+        except PB.BrowserProblem as exc:
+            return ToolResult(ok=False, error=f"could not take a screenshot of {url}: {exc}")
+        if not shot.picture:
+            return ToolResult(ok=False, error=f"could not take a screenshot of {url}: the browser gave no picture")
+        raw = shot.picture
+        path = await asyncio.to_thread(_save_picture, raw, shots_folder(ctx.config.home, ctx), url)
         data, media = await asyncio.to_thread(_fit, raw)
         data_out = {"url": url, "file": str(path), "width": width, "height": height,
                     "bytes": len(raw)}
+        if shot.blocked:
+            data_out["blocked"] = list(shot.blocked)
+        said = "".join(" " + line for line in shot.blocked)
         if len(data) > HARD_IMAGE_BYTES:
             # Too big to hand any model even after re-encoding (a failed
             # Pillow, a huge window): the file is kept and named instead.
@@ -366,7 +324,7 @@ class PageScreenshotTool(Tool):
                 output=(
                     f"Screenshot of {url} at {width}×{height} saved at {path}, but it is "
                     "too large to attach here. Take a smaller one (width/height), or call "
-                    "view_image with that path."
+                    "view_image with that path." + said
                 ),
                 data={**data_out, "attached": False},
             )
@@ -375,7 +333,7 @@ class PageScreenshotTool(Tool):
             output=(
                 f"Screenshot of {url} at {width}×{height}; the picture is attached to "
                 f"this result. Saved at {path}. If you cannot see a picture here, call "
-                "view_image with that path."
+                "view_image with that path." + said
             ),
             data=data_out,
             images=[{"media_type": media, "data_b64": base64.b64encode(data).decode("ascii")}],
@@ -385,7 +343,8 @@ class PageScreenshotTool(Tool):
     async def _from_session_browser(self, ctx: ToolContext) -> ToolResult:
         """v1.376.0: the page the agent's own browser is on, as it is right
         now (after the clicks and the typing), at that browser's window size.
-        Saved in ``<home>/page-screenshots`` like every screenshot."""
+        Saved in the session's own folder like every screenshot. Second review
+        S1: a frame the rules left empty is said."""
         from . import page_browser as PB
         from .page_act import run_action
 
@@ -395,19 +354,21 @@ class PageScreenshotTool(Tool):
         if not out.picture:
             return ToolResult(ok=False, error="The agent's browser could not take a screenshot of its page.")
         url = out.url
-        folder = Path(ctx.config.home) / "page-screenshots"
-        path = await asyncio.to_thread(_save_picture, out.picture, folder, url)
+        path = await asyncio.to_thread(_save_picture, out.picture, shots_folder(ctx.config.home, ctx), url)
         data, media = await asyncio.to_thread(_fit, out.picture)
         width, height = PB.VIEWPORT["width"], PB.VIEWPORT["height"]
         shown = PB.where(url) or "its page"
         data_out = {"url": url, "file": str(path), "width": width, "height": height,
                     "bytes": len(out.picture), "browser": "agent"}
+        if out.blocked:
+            data_out["blocked"] = list(out.blocked)
+        said = "".join(" " + line for line in out.blocked)
         if len(data) > HARD_IMAGE_BYTES:
             return ToolResult(
                 ok=True,
                 output=(
                     f"Screenshot of {shown} (the page the agent's browser is on) saved at {path}, "
-                    "but it is too large to attach here. Call view_image with that path."
+                    "but it is too large to attach here. Call view_image with that path." + said
                 ),
                 data={**data_out, "attached": False},
             )
@@ -416,7 +377,7 @@ class PageScreenshotTool(Tool):
             output=(
                 f"Screenshot of {shown}, the page the agent's browser is on, at {width}×{height}; "
                 f"the picture is attached to this result. Saved at {path}. If you cannot see a "
-                "picture here, call view_image with that path."
+                "picture here, call view_image with that path." + said
             ),
             data=data_out,
             images=[{"media_type": media, "data_b64": base64.b64encode(data).decode("ascii")}],
@@ -424,8 +385,9 @@ class PageScreenshotTool(Tool):
 
 
 def _save_picture(data: bytes, folder: Path, url: str) -> Path:
-    """BLOCKING: a picture taken in memory, into ``<home>/page-screenshots``
-    (the newest :data:`KEEP_SHOTS` kept)."""
+    """BLOCKING: a picture taken in memory, into its session's folder
+    (:func:`shots_folder`; the newest :data:`KEEP_SHOTS` of that session
+    kept)."""
     folder.mkdir(parents=True, exist_ok=True)
     dest = folder / _shot_name(url)
     dest.write_bytes(data)

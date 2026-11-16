@@ -453,7 +453,11 @@ def question_for_turn(
             return None
         # The lane waits 1 s at most: a question picked after it gave up
         # would be marked asked and never shown. A busy pass = no question.
+        # Every skip below says WHY in the log (v1.515.0): a reply that came
+        # without its question was otherwise indistinguishable from "nothing
+        # to ask".
         if not NOTICE_LOCK.acquire(timeout=QUESTION_LOCK_S):
+            log.info("clients: the question under a reply was skipped (a noticing pass was busy)")
             return None
         try:
             with session_scope(engine) as db:
@@ -472,6 +476,7 @@ def question_for_turn(
                 if deadline is not None:
                     left = _left()
                     if left <= 0:
+                        log.info("clients: the question under a reply was skipped (no time left before the write)")
                         return None
                     # The mark-asked write waits on SQLite only for what is
                     # left of the lane's wait. Set on the DBAPI connection
@@ -484,6 +489,7 @@ def question_for_turn(
                     db.flush()
                     if _left() <= 0:
                         db.rollback()
+                        log.info("clients: the question under a reply was skipped (no time left after the write)")
                         return None
                     db.commit()
                 finally:
@@ -498,7 +504,9 @@ def question_for_turn(
                 }
         finally:
             NOTICE_LOCK.release()
-    except Exception:  # noqa: BLE001 — a question is extra; never breaks a turn
+    except Exception as exc:  # noqa: BLE001 — a question is extra; never breaks a turn
+        # The class name only at INFO (a database message can quote a row).
+        log.info("clients: the question under a reply was skipped (%s)", type(exc).__name__)
         log.debug("clients: the question under a reply could not be picked", exc_info=True)
         return None
 

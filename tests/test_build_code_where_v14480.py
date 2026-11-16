@@ -47,22 +47,22 @@ def test_an_unknown_provider_no_model_or_no_platform_is_not_known():
     assert PN.where_view(_row("opencode", "somebody/their-model")) == not_known
     # A model server of the user's with NO platform to ask: not known, never
     # a guess that it is local.
-    assert PN.where_view(_row("pi", "ollama/llama3"), None) == not_known
+    assert PN.where_view(_row("pi", "ollama/llama3"), None)["on_this_network"] is None
     assert PN.where_view(None) == not_known
 
 
-def test_a_model_server_of_the_users_is_judged_by_iron_jarviss_own_address():
+def test_a_model_server_of_the_users_is_not_known_whatever_iron_jarviss_own_address():
+    """v1.515.0 (second review H12): Pi's and OpenCode's own settings say
+    where their Ollama answers; Iron Jarvis's own Ollama address says nothing
+    about it (this test used to pin "on this network" / "cloud" from it)."""
+    pi_words = "Iron Jarvis cannot tell where Pi sends this model."
     here = types.SimpleNamespace(providers=None, config=types.SimpleNamespace(ollama_base_url="http://127.0.0.1:11434"))
-    assert PN.where_view(_row("pi", "ollama/llama3"), here) == {"on_this_network": True, "words": "on this network"}
-    assert PN.where_view(_row("opencode", "ollama/qwen3"), here)["on_this_network"] is True
-    # An Ollama whose address is NOT on this network reads cloud (the chat
-    # receipt's own rule). A3 review: NO address at all is NOT KNOWN — Iron
-    # Jarvis's silence says nothing about where Pi's Ollama answers (moved on
-    # purpose: it read "cloud" for a fresh install with Pi on a local Ollama).
+    assert PN.where_view(_row("pi", "ollama/llama3"), here) == {"on_this_network": None, "words": pi_words}
+    assert PN.where_view(_row("opencode", "ollama/qwen3"), here)["on_this_network"] is None
     away = types.SimpleNamespace(providers=None, config=types.SimpleNamespace(ollama_base_url="https://ollama.example.com"))
-    assert PN.where_view(_row("pi", "ollama/llama3"), away) == {"on_this_network": False, "words": "cloud"}
+    assert PN.where_view(_row("pi", "ollama/llama3"), away) == {"on_this_network": None, "words": pi_words}
     none = types.SimpleNamespace(providers=None, config=types.SimpleNamespace(ollama_base_url=""))
-    assert PN.where_view(_row("pi", "ollama/llama3"), none) == {"on_this_network": None, "words": ""}
+    assert PN.where_view(_row("pi", "ollama/llama3"), none) == {"on_this_network": None, "words": pi_words}
 
 
 def test_where_view_never_raises():

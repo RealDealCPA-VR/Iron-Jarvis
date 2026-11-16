@@ -38,7 +38,10 @@ up to ~10 s). Callers on the event loop use ``asyncio.to_thread``; the
 lifespan's :func:`watch` loop does exactly that.
 
 The token from proxy.json stays inside this object and the client: never in
-``status()``, a log line, or an error sentence.
+``status()``, a log line, or an error sentence. The bundled manager prints it
+on its own stdout (our ``logs/iron-proxy.log``); each start masks it there in
+place (:func:`mask_token_in_log`, v1.515.0). A ``proxy.json`` whose address is
+not this PC is never used (:func:`_loopback_url`).
 """
 
 from __future__ import annotations
@@ -128,6 +131,29 @@ def _health(url: str, timeout: float = HEALTH_TIMEOUT_S) -> dict[str, Any] | Non
         return None
 
 
+def _loopback_url(url: str) -> bool:
+    """v1.515.0 (second review A13): is ``url`` an http(s) address on THIS PC
+    (127.0.0.0/8, ::1, ``localhost``)? The address in ``proxy.json`` is sent
+    the bearer token, so anything else is never used. Never raises."""
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(str(url or "").strip())
+        if parts.scheme not in ("http", "https"):
+            return False
+        host = (parts.hostname or "").rstrip(".").lower()
+        if host == "localhost":
+            return True
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+#: Descriptor addresses already said in the log (one line each, not one per read).
+_FOREIGN_SAID: set[str] = set()
+
+
 def _read_descriptor(path: Path) -> dict[str, Any] | None:
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
@@ -140,7 +166,66 @@ def _read_descriptor(path: Path) -> dict[str, Any] | None:
         return None
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return None
+    if not _loopback_url(url):
+        # v1.515.0 (A13): never hand the token to another computer. Treated
+        # as "no running manager" (a fresh one is started). The address is
+        # said, the token never.
+        key = f"{path}|{url}"
+        if key not in _FOREIGN_SAID:
+            _FOREIGN_SAID.add(key)
+            log.warning("iron-proxy: %s names an address that is not this PC (%s); ignored",
+                        path, url[:200])
+        return None
     return {"url": url, "token": token, "pid": pid}
+
+
+#: v1.515.0 (second review A3): the line the bundled account manager prints
+#: on start, its access token after the label (``iron-proxy.mjs`` ``serve``).
+_TOKEN_LINE = re.compile(rb"Control API token:[ \t]*([^\s]+)")
+#: At most this much of a log is read from its start, and again from its end.
+_MASK_SCAN_BYTES = 8 * 1024 * 1024
+
+
+def mask_token_in_log(path: Path, token: str | None) -> None:
+    """v1.515.0 (second review A3): overwrite every access token in the
+    account manager's log IN PLACE with the same number of ``*`` bytes.
+
+    The manager prints ``Control API token:    <token>`` on stdout at every
+    start, and its stdout is this log (inside the state home that every
+    backup carries). Each such line is masked (this start's and any earlier
+    start's still in the file), and so is any other copy of the KNOWN
+    ``token``. The file's length and every other byte stay as they were: the
+    child holds the same file open for append, so a same-length overwrite is
+    safe beside it where a truncation or a rewrite is not. Bounded (the first
+    and last :data:`_MASK_SCAN_BYTES`), BLOCKING (callers are off the event
+    loop), never raises: a log that cannot be opened is skipped and masked at
+    the next start."""
+    try:
+        with open(path, "r+b") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            windows = [(0, min(size, _MASK_SCAN_BYTES))]
+            if size > _MASK_SCAN_BYTES:
+                windows.append((size - _MASK_SCAN_BYTES, size))
+            known = token.encode("utf-8") if token else b""
+            spans: set[tuple[int, int]] = set()
+            for start, end in windows:
+                f.seek(start)
+                data = f.read(end - start)
+                for m in _TOKEN_LINE.finditer(data):
+                    if m.group(1).strip(b"*"):
+                        spans.add((start + m.start(1), m.end(1) - m.start(1)))
+                if known:
+                    at = data.find(known)
+                    while at != -1:
+                        spans.add((start + at, len(known)))
+                        at = data.find(known, at + len(known))
+            for offset, length in sorted(spans):
+                f.seek(offset)
+                f.write(b"*" * length)
+            f.flush()
+    except Exception:  # noqa: BLE001 — masking never fails a start; tried again next time
+        log.debug("iron-proxy: the log could not be masked this time")
 
 
 #: What a usable Iron-Proxy must advertise on ``GET /iron/health``
@@ -464,6 +549,18 @@ class IronProxyService:
 
     def log_path(self) -> Path:
         return Path(self._config.home) / "logs" / "iron-proxy.log"
+
+    def _mask_logs(self) -> None:
+        """v1.515.0 (second review A3): mask the access token in the log and
+        in the one it was rotated to (:func:`mask_token_in_log`). Blocking,
+        bounded, never raises."""
+        try:
+            log_path = self.log_path()
+            for path in (log_path, log_path.with_suffix(".log.1")):
+                if path.is_file():
+                    mask_token_in_log(path, self._token)
+        except Exception:  # noqa: BLE001 — masking never fails a start
+            log.debug("iron-proxy: the logs could not be masked this time")
 
     def _owned_record_path(self) -> Path:
         return Path(self._config.home) / "iron-proxy-owned.json"
@@ -803,6 +900,8 @@ class IronProxyService:
         if loc is not None:
             if not self._replace_if_stale(loc[2]):
                 self._adopt_located(loc)
+                # v1.515.0 (A3): a line an earlier run's child printed.
+                self._mask_logs()
             return
         if self._proc is not None or self._owned:
             # Our child is there but not answering: it is not coming back.
@@ -864,6 +963,7 @@ class IronProxyService:
                     self._adopt(desc["url"], desc["token"], desc["pid"], owned=True)
                     self._write_owned_record(proc, desc["pid"])
                     log.info("iron-proxy started (pid %s) at %s", desc["pid"], desc["url"])
+                    self._mask_logs()  # v1.515.0 (A3): its start printed the token
                     return
             time.sleep(0.1)
         self._kill_owned()

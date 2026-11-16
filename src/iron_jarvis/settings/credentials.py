@@ -172,6 +172,14 @@ class CredentialStore:
         if name.startswith("channel.") and self._webhook_channel(arg) is not None:
             return self._store_webhook(name, arg, value, sdef, actor)
         if name.startswith("connection."):
+            # v1.515.0 (second review): chat's secure card for the "your own
+            # model server" slot gets the connect door's refusal, before the
+            # key is tested (the test would send it) or stored.
+            from .writer import slot_key_problem
+
+            refusal = slot_key_problem(self.platform, arg)
+            if refusal:
+                raise CredentialError(refusal)
             # v1.449.0 (readiness Wave C, item 25): a model provider's key is
             # TESTED before it is stored, as the connect door's
             # ``POST /connections/{p}/key?check=1`` does — a wrong key used to

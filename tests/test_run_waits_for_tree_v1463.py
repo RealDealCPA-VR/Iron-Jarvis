@@ -90,25 +90,13 @@ def test_a_child_that_starts_nothing_returns_as_before(tmp_path):
     assert res.returncode == 0 and res.stdout.strip() == b"hi" and not res.timed_out
 
 
-def test_the_page_screenshot_waits_for_the_browser_it_started():
-    """The call site: without ``wait_tree`` every screenshot on Edge 157 ended
-    "the browser wrote no picture"."""
-    src = inspect.getsource(page_shot._capture)
-    call = src[src.index("procs.run_async("):]
-    call = call[: call.index("problem =")]
-    assert "wait_tree=True" in call
-
-
-async def test_the_real_capture_keeps_a_late_written_picture(tmp_path, monkeypatch):
-    """The screenshot path end to end with the stand-in browser: the picture
-    the second process writes is the one that is kept."""
-
-    def argv(binary, url, out, profile, width, height, wait_ms):
-        return _argv(out, 0.8)
-
-    monkeypatch.setattr(page_shot, "browser_argv", argv)
-    kept, problem = await page_shot._capture(
-        "browser", "http://127.0.0.1:1/", tmp_path / "shots", 800, 600, 100
-    )
-    assert problem == ""
-    assert kept is not None and kept.read_text() == "picture"
+def test_the_page_screenshot_no_longer_runs_a_bare_command_line():
+    """v1.515.0 (second review S1): the one-shot ``page_screenshot`` that
+    first needed ``wait_tree`` is now taken through the agent browser's
+    backend (``page_browser.AgentBrowsers.one_shot``: its driver adopted into
+    a kill-on-close job, the address rules on every navigation), so the
+    bare ``--screenshot`` call site this file pinned is gone. ``wait_tree``
+    itself stays pinned above."""
+    src = inspect.getsource(page_shot.PageScreenshotTool.execute)
+    assert "BROWSERS.one_shot(" in src
+    assert not hasattr(page_shot, "_capture") and not hasattr(page_shot, "browser_argv")

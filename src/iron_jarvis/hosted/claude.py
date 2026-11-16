@@ -862,6 +862,25 @@ def user_content(text: str, files: list[str]) -> tuple[list[dict[str, Any]], lis
     return content + images, notes
 
 
+#: v1.515.0 (second review A6): Claude Code's ``init`` ``apiKeySource`` values
+#: that mean a pay-per-use API key, not the signed-in subscription — said once
+#: per session, by the credential's NAME (never its value).
+PER_USE_KEY_WORDS: dict[str, str] = {
+    "ANTHROPIC_API_KEY": (
+        "Claude Code is using an API key from this PC's environment (ANTHROPIC_API_KEY), "
+        "not the signed-in account, so this session is billed per use."
+    ),
+    "apiKeyHelper": (
+        "Claude Code is using an API key from its API key helper (apiKeyHelper), "
+        "not the signed-in account, so this session is billed per use."
+    ),
+    "/login managed key": (
+        "Claude Code is using the API key saved by its own sign-in (a Console key), "
+        "not a subscription, so this session is billed per use."
+    ),
+}
+
+
 class ClaudeDriver(Driver):
     harness = HARNESS
 
@@ -1663,6 +1682,18 @@ class ClaudeDriver(Driver):
             from .tool_setup import claude_servers, note_servers
 
             note_servers(self, claude_servers(obj.get("mcp_servers")))
+            # v1.515.0 (second review A6): which credential it runs on. READ
+            # from Claude Code 2.1.323's own schema: ``apiKeySource`` is
+            # "ANTHROPIC_API_KEY" | "apiKeyHelper" | "/login managed key" |
+            # "none" (a subscription sign-in), plus legacy values it never
+            # sends. A frame without the field changes nothing.
+            if "apiKeySource" in obj:
+                source = str(obj.get("apiKeySource") or "")
+                words = PER_USE_KEY_WORDS.get(source)
+                self._per_use_key = source if words else ""
+                if words and getattr(self, "_per_use_said", "") != source:
+                    self._per_use_said = source
+                    self.emit(make("notice", text=words))
         elif sub == "task_started":
             tid = str(obj.get("task_id") or "")
             if tid:
@@ -1996,15 +2027,21 @@ class ClaudeDriver(Driver):
             return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
 
         cost = obj.get("total_cost_usd")
+        # v1.515.0 (second review A6): on an API key the cost is billed, not
+        # a subscription's list-price equivalent — it is Claude Code's own
+        # figure, said as such.
+        per_use = bool(getattr(self, "_per_use_key", ""))
         ev = make(
             "usage",
             input=num("input_tokens") + num("cache_read_input_tokens") + num("cache_creation_input_tokens"),
             output=num("output_tokens"),
             cache_read=num("cache_read_input_tokens"),
-            list_price=True,
+            list_price=not per_use,
         )
         if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
             ev["cost_usd"] = round(float(cost), 6)
+            if per_use:
+                ev["cost_reported_by"] = "Claude Code"
         from . import seen as _seen  # v1.414.0: windows + how full, as seen
 
         _seen.note_context(self, _seen.claude_context(obj))

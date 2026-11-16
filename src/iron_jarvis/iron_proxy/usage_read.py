@@ -53,7 +53,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import queue
 import subprocess
 import tempfile
@@ -284,15 +283,18 @@ USAGE_READ_STRIP: tuple[str, ...] = (
 
 
 def _env(vendor: str, lease: Any) -> dict[str, str]:
+    # v1.515.0 (second review A10): the base is a Build terminal's scrubbed
+    # environment (the install token and the MCP token removed, a parent
+    # Claude Code session's markers dropped), never the daemon's whole one.
+    from ..hosted.process import build_env
+
+    base = build_env(None)
     if vendor == "claude":
         from ..providers.claude_models import child_env
 
-        env = child_env()
+        env = child_env(base)
     else:
-        env = dict(os.environ)
-        from ..core.claude_markers import drop_claude_session_markers
-
-        drop_claude_session_markers(env)
+        env = base
     strip = {n.upper() for n in USAGE_READ_STRIP}
     for name in [k for k in env if str(k).upper() in strip]:  # case-blind, as Windows is
         env.pop(name, None)

@@ -594,8 +594,11 @@ async def test_a_tab_activated_event_is_published_and_cached():
         P.event_frame("evt_1", P.EVENT_TAB_ACTIVATED, {"tab_id": 42, "title": "IRS", "url": "https://irs.gov/"}),
     )
 
-    assert ("browser.tab_activated", {"tab_id": 42, "title": "IRS", "url": "https://irs.gov/"}) in published
+    # v1.515.0 (second review B4): the bus gets the tab and its site only; the
+    # full tab (title, address) is cached in memory for the prompt and tools.
+    assert ("browser.tab_activated", {"tab_id": 42, "site": "https://irs.gov"}) in published
     assert backend.status()["active_tab"]["title"] == "IRS"
+    assert backend.status()["active_tab"]["url"] == "https://irs.gov/"
 
 
 async def test_an_unknown_event_name_is_named_not_published_under_a_guess():

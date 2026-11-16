@@ -87,8 +87,17 @@ class FakeBrowser:
     # -- Browser protocol ---------------------------------------------------
     async def navigate(self, url: str) -> Page:
         self.navigations.append(url)
-        self.current_url = url
-        return self._build_page(url)
+        # v1.515.0 (second review B7): a page entry may carry ``"redirect"``,
+        # the address the site sends the browser on to (a real ``goto``
+        # follows it), so the tools' check of where it LANDED can be driven.
+        landed = url
+        for _hop in range(5):
+            target = self._page_dict(landed).get("redirect")
+            if not target:
+                break
+            landed = str(target)
+        self.current_url = landed
+        return self._build_page(landed)
 
     async def click(self, selector: Selector, *, fallback: bool = False) -> Page:
         node = self._find(selector)

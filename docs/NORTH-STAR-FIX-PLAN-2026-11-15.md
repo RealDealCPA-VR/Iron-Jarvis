@@ -530,6 +530,7 @@ it did (15 to 17 minutes), so the suite did not slow down.
 | group 9, branch (2nd run) | `test_north_star_lesson_tidy_v1501::test_a_tidy_pass_publishes_one_event_naming_what_it_merged` | Fixed in v1.510.0: two notes written in the same clock tick tied on their time, so either could be merged into the other. The later row now always counts as newer (`learning/engine.dedup`), pinned by a test that gives both notes one time |
 | group 9, branch (1st run) | no test named: shard 6 ran 30 minutes (others 9 to 15) and was cancelled; GitHub kept no log | Not reproduced: the same files passed here (2,281 in 8 minutes) and the second run's shard 6 took 15 minutes. Cause unknown. If a shard hangs again, let it reach its 45-minute limit so the log is kept |
 | v1.513.0 release | `test_harness_bench_product_path_review_v14250::test_a_turn_cut_off_after_its_stop_leaves_nothing_a_daemon_would_carry_on` (real time: a 4 s task limit, a 1 s grace, a real program) | Not reproduced: 6 of 6 here on a loaded PC, and it had passed in the branch run of the same commit and in the four releases before. GitHub keeps no first failure, so the cause is unknown. Not changed |
+| v1.514.0 release (failed twice, not published) | `test_clients_lanes_v1499::test_a_chat_code_reply_keeps_its_client_question_and_reads_its_answer` (the lane's real one-second wait for the client question) | Fixed in v1.515.0: the test no longer races the wait, and a skipped question says why in the log. Not reproduced here; see "Group 15 as built" |
 
 To find the cause of an unexplained one, the test run would need to print
 a retried test's first failure (`-rR` shows only its name); that is a change
@@ -649,17 +650,17 @@ or types on the Windows desktop.
 - [x] **B3 (1, medium, checked).** When the answer to a click is lost the
   model is told to retry, so the action can run twice
   (`browser/errors.py:115-118, 149-153`; `browser/tools.py:1094-1101`).
-- [ ] **B4 (2, medium, checked).** Every tab switch, page load and download
+- [x] **B4 (2, medium, checked).** Every tab switch, page load and download
   is stored as an event with its full address for 90 days, whether or not
   Jarvis was asked anything (`extensions/chrome/src/background/index.ts:490-597`,
   `browser/extension_backend.py:1456-1528`).
-- [ ] **B5 (2, medium, checked).** Text typed through `web_action` into a
+- [x] **B5 (2, medium, checked).** Text typed through `web_action` into a
   sensitive field is stored in plain text in the approvals table and shown
   on the card (`computeruse/tools.py:240-245, 278`; `approvals.py:60`).
 - [x] **B6 (4, medium, pass only).** A risk approval nobody could be asked
   about stays pending; approving it later lets the next identical call run
   on another page (`browser/tools.py:1245-1274, 1351-1366`).
-- [ ] **B7 (2, medium, pass only).** The isolated browser's site list is
+- [x] **B7 (2, medium, pass only).** The isolated browser's site list is
   checked on the typed address only, not after a redirect or a click
   (`computeruse/tools.py:132-137`).
 - [ ] **B8-B14 (low; B8, B11 and B14 fixed in v1.509.0, B9 and B10 in v1.511.0).** A download's name reaches the model unfenced
@@ -696,7 +697,7 @@ or types on the Windows desktop.
 - [x] **H6 (3, medium, checked).** A failed write of the session log drops
   that batch for good (`hosted/events.py:335-354`); a lost "done" can make
   the next start carry on a reply that had finished.
-- [ ] **H7-H14 (low; H7 and H9 fixed in v1.511.0, H8, H13 and H14 in v1.512.0, H10 in v1.514.0; H11 and H12 wait for groups 15 and 16).** A PATCH applies the tool's mode before the rest of
+- [ ] **H7-H14 (low; H7 and H9 fixed in v1.511.0, H8, H13 and H14 in v1.512.0, H10 in v1.514.0, H12 in v1.515.0; H11 waits for group 16).** A PATCH applies the tool's mode before the rest of
   the request is checked (`service.py:2211-2296`); a Stop as the start
   completes can still deliver the message (`service.py:3607`, checked); a
   branch copies Full access and the tool boxes without asking
@@ -720,10 +721,10 @@ or types on the Windows desktop.
   `localSettings` included, while the card says "for the rest of this
   session" (`682-700`, `1154-1158`). Fix: rewrite the destination to
   `session`. Claude Code's write to disk was not observed.
-- [ ] **A3 (2, medium, checked).** The account manager prints its access
+- [x] **A3 (2, medium, checked).** The account manager prints its access
   token on start, and Jarvis sends that output to `logs/iron-proxy.log`,
   which every backup carries (`iron_proxy/service.py:834-847`).
-- [ ] **A4 (2, medium, checked in the bundle).** The account manager's model
+- [ ] **A4 (2, medium, checked in the bundle; NOT fixed: it needs a change in the bundled program, see "Group 15 as built").** The account manager's model
   routes need no token on this PC, so any local program can spend the
   subscriptions through it (`iron-proxy.mjs:5567-5576, 6316`). Fix is in
   the bundled program plus a switch at start.
@@ -731,16 +732,16 @@ or types on the Windows desktop.
   work to a Pi or Antigravity helper that asks nothing
   (`hosted/handoff.py:324-327`, `hosted/service.py:308-311`); the card does
   not name the tool.
-- [ ] **A6 (2, medium, suspected).** A session on this PC's own login
+- [x] **A6 (2, medium, suspected).** A session on this PC's own login
   inherits the user's API keys; the tool may bill the key while the receipt
   says list price on the subscription (`hosted/process.py:81-86`).
 - [x] **A7 (1, medium, suspected).** A Codex `turn/completed` from another
   thread ends the user's reply as done (`hosted/codex.py:1312-1315`; the
   guard exists only for `turn/started`).
-- [ ] **A8 (2, medium, checked).** With every account of a provider turned
+- [x] **A8 (2, medium, checked).** With every account of a provider turned
   off, chat runs on this PC's own login with nothing said
   (`iron_proxy/accounts.py:889-894`).
-- [ ] **A9-A13 (low; A12 fixed in v1.511.0, A11 in v1.512.0, A9 and A13's three status lines in v1.514.0).** Codex's move to another model is said without the
+- [ ] **A9-A13 (low; A12 fixed in v1.511.0, A11 in v1.512.0, A9 and A13's three status lines in v1.514.0, A10 and A13's `proxy.json` line in v1.515.0; A13's wording line waits for group 16).** Codex's move to another model is said without the
   model's name (`codex.py:1345-1346`); the usage check hands the vendor's
   program the daemon's whole environment, install token included
   (`iron_proxy/usage_read.py:286-299`, checked); Stop before Codex names the
@@ -819,7 +820,7 @@ or types on the Windows desktop.
 
 ### A coding session's stored sessions, compaction and page browser
 
-- [ ] **S1 (2, medium, checked).** The one-shot screenshot browser has no
+- [x] **S1 (2, medium, checked).** The one-shot screenshot browser has no
   address guard, and the agent's browser judges only top-level pages, never
   frames (`harness/page_shot.py:110-130`, `page_browser.py:1146-1163`): a
   local page can show the model another local app's page.
@@ -836,7 +837,7 @@ or types on the Windows desktop.
 - [x] **S5 (1, medium, pass only).** A reply's failure marks never reach the
   next model or the summarizer (`harness/sessions.py:998-1022`,
   `compact.py:282-322`).
-- [ ] **S6-S12 (low; S8, S11 and S12 fixed in v1.510.0, S6 in v1.511.0).** Typing with "submit" sends a form with no risky-click
+- [x] **S6-S12 (low; S8, S11 and S12 fixed in v1.510.0, S6 in v1.511.0, S7, S9 and S10 in v1.515.0).** Typing with "submit" sends a form with no risky-click
   check (`page_browser.py:1921-1931`, suspected; the twin of B2); a lesson's
   first line goes into an event unmasked (`harness/library.py:1292-1304`,
   suspected); Delete stops a session's programs before it refuses, and
@@ -853,11 +854,11 @@ or types on the Windows desktop.
 The lanes match stage by stage wherever one shared helper does the work. The
 differences are at the edges.
 
-- [ ] **L1 (3, medium, checked).** Both phone doors run a turn without its
+- [x] **L1 (3, medium, checked).** Both phone doors run a turn without its
   chat id (`comm/inbound.py:1246`, `daemon/routes/comm.py:823`): the chat's
   own usage total stays at zero and its notes are keyed with every other
   phone conversation's (`memory/origin.py:47`).
-- [ ] **L2 (2, medium, checked).** A reply typed at the desk into a phone
+- [x] **L2 (2, medium, checked).** A reply typed at the desk into a phone
   conversation has no project and runs at full trust
   (`routes/comm.py:823`, against `inbound.py:1245-1257`).
 - [ ] **L3 (8, medium, checked).** The automatic summary of a long chat is a
@@ -1135,3 +1136,64 @@ Left open:
 - A Codex sub-agent thread's token use is still added to the reply.
 - A run cut off by a restart comes home as "failed"; there is no separate
   word for "cut off".
+
+### Group 15 as built (v1.515.0)
+
+Fixed: A3, A6 (Claude Code), A8, A10, B4, B5, B7, S1, S7, S9, S10, L1, L2
+(its project half), H12, the `proxy.json` line of A13, and the Settings
+model-server slot left open by group 9.
+
+Not fixed, on purpose:
+
+- **A4 (the account manager's model routes need no token on this PC).** The
+  program is vendored from `RealDealCPA-VR/Iron-Proxy` with a pinned
+  checksum, and its own start code decides this from the listen address
+  alone. Decision E9: a change to that program is the owner's to release.
+  What it needs there: require the token on `/v1/*` whatever the address
+  (or a `--require-auth` switch), refuse a Host header that is not
+  loopback, and stop printing the token on start. Iron Jarvis then passes
+  the switch in `iron_proxy/service._spawn` and re-vendors with
+  `scripts/vendor_iron_proxy.py`.
+- **L2's trust half.** `docs/rules/tools.md` says a desk reply into a phone
+  conversation stays at full trust on purpose (the user typed it). The
+  implementer stopped on that rule; the lead agrees.
+- **A6 for Codex.** Its start answers do not say which credential it uses.
+
+Where it went further than the plan (lead's review):
+
+- The run trace also kept typed text, and a click's result carried the full
+  download link into the ledger: both closed with B5 and B4.
+- Chat's own Claude Code child inherited the daemon's install token, like
+  the usage check: closed with A10.
+- "Fetch available models" sent a key over plain http to an outside
+  address: closed with the Settings slot.
+- The Session tab did not draw the new "cannot tell where" sentence:
+  `lib/codePanes.ts` now does.
+
+Left open:
+
+- Rows written by older versions are not rewritten: browser events with
+  full addresses (they age out within 90 days) and approval rows holding
+  typed text. A one-time clean-up is the owner's call.
+- The one-shot screenshot now needs Playwright's driver and was not driven
+  on the packaged build. What would show a problem: `page_screenshot` of an
+  address answering "could not start the browser" in a coding session.
+- The Ollama slot's address is not judged; the CLI `ironjarvis connect`
+  saves a key without the plain-http check.
+- The secret mask also drops a proposed lesson that merely contains words
+  like `token: str`.
+
+**v1.514.0 was never published.** Its release run failed
+`test_clients_lanes_v1499::test_a_chat_code_reply_keeps_its_client_question_and_reads_its_answer`
+on the first try and on the retry (shard 6), although the branch run of the
+same commit had passed. What is known: it is the only test that takes the
+real "Is X a client?" question through a lane, so it raced the lane's real
+one-second wait; v1.514.0's new test files moved the OCR tests into its
+shard for the first time (computed with `scripts/ci_shards.py` for the last
+five releases). What is not known: which step ran out of time, because a
+skipped question left nothing in the log. Not reproduced here (6 of 6 beside
+the OCR tests, 3 of 3 with a leftover event loop). Done in v1.515.0: the
+test gets a wait a busy runner cannot beat (the wait itself stays pinned
+with explicit deadlines in `test_clients_notice_v1499`), and every skipped
+question now says why at INFO (`workmap/clients/store.question_for_turn`,
+`chat_turn.client_question_for`), so a next time explains itself.

@@ -45,13 +45,16 @@ def test_an_ollama_iron_jarvis_has_no_address_for_is_not_known_never_cloud():
     """Iron Jarvis's silence about Ollama says nothing about where Pi's or
     OpenCode's Ollama answers — the old code said "cloud"."""
     nothing = types.SimpleNamespace(providers=None, config=types.SimpleNamespace(ollama_base_url=""))
-    assert PN.where_view(_row("pi", "ollama/llama3"), nothing) == NOT_KNOWN
-    assert PN.where_view(_row("opencode", "ollama/qwen3"), nothing) == NOT_KNOWN
+    assert PN.where_view(_row("pi", "ollama/llama3"), nothing)["on_this_network"] is None
+    assert PN.where_view(_row("opencode", "ollama/qwen3"), nothing)["on_this_network"] is None
     # A config with no such attribute at all (an older or partial object).
-    assert PN.where_view(_row("pi", "ollama/llama3"), types.SimpleNamespace(providers=None, config=None)) == NOT_KNOWN
-    # With an address, the receipt's rule decides, as before.
+    assert PN.where_view(
+        _row("pi", "ollama/llama3"), types.SimpleNamespace(providers=None, config=None)
+    )["on_this_network"] is None
+    # v1.515.0 (second review H12): an address of Iron Jarvis's own decides
+    # nothing either; the tool's own settings say where its Ollama answers.
     here = types.SimpleNamespace(providers=None, config=types.SimpleNamespace(ollama_base_url="http://127.0.0.1:11434"))
-    assert PN.where_view(_row("pi", "ollama/llama3"), here)["on_this_network"] is True
+    assert PN.where_view(_row("pi", "ollama/llama3"), here)["on_this_network"] is None
 
 
 @pytest.mark.parametrize("prefix", ["lmstudio", "lm-studio", "llamacpp", "llama.cpp", "llama-cpp", "LMStudio"])

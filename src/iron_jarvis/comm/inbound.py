@@ -1253,7 +1253,14 @@ class InboundPoller:
         # (unchanged behavior). Best-effort: a weird thread row costs the
         # tag, never the turn.
         project_id = str(getattr(thread, "project_id", "") or "")
-        body = ChatBody(messages=history, auto_tools=True, project_id=project_id)
+        # v1.515.0 (second review L1): the turn is told WHICH saved chat it
+        # answers, so its usage row is the chat's (``GET /chat/threads/{id}/
+        # usage``), the chat reads running while it runs, and its notes are
+        # keyed and recalled as ``chat:<id>`` (``memory/origin.chat_tag``),
+        # never under the one "chat" key every phone conversation shared.
+        # The lane only READS the id: this door still saves the reply itself
+        # (below), and the plain lane keeps no page-owned turn record.
+        body = ChatBody(messages=history, auto_tools=True, project_id=project_id, thread_id=tid or "")
         try:
             # LOW TRUST (v1.298.0): the lane drops its auto-armed memory
             # writers for a turn the phone started (``_chat_turn_kwargs``).

@@ -295,8 +295,21 @@ def where(url: Any) -> str:
 
 
 def blocked_words(kind: str, url: str) -> str:
-    """The sentence for a navigation the rules stopped."""
+    """The sentence for a navigation the rules stopped. Second review S1:
+    ``frame-refuse`` / ``frame-ask`` are a FRAME's page (an iframe) the rules
+    would not load; the frame is left empty and the page around it stays."""
     shown = where(url) or "another address"
+    if kind == "frame-refuse":
+        return (
+            f"A frame in the page tried to load {shown}, which is not on this PC or your network; "
+            "it was not loaded and the frame was left empty."
+        )
+    if kind.startswith("frame-"):
+        return (
+            f"A frame in the page tried to load {shown}, another address on this PC or your network "
+            "that has not been allowed in this session; it was not loaded and the frame was left "
+            "empty (a page can show another program's page in a frame)."
+        )
     if kind == "refuse":
         return (
             f"The page tried to go to {shown}, which is not on this PC or your network; "
@@ -306,6 +319,23 @@ def blocked_words(kind: str, url: str) -> str:
         f"The page tried to go to {shown}, another address on this PC or your network that "
         "has not been allowed in this session; the agent's browser stopped it there. To go "
         "there, call page_open with that address (it asks the user first)."
+    )
+
+
+def one_shot_moved_words(kind: str, url: str) -> str:
+    """Second review S1: why a one-shot screenshot gave no picture — the
+    page moved itself (a meta refresh, a script, a redirect) away from the
+    address asked for."""
+    shown = where(url) or "another address"
+    if kind == "refuse" or shown == "another address":
+        return (
+            f"the page moved to {shown}, which is not the address asked for, so no picture was "
+            "taken (a screenshot shows only the page it was asked for)."
+        )
+    return (
+        f"the page moved to {shown}, which is not the address asked for, so no picture was taken "
+        f"(a screenshot shows only the page it was asked for). To look at {shown}, call "
+        "page_screenshot with that address; it asks the user first."
     )
 
 
@@ -1101,10 +1131,14 @@ class EdgeBackend:
             if request.redirected_from is None or not request.is_navigation_request():
                 return
             frame = request.frame
-            if frame.parent_frame is not None:
-                return
             verdict = self._guard(request.url)
             if verdict.kind == "ok":
+                return
+            if frame.parent_frame is not None:
+                # Second review S1: a FRAME's page redirected somewhere the
+                # rules would not load: the frame is emptied.
+                self._note("blocked", f"frame-{verdict.kind}|{request.url}")
+                self._blank_frame_soon(frame)
                 return
             self._note("blocked", f"{verdict.kind}|{request.url}")
             self._leave_soon(frame.page)
@@ -1160,15 +1194,19 @@ class EdgeBackend:
 
     def _on_navigated(self, page: Any, frame: Any) -> None:
         """A page that ARRIVED somewhere the rules would not open (a server
-        redirect: the route is not asked for its hops) is left at once."""
+        redirect: the route is not asked for its hops) is left at once. Second
+        review S1: a FRAME that arrived there is emptied (the page around it
+        stays)."""
         try:
-            if frame.parent_frame is not None:
-                return
             url = str(frame.url or "")
             if not url.startswith(("http://", "https://")):
                 return
             verdict = self._guard(url)
             if verdict.kind == "ok":
+                return
+            if frame.parent_frame is not None:
+                self._note("blocked", f"frame-{verdict.kind}|{url}")
+                self._blank_frame_soon(frame)
                 return
             self._note("blocked", f"{verdict.kind}|{url}")
             self._leave_soon(page)
@@ -1184,6 +1222,37 @@ class EdgeBackend:
         with contextlib.suppress(Exception):
             await page.goto("about:blank", timeout=10_000)
 
+    def _blank_frame_soon(self, frame: Any) -> None:
+        """Second review S1: empty a frame whose page the rules would not
+        load (awaited by :meth:`quiet`, like a page sent away)."""
+        task = asyncio.ensure_future(self._leave(frame))
+        self._leaving.add(task)
+        task.add_done_callback(self._leaving.discard)
+
+    async def _empty_refused_frames(self, page: Any) -> None:
+        """Second review S1: before a picture, every frame of the page is
+        judged by the rules (the route, the redirect guard and the arrival
+        guard are the first lines; this one holds whatever slipped past
+        them). A frame on an address the rules would not load is emptied and
+        noted; one that cannot be emptied means NO picture."""
+        for frame in list(getattr(page, "frames", None) or []):
+            if getattr(frame, "parent_frame", None) is None:
+                continue
+            url = str(getattr(frame, "url", "") or "")
+            if not url.startswith(("http://", "https://")):
+                continue
+            verdict = self._guard(url)
+            if verdict.kind == "ok":
+                continue
+            self._note("blocked", f"frame-{verdict.kind}|{url}")
+            with contextlib.suppress(Exception):
+                await frame.goto("about:blank", timeout=5_000)
+            if str(getattr(frame, "url", "") or "").startswith(("http://", "https://")):
+                raise BrowserProblem(
+                    "The screenshot was not taken: a frame in the page shows an address the "
+                    "agent's browser may not look at, and it could not be emptied."
+                )
+
     async def quiet(self) -> None:
         """Wait (briefly) for a page the rules sent away to have left — so
         the return to the last allowed page is never undone by it."""
@@ -1192,18 +1261,23 @@ class EdgeBackend:
                 await asyncio.wait(set(self._leaving), timeout=10)
 
     async def _route(self, route: Any, request: Any) -> None:
-        """Every request the page makes passes here first; a NAVIGATION of a
-        top-level page the rules would not open is stopped before it is sent."""
+        """Every request the page makes passes here first; a NAVIGATION the
+        rules would not open is stopped before it is sent. Second review S1:
+        a FRAME's navigation (a page loaded into an iframe) is judged the
+        same way — a local page can frame another program's admin page — and
+        the frame stays empty; a page's other sub-requests (pictures,
+        scripts) go where the page sends them, as before."""
         try:
-            nav = request.is_navigation_request()
+            nav = bool(request.is_navigation_request())
             top = nav and request.frame.parent_frame is None
         except Exception:  # noqa: BLE001 — a service worker's request has no frame
-            top = False
+            nav = top = False
         try:
-            if top:
+            if nav:
                 verdict = self._guard(request.url)
                 if verdict.kind != "ok":
-                    self._note("blocked", f"{verdict.kind}|{request.url}")
+                    kind = verdict.kind if top else f"frame-{verdict.kind}"
+                    self._note("blocked", f"{kind}|{request.url}")
                     await route.abort("blockedbyclient")
                     return
             await route.continue_()
@@ -1370,11 +1444,25 @@ class EdgeBackend:
             return []
         return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
+    async def resize(self, width: int, height: int) -> None:
+        """The window the page is drawn at (a one-shot picture's size)."""
+        await self._current().set_viewport_size({"width": int(width), "height": int(height)})
+
     async def screenshot(self, *, jpeg: bool) -> bytes:
         page = self._current()
+        await self._empty_refused_frames(page)
         if jpeg:
             return await page.screenshot(type="jpeg", quality=VIEW_JPEG_QUALITY, timeout=10_000)
         return await page.screenshot(type="png", timeout=10_000)
+
+
+def _end_one_shot(backend: Any, work: Path) -> None:
+    """BLOCKING, any thread: end a one-shot picture's browser (its job: the
+    driver, Edge and everything Edge started) and remove its throwaway
+    folder. Never raises."""
+    with contextlib.suppress(Exception):
+        backend.kill()
+    _remove_work(work)
 
 
 def _alive(backend: Any) -> bool:
@@ -1659,6 +1747,25 @@ class AgentBrowsers:
     async def picture(self, key: str, *, preview: str = "") -> ActResult:
         return await self.run(self._act(key, "picture", preview=preview, local_only=_local_only_now()))
 
+    async def one_shot(self, url: str, *, edge: str, preview: str = "", width: int = 1280,
+                       height: int = 800, wait_ms: int = 0, limit_s: float = OPEN_TIMEOUT_S) -> ActResult:
+        """Second review S1: ONE picture of ``url`` (``page_screenshot`` with
+        an address the agent's browser is not on), taken through THIS
+        module's backend so the same rules hold as for the agent's browser:
+        a page's own navigation to another address is stopped (route), a
+        redirect's hop and an arrival are judged, a FRAME's page is judged
+        like a top-level one, and a Local only call runs behind the refusing
+        proxy. The browser is started for this picture alone and ended after
+        it (never kept, never a session's browser). A page that MOVED to an
+        address that was not asked for gives NO picture (a
+        :class:`BrowserProblem` in words). ``ActResult.blocked`` holds the
+        frames that were left empty. The caller's Local only scope is read
+        here, on the daemon's side."""
+        return await self.run(self._one_shot(
+            url, edge=edge, preview=preview, width=width, height=height, wait_ms=wait_ms,
+            limit_s=limit_s, local_only=_local_only_now(),
+        ))
+
     async def click_words(self, key: str, target: Any) -> str:
         """What ``target`` on ``key``'s page reads as, for page_click's check
         (v1.376.0 review); remembered as the words that check judged."""
@@ -1861,6 +1968,82 @@ class AgentBrowsers:
                 return str(await read(target) or "")
         finally:
             sess.lock.release()
+
+    async def _one_shot(self, url: str, *, edge: str, preview: str, width: int, height: int,
+                        wait_ms: int, limit_s: float, local_only: bool) -> ActResult:
+        asked = judge(url, set(), "")
+        if asked.kind == "refuse" or not asked.origin:
+            raise BrowserProblem(NOT_LOCAL)
+        if self._factory is None:
+            problem = await asyncio.to_thread(playwright_problem)
+            if problem:
+                raise BrowserProblem(problem)
+        work = await asyncio.to_thread(_new_work)
+        sess = _Session(key="one-shot", backend=None, work=work, lock=asyncio.Lock(),
+                        local_only=bool(local_only))
+        # The address asked for (the user's card, or the pane's page) and the
+        # pane's page; anything else is another address.
+        sess.allowed.add(asked.origin)
+        sess.preview_origin = origin(preview)
+        moved: list[tuple[str, str]] = []  # (verdict, address) of a stopped top-level move
+        noted = self._note_for(sess)
+
+        def note(kind: str, text: str) -> None:
+            if kind == "blocked" and not text.startswith("frame-"):
+                verdict, _, where_to = text.partition("|")
+                moved.append((verdict, where_to))
+            noted(kind, text)
+
+        backend = (self._factory or EdgeBackend)(
+            edge=edge, work=work, guard=self._guard_for(sess), note=note,
+            background=False, extra_args=self.extra_args,
+            **({"local_only": True} if local_only else {}),
+        )
+        out = ActResult()
+        try:
+            try:
+                async with asyncio.timeout(limit_s):
+                    await backend.start()
+                    sizer = getattr(backend, "resize", None)
+                    if sizer is not None:
+                        await sizer(width, height)
+                    await backend.goto(asked.url, limit_s)
+                    if wait_ms > 0:
+                        await asyncio.sleep(wait_ms / 1000.0)  # let the page finish drawing
+                    await backend.quiet()
+                    here = backend.url()
+                    if moved or not (here.startswith(("http://", "https://"))
+                                     and judge(here, sess.allowed, sess.preview_origin).kind == "ok"):
+                        kind, far = moved[0] if moved else (judge(here, set(), "").kind, here)
+                        raise BrowserProblem(one_shot_moved_words(kind, far))
+                    out.picture = await backend.screenshot(jpeg=False)
+                    out.url = backend.url()
+            except TimeoutError:
+                raise BrowserProblem(f"the browser did not finish within {limit_s:g} s") from None
+            except (BrowserProblem, asyncio.CancelledError):
+                raise
+            except Exception as exc:  # noqa: BLE001 — always words
+                raise BrowserProblem(playwright_words(exc, what="The screenshot", limit_s=limit_s)) from None
+        except BrowserProblem:
+            await self._finish_one_shot(backend, work)
+            raise
+        except BaseException:
+            # A Stop: the browser ends at once, its folder goes — from a
+            # thread of its own, never awaited here (an await in a cancelled
+            # task can be cancelled again).
+            threading.Thread(target=_end_one_shot, args=(backend, work), name="page-shot-end",
+                             daemon=True).start()
+            raise
+        await self._finish_one_shot(backend, work)
+        out.blocked = list(sess.blocked)
+        return out
+
+    @staticmethod
+    async def _finish_one_shot(backend: Any, work: Path) -> None:
+        """A one-shot's polite close (bounded), then its job and folder."""
+        with contextlib.suppress(Exception, asyncio.TimeoutError):
+            await asyncio.wait_for(backend.close(), CLOSE_TIMEOUT_S)
+        await asyncio.to_thread(_end_one_shot, backend, work)
 
     async def _make_room(self, key: str) -> None:
         """At most :data:`MAX_BROWSERS` open: the least recently used one that

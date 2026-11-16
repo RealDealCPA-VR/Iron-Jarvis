@@ -310,13 +310,19 @@ export interface CodeOverview {
 /** The Session tab's "Runs · cloud" / "Runs · on this network" line, or ""
  *  when where it runs is not known (the row is then not drawn). */
 export function whereLine(o: Pick<CodeOverview, "where"> | null): string {
-  if (!o || o.where.onThisNetwork === null || !o.where.words) return "";
+  if (!o || !o.where.words) return "";
+  // v1.515.0 (second review H12): when the daemon cannot tell where a tool's
+  // own model runs it says so in a sentence of its own, shown as sent. Never
+  // "on this network" from a name alone.
+  if (o.where.onThisNetwork === null) return o.where.words;
   return `Runs · ${o.where.words}`;
 }
 
 function decodeWhere(raw: unknown): CodeOverview["where"] {
   const w = obj(raw);
-  if (!w || typeof w.on_this_network !== "boolean") return { onThisNetwork: null, words: "" };
+  if (!w) return { onThisNetwork: null, words: "" };
+  // v1.515.0 (H12): "not known" (null) keeps the daemon's own sentence.
+  if (typeof w.on_this_network !== "boolean") return { onThisNetwork: null, words: str(w.words, 120) };
   return { onThisNetwork: w.on_this_network, words: str(w.words, 40) };
 }
 

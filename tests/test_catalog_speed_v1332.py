@@ -503,7 +503,9 @@ def test_a_key_saved_for_the_custom_slot_asks_its_endpoint_row_again(tmp_path, m
     key: a key saved on the Connections page must re-ask BOTH lists, or the
     endpoint row keeps the keyless answer (nothing) for another minute."""
     client, d = _app(tmp_path)
-    d.platform.config.custom_base_url = "http://box.test:8000/v1"
+    # v1.515.0: https — a key is refused for a plain http slot off this
+    # network (``settings.writer.slot_key_problem``).
+    d.platform.config.custom_base_url = "https://box.test:8000/v1"
     d.platform.config.custom_model = "m-default"
 
     def fake_get_json(url, headers):

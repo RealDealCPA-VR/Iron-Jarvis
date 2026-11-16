@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.514.0 (2026-11-15).*
+holds itself to. Current as of v1.515.0 (2026-11-15).*
 
 ---
 
@@ -2041,6 +2041,73 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Secrets at rest, and what leaves this PC (v1.515.0)
+
+The seventh of eight releases from the second review. Each of these is a
+place where something private was written down where it should not be, or
+where work could reach an account, key or address you did not choose.
+
+This installer also brings everything listed under v1.514.0 below. v1.514.0
+was never published: its last check failed one test, in a part of the app
+that release had not changed, so no installer was built. That test raced a
+one-second wait on a busy test machine; it no longer does, and the app now
+writes down why whenever that wait is missed.
+
+- **Your browsing is not written down.** With the browser add-on connected,
+  every tab you switched to and every page you loaded was saved in Iron
+  Jarvis's activity record with its full address, whether or not you had
+  asked Iron Jarvis anything, and kept for 90 days. Those records now hold
+  the site only (no page, no title, nothing after a `?`), and a download's
+  address loses everything after the `?`, where sign-in codes and private
+  links live. Records saved by older versions age out within 90 days.
+- **Text typed into a sensitive field is never kept.** When Iron Jarvis asked
+  before typing a password or card number into a page, the text itself was
+  saved with the request and shown on the card. A stand-in is kept instead.
+  An older saved request is shown masked.
+- **The account manager's own key is not left in a log.** The program that
+  holds your Claude, Codex and Grok accounts printed its access key into a
+  log file at every start, and that file went into every backup. Iron Jarvis
+  now blanks it in the log at each start, including lines left by earlier
+  runs.
+- **Iron Jarvis's own key is not handed to other programs.** The usage check
+  and chat's own Claude Code no longer receive the key that controls Iron
+  Jarvis itself.
+- **Every account turned off means refused, not swapped.** If you turn off
+  every account of a provider on the Several accounts card, chat no longer
+  quietly runs on this PC's own sign-in; it says which card to change.
+- **A coding turn never starts on "whichever account is free".** When the
+  accounts list cannot be read yet, the turn waits with "Your accounts are
+  not listed yet; try again in a moment."
+- **Claude Code on an API key says so.** If Claude Code picks up an API key
+  from this PC's environment instead of your signed-in account, the session
+  says so by the key's name, and its cost is no longer shown as a
+  subscription's list price.
+- **A page cannot show the model another program's page.** In a coding
+  session's own page browser, a frame inside a page is held to the same
+  address rules as the page: another local address or a public site is not
+  loaded into it, and the result says so. A screenshot is never returned for
+  a page that moved somewhere else, and under Local only it reaches no
+  public site.
+- **The isolated browser's site list is checked where it lands.** A redirect
+  or a clicked link that leaves your allowed sites is refused by name and
+  the browser leaves that page.
+- **Phone conversations keep to themselves.** Each one now counts its own
+  usage and keeps its own notes; notes written in one were being recalled in
+  another. A reply you type at the desk into a phone conversation keeps the
+  conversation's project.
+- **"On this network" is only said when it is known.** For a model that Pi
+  or OpenCode runs through its own local setup, Iron Jarvis cannot read
+  where that goes, and says "Iron Jarvis cannot tell where Pi sends this
+  model."
+- **The model-server address in Settings follows the Model servers page's
+  rules**: no name or password in the address, and no key saved for a server
+  outside your network over plain `http://`. "Fetch available models"
+  follows them too.
+- **Smaller ones.** Page screenshots are kept per coding session and go to
+  the trash with it. A lesson a coding session proposes that quotes a
+  secret is dropped. The account manager is only trusted at an address on
+  this PC.
 
 ## What helpers, tools and servers report (v1.514.0)
 

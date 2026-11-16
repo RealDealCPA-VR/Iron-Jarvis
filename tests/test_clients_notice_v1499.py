@@ -25,6 +25,7 @@ import asyncio
 import json
 import os
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -418,7 +419,7 @@ def test_the_question_rides_one_reply_only(platform):
     assert store.question_for_turn(platform, folder=r"C:\Clients\Smith", thread_id="t4") is None
 
 
-def test_the_question_is_only_for_dashboard_turns_and_the_switch(platform, monkeypatch):
+def test_the_question_is_only_for_dashboard_turns_and_the_switch(platform, monkeypatch, caplog):
     _chats(platform, r"C:\Clients\Hartleys", 2)
     _built(platform)
     detect.notice(platform, force=True)
@@ -441,15 +442,31 @@ def test_the_question_is_only_for_dashboard_turns_and_the_switch(platform, monke
     t = threading.Thread(target=busy)
     t.start()
     held.wait(10)
+    # v1.515.0: each skip says WHY in the log (a reply that came without its
+    # question could not be told from a reply with nothing to ask).
+    caplog.set_level("INFO", logger=store.log.name)
     try:
         assert store.question_for_turn(platform, folder=r"C:\Clients\Hartleys", thread_id="t1") is None
     finally:
         release.set()
         t.join(10)
     assert _rows(platform, "proposed")[0].asked_at is None
+    assert [r.getMessage() for r in caplog.records if "was skipped" in r.getMessage()] == [
+        "clients: the question under a reply was skipped (a noticing pass was busy)"]
+    # The lane's wait already over: skipped, said, and the row not used up.
+    caplog.clear()
+    assert store.question_for_turn(
+        platform, folder=r"C:\Clients\Hartleys", thread_id="t1", deadline=time.monotonic() - 1,
+    ) is None
+    assert _rows(platform, "proposed")[0].asked_at is None
+    assert [r.getMessage() for r in caplog.records if "was skipped" in r.getMessage()] == [
+        "clients: the question under a reply was skipped (no time left before the write)"]
     # A failure is "no question", never an error in the turn.
+    caplog.clear()
     monkeypatch.setattr(store, "session_scope", lambda engine: 1 / 0)
     assert store.question_for_turn(platform, folder=r"C:\Clients\Hartleys", thread_id="t1") is None
+    assert [r.getMessage() for r in caplog.records if "was skipped" in r.getMessage()] == [
+        "clients: the question under a reply was skipped (ZeroDivisionError)"]
     monkeypatch.undo()
     monkeypatch.setitem(store._LOOP, "loop", None)
     assert store.question_for_turn(platform, folder=r"C:\Clients\Hartleys", thread_id="t1")["name"] == "Hartleys"

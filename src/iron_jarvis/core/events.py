@@ -342,18 +342,20 @@ class EventType:
     # DERIVED at the release site, never a string typed at the publish call, so
     # "replaced" can never be reported for a browser the user closed themselves.
     BROWSER_DISCONNECTED = "browser.disconnected"
-    # {tab_id, title, url} — the user switched tabs. Feeds the ambient context
-    # block's cached active tab, so prompt assembly never awaits the browser.
+    # The two below publish the tab id and the SITE (scheme + host) only, never
+    # the path, query or title (v1.515.0, B4: events are stored and backed up).
+    # The full active tab stays in memory on the browser backend.
+    # {tab_id, site} — the user switched tabs.
     BROWSER_TAB_ACTIVATED = "browser.tab_activated"
-    # {tab_id, url, title, page_version} — a navigation settled. page_version is
-    # what invalidates a snapshot, so a stale element id is refused not guessed.
+    # {tab_id, site} — a navigation settled (the daemon drops that tab's snapshot).
     BROWSER_NAVIGATION_COMPLETED = "browser.navigation_completed"
     # {tab_id} — the user closed a tab (v1.266.0). Ends that tab's approval grant
     # (browser/grants.py) and drops its cached snapshot.
     BROWSER_TAB_REMOVED = "browser.tab_removed"
     # {download_id, filename, local_path, source_url, tab_id, bytes, mime} —
     # local_path is ABSOLUTE (chrome.downloads gives the real destination), which
-    # is what lets the existing file tools reach the file at all.
+    # is what lets the existing file tools reach the file at all. The addresses
+    # are published without their query or fragment (v1.515.0, B4).
     BROWSER_DOWNLOAD_COMPLETED = "browser.download_completed"
     #: Detections (v1.290.0): after a session completes its tool ledger is
     #: scanned (``iron_jarvis.detections``) and ONE event is published per

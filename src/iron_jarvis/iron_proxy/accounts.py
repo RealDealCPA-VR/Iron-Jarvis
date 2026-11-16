@@ -855,13 +855,37 @@ def _unshared(spec: ProviderAccounts, client: Any, got: Lease | None) -> Lease |
     return _past_shared_login(spec, client, got, twin, set())
 
 
+#: v1.515.0 (second review A8): every account of the provider is turned off.
+ALL_OFF_WORDS = (
+    "Every {label} account is turned off on the Several accounts card in Settings › Connections. "
+    "Turn one on, or remove them to use this PC's own sign-in."
+)
+
+
+def _all_turned_off(spec: ProviderAccounts) -> bool:
+    """Does the CACHED snapshot (no call) show CLI accounts for this provider,
+    every one turned off? False when it shows none, or is not known yet (then
+    a ``NO_PROFILE`` runs as before, on this PC's own login). Never raises."""
+    try:
+        snap = _cached_snapshot()
+        if snap is None:
+            return False
+        mine = [p for p in snap[0]
+                if isinstance(p, dict) and p.get("provider") == spec.proxy_provider
+                and (p.get("lane") or "cli") == "cli"]
+        return bool(mine) and all(p.get("enabled") is False for p in mine)
+    except Exception:  # noqa: BLE001 — unknown keeps today's behaviour
+        return False
+
+
 def lease(ij_provider: str) -> Lease | None:
     """The account to run ``ij_provider``'s CLI as right now, or None (run as
     today: the default login). BLOCKING — call through ``asyncio.to_thread``.
 
     None ONLY when Iron-Proxy is OFF (disabled / no service), when it has no
     account for this provider (``NO_PROFILE``), or when the picked account is
-    not a CLI account. While Iron-Proxy is ON, every other outcome is a
+    not a CLI account. A ``NO_PROFILE`` while the cached snapshot shows this
+    provider's accounts all turned off is refused in words (v1.515.0). While Iron-Proxy is ON, every other outcome is a
     non-transient ``ProviderError`` in plain words that never fails over to
     another provider (``no_failover``) — all parked (said by kind), an account
     needing sign-in, a refused control token, an Iron-Proxy too old for the
@@ -891,6 +915,10 @@ def lease(ij_provider: str) -> Lease | None:
     except Exception as exc:  # noqa: BLE001 — sorted by Iron-Proxy's code below
         code = getattr(exc, "code", "")
         if code == "NO_PROFILE":
+            if _all_turned_off(spec):
+                # v1.515.0 (second review A8): the user turned every account
+                # off; this PC's own login may be one of them. Said, not run.
+                raise _refusal(spec, ALL_OFF_WORDS.format(label=spec.label)) from None
             return None  # no account for this provider: exactly today's behaviour
         if code == "ALL_PROFILES_EXHAUSTED":
             raise _exhausted_error(spec, exc, client) from None

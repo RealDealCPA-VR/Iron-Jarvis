@@ -905,6 +905,10 @@ def propose_role_brief_edit(
         habit = _one_line(line)
         if not habit:
             return None, REASON_NOTHING
+        if _quotes_a_secret(habit) or _quotes_a_secret(_one_line(why)):
+            # Second review S7: a habit that quotes a secret is never proposed.
+            log.info("Build library: a working habit that quoted a secret was not kept (session %s)", thread_id)
+            return None, REASON_NOTHING
         if callable(same) and any(same(ln.lstrip("-*• ").strip()) for ln in before.splitlines() if ln.strip()):
             return None, REASON_BRIEF_HAS_IT
         if before:
@@ -1144,6 +1148,32 @@ def _bill(platform: Any, route: Any, thread_id: str) -> None:
         log.debug("Build library reflection usage not recorded", exc_info=True)
 
 
+def _quotes_a_secret(text: str) -> bool:
+    """Second review S7: True when the app's one secret mask
+    (``providers/failure_words.mask_failure_text``, the masker a session's
+    title goes through) would change ``text`` — it quotes something shaped
+    like a key, a token or a password. A mask that faults reads as a secret
+    (fail closed: the lesson is dropped, never kept unread)."""
+    if not text:
+        return False
+    try:
+        from ..providers import failure_words as _fw
+
+        return _fw.mask_failure_text(text, strict=True) != text
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _publish_summary(row: HarnessLibraryRecord) -> str:
+    """The bell's one line for a proposal: a lesson's first line (masked once
+    more on the way out), or the file an edit changes."""
+    if row.kind == KIND_LESSON and row.text:
+        from ..providers.failure_words import mask_failure_text
+
+        return mask_failure_text(row.text.splitlines()[0][:160])
+    return row.file
+
+
 def _clean_lesson(text: Any) -> str:
     lines = [ln.rstrip() for ln in str(text or "").replace("\r\n", "\n").split("\n") if ln.strip()]
     text = "\n".join(lines[:MAX_LESSON_LINES]).strip()
@@ -1226,6 +1256,12 @@ async def _reflect(platform: Any, thread_id: str, turn_ids: list[str], out: Refl
 
     # THE LESSON
     lesson = _clean_lesson(answer.get("lesson"))
+    if lesson and _quotes_a_secret(lesson):
+        # Second review S7: a lesson that quotes a secret is never kept,
+        # masked or not (it would be stored, sent on the bell and put in
+        # every later prompt in this folder). Nothing else is minted with it.
+        log.info("Build library: a lesson that quoted a secret was not kept (session %s)", thread_id)
+        lesson = ""
     kept_lesson = ""
     if lesson and not scan_context(lesson, source="Build library lesson", cap=None).blocked:
         kept_lesson, ev = check_lines(lesson, evidence)
@@ -1254,6 +1290,13 @@ async def _reflect(platform: Any, thread_id: str, turn_ids: list[str], out: Refl
         name = str(edit["file"])
         before = await asyncio.to_thread(read_layer_file, layer_at, name)
         after = str(edit.get("text") or "").replace("\r\n", "\n").replace("\r", "\n")
+        old_lines = set((before or "").splitlines())
+        added_text = "\n".join(ln for ln in after.splitlines() if ln not in old_lines)
+        if _quotes_a_secret(added_text) or _quotes_a_secret(str(edit.get("why") or "")):
+            # Second review S7: an edit that writes (or explains itself with)
+            # a secret is not proposed; the clean lesson stays.
+            log.info("Build library: an edit that quoted a secret was not kept (session %s)", thread_id)
+            after = ""
         if before is not None and after.strip():
             if not after.endswith("\n"):
                 after += "\n"
@@ -1296,7 +1339,7 @@ async def _publish(platform: Any, row: HarnessLibraryRecord) -> None:
     from ..core.events import EventType
     from .sessions import session_id_for
 
-    summary = row.text.splitlines()[0][:160] if row.kind == KIND_LESSON and row.text else row.file
+    summary = _publish_summary(row)
     try:
         await bus.publish(EventType.LIBRARY_PROPOSAL, {
             "id": row.id, "kind": row.kind, "folder_name": _folder_name(row.folder),
