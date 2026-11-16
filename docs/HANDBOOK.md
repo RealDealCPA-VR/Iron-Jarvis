@@ -2042,6 +2042,52 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## It learns from what went wrong (v1.507.0)
+
+The last part of the review fixes: Iron Jarvis now notices when something
+went wrong and asks whether to remember it. Nothing below changes how it
+works until you press Keep.
+
+- **A thumbs-down note waits for your yes.** The note you type under a
+  thumbs-down ("What should be different next time?") used to become a rule
+  every later reply carried at once. It now waits on the Improvements page as
+  a suggestion in your own words, and is used once you keep it. The line
+  under the reply says what became of it.
+- **A correction in chat is noticed.** When your next message corrects a
+  reply in the short form "no, this, not that" (for example "no, metric
+  units, not imperial"), one suggestion waits in Improvements. It is strict
+  on purpose: a name, a number, a file, "this one", a question or a second
+  sentence reads as a fix to that one reply, and nothing is suggested.
+- **Undoing what a chat reply changed leaves a suggestion too.** It says what
+  was undone and what you had asked for, with a link to the chat. This
+  happens only in a saved chat, and only when the reply that made the change
+  is known for certain.
+- **Kept to the client.** A suggestion that came from a chat or a run in one
+  client's folder is, once kept, never told in another client's folders.
+- **Tools that keep failing are noticed.** Once a day Iron Jarvis reads its
+  own record. A tool that failed three or more times in the last seven days
+  leaves one suggestion in Improvements ("Find out why web fetch keeps
+  failing") that says how many times, where and when. A call you said No to,
+  or that a rule refused, is not counted. Nothing starts by itself:
+  approving asks the maintainer agent to find out why, and you review any
+  change. It is asked once for a week of failures, not again each day.
+- **"Reflect" gives suggestions you can answer.** On the Memory page, each
+  suggestion a model writes from agent runs that scored low now has Keep and
+  Not this, and also waits in Improvements with those runs as evidence. They
+  used to be plain text that was gone when you left the page. When no model
+  answered (or only the demo model did), the page says so and those lines are
+  shown only, with nothing to keep.
+- **A late rating counts.** Rating an agent run after it finished now changes
+  that run's score, its agent's record and the standing of the lessons it
+  was told. Before, a rating given after the run ended changed nothing.
+- **The Home map uses the sidebar's names.** "Sessions" is "Agent runs",
+  "Chats" is "Chat" and "Models" is "Connections", the same words as
+  everywhere else. Two new stars: Improvements and Clients.
+- **A plainer refusal on the phone.** When something needs your approval and
+  you are not at the app, the reply now says "it needs your OK, which can
+  only be given in the Iron Jarvis window". It used to say "this lane cannot
+  ask for approval; use the chat page (POST /chat/stream)".
+
 ## Ask for anything in chat (v1.506.0)
 
 The sixth part of the review fixes: things the app could do that chat could

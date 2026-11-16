@@ -10,8 +10,10 @@
  *
  *   - 👍 is recorded at once ("Thanks — noted").
  *   - 👎 asks one question, "What should be different next time?". The answer
- *     becomes a lesson every later prompt carries; Skip records the rating
- *     without one (a bare thumbs-down does not say what to change).
+ *     waits in Improvements as a suggestion (v1.507.0; it was a lesson every
+ *     later prompt carried at once) and the line says what became of it in
+ *     the daemon's words; Skip records the rating without one (a bare
+ *     thumbs-down does not say what to change).
  *
  * The rating is stored by the daemon (POST /chat/feedback — it counts as
  * "Teach it your style") and on the message, so a reopened chat shows what
@@ -34,6 +36,11 @@ export interface ReplyRatingValue {
   value: "up" | "down";
   /** What the user said should be different (👎 only). */
   note?: string;
+  /** v1.507.0 (north-star plan 7.1): what became of the note, in the
+   *  daemon's own words ("Noted. Your note waits in Improvements as a
+   *  suggestion; …"). Absent on a rating saved before v1.507.0, when a note
+   *  was kept as a lesson at once. */
+  said?: string;
 }
 
 const NOTE_MAX = 500;
@@ -63,13 +70,14 @@ export function ReplyRating({
     setBusy(true);
     setError("");
     try {
-      await post("/chat/feedback", {
+      const res = await post<{ words?: unknown } | null>("/chat/feedback", {
         rating: r.value,
         comment: r.note ?? "",
         thread_id: threadId ?? "",
       });
       setAsking(false);
-      onRated(r);
+      const said = typeof res?.words === "string" ? res.words.trim().slice(0, 300) : "";
+      onRated(r.note && said ? { ...r, said } : r);
     } catch {
       setError("Couldn't save that — try again.");
     } finally {
@@ -84,6 +92,11 @@ export function ReplyRating({
           <>
             <ThumbsUp size={11} className="mr-1 inline align-[-1px]" aria-hidden />
             Thanks — noted.
+          </>
+        ) : rating.note && rating.said ? (
+          <>
+            <ThumbsDown size={11} className="mr-1 inline align-[-1px]" aria-hidden />
+            {rating.said} “{rating.note}”
           </>
         ) : rating.note ? (
           <>
@@ -137,7 +150,9 @@ export function ReplyRating({
             Skip
           </button>
         </div>
-        <p className="text-[11px] text-zinc-500">Your answer is remembered and used in later replies.</p>
+        <p className="text-[11px] text-zinc-500">
+          Your answer waits in Improvements as a suggestion, and is used once you keep it.
+        </p>
         {error && (
           <p role="alert" className="text-[12px] text-tone-danger">
             {error}

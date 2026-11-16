@@ -396,21 +396,36 @@ _WHERE_WORDS = {
 _RUN_WHERE = "run"
 
 
+#: v1.507.0 (north-star plan 7.1 / 7.3): what keeping a suggestion from what
+#: went wrong in a chat, or from Reflect's low-scoring runs
+#: (``learning.preferences.WALLED_SOURCES``), does: once kept, it is told only
+#: where the client wall allows.
+WALLED_NOTE = (
+    "Keeping it tells later chats and agents to work this way. It is never told in another "
+    "client's folders."
+)
+
+
 def preference_item(view: dict[str, Any]) -> dict[str, Any]:
+    from ..learning.preferences import WALLED_SOURCES as _WALLED_SOURCES
+
     pid = str(view.get("id") or "")
-    condensed = str(view.get("source") or "") == "distilled"
+    source = str(view.get("source") or "")
+    condensed = source == "distilled"
     said = []
     for e in view.get("evidence") or []:
         if isinstance(e, dict) and e.get("quote"):
             if str(e.get("where") or "") == _RUN_WHERE:
                 said.append(
                     f"From a note on an agent run: “{e.get('quote')}”" if condensed
+                    else f"From an agent run that went badly, for the task: “{e.get('quote')}”"
+                    if source == "reflected"
                     else f"Noticed during an agent run for the task: “{e.get('quote')}”"
                 )
                 continue
             where = _WHERE_WORDS.get(str(e.get("where") or ""), "in a chat")
             said.append(f"You said, {where}: “{e.get('quote')}”")
-    note = "Keeping it tells every later chat and agent to work this way."
+    note = WALLED_NOTE if source in _WALLED_SOURCES else "Keeping it tells every later chat and agent to work this way."
     if condensed:
         note += (" Once every lesson condensed with it is answered, the agent run notes it was "
                  "condensed from are removed.")

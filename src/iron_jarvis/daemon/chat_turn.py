@@ -2860,8 +2860,11 @@ def no_media_service_line(media_unready: bool, names: Any) -> str:
 #: as today. LOCK-STEP NOTE: this is a POST-LANE-ONLY policy by design — the
 #: stream lane CARDS the same verdict instead; do not mirror this refusal there.
 SPEND_NOT_ASKED_LABEL = "NOT RUN"
+#: v1.507.0 (north-star plan 8.3): in the app's words — the model reads it,
+#: and the Activity page shows it ("lane" and a route address were engine
+#: words on screen; ``tests/test_north_star_lane_words_v1507.py``).
 SPEND_NOT_ASKED_TAIL = (
-    "this lane cannot ask for approval; use the chat page (POST /chat/stream),"
+    "it needs your OK, which can only be given in the Iron Jarvis window;"
     " or make the request one the service does for free."
 )
 #: The FOOTNOTE key for that refusal. It cannot be the registry label: the
@@ -2875,8 +2878,9 @@ def spend_not_asked_invoke_kwargs(check: Any) -> dict[str, Any]:
     """``{"deny_reason", "deny_label"}`` for a call whose spend check says
     ``ask`` (a paid or unknown price) in the lane that cannot ask, else ``{}``
     — so the common path's invoke stays byte-identical. The model-facing tool
-    content becomes ``NOT RUN: <the verdict's words> — this lane cannot ask for
-    approval; …`` (the registry formats ``f"{label}: {reason}"``)."""
+    content becomes ``NOT RUN: <the verdict's words> — it needs your OK, which
+    can only be given in the Iron Jarvis window; …`` (the registry formats
+    ``f"{label}: {reason}"``)."""
     if check is None or not bool(getattr(check, "ask", False)):
         return {}
     words = str(getattr(check, "words", "") or "").strip()
@@ -2901,7 +2905,7 @@ def spend_not_asked_invoke_kwargs(check: Any) -> dict[str, Any]:
 
 
 #: v1.375.0: the POST lane's refusal tail for a call that asks every time.
-ONCE_NOT_ASKED_TAIL = "this lane cannot ask for approval; use the chat page (POST /chat/stream)."
+ONCE_NOT_ASKED_TAIL = "it needs your OK, which can only be given in the Iron Jarvis window."
 
 
 #: v1.344.0 (M3) — the refusal labels a chat turn footnotes, mapped to the
@@ -2913,7 +2917,8 @@ REFUSAL_FOOTNOTE_WORDS: dict[str, str] = {
     "not armed": "not turned on for this chat",
     "low trust": "blocked under low trust",
     # v1.346.0 (post-lane spend): a priced call the POST lane could not ask about.
-    SPEND_NOT_ASKED_FOOTNOTE: "needs an approval this lane cannot ask for",
+    # v1.507.0 (north-star plan 8.3): the app's words, never "this lane".
+    SPEND_NOT_ASKED_FOOTNOTE: "needs your OK, which can only be given in the Iron Jarvis window",
     # v1.503.0 (north-star 3.12): a card nobody answered before it timed out
     # (the agent runtime's own ledger kind for it) — never the user's No.
     "paused": "the approval card was not answered in time",

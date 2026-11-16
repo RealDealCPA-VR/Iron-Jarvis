@@ -16,6 +16,15 @@ Three functions:
   tone, language …). A task request ("write a shorter email"), a question
   ("which route is shorter?"), a stop/cancel ("stop the job"), a correction
   of WHAT ("no, the other file") and anything code-shaped are not.
+* :func:`is_substance_correction` (v1.507.0, north-star plan 7.1) — the ONE
+  shape of a correction of SUBSTANCE this module reads, said straight after
+  a reply: "no," (or "wrong,") and then only "A, not B" / "A instead of B" /
+  "not B, A" in plain lower-case words ("no, metric units, not imperial"). Even
+  more conservative than the style detector: a name, a number or a date, a
+  file or other thing being made, "this one" / "the other", "I meant", a
+  task verb, a question or a second sentence all read as a one-off fix of
+  this reply, never as a lesson. :func:`substance_text` is the owner's own
+  words without the "no,".
 * :func:`signature` — a normalised key: lower-case, synonyms folded to one
   canonical token ("too long" / "shorten" / "be brief" -> ``short``),
   negation kept as ``not`` unless the canonical token already carries its
@@ -247,6 +256,85 @@ def is_correction(text: str) -> bool:
         return False
 
 
+# --------------------------------------------------------------------------- #
+# a correction of SUBSTANCE (v1.507.0, north-star plan 7.1)
+# --------------------------------------------------------------------------- #
+
+#: The longest message read as a correction of substance.
+SUBSTANCE_MAX_CHARS = 160
+
+#: The message must OPEN by saying the reply was wrong, with punctuation after
+#: it: "no, …", "nope - …", "wrong: …", "that's not right, …". "No tables"
+#: (no punctuation) is a style request, never this.
+_SUBSTANCE_LEAD = re.compile(
+    r"^(?:no|nope|wrong|incorrect|not quite|that'?s (?:wrong|not right|incorrect|not it))"
+    r"\s*[,:;!-]+\s*",
+    re.IGNORECASE,
+)
+#: One side of the contrast: one to five plain lower-case words.
+_SIDE = r"[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*){0,4}"
+#: The WHOLE rest is one contrast: "A, not B", "A instead of B", "A rather
+#: than B", "not B, A" / "not B but A". Anything more is not this shape.
+_CONTRASTS = (
+    re.compile(rf"^(?P<a>{_SIDE})\s*,?\s+(?:not|instead of|rather than)\s+(?P<b>{_SIDE})$"),
+    re.compile(rf"^not\s+(?P<b>{_SIDE})\s*(?:,\s*|\s+but\s+|,\s*but\s+)(?P<a>{_SIDE})$"),
+)
+#: Words that point at THIS reply's things ("the other one", "this", "that
+#: file") — a fix of this reply, never a lasting lesson.
+_POINTING = re.compile(
+    r"\b(?:this|that|these|those|it|its|one|ones|other|another|here|there|above|below|"
+    r"previous|last|next|first|second|third|former|latter|same|meant|mean|typo)\b",
+    re.IGNORECASE,
+)
+
+
+def _substance_rest(text: str) -> str:
+    """The message after its "no," lead, or "" when it has none."""
+    flat = " ".join(str(text or "").split())
+    m = _SUBSTANCE_LEAD.match(flat)
+    if not m:
+        return ""
+    return flat[m.end():].strip().rstrip(".!").strip()
+
+
+def is_substance_correction(text: str) -> bool:
+    """True for "no, A, not B" said in plain lower-case words — the one shape
+    of a correction of substance read as a lasting lesson (see the module
+    docstring). Pure; conservative; never raises."""
+    try:
+        raw = str(text or "")
+        if not raw.strip() or len(raw) > SUBSTANCE_MAX_CHARS or "\n" in raw.strip():
+            return False
+        if _CODE.search(raw) or "?" in raw or re.search(r"\d", raw):
+            return False
+        if is_correction(raw):
+            return False  # a correction of style has its own path
+        rest = _substance_rest(raw)
+        if not rest or re.search(r"[.!?;:]", rest):
+            return False  # one sentence only
+        # A capital letter is a name, a product or a title: one person's or
+        # one thing's, never a lesson in itself ("Tom, not Jane").
+        if re.search(r"[A-Z]", rest):
+            return False
+        if _TASK_START.match(rest) or _ARTIFACT.search(rest) or _ONE_OFF.search(rest):
+            return False
+        if (_MOMENT.search(rest) and not _LASTING.search(rest)) or _POINTING.search(rest):
+            return False
+        return any(rx.match(rest) for rx in _CONTRASTS)
+    except Exception:  # noqa: BLE001 — a detector never breaks a turn
+        return False
+
+
+def substance_text(text: str) -> str:
+    """The suggestion's sentence: the owner's OWN words without the "no,"
+    ("no, metric units, not imperial" -> "Metric units, not imperial."). "" when
+    the message is not a correction of substance."""
+    if not is_substance_correction(text):
+        return ""
+    rest = _substance_rest(text)
+    return (rest[:1].upper() + rest[1:] + ".") if rest else ""
+
+
 
 # --------------------------------------------------------------------------- #
 # signatures
@@ -435,8 +523,11 @@ __all__ = [
     "MAX_CHARS",
     "MAX_PROPOSAL",
     "SIMILAR_AT",
+    "SUBSTANCE_MAX_CHARS",
     "is_correction",
+    "is_substance_correction",
     "proposal_text",
     "signature",
     "similar",
+    "substance_text",
 ]

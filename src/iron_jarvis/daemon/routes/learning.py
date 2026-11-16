@@ -168,11 +168,24 @@ def register(app: FastAPI, d) -> None:
         """Run model reflection over recent low-scoring sessions (on-demand).
 
         Returns structured suggestions; applies NOTHING (no prompt/lesson/source
-        edits). Safe + deterministic offline via the mock model + heuristic fallback.
+        edits). Safe + deterministic offline via the heuristic fallback.
+
+        v1.507.0 (north-star plan 7.3): each suggestion is STORED as one that
+        waits for the owner (``ImprovementEngine.keep_suggestions``: listed
+        in Improvements and on the Memory page with Keep and Not this, the
+        low-scoring runs as evidence) and carries its ``status`` and ``id``.
+        ``made_by`` says whether a model wrote them or the scores did, and
+        ``note`` says why when no model's answer was used.
         """
         if d.platform.improvement is None:
             raise HTTPException(status_code=503, detail="improvement engine unavailable")
-        return await d.platform.improvement.reflect(limit=limit)
+        from ...learning.preferences import publish_suggested_noticed
+
+        out = await d.platform.improvement.reflect(limit=limit)
+        out = await asyncio.to_thread(d.platform.improvement.keep_suggestions, out)
+        for row in out.pop("_minted", []):
+            await publish_suggested_noticed(d.platform.event_bus, row)
+        return out
 
     @app.get("/memory/overview")
     async def memory_overview_route() -> dict[str, Any]:

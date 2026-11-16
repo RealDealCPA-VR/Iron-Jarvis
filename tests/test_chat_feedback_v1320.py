@@ -6,8 +6,8 @@ own page (Advanced-only in the Simple menu since v1.318.0), and the step's
 button opened Chat, which had nothing to rate with. Now:
 
 - ``POST /chat/feedback`` stores a 👍 / 👎 on a chat reply through the SAME
-  learning engine as a session rating — it counts as teaching, and a note
-  becomes a lesson. A bare 👎 is recorded WITHOUT the generic "be more
+  learning engine as a session rating — it counts as teaching, and (since
+  v1.507.0) a 👎's note waits as a suggestion. A bare 👎 is recorded WITHOUT the generic "be more
   careful" lesson (it says nothing about what to change).
 - The step's words name what to do in Chat, never "a finished session".
 - The example the dashboard types into Chat for the step really arms the
@@ -58,17 +58,21 @@ def test_a_thumbs_up_is_recorded_against_the_thread_and_counts_as_teaching(tmp_p
     assert _step(client, "teach_style")["done"] is True
 
 
-def test_a_thumbs_down_with_a_note_becomes_a_lesson(tmp_path):
+def test_a_thumbs_down_with_a_note_waits_as_a_suggestion(tmp_path):
+    """v1.507.0 (north-star plan 7.1): the note no longer becomes a lesson
+    every prompt carries at once; it waits in Improvements as a suggestion
+    (tests/test_north_star_went_wrong_v1507.py pins the rest)."""
     client = _client(tmp_path)
     r = client.post(
         "/chat/feedback",
-        json={"rating": "down", "comment": "  shorter, with bullet points  ", "thread_id": ""},
+        json={"rating": "down", "comment": "  shorter, with bullet points  ", "thread_id": "th_2"},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["remembered"] is True
-    assert [f.session_id for f in _rows(client, FeedbackRecord)] == ["chat"]
-    (lesson,) = _feedback_lessons(client)
-    assert "shorter, with bullet points" in lesson
+    assert r.json()["remembered"] is False and r.json()["suggested"] is True
+    assert [f.session_id for f in _rows(client, FeedbackRecord)] == ["chat:th_2"]
+    assert _feedback_lessons(client) == []
+    (row,) = [lsn for lsn in _rows(client, LessonRecord) if lsn.source == "went_wrong"]
+    assert row.status == "proposed" and row.text == "Shorter, with bullet points."
 
 
 def test_a_bare_thumbs_down_is_recorded_without_the_vague_lesson(tmp_path):

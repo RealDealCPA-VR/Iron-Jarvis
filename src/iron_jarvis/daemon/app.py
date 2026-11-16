@@ -585,6 +585,33 @@ async def _event_prune_loop(platform, *, interval_s: float = _EVENT_PRUNE_S) -> 
             log.warning("event-log retention sweep failed", exc_info=True)
 
 
+async def _tool_failure_pass(platform, tick=None) -> list[dict]:
+    """ONE daily read of tool failures (v1.507.0, north-star plan 7.2): the
+    improvement engine's ``sweep`` (a tool that failed repeatedly in the last
+    week leaves ONE suggestion in Improvements), off the event loop, its
+    health reported as ``tool_failures`` through ``tick`` (the lifespan's
+    ``_tick``). Returns the clusters it found; never raises (a failed pass is
+    reported, never fatal)."""
+    improvement = getattr(platform, "improvement", None)
+    if improvement is None:
+        return []
+    try:
+        out = await asyncio.to_thread(improvement.sweep)
+        found = list((out or {}).get("tool_failure_proposals") or [])
+        if found:
+            log.info("tool failures: %d tool(s) failed repeatedly this week", len(found))
+        if tick is not None:
+            tick("tool_failures", True)
+        return found
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — a pass must never kill the daemon
+        log.warning("tool-failure pass failed", exc_info=True)
+        if tick is not None:
+            tick("tool_failures", False, exc)
+        return []
+
+
 #: How often the daemon reclaims idle REPL namespaces (v1.333.0, D3).
 _REPL_SWEEP_S = 60.0
 
@@ -1477,6 +1504,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     except Exception as exc:  # noqa: BLE001 - a pass must never kill the daemon
                         log.exception("lesson compaction pass failed")
                         _tick("lesson_compaction", False, exc)
+                    # v1.507.0 (north-star plan 7.2): the day's read of tool
+                    # failures (its own health entry; never raises).
+                    await _tool_failure_pass(platform, _tick)
                     await asyncio.sleep(24 * 3600)
 
             compact_task = asyncio.create_task(_lesson_compact_loop())

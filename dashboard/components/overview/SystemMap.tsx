@@ -246,8 +246,15 @@ function starfield(w: number, h: number, count: number): { x: number; y: number;
   }));
 }
 
+/** v1.507.0 (north-star plan 8.2): the map's links are the daemon's page
+ *  table's (`daemon/pages.py`). The Directory's is its Settings section,
+ *  which has no surface of its own: its icon is the Directory surface's. */
+const ICON_HREF: Record<string, string> = {
+  "/settings?section=connections-apps": "/marketplace",
+};
+
 function iconFor(href: string): LucideIcon {
-  return (surfaceFor(href)?.icon as LucideIcon | undefined) ?? Circle;
+  return (surfaceFor(ICON_HREF[href] ?? href)?.icon as LucideIcon | undefined) ?? Circle;
 }
 
 function rgb(color: string, alpha: number): string {

@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.507.0
+
+**It learns from what went wrong.** The last part of the review fixes: Iron Jarvis now notices when something went wrong and asks whether to remember it.
+
 ## v1.506.0
 
 **Ask for anything in chat.** The sixth part of the review fixes: things the app could do that chat could not reach, could not find, or could not point you to.
@@ -77,7 +81,3 @@
 ## v1.494.0
 
 **Jarvis writes a short recap of finished work, and can forget a folder.** **A recap of each finished conversation.** When a chat or a coding session in Chat › Code that works in a folder has been quiet for 10 minutes, Jarvis writes a short recap of it: what was done, what was decided, and what is still open.
-
-## v1.493.0
-
-**A coding reply keeps working until Jarvis's own check passes, and says so honestly when it does not.** This is for coding sessions in **Chat › Code**.

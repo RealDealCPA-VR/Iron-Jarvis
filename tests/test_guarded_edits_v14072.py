@@ -341,7 +341,8 @@ async def test_the_post_lane_refuses_it_in_plain_words(env, path, kind):
     (row,) = _ledger(env.platform)
     assert row.ok is False
     assert A.GUARD_WHY[kind] in (row.output or "")
-    assert "this lane cannot ask for approval" in (row.output or "")
+    # v1.507.0 (north-star plan 8.3): in the app's words, never "this lane".
+    assert "it needs your OK, which can only be given in the Iron Jarvis window" in (row.output or "")
     assert out["reply"]
 
 

@@ -16,6 +16,7 @@
 // "Details" disclosure, and agents read by name ("Builder").
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   GraduationCap,
   Loader2,
@@ -91,6 +92,21 @@ const SOURCE_META: Record<string, SourceMeta> = {
     Icon: Brain,
     blurb: "noticed while reflecting on a session",
   },
+  // v1.507.0 (north-star plan 7.1): a suggestion you kept from what went
+  // wrong in a chat (your correction, your note, or a change you undid).
+  went_wrong: {
+    label: "your correction",
+    tone: "amber",
+    Icon: MessageSquare,
+    blurb: "something you corrected, undid or marked down, and kept",
+  },
+  // v1.507.0 (plan 7.3): a suggestion from Reflect that you kept.
+  reflected: {
+    label: "from Reflect",
+    tone: "violet",
+    Icon: Brain,
+    blurb: "suggested from agent runs that scored low, and kept",
+  },
 };
 
 function metaFor(source: string): SourceMeta {
@@ -140,6 +156,11 @@ interface ReflectSuggestion {
   kind?: string;
   target?: string;
   suggestion?: string;
+  /** v1.507.0 (north-star plan 7.3): what the daemon did with it —
+   *  "suggested" (stored, with `id`: it waits in Improvements and on the
+   *  Memory page) or why it was not added. */
+  status?: string;
+  id?: string;
 }
 
 interface ReflectResult {
@@ -147,6 +168,82 @@ interface ReflectResult {
   threshold: number;
   suggestions: ReflectSuggestion[];
   applied: boolean;
+  /** v1.507.0: "model" or "scores" — who wrote the suggestions. */
+  made_by?: string;
+  /** v1.507.0: why no model's answer was used, when it was not. */
+  note?: string;
+}
+
+/** v1.507.0 (north-star plan 7.3): why a suggestion was not added, in words. */
+const NOT_ADDED: Record<string, string> = {
+  already_waiting: "A suggestion like this already waits in Improvements.",
+  already_kept: "You already keep a preference like this.",
+  declined_before: "You said “not this” to one like this before, so it is not suggested again.",
+  full: "Not added: suggestions already wait in Improvements; answer those first.",
+  not_kept: "Not added: it could not be kept as written.",
+  // Lead review: a line written from the scores alone is shown, never stored.
+  from_scores: "Shown only: it comes from the scores alone, so there is nothing to keep.",
+};
+
+/** One of Reflect's suggestions. A stored one is answered on its own routes
+ *  (the Memory page's and Improvements' Keep / Not this). */
+function ReflectSuggestionRow({ sug }: { sug: ReflectSuggestion }) {
+  const [answer, setAnswer] = useState<"" | "kept" | "declined">("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function press(verb: "keep" | "decline") {
+    if (!sug.id) return;
+    setBusy(true);
+    setError("");
+    try {
+      await post(`/memory/preferences/${encodeURIComponent(sug.id)}/${verb}`, {});
+      setAnswer(verb === "keep" ? "kept" : "declined");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save that — try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const waiting = sug.status === "suggested" && !!sug.id;
+  return (
+    <li className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-2.5 text-sm text-zinc-300">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge value={sug.kind || "suggestion"} tone="violet" />
+        {sug.target && <span className="text-[11px] text-zinc-500">{sug.target}</span>}
+      </div>
+      {sug.suggestion && <p className="mt-1.5 leading-relaxed">{sug.suggestion}</p>}
+      {waiting && !answer && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <button type="button" disabled={busy} onClick={() => void press("keep")} className="btn-soft px-2.5 py-1">
+            Keep
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void press("decline")}
+            className="rounded-lg px-2 py-1 text-zinc-400 hover:text-zinc-200"
+          >
+            Not this
+          </button>
+          <span className="text-zinc-500">Waits in Improvements until you answer.</span>
+        </div>
+      )}
+      {answer === "kept" && (
+        <p className="mt-2 text-xs text-zinc-400">
+          Kept. Later chats and agents work this way; it is never told in another client&apos;s folders.
+        </p>
+      )}
+      {answer === "declined" && <p className="mt-2 text-xs text-zinc-400">Not kept; it won&apos;t be suggested again.</p>}
+      {!waiting && sug.status && NOT_ADDED[sug.status] && (
+        <p className="mt-2 text-xs text-zinc-500">{NOT_ADDED[sug.status]}</p>
+      )}
+      {error && (
+        <p role="alert" className="mt-1 text-xs text-tone-danger">
+          {error}
+        </p>
+      )}
+    </li>
+  );
 }
 
 /** POST /lessons/compact — dedup always; distillation only with a real model. */
@@ -478,31 +575,30 @@ export function Lessons() {
             {reflectResult && (
               <div className="space-y-2">
                 <SuccessNote>
-                  Reviewed {reflectResult.reviewed} low-scoring session
-                  {reflectResult.reviewed === 1 ? "" : "s"} (score ≤{" "}
+                  Reviewed {reflectResult.reviewed} agent run
+                  {reflectResult.reviewed === 1 ? "" : "s"} that scored low (score ≤{" "}
                   {reflectResult.threshold}) — {reflectResult.suggestions.length}{" "}
-                  suggestion{reflectResult.suggestions.length === 1 ? "" : "s"}.
-                  Nothing was applied automatically.
+                  suggestion{reflectResult.suggestions.length === 1 ? "" : "s"}. Nothing is used
+                  unless you keep it.
                 </SuccessNote>
+                {reflectResult.note && <p className="text-xs text-zinc-500">{reflectResult.note}</p>}
                 {reflectResult.suggestions.length > 0 && (
-                  <ul className="space-y-2">
-                    {reflectResult.suggestions.map((sug, i) => (
-                      <li
-                        key={i}
-                        className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-2.5 text-sm text-zinc-300"
-                      >
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge value={sug.kind || "suggestion"} tone="violet" />
-                          {sug.target && (
-                            <span className="text-[11px] text-zinc-500">{sug.target}</span>
-                          )}
-                        </div>
-                        {sug.suggestion && (
-                          <p className="mt-1.5 leading-relaxed">{sug.suggestion}</p>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
+                  <>
+                    <ul data-testid="reflect-suggestions" className="space-y-2">
+                      {reflectResult.suggestions.map((sug, i) => (
+                        <ReflectSuggestionRow key={sug.id ?? `s${i}`} sug={sug} />
+                      ))}
+                    </ul>
+                    {reflectResult.suggestions.some((s) => s.status === "suggested" && s.id) && (
+                      <p className="text-xs text-zinc-500">
+                        They also wait in{" "}
+                        <Link href="/improvements" className="text-accent-soft hover:underline">
+                          Improvements
+                        </Link>{" "}
+                        and under your preferences on this page.
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
             )}

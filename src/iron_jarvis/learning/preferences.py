@@ -43,7 +43,14 @@ from sqlmodel import select
 
 from ..core.db import session_scope
 from ..core.ids import utcnow
-from .corrections import MAX_CHARS, is_correction, proposal_text, signature, similar
+from .corrections import (
+    MAX_CHARS,
+    is_correction,
+    is_substance_correction,
+    proposal_text,
+    signature,
+    similar,
+)
 from .models import (
     STATUS_CONFIRMED,
     STATUS_DECLINED,
@@ -86,6 +93,23 @@ SCAN_SOURCES = {"claude-code": "Claude Code", "codex": "Codex"}
 
 #: Sources the prompt never reads (task reflections — see learning.engine).
 _NOT_PREFERENCES = ("reflection",)
+
+#: v1.507.0 (north-star plan 7.1): a suggestion from what went wrong in a
+#: chat — the owner undid a change a reply made, corrected a reply's
+#: substance ("no, cash basis, not accrual"), or gave a reply a thumbs-down
+#: with a note. Its words are the OWNER's (their correction, their note, their
+#: request), its evidence links the chat, and once kept it is told only where
+#: the client wall lets that chat be told (:func:`told_lessons`).
+SOURCE_WENT_WRONG = "went_wrong"
+#: v1.507.0 (plan 7.3): a suggestion "Reflect" made from low-scoring agent
+#: runs (a model's words, or the scores' own when no model answered); its
+#: evidence links the runs, and it is walled by them the same way.
+SOURCE_REFLECTED = "reflected"
+#: The sources whose rows reach a prompt only through the client wall, by
+#: the chats and runs their evidence links (:func:`told_lessons`).
+WALLED_SOURCES = (SOURCE_WENT_WRONG, SOURCE_REFLECTED)
+#: Where a chat's evidence opens (the address ``memory.fabric`` reads back).
+CHAT_LINK = "/chat?thread="
 
 #: One minting at a time, so two turns cannot both pass the cap / never-ask check.
 _MINT_LOCK = threading.Lock()
@@ -479,12 +503,18 @@ NOTICED_DECLINED = "declined_before"
 NOTICED_FULL = "full"
 
 
-def mint_noticed(engine, text: str, *, evidence: list[dict[str, Any]]) -> tuple[LessonRecord | None, str]:
+def mint_noticed(
+    engine, text: str, *, evidence: list[dict[str, Any]], source: str = "preference", weight: int = 5,
+) -> tuple[LessonRecord | None, str]:
     """v1.501.0 (decision D2): a preference an agent run GUESSED waits for
     the owner — ONE ``proposed`` row, origin ``noticed``, the run as evidence
     — never a kept one. The same never-ask-twice rule and open limit as a
     repeated correction (:func:`mint`), under the same lock. Returns
-    ``(row, NOTICED_SUGGESTED)`` or ``(None, reason)``. Blocking."""
+    ``(row, NOTICED_SUGGESTED)`` or ``(None, reason)``. Blocking.
+
+    v1.507.0 (north-star plan 7.1, 7.3): ``source`` / ``weight`` — what went
+    wrong in a chat (:data:`SOURCE_WENT_WRONG`) and Reflect's suggestions
+    (:data:`SOURCE_REFLECTED`) take this same path."""
     sig = signature(text)
     with _MINT_LOCK, session_scope(engine) as db:
         covered = _covering(db, sig) if sig else None
@@ -498,8 +528,8 @@ def mint_noticed(engine, text: str, *, evidence: list[dict[str, Any]]) -> tuple[
         row = LessonRecord(
             text=text,
             scope="user",
-            source="preference",
-            weight=5,
+            source=source,
+            weight=weight,
             status=STATUS_PROPOSED,
             origin="noticed",
             evidence_json=json.dumps(evidence[:MAX_EVIDENCE]),
@@ -721,7 +751,14 @@ async def suggest_for_turn(platform: Any, body: Any, *, session_id: Any = None) 
             if getattr(m, "role", "") == "user":
                 last = str(getattr(m, "content", "") or "")
                 break
-        if not last.strip() or not is_correction(last):
+        if not last.strip():
+            return None
+        if not is_correction(last):
+            # v1.507.0 (north-star plan 7.1): a correction of SUBSTANCE in
+            # the message after a reply leaves one suggestion that waits in
+            # Improvements (never this reply's card: it is not a repeat).
+            if is_substance_correction(last):
+                await _suggest_substance(platform, body, session_id)
             return None
         engine = getattr(platform, "engine", None)
         if engine is None:
@@ -741,6 +778,26 @@ async def suggest_for_turn(platform: Any, body: Any, *, session_id: Any = None) 
         # INSERT's parameters — the user's quoted words (reviewer).
         log.warning("preference suggestion skipped (%s)", type(exc).__name__)
         return None
+
+
+async def _suggest_substance(platform: Any, body: Any, session_id: Any) -> None:
+    """v1.507.0 (plan 7.1): the correction of substance's suggestion
+    (``went_wrong.suggest_from_correction``), off the loop under the turn's
+    budget. A coding session's turn is not read here (its lessons live in its
+    own folder's library). Never raises; logs no words."""
+    try:
+        engine = getattr(platform, "engine", None)
+        if engine is None or where_for_session(session_id):
+            return
+        from .went_wrong import publish_suggested, suggest_from_correction
+
+        row = await asyncio.wait_for(
+            asyncio.to_thread(suggest_from_correction, engine, body), timeout=TURN_BUDGET_S
+        )
+        if row is not None:
+            await publish_suggested(getattr(platform, "event_bus", None), row)
+    except Exception as exc:  # noqa: BLE001 — a suggestion never fails a turn
+        log.warning("correction suggestion skipped (%s)", type(exc).__name__)
 
 
 def fold_suggestion_states(engine, messages: Any) -> Any:
@@ -1002,13 +1059,72 @@ async def publish_scan(platform: Any, minted: list[Any]) -> None:
         await _publish_suggested(platform, row.id, row.text, len(evidence_of(row)), "scan")
 
 
+# --------------------------------------------------------------------------- #
+# the client wall for what went wrong (v1.507.0, north-star plan 7.1 / 7.3)
+# --------------------------------------------------------------------------- #
+
+
+def told_lessons(engine: Any, rows: list[Any]) -> list[Any]:
+    """``rows`` without the :data:`WALLED_SOURCES` rows the turn in flight may
+    not be told (``workmap.clients.wall.current()``). Such a row is told only
+    when EVERY chat and run its evidence links passes the wall
+    (``wall.tell_passages``, with the row's own text read for a client's
+    name); a row whose evidence links nothing, or a wall that cannot be read,
+    tells none of them (fail closed). Every other row is returned as it is.
+    The owner's own screens (``wall.owner_screen()``) are not walled.
+    BLOCKING (the client map, cached, and the chats' and runs' folders);
+    never raises."""
+    rows = list(rows or [])
+    walled = [r for r in rows if str(getattr(r, "source", "") or "") in WALLED_SOURCES]
+    if not walled:
+        return rows
+    allowed: set[int] = set()
+    try:
+        from ..memory.fabric import _lesson_sources
+        from ..workmap.clients import wall
+
+        if wall.on_owner_screen():
+            return rows
+        sources = [_lesson_sources(r) for r in walled]
+        passages = [
+            (kind, ref, "", str(getattr(r, "text", "") or ""))
+            for r, refs in zip(walled, sources) for kind, ref in refs
+        ]
+        verdicts = wall.tell_passages(engine, wall.current(), passages) if passages else []
+        if verdicts is not None:
+            at = 0
+            for r, refs in zip(walled, sources):
+                mine = verdicts[at : at + len(refs)]
+                at += len(refs)
+                if refs and all(mine):
+                    allowed.add(id(r))
+    except Exception:  # noqa: BLE001 — unsure: none of them is told
+        log.debug("a walled lesson could not be judged; it is not told", exc_info=True)
+        allowed = set()
+    return [r for r in rows if str(getattr(r, "source", "") or "") not in WALLED_SOURCES or id(r) in allowed]
+
+
+def chat_evidence(quote: str, thread_id: str, *, at: str = "") -> dict[str, Any] | None:
+    """One evidence entry for a chat turn: the owner's words, when, "chat",
+    and the link to the chat (the link the client wall reads the chat's folder
+    from). None without a quote or a thread."""
+    thread = str(thread_id or "").strip()
+    if not thread:
+        return None
+    return _evidence(quote, at=at or utcnow().isoformat(), where="chat", link=f"{CHAT_LINK}{thread}")
+
+
 __all__ = [
     "MAX_OPEN",
     "PreferenceConflict",
     "add_lesson",
     "PreferenceInvalid",
     "SCAN_SOURCES",
+    "SOURCE_REFLECTED",
+    "SOURCE_WENT_WRONG",
+    "WALLED_SOURCES",
     "ask_again",
+    "chat_evidence",
     "chat_occurrences",
     "clean_text",
     "decline",
@@ -1031,4 +1147,5 @@ __all__ = [
     "sources_available",
     "suggest_for_turn",
     "suggest_from_turn",
+    "told_lessons",
 ]

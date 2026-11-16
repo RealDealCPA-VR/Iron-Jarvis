@@ -366,6 +366,15 @@ async def perform_undo(d, action_id: str) -> dict[str, Any]:
         },
         session_id=session_id,
     )
+    # v1.507.0 (north-star plan 7.1): undoing a change a CHAT reply made is
+    # the owner saying it was wrong — it leaves ONE suggestion in
+    # Improvements, with that reply's chat as evidence (only when the saved
+    # chat names the change for certain). Off the loop; never fails the undo.
+    if session_id == "chat":
+        from ...learning import went_wrong
+
+        row = await asyncio.to_thread(went_wrong.suggest_from_undo, engine, action_id)
+        await went_wrong.publish_suggested(platform.event_bus, row)
     return {
         "undone": action_id,
         "undo_invocation_id": undo_inv_id,

@@ -112,6 +112,9 @@ async def test_the_post_chat_lane_refuses_an_outbound_webhook(tmp_path, monkeypa
     _complete_scripted(platform, monkeypatch, [[ToolCall(id="w1", name="webhook_add", arguments=OUT)]])
     await run_chat_turn(platform, {}, body)
     row = _row(platform, "chat")
-    assert row.ok is False and "cannot ask for approval" in row.output, row.output
+    # v1.507.0 (north-star plan 8.3, moved on purpose): the app's words,
+    # never "this lane cannot ask for approval".
+    assert row.ok is False and "needs your OK, which can only be given in the Iron Jarvis window" in row.output, row.output
+    assert "lane" not in row.output
     assert "for free" not in row.output, "a webhook is not a spend"
     assert registered == []

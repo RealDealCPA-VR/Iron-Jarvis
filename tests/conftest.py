@@ -197,6 +197,26 @@ def _no_real_claude_model_discovery():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _no_real_coding_tool():
+    """v1.507.0: never start a REAL coding tool (Claude Code, Codex, …) from
+    the suite. ``hosted.service`` finds a tool's program through one name,
+    ``service.binary_for``; for the whole session a program that is really
+    installed on this PC reads as "not installed", as it does on GitHub. A
+    test's stand-in (``use_fake``, by monkeypatch) replaces this for its
+    duration and falls back to it, never to the real lookup, if the test
+    undoes its patches early. See ``tests/_real_tool_guard.py``."""
+    from iron_jarvis.hosted import service as hosted_service
+    from tests._real_tool_guard import guard
+
+    original = hosted_service.binary_for
+    hosted_service.binary_for = guard(original)
+    try:
+        yield
+    finally:
+        hosted_service.binary_for = original
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_codex_home():
     """v1.420.0: ``chat_turn.codex_context_window`` reads
     ``<CODEX_HOME>/models_cache.json`` on a background thread for any

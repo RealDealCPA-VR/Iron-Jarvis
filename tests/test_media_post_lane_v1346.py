@@ -8,7 +8,7 @@ THE USER'S RULE: ask before EVERY spend. The stream lane asks with a card
 with nobody asked. Now the lane consults the same ``spend_checks_for`` and a
 verdict with ``ask`` True is REFUSED through the registry's deny path — the
 tool is never started, the model-facing tool message reads ``NOT RUN: <the
-quote's words> — this lane cannot ask for approval; …``, a ledger row and a
+quote's words> — it needs your OK, which can only be given in the Iron Jarvis window; …``, a ledger row and a
 ``tool.denied`` event exist, and the reply footnotes it. A FREE verdict runs
 exactly as before. POST-lane-only by design (the stream lane cards instead).
 
@@ -51,7 +51,8 @@ from tests.test_generate_media_tool_v1346 import (
 )
 
 FOOTNOTE = REFUSAL_FOOTNOTE_WORDS[SPEND_NOT_ASKED_FOOTNOTE]
-TAIL = "this lane cannot ask for approval; use the chat page (POST /chat/stream)"
+#: v1.507.0 (north-star plan 8.3): the app's words, never "this lane".
+TAIL = "it needs your OK, which can only be given in the Iron Jarvis window"
 
 
 @pytest.fixture()

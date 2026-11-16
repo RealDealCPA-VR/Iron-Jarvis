@@ -35,6 +35,7 @@ from sqlmodel import select
 from ..core.db import session_scope
 from ..core.ids import utcnow
 from .models import STATUS_CONFIRMED, STATUS_PROPOSED, FeedbackRecord, LessonRecord
+from .preferences import SOURCE_WENT_WRONG
 
 log = logging.getLogger(__name__)
 
@@ -87,13 +88,21 @@ _TIDY_EVENT_ROWS = 50
 _TIDY_TEXT = 160
 
 
+#: v1.501.0: the sources of a row in the owner's own words. v1.507.0
+#: (north-star plan 7.1): ``went_wrong`` — their correction, their note, or an
+#: undo of a change with their request — joins it (told only where the client
+#: wall lets its chat be told, ``preferences.told_lessons``).
+STATED_SOURCES: tuple[str, ...] = ("preference", SOURCE_WENT_WRONG)
+
+
 def stated_clause():
     """The SQL condition "the owner stated (or kept) this preference"
-    (v1.501.0): ``source == "preference"``. Such a row reaches every prompt
-    under the character budget and no outcome bonus moves it — the owner's
-    word is not ranked by how unrelated runs scored. (A row an agent run
-    wrote before v1.501.0 was stored the same way and cannot be told apart.)"""
-    return LessonRecord.source == "preference"
+    (v1.501.0): ``source`` in :data:`STATED_SOURCES`. Such a row reaches
+    every prompt it may be told in, under the character budget, and no
+    outcome bonus moves it — the owner's word is not ranked by how unrelated
+    runs scored. (A row an agent run wrote before v1.501.0 was stored the same
+    way and cannot be told apart.)"""
+    return LessonRecord.source.in_(STATED_SOURCES)  # type: ignore[attr-defined]
 
 
 def _norm(text: str) -> str:
@@ -119,6 +128,7 @@ class LearningEngine:
         comment: str = "",
         *,
         lesson_on_bare_down: bool = True,
+        lesson_on_note: bool = True,
     ) -> FeedbackRecord:
         """Store user feedback and, when it carries signal, distil a lesson.
 
@@ -131,6 +141,11 @@ class LearningEngine:
         result was rejected; be more careful" says nothing about WHAT to do
         differently, and a thumbs-down on one reply must not add a vague rule
         to every later prompt. The note, when given, is the lesson.
+
+        ``lesson_on_note=False`` (v1.507.0, north-star plan 7.1, a chat
+        reply's 👎 WITH a note): no lesson is written here either — the note
+        waits in Improvements as a suggestion (``learning.went_wrong``) and
+        reaches no prompt until the owner keeps it.
         """
         comment = (comment or "").strip()
         with session_scope(self.engine) as db:
@@ -141,6 +156,8 @@ class LearningEngine:
             db.commit()
             db.refresh(record)
 
+        if comment and not lesson_on_note:
+            return record
         if comment or (rating == "down" and lesson_on_bare_down):
             if comment:
                 text = (
@@ -312,13 +329,18 @@ class LearningEngine:
         from a session's text, which is how an attack would get here.
         """
         from ..core.promptguard import publish_blocked, scan_context
+        from .preferences import told_lessons
 
-        stated = self._stated(scope)
-        stated_ids = {r.id for r in stated}
+        stated_all = self._stated(scope)
+        stated_ids = {r.id for r in stated_all}
+        # v1.507.0 (north-star plan 7.1 / 7.3): a kept suggestion from what
+        # went wrong in a chat, or from Reflect's low-scoring runs, is told
+        # only where the client wall lets its chat or runs be told.
+        stated = told_lessons(self.engine, stated_all)
         others = [
-            r for r in self.lessons(
+            r for r in told_lessons(self.engine, self.lessons(
                 scope=scope, limit=limit + len(stated_ids), exclude_sources=_PROMPT_EXCLUDED_SOURCES
-            )
+            ))
             if r.id not in stated_ids
         ][: max(0, int(limit))]
         if not stated and not others:

@@ -3313,7 +3313,7 @@ def register(app: FastAPI, d) -> None:
         )
 
     @app.post("/chat/feedback")
-    def chat_feedback(body: ChatFeedbackBody) -> dict[str, Any]:
+    async def chat_feedback(body: ChatFeedbackBody) -> dict[str, Any]:
         """A 👍 / 👎 on a chat reply (v1.320.0).
 
         The user's report: the setup checklist said "rate a finished session",
@@ -3322,22 +3322,49 @@ def register(app: FastAPI, d) -> None:
         Session row, so the rating is stored against ``chat:<thread id>``
         (``chat`` for a conversation not saved yet) through the SAME learning
         engine as a session rating: it counts as teaching (the checklist's
-        "Teach it your style"), and a note becomes a lesson every later
-        prompt carries. A bare 👎 is recorded WITHOUT a lesson — it does not
-        say what to change. The reply's text is never stored here.
+        "Teach it your style"). A bare 👎 is recorded WITHOUT a lesson — it
+        does not say what to change. v1.507.0: a 👎's note waits in
+        Improvements as a suggestion (``words`` says what became of it); a
+        👍's note is still a lesson at once. The reply's text is never stored
+        here.
         """
         rating = (body.rating or "").strip().lower()
         if rating not in ("up", "down"):
             raise HTTPException(status_code=422, detail="rating must be 'up' or 'down'")
         comment = (body.comment or "").strip()[:500]
         thread = (body.thread_id or "").strip()[:80]
-        fb = d.platform.learning.record_feedback(
+        # v1.507.0 (north-star plan 7.1): a 👎's note no longer becomes a
+        # lesson every prompt carries at once. It waits in Improvements as ONE
+        # suggestion in the owner's own words, the reply's chat as evidence
+        # (``learning.went_wrong``), and reaches no prompt until kept.
+        down_note = rating == "down" and bool(comment)
+        fb = await asyncio.to_thread(
+            d.platform.learning.record_feedback,
             f"chat:{thread}" if thread else "chat",
             rating,
             comment,
             lesson_on_bare_down=False,
+            lesson_on_note=not down_note,
         )
-        return {"id": fb.id, "rating": fb.rating, "remembered": bool(comment)}
+        out: dict[str, Any] = {
+            "id": fb.id, "rating": fb.rating, "remembered": bool(comment) and not down_note, "suggested": False,
+        }
+        if down_note:
+            from ...learning import went_wrong
+
+            try:
+                row, outcome = await asyncio.to_thread(
+                    went_wrong.suggest_from_note, d.platform.engine, thread, comment
+                )
+            except Exception as exc:  # noqa: BLE001 — the rating is kept either way
+                log.warning("thumbs-down note: no suggestion (%s)", type(exc).__name__)
+                row, outcome = None, ""
+            out["suggested"] = row is not None
+            out["words"] = went_wrong.NOTE_WORDS.get(outcome, "Noted.")
+            if row is not None:
+                out["suggestion_id"] = row.id
+                await went_wrong.publish_suggested(d.platform.event_bus, row)
+        return out
 
     @app.post("/chat/turns/{turn_id}/stop")
     async def stop_chat_turn(turn_id: str) -> dict[str, Any]:

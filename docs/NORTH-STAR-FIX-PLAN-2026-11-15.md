@@ -456,14 +456,33 @@ the routing call rather than the model's own lookup.
 
 Area rules: `docs/rules/memory.md`.
 
-- [ ] **7.1 An undo, a correction of substance and a thumbs-down with a note
+**Shipped in v1.507.0.** As built, where it differs from the lines below:
+7.1 the three doors are in `learning/went_wrong.py`. A correction of
+substance is read in ONE shape only ("no, this, not that" in plain lower-case
+words, straight after a reply, no model call). An undo is linked only when
+exactly one saved reply names the change; its words are the app's own line
+for the change plus the owner's request, quoted. A thumbs-down note is no
+longer a lesson at once. Kept rows are walled by the chat they came from.
+7.2 runs in the daily lesson tidy-up loop; the last 7 days, refusals left
+out, once per week of failures; the kind is the existing "wants" suggestion
+(maintainer agent, high risk, never starts itself). Lead review: the task
+names the Activity rows and does not quote what the tool answered. 7.3 only
+what a model wrote is stored (lead review: the fallback written from the
+scores alone is shown, never stored). 7.4 re-scores by the difference.
+Left open: corrections of substance in Chat › Code and agent runs; an undo
+in a chat that was forked or where two replies list the same file; kept
+preferences and condensed lessons older than this release are still not
+walled; the suggestion card under the reply itself (they wait in
+Improvements only).
+
+- [x] **7.1 An undo, a correction of substance and a thumbs-down with a note
   each leave a suggestion**, with the turn as evidence, kept to the folder.
   `learning/corrections.py:16`, `daemon/routes/chat.py:3307`.
-- [ ] **7.2 Tool failures are read.** `improvement/engine.py:719` `sweep` and
+- [x] **7.2 Tool failures are read.** `improvement/engine.py:719` `sweep` and
   `scan_tool_failures` run from an existing daily loop.
-- [ ] **7.3 "Reflect" leaves suggestions that can be answered.**
+- [x] **7.3 "Reflect" leaves suggestions that can be answered.**
   `dashboard/components/memory/Lessons.tsx:487`.
-- [ ] **7.4 A late rating changes the run's score.**
+- [x] **7.4 A late rating changes the run's score.**
   `improvement/engine.py:170`.
 
 ## Group 8. Calm and plain
@@ -474,13 +493,20 @@ Area rules: `docs/rules/dashboard.md`, `daemon.md`.
 editing). 8.1: `core/failures.plain_failure` at 141 sites in `daemon/routes/`,
 with a scan test and an allow list for the sites whose text is the code's own
 sentence. 8.4: the Autonomy page and the watcher line say "Suggestions", and
-"proposal" is on the dashboard's retired-word list. 8.2 and 8.3 are open.
+"proposal" is on the dashboard's retired-word list.
+
+**8.2 and 8.3 shipped in v1.507.0.** 8.2: `system_map._node` takes each
+star's name and link from `daemon/pages.py`; "Sessions", "Chats" and "Models"
+became "Agent runs", "Chat" and "Connections"; new stars for Improvements
+(no count: its suggestions live in eleven stores) and Clients. 8.3: the three
+refusal phrases say "it needs your OK, which can only be given in the Iron
+Jarvis window", with a scan test.
 
 - [x] **8.1 No raw exception text on screen.** `plain_failure(what, exc)` at
   every broad `except` in `daemon/routes/` (about 168). Scan test.
-- [ ] **8.2 One name per page.** `daemon/routes/system_map.py:595, 652` takes
+- [x] **8.2 One name per page.** `daemon/routes/system_map.py:595, 652` takes
   its labels from the page table (6.1); the map gains Improvements and Clients.
-- [ ] **8.3 No "lane" on screen.** `daemon/chat_turn.py:2862, 2902, 2914`.
+- [x] **8.3 No "lane" on screen.** `daemon/chat_turn.py:2862, 2902, 2914`.
 - [x] **8.4 "Proposals" becomes "suggestions".**
   `dashboard/app/autonomy/page.tsx:586`, `daemon/page_doors.py:930`; the word
   joins the retired list.
@@ -503,6 +529,24 @@ it did (15 to 17 minutes), so the suite did not slow down.
 To find the cause of an unexplained one, the test run would need to print
 a retried test's first failure (`-rR` shows only its name); that is a change
 to `.github/workflows`, left for the owner.
+
+## Found along the way
+
+- **Local test runs could start the owner's real Claude Code** (found
+  2026-11-16, fixed in v1.507.0). Two hand-off tests undid their stand-in
+  before their service had stopped; on this PC a start still in flight then
+  launched the real `claude`, signed in, with the owner's extensions. Four
+  were left running by a local run that was stopped early. None has a
+  transcript, so none was sent a message. Fixed for the whole suite by
+  `tests/_real_tool_guard.py` (see `docs/rules/ci.md`). GitHub's runners have
+  no coding tool installed, so the suite never showed it there.
+- **A coding tool whose start is in flight when Iron Jarvis shuts down is
+  started anyway** (open). `hosted/service.py` sets `_closing` in `shutdown`
+  but neither `_ensure_process` nor `_start_process` reads it after their
+  waits, so the stop pass can finish before the process exists and nothing
+  then stops it. Not fixed here: a change to how child processes start and
+  stop has to be checked on the packaged build. First item for the second
+  review of `hosted/`.
 
 ## Not reviewed
 

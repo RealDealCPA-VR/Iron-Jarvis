@@ -293,7 +293,18 @@ class RecallLessonsTool(Tool):
         # often a client's — and carries no folder the client wall
         # (``workmap.clients.wall``) could judge, so recalling it into another
         # client's chat or run would cross that wall.
-        items = self.learning.lessons(scope=scope, limit=limit, exclude_sources=_PROMPT_EXCLUDED_SOURCES)
+        from .preferences import told_lessons
+
+        # v1.507.0 (north-star plan 7.1 / 7.3): a kept suggestion from what
+        # went wrong in a chat or from low-scoring runs passes the client wall
+        # by the chat or runs it came from. Off the loop (the wall reads the
+        # client record and their folders; the context carries the turn).
+        items = await asyncio.to_thread(
+            lambda: told_lessons(
+                getattr(self.learning, "engine", None),
+                self.learning.lessons(scope=scope, limit=limit, exclude_sources=_PROMPT_EXCLUDED_SOURCES),
+            )
+        )
         results = [
             {
                 "id": lesson.id,

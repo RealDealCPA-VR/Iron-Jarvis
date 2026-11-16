@@ -212,7 +212,8 @@ def test_tool_failure_cluster_mints_suggest_only_proposal(platform):
     pending = platform.intent.list_proposals(status="pending")
     assert len(pending) == 1
     prop = pending[0]
-    assert prop.title == "Recurring failures in tool 'shell'"
+    # v1.507.0 (north-star plan 7.2): the tool by its own name, never its id.
+    assert prop.title == "Find out why shell keeps failing"
     assert prop.source == "event"
     assert prop.risk == "high"  # high risk => never auto-executes under any dial
     assert prop.decoded_action()["agent_type"] == "maintainer"

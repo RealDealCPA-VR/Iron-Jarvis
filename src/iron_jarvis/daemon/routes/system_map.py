@@ -130,8 +130,7 @@ AREAS: list[tuple[str, str]] = [
 
 def _node(
     key: str,
-    label: str,
-    href: str,
+    page: str,
     *,
     setup: int = 0,
     used: int = 0,
@@ -140,10 +139,18 @@ def _node(
     detail: str = "",
     attention: str | None = None,
 ) -> dict[str, Any]:
+    """One star. v1.507.0 (north-star plan 8.2): ``page`` is the id of its
+    row in THE page table (``daemon/pages.py``), and the star's name and
+    link are that row's — the map never words a page itself, so it cannot
+    call ``/sessions`` "Sessions" while the sidebar says "Agent runs". An id
+    that is no row raises (a typo is found by the map's tests, never shown)."""
+    from ..pages import BY_ID
+
+    row = BY_ID[page]
     return {
         "key": key,
-        "label": label,
-        "href": href,
+        "label": row.name,
+        "href": row.href,
         "setup": max(0, int(setup)),
         "used": max(0, int(used)),
         "live": max(0, int(live)),
@@ -217,7 +224,7 @@ def _work(d, db, since) -> list[dict[str, Any]]:
         )
         live = _active_session_count(db, Session.project_id.is_not(None))  # type: ignore[union-attr]
         return _node(
-            "projects", "Projects", "/projects", setup=total, used=len(touched), live=live, unit="project",
+            "projects", "page_projects", setup=total, used=len(touched), live=live, unit="project",
             detail="Folders Jarvis works in, each with its own chats, tasks and team.",
         )
 
@@ -244,7 +251,7 @@ def _work(d, db, since) -> list[dict[str, Any]]:
         # (v1.367.0), so theirs are taken back out and lit on the Build star.
         live = max(0, CHAT_INFLIGHT.count() - _build_replies(d))
         return _node(
-            "chats", "Chats", "/chat", setup=total, used=used, live=live, unit="chat",
+            "chats", "page_chat", setup=total, used=used, live=live, unit="chat",
             detail="Your conversations with Jarvis.",
         )
 
@@ -262,7 +269,7 @@ def _work(d, db, since) -> list[dict[str, Any]]:
         )
         live = _active_session_count(db, Session.origin == "job:mission")
         return _node(
-            "agents", "Agents", "/agents", setup=len(list(AgentType)) + custom, used=used, live=live, unit="agent",
+            "agents", "page_agents", setup=len(list(AgentType)) + custom, used=used, live=live, unit="agent",
             detail="Your team. Give Jarvis one objective and the team works it.",
         )
 
@@ -278,7 +285,7 @@ def _work(d, db, since) -> list[dict[str, Any]]:
         if replies:
             detail += f" {replies} coding session{'s are' if replies != 1 else ' is'} answering now."
         return _node(
-            "build", "Build", "/terminals", setup=len(alive), used=busy + replies, live=busy + replies, unit="terminal",
+            "build", "page_build", setup=len(alive), used=busy + replies, live=busy + replies, unit="terminal",
             detail=detail,
         )
 
@@ -286,14 +293,14 @@ def _work(d, db, since) -> list[dict[str, Any]]:
         total = _count(db, select(func.count()).select_from(LiveDocRecord))
         used = _count(db, select(func.count()).select_from(LiveDocRecord).where(LiveDocRecord.updated_at >= since))
         return _node(
-            "documents", "Documents", "/documents", setup=total, used=used, unit="live document",
+            "documents", "page_documents", setup=total, used=used, unit="live document",
             detail="Documents Jarvis keeps up to date for you.",
         )
 
     def templates() -> dict[str, Any]:
         total = _count(db, select(func.count()).select_from(SavedPromptRecord))
         return _node(
-            "templates", "Templates", "/templates", setup=total, unit="template",
+            "templates", "page_templates", setup=total, unit="template",
             detail="Saved tasks you can start again in one press.",
         )
 
@@ -305,21 +312,21 @@ def _work(d, db, since) -> list[dict[str, Any]]:
             ArtifactRecord.kind.in_(sorted(_MEDIA_KINDS))  # type: ignore[attr-defined]
         )
         return _node(
-            "creative", "Creative", "/creative", setup=_count(db, base),
+            "creative", "page_creative", setup=_count(db, base),
             used=_count(db, base.where(ArtifactRecord.created_at >= since)), unit="piece",
             detail="Images, video and audio made here.",
         )
 
-    for fn, key, label, href in (
-        (projects, "projects", "Projects", "/projects"),
-        (chats, "chats", "Chats", "/chat"),
-        (agents, "agents", "Agents", "/agents"),
-        (panes, "build", "Build", "/terminals"),
-        (documents, "documents", "Documents", "/documents"),
-        (creative, "creative", "Creative", "/creative"),
-        (templates, "templates", "Templates", "/templates"),
+    for fn, key, page in (
+        (projects, "projects", "page_projects"),
+        (chats, "chats", "page_chat"),
+        (agents, "agents", "page_agents"),
+        (panes, "build", "page_build"),
+        (documents, "documents", "page_documents"),
+        (creative, "creative", "page_creative"),
+        (templates, "templates", "page_templates"),
     ):
-        star(fn, _node(key, label, href))
+        star(fn, _node(key, page))
     return out
 
 
@@ -348,11 +355,11 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
 
-    def star(fn: Callable[[], dict[str, Any]], key: str, label: str, href: str) -> None:
+    def star(fn: Callable[[], dict[str, Any]], key: str, page: str) -> None:
         try:
             out.append(fn())
         except Exception:  # noqa: BLE001
-            out.append(_node(key, label, href))
+            out.append(_node(key, page))
 
     def schedules() -> dict[str, Any]:
         from ...scheduling.models import ScheduledTaskRecord as S
@@ -378,7 +385,7 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
         )
         live = _active_session_count(db, Session.origin.like("schedule:%"))  # type: ignore[union-attr]
         return _node(
-            "schedules", "Schedules", "/schedules", setup=enabled, used=used, live=live, unit="schedule",
+            "schedules", "page_schedules", setup=enabled, used=used, live=live, unit="schedule",
             detail="Work handed to an agent on a clock.",
             attention=schedules_attention(failing, short),
         )
@@ -395,7 +402,7 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
             .where(WorkflowRunRecord.status.in_(["running", "waiting", "cancelling", "resuming"])),  # type: ignore[attr-defined]
         )
         return _node(
-            "workflows", "Workflows", "/workflows", setup=total, used=used, live=live, unit="workflow",
+            "workflows", "page_workflows", setup=total, used=used, live=live, unit="workflow",
             detail="Multi-step work wired from agents.",
         )
 
@@ -404,7 +411,7 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
 
         enabled = _count(db, select(func.count()).select_from(ReflexRule).where(ReflexRule.enabled == True))  # noqa: E712
         return _node(
-            "reflexes", "Rules", "/reflex", setup=enabled, used=_event_count(db, ("reflex.fired",), since),
+            "reflexes", "page_rules", setup=enabled, used=_event_count(db, ("reflex.fired",), since),
             unit="rule", detail="Something happens, Jarvis acts — on its own.",
         )
 
@@ -434,7 +441,7 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
             .where(SentinelRecord.last_error != ""),
         ) if on else 0
         return _node(
-            "sentinels", "Watchers", "/sentinels", setup=enabled, used=used, unit="watcher",
+            "sentinels", "page_watchers", setup=enabled, used=used, unit="watcher",
             detail="Always-on watchers that suggest, never act.",
             attention=f"{erroring} watcher{'s' if erroring != 1 else ''} cannot check" if erroring else None,
         )
@@ -452,7 +459,7 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
             db, Session.origin == "autonomy"
         )
         return _node(
-            "goals", "Autonomy", "/autonomy", setup=active, used=used, live=live, unit="active goal",
+            "goals", "page_autonomy", setup=active, used=used, live=live, unit="active goal",
             detail="What Jarvis wants to do on its own, and the switch that stops it.",
             attention=f"{tripped} goal{'s' if tripped != 1 else ''} stopped by its safety breaker" if tripped else None,
         )
@@ -462,30 +469,30 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
 
         enabled = _count(db, select(func.count()).select_from(WebhookRecord).where(WebhookRecord.enabled == True))  # noqa: E712
         return _node(
-            "webhooks", "Webhooks", "/webhooks", setup=enabled, used=_event_count(db, ("webhook.received",), since),
+            "webhooks", "page_webhooks", setup=enabled, used=_event_count(db, ("webhook.received",), since),
             unit="webhook", detail="Other apps knocking on Jarvis's door, and Jarvis knocking on theirs.",
         )
 
-    for fn, key, label, href in (
-        (schedules, "schedules", "Schedules", "/schedules"),
-        (workflows, "workflows", "Workflows", "/workflows"),
-        (goals, "goals", "Autonomy", "/autonomy"),
-        (reflexes, "reflexes", "Rules", "/reflex"),
-        (sentinels, "sentinels", "Watchers", "/sentinels"),
-        (webhooks, "webhooks", "Webhooks", "/webhooks"),
+    for fn, key, page in (
+        (schedules, "schedules", "page_schedules"),
+        (workflows, "workflows", "page_workflows"),
+        (goals, "goals", "page_autonomy"),
+        (reflexes, "reflexes", "page_rules"),
+        (sentinels, "sentinels", "page_watchers"),
+        (webhooks, "webhooks", "page_webhooks"),
     ):
-        star(fn, key, label, href)
+        star(fn, key, page)
     return out
 
 
 def _knowledge(d, db, since) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
 
-    def star(fn: Callable[[], dict[str, Any]], key: str, label: str, href: str) -> None:
+    def star(fn: Callable[[], dict[str, Any]], key: str, page: str) -> None:
         try:
             out.append(fn())
         except Exception:  # noqa: BLE001
-            out.append(_node(key, label, href))
+            out.append(_node(key, page))
 
     def memory() -> dict[str, Any]:
         from ...memory.models import MemoryRecord
@@ -493,7 +500,7 @@ def _knowledge(d, db, since) -> list[dict[str, Any]]:
         total = _count(db, select(func.count()).select_from(MemoryRecord))
         used = _count(db, select(func.count()).select_from(MemoryRecord).where(MemoryRecord.created_at >= since))
         return _node(
-            "memory", "Memory", "/memory", setup=total, used=used, unit="memory",
+            "memory", "page_memory", setup=total, used=used, unit="memory",
             detail="Working notes, lessons learned and long-term facts. Used = new this week.",
         )
 
@@ -506,7 +513,7 @@ def _knowledge(d, db, since) -> list[dict[str, Any]]:
             select(func.count()).select_from(K).where((K.last_used_at >= since) | (K.last_injected_at >= since)),  # type: ignore[operator]
         )
         return _node(
-            "skills", "Skills", "/skills", setup=total, used=used, unit="skill",
+            "skills", "page_skills", setup=total, used=used, unit="skill",
             detail="Know-how your agents call on.",
         )
 
@@ -523,7 +530,7 @@ def _knowledge(d, db, since) -> list[dict[str, Any]]:
             db, select(func.count()).select_from(CodeArtifactRecord).where(CodeArtifactRecord.last_run_at >= since)  # type: ignore[operator]
         )
         return _node(
-            "artifacts", "What agents made", "/artifacts", setup=total, used=used, unit="item",
+            "artifacts", "page_what_agents_made", setup=total, used=used, unit="item",
             detail="Files and code your agents made.",
         )
 
@@ -539,17 +546,44 @@ def _knowledge(d, db, since) -> list[dict[str, Any]]:
             updated = updated.replace(tzinfo=timezone.utc)
         used = 1 if updated is not None and updated >= since and filled else 0
         return _node(
-            "you", "You", "/you", setup=1 if (filled and on) else 0, used=used,
+            "you", "page_you", setup=1 if (filled and on) else 0, used=used,
             detail="Who you are and how you like answers — applied to every model.",
         )
 
-    for fn, key, label, href in (
-        (memory, "memory", "Memory", "/memory"),
-        (skills, "skills", "Skills", "/skills"),
-        (artifacts, "artifacts", "What agents made", "/artifacts"),
-        (you, "you", "You", "/you"),
+    def improvements() -> dict[str, Any]:
+        # v1.507.0 (north-star plan 8.2): the page every suggestion waits on.
+        # No count here: the waiting suggestions live in eleven stores, and
+        # the map reads one aggregate per number (the cost rules above).
+        return _node(
+            "improvements", "page_improvements", setup=1,
+            detail="Suggestions Iron Jarvis is waiting on you to keep or decline.",
+        )
+
+    def clients() -> dict[str, Any]:
+        # v1.507.0 (north-star plan 8.2): the people and businesses the
+        # owner works for, and the names that wait for an answer.
+        from ...workmap.models import CLIENT_CONFIRMED, CLIENT_PROPOSED, WorkClient
+
+        confirmed = _count(
+            db, select(func.count()).select_from(WorkClient).where(WorkClient.status == CLIENT_CONFIRMED)
+        )
+        waiting = _count(
+            db, select(func.count()).select_from(WorkClient).where(WorkClient.status == CLIENT_PROPOSED)
+        )
+        detail = "The people and businesses you do work for, each kept to their own folders."
+        if waiting:
+            detail += f" {waiting} name{'s wait' if waiting != 1 else ' waits'} for your answer."
+        return _node("clients", "page_clients", setup=confirmed, unit="client", detail=detail)
+
+    for fn, key, page in (
+        (memory, "memory", "page_memory"),
+        (skills, "skills", "page_skills"),
+        (artifacts, "artifacts", "page_what_agents_made"),
+        (you, "you", "page_you"),
+        (improvements, "improvements", "page_improvements"),
+        (clients, "clients", "page_clients"),
     ):
-        star(fn, key, label, href)
+        star(fn, key, page)
     return out
 
 
@@ -559,11 +593,11 @@ def _system(d, db, since) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     out: list[dict[str, Any]] = []
     vitals: dict[str, Any] = {}
 
-    def star(fn: Callable[[], dict[str, Any]], key: str, label: str, href: str) -> None:
+    def star(fn: Callable[[], dict[str, Any]], key: str, page: str) -> None:
         try:
             out.append(fn())
         except Exception:  # noqa: BLE001
-            out.append(_node(key, label, href))
+            out.append(_node(key, page))
 
     def sessions() -> dict[str, Any]:
         runs = _count(db, select(func.count()).select_from(Session).where(Session.created_at >= since))
@@ -592,7 +626,7 @@ def _system(d, db, since) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         # neither a success nor a failure yet.
         vitals["runs_done_7d"] = done
         return _node(
-            "sessions", "Sessions", "/sessions", setup=_count(db, select(func.count()).select_from(Session)),
+            "sessions", "page_agent_runs", setup=_count(db, select(func.count()).select_from(Session)),
             used=runs, live=_active_session_count(db), unit="run",
             detail=f"Every agent run. This week: {runs} started, {ok} finished cleanly"
             + (f", {failed} did not." if failed > 0 else "."),
@@ -601,7 +635,7 @@ def _system(d, db, since) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     def activity() -> dict[str, Any]:
         events = _count(db, select(func.count()).select_from(EventRecord).where(EventRecord.created_at >= since))
         return _node(
-            "activity", "Activity", "/activity", setup=1, used=events,
+            "activity", "page_activity", setup=1, used=events,
             detail="Every action, tool and decision, replayable.",
         )
 
@@ -616,7 +650,7 @@ def _system(d, db, since) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         calls, tin, tout = int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
         tokens = tin + tout
         return _node(
-            "usage", "Usage", "/usage", setup=1, used=calls,
+            "usage", "page_usage", setup=1, used=calls,
             detail=f"{tokens:,} tokens across {calls} model run{'s' if calls != 1 else ''} this week.",
         )
 
@@ -631,7 +665,7 @@ def _system(d, db, since) -> tuple[list[dict[str, Any]], dict[str, Any]]:
                 if metrics is not None and (getattr(metrics, "requests_running", 0) or 0) > 0:
                     busy += 1
         return _node(
-            "fleet", "Model servers", "/fleet", setup=len(listing), used=online, live=busy, unit="server",
+            "fleet", "page_model_servers", setup=len(listing), used=online, live=busy, unit="server",
             detail=f"{online} of {len(listing)} model server{'s' if len(listing) != 1 else ''} reachable.",
         )
 
@@ -642,20 +676,20 @@ def _system(d, db, since) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             db, select(func.count()).select_from(ProposalRecord).where(ProposalRecord.status == "pending")
         )
         return _node(
-            "self-dev", "Self-development", "/self-dev", setup=1,
+            "self-dev", "page_self_development", setup=1,
             used=_count(db, select(func.count()).select_from(ProposalRecord).where(ProposalRecord.created_at >= since)),
             detail=f"{pending} suggestion{'s' if pending != 1 else ''} waiting for your review." if pending else
             "Ideas Jarvis has for improving itself — every change review-gated.",
         )
 
-    for fn, key, label, href in (
-        (sessions, "sessions", "Sessions", "/sessions"),
-        (activity, "activity", "Activity", "/activity"),
-        (usage, "usage", "Usage", "/usage"),
-        (fleet, "fleet", "Model servers", "/fleet"),
-        (self_dev, "self-dev", "Self-development", "/self-dev"),
+    for fn, key, page in (
+        (sessions, "sessions", "page_agent_runs"),
+        (activity, "activity", "page_activity"),
+        (usage, "usage", "page_usage"),
+        (fleet, "fleet", "page_model_servers"),
+        (self_dev, "self-dev", "page_self_development"),
     ):
-        star(fn, key, label, href)
+        star(fn, key, page)
     return out, vitals
 
 
@@ -664,11 +698,11 @@ def _setup(d, db, since, failing_packs: list[dict[str, str]]) -> list[dict[str, 
 
     out: list[dict[str, Any]] = []
 
-    def star(fn: Callable[[], dict[str, Any]], key: str, label: str, href: str) -> None:
+    def star(fn: Callable[[], dict[str, Any]], key: str, page: str) -> None:
         try:
             out.append(fn())
         except Exception:  # noqa: BLE001
-            out.append(_node(key, label, href))
+            out.append(_node(key, page))
 
     def models() -> dict[str, Any]:
         from ...core.models import AgentRun
@@ -688,7 +722,7 @@ def _setup(d, db, since, failing_packs: list[dict[str, str]]) -> list[dict[str, 
         names = ", ".join(provider_heading(str(r.get("provider") or ""), manager) for r in ready[:4]) or "none yet"
         demo = default in ("", "mock")
         return _node(
-            "models", "Models", "/connections", setup=len(ready), used=calls, live=1 if live > 0 and not demo else 0,
+            "models", "page_connections", setup=len(ready), used=calls, live=1 if live > 0 and not demo else 0,
             unit="model",
             detail=(f"Ready: {names}. " + ("No model chosen for answers yet — replies are a demo." if demo else
                     answers_from(default, manager))),
@@ -722,7 +756,7 @@ def _setup(d, db, since, failing_packs: list[dict[str, str]]) -> list[dict[str, 
         )
         names = ", ".join(p["name"] for p in failing_packs)
         return _node(
-            "tools", "Tools", "/tools", setup=len(packs) + custom, used=used, live=0, unit="extension",
+            "tools", "page_tools", setup=len(packs) + custom, used=used, live=0, unit="extension",
             detail=f"{ready} of {on} extension{'s' if on != 1 else ''} running"
             + (f" ({off} switched off)" if off else "")
             + (f", plus {custom} custom tool{'s' if custom != 1 else ''}." if custom else "."),
@@ -745,7 +779,7 @@ def _setup(d, db, since, failing_packs: list[dict[str, str]]) -> list[dict[str, 
         # Edge"), read off the transport's cached status — never a probe and
         # never "Chrome" on a guess.
         return _node(
-            "browser", "Browser", "/computeruse", setup=1 if (b.get("paired") or connected) else 0, used=used,
+            "browser", "page_browser", setup=1 if (b.get("paired") or connected) else 0, used=used,
             live=1 if connected else 0,
             detail=browser_detail(connected, bool(b.get("paired")), paired_browser_name(d)),
         )
@@ -754,7 +788,7 @@ def _setup(d, db, since, failing_packs: list[dict[str, str]]) -> list[dict[str, 
         configured = (getattr(d.platform.config, "comm", None) or {}).get("channels") or {}
         n = len(configured) if hasattr(configured, "__len__") else 0
         return _node(
-            "channels", "Notifications", "/channels", setup=n, used=_event_count(db, ("comm.received",), since),
+            "channels", "page_notifications", setup=n, used=_event_count(db, ("comm.received",), since),
             unit="channel", detail="Where Jarvis reaches you, and where you can reach it.",
         )
 
@@ -762,18 +796,18 @@ def _setup(d, db, since, failing_packs: list[dict[str, str]]) -> list[dict[str, 
         rows = d.platform.connections.status()
         connected = sum(1 for r in rows if r.get("connected"))
         return _node(
-            "directory", "Directory", "/marketplace", setup=connected, unit="app",
+            "directory", "page_directory", setup=connected, unit="app",
             detail="Apps you connected — Notion, GitHub, Slack and more.",
         )
 
-    for fn, key, label, href in (
-        (models, "models", "Models", "/connections"),
-        (tools, "tools", "Tools", "/tools"),
-        (browser, "browser", "Browser", "/computeruse"),
-        (channels, "channels", "Notifications", "/channels"),
-        (connections, "directory", "Directory", "/marketplace"),
+    for fn, key, page in (
+        (models, "models", "page_connections"),
+        (tools, "tools", "page_tools"),
+        (browser, "browser", "page_browser"),
+        (channels, "channels", "page_notifications"),
+        (connections, "directory", "page_directory"),
     ):
-        star(fn, key, label, href)
+        star(fn, key, page)
     return out
 
 

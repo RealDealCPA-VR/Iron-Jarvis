@@ -997,18 +997,23 @@ describe("rate a reply in Chat (v1.320.0)", () => {
     expect((lastSaved().at(-1) as { rating?: unknown }).rating).toEqual({ value: "up" });
   });
 
-  it("👎 asks what should be different; the answer is sent and said back", async () => {
+  it("👎 asks what should be different; the answer is sent and what became of it is said back", async () => {
+    // v1.507.0 (north-star plan 7.1): the note waits in Improvements as a
+    // suggestion; the line says so in the daemon's own words.
+    const words = "Noted. Your note waits in Improvements as a suggestion; it is used once you keep it.";
+    H.api.postResponses["/chat/feedback"] = { id: "fb1", rating: "down", suggested: true, words };
     render(<ChatPage />);
     await send("hello", "Reply 1.");
     fireEvent.click(within(await screen.findByTestId("reply-rating")).getByRole("button", { name: "Not quite right" }));
     const ask = screen.getByTestId("reply-rating-ask");
+    expect(ask).toHaveTextContent("Your answer waits in Improvements as a suggestion, and is used once you keep it.");
     const box = within(ask).getByLabelText("What should be different next time?");
     expect(document.activeElement).toBe(box);
     fireEvent.change(box, { target: { value: "shorter, with bullets" } });
     fireEvent.click(within(ask).getByRole("button", { name: "Save" }));
-    expect(await screen.findByTestId("reply-rated")).toHaveTextContent(
-      "Noted — Jarvis will remember: “shorter, with bullets”",
-    );
+    const rated = await screen.findByTestId("reply-rated");
+    expect(rated).toHaveTextContent(`${words} “shorter, with bullets”`);
+    expect(rated.textContent).not.toMatch(/will remember/);
     expect(feedbackPosts().at(-1)!.body).toEqual(
       expect.objectContaining({ rating: "down", comment: "shorter, with bullets" }),
     );
@@ -1016,6 +1021,7 @@ describe("rate a reply in Chat (v1.320.0)", () => {
       expect((lastSaved().at(-1) as { rating?: unknown }).rating).toEqual({
         value: "down",
         note: "shorter, with bullets",
+        said: words,
       }),
     );
   });

@@ -1389,6 +1389,13 @@ def register(app: FastAPI, d) -> None:
     @app.post("/sessions/{session_id}/feedback")
     def session_feedback(session_id: str, body: FeedbackBody) -> dict[str, Any]:
         fb = d.platform.learning.record_feedback(session_id, body.rating, body.comment)
+        # v1.507.0 (north-star plan 7.4): a rating given after the run ended
+        # re-scores it (its score, its agent's record and the lessons it was
+        # told move by the difference). A run not scored yet is left to its
+        # end hook, which reads this rating then. Never fails the rating.
+        improvement = getattr(d.platform, "improvement", None)
+        if improvement is not None:
+            improvement.rescore_if_scored(session_id)
         return {"id": fb.id, "rating": fb.rating}
 
     @app.get("/reviews")

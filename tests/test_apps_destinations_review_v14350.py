@@ -870,4 +870,5 @@ def test_the_post_lane_refuses_an_import_armed_by_name(app, homes):
     with session_scope(p.engine) as db:
         row = db.exec(select(ToolInvocation).where(ToolInvocation.tool == "app_import")).first()
         said = f"{row.output} {getattr(row, 'error', '') or ''}"
-    assert "cannot ask for approval" in said and "for free" not in said, said
+    # v1.507.0 (north-star plan 8.3, moved on purpose): the app's words.
+    assert "needs your OK, which can only be given in the Iron Jarvis window" in said and "for free" not in said, said
