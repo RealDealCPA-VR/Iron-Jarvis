@@ -522,9 +522,11 @@ def register(app: FastAPI, d) -> None:
 
         from ...core.db import session_scope
         from ...core.models import ToolInvocation, UndoJournal
-        from ...settings.records import RECORD_CARD_TOOLS
+        from ...settings.records import ledger_tools
 
-        tools = {"update_settings", "set_secret", "config_set", "config_change", "config_change_protected", *RECORD_CARD_TOOLS}
+        # v1.504.0: the ONE set (records.ledger_tools), which now also names
+        # the page-only removals (settings/page_records.PAGE_ONLY_TOOLS).
+        tools = set(ledger_tools())
         limit = max(1, min(int(limit or 30), 100))
         with session_scope(d.platform.engine) as db:
             rows = list(
@@ -841,6 +843,53 @@ def register(app: FastAPI, d) -> None:
             "saved_as": safety.name,
             "undo": f"Your previous state was saved as {safety.name}. Restore it to undo this.",
         }
+
+    # v1.504.0 (north-star plan 4.3): a database found damaged at start was
+    # set aside and the app started EMPTY, saying so only in the log. The
+    # marker it now leaves (core/db.write_set_aside_marker) is read here for
+    # Everything › Status and Settings › Maintenance; ONE press restores the
+    # newest backup made before it, through the restore above (same busy
+    # check, same backup of the current state first, same restart).
+
+    @app.get("/maintenance/set-aside")
+    def maintenance_set_aside() -> dict[str, Any]:
+        """``{set_aside, latest_good}``: the unanswered marker (which file,
+        when, why) and the backup one press would restore, or nulls.
+        Sync def: it reads the disk."""
+        from ...maintenance import set_aside_status
+
+        return set_aside_status(d.platform.config.home)
+
+    @app.post("/maintenance/set-aside/restore")
+    def maintenance_set_aside_restore() -> dict[str, Any]:
+        """Restore the newest backup made before the database was set aside,
+        then mark the marker answered. Refused (409) in words when there is
+        nothing set aside or no backup that old; any refusal of the restore
+        itself leaves the marker unanswered."""
+        from ...core.db import answer_set_aside_marker
+        from ...maintenance import set_aside_status
+
+        home = d.platform.config.home
+        status = set_aside_status(home)
+        if status["set_aside"] is None:
+            raise HTTPException(status_code=409, detail="No database was set aside, so there is nothing to restore.")
+        good = status["latest_good"]
+        if good is None:
+            raise HTTPException(
+                status_code=409,
+                detail="There is no backup from before the database was set aside, so there is nothing to restore.",
+            )
+        out = maintenance_restore(RestoreBody(name=good["name"]))
+        answer_set_aside_marker(home, "restored", backup=good["name"])
+        return out
+
+    @app.post("/maintenance/set-aside/keep")
+    def maintenance_set_aside_keep() -> dict[str, Any]:
+        """The owner keeps the fresh start: the marker is answered (kept on
+        disk with the answer) and backups are pruned as usual again."""
+        from ...core.db import answer_set_aside_marker
+
+        return {"answered": answer_set_aside_marker(d.platform.config.home, "kept_fresh")}
 
     @app.post("/diagnostics/repair")
     def diagnostics_repair(body: RepairBody) -> dict[str, Any]:

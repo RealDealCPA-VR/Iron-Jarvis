@@ -280,14 +280,33 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/secrets")
     def set_secret(body: SecretSet) -> dict[str, Any]:
+        # v1.504.0 (north-star plan 4.8): a key REPLACED here is recorded
+        # (names only); the value it replaced is not kept, so it says so.
+        from ...settings import page_records as _pr
+
+        replaced = any(s.get("name") == body.name for s in d.platform.secrets.list())  # names only
         rec = d.platform.secrets.set(
             body.name, body.value, kind=body.kind, description=body.description
         )
-        return {"name": rec.name, "kind": rec.kind}
+        out: dict[str, Any] = {"name": rec.name, "kind": rec.kind}
+        if replaced:
+            out["action_id"] = _pr.journal_secret_change(d.platform, rec.name, "replaced")
+            out["undo"] = "The value it replaced can't be undone."
+        return out
 
     @app.delete("/secrets/{name}")
     def delete_secret(name: str) -> dict[str, Any]:
-        return {"deleted": d.platform.secrets.delete(name)}
+        # v1.504.0 (north-star plan 4.8): recorded in the change history,
+        # names only. A key's VALUE is never written into the journal, so a
+        # removed key can't be undone, and the answer says so.
+        from ...settings import page_records as _pr
+
+        deleted = d.platform.secrets.delete(name)
+        out: dict[str, Any] = {"deleted": deleted}
+        if deleted:
+            out["action_id"] = _pr.journal_secret_change(d.platform, name, "removed")
+            out["undo"] = "A removed key can't be undone: save it again to bring it back."
+        return out
 
     @app.get("/integrations")
     def list_integrations() -> dict[str, Any]:
@@ -1269,6 +1288,7 @@ def register(app: FastAPI, d) -> None:
         good. This drops all three; the vault secret named by ``secret_name`` is
         left alone because another webhook may share it. Unknown slug -> 404.
         """
+        from ...settings import page_records as _pr
         from ...webhooks.models import WebhookRecord
 
         with session_scope(d.platform.engine) as db:
@@ -1276,11 +1296,20 @@ def register(app: FastAPI, d) -> None:
             direction = row.direction if row is not None else None
         if direction is None:
             raise HTTPException(status_code=404, detail=f"no webhook named '{slug}'")
+        # v1.504.0 (north-star plan 4.8): recorded with its Undo, the way
+        # chat's webhook_delete is (names a secret, never holds one).
+        prior = _pr.snapshot(d.platform, "webhook", slug)
         if direction == "outbound":
             d.platform.outbound_webhooks.unregister(slug)
         else:
             d.platform.inbound_webhooks.unregister(slug)
-        return {"ok": True, "slug": slug, "direction": direction}
+        action_id = ""
+        if prior is not None:
+            action_id = _pr.journal_removal(
+                d.platform, tool="webhook_delete", record="webhook", name=slug, prior=prior,
+                summary=f"Removed the webhook '{slug}'.",
+            )
+        return {"ok": True, "slug": slug, "direction": direction, "action_id": action_id}
 
     @app.post("/webhooks/{slug}")
     async def inbound_webhook(slug: str, request: Request) -> Any:

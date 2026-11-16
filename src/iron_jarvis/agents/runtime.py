@@ -48,7 +48,7 @@ from ..sandbox.native import host_os_line
 from ..tools.base import SpendCheck, ToolContext, spend_checks_for, spend_words_for
 from ..tools.builtins import is_own_source
 from ..tools.permissions import SAFE_HEADLESS_TOOLS
-from ..tools.reversible import reversible_flag
+from ..tools.reversible import call_reversible_flag
 from . import chat_delivery as _chat_delivery
 from . import decompose as _decompose
 from . import transcript as _transcript
@@ -835,6 +835,14 @@ _WRITE_TIER: frozenset[str] = frozenset(
         "pdf_split",
         "ltm_append",
         "remember_preference",
+        # v1.504.0 (north-star 4.5): made REVERSIBLE (they write over an
+        # existing file: the replaced one is kept and Undo puts it back), and
+        # auto-armable, so the same rule as `excel_apply_spec` above
+        # (`test_autoselect_gaps_v1196`'s forward guard): a read-only
+        # REVIEWER/SUPERVISOR must not gain them off its task text.
+        "convert_document",
+        "image_convert",
+        "image_resize",
     }
 )
 
@@ -3842,7 +3850,19 @@ class AgentRuntime:
         # Left out for a read-only tool and the plan ask (no tool behind it).
         # MIRROR NOTE (lock-step): the stream lane's `approval` frame carries
         # the same key from the same helper.
-        _rev = reversible_flag(tool)
+        # v1.504.0 (4.7): what THIS call can do, not the tool's class (a note
+        # to a cloud memory base cannot be undone) — `Tool.can_undo`, asked
+        # with the run's own session (this pause has no tool context).
+        _undo_ctx = ToolContext(
+            workspace=Path(str(getattr(session, "workspace_path", "") or ".")),
+            session_id=str(getattr(session, "id", "") or ""),
+            agent_run_id=str(getattr(run, "id", "") or ""),
+            config=self.p.config,
+            event_bus=self.p.event_bus,
+            engine=self.p.engine,
+            project_id=getattr(session, "project_id", None),
+        )
+        _rev = await call_reversible_flag(tool, tc.arguments, _undo_ctx)
         # v1.466.0 review: a call its own check calls irreversible (a
         # live-Excel deletion) never says "You can undo this". MIRROR NOTE
         # (lock-step): the stream lane's frame reads the same field.

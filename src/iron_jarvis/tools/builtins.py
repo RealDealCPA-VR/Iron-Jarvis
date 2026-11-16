@@ -24,6 +24,8 @@ from .base import (
     Tool,
     ToolContext,
     ToolResult,
+    atomic_write_bytes,
+    atomic_write_text,
     safe_path,
     unwritable_workspace_error,
 )
@@ -1060,7 +1062,9 @@ class WriteFileTool(Tool):
         # (v1.153.1), not as a slow write.
         def _write() -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            # v1.504.0 (4.4): saved beside, then swapped — a failure half-way
+            # leaves the old file whole, never truncated.
+            atomic_write_text(path, content, encoding="utf-8")
 
         try:
             await asyncio.to_thread(_write)
@@ -1193,7 +1197,7 @@ class EditFileTool(Tool):
         def _edit() -> int:
             tf = load_text(path, where)
             new_text, count = apply_exact_edit(tf.text, old, new, replace_all=replace_all, where=where)
-            path.write_bytes(tf.encode(new_text))
+            atomic_write_bytes(path, tf.encode(new_text))  # v1.504.0 (4.4)
             return count
 
         try:
@@ -1320,17 +1324,78 @@ def _keep_replaced(home: Any, dst: Path) -> str:
     delete, so the file goes to ``<home>/trash/<stamp>/replaced-by-rename/``
     and the result says where."""
     import shutil as _shutil
+
+    target = _trash_slot(home, dst, "replaced-by-rename")
+    _shutil.move(str(dst), str(target))
+    return str(target)
+
+
+def _trash_slot(home: Any, dst: Path, folder_name: str) -> Path:
+    """A free name for *dst* in ``<home>/trash/<stamp>/<folder_name>/``
+    (created). BLOCKING."""
     import time as _time
 
-    folder = Path(home) / "trash" / _time.strftime("%Y%m%d-%H%M%S") / "replaced-by-rename"
+    folder = Path(home) / "trash" / _time.strftime("%Y%m%d-%H%M%S") / folder_name
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / dst.name
     n = 1
     while target.exists():
         target = folder / f"{dst.stem} ({n}){dst.suffix}"
         n += 1
-    _shutil.move(str(dst), str(target))
+    return target
+
+
+def _copy_to_trash(src: Path, dest: Path) -> None:
+    import shutil as _shutil
+
+    _shutil.copy2(str(src), str(dest))
+
+
+def keep_replaced_copy(home: Any, dst: Path, tool: str) -> str:
+    """COPY the file *tool* is about to write over into the app's trash and
+    return where it went (v1.504.0, north-star 4.5). BLOCKING. Raises
+    ``OSError``.
+
+    ``convert_document``, ``image_convert`` and ``image_resize`` (whose default
+    is to overwrite its own source) replaced an existing file with nothing kept
+    and nothing said. The same rule as :func:`_keep_replaced`, as a COPY: the
+    tool may still need to read the file (a resize in place reads its source).
+    The copy goes to ``<home>/trash/<stamp>/replaced-by-<tool>/``."""
+    target = _trash_slot(home, dst, f"replaced-by-{tool}")
+    _copy_to_trash(dst, target)
     return str(target)
+
+
+async def keep_before_overwrite(
+    ctx: ToolContext, target: Path, tool: str
+) -> "tuple[bool, str, str | None]":
+    """Before *tool* writes over *target*: ``(replacing, kept, error)``.
+
+    ``replacing`` — a file is there now. ``kept`` — where the copy of it went
+    (:func:`keep_replaced_copy`; "" when nothing is there, or the context has
+    no app home to keep it in). ``error`` — the plain refusal when the copy
+    could not be made: the caller then changes NOTHING (never a silent
+    overwrite)."""
+    if not await asyncio.to_thread(target.is_file):
+        return False, "", None
+    home = getattr(getattr(ctx, "config", None), "home", None)
+    if not home:
+        return True, "", None
+    try:
+        kept = await asyncio.to_thread(keep_replaced_copy, home, target, tool)
+    except OSError as exc:
+        return True, "", (
+            f"nothing was changed: '{target.name}' is already there and could not be "
+            f"kept before it was replaced ({exc})"
+        )
+    return True, kept, None
+
+
+def replaced_words(kept: str) -> str:
+    """The line an answer adds when it wrote over an existing file."""
+    if kept:
+        return f"\nIt replaced a file that was already there; the earlier one is kept at: {kept}"
+    return "\nIt replaced a file that was already there."
 
 
 class RenameFileTool(Tool):

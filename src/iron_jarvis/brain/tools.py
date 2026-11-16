@@ -452,6 +452,18 @@ class BrainSaveTool(_BrainTool, LTMAppendTool):
         title = str(args.get("title") or "a note")[:120]
         return SpendCheck(ask=True, words=f"Save “{title}” to {label}")
 
+    async def can_undo(self, args: dict[str, Any], ctx: ToolContext) -> "bool | None":
+        """v1.504.0 (north-star 4.7): the same reading ``capture_undo`` makes
+        — a base with no local folder journals "cannot be undone", so the
+        approval card must not promise an Undo."""
+        active = await asyncio.to_thread(self._active, ctx)
+        if active is None:
+            return None
+        conn = self._conn(active)
+        if conn is None or getattr(conn, "dir", None) is None:
+            return False
+        return None
+
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> "dict[str, Any] | None":
         active = await asyncio.to_thread(self._active, ctx)
         if active is None:

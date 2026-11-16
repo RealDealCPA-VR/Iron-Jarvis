@@ -2934,25 +2934,99 @@ class Orchestrator:
                 return r.id
         return ""
 
-    def delete_session(self, session_id: str) -> None:
-        """Remove a session and its runs/tool rows; GC any worktree. Refuses a
-        session that is still actively running (cancel it first)."""
+    #: Events kept per run in a cleared run's record (v1.504.0): the steps and
+    #: tool calls are all kept; a run with more events keeps its newest ones
+    #: and the record says how many were left out.
+    _CLEARED_EVENTS_CAP = 5000
+
+    def _cleared_record(self, session_id: str) -> dict[str, Any]:
+        """The run's record as it is before a delete (v1.504.0, north-star
+        plan 4.2, D7): the session row, its runs, its tool calls and its
+        events, as plain values for ``record.json`` in the trash. Blocking."""
+        from ..core.models import EventRecord
+
+        with session_scope(self.p.engine) as db:
+            row = db.get(Session, session_id)
+            runs = list(db.exec(select(AgentRun).where(AgentRun.session_id == session_id)))
+            tools = list(
+                db.exec(select(ToolInvocation).where(ToolInvocation.session_id == session_id))
+            )
+            from sqlalchemy import func
+
+            total_events = int(
+                db.scalar(
+                    select(func.count())
+                    .select_from(EventRecord)
+                    .where(EventRecord.session_id == session_id)
+                )
+                or 0
+            )
+            events = list(
+                db.exec(
+                    select(EventRecord)
+                    .where(EventRecord.session_id == session_id)
+                    .order_by(EventRecord.created_at.desc())  # type: ignore[attr-defined]
+                    .limit(self._CLEARED_EVENTS_CAP)
+                )
+            )
+        return {
+            "kind": "cleared-run",
+            "cleared_at": utcnow().isoformat(timespec="seconds"),
+            "session": row.model_dump(mode="json") if row is not None else None,
+            "runs": [r.model_dump(mode="json") for r in runs],
+            "tools": [t.model_dump(mode="json") for t in tools],
+            "events": [e.model_dump(mode="json") for e in reversed(events)],
+            "events_left_out": max(0, total_events - len(events)),
+        }
+
+    def delete_session(self, session_id: str, *, trash_stamp: str = "") -> dict[str, Any]:
+        """Remove a session and its runs/tool rows, MOVING what it kept to the
+        app's trash (v1.504.0, north-star plan 4.2, D7). Refuses a session that
+        is still actively running (cancel it first).
+
+        Before a row is deleted the run's record is written to
+        ``<home>/trash/<stamp>/cleared-runs/<id>/record.json`` (kept 30 days:
+        ``maintenance.sweep_cleared_records``); a record that cannot be written
+        stops the delete (``OSError``) with nothing removed. The folder the app
+        made for the run MOVES to ``…/<id>/files`` instead of being deleted; a
+        coding run's own copy of the repository moves the same way and its
+        BRANCH is kept, so its commits survive. A folder that cannot be moved
+        is left where it is. The user's own folder is never touched
+        (``is_managed_workspace``). Returns ``{"trash", "files", "branch"}``:
+        the run's trash folder, where its files went ("" when nothing moved)
+        and the branch kept ("")."""
+        from .. import maintenance as _maint
+
         session = self.get_session(session_id)
         if session is None:
             raise KeyError(f"unknown session '{session_id}'")
         task = self._running.get(session_id)
         if task is not None and not task.done():
             raise ValueError("session is still running; cancel it before deleting")
+        stamp = trash_stamp or _maint.trash_stamp()
+        dest = _maint.cleared_run_dir(self.p.config.home, stamp, session_id)
+        record = self._cleared_record(session_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        tmp = dest / (_maint.CLEARED_RECORD_NAME + ".tmp")
+        tmp.write_text(json.dumps(record, default=str), encoding="utf-8")
+        tmp.replace(dest / _maint.CLEARED_RECORD_NAME)
+        out: dict[str, Any] = {"trash": str(dest), "files": "", "branch": ""}
         # A parked (QUEUED, never-started) run goes with its session — leaving
         # the entry behind would start a deleted session's coroutine later.
         self._remove_queued(session_id)
         ws_path = session.workspace_path
         gs = self._git_sessions.pop(session_id, None)
         if gs is not None:
+            from ..git.integration import retire_worktree
+
             try:
-                gs.discard()  # removes the worktree dir + branch
+                # The folder moves to the trash; the branch is KEPT (it used
+                # to be ``gs.discard()``: worktree and branch deleted).
+                if retire_worktree(gs.repo, gs.workspace, dest / "files"):
+                    out["files"] = str(dest / "files")
+                out["branch"] = gs.branch
             except Exception:  # noqa: BLE001
-                log.exception("worktree cleanup failed while deleting %s", session_id)
+                log.exception("moving the coding copy failed while deleting %s", session_id)
         self._reviews.pop(session_id, None)
         with session_scope(self.p.engine) as db:
             # History search (v1.142.0): the session's own doc, and any doc
@@ -3021,10 +3095,13 @@ class Orchestrator:
                 except Exception:  # noqa: BLE001 - best-effort; never block the delete
                     pass
             db.commit()
-        # Remove a plain (non-git) workspace dir, unless another session (e.g. a
-        # continuation) still reuses it. Git worktrees were already discarded above.
+        # MOVE a plain (non-git) workspace dir to the trash, unless another
+        # session (e.g. a continuation) still reuses it. Git worktrees were
+        # already moved above. v1.504.0 (north-star plan 4.2): this was an
+        # ``rmtree(ignore_errors=True)`` — every file a run wrote, gone on one
+        # press of "Clear completed".
         #
-        # ONLY a workspace THIS APP CREATED is ever deleted (``is_managed_workspace``).
+        # ONLY a workspace THIS APP CREATED is ever moved (``is_managed_workspace``).
         # A session created with ``workspace_root=`` — every Projects in-folder task,
         # every chat escalation carrying its folder, any ``POST /sessions`` with a
         # workspace_root — stores the USER'S REAL FOLDER as ``workspace_path``, and the
@@ -3045,9 +3122,13 @@ class Orchestrator:
 
                     p = Path(ws_path)
                     if p.is_dir():
-                        shutil.rmtree(p, ignore_errors=True)
+                        # A folder that cannot be moved (a file held open) is
+                        # LEFT where it is — never deleted instead.
+                        shutil.move(str(p), str(dest / "files"))
+                        out["files"] = str(dest / "files")
             except Exception:  # noqa: BLE001
-                log.exception("workspace cleanup failed while deleting %s", session_id)
+                log.exception("moving the run's folder failed while deleting %s", session_id)
+        return out
 
     async def run(
         self,
@@ -3076,6 +3157,19 @@ class Orchestrator:
             return list(db.exec(stmt))
 
     def transcript(self, session_id: str) -> dict:
+        """The session's runs and tool calls. ``details_removed_after_days``
+        (v1.504.0, north-star plan 4.9, D8): N when this session's details
+        older than the ``event_retention_days`` cut-off are GONE (no tool call
+        and no event of it older than the cut-off remains), so the run's page
+        says its details were removed after N days instead of showing an
+        empty transcript; else None. The runs (and their final answers) are
+        kept by the clean-up."""
+        from datetime import timedelta
+
+        from ..core.models import EventRecord
+
+        days = int(getattr(self.p.config, "event_retention_days", 0) or 0)
+        removed: int | None = None
         with session_scope(self.p.engine) as db:
             runs = list(
                 db.exec(select(AgentRun).where(AgentRun.session_id == session_id))
@@ -3087,9 +3181,31 @@ class Orchestrator:
                     )
                 )
             )
+            if days > 0 and runs:
+                cutoff = utcnow() - timedelta(days=min(days, 365_000))
+
+                def _aware(dt):  # SQLite hands datetimes back without a zone
+                    return dt if dt is None or dt.tzinfo else dt.replace(tzinfo=cutoff.tzinfo)
+
+                aged = any(
+                    r.created_at is not None and _aware(r.created_at) < cutoff for r in runs
+                )
+                if aged:
+                    old_tool = any(
+                        t.created_at is not None and _aware(t.created_at) < cutoff for t in tools
+                    )
+                    old_event = db.exec(
+                        select(EventRecord.id)
+                        .where(EventRecord.session_id == session_id)
+                        .where(EventRecord.created_at < cutoff)
+                        .limit(1)
+                    ).first()
+                    if not old_tool and old_event is None:
+                        removed = days
         return {
             "runs": [r.model_dump() for r in runs],
             "tools": [t.model_dump() for t in tools],
+            "details_removed_after_days": removed,
         }
 
     # --- review actions (§28) — agents never auto-merge -------------------
@@ -3333,8 +3449,19 @@ class Orchestrator:
         COMPLETED session's pending-review work); ``include_completed=True``
         prunes every orphan. Worktrees of sessions still tracked in memory (live)
         are always preserved.
+
+        v1.504.0 (north-star plan 4.6): this ran at every start right AFTER
+        ``reconcile_interrupted_sessions`` had marked a run a restart cut off
+        FAILED (and offered Continue), and ``prune_worktree`` then deleted its
+        folder AND its branch: everything it wrote, committed or not. Now a run
+        that was cut off (``interrupted_at``) or can be continued
+        (``_resumable_run``) is never touched, and for the rest NOTHING is
+        deleted: the folder MOVES to ``<home>/trash/<stamp>/work-folders/<id>/
+        files``, the BRANCH is kept, and ``removed.json`` beside it records what
+        was moved, from where, and why.
         """
-        from ..git.integration import list_session_worktrees, prune_worktree
+        from .. import maintenance as _maint
+        from ..git.integration import list_session_worktrees, retire_worktree
 
         # Snapshot via list(...) (atomic under the GIL) so a concurrent
         # create/approve/reject on another thread can't raise "dict changed size
@@ -3343,6 +3470,7 @@ class Orchestrator:
             str(Path(gs.workspace).resolve()) for gs in list(self._git_sessions.values())
         }
         pruned: list[str] = []
+        stamp = _maint.trash_stamp()
         for repo in self._candidate_repos():
             try:
                 worktrees = list_session_worktrees(repo)
@@ -3353,6 +3481,11 @@ class Orchestrator:
                     continue  # in use by a live session
                 session = self.get_session(ws.name)
                 status = session.status if session else None
+                if session is not None and (
+                    getattr(session, "interrupted_at", None) is not None
+                    or self._resumable_run(session.id)
+                ):
+                    continue  # cut off by a restart, or Continue can resume it
                 if include_completed:
                     should = True
                 elif status in (SessionStatus.FAILED, SessionStatus.CANCELLED):
@@ -3370,9 +3503,27 @@ class Orchestrator:
                     should = False
                 if not should:
                     continue
+                dest = Path(self.p.config.home) / _maint.TRASH_DIRNAME / stamp / "work-folders" / ws.name
                 try:
-                    prune_worktree(repo, ws, branch)
+                    if not retire_worktree(repo, ws, dest / "files"):
+                        log.warning("left the work folder %s where it is: it could not be moved", ws)
+                        continue
+                    note = {
+                        "at": utcnow().isoformat(timespec="seconds"),
+                        "session_id": ws.name,
+                        "status": getattr(status, "value", status) if status is not None else None,
+                        "folder": str(ws),
+                        "moved_to": str(dest / "files"),
+                        "repository": str(repo),
+                        "branch_kept": branch,
+                        "why": "its run had ended and nothing can continue it",
+                    }
+                    (dest / "removed.json").write_text(json.dumps(note, indent=2), encoding="utf-8")
+                    log.info(
+                        "moved the work folder %s to %s; its branch %s is kept",
+                        ws, dest / "files", branch,
+                    )
                     pruned.append(branch)
                 except Exception:  # noqa: BLE001
-                    log.exception("failed to prune orphan worktree %s", ws)
+                    log.exception("failed to move orphan worktree %s", ws)
         return pruned

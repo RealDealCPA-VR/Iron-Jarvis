@@ -240,6 +240,13 @@ Left open: a coding helper whose plan step failed but whose last change
 landed is still eased to "completed" (the v1.465.0 helper rule); a
 `notify` that reached one channel of several counts as sent for any claim;
 `harness/finish._REFUSAL_PREFIXES` does not list "paused" (same result today).
+To watch: `tests/test_mcp_direct_launch_refresh_v14150.py::
+test_a_running_direct_server_keeps_its_files_and_answers_through_a_daily_check`
+needed one retry on the group's second GitHub run (the log keeps no trace of
+the first try). It passed first time when that shard was run again, in six
+local runs, and in the six release runs before it. Group 3 did not touch
+that code; if it needs a retry again, group 2's change to how an app pack is
+started (2.2) is the first suspect.
 
 - [x] **3.1 One verdict helper.** New: one function that turns a finished
   session into `(status, outcome, ok, words)` from `Session.outcome`. Every
@@ -290,41 +297,63 @@ landed is still eased to "completed" (the v1.465.0 helper rule); a
 
 Area rules: `docs/rules/tools.md`, `daemon.md`, `documents.md`, `settings.md`.
 
-- [ ] **4.1 Undo is written before the change.** `tools/registry.py:1050,
+**Shipped in v1.504.0.** As built, where it differs from the lines below:
+4.1 the inverse is kept after a failure only for the one-file kinds (a file
+restored or removed, a memory note); a patch over several files, a rename
+and the settings kinds are still dropped on failure, as before. An
+interrupted write shows in the Undo list at once; pressing Undo before the
+write has landed answers "nothing to undo yet". 4.2 a cleared run's rows are
+written to a record file in the trash (kept 30 days) and then deleted: there
+is no one-press "bring back" for the rows, and none is promised. A coding
+run's branch is kept. 4.3 the Home line and `repair` picking the backup from
+before the damage are the lead's additions. 4.7 the card's line for a change
+that cannot be undone stays "This may not be undoable." 4.8 personas are
+routed too (the lead's addition). 4.9 an `AgentRun` row is kept whole, so
+that table now only grows. 4.10 run folders are carried up to 100 MB in all,
+a single file over 25 MB left out. 4.11 is done inside the daemon with a
+clock that does not count sleep; nothing was added to the desktop app.
+Left open: page deletes of a phone channel, an app pack and a connector
+(their Undo needs the key copy chat makes) and about 20 routes with no
+record kind are on the scan test's allow list, each with its reason;
+`harness/rewind.py` does not put back an interrupted write (`/undo` does);
+a Stop that changed nothing can be listed as a change until the next start
+settles it; the sleep fix was not run on a sleeping PC or the frozen build.
+
+- [x] **4.1 Undo is written before the change.** `tools/registry.py:1050,
   1270, 1450`. The journal row is written with the intent and kept on every
   outcome that is not provably clean (stop, deadline, failed save, crash).
   An orphaned before-copy file is reclaimed.
-- [ ] **4.2 "Clear completed" moves (D7).** `daemon/routes/sessions.py:827`,
+- [x] **4.2 "Clear completed" moves (D7).** `daemon/routes/sessions.py:827`,
   `agents/orchestrator.py:2985`. Folders go to the app's trash; the button and
   the confirm say what happens.
-- [ ] **4.3 A set-aside database is shown, and backups wait.**
+- [x] **4.3 A set-aside database is shown, and backups wait.**
   `core/db.py:400, 506`, `maintenance.py:178`. A marker is kept; Home and
   doctor show it with one press to restore; no backup is pruned while it is
   unanswered.
-- [ ] **4.4 Writers save beside, then swap.** `documents/excel_tools.py:239,
+- [x] **4.4 Writers save beside, then swap.** `documents/excel_tools.py:239,
   1344`, `documents/excel_reconcile.py:595`, `tools/builtins.py:977, 1110`,
   `harness/tools.py:215, 951`. One atomic-write helper.
-- [ ] **4.5 Three tools stop overwriting silently.**
+- [x] **4.5 Three tools stop overwriting silently.**
   `documents/tools.py:732` (convert), `tools/images.py:681, 746` (convert,
   resize). Each keeps the replaced file (the `_keep_replaced` pattern) and can
   be undone.
-- [ ] **4.6 A cut-off run keeps its branch.** `agents/orchestrator.py:3306`
+- [x] **4.6 A cut-off run keeps its branch.** `agents/orchestrator.py:3306`
   (only with `git_native`). Never prune a run that was interrupted or can be
   resumed.
-- [ ] **4.7 The approval card tells the truth about Undo.**
+- [x] **4.7 The approval card tells the truth about Undo.**
   `tools/reversible.py:41`, `dashboard/lib/approvalWords.ts:140`. The card
   reads what this call can do, not the tool's class.
-- [ ] **4.8 A delete on a page is recorded and can be undone.**
+- [x] **4.8 A delete on a page is recorded and can be undone.**
   `daemon/routes/system.py:860`, `workflows.py:594`, `agents.py:4084`,
   `comm.py:281` and the other `@app.delete` routes. Each goes through the
   record journal chat already uses. Scan test: every delete route journals or
   is on the allow list.
-- [ ] **4.9 The clean-up says what it removes (D8).** `core/db.py:725`,
+- [x] **4.9 The clean-up says what it removes (D8).** `core/db.py:725`,
   `settings/schema.py:977`. The description names run details and Undo
   history; an aged run says so; `AgentRun.result` is kept.
-- [ ] **4.10 Backups include runs' own folders, or say they do not.**
+- [x] **4.10 Backups include runs' own folders, or say they do not.**
   `maintenance.py:81, 130`. Files a run's result names are included.
-- [ ] **4.11 Sleep is not a failure.** `desktop/main.js:6164`,
+- [x] **4.11 Sleep is not a failure.** `desktop/main.js:6164`,
   `tools/registry.py:1097`. Suspend and resume reach the daemon; live
   deadlines are extended by the time asleep.
 

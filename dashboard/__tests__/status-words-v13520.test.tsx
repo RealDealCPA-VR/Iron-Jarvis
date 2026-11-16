@@ -444,11 +444,11 @@ describe("the Session board: lanes in the table's words; a stopped card is slate
     expect(within(stopCard).getByRole("button", { name: /Dismiss/ })).toBeInTheDocument();
     const clear = within(stoppedLane).getByRole("button", { name: "Clear stopped (1)" });
     fireEvent.click(clear);
-    fireEvent.click(within(stoppedLane).getByRole("button", { name: /Confirm clear/ }));
+    fireEvent.click(within(stoppedLane).getByRole("button", { name: /Move to the trash\?/ }));
     await waitFor(() => expect(api.posts).toContainEqual(["/sessions/clear", { statuses: ["cancelled"] }]));
     const failedLane = document.querySelector('[data-lane="failed"]') as HTMLElement;
     fireEvent.click(within(failedLane).getByRole("button", { name: "Clear failed (1)" }));
-    fireEvent.click(within(failedLane).getByRole("button", { name: /Confirm clear/ }));
+    fireEvent.click(within(failedLane).getByRole("button", { name: /Move to the trash\?/ }));
     await waitFor(() => expect(api.posts).toContainEqual(["/sessions/clear", { statuses: ["failed"] }]));
   });
 

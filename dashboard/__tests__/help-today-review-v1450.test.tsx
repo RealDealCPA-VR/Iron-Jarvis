@@ -97,7 +97,7 @@ describe("the Sessions ⋯ menu", () => {
     });
     expect(hooks.posts).toEqual([]);
     await act(async () => {
-      fireEvent.click(within(menu).getByRole("button", { name: /Delete them all\?/ }));
+      fireEvent.click(within(menu).getByRole("button", { name: /Move them to the trash\?/ }));
     });
     expect(hooks.posts.map((p) => p.path)).toEqual(["/sessions/clear"]);
   });

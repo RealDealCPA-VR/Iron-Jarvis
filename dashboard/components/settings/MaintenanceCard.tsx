@@ -16,6 +16,7 @@ import { useDaemon } from "@/lib/daemon";
 import { isDesktopShell, requestTidyRestart } from "@/lib/desktopShell";
 import { Card, ConfirmButton, ErrorNote, LoaderInline, SectionLabel, SuccessNote } from "@/components/ui";
 import { MaintenanceTools } from "@/components/settings/MaintenanceTools";
+import { DatabaseSetAsideNote } from "@/components/overview/DatabaseSetAsideNote";
 import { RESTART_WORDS } from "@/lib/restartWords";
 
 export function MaintenanceCard() {
@@ -91,12 +92,22 @@ export function MaintenanceCard() {
 
   return (
     <Card title="Maintenance" icon={<Wrench size={15} />}>
+      {/* v1.504.0 (north-star plan 4.3): a database set aside at start, with
+          its one-press restore. Nothing when nothing was set aside. */}
+      <DatabaseSetAsideNote />
       <div className="space-y-4">
         <div>
           <SectionLabel>Back up now</SectionLabel>
           <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
             Save a snapshot of your database and settings right now. Backups also run automatically in the
             background.
+          </p>
+          {/* v1.504.0 (north-star plan 4.10): what of the runs' own folders a
+              backup carries (maintenance.WORKSPACE_BACKUP_MAX_BYTES / _FILE). */}
+          <p className="mt-1 text-[12px] leading-relaxed text-zinc-500" data-testid="backup-run-folders">
+            Each backup also carries the files agent runs made in their own folders, newest first, up to
+            100 MB in all; a single file over 25 MB is left out. Folders you chose yourself are yours and
+            are not copied.
           </p>
           <button
             type="button"

@@ -203,6 +203,33 @@ def prune_worktree(repo: Path, workspace: Path, branch: str) -> None:
         _git_code(["branch", "-D", branch], cwd=repo)
 
 
+def retire_worktree(repo: Path, workspace: Path, dest: Path) -> bool:
+    """MOVE a linked worktree's folder to ``dest`` (the app's trash) and tell
+    git it is gone, KEEPING its branch (v1.504.0, north-star plan 4.2/4.6).
+
+    ``prune_worktree`` ran ``worktree remove --force`` and ``branch -D``: the
+    files the run had not committed were deleted and so was every commit it
+    made. Here nothing is deleted: the folder (committed or not) moves into
+    the trash and the branch stays, so ``git log <branch>`` still shows the
+    work. Returns False when the folder could not be moved; then the worktree
+    is left registered where it was and nothing is deleted (a copy that
+    ``shutil.move`` had started may remain in the trash). Never raises."""
+    import shutil
+
+    workspace = Path(workspace)
+    dest = Path(dest)
+    if workspace.exists():
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(workspace), str(dest))
+        except OSError:
+            return False
+    # The folder is gone from where git registered it, so this forgets the
+    # worktree (its metadata only); the branch and its commits stay.
+    _git_code(["worktree", "prune"], cwd=repo)
+    return True
+
+
 @dataclass
 class GitSession:
     """A session's working branch, materialised as a linked git worktree."""

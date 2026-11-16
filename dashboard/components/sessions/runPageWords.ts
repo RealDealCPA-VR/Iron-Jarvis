@@ -428,3 +428,15 @@ export function findContinuation(
   }
   return null;
 }
+
+/** v1.504.0 (north-star plan 4.9, D8): what the run page says in place of an
+ *  empty step list when the "Keep activity history" clean-up removed this
+ *  run's details (`transcript.details_removed_after_days`). Null when it did
+ *  not. The final answer is kept, so the page still shows it. */
+export function detailsRemovedWords(days: number | null | undefined): string | null {
+  if (!days || days <= 0) return null;
+  return (
+    `This run's steps and details were removed after ${days} days, as the ` +
+    `"Keep activity history" setting says. Its final answer is kept.`
+  );
+}

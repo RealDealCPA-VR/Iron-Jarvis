@@ -602,9 +602,28 @@ def register(app: FastAPI, d) -> None:
         # a goal-scoped row has no other reader, and a "never expires" grant
         # (goal scope only) would otherwise outlive the thing it was for.
         # v1.435.0: lifted into the engine, which chat's goal_delete runs too.
+        # v1.504.0 (north-star plan 4.8): recorded with its Undo (the goal,
+        # its schedule and its always-allows), the way chat's goal_delete is.
+        from ...settings import page_records as _pr
+
+        try:
+            prior = _pr.snapshot(d.platform, "goal_contract", goal_id)
+        except Exception:  # noqa: BLE001 — no store, no snapshot: nothing to record
+            prior = None
         revoked = _engine().delete_goal(goal_id)
         if revoked is None:
             raise HTTPException(status_code=404, detail="goal not found")
+        action_id = ""
+        if prior is not None:
+            action_id = _pr.journal_removal(
+                d.platform, tool="goal_delete", record="goal_contract", name=goal_id, prior=prior,
+                summary=f"Removed the goal '{prior.get('name') or goal_id}'.",
+            )
         # Additive ONLY when something was revoked: the pre-v1.299 shape
         # `{"deleted": id}` stays byte-identical for every other goal.
-        return {"deleted": goal_id, **({"revoked_grants": revoked} if revoked else {})}
+        # v1.504.0: + ``action_id`` when the removal was recorded.
+        return {
+            "deleted": goal_id,
+            **({"revoked_grants": revoked} if revoked else {}),
+            **({"action_id": action_id} if action_id else {}),
+        }

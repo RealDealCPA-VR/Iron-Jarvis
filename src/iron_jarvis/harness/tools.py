@@ -41,6 +41,7 @@ from ..tools.base import (
     Tool,
     ToolContext,
     ToolResult,
+    atomic_write_bytes,
     safe_path,
     unwritable_workspace_error,
 )
@@ -212,7 +213,7 @@ class MultiEditTool(Tool):
 
         def _apply() -> int:
             tf, new_text, total = _multi_plan(path, label, edits)
-            path.write_bytes(tf.encode(new_text))
+            atomic_write_bytes(path, tf.encode(new_text))  # v1.504.0 (4.4)
             return total
 
         try:
@@ -948,7 +949,7 @@ class NotebookEditTool(Tool):
 
         def _apply() -> str:
             tf, new_text, done = _notebook_plan(path, label, args)
-            path.write_bytes(tf.encode(new_text))
+            atomic_write_bytes(path, tf.encode(new_text))  # v1.504.0 (4.4)
             return done
 
         try:

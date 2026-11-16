@@ -116,6 +116,21 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/memory/preferences/{pref_id}")
     async def memory_preference_forget(pref_id: str) -> dict[str, Any]:
-        """Forget a kept preference."""
+        """Forget a kept preference.
+
+        v1.504.0 (north-star plan 4.8): recorded with its Undo, the way chat's
+        preference_forget is (snapshot before, journal after; off the loop)."""
+        from ...settings import page_records as _pr
+
+        prior = await asyncio.to_thread(_pr.snapshot, d.platform, "preference", pref_id)
         deleted = await asyncio.to_thread(_run, prefs.forget, _engine(), pref_id)
-        return {"deleted": deleted}
+        out: dict[str, Any] = {"deleted": deleted}
+        if deleted and prior is not None:
+            out["action_id"] = await asyncio.to_thread(
+                lambda: _pr.journal_removal(
+                    d.platform, tool="preference_forget", record="preference", name=pref_id, prior=prior,
+                    summary=f"Forgot the preference “{str(prior.get('text') or '')[:120]}”.",
+                    extra={"after": None},
+                )
+            )
+        return out

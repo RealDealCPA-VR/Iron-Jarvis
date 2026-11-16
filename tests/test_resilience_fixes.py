@@ -87,17 +87,20 @@ def test_quarantine_db_preserves_the_corrupt_file(tmp_path):
 # --- GROW-2: backups exclude the unbounded workspaces scratch -----------------
 
 
-def test_backup_excludes_disposable_workspaces(platform, tmp_path):
+def test_backup_bounds_the_unbounded_workspaces(platform, tmp_path):
+    # v1.504.0 (north-star plan 4.10): the runs' own folders are carried, but
+    # BOUNDED (tests/test_north_star_backup_runs_v1504.py): a file over the
+    # per-file limit is still left out, so the archive cannot grow with them.
     home = platform.config.home
-    (home / "workspaces" / "sess1").mkdir(parents=True, exist_ok=True)
-    (home / "workspaces" / "sess1" / "scratch.bin").write_text("x" * 1000)
+    (home / "workspaces" / "session_1").mkdir(parents=True, exist_ok=True)
+    (home / "workspaces" / "session_1" / "scratch.bin").write_text("x" * 1000)
     (home / "memory").mkdir(parents=True, exist_ok=True)
     (home / "memory" / "note.md").write_text("keep me")
 
     out = tmp_path / "b.tar.gz"
-    create_backup(home, out, engine=platform.engine, include_keys=True)
+    create_backup(home, out, engine=platform.engine, include_keys=True, workspace_max_file=999)
     names = tarfile.open(out).getnames()
-    assert not any("/workspaces/" in n or n.endswith("scratch.bin") for n in names)
+    assert not any(n.endswith("scratch.bin") for n in names)
     assert any(n.endswith("note.md") for n in names)  # durable state IS kept
 
 

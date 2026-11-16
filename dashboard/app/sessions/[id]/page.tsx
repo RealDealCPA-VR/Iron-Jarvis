@@ -88,6 +88,7 @@ import {
   runWhere,
   RUN_TITLE_FALLBACK,
   shownSummary,
+  detailsRemovedWords,
   type ContinuationRow,
 } from "@/components/sessions/runPageWords";
 
@@ -143,6 +144,8 @@ export default function SessionDetailPage({
   const session = detail.data?.session;
   const runs = detail.data?.transcript.runs ?? [];
   const tools = detail.data?.transcript.tools ?? [];
+  // v1.504.0 (north-star plan 4.9): an aged run says its details were removed.
+  const detailsRemoved = detailsRemovedWords(detail.data?.transcript.details_removed_after_days);
 
   // Token usage is present on the live session view but not on the static type.
   const tokens = session as
@@ -898,6 +901,8 @@ export default function SessionDetailPage({
                 <ConfirmButton
                   label="Delete session"
                   confirmLabel="Confirm delete?"
+                  // v1.504.0 (north-star plan 4.2): a Delete MOVES the run.
+                  title="Moves this run to the app's trash: the files it wrote, and its record (kept there 30 days). Your own folder is never moved."
                   onConfirm={remove}
                   className="!px-3 !py-1.5 !text-sm"
                 />
@@ -1192,7 +1197,7 @@ export default function SessionDetailPage({
               {/* Transcript: tool invocations */}
               <Card title={`Tool invocations · ${tools.length}`} icon={<Wrench size={15} />}>
                 {tools.length === 0 ? (
-                  <Empty>No tool invocations.</Empty>
+                  <Empty>{detailsRemoved ?? "No tool invocations."}</Empty>
                 ) : (
                   <div className="-mx-1 overflow-x-auto">
                     <table className="w-full text-left text-sm">

@@ -986,9 +986,14 @@ SETTINGS: tuple[SettingDef, ...] = (
     # and the Undo journal past the new limit (core/db.prune_events), so from
     # chat it asks EVERY time — no grant lifts it. Re-read by the daily sweep
     # (daemon/app._event_prune_loop), so no restart.
+    # v1.504.0 (north-star plan 4.9, D8): the words say exactly what goes. A
+    # run's final answer is kept (core/db.prune_events no longer deletes the
+    # run's row), and an aged run's page says its details were removed.
     S("event_retention_days", "Keep activity history (days)", "permissions", "number",
-      "How long the activity log and ledger are kept. Older entries are removed once a day. "
-      "0 = forever.", tier="ask-floor", advanced=True,
+      "How many days the details of each run are kept: its steps, the tools it used and "
+      "what they returned, and the Undo for changes made then. Older details are removed "
+      "once a day and those changes can no longer be undone. Each run's final answer is "
+      "kept. 0 = keep everything.", tier="ask-floor", advanced=True,
       check=_range(0, 36500)),
     # ---------------------------------------------------------------- system
     S("git_native", "Git-native workspaces", "system", "bool",

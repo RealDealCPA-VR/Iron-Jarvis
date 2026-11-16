@@ -547,5 +547,9 @@ def test_the_persona_routes_are_the_lifted_bodies(tmp_path):
     assert client.post("/chat/personas", json={"name": "x", "prompt": "  "}).status_code == 400
     r = client.put("/chat/personas/tax-pro", json={"title": "Tax Pro", "prompt": "Shorter."})
     assert r.status_code == 200 and r.json()["persona"]["prompt"] == "Shorter."
-    assert client.delete("/chat/personas/tax-pro").json() == {"deleted": "tax-pro", "reverted_to_builtin": False}
+    # v1.504.0 (north-star 4.8, moved on purpose): the page's delete is
+    # recorded with its Undo, so the answer also carries the change's id.
+    gone = client.delete("/chat/personas/tax-pro").json()
+    assert gone.pop("action_id")
+    assert gone == {"deleted": "tax-pro", "reverted_to_builtin": False}
     assert client.delete("/chat/personas/nobody").status_code == 404

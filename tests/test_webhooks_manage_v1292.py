@@ -119,7 +119,10 @@ def test_delete_inbound_removes_row_and_live_handler(tmp_path):
 
     r = client.delete("/webhooks/gh")
     assert r.status_code == 200, r.text
-    assert r.json() == {"ok": True, "slug": "gh", "direction": "inbound"}
+    # v1.504.0 (north-star plan 4.8): + the change history row's id (its Undo).
+    body = r.json()
+    assert body.pop("action_id", "").startswith("tool_")
+    assert body == {"ok": True, "slug": "gh", "direction": "inbound"}
 
     # Gone from the listing AND from the in-memory registry...
     assert "gh" not in _slugs(client)

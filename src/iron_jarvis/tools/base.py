@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -281,6 +282,18 @@ class Tool(ABC):
         "pre_sha256": ...}``), or ``None`` when there is nothing to undo (a
         no-op) or the capture failed. Only called for ``REVERSIBLE`` tools; the
         default no-op keeps every other tool unaffected."""
+        return None
+
+    async def can_undo(
+        self, args: dict[str, Any], ctx: "ToolContext"
+    ) -> "bool | None":
+        """Can THIS call be undone (v1.504.0, north-star 4.7)? Read by the
+        approval card (``tools/reversible.call_reversible_flag``) BEFORE the
+        call runs. ``False`` = this call's journal entry will say it cannot be
+        undone (a REVERSIBLE tool's call that has no inverse), so the card must
+        not promise one; ``None`` (the default) = no opinion, the class
+        decides. Must be CHEAP and never change anything; blocking work goes
+        off the loop."""
         return None
 
     async def revert(
@@ -619,3 +632,50 @@ def unwritable_workspace_error(exc: PermissionError, workspace: Path) -> str:
         f"cannot write in {workspace}: the folder this session is bound to is "
         "not writable — pick a folder you can save files in"
     )
+
+
+# --- save beside, then swap (v1.504.0, north-star 4.4) -----------------------
+
+
+@contextmanager
+def atomic_target(path: "str | Path"):
+    """Yield a hidden sibling temp path; ``os.replace`` it onto *path* only when
+    the body finished. THE ONE copy of the pattern every writer uses.
+
+    A writer that saves IN PLACE opens the user's file for writing first, so a
+    crash, a full disk or an error half-way leaves it truncated: the one copy
+    of a client's workbook, gone. Here the old file is untouched until the new
+    one is whole, and the swap is one rename on the same disk (atomic on every
+    platform, Windows included). On any failure, the swap's too, the temp is
+    removed and the error is raised unchanged, so no stray file is left and the
+    caller's own message stays what it was. Windows refuses the swap while the
+    file is open in Excel or Word: that ``PermissionError`` names the target
+    (``filename2``), which :func:`unwritable_workspace_error` reads as "it is
+    open in another program". The temp's name holds ``.tmp-`` (that reader
+    skips it). Blocking: call it off the event loop."""
+    from uuid import uuid4
+
+    p = Path(path)
+    tmp = p.with_name(f".{p.name}.tmp-{os.getpid()}-{uuid4().hex[:6]}")
+    try:
+        yield tmp
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def atomic_write_bytes(path: "str | Path", data: bytes) -> None:
+    """*data* saved to *path* beside, then swapped (:func:`atomic_target`)."""
+    with atomic_target(path) as tmp:
+        tmp.write_bytes(data)
+
+
+def atomic_write_text(path: "str | Path", text: str, *, encoding: str = "utf-8") -> None:
+    """``Path.write_text`` (the same newline handling) saved beside, then
+    swapped (:func:`atomic_target`)."""
+    with atomic_target(path) as tmp:
+        tmp.write_text(text, encoding=encoding)

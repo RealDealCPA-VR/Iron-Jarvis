@@ -1464,12 +1464,13 @@ def test_the_convert_document_TIER_HOLE_is_recorded_not_hidden(platform):
         assert armed[: len(_REVIEWER)] == _REVIEWER, "the roster rides unchanged"
         assert not (set(armed) & _WRITE_TIER), f"{task!r} armed {armed}"
 
-    assert "convert_document" not in _WRITE_TIER, (
-        "convert_document is gated now — delete this test's second half, drop "
-        "the note in the convert rule, and close the `save X as a pdf` row in "
-        "_STILL_OPEN while you are there"
-    )
+    # v1.504.0 (north-star 4.5, moved on purpose): the hole is CLOSED.
+    # `convert_document` became REVERSIBLE (it keeps a file it writes over), so
+    # it joined `_WRITE_TIER` with `image_convert` / `image_resize`, and a
+    # read-only reviewer no longer gains it off "turn the report into a pdf".
+    # (The note in `tools/autoselect`'s convert rule and the `save X as a pdf`
+    # row in `_STILL_OPEN` are left for that module's owner: closing the row
+    # changes what the convert rule matches.)
+    assert {"convert_document", "image_convert", "image_resize"} <= _WRITE_TIER
     added = arm_for_task(platform, "turn the report into a pdf", list(_REVIEWER))
-    assert "convert_document" in added[len(_REVIEWER):], (
-        f"the hole this test records has moved; re-measure it: {added}"
-    )
+    assert "convert_document" not in added, added

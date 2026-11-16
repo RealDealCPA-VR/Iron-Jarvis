@@ -151,6 +151,17 @@ class LTMAppendTool(Tool):
     def _resolve_source(self, args: dict[str, Any]) -> str | None:
         return args.get("source") or self.manager.default_source()
 
+    async def can_undo(self, args: dict[str, Any], ctx: ToolContext) -> "bool | None":
+        """v1.504.0 (north-star 4.7): a base with no local folder (Notion, a
+        cloud or remote base) has no file to put back — ``capture_undo``
+        journals it "cannot be undone", so the approval card must not promise
+        an Undo. No I/O: the connector lookup only."""
+        source = self._resolve_source(args)
+        conn = self.manager.get(source) if source else None
+        if conn is None or getattr(conn, "dir", None) is None:
+            return False
+        return None
+
     async def capture_undo(
         self, args: dict[str, Any], ctx: ToolContext
     ) -> "dict[str, Any] | None":

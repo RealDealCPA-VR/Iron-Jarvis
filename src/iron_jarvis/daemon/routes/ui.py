@@ -86,7 +86,18 @@ def status_line(d) -> dict[str, int]:
         # failed) — the home offers "N scheduled jobs need a look". One
         # indexed count on the schedules table; no probe.
         "short_schedules": 0,
+        # v1.504.0 (north-star 4.3): 1 while a database that was found
+        # damaged and set aside waits for the owner's answer. Iron Jarvis
+        # started EMPTY then, and only a log line said so: the home says it
+        # first, above everything else. One small file read; no probe.
+        "database_set_aside": 0,
     }
+    try:
+        from ...core.db import read_set_aside_marker
+
+        out["database_set_aside"] = 1 if read_set_aside_marker(d.platform.config.home) else 0
+    except Exception:  # noqa: BLE001 — a marker we cannot read is not shown here
+        pass
     try:
         from .sessions import interrupted_rows
 

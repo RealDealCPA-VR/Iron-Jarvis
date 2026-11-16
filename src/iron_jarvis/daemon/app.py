@@ -568,6 +568,14 @@ async def _event_prune_loop(platform, *, interval_s: float = _EVENT_PRUNE_S) -> 
                         "event-log retention: pruned %d event(s) older than %d days",
                         pruned, days,
                     )
+            # v1.504.0 (north-star plan 4.2, D7): a cleared run's record is
+            # kept 30 days in the trash, then removed (its files stay until
+            # the trash is emptied).
+            from ..maintenance import sweep_cleared_records
+
+            gone = await asyncio.to_thread(sweep_cleared_records, platform.config.home)
+            if gone:
+                log.info("removed %d cleared run record(s) kept in the trash past 30 days", gone)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — a sweep must never kill the daemon
@@ -1302,6 +1310,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
                         "(set event_retention_days=0 to keep forever)",
                         pruned, days,
                     )
+        except Exception:  # pragma: no cover - never block boot
+            pass
+        try:  # v1.504.0 (plan 4.2, D7): cleared run records past 30 days
+            from ..maintenance import sweep_cleared_records
+
+            sweep_cleared_records(platform.config.home)
         except Exception:  # pragma: no cover - never block boot
             pass
         _boot_watch.step("arming background loops")

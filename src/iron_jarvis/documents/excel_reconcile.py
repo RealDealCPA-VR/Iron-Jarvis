@@ -592,7 +592,12 @@ def write_result(path: Path, a: Side, b: Side, res: Result, t: dict) -> None:
             for c in row:
                 if c.data_type == "f":
                     c.data_type = "s"
-    wb.save(str(path))
+    from ..tools.base import atomic_target
+
+    # v1.504.0 (4.4): saved beside, then swapped — a save that fails half-way
+    # leaves no half-written workbook under the name the answer gives.
+    with atomic_target(path) as tmp:
+        wb.save(str(tmp))
     wb.close()
 
 

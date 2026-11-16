@@ -154,7 +154,7 @@ describe("the Sessions bulk delete's ARMED press reads as danger (calm, tone tok
     expect(tokens(clear)).toContain("hover:!text-accent-soft");
     expect(tokens(clear)).toContain("text-zinc-400");
     fireEvent.click(clear);
-    const armed = screen.getByRole("button", { name: /Delete them all\?/ });
+    const armed = screen.getByRole("button", { name: /Move them to the trash\?/ });
     expect(armed.getAttribute("data-armed")).toBe("true");
     // The armed press wears the calm danger cue, and NO override paints over it.
     const cls = tokens(armed);

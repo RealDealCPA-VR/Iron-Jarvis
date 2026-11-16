@@ -695,12 +695,36 @@ class ConvertDocumentTool(Tool):
         "required": ["source", "target"],
     }
 
+    #: v1.504.0 (north-star 4.5): a convert onto an EXISTING file replaced it
+    #: with nothing kept, unasked (tier "allow"). Now its prior bytes are
+    #: journaled (Undo puts them back) and a copy goes to the app's trash.
+    reversibility = Reversibility.REVERSIBLE
+
     def __init__(self, router_resolver: "Any | None" = None) -> None:
         #: () -> the platform's ModelRouter — powers the scanned-source OCR
         #: below. Optional so a bare factory (tests) still constructs.
         self._router_resolver = router_resolver
 
+    async def capture_undo(
+        self, args: dict[str, Any], ctx: ToolContext
+    ) -> "dict[str, Any] | None":
+        """The target's prior bytes (it exists) or a delete of the new file."""
+        from ..tools.undo import capture_file_inverse
+
+        try:
+            target = safe_path(ctx.workspace, args["target"])
+        except Exception:  # noqa: BLE001 — execute refuses it in words
+            return None
+        return await asyncio.to_thread(
+            capture_file_inverse, ctx.config.home, ctx.workspace, target
+        )
+
+    async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        return await revert_workspace_file(undo, ctx)
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        from ..tools.builtins import keep_before_overwrite, replaced_words
+
         source = _resolve_read_path(args["source"], ctx)
         src_suffix = source.suffix.lower()
         if src_suffix not in SUPPORTED_READ:
@@ -728,6 +752,12 @@ class ConvertDocumentTool(Tool):
                 ),
             )
         note = ""
+        # v1.504.0 (4.5): a file already at the target is KEPT (a copy in the
+        # app's trash) before it is written over; if it cannot be, nothing is.
+        replacing, kept, refused = await keep_before_overwrite(ctx, target, self.name)
+        if refused:
+            return ToolResult(ok=False, error=refused)
+        replaced = replaced_words(kept) if replacing else ""
         try:
             existed = target.exists()  # created_paths means CREATED, not overwritten
             if src_suffix == ".doc" and tgt_suffix == ".docx":
@@ -741,12 +771,13 @@ class ConvertDocumentTool(Tool):
                 _abs = str(target.resolve())
                 return ToolResult(
                     ok=True,
-                    output=f"converted {source.name} -> {_abs} ({size} bytes)",
+                    output=f"converted {source.name} -> {_abs} ({size} bytes)" + replaced,
                     data={
                         "source": str(source),
                         "path": str(target.resolve().relative_to(Path(ctx.workspace).resolve())).replace("\\", "/"),
                         "abs_path": _abs,
                         "bytes": size,
+                        **({"replaced_kept": kept} if kept else {}),
                     },
                     created_paths=None if existed else [_abs],
                 )
@@ -768,6 +799,7 @@ class ConvertDocumentTool(Tool):
         return ToolResult(
             ok=True,
             output=f"converted {source.name} -> {_abs} ({size} bytes)"
+            + replaced
             + (f"\nNote: {note}" if note else ""),
             data={
                 "source": str(source),
@@ -775,6 +807,7 @@ class ConvertDocumentTool(Tool):
                 "abs_path": _abs,
                 "bytes": size,
                 **({"note": note} if note else {}),
+                **({"replaced_kept": kept} if kept else {}),
             },
             # Created-files contract (v1.166.0): absolute, success-only, and only
             # when this call brought the file into existence — an overwrite

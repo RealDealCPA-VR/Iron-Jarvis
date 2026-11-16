@@ -1943,6 +1943,17 @@ _TOOLS_KINDS = ("tool_server", "web_service")
 _SNAP.update({k: _tools_snap(k) for k in _TOOLS_KINDS})
 
 
+def _page_snap_custom_tool(platform: Any, name: str) -> Any:
+    from .page_records import snap_custom_tool
+
+    return snap_custom_tool(platform, name)
+
+
+#: v1.504.0 (north-star plan 4.8): a custom tool removed on its page
+#: (settings/page_records).
+_SNAP["custom_tool"] = _page_snap_custom_tool
+
+
 def restore(platform: Any, desc: dict[str, Any]) -> str:
     """``POST /undo/{id}`` for a ``record_restore`` row. Blocking."""
     record = str(desc.get("record") or "")
@@ -1994,6 +2005,10 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
         from .records_tools import restore_kind as _tools_restore
 
         return _tools_restore(platform, record, name, prior, desc)
+    if record == "custom_tool":
+        from .page_records import restore_custom_tool
+
+        return restore_custom_tool(platform, name, prior)
     raise RecordError(f"unknown record kind {record!r}")
 
 
@@ -3575,8 +3590,11 @@ class GrantRevokeTool(_RecordTool):
 def ledger_tools() -> frozenset[str]:
     """The tools the configuration ledger lists — the SAME set as ``GET
     /config/ledger`` (routes/settings.py ``config_ledger``)."""
+    from .page_records import PAGE_ONLY_TOOLS  # v1.504.0: a page-made removal
+
     return frozenset(
-        {"update_settings", "set_secret", "config_set", "config_change", "config_change_protected", *RECORD_CARD_TOOLS}
+        {"update_settings", "set_secret", "config_set", "config_change", "config_change_protected",
+         *RECORD_CARD_TOOLS, *PAGE_ONLY_TOOLS}
     )
 
 

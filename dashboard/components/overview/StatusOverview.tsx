@@ -38,6 +38,7 @@ import { isDemoDefault, noModelChosen } from "@/lib/onboarding";
 // v1.354.0 (G30): the outage in the app's own name, never "Daemon offline".
 import { OFFLINE_WORDS } from "@/lib/offlineWords";
 import { InterruptedJobsNote } from "@/components/InterruptedJobs";
+import { DatabaseSetAsideNote } from "@/components/overview/DatabaseSetAsideNote";
 import { PageShell, Reveal } from "@/components/motion";
 import { Heartbeat, MapLegend, SystemMap, type SystemMapData } from "@/components/overview/SystemMap";
 import { RunningNow } from "@/components/RunningNow";
@@ -227,6 +228,10 @@ export default function OverviewPage({ embedded = false }: { embedded?: boolean 
       {/* v1.249.0 (R-02): work a restart cut off, with its Continue. Renders
           nothing when there is nothing to pick up. */}
       <InterruptedJobsNote />
+
+      {/* v1.504.0 (north-star plan 4.3): a database set aside at start, with
+          ONE press to restore the backup from before it. */}
+      <DatabaseSetAsideNote />
 
       {/* v1.355.0 (G32): each failing task on its own line in the user's
           words ("Slack messages aren't arriving. Chat and your other channels

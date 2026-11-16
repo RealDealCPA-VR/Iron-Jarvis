@@ -57,7 +57,6 @@ from __future__ import annotations
 import csv
 import html as _html_mod
 import json
-import os
 import re
 from contextlib import contextmanager
 from datetime import datetime
@@ -168,17 +167,14 @@ def _atomic(p: Path):
     so the pre-existing good file at ``p`` is never touched and no 0-byte doc is
     ever left behind. The temp lives in the SAME directory so ``os.replace`` is
     an atomic same-filesystem rename on every platform (incl. Windows).
+
+    v1.504.0 (4.4): the ONE copy of this pattern is ``tools.base.atomic_target``
+    (every other writer uses it too); this name stays for the writers here.
     """
-    tmp = p.with_name(f".{p.name}.tmp-{os.getpid()}")
-    try:
+    from ..tools.base import atomic_target
+
+    with atomic_target(p) as tmp:
         yield tmp
-        os.replace(tmp, p)
-    except BaseException:
-        try:
-            Path(tmp).unlink()
-        except OSError:
-            pass
-        raise
 
 
 def _one_newline(text: str) -> str:

@@ -262,16 +262,19 @@ describe("the Sessions page's clear button names everything it deletes", () => {
     H.responses["/projects"] = { projects: [] };
     render(<SessionsPage />);
     const clear = screen.getByRole("button", { name: /Clear finished, failed and stopped/ });
-    expect(clear.getAttribute("title")).toMatch(/finished, failed or was stopped/);
+    expect(clear.getAttribute("title")).toMatch(/finished, failed or stopped run/);
     expect(screen.queryByRole("button", { name: /^Clear finished$/ })).toBeNull();
     fireEvent.click(clear);
     expect(H.posts.some((p) => p.path === "/sessions/clear")).toBe(false); // two presses
-    fireEvent.click(screen.getByRole("button", { name: /Delete them all\?/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Move them to the trash\?/ }));
     await waitFor(() =>
       expect(H.posts.find((p) => p.path === "/sessions/clear")?.body).toEqual({
         statuses: ["completed", "failed", "cancelled"],
       }),
     );
-    expect(await screen.findByText("Cleared 3 finished, failed or stopped sessions.")).toBeInTheDocument();
+    // v1.504.0 (north-star plan 4.2): they MOVED to the trash, and the notice says so.
+    expect(
+      await screen.findByText(/^Moved 3 finished, failed or stopped runs to the app's trash\. .*kept for 30 days\.$/),
+    ).toBeInTheDocument();
   });
 });

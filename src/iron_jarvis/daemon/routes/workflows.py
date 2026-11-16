@@ -598,12 +598,22 @@ def register(app: FastAPI, d) -> None:
         the user's automations and re-pointing them is their call — but they
         are reported as ``referenced_by`` so an API caller learns what just
         started failing (the dashboard asks the same question up front)."""
+        from ...settings import page_records as _pr
         from ...workflows.store import WorkflowStore
 
         referenced_by = _workflow_references(d, name)
+        # v1.504.0 (north-star plan 4.8): recorded with its Undo (steps and
+        # all), the way chat's workflow_delete is.
+        prior = _pr.snapshot(d.platform, "workflow", name)
         if not WorkflowStore(d.platform.engine).remove(name):
             raise HTTPException(status_code=404, detail="no such workflow")
-        return {"deleted": name, "referenced_by": referenced_by}
+        action_id = ""
+        if prior is not None:
+            action_id = _pr.journal_removal(
+                d.platform, tool="workflow_delete", record="workflow", name=name, prior=prior,
+                summary=f"Removed the workflow '{name}'.",
+            )
+        return {"deleted": name, "referenced_by": referenced_by, "action_id": action_id}
 
     @app.post("/workflows/generate")
     async def generate_workflow(body: WorkflowGenerateBody) -> dict[str, Any]:

@@ -861,7 +861,11 @@ class Config(BaseModel):
     # with every session/tool/autonomous tick and is the root of the unbounded
     # EventRecord table that made /metrics, memory-recall, integrity_check and
     # backups scale with uptime. 90 days keeps ample history while capping growth;
-    # set 0 to keep forever, or lower to stay leaner. Pruned on boot.
+    # set 0 to keep forever, or lower to stay leaner. Pruned on boot and once a
+    # day (daemon/app._event_prune_loop). What goes (v1.504.0, north-star plan
+    # 4.9, D8): events, tool calls and the Undo journal older than this; each
+    # run's own row (its final answer) is kept, and an aged run's page says its
+    # details were removed (orchestrator.transcript).
     event_retention_days: int = 90
     ollama_base_url: str | None = None  # local OpenAI-compatible (Ollama) endpoint URL
     ollama_model: str = "llama3.1"  # default model for the local "ollama" provider

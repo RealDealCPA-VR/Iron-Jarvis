@@ -56,29 +56,49 @@ def _consistent_db_snapshot(engine, home: Path) -> "Path | None":
         return None
 
 
+#: v1.504.0 (north-star plan 4.10): what of the runs' own folders
+#: (``<home>/workspaces/``, where a run with no folder chosen puts the files it
+#: produces) each backup carries — NEWEST files first, up to this many bytes in
+#: all, and no single file larger than :data:`WORKSPACE_BACKUP_MAX_FILE`.
+#: Bounded so ``keep`` archives stay bounded (7 × 100 MB at most from here);
+#: Settings › Maintenance says the same in words.
+WORKSPACE_BACKUP_MAX_BYTES = 100 * 1024 * 1024
+WORKSPACE_BACKUP_MAX_FILE = 25 * 1024 * 1024
+
+
 def create_backup(
     home: Path,
     out_path: Path,
     *,
     engine=None,
     include_keys: bool = False,
+    workspace_max_bytes: int = WORKSPACE_BACKUP_MAX_BYTES,
+    workspace_max_file: int = WORKSPACE_BACKUP_MAX_FILE,
 ) -> tuple[Path, int]:
     """Tar the ``.ironjarvis`` home (DB + memory + config + secrets + skills) to
     ``out_path``. When an ``engine`` is given, the DB is archived as a CONSISTENT
     ``VACUUM INTO`` snapshot (not the live ``.db``/``-wal``/``-shm``, which a
     concurrent checkpoint could leave internally inconsistent → a malformed restore).
     Excludes the Fernet keys unless ``include_keys``, ALWAYS excludes ``backups/``,
-    ``workspaces/``, the regenerable media library (``artifacts/`` +
-    ``creative-thumbs/``) and the cleared media waiting in ``trash/``, and writes
-    the tar atomically (temp+os.replace). Returns ``(out_path, count)``."""
+    the regenerable media library (``artifacts/`` + ``creative-thumbs/``) and the
+    cleared media waiting in ``trash/``, and writes the tar atomically
+    (temp+os.replace). Returns ``(out_path, count)``.
+
+    ``workspaces/`` (v1.504.0, north-star plan 4.10) is no longer skipped
+    whole: it is where a run with no folder chosen keeps the files it
+    produced, so those were in no backup at all. The files of the runs' own
+    folders (``workspaces/session_*``; caches kept beside them, such as
+    ``code-index``, still are not) are carried NEWEST first up to ``workspace_max_bytes`` in all, leaving out any file over
+    ``workspace_max_file`` and anything inside a ``.git`` folder (a coding
+    run's repository history is in the repository itself)."""
     home = Path(home)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     backups_dir = (home / BACKUP_DIRNAME).resolve()
-    # Disposable per-session scratch — never in a backup (it grows without bound and
-    # would multiply the archive ~keep× ; a backup captures DB + secrets + config +
-    # memory, not regeneratable session workspaces).
+    # Per-run folders: carried, but BOUNDED (it grows without bound and would
+    # multiply the archive ~keep×), newest files first — see the docstring.
     workspaces_dir = (home / "workspaces").resolve()
+    workspace_files: list[tuple[float, int, Path]] = []
     # The generated-media library (gallery images/video/audio + their thumbnails)
     # dwarfs the state that actually matters (DB, config, secrets, skills,
     # terminals.json) — hundreds of MB per snapshot. It's the user's own,
@@ -128,7 +148,19 @@ def create_backup(
                 if rp in (out_path.resolve(), tmp_out.resolve()) or backups_dir in rp.parents:
                     continue  # never archive the backups themselves
                 if workspaces_dir in rp.parents:
-                    continue  # skip disposable session scratch (unbounded growth)
+                    # v1.504.0: gathered here, added below within the cap.
+                    # Only a RUN's own folder (``workspaces/<session id>``);
+                    # other things kept there are caches (``code-index``).
+                    parts = rp.relative_to(workspaces_dir).parts
+                    if not parts[0].startswith("session_") or ".git" in parts:
+                        continue
+                    try:
+                        st = p.stat()
+                    except OSError:
+                        continue
+                    if st.st_size <= workspace_max_file:
+                        workspace_files.append((st.st_mtime, st.st_size, p))
+                    continue
                 if (
                     any(m in rp.parents for m in media_dirs)
                     or trash_dir in rp.parents
@@ -157,6 +189,17 @@ def create_backup(
                     # that is all the Overview could show. Say which one.
                     raise type(exc)(exc.errno, exc.strerror or str(exc), arcname) from exc
                 n += 1
+            # v1.504.0 (plan 4.10): the runs' own folders, newest first, bounded.
+            room = max(0, int(workspace_max_bytes))
+            for _mtime, size, p in sorted(workspace_files, key=lambda t: t[0], reverse=True):
+                if size > room:
+                    continue
+                try:
+                    tar.add(p, arcname=str(p.relative_to(home.parent)))
+                except OSError:
+                    continue  # a run's file held open or gone: never fails the backup
+                room -= size
+                n += 1
             if snapshot is not None:  # add the consistent snapshot AS ironjarvis.db
                 tar.add(snapshot, arcname=str((home / _DB_NAME).relative_to(home.parent)))
                 n += 1
@@ -175,9 +218,15 @@ def create_backup(
     return out_path, n
 
 
-def prune_backups(backups_dir: Path, keep: int) -> int:
+def prune_backups(backups_dir: Path, keep: int, *, hold_before: "float | None" = None) -> int:
     """Keep the newest ``keep`` auto-backup archives; delete the rest. Returns the
-    number deleted."""
+    number deleted.
+
+    ``hold_before`` (v1.504.0, north-star plan 4.3): an epoch time; an archive
+    modified BEFORE it is never deleted. Passed while a set-aside database is
+    unanswered (:func:`set_aside_hold`): those archives hold the data the
+    fresh, empty database replaced, and the rotation used to push them all out
+    within ``keep`` days."""
     backups_dir = Path(backups_dir)
     if keep <= 0 or not backups_dir.exists():
         return 0
@@ -189,11 +238,56 @@ def prune_backups(backups_dir: Path, keep: int) -> int:
     removed = 0
     for p in snaps[keep:]:
         try:
+            if hold_before is not None and p.stat().st_mtime < hold_before:
+                continue  # made before the database was set aside: kept
             p.unlink()
             removed += 1
         except OSError:
             pass
     return removed
+
+
+def set_aside_hold(home: Path) -> "float | None":
+    """The epoch time of the FIRST unanswered set-aside of the database
+    (``core.db.read_set_aside_marker``), or None. Every archive older than it
+    is kept by :func:`prune_backups`. Never raises."""
+    from .core.db import read_set_aside_marker
+
+    marker = read_set_aside_marker(home)
+    if marker is None:
+        return None
+    try:
+        return datetime.fromisoformat(str(marker.get("first_at") or marker.get("at"))).timestamp()
+    except (TypeError, ValueError):
+        # An unreadable time holds EVERY archive: never the wrong way round.
+        return float("inf")
+
+
+def latest_good_backup(home: Path) -> "dict | None":
+    """The newest archive made BEFORE the database was set aside (the one a
+    restore should bring back), as a :func:`list_backups` row, or None when
+    nothing is set aside or no archive is that old. Never raises."""
+    hold = set_aside_hold(home)
+    if hold is None:
+        return None
+    for row in list_backups(home):  # newest first
+        try:
+            made = datetime.fromisoformat(row["modified_at"]).timestamp()
+        except (TypeError, ValueError):
+            continue
+        if made < hold:
+            return row
+    return None
+
+
+def set_aside_status(home: Path) -> dict:
+    """What Everything › Status, Settings and ``doctor`` show about a set-aside
+    database (v1.504.0): ``{"set_aside": marker | None, "latest_good":
+    backup row | None}``. Never raises; touches the disk (call off the loop)."""
+    from .core.db import read_set_aside_marker
+
+    marker = read_set_aside_marker(home)
+    return {"set_aside": marker, "latest_good": latest_good_backup(home) if marker else None}
 
 
 def run_auto_backup(
@@ -223,7 +317,10 @@ def run_auto_backup(
     stamp = utcnow().strftime("%Y%m%d-%H%M%S")
     out = backups_dir / f"ironjarvis-backup-{stamp}.tar.gz"
     create_backup(home, out, engine=engine, include_keys=include_keys)
-    prune_backups(backups_dir, keep)
+    # v1.504.0 (north-star plan 4.3): while a set-aside database is unanswered,
+    # no archive older than it is pruned (here or in the mirror).
+    hold = set_aside_hold(home)
+    prune_backups(backups_dir, keep, hold_before=hold)
     mirror = (getattr(config, "backup_mirror_dir", "") or "").strip() if config is not None else ""
     if mirror:
         try:
@@ -233,6 +330,7 @@ def run_auto_backup(
                 mirror,
                 keep=keep,
                 media=bool(getattr(config, "backup_mirror_media", True)),
+                hold_before=hold,
             )
         except Exception as exc:  # noqa: BLE001 — the local backup stands regardless
             _write_mirror_state(
@@ -418,6 +516,7 @@ def mirror_backup(
     media: bool = True,
     max_files: int = MIRROR_MEDIA_MAX_FILES,
     deadline_s: float = MIRROR_MEDIA_DEADLINE_S,
+    hold_before: "float | None" = None,
 ) -> dict:
     """Copy ``archive`` into ``mirror_dir`` (temp + ``os.replace``), prune the
     mirror to ``keep`` — ONLY files named like the app's own archives, so a
@@ -456,7 +555,7 @@ def mirror_backup(
         _write_mirror_state(home, state)
         return state
     state["archive"] = archive.name
-    state["pruned"] = prune_backups(dest_dir, keep)
+    state["pruned"] = prune_backups(dest_dir, keep, hold_before=hold_before)
     state["ok"] = True
     if media:
         report = mirror_media(
@@ -975,6 +1074,66 @@ def clear_media(home: Path, older_than_days: int) -> dict:
         "trash": str(dest_root) if moved else "",
         "names": names,
     }
+
+
+# --- v1.504.0 (north-star plan 4.2, D7): a cleared run goes to the trash -----
+#
+# "Clear completed" (``POST /sessions/clear``) and a run's own Delete used to
+# delete the run's rows for good and ``rmtree`` the folder holding the files it
+# wrote. Now the folder MOVES to ``<home>/trash/<stamp>/cleared-runs/<id>/files``
+# and the run's record (its row, its steps, its tool calls and events) is
+# written beside it as ``record.json`` BEFORE a row is deleted. The record is
+# kept 30 days (:func:`sweep_cleared_records`); the files stay until the trash
+# is emptied (:func:`purge_trash`, Settings › Maintenance).
+
+#: The trash sub-folder a cleared run's record and files are moved under.
+CLEARED_RUNS_DIRNAME = "cleared-runs"
+#: The file a cleared run's record is written to, beside its ``files`` folder.
+CLEARED_RECORD_NAME = "record.json"
+#: How long a cleared run's record waits in the trash before it is removed.
+CLEARED_RECORD_DAYS = 30
+
+
+def trash_stamp() -> str:
+    """The ``<home>/trash/<stamp>`` folder name for a move made now (UTC)."""
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def cleared_run_dir(home: Path, stamp: str, session_id: str) -> Path:
+    """Where one cleared run's record and files are moved:
+    ``<home>/trash/<stamp>/cleared-runs/<session_id>``."""
+    safe = "".join(c for c in str(session_id) if c.isalnum() or c in "-_") or "run"
+    return Path(home) / TRASH_DIRNAME / stamp / CLEARED_RUNS_DIRNAME / safe
+
+
+def sweep_cleared_records(
+    home: Path, *, days: int = CLEARED_RECORD_DAYS, now: "float | None" = None
+) -> int:
+    """Remove the ``record.json`` of every cleared run moved to the trash more
+    than ``days`` ago (D7: records are kept 30 days in the trash). The files a
+    run wrote are NOT removed here; they stay until the trash is emptied. Age
+    is the record's modified time; ``now`` is injectable for tests. Returns the
+    number removed. Never raises."""
+    root = Path(home) / TRASH_DIRNAME
+    cutoff = (time.time() if now is None else now) - max(0, int(days)) * 86400.0
+    removed = 0
+    try:
+        records = list(root.glob(f"*/{CLEARED_RUNS_DIRNAME}/*/{CLEARED_RECORD_NAME}"))
+    except OSError:
+        return 0
+    for rec in records:
+        try:
+            if rec.stat().st_mtime > cutoff:
+                continue
+            rec.unlink()
+            removed += 1
+        except OSError:
+            continue
+        try:  # a run that left no files leaves no empty folder behind
+            rec.parent.rmdir()
+        except OSError:
+            pass
+    return removed
 
 
 def purge_trash(home: Path) -> dict:

@@ -159,7 +159,10 @@ def test_create_list_filter_delete_roundtrip(client):
     assert bad.status_code == 400
     assert "unknown goal state" in bad.json()["detail"]
 
-    assert client.delete(f"/goals/{goal['id']}").json() == {"deleted": goal["id"]}
+    # v1.504.0 (north-star plan 4.8): + the change history row's id (its Undo).
+    gone = client.delete(f"/goals/{goal['id']}").json()
+    assert gone.pop("action_id", "").startswith("tool_")
+    assert gone == {"deleted": goal["id"]}
     assert client.get("/goals").json()["goals"] == []
     assert client.delete(f"/goals/{goal['id']}").status_code == 404
 

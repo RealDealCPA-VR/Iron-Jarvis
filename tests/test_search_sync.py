@@ -336,8 +336,8 @@ def test_delete_round_table_removes_its_docs(client):
 
 
 def test_prune_events_drops_docs_for_expiring_runs(client):
-    """``prune_events`` bulk-deletes AgentRun rows with a raw DELETE that fires
-    no ORM event, so it has to drop the matching docs explicitly. Docs are
+    """``prune_events`` expires an old run's details with a raw DELETE that
+    fires no ORM event, so it has to drop the matching docs explicitly. Docs are
     addressed by ``ref``, so this pins the ref-keyed drop."""
     p = client.app.state.platform
     old = datetime.now(timezone.utc) - timedelta(days=90)
@@ -357,8 +357,10 @@ def test_prune_events_drops_docs_for_expiring_runs(client):
 
     prune_events(p.engine, older_than_days=30)
 
+    # v1.504.0 (north-star plan 4.9, D8): the run's ROW is kept (its final
+    # answer); its details, these docs among them, still go.
     with session_scope(p.engine) as db:
-        assert db.get(AgentRun, run_id) is None
+        assert db.get(AgentRun, run_id) is not None
     assert _docs(p.engine, ref=run_id) == []
     assert index.search("harvesting") == []
 

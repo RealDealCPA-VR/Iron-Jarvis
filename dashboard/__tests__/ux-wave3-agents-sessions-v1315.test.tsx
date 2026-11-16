@@ -434,7 +434,7 @@ describe("Session board page: named for what it is, lanes in plain words", () =>
     fireEvent.click(clear);
     // first press only arms
     expect(w3.posts.some((p) => p.path === "/sessions/clear")).toBe(false);
-    fireEvent.click(within(lane!).getByRole("button", { name: /Confirm clear\?/ }));
+    fireEvent.click(within(lane!).getByRole("button", { name: /Move to the trash\?/ }));
     await waitFor(() =>
       expect(w3.posts.find((p) => p.path === "/sessions/clear")?.body).toEqual({ statuses: ["completed"] }),
     );

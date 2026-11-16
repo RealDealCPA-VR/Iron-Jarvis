@@ -33,7 +33,7 @@ from typing import Any, Callable
 from ..core.fs_policy import fs_read_ok
 from ..providers.adapters.base import LLMMessage
 from ..providers.roles import resolve_role
-from .base import Tool, ToolContext, ToolResult, safe_path
+from .base import Reversibility, Tool, ToolContext, ToolResult, safe_path
 
 #: () -> the platform's ModelRouter (anything with an async ``complete``).
 RouterResolver = Callable[[], Any]
@@ -130,6 +130,29 @@ class _ImageTool(Tool):
     """Shared plumbing: one permission switch + never-raise execution."""
 
     permission_key = "images"  # one switch governs the whole image group
+
+    def _write_target(self, args: dict[str, Any], ctx: ToolContext) -> "Path | None":
+        """The workspace file this call would write (the image writers), or
+        None. Resolved exactly as ``_run`` resolves it."""
+        return None
+
+    async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> "dict[str, Any] | None":
+        """v1.504.0 (north-star 4.5): the target's prior bytes when the call
+        writes over a file, else a delete of the file it makes."""
+        from .undo import capture_file_inverse
+
+        try:
+            target = self._write_target(args, ctx)
+        except Exception:  # noqa: BLE001 — _run refuses it in words
+            return None
+        if target is None:
+            return None
+        return await asyncio.to_thread(capture_file_inverse, ctx.config.home, ctx.workspace, target)
+
+    async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        from .undo import revert_workspace_file
+
+        return await revert_workspace_file(undo, ctx)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         try:
@@ -623,6 +646,9 @@ _HELD_NO_VISION_ERROR = (
 
 class ImageConvertTool(_ImageTool):
     name = "image_convert"
+    #: v1.504.0 (4.5): a convert onto an existing image is undoable, and the
+    #: replaced file is kept in the app's trash.
+    reversibility = Reversibility.REVERSIBLE
     description = (
         f"Convert an image to another format ({_CONVERT_SUPPORTED}) chosen by the "
         "target path's suffix. JPEG output is flattened to RGB on white at "
@@ -643,6 +669,10 @@ class ImageConvertTool(_ImageTool):
         },
         "required": ["source", "target"],
     }
+
+    def _write_target(self, args: dict[str, Any], ctx: ToolContext) -> "Path | None":
+        raw_target = str(args.get("target") or "").strip()
+        return _resolve_write_path(raw_target, ctx)[0] if raw_target else None
 
     async def _run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         raw_source = str(args.get("source") or "").strip()
@@ -677,14 +707,23 @@ class ImageConvertTool(_ImageTool):
                 save_kwargs: dict[str, Any] = {"quality": 90} if fmt == "JPEG" else {}
                 out.save(target, format=fmt, **save_kwargs)
 
+        # v1.504.0 (4.5): an image already at the target is KEPT (a copy in
+        # the app's trash) before it is written over; if it cannot be, nothing is.
+        from .builtins import keep_before_overwrite, replaced_words
+
+        replacing, kept, refused = await keep_before_overwrite(ctx, target, self.name)
+        if refused:
+            return ToolResult(ok=False, error=refused)
         # Pillow decode/encode is CPU-bound — keep it off the event loop.
         existed = target.exists()  # created_paths means CREATED, not overwritten
         await asyncio.to_thread(_convert)
         size = target.stat().st_size
         return ToolResult(
             ok=True,
-            output=f"converted {raw_source} -> {raw_target} ({fmt}, {size} bytes)",
-            data={"source": raw_source, "target": raw_target, "format": fmt, "bytes": size},
+            output=f"converted {raw_source} -> {raw_target} ({fmt}, {size} bytes)"
+            + (replaced_words(kept) if replacing else ""),
+            data={"source": raw_source, "target": raw_target, "format": fmt, "bytes": size,
+                  **({"replaced_kept": kept} if kept else {})},
             # Created-files contract (v1.166.0): absolute (safe_path resolves),
             # success-only, and only for files this call brought into existence —
             # an overwrite journaled as "created" would let undo unlink a file
@@ -695,6 +734,9 @@ class ImageConvertTool(_ImageTool):
 
 class ImageResizeTool(_ImageTool):
     name = "image_resize"
+    #: v1.504.0 (4.5): the default writes over the SOURCE — the user's own
+    #: image. It is undoable, and the original is kept in the app's trash.
+    reversibility = Reversibility.REVERSIBLE
     description = (
         "Downscale an image to fit within max_width/max_height, preserving "
         "aspect ratio — never upscales. target defaults to overwriting the "
@@ -717,6 +759,16 @@ class ImageResizeTool(_ImageTool):
         },
         "required": ["source"],
     }
+
+    def _write_target(self, args: dict[str, Any], ctx: ToolContext) -> "Path | None":
+        raw_target = str(args.get("target") or "").strip()
+        if raw_target:
+            return _resolve_write_path(raw_target, ctx)[0]
+        raw_source = str(args.get("source") or "").strip()
+        source = _resolve_read_path(raw_source, ctx)[0] if raw_source else None
+        if source is None or not source.resolve().is_relative_to(ctx.workspace.resolve()):
+            return None
+        return source
 
     async def _run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         raw_source = str(args.get("source") or "").strip()
@@ -771,11 +823,20 @@ class ImageResizeTool(_ImageTool):
                 out.save(target, format=fmt, **save_kwargs)
                 return original[0], original[1], out.width, out.height
 
+        # v1.504.0 (4.5): the image about to be written over (the SOURCE, by
+        # default) is KEPT — a copy in the app's trash; if it cannot be,
+        # nothing is changed.
+        from .builtins import keep_before_overwrite, replaced_words
+
+        replacing, kept, refused = await keep_before_overwrite(ctx, target, self.name)
+        if refused:
+            return ToolResult(ok=False, error=refused)
         existed = target.exists()  # in-place resize (the default) overwrites source
         old_w, old_h, new_w, new_h = await asyncio.to_thread(_resize)
         return ToolResult(
             ok=True,
-            output=f"resized {raw_source}: {old_w}x{old_h} -> {new_w}x{new_h} at {raw_target}",
+            output=f"resized {raw_source}: {old_w}x{old_h} -> {new_w}x{new_h} at {raw_target}"
+            + (replaced_words(kept) if replacing else ""),
             data={
                 "source": raw_source,
                 "target": raw_target,
@@ -783,6 +844,7 @@ class ImageResizeTool(_ImageTool):
                 "height": new_h,
                 "original_width": old_w,
                 "original_height": old_h,
+                **({"replaced_kept": kept} if kept else {}),
             },
             # Created-files contract (v1.166.0): success-only, and only for files
             # this call brought into existence. The in-place default overwrites

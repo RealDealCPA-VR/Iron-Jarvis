@@ -29,6 +29,7 @@
         "workspace_path": ""
       },
       "transcript": {
+        "details_removed_after_days": null,
         "runs": [
           {
             "agent_type": "builder",
@@ -115,6 +116,7 @@
         "workspace_path": ""
       },
       "transcript": {
+        "details_removed_after_days": null,
         "runs": [
           {
             "agent_type": "builder",

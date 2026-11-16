@@ -397,13 +397,95 @@ def init_db(engine: Engine) -> None:
     run_migrations(engine)
 
 
+#: v1.504.0 (north-star plan 4.3): the file that says a database was set aside
+#: (which file, when, why) — beside the database, in the home. It stays until
+#: the owner ANSWERS it (restores a backup, or keeps the fresh start); while it
+#: is unanswered the backup rotation keeps every archive older than it
+#: (``maintenance.prune_backups``), and Everything › Status, Settings and
+#: ``ironjarvis doctor`` say so.
+SET_ASIDE_MARKER = "database-set-aside.json"
+
+
+def set_aside_marker_path(home: str | Path) -> Path:
+    return Path(home) / SET_ASIDE_MARKER
+
+
+def write_set_aside_marker(home: str | Path, set_aside_as: str | Path, reason: str, *, at: Any = None) -> None:
+    """Record that the database was set aside as ``set_aside_as`` (v1.504.0).
+    An earlier unanswered marker is kept in ``earlier`` (the FIRST one is
+    what the backups are held for). Atomic; never raises — a boot that has
+    already set the file aside must still start."""
+    from .ids import utcnow
+
+    path = set_aside_marker_path(home)
+    entry = {
+        "file": str(set_aside_as),
+        "at": (at or utcnow()).isoformat(timespec="seconds"),
+        "reason": str(reason)[:400],
+    }
+    prior = read_set_aside_marker(home)
+    data: dict[str, Any] = dict(entry)
+    if prior is not None:
+        data["earlier"] = [*prior.get("earlier", []), {k: prior[k] for k in ("file", "at", "reason") if k in prior}]
+        data["first_at"] = prior.get("first_at") or prior.get("at")
+    else:
+        data["first_at"] = entry["at"]
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        logger.error("could not record that the database was set aside (%s)", set_aside_as, exc_info=True)
+
+
+def read_set_aside_marker(home: str | Path) -> "dict[str, Any] | None":
+    """The UNANSWERED set-aside marker, or None (none, answered, unreadable)."""
+    try:
+        data = json.loads(set_aside_marker_path(home).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("answered_at"):
+        return None
+    return data
+
+
+def answer_set_aside_marker(home: str | Path, answer: str, *, backup: str = "") -> bool:
+    """Mark the set-aside marker answered (``"restored"`` with the backup's
+    name, or ``"kept_fresh"``). The file is KEPT with the answer, so what
+    happened stays on record. Returns False when there was nothing to answer."""
+    from .ids import utcnow
+
+    data = read_set_aside_marker(home)
+    if data is None:
+        return False
+    data["answered_at"] = utcnow().isoformat(timespec="seconds")
+    data["answer"] = answer
+    if backup:
+        data["restored_from"] = backup
+    path = set_aside_marker_path(home)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        return False
+    return True
+
+
 def quarantine_db(db_path: str | Path, reason: str) -> "Path | None":
     """Rename a corrupt DB so a fresh one can take its place. Returns the
     quarantine path. The corrupt file is KEPT (never deleted) so data can be
     salvaged / restored later, and so are its -wal/-shm sidecars: they MOVE
     beside it as ``<dead>-wal`` / ``<dead>-shm`` (v1.499.3) — the WAL holds
     every transaction since the last checkpoint, and opening the quarantined
-    copy replays it."""
+    copy replays it.
+
+    v1.504.0 (north-star plan 4.3): the app then started EMPTY with only a log
+    line, and within a week the backup rotation had pruned every archive that
+    held the real data. A marker is now written beside the database
+    (:func:`write_set_aside_marker`) so the owner is shown it with one press to
+    restore, and the backups older than it are kept until it is answered."""
     from .ids import utcnow
 
     path = Path(db_path)
@@ -413,7 +495,8 @@ def quarantine_db(db_path: str | Path, reason: str) -> "Path | None":
         stamp = "corrupt"
     dead = path.with_name(path.name + f".corrupt-{stamp}")
     try:
-        if path.exists():
+        moved = path.exists()
+        if moved:
             path.replace(dead)
         for sfx in ("-wal", "-shm"):
             side = Path(str(path) + sfx)
@@ -421,6 +504,8 @@ def quarantine_db(db_path: str | Path, reason: str) -> "Path | None":
                 side.replace(Path(str(dead) + sfx))
     except OSError:
         return None
+    if moved and str(db_path) != ":memory:":
+        write_set_aside_marker(path.parent, dead, reason)
     logger.error(
         "QUARANTINED corrupt database %s -> %s (%s). Starting with a fresh DB; "
         "run `ironjarvis repair` to restore your latest backup.",
@@ -611,8 +696,9 @@ def _expiring_undo_backups(db: Any, cutoff: Any) -> list[str]:
 
 
 def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> int:
-    """Delete EventRecord + the parallel audit tables (ToolInvocation, AgentRun,
+    """Delete EventRecord + the parallel audit tables (ToolInvocation,
     UndoJournal) older than N days (retention parity). Returns the total count.
+    v1.504.0: AgentRun rows are KEPT (a run's final answer); see below.
 
     Previously only EventRecord was pruned, so the tool-invocation ledger + run
     rows grew UNBOUNDED and the audit trail went internally inconsistent (a tool
@@ -722,7 +808,14 @@ def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> 
         # Bulk DELETE in the engine (returns rowcount) rather than materializing every
         # expired row as an ORM object and deleting one-by-one — the boot prune over a
         # large backlog was O(rows) memory + ~1.3s/33k rows.
-        for model in (EventRecord, ToolInvocation, AgentRun, UndoJournal):
+        #
+        # v1.504.0 (north-star plan 4.9, D8): ``AgentRun`` is NOT deleted any
+        # more. Its row is small (state, counts, cost, ``result``) and ``result``
+        # is the run's FINAL ANSWER, which went with the details. The row is
+        # kept as it is (nothing cleared); its steps, tool calls, events and
+        # Undo rows go, as the setting now says. Its search docs (the details)
+        # are still dropped above.
+        for model in (EventRecord, ToolInvocation, UndoJournal):
             result = db.execute(sa_delete(model).where(model.created_at < cutoff))
             deleted += int(result.rowcount or 0)
         db.commit()

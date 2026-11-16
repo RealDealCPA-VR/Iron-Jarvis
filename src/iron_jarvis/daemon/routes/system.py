@@ -859,7 +859,19 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/schedules/{name}")
     def remove_schedule(name: str) -> dict[str, Any]:
-        return {"removed": d.platform.scheduler.remove(name)}
+        # v1.504.0 (north-star plan 4.8): recorded with its Undo, the way
+        # chat's schedule_delete is (settings/page_records).
+        from ...settings import page_records as _pr
+
+        prior = _pr.snapshot(d.platform, "schedule", name)
+        removed = d.platform.scheduler.remove(name)
+        out: dict[str, Any] = {"removed": removed}
+        if removed and prior is not None:
+            out["action_id"] = _pr.journal_removal(
+                d.platform, tool="schedule_delete", record="schedule", name=name, prior=prior,
+                summary=f"Removed the schedule '{name}'.",
+            )
+        return out
 
     @app.post("/schedules/{name}/run")
     async def run_schedule(name: str) -> dict[str, Any]:

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from sqlalchemy import delete as sa_delete
+from sqlalchemy import select as sa_select
 
 from ..core.db import dumps, row_values, session_scope
 from ..core.events import EventType
@@ -39,7 +40,7 @@ from .base import (
 )
 from .permissions import PermissionDecision, PermissionEngine
 from .undo import make_file_descriptor, sha256_target
-from .undo import finalize_post_hash
+from .undo import drop_preimages, finalize_post_hash, settle_unfinished
 
 _log = logging.getLogger("iron_jarvis.tools.registry")
 
@@ -335,8 +336,244 @@ def _intent_pool() -> Any:
     return _INTENT_POOL
 
 
+# --------------------------------------------------------------------------- #
+# THE DEADLINE COUNTS TIME AWAKE (v1.504.0, north-star 4.11).
+# --------------------------------------------------------------------------- #
+# asyncio's clock is ``time.monotonic``; on Windows with Python 3.12 that is
+# ``GetTickCount64()``, which Microsoft documents as the time since the system
+# STARTED (it names ``QueryUnbiasedInterruptTime`` for the time awake). So it
+# runs on while the PC sleeps, and a call that had worked for seconds when the
+# lid closed woke up past its deadline: "did not finish within 600 s". The
+# per-call deadline is now measured on a clock that leaves sleep out. Python
+# 3.13 moved ``time.monotonic`` to QueryPerformanceCounter, which also counts
+# sleep, so this holds there too.
+
+#: The awake clock (seconds), or None until first needed (``_awake_clock``).
+#: Tests inject one here.
+_AWAKE_CLOCK: "Any | None" = None
+
+
+def _awake_clock() -> Any:
+    """A clock that does not count time the PC spent asleep: the unbiased
+    interrupt time on Windows (a plain kernel32 read that never waits),
+    ``time.monotonic`` elsewhere (CLOCK_MONOTONIC already leaves suspend out
+    on Linux; on macOS asyncio's own clock stops in sleep too)."""
+    global _AWAKE_CLOCK
+    if _AWAKE_CLOCK is not None:
+        return _AWAKE_CLOCK
+    import time as _time
+
+    clock: Any = _time.monotonic
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            query = ctypes.windll.kernel32.QueryUnbiasedInterruptTime  # type: ignore[attr-defined]
+            query.argtypes = [ctypes.POINTER(ctypes.c_ulonglong)]
+            query.restype = ctypes.c_int
+
+            def _unbiased() -> float:
+                value = ctypes.c_ulonglong(0)
+                if not query(ctypes.byref(value)):
+                    raise OSError("QueryUnbiasedInterruptTime failed")
+                return value.value / 10_000_000  # 100 ns units
+
+            _unbiased()
+            clock = _unbiased
+        except Exception:  # noqa: BLE001 — no awake clock: the old behaviour
+            _log.debug("no unbiased interrupt time; the deadline counts sleep", exc_info=True)
+    _AWAKE_CLOCK = clock
+    return clock
+
+
+#: The check runs this much BEFORE the scope's own timer, so after a wake (when
+#: both are due at once) it runs first and can move the timer on.
+_AWAKE_CHECK_EARLY_S = 0.001
+#: Left this little (or less) of the awake time: the scope's timer is let fire
+#: (the two clocks tick at about 16 ms on Windows).
+_AWAKE_SLACK_S = 0.02
+
+
+class _AwakeDeadline:
+    """Keeps an entered ``asyncio.timeout(seconds)`` scope to *seconds* of time
+    AWAKE. The scope keeps a real deadline on the loop's clock (``cm.when()``,
+    which ``mcp/client`` reads for its read timeout); a check due just before
+    it reads the awake clock and, when the deadline was reached only because
+    the PC slept, moves the scope's deadline on by what is left. A deadline
+    really reached is left to the scope's own timer, so ``cm.expired()`` stays
+    the one test of OUR deadline."""
+
+    def __init__(self, cm: Any, seconds: float) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._cm = cm
+        self._seconds = float(seconds)
+        self._clock = _awake_clock()
+        self._start = self._clock()
+        self._handle: Any = None
+        self._arm(self._seconds)
+
+    def _arm(self, left: float) -> None:
+        when = self._loop.time() + left
+        self._cm.reschedule(when)
+        self._handle = self._loop.call_at(when - _AWAKE_CHECK_EARLY_S, self._check)
+
+    def _check(self) -> None:
+        try:
+            left = self._seconds - (self._clock() - self._start)
+        except Exception:  # noqa: BLE001 — cannot read it: the deadline stands
+            return
+        if left > _AWAKE_SLACK_S:
+            self._arm(left)
+
+    def cancel(self) -> None:
+        if self._handle is not None:
+            self._handle.cancel()
+
+
+#: v1.504.0 (4.7): the line a successful change carries when its before-copy
+#: could not be taken (``capture_undo`` raised): there is no Undo for it.
+CAPTURE_FAILED_NOTE = "This change can't be undone: its earlier version could not be kept."
+
+
 def interrupted_note(safe: bool) -> str:
     return INTERRUPTED_SAFE if safe else INTERRUPTED_MAY_HAVE_LANDED
+
+
+def _stamp_workspace(desc: "dict[str, Any]", workspace: Any) -> "dict[str, Any]":
+    """Record WHICH workspace the envelope's relative path is against
+    (v1.166.3). POST /undo used to reconstruct the workspace from the
+    Session table — and chat runs every turn as session id "chat",
+    which has no row, so every chat undo resolved against a guessed
+    folder (workspaces_dir/chat) and either 409'd or targeted the
+    wrong tree. Chat's tool workspace also varies per turn (uploads
+    vs. the grounded project), so only capture-time truth can work.
+    Best-effort: an unparseable envelope is left untouched."""
+    try:
+        meta = json.loads(desc.get("pre_inline") or "{}")
+    except (TypeError, ValueError):
+        return desc
+    if not isinstance(meta, dict) or meta.get("workspace"):
+        return desc
+    try:
+        meta["workspace"] = str(Path(workspace).resolve())
+    except Exception:  # noqa: BLE001 — never fail the recording
+        return desc
+    return {**desc, "pre_inline": json.dumps(meta)}
+
+
+def _journal_row(ctx: ToolContext, name: str, inv_id: str, undo: "dict[str, Any]") -> "dict[str, Any]":
+    """The ``UndoJournal`` row for a captured inverse, as the ORM would write
+    it (one shape for the intent's row and the finished row's)."""
+    # The inverse descriptor (from Tool.capture_undo) is a small,
+    # redaction-safe dict; the big pre-image itself is already a blob
+    # ref or a small inline value inside it.
+    stamped = _stamp_workspace(undo, ctx.workspace)
+    return row_values(
+        UndoJournal,
+        action_id=inv_id,
+        session_id=ctx.session_id,
+        agent_run_id=ctx.agent_run_id,
+        tool=name,
+        kind=str(stamped.get("kind") or ""),
+        reversible=bool(stamped.get("reversible", True)),
+        pre_ref=stamped.get("pre_ref"),
+        pre_inline=stamped.get("pre_inline"),
+        pre_sha256=stamped.get("pre_sha256"),
+        post_sha256=stamped.get("post_sha256"),
+    )
+
+
+def _journal_desc(j: UndoJournal) -> "dict[str, Any]":
+    return {
+        "kind": j.kind, "reversible": bool(j.reversible), "pre_ref": j.pre_ref,
+        "pre_inline": j.pre_inline, "pre_sha256": j.pre_sha256,
+        "post_sha256": j.post_sha256,
+    }
+
+
+def _home_of(engine: Any) -> "Path | None":
+    """The app's home from its database file (``<home>/ironjarvis.db``, the
+    same reading ``core/db.prune`` uses); None for a database in memory."""
+    try:
+        db_file = engine.url.database
+    except Exception:  # noqa: BLE001
+        return None
+    if not db_file or db_file == ":memory:":
+        return None
+    return Path(db_file).parent
+
+
+#: A before-copy younger than this is never reclaimed: it may belong to a
+#: capture whose row is still on its way.
+ORPHAN_GRACE_S = 600.0
+
+
+def reclaim_orphan_preimages(
+    engine: Any, home: Any, *, now: "float | None" = None, grace_s: float = ORPHAN_GRACE_S
+) -> int:
+    """Remove every before-copy under ``<home>/undo/`` that no journal row
+    refers to (v1.504.0, 4.1). Such a blob was written by a capture whose
+    call never got a row (a crash between the two, a failed ledger write);
+    nothing could ever read it, and nothing pruned it. A row's ``pre_ref``
+    and a ``files_patch`` envelope's per-file ``ref`` both count. Returns how
+    many were removed. Sync, best-effort; never raises."""
+    import time as _time
+
+    from sqlmodel import select
+
+    from .undo import PATCH_UNDO_KIND, patch_entries, read_envelope
+
+    try:
+        store = Path(home) / "undo"
+        if not store.is_dir():
+            return 0
+        files = [f for f in store.iterdir() if f.is_file() and f.suffix == ".bin"]
+        if not files:
+            return 0
+        used: set[str] = set()
+        with session_scope(engine) as db:
+            for ref in db.exec(
+                select(UndoJournal.pre_ref).where(UndoJournal.pre_ref != None)  # noqa: E711
+            ).all():
+                used.add(str(ref))
+            for kind, inline in db.exec(
+                select(UndoJournal.kind, UndoJournal.pre_inline).where(
+                    UndoJournal.kind == PATCH_UNDO_KIND
+                )
+            ).all():
+                for entry in patch_entries(read_envelope({"pre_inline": inline})):
+                    if entry.get("ref"):
+                        used.add(str(entry["ref"]))
+        cutoff = (now if now is not None else _time.time()) - grace_s
+        removed = 0
+        for f in files:
+            try:
+                if f.name in used or f.stat().st_mtime > cutoff:
+                    continue
+                f.unlink()
+                removed += 1
+            except OSError:
+                continue
+        return removed
+    except Exception:  # noqa: BLE001 — reclaiming must never fail a boot
+        _log.warning("could not reclaim unused before-copies", exc_info=True)
+        return 0
+
+
+def _settle_at_boot(db: Any, j: UndoJournal, home: "Path | None", drops: list) -> None:
+    """One inverse whose call's process is gone (it died mid-call, or the call
+    was cut off and its worker ran on): hashed now, every worker being dead
+    (``undo.settle_unfinished``, finished). Kept with an exact after-hash, or
+    deleted (its before-copy queued in *drops*, removed after the commit)."""
+    desc = _journal_desc(j)
+    settled = settle_unfinished(desc, workspace=None, home=home or "", finished=True, reclaim=False)
+    if settled is None:
+        db.delete(j)
+        drops.append(desc)
+        return
+    j.post_sha256 = settled.get("post_sha256")
+    j.pre_inline = settled.get("pre_inline")
+    db.add(j)
 
 
 def reconcile_interrupted_tool_calls(engine: Any) -> int:
@@ -345,17 +582,29 @@ def reconcile_interrupted_tool_calls(engine: Any) -> int:
 
     An intent whose id already has a row is only removed — a cancel can write
     its row before a late intent write lands. Returns how many calls were
-    recorded as interrupted. Sync; the lifespan runs it off the loop."""
+    recorded as interrupted. Sync; the lifespan runs it off the loop.
+
+    v1.504.0 (4.1): the inverse such a call journaled with its intent is
+    SETTLED here — kept with the after-hash of what is on disk, or removed
+    with its before-copy when the hash proves nothing changed — and so is
+    every inverse a stopped call left marked "interrupted". Then the
+    before-copies no row refers to are reclaimed."""
     from sqlmodel import select
 
     from ..core.ids import new_uid
     from ..core.models import EventRecord
+    from .undo import INTERRUPTED_KEY
 
+    home = _home_of(engine)
+    drops: list = []
     recorded = 0
     with session_scope(engine) as db:
         intents = list(db.exec(select(ToolIntent)).all())
         for it in intents:
             if db.get(ToolInvocation, it.id) is None:
+                j = db.get(UndoJournal, it.id)
+                if j is not None:
+                    _settle_at_boot(db, j, home, drops)
                 # The same `tool.executed` a cancelled call publishes, written
                 # straight to the event log (nothing is subscribed yet at
                 # boot): the Activity page reads events, not this table.
@@ -391,7 +640,19 @@ def reconcile_interrupted_tool_calls(engine: Any) -> int:
                 )
                 recorded += 1
             db.delete(it)
+        # Inverses a STOPPED call left unproven (its worker could still write
+        # when its row was written): every worker of that process is gone now.
+        for j in db.exec(
+            select(UndoJournal)
+            .where(UndoJournal.applied_at == None)  # noqa: E711
+            .where(UndoJournal.pre_inline.contains(f'"{INTERRUPTED_KEY}": true'))  # type: ignore[union-attr]
+        ).all():
+            _settle_at_boot(db, j, home, drops)
         db.commit()
+    if home is not None:
+        for desc in drops:
+            drop_preimages(home, desc)
+        reclaim_orphan_preimages(engine, home)
     return recorded
 
 
@@ -1048,11 +1309,21 @@ class ToolRegistry:
         # tool still runs) rather than blocking the action, matching the
         # returns_untrusted_content best-effort discipline.
         undo_desc: dict[str, Any] | None = None
+        capture_failed = False
         if reversibility == Reversibility.REVERSIBLE:
             try:
                 undo_desc = await tool.capture_undo(run_args, ctx)
             except Exception:  # noqa: BLE001 — capture never blocks the tool
                 undo_desc = None
+                # v1.504.0 (4.7): the card may have said "You can undo this";
+                # the answer then says plainly that this change cannot be.
+                capture_failed = True
+        # v1.504.0 (4.1): the inverse is JOURNALED WITH THE INTENT, before
+        # execute (below), so the finished row REPLACES that journal row.
+        intent_undo = undo_desc is not None
+        # Cut off by OUR deadline: the tool may still be writing (a worker
+        # thread runs on), so its inverse is kept unproven (4.1).
+        cut_off = False
 
         # THE INTENT (v1.335.0). Written BEFORE execute and deleted by the
         # finished row's own transaction, so a process that dies mid-call
@@ -1064,7 +1335,8 @@ class ToolRegistry:
         inv_id = new_id("tool")
         try:
             await self._write_intent(
-                ctx, inv_id, name, args, decision.mode, rev_value, tool, grant_id
+                ctx, inv_id, name, args, decision.mode, rev_value, tool, grant_id,
+                undo=undo_desc,
             )
 
             # THE DEADLINE (v1.228.0, RT6). A wedged subprocess/MCP/HTTP tool
@@ -1095,6 +1367,9 @@ class ToolRegistry:
                 and not getattr(tool, "bounds_itself", False)
             )
             async with asyncio.timeout(float(deadline_s) if armed else None) as cm:
+                # v1.504.0 (4.11): kept to time AWAKE (`_AwakeDeadline`): the
+                # loop's clock counts the PC's sleep on Windows.
+                _awake_deadline = _AwakeDeadline(cm, float(deadline_s)) if armed else None
                 # The scope is visible to the tool (`tool_deadline_expired`),
                 # so a cancel it catches can say whether it was THIS deadline.
                 _scope = _DEADLINE_SCOPE.set(cm)
@@ -1120,11 +1395,14 @@ class ToolRegistry:
                 try:
                     result = await tool.execute(run_args, ctx)
                 finally:
+                    if _awake_deadline is not None:
+                        _awake_deadline.cancel()
                     _TASK_SCOPE.reset(_tscope)
                     _CALL_SCOPE.reset(_call)
                     _DEADLINE_SCOPE.reset(_scope)
         except TimeoutError as exc:
             if cm.expired():
+                cut_off = True
                 result = ToolResult(
                     ok=False,
                     error=(
@@ -1178,6 +1456,10 @@ class ToolRegistry:
                     note,
                     risk=risk,
                     inv_id=inv_id,
+                    # v1.504.0 (4.1): the write may land after this row;
+                    # its inverse is kept (unproven), never dropped.
+                    undo=undo_desc,
+                    replace_undo=intent_undo,
                 )
             )
             self._interrupt_jobs.add(job)
@@ -1239,6 +1521,11 @@ class ToolRegistry:
                         )
             except Exception:  # noqa: BLE001 — a check never fails a call
                 _log.debug("figures check failed", exc_info=True)
+        if result.ok and capture_failed:
+            # v1.504.0 (4.7): no before-copy, no Undo — said, never implied.
+            result = dataclasses.replace(
+                result, output=(str(result.output or "") + "\n" + CAPTURE_FAILED_NOTE).strip()
+            )
         # THE TERMINAL LEDGER SURVIVES A LATE CANCEL (v1.237.0, Ship 3).
         # The `except asyncio.CancelledError` branch above covers a cancel that
         # arrives DURING `execute`. This is the other window, and Ship 3 is what
@@ -1265,9 +1552,15 @@ class ToolRegistry:
                 output=result.output if result.ok else (result.error or ""),
                 reversibility=rev_value,
                 confinement=confinement,
-                # Only journal an inverse for a SUCCESSFUL mutation (a failed
-                # write changed nothing, so there is nothing to undo).
-                undo=undo_desc if result.ok else None,
+                # v1.504.0 (4.1): a FAILED call keeps its inverse too unless
+                # the target's hash proves nothing changed (a save that
+                # failed half-way changed the file; the deadline may still be
+                # writing). `_record` settles it (`undo.settle_unfinished`).
+                undo=undo_desc,
+                undo_settle=(
+                    None if result.ok else ("cut_off" if cut_off else "finished")
+                ),
+                replace_undo=intent_undo,
                 # Files the tool could not name until it had done the work
                 # (v1.157.0) — see ToolResult.created_paths. Journaled through
                 # the same path as any other creation so agents/outcome, the
@@ -1314,12 +1607,22 @@ class ToolRegistry:
         rev_value: str,
         tool: Tool,
         grant_id: str,
+        *,
+        undo: "dict[str, Any] | None" = None,
     ) -> None:
         """Commit the "this call has started" row (v1.335.0) off the loop.
 
         Best-effort: a failed write logs and the call still runs, exactly as
         every call ran before intents existed. A CANCEL is not swallowed — the
-        caller's cancel branch ledgers it under the same id."""
+        caller's cancel branch ledgers it under the same id.
+
+        v1.504.0 (4.1): ``undo`` — the call's captured inverse — goes in the
+        SAME transaction, under the same id, so a call that is stopped, runs
+        out of time or dies mid-write still has its Undo (the finished row
+        replaces this one, ``_record(replace_undo=True)``). Not written when
+        the call's finished row already exists (an intent write that landed
+        late), so a late write never brings back an inverse the finished
+        call dropped."""
 
         def _write() -> None:
             try:
@@ -1340,8 +1643,17 @@ class ToolRegistry:
                 replay_safe=replay_safe(tool),
                 grant_id=str(grant_id or ""),
             )
+            journal = _journal_row(ctx, name, inv_id, undo) if undo else None
             with ctx.engine.begin() as conn:
+                if journal is not None:
+                    done = conn.execute(
+                        sa_select(ToolInvocation.id).where(ToolInvocation.id == inv_id)
+                    ).first()
+                    if done is not None:
+                        return  # landed late: the finished row has settled it
                 conn.execute(ToolIntent.__table__.insert(), values)
+                if journal is not None:
+                    conn.execute(UndoJournal.__table__.insert(), journal)
 
         # ITS OWN WORKERS, and a BOUND. On the shared default executor the
         # write queued behind every other offloaded job, so under load a tool
@@ -1389,6 +1701,8 @@ class ToolRegistry:
         risk: str | None,
         grant_id: str = "",
         inv_id: str | None = None,
+        undo_settle: str | None = None,
+        replace_undo: bool = False,
     ) -> None:
         """The terminal row + ``tool.executed`` for a call that FINISHED.
 
@@ -1411,6 +1725,8 @@ class ToolRegistry:
             created_paths=created_paths,
             grant_id=grant_id,
             inv_id=inv_id,
+            undo_settle=undo_settle,
+            replace_undo=replace_undo,
         )
         await ctx.event_bus.publish(
             EventType.TOOL_EXECUTED,
@@ -1434,9 +1750,15 @@ class ToolRegistry:
         *,
         risk: str | None = None,
         inv_id: str | None = None,
+        undo: "dict[str, Any] | None" = None,
+        replace_undo: bool = False,
     ) -> None:
         """The failed row + ``tool.executed`` for a call that was CANCELLED
         mid-execute (v1.228.0, CL1). Runs as its own task — see ``invoke``.
+
+        ``undo`` (v1.504.0, 4.1): the call's captured inverse, KEPT — the
+        worker thread may still land the write after this row — marked
+        unproven (``undo.settle_unfinished``, cut off).
 
         ``risk`` (v1.237.0) rides this payload for the same reason the row
         itself does: a browser action whose effect LANDED while the await was
@@ -1451,6 +1773,8 @@ class ToolRegistry:
                 self._record,
                 ctx, name, args, mode, ok=False,
                 output=note, reversibility=rev_value, inv_id=inv_id,
+                undo=undo, undo_settle="cut_off" if undo else None,
+                replace_undo=replace_undo,
             )
             await ctx.event_bus.publish(
                 EventType.TOOL_EXECUTED,
@@ -1881,13 +2205,40 @@ class ToolRegistry:
         confinement: str | None = None,
         grant_id: str = "",
         inv_id: str | None = None,
+        undo_settle: str | None = None,
+        replace_undo: bool = False,
     ) -> str:
         """Persist the ToolInvocation (+ an UndoJournal row when an inverse was
         captured) and return the invocation id so the caller can tag its event.
 
         SYNC; ``invoke`` hops every call through ``asyncio.to_thread`` (v1.226.0)
         so a per-tool-call write blocked behind a long writer (VACUUM) waits on
-        a worker thread instead of parking the event loop."""
+        a worker thread instead of parking the event loop.
+
+        v1.504.0 (4.1): ``undo_settle`` — the call did NOT succeed:
+        ``"finished"`` (it returned a failure or raised) or ``"cut_off"``
+        (Stop, the deadline: it may still be writing). The inverse is then
+        kept or dropped by ``undo.settle_unfinished`` (here, on this worker
+        thread: it hashes the target). ``replace_undo`` — the intent wrote
+        this call's journal row (``_write_intent``): it is replaced by what is
+        decided here, or removed; a dropped inverse's before-copy is removed
+        once this transaction has committed."""
+        dropped: "dict[str, Any] | None" = None
+        if undo and undo_settle is not None:
+            try:
+                settled = settle_unfinished(
+                    undo,
+                    workspace=ctx.workspace,
+                    home=ctx.config.home,
+                    finished=undo_settle != "cut_off",
+                    reclaim=False,
+                )
+            except Exception:  # noqa: BLE001 — cannot tell: the inverse is KEPT
+                _log.warning("could not check what %s left; its Undo is kept", name, exc_info=True)
+                settled = undo
+            if settled is None:
+                dropped = undo
+            undo = settled
         # Redact secret-bearing args BEFORE persisting — args_json is stored in the
         # DB at rest, returned by /sessions/{id}/export, and included in backups, so
         # a plaintext credential here would defeat the encrypted vault.
@@ -1897,27 +2248,6 @@ class ToolRegistry:
         # row IS that intent's record and the intent goes in the same commit.
         clears_intent = inv_id is not None
         inv_id = inv_id or new_id("tool")
-
-        def _stamp_workspace(desc: "dict[str, Any]") -> "dict[str, Any]":
-            """Record WHICH workspace the envelope's relative path is against
-            (v1.166.3). POST /undo used to reconstruct the workspace from the
-            Session table — and chat runs every turn as session id "chat",
-            which has no row, so every chat undo resolved against a guessed
-            folder (workspaces_dir/chat) and either 409'd or targeted the
-            wrong tree. Chat's tool workspace also varies per turn (uploads
-            vs. the grounded project), so only capture-time truth can work.
-            Best-effort: an unparseable envelope is left untouched."""
-            try:
-                meta = json.loads(desc.get("pre_inline") or "{}")
-            except (TypeError, ValueError):
-                return desc
-            if not isinstance(meta, dict) or meta.get("workspace"):
-                return desc
-            try:
-                meta["workspace"] = str(Path(ctx.workspace).resolve())
-            except Exception:  # noqa: BLE001 — never fail the recording
-                return desc
-            return {**desc, "pre_inline": json.dumps(meta)}
         # The row as the ORM would write it, inserted plainly (v1.471.0,
         # `core.db.row_values`): this runs after EVERY tool call.
         record = row_values(
@@ -1944,23 +2274,7 @@ class ToolRegistry:
         )
         journal: "dict[str, Any] | None" = None
         if undo:
-            # The inverse descriptor (from Tool.capture_undo) is a small,
-            # redaction-safe dict; the big pre-image itself is already a blob
-            # ref or a small inline value inside it.
-            stamped = _stamp_workspace(undo)
-            journal = row_values(
-                UndoJournal,
-                action_id=inv_id,
-                session_id=ctx.session_id,
-                agent_run_id=ctx.agent_run_id,
-                tool=name,
-                kind=str(stamped.get("kind") or ""),
-                reversible=bool(stamped.get("reversible", True)),
-                pre_ref=stamped.get("pre_ref"),
-                pre_inline=stamped.get("pre_inline"),
-                pre_sha256=stamped.get("pre_sha256"),
-                post_sha256=stamped.get("post_sha256"),
-            )
+            journal = _journal_row(ctx, name, inv_id, undo)
         # Post-hoc creations (v1.157.0, reshaped v1.166.0). action_id is the
         # table's PRIMARY KEY (== the ToolInvocation id), so this invocation
         # owns AT MOST ONE journal row:
@@ -2024,7 +2338,7 @@ class ToolRegistry:
             except Exception:  # noqa: BLE001
                 desc = None
             if desc is not None:
-                desc = _stamp_workspace(desc)
+                desc = _stamp_workspace(desc, ctx.workspace)
                 journal = row_values(
                     UndoJournal,
                     action_id=inv_id,
@@ -2045,6 +2359,12 @@ class ToolRegistry:
             conn.execute(ToolInvocation.__table__.insert(), record)
             if clears_intent:
                 conn.execute(sa_delete(ToolIntent).where(ToolIntent.id == inv_id))
+            if replace_undo and clears_intent:
+                # v1.504.0 (4.1): the intent's journal row gives way to the
+                # one decided now (or to none).
+                conn.execute(sa_delete(UndoJournal).where(UndoJournal.action_id == inv_id))
             if journal is not None:
                 conn.execute(UndoJournal.__table__.insert(), journal)
+        if dropped is not None:
+            drop_preimages(ctx.config.home, dropped)
         return inv_id

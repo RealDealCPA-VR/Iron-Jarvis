@@ -4083,8 +4083,24 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/agents/{name}")
     def delete_agent(name: str) -> dict[str, Any]:
+        # v1.504.0 (north-star plan 4.8): recorded with its Undo, the way
+        # chat's agent_delete is: the snapshot before, and the trash folder
+        # the agent's own folder moved to, so the Undo brings both back.
+        from ...settings import page_records as _pr
+        from ...settings.records_projects import _trash_folders
+
+        prior = _pr.snapshot(d.platform, "agent", name)
+        had = _trash_folders(d.platform, name)
         delete_custom_agent(d.platform, name)
-        return {"removed": name}
+        out: dict[str, Any] = {"removed": name}
+        if prior is not None:
+            moved = sorted(_trash_folders(d.platform, name) - had)
+            out["action_id"] = _pr.journal_removal(
+                d.platform, tool="agent_delete", record="agent", name=name, prior=prior,
+                summary=f"Removed the agent '{name}'.",
+                extra={"after": None, "trash": moved[0] if len(moved) == 1 else ""},
+            )
+        return out
 
     # --- Agent threads: the rooms behind chat @-mentions, the phone and remote
     # inbound. The round table's own doors (list, create, participants,
@@ -4721,9 +4737,20 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/tools/custom/{name}")
     def delete_custom_tool(name: str) -> dict[str, Any]:
+        # v1.504.0 (north-star plan 4.8): recorded with its Undo
+        # (settings/page_records: the "custom_tool" record kind).
+        from ...settings import page_records as _pr
+
+        prior = _pr.snapshot(d.platform, _pr.CUSTOM_TOOL, name)
         removed = d.platform.tools_registry.remove(name)
         d.platform.registry.unregister(name)
-        return {"removed": removed}
+        out: dict[str, Any] = {"removed": removed}
+        if removed and prior is not None:
+            out["action_id"] = _pr.journal_removal(
+                d.platform, tool="custom_tool_delete", record=_pr.CUSTOM_TOOL, name=name, prior=prior,
+                summary=f"Removed the custom tool '{name}'.",
+            )
+        return out
 
     @app.post("/agents/{name}/spawn")
     async def spawn_agent_ep(name: str, body: SpawnBody) -> dict[str, Any]:

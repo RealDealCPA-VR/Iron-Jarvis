@@ -316,7 +316,10 @@ def test_sentinel_endpoints_crud(tmp_path):
     dup = client.post("/sentinels", json={"name": "w", "path": str(tmp_path)})
     assert dup.status_code == 400
 
-    assert client.delete("/sentinels/w").json() == {"deleted": "w"}
+    # v1.504.0 (north-star plan 4.8): + the change history row's id (its Undo).
+    gone = client.delete("/sentinels/w").json()
+    assert gone.pop("action_id", "").startswith("tool_")
+    assert gone == {"deleted": "w"}
     assert client.delete("/sentinels/w").status_code == 404
 
 

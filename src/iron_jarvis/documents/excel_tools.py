@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.fs_policy import fs_read_ok
-from ..tools.base import Reversibility, Tool, ToolContext, ToolResult, safe_path
+from ..tools.base import Reversibility, Tool, ToolContext, ToolResult, atomic_target, safe_path
 from ..tools.undo import make_file_descriptor, revert_workspace_file, sha256_bytes
 
 _MAX_CELLS = 4000  # structured-read cap: keeps a huge sheet from flooding context
@@ -236,7 +236,10 @@ def _apply_edits(path: Path, sheet: "str | None", edits: list[dict[str, Any]],
 
         only = wb.sheetnames[0] if len(wb.sheetnames) == 1 else None
         feature_lines = apply_features(wb, sheet or only, features)
-    wb.save(str(path))
+    # v1.504.0 (4.4): saved beside, then swapped — a save that fails half-way
+    # (a full disk) leaves the workbook as it was, never a truncated file.
+    with atomic_target(path) as tmp:
+        wb.save(str(tmp))
     formulas = _count_formulas(wb)
     sheets = list(wb.sheetnames)
     wb.close()
@@ -1341,7 +1344,8 @@ class ExcelApplySpecTool(Tool):
                 if beauty.get("theme") and theme is None:
                     warnings.append(f"unknown theme {beauty['theme']!r}")
                 xlsx_apply_beauty(ws, theme, beauty, warnings)
-            wb.save(str(target))
+            with atomic_target(target) as tmp:  # v1.504.0 (4.4): beside, then swap
+                wb.save(str(tmp))
             wb.close()
             if formula_cells:
                 from .excel_recalc import store_results

@@ -480,7 +480,10 @@ def test_the_goal_routes_still_answer_with_the_lifted_doors(tmp_path):
     p.goal_engine.store.transition(g.id, "stopped")
     assert client.post(f"/goals/{g.id}/resume").status_code == 409
     r = client.delete(f"/goals/{g.id}")
-    assert r.json() == {"deleted": g.id, "revoked_grants": [grant.id]}
+    # v1.504.0 (north-star plan 4.8): + the change history row's id (its Undo).
+    body = r.json()
+    assert body.pop("action_id", "").startswith("tool_")
+    assert body == {"deleted": g.id, "revoked_grants": [grant.id]}
     assert client.delete(f"/goals/{g.id}").status_code == 404
 
 

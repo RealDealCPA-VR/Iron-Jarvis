@@ -159,6 +159,10 @@ export interface ToolInvocation {
 export interface Transcript {
   runs: AgentRun[];
   tools: ToolInvocation[];
+  /** v1.504.0 (north-star plan 4.9): N when this run's details were removed
+   *  by the "Keep activity history" clean-up after N days (its final answer
+   *  is kept); null otherwise. */
+  details_removed_after_days?: number | null;
 }
 
 export interface SessionDetail {

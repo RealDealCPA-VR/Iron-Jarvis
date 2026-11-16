@@ -65,9 +65,20 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/reflex/rules/{rule_id}")
     def delete_reflex_rule(rule_id: str) -> dict[str, Any]:
+        # v1.504.0 (north-star plan 4.8): recorded with its Undo, the way
+        # chat's reflex_delete is (settings/page_records).
+        from ...settings import page_records as _pr
+
+        prior = _pr.snapshot(d.platform, "reflex", rule_id)
         if not d.platform.reflex.remove(rule_id):
             raise HTTPException(status_code=404, detail="no such reflex rule")
-        return {"removed": rule_id}
+        action_id = ""
+        if prior is not None:
+            action_id = _pr.journal_removal(
+                d.platform, tool="reflex_delete", record="reflex", name=rule_id, prior=prior,
+                summary=f"Removed the rule '{prior.get('name') or rule_id}'.",
+            )
+        return {"removed": rule_id, "action_id": action_id}
 
     @app.patch("/reflex/rules/{rule_id}")
     def toggle_reflex_rule(rule_id: str, body: ReflexToggleBody) -> dict[str, Any]:

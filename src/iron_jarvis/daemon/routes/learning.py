@@ -129,9 +129,14 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/lessons/{lesson_id}")
     def delete_lesson(lesson_id: str) -> dict[str, Any]:
-        """Remove one learned lesson — the user curates what sticks."""
-        from ...learning.models import LessonRecord
+        """Remove one learned lesson — the user curates what sticks.
 
+        v1.504.0 (north-star plan 4.8): recorded with its Undo, the way chat's
+        preference_forget is (the same "preference" snapshot of the row)."""
+        from ...learning.models import LessonRecord
+        from ...settings import page_records as _pr
+
+        prior = _pr.snapshot(d.platform, "preference", lesson_id)
         with session_scope(d.platform.engine) as db:
             r = db.get(LessonRecord, lesson_id)
             if r is None:
@@ -141,7 +146,14 @@ def register(app: FastAPI, d) -> None:
         from ...profile.share import notify_changed
 
         notify_changed()  # v1.306.0: a shared block re-renders (debounced)
-        return {"deleted": lesson_id}
+        action_id = ""
+        if prior is not None:
+            action_id = _pr.journal_removal(
+                d.platform, tool="preference_forget", record="preference", name=lesson_id, prior=prior,
+                summary=f"Forgot the lesson “{str(prior.get('text') or '')[:120]}”.",
+                extra={"after": None},
+            )
+        return {"deleted": lesson_id, "action_id": action_id}
 
     @app.get("/improvement")
     def improvement_stats() -> dict[str, Any]:

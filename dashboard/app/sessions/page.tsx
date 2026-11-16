@@ -40,6 +40,7 @@ import { PageShell, Reveal } from "@/components/motion";
 import { PageGrid } from "@/components/PageGrid";
 import { timeAgo, shortId } from "@/lib/format";
 import { agentDisplayName, agentLabel } from "@/lib/agentWorlds";
+import { clearTitle, clearedWords } from "@/lib/clearWords";
 
 const ACTIVE = new Set(["active", "running", "pending"]);
 
@@ -265,12 +266,14 @@ function SessionsList() {
     setActionError(null);
     setNotice(null);
     try {
-      const res = await post<{ cleared: number }>("/sessions/clear", {
+      const res = await post<{ cleared: number; trash?: string }>("/sessions/clear", {
         statuses: ["completed", "failed", "cancelled"],
       });
       const n = res?.cleared ?? 0;
       // v1.356.0 (G77): the notice names all three kinds it removed.
-      setNotice(`Cleared ${n} finished, failed or stopped session${n === 1 ? "" : "s"}.`);
+      // v1.504.0 (north-star plan 4.2, D7): they MOVED to the app's trash,
+      // and the notice says where.
+      setNotice(clearedWords(n, res?.trash, "finished"));
       reload();
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : String(err));
@@ -288,7 +291,9 @@ function SessionsList() {
         // folders"), never "orphaned worktrees to prune".
         n === 0
           ? "No leftover folders to clean up."
-          : `Cleaned up ${n} leftover folder${n === 1 ? "" : "s"}.`,
+          : // v1.504.0 (north-star plan 4.6): they MOVE to the trash and
+            // their branches are kept.
+            `Moved ${n} leftover folder${n === 1 ? "" : "s"} to the app's trash. ${n === 1 ? "Its branch is" : "Their branches are"} kept.`,
       );
       reload();
     } catch (err) {
@@ -336,9 +341,9 @@ function SessionsList() {
               <div className="absolute right-0 z-20 mt-1 whitespace-nowrap rounded-xl border border-white/10 bg-ink-900 p-1.5 shadow-card-hover">
                 <ConfirmButton
                   label="Clear finished, failed and stopped"
-                  confirmLabel="Delete them all?"
+                  confirmLabel="Move them to the trash?"
                   onConfirm={clearFinished}
-                  title="Deletes every session that finished, failed or was stopped. Running and waiting ones stay."
+                  title={clearTitle("finished")}
                   idleClassName="hover:!text-accent-soft"
                 />
               </div>
@@ -375,7 +380,7 @@ function SessionsList() {
                   label="Clean up leftover folders"
                   confirmLabel="Clean up now?"
                   onConfirm={pruneWorktrees}
-                  title="Remove the work folders left behind by runs that failed or were deleted"
+                  title="Move the work folders left behind by runs that ended to the app's trash. Their branches are kept, and a run that can be continued keeps its folder."
                   idleClassName="!text-zinc-400 hover:!text-accent-soft"
                 />
               }
@@ -643,8 +648,8 @@ function SessionsList() {
                                     disabled={deletingId === s.id}
                                     title={
                                       confirmDeleteId === s.id
-                                        ? "Click again to permanently delete this session"
-                                        : "Delete this session"
+                                        ? "Click again to move this run to the app's trash"
+                                        : "Delete this run: its files and record go to the app's trash"
                                     }
                                     aria-label={`Delete session ${shortId(s.id)}`}
                                     className={`inline-flex items-center gap-1.5 rounded-lg py-1 text-xs font-medium transition-colors disabled:opacity-50 ${

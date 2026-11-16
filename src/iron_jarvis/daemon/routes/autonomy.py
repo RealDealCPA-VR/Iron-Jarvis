@@ -201,9 +201,20 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/sentinels/{name}")
     def delete_sentinel(name: str) -> dict[str, Any]:
+        # v1.504.0 (north-star plan 4.8): recorded with its Undo, the way
+        # chat's sentinel_delete is (settings/page_records).
+        from ...settings import page_records as _pr
+
+        prior = _pr.snapshot(d.platform, "sentinel", name)
         if not d.platform.sentinels.remove(name):
             raise HTTPException(status_code=404, detail="sentinel not found")
-        return {"deleted": name}
+        action_id = ""
+        if prior is not None:
+            action_id = _pr.journal_removal(
+                d.platform, tool="sentinel_delete", record="sentinel", name=name, prior=prior,
+                summary=f"Removed the watcher '{name}'.",
+            )
+        return {"deleted": name, "action_id": action_id}
 
     @app.post("/sentinels/poll")
     def poll_sentinels() -> dict[str, Any]:

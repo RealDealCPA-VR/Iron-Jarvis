@@ -2042,6 +2042,52 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Nothing is lost (v1.504.0)
+
+The fourth part of the review fixes: the places where your work, or the
+record of it, could disappear without a way back.
+
+- **Undo is saved before a change, not after.** If you press Stop while
+  Iron Jarvis is writing a file, or a save fails part-way, or the app closes
+  mid-write, the earlier version is still there and **Undo** brings it back.
+  Before, Undo was only recorded once a change had finished.
+- **A failed save cannot damage your file.** Files and workbooks are now
+  written beside the original and swapped in only when the write is complete.
+  A crash or a full disk mid-save leaves the original untouched.
+- **Converting or resizing never silently replaces a file.** When "convert
+  to Word" or "resize this picture" would write over an existing file, the
+  earlier one is kept in the app's trash, the reply says where, and the
+  change can be undone.
+- **"Clear completed" moves, it does not delete.** Clearing finished runs
+  (and deleting one run) now moves the files each run wrote, and a record of
+  the run, to the app's trash. They stay there until you delete the trash
+  yourself (Settings › System › Maintenance, **Delete permanently**); a
+  run's record is removed by itself after 30 days. The buttons now say so.
+  Your own folders are never moved.
+- **A damaged database is no longer a silent fresh start.** If Iron Jarvis
+  finds its database damaged at start-up it still sets it aside and starts,
+  but it now says so on the Home page, in Everything › Status and in
+  Settings, with one button: **Restore the backup from {date}**. Until you
+  answer, no backup made before the damage is rotated away.
+- **Backups include what runs made.** A backup now carries the files agent
+  runs wrote in their own folders (newest first, up to 100 MB in all).
+- **Deleting on a page can be undone, like deleting in chat.** Removing a
+  schedule, workflow, agent, webhook, watcher, rule, goal, lesson, persona
+  or custom tool from its page now appears under "Changed here or in chat"
+  with an Undo. Removing or replacing a key is recorded too, and says it
+  can't be undone.
+- **Old runs keep their answer.** After the "Keep activity history" period
+  (90 days unless you change it) a run's steps are removed, as before, but
+  its final answer is now kept, and the run's page says its details were
+  removed instead of looking empty. The setting's description now says
+  exactly what is removed, including the Undo for changes made then.
+- **The approval card is honest about Undo.** It no longer says "You can
+  undo this" for a note saved to a cloud notebook, which can't be undone.
+- **Closing the laptop lid does not fail a step.** A step that was running
+  when the PC went to sleep is given the rest of its time when it wakes.
+- **A run cut off by a restart keeps its work** when it worked on its own
+  branch (the self-development setting): its branch is kept.
+
 ## "Done" means done (v1.503.0)
 
 The third part of the review fixes. In several places Iron Jarvis read

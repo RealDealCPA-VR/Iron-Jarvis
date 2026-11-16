@@ -148,6 +148,34 @@ def make_file_descriptor(
     }
 
 
+def capture_file_inverse(
+    home: str | Path, workspace: str | Path, target: Path
+) -> "dict[str, Any] | None":
+    """The inverse of writing *target* (a workspace file) whose new bytes are
+    not known in advance (v1.504.0, 4.5: ``convert_document``,
+    ``image_convert``, ``image_resize``): its prior RAW bytes when it exists
+    (``file_restore``), else a delete of the file it will create
+    (``file_delete``). The after-hash is filled in once the write has landed
+    (``finalize_post_hash``). None when *target* is not inside *workspace* or
+    is not a file. BLOCKING."""
+    try:
+        rel = str(Path(target).resolve().relative_to(Path(workspace).resolve())).replace("\\", "/")
+    except (ValueError, OSError):
+        return None
+    if target.is_file():
+        try:
+            prior = target.read_bytes()
+        except OSError:
+            return None
+        return make_file_descriptor(
+            home, kind="file_restore", path=rel, mode="raw",
+            prior_bytes=prior, pre_sha256=sha256_bytes(prior),
+        )
+    if target.exists():
+        return None
+    return make_file_descriptor(home, kind="file_delete", path=rel, mode="raw")
+
+
 def read_envelope(undo: dict[str, Any]) -> dict[str, Any]:
     """Unpack the JSON envelope stored in ``pre_inline`` (path / mode / inline data)."""
     try:
@@ -207,6 +235,129 @@ def patch_entry_before(home: str | Path, entry: dict[str, Any]) -> bytes | None:
     return None
 
 
+# --- an inverse whose call did not succeed (v1.504.0, north-star 4.1) -------
+
+#: The kinds whose target is ONE file a hash can check, and how its path is
+#: recorded: workspace-relative (the file tools) or absolute (a memory note).
+#: A call of one of these that failed or was cut off keeps its inverse unless
+#: the hash PROVES the file is as it was. Every other kind (a setting, a
+#: record, a multi-file patch) is dropped on failure, as before this version.
+ONE_FILE_KINDS: dict[str, str] = {
+    "file_restore": "workspace",
+    "file_delete": "workspace",
+    "memory_restore": "absolute",
+    "memory_delete_file": "absolute",
+}
+#: The envelope flag of an inverse kept for a call cut off while it may still
+#: have been writing (Stop, the per-call deadline): its after-hash is not
+#: known, so its revert never trusts one (:func:`revert_workspace_file`) and
+#: the next boot settles it (``registry.reconcile_interrupted_tool_calls``).
+INTERRUPTED_KEY = "interrupted"
+
+
+def drop_preimages(home: str | Path, undo: "dict[str, Any] | None") -> None:
+    """Remove every before-copy blob *undo* refers to (its ``pre_ref`` and a
+    ``files_patch`` envelope's per-file refs). For an inverse no row will
+    hold. Never raises."""
+    if not undo:
+        return
+    try:
+        delete_preimage(home, undo.get("pre_ref"))
+        if undo.get("kind") == PATCH_UNDO_KIND:
+            for entry in patch_entries(read_envelope(undo)):
+                delete_preimage(home, entry.get("ref"))
+    except Exception:  # noqa: BLE001 — reclaiming is best-effort
+        pass
+
+
+def _with_meta(undo: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    """*undo* with its envelope's keys changed (``None`` removes a key)."""
+    meta = read_envelope(undo)
+    for key, value in changes.items():
+        if value is None:
+            meta.pop(key, None)
+        else:
+            meta[key] = value
+    return {**undo, "pre_inline": json.dumps(meta)}
+
+
+def _one_file_target(undo: dict[str, Any], workspace: "str | Path | None") -> "Path | None":
+    """The ONE file an inverse of :data:`ONE_FILE_KINDS` is about, or None.
+    A workspace path is resolved the way the revert resolves it
+    (:func:`safe_path` against the capture-time workspace)."""
+    meta = read_envelope(undo)
+    raw = meta.get("path")
+    if not raw:
+        return None
+    if ONE_FILE_KINDS.get(str(undo.get("kind") or "")) == "absolute":
+        return Path(str(raw))
+    base = meta.get("workspace") or workspace
+    if not base:
+        return None
+    try:
+        return safe_path(Path(str(base)), str(raw))
+    except Exception:  # noqa: BLE001 — cannot place it: not provably clean
+        return None
+
+
+def settle_unfinished(
+    undo: "dict[str, Any] | None",
+    *,
+    workspace: "str | Path | None",
+    home: str | Path,
+    finished: bool,
+    reclaim: bool = True,
+) -> "dict[str, Any] | None":
+    """What becomes of a captured inverse when its call did NOT succeed.
+
+    ``finished`` True: the tool is done (it returned a failure or raised, or
+    the process that ran it died) — the target is hashed now. Nothing changed
+    (the file has its before-hash, or a file it would have created is not
+    there) → ``None``. Anything else → the inverse, its after-hash being what
+    the failure LEFT, so the revert's guard still protects a later edit.
+
+    ``finished`` False: cut off while it may still be writing (a worker thread
+    runs on after Stop or the deadline) → the inverse, marked
+    :data:`INTERRUPTED_KEY`; nothing can be proven yet.
+
+    Only :data:`ONE_FILE_KINDS` are kept; any other kind is ``None``, as
+    before this version. Whenever ``None`` is returned, the before-copy blob is
+    removed (no row will refer to it) — unless ``reclaim`` is False, for a
+    caller that removes it once its own transaction has committed. Blocking:
+    call it off the event loop."""
+    if not undo:
+        return None
+    kind = str(undo.get("kind") or "")
+    if kind not in ONE_FILE_KINDS or not undo.get("reversible", True):
+        if reclaim:
+            drop_preimages(home, undo)
+        return None
+    if not finished:
+        return _with_meta(undo, **{INTERRUPTED_KEY: True})
+    target = _one_file_target(undo, workspace)
+    if target is None:
+        # Cannot look at it: keep it, as cautiously as a cut-off call.
+        return _with_meta(undo, **{INTERRUPTED_KEY: True})
+    memory = ONE_FILE_KINDS[kind] == "absolute"
+    # A memory note's before-hash is over its text (newline-invariant); a
+    # workspace file's is over its exact bytes.
+    mode = "text" if memory else str(read_envelope(undo).get("mode") or "raw")
+    if kind in ("file_delete", "memory_delete_file"):
+        clean = not target.exists()
+    else:
+        pre = undo.get("pre_sha256")
+        clean = pre is not None and target.is_file() and (
+            sha256_target(target, "text" if memory else "raw") == pre
+        )
+    if clean:
+        if reclaim:
+            drop_preimages(home, undo)
+        return None
+    return _with_meta(
+        {**undo, "post_sha256": sha256_target(target, mode)}, **{INTERRUPTED_KEY: None}
+    )
+
+
 # --- revert-safety + shared file revert ------------------------------------
 
 def guard_unchanged(current_sha: str | None, post_sha: str | None) -> str | None:
@@ -249,6 +400,73 @@ def finalize_post_hash(undo: "dict[str, Any] | None", ctx: ToolContext) -> None:
 
 class RevertConflict(Exception):
     """Raised when a revert would clobber a change made since the action."""
+
+
+def _write_prior(target: Path, prior: bytes, mode: str, meta: dict[str, Any]) -> None:
+    """Put the before-copy back, exactly as the ordinary restore does."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if mode == "text" and not meta.get("exact"):
+        target.write_text(prior.decode("utf-8"), encoding="utf-8")
+    else:
+        target.write_bytes(prior)
+
+
+def _revert_interrupted(
+    undo: dict[str, Any], meta: dict[str, Any], target: Path, rel: str, mode: str, home: Any
+) -> ToolResult:
+    """The revert of a call cut off mid-write (v1.504.0, 4.1). BLOCKING.
+
+    Nobody knows what it left, so: a file still as it was is left alone and
+    the answer says nothing was changed; otherwise the earlier version goes
+    back, and whatever is there now is MOVED to the app's trash first unless
+    its hash proves it is exactly what the call meant to write (a later edit
+    of the user's is kept, never overwritten).
+
+    "Nothing changed YET" is a refusal, not a success: the stopped call's
+    worker may still be writing, so the row (and its before-copy) stays for
+    an Undo pressed after the write lands; the next boot settles it."""
+    kind = undo.get("kind")
+    exists = target.exists()
+    if kind == "file_delete" and not exists:
+        return ToolResult(
+            ok=False,
+            error=f"nothing to undo yet: {rel} has not been made (the call was stopped first)",
+        )
+    pre = undo.get("pre_sha256")
+    if kind == "file_restore" and pre and target.is_file() and sha256_target(target, "raw") == pre:
+        return ToolResult(
+            ok=False,
+            error=f"nothing to undo yet: {rel} is as it was before the stopped call",
+        )
+    prior: "bytes | None" = None
+    if kind == "file_restore":
+        prior = resolve_prior_bytes(home, undo, meta)
+        if prior is None:
+            return ToolResult(ok=False, error="undo: pre-image unavailable")
+    post = undo.get("post_sha256")
+    proven = (
+        exists and post is not None and guard_unchanged(sha256_target(target, mode), post) is None
+    )
+    kept: "Path | None" = None
+    try:
+        if exists and not proven:
+            kept = move_to_trash(home, target, rel)
+        elif exists and kind == "file_delete":
+            target.unlink()
+        if prior is not None:
+            _write_prior(target, prior, mode, meta)
+    except OSError as exc:
+        return ToolResult(ok=False, error=f"undo: could not put {rel} back: {exc}")
+    delete_preimage(home, undo.get("pre_ref"))
+    if kind == "file_delete":
+        words = f"undo: removed created file {rel}"
+        if kept is not None:
+            words += f" (moved to the trash: {kept})"
+        return ToolResult(ok=True, output=words)
+    words = f"undo: restored prior content of {rel}"
+    if kept is not None:
+        words += f" (the version that was there is kept in the trash: {kept})"
+    return ToolResult(ok=True, output=words)
 
 
 def move_to_trash(home: str | Path, target: Path, rel: str) -> Path:
@@ -385,6 +603,9 @@ async def revert_workspace_file(
             except OSError as exc:
                 return ToolResult(ok=False, error=f"undo: could not rename back: {exc}")
             return ToolResult(ok=True, output=f"undo: renamed {rel} back to {origin}")
+
+        if meta.get(INTERRUPTED_KEY) and kind in ("file_restore", "file_delete"):
+            return _revert_interrupted(undo, meta, target, str(rel), mode, home)
 
         conflict = guard_unchanged(sha256_target(target, mode), undo.get("post_sha256"))
         if conflict is not None:

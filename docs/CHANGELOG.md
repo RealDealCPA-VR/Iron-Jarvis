@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.504.0
+
+**Nothing is lost.** The fourth part of the review fixes: the places where your work, or the record of it, could disappear without a way back.
+
 ## v1.503.0
 
 **"Done" means done.** The third part of the review fixes.
@@ -77,7 +81,3 @@
 ## v1.491.0
 
 **Jarvis remembers the work it did, folder by folder.** **A record of your work, kept by itself.** Iron Jarvis now keeps its own record of every piece of work that has a folder: the chats, the coding sessions (both Code views) and the agent runs, each with its title, when it happened, how it ended and the files it wrote.
-
-## v1.490.4
-
-**"Where is that setting?" gets the real place.** **Jarvis names the section a setting is really in.** Asked "where do I find the button to change the font", Jarvis told you to open "Settings → Device", a section that does not exist, and for the calendar reminders it said "it's under the calendar setting".

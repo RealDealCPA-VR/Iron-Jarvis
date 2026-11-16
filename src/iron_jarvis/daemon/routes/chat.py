@@ -48,7 +48,7 @@ from ...core.grants import args_hash as _grant_hash
 from ...core import risk_door as _risk_door
 from ...core import auto_approve as _auto
 from ...core.turns import CHAT_INFLIGHT, TURNS, thread_key
-from ...tools.reversible import reversible_flag as _reversible_flag
+from ...tools.reversible import call_reversible_flag as _call_reversible_flag
 from ...eval.pricing import UsageTally
 from ...providers import egress as _egress
 from ...providers.adapters.base import refusal_of as _refusal_of
@@ -3030,12 +3030,29 @@ def register(app: FastAPI, d) -> None:
         """Remove a saved persona — reverts a built-in to its default, or deletes
         a custom one. 404 only when the name is neither saved nor a built-in."""
         from ...personas import delete_persona_record
+        from ...personas.store import slugify as _persona_slug
+        from ...settings import page_records as _pr
 
+        # v1.504.0 (north-star plan 4.8): recorded with its Undo, the way
+        # chat's persona_delete is (the same "persona" snapshot of the
+        # user's own saved row; a built-in with no saved version has none,
+        # and removing nothing records nothing).
+        slug = _persona_slug(name)
+        prior = _pr.snapshot(d.platform, "persona", slug)
         # v1.438.0: the body lives in personas.store (chat's persona_delete).
         try:
-            return delete_persona_record(d.platform.engine, d._PERSONAS, name)
+            out = delete_persona_record(d.platform.engine, d._PERSONAS, name)
         except KeyError:
             raise HTTPException(status_code=404, detail="no such persona") from None
+        action_id = ""
+        if prior is not None:
+            title = str(prior.get("title") or slug)
+            action_id = _pr.journal_removal(
+                d.platform, tool="persona_delete", record="persona", name=slug, prior=prior,
+                summary=f"Removed the persona “{title[:120]}”.",
+                extra={"after": None},
+            )
+        return {**out, "action_id": action_id}
 
     @app.post("/chat/compact")
     async def chat_compact(body: ChatCompactBody) -> dict[str, Any]:
@@ -6974,7 +6991,10 @@ async def chat_stream(
                             # tool (nothing to undo). MIRROR NOTE (lock-step):
                             # the runtime's `approval.requested` carries the
                             # same key from the same helper.
-                            _rev = _reversible_flag(_t)
+                            # v1.504.0 (4.7): what THIS call can do, not the
+                            # tool's class (a note to a cloud memory base
+                            # cannot be undone) — `Tool.can_undo`.
+                            _rev = await _call_reversible_flag(_t, tc.arguments, ctx)
                             # v1.466.0 review: a call its own check calls
                             # irreversible (a live-Excel deletion) never
                             # says "You can undo this". MIRROR NOTE

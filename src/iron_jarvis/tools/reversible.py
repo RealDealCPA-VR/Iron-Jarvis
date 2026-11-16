@@ -24,6 +24,15 @@ Three answers, one key:
 
 WORDING ONLY and never a new failure: any fault reading the attribute answers
 ``None`` (no line), never a wrong promise.
+
+THIS CALL, NOT THE CLASS (v1.504.0, north-star 4.7). A tool's class can be
+REVERSIBLE while one call of it is not: a note saved to a cloud memory base
+(Notion, OneDrive) has no local file, so its journal entry says "cannot be
+undone", and the card used to say "You can undo this." right beside it.
+:func:`call_reversible_flag` (what both lanes call) asks the tool about the
+call in hand (``Tool.can_undo``): a ``False`` there makes the verdict
+``False``. ``mission.py`` and ``routes/sessions.py`` still read the class
+verdict (:func:`reversible_flag`) for a listing with no call context.
 """
 
 from __future__ import annotations
@@ -45,3 +54,22 @@ def reversible_flag(tool: Any) -> bool | None:
     if value is Reversibility.READONLY:
         return None
     return value is Reversibility.REVERSIBLE
+
+
+async def call_reversible_flag(tool: Any, args: Any, ctx: Any) -> bool | None:
+    """:func:`reversible_flag` for ONE call (v1.504.0, 4.7): a REVERSIBLE
+    tool whose ``can_undo(args, ctx)`` answers ``False`` for these arguments
+    reads ``False`` — the card then never promises an Undo the journal will
+    not have. ``None`` from ``can_undo`` is no opinion (the class decides). A
+    fault answers ``None`` (no line), never a promise."""
+    flag = reversible_flag(tool)
+    if not flag:
+        return flag
+    fn = getattr(tool, "can_undo", None)
+    if fn is None:
+        return flag
+    try:
+        verdict = await fn(args if isinstance(args, dict) else {}, ctx)
+    except Exception:  # noqa: BLE001 — wording only, never a new failure
+        return None
+    return False if verdict is False else flag

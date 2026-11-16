@@ -840,12 +840,44 @@ def doc_read(path: str, root: str = typer.Option(".")) -> None:
     console.print(extract_text(path)[:4000])
 
 
+def set_aside_doctor_check(home: Path) -> "dict | None":
+    """The doctor's line for a database set aside at start (v1.504.0), in the
+    doctor's ``{name, ok, detail, fix, level}`` shape, or None when nothing is
+    set aside. Reads the marker without building the platform."""
+    from ..maintenance import BACKUP_DIRNAME, set_aside_status
+
+    status = set_aside_status(home)
+    marker = status["set_aside"]
+    if marker is None:
+        return None
+    good = status["latest_good"]
+    detail = (
+        f"The database was found damaged on {marker.get('at')} and set aside as "
+        f"{marker.get('file')}; Iron Jarvis started with an empty one. "
+        "Backups made before then are kept until you answer."
+    )
+    if good is not None:
+        fix = (
+            f"Restore the backup from before it: press Restore on Everything › Status, or stop "
+            f"Iron Jarvis and run `ironjarvis restore --force \"{home / BACKUP_DIRNAME / good['name']}\"`."
+        )
+    else:
+        fix = "There is no backup from before then. The set-aside file is kept; ask for help to read it."
+    return {"name": "database set aside", "ok": False, "detail": detail, "fix": fix, "level": "required"}
+
+
 @app.command()
-def doctor() -> None:
+def doctor(root: str = typer.Option(".", help="Project root (for state location).")) -> None:
     """Check your environment is ready to run Iron Jarvis."""
     from ..onboarding import doctor as run_doctor
 
     result = run_doctor()
+    # v1.504.0 (north-star plan 4.3): a database set aside at start is said
+    # here too, with the one command that restores the backup from before it.
+    words = set_aside_doctor_check(_home_for(root))
+    if words is not None:
+        result["checks"].append(words)
+        result["ok"] = False
     table = Table(title="Iron Jarvis doctor")
     table.add_column("")
     table.add_column("check")
@@ -983,6 +1015,10 @@ def restore(
     except (tarfile.TarError, OSError) as exc:
         console.print(f"[red]restore failed[/red]: cannot read backup {file}: {exc}")
         raise typer.Exit(code=1)
+    # v1.504.0 (north-star plan 4.3): a restore answers a set-aside database.
+    from ..core.db import answer_set_aside_marker
+
+    answer_set_aside_marker(home, "restored", backup=Path(file).name)
     console.print(f"[green]restored[/green] from {file} into {home}")
 
 
@@ -1158,6 +1194,19 @@ def repair(
         import tarfile
 
         newest = snaps[0]
+        # v1.504.0 (north-star 4.3, lead review): while an earlier set-aside
+        # is still unanswered, the newest archive may be a backup of the
+        # EMPTY database Iron Jarvis started with since. Restore the newest
+        # one made BEFORE it (the one Status and doctor name).
+        try:
+            from ..maintenance import latest_good_backup
+
+            good = latest_good_backup(home)
+            named = backups_dir / str((good or {}).get("name") or "")
+            if good and named.is_file():
+                newest = named
+        except Exception:  # noqa: BLE001 — unsure: the newest, as before
+            pass
         console.print(f"  restoring newest backup: {newest.name}")
         from ..core.db import quarantine_db
 
@@ -1169,6 +1218,10 @@ def repair(
             ok = con.execute("PRAGMA integrity_check").fetchone()[0]
             con.close()
             if ok == "ok":
+                # v1.504.0: the set-aside this repair made is answered by it.
+                from ..core.db import answer_set_aside_marker
+
+                answer_set_aside_marker(home, "restored", backup=newest.name)
                 console.print(f"  [green]OK[/green] restored a healthy DB from {newest.name}")
                 console.print("[green]repair complete[/green] — restart the daemon.")
                 return

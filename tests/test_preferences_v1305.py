@@ -769,7 +769,10 @@ def test_edit_and_forget_a_kept_preference(tmp_path):
     assert r.status_code == 200 and r.json()["preference"]["text"] == "Keep answers plain and short"
     assert "Keep answers plain and short" in platform.learning.apply_to_prompt("SYS")
     r = client.delete(f"/memory/preferences/{kept.id}")
-    assert r.status_code == 200 and r.json() == {"deleted": kept.id}
+    # v1.504.0 (north-star plan 4.8): + the change history row's id (its Undo).
+    body = r.json()
+    assert r.status_code == 200 and body.pop("action_id", "").startswith("tool_")
+    assert body == {"deleted": kept.id}
     assert "Keep answers plain" not in platform.learning.apply_to_prompt("SYS")
 
 

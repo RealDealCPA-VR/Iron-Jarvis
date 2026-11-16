@@ -141,11 +141,14 @@ async def test_a_command_card_says_it_may_not_be_undoable(tmp_path):
 
 def test_the_stream_frame_reads_the_one_helper():
     """MIRROR NOTE (lock-step): the frame takes the verdict from
-    `tools/reversible.reversible_flag`, the runtime's payload from the same."""
+    `tools/reversible`, the runtime's payload from the same. v1.504.0 (4.7,
+    moved on purpose): both ask about THIS call (`call_reversible_flag`)."""
     chat = _read("src/iron_jarvis/daemon/routes/chat.py")
     runtime = _read("src/iron_jarvis/agents/runtime.py")
-    assert "_rev = _reversible_flag(_t)" in chat and '_frame["reversible"] = _rev' in chat
-    assert "_rev = reversible_flag(tool)" in runtime and 'requested["reversible"] = _rev' in runtime
+    assert "_rev = await _call_reversible_flag(_t, tc.arguments, ctx)" in chat
+    assert '_frame["reversible"] = _rev' in chat
+    assert "_rev = await call_reversible_flag(tool, tc.arguments, _undo_ctx)" in runtime
+    assert 'requested["reversible"] = _rev' in runtime
 
 
 # --------------------------------------------------------------------------- #

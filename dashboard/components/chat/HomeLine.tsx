@@ -33,7 +33,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, CalendarClock, CircleDot, RotateCcw } from "lucide-react";
+import { AlertTriangle, CalendarClock, CircleDot, Database, RotateCcw } from "lucide-react";
 import { usePolledApi } from "@/lib/useApi";
 import { EVERYTHING_TAB_EVENT } from "@/lib/surfaces";
 import { chatAskHrefFrom } from "@/lib/chatAsk";
@@ -45,11 +45,13 @@ interface StatusCounts {
   failing_packs?: number;
   running?: number;
   short_schedules?: number;
+  /** v1.504.0: 1 while a database that was set aside waits for an answer. */
+  database_set_aside?: number;
 }
 const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
 
 export interface HomeLineItem {
-  kind: "interrupted" | "failing" | "working" | "schedules";
+  kind: "database" | "interrupted" | "failing" | "working" | "schedules";
   text: string;
 }
 
@@ -62,9 +64,19 @@ export function homeLineItems(input: {
   waiting: number;
   /** Enabled schedules whose last run failed or fell short (v1.351.0). */
   shortSchedules?: number;
+  /** A database found damaged was set aside and waits for an answer (v1.504.0). */
+  databaseSetAside?: number;
 }): HomeLineItem[] {
   const out: HomeLineItem[] = [];
   const s = (n: number, one: string, many: string) => (n === 1 ? one : many);
+  // FIRST, above everything: Iron Jarvis started empty and the owner's work
+  // is in a backup. Open goes to Everything › Status, where the restore is.
+  if ((input.databaseSetAside ?? 0) > 0) {
+    out.push({
+      kind: "database",
+      text: "Your database was damaged and set aside, so Iron Jarvis started empty. Open to restore a backup.",
+    });
+  }
   if (input.interrupted > 0) {
     out.push({
       kind: "interrupted",
@@ -100,6 +112,7 @@ export function homeLineItems(input: {
 }
 
 const ICON = {
+  database: Database,
   interrupted: RotateCcw,
   failing: AlertTriangle,
   working: CircleDot,
@@ -125,6 +138,7 @@ export function HomeLine() {
     running: n(c.running),
     waiting: Array.isArray(approvals.data?.approvals) ? approvals.data!.approvals!.length : 0,
     shortSchedules: n(c.short_schedules),
+    databaseSetAside: n(c.database_set_aside),
   });
   if (items.length === 0) return null;
   const [top, ...rest] = items;

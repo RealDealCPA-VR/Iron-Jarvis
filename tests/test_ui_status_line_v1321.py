@@ -25,6 +25,7 @@ def test_status_line_counts_interrupted_failing_and_running(tmp_path):
         "failing_packs": 0,
         "running": 0,
         "short_schedules": 0,  # v1.351.0 (G02)
+        "database_set_aside": 0,  # v1.504.0 (north-star 4.3)
     }
     d = app.state.d
     with session_scope(app.state.platform.engine) as db:

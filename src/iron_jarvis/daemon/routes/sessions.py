@@ -13,6 +13,7 @@ import json
 import re
 
 from dataclasses import asdict
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
@@ -819,31 +820,58 @@ def register(app: FastAPI, d) -> None:
     def clear_sessions(body: SessionsClearBody) -> dict[str, Any]:
         """Bulk-clear FINISHED sessions by status (completed/failed/cancelled) —
         the Kanban 'clear completed' / 'dismiss failed' action. Active sessions
-        are never touched; per-session failures are skipped, not fatal."""
+        are never touched; per-session failures are skipped, not fatal.
+
+        v1.504.0 (north-star plan 4.2, D7): a destructive bulk action MOVES.
+        Each run's folder goes to ONE trash folder for this press
+        (``<home>/trash/<stamp>/cleared-runs/<id>/files``) and its record is
+        kept beside it for 30 days (``orchestrator.delete_session``); the
+        answer names that folder (``trash``) and how many folders moved."""
+        from ...maintenance import TRASH_DIRNAME, trash_stamp
+
         wanted = {s.lower() for s in (body.statuses or [])} - {"active"}
         if not wanted:
             raise HTTPException(status_code=400, detail="no clearable statuses given")
         cleared = 0
+        moved = 0
+        stamp = trash_stamp()
         for view in d.orchestrator.list_sessions(limit=1000):
             status = view.status.value if hasattr(view.status, "value") else str(view.status)
             if status.lower() not in wanted:
                 continue
             try:
-                d.orchestrator.delete_session(view.id)
+                out = d.orchestrator.delete_session(view.id, trash_stamp=stamp)
                 cleared += 1
+                if out.get("files"):
+                    moved += 1
             except Exception:  # noqa: BLE001 — skip stragglers (e.g. review-locked)
                 continue
-        return {"cleared": cleared, "statuses": sorted(wanted)}
+        trash = Path(d.platform.config.home) / TRASH_DIRNAME / stamp
+        return {
+            "cleared": cleared,
+            "statuses": sorted(wanted),
+            "folders_moved": moved,
+            "trash": str(trash) if cleared else "",
+            "record_days": 30,
+        }
 
     @app.delete("/sessions/{session_id}")
     def delete_session(session_id: str) -> dict[str, Any]:
         try:
-            d.orchestrator.delete_session(session_id)
+            out = d.orchestrator.delete_session(session_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="session not found")
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-        return {"deleted": session_id}
+        except OSError as exc:
+            # v1.504.0: the run's record could not be written to the trash, so
+            # nothing was removed.
+            raise HTTPException(
+                status_code=409,
+                detail=f"Nothing was removed: the run's record could not be kept in the trash ({exc.strerror or exc}).",
+            )
+        return {"deleted": session_id, "trash": out.get("trash", ""), "files": out.get("files", ""),
+                "branch": out.get("branch", "")}
 
     @app.get("/sessions/{session_id}/export")
     def export_session(session_id: str, format: str = "md"):

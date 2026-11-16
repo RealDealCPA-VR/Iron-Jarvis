@@ -23,6 +23,7 @@ import {
   type LaneId,
 } from "@/lib/kanban";
 import { KanbanColumn } from "./KanbanColumn";
+import { clearTitle, clearedWords } from "@/lib/clearWords";
 import {
   CardInner,
   KanbanActionsContext,
@@ -335,11 +336,10 @@ export function KanbanBoard({
     // v1.420.0: a stopped (cancelled) session has its own lane (see laneFor).
     const statuses = lane === "completed" ? ["completed"] : lane === "failed" ? ["failed"] : ["cancelled"];
     try {
-      const res = await post<{ cleared: number }>("/sessions/clear", { statuses });
-      setToast({
-        kind: "ok",
-        text: `Cleared ${res.cleared} session${res.cleared === 1 ? "" : "s"}.`,
-      });
+      const res = await post<{ cleared: number; trash?: string }>("/sessions/clear", { statuses });
+      // v1.504.0 (north-star plan 4.2, D7): the press MOVES each run to the
+      // app's trash, and the toast says where.
+      setToast({ kind: "ok", text: clearedWords(res.cleared, res.trash, lane) });
       reload();
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : String(err);
@@ -369,8 +369,8 @@ export function KanbanBoard({
         <ConfirmButton
           variant="calm"
           label={`Clear completed (${laneSessions.completed.length})`}
-          confirmLabel="Confirm clear?"
-          title="Remove every completed session from the board"
+          confirmLabel="Move to the trash?"
+          title={clearTitle("completed")}
           onConfirm={() => clearLane("completed")}
           className="-my-1 whitespace-nowrap"
         />
@@ -381,8 +381,8 @@ export function KanbanBoard({
         <ConfirmButton
           variant="calm"
           label={`Clear failed (${laneSessions.failed.length})`}
-          confirmLabel="Confirm clear?"
-          title="Remove every failed session from the board"
+          confirmLabel="Move to the trash?"
+          title={clearTitle("failed")}
           onConfirm={() => clearLane("failed")}
           className="-my-1 whitespace-nowrap"
         />
@@ -393,8 +393,8 @@ export function KanbanBoard({
         <ConfirmButton
           variant="calm"
           label={`Clear stopped (${laneSessions.stopped.length})`}
-          confirmLabel="Confirm clear?"
-          title="Remove every stopped session from the board"
+          confirmLabel="Move to the trash?"
+          title={clearTitle("stopped")}
           onConfirm={() => clearLane("stopped")}
           className="-my-1 whitespace-nowrap"
         />
