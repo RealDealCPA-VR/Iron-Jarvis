@@ -17,6 +17,7 @@
     "apply_patch",
     "ask_user",
     "assign_work",
+    "backup_now",
     "batch_documents",
     "blackboard_post",
     "blackboard_read",
@@ -210,6 +211,8 @@
     "skill_search",
     "skill_update",
     "spawn_agent",
+    "suggestion_answer",
+    "suggestion_list",
     "tool_create",
     "tool_delete",
     "tool_list",
@@ -254,6 +257,7 @@
     "apply_patch": "change files with a patch",
     "ask_user": "ask you a question",
     "assign_work": "queue a task for a teammate",
+    "backup_now": "back up Iron Jarvis",
     "batch_documents": "work through a folder of documents",
     "blackboard_post": "post a note for the team",
     "blackboard_read": "read the team's notes",
@@ -447,6 +451,8 @@
     "skill_search": "look for a skill",
     "skill_update": "change a skill",
     "spawn_agent": "start a helper agent",
+    "suggestion_answer": "answer a suggestion on the Improvements page",
+    "suggestion_list": "list the waiting suggestions",
     "tool_create": "make a new tool",
     "tool_delete": "remove a custom tool",
     "tool_list": "list the custom tools",
@@ -538,6 +544,10 @@
     "assign_work": [
       "Queued a task for a teammate",
       "Queuing a task for a teammate"
+    ],
+    "backup_now": [
+      "Backed up Iron Jarvis",
+      "Backing up Iron Jarvis"
     ],
     "batch_documents": [
       "Worked through a folder of documents",
@@ -1111,6 +1121,14 @@
       "Started a helper agent",
       "Starting a helper agent"
     ],
+    "suggestion_answer": [
+      "Answered a suggestion",
+      "Answering a suggestion"
+    ],
+    "suggestion_list": [
+      "Listed the waiting suggestions",
+      "Listing the waiting suggestions"
+    ],
     "tool_create": [
       "Made a new tool",
       "Making a new tool"
@@ -1213,6 +1231,7 @@
     "apply_patch": "",
     "ask_user": "",
     "assign_work": "",
+    "backup_now": "",
     "batch_documents": "",
     "blackboard_post": "",
     "blackboard_read": "",
@@ -1406,6 +1425,8 @@
     "skill_search": "",
     "skill_update": "",
     "spawn_agent": "",
+    "suggestion_answer": "",
+    "suggestion_list": "",
     "tool_create": "",
     "tool_delete": "",
     "tool_list": "",

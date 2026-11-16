@@ -24,6 +24,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 
+from ...core.failures import plain_failure
 from ...core.events import EventType
 from ...detections import load_rules, scan
 from ...detections.bell import schedule_scan, wait_for_scans
@@ -81,7 +82,7 @@ def register(app: FastAPI, d) -> None:
             events, findings = await asyncio.to_thread(_run)
         except Exception as exc:  # noqa: BLE001 — say why, never a bare 500
             log.exception("detection scan failed")
-            raise HTTPException(status_code=500, detail=f"detection scan failed: {exc}")
+            raise HTTPException(status_code=500, detail=plain_failure("The check could not run. Try again.", exc))
         return {
             "findings": [f.to_dict() for f in findings],
             "count": len(findings),

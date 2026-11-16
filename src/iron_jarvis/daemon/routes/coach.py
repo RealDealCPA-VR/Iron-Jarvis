@@ -34,6 +34,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
+from ...core.failures import plain_failure
 from ...coach.engine import StaleProposal, proposal_view
 from ...coach.models import PENDING, STATUSES
 
@@ -96,7 +97,7 @@ def _decided(coach, proposal_id: str, action: str) -> tuple[dict[str, Any], list
     except StaleProposal as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
+        raise HTTPException(status_code=409, detail=plain_failure("That suggestion could not be answered.", exc)) from None
     out: dict[str, Any] = {"proposal": proposal_view(row)}
     if note:
         out["note"] = note

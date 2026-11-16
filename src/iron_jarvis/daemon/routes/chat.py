@@ -4304,6 +4304,17 @@ async def chat_stream(
     # v1.436.0 (Wave 5, B3): the lock-step copy of chat_turn's page-step and
     # "not offered" lines ("" when the message names none — byte-identical).
     _query_tail += _chat_turn.page_steps_block(body, platform)
+    # v1.506.0 (north-star plan 6.10): a turn cut to the browser's tools (the
+    # sidebar's ceiling) is told so in one fixed line: what the sidebar does,
+    # and that anything else is done in the Iron Jarvis window. Stable text,
+    # before the planner. Stream lane only: no POST turn has a ceiling. The
+    # sidebar hands its ceiling as the armed family too
+    # (browser/panel.PanelConversation); a coding attempt's ceiling
+    # (harness/attempts) arms no family and is no sidebar.
+    if tool_ceiling is not None and arm_family is not None:
+        from ...browser.panel import CEILING_LINE as _CEILING_LINE
+
+        system += "\n\n" + _CEILING_LINE
     conn_tools = _grounding.conn_tools
 
     # Routing choice (hoisted, mirrors chat_complete) — attachment budgets
@@ -5317,7 +5328,7 @@ async def chat_stream(
             d, body, _routed, armed=armed, auto_armed=auto_armed, ask_armed=ask_armed,
             tool_specs=tool_specs, overrides=overrides, armed_grant=armed_grant,
             ctx=ctx, tool_ceiling=tool_ceiling, ceiling=_arm_ceiling,
-            low_trust=_chat_turn.finish_low_trust(_trust_state), can_ask=True,
+            **_chat_turn.trust_causes(_trust_state), can_ask=True,
             found_asks=_looked_up,
         )
         if _routed_section:
@@ -6172,7 +6183,7 @@ async def chat_stream(
                         tally=_tally, armed=armed, auto_armed=auto_armed, ask_armed=ask_armed,
                         tool_specs=tool_specs, overrides=overrides, armed_grant=armed_grant,
                         ctx=ctx, tool_ceiling=tool_ceiling, ceiling=_arm_ceiling,
-                        low_trust=_chat_turn.finish_low_trust(_trust_state), can_ask=True,
+                        **_chat_turn.trust_causes(_trust_state), can_ask=True,
                         found_asks=_looked_up,
                     ))
                     if _rf_end is _PREP_STOPPED:
@@ -8027,7 +8038,7 @@ async def chat_stream(
                         tool_specs=tool_specs, overrides=overrides,
                         armed_grant=armed_grant, msgs=msgs, ctx=ctx,
                         tool_ceiling=tool_ceiling, ceiling=_arm_ceiling,
-                        low_trust=_chat_turn.finish_low_trust(_trust_state), can_ask=True,
+                        **_chat_turn.trust_causes(_trust_state), can_ask=True,
                         found_asks=_looked_up,
                     ):
                         _rounds = max(
@@ -8515,7 +8526,7 @@ async def chat_stream(
         # vendor already connected, a program already installed) is left out.
         door_entries = _chat_turn.with_page_door(
             door_entries, body, harness=harness, escalate=escalate, sidebar=arm_family is not None,
-            platform=d.platform,
+            platform=d.platform, ctx=ctx,
         )
         done_frame: dict[str, Any] = {
             "reply": reply,

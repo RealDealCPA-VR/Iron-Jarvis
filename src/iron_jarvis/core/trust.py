@@ -85,6 +85,9 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         # it off would let what this run read leave the network).
         "change_undo",
         "chat_local_only",
+        # v1.506.0 (north-star plan 6.2): nor a suggestion answered (an accept
+        # can start a task, make a tool or rewrite notes).
+        "suggestion_answer",
         # v1.438.0 (Wave 4 group A): nor a night task queued, cancelled or
         # moved (unattended work a later night starts), nor a folder's
         # defaults or coding team for new coding sessions.

@@ -290,11 +290,15 @@ def test_the_watcher_line_is_what_a_watcher_really_does():
     src = _read("src/iron_jarvis/motivation/engine.py")
     i = src.index("def add_backlog")
     assert "it never spawns a session" in src[i:i + 1500]
-    assert "Autonomy → Proposals" in _read("dashboard/app/sentinels/page.tsx")
+    # v1.506.0 (north-star 8.4): the Autonomy queue is headed "Suggestions".
+    assert "Autonomy → Suggestions" in _read("dashboard/app/sentinels/page.tsx")
     assert {s.key: s.label for s in schema.SETTINGS}["sentinels_enabled"] == "Folder watchers"
     assert Config.model_fields["sentinels_enabled"].default is False
     line = _line("watcher_suggests")
-    assert '"Folder watchers"' in line and "Proposals list on the Autonomy page" in line
+    # v1.506.0 (north-star 8.4, moved on purpose): "Suggestions", and it
+    # says they also wait on the Improvements page.
+    assert '"Folder watchers"' in line and "Suggestions list on the Autonomy page" in line
+    assert "Improvements page" in line
     assert "nothing runs until the user approves it" in line
 
 

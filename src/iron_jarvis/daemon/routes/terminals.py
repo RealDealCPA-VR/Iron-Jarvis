@@ -17,6 +17,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
+from ...core.failures import plain_failure
 from ...projects.locate import project_context_block, project_for_path
 from ...terminals.backend import ShellStartStuck
 from ..chat_turn import _profile_section
@@ -353,7 +354,7 @@ def launch_pane(
         except ShellStartStuck as exc:  # v1.418.1: another shell is stuck starting
             raise HTTPException(status_code=503, detail=str(exc)) from None
         except RuntimeError as exc:  # the session cap
-            raise HTTPException(status_code=429, detail=str(exc)) from None
+            raise HTTPException(status_code=429, detail=plain_failure("Too many terminals are open. Close one and try again.", exc)) from None
     # Nobody is attached until the page focuses it: keep the CLI's first
     # screen in the pane's tail so the attach replays it (the sign-in pane's
     # pattern), and answer ConPTY's start-up query meanwhile.
@@ -656,7 +657,7 @@ def register(app: FastAPI, d) -> None:
         except ShellStartStuck as exc:  # v1.418.1: another shell is stuck starting
             raise HTTPException(status_code=503, detail=str(exc))
         except RuntimeError as exc:  # session cap reached
-            raise HTTPException(status_code=429, detail=str(exc))
+            raise HTTPException(status_code=429, detail=plain_failure("Too many terminals are open. Close one and try again.", exc))
         return pane_row(d.platform, session.info())
 
     @app.post("/terminals/{term_id}/continue-on-next")
@@ -792,8 +793,7 @@ def register(app: FastAPI, d) -> None:
         except (OSError, ValueError) as exc:
             raise HTTPException(
                 status_code=409,
-                detail=f"The handoff could not be written ({type(exc).__name__}), so nothing "
-                "in the terminal was touched.",
+                detail=plain_failure("The handoff could not be written, so nothing in the terminal was touched.", exc),
             ) from None
         new_sid = str(uuid.uuid4())
         line = shell_line(
@@ -1200,7 +1200,7 @@ def register(app: FastAPI, d) -> None:
         try:
             adapter = d.platform.providers.get(provider, model)
         except Exception as exc:  # unknown provider / no credential
-            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That model could not be used. Choose another model in Settings.", exc))
         from ...providers.adapters.base import LLMMessage
 
         tail = session.output_tail()[-6000:]  # bound the context we bill for
@@ -1365,7 +1365,7 @@ def register(app: FastAPI, d) -> None:
         try:
             blob = await asyncio.to_thread(base64.b64decode, content_b64, validate=False)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That snippet could not be read.", exc))
         if not blob:
             raise HTTPException(status_code=400, detail="empty snippet")
         if len(blob) > _SNIPPET_MAX_BYTES:

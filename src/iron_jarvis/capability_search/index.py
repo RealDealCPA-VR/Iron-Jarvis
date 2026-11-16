@@ -14,7 +14,11 @@ An entry is built ONLY from text the product already has:
 * a setting: the schema row's label, other names, help and choices
   (``settings/schema``);
 * a step that needs a page, and a thing Iron Jarvis does not offer: the
-  sentence ``daemon/page_doors`` already holds for it.
+  sentence ``daemon/page_doors`` already holds for it;
+* a page of the dashboard (v1.506.0, north-star plan 6.1): its name, address
+  and sentence from the ONE page table, ``daemon/pages.py``. Such an entry is
+  a "page" with ``place`` set; a lookup that returns it near the top leaves
+  its door for the reply (``join.FOUND.note_pages``).
 
 No hand-written synonym list lives here, on purpose: the index must not
 become a second set of word tables. A gap is closed by improving the text
@@ -121,6 +125,9 @@ class Capability:
     #: A setting's place on the Settings page, in the page's own words
     #: ("Settings › Appearance"; v1.490.4).
     where: str = ""
+    #: v1.506.0 (north-star 6.1): a row of the page table (``daemon/pages``),
+    #: kind "page"; its door is the table's, never built from the entry.
+    place: bool = False
 
 
 def _stem(word: str) -> str:
@@ -305,6 +312,22 @@ def _page_entries(_platform: Any = None) -> list[Capability]:
     return out
 
 
+def _place_entries(_platform: Any = None) -> list[Capability]:
+    """v1.506.0 (north-star plan 6.1): one entry per row of the page table
+    (``daemon/pages.PAGES``): every dashboard page and the Settings sections
+    that are places of their own, by the name they have on screen."""
+    from ..daemon import pages
+
+    out: list[Capability] = []
+    for page in pages.PAGES:
+        where = "Settings page section" if page.in_settings else "page"
+        out.append(Capability(
+            kind="page", id=page.id, title=page.name, href=page.href, line=page.what, place=True,
+            text=f"{page.name} {where} {page.what}",
+        ))
+    return out
+
+
 #: The parts of the index, by the name a reader is told when one could not
 #: be read.
 PARTS = (
@@ -312,6 +335,7 @@ PARTS = (
     ("settings", _setting_entries),
     ("secrets", _secret_entries),
     ("pages", _page_entries),
+    ("places", _place_entries),
 )
 
 

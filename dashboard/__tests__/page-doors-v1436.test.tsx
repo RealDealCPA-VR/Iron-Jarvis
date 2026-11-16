@@ -185,11 +185,20 @@ describe("the daemon's doors resolve on this dashboard", () => {
   });
 
   it("every Settings address is an alias or the place an alias leads to", () => {
+    // v1.506.0 (north-star plan 6.3): or a section of the Settings page that
+    // is a place of its own (Your other computers, Maintenance), by the id
+    // SettingsHome declares for it.
+    const sections = [
+      ...lf(join(__dirname, "..", "components", "settings", "SettingsHome.tsx")).matchAll(
+        /^\s+id: "([a-z]+-[a-z-]+)",$/gm,
+      ),
+    ].map((m) => `/settings?section=${m[1]}`);
+    expect(sections).toContain("/settings?section=system-maintenance");
     for (const { door } of FIXTURE.table.steps) {
       const path = door.href.split("?")[0];
       if (path === "/settings") {
         const targets = Object.values(RELOCATED).map((r) => relocatedHref(r.base, {}, r.extra));
-        expect(targets, door.href).toContain(door.href);
+        expect([...targets, ...sections], door.href).toContain(door.href);
       } else if (path in RELOCATED) {
         expect(door.href).toBe(path);
       }

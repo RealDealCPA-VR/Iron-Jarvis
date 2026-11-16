@@ -160,6 +160,9 @@ const WORDS: Record<string, string> = {
   // (settings/records_clients.py). agents/mission.ASK_WORDS says the same
   // (pinned equal).
   client_answer: "say whether a name is one of your clients",
+  // v1.506.0 (north-star 6.2): answering one waiting suggestion from chat
+  // (inbox/tools.py). agents/mission.ASK_WORDS says the same (pinned equal).
+  suggestion_answer: "answer a suggestion on the Improvements page",
   client_update: "change one of your clients",
   client_preference_add: "keep a preference for one client",
   client_preference_change: "change a preference kept for one client",

@@ -66,6 +66,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from ...core.failures import plain_failure
 from .. import durable_turns as _durable
 from ..chat_stream import stream_chat_turn
 from ..schemas import ChatArchiveBody, ChatBody, ChatMessageBody
@@ -2308,7 +2309,7 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
         # the transcript must say so too, never end on the question with no
         # reply at all (Phase 4 review — "a turn never ends empty").
         if watch.done is None and watch.error is None:
-            watch.error = {"detail": f"The reply stopped on an internal error ({type(exc).__name__})."}
+            watch.error = {"detail": plain_failure("The reply stopped on an internal error.", exc)}
         status = "error"
         raise
     finally:
@@ -3084,8 +3085,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        f"This session's own folder could not be made in {platform.config.chat_files_dir}: "
-                        f"{exc.strerror or exc}"
+                        plain_failure(f"This session's own folder could not be made in {platform.config.chat_files_dir}.", exc)
                     ),
                 ) from None
             if fresh:
@@ -3540,7 +3540,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                     **({"reply_cap": reply_cap} if reply_cap is not None else {}),
                 )
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from None
+                raise HTTPException(status_code=400, detail=plain_failure("That message could not be sent to the coding session.", exc)) from None
             if resume_of is not None:
                 took = await asyncio.to_thread(
                     S.take_wait, platform.engine, thread_id,
@@ -4858,7 +4858,7 @@ def register(app: FastAPI, d: Any) -> None:
         try:
             return S.rename_folder(engine_of(), S.resolved_folder(body.path), body.name)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from None
+            raise HTTPException(status_code=400, detail=plain_failure("That folder could not be renamed.", exc)) from None
 
     @app.get("/build/folders/team")
     def get_folder_team(folder: str = "") -> dict[str, Any]:

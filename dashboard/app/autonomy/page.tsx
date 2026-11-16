@@ -576,22 +576,22 @@ export default function AutonomyPage() {
         {/* Proposals queue */}
         <Reveal>
           <Card
-            title={`Proposals${pending.length ? ` · ${pending.length}` : ""}`}
+            title={`Suggestions${pending.length ? ` · ${pending.length}` : ""}`}
             icon={<Inbox size={15} />}
           >
             {proposals.loading && !proposals.data ? (
               <SkeletonRows rows={3} />
             ) : proposals.error && proposals.error.status !== 0 ? (
               <LoadFailedLine
-                thing="Proposals"
+                thing="Suggestions"
                 error={proposals.error}
                 onRetry={proposals.reload}
                 testId="autonomy-proposals-failed"
               />
             ) : pending.length === 0 ? (
               <Empty icon={<CircleCheck size={24} />}>
-                Nothing awaiting your call. Proposals Iron Jarvis wants to act on
-                will queue here for approval.
+                Nothing awaiting your call. Suggestions Iron Jarvis wants to act on
+                will queue here for approval (they also wait in Improvements).
               </Empty>
             ) : (
               <div className="space-y-2.5">
@@ -622,7 +622,7 @@ export default function AutonomyPage() {
                           variant="soft"
                           size="sm"
                           onClick={() => approve(p)}
-                          title="Approve and execute this proposal"
+                          title="Approve and run this suggestion"
                         >
                           <CircleCheck size={13} /> Approve
                         </Button>
@@ -1756,7 +1756,7 @@ const STARTER_GOALS = [
     title: "Morning briefing",
     description:
       "A short daily digest: new events, pending reviews, and the one thing worth your attention.",
-    text: "Each deliberation tick in the morning, prepare a short briefing: new events, pending reviews and proposals since yesterday, and the one thing most worth my attention today.",
+    text: "Each deliberation tick in the morning, prepare a short briefing: new events, pending reviews and suggestions since yesterday, and the one thing most worth my attention today.",
     category: "briefing",
     priority: 3,
   },

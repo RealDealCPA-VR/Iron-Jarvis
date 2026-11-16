@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from pathlib import Path
 from typing import Any
 
+from ...core.failures import plain_failure
 from .. import app as _app
 from ..schemas import IngestDocumentBody, LTMAppend, LTMSourceBody
 from ...core.fs_policy import fs_read_ok, is_protected_path
@@ -93,7 +94,10 @@ def _base_health(conn: Any, kind: str, *, probe: bool, refresh: bool, deadline: 
         else:
             info.update(health())
     except Exception as exc:  # noqa: BLE001 — a listing never 500s
-        info.update({"available": False, "detail": f"{type(exc).__name__}: {exc}"})
+        # A fragment on purpose (lead review): this detail is read on its own
+        # in the listing and inside "Added, but it is not answering: …", as
+        # the other details of this function are.
+        info.update({"available": False, "detail": plain_failure("it could not be reached", exc)})
     return info
 
 
@@ -198,7 +202,7 @@ def add_ltm_source_record(d: Any, body: LTMSourceBody) -> dict[str, Any]:
             config_json=json.dumps(body.config) if body.config else "",
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=plain_failure("That memory base could not be saved.", exc))
     try:  # register it live so it's searchable without a restart
         conn = connector_from_record(
             rec,
@@ -215,7 +219,7 @@ def add_ltm_source_record(d: Any, body: LTMSourceBody) -> dict[str, Any]:
         d.platform.ltm.register(conn)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
-            status_code=400, detail=f"source saved but not loadable: {exc}"
+            status_code=400, detail=plain_failure("The memory base was saved but could not be opened. Check its settings.", exc)
         )
     back = read_back(d, rec.name)
     return {"name": rec.name, "kind": rec.kind, "answering": back["answering"], "words": back["words"]}
@@ -366,7 +370,7 @@ def register(app: FastAPI, d) -> None:
         try:
             return {"results": d.platform.ltm.search(q, k=k, source=source)}
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That search could not run.", exc))
 
     @app.post("/ltm/append")
     def ltm_append(body: LTMAppend) -> dict[str, Any]:
@@ -374,7 +378,7 @@ def register(app: FastAPI, d) -> None:
             src = body.source or d.platform.ltm.default_source()
             ref = d.platform.ltm.append(body.title, body.content, source=src)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That note could not be saved.", exc))
         return {"ref": ref, "source": src}
 
     @app.post("/ltm/ingest-document")
@@ -406,7 +410,7 @@ def register(app: FastAPI, d) -> None:
         try:
             data = base64.b64decode(body.content_b64, validate=False)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That file could not be read. Choose another file.", exc))
 
         tmpdir = tempfile.mkdtemp(prefix="ij-ingest-")
         tmp = _Path(tmpdir) / safe_name
@@ -415,7 +419,7 @@ def register(app: FastAPI, d) -> None:
             markdown = document_to_markdown(tmp)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
-                status_code=400, detail=f"could not convert document: {exc}"
+                status_code=400, detail=plain_failure("That document could not be converted.", exc)
             )
         finally:
             try:
@@ -434,7 +438,7 @@ def register(app: FastAPI, d) -> None:
             src = body.source or d.platform.ltm.default_source()
             ref = d.platform.ltm.append(title, markdown, source=src)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That document could not be added to memory.", exc))
         return {
             "ref": ref,
             "source": src,
@@ -458,7 +462,7 @@ def register(app: FastAPI, d) -> None:
             try:
                 return {"source": name, "items": lister(limit=cap), "note": ""}
             except Exception as exc:  # noqa: BLE001 — honest per-source failure
-                return {"source": name, "items": [], "note": str(exc)}
+                return {"source": name, "items": [], "note": plain_failure("This memory base could not list its notes.", exc)}
         files = getattr(conn, "_files", None)
         read = getattr(conn, "_read", None)
         if callable(files) and callable(read):
@@ -478,7 +482,7 @@ def register(app: FastAPI, d) -> None:
                         }
                     )
             except Exception as exc:  # noqa: BLE001
-                return {"source": name, "items": [], "note": str(exc)}
+                return {"source": name, "items": [], "note": plain_failure("This memory base could not list its notes.", exc)}
             return {"source": name, "items": items, "note": ""}
         return {
             "source": name,
@@ -616,12 +620,12 @@ def register(app: FastAPI, d) -> None:
             tools = conn.tool_list() if conn is not None and hasattr(conn, "tool_list") else []
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
-                status_code=409, detail=f"Could not reach {name} to check its tools: {str(exc)[:200]}"
+                status_code=409, detail=plain_failure(f"Could not reach {name} to check its tools.", exc)
             ) from None
         try:
             roles = mcp_roles.clean((body or {}).get("roles"), tools)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from None
+            raise HTTPException(status_code=400, detail=plain_failure("Those roles could not be saved.", exc)) from None
         with session_scope(d.platform.engine) as db:
             row = db.get(LTMSourceRecord, rec.id)
             row.roles_json = _json.dumps(roles) if roles else ""

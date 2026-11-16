@@ -91,9 +91,11 @@ _CATALOG: dict[str, dict[str, str]] = {
         "href": "/memory?scope=lessons",
         "label": "See the lesson it saved",
     },
-    # create_agent is the PERSISTENT registration (agents/agent_tools.py) —
-    # spawn_agent, the ephemeral run, deliberately has no door.
-    "create_agent": {
+    # v1.506.0 (north-star plan 6.4): keyed on CHAT's own tool, `agent_create`
+    # (settings/records_projects). The key was `create_agent`, the agent-run
+    # tool no chat path ever brings (capability_search/join.usable_first), so
+    # an agent made in chat left no door.
+    "agent_create": {
         "href": "/agents",
         "label": "Meet your new agent",
         "named": "Meet your new agent — '{name}'",
@@ -105,7 +107,44 @@ _CATALOG: dict[str, dict[str, str]] = {
         "named": "See your new tool — '{name}'",
         "name_key": "name",
     },
+    # v1.506.0 (north-star plan 6.4): every chat tool that MAKES a record has
+    # a door to the page the record lives on (one row per record kind;
+    # tests/test_north_star_doors_v1506.py derives the list of makers from the
+    # record-tool table). Page-level addresses only, as above.
+    "project_create": {
+        "href": "/projects",
+        "label": "Open your new project",
+        "named": "Open your new project — '{name}'",
+        "name_key": "name",
+    },
+    "reflex_create": {"href": "/reflex", "label": "See your new rule"},
+    "goal_add": {"href": "/autonomy", "label": "See your goal"},
+    "sentinel_add": {"href": "/sentinels", "label": "See your new watcher"},
+    "persona_create": {"href": "/settings?focus=default_persona", "label": "See your personas in Settings"},
+    "skill_create": {"href": "/skills", "label": "See your new skill"},
+    "lesson_add": {"href": "/memory?scope=lessons", "label": "See the lesson it saved"},
+    "night_task_add": {"href": "/chat?view=code", "label": "See tonight's list in Chat › Code"},
+    "model_server_add": {"href": "/fleet", "label": "See your model servers"},
+    "memory_base_add": {"href": "/memory", "label": "See your memory bases"},
+    "mcp_server_add": {"href": "/tools", "label": "See your new extension"},
+    "web_service_add": {"href": "/connections", "label": "See your web services"},
+    "app_import": {"href": "/settings?section=connections-apps", "label": "See your apps in Settings"},
+    # v1.506.0 (north-star plan 6.3): a backup made now — its card lists the
+    # backups and holds Restore from backup.
+    "backup_now": {"href": "/settings?section=system-maintenance", "label": "Open Maintenance in Settings"},
+    # v1.506.0 (north-star plan 6.2): the Improvements page's suggestions.
+    "suggestion_list": {"href": "/improvements", "label": "Open Improvements"},
+    "suggestion_answer": {"href": "/improvements", "label": "Open Improvements"},
 }
+
+#: v1.506.0 (north-star plan 6.4): the record tools that MAKE a record and
+#: whose door is decided elsewhere, on purpose: ``account_add`` and
+#: ``app_connect`` in :func:`door_for` from what the call really carried (an
+#: app that started leaves no door, v1.353.0); ``channel_connect`` by the
+#: Notifications page step (``page_doors`` "slack_setup" / "email_rule_inbox",
+#: whose own words name what is left to do there; a success door to the same
+#: address would take its place).
+OWN_DOOR_TOOLS = frozenset({"account_add", "app_connect", "channel_connect"})
 
 
 def _clean_name(raw: Any) -> str:
@@ -168,6 +207,9 @@ def door_for(tool_name: str, result: Any) -> dict[str, str] | None:
         try:
             data = getattr(result, "data", None)
             if not isinstance(data, dict) or data.get("not_started") is not True:
+                # v1.506.0 (north-star 6.4) review: an app that STARTED gets no
+                # door, on purpose (v1.353.0: a connected app leaves no button
+                # to the Directory; tests/test_rereview_wave3_v13530.py).
                 return None
             from ..connectors.catalog import get_connector
 
@@ -263,6 +305,14 @@ def failure_door_for(tool_name: str, args: Any, result: Any) -> dict[str, str] |
         if getattr(result, "ok", False):
             return None
         name = str(tool_name or "")
+        if name == "suggestion_answer":
+            # v1.506.0 (north-star plan 6.2): a suggestion chat could not
+            # answer (gone, blocked, answered only on its page) leaves the
+            # door to the Improvements page — the one address the tool names.
+            data = getattr(result, "data", None)
+            if isinstance(data, dict) and data.get("door") == "/improvements":
+                return {"href": "/improvements", "label": "Open Improvements"}
+            return None
         if name.startswith("browser_"):
             data = getattr(result, "data", None)
             code = str(data.get("code") or "") if isinstance(data, dict) else ""

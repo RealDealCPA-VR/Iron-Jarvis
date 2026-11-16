@@ -606,7 +606,9 @@ def test_a_tool_whose_permission_is_shared_is_not_made_ask_alone(desk):
 
 def test_at_most_three_tools_per_lookup(desk):
     app, _ws = desk
-    joined, state, data = _join(app, "agent", limit=8)
+    # v1.506.0 (moved on purpose): "agent" alone now also finds the pages
+    # about agents (daemon/pages), leaving fewer than four tool matches.
+    joined, state, data = _join(app, "agent create update pause delete", limit=8)
     tools = [m for m in data["matches"] if m["kind"] == "tool"]
     assert len(tools) > J.MAX_JOINED_PER_LOOKUP, "pick a query with more tool matches"
     # The settings tools take ONE place together (the next test). v1.489.0:

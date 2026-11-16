@@ -12,6 +12,7 @@ import json
 from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
 
+from ...core.failures import plain_failure
 from .. import app as _app
 from ..app import _ws_token_ok
 from ..schemas import DesktopIncidentBody, ScheduleAdd, SchedulePatch, UpdateBody
@@ -824,7 +825,7 @@ def register(app: FastAPI, d) -> None:
                 payload=body.payload,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That schedule could not be saved.", exc))
         return rec.model_dump()
 
     @app.patch("/schedules/{name}")
@@ -865,7 +866,7 @@ def register(app: FastAPI, d) -> None:
                 )
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That schedule could not be changed.", exc))
         row = rec.model_dump()
         row.update(_knobs.decode_knobs(rec.decoded_payload()))
         return row

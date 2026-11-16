@@ -24,6 +24,7 @@ from typing import Any
 
 from sqlmodel import select
 
+from ...core.failures import plain_failure
 from ...core.config import restore_config_values
 from ...core.db import session_scope
 from ...core.events import EventType
@@ -251,7 +252,7 @@ async def perform_undo(d, action_id: str) -> dict[str, Any]:
                 _records.restore, platform, _rec if isinstance(_rec, dict) else {}
             )
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=409, detail=f"undo failed: {exc}")
+            raise HTTPException(status_code=409, detail=plain_failure("That change could not be undone.", exc))
     elif journal_kind == "excel_live_restore":
         # v1.466.0: a change made in a workbook open in Excel. Like a record
         # restore, no tool permission is asked: an Undo puts back what the
@@ -314,7 +315,7 @@ async def perform_undo(d, action_id: str) -> dict[str, Any]:
             raise HTTPException(status_code=409, detail=str(exc))
         except Exception as exc:  # noqa: BLE001 — a bad revert must not 500
             raise HTTPException(
-                status_code=409, detail=f"undo failed: {type(exc).__name__}: {exc}"
+                status_code=409, detail=plain_failure("That change could not be undone.", exc)
             )
         if not result.ok:
             raise HTTPException(
@@ -501,7 +502,7 @@ def register(app: FastAPI, d) -> None:
                 logger.warning(
                     "revert %s: action %s failed", session_id, action_id, exc_info=True
                 )
-                skipped.append({"action_id": action_id, "reason": str(exc)})
+                skipped.append({"action_id": action_id, "reason": plain_failure("That change could not be undone.", exc)})
         return {
             "session_id": session_id,
             "reverted": reverted,

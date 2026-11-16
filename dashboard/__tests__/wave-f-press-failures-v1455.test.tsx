@@ -284,7 +284,8 @@ describe("item 9: the Autonomy page's failed reads", () => {
     render(<AutonomyPage />);
     await waitFor(() =>
       expect(screen.getByTestId("autonomy-proposals-failed").textContent).toBe(
-        "Proposals couldn't load. Try again.",
+        // v1.506.0 (north-star 8.4): the queue is "Suggestions" now.
+        "Suggestions couldn't load. Try again.",
       ),
     );
     expect(screen.getByTestId("autonomy-status-failed").textContent).toBe(

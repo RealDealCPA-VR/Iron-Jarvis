@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from ...core.failures import plain_failure
 from ...hosted import service as S
 
 
@@ -239,7 +240,7 @@ def register(app: FastAPI, d: Any) -> None:
         try:
             await asyncio.to_thread(_open_native, got["path"])
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=422, detail=f"The summary file could not be opened: {exc}") from None
+            raise HTTPException(status_code=422, detail=plain_failure("The summary file could not be opened.", exc)) from None
         return {"ok": True, "path": got["path"]}
 
     @app.delete("/build/app/sessions/{sid}")

@@ -496,4 +496,6 @@ def test_a_connector_whose_health_explodes_never_500s_the_listing(tmp_path):
     assert r.status_code == 200
     bases = {b["name"]: b for b in r.json()["bases"]}
     assert bases["boom-brain"]["available"] is False
-    assert "probe blew up" in bases["boom-brain"]["detail"]
+    # v1.506.0 (north-star 8.1, moved on purpose): a probe's raw exception
+    # text goes to the log, never to the screen; the row says it plainly.
+    assert bases["boom-brain"]["detail"] == "it could not be reached"

@@ -1621,6 +1621,14 @@ def build_platform(
 
     for tool in capability_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # v1.506.0 (north-star plan 6.2): the Improvements page's suggestions from
+    # chat — suggestion_list (reads) and suggestion_answer (asks; answers one
+    # item through its own route). They read the daemon's deps through
+    # `platform.config_writer.d` once the daemon attaches it.
+    from .inbox.tools import suggestion_tools
+
+    for tool in suggestion_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
 
     # Memory Fabric: ONE federated recall over every store (files, notes, memory
     # graph, project knowledge, lessons, past sessions), sharing the same

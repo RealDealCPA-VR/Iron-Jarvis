@@ -82,6 +82,17 @@ INSTALL_PRESSES: tuple[str, ...] = ("claude", "codex")
 #: offered for a program that is already installed).
 INSTALL_BINARIES: dict[str, str] = {"claude": "claude", "codex": "codex"}
 
+#: v1.506.0 (north-star plan 6.3, 6.6): the places of the new steps, each the
+#: address ``daemon/pages`` gives that place (one address per place).
+PAIRING_HREF = "/settings?section=connections-computers"
+PAIRING_PLACE = "Settings › Connections › Your other computers"
+MAINTENANCE_HREF = "/settings?section=system-maintenance"
+UPDATES_HREF = "/updates"
+SECRETS_HREF = "/secrets"
+MEMORY_HREF = "/memory"
+PROJECTS_HREF = "/projects"
+TEMPLATES_HREF = "/templates"
+
 #: The guides the Help page serves (``routes/helpdocs._DOCS``; pinned equal).
 HELP_GUIDES: tuple[str, ...] = ("handbook", "recommended-settings", "local-models", "own-apps", "changelog")
 
@@ -832,6 +843,70 @@ STEPS: tuple[PageStep, ...] = (
         f"Build) and then chosen in {CONNECTIONS_PLACE}. The guide \"Local Models by RAM Tier\" (in Help) says "
         "which model fits this PC; say so plainly and point there.",
     ),
+    # v1.506.0 (north-star plan 6.3): pairing with another computer was filed
+    # under "not offered", which carries no door, and its words never matched
+    # "pair". It is a page's press (Settings › Connections › Your other
+    # computers, components/settings/OtherComputers: "Show a pairing code" /
+    # "Use a pairing code"); `another_computer` stays for opening these
+    # screens on another computer, which really is not offered.
+    PageStep(
+        "pair_computer", PAIRING_HREF, "Pair your other computer in Settings",
+        f"Pairing this computer with another one running Iron Jarvis is done by the user in {PAIRING_PLACE}: "
+        "one computer shows a six-digit pairing code (Show a pairing code) and the other types it, with the "
+        "first one's address (Use a pairing code). Iron Jarvis cannot pair them from chat. Once they are "
+        "paired, \"@\" and the other computer's name in chat hands it a task, and the answer comes back to "
+        "that chat. Say so plainly and point there.",
+    ),
+    # v1.506.0 (6.3): restoring REPLACES the database and settings, so it is
+    # never a tool (routes/settings POST /maintenance/restore, the Maintenance
+    # card's "Restore from backup…", which confirms by name).
+    PageStep(
+        "restore_backup", MAINTENANCE_HREF, "Open Maintenance in Settings",
+        "Putting Iron Jarvis back from one of its backups replaces its whole database and settings, so only "
+        "the user does it, on the Maintenance card in Settings › System (Restore from backup, which lists the "
+        "backups); Iron Jarvis cannot restore a backup from chat. A backup of how things are now can be made "
+        "first, with backup_now when it is offered in this reply, or Back up now on that card. Say so plainly "
+        "and point there.",
+    ),
+    # v1.506.0 (6.3): installing or holding an update (the Updates page:
+    # "Check for updates", "Restart & install"; an update that is ready waits).
+    PageStep(
+        "updates", UPDATES_HREF, "Open Updates",
+        "Updates of Iron Jarvis download by themselves and install only when the user chooses, on the "
+        "Updates page: Check for updates, and Restart & install for an update that is ready (it waits until "
+        "then, so an update is held by not pressing it). Whether it follows Stable or Fresh updates is the "
+        "setting \"Update channel\" (config_set, when it is offered in this reply). Iron Jarvis cannot "
+        "install, check for or hold an update from chat. Say so plainly and point there.",
+    ),
+    # v1.506.0 (north-star plan 6.6): the small actions with no chat tool. A
+    # key's value never rides a tool argument and its removal can't be undone,
+    # so it is a door (routes/comm DELETE /secrets/{name}).
+    PageStep(
+        "remove_key", SECRETS_HREF, "Open Secrets",
+        "A saved key, token or password is removed by the user on the Secrets page (Settings › Connections › "
+        "Secrets), with its Delete press; a removed key can't be undone, and Iron Jarvis cannot remove one "
+        "from chat (a key's value never passes through the chat). Say so plainly and point there.",
+    ),
+    PageStep(
+        "forget_folder", MEMORY_HREF, "Open Memory",
+        "Forgetting the work Iron Jarvis did in a folder is done by the user on the Memory page: the folder's "
+        "own \"Forget this folder\" press takes its work out of the record and keeps it out, and \"Remember "
+        "again\" there brings it back. Iron Jarvis cannot forget a folder from chat. Say so plainly and point "
+        "there.",
+    ),
+    PageStep(
+        "delete_project", PROJECTS_HREF, "Open Projects",
+        "A project is deleted by the user on the Projects page (Delete, two presses). Iron Jarvis cannot "
+        "delete a project from chat; it can archive one (it stops appearing as a workspace and nothing is "
+        "deleted) with project_archive when it is offered in this reply. Say so plainly and point there.",
+    ),
+    PageStep(
+        "templates", TEMPLATES_HREF, "Open Templates",
+        "Templates (saved prompts with the task and the agent filled in) and starter skill bundles are made, "
+        "changed, loaded and removed by the user on the Templates page; Iron Jarvis cannot do that from chat "
+        "(it can make a skill with skill_create when it is offered in this reply). Say so plainly and point "
+        "there.",
+    ),
 )
 
 _STEP_RULES: dict[str, Callable[[str], bool]] = {
@@ -860,6 +935,16 @@ _STEP_RULES: dict[str, Callable[[str], bool]] = {
     "browser_addon": _any(_BROWSER_RULES),
     "model_provider": W.names_a_model_provider,
     "local_model": _any(_LOCAL_MODEL_RULES),
+    # v1.506.0 (north-star plan 6.3): pairing, also when the message asks to
+    # hand tasks to another of the user's computers (pairing is how).
+    "pair_computer": lambda t: W.pairing_asked(t) or _ELSEWHERE_RULES[-1].search(t) is not None,
+    "restore_backup": W.restore_asked,
+    "updates": W.update_asked,
+    # v1.506.0 (6.6).
+    "remove_key": W.key_removal_asked,
+    "forget_folder": W.forget_folder_asked,
+    "delete_project": W.project_delete_asked,
+    "templates": W.template_asked,
 }
 
 NOT_OFFERED: tuple[NotOffered, ...] = (
@@ -920,16 +1005,20 @@ NOT_OFFERED: tuple[NotOffered, ...] = (
         "it does not make a backup). What can be set, with config_set when it is offered in this reply: "
         "\"Backup copy folder\", a folder every backup is also copied to (another drive, or a synced folder on "
         "this PC such as the OneDrive folder), and \"Copy media with backups\". A backup can also be made at "
-        "any time with Back up now in Settings › System › Maintenance. Say so plainly.",
+        "any time, with backup_now when it is offered in this reply or with Back up now in Settings › System "
+        "› Maintenance; restoring one (Restore from backup, on that same card) is done only there, never from "
+        "chat. Say so plainly.",
     ),
     NotOffered(
         # sentinels/service._propose → motivation/engine.add_backlog (never
         # spawns a session); the Sentinels page: "Each suggestion waits in
-        # Autonomy → Proposals for your approval".
+        # Autonomy → Suggestions for your approval" (v1.506.0, north-star 8.4:
+        # the page's list was called Proposals).
         "watcher_suggests",
         "A folder watcher (sentinel_add, when it is offered in this reply) only notices new or changed files: "
-        "each time, it leaves one suggestion, carrying the task it was given, in the Proposals list on the "
-        "Autonomy page, and nothing runs until the user approves it there. Watchers are off until the setting "
+        "each time, it leaves one suggestion, carrying the task it was given, in the Suggestions list on the "
+        "Autonomy page (it also waits on the Improvements page), and nothing runs until the user approves it. "
+        "Watchers are off until the setting "
         "\"Folder watchers\" is turned on. So Iron Jarvis cannot file new files by itself the "
         "moment they arrive: the filing runs when the user approves a suggestion, or right now in this chat. "
         "Say so plainly.",
@@ -964,6 +1053,18 @@ NOT_OFFERED: tuple[NotOffered, ...] = (
         "works: an outgoing webhook (webhook_add with direction outbound) sends Iron Jarvis's events to a web "
         "address, such as a Zapier hook, when the user asks for that. Say so plainly.",
     ),
+    NotOffered(
+        # v1.506.0 (north-star plan 6.6): deleting, archiving or renaming a chat
+        # or a coding session. The chat a reply runs in cannot be archived
+        # while that reply runs (routes/chat.archive_thread answers 409), and a
+        # delete can't be undone, so there is no chat tool for it; the place
+        # is the list the user is looking at, so no door either
+        # (components/chat/SidebarChats: the row's ⋯ menu, Archived chats).
+        "chat_items",
+        "Iron Jarvis cannot delete, archive or rename a chat or a coding session from inside a reply: the user "
+        "does it from that chat's ⋯ menu in the chat list (a coding session's menu is in Code's list), and "
+        "Archived chats at the foot of the list brings an archived one back. Say so plainly.",
+    ),
 )
 
 _NOT_OFFERED_RULES: dict[str, Callable[[str], bool]] = {
@@ -975,6 +1076,7 @@ _NOT_OFFERED_RULES: dict[str, Callable[[str], bool]] = {
     "builtin_agent_limit": W.builtin_agent_limit,
     "voice_press": W.asks_for_voice,
     "internet_calls_in": W.internet_calls_in,
+    "chat_items": W.chat_item_asked,
 }
 
 # --------------------------------------------------------------------------- #

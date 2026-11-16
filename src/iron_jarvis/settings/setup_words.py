@@ -539,9 +539,172 @@ NOT_OUR_SCHEDULE_BEFORE = frozenset(
 )
 
 
+# --------------------------------------------------------------------------- #
+# v1.506.0 (north-star plan 6.3, 6.6): the places chat has no tool for, and
+# a backup made now. Every gap bounded, read one sentence at a time.
+# --------------------------------------------------------------------------- #
+#: "back up Iron Jarvis now", "make a backup of my settings right away", "take
+#: a backup now" — a backup made NOW (Iron Jarvis's own, :data:`JARVIS_BACKUP`,
+#: or a bare "backup now" with no other thing named).
+_NOW = re.compile(r"\b(?:now|right\s+(?:now|away)|immediately|today|before\s+(?:i|we|you))\b", re.IGNORECASE)
+_BACKUP_NOW_BARE = re.compile(
+    r"\b(?:make|take|run|create|do|start)\s+(?:a|an|another|one\s+more|a\s+fresh|a\s+new)\s+backup\s+"
+    r"(?:now|right\s+(?:now|away)|immediately)\b|\bback\s*up\s+now\b",
+    re.IGNORECASE,
+)
+_ASKING_ABOUT = re.compile(r"\b(?:how\s+often|when\s+(?:does|do|did|is)|where\s+(?:are|is|do)|how\s+many)\b", re.I)
+
+
+def backup_now_asked(text: str) -> bool:
+    """Does *text* ask Iron Jarvis to back ITSELF up now (``backup_now``)?
+    Never "back up my client files" (the user's own things), never a question
+    about the daily backup ("how often does it back up?")."""
+    for s in sentences(text):
+        if _ASKING_ABOUT.search(s):
+            continue
+        if _BACKUP_NOW_BARE.search(s) or (JARVIS_BACKUP.search(s) and _NOW.search(s)):
+            return True
+    return False
+
+
+#: Restoring IRON JARVIS from one of its backups (never the user's files).
+_USERS_THINGS = re.compile(
+    r"\b(?:files?|folders?|documents?|photos?|pictures?|laptop|phone|iphone|computer|pc|drive|e-?mails?"
+    r"|spreadsheets?|workbooks?|database\s+of\s+(?:my|the)\s+clients?|website|server|repo(?:sitory)?)\b",
+    re.IGNORECASE,
+)
+_RESTORE = re.compile(
+    r"\brestor(?:e|ing)\s+" + _OWNER + _JARVIS_THINGS + r"\b" + _NOT_JARVIS_AFTER
+    + r"|\b(?:restor(?:e|ing)|roll(?:ing)?\s+back|go(?:ing)?\s+back|revert(?:ing)?)\b[^.!?\n]{0,40}?"
+    r"\b(?:from|to|using)\s+(?:an?\s+|the\s+|my\s+|your\s+|yesterday['’]s\s+|last\s+(?:night|week)['’]s\s+)?"
+    r"(?:(?:earlier|older|previous|last|latest|automatic)\s+)?backups?\b",
+    re.IGNORECASE,
+)
+
+
+def restore_asked(text: str) -> bool:
+    """Does *text* ask to put Iron Jarvis back from one of its backups?"""
+    return any(_RESTORE.search(s) and not _USERS_THINGS.search(s) for s in sentences(text))
+
+
+#: Installing, holding or checking an update of Iron Jarvis itself.
+_UPDATE = re.compile(
+    r"\b(?:install|apply|get|download|skip|hold|pause|postpone|delay|stop|block|turn\s+off|disable)\s+"
+    r"(?:the\s+|this\s+|that\s+|an?\s+|any\s+|all\s+|new\s+|latest\s+){0,3}(?:iron\s+jarvis\s+|jarvis\s+|app\s+)?"
+    r"updates?\b(?!\s+(?:to|of|on|in|for)\s+(?!(?:iron\s+)?jarvis\b|the\s+app\b|you\b))"
+    r"|\b(?:update|upgrade)\s+(?:iron\s+jarvis|jarvis|yourself|the\s+app|this\s+app)\b"
+    r"|\b(?:check|look)\s+(?:for|if\s+there\s+(?:is|are))\s+(?:an?\s+|any\s+|new\s+){0,2}updates?\b"
+    r"|\b(?:don['’]?t|do\s+not|never)\s+(?:auto[\s-]?)?update\s+(?:yourself|iron\s+jarvis|jarvis|the\s+app)\b"
+    r"|\b(?:is\s+there|are\s+there)\s+(?:an?\s+|any\s+)?(?:new\s+)?(?:updates?|version)\s+(?:of\s+)?"
+    r"(?:iron\s+jarvis|jarvis|you|the\s+app|available)\b",
+    re.IGNORECASE,
+)
+
+
+def update_asked(text: str) -> bool:
+    """Does *text* ask to check for, install or hold an update of Iron Jarvis?"""
+    return _UPDATE.search(str(text or "")) is not None
+
+
+#: Pairing this computer with another one running Iron Jarvis.
+_PC = r"(?:computers?|pcs?|laptops?|machines?|desktops?|workstations?|macs?|macbooks?)"
+_PAIR = re.compile(
+    r"\b(?:pair|re-?pair|link|connect)\w*\s+(?:this\s+" + _PC + r"|my\s+(?:two|2|other|office|work|home|second|spare|main)\s+"
+    + _PC + r"|(?:my|our|the)\s+" + _PC + r"|(?:it|you|iron\s+jarvis|jarvis))\s+(?:with|to|and)\s+"
+    r"(?:my|our|the|another|a\s+second|this)\s+(?:(?:other|office|work|home|second|spare|main)\s+)?"
+    r"(?:" + _PC + r"|(?:iron\s+)?jarvis)\b"
+    r"|\b(?:pair|link)\s+(?:my|our|the|two|both)\s+(?:two\s+)?" + _PC + r"\b"
+    r"|\bpairing\s+code\b|\bpair(?:ed|ing)?\s+computers?\b|\byour\s+other\s+computers\b",
+    re.IGNORECASE,
+)
+
+
+def pairing_asked(text: str) -> bool:
+    """Does *text* ask to pair this computer with another one running Iron
+    Jarvis (Settings › Connections › Your other computers)? Never a phone or
+    a Bluetooth device ("pair my headphones")."""
+    return _PAIR.search(str(text or "")) is not None
+
+
+#: Removing a saved key, token or password (the Secrets page; never a tool).
+_KEY = re.compile(
+    r"\b(?:delete|remove|revoke|clear|erase|wipe|get\s+rid\s+of|take\s+out)\s+(?:my\s+|the\s+|that\s+|this\s+"
+    r"|a\s+|an\s+|old\s+|saved\s+|stored\s+){0,3}(?:[\w-]+\s+){0,2}"
+    r"(?:api[\s-]?keys?|access\s+keys?|secret\s+keys?|keys?|tokens?|passwords?|credentials?|secrets?)\b"
+    r"(?!\s+(?:protection|protected|field|column|cell|rows?|from\s+(?:the|this|my)\s+(?:pdf|document|file|sheet)))",
+    re.IGNORECASE,
+)
+_KEY_NOT = re.compile(
+    r"\b(?:pdf|document|spreadsheet|workbook|sheet|word\s+file|excel|zip|keyboard|piano|code|config|dictionary"
+    r"|dict|json|yaml|repo(?:sitory)?|script)\b|\.(?:py|js|ts|json|env|ya?ml|toml|ini)\b",
+    re.I,
+)
+
+
+def key_removal_asked(text: str) -> bool:
+    """Does *text* ask to remove a saved key or password?"""
+    return any(_KEY.search(s) and not _KEY_NOT.search(s) for s in sentences(text))
+
+
+#: Forgetting a folder's work in the work record (the Memory page).
+_FORGET_FOLDER = re.compile(
+    r"\b(?:forget|stop\s+(?:remembering|tracking|recording)|remove|drop|erase|wipe|clear)\s+"
+    r"(?:(?:everything|all|the\s+work)\s+(?:about|from|in|for)\s+)?(?:the|this|that|my)\s+(?:[\w-]+\s+){0,2}folder\b"
+    r"(?=[^.!?\n]{0,60}?\b(?:work\s+record|record|history|memory|remember(?:ed|s)?|you\s+know|what\s+you\s+did)\b)"
+    r"|\bforget\s+(?:the\s+)?(?:work|everything)\s+(?:you\s+did\s+)?in\s+(?:the|this|that|my)\s+(?:[\w-]+\s+){0,2}folder\b",
+    re.IGNORECASE,
+)
+
+
+def forget_folder_asked(text: str) -> bool:
+    """Does *text* ask Iron Jarvis to forget a folder's work?"""
+    return _FORGET_FOLDER.search(str(text or "")) is not None
+
+
+#: Deleting a project (archiving one is a chat tool, project_archive).
+_DELETE_PROJECT = re.compile(
+    r"\b(?:delete|remove|erase|get\s+rid\s+of)\s+(?:the|this|that|my|our)\s+(?:[\w-]+\s+){0,3}project\b"
+    r"(?!\s+(?:files?|folders?|notes?|brief|plan|budget|deadline|tasks?|members?)\b)",
+    re.IGNORECASE,
+)
+
+
+def project_delete_asked(text: str) -> bool:
+    return _DELETE_PROJECT.search(str(text or "")) is not None
+
+
+#: Templates (saved prompts) and starter skill bundles (the Templates page).
+_TEMPLATE = re.compile(
+    r"\b(?:make|create|save|add|delete|remove|change|edit|rename|load|install|unload)\s+(?:a\s+|an\s+|the\s+|this\s+|"
+    r"my\s+|that\s+)?(?:new\s+)?(?:prompt\s+)?templates?\b(?!\s+(?:for\s+(?:a|an|the|my)\s+)?(?:letter|email|invoice|"
+    r"document|word|excel|spreadsheet|report|contract|engagement|memo|slide|deck)s?\b)"
+    r"|\b(?:load|install|add|remove|unload)\s+(?:a\s+|the\s+|this\s+)?(?:starter\s+)?skill\s+bundles?\b"
+    r"|\bskill\s+bundles?\b",
+    re.IGNORECASE,
+)
+
+
+def template_asked(text: str) -> bool:
+    return _TEMPLATE.search(str(text or "")) is not None
+
+
+#: Deleting, archiving or renaming a chat or a coding session.
+_CHAT_THING = re.compile(
+    r"\b(?:delete|remove|erase|archive|unarchive|rename|clear)\s+(?:the|this|that|my|our|all\s+(?:my|the)|old)\s+"
+    r"(?:(?:old|previous|last|other|current)\s+)?(?:chats?|conversations?|threads?|coding\s+sessions?)\b",
+    re.IGNORECASE,
+)
+
+
+def chat_item_asked(text: str) -> bool:
+    return _CHAT_THING.search(str(text or "")) is not None
+
+
 #: Every compiled pattern over the user's words (the linear-time pin reads it).
 ALL_PATTERNS: tuple[re.Pattern[str], ...] = (
     JARVIS_BACKUP, _SENTENCE, TO_MY_PHONE, SET_UP_TO_MESSAGE_ME, _EDITS_A_WEBHOOK, _EVERY_NEW, _STANDING, _MAIL, _MAIL_ARRIVES, WATCH_FOLDER,
     _ACTS_ON_ARRIVALS, _BUILTIN_AGENT, _LIMIT, _LIMIT_VERB, VOICE, INTERNET_CALLS_IN, _OUTBOUND,
     USE_VENDOR, USE_PLAN, SET_UP_VENDOR, FILES_ARRIVE_IN_FOLDER, MAIL_FROM_RULE, _VENDOR_WORD,
+    _NOW, _BACKUP_NOW_BARE, _ASKING_ABOUT, _USERS_THINGS, _RESTORE, _UPDATE, _PAIR, _KEY, _KEY_NOT,
+    _FORGET_FOLDER, _DELETE_PROJECT, _TEMPLATE, _CHAT_THING,
 )

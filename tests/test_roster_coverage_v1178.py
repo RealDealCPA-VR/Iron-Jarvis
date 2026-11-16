@@ -316,6 +316,12 @@ _OFF_ROSTER_BY_DESIGN = {
     # tests/test_clients_chat_v1499.py.
     "client_list", "client_answer", "client_update", "client_preference_add",
     "client_preference_change", "client_preference_forget",
+    # v1.506.0 (north-star plan 6.2, 6.3): the Improvements page's suggestions
+    # (answering one is the OWNER's card) and a backup of Iron Jarvis made now,
+    # from chat, where the owner is present; chat arms them
+    # (settings.records.record_tools_for). Pinned by
+    # tests/test_north_star_suggestions_v1506.py and _reach_v1506.py.
+    "suggestion_list", "suggestion_answer", "backup_now",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

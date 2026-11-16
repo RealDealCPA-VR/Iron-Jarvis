@@ -4634,7 +4634,7 @@ _PAGE_DOOR_CLI_BINARY: dict[str, str] = {
 
 def with_page_door(
     entries: Any, body: Any, *, harness: Any = None, escalate: bool = False,
-    sidebar: bool = False, platform: Any = None,
+    sidebar: bool = False, platform: Any = None, ctx: Any = None,
 ) -> list[Any]:
     """The turn's door entries with the PAGE DOOR (v1.436.0, chat-first plan
     Wave 5, B3): when the user's last message asks for a step only a page or
@@ -4646,7 +4646,13 @@ def with_page_door(
     :func:`with_coding_offer` (a plain chat turn only). Added LAST, after
     ``with_connect_door``, and only while there is room under
     ``doors.MAX_DOORS``: it never pushes out a door the turn earned. MIRROR
-    NOTE (lock-step): both lanes call it at the same seam. Never raises."""
+    NOTE (lock-step): both lanes call it at the same seam. Never raises.
+
+    v1.506.0 (north-star plan 6.1): with the turn's *ctx*, a PAGE a lookup of
+    this turn returned near the top of its answer (``daemon/pages``, noted by
+    ``find_capability`` on ``join.FOUND``) gets its door too, after the step's
+    door, under the same rules: only while there is room under ``MAX_DOORS``,
+    never a second door to one address, the same surfaces."""
     base = list(entries or [])
     try:
         if harness is not None or escalate or sidebar or surface_for(body):
@@ -4658,9 +4664,38 @@ def with_page_door(
         from .page_doors import with_page_door as _with_page_door
 
         ready, installed = _page_door_checks(platform)
-        return _with_page_door(
+        base = _with_page_door(
             base, _last_user_text(getattr(body, "messages", None)), ready=ready, installed=installed,
         )
+        return with_looked_up_pages(base, ctx)
+    except Exception:  # noqa: BLE001 — no door beats no reply
+        return base
+
+
+def with_looked_up_pages(entries: Any, ctx: Any) -> list[Any]:
+    """*entries* with the door of each page a lookup of the turn *ctx* runs in
+    returned (``join.FOUND.pages``), built from the page table by id
+    (``daemon/pages.door_for``), never from the model's words. Added last,
+    only while there is room under ``doors.MAX_DOORS`` and never to an address
+    a door already has. Never raises (the entries come back unchanged)."""
+    base = list(entries or [])
+    try:
+        if ctx is None:
+            return base
+        from ..capability_search.join import FOUND, turn_key
+        from .doors import MAX_DOORS
+        from .pages import door_for as _page_door
+
+        out = list(base)
+        for page_id in FOUND.pages(turn_key(ctx)):
+            door = _page_door(page_id)
+            kept = collect_doors(out)
+            if door is None or len(kept) >= MAX_DOORS:
+                continue
+            if any(isinstance(e, dict) and e.get("href") == door["href"] for e in kept):
+                continue
+            out.append(door)
+        return out
     except Exception:  # noqa: BLE001 — no door beats no reply
         return base
 
@@ -5243,6 +5278,50 @@ def settings_ask_tools(
             out.append(t)
     except Exception:  # noqa: BLE001 — a matcher fault arms nothing new
         log.debug("settings ask arming failed", exc_info=True)
+    return out
+
+
+def post_record_tools(
+    d,
+    text: str,
+    armed: "list[str]",
+    *,
+    workflow_names: "list[str] | tuple[str, ...]" = (),
+    client_names: Any = (),
+    in_client: str = "",
+) -> "list[str]":
+    """The POST lane's record tools for *text* (v1.506.0, north-star plan
+    6.7): the ALLOW-TIER subset of what :func:`settings_ask_tools` (the very
+    same matcher) gives the stream lane. The POST lane serves the phone and
+    API callers, where nobody can answer a card, so it arms only a tool that
+    runs without one AND either only reads (``night_task_list``,
+    ``client_list``, ``build_folder_show``, ``schedule_list``, ``goal_list``…)
+    or is a record tool whose own tier is allow (``grant_revoke`` and
+    ``chat_local_only``: each only narrows). Never a create tool (the stream
+    lane makes those ask, ``records.ASK_FIRST_CREATE_TOOLS``), never a tool
+    the user set to ask or to Never run. BLOCKING (the matcher may read the
+    saved workflows' and clients' names): call it off the loop. Low trust and
+    Local only filter the result afterwards, as for every armed tool. Never
+    raises."""
+    out: list[str] = []
+    try:
+        from ..capability_search.join import _reads
+        from ..settings.records import ASK_FIRST_CREATE_TOOLS, RECORD_TOOL_TIERS
+
+        reg = d.platform.registry
+        perms = d.platform.permissions
+        for name in settings_ask_tools(
+            d, text, armed, [], workflow_names=workflow_names, client_names=client_names, in_client=in_client,
+        ):
+            tool = reg.get(name)
+            if tool is None or name in ASK_FIRST_CREATE_TOOLS:
+                continue
+            if getattr(perms.mode_for(name), "value", "") != "allow":
+                continue
+            if RECORD_TOOL_TIERS.get(name) == "allow" or _reads(tool, name):
+                out.append(name)
+    except Exception:  # noqa: BLE001 — a matcher fault arms nothing new
+        log.debug("post-lane record arming failed", exc_info=True)
     return out
 
 
@@ -8860,6 +8939,16 @@ def finish_low_trust(trust_state: dict[str, Any]) -> bool:
     folder's own code, and the folder is untrusted content then) — the same
     rule as a folder's plugin checks (:func:`harness_check_gate`)."""
     return bool(trust_state.get("low") or trust_state.get("tainted"))
+
+
+def trust_causes(trust_state: dict[str, Any]) -> dict[str, bool]:
+    """The two causes of a low reply, apart (v1.506.0, north-star plan 6.7):
+    ``low_trust`` (the whole posture, :func:`finish_low_trust`) and
+    ``tainted`` (it READ flagged content). The lookup's join tells the model
+    the true one: a phone's reply starts low by its door and read nothing
+    flagged. Both lanes pass it to ``join_found_tools`` and
+    ``join_route_first`` — MIRROR NOTE (lock-step)."""
+    return {"low_trust": finish_low_trust(trust_state), "tainted": bool(trust_state.get("tainted"))}
 
 
 def closing_offer_wanted(
@@ -13029,6 +13118,24 @@ async def run_chat_turn(
         # BRAIN PROFILE (v1.406.0): the brain tools, before the low-trust
         # filter below. MIRROR NOTE (lock-step): routes/chat.py.
         armed += brain_armed(d, _brain, armed)
+        # RECORDS FROM CHAT, WHERE NOBODY CAN BE ASKED (v1.506.0, north-star
+        # 6.7): the stream lane's record matcher (settings_ask_tools), cut to
+        # what runs with no card (post_record_tools: readers, and the two
+        # record switches that only narrow). Off the loop, like the stream
+        # lane's; before the low-trust and Local only filters below.
+        if bool(getattr(body, "auto_tools", True)):
+            from ..settings.records import saved_workflow_names, wants_workflow_names
+
+            def _post_records(text: str, armed_now: list) -> list:
+                names = saved_workflow_names(d.platform) if wants_workflow_names(text) else []
+                return post_record_tools(
+                    d, text, armed_now, workflow_names=names, **client_arming_kw(d.platform),
+                )
+
+            armed += [
+                t for t in await asyncio.to_thread(_post_records, _last_user_text(body.messages), list(armed))
+                if t not in armed
+            ]
         # LOW TRUST (v1.298.0): the kept-away tools leave the armed set
         # BEFORE it becomes specs and grants — a tool the model is not shown
         # is one it cannot be talked into. Recorded once for the receipt.
@@ -13086,6 +13193,9 @@ async def run_chat_turn(
     # v1.359.0 (G41): the apps app_connect answered for this turn (it ran) —
     # the message's Connect door leaves them out. MIRROR NOTE (lock-step).
     connect_offered: list[str] = []
+    # v1.506.0: the door step reads the turn's context (a page a lookup found,
+    # ``with_page_door``); a turn with nothing armed has none.
+    ctx: Any = None
     if armed:
         from ..tools.base import ToolContext
 
@@ -13333,7 +13443,7 @@ async def run_chat_turn(
             d, body, _routed, armed=armed, auto_armed=auto_armed, ask_armed=(),
             tool_specs=tool_specs, overrides=overrides, armed_grant=armed_grant,
             ctx=ctx, ceiling=_arm_ceiling,
-            low_trust=finish_low_trust(_trust_state), can_ask=False,
+            **trust_causes(_trust_state), can_ask=False,
         )
         if _routed_section:
             system += "\n\n" + _routed_section
@@ -13714,7 +13824,7 @@ async def run_chat_turn(
                     tally=_tally, armed=armed, auto_armed=auto_armed, ask_armed=(),
                     tool_specs=tool_specs, overrides=overrides, armed_grant=armed_grant,
                     ctx=ctx, ceiling=_arm_ceiling,
-                    low_trust=finish_low_trust(_trust_state), can_ask=False,
+                    **trust_causes(_trust_state), can_ask=False,
                 )
                 usage_in += _rf_in
                 usage_out += _rf_out
@@ -14411,7 +14521,7 @@ async def run_chat_turn(
                     auto_armed=auto_armed, ask_armed=(), tool_specs=tool_specs,
                     overrides=overrides, armed_grant=armed_grant, msgs=msgs,
                     ctx=ctx, ceiling=_arm_ceiling,
-                    low_trust=finish_low_trust(_trust_state), can_ask=False,
+                    **trust_causes(_trust_state), can_ask=False,
                 ):
                     _rounds = max(_rounds, _round_budget(armed, override=round_budget))
                     _office = _stays_in_chat(armed, force=stay_in_chat)
@@ -14774,7 +14884,7 @@ async def run_chat_turn(
     # (lock-step): routes/chat.py. v1.455.0: with the platform (a door this PC
     # no longer needs is left out).
     door_entries = with_page_door(
-        door_entries, body, harness=harness, escalate=escalate, platform=platform,
+        door_entries, body, harness=harness, escalate=escalate, platform=platform, ctx=ctx,
     )
     out: dict[str, Any] = {
         "reply": reply,

@@ -389,6 +389,8 @@ ASK_WORDS: dict[str, str] = {
     # v1.499.0 (vision plan leap 3 Phase 3): the owner's clients from chat
     # (settings.records_clients). The card's own sentence names the client.
     "client_answer": "say whether a name is one of your clients",
+    # v1.506.0 (north-star 6.2): answering one waiting suggestion asks first.
+    "suggestion_answer": "answer a suggestion on the Improvements page",
     "client_update": "change one of your clients",
     "client_preference_add": "keep a preference for one client",
     "client_preference_change": "change a preference kept for one client",
@@ -647,6 +649,11 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "persona_delete": ("removed or reset a chat persona", "persona removal"),
     # v1.499.0 (vision plan leap 3 Phase 3): the owner's clients from chat.
     # Twin: lib/runWords.ts AGENT_TOOLS.
+    # v1.506.0 (north-star 6.2, 6.3): the Improvements page and a backup,
+    # from chat. Twin: lib/runWords.ts AGENT_TOOLS.
+    "suggestion_list": ("listed the waiting suggestions", "suggestion list"),
+    "suggestion_answer": ("answered a suggestion", "suggestion answer"),
+    "backup_now": ("backed up Iron Jarvis", "backup"),
     "client_list": ("listed your clients", "client list"),
     "client_answer": ("noted whether a name is one of your clients", "client answer"),
     "client_update": ("changed one of your clients", "client change"),
@@ -845,6 +852,8 @@ _PRESENT: dict[str, str] = {
     "picked": "pick", "posted": "post", "queried": "query", "ran": "run",
     "read": "read", "saved": "save", "searched": "search", "started": "start",
     "suggested": "suggest", "updated": "update", "used": "use",
+    # v1.506.0: "answered a suggestion", "backed up Iron Jarvis".
+    "answered": "answer", "backed": "back",
     # v1.359.0 integrate: the verbs of the built-ins worded above.
     "acted": "act",
     "captured": "capture",
@@ -973,6 +982,7 @@ _ING: dict[str, str] = {
     "picked": "picking", "posted": "posting", "queried": "querying", "ran": "running",
     "read": "reading", "saved": "saving", "searched": "searching", "started": "starting",
     "suggested": "suggesting", "updated": "updating", "used": "using",
+    "answered": "answering", "backed": "backing",
     "acted": "acting", "captured": "capturing", "connected": "connecting",
     "created": "creating", "dropped": "dropping", "published": "publishing",
     "queued": "queuing", "removed": "removing", "restarted": "restarting",

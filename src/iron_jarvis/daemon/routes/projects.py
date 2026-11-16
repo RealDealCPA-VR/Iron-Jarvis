@@ -17,6 +17,7 @@ import json as _json
 import logging
 import re
 
+from ...core.failures import plain_failure
 from .. import app as _app
 from ..app import _agent_type, _session_view
 from ..schemas import (
@@ -558,7 +559,7 @@ def register(app: FastAPI, d) -> None:
             try:
                 data = base64.b64decode(b64, validate=False)
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+                raise HTTPException(status_code=400, detail=plain_failure("That file could not be read. Choose another file.", exc))
             if not data:
                 raise HTTPException(status_code=400, detail="empty file")
             # extract_text dispatches by suffix, so the decoded bytes need to live
@@ -587,7 +588,7 @@ def register(app: FastAPI, d) -> None:
                     extracted = (extract_text(target) or "").strip()
                 except Exception as exc:  # noqa: BLE001 — report the real reason, don't fabricate
                     raise HTTPException(
-                        status_code=400, detail=f"could not read {safe}: {exc}"
+                        status_code=400, detail=plain_failure(f"Could not read {safe}.", exc)
                     )
             finally:
                 shutil.rmtree(staging, ignore_errors=True)
@@ -609,7 +610,7 @@ def register(app: FastAPI, d) -> None:
                 d.platform, project_id, item_name, item_text, kind=kind
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That file could not be added to the project.", exc))
         return {"id": rec.id, "name": rec.name, "kind": rec.kind, "size": rec.size}
 
     @app.get("/projects/{project_id}/knowledge")
@@ -840,7 +841,7 @@ def register(app: FastAPI, d) -> None:
                     payload=payload,
                 )
             except ValueError as exc:
-                raise HTTPException(status_code=422, detail=str(exc))
+                raise HTTPException(status_code=422, detail=plain_failure("That task could not be queued.", exc))
             wake = getattr(getattr(d.platform, "assignment_dispatcher", None), "wake", None)
             if callable(wake):
                 try:
@@ -881,7 +882,7 @@ def register(app: FastAPI, d) -> None:
                 max_steps=body.max_steps,
             )
         except (PermissionError, RuntimeError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That task could not start.", exc))
         d._spawn_bg(session.id, d.orchestrator.run_session(session.id))
         view = _session_view(session, d)
         view["output"] = output
@@ -1035,7 +1036,7 @@ def register(app: FastAPI, d) -> None:
                 _world.validate_members, d.platform, body.get("members")
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That team could not be saved.", exc))
         saved = await _asyncio.to_thread(_world.save_team, d.platform, project_id, members)
         if saved is None:
             raise HTTPException(status_code=404, detail="no such project")

@@ -35,6 +35,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from ...core.failures import plain_failure
 from ...agents import model_team as T
 
 
@@ -234,7 +235,7 @@ def register(app: FastAPI, d) -> None:
             catalog = selectable_models(d)
         except Exception as exc:  # noqa: BLE001 — said, never an empty "no models"
             raise HTTPException(
-                status_code=503, detail=f"The model list could not be read: {type(exc).__name__}"
+                status_code=503, detail=plain_failure("The model list could not be read.", exc)
             ) from None
         return T.starter_preview(d.platform, catalog, paid=paid)
 

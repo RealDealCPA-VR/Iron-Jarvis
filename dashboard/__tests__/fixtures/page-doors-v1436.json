@@ -154,6 +154,55 @@
           "label": "Which local model to download"
         },
         "id": "local_model"
+      },
+      {
+        "door": {
+          "href": "/settings?section=connections-computers",
+          "label": "Pair your other computer in Settings"
+        },
+        "id": "pair_computer"
+      },
+      {
+        "door": {
+          "href": "/settings?section=system-maintenance",
+          "label": "Open Maintenance in Settings"
+        },
+        "id": "restore_backup"
+      },
+      {
+        "door": {
+          "href": "/updates",
+          "label": "Open Updates"
+        },
+        "id": "updates"
+      },
+      {
+        "door": {
+          "href": "/secrets",
+          "label": "Open Secrets"
+        },
+        "id": "remove_key"
+      },
+      {
+        "door": {
+          "href": "/memory",
+          "label": "Open Memory"
+        },
+        "id": "forget_folder"
+      },
+      {
+        "door": {
+          "href": "/projects",
+          "label": "Open Projects"
+        },
+        "id": "delete_project"
+      },
+      {
+        "door": {
+          "href": "/templates",
+          "label": "Open Templates"
+        },
+        "id": "templates"
       }
     ]
   }

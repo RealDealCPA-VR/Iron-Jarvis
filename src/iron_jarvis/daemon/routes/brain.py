@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from ...core.failures import plain_failure
 from ...brain import profiles as P
 from ...brain.tools import already_saved, pending_rows, write_note
 from ...brain.turn import forget_guides
@@ -155,7 +156,7 @@ def register(app: FastAPI, d: Any) -> None:
         try:
             verdict = health() if callable(health) else None
         except Exception as exc:  # noqa: BLE001
-            verdict = {"available": False, "detail": str(exc)[:200]}
+            verdict = {"available": False, "detail": plain_failure("it did not answer", exc)[:200]}
         if isinstance(verdict, dict) and verdict.get("available") is False:
             steps.append({"step": "reach", "ok": False,
                           "words": f"{label} could not be reached: {verdict.get('detail') or 'no answer'}."})
@@ -168,7 +169,7 @@ def register(app: FastAPI, d: Any) -> None:
             steps.append({"step": "search", "ok": True,
                           "words": f"Search works ({len(hits)} note(s) for “{active.name or 'notes'}”)."})
         except Exception as exc:  # noqa: BLE001
-            steps.append({"step": "search", "ok": False, "words": f"Search failed: {str(exc)[:200]}"})
+            steps.append({"step": "search", "ok": False, "words": plain_failure("Search failed: the memory base did not answer.", exc)[:200]})
         ref = str(active.profile.get("guide_ref") or "").strip()
         if ref:
             try:
@@ -182,7 +183,7 @@ def register(app: FastAPI, d: Any) -> None:
                     else f"The operating guide “{ref}” is empty.")})
             except Exception as exc:  # noqa: BLE001
                 steps.append({"step": "guide", "ok": False,
-                              "words": f"The operating guide “{ref}” could not be read: {str(exc)[:200]}"})
+                              "words": plain_failure(f"The operating guide “{ref}” could not be read.", exc)[:200]})
         else:
             steps.append({"step": "guide", "ok": None, "words": "No operating guide is set."})
         if active.profile.get("save_to") == "never":

@@ -15,6 +15,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Any
 
+from ...core.failures import plain_failure
 from .. import app as _app
 from ..schemas import RepairBody, RestoreBody, SettingsBody, _SETTINGS_KEYS
 from ...core.logging import get_logger
@@ -590,7 +591,7 @@ def register(app: FastAPI, d) -> None:
         try:
             change = config_writer(d).apply(values, actor="settings_page", device_id=device_id)
         except (SettingError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That setting could not be saved.", exc))
         keys = [s.key for s in _schema.SETTINGS if s.store == "device"]
         w = config_writer(d)
         return {
@@ -796,8 +797,9 @@ def register(app: FastAPI, d) -> None:
                 detail=(
                     "Nothing was restored. Iron Jarvis couldn't save a backup of your "
                     "current state first, so the restore could not be undone. "
-                    + ("The disk is full: free some space, then try again. " if full else "Try again in a moment. ")
-                    + f"({type(exc).__name__}: {exc})"
+                    + ("The disk is full: free some space, then try again." if full else "Try again in a moment.")
+                    # v1.506.0 (north-star 8.1): the raw text is in the log
+                    # line above, never on screen.
                 )[:600],
             ) from exc
         import time as _time
@@ -819,14 +821,15 @@ def register(app: FastAPI, d) -> None:
                 if attempt + 1 < _RESTORE_ATTEMPTS:
                     _time.sleep(_RESTORE_RETRY_S)
             except (ValueError, OSError) as exc:
-                raise HTTPException(status_code=400, detail=f"restore failed: {exc}") from exc
+                raise HTTPException(status_code=400, detail=plain_failure("Nothing was restored: that backup could not be read.", exc)) from exc
         else:
+            log.warning("restore refused: the database stayed held open: %s", held)
             raise HTTPException(
                 status_code=409,
                 detail=(
                     "Nothing was restored: the database is still held open by Iron Jarvis. "
                     "Wait a moment and try again. "
-                    f"(Your current state was saved as {safety.name} anyway.) ({held})"
+                    f"(Your current state was saved as {safety.name} anyway.)"
                 ),
             ) from held
         log.warning(

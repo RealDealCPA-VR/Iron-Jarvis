@@ -374,6 +374,31 @@ async def test_profile_reaches_every_prompt_seam(tmp_path, monkeypatch):
     assert any("Keep answers SHORT" in s for s in panel), "round-table preferences"
     assert not any(_MARK in s for s in panel), "panel must not get the WHO section"
 
+    # (f) v1.506.0 (north-star 6.9): the FINAL ANSWER of a planned run.
+    from types import SimpleNamespace
+
+    from iron_jarvis.agents.decompose import StepResult, assemble
+
+    seen["systems"].clear()
+    await assemble(
+        SimpleNamespace(p=platform),
+        SimpleNamespace(id="r", steps=0, input_tokens=0, output_tokens=0),
+        SimpleNamespace(id="s", task="t", provider=platform.config.default_provider,
+                        model=platform.config.default_model),
+        [StepResult(index=0, goal="g", ok=True, output="o", verified="model")],
+    )
+    assert any(_MARK in s for s in seen["systems"]), "planned-run final answer seam"
+
+    # (g) v1.506.0 (north-star 6.9): POST /skills/{name}/apply.
+    seen["systems"].clear()
+    assert client.post(
+        "/skills", json={"name": "seam-skill", "description": "d", "instructions": "do it"}
+    ).status_code == 200
+    assert client.post(
+        "/skills/seam-skill/apply", json={"request": "go"}
+    ).status_code == 200
+    assert any(_MARK in s for s in seen["systems"]), "apply-a-skill seam"
+
 
 def test_no_profile_means_no_added_prompt_text(tmp_path):
     """The regression that matters most for existing installs: with an empty

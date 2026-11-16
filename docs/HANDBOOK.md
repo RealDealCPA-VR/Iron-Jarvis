@@ -2042,6 +2042,52 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Ask for anything in chat (v1.506.0)
+
+The sixth part of the review fixes: things the app could do that chat could
+not reach, could not find, or could not point you to.
+
+- **Chat knows every page.** Ask where something is ("where do I see what my
+  agents did?", "how do I add another app?") and the reply names the page
+  and gives a button that opens it. Before, chat knew about the tools it
+  could run and a handful of set-up steps, and for anything else it was told
+  to say it found no such feature.
+- **Your suggestions, from chat.** "What suggestions are waiting for me?"
+  lists what is on the Improvements page. "Keep the one about my email tone"
+  or "decline that one" answers it; you confirm on a card first.
+- **Back up from chat.** "Back up Iron Jarvis now" makes a backup and says
+  where it was written. Restoring a backup is still done only by you, on the
+  Maintenance card; chat gives you the button to it.
+- **Buttons to the places chat cannot act for you:** pairing your other
+  computer, installing an update, restoring a backup, removing a saved key,
+  forgetting a folder, deleting a project, and templates.
+- **A thing you make in chat comes with a button to it.** After chat creates
+  an agent, a project, a rule, a goal, a watcher, a persona, a skill, a night
+  task or a model server, the reply has a button that opens it ("Meet your
+  new agent"). That button used to appear only for agent runs, never in chat.
+- **The quick window is chat.** The hotkey window (Ctrl+Shift+Space) used to
+  hand whatever you typed to a coding agent, which could not change a setting
+  or pause a schedule and still said "Done". It now opens a new chat with
+  your words sent, so it can do everything chat can, and you see the answer.
+- **From your phone.**
+  - Long conversations are no longer cut to the last 30 messages before
+    Iron Jarvis reads them; it now fits as much of the conversation as the
+    model can hold.
+  - Reading tools such as "who are my clients?" now work from the phone.
+  - When the phone cannot bring in a tool, the reply says the true reason
+    (the message came from outside the app), not that something was flagged.
+- **The browser sidebar says what belongs in the main window.** Asked for
+  something it cannot do there, it now tells you to ask in the Iron Jarvis
+  window.
+- **Your language and style reach two more places:** the final answer of a
+  job that was split into steps, and "apply a skill" on the Skills page.
+- **Plain words for errors.** About 140 error messages used to show raw
+  program text ("KeyError: 'path'", "[Errno 13] Permission denied"). They
+  now say what could not be done in plain words; the technical text goes to
+  the log.
+- **"Suggestions", one word.** The Autonomy page's "Proposals" list is now
+  "Suggestions", the same word the Improvements page uses.
+
 ## It keeps going, and asks once (v1.505.1)
 
 The fifth part of the review fixes: places where work could hang with nobody

@@ -252,6 +252,11 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   persona_delete: { did: "Removed or reset a chat persona", noun: "persona removal" },
   // v1.499.0 (leap 3 Phase 3): your clients from chat (agents/mission.py
   // _RUN_TOOL_WORDS is the twin).
+  // v1.506.0 (north-star 6.2, 6.3): the Improvements page and a backup,
+  // from chat (agents/mission.py _RUN_TOOL_WORDS is the twin).
+  suggestion_list: { did: "Listed the waiting suggestions", noun: "suggestion list" },
+  suggestion_answer: { did: "Answered a suggestion", noun: "suggestion answer" },
+  backup_now: { did: "Backed up Iron Jarvis", noun: "backup" },
   client_list: { did: "Listed your clients", noun: "client list" },
   client_answer: { did: "Noted whether a name is one of your clients", noun: "client answer" },
   client_update: { did: "Changed one of your clients", noun: "client change" },

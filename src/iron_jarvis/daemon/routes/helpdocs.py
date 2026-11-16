@@ -32,6 +32,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
+from ...core.failures import plain_failure
 from ... import changelog as _changelog
 
 # slug -> (title, filename, description). Fixed order — the Help page renders
@@ -114,7 +115,7 @@ def register(app: FastAPI, d) -> None:
             # Someone deleted the doc (or a build shipped without it): say so.
             raise HTTPException(
                 status_code=404,
-                detail=f"help doc {slug!r} is missing from this install ({filename}): {exc}",
+                detail=plain_failure(f"The help page {slug!r} is missing from this install ({filename}).", exc),
             )
         return {
             "slug": slug,

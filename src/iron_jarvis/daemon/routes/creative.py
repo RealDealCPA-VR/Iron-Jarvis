@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 
+from ...core.failures import plain_failure
 from ..schemas import (
     CreativeIngestBody,
     CreativeIntakeBody,
@@ -620,7 +621,7 @@ def register(app: FastAPI, d) -> None:
             try:
                 transcode_to_playable(src, dst)
             except RuntimeError as exc:
-                raise HTTPException(status_code=422, detail=str(exc))
+                raise HTTPException(status_code=422, detail=plain_failure("That file could not be converted.", exc))
             return {
                 "path": str(dst),
                 "filename": dst.name,
@@ -634,7 +635,7 @@ def register(app: FastAPI, d) -> None:
             transcode_to_playable(src, tmp)
             blob = tmp.read_bytes()
         except RuntimeError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
+            raise HTTPException(status_code=422, detail=plain_failure("That file could not be converted.", exc))
         finally:
             try:
                 tmp.unlink(missing_ok=True)
@@ -786,7 +787,7 @@ def register(app: FastAPI, d) -> None:
             )
             return {"url": url}
         except RuntimeError as exc:  # honest Pixio-side failure
-            raise HTTPException(status_code=424, detail=str(exc))
+            raise HTTPException(status_code=424, detail=plain_failure("Publishing did not finish. Try again.", exc))
 
     # --- Creative Studio: drive an AI CLI from the Creative page -----------
     # The user's real creative workflow is a CLI (Claude Code + the pixio
@@ -837,7 +838,7 @@ def register(app: FastAPI, d) -> None:
         try:
             session = d.platform.terminals.create(cwd=str(cwd), env=env)
         except RuntimeError as exc:  # session cap reached
-            raise HTTPException(status_code=429, detail=str(exc))
+            raise HTTPException(status_code=429, detail=plain_failure("Too many terminals are open. Close one and try again.", exc))
         # CRITICAL: the studio drives this terminal purely over HTTP — no Build
         # WebSocket is attached — so start the background reader NOW, before the
         # CLI prints anything. Without it the output is never consumed: the tail
@@ -1137,7 +1138,7 @@ def register(app: FastAPI, d) -> None:
                 base64.b64decode, body.content_b64, validate=False
             )
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That file could not be read. Choose another file.", exc))
         if not blob:
             raise HTTPException(status_code=400, detail="empty file")
         from .. import app as _app

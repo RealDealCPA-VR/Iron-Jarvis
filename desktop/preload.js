@@ -171,6 +171,10 @@ contextBridge.exposeInMainWorld("ironjarvis", {
       return () => besideExcelListeners.delete(cb);
     },
   },
+  // v1.506.0 (north-star 6.5): the hotkey quick window's words, taken ONCE by
+  // the chat page it opened (`/chat?new=1&quick=1`, dashboard/lib/chatAsk).
+  // Resolves the words, "" when none wait, null when the sender is refused.
+  quickAsk: { take: () => ipcRenderer.invoke("quick-ask:take") },
   // v1.456.0: the Text size setting (90-150 %), applied as the window's zoom.
   // `onChanged` hears a size the View menu's keys or Ctrl + wheel chose, so
   // the page saves it as the setting. Calls resolve null when refused.

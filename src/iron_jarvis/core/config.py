@@ -453,6 +453,16 @@ def default_permissions() -> dict[str, str]:
         # or forgetting a preference for one client each ask on a card that
         # names the client, and have an Undo.
         "client_list": "allow",
+        # v1.506.0 (north-star plan 6.2, inbox/tools): the Improvements page's
+        # suggestions from chat. Listing them reads only; answering one goes
+        # through that suggestion's own route and always shows a card (an
+        # accept may start a task, make a tool or rewrite notes).
+        "suggestion_list": "allow",
+        "suggestion_answer": "ask",
+        # v1.506.0 (north-star plan 6.3, settings/records_upkeep): a backup
+        # made now only adds an archive (the newest seven are kept, as for
+        # the daily one and the Back up now press).
+        "backup_now": "allow",
         "client_answer": "ask",
         "client_update": "ask",
         "client_preference_add": "ask",

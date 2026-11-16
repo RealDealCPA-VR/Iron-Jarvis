@@ -1232,6 +1232,30 @@ _ASSEMBLE_SYSTEM = (
 )
 
 
+def _assemble_system(platform) -> str:
+    """``_ASSEMBLE_SYSTEM`` plus THE IDENTITY SPINE (v1.506.0, north-star 6.9).
+
+    The final answer is the one text of a planned run the user reads, and it
+    was the one call sent without the profile and the voice: the steps ran
+    with them (``runtime.py`` adds both), then "answer in Spanish" was lost
+    exactly at the summary. Same order and text as the runtime's seam, after
+    the honesty instruction so it still leads. Never raises; with no profile
+    and no persona the prompt is ``_ASSEMBLE_SYSTEM`` byte for byte.
+    """
+    system = _ASSEMBLE_SYSTEM
+    try:
+        from ..personas.voice import voice_section
+        from ..profile import profile_block
+
+        system += voice_section(platform)
+        block = profile_block(platform)
+        if block:
+            system += "\n\n" + block
+    except Exception:  # noqa: BLE001 — identity must never break the answer
+        pass
+    return system
+
+
 async def assemble(
     runtime,
     run,
@@ -1267,7 +1291,7 @@ async def assemble(
             runtime,
             run,
             session,
-            system=_ASSEMBLE_SYSTEM,
+            system=_assemble_system(runtime.p),
             messages=[LLMMessage(role="user", content="\n".join(lines))],
             task_class="assemble",
             llm=llm,

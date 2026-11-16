@@ -60,6 +60,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
+from ...core.failures import plain_failure
 from ...core.logging import get_logger
 from ...goals.models import GOAL_STATES, GoalContractRecord, grants_violation
 from ...goals.store import goal_view
@@ -498,7 +499,7 @@ def register(app: FastAPI, d) -> None:
                     except ValueError as exc:
                         # The floor was checked above; anything else here is
                         # a malformed request, said verbatim.
-                        raise HTTPException(status_code=400, detail=str(exc))
+                        raise HTTPException(status_code=400, detail=plain_failure("That goal's permissions could not be changed.", exc))
         for entry in exact:
             tool = str(entry.get("tool") or "").strip()
             h = str(entry.get("args_hash") or "").strip().lower()
@@ -524,7 +525,7 @@ def register(app: FastAPI, d) -> None:
                     )
                 )
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
+                raise HTTPException(status_code=400, detail=plain_failure("That goal's permissions could not be changed.", exc))
         with session_scope(d.platform.engine) as db:
             row = db.get(GoalContractRecord, goal_id)
             if row is None:
@@ -543,7 +544,7 @@ def register(app: FastAPI, d) -> None:
         except ValueError as exc:
             # The store's refusal sentence VERBATIM — it already says why and
             # what to do instead (deny floor, budget rules, verifier rules).
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That goal could not be saved.", exc))
         return {"goal": _payload(record)}
 
     @app.post("/goals/{goal_id}/run")
@@ -560,7 +561,7 @@ def register(app: FastAPI, d) -> None:
         try:
             record = _engine().store.transition(goal_id, "paused")
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=plain_failure("That goal could not be paused.", exc))
         return {"goal": _payload(record)}
 
     @app.post("/goals/{goal_id}/resume")
@@ -573,7 +574,7 @@ def register(app: FastAPI, d) -> None:
             # v1.435.0: the engine's door, which chat's goal_update runs too.
             record = _engine().resume_goal(goal_id)
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=plain_failure("That goal could not be resumed.", exc))
         return {"goal": _payload(record)}
 
     @app.post("/goals/{goal_id}/stop")
@@ -584,7 +585,7 @@ def register(app: FastAPI, d) -> None:
             # ``goal.stopped`` so the dashboard surfaces refresh.
             record = await _engine().stop_goal(goal_id)
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=plain_failure("That goal could not be stopped.", exc))
         return {"goal": _payload(record)}
 
     @app.post("/goals/{goal_id}/reopen")
@@ -593,7 +594,7 @@ def register(app: FastAPI, d) -> None:
         try:
             record = _engine().store.reopen(goal_id)
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=plain_failure("That goal could not be reopened.", exc))
         return {"goal": _payload(record)}
 
     @app.delete("/goals/{goal_id}")

@@ -274,6 +274,23 @@ def browser_tool_ceiling(platform: Any) -> frozenset[str]:
     )
 
 
+#: v1.506.0 (north-star plan 6.10): the ONE fixed line a ceiling turn's
+#: system prompt carries (``routes/chat.stream_chat_turn`` joins it before the
+#: history planner, only when ``tool_ceiling`` is set). The ceiling cuts the
+#: turn to the browser's tools, and the model was never told: asked for a
+#: schedule or a file in the sidebar it had no tool and no sentence, and said
+#: it could not. The two exits :meth:`PanelConversation._empty_answer` words
+#: cover only a turn that ended without an answer.
+CEILING_LINE = (
+    "# Where you are\n"
+    "You are answering in the Iron Jarvis sidebar in the user's own browser. Here you can read the "
+    "user's browser tabs and pages and, when the browser tools in your list allow it, act on a page. "
+    "Everything else Iron Jarvis does (files on this PC, documents, settings, schedules, agents, apps, "
+    "memory, coding) is done in the Iron Jarvis window, not in this sidebar: when the user asks for "
+    "such a thing, say so plainly and tell them to ask for it in the Iron Jarvis window."
+)
+
+
 #: How much of a typed text or a URL the panel repeats back (v1.262.0). The
 #: args are the lane's redacted args already; this is about a card that fits.
 _DESCRIBE_CHARS = 60

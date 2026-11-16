@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from sqlmodel import select
 from typing import Any
 
+from ...core.failures import plain_failure
 from ..schemas import (
     TemplateCreateBody,
     TemplateUpdateBody,
@@ -158,7 +159,7 @@ def register(app: FastAPI, d) -> None:
                 engine.create_record, wf, started_by=STARTED_BY_PERSON, **run_kwargs
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That workflow could not start.", exc))
         _spawn_run_or_interrupt(rec.id, engine.run_record(rec, wf, **run_kwargs))
         return rec.model_dump()
 
@@ -361,7 +362,7 @@ def register(app: FastAPI, d) -> None:
                     except ValueError as exc:
                         raise HTTPException(
                             status_code=422,
-                            detail=f"this run cannot be reconstructed: {exc}",
+                            detail=plain_failure("This run cannot be picked up again.", exc),
                         )
                 claimed = db.exec(
                     _sql_update(WorkflowRunRecord)
@@ -595,7 +596,7 @@ def register(app: FastAPI, d) -> None:
         try:
             rec = store.patch(name, new_name=new_name, description=body.description)
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=plain_failure("That workflow could not be changed.", exc))
         if rec is None:
             raise HTTPException(status_code=404, detail="no such workflow")
         out = rec.model_dump()

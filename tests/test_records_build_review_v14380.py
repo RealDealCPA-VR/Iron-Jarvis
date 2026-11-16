@@ -381,6 +381,13 @@ def test_the_fresh_matchers_stay_linear():
         import time
         from iron_jarvis.settings import records_build as RB
         from iron_jarvis.daemon.change_claims import claimed_change_note
+        # Warm up first (v1.506.0): the first call in a fresh interpreter pays
+        # every lazy import (about 0.8 s on a quiet PC, far more on a busy CI
+        # runner), and that was being timed as if it were the matcher. This
+        # test passed only on CI's retry once. What it pins is growth with
+        # the input, so the clock starts after the imports.
+        RB.build_tools_for("cancel the task")
+        claimed_change_note("I queued the task", [], [])
         for text in ("cancel the " + "x " * 3000 + "task", "Claude reviews " + "a " * 3000,
                      "queue " + "a.b" * 2000 + " for tonight", "stop the " + "night " * 2000 + "task"):
             t0 = time.perf_counter()

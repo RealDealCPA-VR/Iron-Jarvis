@@ -29,6 +29,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Response
 
+from ...core.failures import plain_failure
 from ..schemas import AssignmentCreate
 
 log = logging.getLogger("iron_jarvis.assignments")
@@ -160,7 +161,7 @@ async def _transition(store, assignment_id: str, verb: str):
     try:
         record = await asyncio.to_thread(getattr(store, verb), assignment_id)
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=plain_failure("That queued task could not be changed.", exc))
     if record is None:
         current = store.get(assignment_id) or before
         raise _refuse(verb, assignment_id, str(getattr(current, "status", "") or ""))
@@ -206,7 +207,7 @@ def register(app: FastAPI, d) -> None:
                 idempotency_key=body.idempotency_key or "",
             )
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
+            raise HTTPException(status_code=422, detail=plain_failure("That queued task could not be added.", exc))
         if not created:
             response.status_code = 200
         await _wake(d)

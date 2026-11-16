@@ -30,6 +30,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from ...core.failures import plain_failure
 
 #: Priced against this when ``config.fleet_savings_baseline`` is unset. An
 #: estimate is only honest when its BASIS is named — every /fleet/usage
@@ -402,7 +403,7 @@ async def add_fleet_node(d: Any, body: "FleetNodeBody") -> dict[str, Any]:
     try:
         node = d.fleet.add(node) or node
     except ValueError as exc:  # invalid/duplicate id — surface the reason
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=plain_failure("That model server could not be added.", exc))
     # A routable node becomes a provider NOW, not on the next boot —
     # register_providers is idempotent over the whole routable set.
     if node.routable:
@@ -785,7 +786,7 @@ def register(app: FastAPI, d) -> None:
         except ChildNodeError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That model server could not be changed.", exc))
         # Keep the provider registry in step LIVE: a node flipped routable gets
         # its factory now; one flipped off is unregistered so the router can't
         # pick it again this session.

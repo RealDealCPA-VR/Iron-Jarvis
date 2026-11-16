@@ -19,6 +19,7 @@ from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
+from ...core.failures import plain_failure
 from ..app import _session_view
 from ..schemas import (
     AGENT_APPROVAL_MODES,
@@ -1540,12 +1541,13 @@ def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
             secrets.set(sname, value, kind="api_key", description=f"MCP pack {name}: {key}")
     except Exception as exc:  # noqa: BLE001 — names only, never the value
         refused = sorted(key for _s, _v, key in writes)
+        # v1.506.0 (north-star 8.1): a fixed sentence, NOT plain_failure — a
+        # vault failure's own text could carry what it was given, so it is
+        # never kept on screen; the class name goes to the log.
+        log.warning("the vault refused an extension's keys (%s)", type(exc).__name__)
         raise HTTPException(
             status_code=503,
-            detail=(
-                f"the vault could not store {', '.join(refused)} "
-                f"({type(exc).__name__}); the extension was not changed"
-            ),
+            detail=f"The vault could not keep {', '.join(refused)}, so the extension was not changed.",
         )
     servers[idx] = new
     d.platform.config.mcp_servers = servers
@@ -1593,7 +1595,7 @@ def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
             d.platform.registry.register(tool, mcp=True)
             loaded += 1
     except Exception as exc:  # noqa: BLE001 — the row is saved; say why it did not start
-        errors.setdefault(name, {"reason": f"{type(exc).__name__}: {exc}"})
+        errors.setdefault(name, {"reason": plain_failure("The extension's server did not start.", exc)})
         loaded = 0
     notes: list[str] = []
     if not loaded:
@@ -2062,13 +2064,24 @@ def register(app: FastAPI, d) -> None:
         try:
             adapter = d.platform.providers.get(provider, model)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That model could not be used. Choose another model in Settings.", exc))
         from ...providers.adapters.base import LLMMessage
 
         system = (
             "Fulfil the user's request by FOLLOWING this skill playbook exactly.\n\n"
             f"# Skill: {sk.name}\n{sk.instructions[:8000]}"
         )
+        # THE IDENTITY SPINE (v1.506.0, north-star 6.9): the reply comes
+        # straight back to the user, so it carries the voice and the profile
+        # like every other seam (agents/runtime.py, same order and text). The
+        # playbook leads; both are bounded and never raise.
+        from ...personas.voice import voice_section
+        from ...profile import profile_block
+
+        system += voice_section(d.platform)
+        _profile = profile_block(d.platform)
+        if _profile:
+            system += "\n\n" + _profile
         resp, used_provider, used_model = await d._one_shot_complete(
             provider,
             adapter,
@@ -2149,7 +2162,7 @@ def register(app: FastAPI, d) -> None:
                 body.instructions,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That skill could not be saved.", exc))
         # Re-scan so the new skill (and any external ones) are live without a restart.
         d._rescan_skills()
         sk = d.platform.skills.get(body.name.strip())
@@ -2600,7 +2613,7 @@ def register(app: FastAPI, d) -> None:
         try:
             threads.add_participants(rec.id, clean_participants(resolved))
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That round-table could not start.", exc))
         # LOCAL ONLY (v1.332.0): the round runs under the chat's scope — the
         # body's ``local_only``, or the saved chat (``thread_id``, else
         # ``chat_thread_id``) says so. A seat whose model is off this network
@@ -2652,7 +2665,7 @@ def register(app: FastAPI, d) -> None:
         except KeyError:
             raise HTTPException(status_code=404, detail="panel thread vanished")
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That round-table could not start.", exc))
         finally:
             if round_id and _PANEL_ROUNDS.get(round_id) is round_task:
                 _PANEL_ROUNDS.pop(round_id, None)
@@ -3783,7 +3796,7 @@ def register(app: FastAPI, d) -> None:
         try:
             _open_folder(str(folder))
         except OSError as exc:
-            raise HTTPException(status_code=500, detail=f"could not open the folder: {exc}") from exc
+            raise HTTPException(status_code=500, detail=plain_failure("That folder could not be opened.", exc)) from exc
         return {"opened": str(folder)}
 
     # --- The inbox (v1.296.0) -----------------------------------------------
@@ -3887,7 +3900,7 @@ def register(app: FastAPI, d) -> None:
             try:
                 data = base64.b64decode(image_b64, validate=False)
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+                raise HTTPException(status_code=400, detail=plain_failure("That picture could not be read. Choose another file.", exc))
             if len(data) > _AVATAR_MAX_BYTES:
                 raise HTTPException(
                     status_code=413, detail="portrait too large; limit is 2 MB"
@@ -3914,7 +3927,7 @@ def register(app: FastAPI, d) -> None:
             except RuntimeError as exc:
                 # Configured but failing is a dependency failure, not a
                 # conflict — mirrors /creative/publish's 424.
-                raise HTTPException(status_code=424, detail=str(exc))
+                raise HTTPException(status_code=424, detail=plain_failure("The picture could not be made. Try again, or choose a picture instead.", exc))
             source = "generated"
 
         if _sniff_image(data) is None:
@@ -3930,7 +3943,7 @@ def register(app: FastAPI, d) -> None:
             png = _normalize_avatar_png(data)
         except Exception as exc:  # noqa: BLE001 — decode failure, honest 415
             raise HTTPException(
-                status_code=415, detail=f"could not decode the image: {exc}"
+                status_code=415, detail=plain_failure("That picture could not be read. Choose another file.", exc)
             )
         p = _avatar_path(name)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -4212,7 +4225,7 @@ def register(app: FastAPI, d) -> None:
                 name, body.description, body.parameters, body.command, body.timeout_seconds
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That tool could not be saved.", exc))
         d.platform.registry.register(d.platform.tools_registry.build_tool(rec), custom=True)
         return {"name": rec.name}
 
@@ -4230,7 +4243,7 @@ def register(app: FastAPI, d) -> None:
         try:
             adapter = d.platform.providers.get(provider, model)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That model could not be used. Choose another model in Settings.", exc))
 
         system = (
             "You design COMMAND-LINE tools for an agent platform running on "
@@ -4537,7 +4550,7 @@ def register(app: FastAPI, d) -> None:
                 "ok": False,
                 "count": 0,
                 "tools": [],
-                "error": f"{type(exc).__name__}: {exc}",
+                "error": plain_failure("The extension could not be reached to list its tools.", exc),
                 "reason": "",
                 "fix": "",
                 "stderr_tail": "",
@@ -4703,7 +4716,7 @@ def register(app: FastAPI, d) -> None:
         try:
             adapter = d.platform.providers.get(provider, model)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That model could not be used. Choose another model in Settings.", exc))
         system = (
             "You configure MCP (Model Context Protocol) stdio servers. Respond "
             "with ONLY a JSON object: {\"name\": \"kebab-name\", \"command\": "

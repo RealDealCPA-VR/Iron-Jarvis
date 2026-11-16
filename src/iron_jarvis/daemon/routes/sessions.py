@@ -19,6 +19,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from typing import Any
 
+from ...core.failures import plain_failure
 from ..app import _agent_type, _session_view
 from ..schemas import (
     ContinueBody,
@@ -492,7 +493,7 @@ def register(app: FastAPI, d) -> None:
         except LocalOnlyRefused:
             raise  # v1.332.0: the app's 409 local-only shape, not a 400
         except (PermissionError, RuntimeError) as exc:  # self-dev gating
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That task could not start.", exc))
         if body.wait:
             session = await d.orchestrator.run_session(session.id)
         else:
@@ -690,7 +691,7 @@ def register(app: FastAPI, d) -> None:
             except KeyError:
                 raise HTTPException(status_code=404, detail="objective not found")
             except (PermissionError, RuntimeError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
+                raise HTTPException(status_code=400, detail=plain_failure("That objective could not be tried again.", exc))
             if reuse and getattr(d.orchestrator, "_git_sessions", {}).get(session.id) is None:
                 try:
                     await asyncio.to_thread(_move_into, d, session.id, reuse)
@@ -702,7 +703,7 @@ def register(app: FastAPI, d) -> None:
                         pass
                     raise HTTPException(
                         status_code=500,
-                        detail=f"could not reuse the objective's folder: {exc}",
+                        detail=plain_failure("The objective's folder could not be reused.", exc),
                     )
         try:
             await asyncio.to_thread(store.reset_failed, board_id)
@@ -712,7 +713,7 @@ def register(app: FastAPI, d) -> None:
             except Exception:  # noqa: BLE001
                 pass
             raise HTTPException(
-                status_code=500, detail=f"could not re-open the failed items: {exc}"
+                status_code=500, detail=plain_failure("The failed items could not be opened again.", exc)
             )
         items = "item" if failed == 1 else "items"
         # A retry of a retry names the ORIGINAL objective once (v1.309.0
@@ -735,7 +736,7 @@ def register(app: FastAPI, d) -> None:
         except KeyError:
             raise HTTPException(status_code=404, detail="session not found")
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=plain_failure("That run could not be stopped.", exc))
         return _session_row(d, session)
 
     @app.post("/sessions/{session_id}/rerun")
@@ -745,7 +746,7 @@ def register(app: FastAPI, d) -> None:
         except KeyError:
             raise HTTPException(status_code=404, detail="session not found")
         except (PermissionError, RuntimeError) as exc:  # self-dev gating on a maintainer rerun
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That run could not start again.", exc))
         if wait:
             session = await d.orchestrator.run_session(session.id)
         else:
@@ -779,7 +780,7 @@ def register(app: FastAPI, d) -> None:
         except KeyError:
             raise HTTPException(status_code=404, detail="session not found")
         except ValueError as exc:  # workspace busy — a continuation is running
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=plain_failure("That run could not be continued.", exc))
         # v1.309.0 (contract 5): a MISSION's continuation is linked to it
         # BEFORE it runs, so the old mission screen can say "Continued in →
         # open", and the user's own follow-up becomes its display objective.
@@ -874,13 +875,13 @@ def register(app: FastAPI, d) -> None:
         except KeyError:
             raise HTTPException(status_code=404, detail="session not found")
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=plain_failure("That run could not be removed.", exc))
         except OSError as exc:
             # v1.504.0: the run's record could not be written to the trash, so
             # nothing was removed.
             raise HTTPException(
                 status_code=409,
-                detail=f"Nothing was removed: the run's record could not be kept in the trash ({exc.strerror or exc}).",
+                detail=plain_failure("Nothing was removed: the run's record could not be kept in the trash.", exc),
             )
         return {"deleted": session_id, "trash": out.get("trash", ""), "files": out.get("files", ""),
                 "branch": out.get("branch", "")}

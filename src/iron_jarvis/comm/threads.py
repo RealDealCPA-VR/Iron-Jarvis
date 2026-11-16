@@ -327,10 +327,18 @@ class CommThreadStore:
             log.warning("chat.thread_updated publish failed", exc_info=True)
 
     # -- reads (never raise) -------------------------------------------------
-    def history_body(self, thread_id: str, limit: int = 30) -> list[dict[str, str]]:
-        """The thread tail as ChatBody-shaped ``[{role, content}]`` — last
-        ``limit`` messages, roles coerced to user/assistant (a provider round
-        rejects anything else). ``[]`` on any failure."""
+    def history_body(self, thread_id: str) -> list[dict[str, str]]:
+        """The WHOLE stored thread as ChatBody-shaped ``[{role, content}]``,
+        roles coerced to user/assistant (a provider round rejects anything
+        else). ``[]`` on any failure.
+
+        v1.506.0 (north-star 6.8): no ``limit`` any more. Both phone lanes
+        asked for the last 30 messages, a fixed slice taken BEFORE the chat
+        turn's planner (``context.budget.plan_history``) could fit the
+        conversation to the answering model's window — the forbidden
+        ``messages[-N:]``. The thread is already bounded by its own storage
+        cap (``_MAX_MESSAGES``, the 200 that ``append`` keeps), and the
+        planner decides what fits and says what it left out."""
         try:
             with session_scope(self.engine) as db:
                 r = db.get(ChatThreadRecord, thread_id)
@@ -339,11 +347,8 @@ class CommThreadStore:
                 msgs = json.loads(r.messages_json or "[]")
             if not isinstance(msgs, list):
                 return []
-            limit = int(limit)
-            if limit <= 0:  # -0 slices to the WHOLE list — guard explicitly
-                return []
             out: list[dict[str, str]] = []
-            for m in msgs[-limit:]:
+            for m in msgs:
                 if not isinstance(m, dict):
                     continue
                 role = "user" if m.get("role") == "user" else "assistant"

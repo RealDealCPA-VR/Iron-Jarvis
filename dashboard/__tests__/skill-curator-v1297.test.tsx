@@ -168,11 +168,12 @@ describe("SkillCurator helpers", () => {
 /* ---------------------------------------------------------- the page --- */
 
 describe("skills page — badges, pin, archive", () => {
-  it("shows Agent-made and From a proposal, nothing extra for the user's own", () => {
+  it("shows Agent-made and From a suggestion, nothing extra for the user's own", () => {
     hooks.api["/skills/curator"] = curatorView();
     render(<SkillsPage />);
     expect(screen.getByText("Agent-made")).toBeInTheDocument();
-    expect(screen.getByText("From a proposal")).toBeInTheDocument();
+    // v1.506.0 (north-star 8.4): "proposal" is retired on screen.
+    expect(screen.getByText("From a suggestion")).toBeInTheDocument();
     expect(screen.getAllByTestId("skill-provenance")).toHaveLength(2);
   });
 

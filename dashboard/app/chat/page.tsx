@@ -550,6 +550,7 @@ import { phaseLabel } from "@/lib/stepWords";
 import { OFFLINE_WORDS } from "@/lib/offlineWords";
 import { PACK_OFF_IN_CHAT_LINE, PACK_OFF_WORD } from "@/lib/extensionWords";
 import { useDaemonEpoch } from "@/lib/daemonEpoch";
+import { QUICK_ASK_PARAM, takeQuickAsk } from "@/lib/chatAsk";
 import { ModuleTitle } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 
@@ -5419,6 +5420,17 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         composer.setText(ask);
         inputRef.current?.focus();
       }
+      // v1.506.0 (north-star 6.5, D11): the desktop's hotkey quick window
+      // lands here as `?new=1&quick=1`. Its words wait in the desktop's main
+      // process, never in the URL; taken once and sent through the latest
+      // `send` (sendRef), exactly as the composer's Enter sends them — the
+      // Enter the user pressed in the quick window. lib/chatAsk says why.
+      const quick = params.get(QUICK_ASK_PARAM) === "1";
+      if (quick) {
+        void takeQuickAsk(params.toString()).then((words) => {
+          if (words) sendRef.current(words);
+        });
+      }
       if (skill) {
         // Arm, don't validate: an unknown name just yields a chip the user can
         // clear, which beats silently dropping their pick. markSetupChanged so
@@ -5428,7 +5440,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         inputRef.current?.focus();
       }
       if (thread) void openThread(thread);
-      else if (!ask && !skill && !wantPersona && !fresh && !about) {
+      else if (!ask && !skill && !wantPersona && !fresh && !about && !quick) {
         // v1.311.0: no landing params — reopen the conversation this window
         // had open (a ?thread= link wins and becomes the remembered one; an
         // ask/skill/persona landing is the start of something new). Only
@@ -5436,7 +5448,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         const open = readOpenThread();
         if (open && open.project === wantedProjectId()) void openThread(open.id, { restore: true });
       }
-      if (ask || skill || thread || wantPersona || fresh || openModels || about || archived) {
+      if (ask || skill || thread || wantPersona || fresh || openModels || about || archived || quick) {
         // Strip the params so a refresh doesn't resurrect stale state over
         // whatever the user has done since.
         const url = new URL(window.location.href);
@@ -5448,6 +5460,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         url.searchParams.delete("model");
         url.searchParams.delete("about");
         url.searchParams.delete("archived");
+        url.searchParams.delete(QUICK_ASK_PARAM);
         window.history.replaceState(null, "", url.toString());
       }
     } catch {

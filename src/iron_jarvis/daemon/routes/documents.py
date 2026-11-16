@@ -13,6 +13,7 @@ from sqlmodel import select
 from pathlib import Path
 from typing import Any
 
+from ...core.failures import plain_failure
 from .. import app as _app
 from ..schemas import (
     BatchFolderBody,
@@ -231,7 +232,7 @@ def register(app: FastAPI, d) -> None:
         try:
             data = base64.b64decode(body.content_b64, validate=False)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That file could not be read. Choose another file.", exc))
         target = _unique_upload(uploads, name, data)
         return {"path": str(target), "name": target.name, "bytes": len(data)}
 
@@ -305,7 +306,7 @@ def register(app: FastAPI, d) -> None:
         except OSError as exc:
             raise HTTPException(
                 status_code=409,
-                detail=f"could not make a working folder under {root}: {exc}",
+                detail=plain_failure(f"A working folder could not be made in {root}.", exc),
             )
         problem = root_problem(made["path"])
         if problem:
@@ -399,7 +400,7 @@ def register(app: FastAPI, d) -> None:
         try:
             files, skipped = sweep(folder, cap, include_images=ocr_on)
         except OSError as exc:
-            raise HTTPException(status_code=409, detail=f"could not read {folder}: {exc}")
+            raise HTTPException(status_code=409, detail=plain_failure(f"That folder could not be read: {folder}", exc))
         return {
             "folder": str(folder),
             "files": [{"name": p.name, "path": str(p)} for p in files],
@@ -548,7 +549,7 @@ def register(app: FastAPI, d) -> None:
                 wb.close()
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(
-                    status_code=422, detail=f"could not read workbook: {exc}"
+                    status_code=422, detail=plain_failure("That workbook could not be read.", exc)
                 )
             out = {**base, "kind": "sheet", "sheets": names, "sheet": title,
                    "rows": rows, "truncated": truncated}
@@ -589,7 +590,7 @@ def register(app: FastAPI, d) -> None:
                 # process-wide csv.field_size_limit (~128KB) — a realistic CSV
                 # export with a blob cell. Do NOT raise the limit: it is
                 # process-global state shared with every other csv consumer.
-                raise HTTPException(status_code=422, detail=f"could not read: {exc}")
+                raise HTTPException(status_code=422, detail=plain_failure("That file could not be read.", exc))
             return {**base, "kind": "sheet", "sheets": ["CSV"], "sheet": "CSV",
                     "rows": rows, "truncated": truncated,
                     "total_rows": total_rows, "total_cols": total_cols}
@@ -624,7 +625,7 @@ def register(app: FastAPI, d) -> None:
         try:
             text = extract_text(p)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=422, detail=f"could not read: {exc}")
+            raise HTTPException(status_code=422, detail=plain_failure("That file could not be read.", exc))
         kind = "markdown" if suffix in (".md", ".markdown") else "text"
         return {**base, "kind": kind, "content": text[:20_000],
                 "truncated": len(text) > 20_000, "total_chars": len(text)}
@@ -673,7 +674,7 @@ def register(app: FastAPI, d) -> None:
             try:
                 _open_native(str(folder))
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=422, detail=f"could not open: {exc}")
+                raise HTTPException(status_code=422, detail=plain_failure("That folder could not be opened.", exc))
             return {"ok": True, "app": _folder_app(), "folder": True}
         p = _preview_path(body.path)
         # v1.502.0 (north-star 2.5): a file opens only when its type is a
@@ -684,7 +685,7 @@ def register(app: FastAPI, d) -> None:
         try:
             _open_native(str(p))
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=422, detail=f"could not open: {exc}")
+            raise HTTPException(status_code=422, detail=plain_failure("That file could not be opened.", exc))
         return {"ok": True, "app": _APP_LABEL.get(p.suffix.lower(), "the default app")}
 
     @app.get("/excel/live/now")
@@ -766,7 +767,7 @@ def register(app: FastAPI, d) -> None:
 
                 await asyncio.to_thread(_link_schedule)
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=f"bad schedule: {exc}")
+                raise HTTPException(status_code=400, detail=plain_failure("That schedule is not one Iron Jarvis can read.", exc))
         # First generation now, so the doc exists immediately.
         result = await d._regenerate_livedoc(rec.id)
         return {**result, "name": name, "schedule": bool(body.cron or body.interval_seconds)}
@@ -810,7 +811,7 @@ def register(app: FastAPI, d) -> None:
         try:
             adapter = d.platform.providers.get(provider, model)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That model could not be used. Choose another model in Settings.", exc))
         system = (
             "You polish document drafts. Respond with ONLY JSON: "
             '{"filename": "improved-name.ext (keep/choose a sensible extension)", '
@@ -855,7 +856,7 @@ def register(app: FastAPI, d) -> None:
         try:
             text = await _asyncio.to_thread(extract_text, path)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"cannot read: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That file could not be read.", exc))
         # SCANNED-PDF fallback: an image-only PDF (death certificate, signed
         # form) has no text layer — recover it via vision OCR instead of
         # returning empty silence. The note always says how the text came to
@@ -868,7 +869,9 @@ def register(app: FastAPI, d) -> None:
                 if ocr_text:
                     text = ocr_text
             except Exception as exc:  # noqa: BLE001 — OCR failure ≠ read failure
-                note = f"scanned PDF — OCR fallback failed ({type(exc).__name__}: {exc})"
+                note = plain_failure(
+                    "This looks like a scanned PDF, and its text could not be read from the page images.", exc
+                )
         return {"path": path, "text": text[:20000], "note": note}
 
     #: Suffixes "Compare with…" can put side by side (C-07) — what the
@@ -1007,7 +1010,7 @@ def register(app: FastAPI, d) -> None:
         try:
             shutil.copy2(src, target)
         except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"could not save: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("The copy could not be saved.", exc))
         return {"path": str(target), "name": target.name, "folder": str(dest_dir)}
 
     # ---------------------------------------------------------- PII redaction ---
@@ -1057,7 +1060,7 @@ def register(app: FastAPI, d) -> None:
                 categories=set(cats) or None,
             )
         except Exception as exc:  # noqa: BLE001 — a bad file must not 500
-            raise HTTPException(status_code=400, detail=f"cannot scan: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That file could not be checked for what to redact.", exc))
         # The default destination is offered UP FRONT so the user can see and
         # change where the output will land before approving anything.
         default_out = src.with_name(f"{src.stem}.redacted{src.suffix}")
@@ -1114,7 +1117,7 @@ def register(app: FastAPI, d) -> None:
                 redact_file, src, target, style=style, only_terms=terms
             )
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"cannot redact: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That file could not be redacted. The original is unchanged.", exc))
         return {
             "path": str(target),
             "name": target.name,

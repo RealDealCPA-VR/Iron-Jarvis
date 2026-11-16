@@ -265,7 +265,8 @@ async def test_a_lane_that_raises_leaves_an_error_line_not_a_bare_question(app, 
     await until(lambda: lg.status != "running")
     msgs = await until(lambda: [m for m in messages_of(app, sid) if m.get("role") == "assistant"])
     assert msgs, "the session ended on the question with no reply line"
-    assert "internal error (RuntimeError)" in msgs[-1].get("error", ""), msgs[-1]
+    # v1.506.0 (north-star 8.1): plain words, never the exception's class.
+    assert msgs[-1].get("error", "") == "The reply stopped on an internal error.", msgs[-1]
     assert msgs[-1]["turnId"] == "rv-boom"
 
 

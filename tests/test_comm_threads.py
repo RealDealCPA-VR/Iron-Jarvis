@@ -265,7 +265,7 @@ def test_append_survives_broken_event_bus(engine):
 # --------------------------------------------------------------------------- #
 # history_body
 # --------------------------------------------------------------------------- #
-def test_history_body_shape_coercion_and_limit(store):
+def test_history_body_shape_coercion_and_whole_thread(store):
     t = store.resolve("telegram", "1")
     store.append(t.id, "user", "q1")
     store.append(t.id, "assistant", "a1")
@@ -278,8 +278,11 @@ def test_history_body_shape_coercion_and_limit(store):
         {"role": "assistant", "content": "internal note"},
         {"role": "user", "content": "q2"},
     ]
-    assert store.history_body(t.id, limit=2) == full[-2:]
-    assert store.history_body(t.id, limit=0) == []  # -0 must not mean "all"
+    # v1.506.0 (north-star 6.8): no fixed slice; the chat turn's planner fits
+    # the whole stored thread to the model's window.
+    import inspect
+
+    assert "limit" not in inspect.signature(store.history_body).parameters
 
 
 def test_history_body_never_raises(store):

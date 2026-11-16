@@ -11,6 +11,7 @@ import asyncio
 from fastapi import FastAPI, HTTPException
 from typing import Any
 
+from ...core.failures import plain_failure
 from ..schemas import (
     GraphNodeDeleteBody,
     GraphLinkBody,
@@ -77,7 +78,7 @@ def register(app: FastAPI, d) -> None:
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001 — unusable model reply etc.
-            raise HTTPException(status_code=422, detail=f"distillation failed: {exc}")
+            raise HTTPException(status_code=422, detail=plain_failure("The lessons could not be tidied. Try again.", exc))
         out["deduped"] = res["deduped"]
         out.update(res.get("distill") or {})
         return out
@@ -122,7 +123,7 @@ def register(app: FastAPI, d) -> None:
                 scope_id=body.scope_id,
             )
         except ValueError as exc:  # unknown layer -> client error, not a 500
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That memory could not be saved.", exc))
         return {
             "id": rec.id, "layer": rec.layer, "key": rec.key, "scope_id": rec.scope_id,
         }
@@ -277,7 +278,7 @@ def register(app: FastAPI, d) -> None:
             try:
                 text, detected = extract_export_text(body.path)
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
+                raise HTTPException(status_code=400, detail=plain_failure("That import could not be read.", exc))
             if provider == "other" and detected in _IMPORT_PROVIDERS:
                 provider = detected
         if not text:
@@ -305,7 +306,7 @@ def register(app: FastAPI, d) -> None:
             try:
                 adapter = d.platform.providers.get(llm, model)
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+                raise HTTPException(status_code=400, detail=plain_failure("That model could not be used. Choose another model in Settings.", exc))
             if isinstance(adapter, MockLLMAdapter):
                 adapter, llm = d._failover_adapter("mock")
                 if adapter is None:
@@ -327,7 +328,7 @@ def register(app: FastAPI, d) -> None:
             except HTTPException:
                 raise
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=502, detail=f"the model failed: {exc}")
+                raise HTTPException(status_code=502, detail=plain_failure("The model did not answer. Try again, or choose another model.", exc))
             facts = parse_memory_dump(resp.text or "")
             distilled = True
             if not facts:
@@ -474,7 +475,7 @@ def register(app: FastAPI, d) -> None:
             except Exception as exc:  # noqa: BLE001 — surface, don't half-lie
                 raise HTTPException(
                     status_code=422,
-                    detail=f"stored {added} of {len(items)}, then failed: {exc}",
+                    detail=plain_failure(f"Stored {added} of {len(items)}, then stopped. Try again for the rest.", exc),
                 )
         return {"added": added, "source": base}
 
@@ -529,7 +530,7 @@ def register(app: FastAPI, d) -> None:
                     layer, key, scope_id=None if scope == "-" else scope
                 )
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
+                raise HTTPException(status_code=400, detail=plain_failure("That memory could not be changed.", exc))
             if text is None:
                 raise HTTPException(status_code=404, detail=f"no such node: {node_id}")
             return {
@@ -597,7 +598,7 @@ def register(app: FastAPI, d) -> None:
                     layer, key, scope_id=None if scope == "-" else scope
                 )
             except ValueError as exc:  # unknown layer
-                raise HTTPException(status_code=400, detail=str(exc))
+                raise HTTPException(status_code=400, detail=plain_failure("That memory could not be removed.", exc))
         elif node_id.startswith("ltm:"):
             base = node_id.split(":", 2)[1]
             raise HTTPException(
@@ -639,7 +640,7 @@ def register(app: FastAPI, d) -> None:
         try:
             return set_link(d.platform, body.a.strip(), body.b.strip())
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("Those memories could not be linked.", exc))
 
     @app.post("/memory/graph/unlink")
     def memory_graph_unlink(body: GraphLinkBody) -> dict[str, Any]:
@@ -650,7 +651,7 @@ def register(app: FastAPI, d) -> None:
         try:
             return remove_link(d.platform, body.a.strip(), body.b.strip())
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("Those memories could not be unlinked.", exc))
 
     @app.get("/memory/{layer}/{key}")
     def memory_read(layer: str, key: str, scope_id: str | None = None) -> dict[str, Any]:

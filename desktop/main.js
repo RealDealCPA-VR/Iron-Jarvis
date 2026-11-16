@@ -3120,10 +3120,10 @@ function showMainWindow() {
 
 // --- Spotlight: global quick-task overlay --------------------------------
 // A frameless always-on-top input that opens ANYWHERE in Windows on
-// Ctrl+Shift+Space: type a task, Enter, and an agent runs it in the
-// background — a notification (click -> the session) fires when it's done. This
-// is the daily-driver gesture that makes Iron Jarvis ambient, not an app you
-// have to go open.
+// Ctrl+Shift+Space: type what you want, Enter, and the main window opens on a
+// new chat with those words sent (v1.506.0, north-star 6.5: `runSpotlightTask`
+// below). This is the daily-driver gesture that makes Iron Jarvis ambient,
+// not an app you have to go open.
 
 // A tiny promise-based HTTP call to OUR daemon from the MAIN process (Node http,
 // so no browser Origin/CORS — the Host/Origin guard passes) with the bearer.
@@ -3241,141 +3241,46 @@ function toggleSpotlight() {
   win.webContents.send("spotlight:show"); // clear + focus the input
 }
 
-// Run a spotlight task: start a background session, then poll for completion and
-// fire a clickable "done" notification (click -> open the session).
+// v1.506.0 (north-star fix plan 6.5, decision D11): the quick window goes
+// through CHAT. It used to start a coding agent (`POST /sessions`, agent_type
+// "builder") that holds none of chat's settings tools, record tools, lookup
+// or doors, so "switch to dark mode" did nothing and the toast said "Done".
+// Now the words wait HERE, in the main process, and the main window opens on
+// a fresh chat (`quickAskUrl`); the chat page takes them once over the
+// sender-checked `quick-ask:take` bridge and sends them as its first message
+// (dashboard/lib/chatAsk.takeQuickAsk). Chat runs the turn with every tool,
+// card and door it has, saves the conversation, and hands off to an agent
+// run only when chat itself does. The words never ride in the URL: a link
+// anywhere could carry them, and only the Enter in the quick window is the
+// user's send. Words not taken within QUICK_ASK_TTL_MS are dropped.
+const QUICK_ASK_TTL_MS = 2 * 60 * 1000;
+let pendingQuickAsk = null;
+
+// The chat page address the quick window opens: a NEW conversation (never
+// the one the window had open), told to take the waiting words. Pure.
+function quickAskUrl(base) {
+  return `${base}/chat?new=1&quick=1`;
+}
+
+// One-shot: the waiting words, or "" (none, or older than the hold). Cleared
+// whatever the answer, so a reload never sends them twice.
+function takeQuickAsk(now) {
+  const p = pendingQuickAsk;
+  pendingQuickAsk = null;
+  if (!p || typeof p.text !== "string" || !p.text) return "";
+  const age = now - p.at;
+  return age >= 0 && age <= QUICK_ASK_TTL_MS ? p.text : "";
+}
+
+// Send the quick window's words to chat. Iron Jarvis is asked first whether
+// it is answering, so a stopped app still reads "Iron Jarvis isn't running
+// yet" in the quick window (spotlightErrorWords) instead of an empty chat.
 async function runSpotlightTask(task) {
-  const created = await daemonRequest("POST", "/sessions", {
-    task,
-    agent_type: "builder",
-    wait: false,
-  });
-  const id = created && created.id;
-  if (!id) throw new Error("could not start the task");
-  watchSpotlightTask(id, task);
-  return { ok: true, id };
-}
-
-const SPOTLIGHT_POLL_MS = 4000;
-const SPOTLIGHT_WATCH_CAP_MS = 15 * 60 * 1000;
-
-// The words a finished quick task's toast says (v1.449.0, readiness item 14):
-// the SAME words every status badge reads from dashboard/lib/statusWords.ts
-// (STATUS completed / failed / cancelled and OUTCOME needs_you /
-// completed_with_failures), held equal by
-// tests/test_desktop_spotlight_outcome_v1449.py. One line on purpose: the
-// node pins lift it with a single-line regex.
-const SPOTLIGHT_OUTCOME_WORDS = { completed: "Done", failed: "Failed", cancelled: "Stopped", needs_you: "Needs you", completed_with_failures: "Part failed" };
-
-// The session's folder, named for the toast — or "" when the row carries none
-// or spells a network path (never opened from a toast: an SMB connection is
-// not a press the user made; the v1.379.0 rule).
-function spotlightFolder(raw) {
-  const folder = typeof raw === "string" ? raw.trim() : "";
-  if (!folder || /^(\\\\|\/\/)/.test(folder)) return "";
-  return folder;
-}
-
-// What the watcher says for one read of the slim session row, or null to keep
-// watching (v1.333.0; v1.449.0 reads the ROW, not only its status). The
-// ledger's verdict (`outcome`: needs_you / completed_with_failures) LEADS a
-// completed row — "Done" over work that still needs the user, or that partly
-// failed, was the readiness audit's finding — and a stopped task reads
-// "Stopped", never "cancelled". At the 15-minute cap the task is usually STILL
-// RUNNING, so the toast says so instead of claiming it is done.
-function spotlightOutcome(sess, elapsed, task) {
-  const label = String(task).slice(0, 60);
-  const row = sess && typeof sess === "object" ? sess : { status: sess };
-  const status = typeof row.status === "string" ? row.status : "";
-  if (status === "completed" || status === "failed" || status === "cancelled") {
-    const outcome = typeof row.outcome === "string" ? row.outcome : "";
-    const verdict = status === "completed" && SPOTLIGHT_OUTCOME_WORDS[outcome] ? outcome : status;
-    const folder = spotlightFolder(row.workspace_path);
-    return { title: `${SPOTLIGHT_OUTCOME_WORDS[verdict]}: ${label}`, final: true, verdict, folder };
-  }
-  if (elapsed > SPOTLIGHT_WATCH_CAP_MS) return { title: `Still running: ${label}`, final: false, verdict: "", folder: "" };
-  return null;
-}
-
-// How a final quick-task toast offers its folder (readiness 0j.5 item 18).
-// Electron draws a notification's action BUTTONS on macOS only, so v1.449.0's
-// "Open folder" never appeared on Windows — the platform the app ships on.
-// On macOS: the button, and a click opens the session. Everywhere else: a
-// click on a toast that names a folder OPENS THAT FOLDER (and the session
-// page behind it), and the body says so. A network path never reaches here
-// (`spotlightFolder`). Pure, so the node pins can read it.
-function spotlightToastPlan(platform, outcome) {
-  const folder = outcome && outcome.final && outcome.folder ? String(outcome.folder) : "";
-  if (!folder) return { actions: [], clickOpensFolder: false, bodyTail: "" };
-  if (platform === "darwin") {
-    return { actions: [{ type: "button", text: "Open folder" }], clickOpensFolder: false, bodyTail: "" };
-  }
-  return { actions: [], clickOpensFolder: true, bodyTail: " · click to open the folder" };
-}
-
-// Poll a spotlight task for completion (up to ~15 min) then notify.
-// Best-effort — a failure to poll/notify never surfaces to the user beyond
-// the "started" they already saw. v1.333.0: the read is the SLIM one
-// (`?transcript=0`, still nested: the toast reads only the session row), and a
-// tick never starts while the previous read is still on its way.
-// v1.449.0: a final toast whose row carries a folder NAMES it and offers an
-// "Open folder" button (Electron draws notification actions on macOS only;
-// on Windows the click itself opens the folder: `spotlightToastPlan`).
-function watchSpotlightTask(id, task) {
-  let elapsed = 0;
-  let busy = false;
-  const timer = setInterval(async () => {
-    elapsed += SPOTLIGHT_POLL_MS;
-    if (busy) return;
-    busy = true;
-    let s = null;
-    try {
-      s = await daemonRequest("GET", `/sessions/${id}?transcript=0`, null);
-    } catch {
-      /* transient */
-    } finally {
-      busy = false;
-    }
-    // GET /sessions/{id} returns { session, transcript } — read the NESTED
-    // session (a top-level s.status was always undefined, so the "done"
-    // notification never fired until the 15-min cap).
-    const sess = (s && s.session) || s || {};
-    const outcome = spotlightOutcome(sess, elapsed, task);
-    if (!outcome) return;
-    clearInterval(timer);
-    try {
-      const folderName = outcome.folder ? path.basename(outcome.folder) || outcome.folder : "";
-      let body = !outcome.final
-        ? "It has been working for 15 minutes. Click to open it."
-        : sess.summary
-          ? String(sess.summary).slice(0, 140)
-          : "Click to open the result.";
-      const plan = spotlightToastPlan(process.platform, outcome);
-      if (outcome.final && folderName) body = `${body}\nIn ${folderName}${plan.bodyTail}`;
-      const options = { title: outcome.title, body };
-      if (plan.actions.length) options.actions = plan.actions;
-      const note = new Notification(options);
-      note.on("click", () => {
-        showMainWindow();
-        if (mainWin && !mainWin.isDestroyed()) {
-          mainWin.loadURL(`${DASHBOARD_URL}/sessions/${id}`);
-        }
-        if (plan.clickOpensFolder) {
-          // Readiness 0j.5 item 18: Windows has no toast buttons — the click
-          // is the press, and it opens the folder the toast names.
-          shell.openPath(outcome.folder).catch(() => {});
-        }
-      });
-      if (plan.actions.length) {
-        note.on("action", () => {
-          shell.openPath(outcome.folder).catch(() => {});
-        });
-      }
-      note.show();
-    } catch {
-      /* notifications unavailable */
-    }
-  }, SPOTLIGHT_POLL_MS);
-  return timer;
+  await daemonRequest("GET", "/health", null);
+  pendingQuickAsk = { text: task, at: Date.now() };
+  showMainWindow();
+  if (mainWin && !mainWin.isDestroyed()) mainWin.loadURL(quickAskUrl(DASHBOARD_URL));
+  return { ok: true, opened: "chat" };
 }
 
 // v1.450.0 (Wave D, item 39): what Spotlight says when its task did not
@@ -3423,6 +3328,13 @@ function installSpotlightIpc() {
   });
   ipcMain.on("spotlight:close", () => {
     if (spotlightWin && !spotlightWin.isDestroyed()) spotlightWin.hide();
+  });
+  // v1.506.0 (north-star 6.5): the chat page takes the quick window's words,
+  // once (`takeQuickAsk`). Only the dashboard may ask: the words are the
+  // user's send, and no other frame gets to read or spend them.
+  ipcMain.handle("quick-ask:take", (event) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    return takeQuickAsk(Date.now());
   });
   // Native clipboard for the terminal (paste/copy) — never permission-gated.
   // Native toast for the "This PC" notification destination (v1.118.0).
@@ -3920,6 +3832,8 @@ const TOOL_WORDS = {
   persona_create: "make a chat persona",
   persona_update: "change a chat persona",
   persona_delete: "remove or reset a chat persona",
+  // v1.506.0: answering a waiting suggestion from chat (pinned equal).
+  suggestion_answer: "answer a suggestion on the Improvements page",
   // v1.499.0: your clients from chat (the card's own words, pinned equal).
   client_answer: "say whether a name is one of your clients",
   client_update: "change one of your clients",
@@ -3991,6 +3905,7 @@ const TOOL_WORDS_BUILTIN = {
   approve_plan: "follow this plan",
   ask_user: "ask you a question",
   assign_work: "queue a task for a teammate",
+  backup_now: "back up Iron Jarvis",
   batch_documents: "work through a folder of documents",
   blackboard_post: "post a note for the team",
   blackboard_read: "read the team's notes",
@@ -4184,6 +4099,8 @@ const TOOL_WORDS_BUILTIN = {
   skill_search: "look for a skill",
   skill_update: "change a skill",
   spawn_agent: "start a helper agent",
+  suggestion_answer: "answer a suggestion on the Improvements page",
+  suggestion_list: "list the waiting suggestions",
   tool_create: "make a new tool",
   tool_delete: "remove a custom tool",
   tool_list: "list the custom tools",

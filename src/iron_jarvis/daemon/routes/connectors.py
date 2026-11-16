@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
+from ...core.failures import plain_failure
 from ..schemas import ConnectorConnectBody
 
 
@@ -40,9 +41,9 @@ def register(app: FastAPI, d) -> None:
         try:
             return connect(d.platform, connector_id, body.values)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That connection could not be set up.", exc))
         except Exception as exc:  # noqa: BLE001 — surface a connect failure honestly
-            raise HTTPException(status_code=422, detail=f"{type(exc).__name__}: {exc}")
+            raise HTTPException(status_code=422, detail=plain_failure("That connection could not be set up. Check what you entered and try again.", exc))
 
     @app.post("/connectors/{connector_id}/test")
     def test_route(connector_id: str) -> dict[str, Any]:

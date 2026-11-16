@@ -676,6 +676,19 @@ def record_tools_for(
     out += [
         n for n in _rc().clients_tools_for(t, client_names=client_names, in_client=in_client) if n not in out
     ]
+    # v1.506.0 (north-star plan 6.2): the Improvements page's suggestions
+    # (inbox/tools) — a question keeps only the list.
+    from ..inbox.tools import LIST as _SUGGESTION_LIST
+    from ..inbox.tools import suggestion_tools_for
+
+    asked = suggestion_tools_for(t)
+    if asked and is_question(t):
+        asked = [n for n in asked if n == _SUGGESTION_LIST]
+    out += [n for n in asked if n not in out]
+    # v1.506.0 (north-star plan 6.3): "back up Iron Jarvis now" — never a
+    # question about the daily backup, never the user's own files.
+    if _SETUP_WORDS.backup_now_asked(t) and not is_question(t) and "backup_now" not in out:
+        out.append("backup_now")
     return out
 
 
@@ -3791,7 +3804,15 @@ def record_tools(platform: Any) -> list[Tool]:
         *_tools_record_tools(platform),
         # v1.499.0 (leap 3 Phase 3): the owner's clients.
         *_rc().client_tools(platform),
+        # v1.506.0 (north-star plan 6.3): a backup of Iron Jarvis made now.
+        *_upkeep_tools(platform),
     ]
+
+
+def _upkeep_tools(platform: Any) -> list[Tool]:
+    from .records_upkeep import upkeep_tools
+
+    return upkeep_tools(platform)
 
 
 def _conn_record_tools(platform: Any) -> list[Tool]:

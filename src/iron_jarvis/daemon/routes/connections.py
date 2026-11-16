@@ -15,6 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
+from ...core.failures import plain_failure
 from ...providers.reasoning import reasoning_default, reasoning_levels
 from ...providers import subscription_clis as _SUBS
 
@@ -1376,7 +1377,7 @@ def check_key_first(d: Any, provider: str, key: str) -> dict[str, Any] | None:
     except Exception as exc:  # noqa: BLE001 — a probe fault is a failed check
         result = {
             "ok": False,
-            "detail": f"{spec.display_name}: probe failed ({type(exc).__name__})",
+            "detail": plain_failure(f"{spec.display_name} could not be checked.", exc),
             "kind": "unreachable",
         }
     words = probe_test_words(result, provider, getattr(d.platform, "providers", None))
@@ -1450,7 +1451,7 @@ def register(app: FastAPI, d) -> None:
         try:
             rec = d.platform.connections.set_api_key(provider, body.key)
         except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That key could not be saved.", exc))
         finally:
             invalidate_model_catalog(discovery=True, provider=provider)  # v1.332.0: a new key, new rows
         if check:
@@ -1571,7 +1572,7 @@ def register(app: FastAPI, d) -> None:
         try:
             out = d.platform.connections.start_oauth(provider)
         except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("Sign-in could not start. Try again.", exc))
         # RFC 8252 loopback: embedded public clients registered against a FIXED
         # localhost port (OpenAI's :1455) need a one-shot listener to catch the
         # redirect — it completes the flow server-side, then shuts down.
@@ -1620,7 +1621,7 @@ def register(app: FastAPI, d) -> None:
                 provider, code=body.code, state=body.state
             )
         except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("Sign-in could not finish. Try again.", exc))
         finally:
             invalidate_model_catalog(discovery=True, provider=provider)  # v1.332.0
         promoted = d._maybe_autopromote_default(provider)

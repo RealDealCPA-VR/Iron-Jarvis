@@ -307,6 +307,8 @@ def test_read_back_hands_a_network_base_the_budget_and_words_a_probe_that_raises
     monkeypatch.setattr(platform.ltm, "get", lambda name: Raising() if name == "netty" else real_get(name))
     back = K.read_back(SimpleNamespace(platform=platform), "netty")
     assert back["answering"] is False
-    assert back["words"] == "Added, but it is not answering: ConnectionError: the box is off."
+    # v1.506.0 (north-star 8.1, moved on purpose): no exception name or text
+    # on screen ("ConnectionError: the box is off"); the plain reason.
+    assert back["words"] == "Added, but it is not answering: it could not be reached."
     # The row the add made is still there: the probe never costs the record.
     assert "netty" in client.get("/ltm/sources").json()["active"]

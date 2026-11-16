@@ -31,6 +31,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
+from ...core.failures import plain_failure
 from ...core.logging import get_logger
 from ...templates import MEMORY_REVIEW_SCHEDULE, MEMORY_REVIEW_TASK
 
@@ -201,7 +202,7 @@ def register(app: FastAPI, d) -> None:
             from ...memory.proposals import MemoryProposalStore
         except ImportError as exc:  # pragma: no cover — module always ships
             raise HTTPException(
-                status_code=503, detail=f"memory review unavailable: {exc}"
+                status_code=503, detail=plain_failure("Memory review is not available in this version of Iron Jarvis.", exc)
             )
         store = MemoryProposalStore(
             d.platform.engine,
@@ -551,7 +552,7 @@ def register(app: FastAPI, d) -> None:
         try:
             session = await orchestrator.create_session(task, origin="memory-review")
         except (PermissionError, RuntimeError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("The memory review could not start.", exc))
         # Background, like POST /workflows/run: a review reads a lot of history
         # and would otherwise hold the request open for minutes. The wrapper
         # closes the steward's bookkeeping loop — the review CURSOR advances
@@ -594,7 +595,7 @@ def register(app: FastAPI, d) -> None:
         try:
             run = resetter("", note="review point reset from the Memory page")
         except Exception as exc:  # noqa: BLE001 — never 500 a housekeeping click
-            raise HTTPException(status_code=500, detail=f"could not reset: {exc}")
+            raise HTTPException(status_code=500, detail=plain_failure("The memory review could not be reset. Try again.", exc))
         return {
             "ok": bool((run or {}).get("recorded")),
             "cursor": "",

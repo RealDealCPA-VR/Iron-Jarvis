@@ -732,6 +732,11 @@ def _resolves(href: str) -> bool:
         # default | lessons | longterm)".
         page = (ROOT / "dashboard" / "app" / "memory" / "page.tsx").read_text(encoding="utf-8")
         return "`?scope=` picks the tab" in page and q["scope"] in ("working", "lessons", "longterm")
+    if u.path == "/chat" and q == {"view": "code"}:
+        # v1.506.0 (north-star 6.4): the chat page's Code view, where tonight's
+        # list lives (the night task's door): the dashboard's own address for it.
+        src = (ROOT / "dashboard" / "lib" / "chatSurface.ts").read_text(encoding="utf-8")
+        return 'export const CODE_VIEW_HREF = "/chat?view=code";' in src
     return _page_resolves(href)
 
 

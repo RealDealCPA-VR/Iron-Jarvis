@@ -47,8 +47,8 @@
     <input id="task" autofocus placeholder="Tell Iron Jarvis what to do…" autocomplete="off" spellcheck="false" />
   </div>
   <div class="hint">
-    <span id="status">Runs in the background — you'll get a notification when it's done.</span>
-    <span><kbd>Enter</kbd> run &nbsp; <kbd>Esc</kbd> close</span>
+    <span id="status">Opens in chat, where you see the answer.</span>
+    <span><kbd>Enter</kbd> send &nbsp; <kbd>Esc</kbd> close</span>
   </div>
 </div>
 <script>
@@ -66,11 +66,13 @@
     const task = input.value.trim();
     if (!task) return;
     input.disabled = true;
-    setStatus("Starting…");
+    setStatus("Sending…");
     try {
+      // v1.506.0 (north-star 6.5): the words go to CHAT in the main window
+      // (desktop/main.js runSpotlightTask), not to a background run.
       const res = await window.spotlight.submit(task);
       if (res && res.ok) {
-        setStatus("✓ Started — closing…");
+        setStatus("✓ Opening in chat…");
         setTimeout(() => window.spotlight?.close(), 550);
       } else {
         setStatus((res && res.error) || "Could not start the task.", true);
@@ -86,7 +88,7 @@
   // Clear + refocus each time the overlay is shown.
   window.spotlight?.onShow(() => {
     input.disabled = false; input.value = "";
-    setStatus("Runs in the background — you'll get a notification when it's done.");
+    setStatus("Opens in chat, where you see the answer.");
     setTimeout(() => input.focus(), 30);
   });
 </script>

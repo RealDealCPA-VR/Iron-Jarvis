@@ -100,6 +100,13 @@ def _mode(platform: Any, tool_name: str) -> str:
         return ""
 
 
+#: v1.506.0 (north-star plan 6.1): a page of the dashboard among an answer's
+#: first PAGE_DOOR_RANK lines becomes a door under the reply. Only near the
+#: top: the lookup has no relevance floor, so its fifth line is often only a
+#: neighbour of the request, and a door to it would send the user astray.
+PAGE_DOOR_RANK = 3
+
+
 #: v1.480.0: "It asks the user first" was read by a real model as "ask the
 #: user in words first" (see ``join.CARD_WORDS``). The card is the question.
 ASKS_LINE = "Calling it shows the user an approval card first."
@@ -223,6 +230,11 @@ def entry_line(platform: Any, entry: _index.Capability) -> tuple[str, dict[str, 
             f"{head}: set with tool {entry.tool}, which shows the user a secure card to "
             "paste it into. Never ask for the value in chat." + where
         ), row
+    if entry.kind == "page" and getattr(entry, "place", False):
+        # v1.506.0 (north-star plan 6.1): a page of the dashboard, from the
+        # page table. Iron Jarvis's own words, so the model can name the page.
+        row.update(href=entry.href, place=True)
+        return f"The page \"{entry.title}\" ({entry.href}): {entry.line}", row
     if entry.kind == "page":
         row.update(href=entry.href)
         return f"Needs a page ({entry.title}, {entry.href}): {entry.line}", row
@@ -331,6 +343,9 @@ class FindCapabilityTool(Tool):
             from .join import FOUND, turn_key
 
             FOUND.note(turn_key(ctx), data.get("matches"))
+            # v1.506.0 (north-star plan 6.1): a page near the top of this
+            # answer becomes a door under the reply (chat_turn.with_page_door).
+            FOUND.note_pages(turn_key(ctx), list(data.get("matches") or [])[:PAGE_DOOR_RANK])
         except Exception:  # noqa: BLE001 — the answer stands by itself
             pass
         return ToolResult(ok=True, output=text, data=data)

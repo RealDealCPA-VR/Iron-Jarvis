@@ -24,6 +24,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from ...core.failures import plain_failure
 
 
 class CuratorRunBody(BaseModel):
@@ -59,7 +60,7 @@ def register(app: FastAPI, d) -> None:
         try:
             view = await asyncio.to_thread(getattr(cur, verb), name)
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=plain_failure("That skill could not be changed.", exc))
         if view is None:
             where = "the archive" if verb == "restore" else "your skills folder"
             raise HTTPException(

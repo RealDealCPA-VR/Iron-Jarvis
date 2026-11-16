@@ -407,31 +407,49 @@ in the scan test's allow list.
 
 Area rules: `docs/rules/chat.md`, `messaging.md`, `desktop.md`, `browser.md`.
 
-- [ ] **6.1 One page table.** Daemon-side: every page, its name, its link and
+**Shipped in v1.506.0.** As built, where it differs from the lines below:
+6.1 the page table is `daemon/pages.py` (44 rows: every page plus seven
+Settings sections); a page becomes a door only when it is in the lookup's
+first three lines, and only for the model's own lookup call. 6.2 every
+answer from chat is a card, not only the accepts that act at once. 6.3
+`backup_now` is a tool (allow tier); restore, pairing and updates are doors.
+6.4 an app that connected gets no door (an earlier decision, pinned), and a
+phone channel has no success door (it would push out its own set-up door).
+6.5 the words wait in the desktop app and the chat page takes them once;
+they never ride in a link. 6.6 no new tools: doors for removing a key,
+forgetting a folder, deleting a project and templates, and a "not offered"
+line for deleting, archiving or renaming a chat or coding session (the place
+is the list the user is looking at). 6.7 the phone lane arms the read-only
+and allow-tier record tools only.
+Left open: forgetting a folder could be a tool with an Undo; deleting or
+archiving a chat or a coding session from chat; the door for a page found by
+the routing call rather than the model's own lookup.
+
+- [x] **6.1 One page table.** Daemon-side: every page, its name, its link and
   what can be done there. The lookup gets a "pages" part from it, and a page
   row the lookup returns becomes a door (`capability_search/index.py:310`,
   `tool.py:226`, `daemon/chat_turn.py:4613`). Scan test: every dashboard page
   has a row.
-- [ ] **6.2 Improvements from chat.** Tools to list waiting suggestions and to
+- [x] **6.2 Improvements from chat.** Tools to list waiting suggestions and to
   answer one through its own route.
-- [ ] **6.3 Pairing, backup, restore and updates have doors.**
+- [x] **6.3 Pairing, backup, restore and updates have doors.**
   `daemon/page_doors.py:886, 917`. Pairing and backup become page steps;
   "Back up now" becomes a tool; restore and update are doors.
-- [ ] **6.4 A thing made in chat has a door.** `daemon/doors.py:65`. The
+- [x] **6.4 A thing made in chat has a door.** `daemon/doors.py:65`. The
   catalog is keyed on chat's record tools. Test: every chat tool that creates
   a record has a door.
-- [ ] **6.5 The quick window goes through chat (D11).** `desktop/main.js:3246`.
-- [ ] **6.6 The small actions.** Delete or archive a coding session, delete a
+- [x] **6.5 The quick window goes through chat (D11).** `desktop/main.js:3246`.
+- [x] **6.6 The small actions.** Delete or archive a coding session, delete a
   chat, forget a folder, delete a key: a tool where it can be undone or
   carded, else a door.
-- [ ] **6.7 The phone gets the read-only record tools, and a true reason.**
+- [x] **6.7 The phone gets the read-only record tools, and a true reason.**
   `daemon/chat_turn.py:5093`, `capability_search/join.py:310`.
-- [ ] **6.8 Phone history goes through the planner.** `comm/inbound.py:1222`,
+- [x] **6.8 Phone history goes through the planner.** `comm/inbound.py:1222`,
   `daemon/routes/comm.py:781`, `comm/threads.py:346`.
-- [ ] **6.9 The identity spine at two more seams.** `agents/decompose.py:1226`
+- [x] **6.9 The identity spine at two more seams.** `agents/decompose.py:1226`
   (the final answer of a planned run), `daemon/routes/agents.py:2067` (apply a
   skill). Add both to the seam test.
-- [ ] **6.10 The browser sidebar says what belongs in the main window.**
+- [x] **6.10 The browser sidebar says what belongs in the main window.**
   `daemon/routes/chat.py:4946`.
 
 ## Group 7. Learns from what went wrong
@@ -452,14 +470,39 @@ Area rules: `docs/rules/memory.md`.
 
 Area rules: `docs/rules/dashboard.md`, `daemon.md`.
 
-- [ ] **8.1 No raw exception text on screen.** `plain_failure(what, exc)` at
+**8.1 and 8.4 shipped in v1.506.0** (they touched files nobody else was
+editing). 8.1: `core/failures.plain_failure` at 141 sites in `daemon/routes/`,
+with a scan test and an allow list for the sites whose text is the code's own
+sentence. 8.4: the Autonomy page and the watcher line say "Suggestions", and
+"proposal" is on the dashboard's retired-word list. 8.2 and 8.3 are open.
+
+- [x] **8.1 No raw exception text on screen.** `plain_failure(what, exc)` at
   every broad `except` in `daemon/routes/` (about 168). Scan test.
 - [ ] **8.2 One name per page.** `daemon/routes/system_map.py:595, 652` takes
   its labels from the page table (6.1); the map gains Improvements and Clients.
 - [ ] **8.3 No "lane" on screen.** `daemon/chat_turn.py:2862, 2902, 2914`.
-- [ ] **8.4 "Proposals" becomes "suggestions".**
+- [x] **8.4 "Proposals" becomes "suggestions".**
   `dashboard/app/autonomy/page.tsx:586`, `daemon/page_doors.py:930`; the word
   joins the retired list.
+
+## Tests that passed only on a retry (to watch)
+
+This project counts a test that passes only on GitHub's retry as red. Since
+group 3, four runs each showed one or two, a different test each time, all
+timing-sensitive and none in code the group touched. No run before group 1
+showed any in the six release runs checked. The whole suite takes as long as
+it did (15 to 17 minutes), so the suite did not slow down.
+
+| Run | Test | What was done |
+|---|---|---|
+| group 3, branch | `test_mcp_direct_launch_refresh_v14150` (a real pack process and its process tree) | Passed first time when its shard was re-run, 6 of 6 locally. Not changed. If it recurs, 2.2 (how a pack is started) is the first suspect |
+| v1.504.0 release | `test_build_app_check_again_v1497` (waited with fixed 0.1 s sleeps) | Fixed in v1.505.0: waits for the reply's turn to end |
+| group 5, branch | `test_records_build_review_v14380::test_the_fresh_matchers_stay_linear` (wall-clock bound in a fresh interpreter) | Fixed in v1.506.0: warms up before timing. The matchers' timings are unchanged since v1.502.0 |
+| group 5, branch | `test_records_projects_v14350::test_agent_pause_and_undo_puts_back_the_day_off_exactly` | 12 of 12 locally. GitHub keeps no trace of a first try, so the cause is unknown. Not changed |
+
+To find the cause of an unexplained one, the test run would need to print
+a retried test's first failure (`-rR` shows only its name); that is a change
+to `.github/workflows`, left for the owner.
 
 ## Not reviewed
 

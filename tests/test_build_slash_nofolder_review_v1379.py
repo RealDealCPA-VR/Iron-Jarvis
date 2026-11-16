@@ -611,7 +611,9 @@ async def test_a_chat_files_folder_that_cannot_hold_a_folder_is_said_and_nothing
     wire(app, Script(["ok"]))
     status, out = await asgi(app, "POST", f"/build/sessions/{sid}/turn", {"text": "go"})
     assert status == 409, out
-    assert out["detail"].startswith(f"This session's own folder could not be made in {blocker}:")
+    # v1.506.0 (north-star 8.1): the system's OSError text goes to the log;
+    # the screen reads the plain line alone.
+    assert out["detail"] == f"This session's own folder could not be made in {blocker}."
     assert messages_of(app, sid) == [] and S.folder_of(S.get_row(app.state.platform.engine, sid)) == ""
 
 

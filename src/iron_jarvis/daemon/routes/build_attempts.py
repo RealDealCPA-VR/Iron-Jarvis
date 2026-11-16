@@ -29,6 +29,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from ...core.failures import plain_failure
 from ...harness import attempts as A
 from ...harness import sessions as S
 
@@ -166,7 +167,7 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
             rows = await asyncio.to_thread(menu_rows, d)
         except Exception as exc:  # noqa: BLE001 — said, never an empty menu
             raise HTTPException(
-                status_code=503, detail=f"The model menu could not be read ({type(exc).__name__}); nothing started.",
+                status_code=503, detail=plain_failure("The model menu could not be read, so nothing started.", exc),
             ) from None
         members = await asyncio.to_thread(MT.team_members, platform)
         menu = A.Menu(rows=rows, members=members, session_provider=session_pair[0],
@@ -313,7 +314,7 @@ def register(app: FastAPI, d: Any) -> None:
         except Exception as exc:  # noqa: BLE001 — GitRefused from the lock wait
             status = getattr(exc, "status", None)
             if isinstance(status, int):
-                content: dict[str, Any] = {"detail": str(exc)}
+                content: dict[str, Any] = {"detail": plain_failure("That could not be done right now. Try again in a moment.", exc)}
                 if getattr(exc, "details", ""):
                     content["details"] = exc.details  # type: ignore[attr-defined]
                 return JSONResponse(status_code=status, content=content)
@@ -348,7 +349,7 @@ def register(app: FastAPI, d: Any) -> None:
         except Exception as exc:  # noqa: BLE001 — GitRefused from the lock wait
             status = getattr(exc, "status", None)
             if isinstance(status, int):
-                return JSONResponse(status_code=status, content={"detail": str(exc)})
+                return JSONResponse(status_code=status, content={"detail": plain_failure("That could not be done right now. Try again in a moment.", exc)})
             raise
         finally:
             _GIT_ACTING.discard(thread_id)

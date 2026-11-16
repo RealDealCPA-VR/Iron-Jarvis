@@ -1219,7 +1219,9 @@ class InboundPoller:
             return await self._handle_remote_chat(
                 name, ch, msg, thread, tid, text, display, remote_name
             )
-        history = self.thread_store.history_body(tid, limit=30) if tid else []
+        # v1.506.0 (north-star 6.8): the WHOLE stored thread; the chat turn's
+        # planner fits it to the model's window (never a fixed slice here).
+        history = self.thread_store.history_body(tid) if tid else []
         if not history:
             # The append could not land (or the read hiccuped): the turn still
             # runs on the bare message — the phone gets its answer regardless.

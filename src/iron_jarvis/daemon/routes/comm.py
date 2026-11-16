@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from sqlmodel import select
 from typing import Any
 
+from ...core.failures import plain_failure
 from ..schemas import (
     ChannelCreate,
     ChatBody,
@@ -377,7 +378,7 @@ def register(app: FastAPI, d) -> None:
                 auth_user=body.auth_user,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That connection could not be added.", exc))
         return {"id": iid, "added": True}
 
     @app.post("/integrations/{iid}/enable")
@@ -797,7 +798,9 @@ def register(app: FastAPI, d) -> None:
             # Vanished between the read above and the append (dashboard
             # delete racing this request) — honest 404, nothing half-done.
             raise HTTPException(status_code=404, detail="no such chat thread")
-        history = store.history_body(thread_id, limit=30) or [
+        # v1.506.0 (north-star 6.8): the whole stored thread; the chat turn's
+        # planner fits it to the model's window (never a fixed slice here).
+        history = store.history_body(thread_id) or [
             {"role": "user", "content": text}
         ]
         # The injected seam when wired (production: run_chat_turn; tests may
@@ -1083,7 +1086,7 @@ def register(app: FastAPI, d) -> None:
             )
         except Exception as exc:  # noqa: BLE001 — offline is an answer, not a 500
             raise HTTPException(
-                status_code=502, detail=f"could not reach Telegram: {exc}"
+                status_code=502, detail=plain_failure("Telegram could not be reached. Check the connection and try again.", exc)
             )
         data = resp if isinstance(resp, dict) else {}
         if hasattr(resp, "json"):
@@ -1247,7 +1250,7 @@ def register(app: FastAPI, d) -> None:
                     secret_name=body.secret_name or None,  # persist the real vault key
                 )
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise HTTPException(status_code=400, detail=plain_failure("That webhook could not be saved.", exc)) from exc
         else:  # inbound: publish the event AND fire any bound reflex rules.
             # v1.122.0 fix: the create-time handler used to only publish, so a
             # freshly created webhook silently skipped reflexes until the next

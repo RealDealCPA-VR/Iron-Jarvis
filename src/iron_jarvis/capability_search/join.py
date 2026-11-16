@@ -95,6 +95,10 @@ OWN_PLACE = frozenset({
     # v1.499.0 (leap 3 Phase 3): the walled list of the owner's clients
     # (settings.records_clients), armed by the client words beside its writers.
     "client_list",
+    # v1.506.0 (north-star plan 6.2, 6.3): the Improvements page's suggestions
+    # (inbox/tools) and a backup made now (settings/records_upkeep), armed by
+    # their words through records.record_tools_for.
+    "suggestion_list", "suggestion_answer", "backup_now",
 })
 
 
@@ -143,6 +147,8 @@ def usable_first(entries: list) -> list:
 # what a lookup found, kept for its own turn
 # --------------------------------------------------------------------------- #
 MAX_KEYS = 256
+#: Page-table ids kept per turn (a door is added only while there is room).
+MAX_PAGES = 8
 
 
 def turn_key(ctx: Any) -> str:
@@ -171,8 +177,31 @@ class _Found:
             while len(self._by) >= MAX_KEYS:
                 self._by.popitem(last=False)
             entry = self._by[key] = {"pending": [], "joining": 0, "names": set(), "not_asked": False,
-                                     "asked_ids": set()}
+                                     "asked_ids": set(), "pages": []}
         return entry
+
+    def note_pages(self, key: str, rows: Any) -> None:
+        """v1.506.0 (north-star plan 6.1): the page-table rows (``place``) a
+        lookup of this turn returned, by id, each once, in the order found.
+        Kept apart from ``pending`` (a join takes those); read at the end of
+        the reply by :meth:`pages`."""
+        if not key or not isinstance(rows, list):
+            return
+        with self._lock:
+            got = self._entry(key).setdefault("pages", [])
+            for row in rows:
+                if isinstance(row, dict) and row.get("place") and row.get("kind") == "page":
+                    rid = str(row.get("id") or "")
+                    if rid and rid not in got and len(got) < MAX_PAGES:
+                        got.append(rid)
+
+    def pages(self, key: str) -> list[str]:
+        """The page-table ids this turn's lookups returned near their top."""
+        if not key:
+            return []
+        with self._lock:
+            entry = self._by.get(key)
+            return list(entry.get("pages") or []) if entry else []
 
     def note(self, key: str, rows: Any) -> None:
         if not key or not isinstance(rows, list):
@@ -310,6 +339,15 @@ def network_refusal(ctx: Any, name: str, args: Any) -> str:
 LOW_TRUST_NOTE = (
     "(No tool joined this reply: it has read content that was flagged, so it takes "
     "no new tools. Tell the user what Iron Jarvis can do and where.)"
+)
+#: v1.506.0 (north-star plan 6.7): a reply that STARTED at low trust (a
+#: message from the phone, a task another computer or a rule started) read
+#: nothing flagged; the sentence above was false for it.
+DOOR_LOW_NOTE = (
+    "(No tool joined this reply: it started at low trust, because of where the "
+    "message came from (such as a phone or another outside place), so it takes no "
+    "new tools. Tell the user what Iron Jarvis can do and where; the chat page in the "
+    "Iron Jarvis window can do more.)"
 )
 AUTO_OFF_NOTE = (
     "(No tool joined this reply: Auto tools is off for this chat, so it uses only "
@@ -476,6 +514,9 @@ READER_FOR = {
     "client_preference_add": "client_list",
     "client_preference_change": "client_list",
     "client_preference_forget": "client_list",
+    # v1.506.0 (north-star plan 6.2): a suggestion is answered by its id,
+    # which the list gives.
+    "suggestion_answer": "suggestion_list",
 }
 
 #: v1.489.0: a tool that changes or lists a kind of record brings that
@@ -592,6 +633,7 @@ def join_found(
     can_ask: bool = False,
     max_tools: int = 6,
     found_asks: "set | None" = None,
+    tainted: "bool | None" = None,
 ) -> list[str]:
     """Bring what this round's lookups found into the reply, in place (the
     round loop reads these same lists each round). Returns the names that
@@ -599,7 +641,12 @@ def join_found(
     stream lane), with ``found_asks`` the set that lane reads as its forced
     cards; the POST lane passes ``()`` and ``can_ask=False``. With no
     ``found_asks`` set nothing that asks can join (there would be no forced
-    card). Never raises, and a fault leaves every list as it was."""
+    card). Never raises, and a fault leaves every list as it was.
+
+    ``low_trust`` is the reply's whole posture (low at its door OR tainted
+    since); ``tainted`` (v1.506.0, north-star plan 6.7) says which: True = it
+    read flagged content (:data:`LOW_TRUST_NOTE`), False = it only started low
+    (:data:`DOOR_LOW_NOTE`), None = not told (the flagged sentence, as before)."""
     key = turn_key(ctx)
     try:
         lookups = FOUND.take(key)
@@ -619,7 +666,7 @@ def join_found(
         if not getattr(getattr(d.platform, "config", None), "capability_search", False):
             return []
         if low_trust:
-            _say(msgs, LOW_TRUST_NOTE)
+            _say(msgs, DOOR_LOW_NOTE if tainted is False else LOW_TRUST_NOTE)
             return []
         if not getattr(body, "auto_tools", False):
             _say(msgs, AUTO_OFF_NOTE)

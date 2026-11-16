@@ -40,6 +40,9 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       "build_defaults_clear",
       "build_team_set",
       "build_team_clear",
+      // v1.506.0 (north-star plan 6.2): answering a suggestion on the
+      // Improvements page (an accept can change how every chat answers).
+      "suggestion_answer",
     ],
   },
   {

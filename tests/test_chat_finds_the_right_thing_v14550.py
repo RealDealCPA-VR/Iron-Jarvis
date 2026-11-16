@@ -109,7 +109,10 @@ def test_the_watcher_line_is_true_about_what_a_rule_cannot_hear():
     """The line says a watcher only suggests; a rule's sources really are no
     folder (``reflex/models``), which is why reflex_create is not offered."""
     line = next(n.line for n in P.NOT_OFFERED if n.id == "watcher_suggests")
-    assert "sentinel_add" in line and "Proposals" in line
+    # v1.506.0 (north-star 8.4, moved on purpose): the Autonomy page's list
+    # is called Suggestions, the one word for the thing.
+    assert "sentinel_add" in line and "Suggestions list on the Autonomy page" in line
+    assert "Proposals" not in line
     from iron_jarvis.reflex.models import REFLEX_SOURCES
 
     assert not any(s in ("folder", "file", "files", "sentinel") for s in REFLEX_SOURCES)

@@ -217,7 +217,7 @@ export default function SentinelsPage() {
         setStatusOk("Checked — no changes noticed, nothing to suggest.");
       } else {
         setStatusOk(
-          `Checked — ${r.proposals.length} suggestion${r.proposals.length === 1 ? "" : "s"} waiting for you. Review them in Autonomy → Proposals.`,
+          `Checked — ${r.proposals.length} suggestion${r.proposals.length === 1 ? "" : "s"} waiting for you. Review them in Autonomy → Suggestions.`,
         );
       }
       reload();
@@ -295,7 +295,7 @@ export default function SentinelsPage() {
       <Reveal>
         <PageHeader
           title="Watchers"
-          subtitle="Each watcher keeps an eye on a folder and SUGGESTS a next step when files change. Each suggestion waits in Autonomy → Proposals for your approval."
+          subtitle="Each watcher keeps an eye on a folder and SUGGESTS a next step when files change. Each suggestion waits in Autonomy → Suggestions for your approval."
           actions={
             <div className="flex items-center gap-2">
               {/* v1.314.0: "Check now" (was "Poll now"). While sentinels are
@@ -358,7 +358,7 @@ export default function SentinelsPage() {
                     href="/autonomy"
                     className="text-accent-soft underline-offset-2 hover:underline"
                   >
-                    Autonomy → Proposals
+                    Autonomy → Suggestions
                   </Link>{" "}
                   for your review — anything they suggest still goes through Autonomy&apos;s
                   settings, budget and approvals.
@@ -384,7 +384,7 @@ export default function SentinelsPage() {
                 href="/autonomy"
                 className="inline-flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-1.5 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
               >
-                Review proposals <ArrowRight size={13} />
+                Review suggestions <ArrowRight size={13} />
               </Link>
             </div>
           </div>
@@ -508,7 +508,7 @@ export default function SentinelsPage() {
                   className="field"
                 />
                 <div className="mt-1 text-[11px] text-zinc-600">
-                  Becomes the proposal's task when this watcher fires. Leave blank for a
+                  Becomes the suggestion's task when this watcher fires. Leave blank for a
                   generic “review what changed” suggestion.
                 </div>
               </div>

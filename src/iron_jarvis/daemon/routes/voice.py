@@ -12,6 +12,7 @@ import json
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
 
+from ...core.failures import plain_failure
 from ...providers.adapters.base import ProviderError, scrub_sent_credentials
 from ...providers.egress import LocalOnlyRefused
 from ..app import _ws_token_ok
@@ -162,7 +163,7 @@ async def transcribe_clip(
     try:
         data = base64.b64decode(audio_b64, validate=False)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"invalid base64 audio: {exc}")
+        raise HTTPException(status_code=400, detail=plain_failure("That recording could not be read.", exc))
     if not data:
         raise HTTPException(status_code=400, detail="empty audio")
     if len(data) > d._VOICE_MAX_BYTES:
@@ -237,7 +238,7 @@ async def transcribe_clip(
             except httpx.HTTPError as exc:
                 raise HTTPException(
                     status_code=424,
-                    detail=f"{label} transcription unreachable: {exc}",
+                    detail=plain_failure(f"{label} transcription could not be reached. Check your connection and try again.", exc),
                 )
             if resp.status_code == 200:
                 try:

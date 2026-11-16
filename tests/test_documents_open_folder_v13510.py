@@ -100,4 +100,5 @@ def test_a_launcher_failure_is_said_not_swallowed(client, monkeypatch, tmp_path)
     folder.mkdir()
     res = client.post("/documents/open", json={"path": str(folder)})
     assert res.status_code == 422
-    assert "could not open" in res.json()["detail"]
+    # v1.506.0 (north-star 8.1): the launcher's failure in plain words.
+    assert res.json()["detail"] == "That folder could not be opened."

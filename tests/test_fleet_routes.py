@@ -552,7 +552,12 @@ def test_add_node_validation(tmp_path, monkeypatch):
         "/fleet/nodes", json={"base_url": "http://x", "id": "not a valid id!"}
     )
     assert bad.status_code == 400
-    assert "invalid node id" in bad.json()["detail"]  # the registry's own reason
+    # v1.506.0 (north-star 8.1, moved on purpose): only a sentence the
+    # package's OWN code raised is kept (core/failures.plain_failure); this
+    # file's stand-in registry raises from the test, so the screen reads the
+    # plain line. The real registry's reason ("node id must be lowercase …")
+    # is raised in iron_jarvis/fleet/registry.py and is kept.
+    assert bad.json()["detail"] == "That model server could not be added."
 
 
 def test_config_seeded_node_is_visible_AND_removable(tmp_path, monkeypatch):

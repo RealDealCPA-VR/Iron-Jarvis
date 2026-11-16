@@ -85,6 +85,9 @@ describe("the daemon's scans never read the on-screen-only words (review 2)", ()
       "tool server",
       "reflex",
       "Build session",
+      // v1.506.0 (north-star 8.4, moved on purpose): the daemon's routes and
+      // the Autonomy door's sentence still say "proposal".
+      "proposal",
     ]);
   });
 });

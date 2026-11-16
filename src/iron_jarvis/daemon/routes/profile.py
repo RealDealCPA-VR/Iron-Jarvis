@@ -31,6 +31,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
+from ...core.failures import plain_failure
 from ...profile import ProfileStore, as_dict, render
 from ...profile import training as _training
 from ...profile.block import MAX_BLOCK_CHARS
@@ -108,7 +109,7 @@ def register(app: FastAPI, d) -> None:
             try:
                 data = base64.b64decode(body.content_b64, validate=False)
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+                raise HTTPException(status_code=400, detail=plain_failure("That file could not be read. Choose another file.", exc))
             tmpdir = tempfile.mkdtemp(prefix="ij-sample-")
             tmp = _Path(tmpdir) / safe
             try:
@@ -116,7 +117,7 @@ def register(app: FastAPI, d) -> None:
                 text = document_to_markdown(tmp).strip()
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(
-                    status_code=400, detail=f"could not read that document: {exc}"
+                    status_code=400, detail=plain_failure("That document could not be read.", exc)
                 )
             finally:
                 try:
@@ -135,7 +136,7 @@ def register(app: FastAPI, d) -> None:
                 label=body.label or (body.filename or ""), text=text, origin=origin
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That sample could not be saved.", exc))
         return {"sample": _training.as_dict(rec)}
 
     @app.delete("/profile/samples/{sample_id}")

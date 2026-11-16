@@ -267,7 +267,8 @@ describe("T3-A1 Autonomy: the on/off state leads, then what waits on you, then g
     render(<AutonomyPage />);
     const goalsCard = await findHeading(/^Goals from Chat/);
     const stateTile = await screen.findByText("Enabled"); // the "Autonomy" Stat's value
-    const proposals = heading(/^Proposals/);
+    // v1.506.0 (north-star 8.4): the queue is headed "Suggestions" now.
+    const proposals = heading(/^Suggestions/);
     expect(before(stateTile, goalsCard), "the on/off tile sits above the goals").toBe(true);
     expect(before(proposals, goalsCard), "Proposals (waiting on you) sit above the goals").toBe(true);
     expect(before(stateTile, proposals), "the status tiles lead the page").toBe(true);

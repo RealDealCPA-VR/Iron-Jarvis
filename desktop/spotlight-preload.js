@@ -3,8 +3,9 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("spotlight", {
-  // Send the typed task to the main process (which POSTs it to the daemon).
-  // Resolves { ok: true, id } or { ok: false, error }.
+  // Send the typed words to the main process, which opens them in chat in the
+  // main window (v1.506.0). Resolves { ok: true, opened: "chat" } or
+  // { ok: false, error }.
   submit: (task) => ipcRenderer.invoke("spotlight:submit", task),
   // Hide the overlay.
   close: () => ipcRenderer.send("spotlight:close"),

@@ -13,6 +13,7 @@ import time
 from fastapi import FastAPI, HTTPException, Request, Response
 from typing import Any
 
+from ...core.failures import plain_failure
 from ..schemas import FsMkdirBody
 from ...core.fs_policy import fs_read_ok, is_protected_path
 
@@ -126,7 +127,7 @@ def register(app: FastAPI, d) -> None:
         try:
             p.mkdir(exist_ok=True)
         except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"could not create: {exc}")
+            raise HTTPException(status_code=400, detail=plain_failure("That folder could not be made.", exc))
         return {"path": str(p), "created": created}
 
     @app.get("/fs/drives")
@@ -153,7 +154,7 @@ def register(app: FastAPI, d) -> None:
         try:
             return list_dir(path, show_hidden=show_hidden, dirs_only=dirs_only)
         except (FileNotFoundError, NotADirectoryError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
+            raise HTTPException(status_code=404, detail=plain_failure("That folder was not found.", exc))
 
     @app.get("/fs/files")
     def fs_files(
@@ -182,5 +183,5 @@ def register(app: FastAPI, d) -> None:
         try:
             body = _files_listing(path, depth, limit, show_hidden)
         except (FileNotFoundError, NotADirectoryError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
+            raise HTTPException(status_code=404, detail=plain_failure("That folder was not found.", exc))
         return _etagged_json(body, request)

@@ -128,8 +128,10 @@ def test_preview_csv_oversized_field_is_422_not_500(tmp_path):
     r = client.get("/documents/preview", params={"path": str(f)})
     assert r.status_code == 422
     detail = r.json()["detail"]
-    assert detail.startswith("could not read:")
-    assert "field larger" in detail  # the csv error text reaches the user
+    # v1.506.0 (north-star 8.1, moved on purpose): the csv library's text
+    # ("field larger than field limit") goes to the log, not the screen.
+    assert detail == "That file could not be read."
+    assert "field larger" not in detail
 
 
 # --- truncation honesty on existing kinds -------------------------------------

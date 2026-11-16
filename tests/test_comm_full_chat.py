@@ -365,13 +365,14 @@ async def test_rate_cap_pauses_after_eight_turns_then_recovers(platform):
         res = await poller._handle("tg", ch, _msg(f"m{i}", update_id=i))
         assert res["status"] == "chat"
     tid = res["thread_id"]
-    before = len(store.history_body(tid, limit=100))
+    # v1.506.0 (north-star 6.8): history_body returns the whole thread.
+    before = len(store.history_body(tid))
 
     limited = await poller._handle("tg", ch, _msg("m9", update_id=99))
     assert limited["status"] == "rate_limited"
     assert RATE_LIMIT_REPLY in ch.sent[-1]
     # NOTHING appended for the limited turn.
-    assert len(store.history_body(tid, limit=100)) == before
+    assert len(store.history_body(tid)) == before
 
     now[0] = 61.0  # the window rolls — turns flow again
     ok = await poller._handle("tg", ch, _msg("m10", update_id=100))

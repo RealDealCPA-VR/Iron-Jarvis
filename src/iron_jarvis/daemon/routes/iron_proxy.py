@@ -53,6 +53,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from ...core.failures import plain_failure
 from ...iron_proxy.client import IronProxyError
 from ...iron_proxy.service import JARVIS_TO_PROXY
 
@@ -365,7 +366,7 @@ async def open_account_signin(d: Any, svc: Any, client: Any, account_id: str) ->
             d.platform.terminals.create, None, None, 100, 30, env=env, name=name
         )
     except RuntimeError as exc:  # the session cap
-        raise HTTPException(status_code=429, detail=str(exc)) from None
+        raise HTTPException(status_code=429, detail=plain_failure("Too many terminals are open. Close one and try again.", exc)) from None
     # Nobody is attached until the dashboard opens Build: keep the output
     # (the sign-in URL/code) in the pane's tail so the attach replays it.
     session.start_autodrain()

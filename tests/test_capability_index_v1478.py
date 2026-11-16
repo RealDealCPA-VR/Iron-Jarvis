@@ -174,7 +174,10 @@ def test_the_index_holds_every_built_in_tool_setting_and_page_line(platform):
     assert by_kind["tool"] == expected
     assert CT_TOOL.NAME not in by_kind["tool"]
     assert by_kind["setting"] == {r.key for r in schema.SETTINGS if not r.pattern}
-    assert by_kind["page"] == {s.id for s in PD.STEPS}
+    # v1.506.0 (north-star 6.1): the page steps AND the page table's rows.
+    from iron_jarvis.daemon import pages as PG
+
+    assert by_kind["page"] == {s.id for s in PD.STEPS} | {p.id for p in PG.PAGES}
     assert by_kind["not_offered"] == {n.id for n in PD.NOT_OFFERED}
     for entry in entries:
         assert entry.title.strip() and entry.text.strip(), entry

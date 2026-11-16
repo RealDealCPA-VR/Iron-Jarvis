@@ -48,7 +48,9 @@ def test_voice_transcribe_with_custom_backend_configured(tmp_path):
     audio = base64.b64encode(b"RIFFfakewav" * 500).decode()
     r = client.post("/voice/transcribe", json={"audio_b64": audio, "mime": "audio/wav"})
     assert r.status_code == 424
-    assert "unreachable" in r.json()["detail"] or "failed" in r.json()["detail"]
+    # v1.506.0 (north-star 8.1, moved on purpose): the plain line, not the
+    # HTTP library's words.
+    assert "could not be reached" in r.json()["detail"]
 
 
 def test_voice_transcribe_rejects_empty_audio(tmp_path):

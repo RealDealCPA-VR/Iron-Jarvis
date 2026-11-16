@@ -167,6 +167,17 @@ DOOR_ROWS: list[tuple[str, str]] = [
     ("Can you install Claude Code for me?", "install_claude_code"),
     ("get me Claude Code", "install_claude_code"),
     ("reinstall Claude Code please", "install_claude_code"),
+    # v1.506.0 (north-star plan 6.3, 6.6; moved on purpose: the first two
+    # were "another_computer" lines with no door).
+    ("hand jobs to my other PC", "pair_computer"),
+    ("send the long runs over to my work computer", "pair_computer"),
+    ("pair this computer with my office PC", "pair_computer"),
+    ("restore Iron Jarvis from last night's backup", "restore_backup"),
+    ("install the update", "updates"),
+    ("delete my OpenAI API key", "remove_key"),
+    ("forget the Smith folder, I don't want it in your work record", "forget_folder"),
+    ("delete the Hartley project", "delete_project"),
+    ("make a new template", "templates"),
 ]
 
 #: (sentence, the thing it asks for that Iron Jarvis does not offer)
@@ -186,9 +197,10 @@ LINE_ROWS: list[tuple[str, str]] = [
     ("open Jarvis remotely", "another_computer"),
     # v1.448.0 (Wave A item 4): a second Iron Jarvis on another of the user's PCs.
     ("Let the Jarvis on my office PC take overnight jobs from this one", "another_computer"),
-    ("hand jobs to my other PC", "another_computer"),
+    # v1.506.0 (north-star plan 6.3): handing tasks to another computer is
+    # done by PAIRING it, a page step with a door now ("hand jobs to my other
+    # PC" moved to DOOR_ROWS on purpose).
     ("can my other Iron Jarvis run the night tasks?", "another_computer"),
-    ("send the long runs over to my work computer", "another_computer"),
     ("the Jarvis running on my laptop should pick up tasks from here", "another_computer"),
     ("set up two Jarvises so the office one does the heavy work", "another_computer"),
     ("make full access the default for this folder", "full_access_default"),
@@ -211,6 +223,9 @@ LINE_ROWS: list[tuple[str, str]] = [
     ("double-click the icon on my desktop", "desktop_control"),
     ("Click Save in the QuickBooks desktop app for me.", "desktop_control"),
     ("Press the Submit button inside Lacerte.", "desktop_control"),
+    # v1.506.0 (north-star plan 6.6): a chat or a coding session from inside a reply.
+    ("delete this chat", "chat_items"),
+    ("archive my old conversations", "chat_items"),
 ]
 
 #: Everyday sentences that must name NOTHING (no door, no line).

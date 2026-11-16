@@ -24,6 +24,7 @@ from collections import OrderedDict
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
+from ...core.failures import plain_failure
 
 #: At most this many session loads (parse + scan) run at once; a third waits
 #: in its worker thread — never on the event loop. A heavy session is tens of
@@ -108,7 +109,7 @@ def register(app: FastAPI, d) -> None:
         try:
             sessions = await asyncio.to_thread(list_sessions, harness or None, limit)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=plain_failure("That history could not be read.", exc)) from exc
         return {"sessions": sessions, "count": len(sessions)}
 
     @app.get("/history/sessions/{harness}/{session_id}")
@@ -127,6 +128,6 @@ def register(app: FastAPI, d) -> None:
                 session_page, harness, session_id, offset, limit
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=plain_failure("That history could not be read.", exc)) from exc
         except SessionNotFound as exc:
             raise HTTPException(status_code=404, detail="no such session") from exc

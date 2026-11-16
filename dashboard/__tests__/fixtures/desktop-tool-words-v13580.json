@@ -572,6 +572,12 @@
       "desktop": "remove or reset a chat persona"
     },
     {
+      "tool": "suggestion_answer",
+      "kind": "table",
+      "card": "answer a suggestion on the Improvements page",
+      "desktop": "answer a suggestion on the Improvements page"
+    },
+    {
       "tool": "client_answer",
       "kind": "table",
       "card": "say whether a name is one of your clients",

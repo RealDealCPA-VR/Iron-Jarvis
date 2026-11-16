@@ -18,6 +18,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from typing import Any
 
+from ...core.failures import plain_failure
 from ..schemas import GoalBody, GoalPatch, KillBody, SentinelAdd, SentinelPatch
 
 
@@ -38,7 +39,7 @@ def register(app: FastAPI, d) -> None:
                 autonomy_level=body.autonomy_level,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That goal could not be saved.", exc))
         return d._goal_view(rec)
 
     @app.patch("/autonomy/goals/{goal_id}")
@@ -87,11 +88,11 @@ def register(app: FastAPI, d) -> None:
         except KeyError:
             raise HTTPException(status_code=404, detail="proposal not found")
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=plain_failure("That suggestion could not be approved.", exc))
         except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc))
+            raise HTTPException(status_code=403, detail=plain_failure("Iron Jarvis is not allowed to run that suggestion.", exc))
         except RuntimeError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That suggestion could not be run.", exc))
         return {"status": "executed", "session_id": session.id if session else None}
 
     @app.post("/proposals/{proposal_id}/reject")
@@ -181,7 +182,7 @@ def register(app: FastAPI, d) -> None:
                 risk=body.risk,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That watcher could not be saved.", exc))
         return d._sentinel_view(rec)
 
     @app.patch("/sentinels/{name}")
@@ -194,7 +195,7 @@ def register(app: FastAPI, d) -> None:
         try:
             rec = d.platform.sentinels.update(name, **fields)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=plain_failure("That watcher could not be changed.", exc))
         if rec is None:
             raise HTTPException(status_code=404, detail="sentinel not found")
         return d._sentinel_view(rec)

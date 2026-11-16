@@ -6,7 +6,8 @@ quick task (Spotlight) stops saying "done" about a task that is not.
   and at the 15-minute cap a task that was still RUNNING was announced "Task
   done" too. ``cancelled`` is now an end ("Task cancelled"), the cap says the
   task is still running, the read is the slim one (``?transcript=0``) and a
-  tick never starts while the previous read is on its way.
+  tick never starts while the previous read is on its way. (Retired in
+  v1.506.0 with the watcher itself: the quick window opens chat now.)
 * F10: the Spotlight BrowserWindow (a whole renderer process) lived for the
   life of the app once opened; it is destroyed after
   ``SPOTLIGHT_IDLE_DESTROY_MS`` hidden. A pop-out window whose renderer died
@@ -60,103 +61,10 @@ def _run(script: str, tmp_path: Path, name: str):
 
 
 # --------------------------------------------------------------------------
-# F4 — the quick-task watcher
+# F4 — the quick-task watcher: RETIRED in v1.506.0 (north-star fix plan 6.5,
+# moved on purpose). The quick window's words open in CHAT now; no run is
+# started, so none is watched (tests/test_north_star_quick_window_v1506.py).
 # --------------------------------------------------------------------------
-
-_WATCH_HARNESS = """
-const notes = [];
-const requests = [];
-let cleared = 0;
-let tick = null;
-function setInterval(fn, ms) { tick = fn; return 1; }
-function clearInterval() { cleared += 1; tick = null; } // a cleared interval never fires again
-class Notification {
-  constructor(o) { this.o = o; }
-  on() {}
-  show() { notes.push({ title: this.o.title, body: this.o.body }); }
-}
-const DASHBOARD_URL = "http://127.0.0.1:8788";
-const path = require("path");
-const shell = { openPath: async () => "" };
-let mainWin = null;
-function showMainWindow() {}
-const MODE = process.argv[2];
-let statuses = (process.argv[3] || "").split(",");
-function daemonRequest(method, p) {
-  requests.push(p);
-  if (MODE === "hang") return new Promise(() => {});
-  const status = statuses.length > 1 ? statuses.shift() : statuses[0];
-  return Promise.resolve({ session: { status, summary: status === "completed" ? "All set." : "" }, transcript: null });
-}
-__LIFTED__
-const flush = () => new Promise((r) => setImmediate(r));
-(async () => {
-  watchSpotlightTask("s1", "rename the photos");
-  const ticks = Number(process.argv[4] || "1");
-  for (let i = 0; i < ticks && tick; i += 1) { tick(); await flush(); await flush(); }
-  console.log(JSON.stringify({ notes, requests: requests.length, paths: [...new Set(requests)], cleared }));
-})();
-"""
-
-
-def _watch(tmp_path: Path, mode: str, statuses: str, ticks: int) -> dict:
-    lifted = "\n".join(
-        [
-            _decl("SPOTLIGHT_POLL_MS"),
-            _decl("SPOTLIGHT_WATCH_CAP_MS"),
-            # v1.449.0: the toast reads the row's outcome and says the status
-            # table's words (tests/test_desktop_spotlight_outcome_v1449.py).
-            _decl("SPOTLIGHT_OUTCOME_WORDS"),
-            _lift("function spotlightFolder("),
-            _lift("function spotlightOutcome("),
-            # Readiness 0j.5 item 18 (moved on purpose): the toast's folder
-            # offer is its own helper now.
-            _lift("function spotlightToastPlan("),
-            _lift("function watchSpotlightTask("),
-        ]
-    )
-    script = _WATCH_HARNESS.replace("__LIFTED__", lifted)
-    f = tmp_path / "watch.js"
-    f.write_text(script, encoding="utf-8")
-    proc = subprocess.run(
-        ["node", str(f), mode, statuses, str(ticks)],
-        capture_output=True, text=True, encoding="utf-8", timeout=60,
-    )
-    assert proc.returncode == 0, proc.stderr
-    return json.loads(proc.stdout.strip().splitlines()[-1])
-
-
-@requires_node
-def test_a_cancelled_quick_task_ends_the_watch_and_says_stopped(tmp_path):
-    out = _watch(tmp_path, "answer", "active,cancelled", 10)
-    assert out["notes"] == [{"title": "Stopped: rename the photos", "body": "Click to open the result."}]
-    assert out["cleared"] == 1
-    assert out["requests"] == 2, "the watch kept polling a cancelled task"
-
-
-@requires_node
-def test_at_the_fifteen_minute_cap_a_running_task_is_called_still_running_not_done(tmp_path):
-    # 226 ticks of 4 s = 904 s, just past the 900 s cap.
-    out = _watch(tmp_path, "answer", "active", 226)
-    assert len(out["notes"]) == 1, out["notes"]
-    note = out["notes"][0]
-    assert note["title"] == "Still running: rename the photos"
-    assert "15 minutes" in note["body"]
-    assert "done" not in note["title"].lower()
-    assert out["cleared"] == 1
-
-
-@requires_node
-def test_a_finished_quick_task_still_says_done_with_its_summary(tmp_path):
-    out = _watch(tmp_path, "answer", "active,completed", 5)
-    assert out["notes"] == [{"title": "Done: rename the photos", "body": "All set."}]
-
-
-@requires_node
-def test_the_watch_reads_the_slim_session_and_never_stacks_reads(tmp_path):
-    out = _watch(tmp_path, "hang", "active", 30)
-    assert out["paths"] == ["/sessions/s1?transcript=0"]
-    assert out["requests"] == 1, "a tick started while the previous read was still on its way"
 
 
 # --------------------------------------------------------------------------

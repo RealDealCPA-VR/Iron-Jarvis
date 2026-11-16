@@ -115,6 +115,12 @@ export const RETIRED_ON_SCREEN: readonly Retired[] = [
   // v1.455.0 (Wave E, item 6): a coding session is never a "Build session"
   // on screen (VOCABULARY.md row 25); the daemon's own 404s still say it.
   onScreen("Build session", /\bbuild sessions?\b/i, "coding session"),
+  // v1.506.0 (north-star fix plan 8.4): something Iron Jarvis offers and
+  // waits on is a "suggestion" (VOCABULARY.md row 45); the Autonomy page
+  // still said "Proposals". Dashboard-only: the daemon's ids, routes
+  // (`/proposals`) and the Autonomy door's sentence in daemon/page_doors.py
+  // still carry the word.
+  onScreen("proposal", /\bproposals?\b/i, "suggestion (the page that lists them all is Improvements)"),
 ];
 
 /** A retired word read on SOME dashboard surfaces only (see RETIRED_ON_SURFACES). */

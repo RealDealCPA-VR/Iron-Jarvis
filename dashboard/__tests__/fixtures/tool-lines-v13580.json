@@ -64,6 +64,10 @@
       "ok": "queued a task for a teammate",
       "failed": "tried a queued task and it failed"
     },
+    "backup_now": {
+      "ok": "backed up Iron Jarvis",
+      "failed": "tried a backup and it failed"
+    },
     "batch_documents": {
       "ok": "worked through a folder of documents",
       "failed": "tried a document batch and it failed"
@@ -739,6 +743,14 @@
     "spawn_agent": {
       "ok": "started a helper agent",
       "failed": "tried a helper agent start and it failed"
+    },
+    "suggestion_answer": {
+      "ok": "answered a suggestion",
+      "failed": "tried a suggestion answer and it failed"
+    },
+    "suggestion_list": {
+      "ok": "listed the waiting suggestions",
+      "failed": "tried a suggestion list and it failed"
     },
     "tool_create": {
       "ok": "made a new tool",

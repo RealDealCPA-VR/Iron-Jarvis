@@ -462,10 +462,20 @@ def test_generate_with_key_stores_the_real_bytes(tmp_path, monkeypatch):
 def test_generate_failure_is_a_424_and_writes_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("PIXIO_API_KEY", "pxio_live_test")
 
-    def boom(key: str, prompt: str, **kw) -> bytes:
-        raise RuntimeError("Pixio: insufficient credits (402) — top up the account")
+    # v1.506.0 (north-star 8.1, moved on purpose): the failure comes from the
+    # REAL _generate_avatar_bytes over a fake Pixio answering 402. Only a
+    # sentence this package's own code raised reaches the screen
+    # (core/failures.plain_failure); a RuntimeError raised from this test file
+    # would read as foreign text and be replaced by the plain line.
+    import iron_jarvis.tools.pixio as pixio
 
-    monkeypatch.setattr(agents_routes, "_generate_avatar_bytes", boom)
+    class _Resp:
+        status_code = 402
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr(pixio, "_default_http", lambda *a, **k: _Resp())
     with _client(tmp_path) as client:
         r = client.post("/agents/builder/avatar", json={"generate": True})
         assert r.status_code == 424
