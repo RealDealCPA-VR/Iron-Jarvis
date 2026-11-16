@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.513.0
+
+**"Done" means done in a coding session.** The fifth of eight releases from the second review.
+
 ## v1.512.0
 
 **Stop means stopped.** The fourth of eight releases from the second review.
@@ -77,7 +81,3 @@
 ## v1.499.0
 
 **Iron Jarvis knows your clients.** **What it is.** Iron Jarvis now knows which of your folders belong to which client.
-
-## v1.498.0
-
-**The "keep working until it's true" check, everywhere and in more languages.** v1.495.0 checked chat replies and agent runs, in English.
