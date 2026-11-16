@@ -299,10 +299,10 @@ class SpawnAgentTool(Tool):
             TIME_LIMIT_REASON,
             DelegateTool,
             _local_only_now,
-            _with_handle,
             delegation_handle,
             publish_delegation_completed,
             publish_delegation_started,
+            settled_hand_off,
             stopped_by_user_error,
             user_stopped_child,
         )
@@ -825,12 +825,17 @@ class SpawnAgentTool(Tool):
                 pass
             await orch._post_run_allowance(child_session)
 
-            ok = run.state is AgentState.COMPLETED
+            finished = run.state is AgentState.COMPLETED
+            # v1.503.0 (north-star 3.5): the CHECKED result, delegate's own
+            # rule (``delegate_tool.settled_hand_off``).
+            ok, report, outcome, short_words = settled_hand_off(
+                child_session, run, delegation_handle(agent_name, run.id, child_session.id),
+            )
             # v1.395.0: the piece's row in the member's record for its role
             # (review: on the model it ran on, and the account it was pinned to).
             await _model_team.note_piece(
                 self.platform, record=record, role=_record_role, session_id=child_session.id,
-                scope=ctx.session_id, piece=_piece, finished=ok, report=run.result,
+                scope=ctx.session_id, piece=_piece, finished=finished, report=run.result,
                 provider=str(provider or ""), model=str(model or ""),
                 account=str(getattr(_hp.pin if _hp is not None else _member_pin, "profile_id", "") or ""),
                 turn=str(getattr(_hp, "turn", "") or ""), asked=_record_asked,
@@ -850,17 +855,16 @@ class SpawnAgentTool(Tool):
                 # The child's address rides in the OUTPUT, not only in `data` —
                 # the runtime shows the model `output` and nothing else, so a
                 # handle in `data` is a handle the caller can never use.
-                output=_with_handle(
-                    run.result,
-                    delegation_handle(agent_name, run.id, child_session.id),
-                ),
-                error=None if ok else (run.result or "subagent failed"),
+                output=report,
+                error=None if ok else short_words,
                 data={
                     "agent": agent_name,
                     "dynamic": self.registry.get(agent_name) is not None,
                     "child_run_id": run.id,
                     "child_session_id": child_session.id,
                     "state": run.state.value,
+                    # v1.503.0 (north-star 3.5): the ledger's verdict.
+                    "outcome": outcome,
                     "workspace": child_session.workspace_path,
                     # v1.395.0: the role asked for, and why this member took it.
                     **({"role": _team_role, "reason": _route.reason} if _route is not None else {}),

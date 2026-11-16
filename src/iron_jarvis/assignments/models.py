@@ -97,6 +97,13 @@ class AssignmentRecord(SQLModel, table=True):
     #: The latest session that ran it.
     session_id: str = Field(default="", index=True)
     last_error: str = ""
+    #: v1.503.0 (north-star 3.4, D12): the ledger's verdict on the job of a
+    #: ``done`` row (``Session.outcome``: completed | needs_you |
+    #: completed_with_failures | did_nothing; None before it existed or for
+    #: a run with none). A shortfall reads "Needs you" / "Part failed" /
+    #: "Did nothing" in the inbox (dashboard/lib/statusWords), never "Done".
+    #: Additive nullable: the schema reconcile adds it to an older database.
+    outcome: str | None = None
     created_at: datetime = Field(default_factory=utcnow, index=True)
     claimed_at: datetime | None = None
     started_at: datetime | None = None

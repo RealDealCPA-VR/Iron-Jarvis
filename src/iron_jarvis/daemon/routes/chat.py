@@ -5591,6 +5591,9 @@ async def chat_stream(
         escalate_agent = None   # v1.139.0: validated roster target (None = default)
         workflow_draft = None           # proposed reusable workflow (v1.120.0)
         made_docs: list[str] = []           # documents created/edited (preview)
+        # v1.503.0 (north-star 3.9): True once a file tool succeeded without
+        # naming its file — `made_docs` is then no whole record (lock-step).
+        _write_gap = False
         workflow_run_info = None    # v1.170.0: workflow this turn STARTED (contract 2)
         reply_text = ""
         # TRUNCATED (v1.323.0): did the FINAL answering model call stop for
@@ -6208,9 +6211,12 @@ async def chat_stream(
                         _dv_end = await _chat_turn.until_done_note(
                             d, _until, body, reply=reply_text, tools_used=tools_used,
                             armed=[*armed, *ask_armed], config_cards=config_cards, ctx=ctx,
-                            deliverables=_deliv, denied=denied_tools, round_index=_round,
+                            deliverables=_deliv,
+                            denied=_chat_turn.until_done_denied(denied_tools, refused_tools), round_index=_round,
                             rounds=_rounds, trust_state=_trust_state, truncated=_truncated,
                             demo=_chat_turn.is_demo_route(route_provider, route_reason),
+                            # v1.503.0 (north-star 3.9; lock-step: chat_turn).
+                            written=None if _write_gap else made_docs,
                         )
                     else:
                         _dv_end = await _deliv.end_note(_round, _rounds)
@@ -6721,6 +6727,10 @@ async def chat_stream(
                     _plan: dict[str, Any] = {
                         "t": _t, "safe_args": safe_args, "refused": "",
                         "carded": False, "card_deny": "", "grant_extra": set(),
+                        # v1.503.0 (north-star 3.12): the label a card's
+                        # refusal is recorded under ("" = the registry's
+                        # default, "permission denied" — the user's No).
+                        "card_deny_label": "",
                         # v1.473.0 review: the fingerprints of the kept
                         # values this call names, taken HERE, where its card
                         # is built. A carded call runs only while they still
@@ -7341,10 +7351,17 @@ async def chat_stream(
                             _plan["card_deny"] = _night_turn.declined_words(_nwhat)
                             _night_turn.note("declined", _night_turn.note_words(_nwhat))
                         else:
+                            # v1.503.0 (north-star 3.12): nobody answered — not
+                            # the user's No. Its own label, the agent
+                            # runtime's ("paused"), so the footnote says the
+                            # card was not answered in time and the call is
+                            # never listed as declined by the user.
                             _plan["card_deny"] = (
                                 "the approval request timed out with no"
-                                " answer"
+                                " answer — this call was not run; do not"
+                                " retry it"
                             )
+                            _plan["card_deny_label"] = _chat_turn.CARD_TIMEOUT_LABEL
                     _plan["grant_extra"] = _grant_extra
 
                 # A reader joins the round's batch only when nothing about it
@@ -7378,7 +7395,9 @@ async def chat_stream(
                     # chat_turn passes the same kwargs.
                     _low_kw = _low_trust_invoke_kwargs(_trust_state, tc.name)
                     _deny_reason = _p["card_deny"] or _low_kw.get("deny_reason", "")
-                    _deny_label = _low_kw.get("deny_label", "") if _low_kw else ""
+                    _deny_label = (_p.get("card_deny_label", "") if _p["card_deny"] else "") or (
+                        _low_kw.get("deny_label", "") if _low_kw else ""
+                    )
                     try:
                         # deny_reason rides ONLY when a human actually
                         # refused — the common path stays byte-identical
@@ -7702,8 +7721,10 @@ async def chat_stream(
                             _label = refusal_label(result.error or "")
                             if _label == "permission denied":
                                 denied_tools.append(tc.name)
-                                if _deliv is not None:
-                                    _deliv.declined = True  # v1.481.0 (lock-step)
+                            if _label in ("permission denied", _chat_turn.CARD_TIMEOUT_LABEL) and _deliv is not None:
+                                # v1.481.0 (lock-step); v1.503.0: a card nobody
+                                # answered stops the nudges too (no one is there).
+                                _deliv.declined = True
                             if _label:
                                 refused_tools.append((tc.name, _label))
                             else:
@@ -7815,6 +7836,12 @@ async def chat_stream(
                                     continue
                                 if _cp not in made_docs:
                                     made_docs.append(_cp)
+                            # v1.503.0 (north-star 3.9): a file tool that
+                            # named no file leaves the record incomplete —
+                            # the file-claim note then keeps its old answer.
+                            # MIRROR NOTE (lock-step): chat_turn.py.
+                            if _chat_turn.write_record_gap(tc.name, result):
+                                _write_gap = True
                         # SECOND FAILURE (v1.344.0, M2): the model-facing
                         # tool message names the count; the frame (the
                         # user's tool card) keeps the bare content. MIRROR
@@ -8297,9 +8324,11 @@ async def chat_stream(
                 reply = f"{reply.rstrip()}\n\n{_cut_end}" if reply.strip() else _cut_end
             if not reply.strip():
                 # v1.246.0 — lock-step with chat_turn (v1.378.0: a declined
-                # nudge says so).
+                # nudge says so). v1.503.0 (north-star 3.8): and the calls
+                # that did not succeed (lock-step).
                 reply = _no_text_reply(
                     tools_used, last_tool_output, _f_refusal, surface=_surface_for(body),
+                    failed=[_k[0] for _k in _failed_calls],
                 )
                 _declined_reply = _f_refusal is not None
             reply += refusal_footnotes(refused_tools, surface=_footnote_place)  # 12A: lock-step
@@ -8331,7 +8360,13 @@ async def chat_stream(
                 # ledger — the note above keys off the user's phrasing and
                 # so missed a reply announcing a saved file after only a
                 # scan had run. MIRROR NOTE (lock-step): both lanes.
-                reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)
+                # v1.503.0 (north-star 3.9): with the reply's record of what
+                # its file tools wrote; off the loop (a few stats). MIRROR
+                # NOTE (lock-step): chat_turn.run_chat_turn.
+                _wrote_in = getattr(ctx, "workspace", None) if tools_used else None
+                reply += await asyncio.to_thread(lambda: _claimed_write_note(reply, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer,
+                    written=None if _write_gap else made_docs, workspace=_wrote_in,
+                ))
                 # v1.436.0 (Wave 5 group K): and a CLAIMED SETTING OR RECORD
                 # change against what this turn's successful calls and their
                 # cards really changed — a card the user declined, a refused

@@ -201,7 +201,8 @@ describe("(a) ONE status table covers every outcome wave 1 stores", () => {
     written.push("missed", "failed"); // scheduling/service.py; the legacy FAILED_STATUSES value
     expect(written).toEqual(expect.arrayContaining(["ok", "error", "needs_you", "partial", "cancelled", "skipped"]));
     // v1.358.0 (lane 8A, updated on purpose): the outcome leads.
-    const known = new Set(["Done", "Needs you", "Part failed", "Failed", "Stopped", "Skipped", "Missed"]);
+    // v1.503.0 (north-star 3.11, moved on purpose): + "Did nothing".
+    const known = new Set(["Done", "Needs you", "Part failed", "Did nothing", "Failed", "Stopped", "Skipped", "Missed"]);
     for (const v of written) {
       expect(known.has(scheduleRunWords(v).word), v).toBe(true);
       // lib/scheduleOutcome keeps no second copy of the words.
@@ -219,11 +220,13 @@ describe("(a) ONE status table covers every outcome wave 1 stores", () => {
     const words = statuses.map((s) => statusWords(s).word);
     expect(words).toEqual(["Working", "Queued", "Done", "Failed", "Stopped"]);
     const outcomes = [...outcome.matchAll(/^OUTCOME_[A-Z_]+ = "([a-z_]+)"/gm)].map((m) => m[1]);
-    expect(outcomes.sort()).toEqual(["completed", "completed_with_failures", "needs_you"]);
+    // v1.503.0 (north-star 3.11, moved on purpose): + "did_nothing".
+    expect(outcomes.sort()).toEqual(["completed", "completed_with_failures", "did_nothing", "needs_you"]);
     expect(statusWords("completed", "completed").word).toBe("Done");
     // The SAME words for the same verdict, on a session and on a schedule.
     expect(statusWords("completed", "needs_you").word).toBe(scheduleRunWords("needs_you").word);
     expect(statusWords("completed", "completed_with_failures").word).toBe(scheduleRunWords("partial").word);
+    expect(statusWords("completed", "did_nothing").word).toBe(scheduleRunWords("did_nothing").word);
     // A stop is never painted like a failure, anywhere.
     expect(statusWords("cancelled").tone).toBe("slate");
     expect(scheduleRunWords("cancelled").tone).toBe("slate");

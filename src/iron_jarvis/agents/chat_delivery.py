@@ -181,7 +181,11 @@ def delivery_result(
     BLOCKING. Raises what ``session_result`` raises (the caller catches)."""
     from .outcome import session_result
 
-    result = session_result(engine, session_id, receipt=True, manager=manager, config=config)
+    # v1.503.0 (north-star 3.13): a team job's receipt carries the files its
+    # workers made (``team=True``); a solo run reads exactly as before.
+    result = session_result(
+        engine, session_id, receipt=True, manager=manager, config=config, team=True
+    )
     if manager is None and isinstance(result, dict):
         result.pop("on_this_network", None)
     return result

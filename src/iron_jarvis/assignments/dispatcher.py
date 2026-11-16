@@ -295,7 +295,12 @@ class AssignmentDispatcher:
                     continue
                 ok = status is SessionStatus.COMPLETED
                 error = "" if ok else _first_line(getattr(session, "summary", "") or "")
-                await asyncio.to_thread(store.finish, row.id, ok, error)
+                # v1.503.0 (north-star 3.4): the session's verdict, as the
+                # orchestrator's hook passes it.
+                await asyncio.to_thread(
+                    store.finish, row.id, ok, error,
+                    outcome=getattr(session, "outcome", None),
+                )
                 swept += 1
             except Exception:  # noqa: BLE001 — one bad row must not stop the sweep
                 log.debug("sweep of %s failed", row.id, exc_info=True)

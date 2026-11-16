@@ -41,6 +41,7 @@ import contextlib
 import contextvars
 import json as _json
 import logging
+import os
 import re as _re
 import threading as _threading
 import time as _time
@@ -2913,30 +2914,65 @@ REFUSAL_FOOTNOTE_WORDS: dict[str, str] = {
     "low trust": "blocked under low trust",
     # v1.346.0 (post-lane spend): a priced call the POST lane could not ask about.
     SPEND_NOT_ASKED_FOOTNOTE: "needs an approval this lane cannot ask for",
+    # v1.503.0 (north-star 3.12): a card nobody answered before it timed out
+    # (the agent runtime's own ledger kind for it) — never the user's No.
+    "paused": "the approval card was not answered in time",
 }
+
+#: v1.503.0 (north-star 3.12): the label the stream lane gives a card that
+#: TIMED OUT with no answer — the agent runtime's own (``agents/runtime``,
+#: ``deny_label="paused"``). It used to take the registry's default,
+#: "permission denied", so the footnote said the user had declined.
+CARD_TIMEOUT_LABEL = "paused"
 
 
 def refusal_label(error: str) -> str:
     """Which refusal a failed ``ToolResult.error`` is — ``"permission denied"``
     (the engine's own deny, a declined card, a standing refusal), ``"not
     armed"`` (the v1.227.0 roster gate), ``"low trust"`` (a kept-away call
-    under a low door or a taint) — or ``""`` for an ordinary tool failure.
-    The two labelled refusals are matched on the registry's prefix; the
-    permission one keeps the substring match both lanes have always used."""
+    under a low door or a taint), ``"paused"`` (a card nobody answered in
+    time) — or ``""`` for an ordinary tool failure. Every label is matched on
+    the registry's PREFIX (``tools/registry.py``: ``f"{label}: {reason}"``).
+
+    v1.503.0 (north-star 3.12): the permission one used to be a SUBSTRING
+    match, so a tool whose own output said "permission denied" (a git push
+    over SSH, a database, a locked file) was listed as the user's refusal —
+    no fix button, and the check-again loop switched off for the rest of the
+    reply."""
     text = str(error or "")
     if text.startswith("not armed:"):
         return "not armed"
     if text.startswith("low trust:"):
         return "low trust"
+    if text.startswith(f"{CARD_TIMEOUT_LABEL}:"):
+        return CARD_TIMEOUT_LABEL
     if text.startswith(f"{SPEND_NOT_ASKED_LABEL}:") and (
         SPEND_NOT_ASKED_TAIL in text or ONCE_NOT_ASKED_TAIL in text
     ):
         # v1.346.0: the POST lane's spend refusal — the breaker's own
         # ``NOT RUN:`` sentence (no tail) keeps reading as "" below.
         return SPEND_NOT_ASKED_FOOTNOTE
-    if "permission denied" in text:
+    if text.startswith("permission denied:"):
         return "permission denied"
     return ""
+
+
+def until_done_denied(denied_tools: Iterable[str], refused_tools: Iterable[Any]) -> list[str]:
+    """The calls the check-again loop counts as refused (v1.503.0, north-star
+    3.12): the user's own No (``denied_tools``) and a card nobody answered in
+    time (:data:`CARD_TIMEOUT_LABEL`). A timed-out card is not the user's No
+    (its footnote says so), but nobody is there to answer another one, so the
+    reply is never sent back to wait on a second card. MIRROR NOTE
+    (lock-step): both lanes hand ``until_done_note`` this list."""
+    out = [str(n) for n in denied_tools or ()]
+    for item in refused_tools or ():
+        try:
+            name, label = item
+        except (TypeError, ValueError):
+            continue
+        if label == CARD_TIMEOUT_LABEL and str(name) not in out:
+            out.append(str(name))
+    return out
 
 
 #: v1.353.0 (G41): a connected app's tool id, ``mcp__<pack>__<tool>``
@@ -4651,8 +4687,48 @@ def page_steps_block(body: Any, platform: Any = None) -> str:
         return ""
 
 
+#: The opening of every reply Iron Jarvis writes itself when the model wrote
+#: none but a step ran (``change_claims._NO_TEXT_LEAD`` is the same words:
+#: the claim checks never judge it).
+NO_TEXT_LEAD = "The model finished without writing an answer."
+
+#: v1.503.0 (north-star 3.8): the tools that only READ — asking again after
+#: one of them repeats nothing, so :func:`_no_text_reply` may say "Press
+#: Retry". An allow-list on purpose: any other name may have changed
+#: something, and a retry would do it again.
+_READS_ONLY_TOOLS: frozenset[str] = frozenset({
+    "web_search", "web_fetch", "web_extract", "web_look", "read_document", "read_file", "list_files",
+    "list_folder", "file_search", "memory_search", "memory_read", "ltm_search", "recall", "recall_lessons",
+    "guide_search", "guide_read", "app_search", "app_status", "app_health", "grep", "glob", "code_search",
+    "image_info", "view_image", "extract_pdf", "excel_read", "excel_query", "excel_profile", "excel_trace",
+    "excel_formula_check", "excel_live_look", "compare_documents", "pdf_form_fields", "redact_scan",
+    "find_capability", "config_list", "schedule_list", "workflow_list", "goal_list", "night_task_list",
+    "list_agents", "changes_list", "history_search", "skill_search", "brain_read", "brain_search",
+    "blackboard_read", "mcp_list_resources", "mcp_read_resource", "integration_list", "tool_list",
+    "secret_list", "downloads_list", "pixio_models", "pixio_params", "worklist_status", "calculate",
+    "browser_read_page", "browser_screenshot", "browser_get_elements", "browser_list_tabs",
+    "browser_get_active_tab", "browser_get_status", "page_read", "pane_read", "pane_list", "process_read",
+    "build_folder_show", "computer_use_status", "pack_status",
+})
+
+
+def _steps_said(names: Iterable[str]) -> str:
+    """The steps *names* in the approval card's words ("run a command and
+    change a file"), each once, in call order."""
+    words: list[str] = []
+    for n in dict.fromkeys(str(x) for x in names or ()):
+        parts = app_tool_words(n)
+        w = f"{parts[0]} › {parts[1]}" if parts is not None else (builtin_tool_words(n) or n)
+        if w not in words:
+            words.append(w)
+    if len(words) <= 1:
+        return "".join(words)
+    return ", ".join(words[:-1]) + " and " + words[-1]
+
+
 def _no_text_reply(
     tools_used: list[str], last_tool_output: str, refusal=None, *, surface: "str | None" = None,
+    failed: Iterable[str] = (),
 ) -> str:
     """The reply when the model wrote nothing even after being asked once.
     Says what happened in plain words; never an empty bubble.
@@ -4665,6 +4741,17 @@ def _no_text_reply(
     never "The reply above is incomplete": this reply IS the whole reply and
     holds none of the declined answer, even when the streamed nudge showed a
     few words first.
+
+    v1.503.0 (north-star 3.8): it branches on the CALLS this reply made —
+    *tools_used* (those that succeeded) and *failed* (those that did not) —
+    never on the last output's text alone. A step that changes something and
+    prints nothing (a move, a delete, a new folder) used to read "no tool ran
+    and nothing was written. Press Retry": untrue, and a retry would do it
+    again. Now the reply says what ran in the card's words and that it
+    returned nothing, and after any step that is not a plain read
+    (:data:`_READS_ONLY_TOOLS`) it asks the user to check what changed before
+    asking again — never a bare "Press Retry". "No tool ran" is said only
+    when none was called.
     MIRROR NOTE (lock-step): both chat lanes call this."""
     if refusal is not None:
         try:
@@ -4679,7 +4766,7 @@ def _no_text_reply(
         snippet = last_tool_output.strip()[:600]
         ran = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
         return (
-            "The model finished without writing an answer. "
+            f"{NO_TEXT_LEAD} "
             f"Here is what {ran} returned:\n{snippet}"
         )
     # v1.433.0 review: "Press Retry" where there is a Retry button; the
@@ -4690,6 +4777,31 @@ def _no_text_reply(
         retry = press_retry(surface)
     except Exception:  # noqa: BLE001 — wording only
         retry = "Press Retry"
+    ran_ok = [str(n) for n in dict.fromkeys(tools_used or ())]
+    ran_bad = [str(n) for n in dict.fromkeys(failed or ()) if str(n) not in ran_ok]
+    if ran_ok or ran_bad:
+        # v1.503.0 (north-star 3.8): steps ran (or were tried) and nothing
+        # came back to show — said as it happened, never "no tool ran".
+        parts = [NO_TEXT_LEAD]
+        if ran_ok:
+            one = len(ran_ok) == 1
+            parts.append(
+                f"It ran {'one step' if one else 'these steps'}: {_steps_said(ran_ok)}. "
+                f"{'It' if one else 'They'} returned nothing to show."
+            )
+        if ran_bad:
+            one = len(ran_bad) == 1
+            parts.append(
+                f"{'This step' if one else 'These steps'} did not succeed: {_steps_said(ran_bad)}."
+            )
+        if any(n not in _READS_ONLY_TOOLS for n in (*ran_ok, *ran_bad)):
+            again = retry[:1].lower() + retry[1:]
+            parts.append(
+                f"Check what changed before you {again}: that would run {'it' if len(ran_ok) + len(ran_bad) == 1 else 'them'} again."
+            )
+        else:
+            parts.append(f"{retry}, or pick a different model.")
+        return " ".join(parts)
     return (
         "The model returned an empty answer — no tool ran and nothing was "
         f"written. {retry}, or pick a different model."
@@ -8896,13 +9008,19 @@ async def until_done_note(
     truncated: bool,
     demo: bool,
     session_id: str = "chat",
+    written: "list[str] | None" = None,
 ) -> str:
     """The check-again note for a plain chat reply about to end on words
     (v1.495.0, ``daemon/until_done``), or "" (let it end). Every fact is the
     reply's own record: the calls that ran (``tools_used``), the cards, the
     disk, the figures shelf. One ``autonomy.nudged`` event per note. Never
     raises. MIRROR NOTE (lock-step): both lanes ask it at the same seam, where
-    the deliverables check used to ask once."""
+    the deliverables check used to ask once.
+
+    v1.503.0 (north-star 3.9): *written* — the reply's record of the files
+    its tools wrote (None when a file tool named no file), so a claimed file
+    beyond it is put to the model even after a file tool ran; the folder is
+    ``ctx.workspace``. *denied* is ``until_done_denied(...)`` (3.12)."""
     if until is None or demo:
         return ""
     try:
@@ -8925,6 +9043,8 @@ async def until_done_note(
             figures_ctx=ctx,
             deliverables=deliverables,
             chat=True,
+            written=None if written is None else list(written),
+            workspace=getattr(ctx, "workspace", None),
         )
         note = await until.check(
             facts, round_index=round_index, rounds=rounds,
@@ -9198,6 +9318,21 @@ _FILE_CLAIM_RX = _re.compile(
     _re.IGNORECASE,
 )
 
+#: v1.503.0 (north-star 3.9): a name LISTED right after a claimed one ("I
+#: saved notes.md and budget.xlsx", "…notes.md, plan.docx and budget.xlsx") —
+#: read with ``.match`` at the claim's end only, at most
+#: :data:`_CLAIMED_MORE_MAX` times. Never a name that starts its own clause
+#: ("…and budget.xlsx is unchanged", "…, and budget.xlsx has the totals").
+_CLAIMED_MORE_RX = _re.compile(
+    r"[`\"'*”’]{0,3}(?:\s{0,3},\s{0,3}(?:(?:and|&)\s{1,3})?|\s{1,3}(?:and|&)\s{1,3})"
+    r"[`\"'*“‘]{0,3}(?:[^\s`\"'*<>|,]{0,200}[\\/])?"
+    + _CLAIMED_NAME
+    + r"(?![`\"'*”’]{0,3}\s{1,3}(?:is|was|are|were|has|had|have|stays?|remains?|still|isn't|wasn't|"
+    r"did|does|didn't|doesn't|won't|will|can|cannot|could|should|would|needs?)\b)",
+    _re.IGNORECASE,
+)
+_CLAIMED_MORE_MAX = 8
+
 #: The verbs of a claim that an EXISTING file was changed (v1.351.0, G06).
 _CHANGE_VERBS = r"(?:updated|edited|modified|changed|renamed|moved)"
 
@@ -9470,7 +9605,10 @@ def _may_have_changed_files(tools_used: list[str], custom_tools=()) -> bool:
     return False
 
 
-def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), ran_writer=None) -> str:
+def _claimed_write_note(
+    reply: str, tools_used: list[str], *, custom_tools=(), ran_writer=None,
+    written: "Iterable[str] | None" = None, workspace: Any = None,
+) -> str:
     """'' unless the REPLY claims a file exists that no tool actually wrote.
 
     The sibling note above keys off the USER's phrasing, which is why it stayed
@@ -9512,12 +9650,42 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), r
     before a failing test ends the line — which ``tools_used``, the calls
     that succeeded, cannot show); None = judged from the names. MIRROR NOTE
     (lock-step): both chat lanes pass it.
+
+    v1.503.0 (north-star 3.9): *written* and *workspace* — the reply's record
+    of the files it wrote, and its folder (see :func:`_claimed_write_names`).
+    With them a claimed file beyond what was written is named even though a
+    file tool ran. BLOCKING when a record is handed over and a claimed name
+    is not in it (a few bounded stats): both lanes call it off the event
+    loop (``asyncio.to_thread``).
     """
     named, changed = _claimed_write_names(
         reply, tools_used, custom_tools=custom_tools, ran_writer=ran_writer,
+        written=written, workspace=workspace,
     )
     if not named and not changed:
         return ""
+    if set(tools_used) & _FILE_CHANGING_TOOLS:
+        # v1.503.0 (north-star 3.9): a file tool DID write this reply (the
+        # record names what), so only the claimed files it did not write are
+        # named — never "nothing was written to disk", and no Tools menu
+        # advice: a file tool was on and ran.
+        part = ""
+        if named:
+            shown = ", ".join(f"`{n}`" for n in named[:3])
+            one = len(named) == 1
+            part += (
+                f" The reply mentions {shown}, but no tool wrote {'it' if one else 'them'} this turn"
+                f" and {'it is' if one else 'they are'} not in the folder — so"
+                f" {'that file does' if one else 'those files do'} not exist."
+            )
+        if changed:
+            shown = ", ".join(f"`{n}`" for n in changed[:3])
+            one = len(changed) == 1
+            part += (
+                f" The reply says it changed {shown}, but no tool changed {'it' if one else 'them'}"
+                f" this turn — so {'that file' if one else 'those files'} did not change."
+            )
+        return f"\n\n_Note:{part}_"
     said = ""
     if named:
         shown = ", ".join(f"`{n}`" for n in named[:3])
@@ -9544,26 +9712,135 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), r
     )
 
 
+def write_record_gap(name: str, result: Any) -> bool:
+    """v1.503.0 (north-star 3.9): did a SUCCESSFUL call of a file-changing
+    tool leave the reply's record of written files incomplete — it changed a
+    file (:data:`_FILE_CHANGING_TOOLS`) without naming one, neither a
+    workspace path (:func:`reported_document_paths`) nor an absolute
+    ``created_paths`` entry? Then the lanes hand :func:`_claimed_write_note`
+    no record and it keeps its old conservative answer. MIRROR NOTE
+    (lock-step): both lanes call it where they merge ``made_docs``."""
+    if str(name or "") not in _FILE_CHANGING_TOOLS:
+        return False
+    if reported_document_paths(str(name), getattr(result, "data", None)):
+        return False
+    for p in getattr(result, "created_paths", None) or ():
+        try:
+            if Path(str(p)).is_absolute():
+                return False
+        except (OSError, ValueError):
+            continue
+    return True
+
+
+#: The characters a folder path may be spelled with right before a claimed
+#: file name ("reports/budget.xlsx", "C:\\work\\budget.xlsx").
+_SPELLED_PATH_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.~$/\\:")
+#: At most this many folders a claimed name is looked for in, and this many
+#: claimed names looked for (a few stats: bounded).
+_ON_DISK_MAX_DIRS = 8
+_ON_DISK_MAX_NAMES = 12
+
+
+def _spelled_before(reply: str, start: int) -> str:
+    """The folder part a reply wrote right before a claimed name (up to 260
+    characters, path characters only), or ""."""
+    i = start
+    stop = max(0, start - 260)
+    while i > stop and reply[i - 1] in _SPELLED_PATH_CHARS:
+        i -= 1
+    lead = reply[i:start]
+    return lead if lead.endswith(("/", "\\")) else ""
+
+
+def _claimed_on_disk(spelled: "list[str]", workspace: Any, written: "list[str]") -> bool:
+    """BLOCKING (a few stats, bounded). Is a claimed file there — as the
+    reply spelled it, in the reply's folder, or beside a file this reply
+    wrote? A share (``\\\\host``) is never looked in and counts as there, and
+    so does a folder that cannot be read: in doubt, nothing is marked."""
+    dirs: list[str] = []
+    if workspace is not None and str(workspace).strip():
+        dirs.append(str(workspace))
+    for p in written:
+        parent = os.path.dirname(str(p))
+        if parent and parent not in dirs:
+            dirs.append(parent)
+    for d in dirs[:_ON_DISK_MAX_DIRS]:
+        if d.replace("/", "\\").startswith("\\\\"):
+            return True
+        for s in spelled:
+            try:
+                p = Path(s)
+                if p.is_absolute():
+                    if str(p).replace("/", "\\").startswith("\\\\") or p.exists():
+                        return True
+                    continue
+                if (Path(d) / p).exists():
+                    return True
+            except (OSError, ValueError):
+                return True
+    return False
+
+
 def _claimed_write_names(
     reply: str, tools_used: list[str], *, custom_tools=(), ran_writer=None,
+    written: "Iterable[str] | None" = None, workspace: Any = None,
 ) -> tuple[list[str], list[str]]:
     """``(saved, changed)``: the files the REPLY claims it saved / changed
     that no tool of this turn wrote / changed (the reading behind
     :func:`_claimed_write_note`; v1.495.0: the check-again loop,
     ``daemon/until_done``, reads it too, while the reply can still be fixed).
-    Both empty when nothing is claimed falsely."""
-    if not reply or set(tools_used) & _FILE_CHANGING_TOOLS:
+    Both empty when nothing is claimed falsely.
+
+    v1.503.0 (north-star 3.9): *written* is the reply's RECORD of the files
+    its tools wrote or changed (absolute paths: both lanes' ``made_docs``,
+    handed over only when every file tool that succeeded named its file —
+    :func:`write_record_gap`), *workspace* its folder. With a record, a
+    file-changing tool that succeeded no longer clears every claim: each
+    claimed name is compared with the record by file name, and a saved name
+    in neither the record nor the folder (:func:`_claimed_on_disk`, BLOCKING:
+    a few stats) is marked, and so is a changed name the record lacks ("I
+    saved notes.md and budget.xlsx" after only notes.md was written). The
+    old conservative answer — nothing marked once any file tool succeeded —
+    is kept where there is no record to compare with: *written* None (an
+    older caller), a tool that may write anything without naming it
+    (:func:`_ran_writer`: a command, code, an app's tool, a user-made tool,
+    returned below as before), or one that changes a file it never names
+    (:data:`_CHANGES_A_FILE_UNNAMED`: a vault note, an agent's notebook, a
+    skill, a browser action, a workbook open in Excel)."""
+    if not reply:
         return [], []
+    file_tool_ran = bool(set(tools_used) & _FILE_CHANGING_TOOLS)
+    record: "list[str] | None" = None
+    if file_tool_ran:
+        if written is None or set(tools_used) & _CHANGES_A_FILE_UNNAMED:
+            return [], []
+        record = [str(p) for p in written]
     if _ran_writer(ran_writer, tools_used, custom_tools):
         return [], []
     named: list[str] = []
+    spelled: dict[str, list[str]] = {}
     for m in _FILE_CLAIM_RX.finditer(reply):
         lead = reply[max(0, m.start() - 40) : m.start()]
         if _CLAIM_NEGATION_RX.search(lead):
             continue  # an offer or a denial, not a claim
-        name = m.group(1)
-        if name not in named:
-            named.append(name)
+        # v1.503.0 (north-star 3.9): and the names listed right after it ("I
+        # saved notes.md and budget.xlsx") — the claim names them all.
+        found = [(m.group(1), m.start(1))]
+        pos = m.end()
+        for _ in range(_CLAIMED_MORE_MAX):
+            more = _CLAIMED_MORE_RX.match(reply, pos)
+            if more is None:
+                break
+            found.append((more.group(1), more.start(1)))
+            pos = more.end()
+        for name, at in found:
+            if name not in named:
+                named.append(name)
+            spelled.setdefault(name, [])
+            as_written = _spelled_before(reply, at) + name
+            if as_written not in spelled[name]:
+                spelled[name].append(as_written)
     # v1.498.0: the same claim in Spanish, French, German, Italian, Portuguese
     # and Dutch (``core/claim_languages``), so the note under a reply and the
     # check-again loop read a reply written in those languages too.
@@ -9576,7 +9853,13 @@ def _claimed_write_names(
     # A CHANGE claim is judged only when nothing that can change a file
     # without naming it succeeded (v1.351.0 review) — see
     # :func:`_may_have_changed_files`.
-    judge_changes = not _may_have_changed_files(tools_used, custom_tools)
+    # v1.503.0 (north-star 3.9): with a whole record, the file tools that ran
+    # NAMED what they changed (the record holds it), so only the others can
+    # still have changed a file unseen.
+    judge_changes = not _may_have_changed_files(
+        [t for t in tools_used if t not in _FILE_CHANGING_TOOLS] if record is not None else tools_used,
+        custom_tools,
+    )
     claims = (
         [*_FILE_CHANGE_CLAIM_RX.finditer(reply), *_FILE_MOVED_TO_RX.finditer(reply)]
         if judge_changes else []
@@ -9600,6 +9883,19 @@ def _claimed_write_names(
             changed.append(name)
     # A file the reply says it CHANGED existed before: never "does not exist".
     named = [n for n in named if n not in changed]
+    if record is not None:
+        # v1.503.0 (north-star 3.9): judged by name against the record. A
+        # changed file existed before, so only the record answers it; a saved
+        # one is also left alone when it is in the folder (an earlier reply's
+        # file, or one the reply spelled with its folder).
+        have = {os.path.basename(p.replace("\\", "/").rstrip("/")).lower() for p in record}
+        changed = [n for n in changed if n.lower() not in have]
+        named = [n for n in named if n.lower() not in have]
+        kept: list[str] = []
+        for n in named[:_ON_DISK_MAX_NAMES]:
+            if not _claimed_on_disk(spelled.get(n) or [n], workspace, record):
+                kept.append(n)
+        named = kept
     return named, changed
 
 
@@ -13137,6 +13433,9 @@ async def run_chat_turn(
     escalate_agent = None   # v1.139.0: validated roster target (None = default)
     workflow_draft = None   # the turn proposed a reusable workflow (v1.120.0)
     made_docs: list[str] = []  # documents this turn created/edited (preview)
+    # v1.503.0 (north-star 3.9): True once a file tool succeeded without
+    # naming its file — `made_docs` is then no whole record (lock-step).
+    _write_gap = False
     workflow_run_info = None   # v1.170.0: a workflow this turn STARTED (contract 2)
     # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office turn
     # that uses every round ends HERE with an answer instead of escalating.
@@ -13468,9 +13767,11 @@ async def run_chat_turn(
                 _dv_end = await (until_done_note(
                     d, _until, body, reply=route.response.text or "", tools_used=tools_used,
                     armed=armed, config_cards=config_cards, ctx=ctx, deliverables=_deliv,
-                    denied=denied_tools, round_index=_round, rounds=_rounds,
+                    denied=until_done_denied(denied_tools, refused_tools), round_index=_round, rounds=_rounds,
                     trust_state=_trust_state, truncated=_truncated,
                     demo=is_demo_route(getattr(route, "provider", ""), getattr(route, "reason", "")),
+                    # v1.503.0 (north-star 3.9; lock-step: routes/chat.py).
+                    written=None if _write_gap else made_docs,
                 ) if _until is not None else _deliv.end_note(_round, _rounds))
                 if _dv_end:
                     _dv_said = route.response.text or ""
@@ -13880,8 +14181,10 @@ async def run_chat_turn(
                         _label = refusal_label(result.error or "")
                         if _label == "permission denied":
                             denied_tools.append(tc.name)
-                            if _deliv is not None:
-                                _deliv.declined = True  # v1.481.0 (lock-step)
+                        if _label in ("permission denied", CARD_TIMEOUT_LABEL) and _deliv is not None:
+                            # v1.481.0 (lock-step); v1.503.0: a card nobody
+                            # answered stops the nudges too (no one is there).
+                            _deliv.declined = True
                         if _label:
                             refused_tools.append((tc.name, _label))
                         else:
@@ -14001,6 +14304,12 @@ async def run_chat_turn(
                                 continue
                             if _cp not in made_docs:
                                 made_docs.append(_cp)
+                        # v1.503.0 (north-star 3.9): a file tool that named
+                        # no file leaves the record incomplete — the
+                        # file-claim note then keeps its old answer. MIRROR
+                        # NOTE (lock-step): routes/chat.py.
+                        if write_record_gap(tc.name, result):
+                            _write_gap = True
                     if _harness is not None:
                         # IJ HARNESS (v1.366.0): a folder's plugin checks after a
                         # successful edit (a `shell` call through the registry),
@@ -14298,8 +14607,11 @@ async def run_chat_turn(
         if not reply.strip():
             # v1.246.0: said in plain words — never the bare "(no reply)".
             # v1.378.0: a nudge the safety check declined says so (lock-step).
+            # v1.503.0 (north-star 3.8): and the calls that did not succeed,
+            # so "no tool ran" is said only when none was called (lock-step).
             reply = _no_text_reply(
                 tools_used, last_tool_output, _f_refusal, surface=surface_for(body),
+                failed=[_k[0] for _k in _failed_calls],
             )
             _declined_reply = _f_refusal is not None
         reply += refusal_footnotes(refused_tools, surface=surface_for(body))  # 12A: words true where read
@@ -14335,7 +14647,14 @@ async def run_chat_turn(
             # ledger — the note above keys off the user's phrasing and
             # so missed a reply announcing a saved file after only a
             # scan had run. MIRROR NOTE (lock-step): both lanes.
-            reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)
+            # v1.503.0 (north-star 3.9): with the reply's record of what its
+            # file tools wrote, so a claimed file beyond it is named even
+            # though a file tool ran; off the loop (a few stats). MIRROR NOTE
+            # (lock-step): routes/chat.py.
+            _wrote_in = getattr(ctx, "workspace", None) if tools_used else None
+            reply += await asyncio.to_thread(lambda: _claimed_write_note(reply, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer,
+                written=None if _write_gap else made_docs, workspace=_wrote_in,
+            ))
             # v1.436.0 (Wave 5 group K): and a CLAIMED SETTING OR RECORD change
             # ("read aloud is now on", "I paused the bookkeeper agent",
             # "Undone.") against what this turn's successful calls and their

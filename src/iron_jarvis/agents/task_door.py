@@ -588,7 +588,8 @@ def _reply_files(engine: Any, session_id: str) -> tuple[list[dict[str, str]], li
         from .outcome import session_result
         from .remote_files import safe_filename
 
-        result = session_result(engine, session_id)
+        # v1.503.0 (north-star 3.13): the files the run's workers made too.
+        result = session_result(engine, session_id, team=True)
         docs = [str(p) for p in (result.get("documents") or []) if p] if isinstance(result, dict) else []
     except Exception:  # noqa: BLE001
         return [], []

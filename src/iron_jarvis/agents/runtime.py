@@ -3192,6 +3192,9 @@ class AgentRuntime:
         # v1.350.0: the user declined the plan they were asked to approve —
         # the run ends below, before the flat loop could do the job anyway.
         plan_declined: str | None = None
+        # v1.503.0 (north-star 3.3): what each planned step DID, handed back
+        # by the lane (``results_out``) so the run ends on it, not on prose.
+        plan_results: list[Any] = []
         if engage_decomposed:
             # WAVE C3 (v1.203.0): a measured-weak envelope that demands
             # per-step verification gates EVERY step — criteria-less ones on
@@ -3217,10 +3220,14 @@ class AgentRuntime:
                     record_outcome=step_outcome_recorder(
                         self.p, env_provider, env_model
                     ),
+                    results_out=plan_results,
                     **({"resume": _resume_plan} if _resume_plan is not None else {}),
                 )
             except PlanDeclined as declined:
                 plan_declined = declined.result or PLAN_DECLINED_RESULT
+        # Only when the planned lane produced the answer (a declined planner
+        # falls back to the flat loop below, which ends on its own rules).
+        plan_answered = final_text is not None
         # B4 (v1.202.0): the loop actually BENT under a measured envelope — say
         # so, ONCE per run. Published HERE, after the decompose decision has
         # RESOLVED, because deciding to decompose is not decomposing: the
@@ -3367,6 +3374,23 @@ class AgentRuntime:
         # The decomposed lane's assemble() never returns blank (it degrades to
         # a deterministic step summary), so the fallback below is only a guard.
         run.result = final_text or _no_final_text_result([])
+        if plan_answered and _decompose.plan_not_done(plan_results):
+            # v1.503.0 (north-star 3.3): A PLANNED RUN THAT LEFT ITS JOB NOT
+            # DONE ENDS FAILED — a step never attempted (its budget ran out:
+            # how the flat loop ends at its step limit) or no step that
+            # passed its check. It ended COMPLETED whatever its steps did;
+            # the answer's own note says which steps (assemble's footer).
+            # Some steps done and some failed stays COMPLETED: its verdict is
+            # "part failed", read off the kept plan (agents/outcome).
+            await self._set_state(run, AgentState.FAILED, session.id)
+            await self.p.event_bus.publish(
+                EventType.AGENT_COMPLETED,
+                {"run_id": run.id, "ok": False, "result": run.result},
+                session_id=session.id,
+            )
+            if sink:
+                sink.done(ok=False, result=run.result)
+            return run
         await self._set_state(run, AgentState.COMPLETED, session.id)
         await self.p.event_bus.publish(
             EventType.AGENT_COMPLETED,

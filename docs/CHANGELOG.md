@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.503.0
+
+**"Done" means done.** The third part of the review fixes.
+
 ## v1.502.0
 
 **Nothing leaves your PC as a side effect.** The second part of the review fixes.
@@ -77,7 +81,3 @@
 ## v1.490.4
 
 **"Where is that setting?" gets the real place.** **Jarvis names the section a setting is really in.** Asked "where do I find the button to change the font", Jarvis told you to open "Settings → Device", a section that does not exist, and for the calendar reminders it said "it's under the calendar setting".
-
-## v1.490.3
-
-**Empty folders are listed, and "find me the current rate" looks it up.** **A folder that is there but empty is no longer "missing".** Asked to move files "into the Facturen 2026 folder", Jarvis listed the files, did not see the folder (it was empty, and the listing only showed files) and told you the folder did not exist.

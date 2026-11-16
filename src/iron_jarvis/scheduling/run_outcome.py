@@ -11,6 +11,7 @@ report's raw markdown (``# Final Report ## What happened…``).
 This module is the ONE vocabulary the scheduler writes and the readers count:
 
 * ``last_status`` values — ``ok`` | ``needs_you`` | ``partial`` | ``error`` |
+  ``did_nothing`` (v1.503.0: finished without a single tool call) |
   ``cancelled`` (a run stopped mid-way, by the user or by Emergency stop) |
   ``skipped`` | ``missed`` (the last two written by ``scheduling/service.py``
   and by an Emergency-stop skip) | ``""`` (never fired);
@@ -36,6 +37,11 @@ STATUS_NEEDS_YOU = "needs_you"
 STATUS_PARTIAL = "partial"
 STATUS_CANCELLED = "cancelled"
 STATUS_SKIPPED = "skipped"
+#: v1.503.0 (north-star 3.11): the run finished without a single tool call
+#: (``agents/outcome.OUTCOME_DID_NOTHING``). Not a failure and not counted in
+#: ``SHORT_STATUSES`` (the home line's "need a look" and the dashboard's
+#: pinned twin list); its own words on the row and the notice, never "Done".
+STATUS_DID_NOTHING = "did_nothing"
 
 #: A row whose last run FAILED (the Status map's "failed on its last run").
 #: ``failed`` is not a value the scheduler writes; it is counted too so a row
@@ -60,6 +66,8 @@ STOPPED_NO_WORDS = "The run was stopped before it finished."
 #: the status word says THAT it fell short, this says WHY in plain words.
 NEEDS_YOU_LEAD = "It asked for your OK and nobody answered in time, so some steps did not run."
 PARTIAL_LEAD = "Some of its steps failed."
+#: v1.503.0 (north-star 3.11): a run that finished without doing anything.
+DID_NOTHING_LEAD = "It finished without doing anything. Check what it said."
 
 #: A FAILED run whose ask expired (v1.358.0, lane 8A): the row says
 #: "Failed", like the run's own badge, and the reason says the ask went
@@ -93,6 +101,8 @@ def fire_status(outcome: object) -> str:
         return STATUS_NEEDS_YOU
     if value == "completed_with_failures":
         return STATUS_PARTIAL
+    if value == STATUS_DID_NOTHING:
+        return STATUS_DID_NOTHING
     if value == STATUS_CANCELLED:
         return STATUS_CANCELLED
     if value == STATUS_SKIPPED:
@@ -111,6 +121,7 @@ def delivery_head(status: str) -> str:
         STATUS_OK: "done",
         STATUS_NEEDS_YOU: "needs you",
         STATUS_PARTIAL: "finished, but part of it failed",
+        STATUS_DID_NOTHING: "finished without doing anything",
         STATUS_ERROR: "FAILED",
         STATUS_CANCELLED: "stopped",
         STATUS_SKIPPED: "skipped",
@@ -391,9 +402,14 @@ def failure_detail(reason: object) -> str:
 
 def short_detail(status: str, summary: object) -> str:
     """The row detail for a fire that FINISHED: the lead that says why a
-    needs_you / partial run fell short, then the run's own first sentence."""
+    needs_you / partial run fell short (or, v1.503.0, that it did nothing),
+    then the run's own first sentence."""
     sentence = plain_sentence(summary)
-    lead = {STATUS_NEEDS_YOU: NEEDS_YOU_LEAD, STATUS_PARTIAL: PARTIAL_LEAD}.get(status, "")
+    lead = {
+        STATUS_NEEDS_YOU: NEEDS_YOU_LEAD,
+        STATUS_PARTIAL: PARTIAL_LEAD,
+        STATUS_DID_NOTHING: DID_NOTHING_LEAD,
+    }.get(status, "")
     if lead and sentence:
         return f"{lead} {sentence}"
     return lead or sentence

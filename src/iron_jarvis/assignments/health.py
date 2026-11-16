@@ -85,7 +85,8 @@ def _outcome_word(session: Session) -> str | None:
         return "cancelled"
     if status is SessionStatus.COMPLETED:
         outcome = str(getattr(session, "outcome", "") or "")
-        if outcome in ("completed", "completed_with_failures", "needs_you"):
+        # v1.503.0 (north-star 3.11): "did_nothing" is a verdict too.
+        if outcome in ("completed", "completed_with_failures", "needs_you", "did_nothing"):
             return outcome
         return "completed"
     return None

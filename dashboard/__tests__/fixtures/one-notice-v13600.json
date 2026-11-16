@@ -419,6 +419,28 @@
       "href": "/chat?view=code&session=bs_err"
     },
     {
+      "case": "build-turn-needs-you",
+      "event": {
+        "id": "evt_build_needs",
+        "type": "build.turn_finished",
+        "session_id": "build:bs_red",
+        "ts": "2026-10-19T03:14:00",
+        "payload": {
+          "thread_id": "bs_red",
+          "turn_id": "bt_red1",
+          "title": "Add the export button",
+          "seconds": 150,
+          "outcome": "needs_you"
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "phone": false,
+      "title": "Your coding session finished, but something needs you",
+      "body": "Add the export button · took 2 min 30 s",
+      "href": "/chat?view=code&session=bs_red"
+    },
+    {
       "case": "build-app-turn-finished",
       "event": {
         "id": "evt_build_app_done",

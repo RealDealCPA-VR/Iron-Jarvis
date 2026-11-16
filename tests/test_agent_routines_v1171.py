@@ -162,7 +162,8 @@ def test_fire_without_agent_type_runs_builder_exactly_today(client):
 def test_fire_with_builtin_runs_that_agent_type(client):
     _add(client, "research-fire", {"task": "Dig deep.", "agent_type": "researcher"})
     ran = client.post("/schedules/research-fire/run").json()
-    assert ran["last_status"] == "ok", ran
+    # v1.503.0 (north-star 3.11, moved on purpose): the demo model's run makes no tool call, so the scheduled run "did nothing" (it read "ok").
+    assert ran["last_status"] == "did_nothing", ran
     assert _session(client, ran["last_session_id"])["agent_type"] == "researcher"
 
 
@@ -195,7 +196,8 @@ def test_fire_with_dynamic_agent_uses_its_definition(client, monkeypatch):
     monkeypatch.setattr(orch, "run_session", run_spy)
 
     ran = client.post("/schedules/remy-rounds/run").json()
-    assert ran["last_status"] == "ok", ran
+    # v1.503.0 (north-star 3.11, moved on purpose): the demo model's run makes no tool call, so the scheduled run "did nothing" (it read "ok").
+    assert ran["last_status"] == "did_nothing", ran
     # The REAL definition reached run_session (a lost definition runs a bare
     # builder with the same green row — the exact silent degradation this
     # wave forbids)…
@@ -242,9 +244,13 @@ def test_fire_without_definition_keeps_the_legacy_run_session_signature(client, 
         return await real_run(session_id)
 
     monkeypatch.setattr(orch, "run_session", run_legacy)
+    # v1.503.0 (north-star 3.11, moved on purpose): the demo model's
+    # researcher run makes no tool call, so that scheduled run "did nothing"
+    # (it read "ok"); the builder's demo run calls a tool and stays ok.
+    expected = {"legacy-plain": "ok", "legacy-builtin": "did_nothing"}
     for name in ("legacy-plain", "legacy-builtin"):
         ran = client.post(f"/schedules/{name}/run").json()
-        assert ran["last_status"] == "ok", (name, ran)
+        assert ran["last_status"] == expected[name], (name, ran)
 
 
 def test_fire_treats_non_string_agent_type_as_absent_matching_the_decode(

@@ -3948,10 +3948,20 @@ class FinishCheck:
                 self._settle_review(REVIEW_FAILED, member=member, model=model,
                                     why=text or "the reviewer could not start")
             return
-        if refused or (not getattr(result, "ok", False) and _refusal_shaped(result)):
+        # v1.503.0 (north-star 3.5, lead review): a hand-off is no longer ``ok``
+        # when the worker's run fell short (``delegate_tool.settled_hand_off``).
+        # A REVIEWER is judged by its verdict, never by changes: it only reads,
+        # so a write it tried and was refused (its run's verdict then reads
+        # "part failed") is the gate working, not a review that failed. A run
+        # that FINISHED with that verdict still gives its review.
+        finished = bool(getattr(result, "ok", False)) or (
+            str(data.get("outcome") or "") == "completed_with_failures"
+            and bool(data.get("child_session_id"))
+        )
+        if refused or (not finished and _refusal_shaped(result)):
             self._settle_review(REVIEW_NOT_RUN, member=member, model=model, why=error or content)
             return
-        if not getattr(result, "ok", False):
+        if not finished:
             state = str(data.get("state") or "")
             if state == "not_started":
                 # The TEAM ROUTER found no one: its one sentence of why.

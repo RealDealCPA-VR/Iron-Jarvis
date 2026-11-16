@@ -1174,15 +1174,29 @@ class WorkflowEngine:
                 "tool": step.tool,
                 "kind": "agent",
             }
-        status = (
-            "completed" if session.status is SessionStatus.COMPLETED else "failed"
-        )
+        # v1.503.0 (north-star 3.2): the step reads the run's TRUE ending —
+        # its status AND the ledger's verdict (``agents/outcome.run_ending``).
+        # A run that completed while its ask went unanswered (``needs_you``)
+        # or a change failed (``completed_with_failures``) did not do the
+        # step's work: it is a FAILED step, so ``on_failure`` routes it and a
+        # later step never runs on work that was never done. Its summary
+        # opens with why, in the Schedules row's words, so the run record,
+        # the scheduled workflow's row and the phone all say it.
+        from ..agents.outcome import run_ending
+
+        ending = run_ending(session.status, getattr(session, "outcome", None))
+        summary = session.summary
+        if session.status is SessionStatus.COMPLETED and not ending.ok:
+            own = str(summary or "").strip()
+            summary = f"{ending.reason} {own}" if own else ending.reason
         return {
             "session_id": session.id,
-            "status": status,
-            "summary": session.summary,
+            "status": "completed" if ending.ok else "failed",
+            "summary": summary,
             "tool": step.tool,
             "kind": "agent",
+            # Additive: the verdict itself (None for a run with none).
+            "outcome": ending.outcome,
         }
 
     async def _failed_run_words(self, orch, session, exc: BaseException) -> str:

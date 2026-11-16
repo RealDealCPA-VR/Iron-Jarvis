@@ -1067,7 +1067,43 @@ def outcome_of(task: dict[str, Any], line: "dict[str, Any] | None") -> tuple[str
     # its work stopped short in a way the morning must look at.
     if state == DONE and (has_note(task, "declined") or has_note(task, "unanswered") or low):
         state = NEEDS_YOU
+    # v1.503.0 (north-star 3.6): the task's OWN finish check is the record of
+    # whether the work is done — failing tests, or points of the request it
+    # left open, are never "done" (only an untrusted pass was downgraded,
+    # by ``routes/night``). The tests' words are the route's own note.
+    fin = line.get("finish") if isinstance(line, dict) else None
+    unmet = finish_unmet(fin)
+    if unmet:
+        notes.append(("unmet", unmet_words(unmet)))
+    if state == DONE and finish_needs_you(fin):
+        state = NEEDS_YOU
     return state, notes
+
+
+def finish_unmet(fin: Any) -> int:
+    """How many points of the request a reply's finish record left open
+    (``harness/finish`` ``unmet``); 0 for none or no readable record."""
+    if not isinstance(fin, dict):
+        return 0
+    unmet = fin.get("unmet")
+    return unmet if isinstance(unmet, int) and not isinstance(unmet, bool) and unmet > 0 else 0
+
+
+def finish_needs_you(fin: Any) -> bool:
+    """Does a reply's finish record say its work is NOT done (v1.503.0,
+    north-star 3.6)? Its tests failed, or points of the request are still
+    open. The ONE reading the night shift's ending and the day's "Your coding
+    session finished" notice share. Pure; junk reads as no."""
+    if not isinstance(fin, dict):
+        return False
+    return fin.get("tests") == "failed" or finish_unmet(fin) > 0
+
+
+def unmet_words(unmet: int) -> str:
+    """The morning's note for open points — the coding session's own words
+    (dashboard/lib/nextStep: "2 points of the request still need work.")."""
+    n = int(unmet)
+    return f"{n} point{'s' if n != 1 else ''} of the request still need{'s' if n == 1 else ''} work."
 
 
 #: The trust reason a LATER turn of a night task that went to low trust
@@ -1103,7 +1139,8 @@ __all__ = [
     "BY_CI", "BY_NIGHT", "BY_PERSON", "BY_RESTART", "BY_WAIT", "COMMAND_TOOLS", "DONE", "ENDED", "FAILED",
     "NEEDS_YOU", "NIGHT_TURN", "NightRefused", "NightTaskRecord", "NightTurn", "POSTURE", "QUEUED",
     "RUNNING", "RUNS_UNASKED", "STATES", "asks_at_night", "STOPPED", "add_note", "add_task", "ask_timeout", "call_words", "cancel_queued",
-    "card_wait_seconds", "current", "edit_task", "finish_task", "flush_notes", "get_task",
+    "card_wait_seconds", "current", "edit_task", "finish_needs_you", "finish_task", "finish_unmet",
+    "flush_notes", "get_task", "unmet_words",
     "last_reply_line", "list_tasks", "mark_running", "max_at_once", "move_task", "note_unattended_turn",
     "morning_of", "outcome_of", "posture_setup", "remove_task", "reset_turn", "running_task_for",
     "set_morning", "set_session",

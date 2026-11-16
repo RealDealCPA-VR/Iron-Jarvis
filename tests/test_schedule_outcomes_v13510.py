@@ -131,10 +131,22 @@ def _failed_write(db, sid: str) -> None:
     )
 
 
-def _fake_run(state: AgentState, result: str):
-    """A stand-in for the AGENT's work (not the scheduler under test)."""
+def _fake_run(state: AgentState, result: str, engine=None):
+    """A stand-in for the AGENT's work (not the scheduler under test).
+
+    v1.503.0 (north-star 3.11): with ``engine`` it records the one
+    successful call a run that did its work makes — an unattended run that
+    made none is "did nothing" (tests/test_north_star_verdict_v1503)."""
 
     async def run(session, agent_def, *a, **kw):
+        if engine is not None:
+            from iron_jarvis.core.db import session_scope
+            from iron_jarvis.core.models import ToolInvocation
+
+            with session_scope(engine) as db:
+                db.add(ToolInvocation(session_id=session.id, agent_run_id="r", tool="memory_write",
+                                      ok=True, reversibility="reversible"))
+                db.commit()
         return SimpleNamespace(
             state=state,
             provider=session.provider,
@@ -256,7 +268,7 @@ def test_the_row_detail_is_a_plain_sentence_not_the_report(tmp_path, monkeypatch
         "I reviewed **12** conversations and added 3 notes to [memory](x).\n\n"
         "- note one\n- note two\n"
     )
-    monkeypatch.setattr(orch.runtime, "run", _fake_run(AgentState.COMPLETED, report))
+    monkeypatch.setattr(orch.runtime, "run", _fake_run(AgentState.COMPLETED, report, app.state.platform.engine))
     _add_task(client, "memory-review-ish")
 
     body = client.post("/schedules/memory-review-ish/run").json()

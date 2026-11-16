@@ -225,6 +225,12 @@ class Facts:
     #: Chat only: the reply's deliverables (``deliverables.TurnDeliverables``).
     deliverables: Any = None
     chat: bool = True
+    #: v1.503.0 (north-star 3.9): the reply's record of the files its tools
+    #: wrote (absolute paths; None = no whole record) and its folder — a
+    #: claimed file is then judged by name even after a file tool ran
+    #: (``chat_turn._claimed_write_names``).
+    written: "list[str] | None" = None
+    workspace: Any = None
 
 
 def find_problems(f: Facts) -> list[Problem]:
@@ -241,7 +247,11 @@ def find_problems(f: Facts) -> list[Problem]:
     try:
         named, changed = CT._claimed_write_names(
             reply, list(f.tools_used), custom_tools=f.custom_tools, ran_writer=f.ran_writer,
+            written=f.written, workspace=f.workspace,
         )
+        # v1.503.0 (north-star 3.9): with a record, a file tool may have run
+        # and still not changed the file the answer names.
+        file_tool_ran = bool(set(f.tools_used) & CT._FILE_CHANGING_TOOLS)
         if named and writers:
             one = len(named) == 1
             out.append(Problem(
@@ -254,8 +264,10 @@ def find_problems(f: Facts) -> list[Problem]:
             one = len(changed) == 1
             out.append(Problem(
                 "changed_file:" + "|".join(sorted(changed)),
-                f"Your answer says you changed {_names(changed)}, but no tool that changes "
-                f"files succeeded in this reply, so {'that file is' if one else 'those files are'} "
+                f"Your answer says you changed {_names(changed)}, but "
+                + (f"no tool changed {'it' if one else 'them'}" if file_tool_ran
+                   else "no tool that changes files succeeded")
+                + f" in this reply, so {'that file is' if one else 'those files are'} "
                 "unchanged. Make the change now with your tools.",
             ))
     except Exception:  # noqa: BLE001
@@ -281,6 +293,7 @@ def find_problems(f: Facts) -> list[Problem]:
             said = _plain(claimed_change_note(
                 reply, list(f.tools_used), list(f.config_cards or ()),
                 history=list(f.history or ()), custom_tools=list(f.custom_tools or ()),
+                sends=False,  # v1.503.0: a claimed send is its own problem (below)
             ))
             if said and armed & change_fixers():
                 out.append(Problem(
@@ -302,6 +315,34 @@ def find_problems(f: Facts) -> list[Problem]:
                 ))
         except Exception:  # noqa: BLE001
             log.debug("until-done: the change claims could not be read", exc_info=True)
+        try:
+            # v1.503.0 (north-star 3.10): a claimed SEND ("I emailed it",
+            # "sent to Slack") that no call of this reply sent. Never an
+            # order to send: only when the user asked for it, and every send
+            # still meets its own card.
+            from .change_claims import SEND_TOOLS, claimed_send_note
+
+            said = _plain(claimed_send_note(
+                reply, list(f.tools_used), history=list(f.history or ()),
+                custom_tools=list(f.custom_tools or ()),
+            ))
+            senders = sorted(armed & SEND_TOOLS) + sorted(n for n in armed if n.startswith("mcp__"))
+            if said and senders:
+                out.append(Problem(
+                    "claimed_sent:" + said[:200],
+                    f"Iron Jarvis's own check says: {said} If the user asked for it to be sent, send "
+                    f"it now with {', '.join(senders[:4])}; otherwise say plainly in your answer that "
+                    "it was not sent.",
+                ))
+            elif said:
+                out.append(Problem(
+                    "claimed_sent:" + said[:200],
+                    f"Iron Jarvis's own check says: {said} No tool you hold in this reply can send it, "
+                    "so do not claim it: say plainly in your answer that it was not sent, and how the "
+                    "user can send it.",
+                ))
+        except Exception:  # noqa: BLE001
+            log.debug("until-done: the send claims could not be read", exc_info=True)
     if armed & {"calculate", "tool_script"} and f.figures_ctx is not None:
         try:
             from ..tools.script_values import unchecked_now

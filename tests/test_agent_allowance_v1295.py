@@ -525,7 +525,8 @@ def test_schedule_fire_refuses_a_paused_agent_honestly(tmp_path):
     # Resumed, the same schedule runs.
     p.agents_registry.resume(NAME)
     ran = client.post("/schedules/scout-rounds/run").json()
-    assert ran["last_status"] == "ok", ran
+    # v1.503.0 (north-star 3.11, moved on purpose): the demo model's run makes no tool call, so the scheduled run "did nothing" (it read "ok").
+    assert ran["last_status"] == "did_nothing", ran
 
 
 # --------------------------------------------------------------------------- #
@@ -566,7 +567,8 @@ def test_schedule_fire_passes_the_job_card_max_steps_and_posture(tmp_path):
     )
     _add_schedule(client, "scout-rounds", {"task": "Morning rounds.", "agent_type": NAME})
     ran = client.post("/schedules/scout-rounds/run").json()
-    assert ran["last_status"] == "ok", ran
+    # v1.503.0 (north-star 3.11, moved on purpose): the demo model's run makes no tool call, so the scheduled run "did nothing" (it read "ok").
+    assert ran["last_status"] == "did_nothing", ran
     row = next(s for s in _sessions(p.engine) if s.id == ran["last_session_id"])
     assert row.max_steps == 4
     assert row.approval_mode == "approve_for_me"

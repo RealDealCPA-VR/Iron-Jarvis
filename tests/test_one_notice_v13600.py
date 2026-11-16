@@ -160,8 +160,19 @@ def test_work_a_fire_started_that_outlives_it_is_announced_as_usual():
 # --------------------------------------------------------------------------- #
 
 
-def _fake_run(state: AgentState, result: str):
+def _fake_run(state: AgentState, result: str, engine=None):
     async def run(session, agent_def, *a, **kw):
+        if engine is not None:
+            # v1.503.0 (north-star 3.11, moved on purpose): a clean run DID
+            # its work — one successful call on its ledger. An unattended run
+            # that made none is "did nothing" (tests/test_north_star_verdict_v1503).
+            from iron_jarvis.core.db import session_scope
+            from iron_jarvis.core.models import ToolInvocation
+
+            with session_scope(engine) as db:
+                db.add(ToolInvocation(session_id=session.id, agent_run_id="r", tool="write_file",
+                                      ok=True, reversibility="reversible"))
+                db.commit()
         return SimpleNamespace(
             state=state,
             provider=session.provider,
@@ -200,7 +211,7 @@ def _completed(platform) -> list[dict]:
 def _fire(tmp_path, monkeypatch, state: AgentState, result: str, payload: dict | None = None):
     app, client = _app(tmp_path)
     platform = app.state.platform
-    monkeypatch.setattr(platform.orchestrator.runtime, "run", _fake_run(state, result))
+    monkeypatch.setattr(platform.orchestrator.runtime, "run", _fake_run(state, result, platform.engine))
     completed = _completed(platform)
     r = client.post(
         "/schedules",
@@ -328,7 +339,9 @@ def _goal_fire(tmp_path, monkeypatch, *, ask_expired: bool):
 
     app, client = _app(tmp_path)
     platform = app.state.platform
-    monkeypatch.setattr(platform.orchestrator.runtime, "run", _fake_run(AgentState.COMPLETED, "Did part."))
+    monkeypatch.setattr(
+        platform.orchestrator.runtime, "run", _fake_run(AgentState.COMPLETED, "Did part.", platform.engine)
+    )
 
     def expire(ev) -> None:
         if not ask_expired or ev.type != EventType.SESSION_CREATED or not ev.session_id:

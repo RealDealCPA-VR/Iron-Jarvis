@@ -55,10 +55,22 @@ refused, failed, declined or still-waiting call is not in it) and the
 ``config_cards`` the successful calls produced (a setting's key, a record's
 key, an app waiting for its key). A claim is answered by any successful
 change of a kind it may name (a union — the conservative side). Nothing is
-judged after a tool that can change anything without naming it (a command,
-code, a hand-off, a workflow run, a user-made tool), and record claims are
-not judged after a file was changed (a coding turn's "I updated the
-scheduler" is about code).
+judged after a hand-off or a workflow run (that run holds the app's own
+settings and record tools, and its calls are in its own record), and record
+claims are not judged after a file was changed (a coding turn's "I updated
+the scheduler" is about code). v1.503.0 (north-star 3.10): after a command,
+code, a user-made tool, an app's tool or an action on a web page, a claim
+that names a setting by its whole LABEL is still judged, and so is one of
+the app's record kinds (not after a web page action, nor after an app tool
+whose own name says it made that kind of thing) — it used to be dropped.
+
+SENT (v1.503.0, north-star 3.10): a reply that claims an OUTWARD action ("I
+emailed it to Dana", "sent to your Slack channel", "posted to #general",
+"messaged Priya on Telegram") is answered only by a call of this reply that
+sent — or may have sent — it (:func:`_may_have_sent`); otherwise "No message
+was sent (to Slack) in this reply." joins the same note line.
+:func:`judge_run_summary` gives a finished agent run's summary the same
+check against that run's own ledger.
 
 THE WORDS. One plain line, the setting named by its label in
 ``settings/schema.py`` (never a key): "Note: “Read replies aloud” was not
@@ -116,6 +128,19 @@ _MAY_CHANGE_ANYTHING = frozenset(
         "delegate", "delegate_remote", "spawn_agent", "workflow_run", "assign_work",
         "pane_send", "pane_spawn",
     }
+)
+#: v1.503.0 (north-star 3.10): of those, the HAND-OFFS — another run of Iron
+#: Jarvis's own (a helper, an agent, a workflow) holds the settings and record
+#: tools, and its calls are in ITS record, not this reply's. Nothing is judged
+#: after one of these. After the others (a command, code, a program, a pane)
+#: a claim that names one of the app's settings by its label, or one of its
+#: record kinds, is still judged: only a config card or a record tool changes
+#: those, and both name what they changed.
+_HANDS_OFF = frozenset({"delegate", "delegate_remote", "spawn_agent", "workflow_run", "assign_work"})
+#: Words a setting's label is read without ("Start new chats local only").
+_LABEL_STOP = frozenset(
+    {"the", "a", "an", "of", "for", "to", "my", "your", "in", "on", "and", "or", "with", "by", "at", "it",
+     "its", "is", "be", "when", "if", "this", "that", "every", "up", "s"}
 )
 #: The settings writers (their card names the key changed).
 _SETTINGS_WRITERS = frozenset({"config_set", "config_change", "config_change_protected"})
@@ -1589,6 +1614,213 @@ def claims_this_reply_local(text: str) -> bool:
 
 
 # --------------------------------------------------------------------------
+# v1.503.0 (north-star 3.10): "sent" — a claimed OUTWARD action
+# --------------------------------------------------------------------------
+
+#: Past forms that claim a message went out on their own ("I emailed Dana").
+_SEND_STRONG = frozenset(
+    {"emailed", "texted", "messaged", "dmed", "dm'd", "forwarded", "notified", "pinged", "tweeted", "slacked"}
+)
+#: Past forms that claim it only with a DESTINATION in their words ("I sent
+#: it to Slack", "posted to #general"): "I posted the journal entries", "I've
+#: sent you the summary below" are no message that left the PC.
+_SEND_WEAK = frozenset({"sent", "posted"})
+_SEND_PASSIVE = frozenset({"sent", "posted", "emailed", "forwarded", "texted", "messaged"})
+#: The channels a note names, by the word a reply calls them.
+_SEND_CHANNELS = {"slack": "Slack", "telegram": "Telegram", "discord": "Discord", "whatsapp": "WhatsApp"}
+#: A destination for a weak verb: a channel, a way out, a person a message
+#: goes to ("to the client", "to your phone", "to #general", an address).
+_SEND_DESTINATIONS = frozenset(
+    set(_SEND_CHANNELS)
+    | {"email", "emails", "e", "mail", "inbox", "phone", "sms", "text", "channel", "channels", "webhook",
+       "client", "clients", "team", "colleague", "colleagues", "boss", "manager", "accountant", "everyone",
+       "recipient", "recipients", "customer", "customers", "partner", "partners", "staff", "them", "him",
+       "her", "teams"}
+)
+#: An object that denies the send ("I emailed nobody").
+_SEND_NOBODY = frozenset({"nobody", "noone", "nothing", "anyone", "anybody", "anything", "none"})
+#: Words anywhere before the verb that make it a condition, never a report.
+_SEND_CONDITION = frozenset({"if", "unless", "once", "when", "whenever", "until", "after"})
+#: The send tools of the registry (``comm/tools.notify`` reports ``ok`` only
+#: when a channel took the message; ``rest_call`` is an outbound request; an
+#: agent message and a board post leave this reply too).
+SEND_TOOLS = frozenset({"notify", "rest_call", "message_agent", "blackboard_post"})
+#: An app tool whose own name says it only READS ("search_emails",
+#: "listOpenIssues"): it sent nothing.
+_APP_READS_RX = re.compile(
+    r"^(?:search|list|get|read|fetch|find|query|lookup|describe|view|show|count|check|status|retrieve)"
+    r"(?:_|-|[A-Z]|$)"
+)
+_NO_MESSAGE_SENT = "No message was sent"
+
+
+@dataclass
+class SendClaim:
+    """One outward action a reply says it made, and the channel it names
+    ("" when none or several)."""
+
+    word: str
+    channel: str = ""
+
+
+def _app_tool_reads(name: str) -> bool:
+    remote = name.split("__", 2)[2] if name.count("__") >= 2 else ""
+    return bool(remote) and bool(_APP_READS_RX.match(remote))
+
+
+def _may_have_sent(used: "frozenset[str]", custom: "set[str]") -> bool:
+    """Did a call that SUCCEEDED this reply send — or may it have sent —
+    something out? A send tool, an action on a web page (a Send button), an
+    app's tool that is not a plain read, or a command, code, a hand-off or a
+    user-made tool (which may have sent anything: the conservative side)."""
+    if used & (SEND_TOOLS | _ACTS_ELSEWHERE | _MAY_CHANGE_ANYTHING | {"ssh"}):
+        return True
+    if used & custom or any(n.startswith("custom:") for n in used):
+        return True
+    return any(n.startswith("mcp__") and not _app_tool_reads(n) for n in used)
+
+
+def _send_channel(words: Iterable[str]) -> str:
+    named = {_SEND_CHANNELS[w] for w in words if w in _SEND_CHANNELS}
+    return named.pop() if len(named) == 1 else ""
+
+
+def _send_claims_in_sentence(sentence: str) -> list[SendClaim]:
+    """The outward actions one cleaned sentence claims. Bounded (a sentence
+    is at most :data:`MAX_SENTENCE` tokens, each read once with a bounded
+    look-around). Never a question, an earlier turn, the user's own send, an
+    offer, a denial, a condition or someone else's send."""
+    if sentence.endswith("?"):
+        return []
+    toks = _tokens(sentence)[:MAX_SENTENCE]
+    if not toks or _earlier(toks) or _user_acted(toks):
+        return []
+    core = [t for t in toks if t not in _INTERJECTIONS and t not in _BOUNDARY]
+    if core in (["sent"], ["posted"]):
+        return [SendClaim(word=core[0])]
+    has_at = "@" in sentence or "#" in sentence
+    out: list[SendClaim] = []
+    for i, t in enumerate(toks):
+        if len(out) >= MAX_CLAIMS:
+            break
+        if t in ("has", "have", "was", "were") and i + 1 < len(toks):
+            # "The reminder has been sent", "Your message was successfully sent".
+            j = i + 1
+            if t in ("has", "have"):
+                if toks[j] != "been":
+                    continue
+                j += 1
+            adverbs = 0
+            while j < len(toks) and toks[j] in ("successfully", "just", "now", "also") and adverbs < 3:
+                j += 1
+                adverbs += 1
+            if j >= len(toks) or toks[j] not in _SEND_PASSIVE:
+                continue
+            if t in ("was", "were") and not {"successfully", "just", "now"} & set(toks[i + 1 : j]):
+                continue  # "the invoice was sent to the client" tells a history
+            subj = toks[_clause_start(toks, i) : i]
+            if not subj or _negated(subj) or {"i", "we", "you", "if", "when", "once"} & set(subj):
+                continue
+            rest = toks[j + 1 : _clause_end(toks, j + 1)]
+            if "by" in rest[:2]:
+                continue  # "… was just sent by Dana": someone else's
+            out.append(SendClaim(word=toks[j], channel=_send_channel(subj + rest)))
+            continue
+        if t not in _SEND_STRONG and t not in _SEND_WEAK:
+            continue
+        start = _clause_start(toks, i)
+        if not _assistant_subject(toks, start, i, t):
+            continue
+        if _SEND_CONDITION.intersection(toks[:i]):
+            continue
+        obj = toks[i + 1 : _clause_end(toks, i + 1)]
+        if _SEND_NOBODY.intersection(obj[:3]):
+            continue
+        words = set(obj)
+        if t in _SEND_WEAK and not (words & _SEND_DESTINATIONS or has_at):
+            continue  # "I posted the journal entries", "I've sent you the summary below"
+        out.append(SendClaim(word=t, channel=_send_channel(obj)))
+    return out
+
+
+def send_claims_in(text: str) -> list[SendClaim]:
+    """Every outward action *text* claims. Pure and bounded; never raises."""
+    try:
+        out: list[SendClaim] = []
+        for s in _sentences(_clean(text)):
+            out.extend(_send_claims_in_sentence(s))
+            if len(out) >= MAX_CLAIMS:
+                break
+        return out[:MAX_CLAIMS]
+    except Exception:  # noqa: BLE001 — a fault claims nothing
+        return []
+
+
+def _send_sentence(claim: SendClaim) -> str:
+    if claim.channel:
+        return f"{_NO_MESSAGE_SENT} to {claim.channel} {IN_THIS_REPLY}."
+    return f"{_NO_MESSAGE_SENT} {IN_THIS_REPLY}."
+
+
+def _earlier_sends(history: Iterable[Any]) -> list[str]:
+    """The channels of the sends EARLIER assistant messages claimed (a reply
+    may be summarising them), except a message whose own note said nothing
+    was sent, and another agent's line."""
+    out: list[str] = []
+    msgs = [m for m in (history or ()) if str(getattr(m, "role", "") or "") == "assistant"]
+    for m in msgs[-MAX_HISTORY_MESSAGES:]:
+        content = getattr(m, "content", "")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        if content.lstrip().startswith(_AGENT_LINE_PREFIX):
+            continue
+        text = content[-MAX_HISTORY_CHARS:]
+        if any(ln.lstrip().startswith("_Note:") and _NO_MESSAGE_SENT in ln for ln in text.split("\n")):
+            continue
+        out.extend(c.channel for c in send_claims_in(text))
+    return out
+
+
+def _send_said(reply: str, record: "TurnRecord", custom: "set[str]", history: Iterable[Any]) -> list[str]:
+    """The note's sentences for the sends *reply* claims that no call of this
+    reply made (see :func:`_may_have_sent`)."""
+    if _may_have_sent(record.used, custom):
+        return []
+    claims = send_claims_in(reply)
+    if not claims:
+        return []
+    earlier = _earlier_sends(_earlier_turns(history))
+    out: list[str] = []
+    for c in claims:
+        if earlier and any(not e or not c.channel or e == c.channel for e in earlier):
+            continue
+        s = _send_sentence(c)
+        if s not in out:
+            out.append(s)
+    return out
+
+
+def claimed_send_note(
+    reply: str,
+    tools_used: Iterable[str],
+    *,
+    history: Iterable[Any] = (),
+    custom_tools: Iterable[str] = (),
+) -> str:
+    """'' unless the REPLY claims an outward action — an email, a Slack or
+    Telegram message, a post — that no call of this reply sent (v1.503.0,
+    north-star 3.10). The same one-line note as :func:`claimed_change_note`
+    (which carries these sentences too). Pure; never raises."""
+    try:
+        if not reply or not str(reply).strip() or str(reply).lstrip().startswith(_NO_TEXT_LEAD):
+            return ""
+        record = TurnRecord.build(tools_used, ())
+        return _line(_send_said(str(reply), record, {str(c) for c in custom_tools or ()}, history))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+# --------------------------------------------------------------------------
 # the record
 # --------------------------------------------------------------------------
 
@@ -1999,10 +2231,16 @@ def claimed_change_note(
     history: Iterable[Any] = (),
     custom_tools: Iterable[str] = (),
     reply_local_only: "bool | None" = None,
+    sends: bool = True,
 ) -> str:
     """'' unless the REPLY claims a setting or a record changed that no
     successful call of this turn changed (see the module docstring). The
     note is one line: ``\\n\\n_Note: <sentence> <sentence>_``.
+
+    v1.503.0 (north-star 3.10): and an outward action (an email, a message,
+    a post) no call of this turn sent (:func:`claimed_send_note`'s
+    sentences, after the others in the same line); *sends* False leaves
+    them out (the check-again loop asks them as their own problem).
 
     *tools_used*: the calls that SUCCEEDED this turn; *config_cards*: the
     cards they produced (``chat_turn.config_cards_from_result``); *history*:
@@ -2013,8 +2251,56 @@ def claimed_change_note(
     ``egress.current_scope()``). MIRROR NOTE (lock-step): both chat lanes.
     Never raises."""
     try:
-        return _note(reply, tools_used, config_cards, history, custom_tools, reply_local_only)
+        return _note(reply, tools_used, config_cards, history, custom_tools, reply_local_only, sends)
     except Exception:  # noqa: BLE001 — a note never breaks a turn
+        return ""
+
+
+#: The openings of a run's result the RUNTIME wrote because the model wrote
+#: none (``agents/runtime.RUNTIME_WROTE_RESULT``): they quote a tool, never
+#: the model's claim.
+_RUNTIME_WROTE = ("The model finished without writing", "The model returned an empty answer")
+IN_THIS_RUN = "in this run"
+
+
+def judge_run_summary(
+    summary: str,
+    *,
+    engine: Any,
+    session_id: str,
+    custom_tools: Iterable[str] = (),
+) -> str:
+    """BLOCKING (one ledger read: call it through ``asyncio.to_thread``).
+    v1.503.0 (north-star 3.10): a finished AGENT RUN's summary judged against
+    that run's OWN ledger — the ``ToolInvocation`` rows of *session_id* that
+    succeeded (``ok``) are the record — for a setting or record change it
+    claims and no call made, and for a send it claims and no call sent: the
+    same reading as :func:`claimed_change_note`, with no cards (a settings
+    write without its card is not known, so it is not judged) and no Local
+    only check. *custom_tools*: the user-made tools that ran (a command the
+    registry cannot read: after one a send is not judged).
+
+    Returns ``""`` (nothing claimed falsely, a summary the runtime wrote
+    itself, or a ledger that cannot be read) or ONE line,
+    ``"\\n\\n_Note: <sentence> <sentence>_"``, its sentences ending "in this
+    run" ("No message was sent in this run.", "“Read replies aloud” was not
+    changed in this run."). Never raises."""
+    try:
+        text = str(summary or "")
+        if not text.strip() or text.lstrip().startswith(_RUNTIME_WROTE):
+            return ""
+        from sqlmodel import Session as _DB, select
+
+        from ..core.models import ToolInvocation
+
+        with _DB(engine) as db:
+            rows = db.exec(
+                select(ToolInvocation.tool, ToolInvocation.ok).where(ToolInvocation.session_id == str(session_id))
+            ).all()
+        used = [str(t or "") for t, ok in rows if ok]
+        line = _note(text, used, (), (), custom_tools, True, True)
+        return line.replace(IN_THIS_REPLY, IN_THIS_RUN)
+    except Exception:  # noqa: BLE001 — a note never breaks a run
         return ""
 
 
@@ -2024,7 +2310,45 @@ def claimed_change_note(
 _NO_TEXT_LEAD = "The model finished without writing an answer."
 
 
-def _note(reply, tools_used, config_cards, history, custom_tools, reply_local_only) -> str:
+def _names_label(claim: Claim) -> bool:
+    """Does *claim* name one of its settings by that setting's whole label
+    (at least two words of it, every one in the claim's words — "Read replies
+    aloud", "Emergency stop"), never by an everyday word ("dark mode")?"""
+    try:
+        from ..settings import schema
+
+        words = set(claim.phrase)
+        for k in claim.settings:
+            d = schema.BY_KEY.get(k)
+            if d is None:
+                continue
+            label = set(re.findall(r"[a-z0-9]+", d.label.lower())) - _LABEL_STOP
+            if len(label) >= 2 and label <= words:
+                return True
+    except Exception:  # noqa: BLE001 — not known: not named by its label
+        return False
+    return False
+
+
+def _app_made(claim: Claim, used: "frozenset[str]") -> bool:
+    """Did an app's tool that ran name the record kind the claim is about
+    ("mcp__asana__create_project" and "I created the project")? Then the
+    claim is about THAT app's record."""
+    nouns: set[str] = set()
+    for kind in claim.records:
+        nouns.add(kind.split("_")[0])
+        nouns.update(_RECORD_NOUN.get(kind, "").split()[-1:])
+    nouns.discard("")
+    for n in used:
+        if not n.startswith("mcp__"):
+            continue
+        remote = (n.split("__", 2)[2] if n.count("__") >= 2 else "").lower()
+        if any(w in remote for w in nouns):
+            return True
+    return False
+
+
+def _note(reply, tools_used, config_cards, history, custom_tools, reply_local_only, sends=True) -> str:
     if not reply or not str(reply).strip():
         return ""
     if str(reply).lstrip().startswith(_NO_TEXT_LEAD):
@@ -2046,10 +2370,19 @@ def _note(reply, tools_used, config_cards, history, custom_tools, reply_local_on
             THIS_REPLY_NOT_LOCAL + (NEXT_MESSAGE if _LOCAL_ONLY_TOOL in record.used else "") + "."
         )
     custom = {str(c) for c in custom_tools or ()}
-    if record.used & _MAY_CHANGE_ANYTHING or record.used & custom or any(
+    # v1.503.0 (north-star 3.10): a claimed SEND, answered only by a send
+    # this reply made (or a call that may have sent it); said after the
+    # change sentences, in the same line.
+    sent = _send_said(str(reply), record, custom, history) if sends else []
+    if record.used & _HANDS_OFF:
+        return _line(said + sent)
+    # v1.503.0 (north-star 3.10): a command, code, a program, a pane or a
+    # user-made tool no longer stops every claim: one that names a setting by
+    # its label, or one of the app's record kinds, is still judged (only a
+    # config card or a record tool changes those). It used to return here.
+    opaque = bool(record.used & _MAY_CHANGE_ANYTHING) or bool(record.used & custom) or any(
         n.startswith("custom:") for n in record.used
-    ):
-        return _line(said)
+    )
     try:
         from .chat_turn import _FILE_CHANGING_TOOLS
     except Exception:  # noqa: BLE001
@@ -2057,14 +2390,16 @@ def _note(reply, tools_used, config_cards, history, custom_tools, reply_local_on
     coding = bool(record.used & _FILE_CHANGING_TOOLS)
     # Review (Wave 5 group K): an action in ANOTHER app or a web page (an app's
     # own tool, a click, typing) may be what the reply is about — "I created
-    # the project", "I turned on dark mode" after clicks on a site.
-    elsewhere = (
-        bool(record.used & (_ACTS_ELSEWHERE | _RECAPS_THE_LEDGER))
-        or any(n.startswith("mcp__") for n in record.used)
-    )
+    # the project", "I turned on dark mode" after clicks on a site. v1.503.0
+    # (north-star 3.10): a setting named by its label is still judged after
+    # either, and a record after an app's tool unless that tool's own name
+    # says it made one of that kind; the ledger recap keeps its old rule.
+    recap = bool(record.used & _RECAPS_THE_LEDGER)
+    on_page = bool(record.used & _ACTS_ELSEWHERE)
+    app_tool = any(n.startswith("mcp__") for n in record.used)
     claims = claims_in(reply)
     if not claims:
-        return _line(said)
+        return _line(said + sent)
     excused = _excused(_earlier_turns(history))
     for claim in claims:
         if coding:
@@ -2073,8 +2408,18 @@ def _note(reply, tools_used, config_cards, history, custom_tools, reply_local_on
             claim.records, claim.apps, claim.undo = [], [], False
             if not claim.named():
                 continue
-        if elsewhere:
+        if recap:
             claim.records, claim.settings, claim.undo = [], [], False
+            if not claim.named():
+                continue
+        if opaque or on_page or app_tool:
+            if not _names_label(claim):
+                claim.settings = []
+            if on_page or (app_tool and _app_made(claim, record.used)):
+                claim.records = []
+            claim.undo = False
+            if opaque:
+                claim.apps = []  # "I installed the GitHub app" after a command
             if not claim.named():
                 continue
         if record.answers(claim):
@@ -2086,7 +2431,7 @@ def _note(reply, tools_used, config_cards, history, custom_tools, reply_local_on
             said.append(s)
         if len(said) >= MAX_SAID:
             break
-    return _line(said)
+    return _line(said + [s for s in sent if s not in said])
 
 
 def _line(said: list[str]) -> str:
@@ -2098,9 +2443,15 @@ def _line(said: list[str]) -> str:
 __all__ = [
     "Claim",
     "IN_THIS_REPLY",
+    "IN_THIS_RUN",
+    "SEND_TOOLS",
+    "SendClaim",
     "TurnRecord",
     "claimed_change_note",
+    "claimed_send_note",
     "claims_in",
     "claims_this_reply_local",
+    "judge_run_summary",
+    "send_claims_in",
     "sentence_for",
 ]

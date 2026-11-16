@@ -1311,6 +1311,20 @@ async def assemble(
     return text
 
 
+def plan_not_done(results: "list[StepResult]") -> bool:
+    """Did a planned run leave its job NOT done (v1.503.0, north-star 3.3)?
+    True when a step was never attempted (the run's budget ran out — the flat
+    loop's step limit, which ends a run FAILED) or when no attempted step
+    passed. Some steps done and some failed is NOT this: that run completed
+    part of its job, and its verdict says "part failed" (``agents/outcome``
+    reads the failed steps off the kept plan). Pure."""
+    if not results:
+        return False
+    if any(not getattr(r, "attempted", True) for r in results):
+        return True
+    return not any(r.ok for r in results)
+
+
 # ---------------------------------------------------------------- entry point
 async def run_decomposed(
     runtime,
@@ -1326,12 +1340,19 @@ async def run_decomposed(
     adaptations: list[str] | None = None,
     record_outcome=None,
     resume: "tuple[list[PlanStep], list[StepResult]] | None" = None,
+    results_out: "list[StepResult] | None" = None,
 ) -> str | None:
     """The decomposed path: plan, then execute + verify each step, then
     assemble. Returns the final answer text, or ``None`` when the planner
     declines (degenerate/unparseable plan) — the caller then runs the flat
     loop unchanged. An error DURING execution propagates exactly as a flat-loop
     error would (the orchestrator's failure handling applies either way).
+
+    ``results_out`` (v1.503.0, north-star 3.3): when given, every step's
+    :class:`StepResult` is appended to it before the answer is assembled, so
+    the caller ends the run on what the steps DID — a failed or unattempted
+    step is a fact the runtime acts on, never only prose in the answer (the
+    ``adaptations`` idiom: the list is the caller's).
 
     Wave C3 (v1.203.0) knobs, all dormant at their defaults: ``verify_all``
     and ``record_outcome`` thread straight into :func:`execute_plan` (see its
@@ -1470,6 +1491,8 @@ async def run_decomposed(
         and any(r.retried and r.goal_gated for r in results)
     ):
         adaptations.append("step_retry")
+    if results_out is not None:
+        results_out.extend(results)
     if sink is not None:
         sink.phase("assembling", "writing up what happened")
     return await assemble(runtime, run, session, results, llm=synth_llm)

@@ -109,7 +109,8 @@ def test_a_pre_wave_row_reaches_every_door_without_a_500(tmp_path):
         )
         assert r.status_code in (200, 201), r.text
         ran = client.post("/schedules/old-rounds/run").json()
-        assert ran["last_status"] == "ok", ran
+        # v1.503.0 (north-star 3.11, moved on purpose): the demo model's run makes no tool call, so the scheduled run "did nothing" (it read "ok").
+        assert ran["last_status"] == "did_nothing", ran
 
         # Pause/resume on the old row, and the refusal reaches the spawn route.
         assert client.post("/agents/oldie/pause", json={"reason": "day off"}).status_code == 200
@@ -123,12 +124,17 @@ async def test_deny_tools_refuse_the_call_at_the_real_invoke(tmp_path):
     p.permissions = PermissionEngine({**p.config.permissions, "spawn_agent": "allow", "write_file": "allow"})
     reg = p.agents_registry
 
-    async def run(name: str) -> tuple[Session, list[ToolInvocation]]:
+    async def run(name: str, *, done: bool = True) -> tuple[Session, list[ToolInvocation]]:
         result = await p.registry.invoke(
             "spawn_agent", {"agent": name, "task": "write the summary"},
             _ctx(p, tmp_path, name), p.permissions,
         )
-        assert result.ok, result.error
+        # v1.503.0 (north-star 3.5, moved on purpose): a worker whose write
+        # was refused did not do its job — the lead's result is not ok, and
+        # says "Part failed" (it read ok).
+        assert result.ok is done, result.error
+        if not done:
+            assert result.data["outcome"] == "completed_with_failures", result.data
         with session_scope(p.engine) as db:
             child = list(db.exec(select(Session).where(Session.agent_name == f"custom:{name}")))[-1]
             rows = list(db.exec(select(ToolInvocation).where(ToolInvocation.session_id == child.id)))
@@ -147,7 +153,7 @@ async def test_deny_tools_refuse_the_call_at_the_real_invoke(tmp_path):
     # nothing written, the ledger row says deny.
     reg.register("denied", "You write.", ["read_file", "write_file"], deny_tools=["write_file"])
     before = {pth for pth in tmp_path.rglob("RESULT.md")}
-    child, rows = await run("denied")
+    child, rows = await run("denied", done=False)
     writes = [r for r in rows if r.tool == "write_file"]
     assert writes, "the mock still CALLED write_file — the deny is enforced at invoke, not by hiding the tool"
     assert all(r.ok is False for r in writes)

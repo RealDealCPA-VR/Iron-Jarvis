@@ -2042,6 +2042,51 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## "Done" means done (v1.503.0)
+
+The third part of the review fixes. In several places Iron Jarvis read
+"the run ended without an error" as "the job was done". It now reads its own
+record of what happened, everywhere.
+
+- **A workflow stops at a step that fell short.** If an agent step ends
+  waiting for an OK nobody gave, or with part of its work failed, the step
+  is a failed step. Later steps no longer run on work that was never done,
+  and the workflow and its Schedules row say which step and why.
+- **A queued job shows how it really ended.** A job in an agent's inbox that
+  ended short now reads **Needs you** or **Part failed** instead of Done,
+  with the reason and a Retry.
+- **A planned job with unfinished steps is not "completed".** When a job is
+  split into steps and some were never reached, it ends as Failed. When
+  some steps failed, it reads Part failed.
+- **A night coding task with failing tests is not "done".** It is counted
+  under **Needs you** in the morning summary, and the notice reads "Your
+  coding session finished, but something needs you".
+- **A scheduled job that did nothing says so.** A schedule, queued job, goal
+  or rule whose run only wrote words and took no action now reads **Did
+  nothing** ("finished without doing anything. Check what it said"). A
+  question you asked from your phone and got answered is not affected.
+- **A helper's result is checked before the lead repeats it.** When one
+  agent hands work to another, the lead now gets the checked result, not
+  the helper's own closing words.
+- **A team job's files all come home.** The receipt in chat, and the answer
+  sent back to a paired computer, now include files made by helpers.
+- **Claims are checked more closely.**
+  - "I saved notes.md and budget.xlsx" is now checked name by name. A file
+    that was not written gets a note under the reply.
+  - "I emailed it" or "sent to Slack" with nothing actually sent gets the
+    note "No message was sent in this reply." This is checked for agent
+    runs too.
+  - A claim that a setting or schedule was changed is still checked after
+    other tools ran in the same reply.
+  - "I saved report.docx" after a save you declined, or one that failed, is
+    now marked in an agent run's summary.
+- **"No tool ran" is said only when none did.** If a step ran and printed
+  nothing (moving or deleting a file, for example), the reply now says which
+  step ran and warns that Retry would run it again.
+- **A program printing "permission denied" is not treated as your No.** And
+  an approval card that timed out is described as not answered in time, not
+  as refused by you.
+
 ## Nothing leaves your PC as a side effect (v1.502.0)
 
 The second part of the review fixes. Each of these closed a way for your

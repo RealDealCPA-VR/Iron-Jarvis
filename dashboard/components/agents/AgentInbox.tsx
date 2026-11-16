@@ -37,7 +37,7 @@ import type {
   Project,
 } from "@/lib/types";
 import { Badge, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
-import { statusWords } from "@/lib/statusWords";
+import { outcomeWords, statusWords } from "@/lib/statusWords";
 import { timeAgo } from "@/lib/format";
 import { agentLabel } from "@/lib/agentWorlds";
 import { COMPOSER_CARD_EDGE, composerChipClass } from "@/lib/composerChips";
@@ -113,8 +113,12 @@ export function priorityLabel(priority: number): "high" | "low" | null {
 
 /** Which buttons a row offers, by status. Cancel while it can still be
  *  stopped; Unblock only for a blocked row; Retry for one that failed or
- *  was cancelled (the daemon mints a NEW row for a retry). */
-export function rowActions(status: AssignmentStatus): {
+ *  was cancelled (the daemon mints a NEW row for a retry) — and (v1.503.0,
+ *  north-star 3.4) for a done row whose run fell short (`outcome`). */
+export function rowActions(
+  status: AssignmentStatus,
+  outcome?: string | null,
+): {
   cancel: boolean;
   unblock: boolean;
   retry: boolean;
@@ -122,8 +126,20 @@ export function rowActions(status: AssignmentStatus): {
   return {
     cancel: status === "queued" || status === "claimed" || status === "running" || status === "blocked",
     unblock: status === "blocked",
-    retry: status === "failed" || status === "cancelled",
+    retry: status === "failed" || status === "cancelled" || (status === "done" && fellShort(outcome)),
   };
+}
+
+/** A done row's verdict that is not "done" (statusWords' OUTCOME table). */
+function fellShort(outcome: string | null | undefined): boolean {
+  return outcomeWords(outcome) !== null;
+}
+
+/** v1.503.0 (north-star 3.4): the ledger's verdict a done row carries (the
+ *  daemon's `assignments/store.as_dict`); absent from an older daemon. */
+function rowOutcome(a: Assignment): string | null {
+  const v = (a as Assignment & { outcome?: unknown }).outcome;
+  return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
 export type HealthTone = "green" | "amber" | "red" | "slate";
@@ -144,7 +160,7 @@ export function healthLine(h: AgentHealth | null | undefined): { text: string; t
   if (outcome === "failed" || outcome === "error") {
     return { text: `${when} · failed: ${h.last_error || "no error recorded"}`, tone: "red" };
   }
-  if (outcome === "needs_you" || outcome === "completed_with_failures") {
+  if (outcome === "needs_you" || outcome === "completed_with_failures" || outcome === "did_nothing") {
     return { text: `${when} · ${outcome.replace(/_/g, " ")}`, tone: "amber" };
   }
   return { text: `${when} · ${outcome ? outcome.replace(/_/g, " ") : "completed"}`, tone: "green" };
@@ -183,12 +199,17 @@ export function AssignmentRow({
 }) {
   const [busy, setBusy] = useState<"cancel" | "unblock" | "retry" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const actions = rowActions(a.status);
+  const outcome = rowOutcome(a);
+  const short = a.status === "done" && fellShort(outcome);
+  const actions = rowActions(a.status, outcome);
   const prio = a.status === "queued" ? priorityLabel(a.priority) : null;
   // v1.352.0 (G17): the row's state in the ONE table's words and tone —
   // "Queued", "Working" (claimed or running), "Done", "Failed", "Needs you"
   // (blocked), "Stopped" (slate, not a failure's red) — never the raw id.
-  const state = statusWords(a.status);
+  // v1.503.0 (north-star 3.4, D12): a done row reads its run's verdict —
+  // "Needs you" / "Part failed" / "Did nothing" — never "Done" over a job
+  // that fell short.
+  const state = statusWords(a.status, outcome);
 
   async function act(kind: "cancel" | "unblock" | "retry") {
     if (busy) return;
@@ -297,6 +318,15 @@ export function AssignmentRow({
       )}
       {a.status === "failed" && a.last_error && (
         <p className="mt-0.5 truncate text-[12px] text-tone-danger" title={a.last_error}>
+          {a.last_error}
+        </p>
+      )}
+      {short && a.last_error && (
+        <p
+          data-testid={`inbox-short-reason-${a.id}`}
+          className="mt-0.5 truncate text-[12px] text-tone-warn"
+          title={a.last_error}
+        >
           {a.last_error}
         </p>
       )}

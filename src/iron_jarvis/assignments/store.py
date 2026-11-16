@@ -137,6 +137,8 @@ def as_dict(record: AssignmentRecord) -> dict[str, Any]:
         "depth": int(record.depth or 0),
         "session_id": record.session_id or "",
         "last_error": record.last_error or "",
+        # v1.503.0 (north-star 3.4): the verdict of a done row (None: none).
+        "outcome": getattr(record, "outcome", None) or None,
         "created_at": _iso(record.created_at),
         "claimed_at": _iso(record.claimed_at),
         "started_at": _iso(record.started_at),
@@ -492,12 +494,26 @@ class AssignmentStore:
 
         return self._mutate(id_, fn)
 
-    def finish(self, id_: str, ok: bool, error: str = "") -> AssignmentRecord | None:
+    def finish(
+        self, id_: str, ok: bool, error: str = "", *, outcome: str | None = None
+    ) -> AssignmentRecord | None:
         """running/claimed → done, or failed — or BLOCKED on the third failure
         in a row. A row already settled (cancelled while its session ran,
-        say) is left alone: the first verdict stands."""
+        say) is left alone: the first verdict stands.
+
+        ``ok`` says the run COMPLETED; ``outcome`` (v1.503.0, north-star 3.4,
+        D12) is the ledger's verdict on the job (``Session.outcome``), kept
+        on the row. A completed run that fell SHORT (``needs_you``,
+        ``completed_with_failures``, ``did_nothing``) is ``done`` with that
+        verdict — the inbox says "Needs you" / "Part failed" — its reason in
+        ``last_error``, and its failure streak is neither reset nor added to:
+        it was not a clean run, and it was not a failure the breaker counts."""
         now = utcnow()
         blocked: dict | None = None
+        from ..agents.outcome import run_ending
+
+        verdict = str(outcome or "").strip() or None
+        ending = run_ending("completed", verdict)
 
         def fn(row: AssignmentRecord) -> bool:
             nonlocal blocked
@@ -507,8 +523,12 @@ class AssignmentStore:
             row.finished_at = now
             row.claim_token = ""
             row.held_reason = ""
+            row.outcome = verdict
             if ok:
                 row.status = DONE
+                if not ending.ok:
+                    row.last_error = _one_line(error or ending.reason, MAX_ERROR_CHARS)
+                    return True
                 row.failure_count = 0
                 row.last_error = ""
                 return True

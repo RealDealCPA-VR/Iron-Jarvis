@@ -1933,24 +1933,34 @@ async def _announce_account_limit(platform: Any, thread_id: str, limit: "dict[st
 
 
 async def _announce_turn_finished(platform: Any, thread_id: str, turn_id: str, status: str,
-                                  seconds: float) -> None:
+                                  seconds: float, *, fin: "dict[str, Any] | None" = None) -> None:
     """``build.turn_finished`` (v1.374.0) for a long turn that ended: the
-    session's title, how long it took and how it ended ("done" | "failed").
-    The bell says it (unless the user is looking at that session); "This PC"
-    stays quiet for it (``comm/notifier.bell_pings``). Never raises."""
+    session's title, how long it took and how it ended ("done" | "failed" |
+    "needs_you"). The bell says it (unless the user is looking at that
+    session); "This PC" stays quiet for it (``comm/notifier.bell_pings``).
+    Never raises.
+
+    ``fin`` (v1.503.0, north-star 3.6): the reply's saved finish record. A
+    reply that ended but whose own check found failing tests or points of
+    the request still open is ``needs_you`` — the night shift's reading
+    (``harness/night.finish_needs_you``), never "finished" over it."""
     try:
         bus = getattr(platform, "event_bus", None)
         if bus is None:
             return
         from ...core.events import EventType
+        from ...harness.night import finish_needs_you
 
+        outcome = "done" if status == "done" else "failed"
+        if outcome == "done" and finish_needs_you(fin):
+            outcome = "needs_you"
         row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
         await bus.publish(EventType.BUILD_TURN_FINISHED, {
             "thread_id": thread_id,
             "turn_id": turn_id,
             "title": (getattr(row, "title", "") or "") if row is not None else "",
             "seconds": int(seconds),
-            "outcome": "done" if status == "done" else "failed",
+            "outcome": outcome,
         }, session_id=S.session_id_for(thread_id))
     except Exception:  # noqa: BLE001 — the turn never fails on its notice
         log.warning("announcing build session %s's finished turn failed", thread_id, exc_info=True)
@@ -2351,8 +2361,15 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
             platform is not None and status in ("done", "error") and not watch.account_limit
             and elapsed > FINISH_NOTICE_AFTER_S and _night_shift.current() is None
         ):
+            # v1.503.0 (north-star 3.6): the reply's own finish record rides
+            # along, so a "done" reply whose check failed says "needs you".
+            from ...harness.finish import saved_record as _saved_finish
+
+            _fin = _saved_finish(watch.done.get("finish")) if isinstance(watch.done, dict) else None
             with contextlib.suppress(BaseException):
-                await asyncio.shield(_announce_turn_finished(platform, thread_id, turn_id, status, elapsed))
+                await asyncio.shield(
+                    _announce_turn_finished(platform, thread_id, turn_id, status, elapsed, fin=_fin)
+                )
         # v1.370.0 (Phase 7): the EXPERIENCE LIBRARY notes a turn that
         # FINISHED; the session is reflected on ONCE it has been idle (one
         # model call per idle period over every noted turn — never one per

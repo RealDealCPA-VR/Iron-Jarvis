@@ -233,7 +233,8 @@ def test_skills_ride_a_dynamic_agents_copy_not_its_record(client):
     seen = _spy_complete(platform, {})
     assert _add(client, "remy-skilled", {"task": "Rounds.", "agent_type": "remy", "skills": [skill]}).status_code == 200
     ran = _fire(client, "remy-skilled")
-    assert ran["last_status"] == "ok", ran
+    # v1.503.0 (north-star 3.11, moved on purpose): the demo model's run makes no tool call, so the scheduled run "did nothing" (it read "ok").
+    assert ran["last_status"] == "did_nothing", ran
     assert any("You are remy" in s and f"## {skill}" in s for s in seen["systems"])
     assert platform.agents_registry.definition("remy").skills == []
     assert skill not in json.dumps(platform.agents_registry.get("remy").model_dump(), default=str)

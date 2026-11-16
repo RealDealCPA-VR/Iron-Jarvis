@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlmodel import select
 
@@ -36,12 +36,38 @@ from ..core.events import EventType
 from ..core.models import AgentRun, EventRecord, Session, ToolInvocation, UndoJournal
 from ..tools.base import Reversibility
 
-#: The three verdicts ``Session.outcome`` may carry (v1.227.0, audit A5/U1).
+#: The verdicts ``Session.outcome`` may carry (v1.227.0, audit A5/U1).
 #: ``status`` says how the RUN ended; these say whether the JOB was done.
 OUTCOME_COMPLETED = "completed"
 OUTCOME_WITH_FAILURES = "completed_with_failures"
 OUTCOME_NEEDS_YOU = "needs_you"
-OUTCOMES = (OUTCOME_COMPLETED, OUTCOME_WITH_FAILURES, OUTCOME_NEEDS_YOU)
+#: v1.503.0 (north-star 3.11): an UNATTENDED run that completed without a
+#: single tool call (see :data:`DID_NOTHING_DOORS`). Nobody was reading its
+#: answer as it came, and "completed" with no action is the shape of a run
+#: that DESCRIBED the work instead of doing it.
+OUTCOME_DID_NOTHING = "did_nothing"
+OUTCOMES = (OUTCOME_COMPLETED, OUTCOME_WITH_FAILURES, OUTCOME_NEEDS_YOU, OUTCOME_DID_NOTHING)
+
+#: The doors (``Session.origin`` is ``<door>:<name>``) whose run is a JOB done
+#: with nobody watching, so an empty ledger is not "done" (v1.503.0, 3.11): a
+#: schedule, a queued job (assignment), a goal iteration, a rule (reflex) and
+#: autonomy.
+#: Deliberately NOT here: every attended door (chat, job, project, user, an
+#: untagged run a person started) — a run there that simply answered a
+#: question did its job, and the person read the answer; a PHONE task (comm)
+#: and a task from another computer (remote), whose answer goes straight back
+#: to the person or the chat that asked, so a question answered in words IS
+#: the job and a bell for it would be noise (lead review: quiet unless the
+#: user is needed); a WORKFLOW step, whose text is often the work itself (a
+#: summary the next step uses); and ``self_dev``, which a person starts. An
+#: allow list, so a new door is "done" until someone decides otherwise.
+DID_NOTHING_DOORS = ("schedule", "assignment", "goal", "reflex", "autonomy")
+
+
+def did_nothing_door(origin: Any) -> bool:
+    """Is ``origin`` a door whose run with an empty ledger did nothing?"""
+    door = str(origin or "").strip().partition(":")[0].strip().lower()
+    return door in DID_NOTHING_DOORS
 
 #: The decision an ``approval.resolved`` event carries when the clock, not the
 #: user, answered (``agents/runtime._pause_for_approval``).
@@ -75,14 +101,21 @@ def _count_unanswered_asks(db, session_id: str) -> int:
     return count
 
 
-def derive_outcome(result: dict[str, Any], status: Any = None) -> str | None:
+def derive_outcome(
+    result: dict[str, Any], status: Any = None, *, origin: Any = None
+) -> str | None:
     """The verdict on the JOB, from a ``session_result`` payload. Pure.
 
     * ``needs_you`` — any ask for the session resolved ``timeout``. The run
       may read COMPLETED (it ended without an exception) or FAILED; either way
       the job is waiting on the person, and that is the headline.
     * ``completed_with_failures`` — the run completed, nobody was asked and
-      left unanswered, and at least one MUTATING tool call failed.
+      left unanswered, and at least one MUTATING tool call failed, or
+      (v1.503.0, north-star 3.3) a step of its PLAN failed its check
+      (``plan_steps_failed``, read from the run's kept plan).
+    * ``did_nothing`` (v1.503.0, 3.11) — the run completed without a single
+      tool call and ``origin`` is an unattended door
+      (:func:`did_nothing_door`). Without ``origin`` it is never derived.
     * ``completed`` — the run completed and nothing above applies.
     * ``None`` — not found, not finished, or a status (failed with no
       unanswered ask, cancelled) that already tells the truth on its own.
@@ -100,6 +133,10 @@ def derive_outcome(result: dict[str, Any], status: Any = None) -> str | None:
         return None
     if int(result.get("tools_failed_mutating") or 0) > 0:
         return OUTCOME_WITH_FAILURES
+    if int(result.get("plan_steps_failed") or 0) > 0:
+        return OUTCOME_WITH_FAILURES
+    if not result.get("tools_used") and did_nothing_door(origin):
+        return OUTCOME_DID_NOTHING
     return OUTCOME_COMPLETED
 
 
@@ -107,6 +144,90 @@ def session_outcome(engine, session_id: str, status: Any = None) -> str | None:
     """``derive_outcome`` over a fresh ledger read — the finalize-time call.
     BLOCKING (SQLite reads); the orchestrator runs it off the loop."""
     return derive_outcome(session_result(engine, session_id), status)
+
+
+# --- the ONE reading of a finished run (v1.503.0, north-star 3.1) ------------
+
+#: The word for each ending, exactly as every status badge says it
+#: (``dashboard/lib/statusWords.ts``: STATUS + OUTCOME).
+WORD_DONE = "Done"
+WORD_NEEDS_YOU = "Needs you"
+WORD_PART_FAILED = "Part failed"
+WORD_DID_NOTHING = "Did nothing"
+WORD_FAILED = "Failed"
+WORD_STOPPED = "Stopped"
+
+_STATUS_WORDS = {
+    "completed": WORD_DONE,
+    "failed": WORD_FAILED,
+    "cancelled": WORD_STOPPED,
+}
+_OUTCOME_WORDS = {
+    OUTCOME_NEEDS_YOU: WORD_NEEDS_YOU,
+    OUTCOME_WITH_FAILURES: WORD_PART_FAILED,
+    OUTCOME_DID_NOTHING: WORD_DID_NOTHING,
+}
+#: A failed or stopped run that carries no sentence of its own.
+_FAILED_REASON = "The run did not finish."
+_STOPPED_REASON = "The run was stopped before it finished."
+
+
+class RunEnding(NamedTuple):
+    """How a finished run REALLY ended (:func:`run_ending`).
+
+    ``status`` — the run's status value ("completed", "failed", …);
+    ``outcome`` — the ledger's verdict on the job (``Session.outcome``, None
+    when there is none); ``ok`` — the JOB was done: the run completed AND its
+    verdict is "completed" (or there is no verdict to read, an older row);
+    ``words`` — the badge word every surface says; ``reason`` — one plain
+    sentence on why it fell short ("" when ``ok``)."""
+
+    status: str
+    outcome: str | None
+    ok: bool
+    words: str
+    reason: str
+
+
+def run_ending(status_or_session: Any, outcome: Any = None) -> RunEnding:
+    """THE one reading of a finished run (v1.503.0, north-star 3.1): a run's
+    status says how the RUN ended, ``Session.outcome`` (the ledger's verdict,
+    derived at finalize) says whether the JOB was done, and every door that
+    acts on a finished run reads both here — a workflow's agent step, a
+    queued job, a lead's hand-off, the night shift — never ``status`` alone.
+
+    Takes a session-like object (``.status`` / ``.outcome``) or a status and
+    an outcome. Only a COMPLETED run reads its verdict, as the badges do: a
+    failed or stopped run already says what happened. The reasons are the
+    Schedules row's own sentences (``scheduling/run_outcome``). Pure; never
+    raises."""
+    if outcome is None and hasattr(status_or_session, "status"):
+        outcome = getattr(status_or_session, "outcome", None)
+        status = getattr(status_or_session, "status", None)
+    else:
+        status = status_or_session
+    status_value = str(getattr(status, "value", status) or "").strip().lower()
+    verdict = str(outcome or "").strip().lower() or None
+    try:
+        from ..scheduling.run_outcome import (
+            DID_NOTHING_LEAD,
+            NEEDS_YOU_LEAD,
+            PARTIAL_LEAD,
+        )
+    except Exception:  # noqa: BLE001 — the words are a reading, never the verdict
+        NEEDS_YOU_LEAD = PARTIAL_LEAD = DID_NOTHING_LEAD = _FAILED_REASON
+    if status_value == "completed":
+        if verdict in _OUTCOME_WORDS:
+            reason = {
+                OUTCOME_NEEDS_YOU: NEEDS_YOU_LEAD,
+                OUTCOME_WITH_FAILURES: PARTIAL_LEAD,
+                OUTCOME_DID_NOTHING: DID_NOTHING_LEAD,
+            }[verdict]
+            return RunEnding(status_value, verdict, False, _OUTCOME_WORDS[verdict], reason)
+        return RunEnding(status_value, verdict, True, WORD_DONE, "")
+    words = _STATUS_WORDS.get(status_value) or (status_value.replace("_", " ").capitalize() or WORD_FAILED)
+    reason = _STOPPED_REASON if status_value == "cancelled" else _FAILED_REASON
+    return RunEnding(status_value, verdict, False, words, reason)
 
 #: Journal kinds that describe a FILE mutation, and what each one means the
 #: tool did. (The inverse is the mirror image: to undo a creation you delete.)
@@ -193,6 +314,75 @@ def _rel(path: str, workspace: str) -> str:
         return str(Path(path).relative_to(Path(workspace)))
     except (ValueError, OSError):
         return path
+
+
+def _plan_steps_failed(db, session_id: str) -> int:
+    """How many steps of the session's NEWEST kept plan (``RunPlan``, written
+    step by step by ``agents/decompose.execute_plan``) were attempted and
+    failed their check (v1.503.0, north-star 3.3). A step never attempted is
+    not counted here: a run that left one ends FAILED itself (the runtime's
+    rule). 0 for a run with no plan, or a record that cannot be read."""
+    try:
+        from ..core.models import RunPlan
+
+        rows = [
+            r for r in db.exec(select(RunPlan).where(RunPlan.session_id == session_id)).all()
+            if (r.plan_json or "[]") != "[]"
+        ]
+        if not rows:
+            return 0
+        newest = max(rows, key=lambda r: str(getattr(r, "updated_at", "") or ""))
+        results = json.loads(newest.results_json or "[]")
+        return sum(
+            1 for r in results
+            if isinstance(r, dict) and r.get("ok") is False and r.get("attempted", True) is not False
+        )
+    except Exception:  # noqa: BLE001 — a plan record never costs the result
+        return 0
+
+
+def _with_team_documents(db, session_id: str, own: list[str]) -> list[str]:
+    """``own`` followed by the documents of every worker in the delegation
+    tree under ``session_id``, in team order, without duplicates, capped at
+    the list cap (v1.503.0, north-star 3.13). A read that fails keeps
+    ``own``: the workers' files are an addition, never the result."""
+    try:
+        from .mission import _team_documents, _walk
+
+        members, _runs = _walk(db, session_id)
+        if not members:
+            return own
+        by_member = _team_documents(db, {m.id: m for m in members})
+        merged = list(own)
+        for m in members:
+            for p in by_member.get(m.id) or []:
+                if p not in merged:
+                    merged.append(p)
+        return merged[:_LIST_CAP]
+    except Exception:  # noqa: BLE001
+        return own
+
+
+def succeeded_tools(engine, session_id: str, run_id: str | None = None) -> list[str]:
+    """The tools whose calls SUCCEEDED in run ``run_id`` of the session (every
+    run of it when ``run_id`` is empty), one name per call, oldest first —
+    the facts a run's closing words are judged on (v1.503.0, north-star 3.7:
+    a declined or failed ``write_file`` is not a save). An undo is not the
+    run's work. BLOCKING (one indexed read); ``[]`` when it cannot be read,
+    which is the direction that checks a claim rather than waves it through."""
+    try:
+        with session_scope(engine) as db:
+            stmt = select(ToolInvocation.tool).where(
+                ToolInvocation.session_id == session_id,
+                ToolInvocation.ok == True,  # noqa: E712 — SQL comparison
+                ToolInvocation.undo_of.is_(None),  # type: ignore[union-attr]
+            )
+            if run_id:
+                stmt = stmt.where(ToolInvocation.agent_run_id == run_id)
+            stmt = stmt.order_by(ToolInvocation.created_at)  # type: ignore[arg-type]
+            return [str(t or "") for t in db.exec(stmt).all() if t]
+    except Exception:  # noqa: BLE001
+        return []
 
 
 #: Newest action lines a receipt carries (v1.351.0, G18).
@@ -298,8 +488,18 @@ def session_result(
     receipt: bool = False,
     manager: Any = None,
     config: Any = None,
+    team: bool = False,
 ) -> dict[str, Any]:
     """The honest outcome of one session.
+
+    ``team=True`` (v1.503.0, north-star 3.13): a TEAM job's receipt — the
+    files its workers (the delegation tree under this session,
+    ``mission._walk``) made are added to ``documents`` after the session's
+    own, the mission screen's reading (``mission._team_documents``). The chat
+    delivery and a paired computer's reply use it, so a lead that handed
+    the writing to a worker never delivers a receipt without that file. The
+    verdict and every other key stay this session's own; a solo run reads
+    the same as without it.
 
     Read-only and defensive — this feeds a UI card and an SSE frame, so a
     half-written session or a missing row must degrade to a smaller report, never
@@ -509,16 +709,25 @@ def session_result(
                 str((Path(workspace) / p).resolve())
                 for p in (created + changed)[:_LIST_CAP]
             ] if workspace else []
+            if team:
+                out["documents"] = _with_team_documents(db, session_id, out["documents"])
             out["errors"] = errors
             out["revertable"] = revertable
             out["reverted"] = already_reverted
             out["tools_failed_mutating"] = mutating_failed
             out["ended_on_failed_change"] = last_change_ok is False
+            # v1.503.0 (north-star 3.3): the steps of the run's kept PLAN
+            # that were attempted and failed their check (a decomposed run;
+            # 0 for every other) — a fact on the record, so the verdict and
+            # every later reading of it agree.
+            out["plan_steps_failed"] = _plan_steps_failed(db, session_id)
             # The stored verdict wins (it was derived at finalize with the
             # status the run actually ended in); a row from before the column
             # existed gets the same derivation live, so an old card is not
             # left blank where a new one would say "needs you".
-            out["outcome"] = stored_outcome or derive_outcome(out)
+            out["outcome"] = stored_outcome or derive_outcome(
+                out, origin=getattr(session, "origin", None)
+            )
             try:
                 # ``finished_at`` is only set once the session ends, so a running
                 # session honestly reports no duration rather than a growing one.

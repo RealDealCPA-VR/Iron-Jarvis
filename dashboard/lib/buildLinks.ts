@@ -245,6 +245,9 @@ export function buildTookWords(seconds: unknown): string {
 /** The bell's headline for `build.turn_finished` (v1.374.0): a Build turn
  *  that ran longer than a minute ended. */
 export function buildFinishedHeadline(outcome: unknown): string {
+  // v1.503.0 (north-star 3.6): the reply ended, but its own finish check found
+  // failing tests or points still open (comm/notifier.build_finished_title).
+  if (outcome === "needs_you") return "Your coding session finished, but something needs you";
   return outcome === "failed" ? "Your coding session could not finish" : "Your coding session finished";
 }
 

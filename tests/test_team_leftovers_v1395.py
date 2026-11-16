@@ -133,7 +133,9 @@ def test_a_scheduled_member_runs_held_to_its_own_model(tmp_path, monkeypatch):
     member(world.p, "codex", "codex-cli", "", roles=("code",), account="x-plus")
     _add_schedule(client, "nightly", {"task": "Nightly sweep.", "agent_type": "codex"})
     ran = client.post("/schedules/nightly/run").json()
-    assert ran["last_status"] == "ok", ran
+    # v1.503.0 (north-star 3.11, moved on purpose): the stand-in run makes no
+    # tool call, so the scheduled run "did nothing" (it read "ok").
+    assert ran["last_status"] == "did_nothing", ran
     calls = [c for c in world.log if c["task"].startswith("Nightly sweep")]
     assert calls and all(c["hold"] == ("codex-cli", "default") for c in calls), world.log
     assert all(c["pin"] is not None and c["pin"].profile_id == "x-plus" for c in calls)

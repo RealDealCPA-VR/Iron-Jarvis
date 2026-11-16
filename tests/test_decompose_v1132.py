@@ -509,6 +509,9 @@ async def test_decomposed_run_end_to_end_double_fail_surfaced(
 
     session = await orchestrator.run(_LONG_TASK, AgentType.BUILDER, provider="local-e2e")
     assert session.status is SessionStatus.COMPLETED
+    # v1.503.0 (north-star 3.3, moved on purpose): a step failed its check,
+    # so the job is "part failed", never a plain "Done".
+    assert orchestrator.get_session(session.id).outcome == "completed_with_failures"
     assert (Path(session.workspace_path) / "hello.txt").exists()
     assert not (Path(session.workspace_path) / "missing.txt").exists()
 
@@ -644,6 +647,9 @@ async def test_middle_step_double_fail_rest_runs_and_lying_assemble_corrected(
 
     session = await orchestrator.run(_LONG_TASK, AgentType.BUILDER, provider="local-mid")
     assert session.status is SessionStatus.COMPLETED
+    # v1.503.0 (north-star 3.3, moved on purpose): steps 1 and 3 did their
+    # work and step 2 failed its check — the run COMPLETED, "part failed".
+    assert orchestrator.get_session(session.id).outcome == "completed_with_failures"
     ws = Path(session.workspace_path)
     assert (ws / "a.txt").exists() and (ws / "c.txt").exists()
     assert not (ws / "b.txt").exists()

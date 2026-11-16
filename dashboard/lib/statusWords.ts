@@ -54,6 +54,10 @@ const WAITING_FOR_YOU = w("Waiting for you", "amber");
 // Finished, but part of the work failed (a run's ledger verdict, a
 // workflow run with a failed step it was told to skip, a schedule fire).
 const PART_FAILED = w("Part failed", "amber");
+// v1.503.0 (north-star 3.11): an unattended run (a schedule, a queued job, a
+// phone task) that finished without a single tool call — the ledger verdict
+// `did_nothing` (agents/outcome.OUTCOME_DID_NOTHING). Amber: check what it said.
+const DID_NOTHING = w("Did nothing", "amber");
 
 /** Every work status the daemon writes, by its raw value (lower case). */
 const STATUS: Readonly<Record<string, StatusWords>> = {
@@ -112,6 +116,8 @@ const OUTCOME: Readonly<Record<string, StatusWords>> = {
   needs_you: NEEDS_YOU,
   // A mutating step failed (or a mission's worklist kept failed items).
   completed_with_failures: PART_FAILED,
+  // v1.503.0: an unattended run that made no tool call.
+  did_nothing: DID_NOTHING,
 };
 
 function norm(v: unknown): string {
@@ -164,6 +170,8 @@ const SCHEDULE: Readonly<Record<string, StatusWords>> = {
   ok: DONE,
   needs_you: OUTCOME.needs_you,
   partial: OUTCOME.completed_with_failures,
+  // v1.503.0 (north-star 3.11): scheduling/run_outcome.STATUS_DID_NOTHING.
+  did_nothing: OUTCOME.did_nothing,
   error: FAILED,
   // Not written by the scheduler; a row planted by an older build reads like
   // `error` (the daemon's FAILED_STATUSES counts it too).

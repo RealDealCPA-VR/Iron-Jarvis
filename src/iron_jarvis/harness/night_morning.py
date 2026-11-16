@@ -63,7 +63,9 @@ STATE_WORDS = {
 }
 #: The note kinds that are "what needs you" on a row (the main folder change
 #: has its own line, never folded).
-NEEDS_KINDS = ("declined", "unanswered", "low_trust", "account")
+#: v1.503.0 (north-star 3.6): + "unmet" — points of the request the task's
+#: own finish check left open (``night.outcome_of``).
+NEEDS_KINDS = ("declined", "unanswered", "low_trust", "account", "unmet")
 #: v1.399.0 review: the note kinds that say why a task STOPPED (its row says
 #: the first one in words).
 STOP_KINDS = ("emergency", "limit", "stopped", "restart")

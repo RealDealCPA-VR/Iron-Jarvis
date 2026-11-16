@@ -91,6 +91,57 @@ def _with_handle(result: str | None, handle: str) -> str:
     return f"{handle}\n{body}" if body else handle
 
 
+#: What a lead reads before its worker's report when the worker's RUN
+#: completed but its JOB fell short (v1.503.0, north-star 3.5): the badge
+#: word the user sees on that worker's row, then what to do about it.
+_SHORT_FOR_THE_LEAD = {
+    "needs_you": (
+        "this worker asked for an OK and nobody answered in time, so part of its "
+        "work did not run."
+    ),
+    "completed_with_failures": "some of this worker's changes did not land.",
+    "did_nothing": "this worker finished without running a single tool.",
+}
+_SHORT_NEXT = (
+    " Do not rely on its report as done: check what is missing, then hand that "
+    "part out again or say plainly that it is not done."
+)
+
+
+def settled_hand_off(child_session: Any, run: Any, handle: str) -> tuple[bool, str, str | None, str]:
+    """The lead's view of a finished worker (v1.503.0, north-star 3.5), shared
+    by ``delegate`` and ``spawn_agent`` after ``Orchestrator.settle_child``:
+    ``(ok, report, outcome, error)``.
+
+    ``report`` is the SETTLED summary — the child's row as ``settle_child``
+    stored it (the closing words with the ledger's note on a claimed file
+    nothing wrote, and the folder note), never ``run.result`` bare — with the
+    worker's address on its first line. ``ok`` is the job's TRUE ending
+    (``outcome.run_ending``: the run completed AND its verdict is
+    "completed"), so ``needs_you`` and "part failed" are not ``ok``; then
+    ``error`` (what the lead reads for a failed result) opens with the badge
+    word and the reason, in words the lead can act on, before the report.
+    Never raises."""
+    from .outcome import run_ending
+
+    try:
+        ending = run_ending(
+            getattr(child_session, "status", None), getattr(child_session, "outcome", None)
+        )
+        settled = str(getattr(child_session, "summary", "") or "").strip() or str(run.result or "")
+        report = _with_handle(settled, handle)
+        if ending.ok:
+            return True, report, ending.outcome, ""
+        if ending.status == "completed":
+            why = _SHORT_FOR_THE_LEAD.get(str(ending.outcome or ""), ending.reason)
+            return False, report, ending.outcome, f"{ending.words}: {why}{_SHORT_NEXT}\n{report}"
+        return False, report, ending.outcome, (settled or "subagent failed")
+    except Exception:  # noqa: BLE001 — the hand-off itself never fails here
+        ok = getattr(run, "state", None) is AgentState.COMPLETED
+        report = _with_handle(run.result, handle)
+        return ok, report, None, "" if ok else (run.result or "subagent failed")
+
+
 async def publish_delegation_started(
     platform,
     *,
@@ -955,13 +1006,19 @@ class DelegateTool(Tool):
                 pass
             await orch._post_run_allowance(child_session)
 
-            ok = run.state is AgentState.COMPLETED
+            finished = run.state is AgentState.COMPLETED
+            # v1.503.0 (north-star 3.5): the lead gets the CHECKED result —
+            # the settled summary and the job's true ending, never the
+            # worker's closing words with ``ok`` read off its run state.
+            ok, report, outcome, short_words = settled_hand_off(
+                child_session, run, delegation_handle(target_name, run.id, child_session.id),
+            )
             # v1.395.0: the piece's row in the member's record for its role
             # (and a reviewer's verdict on the work it reviewed). Review: on
             # the model it ran on, and the account it was pinned to.
             await _model_team.note_piece(
                 self.platform, record=rec, role=_record_role, session_id=child_session.id,
-                scope=ctx.session_id, piece=_piece, finished=ok, report=run.result,
+                scope=ctx.session_id, piece=_piece, finished=finished, report=run.result,
                 provider=str(provider or ""), model=str(model or ""),
                 account=str(getattr(_hp.pin if _hp is not None else _member_pin, "profile_id", "") or ""),
                 turn=str(getattr(_hp, "turn", "") or ""), asked=_record_asked,
@@ -978,13 +1035,11 @@ class DelegateTool(Tool):
             )
             return ToolResult(
                 ok=ok,
-                # The child's summary PLUS its address, so the parent can reach
-                # it again (message_agent) instead of only reading its report.
-                output=_with_handle(
-                    run.result,
-                    delegation_handle(target_name, run.id, child_session.id),
-                ),
-                error=None if ok else (run.result or "subagent failed"),
+                # The child's SETTLED summary PLUS its address, so the parent
+                # can reach it again (message_agent) instead of only reading
+                # its report.
+                output=report,
+                error=None if ok else short_words,
                 data={
                     "child_run_id": run.id,
                     "child_session_id": child_session.id,
@@ -994,6 +1049,9 @@ class DelegateTool(Tool):
                     # (additive; agent_type stays the base-type for compat).
                     "target": target_name,
                     "state": run.state.value,
+                    # v1.503.0 (north-star 3.5): the ledger's verdict on the
+                    # job (Session.outcome; None for a run with none).
+                    "outcome": outcome,
                     # Where the child actually worked: the parent's real folder
                     # when it had one, else its own disposable workspace.
                     "workspace": child_session.workspace_path,

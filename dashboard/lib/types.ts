@@ -1258,6 +1258,9 @@ export interface Assignment {
   depth: number;
   session_id: string | null;
   last_error: string | null;
+  /** v1.503.0: how the job REALLY ended when its run completed short of the
+   *  work (needs_you, completed_with_failures, did_nothing); null = done. */
+  outcome?: string | null;
   created_at: string | null;
   claimed_at: string | null;
   started_at: string | null;

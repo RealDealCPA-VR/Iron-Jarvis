@@ -143,8 +143,14 @@ def test_both_chat_lanes_actually_append_the_note():
         # v1.351.0 fix round: the call also names the custom tools that ran
         # (read off the live registry), so the needle grew its keyword — and
         # (finish-check review, part 3) whether the Build turn ran a writer.
-        assert "_claimed_write_note(reply, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)" in src, (
+        # v1.503.0 (north-star 3.9, moved on purpose): the call also hands
+        # over the reply's record of written files and its folder, off the
+        # event loop (a few stats).
+        assert "_claimed_write_note(reply, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer," in src, (
             f"{rel} never appends the claim-check note"
+        )
+        assert "written=None if _write_gap else made_docs, workspace=_wrote_in," in src, (
+            f"{rel} does not hand the claim-check note the reply's record of written files"
         )
         assert "_creation_honesty_note(body, armed, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)" in src, (
             f"{rel} never appends the creation note with what the finish check saw run"

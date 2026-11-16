@@ -4651,7 +4651,8 @@ function runOutcomeNotice(entry) {
     return {
       id,
       ts: runOutcomeTsMs(entry.ts),
-      title: p.outcome === "failed" ? "Your coding session could not finish" : "Your coding session finished",
+      // v1.503.0: "needs_you" = the finish check found failing tests or open points (the bell's words).
+      title: p.outcome === "failed" ? "Your coding session could not finish" : p.outcome === "needs_you" ? "Your coding session finished, but something needs you" : "Your coding session finished",
       body: bits.join(" · ") || RUN_OUTCOME_NO_DETAIL,
       href: app
         ? `/terminals?view=code&code=${encodeURIComponent(thread)}`

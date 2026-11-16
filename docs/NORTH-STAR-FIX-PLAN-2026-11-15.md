@@ -221,47 +221,67 @@ steps still run at full trust.
 
 Area rules: `docs/rules/agents.md`, `automations.md`, `chat.md`, `build.md`.
 
-- [ ] **3.1 One verdict helper.** New: one function that turns a finished
+**Shipped in v1.503.0.** As built, where it differs from the lines below:
+3.3 a step never attempted (or none passing) ends the run Failed; some passed
+and some failed stays Completed with the verdict "part failed". 3.4 a job
+that fell short keeps status `done` with its verdict and reason; its failure
+streak is neither reset nor raised. 3.6 the bell and the tray say the same
+sentence as the phone (the lead's addition). 3.9 where a command, code, an
+app tool or a user-made tool ran there is no record to compare against, so
+nothing is judged there, as before. 3.10 a hand-off still stops the judging
+of settings and records; a one-word setting label is not judged after other
+tools; the send check reads English only; the run-summary check is wired
+into both settle sites (the lead's addition). 3.11 is a new stored verdict,
+`did_nothing`, for a schedule, a queued job, a goal, a rule and autonomy
+only: a phone task and a task from another computer are left out (the lead's
+correction: their answer goes straight back to whoever asked). 3.12 a card
+that timed out is "paused"; it still ends the check-again loop.
+Left open: a coding helper whose plan step failed but whose last change
+landed is still eased to "completed" (the v1.465.0 helper rule); a
+`notify` that reached one channel of several counts as sent for any claim;
+`harness/finish._REFUSAL_PREFIXES` does not list "paused" (same result today).
+
+- [x] **3.1 One verdict helper.** New: one function that turns a finished
   session into `(status, outcome, ok, words)` from `Session.outcome`. Every
   item below calls it.
-- [ ] **3.2 A workflow's agent step reads the verdict.**
+- [x] **3.2 A workflow's agent step reads the verdict.**
   `workflows/engine.py:1139`. `needs_you` and `completed_with_failures` are a
   failed step (so `on_failure` routes it), and the run and its Schedules row
   say so.
-- [ ] **3.3 A planned run with failed or unattempted steps is not Completed.**
+- [x] **3.3 A planned run with failed or unattempted steps is not Completed.**
   `agents/runtime.py:3311`, `agents/decompose.py:1475`. `run_decomposed`
   returns its step results; the run ends Failed or part failed. Update the
   v1.132 test that pins Completed.
-- [ ] **3.4 A queued job shows how it really ended (D12).**
+- [x] **3.4 A queued job shows how it really ended (D12).**
   `agents/orchestrator.py:2190`, `assignments/store.py:510`. The row carries
   the outcome; the failure count is not reset on a shortfall.
-- [ ] **3.5 A lead gets the checked result.** `agents/delegate_tool.py:958`.
+- [x] **3.5 A lead gets the checked result.** `agents/delegate_tool.py:958`.
   The tool result carries the settled summary and `outcome`; `needs_you` and
   part-failed are not `ok`.
-- [ ] **3.6 A night task with failing tests is not "done".**
+- [x] **3.6 A night task with failing tests is not "done".**
   `harness/night.py:1050`, `daemon/routes/night.py:715`. Failed tests or unmet
   points make it "Needs you"; the morning notice counts it there.
-- [ ] **3.7 The false-save check counts only writes that landed.**
+- [x] **3.7 The false-save check counts only writes that landed.**
   `agents/outcome.py:429`, `agents/orchestrator.py:1958`. Build the list from
   `ok` rows of this run. Test: a declined `write_file` followed by "I saved
   report.docx" is marked.
-- [ ] **3.8 "No tool ran" is said only when none ran.**
+- [x] **3.8 "No tool ran" is said only when none ran.**
   `daemon/chat_turn.py:4669`. Branch on the calls made, not on the output
   text; no bare "Press Retry" after a call that changes things.
-- [ ] **3.9 File claims are checked by name.** `daemon/chat_turn.py:9545`,
+- [x] **3.9 File claims are checked by name.** `daemon/chat_turn.py:9545`,
   `daemon/until_done.py:242`. When the turn has recorded paths, a claimed name
   absent from the record and the disk is marked, whatever else ran.
-- [ ] **3.10 Setting and record claims stay judged; "sent" is a kind.**
+- [x] **3.10 Setting and record claims stay judged; "sent" is a kind.**
   `daemon/change_claims.py:2049, 2076`. A claim naming a setting label or a
   record kind is judged after any tool; a claimed send is answered only by a
   successful send tool this turn; a run's summary gets the same check.
-- [ ] **3.11 A run that did nothing is not "done".** `agents/outcome.py:97,
+- [x] **3.11 A run that did nothing is not "done".** `agents/outcome.py:97,
   581`. An unattended run with an empty ledger gets its own words ("finished
   without doing anything. Check what it said").
-- [ ] **3.12 "Permission denied" in a tool's output is not the owner's No.**
+- [x] **3.12 "Permission denied" in a tool's output is not the owner's No.**
   `daemon/chat_turn.py:2936`. Match the registry's prefix only; a timed-out
   card gets its own label.
-- [ ] **3.13 A team job's receipt includes its workers' files.**
+- [x] **3.13 A team job's receipt includes its workers' files.**
   `agents/outcome.py:394`, `agents/chat_delivery.py:187`,
   `agents/task_door.py:558`. `session_result` gets a team mode that reuses
   `mission._team_documents`.

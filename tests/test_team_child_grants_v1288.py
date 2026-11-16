@@ -98,7 +98,7 @@ async def _run_team(p, **create_kw):
     return s.id
 
 
-async def _spawn_from(p, tmp_path, **create_kw):
+async def _spawn_from(p, tmp_path, *, fell_short: bool = False, **create_kw):
     orch = Orchestrator(p)
     parent = await orch.create_session(
         "run the job", AgentType.AUTOMATION, provider="mock", model="mock-1",
@@ -115,7 +115,14 @@ async def _spawn_from(p, tmp_path, **create_kw):
             engine=p.engine,
         ),
     )
-    assert res.ok is True, res.error
+    # v1.503.0 (north-star 3.5, moved on purpose): the lead is handed the
+    # worker's TRUE ending. A worker whose command was refused did not do the
+    # job, so its hand-off is "Part failed", never ok.
+    if fell_short:
+        assert res.ok is False and str(res.error or "").startswith("Part failed:"), res.error
+        assert (res.data or {}).get("outcome") == "completed_with_failures"
+    else:
+        assert res.ok is True, res.error
     return parent.id
 
 
@@ -183,7 +190,7 @@ async def test_a_tool_the_parent_was_not_granted_is_still_refused(tmp_path):
 async def test_an_always_ask_parent_hands_down_no_silent_pre_approval(tmp_path):
     p = _platform(tmp_path)
     sid = await _spawn_from(
-        p, tmp_path, allow_tools=["shell"], approval_mode="always_ask"
+        p, tmp_path, fell_short=True, allow_tools=["shell"], approval_mode="always_ask"
     )
 
     kid, shell = _child(p, sid)

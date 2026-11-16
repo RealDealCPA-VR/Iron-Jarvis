@@ -322,6 +322,10 @@ def _run_words(payload: dict) -> str:
         return "finished"
     if outcome == "completed_with_failures":
         return "finished, but part of it failed"
+    if outcome == "did_nothing":
+        # v1.503.0 (north-star 3.11): an unattended run that made no tool
+        # call (agents/outcome.OUTCOME_DID_NOTHING) is not "finished".
+        return "finished without doing anything. Check what it said"
     return "finished. Check what it did"
 
 
@@ -468,12 +472,17 @@ def build_ask_words(payload: dict) -> str:
 
 
 def build_finished_title(payload: dict) -> str:
-    """The bell's headline for ``build.turn_finished`` (v1.374.0)."""
-    return (
-        "Your coding session could not finish"
-        if _text(payload.get("outcome")) == "failed"
-        else "Your coding session finished"
-    )
+    """The bell's headline for ``build.turn_finished`` (v1.374.0).
+
+    v1.503.0 (north-star 3.6): ``needs_you`` — the reply ended, but its own
+    finish check found failing tests or points still open (the objective's
+    own words for the same verdict)."""
+    outcome = _text(payload.get("outcome"))
+    if outcome == "failed":
+        return "Your coding session could not finish"
+    if outcome == "needs_you":
+        return "Your coding session finished, but something needs you"
+    return "Your coding session finished"
 
 
 def _build_finished_line(payload: dict) -> str:

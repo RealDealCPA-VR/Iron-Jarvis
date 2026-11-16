@@ -271,7 +271,9 @@ async def test_a_schedules_account_pins_its_fire(app, fake, monkeypatch):
     assert status == 200, body
     fake.queries.clear()
     status, ran = await asgi(app, "POST", "/schedules/rounds/run", {})
-    assert status == 200 and ran["last_status"] == "ok", ran
+    # v1.503.0 (north-star 3.11, moved on purpose): "Say hi." makes no tool
+    # call, so the scheduled run "did nothing" (it read "ok").
+    assert status == 200 and ran["last_status"] == "did_nothing", ran
     assert beh.leases and all(lease == ("claude-cli", "c-spare") for lease in beh.leases)
     only_pinned(fake, "c-spare")
     assert P.current() is None

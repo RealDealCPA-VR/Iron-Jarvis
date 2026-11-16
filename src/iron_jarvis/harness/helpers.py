@@ -992,6 +992,18 @@ class HelperCall:
             self.model = model
         return usage
 
+    def _review_finished(self, data: dict) -> bool:
+        """A REVIEWER whose run finished (v1.503.0, north-star 3.5): since a
+        hand-off is no longer ``ok`` when the worker's run fell short, a
+        reviewer that tried a write and was refused (it only reads) would
+        read "failed" here while its review is done. It is judged by its
+        verdict, never by changes (``finish._take_review``'s rule)."""
+        return (
+            self.role == "review"
+            and str(data.get("outcome") or "") == "completed_with_failures"
+            and bool(data.get("child_session_id"))
+        )
+
     def finish(self, result: Any, *, stopped: bool = False, crash: str = "",
                usage: "dict[str, Any] | None" = None) -> None:
         """The helper's last frame: how it ended and what it reported (and,
@@ -1004,7 +1016,7 @@ class HelperCall:
             state, text = "stopped", STOPPED_RESULT
         elif result is None:
             state, text = "failed", crash or "The helper could not start."
-        elif getattr(result, "ok", False):
+        elif getattr(result, "ok", False) or self._review_finished(data):
             state, text = "done", report_text(getattr(result, "output", ""))
         else:
             state = "stopped" if str(data.get("state") or "") == "cancelled" else "failed"

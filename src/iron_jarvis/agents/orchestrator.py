@@ -1524,6 +1524,7 @@ class Orchestrator:
                     run.result or "", tools_used,
                     custom_tools=custom_tools_used(self.p, tools_used),
                 )
+                note = f"{note}{await self._claimed_change_note(session.id, run.result, tools_used)}"
                 # Readiness 0j.5 item 17: a run that did NOT finish says which
                 # files it wrote are kept (a finished run's card lists them).
                 if session.status is SessionStatus.FAILED and _kept and _kept[0]:
@@ -1942,10 +1943,11 @@ class Orchestrator:
     ) -> tuple[list[str], str | None]:
         """One off-loop read at finalize: release the run's worklist claims,
         then read the ledger ONCE for both the claimed-write check and the
-        honest outcome. Returns ``(tools_used, outcome)``; a broken ledger
-        read degrades to ``([], None)`` rather than failing the run."""
+        honest outcome. Returns ``(tools that succeeded in this run,
+        outcome)`` (v1.503.0: the succeeded calls only, see below); a broken
+        ledger read degrades to ``([], None)`` rather than failing the run."""
         from .outcome import (OUTCOME_COMPLETED, OUTCOME_WITH_FAILURES,
-                              derive_outcome, session_result)
+                              derive_outcome, session_result, succeeded_tools)
         from .team import MISSION_ORIGIN
 
         # An id-less run (a test double) releases every run of the session.
@@ -1955,8 +1957,14 @@ class Orchestrator:
         except Exception:  # noqa: BLE001 — the card must never break the run
             log.exception("ledger read failed at finalize for %s", session.id)
             return [], None
-        tools = [str(t.get("tool") or "") for t in result.get("tools_used") or []]
-        outcome = derive_outcome(result, status)
+        # v1.503.0 (north-star 3.7): the claimed-write check is fed the calls
+        # that SUCCEEDED in THIS run — ``tools_used`` counts every call made,
+        # so "I saved report.docx" after a DECLINED or failed ``write_file``
+        # was never marked. An id-less run (a test double) reads the session.
+        tools = succeeded_tools(self.p.engine, session.id, run_id or None)
+        # v1.503.0 (north-star 3.11): the origin decides whether an empty
+        # ledger is "did nothing" (an unattended door) or a plain answer.
+        outcome = derive_outcome(result, status, origin=getattr(session, "origin", None))
         # v1.465.0: A CODING HELPER IS "PART FAILED" ONLY WHEN IT ENDED ON A
         # FAILED CHANGE. A helper works by running commands, and a command
         # that exits with an error (a test that fails before the fix, a search
@@ -2059,6 +2067,7 @@ class Orchestrator:
                 run.result or "", tools_used,
                 custom_tools=custom_tools_used(self.p, tools_used),
             )
+            note = f"{note}{await self._claimed_change_note(child_session.id, run.result, tools_used)}"
             if note:
                 child_session.summary = _with_folder_note(prior, f"{run.result}{note}")
             child_session.outcome = outcome
@@ -2067,6 +2076,26 @@ class Orchestrator:
         child_session.finished_at = utcnow()
         self._save(child_session)
         return False
+
+    async def _claimed_change_note(self, session_id: str, summary: Any, tools_used: list[str]) -> str:
+        """The note for a setting, record or SEND a finished run's summary
+        claims and its own ledger does not hold (v1.503.0, north-star 3.10:
+        ``daemon/change_claims.judge_run_summary``, the chat's reading applied
+        to a run: "No message was sent in this run."). ``""`` when nothing is
+        claimed falsely. One ledger read, off the loop; never raises (a note
+        never fails a settle). Lazy import by import direction, as the
+        claimed-write note beside it."""
+        try:
+            from ..daemon.change_claims import judge_run_summary
+            from ..daemon.chat_turn import custom_tools_used
+
+            return await asyncio.to_thread(
+                judge_run_summary, str(summary or ""), engine=self.p.engine,
+                session_id=str(session_id), custom_tools=custom_tools_used(self.p, tools_used),
+            ) or ""
+        except Exception:  # noqa: BLE001 — bookkeeping only
+            log.debug("claimed-change note failed for %s", session_id, exc_info=True)
+            return ""
 
     def _user_cancelled(self, session_id: str) -> bool:
         """Does the STORED row say the user cancelled ``session_id``?
@@ -2214,7 +2243,14 @@ class Orchestrator:
             else:
                 if not ok:
                     error = _prose(session.summary) or str(session.status.value)
-                row = await asyncio.to_thread(store.finish, assignment_id, ok, error)
+                # v1.503.0 (north-star 3.4, D12): the ledger's verdict rides
+                # to the row — a completed run whose ask went unanswered or
+                # whose change failed is "Needs you" / "Part failed", never
+                # "Done", and does not reset the failure streak.
+                row = await asyncio.to_thread(
+                    store.finish, assignment_id, ok, error,
+                    outcome=getattr(session, "outcome", None),
+                )
             if row is None:
                 return
             await self.p.event_bus.publish(
