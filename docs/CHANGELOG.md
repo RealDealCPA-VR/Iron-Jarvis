@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.509.0
+
+**Other computers and web pages stay outside.** A second review read the parts of Iron Jarvis the first one skipped (coding sessions, the browser, your other computers) and found 98 more things to fix.
+
 ## v1.508.0
 
 **A coding session recovers from its own mistakes.** Read off a real coding session with a team, where helpers kept repeating failed steps.
@@ -77,7 +81,3 @@
 ## v1.496.0
 
 **One page for everything Jarvis suggests.** **A new page, Improvements.** It lists every suggestion Iron Jarvis is waiting on you to accept or decline, in one place.
-
-## v1.495.0
-
-**Chat replies and agent runs keep working until what they say is true.** v1.493.0 gave coding sessions a check that sends the model back until its work checks out.
