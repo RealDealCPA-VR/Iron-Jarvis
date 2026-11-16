@@ -1922,7 +1922,10 @@ def _ended_answering(m: "dict[str, Any]") -> bool:
     cut = route.get("cut_off") if isinstance(route.get("cut_off"), dict) else None
     if cut and int(cut.get("times") or 0) > 0 and not cut.get("recovered"):
         return False
-    return isinstance(m.get("finish"), dict)
+    fin = m.get("finish")
+    # v1.513.0 (second review S3): a record that only says the folder turned
+    # the check off is not a check that read the lead's answers.
+    return isinstance(fin, dict) and fin.get("off") != "folder"
 
 
 def _place_words(path: Any, line: Any) -> str:

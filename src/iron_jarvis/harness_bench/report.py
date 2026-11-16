@@ -629,6 +629,9 @@ def finish_words(fin: Mapping[str, Any]) -> str:
     """A run's finish check in one plain line (v1.425.0) — the words the app
     shows under the reply (``dashboard/lib/stepWords.finishWords``), built
     only from the record."""
+    if fin.get("off") == "folder":
+        # v1.513.0 (second review S3): the folder turned the check off.
+        return "Not checked: this folder's own settings turned the check off"
     tests, after = fin.get("tests"), fin.get("after")
     if tests == "passed":
         parts = ["tests passed, then failed" if after == "failed" else "tests passed"]
@@ -651,7 +654,9 @@ def finish_words(fin: Mapping[str, Any]) -> str:
     if isinstance(review, Mapping):
         state = review.get("state")
         if state != "done":
-            parts.append({"failed": "review failed", "stopped": "review stopped"}.get(str(state), "review not run"))
+            # v1.513.0 (D7): a review that reached nobody is "not counted".
+            parts.append({"failed": "review failed", "stopped": "review stopped",
+                          "not_counted": "review not counted"}.get(str(state), "review not run"))
         else:
             who = f"reviewed by {review.get('member')}" if review.get("member") else "reviewed by your team"
             verdict = {"approved": ": approved", "changes_needed": ": changes needed"}.get(

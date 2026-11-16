@@ -204,8 +204,12 @@ async def test_a_limit_mid_turn_ends_after_the_last_complete_round_and_keeps_the
     results = [m.tool_call_id for m in second if m.role == "tool"]
     assert calls == ["w1"] and results == ["w1"]
     # The session's record: the question and the limit line, role + content.
+    # v1.513.0 (second review S5): the limit line wrote no words, and it keeps
+    # its place as Iron Jarvis's own stand-in (never the limit's own text).
     history = S.history(S.get_row(app.state.platform.engine, sid))
-    assert [h["role"] for h in history] == ["user"], history
+    assert [h["role"] for h in history] == ["user", "assistant"], history
+    assert history[1]["content"].startswith("[" + S.REPLY_END_LEAD) and S.REPLY_ACCOUNT_LIMIT in history[1]["content"]
+    assert "Work Max" not in history[1]["content"]
     line = messages_of(app, sid)[-1]
     assert line["accountLimit"]["kind"] == "rate" and line["steps"][0]["name"] == "write_file"
 

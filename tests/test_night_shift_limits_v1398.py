@@ -124,5 +124,8 @@ async def test_with_room_a_pay_per_use_night_turn_is_capped_at_what_is_left(tmp_
     assert seen and seen[-1].get("usd") == 3.5, seen
     assert seen[-1].get("minutes") == 90
     ended = await _ended(app, task["id"], 60)
-    assert ended["state"] == N.DONE, ended
+    # v1.513.0 (second review T7, moved on purpose): the scripted reply
+    # changes nothing, so it ends "needs you" with its line — never "done".
+    assert ended["state"] == N.NEEDS_YOU, ended
+    assert any(n["kind"] == "did_nothing" for n in ended["notes"]), ended["notes"]
     assert Path(task["folder"]).is_dir()

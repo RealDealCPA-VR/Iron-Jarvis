@@ -93,7 +93,12 @@ NOTE_KINDS = ("declined", "unanswered", "low_trust", "limit", "env", "error", "s
               "restart", "account", "tests", "info", "outside",
               # v1.399.0 (N2): what Iron Jarvis's own commit of the task's
               # work did (``harness/night_morning``).
-              "commit")
+              "commit",
+              # v1.513.0 (second review T6): points of the request the task's
+              # own finish check left open (``outcome_of``) — filed as "info"
+              # before, so a "Needs you" row carried no reason. T7: a task
+              # that ended without changing anything (``routes/night``).
+              "unmet", "did_nothing")
 
 #: The command tools the night posture grants for the turn (decision 4):
 #: "runs commands inside its own branch folder without asking" — the model's
@@ -1075,28 +1080,98 @@ def outcome_of(task: dict[str, Any], line: "dict[str, Any] | None") -> tuple[str
     unmet = finish_unmet(fin)
     if unmet:
         notes.append(("unmet", unmet_words(unmet)))
+    elif finish_loop_unfinished(fin) and finish_tests(fin) != "failed":
+        # v1.513.0 (second review T5): the check-again loop ended without
+        # finishing (stuck, its round or step limit, tests it could not run
+        # again) and no point and no first test run says why: the line under
+        # the reply's own words.
+        notes.append(("unmet", NOT_FINISHED_WORDS))
     if state == DONE and finish_needs_you(fin):
         state = NEEDS_YOU
     return state, notes
 
 
+#: v1.513.0 (second review T5): the reason a task needs the user when its
+#: check-again loop ended unfinished with no open point to count (the coding
+#: session's own words, dashboard/lib/nextStep).
+NOT_FINISHED_WORDS = "Jarvis's own check says this is not finished."
+
+
+def _again_of(fin: dict[str, Any]) -> "dict[str, Any] | None":
+    """The record's check-again block as a reply line keeps it
+    (``finish.saved_again``: ``rounds``, ``ended``, ``open``), None when the
+    loop was not in play or the block is unreadable."""
+    if "again" not in fin:
+        return None
+    from .finish import saved_again
+
+    return saved_again(fin.get("again"))
+
+
 def finish_unmet(fin: Any) -> int:
-    """How many points of the request a reply's finish record left open
-    (``harness/finish`` ``unmet``); 0 for none or no readable record."""
+    """How many points of the request a reply's finish record left open AT
+    THE END; 0 for none or no readable record.
+
+    v1.513.0 (second review T5): with a check-again block, its ``open`` (the
+    points still open when the loop ended) — ``unmet`` is the FIRST answer's
+    count by design (``harness/finish``), so a point the loop got fixed read
+    as open, and one a later round answered "blocked" read as none. ``unmet``
+    only when the loop was not in play."""
     if not isinstance(fin, dict):
         return 0
+    again = _again_of(fin)
+    if again is not None:
+        still = again.get("open")
+        return still if isinstance(still, int) and not isinstance(still, bool) and still > 0 else 0
     unmet = fin.get("unmet")
     return unmet if isinstance(unmet, int) and not isinstance(unmet, bool) and unmet > 0 else 0
 
 
-def finish_needs_you(fin: Any) -> bool:
-    """Does a reply's finish record say its work is NOT done (v1.503.0,
-    north-star 3.6)? Its tests failed, or points of the request are still
-    open. The ONE reading the night shift's ending and the day's "Your coding
-    session finished" notice share. Pure; junk reads as no."""
+def finish_loop_unfinished(fin: Any) -> bool:
+    """Did the record's check-again loop end WITHOUT finishing the work
+    (v1.513.0, second review T5)? Every ending but "done" (and "" — it never
+    had to end): blocked, stuck, its round limit, its step limit, tests it
+    could not run again, failures called outside the request. Pure; junk
+    reads as no."""
     if not isinstance(fin, dict):
         return False
-    return fin.get("tests") == "failed" or finish_unmet(fin) > 0
+    again = _again_of(fin)
+    if again is None:
+        return False
+    from .finish import AGAIN_DONE
+
+    return again.get("ended") not in ("", AGAIN_DONE)
+
+
+def finish_tests(fin: Any) -> str:
+    """A reply's tests as they were LAST seen: "passed", "failed" or ""
+    (v1.513.0, lead review of T5). The finish record keeps the first run in
+    ``tests`` and a later run in ``after``: tests that failed first and
+    passed after the fix are passing, and tests that passed first and
+    failed in a later run are failing. The daemon read only the first
+    verdict, so the morning said "Needs you: its tests failed" over a fix
+    that had made them pass, and "Done" over a later failure. The same
+    reading as the screen's (``dashboard/lib/stepWords`` ``testsFailing``).
+    Pure; junk reads as ""."""
+    if not isinstance(fin, dict):
+        return ""
+    after = fin.get("after")
+    if after in ("passed", "failed"):
+        return after
+    first = fin.get("tests")
+    return first if first in ("passed", "failed") else ""
+
+
+def finish_needs_you(fin: Any) -> bool:
+    """Does a reply's finish record say its work is NOT done (v1.503.0,
+    north-star 3.6)? Its tests failed, points of the request are still open
+    AT THE END, or (v1.513.0, second review T5) its check-again loop ended
+    without finishing. The ONE reading the night shift's ending, the day's
+    "Your coding session finished" notice and the pull-request auto-fix
+    share. Pure; junk reads as no."""
+    if not isinstance(fin, dict):
+        return False
+    return finish_tests(fin) == "failed" or finish_unmet(fin) > 0 or finish_loop_unfinished(fin)
 
 
 def unmet_words(unmet: int) -> str:
@@ -1104,6 +1179,30 @@ def unmet_words(unmet: int) -> str:
     (dashboard/lib/nextStep: "2 points of the request still need work.")."""
     n = int(unmet)
     return f"{n} point{'s' if n != 1 else ''} of the request still need{'s' if n == 1 else ''} work."
+
+
+#: v1.513.0 (second review T7): the morning's reason when a night task ended
+#: with nothing changed and nothing checked (the sense of the unattended
+#: runs' ``did_nothing`` verdict, ``agents/outcome``).
+DID_NOTHING_WORDS = "It ended without changing anything."
+
+
+def ended_doing_nothing(state: str, fin: Any, *, changed: bool, try_on: bool = False) -> bool:
+    """Does a night task that would end "done" end "needs you" instead,
+    because it changed nothing (``changed`` False: nothing to commit and its
+    branch carries nothing over its base) and no check of its passed
+    (v1.513.0, second review T7)? A task that merely read a few files and
+    ended, or said it could not find the code, was announced "Done". Whether
+    a read-only ask's answer IS the result cannot be told reliably, so it is
+    not guessed: "needs you" with the reply one press away is the honest
+    state. A task tried on several models (``try_on``) keeps its work on its
+    attempts' own branches, so its session's branch is empty by design:
+    never this. Pure."""
+    if state != DONE or changed or try_on:
+        return False
+    if finish_tests(fin) == "passed":
+        return False
+    return True
 
 
 #: The trust reason a LATER turn of a night task that went to low trust
@@ -1140,7 +1239,8 @@ __all__ = [
     "NEEDS_YOU", "NIGHT_TURN", "NightRefused", "NightTaskRecord", "NightTurn", "POSTURE", "QUEUED",
     "RUNNING", "RUNS_UNASKED", "STATES", "asks_at_night", "STOPPED", "add_note", "add_task", "ask_timeout", "call_words", "cancel_queued",
     "card_wait_seconds", "current", "edit_task", "finish_needs_you", "finish_task", "finish_unmet",
-    "flush_notes", "get_task", "unmet_words",
+    "flush_notes", "get_task", "unmet_words", "finish_loop_unfinished", "NOT_FINISHED_WORDS",
+    "DID_NOTHING_WORDS", "ended_doing_nothing",
     "last_reply_line", "list_tasks", "mark_running", "max_at_once", "move_task", "note_unattended_turn",
     "morning_of", "outcome_of", "posture_setup", "remove_task", "reset_turn", "running_task_for",
     "set_morning", "set_session",

@@ -8914,8 +8914,9 @@ def harness_check_runner(d, ctx, overrides: dict[str, str], grants, gate, trust_
 async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws,
                           resumed: Any = None) -> Any:
     """The reply's finish check (``harness/finish.FinishCheck``), or None:
-    only a harness turn of a Build session's own (``build:<id>``) in act mode,
-    in a folder that did not turn it off. The ledger mark it measures "this
+    only a harness turn of a Build session's own (``build:<id>``) in act mode
+    (second review S3: in a folder that turned it off, a check that only says
+    the reply was not checked, ``FinishCheck.off``). The ledger mark it measures "this
     reply" from is read off the loop, before any tool of the reply runs.
 
     v1.391.0 review: ``resumed`` — a coding reply a RESTART cut off, carried
@@ -8924,9 +8925,10 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws,
     account ones below: the check covers the WHOLE reply from the question it
     continues — the files the cut part made too, never only the resumed part's
     — and when the cut part's own conversation already holds the finish note
-    (it was checked before the stop), the check does not run a second time
-    (the note "comes once per reply"). Omitted (every other caller, the POST
-    lane): exactly as before."""
+    (it was checked before the stop), the note is not sent a second time
+    (it "comes once per reply"); second review D3: the check carries on as
+    having run (``FinishCheck.carry_past_note``). Omitted (every other
+    caller, the POST lane): exactly as before."""
     if harness_turn is None:
         return None
     from ..harness import finish as _finish
@@ -8979,7 +8981,15 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws,
         team_review=_team_first_on(d.platform),
     )
     if check is not None and is_resume and _finish.noted_in(resumed_tail):
-        check.checked_before = True
+        # Second review D3 (v1.513.0): the cut part already HAD its check and
+        # its note. It used to be marked "checked" and nothing more — every
+        # "until done" guard off, no test re-run, no verdict line and no
+        # record, so a reply whose tests were failing when the restart cut it
+        # ended on whatever the model wrote. Now the check carries on as
+        # having run and sent its note (never sent again), with what it knew
+        # stale: the reply's end re-runs the cut part's tests through the
+        # check-again loop, under that loop's own rules.
+        check.carry_past_note(resumed_tail)
     return check
 
 
@@ -15030,56 +15040,60 @@ async def run_chat_turn(
             from ..documents.excel_live import unchanged_note as _xl_unchanged
 
             reply += _xl_unchanged(getattr(body, "turn_id", ""), tools_used)
-        # v1.473.0: a file this turn wrote that STILL holds a figure no
-        # script or calculator worked out is named for the user, whatever
-        # the reply says (the model was told in the file tool's answer and
-        # may have ignored it: seen live, "Done" over a wrong grand total).
-        # From what ran; a file written again without the figure is not
-        # named. MIRROR NOTE (lock-step): routes/chat.py appends the same.
-        if tools_used:
-            from ..tools.script_values import unchecked_figures_note
+    # Second review L5 (v1.513.0): the notes below are added AFTER the
+    # if/else, for a reply that ends in a workflow card too — they sat inside
+    # the `else:` here, so this lane dropped them where the stream lane kept
+    # them. Same notes, same order, as routes/chat.py.
+    # v1.473.0: a file this turn wrote that STILL holds a figure no
+    # script or calculator worked out is named for the user, whatever
+    # the reply says (the model was told in the file tool's answer and
+    # may have ignored it: seen live, "Done" over a wrong grand total).
+    # From what ran; a file written again without the figure is not
+    # named. MIRROR NOTE (lock-step): routes/chat.py appends the same.
+    if tools_used:
+        from ..tools.script_values import unchecked_figures_note
 
-            reply += unchecked_figures_note(ctx)
-        # v1.481.0: THE DELIVERABLES CHECK under the reply, drawn from the
-        # disk and the turn's own steps, never from the plan or the reply:
-        # what is done, what failed, what is not done, what changed outside
-        # the folders the task may write. MIRROR NOTE (lock-step):
-        # routes/chat.py appends the same.
-        if _deliv is not None and not escalate:
-            reply += await _deliv.final()
-        # v1.495.0: a reply the check-again loop sent back and that STILL has
-        # a problem says how many times and why it stopped (the notes above
-        # say what). MIRROR NOTE (lock-step): routes/chat.py appends the same.
-        if _until is not None and not escalate:
-            reply += _until.verdict()
-        # v1.493.0: A CODING REPLY ITS OWN CHECK FOUND NOT FINISHED says so
-        # under the reply, in Iron Jarvis's words (the tests still fail, a
-        # point is not done, how the check-again loop ended) — whatever the
-        # model wrote. MIRROR NOTE (lock-step): routes/chat.py appends the same.
-        if _finish is not None and _finish.ran:
-            reply += await _finish.verdict_note()
-        # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
-        # says it did ("I'm passing this to builder") gets the plain note.
-        # MIRROR NOTE (lock-step): routes/chat.py appends the same helper.
-        # Only an AGENT-shaped receiver counts (the roster's names, read off
-        # the loop and only when a hand-off phrase is there at all).
-        if text_only_pick:
-            reply += await handoff_note_for(
-                d.platform, reply, tool_note_follows=bool(body.tools or [])
-            )
-        if text_only_pick and (body.tools or []):
-            reply += text_only_note(d.platform, provider_choice)
-        # APPS FROM THE PHONE (readiness 12B, G39): the phone's conversation
-        # arms no app tool (this lane cannot show a card, so an armed tool
-        # would run with nobody's OK); a connected app the user named for
-        # their own data gets ONE fixed line saying where it can be used.
-        # Filled only under ``phone_surface`` — every other turn adds nothing.
-        # MIRROR NOTE: the stream lane never answers the phone; if it ever
-        # does, it appends the same helper from the same grounding field.
-        if not escalate:
-            from ..connectors.app_names import phone_apps_note
+        reply += unchecked_figures_note(ctx)
+    # v1.481.0: THE DELIVERABLES CHECK under the reply, drawn from the
+    # disk and the turn's own steps, never from the plan or the reply:
+    # what is done, what failed, what is not done, what changed outside
+    # the folders the task may write. MIRROR NOTE (lock-step):
+    # routes/chat.py appends the same.
+    if _deliv is not None and not escalate:
+        reply += await _deliv.final()
+    # v1.495.0: a reply the check-again loop sent back and that STILL has
+    # a problem says how many times and why it stopped (the notes above
+    # say what). MIRROR NOTE (lock-step): routes/chat.py appends the same.
+    if _until is not None and not escalate:
+        reply += _until.verdict()
+    # v1.493.0: A CODING REPLY ITS OWN CHECK FOUND NOT FINISHED says so
+    # under the reply, in Iron Jarvis's words (the tests still fail, a
+    # point is not done, how the check-again loop ended) — whatever the
+    # model wrote. MIRROR NOTE (lock-step): routes/chat.py appends the same.
+    if _finish is not None and _finish.ran:
+        reply += await _finish.verdict_note()
+    # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
+    # says it did ("I'm passing this to builder") gets the plain note.
+    # MIRROR NOTE (lock-step): routes/chat.py appends the same helper.
+    # Only an AGENT-shaped receiver counts (the roster's names, read off
+    # the loop and only when a hand-off phrase is there at all).
+    if text_only_pick:
+        reply += await handoff_note_for(
+            d.platform, reply, tool_note_follows=bool(body.tools or [])
+        )
+    if text_only_pick and (body.tools or []):
+        reply += text_only_note(d.platform, provider_choice)
+    # APPS FROM THE PHONE (readiness 12B, G39): the phone's conversation
+    # arms no app tool (this lane cannot show a card, so an armed tool
+    # would run with nobody's OK); a connected app the user named for
+    # their own data gets ONE fixed line saying where it can be used.
+    # Filled only under ``phone_surface`` — every other turn adds nothing.
+    # MIRROR NOTE: the stream lane never answers the phone; if it ever
+    # does, it appends the same helper from the same grounding field.
+    if not escalate:
+        from ..connectors.app_names import phone_apps_note
 
-            reply += phone_apps_note(getattr(_grounding, "apps_phone", None) or [])
+        reply += phone_apps_note(getattr(_grounding, "apps_phone", None) or [])
     # INLINE MEDIA (v1.346.0, contract 4c): every file a tool MADE this turn
     # that the settled reply does not already show is appended as the markdown
     # image syntax, so the picture/video appears in the chat whatever the

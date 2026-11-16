@@ -95,14 +95,20 @@ def clock_words(hhmm: str) -> str:
 
 
 def window_words(now: datetime, start: str, end: str) -> str:
-    """The window in one plain sentence, from ``now``: "Night tasks run now,
-    until 7:00 AM." / "Starts at 11:00 PM tonight." / "Starts at 1:00 AM
-    tomorrow." / "The night window is empty: …"."""
+    """The window in one plain sentence, from ``now``: "Night tasks start now,
+    until 7:00 AM. One that has started runs to its own time limit." /
+    "Starts at 11:00 PM tonight." / "Starts at 1:00 AM tomorrow." / "The night
+    window is empty: …".
+
+    v1.513.0 (second review T10): the window bounds when a task STARTS, not
+    how long it runs (a started task is held to its own time limit plus a
+    grace, ``docs/NIGHT-SHIFT-PLAN.md``: tasks "start between 11 PM and 7
+    AM"); "run now, until 7:00 AM" claimed more than that."""
     s, e = clean_time(start), clean_time(end)
     if not s or not e or s == e:
         return "The night window starts and ends at the same time, so night tasks never start. Change it in Settings."
     if in_window(now, s, e):
-        return f"Night tasks run now, until {clock_words(e)}."
+        return f"Night tasks start now, until {clock_words(e)}. One that has started runs to its own time limit."
     nxt = next_start(now, s, e)
     if nxt is None:  # pragma: no cover — handled above
         return ""

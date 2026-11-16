@@ -751,19 +751,19 @@ or types on the Windows desktop.
 
 ### How a coding reply ends (`harness/finish.py`, `ci_fix.py`, `attempts.py`)
 
-- [ ] **D1 (1, high, checked). The pull-request auto-fix says "Pushed the
+- [x] **D1 (1, high, checked). The pull-request auto-fix says "Pushed the
   reviewed fix" when its commit left files out or committed nothing.**
   `daemon/routes/ci_watch.py:774-803` never reads `left_out`;
   `harness/ci_fix.py:807-813` turns "nothing to commit" into `None`.
-- [ ] **D2 (1, high, checked). A carried-on reply can be recorded "tests
+- [x] **D2 (1, high, checked). A carried-on reply can be recorded "tests
   passed" for a run that failed.** `harness/finish.py:4842` adds the cut
   part's commands to `_commands` with no entry in `_cmd_meta` (appended only
   at `2794`), so `_reusable` (`2855-2867`) pairs a command with a later
   command's result.
-- [ ] **D3 (1, medium, checked).** A reply resumed after a restart whose cut
+- [x] **D3 (1, medium, checked).** A reply resumed after a restart whose cut
   part held the finish note ends with every "until done" guard off and no
   verdict (`daemon/chat_turn.py:8839-8840`, `finish.py:2983-2985, 3321`).
-- [ ] **D4 (1, medium, checked).** The auto-fix reviews and pushes a fix
+- [x] **D4 (1, medium, checked).** The auto-fix reviews and pushes a fix
   whose own finish check recorded failing tests
   (`routes/ci_watch.py:594-666` never reads the line's finish record).
 - [x] **D5 (4, medium, checked for the test).** A whole Maven, Gradle, tox
@@ -771,7 +771,7 @@ or types on the Windows desktop.
   second time by the check (`finish.py:885-886, 923-924`).
 - [x] **D6 (4, medium, pass only).** Stop is not honoured while the check
   waits for a long test run on a GPT model (`finish.py:3839-3857`).
-- [ ] **D7-D11 (low; D9 fixed in v1.512.0).** "reviewed by <member>" over a review that reached
+- [ ] **D7-D11 (low; D9 fixed in v1.512.0, D7, D8 and D11 in v1.513.0; D10 waits for group 16).** "reviewed by <member>" over a review that reached
   nobody (`finish.py:3984-3999`); ESLint "no problems in <file>" for a file
   it ignored (`harness/checkers.py:410-412`, checked); a watch whose
   worktree folder is gone stays "fixing" for ever (`ci_watch.py:623`);
@@ -799,19 +799,19 @@ or types on the Windows desktop.
   and its saved copies when it is cut off or the app dies while it writes
   (`tools/undo.py:330-336`); its writes are not atomic
   (`harness/tools.py:427-455`).
-- [ ] **T5 (1, medium, checked).** A night task's "Done" or "Needs you" is
+- [x] **T5 (1, medium, checked).** A night task's "Done" or "Needs you" is
   read from the finish check's first answer, not from what was still open
   at the end (`harness/night.py:1083-1099`; `finish.py:4496-4518`).
-- [ ] **T6 (1, medium, checked).** The reason for open points is filed as
+- [x] **T6 (1, medium, checked).** The reason for open points is filed as
   "info" because "unmet" is not in `NOTE_KINDS` (`night.py:92-96, 543`), so
   a "Needs you" row carries no reason.
-- [ ] **T7 (1, low, pass only).** A night task that changed nothing and ran
+- [x] **T7 (1, low, pass only).** A night task that changed nothing and ran
   no check is announced "Done" (`night.py:1050-1051`).
 - [x] **T8 (3, medium, checked for checkout and stash).** On its own branch
   the guard misses `git remote set-url`, `git reset <branch>`,
   `git checkout <file>`, `git stash pop` and a separator inside a quoted
   message (`git_guard.py:72, 414, 488, 502`).
-- [ ] **T9-T10 (low).** `process_start` works out its environment on the
+- [ ] **T9-T10 (low; T10 fixed in v1.513.0; T9 waits for group 16).** `process_start` works out its environment on the
   event loop (`harness/process.py:676`, checked); "Night tasks run now,
   until 7:00 AM" although a started task runs past it
   (`harness/night_window.py:104-105`).
@@ -825,14 +825,14 @@ or types on the Windows desktop.
 - [x] **S2 (1, medium, checked).** A failed transcript write at a reply's
   end is swallowed (`daemon/routes/build.py:2017-2026`); the reply is gone
   from the session and the kept copy is deleted (`2328-2330`).
-- [ ] **S3 (1, medium, checked on the daemon side).** A file in the folder
+- [x] **S3 (1, medium, checked on the daemon side).** A file in the folder
   (`.ironjarvis/harness/finish.toml`) can turn the finish check off and
   nothing on screen says so (`harness/components.py:545-557`,
   `finish.py:4787-4790`).
 - [ ] **S4 (4, medium, checked in code, not run).** One search pattern can
   freeze the app: the search's time limit is read only between files
   (`harness/search.py:188-191, 233-235`).
-- [ ] **S5 (1, medium, pass only).** A reply's failure marks never reach the
+- [x] **S5 (1, medium, pass only).** A reply's failure marks never reach the
   next model or the summarizer (`harness/sessions.py:998-1022`,
   `compact.py:282-322`).
 - [ ] **S6-S12 (low; S8, S11 and S12 fixed in v1.510.0, S6 in v1.511.0).** Typing with "submit" sends a form with no risky-click
@@ -865,7 +865,7 @@ differences are at the edges.
 - [x] **L4 (1, medium, pass only).** A turn that fails after its tools ran
   says only that it failed; on the phone that is the whole message
   (`chat_turn.py:14547-14583`, `routes/chat.py:8093-8119`).
-- [ ] **L5 (1, low, checked).** On a reply that ends in a workflow card the
+- [x] **L5 (1, low, checked).** On a reply that ends in a workflow card the
   plain lane drops four honesty notes the streaming lane adds
   (`chat_turn.py:14716-14836` against `routes/chat.py:8457-8484`).
 - [x] **L6 (3, low, checked).** A cancelled plain-lane turn leaves no usage
@@ -1075,3 +1075,35 @@ Left open:
 - A "Retry failed" stopped after its failed items were reset leaves them
   reset; a second Retry then says nothing failed.
 - A stop that timed out on a link that stays up waits for the next link.
+
+### Group 13 as built (v1.513.0)
+
+Fixed: D1, D2, D3, D4, D7, D8, D11, T5, T6, T7, T10, S3, S5, L5.
+
+Where it differs from the plan, or went further:
+
+- **One reading of a finish record** now lives in `harness/night.py` and
+  includes the tests "as last seen". The implementer of T5 found that the
+  daemon read only the FIRST test run: a fix that made the tests pass
+  still said "Needs you: its tests failed", and a later failure said
+  "Done". The lead added `finish_tests` and moved the night's notes and the
+  auto-fix's words to it.
+- **T5's case B in the review was half right**: with a failed first run the
+  old code already said "Needs you"; the case that wrongly read "Done" was
+  a point blocked in a later round with no tests.
+- **S3**: `enabled` can only come from the folder's own file, so every
+  "off" is the folder's.
+- **S5** also notes an account limit, and follow-up suggestions stay quiet
+  after a failed reply that wrote nothing (lead's review).
+- **D7**: the benchmark report and the fix-request reader were taught the
+  new records too (lead's review).
+
+Left open:
+
+- A night task in a folder that turned the check off reads "Done" when it
+  changed files (it is read as "no check ran", like a folder with no
+  tests). The reply itself says "Not checked".
+- In a carried reply, points that come from a written description file are
+  re-read only at the end.
+- A commit the auto-fix made with files left out stays on the branch, not
+  pushed and not undone; the message says so.

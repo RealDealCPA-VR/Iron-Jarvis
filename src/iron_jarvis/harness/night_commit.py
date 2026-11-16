@@ -299,15 +299,17 @@ def why_words(why: str) -> str:
     return "left out"
 
 
-def left_out_words(left: list[dict[str, Any]], total: "int | None" = None) -> str:
+def left_out_words(left: list[dict[str, Any]], total: "int | None" = None, *,
+                   where: str = "its branch folder") -> str:
     """The record's sentence about what the night's commit left out: "3 files
     were not committed and are still in its branch folder: .env (looks like a
-    secret), …". "" when nothing was."""
+    secret), …". "" when nothing was. ``where`` names the folder (the
+    pull-request auto-fix says "the session's folder", v1.513.0)."""
     n = int(total if total is not None else len(left))
     if n <= 0:
         return ""
     files = "1 file was" if n == 1 else f"{n} files were"
-    head = f"{files} not committed and {'is' if n == 1 else 'are'} still in its branch folder: "
+    head = f"{files} not committed and {'is' if n == 1 else 'are'} still in {where}: "
     foot = (". Look at it before you commit or push it yourself." if n == 1
             else ". Look at them before you commit or push them yourself.")
     # The row shows at most WORDS_CHARS of it (the Last night view cuts a

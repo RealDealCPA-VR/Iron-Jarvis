@@ -141,6 +141,9 @@ TSC_COUNT_DEADLINE_S = 1.5
 TSC_COUNT_GRACE_S = 2.0
 TSC_TOO_LARGE = "project too large for a quick check"
 TSC_NOT_COUNTED = "the project's TypeScript files could not be counted quickly"
+#: Second review D8 (v1.513.0): the record's reason when a checker's own
+#: settings left out every changed file (ruff's ``exclude``, ESLint's ignores).
+EXCLUDED_WHY = "the project's own settings leave the changed files out"
 #: ``process_start`` waits at most this long a call (the process tools' cap).
 PROCESS_WAIT_MS = 30_000
 #: The most files one run is handed (a command line has a length limit —
@@ -415,6 +418,40 @@ def _eslint_findings(text: str, files: set[str], folder: Path) -> "tuple[list[st
             lines.append(f"{rel}:{msg.get('line', 0)}:{msg.get('column', 0)}: {sev} {words}"
                          + (f" ({rule})" if rule else ""))
     return lines, 0
+
+
+def eslint_ignored(output: str, files: list[str], folder: Path) -> list[str]:
+    """Second review D8 (v1.513.0): the changed files ESLint IGNORED — its
+    ``--format json`` entry carries ESLint's own "File ignored because …"
+    message (the project's own settings leave the file out: a flat config
+    that covers only ``*.js``, an ignore pattern). Those files were never
+    checked, so "no problems" would be a claim about a file ESLint never
+    read. As handed out (``files``' own spelling); [] when none or the
+    output is not that JSON. Pure; never raises."""
+    try:
+        text = "\n".join(ln for ln in str(output or "").splitlines() if not _ADVISORY.match(ln))
+        start = text.find("[")
+        if start < 0:
+            return []
+        data = json.loads(text[start:])
+        if not isinstance(data, list):
+            return []
+        ignored: set[str] = set()
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            msgs = [m for m in entry.get("messages") or [] if isinstance(m, dict)]
+            if not any(str(m.get("message") or "").startswith("File ignored") for m in msgs):
+                continue
+            fp = str(entry.get("filePath") or "")
+            try:
+                rel = os.path.relpath(fp, str(folder)).replace("\\", "/")
+            except ValueError:
+                rel = fp
+            ignored.add(_norm(rel))
+        return [f for f in files if _norm(f) in ignored]
+    except Exception:  # noqa: BLE001 — unsure: nothing is called ignored
+        return []
 
 
 def findings(checker: Checker, output: str, files: list[str], folder: Path) -> tuple[list[str], int, bool]:
@@ -764,9 +801,13 @@ class ProjectCheckers:
             code = data.get("returncode")
         record["exit_code"] = code
         # Parsed OFF the loop: a checker's output can be thousands of lines.
-        lines, others, understood = await asyncio.to_thread(
-            findings, pend.checker, output, pend.ran_files or pend.files, self.folder,
-        )
+        handed = pend.ran_files or pend.files
+
+        def _read() -> "tuple[list[str], int, bool, list[str]]":
+            got = findings(pend.checker, output, handed, self.folder)
+            return (*got, eslint_ignored(output, handed, self.folder) if name == "eslint" else [])
+
+        lines, others, understood, ignored = await asyncio.to_thread(_read)
         ran_ok = code in (0, 1) or (name == "tsc" and code == 2)
         if not ran_ok or not understood:
             record["verdict"] = "error"
@@ -774,11 +815,24 @@ class ProjectCheckers:
             # Review: the PROGRAM's words go UNDER the head line, where the
             # lane's fence (scan + taint) reads them — never on the head line.
             return f"Check ({name}) could not run (exit {code}):\n{_cut(head or error, 600)}"
-        files = pend.ran_files or pend.files
+        files = [f for f in handed if f not in ignored]
         where = ", ".join(files[:5]) + (f" and {len(files) - 5} more" if len(files) > 5 else "")
         other = (
             f" ({others} in other files, not shown)" if others else ""
         )
+        if ignored:
+            # Second review D8 (v1.513.0): a file ESLint IGNORED (its own
+            # settings leave it out) was never checked — never "no problems
+            # in" it, and never on the record as a file it checked.
+            record["files"] = list(files)
+            record["ignored"] = list(ignored)
+            ign = ", ".join(ignored[:5]) + (f" and {len(ignored) - 5} more" if len(ignored) > 5 else "")
+            it = "it" if len(ignored) == 1 else "them"
+            if not files and not lines:
+                record["verdict"] = "excluded"
+                return (f"Check ({name}): {name} does not check {ign} (the project's own {name} settings "
+                        f"leave {it} out), so {'it was' if len(ignored) == 1 else 'they were'} not checked.")
+            other += f" ({ign} not checked: the project's own {name} settings leave {it} out)"
         if pend.left_out:
             other += (
                 f" ({pend.left_out} more changed file{'' if pend.left_out == 1 else 's'} not checked: "
@@ -840,15 +894,18 @@ class ProjectCheckers:
         """The finish record's ``checkers``: ``ran`` (checkers that read the
         files and said what they found), ``skipped`` (``{checker, why}``: not
         run — a project too large for tsc, a declined card, a refusal, a run
-        that could not start) and ``late`` (not finished inside the shared
-        budget)."""
+        that could not start — or, second review D8, a checker whose own
+        settings left out every changed file: it read none of them) and
+        ``late`` (not finished inside the shared budget)."""
         ran: list[str] = []
         late: list[str] = []
         skipped = [dict(s) for s in self.skipped]
         for r in self.runs:
             name, verdict = str(r.get("checker") or ""), str(r.get("verdict") or "")
-            if verdict in ("clean", "problems", "excluded"):
+            if verdict in ("clean", "problems"):
                 ran.append(name)
+            elif verdict == "excluded":
+                skipped.append({"checker": name, "why": EXCLUDED_WHY})
             elif verdict == "late":
                 late.append(name)
             else:

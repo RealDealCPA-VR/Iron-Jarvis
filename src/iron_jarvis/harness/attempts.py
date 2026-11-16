@@ -107,6 +107,9 @@ WHY_WORDS = {
     "limit": "Stopped at an account limit",
     "cut_off": "Cut off when Iron Jarvis stopped",
 }
+#: Second review D11 (v1.513.0): an attempt cut at the step limit (the
+#: session page's own words for a reply: "stopped at its step limit").
+STEP_LIMIT_WORDS = "Stopped at its step limit"
 #: Never armed in an attempt: an attempt is ONE model's own try — it starts no
 #: helpers (they would run on other models and muddy the comparison) and no
 #: attempts of its own; the question card and the plan door belong to the
@@ -1178,6 +1181,9 @@ class Attempt:
     spend_kept: bool = False
     #: Review: the session's cap ended it ({kind, limit}).
     cap_met: "dict[str, Any] | None" = None
+    #: Second review D11 (v1.513.0): its turn was cut at the step limit
+    #: ({limit} — the end frame's ``step_limit``).
+    step_limit: "dict[str, Any] | None" = None
 
     def metered_usd(self) -> float:
         """The METERED dollars this attempt spent (a subscription's list-price
@@ -1297,6 +1303,11 @@ class Attempt:
             self.reply = _short(data.get("reply"), REPLY_CHARS)
             if isinstance(data.get("cap"), dict):
                 self.cap_met = dict(data["cap"])
+            # Second review D11 (v1.513.0): the step limit cut it (the lane's
+            # end frame says ``step_limit``; a reply LINE says ``stepLimit``).
+            sl = data.get("step_limit") if isinstance(data.get("step_limit"), dict) else data.get("stepLimit")
+            if isinstance(sl, dict):
+                self.step_limit = dict(sl)
             from .finish import saved_record
 
             self.finish = saved_record(data.get("finish"))
@@ -1355,6 +1366,14 @@ class Attempt:
             self.state, self.why = "stopped", "stopped"
             kind = "cost" if self.cap_met.get("kind") == "cost" else "time"
             self.words = f"Stopped at this session's {kind} limit ({limit_words(self.cap_met)})"
+        elif self.done and self.step_limit is not None:
+            # Second review D11 (v1.513.0): cut at the step limit is not
+            # "Finished" — the card's warning tone, and Keep only for its
+            # changed files (never offered as the finished one).
+            self.state, self.why = "stopped", "stopped"
+            n = self.step_limit.get("limit")
+            count = (f" ({n:,} steps)" if isinstance(n, int) and not isinstance(n, bool) and n > 0 else "")
+            self.words = f"{STEP_LIMIT_WORDS}{count}"
         elif self.done:
             self.state, self.why, self.words = "done", "finished", WHY_WORDS["finished"]
         elif isinstance(limit, dict) and limit:

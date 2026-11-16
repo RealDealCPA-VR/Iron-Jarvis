@@ -157,7 +157,22 @@ REVIEW_DONE = "done"
 REVIEW_FAILED = "failed"
 REVIEW_NOT_RUN = "not_run"
 REVIEW_STOPPED = "stopped"
-REVIEW_STATES = (REVIEW_DONE, REVIEW_FAILED, REVIEW_NOT_RUN, REVIEW_STOPPED)
+#: Second review D7 (v1.513.0): the reviewer's run FINISHED but its answer
+#: does not count as a review — it ended at low trust, or its report read like
+#: an instruction and was withheld from the lead. The work line says "review
+#: not counted", never "reviewed by" (``why`` says which).
+REVIEW_NOT_COUNTED = "not_counted"
+REVIEW_STATES = (REVIEW_DONE, REVIEW_FAILED, REVIEW_NOT_RUN, REVIEW_STOPPED, REVIEW_NOT_COUNTED)
+#: Second review D7: the ``why`` of each review that reached no one.
+REVIEW_NO_REPORT_WHY = "it ended without a report"
+REVIEW_LOW_TRUST_WHY = (
+    "its answer was not counted: the reviewer read something that looked like an instruction, "
+    "so its run was at low trust"
+)
+REVIEW_WITHHELD_WHY = (
+    "its answer was not counted: its report read like an instruction, so it was kept from the reply"
+)
+REVIEW_UNREAD_WHY = "its answer was not counted: its run could not be read back"
 #: The reviewer's verdict as the record keeps it ("" = none counted).
 VERDICT_APPROVED = "approved"
 VERDICT_CHANGES = "changes_needed"
@@ -382,6 +397,19 @@ AGAIN_END_ASK = "End with one sentence saying what you changed since this check.
 #: (:meth:`FinishCheck.verdict_note`).
 VERDICT_LEAD = "Checked by Iron Jarvis:"
 VERDICT_CARRY_ON = "Tell it to keep going and it will carry on."
+#: Second review D3 (v1.513.0): why a reply carried on after a restart that
+#: cut it AFTER its check has no test verdict of this part (the record's
+#: ``why``; replaced by the re-run's verdict when the tests are run again).
+RESUMED_NOT_RUN_WHY = (
+    "a restart cut this reply after its first check, and the tests were not run again after that"
+)
+#: Second review S3 (v1.513.0): a finish record ``{"off": OFF_FOLDER}`` — the
+#: folder's own ``.ironjarvis/harness/finish.toml`` turned the check off
+#: (``enabled = false``; the app's own default is always on), and the reply
+#: changed files, so it was NOT checked. Nothing else is claimed.
+OFF_FOLDER = "folder"
+#: The "See the harness" view's line for such a folder (routes/build_harness).
+OFF_FOLDER_WORDS = "This folder turned the finish check off."
 #: v1.420.0 (C3.3): the note's section with the project's own checkers
 #: (``harness/checkers``), which run once per reply in the check's round.
 CHECKERS_HEAD = "## The project's checkers"
@@ -2876,6 +2904,19 @@ class FinishCheck:
         #: whether a note already asked for them (asked once, then only said).
         self._missing: list[str] = []
         self._files_asked = False
+        #: Second review D3 (v1.513.0): a reply a restart cut AFTER its note,
+        #: carried on (:meth:`carry_past_note`) — what the check knows is read
+        #: again at the reply's end (``_resume_gather``), and the tests the cut
+        #: part ran are what a check-again re-run runs (``_carried``).
+        self._carried = False
+        self._resume_gather = False
+        #: Second review S3 (v1.513.0): "" — the check is on; :data:`OFF_FOLDER`
+        #: — the FOLDER's own ``finish.toml`` turned it off. Such a check does
+        #: nothing at all (:meth:`prepare` is always None) except remember
+        #: whether the reply changed a file or ran a command that could
+        #: (``_off_changed``), so its record SAYS the reply was not checked.
+        self.off = ""
+        self._off_changed = False
 
     # -- what the lane tells it -------------------------------------------- #
 
@@ -2989,6 +3030,13 @@ class FinishCheck:
             # A call the HARNESS made (a project's checker, part 3 Phase 3):
             # neither a command the model ran nor the reply's own work.
             return
+        if self.off:
+            # Second review S3 (v1.513.0): the folder turned the check off —
+            # only whether this reply changed a file (or ran something that
+            # could) is kept, for the record's "not checked".
+            if not self._off_changed and self._may_change_files(name, call, result):
+                self._off_changed = True
+            return
         if not self.ran:
             # v1.417.0 (C1.3): the reply's settled calls, in order, and the
             # last one that may have changed a file.
@@ -3039,8 +3087,7 @@ class FinishCheck:
             self._ended[handle] = data["exit_code"]
         syntax = self._syntax_of(call)
         if not self.ran:
-            self._commands.append((name, dict(args), handle, syntax))
-            self._cmd_meta.append((self._seq, _verdict(name, result)))
+            self.keep_command(name, args, handle, syntax, seq=self._seq, verdict=_verdict(name, result))
             return
         if not self._note_sent:
             return
@@ -3096,11 +3143,116 @@ class FinishCheck:
         except Exception:  # noqa: BLE001
             return True
 
+    def keep_command(self, name: str, args: Any, handle: str = "", syntax: str = "", *,
+                     seq: int = 0, verdict: str = "") -> None:
+        """Keep one command the model ran as a source of the test command —
+        ``_commands`` and ``_cmd_meta`` are written HERE ONLY, together, so
+        index ``i`` of one is always the same command as index ``i`` of the
+        other.
+
+        Second review D2 (v1.513.0): a carry-on's cut part (``start``'s
+        ``earlier``) and a team's workers' commands went into ``_commands``
+        with no meta, so every later command's meta sat one place off and
+        :meth:`_reusable` read a later ``git status``'s "passed after the last
+        change" for an earlier ``pytest`` that FAILED — "did not run it
+        again", "Checked: tests passed". A command kept without its own place
+        (``seq`` 0: before any change) and verdict ("") is never reused."""
+        self._commands.append((str(name), dict(args or {}), str(handle or ""), str(syntax or "")))
+        self._cmd_meta.append((int(seq), str(verdict or "")))
+
+    def carry_past_note(self, tail: Iterable[Any]) -> None:
+        """Second review D3 (v1.513.0): this reply was cut by a restart AFTER
+        its note went out (``tail``, the cut part's conversation, holds it),
+        and the boot carries it on. The check HAS run and HAS sent its note —
+        the note is never sent again — and what it last knew is stale (the
+        model was fixing when the restart cut it). So the reply's end goes
+        through the check-again loop exactly as an uninterrupted reply's
+        would: the cut part's tests are run again (:meth:`_carried_runs`),
+        the verdict line and the record are written, and every rule of the
+        loop (never cut, low trust, ``again = false``, the step limit) still
+        holds. Before, the check was simply marked "checked" and the reply
+        ended on whatever the model wrote: no re-run, no line, no record.
+        Never raises."""
+        if self.off:
+            return  # the folder turned the check off since: it stays off
+        try:
+            msgs = list(tail or ())
+            self.ran = True
+            self._note_sent = True
+            self._carried = True
+            self._resume_gather = True
+            self._dirty = True
+            self.tests = TESTS_NOT_RUN
+            self.why = ("this folder turned the test run off" if not self.config.tests
+                        else RESUMED_NOT_RUN_WHY)
+            if self.config.request:
+                points, left = request_points(self.request)
+                self.points, self.request_count, self.points_left_out = list(points), len(points), left
+            last = -1
+            again = 0
+            for i, m in enumerate(msgs):
+                said = str(getattr(m, "content", "") or "")
+                if getattr(m, "role", "") == "user" and said.startswith(NOTE_OPENING):
+                    last = i
+                    if said.startswith(f"{NOTE_OPENING} Check again"):
+                        again += 1
+            self.again_rounds = min(again, AGAIN_MAX_ROUNDS)
+            for m in msgs[last + 1:]:
+                if getattr(m, "role", "") == "assistant":
+                    said = str(getattr(m, "content", "") or "")
+                    if said.strip():
+                        self.heard(said)
+        except Exception:  # noqa: BLE001 — a check never breaks a reply
+            log.warning("finish check: the carried reply's check could not be read", exc_info=True)
+
+    async def _gather_resumed(self) -> None:
+        """Second review D3: the carried reply's end — the change, the new
+        files and the points read as :meth:`prepare` reads them for the first
+        check (the whole reply, from the question it continues). Never
+        raises."""
+        self._resume_gather = False
+        try:
+            files = await asyncio.to_thread(read_turn_files, self.engine, self.session_id, self.mark)
+            seen = await self._folder_changes()
+            await self.ready()
+            await asyncio.to_thread(self._gather, files, seen)
+        except Exception:  # noqa: BLE001
+            log.warning("finish check: the carried reply's change could not be read", exc_info=True)
+        if (self.config.tests and self.tests == TESTS_NOT_RUN and self.why == RESUMED_NOT_RUN_WHY
+                and self._after_run is None and not self._carried_runs()):
+            # The cut part ran no test (nor does the folder name one).
+            self.tests, self.why = TESTS_NONE, ""
+
+    def _carried_runs(self) -> "list[_Run]":
+        """Second review D3: the tests a carried reply's check ran before the
+        restart, as :meth:`_test_calls` picks them — the folder's checks for
+        the changed files, else the test part of the last test command the
+        model ran (the cut part's, ``start``'s ``earlier``). [] when none."""
+        if not self._carried:
+            return []
+        checks = [c for c in self.checks if _applies(c, self._changed_rels)]
+        if checks:
+            return [_Run(command=str(c.command), args={}, source="folder",
+                         timeout_s=int(getattr(c, "timeout_s", 0) or 0) or None) for c in checks]
+        pick = self._last_test_pick()
+        if pick is None:
+            return []
+        _index, _name, args, part, syntax = pick
+        return [_Run(command=part, args=args, source="yours",
+                     timeout_s=_int_or_none(args.get("timeout_s")), syntax=syntax)]
+
     def _reusable(self, index: int) -> bool:
         """v1.417.0 (C1.3, decision D1): did the model's test command at
         ``index`` of ``_commands`` run AFTER the reply's last change and exit
         0, with its OWN exit status its tests' (``status_is_tests``)? Then the
-        check does not run it again: it already says what a re-run would."""
+        check does not run it again: it already says what a re-run would.
+        Second review D2: never when the two lists are not the same length
+        (a writer that skipped :meth:`keep_command`): the meta could be
+        another command's."""
+        if len(self._cmd_meta) != len(self._commands):
+            log.warning("finish check: the commands and their results are out of step; "
+                        "the tests are run again")
+            return False
         try:
             seq, verdict = self._cmd_meta[index]
             name, args, handle, syntax = self._commands[index]
@@ -3213,7 +3365,13 @@ class FinishCheck:
         # fixes could not run there (a round with tool calls at the limit is
         # the step-limit report), so a reply that had ENDED would end on the
         # step-limit report instead.
+        if self.off:
+            return None  # second review S3: the folder turned it off
         if self.ran and not self.checked_before:
+            if self._resume_gather:
+                # Second review D3 (v1.513.0): a reply carried on after a
+                # restart cut it past its note — read what it changed now.
+                await self._gather_resumed()
             # v1.403.0 (the coding-session team): the check ran once; what may
             # follow is the team's second review —
             second = await self._second_review(
@@ -3249,9 +3407,10 @@ class FinishCheck:
         if self.team is not None and not self._commands:
             # v1.403.0: the team LEAD runs no command — the tests are the ones
             # its WORKERS ran in this reply (their own sessions' ledger rows).
-            self._commands.extend(
-                await asyncio.to_thread(helper_commands, self.engine, self.session_id, self.mark)
-            )
+            for name, args, handle, syntax in await asyncio.to_thread(
+                helper_commands, self.engine, self.session_id, self.mark
+            ):
+                self.keep_command(name, args, handle, syntax)  # second review D2: never reused
         await asyncio.to_thread(self._gather, files, seen)
         calls = self._test_calls(low_trust=low_trust)
         if self.harness is not None:
@@ -3410,7 +3569,13 @@ class FinishCheck:
             runs = [_Run(command=part, args=args, source="yours",
                          timeout_s=_int_or_none(args.get("timeout_s")), syntax=syntax)]
         else:
-            return []
+            # Second review D3 (v1.513.0): a reply carried on after a restart
+            # cut it past its note — the tests its cut part ran, run again;
+            # their verdict is the record's (as the first check's would be).
+            runs = self._carried_runs()
+            if not runs:
+                return []
+            self.runs = runs
         calls = []
         for run in runs:
             self._calls_made += 1
@@ -4262,18 +4427,44 @@ class FinishCheck:
         verdict = ""
         child = str(data.get("child_session_id") or "")
         low = True
+        silent = False
+        flagged = False
         try:
             from ..agents import model_team as MT
             from ..agents import team_record as TR
 
             low = (not child) or bool(await asyncio.to_thread(MT._low_trust, self.engine, child))
-            if not low and not MT._runtime_wrote(report):
+            silent = MT._runtime_wrote(report)
+            # The scan the note withholds a report by (``_review_text``):
+            # a flagged report's verdict never counts, note written or not.
+            flagged = bool(report.strip()) and MT._report_flagged(report)
+            if not low and not silent and not flagged:
                 verdict = {TR.REVIEW_GOOD: VERDICT_APPROVED, TR.REVIEW_BAD: VERDICT_CHANGES}.get(
                     TR.verdict_of(report), "")
         except Exception:  # noqa: BLE001 — no verdict beats a wrong one
             verdict = ""
+            flagged = True  # unread: not counted (the note's rule for an unscanned report)
         self._review_low = low
-        self._settle_review(REVIEW_DONE, member=member, model=model, verdict=verdict, report=report)
+        if silent:
+            # Second review D7 (v1.513.0): the reviewer ended without a word —
+            # the runtime wrote its result ("The model returned an empty
+            # answer…"). That is no review (the CI fix's reading too): failed,
+            # never "reviewed by". No report reaches the lead.
+            self._settle_review(REVIEW_FAILED, member=member, model=model, why=REVIEW_NO_REPORT_WHY)
+        elif low:
+            # Second review D7: its run ended at LOW trust — its verdict never
+            # counts, so it is not a review on the line either (the lead still
+            # reads its report, fenced, with "Its verdict is not counted").
+            self._settle_review(REVIEW_NOT_COUNTED, member=member, model=model,
+                                why=REVIEW_LOW_TRUST_WHY if child else REVIEW_UNREAD_WHY, report=report)
+        elif flagged:
+            # Second review D7: its report reads like an instruction — the
+            # note withholds it from the lead (``_review_text``), so it is
+            # not a review that reached anyone.
+            self._settle_review(REVIEW_NOT_COUNTED, member=member, model=model,
+                                why=REVIEW_WITHHELD_WHY, report=report)
+        else:
+            self._settle_review(REVIEW_DONE, member=member, model=model, verdict=verdict, report=report)
         # v1.423.0 (Team notes, Phase 1b): the review whose findings the next
         # note's answers settle ("" for a low-trust run: none were stored),
         # and where the ledger stood — what is written after it may confirm
@@ -4453,7 +4644,7 @@ class FinishCheck:
         wrote nothing."""
         rv = self.review
         report = str(self._review_report or "").strip()
-        if not rv or rv.get("state") != REVIEW_DONE or not report:
+        if not rv or rv.get("state") not in (REVIEW_DONE, REVIEW_NOT_COUNTED) or not report:
             return ""
         # v1.401.0 review: a report that reads like an INSTRUCTION is withheld
         # from the model by the fence below — and its verdict is not counted
@@ -4469,6 +4660,11 @@ class FinishCheck:
             flagged = True
         if flagged:
             rv["verdict"] = ""
+            # Second review D7 (v1.513.0): the report is withheld from the
+            # lead, so no review reached anyone — the line says "review not
+            # counted", never "reviewed by", and the hover says why.
+            rv["state"] = REVIEW_NOT_COUNTED
+            rv["why"] = _clip(REVIEW_WITHHELD_WHY, MAX_REVIEW_WHY_CHARS)
         who = str(rv.get("member") or "") or "A member of your team"
         on = f" (on {rv['model']})" if rv.get("model") else ""
         if rv.get("verdict") == VERDICT_APPROVED:
@@ -4613,7 +4809,18 @@ class FinishCheck:
 
     def combine(self, final: str) -> str:
         """The reply the user keeps: what the model wrote before the check,
-        then its answer to it."""
+        then its answer to it.
+
+        Second review S3 (v1.513.0): for a check the FOLDER turned off, the
+        reply is unchanged; this is where it becomes known that a reply which
+        changed files ended unchecked (``ran`` — both lanes write the record
+        only then, and they combine once, after the tool loop and before the
+        record), so nothing in the loop (the closing offer, the give-up nudge)
+        ever reads it as "the check ran"."""
+        if self.off:
+            if self._off_changed:
+                self.ran = True
+            return final
         if not self.ran:
             return final
         head = str(self.draft or "").rstrip()
@@ -4744,7 +4951,12 @@ class FinishCheck:
         v1.423.0 (Team notes, Phase 1b): the reply has ENDED, so the lead's
         R answers settle the review's findings (:meth:`_settle_findings`,
         off the loop) — unless the reply ended at LOW trust (``low_trust``,
-        the lanes' trust state: both lanes pass it, lock-step)."""
+        the lanes' trust state: both lanes pass it, lock-step).
+
+        Second review S3 (v1.513.0): a check the folder turned off records
+        ``{"off": "folder"}`` and claims nothing else."""
+        if self.off:
+            return {"off": self.off}
         if self._answer_windows:
             await asyncio.to_thread(self._settle_findings, bool(low_trust))
         self._settle_tests()
@@ -4895,6 +5107,10 @@ def saved_record(raw: Any) -> "dict[str, Any] | None":
     the screen then reads exactly as before)."""
     if not isinstance(raw, dict):
         return None
+    if raw.get("off") == OFF_FOLDER:
+        # Second review S3 (v1.513.0): the folder turned the check off and the
+        # reply changed files — said, and nothing else claimed.
+        return {"off": OFF_FOLDER}
     tests = raw.get("tests")
     if tests not in TEST_VERDICTS:
         return None
@@ -5028,8 +5244,9 @@ async def start(
     team: Any = None,
 ) -> "FinishCheck | None":
     """The reply's finish check, or None when it does not apply: no harness
-    turn, not a Build session's own turn (``build:<id>``), plan mode, no
-    folder, or the folder turned it off. Reads the ledger mark off the loop.
+    turn, not a Build session's own turn (``build:<id>``), plan mode, or no
+    folder. A folder that turned it off gets a check that only says so
+    (second review S3: ``FinishCheck.off``). Reads the ledger mark off the loop.
     ``since`` (review): the stamp of the question a daemon's "carry on"
     continues (a reply cut off by an account limit and resumed) — the check
     then covers the WHOLE reply from that question: the files the cut part
@@ -5063,14 +5280,26 @@ async def start(
         return None
     tree = getattr(harness, "tree", None)
     config = getattr(tree, "finish", DEFAULT_CONFIG) or DEFAULT_CONFIG
-    if not config.enabled:
-        return None
     try:
         base = Path(str(folder))
     except Exception:  # noqa: BLE001
         return None
     if not str(folder or "").strip():
         return None
+    if not config.enabled:
+        # Second review S3 (v1.513.0): only a FOLDER's own finish.toml turns
+        # the check off (the app's default is on; a voided layer is the
+        # default). The folder may be someone else's repository, so the
+        # reply SAYS it was not checked: a check that does nothing but note
+        # whether the reply changed a file, and records ``{"off": "folder"}``
+        # (no ledger read, no folder snapshot, no test, no note).
+        off = FinishCheck(
+            engine=engine, home=home, event_bus=event_bus, session_id=sid, folder=base, mark=0,
+            request="", config=config, harness=harness,
+            unjournaled=frozenset(str(c) for c in custom_tools or ()),
+        )
+        off.off = OFF_FOLDER
+        return off
     mark = await asyncio.to_thread(ledger_mark, engine)
     earlier: list[tuple[str, dict[str, Any], str]] = []
     custom = frozenset(str(c) for c in custom_tools or ())
@@ -5116,7 +5345,10 @@ async def start(
         except Exception:  # noqa: BLE001
             return ""
 
-    check._commands.extend((name, args, "", _syntax(called)) for name, args, called in earlier)
+    # Second review D2 (v1.513.0): the cut part's commands are kept WITH
+    # their meta (place 0, no verdict): never "passed after the last change".
+    for name, args, called in earlier:
+        check.keep_command(name, args, "", _syntax(called))
     # The folder as this reply BEGAN (harness/folder_changes) — before any of
     # its tools runs, off the loop. A carry-on compares with the snapshot of
     # the reply it continues (the cut part changed the folder already).

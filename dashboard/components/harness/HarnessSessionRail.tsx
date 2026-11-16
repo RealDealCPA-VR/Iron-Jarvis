@@ -364,6 +364,9 @@ function Instructions({ view, messages }: { view: BuildSessionView; messages: re
   // The note said once: the newest reply's, else (no reply yet, or the
   // folder changed since) what the view just put together says.
   const note = reply?.note || (open ? shown?.note : "") || "";
+  // v1.513.0 (second review S3): the folder's own finish.toml turned the
+  // end-of-reply check off — said in one line, as the instructions are read.
+  const finishOff = (open ? shown?.finishOff : "") || "";
   return (
     <Section id="instructions" title="Instructions">
       {reply ? (
@@ -390,6 +393,11 @@ function Instructions({ view, messages }: { view: BuildSessionView; messages: re
       {note ? (
         <p data-testid="session-rail-instructions-note" role="status" className="text-[12px] text-tone-warn">
           {note}
+        </p>
+      ) : null}
+      {finishOff ? (
+        <p data-testid="session-rail-instructions-finish-off" role="status" className="text-[12px] text-tone-warn">
+          {finishOff}
         </p>
       ) : null}
       <p className={QUIET}>

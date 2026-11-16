@@ -83,7 +83,8 @@ def test_the_window_crosses_midnight_and_says_when_it_starts():
     assert not W.in_window(_local(15, 0), "23:00", "07:00")
     assert W.in_window(_local(13, 0), "12:00", "14:00") and not W.in_window(_local(14, 0), "12:00", "14:00")
     assert W.window_words(_local(15, 0), "23:00", "07:00") == "Starts at 11:00 PM tonight."
-    assert W.window_words(_local(23, 30), "23:00", "07:00") == "Night tasks run now, until 7:00 AM."
+    assert W.window_words(_local(23, 30), "23:00", "07:00") == (
+        "Night tasks start now, until 7:00 AM. One that has started runs to its own time limit.")
     assert W.window_words(_local(15, 0), "01:00", "05:00") == "Starts at 1:00 AM tomorrow."
     # Equal ends: an empty window, never "all day".
     assert not W.in_window(_local(3, 0), "23:00", "23:00")

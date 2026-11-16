@@ -123,6 +123,9 @@ function joinAnd(parts: string[]): string {
 
 /** The tests' state in the box's words, from the finish record only. */
 function testsWords(f: FinishRecord): string {
+  // v1.513.0 (second review S3): never "no tests found" over a reply the
+  // folder's own settings kept from being checked at all.
+  if (f.off === "folder") return "it was not checked: this folder's own settings turned the check off";
   if (testsFailing(f)) return "tests are failing";
   if (f.tests === "failed" && f.after === "passed") return "tests pass after a fix";
   if (f.tests === "passed" || f.after === "passed") return "tests pass";

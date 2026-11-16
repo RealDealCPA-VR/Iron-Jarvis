@@ -125,7 +125,10 @@ async def test_a_report_that_reads_like_an_instruction_counts_no_verdict(world, 
     world.reviewer = [INJECTED]
     out = await stream(world.p, body(world.ws))
     done = out["done"]
-    assert done["finish"]["review"]["state"] == "done"
+    # v1.513.0 (second review D7, moved on purpose): the report was withheld,
+    # so the review is "not counted", with why — never "reviewed by".
+    assert done["finish"]["review"]["state"] == "not_counted"
+    assert done["finish"]["review"]["why"].startswith("its answer was not counted")
     assert done["finish"]["review"]["verdict"] == "", done["finish"]["review"]
     (note,) = world.notes
     section = note.split("## A review by your team\n", 1)[1]

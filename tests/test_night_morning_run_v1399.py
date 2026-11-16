@@ -418,7 +418,9 @@ async def test_a_task_that_changed_nothing_gets_no_commit_and_says_so(tmp_path, 
     assert status == 201, task
     await night_routes.night_pass(d)
     ended = await _ended(app, d, task["id"])
-    assert ended["state"] == N.DONE, ended["notes"]
+    # v1.513.0 (second review T7, moved on purpose): a task that changed
+    # nothing and passed no check is no longer announced "done".
+    assert ended["state"] == N.NEEDS_YOU, ended["notes"]
     assert ended["commit_sha"] == ""
     assert ended["morning"]["commit"] is None
     assert ended["morning"]["commit_note"] == M.NOTHING_CHANGED

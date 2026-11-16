@@ -330,7 +330,7 @@ def _branch_numbers(git: "dict[str, str] | None") -> dict[str, Any]:
 async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[str, str] | None",
                           state: str, messages: list[dict[str, Any]], fin: Any, tests_trusted: bool,
                           stopped_by_emergency: bool, notes: "list[tuple[str, str]]", *,
-                          local_only: bool = False) -> None:
+                          local_only: bool = False) -> str:
     """v1.399.0 (N2): one ended night task's COMMIT and its MORNING FACTS.
 
     * THE COMMIT (decision 2): the task's work is committed to its own branch
@@ -345,8 +345,14 @@ async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[
       finish check's test verdict (and whether it can be trusted), the
       branch's numbers (``branches.branch_summary``, after the commit), the
       usage per account (each reply line's receipt), the commit.
+    * v1.513.0 (second review T7): a task that would end "done" with nothing
+      changed (nothing to commit, its branch carries nothing over its base)
+      and no check passed ends "needs you" with one plain line
+      (``night.ended_doing_nothing``) — never "Last night: 1 done" over a
+      task that only read a few files.
 
-    Appends its notes to ``notes``. Never raises."""
+    Appends its notes to ``notes``; returns the task's state (``state``, or
+    "needs you" for the case above). Never raises."""
     from ...harness import night_morning as M
     from .build_git import commit_for_night
 
@@ -359,6 +365,8 @@ async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[
     from ...harness import night_commit as NC
 
     left_out: list[dict[str, Any]] = []
+    #: Nothing to commit and none of the cases that still had work (T7).
+    nothing_changed = False
     try:
         if git:
             if stopped_by_emergency:
@@ -392,6 +400,7 @@ async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[
                     notes.append(("commit", M.commit_note_words(branch, commit["sha"])))
                 elif done.get("nothing"):
                     commit_note = M.TRY_ON_NOTE if task.get("try_on") else M.NOTHING_CHANGED
+                    nothing_changed = True
                 else:
                     commit_note = str(done.get("note") or "")
             if left_out:
@@ -400,8 +409,15 @@ async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[
             if commit_note:
                 notes.append(("commit", commit_note))
         numbers = await asyncio.to_thread(_branch_numbers, git)
+        # v1.513.0 (second review T7): only on the branch's own word that it
+        # holds nothing (unreadable numbers decide nothing).
+        empty_branch = bool(numbers) and not int(numbers.get("files") or 0) and not int(numbers.get("ahead") or 0)
+        if nothing_changed and empty_branch and N.ended_doing_nothing(
+                state, fin, changed=False, try_on=bool(task.get("try_on"))):
+            state = N.NEEDS_YOU
+            notes.append(("did_nothing", N.DID_NOTHING_WORDS))
         usage = await asyncio.to_thread(M.usage_by_account, messages, _cost_kind(platform))
-        tests = fin.get("tests") if isinstance(fin, dict) and fin.get("tests") in ("passed", "failed") else ""
+        tests = N.finish_tests(fin)  # as LAST seen (v1.513.0, lead review of T5)
         facts: dict[str, Any] = {
             "tests": tests,
             "tests_trusted": bool(tests_trusted),
@@ -423,6 +439,7 @@ async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[
         await asyncio.to_thread(N.set_morning, engine, tid, facts, commit_sha=(commit or {}).get("sha", ""))
     except Exception:  # noqa: BLE001 — the morning never breaks the settle
         log.warning("night task %s: its morning facts could not be kept", tid, exc_info=True)
+    return state
 
 
 #: v1.399.0: a night whose summary is made this long after it (an upgrade
@@ -758,8 +775,11 @@ async def settle_running(d: Any) -> list[str]:
                               f"{borrowed.words()}; nothing was installed."))
         fin = (line or {}).get("finish") if isinstance(line, dict) else None
         tests_trusted = True
-        if isinstance(fin, dict) and fin.get("tests") in ("passed", "failed"):
-            words = "Its tests passed." if fin["tests"] == "passed" else "Its tests failed."
+        # v1.513.0 (lead review of T5): the tests as LAST seen, never the
+        # first run alone (``night.finish_tests``).
+        last_tests = N.finish_tests(fin)
+        if last_tests:
+            words = "Its tests passed." if last_tests == "passed" else "Its tests failed."
             if git and borrowed and tests_line(borrowed):
                 words += " They ran with your main folder's environment."
                 if borrowed.untrusted:
@@ -769,7 +789,7 @@ async def settle_running(d: Any) -> list[str]:
 
                     words += " " + untrusted_words(borrowed)
                     tests_trusted = False
-                    if fin["tests"] == "passed" and state == N.DONE:
+                    if last_tests == "passed" and state == N.DONE:
                         state = N.NEEDS_YOU  # a pass nobody can rely on
             notes.append(("tests", words))
         if git:
@@ -808,8 +828,8 @@ async def settle_running(d: Any) -> list[str]:
             isinstance(m, dict) and isinstance(m.get("route"), dict) and m["route"].get("local_only") is True
             for m in messages
         )
-        await _settle_morning(d, task, thread, git, state, messages, fin, tests_trusted,
-                              stopped_by_emergency, notes, local_only=local_only)
+        state = await _settle_morning(d, task, thread, git, state, messages, fin, tests_trusted,
+                                      stopped_by_emergency, notes, local_only=local_only)
         if git:
             # v1.399.0 review: the commit ran the repository's own HOOKS (a
             # post-commit hook can write anywhere), so the user's main folder

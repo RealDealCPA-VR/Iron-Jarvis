@@ -61,6 +61,11 @@ async def suggest(platform: Any, thread_id: str, *, running: bool = False) -> di
     window = F.conversation_window([SimpleNamespace(**m) for m in history])
     if not window or window[-1]["role"] != "assistant":
         return {"suggestions": [], "reason": F.NOTHING_REASON}
+    if str(window[-1].get("content") or "").lstrip().startswith("[" + S.REPLY_END_LEAD):
+        # v1.513.0 (lead review of S5): a failed reply that wrote nothing is
+        # kept in the history as Iron Jarvis's own note of how it ended. There
+        # is no answer to suggest a follow-up to, as before that note existed.
+        return {"suggestions": [], "reason": F.NOTHING_REASON}
     last_user = next((m["content"] for m in reversed(window) if m["role"] == "user"), "")
 
     # THE SESSION'S OWN MODEL ON ITS OWN ACCOUNT (Compact's way).

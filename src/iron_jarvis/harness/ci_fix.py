@@ -794,23 +794,33 @@ COMMIT_S = 120.0
 
 
 def commit_fix(facts: dict[str, str], branch: str, message: str, *,
-               on_spawn: Any = None) -> "dict[str, Any] | None":
+               on_spawn: Any = None, left_out: "list[dict[str, str]] | None" = None) -> "dict[str, Any] | None":
     """Commit the worktree's changes on ``branch`` (the night shift's
     SCREENED commit: a secret, a huge file or a dependency folder is left out
     and named). None when there was nothing to commit. BLOCKING.
 
     v1.406.0 part 3 follow-ups: the night commit's ``on_spawn`` seam — the
     commit's process (and the repository's hooks it runs) is published to
-    :class:`Kill`, so Emergency stop ends it; bounded by :data:`COMMIT_S`."""
+    :class:`Kill`, so Emergency stop ends it; bounded by :data:`COMMIT_S`.
+
+    Second review D1 (v1.513.0): ``left_out`` (a list the caller passes) is
+    extended with every ``{path, why}`` the screen left out — of a commit
+    that was made AND of a "nothing to commit" whose every change was
+    screened out (``exc.left_out``), which this answers as None."""
     from . import night_commit as NC
 
     try:
-        return B.commit({**facts, "branch": branch}, message, screen=NC.screen, recheck=NC.check_commit,
+        done = B.commit({**facts, "branch": branch}, message, screen=NC.screen, recheck=NC.check_commit,
                         timeout=COMMIT_S, on_spawn=on_spawn)
     except B.GitRefused as exc:
+        if left_out is not None:
+            left_out.extend(getattr(exc, "left_out", None) or [])
         if str(exc) == B.NOTHING_TO_COMMIT:
             return None
         raise
+    if left_out is not None:
+        left_out.extend(done.get("left_out") or [])
+    return done
 
 
 def move_to_side(facts: dict[str, str], side: str) -> None:

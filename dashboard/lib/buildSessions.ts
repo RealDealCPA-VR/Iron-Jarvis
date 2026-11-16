@@ -320,6 +320,11 @@ export type BuildMessage = PaneMessage & {
 export function decodeFinish(raw: unknown): FinishRecord | null {
   const r = rec(raw);
   if (!r) return null;
+  if (r.off === "folder") {
+    // v1.513.0 (second review S3): the folder turned the check off and the
+    // reply changed files — "not checked", and nothing else is claimed.
+    return { tests: "none", command: "", removed: 0, kept: 0, points: 0, unmet: 0, after: "", off: "folder" };
+  }
   const tests = r.tests;
   if (tests !== "passed" && tests !== "failed" && tests !== "none" && tests !== "not_run") return null;
   const count = (v: unknown): number =>
@@ -377,7 +382,10 @@ export function decodeFinishReview(raw: unknown): FinishReview | null {
   const r = rec(raw);
   if (!r) return null;
   const state = r.state;
-  if (state !== "done" && state !== "failed" && state !== "not_run" && state !== "stopped") return null;
+  if (
+    state !== "done" && state !== "failed" && state !== "not_run" && state !== "stopped"
+    && state !== "not_counted" // v1.513.0 (second review D7)
+  ) return null;
   const verdict = r.verdict === "approved" || r.verdict === "changes_needed" ? r.verdict : "";
   const out: FinishReview = {
     state,

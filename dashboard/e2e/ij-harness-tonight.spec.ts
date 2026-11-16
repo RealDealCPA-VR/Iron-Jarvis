@@ -55,7 +55,7 @@ async function openTonight(page: Page) {
   await expect(page.getByTestId("ij-harness-view")).toBeVisible({ timeout: 60_000 });
   await page.getByTestId("harness-tonight").click();
   await expect(page.getByTestId("tonight")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId("tonight-window")).toHaveText(/^(Starts at \d{1,2}:\d{2} [AP]M (tonight|today|tomorrow)\.|Night tasks run now, until \d{1,2}:\d{2} [AP]M\.)$/);
+  await expect(page.getByTestId("tonight-window")).toHaveText(/^(Starts at \d{1,2}:\d{2} [AP]M (tonight|today|tomorrow)\.|Night tasks start now, until \d{1,2}:\d{2} [AP]M\. One that has started runs to its own time limit\.)$/);
 }
 
 async function noSidewaysPan(page: Page): Promise<void> {

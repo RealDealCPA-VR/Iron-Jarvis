@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.512.0 (2026-11-15).*
+holds itself to. Current as of v1.513.0 (2026-11-15).*
 
 ---
 
@@ -2041,6 +2041,53 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## "Done" means done in a coding session (v1.513.0)
+
+The fifth of eight releases from the second review. Each of these is a place
+where a coding session, the night shift or the pull-request auto-fix said
+more than it had proved.
+
+- **"Tests passed" is never borrowed from another command.** After a reply
+  was carried on (an account limit, a restart), the end-of-reply check could
+  pair an earlier failed test run with a later command that succeeded, and
+  report "tests passed" without running them. A command and its result are
+  now kept together, and tests from before the break are always run again.
+- **A reply picked up after a restart is checked like any other.** It used
+  to finish with no test run, no "check again" and no verdict at all.
+- **"Pushed the reviewed fix" is only said for the fix.** If the safety
+  screen held a file back from the auto-fix's commit (something that looks
+  like a secret, or is very large), nothing is pushed and the message names
+  the file and why. If nothing could be committed, it says that, instead of
+  "Pushed". Before, it said "Pushed", the checks failed again, and it paid
+  for two more rounds.
+- **The auto-fix does not send a failing fix for review.** A fix whose own
+  tests still fail, or that left points open, stops with the reason before
+  any paid review, and is not pushed.
+- **The morning's verdict reads how the work ended.** A night task is "Done"
+  or "Needs you" by what was still open at the END of its reply, and by its
+  tests as they were last seen. A point it fixed no longer leaves "Needs
+  you"; a problem found in a later round no longer reads "Done". A "Needs
+  you" row now carries its reason, which used to be filed away. A task that
+  ended without changing anything says "It ended without changing anything."
+  instead of "Done".
+- **"Reviewed by" means a review reached the lead.** A reviewer that ended
+  without a report, ran at low trust, or whose report was withheld now reads
+  "review failed" or "review not counted", with why.
+- **A folder that turns the check off is said.** A folder can carry its own
+  `finish.toml` that switches the end-of-reply check off. A reply there now
+  reads "Not checked: this folder's own settings turned the check off", and
+  the session's instructions view says "This folder turned the finish check
+  off."
+- **The next reply knows how the last one ended.** A reply that was cut off,
+  ended on an error, hit a limit or failed its check used to reach the next
+  turn's model as an ordinary finished answer, or vanish. It now carries one
+  fixed note of how it ended. What you see is unchanged.
+- **Smaller ones.** ESLint no longer reports "no problems" for a file its
+  settings skip. An attempt cut at its step limit reads "Stopped at its step
+  limit", not "Finished". The Tonight list says night tasks START until the
+  window's end and then run to their own limit. A chat reply that ends in a
+  workflow card keeps its notes about unchecked figures.
 
 ## Stop means stopped (v1.512.0)
 

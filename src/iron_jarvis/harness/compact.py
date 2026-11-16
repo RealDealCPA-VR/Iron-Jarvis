@@ -306,7 +306,21 @@ def _line_text(m: dict[str, Any]) -> str:
         shown.append(f"{st['name']}{(' ' + head) if head else ''}{mark}")
     if shown:
         text = (text + "\n" if text.strip() else "") + "[tools used: " + "; ".join(shown) + "]"
-    return text
+    return _with_end(m, text)
+
+
+def _with_end(m: dict[str, Any], text: str) -> str:
+    """Second review S5 (v1.513.0): a reply that was cut off, ended on an
+    error, met its step limit or the session's cap, or whose finish check
+    found failing tests says so — the history's own fixed words
+    (``sessions.reply_end_note``), so the summary never records it as a
+    finished reply."""
+    from .sessions import reply_end_note
+
+    end = reply_end_note(m)
+    if not end:
+        return text
+    return (text + "\n" if text.strip() else "") + end
 
 
 def pairs_of(lines: list[dict[str, Any]], *, with_steps: bool = True) -> list[tuple[str, str]]:
@@ -316,7 +330,7 @@ def pairs_of(lines: list[dict[str, Any]], *, with_steps: bool = True) -> list[tu
         role = m.get("role")
         if role not in ("user", "assistant"):
             continue
-        text = _line_text(m) if with_steps or role == "user" else str(m.get("content") or "")
+        text = _line_text(m) if with_steps or role == "user" else _with_end(m, str(m.get("content") or ""))
         if text.strip():
             out.append((str(role), text))
     return out

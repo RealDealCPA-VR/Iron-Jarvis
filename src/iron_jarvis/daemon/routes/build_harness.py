@@ -20,8 +20,10 @@ project map, the skill listing, a picked skill, the team brief, the summary
 standing in for older turns) is not part of the tree and is not here.
 
 The answer: ``{family, dialect, dialect_label, layers, note, mode,
-rule_files, text, chars, cut, fingerprint}`` — ``note`` is the folder layer's
-own sentence when its files were not used ("" otherwise). A failure is an
+rule_files, text, chars, cut, fingerprint, finish_off}`` — ``note`` is the
+folder layer's own sentence when its files were not used ("" otherwise);
+``finish_off`` (second review S3, v1.513.0) is "This folder turned the finish
+check off." when the folder's own ``finish.toml`` did ("" otherwise). A failure is an
 ``error`` sentence with no text, never a 500. Sync ``def``: the threadpool
 runs it (stats, small reads, registry reads).
 """
@@ -120,6 +122,14 @@ def instructions_view(platform: Any, row: Any) -> dict[str, Any]:
             lead=lead,
         )
         info = turn.route_info()
+        # Second review S3 (v1.513.0): a folder whose own finish.toml says
+        # `enabled = false` turns the end-of-reply check off for every reply
+        # (the app's default is on; a voided layer is the default) — said in
+        # one line, so a cloned repository cannot switch it off unseen.
+        from ...harness.finish import OFF_FOLDER_WORDS
+
+        fin = getattr(layer, "finish", None) if getattr(layer, "used", False) else None
+        finish_off = OFF_FOLDER_WORDS if fin is not None and not getattr(fin, "enabled", True) else ""
         text = mask(str(turn.rendered or ""))
         cut = len(text) > SHOW_CAP
         if cut:
@@ -137,6 +147,7 @@ def instructions_view(platform: Any, row: Any) -> dict[str, Any]:
             "chars": len(text),
             "cut": cut,
             "fingerprint": str(info.get("fingerprint") or ""),
+            "finish_off": finish_off,
         }
     except Exception:  # noqa: BLE001 — a view never breaks the session
         log.warning("the harness instructions could not be put together", exc_info=True)

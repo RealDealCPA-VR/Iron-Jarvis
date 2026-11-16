@@ -490,7 +490,9 @@ async def test_a_folder_can_turn_it_off(env, lane, monkeypatch):
     (hd / "finish.toml").write_text("enabled = false\n", encoding="utf-8")
     model = wire([_write("app.py", "X = 2\n"), _shell(TEST_CMD), "Done."])
     done, _ = await _lane(lane, platform, _body(ws), monkeypatch)
-    assert len(model.calls) == 3 and model.notes() == [] and "finish" not in done
+    # v1.513.0 (second review S3, moved on purpose): no check, and the record
+    # SAYS so — it read the same as "changed nothing" before.
+    assert len(model.calls) == 3 and model.notes() == [] and done["finish"] == {"off": "folder"}
     assert _finish_rows(platform) == []
 
 

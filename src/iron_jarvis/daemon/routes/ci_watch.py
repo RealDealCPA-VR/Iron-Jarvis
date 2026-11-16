@@ -109,6 +109,19 @@ DECLINED_WORDS = (
     "A step of the fix needed your OK and was not done ({steps}), so Iron Jarvis did not have the fix "
     "reviewed or push it. The fix is in the session's folder: look at it, then finish it yourself."
 )
+#: Second review D1 (v1.513.0): the push step committed nothing new — the
+#: pull request's branch still ends on the failing commit — so there is
+#: nothing of this fix to push.
+NOTHING_COMMITTED_WORDS = (
+    "The approved fix left nothing git could commit, so the pull request's branch is still at the failing "
+    "commit and nothing was pushed. The fix is in the session's folder: look at it, then commit and push it "
+    "yourself."
+)
+#: …and the branch's tip is not a commit Iron Jarvis made for this fix.
+NOT_THIS_FIX_WORDS = (
+    "The pull request's branch does not end on the commit Iron Jarvis made for this fix, so nothing was "
+    "pushed. Look at the branch, then push it yourself."
+)
 #: How often the push step looks at the Emergency stop switch while it runs.
 STOP_POLL_S = 0.25
 
@@ -147,6 +160,33 @@ def _lock_for(thread_id: str) -> asyncio.Lock:
     if lock is None:
         lock = _LOCKS[thread_id] = asyncio.Lock()
     return lock
+
+
+def _left_out_words(left: "list[dict[str, Any]]", *, committed: bool) -> str:
+    """Second review D1 (v1.513.0): the screened commit left files out, so
+    the fix is not pushed — which files, and why, in the night shift's words."""
+    from ...harness import night_commit as NC
+
+    said = NC.left_out_words(left, where="the session's folder")
+    kept = ("The rest of the fix is committed on the session's branch, not pushed." if committed
+            else "The fix held nothing else, so nothing was committed.")
+    return ("Iron Jarvis's commit of the reviewed fix had to leave files out, so the fix was not pushed. "
+            f"{said} {kept}")
+
+
+def _not_done_words(fin: Any) -> str:
+    """Second review D4 (v1.513.0): why a fix whose own finish check says it
+    is not done waits for the user (``night.finish_needs_you``)."""
+    from ...harness import night as N
+
+    if N.finish_tests(fin) == "failed":  # as last seen, the night's one reading
+        why = "The fix's own tests still fail"
+    else:
+        n = N.finish_unmet(fin)
+        why = (f"{n} point{'s' if n != 1 else ''} of the request {'are' if n != 1 else 'is'} still open" if n
+               else "The fix's own check says it is not finished")
+    return (f"{why}, so Iron Jarvis did not have the fix reviewed, and nothing was pushed. The fix is in the "
+            "session's folder: look at it, then finish it yourself.")
 
 
 def autofix_on(config: Any) -> bool:
@@ -643,6 +683,15 @@ async def _after_fix(d: Any, thread_id: str, title: str, facts: dict[str, str], 
     if not change.strip():
         await _end(d, thread_id, title, CI.GAVE_UP, CI.KIND_GAVE_UP, NO_CHANGE_WORDS, local_only=local_only)
         return
+    # Second review D4 (v1.513.0): the fix turn's OWN finish check says the
+    # work is not done (its tests still fail, points of the request are still
+    # open) — the reviewer cannot run tests, so such a fix is never reviewed
+    # or pushed by itself (the night shift's reading of the same record).
+    # A line with no finish record goes on as before.
+    if N.finish_needs_you(line.get("finish")):
+        await _end(d, thread_id, title, CI.ASKING, CI.KIND_ASKING, _not_done_words(line.get("finish")),
+                   local_only=local_only)
+        return
     if binaries is None or binaries:
         # v1.406.0 part 3 follow-ups: the reviewer cannot read a file that is
         # not text — such a fix is never pushed by itself.
@@ -797,10 +846,17 @@ async def _land_and_push(d: Any, thread_id: str, title: str, facts: dict[str, st
         on_side = bool(side) and on == side
         if emergency_stop_on(config) or kill.stop:
             raise B.GitRefused(EMERGENCY_WORDS, 409)
+        left: list[dict[str, str]] = []
         committed = CI.commit_fix(facts, side if on_side else facts["branch"], _commit_message(rec),
-                                  on_spawn=kill.on_spawn)
+                                  on_spawn=kill.on_spawn, left_out=left)
         if committed:
             own.append(CI.ref_sha(wt, "HEAD"))
+        # Second review D1 (v1.513.0): the screen left a file out (a secret's
+        # name or shape, a huge file, a dependency folder) — the commit is not
+        # what the reviewer read, and CI would fail on the same head again.
+        # Never pushed; the user is told which file and why.
+        if left:
+            raise CI.AskUser(_left_out_words(left, committed=bool(committed)), 409)
         if CI.changed_since_review(wt, base_sha, reviewed):
             raise B.GitRefused(CI.CHANGED_SINCE_REVIEW + " (The commit was made and kept, not pushed.)", 409)
         if on_side:
@@ -812,6 +868,14 @@ async def _land_and_push(d: Any, thread_id: str, title: str, facts: dict[str, st
         if foreign is None or foreign:
             raise CI.AskUser(CI.FOREIGN_COMMITS_WORDS.format(
                 commits=", ".join(foreign[:5]) if foreign else "git could not list them"), 409)
+        # Second review D1 (v1.513.0): "Pushed the reviewed fix" is said only
+        # of a commit made for THIS fix — a branch still at the failing head
+        # (nothing new committed) or ending on any other commit is not pushed.
+        tip = CI.ref_sha(wt, f"refs/heads/{facts['branch']}")
+        if not tip or (base_sha and tip == base_sha):
+            raise CI.AskUser(NOTHING_COMMITTED_WORDS, 409)
+        if tip.lower() not in {str(o).lower() for o in own if o}:
+            raise CI.AskUser(NOT_THIS_FIX_WORDS, 409)
         # …and nothing that is not text (the reviewer could not read it).
         binaries = CI.binary_changes(wt, base_sha)
         if binaries is None or binaries:

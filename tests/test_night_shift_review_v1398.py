@@ -24,6 +24,7 @@ from iron_jarvis.daemon.app import create_app
 from iron_jarvis.daemon.routes import chat as chat_routes
 from iron_jarvis.daemon.routes import night as night_routes
 from iron_jarvis.harness import night as N
+from iron_jarvis.harness import night_morning as M
 from iron_jarvis.providers.adapters.base import ToolCall
 from iron_jarvis.tools.base import Tool, ToolResult
 from tests.test_build_git_v1375 import git, make_repo, no_real_gh
@@ -353,7 +354,11 @@ async def test_a_night_card_goes_to_the_phone_at_once_and_a_phone_approve_runs_t
     assert res["status"] == "approval_answered", res
     ended = await _ended(app, task["id"])
     assert [r[0] for r in rec.ran] == ["web_fetch"], rec.ran
-    assert ended["state"] == N.DONE, ended
+    # v1.513.0 (second review T7, moved on purpose): the step the phone
+    # approved RAN (no "declined" note); the task read a page and changed
+    # nothing, so it ends "needs you" with its line, never "done".
+    assert ended["state"] == N.NEEDS_YOU, ended
+    assert [n["kind"] for n in ended["notes"] if n["kind"] in M.NEEDS_KINDS] == ["did_nothing"], ended["notes"]
     assert not [n for n in ended["notes"] if n["kind"] == "declined"]
 
 

@@ -355,7 +355,16 @@ export interface FinishRecord {
    *  first" on, a member with the Review role) — absent when it did not
    *  apply. */
   review?: FinishReview;
+  /** v1.513.0 (second review S3): "folder" — the folder's own
+   *  `.ironjarvis/harness/finish.toml` turned the check off and the reply
+   *  changed files, so it was NOT checked. The record then claims nothing
+   *  else (lib/buildSessions fills the other fields with nothing). */
+  off?: "folder";
 }
+
+/** v1.513.0 (second review S3): the work line when the folder turned the
+ *  check off — the reply was not checked, said in plain words. */
+export const FINISH_OFF_WORDS = "Not checked: this folder's own settings turned the check off";
 
 /** v1.493.0: a finish record's `again` (see FinishRecord). `ended`: "done"
  *  everything checked out; "blocked" a point is left that the model says is
@@ -397,7 +406,11 @@ export function finishNotDone(f: FinishRecord): boolean {
 /** v1.401.0: how the team's review at the finish went (the daemon's
  *  harness/finish `saved_review`; decoded by lib/buildSessions). */
 export interface FinishReview {
-  state: "done" | "failed" | "not_run" | "stopped";
+  /** v1.513.0 (second review D7): "not_counted" — the reviewer's run
+   *  finished but its answer did not count (it ran at low trust, or its
+   *  report read like an instruction and was kept from the reply); `why`
+   *  says which. */
+  state: "done" | "failed" | "not_run" | "stopped" | "not_counted";
   member: string;
   model: string;
   verdict: "" | "approved" | "changes_needed";
@@ -415,6 +428,9 @@ export interface FinishReview {
 export function reviewWords(r: FinishReview): string {
   if (r.state === "failed") return "review failed";
   if (r.state === "stopped") return "review stopped";
+  // v1.513.0 (second review D7): nothing reads "reviewed by" unless a report
+  // reached the reply.
+  if (r.state === "not_counted") return "review not counted";
   if (r.state !== "done") return "review not run";
   // v1.403.0: a second review (after the workers' fixes) says so.
   const twice = r.rounds === 2;
@@ -432,6 +448,7 @@ export function reviewWords(r: FinishReview): string {
  *  1 scratch file removed", "Checked: tests failed, then fixed". Built only
  *  from the record (never a claim the record does not make). */
 export function finishWords(f: FinishRecord): string {
+  if (f.off === "folder") return FINISH_OFF_WORDS; // v1.513.0 (second review S3)
   const parts: string[] = [];
   if (f.tests === "passed") {
     parts.push(f.after === "failed" ? "tests passed, then failed" : "tests passed");
@@ -472,13 +489,19 @@ export function testsFailing(f: FinishRecord): boolean {
  *  FAILING (never fixed after), or (v1.493.0) when the check-again loop ended
  *  with the work not finished: the same theme token as a failed step. */
 export function finishWarn(f: FinishRecord): boolean {
-  return testsFailing(f) || finishNotDone(f);
+  // v1.513.0 (second review S3): a reply that changed files and was not
+  // checked, because the folder turned the check off, carries the mark too.
+  return f.off === "folder" || testsFailing(f) || finishNotDone(f);
 }
 
 /** The finish line's hover: the command it ran — or, when the tests did not
  *  run, the command it did NOT run and why (review: the hover said "Ran: X"
  *  over a command that never ran). */
 export function finishTitle(f: FinishRecord): string | undefined {
+  if (f.off === "folder") {
+    // v1.513.0 (second review S3): where the switch is.
+    return "This folder's own finish.toml file turns the check off, so Iron Jarvis did not check this reply's work.";
+  }
   const bits: string[] = [];
   const ran = f.tests === "passed" || f.tests === "failed";
   if (f.command) bits.push(`${ran ? "Ran" : "Not run"}: ${f.command}`);

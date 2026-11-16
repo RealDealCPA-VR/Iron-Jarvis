@@ -320,7 +320,10 @@ async def test_it_is_never_built_for_plan_mode_plain_chat_or_a_chat_session(tmp_
     assert await F.start(session_id="build:s1", harness=harness, **kw) is None
     harness.plan_mode = False
     harness.tree.finish = F.FinishConfig(enabled=False)
-    assert await F.start(session_id="build:s1", harness=harness, **kw) is None
+    # v1.513.0 (second review S3, moved on purpose): a folder that turned it
+    # off gets a check that only SAYS the reply was not checked.
+    off = await F.start(session_id="build:s1", harness=harness, **kw)
+    assert off is not None and off.off == F.OFF_FOLDER
 
 
 def test_the_harness_turns_fingerprint_names_a_folder_that_changed_the_switch(tmp_path):

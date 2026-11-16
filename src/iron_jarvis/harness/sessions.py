@@ -977,7 +977,9 @@ def set_compaction(engine: Any, thread_id: str, record: dict[str, Any], key: str
 def history(row: Any) -> list[dict[str, str]]:
     """What the next turn's model is shown of the conversation: the user's
     questions (steer notes included) and the replies, role + content only —
-    a reply that failed with nothing written is left out. v1.374.0: a turn
+    a reply with nothing written is left out, unless it failed or was cut off
+    (second review S5: then :func:`reply_end_note` stands in for it, and a
+    failed reply WITH words carries that note too). v1.374.0: a turn
     reads it through ``harness/compact.history_for_turn``, which leaves out
     the lines a standing summary covers."""
     return history_of(_messages(row))
@@ -1006,7 +1008,9 @@ def history_of(messages: list[dict[str, Any]], *, last_work: bool = False) -> li
     if last_work:
         for i in range(len(messages) - 1, -1, -1):
             m = messages[i]
-            if m.get("role") != "assistant" or not str(m.get("content") or "").strip():
+            # (a SHOWN reply: words, or — second review S5 — a failed reply
+            # whose stand-in keeps its place)
+            if m.get("role") != "assistant" or not (str(m.get("content") or "").strip() or reply_end_note(m)):
                 continue
             note = last_work_note(m.get("steps"))
             if note:
@@ -1032,12 +1036,86 @@ def history_of(messages: list[dict[str, Any]], *, last_work: bool = False) -> li
             # the model never learned a picture had been sent.
             # v1.373.0: a file picked with "@" alone counts the same way.
             content = sent_files_line(_listed(m.get("attachmentPaths")) + _listed(m.get("filePaths")))
-        if role not in ("user", "assistant") or not content.strip():
+        # Second review S5 (v1.513.0): how a reply ENDED (cut off, an error,
+        # the step limit, the session's cap, failing tests at the finish
+        # check), in Iron Jarvis's own fixed words — and a failed reply with
+        # no words keeps that line as its stand-in, so it never vanishes.
+        end = reply_end_note(m, said=newest_note if idx == newest else "") if role == "assistant" else ""
+        if role not in ("user", "assistant") or not (content.strip() or end):
             continue
         if idx == newest:
-            content += newest_note
+            content = content + newest_note if content.strip() else newest_note.lstrip()
+        if end:
+            content = content + "\n\n" + end if content.strip() else end
         out.append({"role": role, "content": content})
     return out
+
+
+#: Second review S5 (v1.513.0): how a reply ended, as the next turn's model
+#: and the summarizer read it — the daemon's record in the "last work" note's
+#: form (:data:`LAST_WORK_LEAD`), never the model's or a tool's words.
+REPLY_END_LEAD = "How that reply ended (recorded by Iron Jarvis, not shown to the user): "
+REPLY_CUT_OFF = "it was cut off before it finished"
+REPLY_ERROR = "it ended on an error"
+REPLY_ACCOUNT_LIMIT = "it stopped at an account's limit"
+REPLY_STEP_LIMIT = "it stopped at its step limit"
+REPLY_TIME_CAP = "it stopped at this session's time limit"
+REPLY_COST_CAP = "it stopped at this session's cost limit"
+REPLY_TESTS_FAILED = "Iron Jarvis's own check at its end found failing tests"
+REPLY_NO_WORDS = "it wrote no answer"
+#: What the "last work" note says of a failed finish-check run (the same fact
+#: as :data:`REPLY_TESTS_FAILED`, never said twice).
+_CHECK_FAILED_SAID = "(failed) (Iron Jarvis's own check)"
+
+
+def reply_end_note(m: dict[str, Any], *, said: str = "") -> str:
+    """``"[How that reply ended …: it ended on an error.]"`` for a reply line
+    that carries one of its failure marks (``interrupted`` / ``error``,
+    ``stepLimit``, ``capMet``, a finish record with ``tests == "failed"``);
+    "" for a healthy reply. Fixed words only — never the error's text, a file
+    name or anything the model or a tool wrote. ``said``: the "last work" note
+    riding the same reply (its failed finish-check run is not said again).
+    Never raises."""
+    try:
+        if m.get("role") != "assistant":
+            return ""
+        parts: list[str] = []
+        error = str(m.get("error") or "").strip()
+        if isinstance(m.get("accountLimit"), dict) and m["accountLimit"]:
+            parts.append(REPLY_ACCOUNT_LIMIT)
+        elif error and error != _interrupted_detail():
+            parts.append(REPLY_ERROR)
+        elif m.get("interrupted") is True or error:
+            parts.append(REPLY_CUT_OFF)
+        if isinstance(m.get("stepLimit"), dict):
+            parts.append(REPLY_STEP_LIMIT)
+        cap = m.get("capMet")
+        if isinstance(cap, dict):
+            parts.append(REPLY_COST_CAP if cap.get("kind") == "cost" else REPLY_TIME_CAP)
+        finish = m.get("finish")
+        if isinstance(finish, dict) and finish.get("tests") == "failed":
+            # The note says "ran `…` (failed) (Iron Jarvis's own check)" for
+            # the finish check's own failed run — the same fact.
+            steps = m.get("steps") if isinstance(m.get("steps"), list) else []
+            noted = _CHECK_FAILED_SAID in said and any(
+                isinstance(s, dict) and s.get("check") == "finish" and s.get("ok") is False for s in steps
+            )
+            if not noted:
+                parts.append(REPLY_TESTS_FAILED)
+        if not parts:
+            return ""
+        if not str(m.get("content") or "").strip():
+            parts.append(REPLY_NO_WORDS)
+        return f"[{REPLY_END_LEAD}{'; '.join(parts)}.]"
+    except Exception:  # noqa: BLE001 — a note never breaks a turn's history
+        log.debug("the reply-end note failed", exc_info=True)
+        return ""
+
+
+def _interrupted_detail() -> str:
+    from ..daemon.durable_turns import INTERRUPTED_DETAIL
+
+    return str(INTERRUPTED_DETAIL)
 
 
 #: v1.420.0 (C3.2): the most a "what I did in that reply" note may hold.

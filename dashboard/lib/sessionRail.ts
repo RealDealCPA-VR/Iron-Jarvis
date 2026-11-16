@@ -395,6 +395,9 @@ export interface SessionInstructions {
   plan: boolean;
   /** The daemon could not put them together: its sentence, or "". */
   error: string;
+  /** v1.513.0 (second review S3): "This folder turned the finish check
+   *  off." when the folder's own finish.toml did, else "". */
+  finishOff: string;
 }
 
 /** The longest text the view keeps (the daemon cuts at 80,000). */
@@ -412,6 +415,7 @@ export function decodeSessionInstructions(raw: unknown): SessionInstructions {
     ruleFiles: strings(r.rule_files),
     plan: r.mode === "plan",
     error: typeof r.error === "string" ? r.error.trim().slice(0, NOTE_CHARS) : "",
+    finishOff: typeof r.finish_off === "string" ? r.finish_off.trim().slice(0, NOTE_CHARS) : "",
   };
 }
 
