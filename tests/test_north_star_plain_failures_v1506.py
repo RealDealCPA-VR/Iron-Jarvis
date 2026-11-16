@@ -210,9 +210,9 @@ ANSWER_KEYS = {"detail", "error", "reason", "note", "words", "why", "message", "
 #: Sites whose interpolated text IS worded for a person, each with the reason.
 #: An entry that no longer matches a site fails (a fixed line takes its entry).
 ALLOW: list[tuple[str, str, str]] = [
-    ("fleet.py", "_err(exc)",
-     "Model servers is a network diagnostic page: its probe rows deliberately show the connection's own "
-     "error (\"Verbatim, bounded error text. Never a friendly lie.\"); left for the lead to decide (plan 8.1)"),
+    # v1.516.0 (second review F13, decision E8): the Model servers page's
+    # `_err(exc)` entry is gone; its errors are plain_failure sentences and
+    # the program's words ride `error_detail`, folded under Details.
     ("settings.py", "The disk is full",
      "`full` is a yes/no read off the exception (ENOSPC), never its text; the raw text is logged above"),
 ]
@@ -225,6 +225,7 @@ WORDING_HELPERS = {
     "plain_reason",  # providers/failure_words
     "_plain_validation_words",  # routes/agents: the extension import's validation words
     "_unavailable_sentence",  # terminals/pane_accounts: the account manager's words
+    "_read_failed_words",  # routes/fleet (v1.516.0): plain_failure for the polled read, logged once per five minutes
 }
 
 _BUILTIN_NAMES = set(dir(builtins))

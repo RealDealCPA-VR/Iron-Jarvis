@@ -16,13 +16,30 @@ heavy folders, a file cap, a deadline), a per-file size cap, a hard ceiling on
 output entries, and every limit hit is SAID in the output — a silently short
 answer reads as complete. BLOCKING throughout: the tools call it from a
 worker thread.
+
+ONE PATTERN CANNOT FREEZE THE APP (v1.516.0, second review S4). Python's
+``re`` cannot be interrupted, and it HOLDS THE INTERPRETER LOCK while it
+matches: one pattern that backtracks without end (``(a+)+$`` against a long
+run of ``a`` then ``b``) stopped the whole daemon, event loop included, from a
+worker thread too (measured: the loop stood still for the whole match). The
+time limit was read only between files, so it never fired. A pattern that can
+backtrack (:func:`plain_pattern` says no) is therefore matched in its OWN
+short-lived program (``search-worker``: this module's :func:`main`, started
+through ``core/procs`` like the OCR and Excel children), which is killed at
+the limit (plus :data:`SEARCH_START_S` for its start). What it found before
+then is kept, and the answer names the file it was stuck on and says why. A
+plain pattern (no repeat, no group, short) cannot backtrack and still
+searches in this process, as before.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import re
+import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +53,28 @@ GLOB_MAX_FILES = 20_000
 GREP_MAX_FILE_BYTES = 2_000_000
 #: Search time budget.
 SEARCH_DEADLINE_S = 10.0
+#: v1.516.0 (S4): how long the search program may take to START, on top of
+#: the time budget, before it is killed (a frozen start is ~0.3 s, a cold
+#: start from source on a busy PC a few seconds).
+SEARCH_START_S = 5.0
+#: The hidden subcommand of the frozen exe that runs :func:`main`
+#: (``packaging/ironjarvis_entry._fast_path``, ``daemon/cli.search_worker``).
+WORKER_SUBCOMMAND = "search-worker"
+#: A pattern longer than this is never judged plain.
+PLAIN_PATTERN_MAX = 200
+#: Lead's review of S4: the search program costs about half a second per
+#: search, and most patterns a model writes carry a repeat (``\w+``, ``.*``).
+#: A pattern with NO group can only cost a polynomial of the line's length,
+#: so it is matched in this process, line by line, as long as no line could
+#: cost more than about this many steps (:func:`in_process_line_limit`); the
+#: first longer line sends the whole search to the search program instead.
+IN_PROCESS_STEPS = 50_000_000
+#: With more repeats than this a pattern always goes to the search program.
+IN_PROCESS_MAX_REPEATS = 2
+#: In this process the time limit is read every this many lines of a file too.
+_DEADLINE_EVERY_LINES = 64
+
+log = logging.getLogger("iron_jarvis.harness.search")
 #: Default and ceiling of grep's ``head_limit`` (0 means "the ceiling").
 GREP_DEFAULT_HEAD_LIMIT = 250
 GREP_HARD_LIMIT = 5_000
@@ -88,6 +127,11 @@ FILE_TYPES: dict[str, tuple[str, ...]] = {
 
 class SearchError(ValueError):
     """A search that cannot run as asked; the message is the sentence."""
+
+
+class LineTooLong(Exception):
+    """A line longer than this process may match with the search's pattern
+    (:func:`in_process_line_limit`): the search goes to the search program."""
 
 
 @dataclass
@@ -156,38 +200,110 @@ def _cut_line(text: str) -> str:
     return text
 
 
-def grep(base: Path, root: Path, opts: GrepOptions) -> SearchReport:
-    """Search ``base`` (a file or folder under ``root``) and return the
-    report. BLOCKING."""
-    from ..tools.builtins import _walk_files
+#: Characters that make a pattern able to backtrack: a repeat (``*``, ``+``,
+#: ``?``, ``{n,m}``) or a group (which a backreference or a look-around needs).
+_NOT_PLAIN_RX = re.compile(r"[*+?{(]")
 
+
+def plain_pattern(pattern: str) -> bool:
+    """Can ``pattern`` be matched in this process without any risk of running
+    for ever (v1.516.0, S4)? True for a short pattern with no repeat and no
+    group — words, classes, anchors, ``|`` — read after its escaped
+    characters are set aside (``\\(`` is a plain bracket). Such a pattern
+    tries at most its own length at each place in a line. Anything else is
+    matched by the search program."""
+    text = str(pattern or "")
+    if len(text) > PLAIN_PATTERN_MAX:
+        return False
+    return not _NOT_PLAIN_RX.search(re.sub(r"\\.", "", text, flags=re.S))
+
+
+def in_process_line_limit(pattern: str, *, multiline: bool = False) -> int:
+    """How long a line this process may match with ``pattern`` (lead's review
+    of S4): ``-1`` any length (a plain pattern), ``0`` none (the search
+    program matches it), else the longest line allowed.
+
+    A pattern with no group cannot nest a repeat, so matching one line of
+    ``n`` characters costs at most about ``n ** (repeats + 1)`` steps, doubled
+    for each ``?``. The limit is the ``n`` that keeps that under
+    :data:`IN_PROCESS_STEPS` (about 7,000 characters with one repeat, 368
+    with two), which bounds how long ONE line can hold the
+    interpreter lock; the time limit is read between lines. A group, a
+    multiline search, or more than :data:`IN_PROCESS_MAX_REPEATS` repeats is
+    always the search program's."""
+    if plain_pattern(pattern):
+        return -1
+    text = str(pattern or "")
+    if multiline or len(text) > PLAIN_PATTERN_MAX:
+        return 0
+    bare = re.sub(r"\\.", "", text, flags=re.S)
+    if "(" in bare:
+        return 0
+    repeats = len(re.findall(r"[*+{]", bare))
+    optional = bare.count("?")
+    if repeats > IN_PROCESS_MAX_REPEATS or optional > 8:
+        return 0
+    return max(1, int((IN_PROCESS_STEPS / (2 ** optional)) ** (1.0 / (repeats + 1))))
+
+
+def _secs(value: float) -> str:
+    return f"{value:.0f}" if value >= 1 else f"{value:.1f}"
+
+
+def stuck_words(rel: str, seconds: float) -> str:
+    """Why a search was cut short by its pattern (v1.516.0, S4): the words
+    the search's note carries (``[search truncated — <these>. …]``)."""
+    where = f"on {rel}" if rel else "when it started"
+    return (
+        f"the pattern was still running {where} after {_secs(seconds)}s, so the search was stopped "
+        "there and nothing after it was searched (a pattern with a repeat inside a repeat, like "
+        "(a+)+, can run for a very long time on some lines; a simpler pattern avoids that)"
+    )
+
+
+def _compile(opts: GrepOptions) -> "re.Pattern[str]":
     flags = re.IGNORECASE if opts.case_insensitive else 0
     if opts.multiline:
         flags |= re.MULTILINE | re.DOTALL
     try:
-        rx = re.compile(opts.pattern, flags)
+        return re.compile(opts.pattern, flags)
     except re.error as exc:
         raise SearchError(f"bad regex: {exc}") from None
-    suffixes = _type_suffixes(opts.file_type)
-    if opts.glob:
-        try:
-            normalize_pattern(opts.glob)
-        except GlobError as exc:
-            raise SearchError(f"bad glob: {exc}") from None
 
-    report = SearchReport()
+
+def _scan(
+    base: Path,
+    root: Path,
+    opts: GrepOptions,
+    limits: "dict[str, float]",
+    on_file: "Any" = None,
+    on_found: "Any" = None,
+    line_limit: "int | None" = None,
+) -> "tuple[str, int, int]":
+    """Walk, read and match. ``line_limit`` (in this process, for a pattern
+    with a repeat): a longer line raises :class:`LineTooLong`, and the time
+    limit is read every :data:`_DEADLINE_EVERY_LINES` lines too (a file cut
+    that way is not reported as searched). ``on_file(rel, unreadable, oversize)`` is
+    called before a file is matched (with the skips so far), ``on_found``
+    with each matched file: ``(rel, mtime, matched line numbers in order,
+    total matches, the lines content mode shows as (number, is a match, the
+    line already cut))``. Returns ``(walk_truncated, unreadable, oversize)``.
+    BLOCKING."""
+    from ..tools.builtins import _walk_files
+
+    rx = _compile(opts)
+    suffixes = _type_suffixes(opts.file_type)
+    deadline_s = float(limits["deadline_s"])
+    max_bytes = int(limits["max_file_bytes"])
+    unreadable = oversize = 0
     started = time.monotonic()
     if base.is_file():
-        files, report.walk_truncated = [base], ""
+        files, walk_truncated = [base], ""
     else:
-        files, report.walk_truncated = _walk_files(
-            base, limit=GREP_MAX_FILES, deadline_s=SEARCH_DEADLINE_S
-        )
-    #: (rel, mtime, matched line numbers ordered, total matches, lines)
-    found: list[tuple[str, float, list[int], int, list[str]]] = []
+        files, walk_truncated = _walk_files(base, limit=int(limits["max_files"]), deadline_s=deadline_s)
     for fp in sorted(files, key=lambda p: _rel(p, root)):
-        if time.monotonic() - started >= SEARCH_DEADLINE_S:
-            report.walk_truncated = report.walk_truncated or f"stopped after {SEARCH_DEADLINE_S:.0f}s"
+        if time.monotonic() - started >= deadline_s:
+            walk_truncated = walk_truncated or f"stopped after {_secs(deadline_s)}s"
             break
         rel = _rel(fp, root)
         if not rel:
@@ -198,20 +314,22 @@ def grep(base: Path, root: Path, opts: GrepOptions) -> SearchReport:
             continue
         try:
             stat = fp.stat()
-            if stat.st_size > GREP_MAX_FILE_BYTES:
-                report.oversize += 1
+            if stat.st_size > max_bytes:
+                oversize += 1
                 continue
             raw = fp.read_bytes()
         except (OSError, ValueError):
-            report.unreadable += 1
+            unreadable += 1
             continue
         try:
             text = _decode(raw)
         except Exception:  # noqa: BLE001 — a REPORTED skip, never a silent miss
-            report.unreadable += 1
+            unreadable += 1
             continue
         if text is None:
             continue  # binary
+        if on_file is not None:
+            on_file(rel, unreadable, oversize)
         text = text.replace("\r\n", "\n")
         lines = text.split("\n")
         if lines and lines[-1] == "":
@@ -230,13 +348,141 @@ def grep(base: Path, root: Path, opts: GrepOptions) -> SearchReport:
                         hit_lines.append(no)
             hit_lines.sort()
         else:
+            cut = False
             for no, line in enumerate(lines, 1):
+                if line_limit is not None:
+                    if len(line) > line_limit:
+                        raise LineTooLong(rel)
+                    if not no % _DEADLINE_EVERY_LINES and time.monotonic() - started >= deadline_s:
+                        cut = True
+                        break
                 if rx.search(line):
                     hit_lines.append(no)
+            if cut:
+                walk_truncated = walk_truncated or f"stopped after {_secs(deadline_s)}s"
+                break
             count = len(hit_lines)
         if not hit_lines:
             continue
-        found.append((rel, stat.st_mtime, hit_lines, count, lines))
+        shown: list[tuple[int, bool, str]] = []
+        if opts.output_mode == "content":
+            wanted: dict[int, bool] = {}
+            for no in hit_lines:
+                for ctx_no in range(max(1, no - opts.before), min(len(lines), no + opts.after) + 1):
+                    wanted.setdefault(ctx_no, False)
+                wanted[no] = True
+            for no in sorted(wanted):
+                body = _cut_line(lines[no - 1]) if no - 1 < len(lines) else ""
+                shown.append((no, wanted[no], body))
+        if on_found is not None:
+            on_found((rel, stat.st_mtime, hit_lines, count, shown))
+    return walk_truncated, unreadable, oversize
+
+
+def _limits(deadline_s: "float | None") -> "dict[str, float]":
+    """The limits, read NOW (a test or a caller may have changed them)."""
+    return {
+        "deadline_s": SEARCH_DEADLINE_S if deadline_s is None else float(deadline_s),
+        "max_files": GREP_MAX_FILES,
+        "max_file_bytes": GREP_MAX_FILE_BYTES,
+    }
+
+
+def worker_argv() -> "list[str]":
+    """How to start the search program: the frozen exe's hidden subcommand
+    (served by ``packaging/ironjarvis_entry._fast_path``), else this
+    interpreter."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, WORKER_SUBCOMMAND]
+    return [sys.executable, "-m", "iron_jarvis.harness.search"]
+
+
+#: What still works when the search program does not (lead's review).
+SIMPLER_WORDS = (
+    "A pattern with no brackets group and at most a few repeats is searched without that program."
+)
+
+
+def _in_program(request: dict[str, Any], deadline_s: float) -> "tuple[list[dict[str, Any]], bool]":
+    """Run ``request`` in the search program, killed (its whole tree) at
+    ``deadline_s`` + :data:`SEARCH_START_S`. Returns ``(records it wrote,
+    timed out)``. BLOCKING — never on the event loop. Raises
+    :class:`SearchError` in words when the program could not run at all."""
+    from ..core import procs
+
+    try:
+        res = procs.run(
+            worker_argv(),
+            timeout=deadline_s + SEARCH_START_S,
+            input=json.dumps(request).encode("ascii"),
+        )
+    except OSError as exc:
+        log.warning("search: the search program did not start: %s", exc)
+        raise SearchError("the search could not run: its search program did not start. " + SIMPLER_WORDS) from None
+    records: list[dict[str, Any]] = []
+    for raw in (res.stdout or b"").split(b"\n"):
+        if not raw.strip():
+            continue
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue  # the last line, cut by the kill
+        if isinstance(rec, dict):
+            records.append(rec)
+    if not res.timed_out and not any("end" in r for r in records):
+        log.warning("search: the search program ended without an answer (exit %s): %s",
+                    res.returncode, procs.text(res.stderr)[-600:])
+        raise SearchError(
+            "the search could not run: its search program stopped without an answer. " + SIMPLER_WORDS)
+    return records, bool(res.timed_out)
+
+
+def _stuck_on(records: list[dict[str, Any]]) -> str:
+    at = [r["at"] for r in records if "at" in r]
+    return str(at[-1]) if at else ""
+
+
+def grep(base: Path, root: Path, opts: GrepOptions, *, deadline_s: "float | None" = None) -> SearchReport:
+    """Search ``base`` (a file or folder under ``root``) and return the
+    report. BLOCKING, and bounded in time INSIDE a file too (v1.516.0, S4):
+    a pattern that can backtrack is matched by the search program, killed at
+    the limit; what it found before then is kept and the report says where
+    and why it stopped."""
+    _compile(opts)  # a bad pattern is said here, before any program starts
+    _type_suffixes(opts.file_type)
+    if opts.glob:
+        try:
+            normalize_pattern(opts.glob)
+        except GlobError as exc:
+            raise SearchError(f"bad glob: {exc}") from None
+
+    report = SearchReport()
+    limits = _limits(deadline_s)
+    found: list[Any] = []
+    line_limit = in_process_line_limit(opts.pattern, multiline=opts.multiline)
+    here = False
+    if line_limit != 0:
+        try:
+            report.walk_truncated, report.unreadable, report.oversize = _scan(
+                base, root, opts, limits, on_found=found.append,
+                line_limit=None if line_limit < 0 else line_limit,
+            )
+            here = True
+        except LineTooLong:
+            found.clear()  # a line too long to match here: the search program does it all
+    if not here:
+        request = {"kind": "grep", "base": str(base), "root": str(root), "opts": asdict(opts),
+                   "limits": limits}
+        records, _timed_out = _in_program(request, limits["deadline_s"])
+        found = [tuple(r["found"]) for r in records if "found" in r]
+        end = next((r["end"] for r in records if "end" in r), None)
+        if end is not None:
+            report.walk_truncated, report.unreadable, report.oversize = str(end[0]), int(end[1]), int(end[2])
+        else:
+            report.walk_truncated = stuck_words(_stuck_on(records), limits["deadline_s"])
+            skips = [r["skipped"] for r in records if "skipped" in r]
+            if skips:
+                report.unreadable, report.oversize = int(skips[-1][0]), int(skips[-1][1])
 
     report.files_matched = len(found)
     report.matches = sum(f[3] for f in found)
@@ -245,24 +491,18 @@ def grep(base: Path, root: Path, opts: GrepOptions) -> SearchReport:
     entries: list[tuple[str, bool]] = []
     if opts.output_mode == "files_with_matches":
         # Claude Code's order: most recently modified first.
-        for rel, _mt, _h, _c, _l in sorted(found, key=lambda f: (-f[1], f[0])):
+        for rel, _mt, _h, _c, _s in sorted(found, key=lambda f: (-f[1], f[0])):
             entries.append((rel, False))
     elif opts.output_mode == "count":
-        for rel, _mt, _h, count, _l in found:
+        for rel, _mt, _h, count, _s in found:
             entries.append((f"{rel}:{count}", False))
     else:
         grouped = bool(opts.before or opts.after)
-        for rel, _mt, hits, _c, lines in found:
-            wanted: dict[int, bool] = {}
-            for no in hits:
-                for ctx_no in range(max(1, no - opts.before), min(len(lines), no + opts.after) + 1):
-                    wanted.setdefault(ctx_no, False)
-                wanted[no] = True
+        for rel, _mt, _h, _c, shown in found:
             prev: int | None = None
-            for no in sorted(wanted):
+            for no, is_hit, body in shown:
                 new_group = grouped and (prev is None or no != prev + 1)
-                sep = ":" if wanted[no] else "-"
-                body = _cut_line(lines[no - 1]) if no - 1 < len(lines) else ""
+                sep = ":" if is_hit else "-"
                 text = f"{rel}{sep}{no}{sep}{body}" if opts.line_numbers else f"{rel}{sep}{body}"
                 entries.append((text, new_group))
                 prev = no
@@ -432,7 +672,102 @@ def render_glob(report: GlobReport) -> str:
     return out
 
 
+# --------------------------------------------------------------------------- #
+# the search program (v1.516.0, S4)
+# --------------------------------------------------------------------------- #
+
+
+def plain_grep_bounded(base: Path, root: Path, pattern: str) -> "tuple[list[str], str, int, int]":
+    """``grep``'s original form (pattern and path only,
+    ``tools/builtins._plain_grep``) for a pattern that can backtrack: run in
+    the search program, killed at the original form's limit. The same
+    ``(hits, truncated, unreadable, oversize)`` as the original; when it was
+    cut short, the matches before then and the words of why. BLOCKING."""
+    from ..tools import builtins as B
+
+    line_limit = in_process_line_limit(pattern)
+    if line_limit != 0:
+        try:
+            return B._plain_grep(
+                base, root, re.compile(pattern), line_limit=None if line_limit < 0 else line_limit,
+            )
+        except LineTooLong:
+            pass  # a line too long to match here: the search program does it all
+    limits = {"deadline_s": float(B._WALK_DEADLINE_S), "max_files": B._MAX_GREP_FILES,
+              "max_file_bytes": B._MAX_GREP_FILE_BYTES, "max_hits": B._MAX_GREP_HITS}
+    request = {"kind": "plain", "base": str(base), "root": str(root), "pattern": pattern, "limits": limits}
+    records, _timed_out = _in_program(request, limits["deadline_s"])
+    end = next((r["end"] for r in records if "end" in r), None)
+    if end is not None:
+        return [str(h) for h in end[0]], str(end[1]), int(end[2]), int(end[3])
+    hits = [str(h) for r in records if "hits" in r for h in r["hits"]]
+    skips = [r["skipped"] for r in records if "skipped" in r]
+    unreadable, oversize = (int(skips[-1][0]), int(skips[-1][1])) if skips else (0, 0)
+    return hits, stuck_words(_stuck_on(records), limits["deadline_s"]), unreadable, oversize
+
+
+def _serve(request: dict[str, Any], emit: Any) -> None:
+    """Answer one request, writing records with ``emit`` as it goes: ``at``
+    (the file about to be matched, with the skips so far), ``found`` /
+    ``hits`` (what matched) and, when it finished, ``end``."""
+    base, root, limits = Path(request["base"]), Path(request["root"]), request["limits"]
+    if request.get("kind") == "plain":
+        from ..tools.builtins import _plain_grep
+
+        hits: list[str] = []
+        sent = 0
+
+        def on_plain_file(rel: str, unreadable: int, oversize: int) -> None:
+            nonlocal sent
+            if len(hits) > sent:
+                emit({"hits": hits[sent:]})
+                sent = len(hits)
+            emit({"at": rel, "skipped": [unreadable, oversize]})
+
+        out = _plain_grep(
+            base, root, re.compile(request["pattern"]), deadline_s=float(limits["deadline_s"]),
+            max_files=int(limits["max_files"]), max_bytes=int(limits["max_file_bytes"]),
+            max_hits=int(limits["max_hits"]), hits=hits, on_file=on_plain_file,
+        )
+        emit({"end": list(out)})
+        return
+    opts = GrepOptions(**request["opts"])
+
+    def on_file(rel: str, unreadable: int, oversize: int) -> None:
+        emit({"at": rel, "skipped": [unreadable, oversize]})
+
+    end = _scan(base, root, opts, limits, on_file=on_file, on_found=lambda f: emit({"found": list(f)}))
+    emit({"end": list(end)})
+
+
+def main() -> int:
+    """The search program (``search-worker``): one JSON request on stdin, one
+    JSON record per line on stdout, flushed as it goes (what it wrote before
+    it was killed is still read). Exit 0 when it answered, 2 on a bad
+    request."""
+    out = sys.stdout.buffer
+
+    def emit(record: dict[str, Any]) -> None:
+        out.write(json.dumps(record, ensure_ascii=True).encode("ascii") + b"\n")
+        out.flush()
+
+    try:
+        request = json.loads(sys.stdin.buffer.read().decode("ascii") or "null")
+        if not isinstance(request, dict):
+            raise ValueError("not a request")
+        _serve(request, emit)
+    except (ValueError, KeyError, TypeError, re.error, SearchError) as exc:
+        sys.stderr.write(f"search-worker: {exc}\n")
+        return 2
+    return 0
+
+
 __all__ = [
     "GrepOptions", "SearchError", "SearchReport", "GlobReport", "grep", "render_grep",
-    "parse_grep_options", "wants_new_grep", "glob_files", "render_glob",
+    "parse_grep_options", "wants_new_grep", "glob_files", "render_glob", "plain_grep_bounded",
+    "plain_pattern", "in_process_line_limit", "LineTooLong", "stuck_words", "main",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

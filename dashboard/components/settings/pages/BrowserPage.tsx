@@ -54,7 +54,7 @@ import { PageGrid } from "@/components/PageGrid";
 // "Allow once" / "Deny" like every other ask (an approval here lets the
 // agent's next identical step run ONCE, so "once" is literally true).
 import { ALLOW_ONCE, DENY, answeredLine } from "@/lib/approvalWords";
-import { queueRunWords, targetWords } from "@/lib/browserQueueWords";
+import { queueRunWords, targetWords, typedValueWords } from "@/lib/browserQueueWords";
 
 /* -------------------------------------------------------------------------- */
 /*  Local contracts (daemon additions not yet in lib/types)                    */
@@ -191,7 +191,9 @@ function prettyAction(actionJson: string): { kind: string; detail: string } {
     if (sel.name) parts.push(`"${String(sel.name)}"`);
     if (sel.text) parts.push(`text="${String(sel.text)}"`);
     if (sel.css) parts.push(`css=${String(sel.css)}`);
-    if (a.value) parts.push(`value="${String(a.value)}"`);
+    // v1.516.0: typed text is stored as a stand-in; it reads "typed text: hidden".
+    const typed = typedValueWords(a.value);
+    if (typed) parts.push(typed);
     return { kind, detail: parts.join("  ") || "—" };
   } catch {
     return { kind: "action", detail: actionJson };
@@ -356,8 +358,8 @@ function describeTraceAction(a: unknown): string {
     if (s.text) parts.push(`text="${String(s.text)}"`);
     if (s.css) parts.push(`css=${String(s.css)}`);
   }
-  if (action.value !== undefined && action.value !== null && action.value !== "")
-    parts.push(`value="${String(action.value)}"`);
+  const typed = typedValueWords(action.value);
+  if (typed) parts.push(typed);
   return parts.join(" ");
 }
 

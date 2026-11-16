@@ -545,7 +545,7 @@ def test_an_office_turn_gets_twelve_rounds_and_ends_in_chat(tmp_path, monkeypatc
     assert len(nudges) == 1 and nudges[0]["last"] == chat_turn.OUT_OF_ROUNDS_INSTRUCTION
     assert body["escalate"] is False, "an office turn must not hand its work away"
     assert body["reply"].startswith(_ANSWER)
-    assert "stopped after 23 tool rounds" in body["reply"]
+    assert "I stopped after 23 model calls" in body["reply"]
 
 
 def test_the_stream_lane_gives_an_office_turn_the_same_budget(tmp_path, monkeypatch):
@@ -585,7 +585,7 @@ def test_the_stream_lane_gives_an_office_turn_the_same_budget(tmp_path, monkeypa
     assert nudges == [chat_turn.OUT_OF_ROUNDS_INSTRUCTION]
     assert done["escalate"] is False
     assert done["reply"].startswith(_ANSWER)
-    assert "stopped after 23 tool rounds" in done["reply"]
+    assert "I stopped after 23 model calls" in done["reply"]
 
 
 # --------------------------------------------------------------------------- #

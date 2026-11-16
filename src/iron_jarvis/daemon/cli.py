@@ -144,6 +144,23 @@ def excel_worker() -> None:
     excel_main()
 
 
+@app.command("search-worker", hidden=True)
+def search_worker() -> None:
+    """Answer ONE search request on stdin/stdout (v1.516.0, internal).
+
+    ``harness/search`` starts this as a short-lived child for a pattern that
+    can backtrack and kills it at the search's time limit: Python's ``re``
+    cannot be interrupted and holds the interpreter lock, so in the daemon one
+    such pattern froze everything. The frozen exe serves it from
+    ``packaging/ironjarvis_entry._fast_path`` without importing this CLI;
+    keep the two identical (same module, same ``main()``)."""
+    from ..harness.search import main as search_main
+
+    code = search_main()
+    if code:
+        raise typer.Exit(code)
+
+
 @app.command("repl-worker", hidden=True)
 def repl_worker() -> None:
     """Run the session-namespace worker on stdin/stdout (v1.159.0, internal).

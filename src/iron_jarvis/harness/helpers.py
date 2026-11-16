@@ -152,6 +152,9 @@ MAX_SAVED_HELPERS = 12
 
 #: The sentence a helper call answers when the user stopped the turn.
 STOPPED_RESULT = "Stopped by the user before the helper finished."
+#: v1.516.0 (D10): the row's words when the call broke on something with no
+#: sentence of its own (the raw text is logged, never drawn).
+HELPER_CRASHED = "The helper stopped on an internal error."
 #: The states a helper row can be in.
 STATES = ("starting", "queued", "running", "waiting", "done", "failed", "stopped")
 FINAL_STATES = frozenset({"done", "failed", "stopped"})
@@ -1232,8 +1235,12 @@ async def invoke_helper(parent: "HelperParent | None", call_id: str, name: str, 
             result, stopped = await until_stopped(_bounded(invoke(), deadline_s), handle)
         except Exception as exc:  # noqa: BLE001 — said on the row, then re-raised
             if call is not None:
+                from ..core.failures import plain_failure
+
                 call.close()
-                call.finish(None, crash=f"{type(exc).__name__}: {exc}")
+                # v1.516.0 (D10): the row says it in plain words (an exception's
+                # name never); the raw text goes to the log.
+                call.finish(None, crash=plain_failure(HELPER_CRASHED, exc))
             raise
         if call is not None:
             # Every step frame still queued goes out BEFORE the last frame.

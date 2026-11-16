@@ -194,9 +194,14 @@ class IronProxyClient:
                     self._on_unreachable()
                 except Exception:  # noqa: BLE001 — a hook never masks the error
                     pass
+            # Second review A13: no exception class in the sentence; the
+            # class goes to the log (the URL at most, never the token).
+            log.debug("iron-proxy call %s %s failed: %s", method, path, type(exc).__name__)
+            late = isinstance(exc, httpx.TimeoutException)
             raise IronProxyError(
                 "UNREACHABLE",
-                f"Iron-Proxy did not answer at {self.url} ({type(exc).__name__}).",
+                f"Iron-Proxy did not answer at {self.url}"
+                + (" in time." if late else "."),
             ) from None
         if resp.status_code >= 400:
             err = _error_from_response(resp)

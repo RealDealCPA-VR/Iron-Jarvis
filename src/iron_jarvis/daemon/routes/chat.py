@@ -3160,6 +3160,13 @@ def register(app: FastAPI, d) -> None:
             )
 
         out = await _C.compact_messages(pairs, complete=complete, trigger="manual")
+        # v1.516.0 (second review L3): the Compact button's summary is a paid
+        # call of this chat too — on its usage row, kept or not (lock-step
+        # with the automatic one in `_apply_compaction`).
+        await _chat_turn.bill_summary(
+            d, complete, out, thread_id=str(body.thread_id or ""),
+            provider=provider, model=model,
+        )
         if not out.ok:
             raise HTTPException(
                 status_code=502,
@@ -6360,8 +6367,7 @@ async def chat_stream(
                     # model's own progress report — no engine note under it.
                     # MIRROR NOTE (lock-step): chat_turn.
                     stopped_note = "" if _harness is not None else (
-                        f"stopped after {_round} tool rounds; "
-                        f"{len(calls)} tool call(s) not executed"
+                        _chat_turn.rounds_stopped_note(_round, len(calls))
                     )
                     if _office:
                         # OFFICE WORK STAYS IN CHAT (v1.247.0) — lock-step
@@ -7571,7 +7577,9 @@ async def chat_stream(
                             )
                         return result, ""
                     except Exception as exc:  # noqa: BLE001
-                        return None, f"{type(exc).__name__}: {exc}"
+                        # v1.516.0 (L8): plain words on the step, the raw
+                        # text to the log (lock-step: chat_turn).
+                        return None, _chat_turn.step_crash_words(exc)
 
                 def _registry_invoke(tc, _p, _low_kw, _deny_reason, _deny_label):
                     """The call through the registry (an awaitable) — its own
@@ -8295,8 +8303,11 @@ async def chat_stream(
                 try:
                     async with contextlib.aclosing(_frames_until_stop(_bounded_frames(
                         d.platform.router,
-                        # The rewrite never had a bound; it keeps none.
-                        timeout_s=None,
+                        # v1.516.0 (second review L9): bounded as a WHOLE,
+                        # read at CALL time (lock-step: chat_turn's
+                        # `_enforce_language`). A cut is a failed rewrite: the
+                        # original is kept and `done.reply` carries it.
+                        timeout_s=_chat_turn._LANGUAGE_REWRITE_TIMEOUT_S,
                         provider=provider_choice or None,
                         model=model_choice or None,
                         system=_send_system,

@@ -11,7 +11,8 @@ so ``/fleet/usage`` runs against the real Observability rollup and real prices.
 The invariants worth breaking a build over:
 
 * ``GET /fleet`` never raises — the dashboard polls it, so a fleet fault
-  degrades to an empty list plus the verbatim error.
+  degrades to an empty list plus one plain sentence (the program's own
+  words under ``error_detail``, v1.516.0).
 * an unreachable node's tool-use capability is ``null``, never ``False``.
 * the savings estimate always names the baseline it was priced against.
 """
@@ -218,8 +219,10 @@ class _Sampler:
         rows = list(self._series.get(node_id, []))
         return rows[-limit:] if limit else rows
 
-    def sample_once(self) -> None:
+    def sample_once(self, *, force: bool = False) -> None:
+        # v1.516.0 (second review F8): the Refresh route forces the pass.
         self.sampled += 1
+        self.forced = force
 
     def status(self) -> dict:
         return {"active": False, "interval": 30.0, "lease_expires_in": 0.0}
@@ -381,19 +384,25 @@ def test_fleet_overview_empty_and_touches_without_probing(tmp_path, monkeypatch)
 
 
 def test_fleet_overview_survives_a_broken_sampler(tmp_path, monkeypatch):
-    """A fleet fault must not break dashboard polling — 200 with the verbatim
-    error beats a 500 that blanks the page."""
+    """A fleet fault must not break dashboard polling — 200 with what went
+    wrong beats a 500 that blanks the page.
+
+    v1.516.0 (second review F13, decision E8): ``error`` is one plain
+    sentence and the program's own words ride ``error_detail`` (the page
+    folds them under Details) — never "RuntimeError: ..." as the sentence."""
     _stub_probes(monkeypatch)
     client, _d = _wire(tmp_path, sampler=_BoomSampler())
     r = client.get("/fleet")
     assert r.status_code == 200
     out = r.json()
     assert out["nodes"] == []
-    assert "sampler exploded" in out["error"]  # verbatim, not "something failed"
+    assert out["error"] == fleet_routes.FLEET_READ_FAILED
+    assert "RuntimeError: sampler exploded" in out["error_detail"]  # kept, under Details
     # And the refreshing variant degrades the same way.
     r2 = client.get("/fleet/snapshot?refresh=1")
     assert r2.status_code == 200
-    assert "sampler exploded" in r2.json()["error"]
+    assert r2.json()["error"] == fleet_routes.FLEET_READ_FAILED
+    assert "sampler exploded" in r2.json()["error_detail"]
 
 
 def test_unreachable_node_reports_null_metrics_not_zeros(tmp_path, monkeypatch):
@@ -423,6 +432,7 @@ def test_snapshot_refresh_forces_one_sample(tmp_path, monkeypatch):
     assert d.fleet_sampler.sampled == 0  # no refresh => no network
     client.get("/fleet/snapshot?refresh=1")
     assert d.fleet_sampler.sampled == 1
+    assert d.fleet_sampler.forced is True  # v1.516.0 (F8): Refresh means asked again
 
 
 # --- history ------------------------------------------------------------------
@@ -620,7 +630,9 @@ def test_probe_is_always_200_with_an_honest_error(tmp_path, monkeypatch):
     assert r.status_code == 200
     out = r.json()
     assert out["snapshot"] is None
-    assert "Connection refused" in out["error"]
+    # v1.516.0 (second review F13, E8): a sentence; the program's words under Details.
+    assert out["error"] == fleet_routes.PROBE_FAILED
+    assert "Connection refused" in out["error_detail"]
     assert d.fleet.nodes() == []  # probe-only: nothing was saved
     assert client.post("/fleet/probe", json={"base_url": " "}).status_code == 400
 
@@ -689,7 +701,9 @@ def test_verify_unreachable_node_is_null_not_false(tmp_path, monkeypatch):
     assert r.status_code == 200  # not a 500 — the node just can't answer
     out = r.json()
     assert out["tool_use"] is None
-    assert "unknown provider" in out["error"]
+    # v1.516.0 (second review F13, E8): a sentence; the program's words under Details.
+    assert out["error"] == fleet_routes.CHECK_FAILED
+    assert "unknown provider" in out["error_detail"]
     # Nothing was written, and the hint is actionable (the node isn't routable).
     assert d.fleet.get("spark").tool_use is None
     assert d.fleet.get("spark").verified_at == 0.0

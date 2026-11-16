@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.515.0 (2026-11-15).*
+holds itself to. Current as of v1.516.0 (2026-11-15).*
 
 ---
 
@@ -2041,6 +2041,54 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Never stalls, every cost counted, plain words (v1.516.0)
+
+The last of eight releases from the second review. These are the places
+where one slow thing could hold the whole app, where a paid model call was
+on no receipt, or where the screen showed a program's own error text.
+
+- **One search can no longer freeze the app.** In a coding session, a search
+  pattern with a repeat inside a repeat (for example `(a+)+$`) could run for
+  minutes on one line, and while it ran nothing else in Iron Jarvis moved:
+  no chat, no pages. Such a pattern is now run by a separate small program
+  that is stopped at the search's time limit; what it found before then is
+  kept, and the result names the file it was stuck on. Ordinary patterns are
+  searched as before, at the same speed. A file filter with too many `*` is
+  refused in words for the same reason.
+- **A folder that stops answering holds nothing up.** Starting a program in
+  a coding session, and checking a git command before it runs, read a few
+  things on disk. On a network folder that had gone away, that could hold
+  the app. Both now wait a few seconds at most, then say so: the program is
+  not started, and the git command is asked about or refused.
+- **The summary of a long chat is on that chat's usage.** When a chat gets
+  long, Iron Jarvis asks a model to summarise the earlier part. That call
+  cost tokens that appeared on no total. It now counts on the chat's own
+  usage line and on the Usage page, for the automatic summary and for the
+  Compact button.
+- **Rewriting a reply into your language has a time limit.** If the model
+  never answered that rewrite, the reply stayed open for ever. After two
+  minutes the original reply is kept, with the usual note.
+- **Refresh on the Model servers page really checks again.** A server that
+  had failed a few times was left alone for up to ten minutes, and Refresh
+  did not change that. Refresh now asks every server again at once. A check
+  of one server also has a total time limit, so a server that answers a
+  byte at a time cannot hold it.
+- **Plain words where a program's error used to show.** The Model servers
+  page, the browser sidebar, the isolated browser's steps, a coding tool
+  that does not start, a helper or an attempt that breaks, and the account
+  manager's messages now say what happened in a sentence, for example "The
+  model server could not be reached." or "Codex did not start." On the
+  Model servers page the program's own words are still there, under
+  Details. Everywhere else they are in the log.
+- **A reply that ran out of steps says so plainly.** "stopped after 7 tool
+  rounds; 2 tool call(s) not executed" now reads "I stopped after 7 model
+  calls, the most one reply may take; 2 more steps were not run". A reply
+  with no answer names the steps it ran in the same words the approval card
+  uses, not the tools' internal names.
+- **Hidden typed text reads "typed text: hidden".** On the Browser page, a
+  request to type into a password or card field showed
+  `***REDACTED*** (sha256:...)`.
 
 ## Secrets at rest, and what leaves this PC (v1.515.0)
 

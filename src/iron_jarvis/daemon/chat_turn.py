@@ -269,6 +269,50 @@ def _compaction_thresholds(d) -> tuple[float, float]:
     return suggest, auto
 
 
+#: What the usage row of a conversation summary is called (v1.516.0, second
+#: review L3): the row's ``result``, in the user's words.
+SUMMARY_USAGE_LABEL = "Summary of the earlier part of this chat"
+
+
+async def bill_summary(
+    d, complete, out, *, thread_id: str = "", provider: str = "", model: str = "",
+) -> bool:
+    """Record what a conversation summary's model call used, the way the
+    follow-up suggestions and the coding reflection are recorded: ONE usage
+    row through :func:`_persist_chat_usage`, stamped with the chat
+    (``thread_id``), so it counts on the chat's own total and the Usage page.
+
+    *complete* is the summary's call (``app._compaction_complete``'s): it
+    keeps the last call's usage as ``last_usage`` (None when the call never
+    answered: a failed or cancelled call is not billed). *out* is the
+    ``Compaction``; its provider and model are the ones that answered (after
+    a failover too). Written OFF the loop (a database write). True when a row
+    was written. Never raises: accounting never fails a turn.
+
+    Both chat lanes reach it through :func:`_apply_compaction`;
+    ``POST /chat/compact`` calls it for the Compact button."""
+    usage = getattr(complete, "last_usage", None)
+    if not isinstance(usage, dict):
+        return False
+    try:
+        from ..eval.pricing import UsageTally
+
+        prov = str(getattr(out, "provider", "") or provider or "")
+        mdl = str(getattr(out, "model", "") or model or "")
+        tally = UsageTally()
+        tally.add(prov, mdl, usage)
+        await asyncio.to_thread(
+            _persist_chat_usage,
+            d, provider=prov, model=mdl, state=AgentState.COMPLETED, completions=1,
+            usage_in=tally.input_tokens, usage_out=tally.output_tokens,
+            cost_usd=tally.cost_usd, thread_id=thread_id, label=SUMMARY_USAGE_LABEL,
+        )
+        return True
+    except Exception:  # noqa: BLE001 — accounting never fails a turn
+        log.debug("conversation summary usage not recorded", exc_info=True)
+        return False
+
+
 def _compaction_enabled(d) -> bool:
     try:
         cfg = getattr(d.platform.config, "context_compaction", None) or {}
@@ -388,6 +432,8 @@ async def _apply_compaction(
             complete = factory(provider, model) if factory is not None else None
         except Exception:  # noqa: BLE001 — no real model -> keep the recap
             complete = None
+        # v1.516.0 (L3): the factory's own call, which keeps its usage.
+        _billed_call = complete
         if complete is not None and on_summarize is not None:
             _model_call = complete
 
@@ -397,6 +443,14 @@ async def _apply_compaction(
 
         if complete is not None:
             out = await _C.compact_messages(pairs, complete=complete, trigger="auto")
+            # v1.516.0 (second review L3): the summary is a paid model call
+            # of THIS chat — on its own usage row, billed whether or not the
+            # summary survived verification (the call was made either way).
+            await bill_summary(
+                d, _billed_call, out,
+                thread_id=str(getattr(body, "thread_id", "") or ""),
+                provider=provider, model=model,
+            )
             if out.ok:
                 rec = await asyncio.to_thread(
                     store.put,
@@ -2406,6 +2460,14 @@ def _last_user_text(messages) -> str:
     return ""
 
 
+#: The language rewrite may take this long (v1.516.0, second review L9), in
+#: BOTH lanes: POST's ``complete()`` here and the stream lane's streamed
+#: rewrite (``routes/chat.py``, read at call time). It had no bound, so a
+#: wedged model held a finished reply open for ever. When it runs out the
+#: ORIGINAL reply is kept with the "could not rewrite" note, as on any failure.
+_LANGUAGE_REWRITE_TIMEOUT_S = 120.0
+
+
 async def _enforce_language(
     platform,
     *,
@@ -2445,19 +2507,23 @@ async def _enforce_language(
         return (text, "", 0, 0, 0)
     retry_msgs = _rewrite_messages(messages, text, code)
     try:
-        route = await platform.router.complete(
-            provider=provider or None,
-            model=model or None,
-            system=system,
-            messages=retry_msgs,
-            # EMPTY LIST, never None: a rewrite must not re-run tools, and the
-            # adapters build their tool payload with `for t in tools` — None
-            # would TypeError inside the provider on the very path this feature
-            # exists for. (Found in review; a fake-router test cannot catch it,
-            # which is why the regression test drives the REAL router.)
-            tools=[],
-            task_class="chat",
-        )
+        # v1.516.0 (second review L9): bounded, read at CALL time. A rewrite
+        # that runs out of time is a failed rewrite: the original is kept.
+        async with asyncio.timeout(_LANGUAGE_REWRITE_TIMEOUT_S):
+            route = await platform.router.complete(
+                provider=provider or None,
+                model=model or None,
+                system=system,
+                messages=retry_msgs,
+                # EMPTY LIST, never None: a rewrite must not re-run tools, and
+                # the adapters build their tool payload with `for t in tools`
+                # — None would TypeError inside the provider on the very path
+                # this feature exists for. (Found in review; a fake-router
+                # test cannot catch it, which is why the regression test
+                # drives the REAL router.)
+                tools=[],
+                task_class="chat",
+            )
     except Exception:  # noqa: BLE001 — a failed rewrite must not fail the turn
         log.warning("language rewrite failed (original reply kept)", exc_info=True)
         return (text, _rewrite_failed_note(code), 0, 0, 0)
@@ -2525,6 +2591,39 @@ def _rewrite_verdict(text: str, rewritten: str, code: str, user_text: str) -> tu
     if rewritten and detect_leak(rewritten, code, user_text) is None:
         return rewritten, NOTE_CORRECTED.format(name=label(code))
     return text, _rewrite_failed_note(code)
+
+
+def rounds_stopped_note(rounds_done: int, not_run: int) -> str:
+    """The note under a reply whose last round's steps were not run because
+    the turn used every round it is allowed (v1.516.0, second review L8: it
+    said "stopped after 7 tool rounds; 2 tool call(s) not executed"). Plain
+    words: a step, never a "tool call" or "executed", and a "model call",
+    never a "round" (VOCABULARY.md: "round" is never shown; lead's review).
+    MIRROR NOTE (lock-step): both chat lanes set ``stopped_note`` from here."""
+    n = max(0, int(not_run))
+    more = "1 more step was" if n == 1 else f"{n} more steps were"
+    done = int(rounds_done)
+    calls = "1 model call" if done == 1 else f"{done} model calls"
+    return f"I stopped after {calls}, the most one reply may take; {more} not run"
+
+
+#: The words a step's result carries when running it raised in the lane
+#: itself (v1.516.0, second review L8): the step's output on screen and the
+#: result the model reads. The exception's own text goes to the log only.
+STEP_CRASHED = (
+    "This step could not finish: Iron Jarvis hit an unexpected problem while "
+    "running it."
+)
+
+
+def step_crash_words(exc: BaseException) -> str:
+    """A step that raised, in plain words (``core.failures.plain_failure``):
+    a sentence Iron Jarvis wrote for the user is kept, anything else (a
+    class name, a library's message) becomes :data:`STEP_CRASHED` and the raw
+    text is logged, masked. MIRROR NOTE (lock-step): both chat lanes."""
+    from ..core.failures import plain_failure
+
+    return plain_failure(STEP_CRASHED, exc)
 
 
 #: The one "now write your answer" completion may take this long (v1.246.0).
@@ -4808,10 +4907,16 @@ def _no_text_reply(
         return f"{words['title']}. {words['fix']}"
     if last_tool_output.strip():
         snippet = last_tool_output.strip()[:600]
-        ran = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
+        # v1.516.0 (second review L8): the steps in the approval card's
+        # words, never the tools' own names ("write_document, excel_query").
+        names = [str(n) for n in dict.fromkeys(tools_used or ())]
+        ran = ""
+        if names:
+            one = len(names) == 1
+            ran = f"It ran {'one step' if one else 'these steps'}: {_steps_said(names)}. "
         return (
             f"{NO_TEXT_LEAD} "
-            f"Here is what {ran} returned:\n{snippet}"
+            f"{ran}Here is what came back last:\n{snippet}"
         )
     # v1.433.0 review: "Press Retry" where there is a Retry button; the
     # browser sidebar has none (``failure_words.press_retry``).
@@ -11310,7 +11415,7 @@ def _persist_chat_usage(
     d, *, provider: str, model: str, state: AgentState,
     completions: int, usage_in: int, usage_out: int,
     started_at=None, cost_usd: float = 0.0, thread_id: str = "",
-    tool_session: str = "",
+    tool_session: str = "", label: str = "",
 ) -> None:
     """USAGE LEDGER: direct chat turns must count like agent runs, or the Usage
     page under-reports the user's main surface. Persist a run row (session_id
@@ -11328,7 +11433,10 @@ def _persist_chat_usage(
     Claude-subscription turn is no longer $0 on the Usage page.
 
     ``thread_id`` (v1.335.0): the saved chat this turn billed for, so the
-    chat can total its own use (``GET /chat/threads/{id}/usage``)."""
+    chat can total its own use (``GET /chat/threads/{id}/usage``).
+
+    ``label`` (v1.516.0): what a row that is not a turn's own was for, in the
+    user's words (the row's ``result``) — a conversation summary's row."""
     try:
         from ..core.ids import utcnow as _now
         from ..core.models import AgentRun
@@ -11346,6 +11454,7 @@ def _persist_chat_usage(
                 cost_usd=max(0.0, float(cost_usd or 0.0)),
                 finished_at=_now(),
                 thread_id=(str(thread_id or "").strip()[:80] or None),
+                **({"result": str(label)} if label else {}),
                 **({"created_at": started_at} if started_at is not None else {}),
             )
             run_id = run.id
@@ -14156,8 +14265,7 @@ async def run_chat_turn(
                 # INSTRUCTION), so no engine note is glued under it. MIRROR
                 # NOTE (lock-step): the stream lane.
                 stopped_note = "" if _harness is not None else (
-                    f"stopped after {_round} tool rounds; "
-                    f"{len(calls)} tool call(s) not executed"
+                    rounds_stopped_note(_round, len(calls))
                 )
                 if _office:
                     # OFFICE WORK STAYS IN CHAT (v1.247.0): escalating here
@@ -14404,7 +14512,9 @@ async def run_chat_turn(
                         return _hres, ""
                     return await _registry_invoke(tc, _deny_kw), ""
                 except Exception as exc:  # noqa: BLE001
-                    return None, f"{type(exc).__name__}: {exc}"
+                    # v1.516.0 (L8): plain words, the raw text to the log
+                    # (lock-step: the stream lane).
+                    return None, step_crash_words(exc)
 
             def _registry_invoke(tc, _deny_kw):
                 """The call through the registry (an awaitable) — its own

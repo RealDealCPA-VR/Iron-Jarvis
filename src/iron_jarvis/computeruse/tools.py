@@ -16,11 +16,13 @@ When ``policy.enabled`` is False every tool REFUSES with a clear message (the
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
 from ..core import risk_door as _risk_door
+from ..core.failures import plain_failure
 from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 from .approvals import ApprovalQueue
 from .base import Action, Browser, Selector
@@ -170,6 +172,49 @@ async def _recheck_current(cu: "CUContext", how: str) -> ToolResult | None:
     return await _refuse_where_it_is(cu, url, how)
 
 
+#: Added to a plain failure line when the page did not answer in time.
+TIMED_OUT_WORDS = "The page did not answer in time."
+
+
+def _plain(what: str, exc: BaseException) -> str:
+    """The words a tool's error carries for *exc* (v1.516.0, second review B12).
+
+    *what* is the plain line; a sentence the app wrote itself (an element that
+    is not on the page) follows it in brackets so the model still learns
+    which; anything else (a browser library's text, a provider's body) is
+    logged, masked, by ``core.failures.plain_failure`` and never shown."""
+    words = plain_failure(what, exc)
+    if words == what:
+        # Lead's review: the one fact the model can act on is kept, read from
+        # the exception's KIND (never its text): a wait that ran out is not
+        # "the element is wrong", and the next step differs.
+        if isinstance(exc, TimeoutError) or "Timeout" in type(exc).__name__:
+            return f"{what} {TIMED_OUT_WORDS}"
+        return what
+    return f"{what.rstrip('.')} ({words.rstrip('.')})."
+
+
+#: Denials started after a cancel, kept until they land (v1.516.0, B13).
+_DETACHED_DENIALS: set[asyncio.Task] = set()
+
+
+def _deny_detached(queue: ApprovalQueue, request_id: str) -> None:
+    """Deny a queue row from a task the cancelled caller does not own, off the
+    loop (the browser add-on's door does the same, ``browser/tools``): every
+    later await of a cancelled task may be cancelled again."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            queue.deny(request_id)
+        except Exception:  # noqa: BLE001 — nothing left to do without a loop
+            pass
+        return
+    task = loop.create_task(asyncio.to_thread(queue.deny, request_id))
+    _DETACHED_DENIALS.add(task)
+    task.add_done_callback(_DETACHED_DENIALS.discard)
+
+
 def _selector_from_args(args: dict[str, Any]) -> Selector:
     if "selector" in args and isinstance(args["selector"], (dict, str)):
         return Selector.coerce(args["selector"]) or Selector()
@@ -281,7 +326,7 @@ class WebExtractTool(_GatedTool):
         try:
             text = await self.cu.browser.extract(selector)
         except Exception as exc:  # noqa: BLE001
-            return ToolResult(ok=False, error=f"extract failed: {exc}")
+            return ToolResult(ok=False, error=_plain("That part of the page could not be read.", exc))
         injection = detect_injection(text)
         if injection["flagged"]:
             return ToolResult(ok=False, error=f"stopped: {injection['reason']}")
@@ -348,9 +393,15 @@ class WebActionTool(_GatedTool):
             # dashboard (the prior, pending call), spend that approval now and
             # proceed. This is what makes the resolver-less production path work —
             # without it a dashboard approval would never be matched/consumed.
-            prior = self.cu.approvals.approved_unconsumed(run_id, action)
+            # v1.516.0 (second review B13): every queue call below is SQLite
+            # work, so it runs on a worker thread, never on the event loop;
+            # the database's own busy timeout bounds each one (the browser
+            # add-on's door, ``browser/tools._ActingTool._require_approval``,
+            # does the same).
+            queue = self.cu.approvals
+            prior = await asyncio.to_thread(queue.approved_unconsumed, run_id, action)
             if prior is not None:
-                self.cu.approvals.consume(prior.id)
+                await asyncio.to_thread(queue.consume, prior.id)
             else:
                 # No standing approval: create the human-approval gate. Only proceed
                 # if an injected resolver approves synchronously (tests); otherwise
@@ -359,8 +410,10 @@ class WebActionTool(_GatedTool):
                 # Capture WHAT THE PAGE LOOKS LIKE right now so the human approves
                 # with eyes on the actual screen, not just an action description.
                 shot = await self.cu.snap()
-                req = self.cu.approvals.create_request(
-                    run_id, action, decision.reason, screenshot_b64=shot or ""
+                req = await asyncio.to_thread(
+                    lambda: queue.create_request(
+                        run_id, action, decision.reason, screenshot_b64=shot or ""
+                    )
                 )
                 # v1.449.0 (G54): the chat stream lane's or the agent run's
                 # own resolver first (core/risk_door), else the injected one;
@@ -378,10 +431,11 @@ class WebActionTool(_GatedTool):
                 except BaseException:
                     # v1.449.0 review: a cancel while the card waits must not
                     # leave the row PENDING for a later approval the next
-                    # identical call would spend with no card (the queue is
-                    # synchronous here, as every call of it in this branch).
+                    # identical call would spend with no card. v1.516.0 (B13):
+                    # denied from a task of its own, off the loop, since a
+                    # cancelled task's next await may be cancelled again.
                     if resolver is not None:
-                        self.cu.approvals.deny(req.id)
+                        _deny_detached(queue, req.id)
                     raise
                 if not granted:
                     # Readiness 0j.5 item 18: the row is DENIED whether or not
@@ -391,13 +445,13 @@ class WebActionTool(_GatedTool):
                     # identical call with no card in front of the person who
                     # asked — a stale approval nothing in this turn could see.
                     # The refusal's own words (no queue id) say what to do.
-                    self.cu.approvals.deny(req.id)
+                    await asyncio.to_thread(queue.deny, req.id)
                     return ToolResult(
                         ok=False,
                         error=_risk_door.refusal_words(decision.reason, resolver=resolver, tail=tail),
                         data={"approval_id": req.id, "status": "denied"},
                     )
-                self.cu.approvals.approve(req.id)
+                await asyncio.to_thread(queue.approve, req.id)
                 # v1.449.0 review: AND SPEND IT, in the same breath (the browser
                 # door's rule, ``browser/tools._ActingTool._require_approval``).
                 # Approving without consuming left an approved-unconsumed row
@@ -406,7 +460,7 @@ class WebActionTool(_GatedTool):
                 # human Allow authorising two clicks on "Delete account". No
                 # production resolver ever reached this line before the chat
                 # lane's and the runtime's (v1.449.0), so it had no victim.
-                self.cu.approvals.consume(req.id)
+                await asyncio.to_thread(queue.consume, req.id)
 
         if kind == "screenshot_click" and not action.fallback:
             return ToolResult(
@@ -422,7 +476,12 @@ class WebActionTool(_GatedTool):
                     action.selector, fallback=action.fallback
                 )
         except Exception as exc:  # noqa: BLE001
-            return ToolResult(ok=False, error=f"action failed: {exc}")
+            what = (
+                "That text could not be typed on the page."
+                if kind == "type"
+                else "That click could not be made on the page."
+            )
+            return ToolResult(ok=False, error=_plain(what, exc))
         # v1.515.0 (B7): a click (or typing) can navigate; judge where it landed.
         off = await _refuse_where_it_is(
             self.cu, page.url, _TYPE_TOOK if kind == "type" else _CLICK_TOOK
@@ -499,7 +558,14 @@ class WebLookTool(_GatedTool):
                 session_id=getattr(ctx, "session_id", None),
             )
         except Exception as exc:  # noqa: BLE001
-            return ToolResult(ok=False, error=f"vision call failed: {exc}")
+            return ToolResult(
+                ok=False,
+                error=_plain(
+                    "The model could not look at the page. Try again, or pick a "
+                    "model that can read pictures.",
+                    exc,
+                ),
+            )
         text = (route.response.text or "").strip()
         if not text:
             return ToolResult(

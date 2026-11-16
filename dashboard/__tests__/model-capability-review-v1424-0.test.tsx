@@ -212,11 +212,16 @@ describe("the per-model Check press", () => {
 
   it("a check that could not reach the model says so", async () => {
     seed([row(node("gw"), { models: [{ id: "qwen", ...BORROWED }] })]);
-    vi.mocked(post).mockResolvedValueOnce({ tool_use: null, error: "connection refused" } as never);
+    // v1.516.0 (second review F13): the daemon's `error` is a sentence, and
+    // it follows a full stop (fleet-plain-errors-v1516 pins the Details fold).
+    vi.mocked(post).mockResolvedValueOnce({
+      tool_use: null,
+      error: "The model server could not be reached.",
+    } as never);
     render(<FleetPage />);
     fireEvent.click(screen.getByTestId("fleet-model-check"));
     expect(await screen.findByTestId("fleet-model-check-note")).toHaveTextContent(
-      "Couldn't check qwen: connection refused",
+      "Couldn't check qwen. The model server could not be reached.",
     );
   });
 

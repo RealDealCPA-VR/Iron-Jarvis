@@ -13,7 +13,7 @@ presses Stop:
   exactly the budget it had;
 * a reply that meets its limit writes a progress report (never the office
   verdict), carries ``step_limit`` on its done frame and ``stepLimit`` on its
-  line (the screen's "Keep going"), and no engine "_Note: stopped after_";
+  line (the screen's "Keep going"), and no engine "_Note: I stopped after_";
 * a Build turn is NEVER stopped for being unwatched (a chat turn still is);
 * a 120-round reply stays inside the model's window every round, and never
   sends a ``tool_use`` without its ``tool_result``.
@@ -135,7 +135,7 @@ async def test_a_number_the_user_sets_is_honoured_and_the_reply_says_it_met_it(a
     assert chat_turn.OUT_OF_ROUNDS_INSTRUCTION not in last_user
     line = messages_of(app, sid)[-1]
     assert line["stepLimit"] == {"limit": 3, "safety": False}
-    assert "_Note: stopped after" not in line["content"], "no engine note under a harness reply"
+    assert "_Note: I stopped after" not in line["content"], "no engine note under a harness reply"
     assert done["escalate"] is False
 
 

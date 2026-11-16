@@ -483,7 +483,16 @@ async def test_a_stalled_walk_never_holds_the_reply_and_is_never_started_twice(e
     stalled. Now the reply waits the deadline and a grace, then goes on with
     the journal alone (said); the stalled walk is left on its thread, and a
     second reply in that folder does not start another while it runs. OLD
-    CODE: the first model call waited the whole stall."""
+    CODE: the first model call waited the whole stall.
+
+    v1.516.0: no wall clock decides this test any more. It passed only on the
+    retry in v1.515.0's release run: the stall used to end by itself after 8
+    seconds, so two slow replies on a busy runner let a second walk start,
+    and "the first model call came within 3 seconds" timed the whole reply's
+    start (the walk begins later, at the reply's first command, so that
+    bound never looked at the stall at all). Now the stall lasts until the
+    test releases it, and what is asserted is the fact itself: each reply
+    ENDED while the one walk was still stalled."""
     import threading
     import time
 
@@ -492,37 +501,37 @@ async def test_a_stalled_walk_never_holds_the_reply_and_is_never_started_twice(e
     monkeypatch.setattr(FC, "WALK_GRACE_S", 0.3)
     release = threading.Event()
     started: list[float] = []
+    returned: list[float] = []
     real = FC.take
 
     def stalled(folder, **kw):
         started.append(time.monotonic())
-        release.wait(8.0)
+        # Until the test lets go (the bound only ends a broken run).
+        release.wait(120.0)
+        returned.append(time.monotonic())
         return real(folder, **kw)
 
     monkeypatch.setattr(FC, "take", stalled)
-    first_call: list[float] = []
-
     def stamp(model: Model):
-        first_call.append(time.monotonic())
         return _shell(_py("open('app.py', 'w').write('X = 2\\n')"))
 
     try:
         for _turn in range(2):
-            began = time.monotonic()
-            first_call.clear()
             model = wire([stamp, "Done."])
             out = await _stream(platform, _body(ws))
-            assert first_call and first_call[0] - began < 3.0, first_call[0] - began
+            assert started, "the reply never read the folder"
+            assert not returned, "the reply waited for the stalled walk to end"
             assert model.notes() == [] and "finish" not in out["done"]
         assert len(started) == 1, "a second walk of a folder still being read was started"
     finally:
         release.set()
     # ...and once the stalled walk has ended, the folder is read again: a
     # command's write is seen (a stall is never remembered past its walk).
-    for _ in range(100):
+    for _ in range(1200):  # up to a minute: waits for the walk, not a clock
         if not FC._STALLED:
             break
         await asyncio.sleep(0.05)
+    assert not FC._STALLED and returned, "the stalled walk never ended after its release"
     monkeypatch.setattr(FC, "take", real)
     (ws / "app.py").write_bytes(b"X = 1\n")
     model = wire([_shell(_py("open('app.py', 'w').write('X = 2\\n')")), "Done.", "1. met."])

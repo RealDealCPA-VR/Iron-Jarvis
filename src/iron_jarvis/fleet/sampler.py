@@ -85,9 +85,9 @@ _FAIL_THRESHOLD = 3
 #: Backoff ladder applied at failure 3, 4, 5+ (seconds). The last step repeats.
 _BACKOFF_STEPS = (30.0, 120.0, 600.0)
 
-#: Per-node probe deadline (seconds). ``probes._get`` bounds each REQUEST at
-#: 3.0s but a probe makes several; this bounds the whole node so a cycle cannot
-#: outlive it.
+#: Per-node probe deadline (seconds). ``probes._get`` bounds each request
+#: (``GET_TOTAL_S``) and a probe asks nothing new after ``PROBE_TOTAL_S``
+#: (v1.516.0); this bounds how long the cycle WAITS for a node.
 _NODE_TIMEOUT = 10.0
 
 #: v1.333.0 (D6): the cadence sleep used to wake every 0.25 s to re-read the

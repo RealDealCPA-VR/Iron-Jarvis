@@ -531,6 +531,7 @@ it did (15 to 17 minutes), so the suite did not slow down.
 | group 9, branch (1st run) | no test named: shard 6 ran 30 minutes (others 9 to 15) and was cancelled; GitHub kept no log | Not reproduced: the same files passed here (2,281 in 8 minutes) and the second run's shard 6 took 15 minutes. Cause unknown. If a shard hangs again, let it reach its 45-minute limit so the log is kept |
 | v1.513.0 release | `test_harness_bench_product_path_review_v14250::test_a_turn_cut_off_after_its_stop_leaves_nothing_a_daemon_would_carry_on` (real time: a 4 s task limit, a 1 s grace, a real program) | Not reproduced: 6 of 6 here on a loaded PC, and it had passed in the branch run of the same commit and in the four releases before. GitHub keeps no first failure, so the cause is unknown. Not changed |
 | v1.514.0 release (failed twice, not published) | `test_clients_lanes_v1499::test_a_chat_code_reply_keeps_its_client_question_and_reads_its_answer` (the lane's real one-second wait for the client question) | Fixed in v1.515.0: the test no longer races the wait, and a skipped question says why in the log. Not reproduced here; see "Group 15 as built" |
+| v1.515.0 release | `test_finish_shell_writes_review_v1387::test_a_stalled_walk_never_holds_the_reply_and_is_never_started_twice` (a stall that ended by itself after 8 s; a 3 s bound on the reply's start) | Fixed in v1.516.0: the stall lasts until the test releases it, and the test asserts each reply ended while the walk was still stalled. Two mutations turn it red |
 
 To find the cause of an unexplained one, the test run would need to print
 a retried test's first failure (`-rR` shows only its name); that is a change
@@ -613,7 +614,7 @@ Severity counts: 12 high, 40 medium, 46 low.
 - [x] **F7 (2, medium, pass only).** A model server's key is sent over plain
   http to any address, and an address with a password in it is accepted
   (`routes/fleet.py:375-402`, `fleet/endpoint_auth.py:45-56`).
-- [ ] **F8 (4, medium, checked).** Refresh on the Model servers page does not
+- [x] **F8 (4, medium, checked).** Refresh on the Model servers page does not
   force a re-check (`routes/fleet.py:721-722` calls `sample_once` without
   `force=True`); a server that came back is refused for up to ten minutes.
 - [x] **F9 (1, medium, pass only).** Tokens a proxy sent to the cloud are
@@ -621,7 +622,7 @@ Severity counts: 12 high, 40 medium, 46 low.
 - [x] **F10 (2, low, pass only).** With network access on, the daemon listens
   on every network the PC joins; the filter is the Host header
   (`desktop/main.js:190-200`, `daemon/auth.py:62-69`).
-- [ ] **F11-F15 (low, pass only; F11, F12 and F14 fixed in v1.509.0).** The sampler probes addresses a proxy
+- [x] **F11-F15 (low, pass only; F11, F12 and F14 fixed in v1.509.0, F13 and F15 in v1.516.0).** The sampler probes addresses a proxy
   reported (`fleet/probes.py:597-617`); over 500 proxy names an unlisted
   name can read as local (`fleet/upstreams.py:289-290`); exception names on
   the Model servers page (`routes/fleet.py:282-284`, pinned by a test); the
@@ -663,7 +664,7 @@ or types on the Windows desktop.
 - [x] **B7 (2, medium, pass only).** The isolated browser's site list is
   checked on the typed address only, not after a redirect or a click
   (`computeruse/tools.py:132-137`).
-- [ ] **B8-B14 (low; B8, B11 and B14 fixed in v1.509.0, B9 and B10 in v1.511.0).** A download's name reaches the model unfenced
+- [x] **B8-B14 (low; B8, B11 and B14 fixed in v1.509.0, B9 and B10 in v1.511.0, B12 and B13 in v1.516.0).** A download's name reaches the model unfenced
   (`tools/download_tools.py:201-221`); after an approved card a click by
   role and name runs on whatever page the tab then shows (suspected);
   nothing stops Jarvis being sent to the app's own pages, the daemon's port
@@ -697,7 +698,7 @@ or types on the Windows desktop.
 - [x] **H6 (3, medium, checked).** A failed write of the session log drops
   that batch for good (`hosted/events.py:335-354`); a lost "done" can make
   the next start carry on a reply that had finished.
-- [ ] **H7-H14 (low; H7 and H9 fixed in v1.511.0, H8, H13 and H14 in v1.512.0, H10 in v1.514.0, H12 in v1.515.0; H11 waits for group 16).** A PATCH applies the tool's mode before the rest of
+- [x] **H7-H14 (low; H7 and H9 fixed in v1.511.0, H8, H13 and H14 in v1.512.0, H10 in v1.514.0, H12 in v1.515.0, H11 in v1.516.0).** A PATCH applies the tool's mode before the rest of
   the request is checked (`service.py:2211-2296`); a Stop as the start
   completes can still deliver the message (`service.py:3607`, checked); a
   branch copies Full access and the tool boxes without asking
@@ -741,7 +742,7 @@ or types on the Windows desktop.
 - [x] **A8 (2, medium, checked).** With every account of a provider turned
   off, chat runs on this PC's own login with nothing said
   (`iron_proxy/accounts.py:889-894`).
-- [ ] **A9-A13 (low; A12 fixed in v1.511.0, A11 in v1.512.0, A9 and A13's three status lines in v1.514.0, A10 and A13's `proxy.json` line in v1.515.0; A13's wording line waits for group 16).** Codex's move to another model is said without the
+- [x] **A9-A13 (low; A12 fixed in v1.511.0, A11 in v1.512.0, A9 and A13's three status lines in v1.514.0, A10 and A13's `proxy.json` line in v1.515.0, A13's wording line in v1.516.0).** Codex's move to another model is said without the
   model's name (`codex.py:1345-1346`); the usage check hands the vendor's
   program the daemon's whole environment, install token included
   (`iron_proxy/usage_read.py:286-299`, checked); Stop before Codex names the
@@ -773,7 +774,7 @@ or types on the Windows desktop.
   second time by the check (`finish.py:885-886, 923-924`).
 - [x] **D6 (4, medium, pass only).** Stop is not honoured while the check
   waits for a long test run on a GPT model (`finish.py:3839-3857`).
-- [ ] **D7-D11 (low; D9 fixed in v1.512.0, D7, D8 and D11 in v1.513.0; D10 waits for group 16).** "reviewed by <member>" over a review that reached
+- [x] **D7-D11 (low; D9 fixed in v1.512.0, D7, D8 and D11 in v1.513.0, D10 in v1.516.0).** "reviewed by <member>" over a review that reached
   nobody (`finish.py:3984-3999`); ESLint "no problems in <file>" for a file
   it ignored (`harness/checkers.py:410-412`, checked); a watch whose
   worktree folder is gone stays "fixing" for ever (`ci_watch.py:623`);
@@ -813,7 +814,7 @@ or types on the Windows desktop.
   the guard misses `git remote set-url`, `git reset <branch>`,
   `git checkout <file>`, `git stash pop` and a separator inside a quoted
   message (`git_guard.py:72, 414, 488, 502`).
-- [ ] **T9-T10 (low; T10 fixed in v1.513.0; T9 waits for group 16).** `process_start` works out its environment on the
+- [x] **T9-T10 (low; T10 fixed in v1.513.0, T9 in v1.516.0).** `process_start` works out its environment on the
   event loop (`harness/process.py:676`, checked); "Night tasks run now,
   until 7:00 AM" although a started task runs past it
   (`harness/night_window.py:104-105`).
@@ -831,7 +832,7 @@ or types on the Windows desktop.
   (`.ironjarvis/harness/finish.toml`) can turn the finish check off and
   nothing on screen says so (`harness/components.py:545-557`,
   `finish.py:4787-4790`).
-- [ ] **S4 (4, medium, checked in code, not run).** One search pattern can
+- [x] **S4 (4, medium, checked in code, not run).** One search pattern can
   freeze the app: the search's time limit is read only between files
   (`harness/search.py:188-191, 233-235`).
 - [x] **S5 (1, medium, pass only).** A reply's failure marks never reach the
@@ -861,7 +862,7 @@ differences are at the edges.
 - [x] **L2 (2, medium, checked).** A reply typed at the desk into a phone
   conversation has no project and runs at full trust
   (`routes/comm.py:823`, against `inbound.py:1245-1257`).
-- [ ] **L3 (8, medium, checked).** The automatic summary of a long chat is a
+- [x] **L3 (8, medium, checked).** The automatic summary of a long chat is a
   paid model call that is on no receipt (`daemon/app.py:3409` drops the
   usage; `chat_turn.py:373-410`).
 - [x] **L4 (1, medium, pass only).** A turn that fails after its tools ran
@@ -876,9 +877,9 @@ differences are at the edges.
 - [x] **L7 (4, low, checked).** The plain lane does not honour "Ask before
   every action" (`chat_turn.py:13462, 14041`); only a direct caller of the
   route reaches it today.
-- [ ] **L8 (7, low, pass only).** Engine words in replies: "stopped after 7
+- [x] **L8 (7, low, pass only).** Engine words in replies: "stopped after 7
   tool rounds", raw tool names, a Python exception as a step's output.
-- [ ] **L9 (4, low, checked).** The language rewrite has no time limit in
+- [x] **L9 (4, low, checked).** The language rewrite has no time limit in
   either lane (`chat_turn.py:2443-2456`).
 
 ### Still not read
@@ -1197,3 +1198,79 @@ test gets a wait a busy runner cannot beat (the wait itself stays pinned
 with explicit deadlines in `test_clients_notice_v1499`), and every skipped
 question now says why at INFO (`workmap/clients/store.question_for_turn`,
 `chat_turn.client_question_for`), so a next time explains itself.
+
+### Group 16 as built (v1.516.0)
+
+Fixed: S4, L9, L3, L8, T9, the git guard's file checks (left open by group
+11), B12, B13, F8, F13 (decision E8), F15, H11, D10, the wording line of
+A13, and the Browser page's hidden-text wording.
+
+Where the lead changed the implementers' work:
+
+- **S4 was safe but slow.** The implementer sent every pattern with a
+  repeat or a group to a separate program. Measured here: 0.5 to 0.9 s per
+  search against 0.03 s, and most patterns a model writes carry a repeat.
+  The lead added a middle path (`in_process_line_limit`): a pattern with no
+  group and at most two repeats is matched in the daemon as long as no line
+  is long enough to cost too much, with the time limit read between lines;
+  the first longer line sends the whole search to the program. Ordinary
+  searches are back to 0.03 s.
+- **A glob could freeze the app the same way** (the implementer measured
+  5.3 s for eight `**/` in a row and left it): a run of `**/` is now one,
+  and too many are refused in words.
+- **L8's note said "rounds of steps".** VOCABULARY.md never shows "round":
+  it now says "model calls".
+- **F13 logged on every poll.** The Model servers page reads every two
+  seconds; the same failure is now logged once per five minutes.
+- **A probe failure with no phrase of its own** showed the library's text on
+  a server's row: now "could not be read" (or "certificate problem").
+- **B12 kept one fact for the model**: "The page did not answer in time."
+
+Left open:
+
+- **The search program was not run on the packaged build.** Its start is
+  proven from source and by the fast-path test only. Since the middle path,
+  only a pattern with a group, a multiline search, three or more repeats or
+  a very long line needs it. What would show a problem: such a search in a
+  coding session answers "the search could not run: its search program did
+  not start" (or "stopped without an answer").
+- The agent runtime's own summary of a long run is still on no receipt.
+- The Connections page and the old settings form show the new Model
+  servers sentence after a colon and not the Details.
+- Chat's own approval card still shows `***REDACTED***` for hidden typed
+  text (pinned by `approval-preview-v1348.test.tsx`).
+- `browser/panel.py` has other error texts in sentences (skills, recording,
+  voice) and `browser/screenshot.py` one; `chat_turn.py`'s finish-check
+  command runner returns a class name as its reason.
+- `finish.py` compiles an ignore file's lines without the new glob counts.
+- "rounds of fixes" is still said by the CI watch.
+
+## Second fix plan: closing state (2026-11-16)
+
+All eight groups (9 to 16) are released: v1.509.0, v1.510.0, v1.511.0,
+v1.512.0, v1.513.0, v1.515.0 (which also carries v1.514.0, never published)
+and v1.516.0. Of the 98 findings, one is deliberately not fixed (A4: it
+needs a change in the bundled account manager, the owner's to release) and
+the "Not closed" and "Left open" lines under each group say what else
+remains.
+
+For the owner to decide:
+
+1. Whether an "Always for this schedule" approval may cover a tool with any
+   details (today: one exact step, 30 days).
+2. Changing the GitHub workflow so a retried test prints its first failure.
+   Three retried or failed tests in this plan could not be explained from
+   the log for want of it.
+3. A one-time clean-up of rows older versions wrote: browser events with
+   full addresses (they age out in 90 days) and approval rows holding typed
+   text.
+4. The A4 change in the Iron-Proxy repository (token on every route, a
+   loopback Host check, no token printed on start).
+5. Whether everything git but a commit should ask every time in your own
+   folder (decision E3 as built is wider than written).
+6. Whether a night task that only answers a question should read "Done"
+   rather than "Needs you".
+7. Cost is not sent with an answer from another computer.
+8. Trying the two things that were tested with stand-ins only on the
+   installed app: starting and stopping a real coding tool (group 12), and a
+   search with a group in its pattern in a coding session (group 16).

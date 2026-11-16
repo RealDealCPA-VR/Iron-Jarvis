@@ -74,7 +74,9 @@ def test_nothing_at_all_keeps_the_old_words_and_a_tool_output_keeps_its_quote():
         "written. Press Retry, or pick a different model."
     )
     out = chat_turn._no_text_reply(["image_info"], "PNG 2x2")
-    assert out.endswith("PNG 2x2") and "image_info" in out
+    # v1.516.0 (second review L8): the step in the card's words, not its name.
+    assert out.endswith("PNG 2x2") and "It ran one step: read a file." in out
+    assert "image_info" not in out
 
 
 def test_the_claim_notes_never_judge_the_apps_own_words():

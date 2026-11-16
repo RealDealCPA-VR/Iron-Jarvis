@@ -45,6 +45,7 @@ import { CALM_ACTION, CALM_ICON_ACTION } from "@/components/connections/endpoint
 // v1.449.0 (readiness Wave C, item 24): what Remove does to the default model.
 import { DefaultImpactLine, defaultReplacedWords, fetchDefaultImpact, type DefaultImpact } from "@/components/connections/DefaultImpact";
 import { useDaemon } from "@/lib/daemon";
+import { DETAILS_WORDS } from "@/lib/failureActions";
 import { IconButton } from "@/components/IconButton";
 import { PageHeader } from "@/components/PageHeader";
 import { AllConnectionsLink } from "@/components/connections/AllConnectionsLink";
@@ -55,6 +56,7 @@ import {
   SPARK_POINTS,
   buildFleetTree,
   chatHint,
+  checkFailedWords,
   chatLabel,
   chatTone,
   codeRouteText,
@@ -83,6 +85,7 @@ import {
   snapStatusLabel,
   unloadIn,
   waiting,
+  type FleetCheck,
   type FleetModel,
   type FleetProbe,
   type FleetResponse,
@@ -97,6 +100,22 @@ const POLL_MS = 2000;
 /* -------------------------------------------------------------------------- */
 /*  Small shared pieces                                                        */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * v1.516.0 (second review F13, decision E8): what the program itself said
+ * about a failure ("ConnectError: …", masked by the daemon), folded under
+ * Details below the plain sentence. Nothing when the daemon sent none.
+ */
+function ProgramWords({ text, testId }: { text?: string | null; testId: string }) {
+  const words = (text || "").trim();
+  if (!words) return null;
+  return (
+    <details data-testid={testId} className="mt-1 text-[11px] text-zinc-500">
+      <summary className="cursor-pointer select-none hover:text-zinc-400">{DETAILS_WORDS}</summary>
+      <span className="mt-1 block break-words font-mono text-[10px] text-zinc-500">{words}</span>
+    </details>
+  );
+}
 
 function StatusPill({ snap }: { snap: NodeSnapshot }) {
   // v1.329.0: a node no probe has looked at yet says so, in a neutral tone
@@ -227,18 +246,22 @@ function CheckModel({
 }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  // v1.516.0 (second review F13): the program's own words, under Details.
+  const [detail, setDetail] = useState("");
   const check = async () => {
     setBusy(true);
     setNote("");
+    setDetail("");
     try {
-      const r = await post<{ tool_use?: boolean | null; error?: string }>(
+      const r = await post<FleetCheck>(
         `/fleet/nodes/${encodeURIComponent(nodeId)}/verify`,
         { model },
       );
       if (r?.tool_use === true || r?.tool_use === false) {
         setNote("Checked.");
       } else {
-        setNote(r?.error ? `Couldn't check ${model}: ${r.error}` : `Couldn't check ${model}.`);
+        setNote(checkFailedWords(model, r?.error));
+        setDetail(r?.error_detail || "");
       }
       onChecked?.();
     } catch (e) {
@@ -264,6 +287,7 @@ function CheckModel({
           {note}
         </span>
       )}
+      <ProgramWords text={detail} testId="fleet-model-check-details" />
     </span>
   );
 }
@@ -1112,10 +1136,13 @@ export default function FleetPage() {
         </Reveal>
       )}
 
-      {/* A fault inside the fleet stack, reported alongside whatever data survived. */}
+      {/* A fault inside the fleet stack, reported alongside whatever data survived.
+          v1.516.0 (second review F13, E8): a plain sentence; the program's
+          own words one press down, under Details. */}
       {data?.error && (
         <Reveal>
           <ErrorNote>{data.error}</ErrorNote>
+          <ProgramWords text={data.error_detail} testId="fleet-error-details" />
         </Reveal>
       )}
 

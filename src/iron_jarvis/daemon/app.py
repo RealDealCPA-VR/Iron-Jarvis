@@ -3418,8 +3418,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 messages=[LLMMessage(role="user", content=user)],
                 named=_named,
             )
+            # v1.516.0 (second review L3): the call's usage, kept for the
+            # caller that bills it (``chat_turn.bill_summary``). The return
+            # shape stays ``(text, provider, model)`` for every caller.
+            _complete.last_usage = dict(getattr(resp, "usage", None) or {})
             return (resp.text or ""), (used_provider or prov), (used_model or mdl)
 
+        _complete.last_usage = None
         return _complete
 
     # The agent runtime compacts its own transcript mid-run and cannot reach

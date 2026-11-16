@@ -74,6 +74,10 @@ read both cut at its first separator and to the end of the line). Whether a
 ``reset`` / ``checkout`` word is a path is read from the syntax (``--``) and
 an existing file or folder under the session's folder (one look, only for
 those two commands); a word that cannot be told is read the stricter way.
+The command tools judge a command that names git or gh in a worker thread
+(:func:`spend_check_off_loop`, :func:`refusal_off_loop`, v1.516.0), so that
+look and the reading of the user's git config never run on the event loop;
+past :data:`CHECK_TIMEOUT_S` the check asks, and the run refuses, in words.
 
 HONEST LIMITS: this reads the command's text. It catches git as a model
 writes it (``git push``, ``git -C x commit``, ``cmd /c "git push"``,
@@ -937,6 +941,71 @@ def refusal(command: Any) -> str:
 force_refusal = refusal
 
 
+# --------------------------------------------------------------------------- #
+# off the event loop (v1.516.0, the file checks left open by group 11)
+# --------------------------------------------------------------------------- #
+
+#: How long the guard may take to read what it looks at on disk (whether a
+#: ``reset`` / ``checkout`` word is a file, the user's git config for
+#: aliases) — a folder on a network drive that stopped answering.
+CHECK_TIMEOUT_S = 5.0
+#: The card's line when the guard could not finish in time: it asks.
+SLOW_CHECK_WORDS = (
+    "Iron Jarvis could not finish checking this git command in time (a folder did not answer), so it "
+    "asks you this time."
+)
+#: The refusal when the guard could not finish in time before running it.
+SLOW_CHECK_REFUSAL = (
+    "Refused: Iron Jarvis could not finish checking this git command in time (a folder did not "
+    "answer), so it did not run it. Try again."
+)
+
+
+def _may_read_files(command: Any) -> bool:
+    """Can judging ``command`` read anything on disk? Only when it names a
+    git or gh program (:func:`classify` reads nothing otherwise)."""
+    text = str(command or "")
+    if not text or ("git" not in text.lower() and "gh" not in text.lower()):
+        return False
+    return _PROG_RX.search(_CONTINUATION_RX.sub(" ", text)) is not None
+
+
+async def _off_loop(fn: Any, command: Any) -> "tuple[bool, Any]":
+    """``(finished, fn(command))``, judged in a worker thread (the turn's
+    branch and folder go with it: ``to_thread`` copies the context) and
+    bounded by :data:`CHECK_TIMEOUT_S`; a command that cannot read anything
+    is judged right here, as before."""
+    import asyncio
+
+    if not _may_read_files(command):
+        return True, fn(command)
+    try:
+        return True, await asyncio.wait_for(asyncio.to_thread(fn, command), timeout=CHECK_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        return False, None
+
+
+async def spend_check_off_loop(check: Any, command: Any) -> Any:
+    """A command tool's spend check (``command_shell.tool_check``, which asks
+    :func:`guard_check` first) without the guard's file checks on the event
+    loop, bounded. Past the bound it FAILS CLOSED: it asks once, every time,
+    and says why. Same answers otherwise."""
+    finished, verdict = await _off_loop(check, command)
+    if finished:
+        return verdict
+    from ..tools.base import SpendCheck
+
+    return SpendCheck(ask=True, words=SLOW_CHECK_WORDS, cost_note="asks every time", once_only=True,
+                      reason="git")
+
+
+async def refusal_off_loop(command: Any) -> str:
+    """:func:`refusal` without its file checks on the event loop, bounded.
+    Past the bound it refuses, in words."""
+    finished, refused = await _off_loop(refusal, command)
+    return refused if finished else SLOW_CHECK_REFUSAL
+
+
 def guard_check(command: Any) -> Any:
     """``SpendCheck`` for a command tool's call while the turn works on a
     branch: ask once, every time, for a commit / push / pull request /
@@ -975,7 +1044,8 @@ def guard_check(command: Any) -> Any:
 
 
 __all__ = [
-    "FORCE_REFUSAL", "GitAct", "REFUSED_KINDS", "TURN_FOLDER", "TurnFolder", "card_words", "classify",
-    "folder_card_words", "folder_facts", "force_refusal", "guard_check", "refusal", "reset_turn_folder",
-    "set_turn_folder", "user_aliases",
+    "CHECK_TIMEOUT_S", "FORCE_REFUSAL", "GitAct", "REFUSED_KINDS", "SLOW_CHECK_REFUSAL", "SLOW_CHECK_WORDS",
+    "TURN_FOLDER", "TurnFolder", "card_words", "classify", "folder_card_words", "folder_facts",
+    "force_refusal", "guard_check", "refusal", "refusal_off_loop", "reset_turn_folder", "set_turn_folder",
+    "spend_check_off_loop", "user_aliases",
 ]

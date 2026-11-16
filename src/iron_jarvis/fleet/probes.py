@@ -62,15 +62,66 @@ class ProbeUnreachable(Exception):
         self.detail = detail or phrase
 
 
+#: Each step of one request (connect, each read) may take this long.
+GET_STEP_S = 3.0
+
+#: Second review F15: one request may take this long IN ALL. ``timeout=3.0``
+#: bounds each read, not the request, so a server that trickled its answer a
+#: byte at a time held the probe (and the thread under it) for ever.
+GET_TOTAL_S = 8.0
+
+#: Second review F15: one probe (``detect_kind``, ``probe_node``) asks no new
+#: question after this long; the request already under way ends within
+#: :data:`GET_TOTAL_S`. The sampler waits ``_NODE_TIMEOUT`` (10 s) for a node
+#: and then walks away from its thread: this is what ends that thread.
+PROBE_TOTAL_S = 10.0
+
+#: What ``detect_kind`` reports when its time ran out before it could tell.
+PROBE_OUT_OF_TIME = "the server took too long to answer"
+
+
 def _get(url: str, headers: dict[str, str] | None = None) -> Any:
-    """Default transport. Short timeout — probing runs on a loop and a hung
-    node must never stall the sampler."""
+    """Default transport. Short timeouts — probing runs on a loop and a hung
+    node must never stall the sampler: each step within :data:`GET_STEP_S`,
+    the whole request within :data:`GET_TOTAL_S` (read in pieces, the clock
+    checked after each). Returns a whole ``httpx.Response``."""
     import httpx
 
-    return httpx.get(url, headers=headers or {}, timeout=3.0)
+    deadline = time.monotonic() + GET_TOTAL_S
+    with httpx.stream("GET", url, headers=headers or {}, timeout=GET_STEP_S) as resp:
+        body = bytearray()
+        for chunk in resp.iter_raw():
+            body.extend(chunk)
+            if time.monotonic() > deadline:
+                raise httpx.ReadTimeout(
+                    f"the answer took longer than {GET_TOTAL_S:g} seconds",
+                    request=getattr(resp, "request", None),
+                )
+        # The raw bytes and the server's own headers: the new response
+        # decodes them (gzip and the like) exactly as httpx.get would.
+        return httpx.Response(
+            resp.status_code,
+            headers=resp.headers,
+            content=bytes(body),
+            request=getattr(resp, "request", None),
+        )
 
 
 Getter = Callable[..., Any]
+
+
+def _within(get: Getter, deadline: float) -> Getter:
+    """*get* that asks nothing once *deadline* (``time.monotonic``) has
+    passed (second review F15): it raises a timeout, which every probe
+    already reads as "timed out". The request under way is the transport's
+    to end (:func:`_get`: within :data:`GET_TOTAL_S`)."""
+
+    def within(url: str, headers: dict[str, str] | None = None) -> Any:
+        if time.monotonic() >= deadline:
+            raise TimeoutError(PROBE_OUT_OF_TIME)
+        return get(url, headers=headers)
+
+    return within
 
 
 def _keyed(get: Getter, headers: dict[str, str] | None) -> Getter:
@@ -128,7 +179,12 @@ def _human_error(exc: BaseException) -> str:
         return "network unreachable"
     if "connect" in name or "connection" in name:
         return "connection failed"
-    return str(exc).strip() or type(exc).__name__
+    if "ssl" in name or "certificate" in msg or "ssl" in msg:
+        return "certificate problem"
+    # Lead's review (second review F13): a phrase, never the library's own
+    # text or a class name on a server's row. The raw text is not lost:
+    # every caller keeps ``str(exc)`` as ``ProbeUnreachable.detail``.
+    return "could not be read"
 
 
 def _fetch(get: Getter, url: str, headers: dict[str, str] | None = None) -> Any:
@@ -208,7 +264,8 @@ def detect_kind(
     last_status = ""  # last "host answered, just not this API"
     refused = False  # a 401/403 — a keyed server: stop asking
 
-    get = _keyed(get, headers)
+    # Second review F15: the four questions together have a time limit.
+    get = _keyed(_within(get, time.monotonic() + PROBE_TOTAL_S), headers)
 
     def _try(path: str) -> Any | None:
         nonlocal last, last_status, refused
@@ -743,8 +800,11 @@ def probe_node(
     *metrics_memo* (the gateway-key review): the sampler's
     :class:`MetricsMemo`, so a proxy with no ``/metrics`` is not asked for it
     on every pass. None (every other caller) asks, as before.
+
+    Second review F15: the pass asks no new question after
+    :data:`PROBE_TOTAL_S`; a question it could not ask reads "timed out".
     """
-    get = _keyed(get, headers)
+    get = _keyed(_within(get, time.monotonic() + PROBE_TOTAL_S), headers)
     started = time.perf_counter()
     root = normalize_root(node.base_url)
     if not root or (node.parent_id and not _child_on_this_network(root)):
@@ -818,9 +878,10 @@ def litellm_child_health(
     ``NodeSnapshot.proxy_health`` lives on the CHILD's snapshot, but only the
     parent can learn it (``/health`` is a proxy endpoint). The sampler applies
     this map onto child snapshots after probing the parent. Every request
-    carries *headers* (the proxy's saved key), like :func:`probe_node`.
+    carries *headers* (the proxy's saved key), like :func:`probe_node`, and
+    the same total time limit (second review F15).
     """
-    get = _keyed(get, headers)
+    get = _keyed(_within(get, time.monotonic() + PROBE_TOTAL_S), headers)
     root = normalize_root(node.base_url)
     if not root:
         return {}

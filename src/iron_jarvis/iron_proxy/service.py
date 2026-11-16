@@ -885,9 +885,10 @@ class IronProxyService:
             self._start_locked()
         except _StartProblem as exc:
             self._error = str(exc)
-        except Exception as exc:  # noqa: BLE001 — a start never raises to a route
+        except Exception:  # noqa: BLE001 — a start never raises to a route
             log.warning("iron-proxy start failed", exc_info=True)
-            self._error = f"Iron-Proxy could not be started ({type(exc).__name__})."
+            # Second review A13: the class name stays in the log line above.
+            self._error = "Iron-Proxy could not be started. The reason is in the Iron Jarvis log."
 
     def _start_locked(self) -> None:
         if self._url:

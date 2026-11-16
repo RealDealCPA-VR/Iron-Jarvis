@@ -166,8 +166,8 @@ def test_final_round_tool_calls_not_executed(tmp_path, monkeypatch):
     # invariant is that the LAST round never executes the tools it asks for.
     assert completions["n"] == _MAX_TOOL_ROUNDS   # the budget was fully used…
     assert invoked["n"] == _MAX_TOOL_ROUNDS - 1   # …minus the final round
-    assert f"stopped after {_MAX_TOOL_ROUNDS - 1} tool rounds" in body["reply"]
-    assert "1 tool call(s) not executed" in body["reply"]
+    assert f"I stopped after {_MAX_TOOL_ROUNDS - 1} model calls" in body["reply"]
+    assert "1 more step was not run" in body["reply"]
     # The whole turn's usage (all 4 billed completions) reached the ledger.
     runs = _chat_runs(platform)
     assert len(runs) == 1 and runs[0].steps == _MAX_TOOL_ROUNDS
@@ -206,8 +206,8 @@ def test_stream_final_round_tool_calls_not_executed(tmp_path, monkeypatch):
     done = next(d for e, d in frames if e == "done")
     assert completions["n"] == _MAX_TOOL_ROUNDS
     assert invoked["n"] == _MAX_TOOL_ROUNDS - 1
-    assert f"stopped after {_MAX_TOOL_ROUNDS - 1} tool rounds" in done["reply"]
-    assert "1 tool call(s) not executed" in done["reply"]
+    assert f"I stopped after {_MAX_TOOL_ROUNDS - 1} model calls" in done["reply"]
+    assert "1 more step was not run" in done["reply"]
 
 
 # --- oversized attachments: honest retrieval (v1.89.0 — was a head-clip) ------

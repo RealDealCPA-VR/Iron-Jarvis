@@ -344,7 +344,10 @@ def test_a_draft_or_a_handoff_is_an_answer_and_gets_no_nudge():
 
 def test_the_fallback_names_the_tool_and_quotes_its_output():
     assert chat_turn._no_text_reply(["image_info"], "PNG 2x2").endswith("PNG 2x2")
-    assert "image_info" in chat_turn._no_text_reply(["image_info"], "PNG 2x2")
+    # v1.516.0 (second review L8): the step in the approval card's words,
+    # never the tool's own name.
+    out = chat_turn._no_text_reply(["image_info"], "PNG 2x2")
+    assert chat_turn._steps_said(["image_info"]) in out and "image_info" not in out
     assert "empty answer" in chat_turn._no_text_reply([], "")
 
 

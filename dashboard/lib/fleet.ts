@@ -201,8 +201,37 @@ export interface FleetResponse {
   nodes: NodeSnapshot[];
   sampling?: FleetSampling | null;
   code_route?: FleetCodeRoute | null;
-  /** Non-empty when the fleet stack itself faulted; the route never 500s. */
+  /** Non-empty when the fleet stack itself faulted; the route never 500s.
+   *  v1.516.0 (second review F13, decision E8): one plain sentence. */
   error?: string | null;
+  /** v1.516.0: what the program itself said (masked by the daemon), shown
+   *  only under Details. Absent from an older daemon. */
+  error_detail?: string | null;
+}
+
+/** POST /fleet/nodes/{id}/verify — a live check of one model. `tool_use`
+ *  null = not known (the check did not work; `error` says why in a sentence,
+ *  `error_detail` holds the program's own words for Details). */
+export interface FleetCheck {
+  tool_use?: boolean | null;
+  vision?: boolean | null;
+  model?: string | null;
+  error?: string | null;
+  error_detail?: string | null;
+  vision_error?: string | null;
+  vision_error_detail?: string | null;
+  hint?: string | null;
+  answered?: boolean | null;
+}
+
+/**
+ * v1.516.0 (second review F13): the note under a model's Check press when the
+ * check did not work. The daemon's `error` is a whole sentence ("The model
+ * server could not be reached."), so it follows a full stop, never a colon.
+ */
+export function checkFailedWords(model: string, error?: string | null): string {
+  const why = (error || "").trim();
+  return why ? `Couldn't check ${model}. ${why}` : `Couldn't check ${model}.`;
 }
 
 /** GET /fleet/usage — local vs cloud split, with the basis for the estimate. */
@@ -250,7 +279,9 @@ export interface FleetProbe {
   snapshot?: NodeSnapshot | null;
   /** Upstreams a LiteLLM proxy named. Every other kind returns []. */
   children?: FleetNode[] | null;
+  /** v1.516.0: a plain sentence; the program's own words in `error_detail`. */
   error?: string | null;
+  error_detail?: string | null;
 }
 
 /* -------------------------------------------------------------------------- */

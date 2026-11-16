@@ -220,5 +220,5 @@ def test_the_stream_lane_extends_an_office_turn_once_too(tmp_path, monkeypatch):
     assert rounds["n"] == 24
     assert asked == [chat_turn.OUT_OF_ROUNDS_INSTRUCTION]
     assert done["escalate"] is False and done["reply"].startswith(_ANSWER)
-    assert "stopped after 23 tool rounds" in done["reply"]
+    assert "I stopped after 23 model calls" in done["reply"]
     assert nudges == [{"kind": ROUNDS_EXTENDED, "rounds": 24, "turn_id": "tr-more"}]

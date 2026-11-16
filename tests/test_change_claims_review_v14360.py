@@ -92,8 +92,9 @@ NO_NOTE: list[tuple[str, list[str]]] = [
     ("I rolled back the release.", []),
     ("I've undone the formatting changes in your doc.", []),
     # Iron Jarvis's own words quoting a tool, never the model's claim.
-    ("The model finished without writing an answer. Here is what project_create returned:\n"
-     "The project has been created.", []),
+    # v1.516.0 (second review L8): the steps in the card's words.
+    ("The model finished without writing an answer. It ran one step: create a project. "
+     "Here is what came back last:\nThe project has been created.", []),
     # A completion followed by a state that is no setting or record.
     ("Done! The meeting is cancelled.", []),
     ("Done! Your Notion page is deleted.", []),

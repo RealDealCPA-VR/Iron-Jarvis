@@ -273,8 +273,8 @@ def test_round_budget_exhaustion_forces_escalate_with_stopped_note(
     assert body["escalate_reason"]       # forced escalation carries a reason
     assert completions["n"] == _MAX_TOOL_ROUNDS       # budget fully used…
     assert invoked["n"] == _MAX_TOOL_ROUNDS - 1       # …last round never runs tools
-    assert f"stopped after {_MAX_TOOL_ROUNDS - 1} tool rounds" in body["reply"]
-    assert "not executed" in body["reply"]
+    assert f"I stopped after {_MAX_TOOL_ROUNDS - 1} model calls" in body["reply"]
+    assert "not run" in body["reply"]
 
 
 # --- the workflow-draft exit --------------------------------------------------

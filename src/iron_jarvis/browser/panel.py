@@ -1704,10 +1704,17 @@ class PanelTurns:
             logger.debug("panel turn failed", exc_info=True)
             # v1.270.0: what was read is remembered BEFORE the panel is told.
             self._remember_exchange()
+            # v1.516.0 (second review B12): never the exception's own text on
+            # the sidebar. A sentence the app wrote is kept after the colon;
+            # anything else is logged (masked) and the plain line stands.
+            from ..core.failures import plain_failure
+
+            plain = "Iron Jarvis could not finish that."
+            words = plain_failure(plain, exc)
             await self.emit(
                 conn,
                 P.PANEL_EVENT_ERROR,
-                {"text": f"Iron Jarvis could not finish that: {exc}"},
+                {"text": plain if words == plain else f"Iron Jarvis could not finish that: {words}"},
             )
             emitted_done = True
         finally:

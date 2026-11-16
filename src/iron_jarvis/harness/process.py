@@ -69,6 +69,10 @@ MAX_INPUT_CHARS = 64_000
 WRITE_WAIT_S = 5.0
 #: How long a stop waits for the reader thread to drain.
 STOP_DRAIN_S = 2.0
+#: v1.516.0 (second review T9): how long working out a program's environment
+#: may take (stats of the main folder's .venv / node_modules) before nothing
+#: is started.
+ENV_TIMEOUT_S = 10.0
 
 
 @dataclass
@@ -565,16 +569,18 @@ class ProcessStartTool(Tool):
         v1.381.0: and any program a project's or a plugin's command turn
         starts (``harness/command_shell``)."""
         from .command_shell import tool_check
+        from .git_guard import spend_check_off_loop
 
-        return tool_check(args.get("command") if isinstance(args, dict) else "")
+        # v1.516.0: the git guard's file checks run off the event loop.
+        return await spend_check_off_loop(tool_check, args.get("command") if isinstance(args, dict) else "")
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         command = str(args.get("command") or "").strip()
         if not command:
             return ToolResult(ok=False, error="`command` is empty")
-        from .git_guard import refusal
+        from .git_guard import refusal_off_loop
 
-        refused = refusal(command)
+        refused = await refusal_off_loop(command)
         if refused:
             return ToolResult(ok=False, error=refused)
         try:
@@ -673,7 +679,22 @@ class ProcessStartTool(Tool):
         # turn's or a helper's, keyed on the session — gets the user's PATH
         # and home folder, secrets removed; every other run the scrubbed
         # environment, exactly as before (``harness/command_env``).
-        env = command_env(policy.modify_env, ctx.session_id)
+        # v1.516.0 (second review T9): working it out stats the main folder's
+        # .venv / node_modules (``harness/main_env``) — off the event loop,
+        # bounded: a folder that stops answering starts nothing.
+        try:
+            env = await asyncio.wait_for(
+                asyncio.to_thread(command_env, policy.modify_env, ctx.session_id), timeout=ENV_TIMEOUT_S
+            )
+        except asyncio.TimeoutError:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"could not start the program: getting its settings ready took longer than "
+                    f"{ENV_TIMEOUT_S:.0f} seconds (a folder did not answer), so nothing was started. "
+                    "Try again."
+                ),
+            )
 
         def _spawn() -> Any:
             if bash is not None:
@@ -831,15 +852,16 @@ class ProcessWriteTool(Tool):
         branch. v1.381.0: and anything typed into a program during a
         project's or a plugin's command turn (``harness/command_shell``)."""
         from .command_shell import tool_check
+        from .git_guard import spend_check_off_loop
 
-        return tool_check(args.get("input") if isinstance(args, dict) else "")
+        return await spend_check_off_loop(tool_check, args.get("input") if isinstance(args, dict) else "")
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from ..tools.builtins import _bool_arg
 
-        from .git_guard import refusal
+        from .git_guard import refusal_off_loop
 
-        refused = refusal(args.get("input") if isinstance(args, dict) else "")
+        refused = await refusal_off_loop(args.get("input") if isinstance(args, dict) else "")
         if refused:
             return ToolResult(ok=False, error=refused)
         mp, err = _lookup(args, ctx)

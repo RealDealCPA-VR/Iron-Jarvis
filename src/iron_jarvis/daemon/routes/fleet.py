@@ -282,9 +282,73 @@ def _catalog_changed(node_id: str) -> None:
         pass
 
 
-def _err(exc: BaseException) -> str:
-    """Verbatim, bounded error text. Never a friendly lie."""
-    return f"{type(exc).__name__}: {exc}"[:300]
+#: Second review F13 (decision E8): the page's sentences for a failure. The
+#: program's own words ride ``error_detail`` beside them (:func:`_program_words`),
+#: which the page folds under Details.
+FLEET_READ_FAILED = "Your model servers could not be read just now. Press Refresh to try again."
+PROBE_FAILED = "Nothing could be read at that address. Check the address and try again."
+CHECK_FAILED = "The check did not work."
+VISION_CHECK_FAILED = "The picture check did not work."
+
+
+#: Lead's review: the page reads ``GET /fleet`` every two seconds, and
+#: ``plain_failure`` logs the raw text each time it is asked. The SAME
+#: failure is logged once per this many seconds, never 30 times a minute.
+READ_FAILED_LOG_EVERY_S = 300.0
+_READ_FAILED_LOGGED: dict[str, float] = {}
+
+
+def _read_failed_words(exc: BaseException, *, clock=time.monotonic) -> str:
+    """The polled read's sentence for *exc*: ``plain_failure`` (which logs the
+    raw text, masked) the first time a failure is seen and then once per
+    :data:`READ_FAILED_LOG_EVERY_S`; in between, the same words with nothing
+    logged. Never raises."""
+    try:
+        from ...core.failures import own_sentence
+
+        key = f"{type(exc).__name__}: {exc}"[:300]
+        now = float(clock())
+        last = _READ_FAILED_LOGGED.get(key)
+        if last is not None and now - last < READ_FAILED_LOG_EVERY_S:
+            return own_sentence(exc) or FLEET_READ_FAILED
+        if len(_READ_FAILED_LOGGED) > 64:
+            _READ_FAILED_LOGGED.clear()
+        _READ_FAILED_LOGGED[key] = now
+    except Exception:  # noqa: BLE001 — wording only
+        pass
+    return plain_failure(FLEET_READ_FAILED, exc)
+
+
+def _program_words(exc: BaseException) -> str:
+    """What the program itself said about *exc* (``ConnectError: ...``), for
+    the Details fold only (second review F13, decision E8). Masked (a secret
+    is never on screen) and bounded. Never raises."""
+    try:
+        from ...providers.failure_words import mask_failure_text
+
+        return mask_failure_text(f"{type(exc).__name__}: {exc}")[:600]
+    except Exception:  # noqa: BLE001 — the fold is never a new failure
+        return type(exc).__name__
+
+
+def _check_words(exc: BaseException) -> str:
+    """One sentence for a live check that failed, from the router's one
+    reading of a failure (``failure_reason``). Never raises."""
+    try:
+        from ...providers.router import failure_reason
+
+        reason = failure_reason(exc)  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001 — wording only
+        return CHECK_FAILED
+    if reason == "unreachable":
+        return "The model server could not be reached."
+    if reason == "timeout":
+        return "The model server did not answer in time."
+    if reason == "interrupted":
+        return "The model server stopped answering partway through."
+    if reason.startswith("http "):
+        return f"The model server answered with error {reason[5:]}."
+    return CHECK_FAILED
 
 
 def _history_rows(points: Any) -> list[dict[str, Any]]:
@@ -811,8 +875,9 @@ def register(app: FastAPI, d) -> None:
         Zero network in the handler — ``touch()`` just tells the sampler a
         human is watching so it speeds up to the active cadence. THIS ROUTE
         NEVER RAISES: the dashboard polls it continuously, so a fault anywhere
-        in the fleet stack degrades to an empty list plus the verbatim error
-        rather than breaking the page.
+        in the fleet stack degrades to an empty list plus one plain sentence
+        (``error``) and the program's own words (``error_detail``, under
+        Details; second review F13) rather than breaking the page.
         """
         try:
             sampler = d.fleet_sampler
@@ -822,37 +887,46 @@ def register(app: FastAPI, d) -> None:
                 "sampling": sampler.status(),
                 "code_route": _code_route_view(),
                 "error": "",
+                "error_detail": "",
             }
         except Exception as exc:  # noqa: BLE001 — a fleet fault can't break polling
             return {
                 "nodes": [],
                 "sampling": {},
                 "code_route": {},
-                "error": _err(exc),
+                "error": _read_failed_words(exc),
+                "error_detail": _program_words(exc),
             }
 
     @app.get("/fleet/snapshot")
     async def fleet_snapshot(refresh: int = 0) -> dict[str, Any]:
         """Same shape as ``GET /fleet``; ``refresh=1`` forces ONE synchronous
         sampling pass first (in a thread — probing four hosts must never block
-        the event loop). Also never raises."""
+        the event loop). Also never raises.
+
+        Second review F8: the pass is FORCED (``sample_once(force=True)``),
+        so a server serving a backoff penalty (up to ten minutes) is asked
+        again: the Refresh button means what it says, and a server that came
+        back is usable at once."""
         try:
             sampler = d.fleet_sampler
             if refresh:
-                await asyncio.to_thread(sampler.sample_once)
+                await asyncio.to_thread(sampler.sample_once, force=True)
             sampler.touch()
             return {
                 "nodes": _node_rows(sampler, getattr(d, "fleet", None)),
                 "sampling": sampler.status(),
                 "code_route": _code_route_view(),
                 "error": "",
+                "error_detail": "",
             }
         except Exception as exc:  # noqa: BLE001
             return {
                 "nodes": [],
                 "sampling": {},
                 "code_route": {},
-                "error": _err(exc),
+                "error": _read_failed_words(exc),
+                "error_detail": _program_words(exc),
             }
 
     @app.get("/fleet/nodes/{node_id}/history")
@@ -1021,7 +1095,10 @@ def register(app: FastAPI, d) -> None:
                 "node": _dump(node),
                 "tool_use": None,
                 "model": model,
-                "error": _err(exc),
+                # Second review F13 (E8): a sentence; the program's words
+                # under Details.
+                "error": plain_failure(_check_words(exc), exc),
+                "error_detail": _program_words(exc),
                 "hint": hint,
                 "answered": answered,
             }
@@ -1061,6 +1138,7 @@ def register(app: FastAPI, d) -> None:
         # transport fault must not permanently brand a multimodal node blind.
         vision: bool | None = None
         vision_error = ""
+        vision_error_detail = ""
         try:
             vresp = await adapter.complete(
                 system="You are a vision connectivity check.",
@@ -1083,7 +1161,8 @@ def register(app: FastAPI, d) -> None:
             answer = (getattr(vresp, "text", "") or "").strip().lower()
             vision = "red" in answer
         except Exception as exc:  # noqa: BLE001 — unknown capability, not False
-            vision_error = _err(exc)
+            vision_error = plain_failure(VISION_CHECK_FAILED, exc)
+            vision_error_detail = _program_words(exc)
         if vision is not None:
             _record_check(node_id, asked, default=None if model else True, vision=vision)
         return {
@@ -1091,6 +1170,7 @@ def register(app: FastAPI, d) -> None:
             "tool_use": tool_use,
             "vision": vision,
             "vision_error": vision_error,
+            "vision_error_detail": vision_error_detail,
             "model": asked,
             "error": "",
             "hint": "",
@@ -1118,6 +1198,7 @@ def register(app: FastAPI, d) -> None:
                 "tool_use": None,
                 "vision": None,
                 "error": "",
+                "error_detail": "",
             }
             if not node.routable:
                 out["error"] = "not routable — enable Routable to register it as a provider"
@@ -1175,7 +1256,8 @@ def register(app: FastAPI, d) -> None:
                     except Exception:  # noqa: BLE001 — vision unknown, tools stand
                         pass
                 except Exception as exc:  # noqa: BLE001 — this node only
-                    out["error"] = _err(exc)
+                    out["error"] = plain_failure(_check_words(exc), exc)
+                    out["error_detail"] = _program_words(exc)
             return out
 
         nodes = d.fleet.nodes()
@@ -1219,7 +1301,8 @@ def register(app: FastAPI, d) -> None:
                 "reason": "",
                 "snapshot": None,
                 "children": [],
-                "error": _err(exc),
+                "error": plain_failure(PROBE_FAILED, exc),
+                "error_detail": _program_words(exc),
             }
         return {
             "kind": kind,
@@ -1227,6 +1310,7 @@ def register(app: FastAPI, d) -> None:
             "snapshot": _dump(snapshot),
             "children": [_dump(c) for c in children],
             "error": "",
+            "error_detail": "",
         }
 
     # --- attribution + savings --------------------------------------------

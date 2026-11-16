@@ -273,6 +273,23 @@ class Refused(Exception):
         self.code = code
 
 
+def _start_failed_words(harness: str, exc: BaseException) -> str:
+    """v1.516.0 (H11): the sentence for a tool whose handshake broke while it
+    started. A sentence Iron Jarvis or the tool wrote for a person (its own
+    refusal class) is kept after "<Tool> did not start:"; anything else is
+    plain words, never an exception's name or a bare key (the raw text is
+    logged by ``plain_failure``)."""
+    from ..core.failures import own_sentence, plain_failure
+
+    name = W.label(harness)
+    said = own_sentence(exc)
+    if said:
+        return f"{name} did not start: {clip(said, 200)}"
+    if isinstance(exc, TimeoutError):
+        return plain_failure(f"{name} did not answer in time while it started.", exc)
+    return plain_failure(f"{name} did not start.", exc)
+
+
 def same_folder(a: Any, b: Any) -> bool:
     try:
         return os.path.normcase(os.path.normpath(str(a))) == os.path.normcase(os.path.normpath(str(b)))
@@ -2899,8 +2916,7 @@ class HostedService:
             # (it read "Stopped: the coding tool was closed", its reason lost).
             await self._stop_process(live, end_turn=False, lock_held=True)
             await self._undo_unwanted_start(live)  # closing: no words for a reply that is gone
-            said = exc.args[0] if exc.args else type(exc).__name__
-            raise Refused(f"{W.label(row.harness)} did not start: {clip(said, 200)}") from None
+            raise Refused(_start_failed_words(row.harness, exc)) from None
         await self._undo_unwanted_start(live)  # the handshake is a wait too
         if not took_before and JT.takes(row.harness) and JT.wanted(live.caps) and url:
             # v1.441.0 (review of lane fix1): this start's handshake said the

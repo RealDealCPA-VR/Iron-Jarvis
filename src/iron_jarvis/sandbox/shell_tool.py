@@ -306,8 +306,10 @@ class SandboxedShellTool(Tool):
         started with shell lines (or a later turn running one of its lines),
         the command asks first the same way (``harness/command_shell``)."""
         from ..harness.command_shell import tool_check
+        from ..harness.git_guard import spend_check_off_loop
 
-        return tool_check(args.get("command") if isinstance(args, dict) else "")
+        # v1.516.0: the git guard's file checks run off the event loop.
+        return await spend_check_off_loop(tool_check, args.get("command") if isinstance(args, dict) else "")
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         """Run the command (:meth:`_run`), then say whose words the output is.
@@ -337,9 +339,9 @@ class SandboxedShellTool(Tool):
         # v1.375.0: git the plan rules out on a session's branch (a force
         # push, deleting a branch, a history rewrite — harness/git_guard) is
         # refused before anything runs, whatever the posture.
-        from ..harness.git_guard import refusal
+        from ..harness.git_guard import refusal_off_loop
 
-        refused = refusal(args.get("command") if isinstance(args, dict) else "")
+        refused = await refusal_off_loop(args.get("command") if isinstance(args, dict) else "")
         if refused:
             return ToolResult(ok=False, output="", error=refused)
         policy = SandboxPolicy.from_config(getattr(ctx.config, "sandbox", {}))

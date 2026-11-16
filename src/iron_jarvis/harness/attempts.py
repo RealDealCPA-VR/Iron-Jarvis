@@ -1647,6 +1647,7 @@ async def _run_one(platform: Any, personas: dict, plan: Plan, a: Attempt, queue:
                    stopped: Any) -> None:
     """ONE attempt's turn (a harness turn of the stream lane, in its own
     worktree, under its own tool session); every frame goes to ``queue``."""
+    from ..core.failures import plain_failure
     from ..daemon.chat_stream import stream_chat_turn
     from ..daemon.durable_turns import parse_chunk
 
@@ -1665,7 +1666,10 @@ async def _run_one(platform: Any, personas: dict, plan: Plan, a: Attempt, queue:
                 **({"reply_cap": cap} if (cap := attempt_cap(plan, a)) is not None else {}),
             )
         except Exception as exc:  # noqa: BLE001 — the lane's eager refusal is this attempt's failure
-            queue.put_nowait(("frame", a.id, "error", json.dumps({"detail": str(getattr(exc, "detail", "") or exc)})))
+            # v1.516.0 (D10): the lane's own refusal (an HTTPException's
+            # detail) is kept; anything else is a plain sentence, raw text logged.
+            said = plain_failure("The attempt could not start because of an internal error.", exc)
+            queue.put_nowait(("frame", a.id, "error", json.dumps({"detail": said})))
             return
         async with contextlib.aclosing(gen) as frames:
             async for chunk in frames:
@@ -1676,7 +1680,9 @@ async def _run_one(platform: Any, personas: dict, plan: Plan, a: Attempt, queue:
         raise
     except Exception as exc:  # noqa: BLE001 — said on the row
         log.warning("an attempt (%s) broke outside its stream", a.id, exc_info=True)
-        queue.put_nowait(("frame", a.id, "error", json.dumps({"detail": f"The attempt stopped on an internal error ({type(exc).__name__})."})))
+        # v1.516.0 (D10): never the exception's name on the card (logged above).
+        said = plain_failure("The attempt stopped on an internal error.", exc)
+        queue.put_nowait(("frame", a.id, "error", json.dumps({"detail": said})))
     finally:
         with contextlib.suppress(BaseException):
             await asyncio.shield(_end_programs(a.sid))

@@ -61,7 +61,11 @@ def test_verify_all_reports_each_endpoint_independently(tmp_path, monkeypatch):
     g = rows[good["id"]]
     assert g["tool_use"] is True and g["vision"] is True and g["error"] == ""
     d_ = rows[dead["id"]]
-    assert d_["tool_use"] is None and "connection refused" in d_["error"]
+    assert d_["tool_use"] is None and d_["error"]
+    # v1.516.0 (second review F13, E8): a sentence, never the exception;
+    # the program's own words ride error_detail (the page's Details).
+    assert "RuntimeError" not in d_["error"] and "connection refused" not in d_["error"]
+    assert "RuntimeError: connection refused" in d_["error_detail"]
     w = rows[watch["id"]]
     assert "not routable" in w["error"]
 

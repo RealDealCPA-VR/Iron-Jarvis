@@ -52,6 +52,23 @@ export function targetWords(actionJson: string): string {
   return "";
 }
 
+/** v1.516.0: what the daemon stores in place of typed text
+ *  (`computeruse/approvals.TYPED_MARKER`, followed by a short digest). */
+export const TYPED_MARKER = "***REDACTED***";
+
+/** v1.516.0: the words a person reads for that stand-in. */
+export const HIDDEN_TYPED_WORDS = "typed text: hidden";
+
+/** An action's typed value as a card or a run's trace shows it: the stand-in
+ *  (marker plus digest) reads as {@link HIDDEN_TYPED_WORDS}, never as
+ *  `***REDACTED*** (sha256:…)`; any other value is quoted as before; none is "". */
+export function typedValueWords(value: unknown): string {
+  if (value === undefined || value === null || value === "") return "";
+  const text = String(value);
+  if (text.startsWith(TYPED_MARKER)) return HIDDEN_TYPED_WORDS;
+  return `value="${text}"`;
+}
+
 /** Which task the step belongs to: "For “Pay the March invoice”", else
  *  "For a browser task" (the run is not in the recent list). */
 export function queueRunWords(task: string | null | undefined): string {

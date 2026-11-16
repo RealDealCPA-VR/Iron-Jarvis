@@ -1740,6 +1740,110 @@ class ListFilesTool(Tool):
         )
 
 
+def _plain_grep(
+    base: Path, root: Path, rx: "re.Pattern[str]", *, deadline_s: "float | None" = None,
+    max_files: "int | None" = None, max_bytes: "int | None" = None, max_hits: "int | None" = None,
+    hits: "list[str] | None" = None, on_file: Any = None, line_limit: "int | None" = None,
+) -> "tuple[list[str], str, int, int]":
+    """``grep``'s ORIGINAL search (pattern and path only), lifted out of
+    the tool (v1.516.0, second review S4) so the search program
+    (``harness/search.plain_grep_bounded``) runs this very code for a
+    pattern that can backtrack. The limits are this module's, read when
+    called; ``hits`` collects the matches; ``on_file(rel, unreadable,
+    oversize)`` is called before a file is matched. BLOCKING."""
+    import time
+
+    deadline_s = _WALK_DEADLINE_S if deadline_s is None else deadline_s
+    max_files = _MAX_GREP_FILES if max_files is None else max_files
+    max_bytes = _MAX_GREP_FILE_BYTES if max_bytes is None else max_bytes
+    max_hits = _MAX_GREP_HITS if max_hits is None else max_hits
+    started = time.monotonic()
+    hits = [] if hits is None else hits
+    # Files we opened and could NOT turn into text. Counted, not dropped:
+    # the truncation note below already proves this tool reports what it
+    # could not cover, and a skipped file is the same kind of hole.
+    unreadable = 0
+    # Files over the size cap (v1.232.0, audit T7) — the same kind of
+    # hole, and it used to be silent: a 3 MB log the search "did not
+    # find" read exactly like one with no match.
+    oversize = 0
+    if base.is_file():
+        files, truncated = [base], ""
+    else:
+        files, truncated = _walk_files(base, limit=max_files, deadline_s=deadline_s)
+    for fp in files:
+        if time.monotonic() - started > deadline_s:
+            truncated = truncated or f"stopped after {deadline_s:.0f}s"
+            break
+        try:
+            # Skip anything too big to be worth scanning line-by-line;
+            # reading a 300MB log into memory on this path is what turns
+            # a slow search into an unresponsive app. Counted (v1.232.0).
+            if fp.stat().st_size > max_bytes:
+                oversize += 1
+                continue
+            raw = fp.read_bytes()
+        except (OSError, ValueError):
+            unreadable += 1
+            continue
+        # UTF-16 BEFORE the NUL sniff (v1.232.0, audit T7): every other
+        # byte of a UTF-16 file is a NUL, so a log PowerShell 5.1 wrote
+        # with `>` read as binary. The BOM says what it is.
+        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            try:
+                text = raw.decode("utf-16")
+            except UnicodeDecodeError:
+                unreadable += 1
+                continue
+        # The decoder below is TOTAL (latin-1 maps all 256 bytes), so it
+        # can no longer be the thing that keeps binaries out — the
+        # UnicodeDecodeError used to do that by accident. Sniff for NUL
+        # explicitly instead, exactly as `filesearch/service._read_text`
+        # does; without it every .png and .exe in the tree would be
+        # scanned as latin-1 mojibake and could produce junk matches.
+        elif b"\x00" in raw:
+            continue
+        else:
+            try:
+                text = _decode_text(raw)
+            except Exception:  # noqa: BLE001 — the decoder is total; this
+                # only fires if the documents package fails to import, which
+                # must degrade to a REPORTED skip, not a silent miss.
+                unreadable += 1
+                continue
+        if on_file is not None:
+            try:
+                shown = str(fp.relative_to(root)).replace("\\", "/")
+            except ValueError:
+                shown = fp.name
+            on_file(shown, unreadable, oversize)
+        try:
+            for i, line in enumerate(text.splitlines(), 1):
+                if line_limit is not None:
+                    # Lead's review of S4 (``search.in_process_line_limit``):
+                    # in this process a pattern with a repeat matches short
+                    # lines only, and the time limit is read between lines.
+                    if len(line) > line_limit:
+                        from ..harness.search import LineTooLong
+
+                        raise LineTooLong(str(fp))
+                    if not i % 64 and time.monotonic() - started > deadline_s:
+                        return hits, f"stopped after {deadline_s:.0f}s", unreadable, oversize
+                if rx.search(line):
+                    rel = str(fp.relative_to(root)).replace("\\", "/")
+                    hits.append(f"{rel}:{i}: {line.strip()}")
+                    if len(hits) >= max_hits:
+                        return (
+                            hits,
+                            f"stopped at {max_hits} matches",
+                            unreadable,
+                            oversize,
+                        )
+        except ValueError:  # a path outside root -> relative_to
+            continue
+    return hits, truncated, unreadable, oversize
+
+
 class GrepTool(Tool):
     name = "grep"
     description = (
@@ -1836,83 +1940,25 @@ class GrepTool(Tool):
             rx = re.compile(args["pattern"])
         except re.error as exc:
             return ToolResult(ok=False, error=f"bad regex: {exc}")
-        def _search():
-            import time
+        from ..harness.search import SearchError, plain_grep_bounded, plain_pattern
 
+        def _search():
             root = ctx.workspace.resolve()
-            started = time.monotonic()
-            hits: list[str] = []
-            # Files we opened and could NOT turn into text. Counted, not dropped:
-            # the truncation note below already proves this tool reports what it
-            # could not cover, and a skipped file is the same kind of hole.
-            unreadable = 0
-            # Files over the size cap (v1.232.0, audit T7) — the same kind of
-            # hole, and it used to be silent: a 3 MB log the search "did not
-            # find" read exactly like one with no match.
-            oversize = 0
-            if base.is_file():
-                files, truncated = [base], ""
-            else:
-                files, truncated = _walk_files(base, limit=_MAX_GREP_FILES)
-            for fp in files:
-                if time.monotonic() - started > _WALK_DEADLINE_S:
-                    truncated = truncated or f"stopped after {_WALK_DEADLINE_S:.0f}s"
-                    break
-                try:
-                    # Skip anything too big to be worth scanning line-by-line;
-                    # reading a 300MB log into memory on this path is what turns
-                    # a slow search into an unresponsive app. Counted (v1.232.0).
-                    if fp.stat().st_size > _MAX_GREP_FILE_BYTES:
-                        oversize += 1
-                        continue
-                    raw = fp.read_bytes()
-                except (OSError, ValueError):
-                    unreadable += 1
-                    continue
-                # UTF-16 BEFORE the NUL sniff (v1.232.0, audit T7): every other
-                # byte of a UTF-16 file is a NUL, so a log PowerShell 5.1 wrote
-                # with `>` read as binary. The BOM says what it is.
-                if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-                    try:
-                        text = raw.decode("utf-16")
-                    except UnicodeDecodeError:
-                        unreadable += 1
-                        continue
-                # The decoder below is TOTAL (latin-1 maps all 256 bytes), so it
-                # can no longer be the thing that keeps binaries out — the
-                # UnicodeDecodeError used to do that by accident. Sniff for NUL
-                # explicitly instead, exactly as `filesearch/service._read_text`
-                # does; without it every .png and .exe in the tree would be
-                # scanned as latin-1 mojibake and could produce junk matches.
-                elif b"\x00" in raw:
-                    continue
-                else:
-                    try:
-                        text = _decode_text(raw)
-                    except Exception:  # noqa: BLE001 — the decoder is total; this
-                        # only fires if the documents package fails to import, which
-                        # must degrade to a REPORTED skip, not a silent miss.
-                        unreadable += 1
-                        continue
-                try:
-                    for i, line in enumerate(text.splitlines(), 1):
-                        if rx.search(line):
-                            rel = str(fp.relative_to(root)).replace("\\", "/")
-                            hits.append(f"{rel}:{i}: {line.strip()}")
-                            if len(hits) >= _MAX_GREP_HITS:
-                                return (
-                                    hits,
-                                    f"stopped at {_MAX_GREP_HITS} matches",
-                                    unreadable,
-                                    oversize,
-                                )
-                except ValueError:  # a path outside root -> relative_to
-                    continue
-            return hits, truncated, unreadable, oversize
+            # v1.516.0 (S4): a pattern that can backtrack is matched by the
+            # search program, killed at the limit (``re`` holds the
+            # interpreter lock: in this process it froze the whole daemon).
+            # Lead's review: ``plain_grep_bounded`` itself keeps a pattern
+            # that is safe on short lines in this process.
+            if plain_pattern(args["pattern"]):
+                return _plain_grep(base, root, rx)
+            return plain_grep_bounded(base, root, args["pattern"])
 
         # Offloaded: unlike the old inline version, a pathological tree can now
         # only ever slow down THIS request instead of the whole daemon.
-        hits, truncated, unreadable, oversize = await asyncio.to_thread(_search)
+        try:
+            hits, truncated, unreadable, oversize = await asyncio.to_thread(_search)
+        except SearchError as exc:  # the search program could not run: said, never a crash
+            return ToolResult(ok=False, error=str(exc))
         out = "\n".join(hits)
         if truncated:
             out += f"\n\n[search truncated — {truncated}. Narrow `path` or the pattern.]"

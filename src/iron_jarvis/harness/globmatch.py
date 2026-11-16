@@ -25,6 +25,13 @@ import re
 
 #: A pattern may expand into at most this many alternatives.
 MAX_BRACE_EXPANSIONS = 64
+#: v1.516.0 (found with second review S4): a glob becomes a ``re`` pattern,
+#: and ``re`` holds the interpreter lock while it matches. Eight ``**/`` in a
+#: row against a 40-folder path took over five seconds with the whole app
+#: standing still. ``**/**/`` means what ``**/`` means, so a run of them is
+#: one; past these counts the pattern is refused in words.
+MAX_DEEP_PARTS = 5
+MAX_STARS_IN_A_NAME = 4
 #: Characters that make a path segment a pattern, not a literal folder.
 GLOB_CHARS = frozenset("*?[{")
 
@@ -129,7 +136,27 @@ def normalize_pattern(pattern: str) -> str:
     parts = [p for p in text.split("/") if p not in ("", ".")]
     if any(p == ".." for p in parts):
         raise GlobError("the pattern may not climb out of the folder with '..'")
-    return "/".join(parts)
+    # v1.516.0: "**/**/" is "**/" (the same files), so a run of them is one.
+    kept: list[str] = []
+    for p in parts:
+        if p == "**" and kept and kept[-1] == "**":
+            continue
+        kept.append(p)
+    if sum(1 for p in kept if p == "**") > MAX_DEEP_PARTS:
+        raise GlobError(
+            f"the pattern uses '**' more than {MAX_DEEP_PARTS} times, which can take a very "
+            "long time to match; use fewer"
+        )
+    for p in kept:
+        if p == "**":
+            continue
+        # Each choice inside braces is its own name.
+        if max(piece.count("*") for piece in re.split(r"[{},]", p)) > MAX_STARS_IN_A_NAME:
+            raise GlobError(
+                f"one name in the pattern uses '*' more than {MAX_STARS_IN_A_NAME} times, which "
+                "can take a very long time to match; use fewer"
+            )
+    return "/".join(kept)
 
 
 @functools.lru_cache(maxsize=256)

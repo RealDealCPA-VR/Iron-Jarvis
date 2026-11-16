@@ -28,6 +28,9 @@ INERT_MCP_SUBCOMMAND = "claude-inert-mcp"
 OCR_WORKER_SUBCOMMAND = "ocr-worker"
 #: v1.466.0: the live-Excel child (iron_jarvis/excel_worker.py).
 EXCEL_WORKER_SUBCOMMAND = "excel-worker"
+#: v1.516.0: the search child (iron_jarvis/harness/search.py): a pattern that
+#: can backtrack is matched there and killed at the time limit.
+SEARCH_WORKER_SUBCOMMAND = "search-worker"
 
 #: v1.333.0: the two other self-re-exec children take the same door. Through
 #: the Typer app each one imported the whole daemon (platform, orchestrator,
@@ -68,6 +71,12 @@ def _fast_path(argv: list[str]) -> int | None:
         from iron_jarvis.excel_worker import main as excel_main
 
         return excel_main()
+    if argv == [SEARCH_WORKER_SUBCOMMAND]:
+        # v1.516.0: one search with a pattern that can backtrack, killed at
+        # its limit (`re` holds the interpreter lock while it matches).
+        from iron_jarvis.harness.search import main as search_main
+
+        return search_main()
     if argv == [REPL_WORKER_SUBCOMMAND]:
         from iron_jarvis.repl.worker import main as worker_main
 

@@ -117,7 +117,7 @@ async def test_omitted_is_the_old_budget_and_the_old_escalation(wired):
     assert len(model.calls) == chat_turn._MAX_TOOL_ROUNDS == 6
     assert invoked["n"] == 5
     assert got["done"]["escalate"] is True
-    assert "stopped after 5 tool rounds" in got["done"]["reply"]
+    assert "I stopped after 5 model calls" in got["done"]["reply"]
 
 
 async def test_passing_the_defaults_explicitly_changes_nothing(wired):
@@ -162,7 +162,7 @@ async def test_stream_lane_runs_the_callers_budget_and_ends_in_chat(wired):
     assert got["rounds"] == 9
     assert invoked["n"] == 8
     assert got["done"]["escalate"] is False
-    assert "stopped after 8 tool rounds" in got["done"]["reply"]
+    assert "I stopped after 8 model calls" in got["done"]["reply"]
     assert got["done"]["reply"].startswith("Here is where it stands.")
 
 
@@ -192,7 +192,7 @@ async def test_post_lane_runs_the_callers_budget_and_ends_in_chat(wired):
     assert model.calls == [True] * 9 + [False]
     assert invoked["n"] == 8
     assert out["escalate"] is False
-    assert "stopped after 8 tool rounds" in out["reply"]
+    assert "I stopped after 8 model calls" in out["reply"]
 
 
 async def test_post_lane_default_is_untouched(wired):
