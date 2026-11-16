@@ -2,7 +2,7 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
-## v1.507.0
+## v1.507.1
 
 **It learns from what went wrong.** The last part of the review fixes: Iron Jarvis now notices when something went wrong and asks whether to remember it.
 

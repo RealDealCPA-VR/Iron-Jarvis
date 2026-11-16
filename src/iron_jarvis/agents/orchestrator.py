@@ -1292,13 +1292,32 @@ class Orchestrator:
         # v1.505.0 (north-star 5.4): off the loop, like the finish's save (a
         # long writer holding the file must not park every door's start); the
         # row still lands BEFORE anyone is told the session exists.
-        await off_loop_settled(self._save, session)
-        await self.p.event_bus.publish(
-            EventType.SESSION_CREATED,
-            {"task": task, "agent": agent_type.value, "workspace": session.workspace_path},
-            session_id=session.id,
-        )
+        try:
+            await off_loop_settled(self._save, session)
+            await self.p.event_bus.publish(
+                EventType.SESSION_CREATED,
+                {"task": task, "agent": agent_type.value, "workspace": session.workspace_path},
+                session_id=session.id,
+            )
+        except asyncio.CancelledError:
+            # v1.507.1: a stop that lands HERE (a review's time limit, Stop on
+            # a supervisor) finds the row saved and the caller without its id:
+            # the cancel propagates, nobody could ever settle the run, and it
+            # read "active" for ever. Settle it before the cancel goes on.
+            await self._settle_never_started(session)
+            raise
         return session
+
+    async def _settle_never_started(self, session: Session) -> None:
+        """Mark a run that was stopped before anyone could start it CANCELLED
+        (``_finalize_cancelled`` with the queue's own words). Called while a
+        cancel unwinds: never raises, so nothing displaces that cancel."""
+        try:
+            await self._finalize_cancelled(session, reason=STOPPED_BEFORE_START)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - the unwind goes on either way
+            log.warning("a run stopped before it started could not be settled", exc_info=True)
 
     def _project_folder(self, project_id: str) -> tuple[str | None, str]:
         """``(folder, note)`` for a project-tagged session with no explicit

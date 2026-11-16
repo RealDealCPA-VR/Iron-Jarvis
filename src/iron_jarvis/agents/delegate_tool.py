@@ -776,27 +776,30 @@ class DelegateTool(Tool):
                 # then — every other call keeps its exact kwargs).
                 **({"options": _helper_options} if _helper_options else {}),
             )
-            await publish_delegation_started(
-                self.platform,
-                session_id=ctx.session_id,
-                parent_run_id=ctx.agent_run_id,
-                child_session_id=child_session.id,
-                target=target_name,
-                task=task,
-                role=_team_role if _route is not None else "",
-                reason=_route.reason if _route is not None else "",
-            )
-            # v1.372.0: the harness row starts following the helper.
-            _helpers.child_started(_hp, self.platform, child_session.id, target_name, task)
-            # v1.403.0: a piece really started on a worker of the session's team.
-            _helpers.note_team_piece(_hp, target_name)
-
             # The child must ALWAYS settle (v1.167.0). A bare await left the child
             # session ACTIVE forever when the parent was cancelled mid-delegation
             # (Stop on a supervisor) or the child's runtime raised (a provider
             # refusing per the v1.162.0 no-mock rule) — never finalized, never
             # learned from, lying on the kanban board.
+            # v1.507.1: the guard starts where the child's row EXISTS. The
+            # announcement used to sit before it, so a stop that landed while
+            # the hand-off was being announced (a review's time limit on a
+            # slow start, seen on GitHub) left the child "active" for ever.
             try:
+                await publish_delegation_started(
+                    self.platform,
+                    session_id=ctx.session_id,
+                    parent_run_id=ctx.agent_run_id,
+                    child_session_id=child_session.id,
+                    target=target_name,
+                    task=task,
+                    role=_team_role if _route is not None else "",
+                    reason=_route.reason if _route is not None else "",
+                )
+                # v1.372.0: the harness row starts following the helper.
+                _helpers.child_started(_hp, self.platform, child_session.id, target_name, task)
+                # v1.403.0: a piece really started on a worker of the session's team.
+                _helpers.note_team_piece(_hp, target_name)
                 # v1.307.0: the child is VISIBLY working for its team (roster
                 # liveness, the mission view's cards) and its stream mirrors to
                 # the team root — display only, see agents/team.py.

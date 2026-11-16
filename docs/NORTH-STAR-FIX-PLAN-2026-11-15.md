@@ -456,7 +456,9 @@ the routing call rather than the model's own lookup.
 
 Area rules: `docs/rules/memory.md`.
 
-**Shipped in v1.507.0.** As built, where it differs from the lines below:
+**Shipped in v1.507.1** (v1.507.0 was never published: its release run
+failed one test, see "Found along the way"). As built, where it differs
+from the lines below:
 7.1 the three doors are in `learning/went_wrong.py`. A correction of
 substance is read in ONE shape only ("no, this, not that" in plain lower-case
 words, straight after a reply, no model call). An undo is linked only when
@@ -495,7 +497,7 @@ with a scan test and an allow list for the sites whose text is the code's own
 sentence. 8.4: the Autonomy page and the watcher line say "Suggestions", and
 "proposal" is on the dashboard's retired-word list.
 
-**8.2 and 8.3 shipped in v1.507.0.** 8.2: `system_map._node` takes each
+**8.2 and 8.3 shipped in v1.507.1.** 8.2: `system_map._node` takes each
 star's name and link from `daemon/pages.py`; "Sessions", "Chats" and "Models"
 became "Agent runs", "Chat" and "Connections"; new stars for Improvements
 (no count: its suggestions live in eleven stores) and Clients. 8.3: the three
@@ -540,6 +542,15 @@ to `.github/workflows`, left for the owner.
   transcript, so none was sent a message. Fixed for the whole suite by
   `tests/_real_tool_guard.py` (see `docs/rules/ci.md`). GitHub's runners have
   no coding tool installed, so the suite never showed it there.
+- **A helper stopped while its run was being created or announced stayed
+  "active" for ever** (found 2026-11-16 by v1.507.0's release run, fixed in
+  v1.507.1). `tests/test_team_review_finish_ship_v1401.py` gives a review a
+  0.5 s limit; on one GitHub worker the reviewer's start took that long
+  (1 ms on this PC; why is not known), the stop landed before the
+  hand-off's settle guard, and the run was never settled. The test failed
+  on its retry too, so nothing was published. The hole is older than this
+  plan. Fixed in `Orchestrator.create_session` and `delegate`; the same
+  window in the follow-up path (`continue_session`) is open.
 - **A coding tool whose start is in flight when Iron Jarvis shuts down is
   started anyway** (open). `hosted/service.py` sets `_closing` in `shutdown`
   but neither `_ensure_process` nor `_start_process` reads it after their

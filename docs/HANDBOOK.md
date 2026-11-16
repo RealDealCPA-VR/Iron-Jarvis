@@ -2042,11 +2042,13 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## It learns from what went wrong (v1.507.0)
+## It learns from what went wrong (v1.507.1)
 
 The last part of the review fixes: Iron Jarvis now notices when something
 went wrong and asks whether to remember it. Nothing below changes how it
-works until you press Keep.
+works until you press Keep. (v1.507.0 was never published: its last check
+found the stopped-helper problem at the end of this list, which is fixed
+here.)
 
 - **A thumbs-down note waits for your yes.** The note you type under a
   thumbs-down ("What should be different next time?") used to become a rule
@@ -2087,6 +2089,11 @@ works until you press Keep.
   you are not at the app, the reply now says "it needs your OK, which can
   only be given in the Iron Jarvis window". It used to say "this lane cannot
   ask for approval; use the chat page (POST /chat/stream)".
+- **A helper stopped as it starts is really stopped.** When a helper agent
+  was stopped in the instant its run was being set up (a review that hit
+  its time limit on a slow start, or Stop pressed at that moment), its run
+  stayed listed as "active" for good. It is now marked stopped, and says it
+  was stopped before it started.
 
 ## Ask for anything in chat (v1.506.0)
 
