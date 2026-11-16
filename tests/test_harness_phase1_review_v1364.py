@@ -277,7 +277,10 @@ async def test_a_write_that_fails_part_way_is_put_back_too(tmp_path, monkeypatch
     real = Path.write_bytes
 
     def disk_full(self, data):
-        if self.name == "b.txt" and data != before["b.txt"]:
+        # v1.510.0 (T4, moved on purpose): the patch saves each file through
+        # a hidden temp beside it (`atomic_write_bytes`); the full disk hits
+        # whichever b.txt write comes first.
+        if (self.name == "b.txt" or self.name.startswith(".b.txt.tmp-")) and data != before["b.txt"]:
             with open(self, "wb") as fh:
                 fh.write(data[:2])
             raise OSError(28, "No space left on device")

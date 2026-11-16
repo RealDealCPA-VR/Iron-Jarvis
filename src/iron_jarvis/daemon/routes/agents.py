@@ -3225,11 +3225,15 @@ def register(app: FastAPI, d) -> None:
         )
         if not ok:
             raise HTTPException(status_code=401, detail="invalid inbound token")
-        # A paired computer's answer counts as hearing from it (v1.497.0).
+        # A paired computer's answer counts as hearing from it (v1.497.0);
+        # v1.510.0 (F3): so what this computer still owes it goes now.
         try:
             from ...peers.store import store_for
 
             await asyncio.to_thread(store_for(d.platform).note_heard_by_remote, name, _source)
+            _heard_peer = await asyncio.to_thread(store_for(d.platform).get, name)
+            if _heard_peer is not None:
+                _owed_go_home(_heard_peer, _source)
         except Exception:  # noqa: BLE001 — bookkeeping only
             pass
         if not _inbound_rate_ok(name):
@@ -3279,6 +3283,25 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(
                 status_code=403, detail="this remote agent is not a participant of that conversation"
             )
+        # v1.510.0 (second review F3): another Iron Jarvis tries an answer
+        # again until it hears a 2xx, so a try whose 2xx was lost arrives
+        # twice. An answer this room already holds (same remote, same
+        # ``answer_id``) is answered as taken and lands nowhere again —
+        # checked here before any file is fetched, and again under the
+        # append's lock (``AgentThreads.add_inbound_entry``).
+        answer_id = str(body.get("answer_id") or "").strip()[:200]
+
+        def _repeat_answer() -> dict[str, Any]:
+            return {
+                "ok": True, "thread_id": room.id, "entries": None, "kind": kind,
+                "documents": [], "skipped": [], "phoned": False,
+                "phone_rate_limited": False, "homed": False, "repeat": True,
+            }
+
+        if answer_id and await asyncio.to_thread(
+            AgentThreads(d.platform.engine).has_answer, room.id, who, answer_id
+        ):
+            return _repeat_answer()
 
         # FILES — the same trust boundary the delegate tool uses; landed in a
         # per-agent inbox, never in a workspace the remote did not earn.
@@ -3344,12 +3367,17 @@ def register(app: FastAPI, d) -> None:
         if notes:
             text += "\n\nNot saved:\n" + "\n".join(f"- {n}" for n in notes)
 
+        from ...agents.threads import RepeatAnswer
+
         try:
             count = await threads.add_inbound_entry(
-                room.id, who, text, d, kind=kind, documents=documents or None
+                room.id, who, text, d, kind=kind, documents=documents or None,
+                answer_id=answer_id,
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="no such conversation")
+        except RepeatAnswer:
+            return _repeat_answer()
         # A PHONE conversation hears it too — on the thread and on the phone.
         phoned = False
         phone_rate_limited = False
@@ -3537,6 +3565,26 @@ def register(app: FastAPI, d) -> None:
         client = getattr(request, "client", None)
         return str(getattr(client, "host", "") or "") if client else ""
 
+    def _owed_go_home(peer: Any, source: str) -> None:
+        """v1.510.0 (second review F3): a computer was just heard from — a
+        task, a probe or a Check press reached this door, or its answer came
+        home — so the answers this computer still owes it are tried now
+        (``task_door.retry_owed_soon``, on a tracked task, at most once a
+        minute per computer). v1.509.0's rules hold: a paired computer heard
+        from ANOTHER address than its pairing's proves nothing about that
+        address, so it starts nothing; the answer still goes to the pairing,
+        by id, at its stored address. ``peer`` None = the hand-made door.
+        Never raises."""
+        from ...agents import task_door as td
+
+        try:
+            if peer is None:
+                td.retry_owed_soon(d.platform, door=td.DOOR_HAND)
+            elif not td.came_from_elsewhere(source, getattr(peer, "address", "")):
+                td.retry_owed_soon(d.platform, peer_id=str(peer.id))
+        except Exception:  # noqa: BLE001 — bookkeeping only
+            log.warning("task door: the owed answers could not be started", exc_info=True)
+
     async def _door_check(request: Request):
         """The door's locks, fail-closed and off the loop. A PAIRED computer
         (v1.497.0, ``peers/``) shows the token this computer made for it and
@@ -3584,6 +3632,8 @@ def register(app: FastAPI, d) -> None:
             await asyncio.to_thread(
                 store_for(d.platform).note_heard, peer.id, _source_of(request)
             )
+        # v1.510.0 (F3): it was heard from — what is still owed to it goes.
+        _owed_go_home(peer, _source_of(request))
         return {"ok": True, "takes_tasks": True}
 
     @app.post(_TASK_DOOR_PATH, status_code=202)
@@ -3718,6 +3768,8 @@ def register(app: FastAPI, d) -> None:
             await asyncio.to_thread(store_for(d.platform).note_heard, peer.id, source)
         else:
             await asyncio.to_thread(door.note_task, session.id)
+        # v1.510.0 (F3): it was heard from — what is still owed to it goes.
+        _owed_go_home(peer, source)
         d._spawn_bg(session.id, orchestrator.run_session(session.id))
         return {"accepted": True}
 

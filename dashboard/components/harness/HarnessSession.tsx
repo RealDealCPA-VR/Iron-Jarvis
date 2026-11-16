@@ -50,7 +50,15 @@ import { carriedOn, carriedOnTurns, continuedTurns } from "@/lib/buildResume";
 import { PROVIDER_WAIT_FRAME, decodeProviderWait, dropCodePoints, type ProviderWait } from "@/lib/buildPatience";
 import { useDaemon } from "@/lib/daemon";
 import { useModels } from "@/lib/useModels";
-import { useChatStream, useLiveText, StreamError, type StreamSeed } from "@/lib/useChatStream";
+import {
+  useChatStream,
+  useLiveText,
+  StreamError,
+  stepsFromTools,
+  type ChatStreamResult,
+  type StreamSeed,
+} from "@/lib/useChatStream";
+import { paneReplyWork } from "@/components/terminal/paneWork";
 // v1.384.0: where the user was — the session, its running reply, the scroll.
 import {
   atBottomOf,
@@ -276,18 +284,24 @@ import {
   KEEP_GOING_TEXT,
   getSession,
   isMissing,
+  keepUnsavedReply,
   NO_FOLDER_NAME,
   noFolderEmptyWords,
+  notSavedOf,
   patchSession,
   planFromCards,
+  pruneUnsavedReplies,
   shownMessages,
   readSentSteers,
   unreadSteersFor,
+  unsavedRepliesFor,
   withSteersRestored,
+  withUnsavedReplies,
   writeSentSteers,
   type AskUserAsk,
   type BuildMessage,
   type BuildSessionView,
+  type UnsavedReply,
 } from "@/lib/buildSessions";
 
 /** How many times a finished turn's reply is looked for before giving up. */
@@ -696,6 +710,12 @@ export function HarnessSession({
   // back yet — its live block stays up until the transcript holds the reply
   // (or the read gave up), so the answer never blinks out and back in.
   const [held, setHeld] = useState<string | null>(null);
+  // v1.510.0 (S2): a turn whose last frame said the session could not keep
+  // its reply (or its approved plan) — `notSaved`, the daemon's sentence.
+  // Such a reply is KEPT as it was drawn live (lib/buildSessions
+  // withUnsavedReplies) until the session's own transcript holds it.
+  const notSavedRef = useRef<{ turnId: string; words: string } | null>(null);
+  const [unsaved, setUnsaved] = useState<UnsavedReply[]>(() => unsavedRepliesFor(threadId));
   const [error, setError] = useState<string | null>(null);
   // v1.418.0 (C2.6): the start composer's first message went out (once).
   const firstTakenRef = useRef(false);
@@ -1151,6 +1171,9 @@ export function HarnessSession({
     setAttempts(pageRef.current.attempts);
   }, []);
   const onFrame = useCallback((event: string, data: Record<string, unknown>) => {
+    // v1.510.0 (S2): the last frame says what the session could not keep.
+    const notSaved = notSavedOf(event, data);
+    if (notSaved && turnRef.current) notSavedRef.current = { turnId: turnRef.current, words: notSaved };
     if (event === "resume") {
       // A tagged follow (v1.384.0): what comes up to `caught_up` is folded,
       // not drawn; `resumed: false` is the whole turn — fold it from nothing.
@@ -1259,7 +1282,12 @@ export function HarnessSession({
   /** After a turn: adopt what the daemon wrote, put unread steer notes back
    *  in the box, and send what was waiting. */
   const settle = useCallback(
-    async (finished: string, unread: readonly string[], clean: boolean) => {
+    async (
+      finished: string,
+      unread: readonly string[],
+      clean: boolean,
+      notSaved?: { words: string; live: BuildMessage } | null,
+    ) => {
       // THE SESSION VIEW IS THE TRUTH. The daemon writes the reply line —
       // and the limit card a turn ended on — BEFORE it passes the turn's
       // last frame on (v1.369.0 review, routes/build `recorded_turn`), so the
@@ -1272,6 +1300,17 @@ export function HarnessSession({
         if (!v || !v.running) break;
         if (v.messages.some((m) => m.role === "assistant" && m.turnId === finished)) break;
         if (i < REREAD_TRIES - 1) await sleep(REREAD_GAP_MS);
+      }
+      // v1.510.0 (S2): the session could not keep this turn's end. A reply
+      // its transcript does not hold is KEPT as it was drawn live (words,
+      // steps, files) with the daemon's sentence, until a later read holds
+      // it; a reply it does hold carries the sentence (an approved plan that
+      // could not be saved). Set in the same render as the hold ends.
+      if (notSaved) {
+        const saved = !!v?.messages.some((m) => m.role === "assistant" && m.turnId === finished);
+        setUnsaved(
+          keepUnsavedReply(threadId, { turnId: finished, words: notSaved.words, reply: saved ? null : notSaved.live }),
+        );
       }
       // v1.417.0 (C2.2): the saved reply is in (or the read gave up): the
       // live block it stood in for goes in the SAME render as the view.
@@ -1439,6 +1478,8 @@ export function HarnessSession({
       let retired = !!rejoinId;
       let unread: string[] = [];
       let clean = false;
+      let ended: ChatStreamResult | null = null;
+      if (notSavedRef.current?.turnId === id) notSavedRef.current = null;
       const onPosition = (pos: string) => {
         posRef.current = pos;
         keepRunning(id, pos);
@@ -1525,6 +1566,7 @@ export function HarnessSession({
         );
         unread = res.unreadSteers ?? [];
         clean = true;
+        ended = res;
       } catch (e) {
         if (e instanceof StreamError && e.status === 409) {
           // Already answering (another window, a resumed wait): follow it.
@@ -1582,7 +1624,34 @@ export function HarnessSession({
         }
       }
       if (!started || leavingRef.current) return;
-      let v = await settle(id, unread, clean);
+      // v1.510.0 (S2): the session could not keep this turn's end — the reply
+      // as it was drawn: the `done` frame's result, or (an `error` frame) the
+      // stream's own last state.
+      let notSaved: { words: string; live: BuildMessage } | null = null;
+      if (notSavedRef.current?.turnId === id) {
+        const words = notSavedRef.current.words;
+        notSavedRef.current = null;
+        const seed = ended ? null : (stream.seedOf?.() ?? null);
+        const at = new Date().toISOString();
+        const live: BuildMessage = ended
+          ? {
+              role: "assistant",
+              content: ended.reply,
+              turnId: id,
+              ...(ended.documents?.length ? { documents: ended.documents } : {}),
+              ...(ended.tools_used?.length ? { toolsUsed: ended.tools_used } : {}),
+              ...(ended.route ? { route: ended.route } : {}),
+              ...paneReplyWork(ended, at),
+            }
+          : {
+              role: "assistant",
+              content: seed?.text ?? "",
+              turnId: id,
+              ...paneReplyWork({ steps: seed ? stepsFromTools(seed.tools) : [], thinking: seed?.thinking ?? "" }, at),
+            };
+        notSaved = { words, live };
+      }
+      let v = await settle(id, unread, clean, notSaved);
       // v1.402.0: AN APPROVED PLAN RUNS. When this turn approved a plan and
       // ended cleanly, the daemon starts the act turn BY ITSELF (the view
       // says `planRun` until it runs): read again (bounded) and FOLLOW it —
@@ -2813,14 +2882,20 @@ export function HarnessSession({
   // v1.377.0: a Compact found running when the session opened — read the
   // session again until it ends (then the meter shows the summary).
   useVisibleInterval(() => void load(), COMPACT_REREAD_MS, elsewhereCompacting);
+  // v1.510.0 (S2): a kept reply the session's transcript now holds (put back
+  // at the next start) is forgotten — it is never drawn twice.
+  useEffect(() => {
+    if (view?.messages) setUnsaved(pruneUnsavedReplies(threadId, view.messages));
+  }, [threadId, view?.messages]);
   const shown: BuildMessage[] = useMemo(() => {
     // The daemon's own "carry on" questions are not shown (Phase 5).
-    const base = shownMessages(view?.messages ?? []);
+    // v1.510.0 (S2): with each reply the session could not keep put back.
+    const base = withUnsavedReplies(shownMessages(view?.messages ?? []), unsaved);
     if (!pending) return base;
     // The daemon wrote the question already (a re-read mid-turn): not twice.
     const dup = base.some((m) => m.role === "user" && m.content === pending.content && m.turnId && m.turnId === turnId);
     return dup ? base : [...base, pending];
-  }, [view?.messages, pending, turnId]);
+  }, [view?.messages, pending, turnId, unsaved]);
   // v1.417.0 (C2.1): read off the tool cards ONCE per change of them — the
   // panes are memoised and must see the same object until a card moves.
   const livePlan = useMemo(() => planFromCards(stream.tools), [stream.tools]);

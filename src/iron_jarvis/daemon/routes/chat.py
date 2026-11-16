@@ -8112,6 +8112,15 @@ async def chat_stream(
                         # session's failed reply is continued at low trust
                         # (lock-step: chat_turn's 502).
                         **_chat_turn.failed_trust_keys(_trust_state),
+                        # v1.510.0 (second review, L4): what the turn already
+                        # did — the steps that ran, the files they made or
+                        # changed (absolute) and one sentence from the
+                        # journal; {} when nothing ran. MIRROR NOTE
+                        # (lock-step): chat_turn.run_chat_turn's 502.
+                        **await _chat_turn.failed_work_keys(
+                            d.platform, tools_used=tools_used, made_docs=made_docs,
+                            since=turn_started, session=_tool_session, write_gap=_write_gap,
+                        ),
                     },
                     handle,
                 ),

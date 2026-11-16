@@ -154,6 +154,31 @@ REMEDIES: dict[BrowserErrorCode, str] = {
 }
 
 
+#: v1.510.0 (second review B3): the codes that, on an ACTING call whose frame
+#: was sent, mean the ANSWER was lost — not that nothing happened. The browser
+#: may have clicked, typed or navigated already, so the remedies above ("retry
+#: the call once", "retry against the connected browser") would make a form
+#: submit twice. ``BROWSER_NOT_CONNECTED`` counts only when the browser was
+#: connected as the call was sent (the tool decides that); with no browser at
+#: all nothing went, and its pairing remedy stays. A READ keeps the remedies
+#: above: reading again changes nothing. Plain strings, because
+#: ``BrowserError.code`` is one.
+ANSWER_LOST_CODES: frozenset[str] = frozenset(
+    {
+        BrowserErrorCode.ACTION_TIMEOUT.value,
+        BrowserErrorCode.CONNECTION_REPLACED.value,
+        BrowserErrorCode.BROWSER_NOT_CONNECTED.value,
+    }
+)
+
+#: What the model reads instead, for an acting call in that state. No "retry":
+#: the next step is to look at the page.
+UNKNOWN_OUTCOME_MESSAGE = (
+    "The browser did not answer, so this may already have happened on the page. "
+    "Read the page before doing it again."
+)
+
+
 def remedy(code: BrowserErrorCode | str, **fmt: Any) -> str:
     """The remedy sentence for ``code``, with ``fmt`` substituted where asked.
 
@@ -220,7 +245,9 @@ class BrowserError(Exception):
 
 
 __all__ = [
+    "ANSWER_LOST_CODES",
     "REMEDIES",
+    "UNKNOWN_OUTCOME_MESSAGE",
     "BrowserError",
     "BrowserErrorCode",
     "browser_error",

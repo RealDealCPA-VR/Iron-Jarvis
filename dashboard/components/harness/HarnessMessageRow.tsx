@@ -443,6 +443,22 @@ function HarnessMessageRowImpl({
             </p>
           ) : null;
         })()}
+        {/* v1.510.0 (S2): the session could not keep this reply (or the
+            plan it approved) — the daemon's own sentence, in the limit
+            line's warn tone. A kept reply drawn from the live one has it
+            until the session's own transcript holds that reply. */}
+        {m.notSaved ? (
+          <p
+            data-testid="harness-reply-not-saved"
+            role="status"
+            className="mt-1 flex items-start gap-1.5 text-[12px] text-tone-warn"
+          >
+            <CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden />
+            <span data-testid="harness-reply-not-saved-words" className="min-w-0 break-words">
+              {m.notSaved}
+            </span>
+          </p>
+        ) : null}
         {/* Harness gaps (fix 2): the chat's failure line at a
             session's scale (HarnessFailure) — the sentence (or its
             headline beside a press), Sign in / the key link, Retry on
@@ -529,8 +545,9 @@ function HarnessMessageRowImpl({
             {...receiptFacts(m)}
           />
           {/* v1.377.0: a new session with the conversation up to
-              and including this reply. */}
-          {m.turnId ? (
+              and including this reply. v1.510.0 (S2): not from a reply
+              the session could not keep (it has no such reply yet). */}
+          {m.turnId && !m.keptLive ? (
             <BranchButton
               at="reply"
               turnId={m.turnId}

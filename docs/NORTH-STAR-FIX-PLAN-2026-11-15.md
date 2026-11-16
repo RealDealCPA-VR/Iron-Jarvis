@@ -527,6 +527,8 @@ it did (15 to 17 minutes), so the suite did not slow down.
 | v1.504.0 release | `test_build_app_check_again_v1497` (waited with fixed 0.1 s sleeps) | Fixed in v1.505.0: waits for the reply's turn to end |
 | group 5, branch | `test_records_build_review_v14380::test_the_fresh_matchers_stay_linear` (wall-clock bound in a fresh interpreter) | Fixed in v1.506.0: warms up before timing. The matchers' timings are unchanged since v1.502.0 |
 | group 5, branch | `test_records_projects_v14350::test_agent_pause_and_undo_puts_back_the_day_off_exactly` | 12 of 12 locally. GitHub keeps no trace of a first try, so the cause is unknown. Not changed |
+| group 9, branch (2nd run) | `test_north_star_lesson_tidy_v1501::test_a_tidy_pass_publishes_one_event_naming_what_it_merged` | Fixed in v1.510.0: two notes written in the same clock tick tied on their time, so either could be merged into the other. The later row now always counts as newer (`learning/engine.dedup`), pinned by a test that gives both notes one time |
+| group 9, branch (1st run) | no test named: shard 6 ran 30 minutes (others 9 to 15) and was cancelled; GitHub kept no log | Not reproduced: the same files passed here (2,281 in 8 minutes) and the second run's shard 6 took 15 minutes. Cause unknown. If a shard hangs again, let it reach its 45-minute limit so the log is kept |
 
 To find the cause of an unexplained one, the test run would need to print
 a retried test's first failure (`-rR` shows only its name); that is a change
@@ -593,7 +595,7 @@ Severity counts: 12 high, 40 medium, 46 low.
   the schema and the config field mention it; the page says "Coding work
   goes to <server>". Fix: wire it in the router (refuse by name when the
   server is down) or say it is not in effect.
-- [ ] **F3 (3, high, checked). An answer from another computer is sent
+- [x] **F3 (3, high, checked). An answer from another computer is sent
   once.** `agents/task_door.py:504-516` deletes the answer key before the
   POST; `666-673` allows one attempt; the asking chat and mission card wait
   for ever (`agents/threads.py:1941-1947`, `agents/mission.py:1582-1621`).
@@ -643,7 +645,7 @@ or types on the Windows desktop.
   `browser/tools.py:1075-1085` never passes `press_enter` or the key to the
   risk check; the add-on then calls `form.requestSubmit()`
   (`extensions/chrome/src/content/actions.ts:763-780`).
-- [ ] **B3 (1, medium, checked).** When the answer to a click is lost the
+- [x] **B3 (1, medium, checked).** When the answer to a click is lost the
   model is told to retry, so the action can run twice
   (`browser/errors.py:115-118, 149-153`; `browser/tools.py:1094-1101`).
 - [ ] **B4 (2, medium, checked).** Every tab switch, page load and download
@@ -688,9 +690,9 @@ or types on the Windows desktop.
   (`hosted/adopt.py:482-501`, `hosted/carry_on.py:1231-1245`).
 - [ ] **H4 (1, medium, checked).** A helper that was stopped or cut off is
   listed "done" after ten minutes or a restart (`hosted/handoff.py:195-210`).
-- [ ] **H5 (3, medium, checked).** Revert in the Changes pane overwrites a
+- [x] **H5 (3, medium, checked).** Revert in the Changes pane overwrites a
   file with no copy and no record (`hosted/panes.py:1137-1150`).
-- [ ] **H6 (3, medium, checked).** A failed write of the session log drops
+- [x] **H6 (3, medium, checked).** A failed write of the session log drops
   that batch for good (`hosted/events.py:335-354`); a lost "done" can make
   the next start carry on a reply that had finished.
 - [ ] **H7-H14 (low).** A PATCH applies the tool's mode before the rest of
@@ -706,7 +708,7 @@ or types on the Windows desktop.
 
 ### Coding-tool adapters and the accounts proxy (`hosted/<tool>.py`, `iron_proxy/`)
 
-- [ ] **A1 (3, high, checked). Removing an account deletes its whole folder
+- [x] **A1 (3, high, checked). Removing an account deletes its whole folder
   for good.** `daemon/routes/iron_proxy.py:633-640` calls the bundled
   manager's `deleteProfile`, which removes the account's home recursively
   (`desktop/vendor/iron-proxy/iron-proxy.mjs:4726-4741`): its sign-in and
@@ -790,10 +792,10 @@ or types on the Windows desktop.
   `dashboard/components/harness/HarnessStartComposer.tsx:294`). After one
   "allow commands for this session", a push, force push, `reset --hard` or
   `clean` runs with no card on the user's own checkout.
-- [ ] **T3 (3, medium, checked).** Rewind does not put back files changed by
+- [x] **T3 (3, medium, checked).** Rewind does not put back files changed by
   a session's helpers, and answers that it rewound
   (`harness/rewind.py:202-221, 518`).
-- [ ] **T4 (3, medium, checked).** A patch over several files loses its Undo
+- [x] **T4 (3, medium, checked).** A patch over several files loses its Undo
   and its saved copies when it is cut off or the app dies while it writes
   (`tools/undo.py:330-336`); its writes are not atomic
   (`harness/tools.py:427-455`).
@@ -820,7 +822,7 @@ or types on the Windows desktop.
   address guard, and the agent's browser judges only top-level pages, never
   frames (`harness/page_shot.py:110-130`, `page_browser.py:1146-1163`): a
   local page can show the model another local app's page.
-- [ ] **S2 (1, medium, checked).** A failed transcript write at a reply's
+- [x] **S2 (1, medium, checked).** A failed transcript write at a reply's
   end is swallowed (`daemon/routes/build.py:2017-2026`); the reply is gone
   from the session and the kept copy is deleted (`2328-2330`).
 - [ ] **S3 (1, medium, checked on the daemon side).** A file in the folder
@@ -833,7 +835,7 @@ or types on the Windows desktop.
 - [ ] **S5 (1, medium, pass only).** A reply's failure marks never reach the
   next model or the summarizer (`harness/sessions.py:998-1022`,
   `compact.py:282-322`).
-- [ ] **S6-S12 (low).** Typing with "submit" sends a form with no risky-click
+- [ ] **S6-S12 (low; S8, S11 and S12 fixed in v1.510.0).** Typing with "submit" sends a form with no risky-click
   check (`page_browser.py:1921-1931`, suspected; the twin of B2); a lesson's
   first line goes into an event unmasked (`harness/library.py:1292-1304`,
   suspected); Delete stops a session's programs before it refuses, and
@@ -860,13 +862,13 @@ differences are at the edges.
 - [ ] **L3 (8, medium, checked).** The automatic summary of a long chat is a
   paid model call that is on no receipt (`daemon/app.py:3409` drops the
   usage; `chat_turn.py:373-410`).
-- [ ] **L4 (1, medium, pass only).** A turn that fails after its tools ran
+- [x] **L4 (1, medium, pass only).** A turn that fails after its tools ran
   says only that it failed; on the phone that is the whole message
   (`chat_turn.py:14547-14583`, `routes/chat.py:8093-8119`).
 - [ ] **L5 (1, low, checked).** On a reply that ends in a workflow card the
   plain lane drops four honesty notes the streaming lane adds
   (`chat_turn.py:14716-14836` against `routes/chat.py:8457-8484`).
-- [ ] **L6 (3, low, checked).** A cancelled plain-lane turn leaves no usage
+- [x] **L6 (3, low, checked).** A cancelled plain-lane turn leaves no usage
   row and no safety scan (`chat_turn.py:14547`; the streaming lane has
   `except BaseException` at `routes/chat.py:8120`).
 - [ ] **L7 (4, low, checked).** The plain lane does not honour "Ask before
@@ -978,3 +980,38 @@ Left open (group 15 takes the first):
   shared one.
 - The link part of the "only files inside the folder" test is skipped where
   the test machine cannot make links.
+
+### Group 10 as built (v1.510.0)
+
+Fixed: A1, F3, H5, H6, S2, S8, S11, S12, T3, T4, L4, L6, B3.
+
+Where it differs from the plan, or went further:
+
+- **A1** also works across drives (a full copy to the trash first), added
+  in the lead's review; a plain rename cannot cross drives and the account
+  could then never have been removed.
+- **F3** stores "owed" in the run's reply spec plus the kept key (no new
+  table), and rides the daemon's existing 30-second pass.
+- **H5** also makes a revert wait while the tool or a helper is still
+  working in the folder. The new refusal carries no operating-system error
+  text (lead's review).
+- **S2** needed the screen as well: the implementer's daemon change put the
+  sentence on the last frame, and nothing drew it. The page now keeps the
+  reply with the sentence.
+- **T4** raised a hole the plan did not list: Rewind skipped a write that
+  failed or was stopped with its Undo kept, and still answered "rewound".
+  The lead's review made Rewind name it, with where to undo it.
+- **L4** points Undo at the Activity page, which works from every surface.
+
+Left open:
+
+- The Undo of adding an account still deletes the profile directly (it
+  only runs for an account that never signed in).
+- A pairing removed while it is owed answers keeps their keys until the
+  7-day let-go.
+- A page reload drops a kept unsaved reply until the next start.
+- A hand-off row is not linked to its exact helper session, so with two
+  hand-offs in one rewind, neither is listed as a command if either
+  helper left rows.
+- A Local only refusal after a tool round does not carry the "what it
+  already did" sentence.

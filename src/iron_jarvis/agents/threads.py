@@ -706,6 +706,153 @@ def no_reply_back_line(name: str) -> str:
     )
 
 
+# --------------------------------------------------------------------------- #
+# a wait for another computer ends (v1.510.0, second review F3)
+# --------------------------------------------------------------------------- #
+
+#: How long a "has the task and will report back" line waits for that remote's
+#: report before it ends in plain words (the room, the chat it was asked in,
+#: the mission card). Read through ``task_door.now_for`` (an injected clock);
+#: the start is the pending line's own stored ``at``, so it survives a restart.
+REMOTE_REPORT_LIMIT_S = 12 * 3600.0
+#: The kinds of a remote's own line that END its wait (its report); a progress
+#: line or a question is a sign of life and starts the wait again.
+REPORT_KINDS = ("done", "message")
+#: The flag on the room line that ended a wait (Iron Jarvis's words about the
+#: remote, like the pending line: never handed back to the remote).
+NOT_REPORTED_FLAG = "not_reported"
+#: The mission card's bar label for such a member.
+NOT_REPORTED_LABEL = "Has not reported back"
+#: How often the periodic pass reads the rooms for waits past their limit,
+#: and how many rooms (newest first) one read takes.
+SILENT_SWEEP_S = 600.0
+SILENT_SWEEP_ROOMS = 100
+
+
+def not_reported_words(name: str, *, paired: bool) -> str:
+    """What the chat, the room and the mission card say once ``name`` has not
+    reported back within :data:`REMOTE_REPORT_LIMIT_S`: what happened and
+    what the user can do."""
+    hours = int(REMOTE_REPORT_LIMIT_S // 3600)
+    fix = (
+        "press Check on its card in Settings › Connections › Your other computers, "
+        "so it sends what it still owes"
+        if paired
+        else "check that it is still running"
+    )
+    return f"{name} has not reported back in {hours} hours. Ask it again, or {fix}."
+
+
+def remote_wait(msgs: list[Any], who: str) -> tuple[str, Any]:
+    """Where ``who``'s accepted job in this room stands, read from the room's
+    own lines in order: ``("waiting", start_at)`` while a pending line (with
+    message-back on) has had no report since; ``("reported", line)`` once it
+    reported (``REPORT_KINDS``); ``("ended", line)`` once the wait was ended
+    in words; ``("", None)`` for no wait. A progress line or a question
+    starts the wait again from its own time. Pure."""
+    state, value = "", None
+    for m in msgs if isinstance(msgs, list) else []:
+        if not isinstance(m, dict) or str(m.get("who") or "") != who:
+            continue
+        if m.get(NOT_REPORTED_FLAG):
+            if state == "waiting":
+                state, value = "ended", m
+        elif m.get("pending"):
+            if m.get("reply_back") is False:
+                state, value = "", None
+            else:
+                state, value = "waiting", m.get("at")
+        elif m.get("inbound"):
+            if str(m.get("kind") or "message") in REPORT_KINDS:
+                state, value = "reported", m
+            elif state in ("waiting", "ended"):
+                state, value = "waiting", m.get("at")
+    return state, value
+
+
+def _overdue(start: Any, now: datetime, limit_s: float) -> bool:
+    from .task_door import parse_at
+
+    at = parse_at(start)
+    return at is not None and (now - at).total_seconds() >= limit_s
+
+
+def _remote_name(who: str) -> str:
+    return who.split(":", 1)[1] if ":" in who else who
+
+
+class RepeatAnswer(Exception):
+    """The answer a remote posted is one this room already holds (v1.510.0):
+    a try whose 2xx was lost on the way back. The door answers it as taken."""
+
+
+#: When each platform's rooms were last read for overdue waits.
+_SWEPT_AT: dict[int, datetime] = {}
+
+
+async def end_overdue_waits(platform: Any, *, force: bool = False) -> int:
+    """End every remote wait past :data:`REMOTE_REPORT_LIMIT_S` (the periodic
+    pass, at most every :data:`SILENT_SWEEP_S` unless ``force``): a line in
+    the room (:data:`NOT_REPORTED_FLAG`, the words of
+    :func:`not_reported_words`) and the same words in the chat the room
+    answers into. Each wait is ended once. Returns how many ended. The clock
+    is ``task_door.now_for`` (injected in tests). Never raises."""
+    from types import SimpleNamespace
+
+    from .task_door import now_for
+
+    now = now_for(platform)
+    key = id(platform)
+    last = _SWEPT_AT.get(key)
+    if not force and last is not None and 0 <= (now - last).total_seconds() < SILENT_SWEEP_S:
+        return 0
+    _SWEPT_AT[key] = now
+    threads = AgentThreads(platform.engine)
+    try:
+        overdue = await asyncio.to_thread(threads.overdue_waits, now)
+    except Exception:  # noqa: BLE001
+        log.warning("remote waits: the rooms could not be read", exc_info=True)
+        return 0
+    ended = 0
+    d = SimpleNamespace(platform=platform)
+    for item in overdue:
+        name = _remote_name(item["who"])
+        try:
+            from ..peers.store import is_paired_remote
+
+            paired = await asyncio.to_thread(is_paired_remote, platform, name)
+            words = not_reported_words(name, paired=paired)
+            count = await asyncio.to_thread(
+                threads.end_wait, item["room_id"], item["who"], item["start"], words, now
+            )
+        except Exception:  # noqa: BLE001 — one room must not stop the rest
+            log.warning("remote waits: a wait could not be ended", exc_info=True)
+            continue
+        if not count:
+            continue
+        ended += 1
+        await threads._publish_updated(item["room_id"], item["who"], count, d)
+        if item["chat_id"]:
+            try:
+                # Through ``chat_delivery`` (lead review): this module must
+                # not import from the daemon
+                # (``test_agents_threads_does_not_import_from_daemon_routes``).
+                from .chat_delivery import say_in_chat
+
+                # Iron Jarvis's own line (no agent's name on it): it is what
+                # this computer knows, not something the remote said.
+                await asyncio.to_thread(
+                    say_in_chat,
+                    platform.engine,
+                    item["chat_id"],
+                    words,
+                    event_bus=getattr(platform, "event_bus", None),
+                )
+            except Exception:  # noqa: BLE001 — the room has the line
+                log.warning("remote waits: the chat line could not be added", exc_info=True)
+    return ended
+
+
 #: v1.420.0 (C6.4): a seat's fix said for WHERE it is read. The failure words
 #: (``providers.failure_words``) speak to a chat reply ("Press Retry", "pick
 #: another model for this chat"); a panel seat has no Retry press and its
@@ -1819,10 +1966,11 @@ class AgentThreads:
             content = str(e.get("content") or "").strip()
             if not content:
                 continue
-            if e.get("pending"):
-                # "hermes has the task and will report back" is IRON JARVIS's
-                # note about the remote, not the remote's own words — never
-                # hand it back to the remote as something it said.
+            if e.get("pending") or e.get(NOT_REPORTED_FLAG):
+                # "hermes has the task and will report back" (and v1.510.0's
+                # "has not reported back") is IRON JARVIS's note about the
+                # remote, not the remote's own words — never hand it back to
+                # the remote as something it said.
                 continue
             who = str(e.get("who") or "user")
             if who == "user":
@@ -1967,12 +2115,19 @@ class AgentThreads:
         *,
         kind: str = "message",
         documents: list[str] | None = None,
+        answer_id: str = "",
     ) -> int:
         """A remote MESSAGED BACK (v1.285.0): land its line in the room as an
         entry of its own — ``inbound: True`` and ``kind`` (message / progress /
         question / done) so every surface can render it for what it is — and
         announce it like any round entry. Returns the room's new entry count.
-        Raises ``KeyError`` for an unknown room (the route turns it into 404)."""
+        Raises ``KeyError`` for an unknown room (the route turns it into 404).
+
+        v1.510.0 (second review F3): ``answer_id`` (the run another Iron
+        Jarvis answers with) is kept on the line, and a line carrying an
+        ``answer_id`` this remote already landed here is NOT landed again:
+        :class:`RepeatAnswer` is raised instead (checked under the append's
+        own lock, so two tries arriving together land once)."""
         if self.get(thread_id) is None:
             raise KeyError(thread_id)
         entry: dict[str, Any] = {
@@ -1986,11 +2141,113 @@ class AgentThreads:
         }
         if documents:
             entry["documents"] = list(documents)
+        answer_id = str(answer_id or "").strip()[:200]
+        if answer_id:
+            entry["answer_id"] = answer_id
         # The append is a locked read-modify-write on SQLite — off the loop
         # (v1.153.1 rule), because a third party can call this 60×/min.
-        count = await asyncio.to_thread(self._append, thread_id, [entry])
+        if answer_id:
+            count = await asyncio.to_thread(self._append_answer, thread_id, entry)
+            if count < 0:
+                raise RepeatAnswer(thread_id)
+        else:
+            count = await asyncio.to_thread(self._append, thread_id, [entry])
         await self._publish_updated(thread_id, who, count, d)
         return count
+
+    def _append_answer(self, thread_id: str, entry: dict[str, Any]) -> int:
+        """:meth:`_append` for an answer line, unless the room already holds
+        a line from the same remote with the same ``answer_id`` (then -1).
+        One check-and-append under the conversation lock (BLOCKING)."""
+        with _APPEND_LOCK:
+            if self.has_answer(thread_id, str(entry.get("who") or ""), str(entry["answer_id"])):
+                return -1
+            return self._append(thread_id, [entry])
+
+    def has_answer(self, thread_id: str, who: str, answer_id: str) -> bool:
+        """Did ``who`` already land the answer ``answer_id`` in this room?
+        (BLOCKING; False for no id.)"""
+        if not answer_id:
+            return False
+        rec = self.get(thread_id)
+        if rec is None:
+            return False
+        try:
+            msgs = json.loads(rec.messages_json or "[]")
+        except (TypeError, ValueError):
+            return False
+        return any(
+            isinstance(m, dict)
+            and m.get("inbound")
+            and str(m.get("who") or "") == who
+            and str(m.get("answer_id") or "") == answer_id
+            for m in (msgs if isinstance(msgs, list) else [])
+        )
+
+    # -- a wait for another computer ends (v1.510.0, second review F3) -------
+
+    def overdue_waits(
+        self, now: datetime, limit_s: float = REMOTE_REPORT_LIMIT_S
+    ) -> list[dict[str, Any]]:
+        """The rooms' remote waits past ``limit_s`` (BLOCKING, bounded: the
+        ``SILENT_SWEEP_ROOMS`` most recently active rooms holding a pending
+        line). ``[{room_id, who, start, chat_id}]``; ``chat_id`` is the chat
+        the room answers into (its @-panel chat, else a job's home chat)."""
+        with session_scope(self.engine) as db:
+            rows = list(
+                db.exec(
+                    select(AgentThreadRecord)
+                    .where(AgentThreadRecord.messages_json.contains('"pending": true'))  # type: ignore[attr-defined]
+                    .order_by(AgentThreadRecord.updated_at.desc())  # type: ignore[attr-defined]
+                    .limit(SILENT_SWEEP_ROOMS)
+                )
+            )
+            found = [
+                (r.id, r.messages_json, str(r.chat_thread_id or "") or str(r.home_chat_id or ""))
+                for r in rows
+            ]
+        out: list[dict[str, Any]] = []
+        for room_id, blob, chat_id in found:
+            try:
+                msgs = json.loads(blob or "[]")
+            except (TypeError, ValueError):
+                continue
+            whos = {
+                str(m.get("who") or "")
+                for m in (msgs if isinstance(msgs, list) else [])
+                if isinstance(m, dict) and m.get("pending")
+                and str(m.get("who") or "").startswith("remote:")
+            }
+            for who in sorted(whos):
+                state, start = remote_wait(msgs, who)
+                if state == "waiting" and _overdue(start, now, limit_s):
+                    out.append({"room_id": room_id, "who": who, "start": start, "chat_id": chat_id})
+        return out
+
+    def end_wait(self, thread_id: str, who: str, start: Any, words: str, now: datetime) -> int:
+        """Land the line that ends ``who``'s wait (``NOT_REPORTED_FLAG``),
+        only if the wait that began at ``start`` is still open — re-read under
+        the conversation lock, so a report that just came home wins. Returns
+        the room's new count, or 0 when nothing was landed (BLOCKING)."""
+        with _APPEND_LOCK:
+            rec = self.get(thread_id)
+            if rec is None:
+                return 0
+            try:
+                msgs = json.loads(rec.messages_json or "[]")
+            except (TypeError, ValueError):
+                return 0
+            if remote_wait(msgs, who) != ("waiting", start):
+                return 0
+            entry = {
+                "who": who,
+                "role": "participant",
+                "source": "remote",
+                "content": words,
+                "at": now.isoformat(),
+                NOT_REPORTED_FLAG: True,
+            }
+            return self._append(thread_id, [entry])
 
     # -- long-term memory -----------------------------------------------------
 

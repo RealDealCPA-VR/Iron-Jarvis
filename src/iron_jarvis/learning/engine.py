@@ -29,7 +29,7 @@ import threading
 from collections import OrderedDict
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import Engine, case, func, or_
+from sqlalchemy import Engine, case, func, literal_column, or_
 from sqlmodel import select
 
 from ..core.db import session_scope
@@ -426,11 +426,19 @@ class LearningEngine:
         removed = 0
         with session_scope(self.engine) as db:
             named = set().union(*named_notes(db).values())
+            # v1.510.0: two notes written in the same clock tick (Windows'
+            # clock steps in whole milliseconds or more) tie on ``created_at``,
+            # and which one was "newest" was then the database's choice: the
+            # tidy-up merged either into the other. The row written LATER is
+            # the newer one (``rowid``), so the order is always the same.
             rows = [
                 r for r in db.exec(
                     select(LessonRecord)
                     .where(LessonRecord.source == "reflection")
-                    .order_by(LessonRecord.created_at.desc())
+                    .order_by(
+                        LessonRecord.created_at.desc(),
+                        literal_column("lessonrecord.rowid").desc(),
+                    )
                 )
                 if r.id not in named
             ]

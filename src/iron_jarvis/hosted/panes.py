@@ -447,11 +447,11 @@ TURN_NOT_GIT = (
     "Changes per message need a git repository; this is the whole session's list."
 )
 #: The words under a git list (v1.420.0): "No Undo" still, but a file can be
-#: put back.
+#: put back. v1.510.0 (H5): the version a revert replaces is kept.
 REVERT_WORDS = (
     "No Undo here: {tool} made these changes itself. Revert puts ONE file back as it was "
-    "{when}; the branch, its commits and every other file stay as they are. Use git or "
-    "{tool} for anything more."
+    "{when} and keeps the version it replaces in Iron Jarvis's trash; the branch, its "
+    "commits and every other file stay as they are. Use git or {tool} for anything more."
 )
 WHEN_SESSION = "when the session started here"
 WHEN_TURN = "when this message started"
@@ -482,6 +482,35 @@ REVERT_MOVED = (
     "branch, its commits and every other file are as they were."
 )
 REVERT_FAILED = "git could not put {name} back: {why}."
+#: v1.510.0 (H5): a changed file is COPIED to the trash before git writes
+#: over it; no copy, no revert.
+REVERT_KEPT = (
+    "{name} is back as it was {when}. The version it replaced is kept in Iron Jarvis's trash "
+    "({trash}). Only this file changed: the branch, its commits and every other file are as "
+    "they were."
+)
+#: Lead review: no operating-system error text on screen (the raw text is
+#: logged, masked, by ``core.failures.plain_failure``).
+REVERT_NOT_KEPT = (
+    "{name} was left as it is: Iron Jarvis could not keep a copy of it before putting it "
+    "back. Close any program that has the file open, then try again."
+)
+#: The line the session's own conversation gets (the route writes it).
+REVERT_NOTICE = (
+    "{name} was reverted from the Changes tab. The version it replaced is kept in Iron "
+    "Jarvis's trash ({trash})."
+)
+REVERT_NOTICE_PLAIN = "{name} was reverted from the Changes tab."
+#: v1.510.0: the route also waits for work in the folder no reply of the
+#: user's owns (the same states "Close it now" waits for).
+REVERT_TOOL_BUSY = (
+    "{tool} is still working in this folder (a reply of its own, or its helpers). Revert a "
+    "file once it has finished."
+)
+REVERT_HELPER_BUSY = (
+    "A helper this session started is still working in this folder. Revert a file once it "
+    "has finished."
+)
 
 
 class RevertRefused(Exception):
@@ -1087,7 +1116,9 @@ def revert_file(home: Any, sid: str, row: Any, events: list[dict[str, Any]], too
     it was at the scope's start — the session's base commit, or the tree
     recorded at this message's start (:func:`turn_base`). A file that did not
     exist then is MOVED to ``<home>/trash/<stamp>/code-revert/`` (never
-    deleted); a renamed one also gets its old name back. Nothing else moves:
+    deleted); v1.510.0 (H5): a file git writes over is COPIED there first
+    (``moved_to`` names either; no copy, no revert); a renamed one also gets
+    its old name back. Nothing else moves:
     no branch, no commit, no other file, and git's staging area is left as it
     is (``git restore --worktree``). A renamed row's *old_rel* (its row's
     ``old_rel``) is put back too when it is gone now and was there then.
@@ -1134,7 +1165,13 @@ def revert_file(home: Any, sid: str, row: Any, events: list[dict[str, Any]], too
         raise RevertRefused(REVERT_CHANGED.format(name=name))
     old = _clean_rel(folder, old_rel) if old_rel else ""
     moved = ""
+    kept = ""
     if _in_tree(folder, base, clean):
+        if os.path.lexists(path):
+            # v1.510.0 (H5): git rewrites the file in place, so the version it
+            # replaces (the tool's work, the user's own edits) is COPIED to
+            # the trash first; no copy, no revert.
+            kept = _keep_copy(home, sid, folder, clean)
         got = _g_write(["restore", f"--source={base}", "--worktree", "--", _literal(clean)], folder)
         if not got.ok:
             raise RevertRefused(REVERT_FAILED.format(name=name, why=_git_reason(got)))
@@ -1146,8 +1183,13 @@ def revert_file(home: Any, sid: str, row: Any, events: list[dict[str, Any]], too
             moved = _to_trash(home, sid, folder, clean)
     if old and old != clean and not os.path.lexists(os.path.join(folder, *old.split("/"))) and _in_tree(folder, base, old):
         _g_write(["restore", f"--source={base}", "--worktree", "--", _literal(old)], folder)
-    words = REVERT_MOVED.format(name=name, when=when, trash=moved) if moved else REVERT_DONE.format(name=name, when=when)
-    return {"ok": True, "rel": clean, "words": words, "moved_to": moved}
+    if moved:
+        words = REVERT_MOVED.format(name=name, when=when, trash=moved)
+    elif kept:
+        words = REVERT_KEPT.format(name=name, when=when, trash=kept)
+    else:
+        words = REVERT_DONE.format(name=name, when=when)
+    return {"ok": True, "rel": clean, "words": words, "moved_to": moved or kept}
 
 
 def _g_write(args: list[str], cwd: str) -> Any:
@@ -1163,15 +1205,50 @@ def _to_trash(home: Any, sid: str, folder: str, rel: str) -> str:
     :class:`RevertRefused` when it cannot be moved."""
     import shutil
 
-    stamp = _now_utc().strftime("%Y%m%d-%H%M%S")
-    dest = Path(home) / "trash" / stamp / "code-revert" / str(sid) / Path(*rel.split("/"))
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.exists():
-            dest = dest.with_name(f"{dest.name}.{os.getpid()}-{int(_now_utc().timestamp())}")
+        dest = _trash_dest(home, sid, rel)
         shutil.move(os.path.join(folder, *rel.split("/")), str(dest))
     except OSError as exc:
         raise RevertRefused(REVERT_FAILED.format(name=rel.rsplit("/", 1)[-1], why=one_line(str(exc), 160))) from None
+    return str(dest)
+
+
+def _trash_dest(home: Any, sid: str, rel: str) -> Path:
+    """Where a revert keeps *rel*: ``<home>/trash/<stamp>/code-revert/<sid>/
+    <rel>`` (its folder made; a name already there gets a suffix). Raises
+    ``OSError``."""
+    stamp = _now_utc().strftime("%Y%m%d-%H%M%S")
+    dest = Path(home) / "trash" / stamp / "code-revert" / str(sid) / Path(*rel.split("/"))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if os.path.lexists(dest):
+        dest = dest.with_name(f"{dest.name}.{os.getpid()}-{int(_now_utc().timestamp())}")
+    return dest
+
+
+def _keep_copy(home: Any, sid: str, folder: str, rel: str) -> str:
+    """v1.510.0 (H5): COPY *rel* as it is now into the trash place
+    :func:`_to_trash` uses, before git writes over it. A link is kept as the
+    name it points at (what git stores; making a link needs a privilege on
+    Windows), never followed. Raises :class:`RevertRefused` when no copy can
+    be made (a folder in the file's place too): the revert is then refused,
+    nothing touched."""
+    import shutil
+
+    from ..harness.code_editor import _is_link
+
+    src = os.path.join(folder, *rel.split("/"))
+    name = rel.rsplit("/", 1)[-1]
+    try:
+        dest = _trash_dest(home, sid, rel)
+        if _is_link(src, os.lstat(src)):  # a symlink or a junction: never followed
+            dest = dest.with_name(dest.name + ".link.txt")
+            dest.write_text(os.readlink(src), encoding="utf-8")
+        else:
+            shutil.copy2(src, str(dest))
+    except OSError as exc:
+        from ..core.failures import plain_failure
+
+        raise RevertRefused(plain_failure(REVERT_NOT_KEPT.format(name=name), exc)) from None
     return str(dest)
 
 

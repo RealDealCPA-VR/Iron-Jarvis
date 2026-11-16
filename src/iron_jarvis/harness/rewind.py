@@ -12,7 +12,9 @@ pair under the session's own ``build:<thread id>``; grouping them PER TURN is
 a time window — every row recorded at or after the turn's question (its
 ``at`` stamp, the daemon's own clock, written before the turn starts) belongs
 to that turn or a later one, and only one turn of a session runs at a time.
-Each action is reverted by the SAME code ``POST /undo/{id}`` runs
+The session's HELPERS journal their writes under their own session ids; their
+rows in the same window are read too and undone in the same newest-first
+sequence (v1.510.0, second review T3). Each action is reverted by the SAME code ``POST /undo/{id}`` runs
 (``routes/undo.perform_undo``: the tool's own ``revert``, the permission
 engine, the fs policy, the "changed since" guard, the undo written into the
 ledger as its own row), newest first — the only order that composes.
@@ -199,9 +201,51 @@ def _turn_record_start(engine: Any, turn_id: str) -> datetime | None:
 # --------------------------------------------------------------------------- #
 
 
+#: At most this many helper sessions are read for one rewind.
+MAX_HELPERS = 200
+
+
+def _helper_names(db: Any, session_id: str, since: datetime) -> dict[str, str]:
+    """``{helper session id: its name}`` for the helpers of the coding session
+    ``session_id`` (``build:<thread>``) that wrote ledger rows at or after
+    ``since`` (v1.510.0, second review T3). The same gathering as
+    ``finish._helper_sessions`` (a helper's run carries
+    ``options["build_session"]`` = the thread), bounded by time instead of a
+    row number. A helper starts no helpers of its own
+    (``helpers.NOT_FOR_HELPERS`` holds the helper doors), so one level is
+    every level."""
+    from sqlalchemy import case, func
+    from sqlmodel import select
+
+    from ..core.models import Session, ToolInvocation
+    from .helpers import BUILD_SESSION_OPTION, build_thread_of
+
+    thread = build_thread_of(session_id)
+    if not thread:
+        return {}
+    options = case((func.json_valid(Session.options_json) == 1, Session.options_json), else_="{}")
+    rows = db.exec(
+        select(Session.id, Session.agent_name, Session.agent_type)
+        .join(ToolInvocation, ToolInvocation.session_id == Session.id)  # type: ignore[arg-type]
+        .where(ToolInvocation.created_at >= since)
+        .where(func.json_extract(options, f"$.{BUILD_SESSION_OPTION}") == thread)
+        .distinct()
+        .limit(MAX_HELPERS)
+    ).all()
+    out: dict[str, str] = {}
+    for sid, name, agent_type in rows:
+        shown = str(name or "").strip() or str(getattr(agent_type, "value", agent_type) or "")
+        out[str(sid)] = shown.split(":", 1)[-1] or "helper"
+    return out
+
+
 def _rows_since(engine: Any, session_id: str, since: datetime) -> list[dict[str, Any]]:
-    """The session's ledger rows recorded at or after ``since``, NEWEST FIRST,
-    with their journal (plain values: SQLModel attributes expire)."""
+    """The session's ledger rows recorded at or after ``since`` — AND its
+    helpers' (v1.510.0, T3: a helper's edits are journaled under the helper's
+    own session id) — NEWEST FIRST as ONE sequence (a helper's later edit of a
+    file the lead also touched goes back before the lead's), with their
+    journal (plain values: SQLModel attributes expire). A helper's row carries
+    ``helper`` (its name); the session's own carry ""."""
     from sqlalchemy import literal_column
     from sqlmodel import select
 
@@ -211,16 +255,18 @@ def _rows_since(engine: Any, session_id: str, since: datetime) -> list[dict[str,
     rowid = literal_column("toolinvocation.rowid")
     out: list[dict[str, Any]] = []
     with session_scope(engine) as db:
+        helpers = _helper_names(db, session_id, since)
         rows = db.exec(
             select(ToolInvocation, UndoJournal)
             .join(UndoJournal, UndoJournal.action_id == ToolInvocation.id, isouter=True)  # type: ignore[arg-type]
-            .where(ToolInvocation.session_id == session_id)
+            .where(ToolInvocation.session_id.in_([session_id, *helpers]))  # type: ignore[attr-defined]
             .where(ToolInvocation.created_at >= since)
             .order_by(ToolInvocation.created_at.desc(), rowid.desc())  # type: ignore[attr-defined]
             .limit(MAX_ROWS)
         ).all()
         for inv, j in rows:
             out.append({
+                "helper": helpers.get(str(inv.session_id), ""),
                 "id": inv.id,
                 "tool": inv.tool,
                 "called_as": getattr(inv, "called_as", "") or "",
@@ -267,6 +313,27 @@ def _what(row: dict[str, Any]) -> str:
 
 def _key(path: Path) -> str:
     return os.path.normcase(os.path.normpath(str(path)))
+
+
+def _local_hand_off(row: dict[str, Any]) -> bool:
+    """The SESSION's own call that handed work to a helper on this PC
+    (``delegate`` / ``spawn_agent``, not to a ``remote:`` agent): what it did
+    is the helper's rows, read with the session's (v1.510.0, T3)."""
+    from .helpers import HELPER_TOOLS
+
+    if row.get("helper") or row.get("tool") not in HELPER_TOOLS:
+        return False
+    args = _args(row)
+    target = str(args.get("agent_type") or args.get("agent") or "").strip().lower()
+    return not target.startswith("remote:")
+
+
+def _command(row: dict[str, Any]) -> dict[str, Any]:
+    """A command left as it is, with the helper that ran it named."""
+    out = {"tool": row["called_as"] or row["tool"], "what": _what(row)}
+    if row.get("helper"):
+        out["helper"] = row["helper"]
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -515,8 +582,18 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str,
                 allowed[tool_name] = ""
         return allowed[tool_name]
 
-    for led in _rows_since(engine, session_id_for(thread_id), cut_at):
-        if prev_at is not None and led["created_at"] is not None and led["created_at"] <= prev_at:
+    rows = [
+        led for led in _rows_since(engine, session_id_for(thread_id), cut_at)
+        if prev_at is None or led["created_at"] is None or led["created_at"] > prev_at
+    ]
+    # v1.510.0 (T3): a hand-off is not itself "a command left as it was"
+    # when its helpers' rows are read here — their files go back below and
+    # their commands are named with the helper. With no helper row in these
+    # turns (a helper that did nothing, or one that left no record) it is
+    # listed as before.
+    helpers_seen = any(led["helper"] for led in rows)
+    for led in rows:
+        if helpers_seen and _local_hand_off(led):
             continue
         if led["undo_of"]:
             continue  # an Undo the user pressed: the row that made it is skipped too
@@ -538,12 +615,23 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str,
                     "reason": "no copy was kept when this session changed it, so it cannot be put back",
                 })
             else:
-                out.commands.append({"tool": led["called_as"] or led["tool"], "what": _what(led)})
+                out.commands.append(_command(led))
             continue
-        if not led["ok"] or desc.get("applied"):
-            continue  # a call that failed changed nothing the journal can name
+        if desc.get("applied"):
+            continue
+        if not led["ok"]:
+            # v1.510.0 (lead review of T4): a call that failed or was stopped
+            # part-way and STILL has its Undo kept may have changed a file
+            # (since v1.504.0 the journal drops the inverse of a failed call
+            # only when nothing changed). Rewind does not put it back: what
+            # is on disk is not what the journal can prove. It is NAMED, with
+            # the way to undo it, never skipped in silence under
+            # "rewound: true".
+            if desc.get("reversible", True):
+                out.commands.append({**_command(led), "stopped": True})
+            continue
         if not desc.get("reversible") or rev == Reversibility.IRREVERSIBLE.value:
-            out.commands.append({"tool": led["called_as"] or led["tool"], "what": _what(led)})
+            out.commands.append(_command(led))
             continue
         if registry is not None and registry.get(led["tool"]) is None and desc["kind"] in _FILE_KINDS:
             out.problems.append({
@@ -613,13 +701,32 @@ def commands_note(commands: list[dict[str, Any]]) -> str:
     """What a rewind leaves as it is, in words ("" when nothing ran)."""
     if not commands:
         return ""
-    names = [f"`{c.get('what') or c.get('tool')}`" for c in commands[:SENTENCE_ITEMS]]
-    more = len(commands) - len(names)
-    tail = f" and {more} more" if more > 0 else ""
-    return (
-        "Commands are not undone: " + ", ".join(names) + tail
-        + " ran in the rewound turns, and whatever they changed stays as it is."
-    )
+
+    def _named(rows: list[dict[str, Any]]) -> str:
+        names = [
+            f"`{c.get('what') or c.get('tool')}`"
+            + (f" (by the helper {c['helper']})" if c.get("helper") else "")
+            for c in rows[:SENTENCE_ITEMS]
+        ]
+        more = len(rows) - len(names)
+        return ", ".join(names) + (f" and {more} more" if more > 0 else "")
+
+    # v1.510.0 (lead review of T4): a change that was stopped part-way is
+    # said apart from the commands, with where its own Undo is.
+    ran = [c for c in commands if not c.get("stopped")]
+    stopped = [c for c in commands if c.get("stopped")]
+    parts = []
+    if ran:
+        parts.append(
+            "Commands are not undone: " + _named(ran)
+            + " ran in the rewound turns, and whatever they changed stays as it is."
+        )
+    if stopped:
+        parts.append(
+            "A change that failed or was stopped part-way is not put back by Rewind: "
+            + _named(stopped) + ". Undo it on the Activity page."
+        )
+    return " ".join(parts)
 
 
 def checkpoints(engine: Any, thread_id: str) -> list[dict[str, Any]]:
@@ -654,9 +761,8 @@ def checkpoints(engine: Any, thread_id: str) -> list[dict[str, Any]]:
         })
     first = next((p["_since"] for p in points if p["_since"] is not None), None)
     rows = _rows_since(engine, session_id_for(thread_id), first) if first is not None else []
+    owned: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for led in rows:
-        if led["undo_of"] or led["undone"] or not led["ok"]:
-            continue
         at = led["created_at"]
         owner = None
         for p in points:
@@ -666,6 +772,16 @@ def checkpoints(engine: Any, thread_id: str) -> list[dict[str, Any]]:
                 owner = p
         if owner is None:
             continue
+        if led["helper"]:
+            owner["_helpers"] = True
+        owned.append((owner, led))
+    for owner, led in owned:
+        if led["undo_of"] or led["undone"] or not led["ok"]:
+            continue
+        # v1.510.0 (T3): the helpers' rows are counted themselves; a hand-off
+        # is a command only when no helper row is in its turn (as plan()).
+        if owner.get("_helpers") and _local_hand_off(led):
+            continue
         desc = led["journal"]
         if desc is not None and desc.get("kind") in _FILE_KINDS and desc.get("reversible"):
             owner["files"] += 1
@@ -674,6 +790,7 @@ def checkpoints(engine: Any, thread_id: str) -> list[dict[str, Any]]:
     for p in points:
         p.pop("_since", None)
         p.pop("_prev", None)
+        p.pop("_helpers", None)
     return points
 
 

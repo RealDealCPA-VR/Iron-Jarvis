@@ -1648,6 +1648,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
                         log.debug("periodic terminal snapshot still failing", exc_info=True)
                     raising = True
                     _tick("terminal_snapshot", False, exc)
+                # v1.510.0 (second review F3): the same 30 s pass carries the
+                # answers owed to other computers (their next try) and ends a
+                # wait for one past its limit. Never raises; its tries run on
+                # their own tracked tasks, so this loop never waits on them.
+                try:
+                    from ..agents.task_door import periodic_pass
+
+                    await periodic_pass(platform)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 — a pass must never kill the daemon
+                    log.warning("owed answers pass failed", exc_info=True)
 
         bg_tasks["terminal_snapshot"] = asyncio.create_task(_terminal_snapshot_loop())
 

@@ -36,10 +36,12 @@ the reply needs:
   token, which the caller sent for that purpose as ``reply_token`` beside
   ``reply_to`` (the one, backward-compatible addition to the body; only a
   sender talking to an Iron Jarvis door adds it). The reply key is kept in the
-  vault per session (``REPLY_TOKEN_PREFIX``) and removed the moment the reply
-  is attempted. One attempt, bounded, masked, off the loop; a reply that fails
-  is RECORDED on the session's summary and on the door's status, named (who,
-  why) — never retried blindly.
+  vault per session (``REPLY_TOKEN_PREFIX``) and removed only once the other
+  computer TOOK the answer (a 2xx) or refused it for good (v1.510.0, second
+  review F3). Each attempt is bounded, masked, off the loop; a failed one is
+  tried again on a fixed ladder (``REPLY_RETRY_AFTER_S``), then whenever that
+  computer is next heard from (``retry_owed_soon``); every state is RECORDED
+  on the session's summary and on the door's status, named (who, why).
 * REACHABILITY is said, never opened: the packaged app listens on 127.0.0.1
   and admits loopback Hosts only, so the door's answer carries the same
   ``reachable: {host_allowed, note}`` sentence the v1.285.0 inbound door
@@ -55,6 +57,7 @@ import re
 import threading
 import time
 from collections import deque
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -123,6 +126,37 @@ HISTORY_CHARS_IN_TASK = 8_000
 
 #: The reply's bound (the WHOLE call, not a per-phase httpx timeout).
 REPLY_TIMEOUT_S = 20.0
+
+#: v1.510.0 (second review F3): an answer that did not arrive is tried again
+#: after these waits (the first try is when the run ends, so: now, +1 minute,
+#: +5 minutes, +30 minutes), read through the injected clock
+#: (:func:`now_for`) by the daemon's periodic pass (:func:`periodic_pass`).
+REPLY_RETRY_AFTER_S: tuple[float, ...] = (60.0, 300.0, 1800.0)
+#: Tries on the ladder; after the last the answer waits for that computer to
+#: be heard from again (a task, a probe, a Check press: :func:`retry_owed_soon`).
+REPLY_TRIES = 1 + len(REPLY_RETRY_AFTER_S)
+#: How long an answer is kept for a computer that is never heard from again;
+#: past it the key is removed and the run says the answer was not sent.
+REPLY_OWED_FOR_S = 7 * 24 * 3600.0
+#: Being heard from tries a computer's owed answers at most this often (two
+#: computers each owing the other must not answer each other's tries in a loop).
+HEARD_RETRY_EVERY_S = 60.0
+#: Owed answers read per pass (newest first).
+REPLY_OWED_SCAN = 200
+
+#: Where an answer stands, kept INSIDE the run's reply spec (its options), so
+#: it survives a restart and leaves with the spec when a rerun drops it:
+#: ``{"state", "tries", "next_at"}``. "owed": a try is due at ``next_at``
+#: (none = now); "waiting": the ladder is over, sent when heard from; "sent":
+#: the other computer took it; "final": refused or let go, never sent again.
+REPLY_OWED = "owed"
+REPLY_WAITING = "waiting"
+REPLY_SENT = "sent"
+REPLY_FINAL = "final"
+
+#: A refusal that no retry can change (a wrong or expired key, no message back,
+#: an unknown conversation, too large, a bad body). 408 / 425 / 429 are "later".
+_RETRY_LATER_4XX = frozenset({408, 425, 429})
 
 #: The reply message cap: the receiving inbound door refuses longer (413).
 REPLY_MESSAGE_CHARS = 12_000
@@ -359,8 +393,8 @@ class TaskDoor:
 
     def disable(self) -> dict[str, Any]:
         """Turn the door off and forget its token. Reply keys already handed
-        over for tasks still running stay until their reply is attempted —
-        the sender is owed that answer."""
+        over for tasks stay until their answer is delivered (or refused for
+        good) — the sender is owed that answer."""
         try:
             self.secrets.delete(DOOR_TOKEN_SECRET)
         except Exception:  # noqa: BLE001 — an absent secret is fine
@@ -459,9 +493,13 @@ class TaskDoor:
 _DOORS: dict[str, TaskDoor] = {}
 _DOORS_LOCK = threading.Lock()
 
-#: Runs whose answer has been attempted in this process (one attempt each).
-_ATTEMPTED: set[str] = set()
-_ATTEMPTED_LOCK = threading.Lock()
+#: Runs whose answer is being sent right now in this process (v1.510.0: one
+#: try at a time per run; the run's stored reply spec says the rest).
+_IN_FLIGHT: set[str] = set()
+_IN_FLIGHT_LOCK = threading.Lock()
+#: When each computer's owed answers were last tried because it was heard
+#: from (``HEARD_RETRY_EVERY_S``), by ``peer:<id>`` / ``hand``.
+_HEARD_AT: dict[str, datetime] = {}
 
 
 def door_for(platform: Any) -> TaskDoor:
@@ -546,6 +584,10 @@ PAIRING_REMOVED = (
     "nothing was sent"
 )
 
+#: The paired computers could not be read: nothing is sent THIS time, and the
+#: answer stays owed (v1.510.0: a passing database error is not a refusal).
+PAIRINGS_UNREADABLE = "this computer could not read its paired computers, so nothing was sent"
+
 
 def moved_words(came_from: str, paired_at: str) -> str:
     """The task came from another address than the one the pairing keeps:
@@ -586,7 +628,7 @@ def _paired_reply_to(platform: Any, spec: dict[str, str]) -> tuple[bool, str, st
         )
     except Exception:  # noqa: BLE001 — unreadable: fail closed, nothing is sent
         log.warning("task door: the paired computers could not be read", exc_info=True)
-        return True, "", "this computer could not read its paired computers, so nothing was sent"
+        return True, "", PAIRINGS_UNREADABLE
     if peer is None:
         if door == DOOR_PEER:
             return True, "", PAIRING_REMOVED
@@ -662,19 +704,116 @@ def store_reply_token(secrets: Any, session_id: str, token: str, caller: str) ->
     )
 
 
-def _take_reply_token(secrets: Any, session_id: str) -> str:
-    """Read the session's reply key and REMOVE it in the same hop (BLOCKING):
-    the reply is attempted once, so the key is never needed twice."""
-    name = REPLY_TOKEN_PREFIX + session_id
+def _read_reply_token(secrets: Any, session_id: str) -> str:
+    """The session's reply key, KEPT (BLOCKING). v1.510.0 (second review F3):
+    it used to be removed in the same hop, before the POST, so an answer that
+    did not arrive could never be sent again."""
     try:
-        token = secrets.get(name) or ""
+        return str(secrets.get(REPLY_TOKEN_PREFIX + session_id) or "")
     except Exception:  # noqa: BLE001
-        token = ""
+        return ""
+
+
+def _forget_reply_token(secrets: Any, session_id: str) -> None:
+    """Remove the session's reply key (BLOCKING): only once the other
+    computer took the answer, or it can never be sent. Never raises."""
     try:
-        secrets.delete(name)
-    except Exception:  # noqa: BLE001
+        secrets.delete(REPLY_TOKEN_PREFIX + session_id)
+    except Exception:  # noqa: BLE001 — an absent secret is fine
         pass
-    return token
+
+
+def _holds_reply_token(secrets: Any, session_id: str) -> bool:
+    """Is the session's reply key still kept? (BLOCKING; False on a vault
+    error: an answer that cannot be keyed is not tried.)"""
+    try:
+        exists = getattr(secrets, "exists", None)
+        if callable(exists):
+            return bool(exists(REPLY_TOKEN_PREFIX + session_id))
+        return bool(secrets.get(REPLY_TOKEN_PREFIX + session_id))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# --------------------------------------------------------------------------- #
+# where an answer stands (v1.510.0, second review F3)
+# --------------------------------------------------------------------------- #
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def now_for(platform: Any) -> datetime:
+    """The wall clock the answer's tries and the asking side's limit read:
+    ``platform.reply_clock`` when one is injected (tests), else now (UTC)."""
+    clock = getattr(platform, "reply_clock", None)
+    if callable(clock):
+        try:
+            value = clock()
+            if isinstance(value, datetime):
+                return _aware(value)
+        except Exception:  # noqa: BLE001 — a broken clock reads as now
+            log.warning("task door: the injected clock failed; reading now", exc_info=True)
+    return utcnow()
+
+
+def parse_at(raw: object) -> datetime | None:
+    """A stored stamp (ISO, with or without its zone) as aware UTC, or None."""
+    if isinstance(raw, datetime):
+        return _aware(raw)
+    try:
+        return _aware(datetime.fromisoformat(str(raw or "").strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _stored_spec(engine: Any, session_id: str) -> dict[str, Any]:
+    """The run's reply spec as STORED (state fields included), or {}
+    (BLOCKING)."""
+    try:
+        from ..core.db import session_scope
+        from ..core.models import Session
+        from ..scheduling.knobs import session_options
+
+        with session_scope(engine) as db:
+            row = db.get(Session, session_id)
+            spec = session_options(row).get(REPLY_OPTION) if row is not None else None
+    except Exception:  # noqa: BLE001
+        log.warning("task %s: the answer's state could not be read", session_id, exc_info=True)
+        return {}
+    return dict(spec) if isinstance(spec, dict) else {}
+
+
+def _write_reply_state(engine: Any, session_id: str, **fields: Any) -> None:
+    """Write where the answer stands into the run's stored reply spec
+    (BLOCKING; never raises — a state that cannot be written leaves the
+    answer to be tried again, which the receiving door takes once)."""
+    try:
+        from ..core.db import session_scope
+        from ..core.models import Session
+        from ..scheduling.knobs import session_options
+
+        with session_scope(engine) as db:
+            row = db.get(Session, session_id)
+            if row is None:
+                return
+            options = dict(session_options(row))
+            spec = options.get(REPLY_OPTION)
+            if not isinstance(spec, dict):
+                return
+            spec = dict(spec)
+            for key, value in fields.items():
+                if value is None:
+                    spec.pop(key, None)
+                else:
+                    spec[key] = value
+            options[REPLY_OPTION] = spec
+            row.options_json = json.dumps(options, default=str)
+            db.add(row)
+            db.commit()
+    except Exception:  # noqa: BLE001 — bookkeeping only
+        log.warning("task %s: the answer's state could not be written", session_id, exc_info=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -723,15 +862,22 @@ def _answered_by_demo(session: Any) -> bool:
     )
 
 
-def _reply_message(session: Any) -> str:
+def _reply_message(session: Any, caller: str = "") -> str:
     """The answer, in the words the sender's chat would show for this run
     (``chat_delivery.content_for_session``), secrets masked, cut to what the
     receiving door accepts — and, when the demo model wrote it, saying so
-    (:data:`DEMO_ANSWER_NOTE`, kept whole past the cut)."""
+    (:data:`DEMO_ANSWER_NOTE`, kept whole past the cut).
+
+    v1.510.0: this computer's own lines about sending it (``retry_note`` /
+    ``waiting_note``, written on the run while it is owed) are left out: they
+    are about the answer, not part of it."""
     from ..detections.redact import mask
     from .chat_delivery import content_for_session
 
-    text = str(mask(content_for_session(session)) or "").strip()
+    text = str(content_for_session(session) or "")
+    if caller:
+        text = _with_note(text, caller, "")
+    text = str(mask(text) or "").strip()
     demo = ("\n\n" + _demo_note_for(text)) if _answered_by_demo(session) else ""
     room = REPLY_MESSAGE_CHARS - len(demo)
     if len(text) > room:
@@ -858,134 +1004,394 @@ def _plain_reply_failure(
     return "the other computer could not be reached" + (f" ({text})" if text else "")
 
 
-async def send_reply(platform: Any, session: Any) -> dict[str, Any]:
+async def send_reply(platform: Any, session: Any, *, force: bool = False) -> dict[str, Any]:
     """Send the finished session's answer to the computer that asked for it.
 
-    ONE attempt, bounded by ``REPLY_TIMEOUT_S`` as a total deadline, the
-    blocking parts (vault, ledger, file reads, the record) off the loop, the
-    message masked. Returns ``{ok, sent, detail}``; a session nobody waits on
-    returns ``{"ok": False, "sent": False, "detail": "no reply address"}``
-    without touching anything. Never raises. A failure is RECORDED on the
-    session's summary and on the door's status, naming who and why."""
-    import httpx
+    v1.510.0 (second review F3): ONE try per call, bounded by
+    ``REPLY_TIMEOUT_S`` as a total deadline, the blocking parts (vault, ledger,
+    file reads, the record) off the loop, the message masked. The answer key
+    is KEPT until the other computer answers 2xx (then removed) or refuses it
+    for good (a 4xx such as a wrong key, an unknown conversation: removed,
+    recorded, never tried again). Any other failure (cannot be reached, timed
+    out, a 5xx, "slow down") keeps the answer OWED: the next try is due after
+    the next wait of ``REPLY_RETRY_AFTER_S``, and after ``REPLY_TRIES`` tries
+    it waits for that computer to be heard from. Where it stands is written
+    into the run's reply spec BEFORE the POST (a restart mid-try finds it
+    owed). A call before the next try is due does nothing unless ``force``
+    (the computer was just heard from).
 
+    Returns ``{ok, sent, detail}``; a session nobody waits on returns
+    ``{"ok": False, "sent": False, "detail": "no reply address"}`` without
+    touching anything. Never raises."""
     spec = reply_spec_of(session)
     sid = str(getattr(session, "id", "") or "")
     if spec is None or not sid:
         return {"ok": False, "sent": False, "detail": "no reply address"}
-    # ONE attempt per run, whichever terminal path asks twice (a cancel that
-    # lands on a run already finalizing): the second ask records nothing.
-    with _ATTEMPTED_LOCK:
-        if sid in _ATTEMPTED:
-            return {"ok": False, "sent": False, "detail": "already attempted"}
-        if len(_ATTEMPTED) > 10_000:
-            _ATTEMPTED.clear()
-        _ATTEMPTED.add(sid)
-    caller = spec["caller"]
+    # One try at a time per run, whichever path asks (a cancel that lands on
+    # a run already finalizing, a pass, a computer heard from).
+    with _IN_FLIGHT_LOCK:
+        if sid in _IN_FLIGHT:
+            return {"ok": False, "sent": False, "detail": "already being sent"}
+        _IN_FLIGHT.add(sid)
     try:
-        token = await asyncio.to_thread(_take_reply_token, platform.secrets, sid)
-    except Exception:  # noqa: BLE001
-        token = ""
-    if not spec["conversation_id"]:
-        detail = "the other computer sent no conversation to answer into"
+        return await _send_once(platform, session, spec, sid, force=force)
+    finally:
+        with _IN_FLIGHT_LOCK:
+            _IN_FLIGHT.discard(sid)
+
+
+def _let_go_words(caller: str) -> str:
+    days = int(REPLY_OWED_FOR_S // 86400)
+    return (
+        f"{clean_caller(caller)} did not connect again within {days} days, so the "
+        "answer is no longer kept"
+    )
+
+
+async def _send_once(
+    platform: Any, session: Any, spec: dict[str, str], sid: str, *, force: bool
+) -> dict[str, Any]:
+    import httpx
+
+    engine = platform.engine
+    caller = spec["caller"]
+    now = now_for(platform)
+    stored = await asyncio.to_thread(_stored_spec, engine, sid)
+    state = str(stored.get("state") or "")
+    if state in (REPLY_SENT, REPLY_FINAL):
+        return {"ok": state == REPLY_SENT, "sent": False, "detail": "already attempted"}
+    try:
+        tries = max(int(stored.get("tries") or 0), 0)
+    except (TypeError, ValueError):
+        tries = 0
+    if tries and not force:
+        if state == REPLY_WAITING:
+            ended = parse_at(getattr(session, "finished_at", None))
+            if ended is None or (now - ended).total_seconds() <= REPLY_OWED_FOR_S:
+                return {"ok": False, "sent": False, "detail": "waiting for that computer"}
+        else:
+            due = parse_at(stored.get("next_at"))
+            if due is not None and now < due:
+                return {"ok": False, "sent": False, "detail": "not due yet"}
+
+    async def final(detail: str, *, forget: bool = True) -> dict[str, Any]:
+        if forget:
+            await asyncio.to_thread(_forget_reply_token, platform.secrets, sid)
+        await asyncio.to_thread(_write_reply_state, engine, sid, state=REPLY_FINAL, next_at=None)
         await _record_reply(platform, session, ok=False, detail=detail, caller=caller)
         return {"ok": False, "sent": False, "detail": detail}
+
+    ended = parse_at(getattr(session, "finished_at", None))
+    if ended is not None and (now - ended).total_seconds() > REPLY_OWED_FOR_S:
+        return await final(_let_go_words(caller))
+    if not spec["conversation_id"]:
+        return await final("the other computer sent no conversation to answer into")
+    try:
+        token = await asyncio.to_thread(_read_reply_token, platform.secrets, sid)
+    except Exception:  # noqa: BLE001
+        token = ""
     if not token:
         # Nothing is sent without the key the sender gave for its answer: a
         # POST with none could only be refused there.
-        detail = "no answer key for this task is held here (it never came, or was lost)"
-        await _record_reply(platform, session, ok=False, detail=detail, caller=caller)
-        return {"ok": False, "sent": False, "detail": detail}
+        return await final(
+            "no answer key for this task is held here (it never came, or was lost)",
+            forget=False,
+        )
     # A PAIRED COMPUTER'S ANSWER GOES TO ITS STORED ADDRESS (v1.502.0,
     # north-star 2.16): the answer and the files the run made never go to a
-    # host the task named instead.
+    # host the task named instead. v1.509.0: by the pairing's id; a removed
+    # pairing or a task from another address sends nothing, for good.
     _paired, target, why = await asyncio.to_thread(_paired_reply_to, platform, spec)
-    if not target:
-        detail = why or (
-            "this computer does not know that paired computer's address any more (pair them again)"
+    if not target and why != PAIRINGS_UNREADABLE:
+        return await final(
+            why or (
+                "this computer does not know that paired computer's address any more (pair them again)"
+            )
         )
-        await _record_reply(platform, session, ok=False, detail=detail, caller=caller)
-        return {"ok": False, "sent": False, "detail": detail}
-    message = _reply_message(session)
-    files, left = await asyncio.to_thread(_reply_files, platform.engine, sid)
-    if left:
-        message += "\n\nAlso made on this computer, not sent: " + ", ".join(left)
-        if len(message) > REPLY_MESSAGE_CHARS:
-            message = message[:REPLY_MESSAGE_CHARS]
-    body: dict[str, Any] = {
-        "conversation_id": spec["conversation_id"],
-        "message": message,
-        "kind": "done",
-    }
-    if files:
-        body["files"] = files
-    headers = {"Authorization": f"Bearer {token}"}
+    # Where it stands is written BEFORE the try: a restart in the middle of
+    # it finds the answer owed, with its next try due.
+    tries += 1
+    wait = REPLY_RETRY_AFTER_S[tries - 1] if tries <= len(REPLY_RETRY_AFTER_S) else None
+    next_at = (now + timedelta(seconds=wait)).isoformat() if wait is not None else now.isoformat()
+    await asyncio.to_thread(
+        _write_reply_state, engine, sid, state=REPLY_OWED, tries=tries, next_at=next_at
+    )
     status = 0
     text = ""
     exc: BaseException | None = None
     timed_out = False
-    # A TOTAL deadline (the v1.288.0 rule): httpx's timeout is per phase, so a
-    # peer trickling bytes would never trip it. Only this scope expiring earns
-    # the deadline wording; a TimeoutError raised inside keeps its own words.
-    deadline = asyncio.timeout(REPLY_TIMEOUT_S)
-    try:
-        async with deadline:
-            async with httpx.AsyncClient(timeout=REPLY_TIMEOUT_S, follow_redirects=False) as client:
-                resp = await client.post(target, json=body, headers=headers)
-        status = int(getattr(resp, "status_code", 0) or 0)
+    if not target:
+        detail = why
+    else:
+        message = _reply_message(session, caller)
+        files, left = await asyncio.to_thread(_reply_files, engine, sid)
+        if left:
+            message += "\n\nAlso made on this computer, not sent: " + ", ".join(left)
+            if len(message) > REPLY_MESSAGE_CHARS:
+                message = message[:REPLY_MESSAGE_CHARS]
+        body: dict[str, Any] = {
+            "conversation_id": spec["conversation_id"],
+            "message": message,
+            "kind": "done",
+            # v1.510.0: which run this answers, so the other computer takes a
+            # repeat (a try whose 2xx was lost on the way back) only once.
+            "answer_id": sid,
+        }
+        if files:
+            body["files"] = files
+        headers = {"Authorization": f"Bearer {token}"}
+        # A TOTAL deadline (the v1.288.0 rule): httpx's timeout is per phase,
+        # so a peer trickling bytes would never trip it. Only this scope
+        # expiring earns the deadline wording; a TimeoutError raised inside
+        # keeps its own words.
+        deadline = asyncio.timeout(REPLY_TIMEOUT_S)
         try:
-            text = str(resp.text or "")[:500]
-        except Exception:  # noqa: BLE001
-            text = ""
-    except TimeoutError as err:
-        exc = err
-        timed_out = deadline.expired()
-    except Exception as err:  # noqa: BLE001 — connection / DNS / anything
-        exc = err
-    if exc is None and status // 100 == 2:
-        await _record_reply(platform, session, ok=True, detail="", caller=caller)
-        return {"ok": True, "sent": True, "detail": "sent"}
-    detail = _plain_reply_failure(exc, status, text, timed_out=timed_out)
-    await _record_reply(platform, session, ok=False, detail=detail, caller=caller)
+            async with deadline:
+                async with httpx.AsyncClient(timeout=REPLY_TIMEOUT_S, follow_redirects=False) as client:
+                    resp = await client.post(target, json=body, headers=headers)
+            status = int(getattr(resp, "status_code", 0) or 0)
+            try:
+                text = str(resp.text or "")[:500]
+            except Exception:  # noqa: BLE001
+                text = ""
+        except TimeoutError as err:
+            exc = err
+            timed_out = deadline.expired()
+        except Exception as err:  # noqa: BLE001 — connection / DNS / anything
+            exc = err
+        if exc is None and status // 100 == 2:
+            await asyncio.to_thread(_forget_reply_token, platform.secrets, sid)
+            await asyncio.to_thread(_write_reply_state, engine, sid, state=REPLY_SENT, next_at=None)
+            await _record_reply(platform, session, ok=True, detail="", caller=caller)
+            return {"ok": True, "sent": True, "detail": "sent"}
+        detail = _plain_reply_failure(exc, status, text, timed_out=timed_out)
+        if exc is None and 400 <= status < 500 and status not in _RETRY_LATER_4XX:
+            # Refused for good: no later try can change a wrong key or an
+            # unknown conversation.
+            return await final(detail)
+    if tries >= REPLY_TRIES:
+        await asyncio.to_thread(_write_reply_state, engine, sid, state=REPLY_WAITING, next_at=None)
+        interim = waiting_note(caller, detail)
+    else:
+        interim = retry_note(caller, detail)
+    await _record_reply(platform, session, ok=False, detail=detail, caller=caller, interim=interim)
     return {"ok": False, "sent": False, "detail": detail}
 
 
 def reply_failed_note(caller: str, detail: str) -> str:
-    """The sentence a session's summary gains when its answer did not arrive."""
+    """The sentence a session's summary gains when its answer will not arrive."""
     return f"Could not send this answer back to {clean_caller(caller)}: {detail}."
 
 
-async def _record_reply(platform: Any, session: Any, *, ok: bool, detail: str, caller: str) -> None:
+def _retry_prefix(caller: str) -> str:
+    return f"This answer has not reached {clean_caller(caller)} yet"
+
+
+def _waiting_prefix(caller: str) -> str:
+    return f"This answer is still waiting for {clean_caller(caller)}"
+
+
+def retry_note(caller: str, detail: str) -> str:
+    """The run's line while its answer is still on the ladder (v1.510.0)."""
+    return f"{_retry_prefix(caller)}: {detail}. It will be tried again."
+
+
+def waiting_note(caller: str, detail: str) -> str:
+    """The run's line once the ladder is over (v1.510.0): the answer is still
+    kept and goes when that computer next connects."""
+    name = clean_caller(caller)
+    return f"{_waiting_prefix(caller)}: {detail}. It will be sent when {name} next connects."
+
+
+def _with_note(summary: str, caller: str, note: str) -> str:
+    """``summary`` with this answer's earlier interim lines removed and
+    ``note`` (if any) added once, as its own paragraph."""
+    prefixes = (_retry_prefix(caller), _waiting_prefix(caller))
+    paras = [p for p in str(summary or "").split("\n\n") if not p.strip().startswith(prefixes)]
+    text = "\n\n".join(paras).strip()
+    if note and note not in text:
+        text = (text + "\n\n" + note).strip()
+    return text
+
+
+async def _record_reply(
+    platform: Any,
+    session: Any,
+    *,
+    ok: bool,
+    detail: str,
+    caller: str,
+    interim: str | None = None,
+) -> None:
+    """Record the try on the door's status and the run's summary: a sent
+    answer clears this answer's interim line; a final failure replaces it
+    with :func:`reply_failed_note`; a failure still owed (``interim``)
+    replaces it with the new interim line."""
     sid = str(getattr(session, "id", "") or "")
 
     def _write() -> None:
         door_for(platform).note_reply(sid, ok=ok, detail=detail)
-        if ok:
-            return
-        log.warning("task %s: could not send the answer back to %s: %s", sid, caller, detail)
+        if not ok:
+            log.warning("task %s: could not send the answer back to %s: %s", sid, caller, detail)
+        note = "" if ok else (interim if interim is not None else reply_failed_note(caller, detail))
         try:
             from ..core.db import session_scope
             from ..core.models import Session
 
-            note = reply_failed_note(caller, detail)
             with session_scope(platform.engine) as db:
                 row = db.get(Session, sid)
-                if row is not None and note not in (row.summary or ""):
-                    row.summary = ((row.summary or "").rstrip() + "\n\n" + note).strip()
-                    db.add(row)
-                    db.commit()
-            if note not in (getattr(session, "summary", "") or ""):
-                try:
-                    session.summary = ((session.summary or "").rstrip() + "\n\n" + note).strip()
-                except Exception:  # noqa: BLE001 — a detached double
-                    pass
+                if row is not None:
+                    new = _with_note(row.summary or "", caller, note)
+                    if new != (row.summary or ""):
+                        row.summary = new
+                        db.add(row)
+                        db.commit()
+            try:
+                session.summary = _with_note(getattr(session, "summary", "") or "", caller, note)
+            except Exception:  # noqa: BLE001 — a detached double
+                pass
         except Exception:  # noqa: BLE001 — bookkeeping only
-            log.warning("task %s: could not record the failed reply", sid, exc_info=True)
+            log.warning("task %s: could not record the reply", sid, exc_info=True)
 
     try:
         await asyncio.to_thread(_write)
     except Exception:  # noqa: BLE001
         log.warning("task %s: could not record the reply", sid, exc_info=True)
+
+
+# --- answers still owed (v1.510.0, second review F3) -----------------------
+
+
+def _owed_runs(
+    platform: Any, *, now: datetime, peer_id: str = "", door: str = "", force: bool = False
+) -> list[Any]:
+    """The ended runs whose answer is still OWED (BLOCKING), newest first,
+    at most ``REPLY_OWED_SCAN``: a reply spec in the options that is not
+    "sent" or "final", AND the answer key still kept in the vault (so a run
+    from before v1.510.0, whose key was used up, is never tried again).
+    ``peer_id`` keeps one pairing's, ``door`` = :data:`DOOR_HAND` the hand-made
+    door's. Without ``force`` only a try that is due (its ``next_at`` passed;
+    a "waiting" one only once it is past ``REPLY_OWED_FOR_S``, to be let go)."""
+    from sqlmodel import select
+
+    from ..core.db import session_scope
+    from ..core.models import Session, SessionStatus
+    from ..scheduling.knobs import session_options
+
+    with session_scope(platform.engine) as db:
+        rows = list(
+            db.exec(
+                select(Session)
+                .where(Session.origin.startswith(f"{REMOTE_TASK_ORIGIN}:"))  # type: ignore[union-attr]
+                .where(
+                    Session.status.in_(  # type: ignore[attr-defined]
+                        [SessionStatus.COMPLETED, SessionStatus.FAILED, SessionStatus.CANCELLED]
+                    )
+                )
+                .where(Session.options_json.contains(f'"{REPLY_OPTION}"'))  # type: ignore[attr-defined]
+                .order_by(Session.created_at.desc())  # type: ignore[attr-defined]
+                .limit(REPLY_OWED_SCAN)
+            )
+        )
+        for r in rows:
+            db.expunge(r)
+    out: list[Any] = []
+    for row in rows:
+        spec = session_options(row).get(REPLY_OPTION)
+        if not isinstance(spec, dict) or reply_spec_of(row) is None:
+            continue
+        state = str(spec.get("state") or "")
+        if state in (REPLY_SENT, REPLY_FINAL):
+            continue
+        if peer_id and str(spec.get("peer_id") or "") != peer_id:
+            continue
+        if door and str(spec.get("door") or "") != door:
+            continue
+        if not force and spec.get("tries"):
+            if state == REPLY_WAITING:
+                ended = parse_at(getattr(row, "finished_at", None))
+                if ended is None or (now - ended).total_seconds() <= REPLY_OWED_FOR_S:
+                    continue
+            else:
+                due = parse_at(spec.get("next_at"))
+                if due is not None and now < due:
+                    continue
+        if not _holds_reply_token(platform.secrets, row.id):
+            continue
+        out.append(row)
+    return out
+
+
+async def reply_pass(
+    platform: Any, *, peer_id: str = "", door: str = "", force: bool = False
+) -> int:
+    """Start a try for every answer still owed (see :func:`_owed_runs`), each
+    on its own tracked task (so nothing here waits on another machine).
+    Returns how many were started. Never raises."""
+    try:
+        rows = await asyncio.to_thread(
+            _owed_runs, platform, now=now_for(platform), peer_id=peer_id, door=door, force=force
+        )
+    except Exception:  # noqa: BLE001 — a pass must never raise
+        log.warning("task door: the answers still owed could not be read", exc_info=True)
+        return 0
+    started = 0
+    for row in rows:
+        if _start_send(platform, row, force=force) is not None:
+            started += 1
+    return started
+
+
+def retry_owed_soon(
+    platform: Any, *, peer_id: str = "", door: str = "", pressed: bool = False
+) -> asyncio.Task | None:
+    """The computer ``peer_id`` (or the hand-made door's, ``door``) was just
+    heard from: try what is still owed to it now, whatever its ladder says —
+    at most once per ``HEARD_RETRY_EVERY_S`` for that computer, unless the
+    user ``pressed`` Check here. Callers keep v1.509.0's rules: a request from
+    another address than the pairing's never calls this (the answer goes to
+    the pairing, by id, at its stored address). A tracked task on the running
+    loop; None when nothing was started. Never raises."""
+    who = f"peer:{peer_id}" if peer_id else (door or "")
+    if not who:
+        return None
+    key = f"{id(platform)}:{who}"
+    now = now_for(platform)
+    last = _HEARD_AT.get(key)
+    if (
+        not pressed
+        and last is not None
+        and 0 <= (now - last).total_seconds() < HEARD_RETRY_EVERY_S
+    ):
+        return None
+    _HEARD_AT[key] = now
+    if len(_HEARD_AT) > 4096:
+        _HEARD_AT.pop(next(iter(_HEARD_AT)))
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    task = loop.create_task(reply_pass(platform, peer_id=peer_id, door=door, force=True))
+    _PENDING_TASKS.add(task)
+    task.add_done_callback(_PENDING_TASKS.discard)
+    return task
+
+
+async def periodic_pass(platform: Any) -> None:
+    """The daemon's periodic pass (``daemon/app._terminal_snapshot_loop``,
+    every 30 s): the answers owed whose next try is due, and (at most every
+    ``threads.SILENT_SWEEP_S``) the asking side's waits that passed their
+    limit. Never raises."""
+    try:
+        await reply_pass(platform)
+    except Exception:  # noqa: BLE001
+        log.warning("task door: the owed answers pass failed", exc_info=True)
+    try:
+        from .threads import end_overdue_waits
+
+        await end_overdue_waits(platform)
+    except Exception:  # noqa: BLE001
+        log.warning("task door: the overdue waits pass failed", exc_info=True)
 
 
 # --- tracked background replies -------------------------------------------
@@ -994,7 +1400,7 @@ _PENDING_TASKS: set[asyncio.Task] = set()
 _PENDING_THREADS: set[threading.Thread] = set()
 
 
-def send_reply_soon(platform: Any, session: Any) -> asyncio.Task | None:
+def send_reply_soon(platform: Any, session: Any, *, force: bool = False) -> asyncio.Task | None:
     """Start :func:`send_reply` for a finished session WITHOUT holding the
     run's teardown on another machine (a tracked task on the running loop).
     No reply address = nothing started (None). Never raises."""
@@ -1003,23 +1409,28 @@ def send_reply_soon(platform: Any, session: Any) -> asyncio.Task | None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        return send_reply_in_thread(platform, session)  # type: ignore[return-value]
-    task = loop.create_task(send_reply(platform, session))
+        return send_reply_in_thread(platform, session, force=force)  # type: ignore[return-value]
+    task = loop.create_task(send_reply(platform, session, force=force))
     _PENDING_TASKS.add(task)
     task.add_done_callback(_PENDING_TASKS.discard)
     return task
 
 
-def send_reply_in_thread(platform: Any, session: Any) -> threading.Thread | None:
+_start_send = send_reply_soon
+
+
+def send_reply_in_thread(
+    platform: Any, session: Any, *, force: bool = False
+) -> threading.Thread | None:
     """The same from a place with no running loop (the boot reconcile): a
-    daemon thread runs the one attempt, so boot never waits on another
-    machine. Never raises."""
+    daemon thread runs the try, so boot never waits on another machine.
+    Never raises."""
     if reply_spec_of(session) is None:
         return None
 
     def _run() -> None:
         try:
-            asyncio.run(send_reply(platform, session))
+            asyncio.run(send_reply(platform, session, force=force))
         except Exception:  # noqa: BLE001
             log.warning("task reply thread failed", exc_info=True)
         finally:
@@ -1032,9 +1443,12 @@ def send_reply_in_thread(platform: Any, session: Any) -> threading.Thread | None
 
 
 async def drain_replies(timeout: float = 30.0) -> None:
-    """Wait for every reply in flight (tests; a clean shutdown)."""
-    tasks = [t for t in list(_PENDING_TASKS) if not t.done()]
-    if tasks:
+    """Wait for every reply in flight (tests; a clean shutdown) — including
+    the tries a pass started while it was waited for (v1.510.0), bounded."""
+    for _round in range(8):
+        tasks = [t for t in list(_PENDING_TASKS) if not t.done()]
+        if not tasks:
+            break
         await asyncio.wait(tasks, timeout=timeout)
     for thread in list(_PENDING_THREADS):
         await asyncio.to_thread(thread.join, timeout)

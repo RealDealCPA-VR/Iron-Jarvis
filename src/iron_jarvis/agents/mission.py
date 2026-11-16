@@ -1579,14 +1579,22 @@ def _handoff_key(data: dict[str, Any]) -> str:
 _REPORT_KINDS = ("done", "message")
 
 
-def _remote_reports(engine: Any, waiting: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _remote_reports(
+    engine: Any, waiting: dict[str, dict[str, Any]], now: Any = None
+) -> list[dict[str, Any]]:
     """Settle each ACCEPTED remote job (``waiting``: room id → its card slot)
     whose report has come home (v1.420.0, C6.3, G62): the NEWEST inbound
     ``done`` / ``message`` line that remote posted into the job's room ends the
     card ``done`` with that text (plain, for a person: a room line is never
     fenced). Mutates the slots; returns ``[{agent, at}]`` for the activity
-    log. BLOCKING (one bounded read)."""
-    from .threads import AgentThreadRecord
+    log. BLOCKING (one bounded read).
+
+    v1.510.0 (second review F3): with ``now`` (``task_door.now_for``), a job
+    whose wait passed ``threads.REMOTE_REPORT_LIMIT_S`` with no report is
+    marked ``silent`` (the slot's ``silent_at``): the card says it has not
+    reported back, never "will report back" for ever. The wait starts at the
+    room's own pending line (else the moment it was accepted)."""
+    from .threads import AgentThreadRecord, REMOTE_REPORT_LIMIT_S, _overdue, remote_wait
 
     out: list[dict[str, Any]] = []
     with session_scope(engine) as db:
@@ -1610,6 +1618,23 @@ def _remote_reports(engine: Any, waiting: dict[str, dict[str, Any]]) -> list[dic
                     report = m
                     break
             if report is None:
+                if now is not None and slot.get("reply_back"):
+                    from datetime import timedelta
+
+                    from .task_door import parse_at
+
+                    state, start = remote_wait(msgs, who)
+                    when = None
+                    if state == "ended":
+                        when = parse_at((start or {}).get("at"))
+                    elif state != "reported":
+                        start = start if state == "waiting" else slot.get("accepted_at")
+                        if _overdue(start, now, REMOTE_REPORT_LIMIT_S):
+                            when = parse_at(start) + timedelta(seconds=REMOTE_REPORT_LIMIT_S)
+                    if when is not None:
+                        slot["silent"] = True
+                        # the event rows' naive UTC spelling, like the log's
+                        slot["silent_at"] = when.replace(tzinfo=None).isoformat()
                 continue
             at = str(report.get("at") or "")
             if at.endswith("+00:00"):  # the event rows' naive UTC spelling
@@ -1769,6 +1794,9 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
             slot["conversation_id"] = str(data.get("conversation_id") or "")
             slot["reply_back"] = bool(data.get("reply_back"))
             slot["finished_at"] = None
+            # v1.510.0 (F3): when it was accepted, should the room's own
+            # pending line be missing (the wait's limit counts from it).
+            slot["accepted_at"] = _iso(ev.created_at)
             continue
         slot["status"] = "done" if data.get("ok") else "failed"
         slot["finished_at"] = _iso(ev.created_at)
@@ -1785,9 +1813,31 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
     }
     if waiting_rooms:
         try:
-            reported = _remote_reports(engine, waiting_rooms)
+            from .task_door import now_for
+
+            reported = _remote_reports(engine, waiting_rooms, now_for(platform))
         except Exception:  # noqa: BLE001 — an unread room keeps the card waiting
             reported = []
+    # v1.510.0 (second review F3): a job that has not reported back within
+    # ``threads.REMOTE_REPORT_LIMIT_S`` needs the user (ask again, or Check
+    # that computer): "needs you" (``waiting_you``, a state the card draws)
+    # with the same words the chat gets, never "will report back" for ever.
+    silent: list[dict[str, Any]] = []
+    for slot in waiting_rooms.values():
+        if not slot.get("silent") or slot.get("status") != "waiting_remote":
+            continue
+        from .threads import _remote_name, not_reported_words
+
+        name = _remote_name(str(slot.get("agent") or ""))
+        try:
+            from ..peers.store import is_paired_remote
+
+            paired = is_paired_remote(platform, name)
+        except Exception:  # noqa: BLE001 — wording only
+            paired = False
+        slot["status"] = "waiting_you"
+        slot["result"] = not_reported_words(name, paired=paired)
+        silent.append(slot)
 
     lines, last_line = tool_activity(invocations, denied_kind, names)
     for ev in events:
@@ -1858,6 +1908,12 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
             "text": f"{display_name(str(rep.get('agent') or ''))} reported back to {COORDINATOR}",
             "tone": "ok",
         })
+    for slot in silent:
+        agent = display_name(str(slot.get("agent") or ""))
+        lines.append({
+            "at": slot.get("silent_at"), "who": agent, "session_id": None,
+            "text": f"{agent} has not reported back", "tone": "ask",
+        })
     lines.sort(key=lambda r: r.get("at") or "")
     lines = lines[-_ACTIVITY_MAX:]
 
@@ -1897,6 +1953,8 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
             # member took the piece ("" when the planner named it).
             "reason": why.get(m.id, ""),
         })
+    from .threads import NOT_REPORTED_LABEL
+
     for rec in remote_members:
         st = rec["status"]
         out_members.append({
@@ -1906,7 +1964,12 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
             "kind": "remote",
             "task": _short(rec.get("task") or "", _TASK_CHARS),
             "status": st,
-            "progress": progress_for(st, 0, (0, 0, "")),
+            "progress": (
+                # v1.510.0 (F3): its own label, never "Waiting for your OK".
+                {"pct": None, "label": NOT_REPORTED_LABEL, "basis": "remote_silent"}
+                if rec.get("silent") and st == "waiting_you"
+                else progress_for(st, 0, (0, 0, ""))
+            ),
             "activity": "",
             "waiting_on": None,
             "steps": 0,

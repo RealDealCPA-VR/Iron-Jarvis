@@ -4370,6 +4370,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     fixKind?: string;
     fixProvider?: string;
     draftBack?: boolean;
+    /** v1.510.0 (L4): what the failed turn already did and kept, in the
+     *  daemon's words ("Before it failed, this reply made notes.md. …"). */
+    kept?: string;
   }>({ text: "", technical: "" });
   // v1.355.0 (G29): the failure line's Details fold is open for THIS line
   // (keyed to its text, so a new failure always starts folded).
@@ -9507,20 +9510,40 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           followLocalOnly(localOnlyFromTools(streamToolsRef.current));
           const partial = (se?.partial ?? "").trim();
           const sources = extractWebSources(streamToolsRef.current);
-          const withPartial: ChatMessage[] = partial
-            ? [
-                ...history,
-                {
-                  role: "assistant",
-                  content: partial,
-                  interrupted: true,
-                  ...(sources.length ? { sources } : {}),
-                  // v1.378.0 review: the rest was declined (typed fix_kind).
-                  ...(isRefusal(failureFacts(e)) ? { refused: true } : {}),
-                },
-              ]
-            : history;
-          if (partial) setMessages(withPartial);
+          // v1.510.0 (second review, L4): a turn that failed AFTER its steps
+          // ran keeps them — the failed reply carries its step cards, the
+          // steps that ran and the files they made or changed (the files
+          // list beside the chat shows them, with their Undo), and the
+          // daemon's sentence of what it kept stands in for words the turn
+          // never wrote. Nothing changes for a failure before any step.
+          const keptNote = (se?.keptNote ?? "").trim();
+          const keptDocs = (se?.documents ?? []).filter(Boolean);
+          const keptTools = (se?.toolsUsed ?? []).filter(Boolean);
+          const keptSteps = se?.steps ?? [];
+          const keptWork = keptNote
+            ? {
+                ...(keptTools.length ? { toolsUsed: keptTools } : {}),
+                ...(keptSteps.length ? { steps: keptSteps } : {}),
+                ...(keptDocs.length ? { documents: keptDocs } : {}),
+              }
+            : null;
+          const withPartial: ChatMessage[] =
+            partial || keptWork
+              ? [
+                  ...history,
+                  {
+                    role: "assistant",
+                    content: partial || keptNote,
+                    ...(partial ? { interrupted: true } : {}),
+                    ...(sources.length ? { sources } : {}),
+                    // v1.378.0 review: the rest was declined (typed fix_kind).
+                    ...(isRefusal(failureFacts(e)) ? { refused: true } : {}),
+                    ...(keptWork ?? {}),
+                  },
+                ]
+              : history;
+          if (partial || keptWork) setMessages(withPartial);
+          if (keptDocs.length) showDocPreview(keptDocs);
           if (se?.offline || (e instanceof ApiError && e.status === 0 && !se))
             setOffline(true);
           else {
@@ -9535,6 +9558,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               text: line,
               technical: turnErrorTechnical(e),
               ...failureFacts(e),
+              // v1.510.0 (L4): the daemon's sentence of what the turn kept.
+              ...(keptNote ? { kept: keptNote } : {}),
             };
             setError(line);
           }
@@ -13706,6 +13731,16 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                                 sentence — its fix says why every new message
                                 here is declined too, and the edit way back. */}
                             {turnFix && turnFix.kind !== "refusal" && errFacts?.title ? errFacts.title : error}
+                            {/* v1.510.0 (second review, L4): a turn that
+                                failed after its steps ran says what it made
+                                or changed and that it is kept — the daemon's
+                                sentence, read from the journal. */}
+                            {errFacts?.kept && (
+                              <span data-testid="chat-turn-kept" className="text-zinc-300">
+                                {" "}
+                                {errFacts.kept}
+                              </span>
+                            )}
                           </p>
                         )}
                         {compactNote && (

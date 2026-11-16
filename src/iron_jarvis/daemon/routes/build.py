@@ -228,6 +228,10 @@ class BuildSessionCreate(BaseModel):
 NOT_EMPTY_SENTENCE = (
     "This session already has a message in it, so it was kept."
 )
+#: v1.510.0 (second review S8): a delete stops the session's programs (dev
+#: server, background programs, its browser) BEFORE the step that can refuse —
+#: the folder must be free to move — so a refusal says they were stopped.
+PROGRAMS_STOPPED = "Any programs it had running were stopped."
 
 
 class BuildFolderTeam(BaseModel):
@@ -949,6 +953,10 @@ class _ReplyWatch:
         #: shutdown) has no ``done`` / ``error`` frame to say its trust, so
         #: :meth:`lines` reads it from here. None: not known (a replay).
         self.trust_now: Any = None  # () -> str, or None
+        #: v1.510.0 (S2): the reply line could not be written to the session
+        #: (``_record_turn_end``): its kept conversation stays, the last frame
+        #: says so, and the next start writes the line.
+        self.reply_unsaved = False
 
     def stopped_trust(self) -> str:
         """Why a reply that ended WITHOUT its done / error frame ran at LOW
@@ -1508,7 +1516,8 @@ def frame_offset(event: str, data: Any) -> "int | None":
     return None
 
 
-def replayed_reply_line(turn_id: str, frames: Any, *, started_at: float) -> "list[dict[str, Any]] | None":
+def replayed_reply_line(turn_id: str, frames: Any, *, started_at: float,
+                        status: str = "interrupted") -> "list[dict[str, Any]] | None":
     """The lines a reply a CRASH cut off is given at boot (v1.391.0, the
     Timeline's open item): its STORED frames (``ChatTurnRecord.frames_json``)
     folded by the same :class:`_ReplyWatch` the live reply writer uses, on a
@@ -1521,9 +1530,17 @@ def replayed_reply_line(turn_id: str, frames: Any, *, started_at: float) -> "lis
     line is interrupted (``error`` = ``durable_turns.INTERRUPTED_DETAIL``);
     the call that was in flight is kept as stopped. None when the frames
     carry no offsets at all (a reply stored before the Timeline): the caller
-    then writes the line it always wrote. Never raises (None)."""
+    then writes the line it always wrote. Never raises (None).
+
+    ``status`` (v1.510.0, S2): a turn that FINISHED ("done" | "error" |
+    "stopped") but whose line could not be written. Its own end frame is
+    folded too, and the lines are exactly what the live writer would have
+    written (no line for a turn stopped before a word or a step; an empty
+    list then). Untimed frames still give the lines (a finished turn has no
+    older line to fall back on)."""
     from ...harness.timeline import ReplyClock
 
+    cut_off = status == "interrupted"
     try:
         now_ms = [0]
         watch = _ReplyWatch()
@@ -1535,7 +1552,7 @@ def replayed_reply_line(turn_id: str, frames: Any, *, started_at: float) -> "lis
             if not (isinstance(frame, list) and len(frame) == 2):
                 continue
             event, raw = str(frame[0] or ""), frame[1]
-            if event in _TERMINAL_EVENTS:
+            if event in _TERMINAL_EVENTS and cut_off:
                 # The cut-off turn's own end (the boot reconcile's, or the
                 # shutdown's): it is said by the line's `error`, never folded.
                 continue
@@ -1548,6 +1565,8 @@ def replayed_reply_line(turn_id: str, frames: Any, *, started_at: float) -> "lis
                 now_ms[0] = max(now_ms[0], off)
                 timed = True
             watch.see(event, raw if isinstance(raw, str) else json.dumps(raw))
+        if not cut_off:
+            return watch.lines(turn_id, status)
         if not timed and not watch.attempts:
             # v1.397.0: an attempts turn's frames carry no offsets, but its
             # rows are what the line must keep (the card, cut off).
@@ -1638,13 +1657,19 @@ async def _apply_session_changes(engine: Any, thread_id: str, watch: _ReplyWatch
     """An approved plan switches the session to act mode and keeps the plan
     (v1.402.0: the act turn then starts BY ITSELF when this turn ends cleanly,
     :func:`run_approved_plan`); an "allow for this conversation" answer is
-    kept for the next turns. Off the loop; never raises."""
+    kept for the next turns. Off the loop; never raises.
+
+    v1.510.0 (second review S2): an approved plan is cleared from the watch
+    only once the session write SUCCEEDED (the grant's rule below): a failed
+    write keeps it for the next frame's try, and while it is pending the act
+    turn never starts (:func:`plan_run_due`) and the last frame says why."""
     setup: dict[str, Any] = {}
+    plans_taken = 0
     if watch.approved_plans:
         from ...harness.session_tools import plan_steps
 
+        plans_taken = len(watch.approved_plans)
         text = watch.approved_plans[-1]
-        watch.approved_plans = []
         setup["mode"] = None  # act is stored as nothing
         setup["plan"] = {
             "text": text, "steps": plan_steps(text) or list(watch.plan_update_steps),
@@ -1668,7 +1693,11 @@ async def _apply_session_changes(engine: Any, thread_id: str, watch: _ReplyWatch
     try:
         await asyncio.to_thread(S.update, engine, thread_id, setup=setup)
     except Exception:  # noqa: BLE001 — the turn never fails on its session record
+        # The approved plan stays pending (the next frame tries again).
         log.warning("updating build session %s failed", thread_id, exc_info=True)
+        return
+    # Written (or the session is gone: nothing left to write it to).
+    del watch.approved_plans[:plans_taken]
 
 
 #: Frames that END a turn: the account-limit card goes out right BEFORE one.
@@ -2014,16 +2043,109 @@ def _turn_served(pin: Any, status: str) -> bool:
     )
 
 
+#: v1.510.0 (second review S2): the words on a turn's last frame when its
+#: reply line could not be written to the session (twice). Only what the code
+#: then does: the reply's kept conversation is not deleted, and the boot step
+#: ``sessions.reconcile_unsaved_replies`` writes the line from the turn's
+#: stored frames.
+REPLY_NOT_SAVED = (
+    "This reply could not be saved to the session. It will be put back when Iron Jarvis next starts."
+)
+#: v1.510.0 (S2): the words on a turn's last frame when the plan the user
+#: approved could not be saved to the session (the session stays in Plan and
+#: the act turn is not started, :func:`plan_run_due`).
+PLAN_NOT_SAVED = (
+    "The plan you approved could not be saved to the session, so the work did not start and the"
+    " session is still on Plan. Ask again to carry it out."
+)
+#: v1.510.0 (S2): how long the reply-line write waits before its one retry
+#: (in its worker thread, never on the event loop).
+REPLY_SAVE_RETRY_S = 1.0
+#: The wait itself — a test injects its own (no real wait in a test).
+_pause_before_retry = time.sleep
+
+
+def _append_reply_lines(engine: Any, thread_id: str, turn_id: str, lines: list[dict[str, Any]]) -> bool:
+    """Write a turn's end lines, trying ONCE more after
+    :data:`REPLY_SAVE_RETRY_S` (v1.510.0, S2). True when they are on the
+    session — or there is no session to keep them (deleted meanwhile).
+    BLOCKING (the pause runs in the caller's worker thread); never raises."""
+
+    def _settled() -> bool:
+        # A write that committed but answered "not ok" is never written
+        # twice; a session that is gone has nothing to put back.
+        try:
+            row = S.get_row(engine, thread_id)
+        except Exception:  # noqa: BLE001 — cannot tell: not settled
+            return False
+        return row is None or S.has_turn_reply(row, turn_id)
+
+    for attempt in range(2):
+        if attempt:
+            if _settled():
+                return True
+            _pause_before_retry(REPLY_SAVE_RETRY_S)
+        try:
+            if S.append_lines(engine, thread_id, lines).get("ok"):
+                return True
+        except Exception:  # noqa: BLE001 — told below, never raised
+            log.warning("writing the reply of build session %s failed", thread_id, exc_info=True)
+    return _settled()
+
+
+def _with_save_notes(chunk: str, watch: "_ReplyWatch") -> str:
+    """The terminal ``done`` / ``error`` frame with ``not_saved`` — the plain
+    sentence(s) of what could not be kept on the session (v1.510.0, S2): the
+    reply line (:data:`REPLY_NOT_SAVED`) and/or an approved plan
+    (:data:`PLAN_NOT_SAVED`). Any other chunk, or nothing to say, passes."""
+    said = [s for s, on in ((REPLY_NOT_SAVED, watch.reply_unsaved), (PLAN_NOT_SAVED, bool(watch.approved_plans)))
+            if on]
+    if not said:
+        return chunk
+    frames = _durable.parse_chunk(chunk)
+    out: list[str] = []
+    changed = False
+    for event, raw in frames:
+        if event in _TERMINAL_EVENTS:
+            try:
+                data = json.loads(raw or "{}")
+            except ValueError:
+                data = None
+            if isinstance(data, dict):
+                data["not_saved"] = " ".join(said)
+                out.append(_durable.sse(event, data))
+                changed = True
+                continue
+        out.append(_durable.sse(event, raw))
+    return "".join(out) if changed else chunk
+
+
 async def _record_turn_end(engine: Any, thread_id: str, turn_id: str, watch: "_ReplyWatch",
                            status: str, pin: Any, platform: Any) -> None:
     """What a turn's END writes on the session: the reply line (plus any steer
-    notes), then the account outcome's record. Never raises."""
+    notes), then the account outcome's record. Never raises.
+
+    v1.510.0 (S2): the write's answer is READ. It is tried once more after a
+    short pause; still failing, ``watch.reply_unsaved`` is set — the turn's
+    last frame says so (:func:`_with_save_notes`) and its kept conversation is
+    not deleted. A helper plan that cannot be read never skips the write: the
+    lines go without it."""
     lines = watch.lines(turn_id, status)
     if lines:
-        with contextlib.suppress(Exception):
-            if watch.helpers:
+        if watch.helpers:
+            try:
                 lines = await asyncio.to_thread(_with_helper_plans, engine, lines)
-            await asyncio.to_thread(S.append_lines, engine, thread_id, lines)
+            except Exception:  # noqa: BLE001 — the reply is written without them
+                log.warning("reading the helper plans of build session %s failed", thread_id, exc_info=True)
+        try:
+            saved = await asyncio.to_thread(_append_reply_lines, engine, thread_id, turn_id, lines)
+        except Exception:  # noqa: BLE001 — "never raises"
+            log.warning("writing the reply of build session %s failed", thread_id, exc_info=True)
+            saved = False
+        if not saved:
+            watch.reply_unsaved = True
+            log.warning("the reply %s of build session %s could not be saved; it is put back at the next start",
+                        turn_id, thread_id)
     served = _turn_served(pin, status)
     if pin is not None and platform is not None and (watch.account_limit or served):
         # v1.393.0 review: a billed model call (or streamed words) this turn
@@ -2098,8 +2220,12 @@ def plan_run_due(watch: "_ReplyWatch") -> bool:
     by itself (v1.402.0)? Clean = a ``done`` frame (never an error, a Stop or
     a cut-off), not cut at its length, its step limit or its cap, no account
     limit, and nothing the user wrote after the approval (a steer note, or
-    one the model never read). Pure."""
-    if not watch.plan_approved or watch.steered_after_plan:
+    one the model never read). Pure.
+
+    v1.510.0 (S2): never while the approval is still pending — its session
+    write failed, so the session is still in Plan (``watch.approved_plans``
+    is cleared only once it is written)."""
+    if not watch.plan_approved or watch.steered_after_plan or watch.approved_plans:
         return False
     done = watch.done
     if done is None or watch.error is not None or watch.account_limit:
@@ -2298,6 +2424,9 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                     watch.can_continue = bool(await asyncio.shield(record.keep_failed()))
                 if terminal and (watch.done is not None or watch.error is not None):
                     await asyncio.shield(end("done" if watch.done is not None else "error"))
+                    # v1.510.0 (S2): what could not be kept on the session
+                    # (the reply line, an approved plan) is said on this frame.
+                    chunk = _with_save_notes(chunk, watch)
                 yield chunk
         status = "done" if watch.done is not None else "error" if watch.error is not None else "stopped"
     except asyncio.CancelledError:
@@ -2325,7 +2454,12 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
         # its kept conversation goes. A turn a shutdown cut off keeps it.
         # v1.422.0 (B1): a FAILED turn whose rounds were kept for "Continue
         # from where it stopped" keeps them (under the failed key).
-        if record is not None and status != "interrupted" and not watch.can_continue:
+        # v1.510.0 (S2): a reply whose line could not be written keeps its
+        # record too — the next start writes the line from the turn's stored
+        # frames (`sessions.reconcile_unsaved_replies`), and the boot's resume
+        # pass then drops the record (the turn was not cut off).
+        if record is not None and status != "interrupted" and not watch.can_continue \
+                and not watch.reply_unsaved:
             with contextlib.suppress(BaseException):
                 await asyncio.shield(record.forget())
         # v1.376.0 (part 2, Phase 5) DECISION: a Stop CLOSES the session's
@@ -4805,13 +4939,19 @@ def register(app: FastAPI, d: Any) -> None:
         from ...harness.attempts import discard_for_delete
         from .build_git import _locked as _git_locked
 
+        # v1.510.0 (S8): stopped FIRST (the folders must be free to move), so
+        # every refusal below says so (PROGRAMS_STOPPED).
         S.end_session_programs(thread_id)
         try:
             left = _git_locked(thread_id, lambda: discard_for_delete(d.platform, row))
         except B.GitRefused as exc:
-            return JSONResponse(status_code=exc.status, content={"detail": f"{exc} The session was not deleted."})
+            return JSONResponse(status_code=exc.status, content={
+                "detail": f"{exc} The session was not deleted. {PROGRAMS_STOPPED}",
+            })
         if left:
-            return JSONResponse(status_code=409, content={"detail": f"{left} The session was not deleted."})
+            return JSONResponse(status_code=409, content={
+                "detail": f"{left} The session was not deleted. {PROGRAMS_STOPPED}",
+            })
         if facts and not facts.get("removed_at"):
             from .build_git import _locked
 
@@ -4823,7 +4963,7 @@ def register(app: FastAPI, d: Any) -> None:
                 moved = _locked(thread_id, lambda: B.remove_worktree(d.platform.config.home, facts))
             except B.GitRefused as exc:
                 content: dict[str, Any] = {
-                    "detail": f"{exc} The session was not deleted.",
+                    "detail": f"{exc} The session was not deleted. {PROGRAMS_STOPPED}",
                 }
                 if exc.details:
                     content["details"] = exc.details
@@ -5359,8 +5499,9 @@ def register(app: FastAPI, d: Any) -> None:
                 if problem.get("code"):
                     content["code"] = problem["code"]
                 return JSONResponse(status_code=409, content=content)
+        old_setup = _setup_of(row)
         patch = await asyncio.to_thread(
-            account_patch, platform, _setup_of(row), body.account.strip(), body.model.strip() or None,
+            account_patch, platform, old_setup, body.account.strip(), body.model.strip() or None,
         )
         row = await asyncio.to_thread(S.update, platform.engine, thread_id, setup=patch)
         if row is None:
@@ -5372,10 +5513,25 @@ def register(app: FastAPI, d: Any) -> None:
                 await start_build_turn(d, thread_id, CONTINUE_TEXT, turn_id, continuation=True,
                                        device_id=body.device_id or "")
             except SessionBusy:
+                # Another turn of the session got there first and may already
+                # run on the account just chosen: it is left on it.
                 return JSONResponse(
                     status_code=409,
                     content={"detail": RUNNING_SENTENCE, "turn_id": _running_turn(d, thread_id)},
                 )
+            except Exception:
+                # v1.510.0 (second review S8): the continue was REFUSED, so
+                # the session is put back on its old account, with its limit
+                # card and any wait, exactly as before the press (a key it did
+                # not have is removed again).
+                try:
+                    await asyncio.to_thread(
+                        S.update, platform.engine, thread_id, setup={k: old_setup.get(k) for k in patch},
+                    )
+                except Exception:  # noqa: BLE001 — the refusal is still answered
+                    log.warning("putting build session %s back on its account failed", thread_id,
+                                exc_info=True)
+                raise
             row = await asyncio.to_thread(_session_or_404, thread_id)
         return {"session": await asyncio.to_thread(_full_view, row), "turn_id": turn_id}
 

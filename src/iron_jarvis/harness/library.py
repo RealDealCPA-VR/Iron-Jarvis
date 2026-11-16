@@ -1662,6 +1662,82 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+#: v1.510.0 (second review S11): the ledger name an accepted edit's Undo row
+#: is filed under — the file tool whose own ``revert`` (``tools/undo.
+#: revert_workspace_file``) puts a ``file_restore`` / ``file_delete`` back, so
+#: ``POST /undo/{id}`` needs no new code (the memory review's way,
+#: ``memory/proposals._journal``).
+UNDO_TOOL = "write_file"
+#: Refused when the Undo row cannot be written: nothing is changed.
+NOT_RECORDED_SENTENCE = "The change could not be recorded for Undo, so the file was not changed."
+
+
+def _journal_edit(engine: Any, row: HarnessLibraryRecord, old_bytes: "bytes | None") -> str:
+    """Write the Undo row of an accepted edit BEFORE the file is written (the
+    journal row is written with the intent): a ``file_restore`` holding the
+    file's exact old bytes, or a ``file_delete`` for a file the edit makes,
+    under the session it came from (``build:<thread>``, the session's Undo
+    list) with the folder as its workspace. The old bytes ride INLINE in the
+    row (the library has no app home for a blob; a harness file is small).
+    Returns the action id. Raises when it cannot be written. BLOCKING."""
+    import base64
+
+    from ..core.models import PermissionMode, ToolInvocation, UndoJournal
+    from ..tools.base import Reversibility
+    from ..tools.undo import make_file_descriptor, sha256_bytes
+    from .components import HARNESS_PARTS
+    from .sessions import session_id_for
+
+    rel = "/".join([*HARNESS_PARTS, *str(row.file).replace("\\", "/").split("/")])
+    # The hash an Undo checks first (text mode: newline-invariant, read back
+    # the way ``sha256_target(..., "text")`` reads it).
+    after = str(row.after or "")
+    post = sha256_bytes(after.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8"))
+    desc = make_file_descriptor(
+        "", kind="file_restore" if old_bytes is not None else "file_delete", path=rel, mode="text",
+        pre_sha256=sha256_bytes(old_bytes) if old_bytes is not None else None, post_sha256=post,
+        exact=old_bytes is not None,
+    )
+    meta = json.loads(desc["pre_inline"])
+    meta["workspace"] = str(row.folder)
+    if old_bytes is not None:
+        meta["data"] = base64.b64encode(old_bytes).decode("ascii")
+    session = session_id_for(row.thread_id) if row.thread_id else "build:library"
+    action_id = new_id("tool")
+    words = f"Accepted a suggested edit to {rel}"
+    with session_scope(engine) as db:
+        db.add(ToolInvocation(
+            id=action_id, session_id=session, agent_run_id="", tool=UNDO_TOOL,
+            args_json=json.dumps({"path": rel, "actor": "library", "suggestion": row.id}),
+            verdict=PermissionMode.ALLOW, ok=True, output=words,
+            reversibility=Reversibility.REVERSIBLE.value,
+        ))
+        db.add(UndoJournal(
+            action_id=action_id, session_id=session, agent_run_id="", tool=UNDO_TOOL,
+            kind=desc["kind"], reversible=True, pre_ref=None, pre_inline=json.dumps(meta),
+            pre_sha256=desc["pre_sha256"], post_sha256=desc["post_sha256"],
+        ))
+        db.commit()
+    return action_id
+
+
+def _unjournal_edit(engine: Any, action_id: str) -> None:
+    """The edit was NOT made after all (its write failed, or it was put
+    back): its Undo row goes, so Undo never offers a change that is not
+    there. Never raises."""
+    from ..core.models import ToolInvocation, UndoJournal
+
+    try:
+        with session_scope(engine) as db:
+            for model in (UndoJournal, ToolInvocation):
+                found = db.get(model, action_id)
+                if found is not None:
+                    db.delete(found)
+            db.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("removing the Undo row of a change not made failed", exc_info=True)
+
+
 def accept(engine: Any, item_id: str, *, known_tools: Any = None) -> HarnessLibraryRecord:
     """Accept a proposal. A LESSON is kept (it rides the next sessions in
     that folder). A LAYER EDIT is written into the folder's harness file now —
@@ -1702,20 +1778,32 @@ def accept(engine: Any, item_id: str, *, known_tools: Any = None) -> HarnessLibr
         old_bytes = path.read_bytes() if existed else None
     except OSError as exc:
         raise LibraryRefused(f"The file could not be read ({exc.strerror or exc}).", 409) from None
+    # v1.510.0 (second review S11): the Undo row is written with the intent,
+    # BEFORE the file changes — the edit is on the session's Undo list and
+    # Undo puts the old text back. No row, no change.
+    try:
+        action_id = _journal_edit(engine, row, old_bytes)
+    except Exception:  # noqa: BLE001 — refused in words, nothing changed
+        log.warning("recording the Undo of library edit %s failed", item_id, exc_info=True)
+        raise LibraryRefused(NOT_RECORDED_SENTENCE, 409) from None
     try:
         _atomic_write(path, row.after)
     except OSError as exc:
+        _unjournal_edit(engine, action_id)
         raise LibraryRefused(f"The file could not be written ({exc.strerror or exc}).", 409) from None
     layer = read_project_layer(row.folder, known_tools=known_tools, session_id=None)
     if not layer.used:
-        # All or nothing: put the file back exactly as it was.
+        # All or nothing: put the file back exactly as it was — saved beside,
+        # then swapped (v1.510.0), never truncated half-way.
         try:
             if old_bytes is None:
                 path.unlink(missing_ok=True)
             else:
-                path.write_bytes(old_bytes)
-        except OSError:
+                _atomic_write(path, old_bytes.decode("utf-8"))
+        except (OSError, UnicodeDecodeError):
             log.warning("putting %s back failed", path, exc_info=True)
+        else:
+            _unjournal_edit(engine, action_id)
         raise LibraryRefused(INVALID_SENTENCE.format(note=layer.note or "it could not be read"), 409)
     return _decide(engine, item_id, ACCEPTED)
 

@@ -446,6 +446,35 @@ describe("account actions", () => {
     await waitFor(() => expect(callsTo("DELETE", "/iron-proxy/accounts/a")).toHaveLength(1));
   });
 
+  it("v1.510.0: Remove says the folder is moved, not deleted, and shows where it went", async () => {
+    await mountWith(
+      snap({}, { accounts: [...MIXED, acct({ id: "p", title: "This PC", order: 3, home_adopted: true })] }),
+    );
+    const removeA = within(row("a")).getByRole("button", { name: "Remove" });
+    expect(removeA.getAttribute("title")).toBe(
+      "Remove this account from Iron-Proxy (press twice). Its sign-in and conversations are moved to Iron Jarvis's trash, not deleted. Close any coding session or terminal on it first.",
+    );
+    expect(within(row("p")).getByRole("button", { name: "Remove" }).getAttribute("title")).toContain(
+      "this PC's own login, so its sign-in and conversations stay where they are",
+    );
+    const words =
+      'Removed "Work Claude". Its sign-in and conversations were moved to C:/trash/accounts/anthropic/a. They stay there until you press Delete permanently in Settings › Maintenance.';
+    hooks.results["DELETE /iron-proxy/accounts/a"] = { ok: true, words, trash: "C:/trash/accounts/anthropic/a" };
+    fireEvent.click(removeA);
+    fireEvent.click(within(row("a")).getByRole("button", { name: "Press again to remove" }));
+    await waitFor(() => expect(screen.getByText(words)).toBeTruthy());
+  });
+
+  it("v1.510.0: a refused Remove shows the daemon's sentence", async () => {
+    await mountWith(snap({}, { accounts: MIXED }));
+    const detail =
+      'The account "Work Claude" is in use by the terminal "Claude on Work". Close it first, then remove the account.';
+    hooks.fail["DELETE /iron-proxy/accounts/a"] = { status: 409, message: detail };
+    fireEvent.click(within(row("a")).getByRole("button", { name: "Remove" }));
+    fireEvent.click(within(row("a")).getByRole("button", { name: "Press again to remove" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(detail));
+  });
+
   it("a route error shows the daemon's detail sentence", async () => {
     await mountWith(snap({}, { accounts: MIXED }));
     hooks.fail["POST /iron-proxy/accounts/c/unpark"] = {

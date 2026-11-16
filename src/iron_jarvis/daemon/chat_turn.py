@@ -4924,6 +4924,136 @@ def error_payload(d, body, exc: Exception, *, detail: "str | None" = None) -> di
     return {"detail": base, **words, **fix_action(exc, provider=hint)}
 
 
+#: v1.510.0 (second review, L4): how long a failed turn's words may spend
+#: reading the journal for what the turn kept (a thread hop, bounded).
+FAILED_WORK_READ_S = 3.0
+#: Files named one by one in the kept sentence; more are counted.
+_KEPT_NAMES_MAX = 3
+#: Where every chat change that can be undone is undone, from any surface
+#: (the phone included) — the page's own name (``daemon/pages.py``).
+_UNDO_PLACE = "the Activity page"
+
+
+def _kept_names(paths: "list[str]") -> str:
+    """``notes.md``, ``a.md and b.md``, ``a, b and c`` or ``5 files``."""
+    names = [Path(p).name or str(p) for p in paths]
+    if len(names) > _KEPT_NAMES_MAX:
+        return f"{len(names)} files"
+    if len(names) == 1:
+        return names[0]
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def failed_work_sentence(
+    steps: int, made: "list[str]", changed: "list[str]", wrote: "list[str]",
+    *, undoable: int, unrecorded: bool,
+) -> str:
+    """THE ONE SENTENCE a failed turn says about what it already did
+    (v1.510.0, L4), from the record: *made* / *changed* are the files the
+    undo journal holds a write of this turn for (created / overwritten),
+    *wrote* the files a tool reported that the journal does not hold,
+    *undoable* how many of the journaled ones can still be undone, and
+    *unrecorded* that a step ran that can change files without naming them
+    (a command, code, an app tool). Undo is promised only when EVERY named
+    file has one. "" when no step ran."""
+    if steps <= 0:
+        return ""
+    parts = [
+        f"{verb} {_kept_names(files)}"
+        for verb, files in (("made", made), ("changed", changed), ("wrote", wrote))
+        if files
+    ]
+    if parts:
+        did = parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"
+        out = f"Before it failed, this reply {did}."
+        total = len(made) + len(changed) + len(wrote)
+        one = total == 1
+        if undoable >= total:
+            out += (
+                f" It is kept and can be undone on {_UNDO_PLACE}." if one
+                else f" They are kept, and each can be undone on {_UNDO_PLACE}."
+            )
+        elif undoable > 0:
+            out += f" They are kept; some of them can be undone on {_UNDO_PLACE}."
+        else:
+            out += " It is kept." if one else " They are kept."
+    else:
+        out = f"Before it failed, this reply ran {steps} step{'' if steps == 1 else 's'}."
+    if unrecorded:
+        out += " One of its steps may have changed files that are not named here."
+    return out
+
+
+def _failed_work_note(
+    platform, tools_used: "list[str]", made_docs: "list[str]", since, session: str, write_gap: bool,
+) -> str:
+    """Sync (run off the loop): the turn's files read back from the UNDO
+    JOURNAL — the same reading as the reply's "N files changed" line
+    (``routes/chat_changes.collect_changes``), narrowed to the files this
+    turn's tools reported — then :func:`failed_work_sentence`. A file the
+    journal does not hold is "wrote" and never promised an Undo."""
+    made: list[str] = []
+    changed: list[str] = []
+    wrote: list[str] = []
+    undoable = 0
+    if made_docs:
+        from .routes.chat_changes import CHAT_SESSION, collect_changes
+
+        try:
+            got = collect_changes(
+                platform.engine, platform.config.home, since, None, list(made_docs),
+                session or CHAT_SESSION,
+            )
+            rows = {os.path.normcase(os.path.normpath(str(c.get("path") or ""))): c
+                    for c in got.get("changes") or []}
+        except Exception:  # noqa: BLE001 — no reading: nothing is promised
+            log.debug("reading a failed turn's journal failed", exc_info=True)
+            rows = {}
+        for p in made_docs:
+            row = rows.get(os.path.normcase(os.path.normpath(str(p))))
+            if row is None:
+                wrote.append(p)
+                continue
+            (made if row.get("status") == "created" else changed).append(p)
+            if not row.get("undone"):
+                undoable += 1
+    unrecorded = bool(write_gap) or ran_local_writer(
+        platform, tools_used, custom_tools_used(platform, tools_used),
+    )
+    return failed_work_sentence(
+        len(tools_used), made, changed, wrote, undoable=undoable, unrecorded=unrecorded,
+    )
+
+
+async def failed_work_keys(
+    platform, *, tools_used, made_docs, since, session: str = "", write_gap: bool = False,
+) -> dict[str, Any]:
+    """WHAT A FAILED TURN ALREADY DID (v1.510.0, second review L4), for its
+    failure payload: ``tools_used`` (the steps that ran), ``documents`` (the
+    files they made or changed, ABSOLUTE paths — the done payload's shape)
+    and ``kept_note`` (one plain sentence from the journal's record of this
+    turn, never from the model's words). ``{}`` when no step ran, so a
+    failure before any tool is answered exactly as before. The journal read
+    runs off the loop under :data:`FAILED_WORK_READ_S`; past it (or on any
+    fault) the sentence is built from the lane's record alone, promising no
+    Undo. Never raises (a cancellation still propagates). MIRROR NOTE
+    (lock-step): the POST lane's ``ChatTurnFailed`` and the stream lane's
+    ``error`` frame both add these keys from here."""
+    used = [str(t) for t in tools_used or () if t]
+    if not used:
+        return {}
+    docs = [str(p) for p in made_docs or () if p]
+    try:
+        note = await asyncio.wait_for(
+            asyncio.to_thread(_failed_work_note, platform, used, docs, since, session, write_gap),
+            FAILED_WORK_READ_S,
+        )
+    except Exception:  # noqa: BLE001 — the failure is still answered
+        log.debug("a failed turn's kept sentence fell back", exc_info=True)
+        note = failed_work_sentence(len(used), [], [], docs, undoable=0, unrecorded=bool(write_gap))
+    return {"tools_used": used, "documents": docs, **({"kept_note": note} if note else {})}
+
+
 def fix_action(exc: BaseException | None, *, provider: str = "") -> dict[str, str]:
     """The ONE press that fixes a failed turn (v1.355.0, G29), read off the
     SAME typed facts ``failure_words.classify`` words the headline from —
@@ -5060,19 +5190,27 @@ class ChatTurnFailed(HTTPException):
     caller (the phone poller) that catches ``HTTPException`` and reads
     ``.detail`` sees no change."""
 
-    def __init__(self, detail: str, words: "dict[str, str] | None" = None) -> None:
+    def __init__(self, detail: str, words: "dict[str, Any] | None" = None) -> None:
         super().__init__(status_code=502, detail=detail)
-        self.words: dict[str, str] = dict(words or {})
+        self.words: dict[str, Any] = dict(words or {})
 
-    def body(self) -> dict[str, str]:
+    def body(self) -> dict[str, Any]:
         """The 502 body: ``detail`` first, then ``title``/``fix``/``technical``
         and (v1.355.0, G29) ``fix_kind``/``fix_provider`` when a press fixes it
         — v1.422.0 review: and ``trust``/``trust_reason`` for a turn that ran
-        at LOW trust (lock-step: the stream lane's error frame)."""
-        out = {"detail": str(self.detail)}
-        for key in ("title", "fix", "technical", "fix_kind", "fix_provider", "trust", "trust_reason"):
+        at LOW trust (lock-step: the stream lane's error frame) — v1.510.0
+        (L4): and, ONLY when a step ran before the failure, ``tools_used``,
+        ``documents`` and ``kept_note`` (:func:`failed_work_keys`)."""
+        out: dict[str, Any] = {"detail": str(self.detail)}
+        for key in (
+            "title", "fix", "technical", "fix_kind", "fix_provider", "trust", "trust_reason",
+            "kept_note",
+        ):
             if self.words.get(key):
                 out[key] = str(self.words[key])
+        for key in ("tools_used", "documents"):
+            if isinstance(self.words.get(key), list):
+                out[key] = [str(x) for x in self.words[key]]
         return out
 
 
@@ -13583,6 +13721,45 @@ async def run_chat_turn(
     # reply's receipt (`refit_receipt`). MIRROR NOTE (lock-step): the stream
     # lane keeps the same dict.
     _refit_note: dict[str, int] = {}
+    # USAGE LEDGER, EXACTLY ONE TERMINAL ROW (v1.510.0, second review L6) —
+    # the lock-step copy of the stream lane's `_persist_once`. Every terminal
+    # path below goes through it, so the cancellation guards can run
+    # unconditionally without ever writing a second row for the same turn. It
+    # reads the live counters and route by closure, which is what makes it
+    # correct from an exception handler. Sync on purpose: a cancel is never
+    # delayed by an await here. MIRROR NOTE (lock-step): routes/chat.py.
+    route = None  # bound by the first round (the routing call may bill first)
+    _usage_written = False
+
+    def _persist_once(state: AgentState) -> None:
+        nonlocal _usage_written
+        if _usage_written or not completions:
+            return
+        _usage_written = True
+        _persist_chat_usage(
+            d, provider=str(getattr(route, "provider", "") or provider_choice or ""),
+            model=str(getattr(route, "model", "") or model_choice or ""),
+            state=state, completions=completions,
+            usage_in=usage_in, usage_out=usage_out,
+            started_at=turn_started, cost_usd=_tally.cost_usd,
+            thread_id=getattr(body, "thread_id", ""),
+            tool_session=_tool_session,  # v1.367.0 (lock-step)
+        )
+
+    async def _billed_await(aw):
+        """The awaits between the last billed round and the COMPLETED row
+        (each may call a model): a cancel delivered HERE drops exactly the
+        same already-billed tokens as one delivered inside the loop, so it
+        ends the same way (lock-step: the stream lane's second
+        ``except BaseException`` arm). A failure passes through unchanged."""
+        try:
+            return await aw
+        except Exception:
+            raise
+        except BaseException:
+            _persist_once(AgentState.CANCELLED)
+            raise
+
     try:
         for _round in turn_rounds(lambda: _rounds):
             if _cut_pending:
@@ -14552,18 +14729,9 @@ async def run_chat_turn(
         # The rounds that DID complete were still billed — persist their
         # usage before surfacing the failure, or a round-2 error silently
         # drops round 1 from the ledger. The client's error is unchanged.
-        # (``route`` is loop-scoped: it is only read here under
-        # ``completions > 0``, which guarantees at least one complete()
-        # returned and bound it.)
-        if completions:
-            _persist_chat_usage(
-                d, provider=route.provider, model=route.model,
-                state=AgentState.FAILED, completions=completions,
-                usage_in=usage_in, usage_out=usage_out,
-                started_at=turn_started, cost_usd=_tally.cost_usd,
-                thread_id=getattr(body, "thread_id", ""),
-                tool_session=_tool_session,  # v1.367.0 (lock-step)
-            )
+        # (v1.510.0: through `_persist_once`, so a cancel that lands while
+        # the failure is being worded writes no second row.)
+        _persist_once(AgentState.FAILED)
         # LOCAL ONLY (v1.332.0): a refusal leaves as itself, so the app's
         # handler answers the 409 {detail, code, provider, model} shape the
         # page keys its "send once" action on. MIRROR NOTE (lock-step): the
@@ -14583,8 +14751,29 @@ async def run_chat_turn(
                 # v1.422.0 review: a LOW-trust turn says so (lock-step: the
                 # stream lane's error frame).
                 **failed_trust_keys(_trust_state),
+                # v1.510.0 (second review, L4): what the turn already did —
+                # the steps that ran, the files they made or changed and
+                # one sentence from the journal; {} when nothing ran.
+                # MIRROR NOTE (lock-step): the stream lane's error frame.
+                **await failed_work_keys(
+                    d.platform, tools_used=tools_used, made_docs=made_docs,
+                    since=turn_started, session=_tool_session, write_gap=_write_gap,
+                ),
             },
         ) from exc
+    except BaseException:
+        # STOP MID-GENERATION (v1.510.0, second review L6) — the lock-step
+        # copy of the stream lane's arm. When the request is cancelled or
+        # the daemon shuts down DURING a round, the task is cancelled at its
+        # current await (CancelledError; GeneratorExit / KeyboardInterrupt
+        # alike). Both are BaseException-shaped: they skip the handler above,
+        # so every COMPLETED earlier round — already billed by the provider —
+        # used to vanish from the ledger, and the safety scan that hangs off
+        # the row never ran. One CANCELLED row (sync, no await), then the
+        # exception is re-raised unchanged, so cancellation still means
+        # cancellation. MIRROR NOTE (lock-step): routes/chat.py.
+        _persist_once(AgentState.CANCELLED)
+        raise
     finally:
         # The finish check's turn scope (review): nothing is continued after
         # the tool loop — every session still kept for it stops now.
@@ -14627,7 +14816,8 @@ async def run_chat_turn(
         model_text, workflow_draft, escalate, completions,
     )):
         _f_outcome: dict = {}
-        _f_text, _f_in, _f_out, _f_n = await _final_answer_after_tools(
+        # v1.510.0 (L6): a cancel here writes the CANCELLED row (lock-step).
+        _f_text, _f_in, _f_out, _f_n = await _billed_await(_final_answer_after_tools(
             d.platform,
             system=_send_system,
             messages=_send,
@@ -14642,7 +14832,7 @@ async def run_chat_turn(
             )} if _cut_office else {}),
             tally=_tally,
             outcome=_f_outcome,
-        )
+        ))
         if "response" in _f_outcome:
             # v1.323.0: the nudge was the final answering call.
             _thinking_parts.append(_thinking_of(_f_outcome["response"]))
@@ -14667,7 +14857,7 @@ async def run_chat_turn(
     # stream lane combines at the same point.
     model_text = combine_closing_offer(_harness, model_text)
     _l_outcome: dict = {}
-    model_text, lang_note, _l_in, _l_out, _l_n = await _enforce_language(
+    model_text, lang_note, _l_in, _l_out, _l_n = await _billed_await(_enforce_language(
         d.platform,
         text=model_text,
         user_text=_last_user_text(body.messages),
@@ -14677,7 +14867,7 @@ async def run_chat_turn(
         model=model_choice,
         tally=_tally,
         outcome=_l_outcome,
-    )
+    ))
     if "response" in _l_outcome:
         # v1.323.0: an ADOPTED rewrite is the reply now — its ending counts.
         _truncated = _truncated_by(_l_outcome["response"])
@@ -14687,6 +14877,9 @@ async def run_chat_turn(
     # USAGE LEDGER: direct chat turns must count like agent runs, or the
     # Usage page under-reports the user's main surface. Persist a run row
     # (session_id "chat") with the adapters' reported token usage.
+    # v1.510.0 (L6): the ONE terminal row — a cancel after it writes nothing
+    # more (`_persist_once`). Lock-step: the stream lane.
+    _usage_written = True
     _persist_chat_usage(
         d, provider=route.provider, model=route.model,
         state=AgentState.COMPLETED, completions=completions,

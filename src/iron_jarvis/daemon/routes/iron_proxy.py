@@ -24,7 +24,9 @@ Shapes:
 * ``POST /iron-proxy/accounts`` ``{provider, title}`` → 201 account.
 * ``POST /iron-proxy/accounts/adopt`` ``{provider, home, title?}`` → 201 account.
 * ``PATCH /iron-proxy/accounts/{id}`` ``{enabled?, title?}`` (PARTIAL) → account.
-* ``DELETE /iron-proxy/accounts/{id}`` → ``{ok: true}``.
+* ``DELETE /iron-proxy/accounts/{id}`` → ``{ok: true, words, trash}`` (v1.510.0:
+  the account's folder is moved to Iron Jarvis's trash first; 409 while a
+  coding session or terminal runs on it, or when the folder cannot be moved).
 * ``POST /iron-proxy/accounts/reorder`` ``{provider, ids}`` → ``{ok: true}``.
 * ``POST /iron-proxy/accounts/{id}/unpark`` → ``{ok: true}``.
 * ``POST /iron-proxy/accounts/{id}/signin`` → ``{terminal_id, name}`` — a Build
@@ -48,6 +50,7 @@ import asyncio
 import os
 import shlex
 import shutil
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -274,6 +277,244 @@ def _home_key(home: str) -> str:
 
 def _sorted_accounts(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(accounts, key=lambda a: (str(a.get("provider")), a.get("order") or 0))
+
+
+# --------------------------------------------------------------------------- #
+# Removing an account (v1.510.0, second review A1, decision E2)
+# --------------------------------------------------------------------------- #
+# The account manager's ``deleteProfile`` removes the account's home folder
+# (``<data dir>/cli-homes/<provider>/<id>``) recursively — its sign-in and every
+# conversation kept on it — and its HTTP route takes no "keep the files". So
+# Iron Jarvis MOVES that folder into its own trash first (the same rule as the
+# bundle: only a folder strictly inside ``cli-homes``, never an adopted home,
+# never a home another account also uses) and only then asks for the delete,
+# which then finds nothing to remove. A move that fails deletes nothing.
+
+#: Where a removed account's folder goes: ``<home>/trash/<stamp>/accounts/<provider>/<id>``.
+_ACCOUNTS_TRASH = "accounts"
+
+_IN_USE = (
+    'Nothing was removed: a file in the folder of "{name}" is in use. '
+    "Close any terminal or program using that account, then try again."
+)
+_NOT_MOVED = (
+    'Nothing was removed: the folder of "{name}" could not be moved to Iron Jarvis\'s trash.'
+)
+_THROUGH_LINK = (
+    'Nothing was removed: the folder of "{name}" is reached through a link, '
+    "so Iron Jarvis will not move or delete it."
+)
+#: How long the trash keeps a folder: it has no clock of its own — files stay
+#: until the user empties it (``maintenance.purge_trash``).
+_TRASH_KEEPS = "They stay there until you press Delete permanently in Settings › Maintenance."
+
+
+class _RemoveRefused(Exception):
+    def __init__(self, sentence: str, status: int = 409) -> None:
+        super().__init__(sentence)
+        self.sentence = sentence
+        self.status = status
+
+
+def _move_folder(src: str, dst: str) -> None:
+    """ONE rename: all or nothing, never a copy-then-delete. On Windows it
+    fails while a file inside is open; a link or junction is moved as the
+    link, never followed."""
+    os.rename(src, dst)
+
+
+def _other_drive(exc: OSError) -> bool:
+    """A rename refused because the two folders are on different drives."""
+    import errno
+
+    return exc.errno == errno.EXDEV or getattr(exc, "winerror", None) == 17
+
+
+def _copy_folder(src: str, dst: str) -> None:
+    """A whole COPY into the trash, for a folder on another drive than Iron
+    Jarvis's home (a rename cannot cross drives). The original stays where it
+    is: the account manager's own delete removes it afterwards, and only
+    after this copy is complete. A link inside is copied as the link, never
+    followed. A copy that fails part-way is removed and raises."""
+    try:
+        shutil.copytree(src, dst, symlinks=True)
+    except BaseException:
+        shutil.rmtree(dst, ignore_errors=True)
+        raise
+
+
+def _norm(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _strictly_inside(parent: str, child: str) -> bool:
+    """The bundle's ``isStrictlyInside``: ``child`` is below ``parent`` (not
+    equal), compared as the filesystem does."""
+    try:
+        rel = os.path.relpath(_norm(child), _norm(parent))
+    except ValueError:  # another drive
+        return False
+    return rel not in ("", ".") and rel != ".." and not rel.startswith(".." + os.sep) and not os.path.isabs(rel)
+
+
+def _inside_or_same(parent: str, child: str) -> bool:
+    return _norm(parent) == _norm(child) or _strictly_inside(parent, child)
+
+
+def _plan_home(prof: dict[str, Any], profiles: list[Any], data_dir: str) -> tuple[str, str]:
+    """``(what, home)`` for the account's folder: ``move`` (Iron Jarvis moves
+    it), or ``adopted`` / ``shared`` / ``outside`` / ``none`` (left where it
+    is — the account manager leaves it too). Raises :class:`_RemoveRefused`
+    when the folder is reached through a link out of ``cli-homes``."""
+    cli = prof.get("cli") if isinstance(prof.get("cli"), dict) else {}
+    home = str(cli.get("home") or "")
+    if not home:
+        return "none", ""
+    if cli.get("adopted"):
+        return "adopted", home
+    if not os.path.isabs(home):  # the account manager runs with its data dir as cwd
+        home = os.path.join(data_dir, home)
+    cli_homes = os.path.join(data_dir, "cli-homes")
+    if not _strictly_inside(cli_homes, home):
+        return "outside", home
+    for other in profiles:
+        if not isinstance(other, dict) or other.get("id") == prof.get("id"):
+            continue
+        ocli = other.get("cli") if isinstance(other.get("cli"), dict) else {}
+        ohome = str(ocli.get("home") or "")
+        if ohome and (_norm(ohome) == _norm(home) or _strictly_inside(home, ohome)):
+            return "shared", home
+    if not os.path.lexists(home):
+        return "none", home
+    # Never through a link: every folder between cli-homes and the home must
+    # really be inside cli-homes (the home itself is moved as the link).
+    if not _inside_or_same(os.path.realpath(cli_homes), os.path.realpath(os.path.dirname(home))):
+        name = str(prof.get("title") or prof.get("id") or "")
+        raise _RemoveRefused(_THROUGH_LINK.format(name=name))
+    return "move", home
+
+
+def _home_to_trash(ij_home: str, prof: dict[str, Any], home: str) -> str:
+    """MOVE the account's folder to ``<ij_home>/trash/<stamp>/accounts/<provider>/<id>``
+    and answer where it went. BLOCKING. Raises :class:`_RemoveRefused` (nothing
+    moved) when it cannot be moved."""
+    from ...maintenance import TRASH_DIRNAME, trash_stamp
+
+    name = str(prof.get("title") or prof.get("id") or "")
+
+    def _safe(text: Any) -> str:
+        return "".join(ch for ch in str(text or "") if ch.isalnum() or ch in "-_") or "account"
+
+    dest = (
+        Path(ij_home) / TRASH_DIRNAME / trash_stamp() / _ACCOUNTS_TRASH
+        / _safe(prof.get("provider")) / _safe(prof.get("id"))
+    )
+    if dest.exists():
+        dest = dest.with_name(f"{dest.name}-{os.getpid()}-{len(list(dest.parent.iterdir()))}")
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            _move_folder(home, str(dest))
+        except OSError as exc:
+            if not _other_drive(exc):
+                raise
+            # Lead review: on another drive a rename is refused every time,
+            # and the account could then never be removed. Keep a full copy
+            # instead; the account manager deletes the original.
+            _copy_folder(home, str(dest))
+    except PermissionError as exc:
+        raise _RemoveRefused(plain_failure(_IN_USE.format(name=name), exc)) from None
+    except OSError as exc:
+        raise _RemoveRefused(plain_failure(_NOT_MOVED.format(name=name), exc)) from None
+    return str(dest)
+
+
+def _home_back(dest: str, home: str) -> bool:
+    """Undo the move after the account manager refused the delete. BLOCKING."""
+    if os.path.lexists(home):
+        # The folder was COPIED to the trash (another drive) and the original
+        # is still in place: nothing to put back. The copy is left in the
+        # trash rather than deleted.
+        return True
+    try:
+        _move_folder(dest, home)
+        return True
+    except OSError:
+        return False
+
+
+def _removed_words(name: str, what: str, dest: str) -> str:
+    head = f'Removed "{name}".'
+    if what == "move":
+        return f"{head} Its sign-in and conversations were moved to {dest}. {_TRASH_KEEPS}"
+    if what == "adopted":
+        return f"{head} Its folder is this PC's own login, so its sign-in and conversations stay where they are."
+    if what == "shared":
+        return f"{head} Another account uses the same folder, so its sign-in and conversations stay where they are."
+    if what == "outside":
+        return f"{head} Its folder was not made by Iron-Proxy, so it was left where it is."
+    return head
+
+
+def _names(kind: str, titles: list[str]) -> str:
+    quoted = [f'"{t}"' for t in titles]
+    if len(quoted) == 1:
+        return f"the {kind} {quoted[0]}"
+    return f"the {kind}s " + ", ".join(quoted[:-1]) + f" and {quoted[-1]}"
+
+
+def _in_use_by(d: Any, account_id: str) -> str:
+    """What runs on the account right now, in words ("" = nothing): coding
+    sessions whose tool is running or starting (the Code view's live map) and
+    open terminals on it (Build panes, sign-in panes, panes still coming
+    back). BLOCKING (a pane's liveness asks its process); never raises."""
+    sessions: list[str] = []
+    try:
+        hosted = getattr(d.platform, "hosted", None)
+        lives = list(getattr(hosted, "live", {}).values()) if hosted is not None else []
+    except Exception:  # noqa: BLE001 — no Code view, no sessions
+        lives = []
+    for live in lives:
+        try:
+            if str(getattr(live, "account", "") or "") != account_id:
+                continue
+            if live.running or getattr(live, "starting", False):
+                sessions.append(str(getattr(live, "title", "") or "untitled"))
+        except Exception:  # noqa: BLE001
+            continue
+    panes: list[str] = []
+    try:
+        terminals = d.platform.terminals
+        open_panes = list(terminals.sessions())
+        restoring = list(getattr(terminals, "_restoring", {}).values())
+    except Exception:  # noqa: BLE001 — no terminals, no panes
+        open_panes, restoring = [], []
+    for s in open_panes:
+        try:
+            on_it = str(getattr(s, "signin_for", "") or "") == account_id or any(
+                isinstance(a, dict) and str(a.get("id") or "") == account_id
+                for a in (getattr(s, "accounts", None) or {}).values()
+            )
+            if on_it and s.alive:
+                panes.append(str(getattr(s, "pane_name", "") or "untitled"))
+        except Exception:  # noqa: BLE001
+            continue
+    for entry in restoring:
+        try:
+            accounts = entry.get("accounts") if isinstance(entry, dict) else None
+            if any(
+                isinstance(a, dict) and str(a.get("id") or "") == account_id
+                for a in (accounts or {}).values()
+            ):
+                panes.append(str(entry.get("name") or "untitled"))
+        except Exception:  # noqa: BLE001
+            continue
+    parts = []
+    if sessions:
+        parts.append(_names("coding session", sessions))
+    if panes:
+        parts.append(_names("terminal", panes))
+    return " and ".join(parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -632,12 +873,50 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/iron-proxy/accounts/{account_id}")
     async def iron_proxy_delete_account(account_id: str) -> dict[str, Any]:
-        """Remove an account from Iron-Proxy."""
+        """Remove an account from Iron-Proxy. v1.510.0 (second review A1,
+        decision E2): its folder — sign-in and conversations — is MOVED to
+        Iron Jarvis's trash BEFORE the account manager is asked to delete the
+        profile (whose delete would remove it for good); refused while a
+        coding session or a terminal runs on it, and refused with nothing
+        removed when the folder cannot be moved. Answers ``{ok, words,
+        trash}`` (``trash`` = where the folder went, "" when it stayed)."""
         svc = _svc()
         client = await _client(svc)
-        await _call(client.delete_profile, account_id)
+        profiles = await _call(client.profiles)
+        profiles = [p for p in (profiles or []) if isinstance(p, dict)]
+        prof = next((p for p in profiles if p.get("id") == account_id), None)
+        if prof is None:
+            raise HTTPException(status_code=404, detail="Iron-Proxy has no account with that id.")
+        name = str(prof.get("title") or account_id)
+        busy = await asyncio.to_thread(_in_use_by, d, account_id)
+        if busy:
+            raise HTTPException(
+                status_code=409,
+                detail=f'The account "{name}" is in use by {busy}. '
+                "Close it first, then remove the account.",
+            )
+        data_dir = str(svc.data_dir())
+        try:
+            what, home = await asyncio.to_thread(_plan_home, prof, profiles, data_dir)
+            dest = ""
+            if what == "move":
+                dest = await asyncio.to_thread(
+                    _home_to_trash, str(d.platform.config.home), prof, home
+                )
+        except _RemoveRefused as refused:
+            raise HTTPException(status_code=refused.status, detail=refused.sentence) from None
+        try:
+            await asyncio.to_thread(client.delete_profile, account_id)
+        except IronProxyError as exc:
+            err = _fail(exc)
+            if dest and not await asyncio.to_thread(_home_back, dest, home):
+                err.detail = (
+                    f"{err.detail} The account was not removed, and its folder could not be "
+                    f"put back: it is at {dest}."
+                )
+            raise err from None
         await _changed(svc)
-        return {"ok": True}
+        return {"ok": True, "words": _removed_words(name, what, dest), "trash": dest}
 
     @app.post("/iron-proxy/accounts/{account_id}/unpark")
     async def iron_proxy_unpark(account_id: str) -> dict[str, Any]:

@@ -237,3 +237,22 @@ def deliver_session_line(
             "appended": 0,
             "skipped": 0,
         }
+
+
+def say_in_chat(engine: Any, thread_id: str, words: str, *, event_bus: Any = None) -> dict[str, Any]:
+    """Add ONE line of Iron Jarvis's own to a chat (v1.510.0): what this
+    computer knows, with no agent's name on it (a wait for another computer
+    that ended, ``threads.end_overdue_waits``). BLOCKING: call it off the
+    loop. Returns ``append_to_chat_thread``'s answer (it refuses a
+    daemon-owned chat); never raises."""
+    try:
+        # Lazy, by import direction (see ``deliver_to_chat``).
+        from ..daemon import chat_append as _chat_append
+
+        return _chat_append.append_to_chat_thread(
+            engine, thread_id, [{"role": "assistant", "content": str(words or "")}],
+            event_bus=event_bus, who="daemon",
+        )
+    except Exception:  # noqa: BLE001 — the room already has the line
+        log.exception("could not add a line to chat %s", thread_id)
+        return {"ok": False, "updated_at": None, "why": "could not add the line", "appended": 0, "skipped": 0}

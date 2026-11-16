@@ -305,6 +305,13 @@ export type BuildMessage = PaneMessage & {
    *  decodeClientQuestion) — with its CURRENT answer, read from the record
    *  by the daemon (a coding session's lines are the daemon's). */
   clientQuestion?: unknown;
+  /** v1.510.0 (S2): PAGE-ONLY, never read off the daemon. The daemon's own
+   *  sentence of what could not be saved on the session (the turn's last
+   *  frame's `not_saved`), shown on the reply as a warning line. */
+  notSaved?: string;
+  /** v1.510.0 (S2): PAGE-ONLY. The reply as the page drew it live, kept
+   *  because the session could not save it (`withUnsavedReplies`). */
+  keptLive?: boolean;
 };
 
 /** Part 3, Phase 2: a reply line's `finish`, whitelisted — the known keys
@@ -1025,4 +1032,89 @@ export type BuildView = "rail" | "harness";
  *  place in the switch); the Terminals rail for anything else. */
 export function viewFromSaved(saved: string | null | undefined): BuildView {
   return saved === "harness" || saved === "canvas" ? "harness" : "rail";
+}
+
+// ------------------------------------------- a reply the session could not keep
+
+/** v1.510.0 (S2): what the turn's LAST frame (`done` or `error`) says could
+ *  not be saved on the session — the daemon's own plain sentence
+ *  (routes/build `_with_save_notes`), shown as it is. "" when it says nothing
+ *  or for any other frame. */
+export function notSavedOf(event: string, data: Record<string, unknown> | null | undefined): string {
+  if (event !== "done" && event !== "error") return "";
+  const words = data?.not_saved;
+  return typeof words === "string" ? words.trim().slice(0, 600) : "";
+}
+
+/** v1.510.0 (S2): one turn whose end the session could not keep.
+ *  `reply` is the reply as the page drew it live, when the session's own
+ *  transcript did not hold it at the end of the turn; null when the reply
+ *  WAS saved and only something else was not (an approved plan): the
+ *  sentence then sits on the saved reply. */
+export interface UnsavedReply {
+  turnId: string;
+  words: string;
+  reply: BuildMessage | null;
+}
+
+/** v1.510.0 (S2): the transcript to draw. A kept reply goes back after its
+ *  question (else at the end) with its warning line, until the session's own
+ *  transcript holds that turn's reply (put back at the next start): from
+ *  then on only the saved one is drawn — never twice. */
+export function withUnsavedReplies(
+  messages: readonly BuildMessage[],
+  kept: readonly UnsavedReply[],
+): BuildMessage[] {
+  if (!kept.length) return messages as BuildMessage[];
+  let out = [...messages];
+  for (const k of kept) {
+    const saved = out.findIndex((m) => m.role === "assistant" && m.turnId === k.turnId);
+    if (saved >= 0) {
+      if (!k.reply) out[saved] = { ...out[saved], notSaved: k.words };
+      continue;
+    }
+    if (!k.reply) continue;
+    const row: BuildMessage = { ...k.reply, turnId: k.turnId, notSaved: k.words, keptLive: true };
+    let q = -1;
+    for (let i = out.length - 1; i >= 0; i -= 1) {
+      if (out[i].turnId === k.turnId) {
+        q = i;
+        break;
+      }
+    }
+    out = q >= 0 ? [...out.slice(0, q + 1), row, ...out.slice(q + 1)] : [...out, row];
+  }
+  return out;
+}
+
+/** The kept turns per session, for this window's life (a return to the
+ *  session draws them again; a reload has the daemon's own record). */
+const UNSAVED_KEPT = 20;
+const unsavedBySession = new Map<string, UnsavedReply[]>();
+/** One empty list, so "nothing kept" never changes a caller's state. */
+const NONE_KEPT: UnsavedReply[] = [];
+
+export function keepUnsavedReply(threadId: string, entry: UnsavedReply): UnsavedReply[] {
+  const list = (unsavedBySession.get(threadId) ?? []).filter((k) => k.turnId !== entry.turnId);
+  const next = [...list, entry].slice(-UNSAVED_KEPT);
+  unsavedBySession.set(threadId, next);
+  return next;
+}
+
+export function unsavedRepliesFor(threadId: string): UnsavedReply[] {
+  return unsavedBySession.get(threadId) ?? NONE_KEPT;
+}
+
+/** Forget each kept reply the session's transcript now holds; returns the
+ *  rest (the same array when nothing went, so a caller's state is unchanged). */
+export function pruneUnsavedReplies(threadId: string, messages: readonly BuildMessage[]): UnsavedReply[] {
+  const list = unsavedBySession.get(threadId);
+  if (!list?.length) return NONE_KEPT;
+  const rest = list.filter(
+    (k) => !k.reply || !messages.some((m) => m.role === "assistant" && m.turnId === k.turnId),
+  );
+  if (rest.length === list.length) return list;
+  if (rest.length) unsavedBySession.set(threadId, rest);
+  else unsavedBySession.delete(threadId);
+  return rest.length ? rest : NONE_KEPT;
 }

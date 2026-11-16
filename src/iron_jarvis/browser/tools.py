@@ -101,7 +101,13 @@ from ..computeruse.safety import defang_fence_markers, wrap_untrusted
 from ..core import risk_door as _risk_door
 from ..tools.base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
 from . import protocol as P
-from .errors import BrowserError, BrowserErrorCode, browser_error
+from .errors import (
+    ANSWER_LOST_CODES,
+    UNKNOWN_OUTCOME_MESSAGE,
+    BrowserError,
+    BrowserErrorCode,
+    browser_error,
+)
 from .protocol import METHOD_ACTIVE_TAB, METHOD_LIST_TABS
 from .risk import browser_risk_decision, request_text_of, risk_row, tab_is_flagged
 from .screenshot import ScreenshotSaveFailed, capture_for_tool
@@ -422,11 +428,22 @@ class _BrowserTool(Tool):
         text = f"{envelope['code']}: {envelope['message']}"
         return ToolResult(ok=False, error=text, output=text, data=dict(envelope))
 
-    def _refusal_from(self, exc: BrowserError) -> ToolResult:
-        """The same, for a :class:`BrowserError` raised by the runtime/backend."""
+    def _refusal_from(self, exc: BrowserError, *, outcome_unknown: bool = False) -> ToolResult:
+        """The same, for a :class:`BrowserError` raised by the runtime/backend.
+
+        ``outcome_unknown`` (v1.510.0, B3): an acting call's frame went and its
+        answer was lost, so the code's own remedy (which says retry) is replaced
+        by :data:`UNKNOWN_OUTCOME_MESSAGE` and ``data`` carries
+        ``outcome: "unknown"``. Still ``ok=False``: the ledger must not record a
+        success nobody saw.
+        """
         envelope = exc.envelope()
-        text = f"{envelope['code']}: {envelope['message']}"
-        return ToolResult(ok=False, error=text, output=text, data=dict(envelope))
+        if not outcome_unknown:
+            text = f"{envelope['code']}: {envelope['message']}"
+            return ToolResult(ok=False, error=text, output=text, data=dict(envelope))
+        text = f"{envelope['code']}: {UNKNOWN_OUTCOME_MESSAGE}"
+        data = {"code": envelope["code"], "message": UNKNOWN_OUTCOME_MESSAGE, "outcome": "unknown"}
+        return ToolResult(ok=False, error=text, output=text, data=data)
 
     def _refuse_if_unavailable(self) -> ToolResult | None:
         """The access gate. ``None`` means "allowed to try"."""
@@ -1100,14 +1117,31 @@ class _ActingTool(_BrowserTool):
                 # word matched and not which page; D24 asks for both.
                 return self._with_ledger_context(pending, plan, {})
 
+        # Read BEFORE the send (v1.510.0, B3): a BROWSER_NOT_CONNECTED raised
+        # with no browser on the socket means nothing went; raised after a
+        # connected send began (``fail_pending`` from ``release``, or a send that
+        # failed on a socket that had just been open) it cannot be told apart
+        # from an answer lost in flight, so it is read as unknown. Missing
+        # attribute: assume connected, the side that never says "retry" over a
+        # click that may have landed.
+        sent_connected = bool(getattr(self.browser, "connected", True))
         try:
             result = await self._command(self.method, params)
         except BrowserError as exc:
             # The frame WENT. An ACTION_TIMEOUT means the browser did not answer,
             # not that nothing happened, so this is precisely the row where a
             # reader most needs the tab, the page and the element — and it is the
-            # row that carried none of them.
-            return self._with_ledger_context(self._refusal_from(exc), plan, {})
+            # row that carried none of them. And the model must NOT be told to
+            # retry (v1.510.0, B3): a form would be submitted twice.
+            lost = exc.code in ANSWER_LOST_CODES and (
+                exc.code != BrowserErrorCode.BROWSER_NOT_CONNECTED.value or sent_connected
+            )
+            answer = self._refusal_from(exc, outcome_unknown=lost)
+            if lost and isinstance(answer.data, dict):
+                answer.data.update(
+                    {"tab_id": plan.tab_id, "url": plan.page_url, "title": plan.page_title}
+                )
+            return self._with_ledger_context(answer, plan, {})
         settled = self._settle(plan, result)
         # BOTH names, because they can legitimately differ. ``risk_name`` is what
         # ``base`` is derived from — the rules the verdict was reached under, or a

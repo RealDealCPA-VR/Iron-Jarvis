@@ -1702,7 +1702,10 @@ def test_a_command_that_never_answers_resolves_as_action_timeout(tmp_path):
     result = _run(BrowserClickTool(runtime), _ctx(tmp_path), {"target": {"element_id": "e3"}})
     assert not result.ok
     assert BrowserErrorCode.ACTION_TIMEOUT.value in (result.error or "")
-    assert "browser_get_status" in (result.error or "")
+    # v1.510.0 (B3): the click may have landed, so the model reads the page
+    # instead of retrying (tests/test_second_review_browser_unknown_v1510.py).
+    assert "may already have happened" in (result.error or "")
+    assert "retry" not in (result.error or "").lower()
 
 
 def test_a_disconnected_browser_refuses_at_send_time_with_the_pairing_remedy(tmp_path):
@@ -2051,8 +2054,9 @@ def test_a_timed_out_action_still_names_the_tab_the_page_and_the_element(tmp_pat
     assert "https://portal.example/account" in result.output, "the timed-out row names no URL"
     assert "e3" in result.output, "the timed-out row names no element"
     # The remedy is still the first thing a model reads. The context is appended,
-    # never substituted.
-    assert "browser_get_status" in result.output
+    # never substituted. (v1.510.0, B3: the remedy for a lost answer to an action
+    # is to read the page, never to retry.)
+    assert "Read the page before doing it again" in result.output
 
 
 def test_the_paused_row_names_the_page_the_approval_is_about(tmp_path):

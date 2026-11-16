@@ -359,7 +359,13 @@ async def test_a_task_becomes_one_unattended_low_trust_session(tmp_path, monkeyp
     assert "summarise the notes" in row.task and "we need the Q3 notes" in row.task
     # the reply address rides on the row — never the key
     opts = json.loads(row.options_json)
-    assert opts[td.REPLY_OPTION] == {
+    spec = opts[td.REPLY_OPTION]
+    # v1.510.0 (second review F3, moved on purpose): where the answer stands
+    # rides in the same spec — a-pc cannot be reached here, so it is owed,
+    # tried once, its next try due.
+    assert spec.pop("state") == td.REPLY_OWED and spec.pop("tries") == 1
+    assert spec.pop("next_at")
+    assert spec == {
         "to": "http://a-pc:8787/agents/remote/desk/inbound",
         "conversation_id": "athr_1",
         "caller": "laptop",
@@ -597,11 +603,16 @@ async def test_two_computers_desk_does_the_task_and_the_answer_comes_home(tmp_pa
 
 
 # --------------------------------------------------------------------------- #
-# D6 — a failed answer is recorded, named, attempted once
+# D6 — a failed answer is recorded, named, tried again only when due (v1.510.0)
 # --------------------------------------------------------------------------- #
 
 
-async def test_a_failed_answer_is_recorded_and_named_and_never_retried(tmp_path, lan):
+async def test_a_failed_answer_is_recorded_and_named_and_tried_again_only_when_due(tmp_path, lan):
+    """v1.510.0 (second review F3, moved on purpose): a failed answer is no
+    longer tried once and dropped. The run says it has not reached the sender
+    yet and will be tried again; the key is kept; a second terminal path
+    asking before the next try is due sends nothing
+    (``tests/test_second_review_reply_kept_v1510.py`` pins the ladder)."""
     b = create_app(str(tmp_path / "b"))
     net = lan({B_HOST: b})  # the sender's computer cannot be reached
     b.state.platform.router.stream = _scripted("Done here.")
@@ -622,18 +633,21 @@ async def test_a_failed_answer_is_recorded_and_named_and_never_retried(tmp_path,
         status = (await cb.get("/agents/task-door")).json()
     row = rows[0]
     assert row.status is SessionStatus.COMPLETED
-    note = td.reply_failed_note("laptop", "")
+    note = td.retry_note("laptop", "")
     assert note.split(":")[0] in (row.summary or ""), row.summary
     assert "laptop" in row.summary and "could not be reached" in row.summary
+    assert "It will be tried again." in row.summary
     assert "secret-reply-key-123" not in (row.summary or "")
     assert status["last_reply"]["ok"] is False
     assert "could not be reached" in status["last_reply"]["detail"]
-    # ONE attempt
+    # the key is kept for the next try
+    assert b.state.platform.secrets.get(td.REPLY_TOKEN_PREFIX + row.id) == "secret-reply-key-123"
+    # ONE attempt so far
     attempts = [c for c in net.calls if "gone-pc" in c["url"]]
     assert len(attempts) == 1
-    # a second terminal path asking again records nothing new
+    # a second terminal path asking before the next try is due sends nothing
     again = await td.send_reply(b.state.platform, row)
-    assert again == {"ok": False, "sent": False, "detail": "already attempted"}
+    assert again == {"ok": False, "sent": False, "detail": "not due yet"}
     assert len([c for c in net.calls if "gone-pc" in c["url"]]) == 1
 
 

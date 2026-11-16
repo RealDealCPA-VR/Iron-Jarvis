@@ -498,6 +498,16 @@ def register(app: FastAPI, d: Any) -> None:
             ok = True
         except L.LinkFailed as exc:
             await asyncio.to_thread(store.note_error, peer.id, exc.words)
+        if ok:
+            # v1.510.0 (second review F3): it answered at the pairing's own
+            # address, so the answers this computer still owes it go now (the
+            # other computer, hearing this Check at its door, does the same).
+            from ...agents.task_door import retry_owed_soon
+
+            try:
+                retry_owed_soon(d.platform, peer_id=str(peer.id), pressed=True)
+            except Exception:  # noqa: BLE001 — bookkeeping only
+                log.warning("pairing: the owed answers could not be started", exc_info=True)
         fresh = await asyncio.to_thread(store.get, peer.name)
         return {"ok": ok, "peer": S.peer_view(fresh or peer)}
 

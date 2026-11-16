@@ -123,17 +123,27 @@ def _failure_words_for_phone(exc: HTTPException) -> str:
     ``title. fix``, the join ``failure_words.plain_reason`` makes — never the
     server's raw text ("openrouter API error 401: …"), which the phone has no
     hover to fold away. Any other refusal (an unknown skill's 404, …) keeps
-    its own ``detail``, exactly as before. Never raises."""
+    its own ``detail``, exactly as before.
+
+    v1.510.0 (second review, L4): a turn that failed AFTER its steps ran
+    ends with the daemon's sentence of what it kept (``kept_note``, from
+    ``chat_turn.failed_work_keys``: "Before it failed, this reply made
+    notes.md. It is kept and can be undone on the Activity page."). Both
+    phone doors (this poller and the desk reply into a phone chat) word a
+    failure here. Never raises."""
+    head = str(exc.detail)
+    kept = ""
     try:
         words = getattr(exc, "words", None)
         if isinstance(words, dict):
             title = " ".join(str(words.get("title") or "").split())
             fix = " ".join(str(words.get("fix") or "").split())
+            kept = " ".join(str(words.get("kept_note") or "").split())
             if title:
-                return f"{title}. {fix}" if fix else f"{title}."
+                head = f"{title}. {fix}" if fix else f"{title}."
     except Exception:  # noqa: BLE001 — wording only
         pass
-    return str(exc.detail)
+    return f"{head} {kept}" if kept else head
 
 
 def _run_problem(

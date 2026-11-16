@@ -228,7 +228,8 @@ def test_account_actions_and_partial_patch(app_client, fake):
     assert fake.states[b["id"]]["status"] == "ready"
     assert c.post(f"/iron-proxy/accounts/{b['id']}/signout").json() == {"ok": True}
     assert fake.states[b["id"]]["status"] == "unauthenticated"
-    assert c.delete(f"/iron-proxy/accounts/{a['id']}").json() == {"ok": True}
+    # v1.510.0: the answer also says where the account's folder went.
+    assert c.delete(f"/iron-proxy/accounts/{a['id']}").json()["ok"] is True
     assert a["id"] not in fake.profiles
 
     for text in c.seen:

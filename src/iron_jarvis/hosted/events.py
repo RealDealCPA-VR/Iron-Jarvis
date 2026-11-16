@@ -109,6 +109,17 @@ TRIM_TO = 0.8
 #: How often the writer thread writes what it holds (seconds).
 FLUSH_EVERY_S = 0.25
 
+#: v1.510.0 (H6): said ONCE per run of failed writes, in the session itself
+#: (a ``notice`` with no turn: the in-memory tail the page reads has it at
+#: once; the file gets it when the disk takes writes again).
+SAVE_FAILED = (
+    "Iron Jarvis could not save this session's record to the disk. It keeps the newest part "
+    "in memory and tries again; if Iron Jarvis closes before then, that part is lost. If the "
+    "disk is full, free some space on it."
+)
+SAVE_BACK = "This session's record is being saved to the disk again."
+SAVE_LOST = " {n} lines from while it could not be saved were too many to keep and are missing."
+
 
 def clip(text: Any, cap: int) -> str:
     """``text`` masked, THEN cut to ``cap`` characters (an ellipsis marks a cut)."""
@@ -289,6 +300,14 @@ class EventLog:
         #: v1.418.0 review: steps whose first update-while-written is in the
         #: log already (the later ones are not written; the finished row is).
         self._partial_logged: set[str] = set()
+        #: v1.510.0 (H6): a run of failed writes is going on (said once), the
+        #: rows dropped at the retry bound meanwhile, a partial write still to
+        #: be cut off (``(size before it, file id)``), and whether the file's
+        #: last line was checked for a tear left by a process that died.
+        self._failing = False
+        self._lost = 0
+        self._cut_from: tuple[int, int] | None = None
+        self._end_checked = False
 
     # -- writing ---------------------------------------------------------------
     def append(self, event: dict[str, Any]) -> None:
@@ -333,25 +352,108 @@ class EventLog:
             time.sleep(FLUSH_EVERY_S)
 
     def flush(self) -> None:
-        """BLOCKING: write everything queued so far."""
+        """BLOCKING: write everything queued so far.
+
+        v1.510.0 (H6): a write that fails puts its rows back at the FRONT of
+        the queue, in order, so the next flush tries again (a lost ``done``
+        made the next start read a finished reply as cut). Whatever a
+        partial write put in the file is cut off first, so a retry never
+        writes a row twice and never leaves a torn line. The rows waiting are
+        bounded by the log's own bounds (:data:`MAX_LINES`,
+        :data:`MAX_BYTES`): past them the oldest go and are counted. The
+        session is told once per run of failures (:data:`SAVE_FAILED`), and
+        once when writes work again (:data:`SAVE_BACK`)."""
         with self._io:
             with self._lock:
                 batch, self._pending = self._pending, []
             if not batch:
                 return
             rows = coalesce(batch)
+            lines = [(json.dumps(r, ensure_ascii=False) + "\n").encode("utf-8") for r in rows]
+            at: tuple[int, int] | None = None
             try:
                 self.dir.mkdir(parents=True, exist_ok=True)
-                data = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows).encode("utf-8")
+                self._cut_partial()
+                lead = b"" if self._end_checked else self._lead()
                 with open(self.path, "ab") as fh:
-                    fh.write(data)
-                if self._lines is None:
-                    self._lines = self._count_lines()
-                else:
-                    self._lines += len(rows)
+                    st = os.fstat(fh.fileno())
+                    at = (st.st_size, st.st_ino)
+                    fh.write(lead + b"".join(lines))
+            except OSError:
+                self._write_failed(rows, lines, at)
+                return
+            self._end_checked = True
+            if self._lines is None:
+                self._lines = self._count_lines()
+            else:
+                self._lines += len(rows)
+            try:
                 self._bound()
             except OSError:
-                log.warning("could not write a Code-view session's events", exc_info=True)
+                # The rows are written: never queued again over a failed trim.
+                log.warning("could not trim a Code-view session's events", exc_info=True)
+            if self._failing:
+                self._failing = False
+                lost, self._lost = self._lost, 0
+                self.append(make("notice", text=SAVE_BACK + (SAVE_LOST.format(n=lost) if lost else "")))
+
+    def _lead(self) -> bytes:
+        """``b"\\n"`` when the file ends inside a line (a process that died
+        mid-write): the next row then starts a line of its own instead of
+        joining the torn one (a reader skips a line that is not JSON)."""
+        try:
+            with open(self.path, "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                if fh.tell() == 0:
+                    return b""
+                fh.seek(-1, os.SEEK_END)
+                return b"" if fh.read(1) == b"\n" else b"\n"
+        except OSError:
+            return b""
+
+    def _cut_partial(self) -> None:
+        """Cut off what a failed write left when it could not be cut off at
+        once — only in the same file (a rewind or branch that replaced the
+        file took the torn rows with the old one). Raises ``OSError`` while
+        it still cannot: nothing is written after a torn row."""
+        cut = self._cut_from
+        if cut is None:
+            return
+        size, ino = cut
+        try:
+            st = os.stat(self.path)
+        except FileNotFoundError:
+            self._cut_from = None
+            return
+        if st.st_ino == ino and st.st_size > size:
+            os.truncate(self.path, size)
+        self._cut_from = None
+
+    def _write_failed(self, rows: list[dict[str, Any]], lines: list[bytes], at: tuple[int, int] | None) -> None:
+        """A failed write: cut off what it put in the file, queue its rows
+        again at the front (bounded, the oldest dropped and counted), and say
+        so once per run of failures. Called inside the ``except``."""
+        if at is not None:
+            try:
+                os.truncate(self.path, at[0])
+            except OSError:
+                self._cut_from = at
+        sizes = [len(b) for b in lines]
+        with self._lock:
+            total = sum(sizes)
+            i = 0
+            while i < len(rows) and (len(rows) - i + len(self._pending) > MAX_LINES or total > MAX_BYTES):
+                total -= sizes[i]
+                i += 1
+            queue = rows[i:] + self._pending
+            extra = max(0, len(queue) - MAX_LINES)
+            self._pending = queue[extra:]
+        self._lost += i + extra
+        if self._failing:
+            return
+        self._failing = True
+        log.warning("could not write a Code-view session's events; kept to try again", exc_info=True)
+        self.append(make("notice", text=SAVE_FAILED))
 
     def close(self) -> None:
         """Write what is queued and stop the writer (BLOCKING, bounded)."""

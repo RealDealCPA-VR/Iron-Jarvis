@@ -158,3 +158,28 @@ def test_only_the_reflect_call_site_changed_in_the_orchestrator():
     src = (ROOT / "src" / "iron_jarvis" / "agents" / "orchestrator.py").read_text(encoding="utf-8").replace("\r\n", "\n")
     body = src[src.index("def _post_run_learning"):src.index("# Skill learning (v1.135.0)")]
     assert re.search(r"low.trust", body, re.IGNORECASE)
+
+
+def test_two_notes_written_in_the_same_instant_merge_the_same_way_every_time(platform):
+    """v1.510.0. On GitHub's Windows machines two notes can carry the SAME
+    ``created_at`` (the clock steps in whole ticks), and the tidy-up then
+    merged whichever the database happened to list first: the test above
+    passed only on its retry. The note written later is the newer one."""
+    from datetime import datetime, timezone
+
+    learning = platform.learning
+    learning.reflect("s1", task="fix the tests", summary="ran pytest", ok=True)
+    learning.reflect("s2", task="fix the tests", summary="patched conftest", ok=True)
+    same = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with session_scope(platform.engine) as db:
+        rows = list(db.exec(select(LessonRecord)))
+        assert len(rows) == 2
+        for r in rows:
+            r.created_at = same
+            db.add(r)
+        db.commit()
+        older_id = next(r.id for r in rows if "ran pytest" in r.text)
+
+    report: list[dict] = []
+    assert learning.dedup(report=report) == 1
+    assert [m["id"] for m in report] == [older_id], "the note written first was not the one merged away"

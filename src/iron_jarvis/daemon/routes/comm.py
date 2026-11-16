@@ -827,14 +827,18 @@ def register(app: FastAPI, d) -> None:
             # dashboard like a normal turn (not surfaced as a raw 4xx/5xx).
             # v1.378.0 review: the chat's plain sentence (`words`) like the
             # inbound pipeline, never the vendor's raw `detail` on a phone.
+            # v1.510.0 (second review, L4): a turn that failed after its steps
+            # ran says what it kept (the sentence rides the words above) and
+            # names the steps here, never an empty list after one ran.
             reply = f"I hit a problem: {_failure_words_for_phone(exc)}"
             _append_reply(reply)
             sent = await poller.send_chunked(ch, reply, chat_id=sender_id)
+            _ran = (getattr(exc, "words", None) or {}).get("tools_used")
             return {
                 "reply": reply,
                 "provider": "",
                 "model": "",
-                "tools_used": [],
+                "tools_used": [str(t) for t in _ran] if isinstance(_ran, list) else [],
                 "escalate": False,
                 "error": str(exc.detail),
                 "sent": sent,

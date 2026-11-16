@@ -678,6 +678,23 @@ def session_title(current: str, before: list[dict[str, Any]], after: list[dict[s
     return title[:1].upper() + title[1:]
 
 
+def _capped(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The newest lines within :data:`MAX_MESSAGES` (the cap itself is listed
+    OPEN in ``docs/rules/context.md``), cut at a TURN START (v1.510.0, second
+    review S12): whole turns are dropped from the front, so a kept transcript
+    never begins with a reply or a steer note whose question is gone. Turn
+    starts are ``rewind.turn_starts``'s reading (a question, never a steer).
+    When the newest turn ALONE is longer than the cap there is no start to
+    cut at: its newest :data:`MAX_MESSAGES` lines are kept, as before. Pure."""
+    if len(msgs) <= MAX_MESSAGES:
+        return msgs
+    from .rewind import turn_starts  # lazy: rewind reads this module (lazily too)
+
+    cut = len(msgs) - MAX_MESSAGES
+    start = next((i for i, _ in turn_starts(msgs) if i >= cut), None)
+    return msgs[start:] if start is not None else msgs[cut:]
+
+
 def append_lines(engine: Any, thread_id: str, lines: list[dict[str, Any]], *,
                  title_from_first: bool = True) -> dict[str, Any]:
     """Append ``lines`` to the session (whitelisted to :data:`LINE_KEYS`,
@@ -694,7 +711,7 @@ def append_lines(engine: Any, thread_id: str, lines: list[dict[str, Any]], *,
             if row is None or not is_build_thread(row):
                 return {"ok": False, "updated_at": None, "count": 0}
             before = _messages(row)
-            msgs = (before + cleaned)[-MAX_MESSAGES:]
+            msgs = _capped(before + cleaned)
             row.messages_json = json.dumps(msgs)
             if title_from_first:
                 row.title = session_title(row.title or NEW_SESSION_TITLE, before, msgs)
@@ -911,7 +928,7 @@ def create_with_lines(engine: Any, folder: str, title: str, setup: "dict[str, An
     its origin's conversation up to the message, whitelisted like every line,
     stamps kept). BLOCKING."""
     stamp = utcnow().isoformat()
-    kept = [c for c in (_clean_line(x, stamp) for x in (lines or [])) if c is not None][-MAX_MESSAGES:]
+    kept = _capped([c for c in (_clean_line(x, stamp) for x in (lines or [])) if c is not None])
     row = create(engine, folder, title, setup)
     if not kept:
         return row
@@ -1569,6 +1586,101 @@ def reconcile_interrupted_turns(engine: Any) -> int:
                 written += 1
     except Exception:  # noqa: BLE001 — a boot step never blocks the boot
         log.warning("reconciling interrupted build turns failed", exc_info=True)
+    # v1.510.0 (second review S2): and a turn that FINISHED whose line could
+    # not be written — run here so every boot path (the lifespan's, a test's
+    # reboot) runs it right after the cut-off ones, before the resume pass.
+    reconcile_unsaved_replies(engine)
+    return written
+
+
+#: The turn states a FINISHED turn's record ends in (``durable_turns``).
+_FINISHED_STATES = ("done", "error", "stopped")
+
+
+def reconcile_unsaved_replies(engine: Any) -> int:
+    """Boot step (v1.510.0, second review S2), the sibling of
+    :func:`reconcile_interrupted_turns`: a build turn that FINISHED (done,
+    failed, stopped) but whose reply line could not be written to its session
+    (the live turn tried twice and said so: "It will be put back when Iron
+    Jarvis next starts") has its line written now — rebuilt from the turn's
+    stored frames (``ChatTurnRecord.frames_json``, kept 7 days) by the live
+    writer's own fold (``routes/build.replayed_reply_line`` with the turn's
+    status), so it is the line the live writer would have written. Only a
+    session whose transcript holds that turn's QUESTION and no reply is
+    touched, and only when the rebuild has a reply line (a turn stopped
+    before a word or a step keeps none, as live), so it runs once: the line
+    it writes is the reply the next boot finds. Returns the lines written.
+    BLOCKING; never raises."""
+    from datetime import timezone
+
+    from sqlmodel import select
+
+    from ..core.models import ChatTurnRecord
+
+    written = 0
+    try:
+        with session_scope(engine) as db:
+            rows = list(db.exec(
+                select(ChatTurnRecord.id, ChatTurnRecord.thread_id, ChatTurnRecord.status,
+                       ChatTurnRecord.started_at)
+                .join(ChatThreadRecord, ChatThreadRecord.id == ChatTurnRecord.thread_id)
+                .where(ChatThreadRecord.surface == BUILD_SURFACE)  # never a chat's turns
+                .where(ChatTurnRecord.status.in_(_FINISHED_STATES))  # type: ignore[attr-defined]
+            ))
+        sessions: dict[str, Any] = {}
+        for turn_id, thread_id, status, started in rows:
+            tid = str(thread_id or "")
+            if tid not in sessions:
+                sessions[tid] = get_row(engine, tid)
+            row = sessions[tid]
+            if row is None or has_turn_reply(row, turn_id):
+                continue
+            question = next((
+                m for m in _messages(row)
+                if m.get("role") == "user" and m.get("turnId") == turn_id and not m.get("steer")
+            ), None)
+            if question is None:
+                continue
+            with session_scope(engine) as db:
+                rec = db.get(ChatTurnRecord, turn_id)
+                frames_json = rec.frames_json if rec is not None else "[]"
+            try:
+                frames = json.loads(frames_json or "[]")
+            except (TypeError, ValueError):
+                continue
+            from ..daemon.routes.build import replayed_reply_line
+
+            when = 0.0
+            if started is not None:
+                when = (started if started.tzinfo is not None else started.replace(tzinfo=timezone.utc)).timestamp()
+            lines = replayed_reply_line(turn_id, frames, started_at=when, status=str(status)) or []
+            if not lines or lines[-1].get("role") != "assistant":
+                continue  # the live writer kept no reply line for it either
+            # The carry-on facts the question holds, as the cut-off rebuild
+            # (above) and the live writer keep them.
+            for key in ("resumedFrom", "continuedFrom"):
+                value = question.get(key)
+                if isinstance(value, str) and value.strip():
+                    lines[-1][key] = value
+            moved = question.get("accountMove")
+            if isinstance(moved, dict) and moved:
+                lines[-1]["accountMove"] = moved
+            from . import reply_record as RR
+
+            if lines[-1].get("error") and RR.has_failed(engine, turn_id):
+                lines[-1]["canContinue"] = True  # its rounds were kept (v1.422.0)
+            if str(status) == "stopped" and "trust" not in lines[-1]:
+                low = RR.low_trust_of(engine, turn_id)
+                if low:
+                    lines[-1]["trust"] = "low"
+                    lines[-1]["trustReason"] = low
+            if append_lines(engine, tid, lines, title_from_first=False).get("ok"):
+                written += 1
+                sessions[tid] = get_row(engine, tid)
+        if written:
+            log.info("put back %d Build session repl(ies) that could not be saved", written)
+    except Exception:  # noqa: BLE001 — a boot step never blocks the boot
+        log.warning("putting back unsaved build replies failed", exc_info=True)
     return written
 
 

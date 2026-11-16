@@ -240,8 +240,9 @@ def patch_entry_before(home: str | Path, entry: dict[str, Any]) -> bytes | None:
 #: The kinds whose target is ONE file a hash can check, and how its path is
 #: recorded: workspace-relative (the file tools) or absolute (a memory note).
 #: A call of one of these that failed or was cut off keeps its inverse unless
-#: the hash PROVES the file is as it was. Every other kind (a setting, a
-#: record, a multi-file patch) is dropped on failure, as before this version.
+#: the hash PROVES the file is as it was. A multi-file patch is settled file
+#: by file the same way (v1.510.0, :func:`_settle_patch`); every other kind
+#: (a setting, a record, a rename) is dropped on failure, as before.
 ONE_FILE_KINDS: dict[str, str] = {
     "file_restore": "workspace",
     "file_delete": "workspace",
@@ -320,14 +321,18 @@ def settle_unfinished(
     runs on after Stop or the deadline) → the inverse, marked
     :data:`INTERRUPTED_KEY`; nothing can be proven yet.
 
-    Only :data:`ONE_FILE_KINDS` are kept; any other kind is ``None``, as
-    before this version. Whenever ``None`` is returned, the before-copy blob is
+    :data:`ONE_FILE_KINDS` and, since v1.510.0 (second review T4), a patch
+    over several files (:data:`PATCH_UNDO_KIND`, :func:`_settle_patch`) can
+    be kept; any other kind is ``None``, as before. Whenever ``None`` is
+    returned, the before-copy blob is
     removed (no row will refer to it) — unless ``reclaim`` is False, for a
     caller that removes it once its own transaction has committed. Blocking:
     call it off the event loop."""
     if not undo:
         return None
     kind = str(undo.get("kind") or "")
+    if kind == PATCH_UNDO_KIND and undo.get("reversible", True):
+        return _settle_patch(undo, workspace=workspace, home=home, finished=finished, reclaim=reclaim)
     if kind not in ONE_FILE_KINDS or not undo.get("reversible", True):
         if reclaim:
             drop_preimages(home, undo)
@@ -356,6 +361,62 @@ def settle_unfinished(
     return _with_meta(
         {**undo, "post_sha256": sha256_target(target, mode)}, **{INTERRUPTED_KEY: None}
     )
+
+
+def _settle_patch(
+    undo: dict[str, Any],
+    *,
+    workspace: "str | Path | None",
+    home: str | Path,
+    finished: bool,
+    reclaim: bool,
+) -> "dict[str, Any] | None":
+    """:func:`settle_unfinished` for a patch over several files (v1.510.0,
+    second review T4). It used to be dropped, copies and all, whatever it had
+    already written.
+
+    Cut off (``finished`` False): KEPT, marked :data:`INTERRUPTED_KEY`, as
+    the one-file kinds are: the worker thread may still be writing, so even
+    files that are all as they were now prove nothing (the next boot settles
+    it). Finished (a failure, or the boot): every file is hashed against its
+    own before-copy. All of them as they were (a patch that failed and was
+    rolled back by ``_write_plan``, or one stopped before its first write) →
+    ``None``, the copies removed. Otherwise the inverse is kept with each
+    entry's after-hash set to what is there NOW, so its revert puts back
+    every file the patch reached and its guard still protects a later edit.
+    A before-copy that cannot be read cannot prove anything: kept."""
+    if not finished:
+        return _with_meta(undo, **{INTERRUPTED_KEY: True})
+    meta = read_envelope(undo)
+    entries = patch_entries(meta)
+    base = meta.get("workspace") or workspace
+    if not entries or not base:
+        return _with_meta(undo, **{INTERRUPTED_KEY: True})
+    clean = True
+    settled: list[dict[str, Any]] = []
+    for entry in entries:
+        try:
+            target = safe_path(Path(str(base)), str(entry.get("path") or ""))
+        except Exception:  # noqa: BLE001 — cannot place it: not provably clean
+            return _with_meta(undo, **{INTERRUPTED_KEY: True})
+        now = sha256_target(target, "raw") if target.is_file() else None
+        try:
+            before = patch_entry_before(home, entry)
+        except (OSError, ValueError):
+            clean = False
+        else:
+            if before is None and entry.get("existed"):
+                clean = False
+            elif now != (sha256_bytes(before) if before is not None else None):
+                clean = False
+        settled.append({**entry, "post_sha256": now})
+    if clean:
+        if reclaim:
+            drop_preimages(home, undo)
+        return None
+    meta["files"] = settled
+    meta.pop(INTERRUPTED_KEY, None)
+    return {**undo, "pre_inline": json.dumps(meta)}
 
 
 # --- revert-safety + shared file revert ------------------------------------

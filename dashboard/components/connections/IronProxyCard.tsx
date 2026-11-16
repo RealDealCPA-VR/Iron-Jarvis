@@ -413,6 +413,19 @@ function IronProxyBody({
     if (ok) reload();
   }
 
+  /** v1.510.0 (second review A1): remove an account. The daemon moves its
+   *  folder (sign-in and conversations) to Iron Jarvis's trash first; its
+   *  sentence says where, and is shown as is. */
+  async function removeAccount(a: IronProxyAccount) {
+    let words: string | null = null;
+    const ok = await run(`${a.id}:remove`, async () => {
+      words = removedWords(await del<unknown>(`/iron-proxy/accounts/${enc(a.id)}`));
+    });
+    if (!ok) return;
+    setNote(words ?? `Removed “${a.title}”.`);
+    reload();
+  }
+
   /** v1.393.0: put an account in a group (null = in no group) — one save of
    *  the whole setting through the one writer; the daemon's sentence on a
    *  refusal. */
@@ -639,13 +652,7 @@ function IronProxyBody({
                           )
                         }
                         onUsageRead={reload}
-                        onRemove={() =>
-                          act(
-                            `${a.id}:remove`,
-                            () => del(`/iron-proxy/accounts/${enc(a.id)}`),
-                            `Removed “${a.title}”.`,
-                          )
-                        }
+                        onRemove={() => removeAccount(a)}
                         group={accountGroups && groupable(a) ? groupOf(accountGroups, a.id) : null}
                         groupNames={groupNames}
                         onGroup={(name) => void setGroup(a, name)}
@@ -949,7 +956,7 @@ function AccountRow({
           onConfirm={onRemove}
           label="Remove"
           confirmLabel="Press again to remove"
-          title="Remove this account from Iron-Proxy (press twice)"
+          title={removeTitle(a)}
         />
       </div>
     </div>
@@ -967,6 +974,22 @@ export function signOutTitle(a: Pick<IronProxyAccount, "home_adopted">): string 
   return a.home_adopted
     ? `${base} This is this PC's own login, so the CLI is signed out on this PC too.`
     : base;
+}
+
+/** v1.510.0 (second review A1): what Remove does, said before the press. The
+ *  account's folder is moved to Iron Jarvis's trash, never deleted; this PC's
+ *  own login (`home_adopted`) is left where it is. */
+export function removeTitle(a: Pick<IronProxyAccount, "home_adopted">): string {
+  return a.home_adopted
+    ? "Remove this account from Iron-Proxy (press twice). It is this PC's own login, so its sign-in and conversations stay where they are."
+    : "Remove this account from Iron-Proxy (press twice). Its sign-in and conversations are moved to Iron Jarvis's trash, not deleted. Close any coding session or terminal on it first.";
+}
+
+/** v1.510.0: the daemon's sentence after a remove (`{words}`), or null. */
+export function removedWords(res: unknown): string | null {
+  if (!res || typeof res !== "object") return null;
+  const w = (res as Record<string, unknown>).words;
+  return typeof w === "string" && w.trim() ? w : null;
 }
 
 /** v1.439.0: the note after a sign-out the daemon accepted. */

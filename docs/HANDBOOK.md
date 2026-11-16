@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.509.0 (2026-11-15).*
+holds itself to. Current as of v1.510.0 (2026-11-15).*
 
 ---
 
@@ -2041,6 +2041,66 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Nothing is lost, part two (v1.510.0)
+
+The second of eight releases from the second review. Each of these is a place
+where something you had could disappear with no copy and no word.
+
+- **Removing an account keeps its conversations.** Remove on a Claude, Codex
+  or Grok account used to delete the account's whole folder for good: its
+  sign-in and every conversation kept on it. The folder is now moved to Iron
+  Jarvis's trash first, and the card says where ("Its sign-in and
+  conversations were moved to ..."). It stays there until you press Delete
+  permanently in Settings › Maintenance. Remove is refused while a coding
+  session or a terminal is using the account, and the refusal names it. An
+  account that is this PC's own login is never moved or deleted.
+- **An answer from another computer is kept until it arrives.** It used to be
+  sent once; if that one try failed, it was gone, and the chat that asked
+  waited for ever. It is now tried again after 1, 5 and 30 minutes, and after
+  that whenever the other computer is next heard from, or you press Check on
+  its card. It is kept for 7 days. An answer that arrives twice is taken
+  once.
+- **A wait for another computer ends in words.** After 12 hours with no
+  report, the chat says "<name> has not reported back in 12 hours. Ask it
+  again, or press Check on its card ...", and the mission card shows "Needs
+  you" with the same words.
+- **Reverting a file in the Changes tab keeps what it replaced.** The version
+  that was there is copied to Iron Jarvis's trash before the file is put
+  back, the words say where, and the session's own record notes the revert.
+  A revert now also waits while the coding tool or one of its helpers is
+  still working in the folder.
+- **A coding session's record survives a failed save.** If a coding tool's
+  session record cannot be written (a full disk, a file held by another
+  program), the part that failed is kept and written again, and the session
+  says so once. If a Build reply cannot be saved to its session, the reply
+  stays on screen with "This reply could not be saved to the session. It
+  will be put back when Iron Jarvis next starts.", and it is. A plan you
+  approved is no longer lost the same way.
+- **Rewind puts back what helpers changed.** In a session with a team the
+  helpers make the changes, and Rewind used to put none of them back while
+  saying it had rewound. It now puts back the helpers' files with the
+  session's own, newest first. A helper's command is still named as not
+  undone, and so is a change that was stopped part-way, with where to undo
+  it.
+- **A stopped multi-file change keeps its Undo.** A change across several
+  files that was stopped, hit its time limit or was cut by a crash used to
+  lose its Undo and its saved copies. It keeps them now, and each file is
+  written whole or not at all.
+- **A chat reply that fails after it already did something says so.** If a
+  reply made or changed files and then failed, the message now reads, for
+  example, "Before it failed, this reply made notes.md and changed plan.md.
+  They are kept, and each can be undone on the Activity page." The files
+  stay listed beside the chat, and the phone gets the same sentence.
+- **A lost answer to a click is not a retry.** When your browser does not
+  answer after a click or typing was sent, Iron Jarvis is told the action
+  may already have happened and to read the page first. It used to be told
+  to try again, which could submit a form twice.
+- **Smaller ones.** Accepting a suggested edit in a coding session's library
+  can be undone. A refused Delete of a coding session says its running
+  programs were stopped. Choosing another account and continuing leaves the
+  session as it was if the continue is refused. A very long session's
+  transcript is trimmed at a question, never in the middle of a reply.
 
 ## Other computers and web pages stay outside (v1.509.0)
 

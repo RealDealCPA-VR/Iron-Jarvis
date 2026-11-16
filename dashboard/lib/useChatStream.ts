@@ -308,6 +308,13 @@ export type SSEEvent =
       /** v1.499.3: steer notes the turn accepted and never read before it
        *  FAILED — handed back like the done frame's. Absent when none. */
       unread_steers?: string[];
+      /** v1.510.0 (L4): what the turn already did before it failed — the
+       *  daemon's sentence (`chat_turn.failed_work_keys`, from the journal),
+       *  the steps that ran and the files they made or changed (absolute).
+       *  Absent when no step ran. */
+      kept_note?: string;
+      tools_used?: string[];
+      documents?: string[];
     }
   /** v1.324.0: an installed app asks the USER something (MCP elicitation)
    *  or asks to use the turn's model (MCP sampling) — the decoded ask. */
@@ -930,6 +937,16 @@ export function sseEventFrom(
         );
         if (unread.length) ev.unread_steers = unread;
       }
+      // v1.510.0 (L4): what the failed turn kept, whitelisted.
+      if (str(data.kept_note)) ev.kept_note = str(data.kept_note);
+      for (const key of ["tools_used", "documents"] as const) {
+        if (Array.isArray(data[key])) {
+          const list = (data[key] as unknown[]).filter(
+            (x): x is string => typeof x === "string" && x.trim().length > 0,
+          );
+          if (list.length) ev[key] = list;
+        }
+      }
       return ev;
     }
     // v1.324.0: apps that talk back. Each decoder WHITELISTS (lib/mcpInteract)
@@ -1343,6 +1360,14 @@ export class StreamError extends ApiError {
   /** v1.499.3: steer notes the failed turn never read ([] when none) — the
    *  caller puts them back in the box, as it does after a finished turn. */
   readonly unreadSteers: string[];
+  /** v1.510.0 (L4): what the turn already did before it failed — the
+   *  daemon's sentence ("" when no step ran), the steps that ran, the files
+   *  they made or changed (absolute) and the step cards as the reply's
+   *  steps, so the page keeps them on the failed reply. */
+  readonly keptNote: string;
+  readonly toolsUsed: string[];
+  readonly documents: string[];
+  readonly steps: TurnStep[];
   constructor(
     message: string,
     status: number,
@@ -1359,6 +1384,10 @@ export class StreamError extends ApiError {
       fix_kind?: string;
       fix_provider?: string;
       unread_steers?: string[];
+      kept_note?: string;
+      tools_used?: string[];
+      documents?: string[];
+      steps?: TurnStep[];
     } = {},
   ) {
     super(message, status);
@@ -1375,6 +1404,10 @@ export class StreamError extends ApiError {
     this.fixKind = refusal.fix_kind ?? "";
     this.fixProvider = refusal.fix_provider ?? "";
     this.unreadSteers = [...(refusal.unread_steers ?? [])];
+    this.keptNote = refusal.kept_note ?? "";
+    this.toolsUsed = [...(refusal.tools_used ?? [])];
+    this.documents = [...(refusal.documents ?? [])];
+    this.steps = [...(refusal.steps ?? [])];
   }
 }
 
@@ -2210,6 +2243,11 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                   fix_kind: ev.fix_kind,
                   fix_provider: ev.fix_provider,
                   unread_steers: ev.unread_steers,
+                  // v1.510.0 (L4): what the turn kept, and its step cards.
+                  kept_note: ev.kept_note,
+                  tools_used: ev.tools_used,
+                  documents: ev.documents,
+                  ...(ev.kept_note ? { steps: stepsFromTools(cards) } : {}),
                 },
               );
             default:

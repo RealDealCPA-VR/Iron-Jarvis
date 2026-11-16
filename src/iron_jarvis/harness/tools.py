@@ -443,14 +443,20 @@ def _write_plan(plan: PatchPlan) -> None:
     truncates when it opens, so a write that fails part way (a full disk, a
     scanner grabbing the file) left that file cut short while the reply said
     "what it had written was put back". It joins ``done`` BEFORE its write;
-    putting back a file whose write never started rewrites the same bytes."""
+    putting back a file whose write never started rewrites the same bytes.
+
+    v1.510.0 (second review T4): every file is saved beside and swapped
+    (``tools/base.atomic_write_bytes``), the put-back too, so a crash or a
+    Stop in the middle of a write never leaves that file cut short (the
+    worker thread runs on after a Stop; a crash runs no put-back at all).
+    Deletions stay last."""
     done: list[_FileState] = []
     changes = plan.changes()
     try:
         for st in [s for s in changes if s.exists]:
             st.target.parent.mkdir(parents=True, exist_ok=True)
             done.append(st)
-            st.target.write_bytes(st.after_bytes() or b"")
+            atomic_write_bytes(st.target, st.after_bytes() or b"")
         for st in [s for s in changes if not s.exists]:
             done.append(st)
             st.target.unlink()
@@ -460,7 +466,7 @@ def _write_plan(plan: PatchPlan) -> None:
                 if st.before is None:
                     st.target.unlink(missing_ok=True)
                 else:
-                    st.target.write_bytes(st.before)
+                    atomic_write_bytes(st.target, st.before)
             except OSError:
                 pass
         raise
@@ -523,6 +529,10 @@ class ApplyPatchTool(Tool):
         if undo.get("kind") != PATCH_UNDO_KIND:
             return await revert_workspace_file(undo, ctx)
         home = ctx.config.home
+        from ..tools.undo import INTERRUPTED_KEY
+
+        if read_envelope(undo).get(INTERRUPTED_KEY):
+            return await asyncio.to_thread(self._revert_interrupted, undo, ctx)
 
         def _revert() -> ToolResult:
             files = patch_entries(read_envelope(undo))
@@ -576,7 +586,8 @@ class ApplyPatchTool(Tool):
                             target.unlink()
                     else:
                         target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(before)
+                        # v1.510.0 (T4): saved beside, then swapped.
+                        atomic_write_bytes(target, before)
                     restored += 1
                 except OSError as exc:
                     return ToolResult(
@@ -588,6 +599,82 @@ class ApplyPatchTool(Tool):
             return ToolResult(ok=True, output=f"undo: put back {restored} file(s) the patch changed")
 
         return await asyncio.to_thread(_revert)
+
+    @staticmethod
+    def _revert_interrupted(undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """The Undo of a patch STOPPED while it was writing (v1.510.0, second
+        review T4; the one-file model is ``tools/undo._revert_interrupted``).
+        BLOCKING.
+
+        Nobody knows how far it got, so each file is judged on its own: one
+        still as it was is left alone; one exactly as the patch meant it is
+        put back; anything else (a later edit, a write it never finished) is
+        MOVED to the app's trash first, then put back — never overwritten
+        blind. Every file all still as it was is "nothing to undo yet", a
+        refusal: the stopped patch's worker may still write, so the row and
+        its copies stay (the next boot settles it). Every saved copy is read
+        before any file is touched."""
+        from ..tools.undo import move_to_trash
+
+        home = ctx.config.home
+        files = patch_entries(read_envelope(undo))
+        if not files:
+            return ToolResult(ok=False, error="undo: no files recorded for this patch")
+        plan: list[tuple[dict[str, Any], Path, "bytes | None", bool]] = []
+        for entry in files:
+            rel = str(entry.get("path") or "")
+            try:
+                target = safe_path(ctx.workspace, rel)
+            except Exception as exc:  # noqa: BLE001 — never write outside it
+                return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
+            try:
+                before = patch_entry_before(home, entry)
+            except (OSError, ValueError) as exc:
+                return ToolResult(
+                    ok=False,
+                    error=f"undo: the saved copy of {rel} could not be read ({exc}); nothing was undone",
+                )
+            if before is None and entry.get("existed"):
+                return ToolResult(ok=False, error=f"undo: no saved copy of {rel} was kept; nothing was undone")
+            try:
+                now = sha256_bytes(target.read_bytes()) if target.is_file() else None
+            except OSError:
+                now = None
+            if now == (sha256_bytes(before) if before is not None else None) and (
+                before is not None or not target.exists()
+            ):
+                continue  # still as it was
+            plan.append((entry, target, before, now is not None and now == entry.get("post_sha256")))
+        if not plan:
+            return ToolResult(
+                ok=False,
+                error="nothing to undo yet: every file is as it was before the stopped patch",
+            )
+        restored = 0
+        kept: list[str] = []
+        for entry, target, before, proven in plan:
+            rel = str(entry.get("path") or "")
+            try:
+                if target.exists() and not proven:
+                    kept.append(str(move_to_trash(home, target, rel)))
+                if before is None:
+                    if target.exists():
+                        target.unlink()
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_write_bytes(target, before)
+                restored += 1
+            except OSError as exc:
+                return ToolResult(
+                    ok=False,
+                    error=f"undo: could not put {rel} back: {exc} ({restored} put back before it)",
+                )
+        for entry in files:
+            delete_preimage(home, entry.get("ref"))
+        words = f"undo: put back {restored} file(s) the stopped patch changed"
+        if kept:
+            words += f" (the versions that were there are kept in the trash: {', '.join(kept)})"
+        return ToolResult(ok=True, output=words)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         text = self._patch_text(args)

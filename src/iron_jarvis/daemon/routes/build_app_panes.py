@@ -13,6 +13,7 @@ session's git lock, refused in words while a reply runs.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -22,6 +23,8 @@ from ...hosted import panes as PN
 from ...hosted import service as S
 from ...hosted import session_controls as SC
 from ...hosted.events import EventLog
+
+log = logging.getLogger(__name__)
 
 #: How many of the newest events the panes read (the log's own bound is 20k).
 EVENTS_READ = 20_000
@@ -47,6 +50,21 @@ class McpActionBody(BaseModel):
 def _turn_running(live: Any) -> bool:
     turn = getattr(live, "turn", None) if live is not None else None
     return bool(turn is not None and getattr(turn, "running", False))
+
+
+def _works_alone(live: Any, now: float) -> bool:
+    """v1.510.0: the tool writes in the folder with no reply of the user's
+    running — Pi's own run, a reply the tool writes by itself, its helper
+    agents (``LiveSession``'s own readings)."""
+    if live is None:
+        return False
+    replying = getattr(live, "replying_alone", None)
+    helping = getattr(live, "helpers_working", None)
+    return bool(
+        getattr(live, "working_alone", False)
+        or (callable(replying) and replying(now))
+        or (callable(helping) and helping(now))
+    )
 
 
 def register(app: FastAPI, d: Any) -> None:
@@ -90,24 +108,47 @@ def register(app: FastAPI, d: Any) -> None:
         from .build_git import _locked
         from ...harness import branches as B
 
+        from ...hosted import handoff as H
+        from ...hosted.events import make
+
+        service = svc()
         row, events, live = await _session(sid)
         tool = _tool_name(row.harness)
         if _turn_running(live):
             raise HTTPException(status_code=409, detail=PN.REVERT_RUNNING.format(tool=tool))
+        if _works_alone(live, service.clock()):
+            # v1.510.0 (H5 guard): work in the folder no reply of the user's
+            # owns — the states "Close it now" waits for.
+            raise HTTPException(status_code=409, detail=PN.REVERT_TOOL_BUSY.format(tool=tool))
+        helpers = await asyncio.to_thread(H._helper_rows, service, sid)
+        if any(H._running(service, h.id) for h in helpers):
+            # A helper session (Hand off) works in this SAME folder.
+            raise HTTPException(status_code=409, detail=PN.REVERT_HELPER_BUSY)
 
         def act() -> dict[str, Any]:
             return PN.revert_file(
-                svc().home, sid, row, events, tool, rel=body.path, blob=body.blob,
+                service.home, sid, row, events, tool, rel=body.path, blob=body.blob,
                 scope=PN.SCOPE_TURN if body.scope == PN.SCOPE_TURN else PN.SCOPE_SESSION,
                 turn=body.turn, running=_turn_running(live), old_rel=body.old_rel,
             )
 
         try:
-            return await asyncio.to_thread(_locked, f"app:{sid}", act)
+            out = await asyncio.to_thread(_locked, f"app:{sid}", act)
         except PN.RevertRefused as r:
             raise HTTPException(status_code=r.status, detail=r.sentence) from None
         except B.GitRefused as g:
             raise HTTPException(status_code=g.status, detail=str(g)) from None
+        # v1.510.0 (H5): the session's own conversation says what was put
+        # back and where the replaced version is (the log only queues: the
+        # write is its writer thread's). Never fails the revert.
+        name = str(out.get("rel") or body.path).rsplit("/", 1)[-1]
+        kept = str(out.get("moved_to") or "")
+        text = PN.REVERT_NOTICE.format(name=name, trash=kept) if kept else PN.REVERT_NOTICE_PLAIN.format(name=name)
+        try:
+            service._emit(service._live(row), make("notice", text=text))
+        except Exception:  # noqa: BLE001 — the file is already back
+            log.warning("could not say a revert in a Code-view session", exc_info=True)
+        return out
 
     @app.get("/build/app/sessions/{sid}/usage")
     async def app_usage(sid: str) -> dict[str, Any]:
