@@ -380,6 +380,17 @@ ALREADY_IN_TERMINAL = (
 CLAIM_TERMINAL = "being opened in a terminal"
 STOPPED_BECAUSE = "Stopped because the session is {why}."
 STOPPED_PLAIN = "Stopped: the coding tool was closed."
+#: v1.512.0 (second review H1): the tool was told to stop and did not — a
+#: second Stop, "Close it now" or the time bound closed it (a tree kill).
+STOP_NOT_HONOURED = (
+    "{label} did not stop when asked, so Iron Jarvis closed it. The conversation is kept: "
+    "your next message carries on from here."
+)
+#: v1.512.0 (H1): the answer to a Stop the tool has not acted on yet (the
+#: page can say it; ``interrupt`` returns it as ``words``).
+STOP_ASKED = (
+    "{label} has been asked to stop and has not stopped yet. Press Stop again to close it now."
+)
 #: v1.427.2: steps a coding tool was running ON ITS OWN (after its reply ended:
 #: helpers, a reply it started itself) when it or Iron Jarvis stopped. Each
 #: step's row says "did not finish" (status ``stopped``); this says why, once.

@@ -9066,6 +9066,11 @@ def finish_invoke(d, ctx, overrides: dict[str, str], grants, gate, *, called_as:
             deadline_s=chat_tool_deadline(d.platform),
         )
 
+    # Second review D6 (v1.512.0): the turn these calls belong to, so the
+    # check's wait for a long test run is raced against THAT turn's Stop
+    # (``harness/finish._turn_stop`` — ``core/turns``, ``stall.run_step``'s
+    # way). The POST lane registers no Stop handle, so nothing changes there.
+    invoke.turn_id = str(getattr(own_ctx, "turn_id", "") or "").strip()  # type: ignore[attr-defined]
     return invoke
 
 

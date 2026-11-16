@@ -449,6 +449,15 @@ function SessionPane({
   const [hints, setHints] = useState<Record<string, string>>({});
   /** A quiet word that is not an error ("applies from your next message"). */
   const [info, setInfo] = useState<string | null>(null);
+  /** v1.512.0 (second review H1): the tool was told to stop the running
+   *  reply and has not stopped yet — the daemon's own words, shown as sent,
+   *  with "Close" beside them. It belongs to that reply: cleared when the
+   *  reply ends, the session changes, or a Stop answers without it. */
+  const [stopPending, setStopPending] = useState<string | null>(null);
+  /** Bumped when a reply ends (a session change ends it here too): a Stop's answer that
+   *  comes back after that is for a reply no longer on screen. */
+  const stopSeqRef = useRef(0);
+  const runningNowRef = useRef(false);
   const [continuing, setContinuing] = useState(false);
   const [tryChoices, setTryChoices] = useState<TryChoice[]>([]);
   /** v1.422.0 (B3, B5): a reply a restart cut off (Continue) and a limit's
@@ -1225,20 +1234,42 @@ function SessionPane({
     void send(words, withFiles);
   }, [session, running, send, onFirstSent]);
 
+  // v1.512.0 (second review H1): a reply that ended takes its pending Stop
+  // with it (an answer still on its way is for that reply: dropped). A new
+  // session starts with `running` false, so it is cleared there too.
+  runningNowRef.current = running;
+  useEffect(() => {
+    if (running) return;
+    stopSeqRef.current += 1;
+    setStopPending(null);
+  }, [running]);
+
   const stop = useCallback(() => {
     if (!session) return;
-    post(`${SESSIONS}/${encodeURIComponent(session.id)}/interrupt`).catch((e) =>
-      setNote(errorWords(e, "Stop did not reach the coding tool.")),
+    const seq = stopSeqRef.current;
+    post<{ stop_pending?: unknown; words?: unknown } | null>(
+      `${SESSIONS}/${encodeURIComponent(session.id)}/interrupt`,
+    ).then(
+      (r) => {
+        if (seq !== stopSeqRef.current || !runningNowRef.current) return;
+        // v1.512.0 (H1): told, and still running — the daemon's own words,
+        // as sent. Any other answer (stopped, closed) clears the line.
+        const words = r && r.stop_pending === true && typeof r.words === "string" ? r.words : "";
+        setStopPending(words || null);
+      },
+      (e) => setNote(errorWords(e, "Stop did not reach the coding tool.")),
     );
   }, [session]);
 
   // v1.422.0 (B4): the user's own "Close it now" for a session kept open
   // because its tool runs a program (two presses: the program stops too).
+  // v1.512.0 (H1): also offered beside a Stop the tool has not acted on.
   const closeTool = useCallback(async () => {
     if (!session) return;
     try {
       await post(`${SESSIONS}/${encodeURIComponent(session.id)}/close`);
       setNote(null);
+      setStopPending(null);
       void load({ follow: false });
     } catch (e) {
       setNote(errorWords(e, `${toolName} could not be closed.`));
@@ -1961,6 +1992,24 @@ function SessionPane({
             <p role="status" data-testid="code-info" className="mb-2 text-[12px] text-zinc-500">
               {info}
             </p>
+          ) : null}
+          {/* v1.512.0 (second review H1): told to stop, still running — the
+              daemon's words as sent, and the kept-open line's own Close
+              (Stop again closes it too). Only while that reply runs. */}
+          {running && stopPending ? (
+            <div data-testid="code-stop-pending" className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1">
+              <p role="status" className="min-w-0 text-[12px] text-zinc-500">
+                {stopPending}
+              </p>
+              <span data-testid="code-stop-pending-close" className="shrink-0">
+                <ConfirmButton
+                  label={closeToolWords(toolName).idle}
+                  confirmLabel={closeToolWords(toolName).armed}
+                  title={closeToolWords(toolName).title}
+                  onConfirm={closeTool}
+                />
+              </span>
+            </div>
           ) : null}
           {/* v1.474.0 (Hand off): the helpers this session's tool started,
               or, in a helper, the session that started it. */}

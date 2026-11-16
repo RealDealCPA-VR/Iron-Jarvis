@@ -379,6 +379,12 @@ def _write_events(home: Any, sid: str, events: list[dict[str, Any]], dropped: in
     meta = _read_json(d / "meta.json")
     meta["dropped"] = int(dropped)
     (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    # v1.512.0 (H14): a log that now ends on a reply a restart cut off keeps
+    # that cut DECIDED (offered, never carried on by itself at the next start).
+    from . import carry_on as CO
+    from .service import STOPPED_TITLE
+
+    CO.note_rewritten(home, sid, events, stopped_title=STOPPED_TITLE)
 
 
 def _trash_log(home: Any, sid: str) -> str:
@@ -509,10 +515,17 @@ async def _running_driver(svc: Any, row: Any, live: Any) -> Any:
     """The session's tool, started if it is not running (no model call: a
     start only opens the saved conversation)."""
     from .process import HarnessGone
+    from .service import STOPPED_FIX, STOPPED_TITLE, Refused, _StoppedWhileWaiting
 
     live = svc._live(row)
     async with live.lock:
-        await svc._ensure_running(live, row)
+        try:
+            await svc._ensure_running(live, row)
+        except _StoppedWhileWaiting:
+            # v1.512.0 (lead review): since the start re-checks, it can refuse
+            # because Iron Jarvis is closing or the session was just removed.
+            # That is a plain refusal here, never a server error.
+            raise Refused(f"{STOPPED_TITLE}. {STOPPED_FIX}", 409) from None
     if live.driver is None:
         raise HarnessGone("the coding tool stopped")
     return live, live.driver

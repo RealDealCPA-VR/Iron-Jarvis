@@ -554,7 +554,7 @@ to `.github/workflows`, left for the owner.
   plan. Fixed in `Orchestrator.create_session` and `delegate`; the same
   window in the follow-up path (`continue_session`) is open.
 - **A coding tool whose start is in flight when Iron Jarvis shuts down is
-  started anyway** (open). `hosted/service.py` sets `_closing` in `shutdown`
+  started anyway** (fixed in v1.512.0, group 12). `hosted/service.py` sets `_closing` in `shutdown`
   but neither `_ensure_process` nor `_start_process` reads it after their
   waits, so the stop pass can finish before the process exists and nothing
   then stops it. Not fixed here: a change to how child processes start and
@@ -674,18 +674,18 @@ or types on the Windows desktop.
 
 ### The service that runs other coding tools (`hosted/`)
 
-- [ ] **H1 (4, high, checked). A coding tool that ignores its own interrupt
+- [x] **H1 (4, high, checked). A coding tool that ignores its own interrupt
   cannot be stopped from the app.** `hosted/service.py:3859-3860` gives up
   after the wait; Close, Archive, Delete and Open in terminal are all
   refused while the turn runs (`3959-3968`, `1281-1286`). Fix: after a bound
   or a second Stop, `_stop_process` (the tree kill) and say so.
-- [ ] **H2 (3, medium, checked). A stop is not serialized with a start.**
+- [x] **H2 (3, medium, checked). A stop is not serialized with a start.**
   `_stop_process` (`service.py:2901-2924`) never takes `live.lock` and reads
   `live.turn` after its awaits: a message sent during an idle stop gets a
   second process and is then ended "Stopped"; Stop during a start followed
   by Delete leaves a tool running that nothing tracks. Same family as the
   open shutdown item. Needs checking on the packaged build.
-- [ ] **H3 (4, medium, checked).** Emergency stop skips a reply Jarvis
+- [x] **H3 (4, medium, checked).** Emergency stop skips a reply Jarvis
   started by itself once it was adopted across a restart
   (`hosted/adopt.py:482-501`, `hosted/carry_on.py:1231-1245`).
 - [ ] **H4 (1, medium, checked).** A helper that was stopped or cut off is
@@ -695,7 +695,7 @@ or types on the Windows desktop.
 - [x] **H6 (3, medium, checked).** A failed write of the session log drops
   that batch for good (`hosted/events.py:335-354`); a lost "done" can make
   the next start carry on a reply that had finished.
-- [ ] **H7-H14 (low; H7 and H9 fixed in v1.511.0).** A PATCH applies the tool's mode before the rest of
+- [ ] **H7-H14 (low; H7 and H9 fixed in v1.511.0, H8, H13 and H14 in v1.512.0; H10, H11, H12 wait for groups 14 to 16).** A PATCH applies the tool's mode before the rest of
   the request is checked (`service.py:2211-2296`); a Stop as the start
   completes can still deliver the message (`service.py:3607`, checked); a
   branch copies Full access and the tool boxes without asking
@@ -739,7 +739,7 @@ or types on the Windows desktop.
 - [ ] **A8 (2, medium, checked).** With every account of a provider turned
   off, chat runs on this PC's own login with nothing said
   (`iron_proxy/accounts.py:889-894`).
-- [ ] **A9-A13 (low; A12 fixed in v1.511.0).** Codex's move to another model is said without the
+- [ ] **A9-A13 (low; A12 fixed in v1.511.0, A11 in v1.512.0).** Codex's move to another model is said without the
   model's name (`codex.py:1345-1346`); the usage check hands the vendor's
   program the daemon's whole environment, install token included
   (`iron_proxy/usage_read.py:286-299`, checked); Stop before Codex names the
@@ -769,9 +769,9 @@ or types on the Windows desktop.
 - [x] **D5 (4, medium, checked for the test).** A whole Maven, Gradle, tox
   or nox line counts as "the tests", so `mvn test deploy` can be run a
   second time by the check (`finish.py:885-886, 923-924`).
-- [ ] **D6 (4, medium, pass only).** Stop is not honoured while the check
+- [x] **D6 (4, medium, pass only).** Stop is not honoured while the check
   waits for a long test run on a GPT model (`finish.py:3839-3857`).
-- [ ] **D7-D11 (low).** "reviewed by <member>" over a review that reached
+- [ ] **D7-D11 (low; D9 fixed in v1.512.0).** "reviewed by <member>" over a review that reached
   nobody (`finish.py:3984-3999`); ESLint "no problems in <file>" for a file
   it ignored (`harness/checkers.py:410-412`, checked); a watch whose
   worktree folder is gone stays "fixing" for ever (`ci_watch.py:623`);
@@ -781,7 +781,7 @@ or types on the Windows desktop.
 
 ### A coding session's tools, git, rewind and the night shift
 
-- [ ] **T1 (4, high, checked). A night task cancelled while it is starting
+- [x] **T1 (4, high, checked). A night task cancelled while it is starting
   is recorded "You stopped it" and then runs.**
   `daemon/routes/night.py:1154-1159` stops a turn only if one exists;
   `start_task` (`882-885`) never re-reads the task; `settle_running` reads
@@ -1046,3 +1046,32 @@ Left open:
   address is not refused by the browser tools (the check is loopback only).
 - A chat box that sends on Enter through its own script (a textarea) is not
   judged as a submit, matching what the add-on does by default.
+
+### Group 12 as built (v1.512.0)
+
+Fixed: H1, H2, H3, H8, H13, H14, T1, A11, D6, D9, the open shutdown item and
+the open `continue_session` window.
+
+Where it went further than the plan:
+
+- **A background run stopped before its very first step** stayed "active"
+  for ever too (the task is cancelled before its coroutine runs, so the
+  run's own cancel handler never did). Found while closing the
+  `continue_session` window; fixed in `_start_managed`.
+- **D9's suspected half was real and worse than written**: an unexpected
+  error after a review left the watch "reviewing", and three passes then
+  paid for three reviews of one fix and pushed it with no round counted.
+- **H1 needed the screen**: the daemon answers "asked, not stopped yet",
+  and the view now shows those words and offers Close it now.
+- **The slow start on GitHub (v1.507.0)** has a likely cause now: two hops
+  on a shared thread pool per run created.
+
+Left open:
+
+- None of the start / stop changes were driven on the packaged build or
+  through the code host with a real coding tool; the tests use stand-ins.
+  What would show a problem: a session that will not start after an idle
+  stop, or a tool left in Task Manager after Delete or quit.
+- A "Retry failed" stopped after its failed items were reset leaves them
+  reset; a second Retry then says nothing failed.
+- A stop that timed out on a link that stays up waits for the next link.

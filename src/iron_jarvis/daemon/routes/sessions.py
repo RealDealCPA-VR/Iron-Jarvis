@@ -32,6 +32,7 @@ from ..schemas import (
 #: The origin the mission door stamps (v1.307.0). Starts with "job", so it is
 #: an ATTENDED origin (runtime.ATTENDED_ORIGINS): its asks wait for the user.
 from ...agents.team import MISSION_ORIGIN  # noqa: E402  (one definition)
+from ...agents.orchestrator import off_loop_settled  # noqa: E402  (v1.512.0)
 from ...core.events import EventType  # noqa: E402  (v1.433.0: review events)
 from ...providers.egress import LocalOnlyRefused  # noqa: E402  (v1.332.0)
 
@@ -312,6 +313,23 @@ def _move_into(d, new_id: str, workspace: str) -> None:
             Path(fresh).rmdir()  # only ever empty: nothing has run in it
         except OSError:
             pass
+
+
+async def _settle_unstarted(d, session) -> None:
+    """Settle a run a door made but never started, when a stop lands in
+    between (v1.512.0): the run's own finalizers never run for it, so the row
+    read "active" for ever. Re-reads the row (the door's writes to it were
+    waited for) and leaves one that is already settled or gone alone. Called
+    while a cancel unwinds; never raises (``_settle_never_started``)."""
+    from ...core.models import SessionStatus
+
+    orch = d.orchestrator
+    try:
+        row = orch.get_session(session.id)
+    except Exception:  # noqa: BLE001 — the cancel goes on either way
+        row = session
+    if row is not None and row.status in (SessionStatus.ACTIVE, SessionStatus.QUEUED):
+        await orch._settle_never_started(row)
 
 
 def _etag_matches(if_none_match: str | None, etag: str) -> bool:
@@ -677,54 +695,65 @@ def register(app: FastAPI, d) -> None:
         # The orchestrator's continue lock: a /continue and a retry can never
         # both claim one folder (a double without one runs unserialised).
         lock = getattr(d.orchestrator, "_continue_lock", None)
-        async with lock if lock is not None else contextlib.nullcontext():
-            if reuse and await asyncio.to_thread(_folder_busy, d, reuse):
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "A follow-up of this objective is already running or "
-                        "queued. Wait for it to finish before retrying."
-                    ),
-                )
-            try:
-                session = await d.orchestrator.rerun_session(session_id)
-            except KeyError:
-                raise HTTPException(status_code=404, detail="objective not found")
-            except (PermissionError, RuntimeError) as exc:
-                raise HTTPException(status_code=400, detail=plain_failure("That objective could not be tried again.", exc))
-            if reuse and getattr(d.orchestrator, "_git_sessions", {}).get(session.id) is None:
-                try:
-                    await asyncio.to_thread(_move_into, d, session.id, reuse)
-                    session.workspace_path = reuse
-                except Exception as exc:  # noqa: BLE001 — never run it blind
-                    try:
-                        d.orchestrator.delete_session(session.id)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    raise HTTPException(
-                        status_code=500,
-                        detail=plain_failure("The objective's folder could not be reused.", exc),
-                    )
+        # v1.512.0: the retry's row exists from ``rerun_session`` on, and the
+        # run starts only at ``_spawn_bg``; a stop in between settles it.
+        made = None
         try:
-            await asyncio.to_thread(store.reset_failed, board_id)
-        except Exception as exc:  # noqa: BLE001 — never leave a run with nothing to do
+            async with lock if lock is not None else contextlib.nullcontext():
+                if reuse and await asyncio.to_thread(_folder_busy, d, reuse):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "A follow-up of this objective is already running or "
+                            "queued. Wait for it to finish before retrying."
+                        ),
+                    )
+                try:
+                    session = made = await d.orchestrator.rerun_session(session_id)
+                except KeyError:
+                    raise HTTPException(status_code=404, detail="objective not found")
+                except (PermissionError, RuntimeError) as exc:
+                    raise HTTPException(status_code=400, detail=plain_failure("That objective could not be tried again.", exc))
+                if reuse and getattr(d.orchestrator, "_git_sessions", {}).get(session.id) is None:
+                    try:
+                        # v1.512.0: a cancel waits for this write (the new row's).
+                        await off_loop_settled(_move_into, d, session.id, reuse)
+                        session.workspace_path = reuse
+                    except Exception as exc:  # noqa: BLE001 — never run it blind
+                        try:
+                            d.orchestrator.delete_session(session.id)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        raise HTTPException(
+                            status_code=500,
+                            detail=plain_failure("The objective's folder could not be reused.", exc),
+                        )
             try:
-                d.orchestrator.delete_session(session.id)
-            except Exception:  # noqa: BLE001
-                pass
-            raise HTTPException(
-                status_code=500, detail=plain_failure("The failed items could not be opened again.", exc)
-            )
-        items = "item" if failed == 1 else "items"
-        # A retry of a retry names the ORIGINAL objective once (v1.309.0
-        # review): strip a previous "Retry the N failed item(s): " prefix.
-        base = re.sub(r"^(?:Retry the \d+ failed items?: )+", "", display_objective(prev))
-        objective = f"Retry the {failed} failed {items}: {base}"
-        session.options_json = await asyncio.to_thread(
-            _stamp_continuation, d, session.id, session_id, objective, retry_failed=failed
-        ) or session.options_json
-        # Continuing the work answers a restart's prompt, as /continue does.
-        await asyncio.to_thread(_clear_interrupted, d, session_id)
+                await asyncio.to_thread(store.reset_failed, board_id)
+            except Exception as exc:  # noqa: BLE001 — never leave a run with nothing to do
+                try:
+                    d.orchestrator.delete_session(session.id)
+                except Exception:  # noqa: BLE001
+                    pass
+                raise HTTPException(
+                    status_code=500, detail=plain_failure("The failed items could not be opened again.", exc)
+                )
+            items = "item" if failed == 1 else "items"
+            # A retry of a retry names the ORIGINAL objective once (v1.309.0
+            # review): strip a previous "Retry the N failed item(s): " prefix.
+            base = re.sub(r"^(?:Retry the \d+ failed items?: )+", "", display_objective(prev))
+            objective = f"Retry the {failed} failed {items}: {base}"
+            session.options_json = await off_loop_settled(
+                lambda: _stamp_continuation(
+                    d, session.id, session_id, objective, retry_failed=failed
+                )
+            ) or session.options_json
+            # Continuing the work answers a restart's prompt, as /continue does.
+            await asyncio.to_thread(_clear_interrupted, d, session_id)
+        except asyncio.CancelledError:
+            if made is not None:
+                await _settle_unstarted(d, made)
+            raise
         if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
             session = d.orchestrator.get_session(session.id) or session
         return _session_row(d, session)
@@ -781,18 +810,25 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="session not found")
         except ValueError as exc:  # workspace busy — a continuation is running
             raise HTTPException(status_code=409, detail=plain_failure("That run could not be continued.", exc))
-        # v1.309.0 (contract 5): a MISSION's continuation is linked to it
-        # BEFORE it runs, so the old mission screen can say "Continued in →
-        # open", and the user's own follow-up becomes its display objective.
-        # Any other continuation is left exactly as continue_session made it.
-        session.options_json = await asyncio.to_thread(
-            _stamp_continuation, d, session.id, session_id, (body.message or "").strip(),
-            resume=bool(body.resume),
-        ) or session.options_json
-        # v1.249.0 (R-02): this job is being picked up again, so it is no
-        # longer a prompt. The tag is cleared on the ORIGINAL row — the
-        # continuation is a new session, and the old one keeps its verdict.
-        await asyncio.to_thread(_clear_interrupted, d, session_id)
+        try:
+            # v1.309.0 (contract 5): a MISSION's continuation is linked to it
+            # BEFORE it runs, so the old mission screen can say "Continued in →
+            # open", and the user's own follow-up becomes its display objective.
+            # Any other continuation is left exactly as continue_session made it.
+            # v1.512.0: a cancel waits for this write (it is the new row's).
+            session.options_json = await off_loop_settled(
+                lambda: _stamp_continuation(
+                    d, session.id, session_id, (body.message or "").strip(),
+                    resume=bool(body.resume),
+                )
+            ) or session.options_json
+            # v1.249.0 (R-02): this job is being picked up again, so it is no
+            # longer a prompt. The tag is cleared on the ORIGINAL row — the
+            # continuation is a new session, and the old one keeps its verdict.
+            await asyncio.to_thread(_clear_interrupted, d, session_id)
+        except asyncio.CancelledError:
+            await _settle_unstarted(d, session)
+            raise
         if body.wait:
             session = await d.orchestrator.run_session(session.id)
         else:

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.511.0 (2026-11-15).*
+holds itself to. Current as of v1.512.0 (2026-11-15).*
 
 ---
 
@@ -2041,6 +2041,51 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Stop means stopped (v1.512.0)
+
+The fourth of eight releases from the second review. Each of these is a place
+where you pressed Stop, or cancelled, and the work went on anyway, or where
+something was left reading "working" for good.
+
+- **A coding tool that ignores Stop can be closed.** If Claude Code, Codex or
+  another coding tool is told to stop and keeps going, the view now says
+  "<Tool> has been asked to stop and has not stopped yet. Press Stop again
+  to close it now.", and offers Close it now. A second Stop closes it; after
+  a minute Iron Jarvis closes it by itself and says so. The conversation is
+  kept and your next message carries on from there. Before, Stop did
+  nothing, and Close, Archive and Delete were all refused because the
+  session was "working".
+- **A stop and a start can no longer cross.** Sending a message while a
+  session's tool was being closed for idleness could start a second copy of
+  the tool on the same conversation, and the old stop then ended your new
+  message. Deleting a session in the instant its tool was starting could
+  leave a tool running that nothing knew about. Each session's starts and
+  stops now happen one at a time, and a tool that finishes starting after
+  its session was deleted, or after Iron Jarvis began closing, is stopped at
+  once.
+- **A night task cancelled while it is starting does not run.** It used to
+  be recorded "You stopped it." and then work for up to its whole time
+  limit.
+- **Stop reaches the end-of-reply test run.** A long test run the check
+  started is stopped when you press Stop and is recorded as not run
+  ("stopped by you"), instead of running on and being marked failed.
+- **Emergency stop reaches work Iron Jarvis started by itself, after a
+  restart too.** A reply it carried on by itself, or a helper's piece, kept
+  going when it had been picked up again after a restart. A reply you
+  started yourself is never stopped by Emergency stop.
+- **Stop on Codex right after you send.** A Stop pressed before Codex had
+  named the reply did nothing. It is now sent as soon as the reply has a
+  name.
+- **Nothing is left "active" for good.** A follow-up, a retry, or a
+  background job that is stopped in the instant it is being set up is now
+  marked stopped. So is a pull-request watch whose folder is gone, which
+  says so in plain words; and a watch that hits an unexpected error after a
+  review stops there, instead of paying for the same review again on every
+  pass.
+- **A rewound conversation is not carried on by itself.** If you rewind or
+  branch back to a reply that had been cut off, Iron Jarvis no longer sends
+  "carry on" into it at the next start.
 
 ## Every OK is for what will really happen (v1.511.0)
 

@@ -541,6 +541,11 @@ class CodexDriver(Driver):
         self._replies = ControlWaiter()
         self._n = 0
         self.turn_id = ""
+        #: v1.512.0 (A11): the user pressed Stop before Codex named the turn
+        #: (``turn/start``'s answer or ``turn/started``): ``turn/interrupt`` is
+        #: sent the moment the name arrives. Dropped when the turn ends or a
+        #: new message is sent — never applied to a later turn.
+        self._stop_unsent = False
         self._items: dict[str, dict[str, Any]] = {}
         self._usage = {"input": 0, "output": 0, "cache_read": 0}
         self._errored = False
@@ -780,9 +785,30 @@ class CodexDriver(Driver):
             res = f.result()
             turn = res.get("turn") if isinstance(res, dict) else None
             if isinstance(turn, dict) and turn.get("id"):
-                self.turn_id = str(turn["id"])
+                self._named(str(turn["id"]))
 
         fut.add_done_callback(took)
+
+    def _named(self, turn_id: str) -> None:
+        """v1.512.0 (A11): Codex named the running turn. A Stop the user
+        pressed before it had a name goes to it now (once)."""
+        self.turn_id = turn_id
+        if not (self._stop_unsent and self.turn_open and turn_id):
+            return
+        self._stop_unsent = False
+        self._interrupting = True
+        try:
+            task = asyncio.get_running_loop().create_task(self._interrupt_named(turn_id))
+        except RuntimeError:  # no loop (a restore outside one): nothing runs to stop
+            return
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
+
+    async def _interrupt_named(self, turn_id: str) -> None:
+        try:
+            await self.request("turn/interrupt", {"threadId": self.session_id, "turnId": turn_id})
+        except Exception:  # noqa: BLE001 — a gone process or an ended turn: the reply ends either way
+            log.debug("Codex did not take a Stop sent once the turn was named", exc_info=True)
 
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
         return ["app-server", "--listen", "stdio://"]
@@ -901,6 +927,9 @@ class CodexDriver(Driver):
             # ``thread/compact/start`` answers ``{}`` and runs as a turn of its
             # own — turn/started, a contextCompaction item, turn/completed).
             # The turn's id comes from ``turn/started`` (below).
+            # v1.512.0 (A11): never the previous turn's id until then.
+            self.turn_id = ""
+            self._stop_unsent = False
             self.turn_open = True
             self._errored = False
             self._interrupting = False
@@ -909,6 +938,7 @@ class CodexDriver(Driver):
             await self.request("thread/compact/start", {"threadId": self.session_id})
             return
         items = user_input(text, files)
+        self._stop_unsent = False  # v1.512.0 (A11): a new message, a new turn
         self.turn_open = True
         self._errored = False
         self._interrupting = False
@@ -963,6 +993,10 @@ class CodexDriver(Driver):
                                            "developer_instructions": None}}
 
     async def _start_codex_turn(self, items: list[dict[str, Any]]) -> None:
+        # v1.512.0 (A11): the turn this starts has no name until Codex gives
+        # it one — a Stop meanwhile is kept for it (``interrupt``), never sent
+        # to the previous turn's id (Codex refused that and the reply ran on).
+        self.turn_id = ""
         approval, sandbox = self._policy()
         params: dict[str, Any] = {
             "threadId": self.session_id, "input": items, "approvalPolicy": approval,
@@ -986,7 +1020,9 @@ class CodexDriver(Driver):
         if collab is not None:
             self._collab = collab["mode"]
         turn = (res or {}).get("turn") if isinstance(res, dict) else None
-        self.turn_id = str((turn or {}).get("id") or self.turn_id)
+        named = str((turn or {}).get("id") or "")
+        if named:
+            self._named(named)
 
     async def steer(self, ref: str, text: str, files: list[str]) -> str:
         """v1.412.0: Codex's own ``turn/steer`` — the note joins the RUNNING
@@ -1116,7 +1152,7 @@ class CodexDriver(Driver):
         return out
 
     async def interrupt(self) -> None:
-        if not (self.session_id and self.turn_id) or not self.turn_open:
+        if not self.session_id or not self.turn_open:
             return
         if self._held:
             # The plan card waited (Codex's own turn had ended): nothing runs
@@ -1125,6 +1161,12 @@ class CodexDriver(Driver):
             self._finish("interrupted")
             return
         self._interrupting = True
+        if not self.turn_id:
+            # v1.512.0 (A11): Codex has not named the turn yet (the message's
+            # ``turn/start`` is unanswered): kept, and sent the moment the
+            # name arrives (``_named``) — it used to do nothing at all.
+            self._stop_unsent = True
+            return
         try:
             await self.request("turn/interrupt", {"threadId": self.session_id, "turnId": self.turn_id})
         except asyncio.TimeoutError:
@@ -1324,7 +1366,7 @@ class CodexDriver(Driver):
             thread = str(p.get("threadId") or "")
             if (self.turn_open and isinstance(turn, dict) and turn.get("id")
                     and (not thread or not self.session_id or thread == self.session_id)):
-                self.turn_id = str(turn["id"])
+                self._named(str(turn["id"]))
         elif method == "mcpServer/oauthLogin/completed":
             # v1.441.0 (g1): a sign-in started from the Session tab ended.
             thread = str(p.get("threadId") or "")
@@ -1517,6 +1559,7 @@ class CodexDriver(Driver):
 
         self.emit(_seen.attach(make("usage", **self._usage, list_price=True), self))
         self.turn_open = False
+        self._stop_unsent = False  # v1.512.0 (A11): never carried to a later turn
         self.emit(make("done", stop=stop))
         # v1.441.0 (g1): a command the model left running is a background
         # terminal now — read them (and follow them while any runs).

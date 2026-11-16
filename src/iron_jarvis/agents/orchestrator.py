@@ -847,11 +847,28 @@ class Orchestrator:
 
         Exceptions are retrieved and logged (never swallowed silently, never
         left as an "exception was never retrieved" warning); the ``_running``
-        entry self-removes via ``register_running``'s done-callback."""
-        task = asyncio.create_task(coro)
+        entry self-removes via ``register_running``'s done-callback.
+
+        v1.512.0: a task cancelled before its FIRST step never runs its
+        coroutine at all, so ``run_session``'s own cancel handler never ran
+        and the row read "active" for ever (a stop on the loop in the same
+        turn the run was started or promoted). ``began`` tells that case
+        apart, and ``_settle_never_ran`` settles the row."""
+        began = False
+
+        async def _run() -> Any:
+            nonlocal began
+            began = True
+            return await coro
+
+        task = asyncio.create_task(_run())
         self.register_running(session_id, task)
 
         def _done(t: asyncio.Task) -> None:
+            if t.cancelled() and not began:
+                coro.close()  # never awaited: no "never awaited" warning
+                self._settle_never_ran(session_id)
+                return
             try:
                 t.result()
             except asyncio.CancelledError:  # pragma: no cover - expected on cancel
@@ -861,6 +878,44 @@ class Orchestrator:
 
         task.add_done_callback(_done)
         return task
+
+    def _settle_never_ran(self, session_id: str) -> None:
+        """Settle the row of a managed run whose task was cancelled before
+        its first step (v1.512.0; see ``_start_managed``). Runs as its own
+        task: a row still ACTIVE/QUEUED is CANCELLED with the stop's reason
+        or "stopped before it started"; a row ``cancel_session`` already
+        stamped CANCELLED from another thread gets the rest of the settle
+        (the event, the chat line, the queued job) as ``run_session``'s top
+        gives it. No row (a workflow, a handler) or a finished one: nothing.
+        Inert while draining: the boot reconcile owns those rows."""
+        if self._draining:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def _settle() -> None:
+            try:
+                row = await asyncio.to_thread(self.get_session, session_id)
+                if row is None or row.status not in (
+                    SessionStatus.ACTIVE, SessionStatus.QUEUED, SessionStatus.CANCELLED,
+                ):
+                    return
+                await self._finalize_cancelled(
+                    row,
+                    reason=self._stop_reasons.pop(session_id, None)
+                    or _prose(row.summary)
+                    or STOPPED_BEFORE_START,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - a background settle never raises
+                log.warning("a run stopped before it started could not be settled", exc_info=True)
+
+        t = loop.create_task(_settle())
+        self._event_tasks.add(t)
+        t.add_done_callback(self._event_tasks.discard)
 
     def _dequeue_next(self) -> None:
         """Start the next parked run if a slot is free — ONE per freed slot.
@@ -2941,41 +2996,55 @@ class Orchestrator:
         # under it, so a git-backed parent's continuation gets a fresh workspace
         # (the recap still carries the context).
         reuse_ws = bool(prev.workspace_path) and self._git_sessions.get(prev.id) is None
-        # Serialize the busy-check + save when REUSING a workspace, so two
-        # simultaneous continuations of the same parent can't both pass the check.
-        async with self._continue_lock:
-            if reuse_ws:
-                ws = prev.workspace_path
-                with session_scope(self.p.engine) as db:
-                    # QUEUED counts as busy (v1.166.0): a continuation parked by
-                    # the concurrency governor still owns this workspace — letting
-                    # a second continue through creates two sessions sharing one
-                    # workspace, the exact race _continue_lock defends against.
-                    busy = db.exec(
-                        select(Session).where(
-                            Session.workspace_path == ws,
-                            Session.status.in_(  # type: ignore[attr-defined]
-                                (SessionStatus.ACTIVE, SessionStatus.QUEUED)
-                            ),
+        # v1.512.0: set once the row is being written. A stop from then on
+        # (a review's time limit, Stop, a client that went away) settles the
+        # follow-up as ``create_session`` does (v1.507.1): the caller never
+        # gets its id, and an ACTIVE row in a reused folder would also refuse
+        # every later Continue there. The parent row is never touched.
+        row_saved = False
+        try:
+            # Serialize the busy-check + save when REUSING a workspace, so two
+            # simultaneous continuations of the same parent can't both pass the check.
+            async with self._continue_lock:
+                if reuse_ws:
+                    ws = prev.workspace_path
+                    with session_scope(self.p.engine) as db:
+                        # QUEUED counts as busy (v1.166.0): a continuation parked by
+                        # the concurrency governor still owns this workspace — letting
+                        # a second continue through creates two sessions sharing one
+                        # workspace, the exact race _continue_lock defends against.
+                        busy = db.exec(
+                            select(Session).where(
+                                Session.workspace_path == ws,
+                                Session.status.in_(  # type: ignore[attr-defined]
+                                    (SessionStatus.ACTIVE, SessionStatus.QUEUED)
+                                ),
+                            )
+                        ).first()
+                    if busy is not None:
+                        raise ValueError(
+                            "A follow-up is already running or queued in this folder. "
+                            "Wait for it to finish before continuing again."
                         )
-                    ).first()
-                if busy is not None:
-                    raise ValueError(
-                        "A follow-up is already running or queued in this folder. "
-                        "Wait for it to finish before continuing again."
-                    )
-            else:
-                ws = str(self.p.config.workspaces_dir / session.id)
-            Path(ws).mkdir(parents=True, exist_ok=True)
-            session.workspace_path = ws
-            # v1.505.0: off the loop, still inside ``_continue_lock`` (an
-            # asyncio lock, so a second continue waits for this row).
-            await off_loop_settled(self._save, session)
-        await self.p.event_bus.publish(
-            EventType.SESSION_CREATED,
-            {"task": message, "agent": session.agent_type.value, "workspace": ws},
-            session_id=session.id,
-        )
+                else:
+                    ws = str(self.p.config.workspaces_dir / session.id)
+                Path(ws).mkdir(parents=True, exist_ok=True)
+                session.workspace_path = ws
+                # v1.505.0: off the loop, still inside ``_continue_lock`` (an
+                # asyncio lock, so a second continue waits for this row). A
+                # cancel waits for the write to land, so the settle below
+                # always finds the row.
+                row_saved = True
+                await off_loop_settled(self._save, session)
+            await self.p.event_bus.publish(
+                EventType.SESSION_CREATED,
+                {"task": message, "agent": session.agent_type.value, "workspace": ws},
+                session_id=session.id,
+            )
+        except asyncio.CancelledError:
+            if row_saved:  # outside the lock: the settle never holds a Continue up
+                await self._settle_never_started(session)
+            raise
         return session
 
     def _resumable_run(self, session_id: str) -> str:

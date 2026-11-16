@@ -140,6 +140,9 @@ WHY_POOL = "too many coding sessions were working at once"
 WHY_STOP = "Emergency stop is on"
 #: v1.441.0 review: the cut message was a command the user ran (Pi's ``!``).
 WHY_COMMAND = "it was a command you ran, not a reply — run it again if you still need it"
+#: v1.512.0 (H14): the conversation was rewound or branched back to a reply a
+#: restart had cut off.
+WHY_REWOUND = "the conversation was rewound or branched back to it after it was cut off"
 NOTHING_CUT = "Nothing here was cut off by a restart — send your message instead."
 NO_WAIT = "This session is not waiting for an account's limit to reset."
 MOVED_NOTE = (
@@ -386,6 +389,45 @@ def note_cut(home: Any, sid: str, facts: dict[str, Any]) -> None:
             "auto": "",
         }
         _write(_path(home, sid, CUT_FILE), rec)
+
+
+def note_rewritten(home: Any, sid: str, events: list[dict[str, Any]], *, stopped_title: str) -> bool:
+    """BLOCKING, never raises. v1.512.0 (H14): a rewind or a branch wrote
+    ``events`` as the session's whole log. When its newest reply is one a
+    restart cut off (read the boot's way, :func:`analyse_tail`), that cut is
+    kept DECIDED beside it — offered (Continue), never carried on by itself:
+    the user went back in this conversation on purpose, and the boot reads
+    every log's tail and keeps a decision only for the same session and turn
+    (:func:`note_cut`), so the reply read as freshly cut and "carry on" went
+    into the conversation they had rewound or branched. A record already
+    offered for that turn is kept as it is; a reply the user stopped is
+    never a cut. Returns whether a record was written."""
+    try:
+        facts = analyse_tail(events, stopped_title=stopped_title)
+        if facts is None:
+            return False
+        turn = str(facts.get("turn") or "")
+        with _LOCK:
+            old = read_cut(home, sid)
+            if old.get("turn") == turn and old.get("auto") == "offered":
+                return False
+            if turn and old.get("stopped") == turn:
+                return False
+            _write(_path(home, sid, CUT_FILE), {
+                "turn": turn,
+                "waiting": bool(facts.get("waiting")),
+                "carried": bool(facts.get("carried")),
+                "limit": bool(facts.get("limit")),
+                "command": bool(facts.get("command")),
+                "at": _iso(CLOCK()),
+                "cut_at": str(facts.get("cut_at") or ""),
+                "auto": "offered",
+                "why_not": WHY_REWOUND,
+            })
+        return True
+    except Exception:  # noqa: BLE001 — a record never fails the rewind or the branch
+        log.warning("could not keep the cut reply of a rewound or branched Code-view session", exc_info=True)
+        return False
 
 
 def _tail_events(path: Path, size: int = 256 * 1024) -> list[dict[str, Any]]:
@@ -1231,21 +1273,72 @@ def stop_unattended_turns(platform: Any) -> list[str]:
     for sid, live in lives:
         try:
             turn = live.turn
-            carry = getattr(turn, "carry", None) if turn is not None else None
+            if turn is None or not turn.running:
+                continue
+            carry = getattr(turn, "carry", None)
             # v1.474.0 (Hand off): a helper's piece is work a coding tool
             # started, not the user — Emergency stop stops it too.
-            helper = turn is not None and turn.id in set((getattr(svc, "handoff_turns", None) or {}).values())
-            if turn is None or not turn.running or (
-                    not helper and (not isinstance(carry, dict) or carry.get("pressed"))):
+            helper = turn.id in set((getattr(svc, "handoff_turns", None) or {}).values()) \
+                or _helper_piece(svc, sid, str(turn.id))
+            if not helper and (not isinstance(carry, dict) or carry.get("pressed")):
                 continue
-            task = turn.task
-            if task is None:
+            loop = _loop_for(svc, live, turn)
+            if loop is None:
+                log.warning("Emergency stop found no loop to stop Code-view reply %s on", turn.id)
                 continue
-            asyncio.run_coroutine_threadsafe(svc.interrupt(sid), task.get_loop())
+            asyncio.run_coroutine_threadsafe(svc.interrupt(sid), loop)
             stopped.append(f"build_app:{turn.id}")
         except Exception:  # noqa: BLE001 — one turn never keeps the rest going
             log.warning("Emergency stop could not stop a Code-view carry-on", exc_info=True)
     return stopped
+
+
+#: v1.512.0 (H3): the id a hand-off helper's piece is started under
+#: (``handoff._start_locked``: ``handoff-<12 hex>``). Kept with the reply
+#: across a restart, unlike ``svc.handoff_turns``.
+HANDOFF_TURN_PREFIX = "handoff-"
+
+
+def _helper_piece(svc: Any, sid: str, turn_id: str) -> bool:
+    """BLOCKING (one row read, only for a piece's id). v1.512.0 (H3): a
+    hand-off helper's piece told apart by what survives a restart — the
+    piece's own id and the session row's ``handed_from`` — once
+    ``svc.handoff_turns`` (memory only) has forgotten it. A message the user
+    typed into a helper session has another id: it keeps going."""
+    if not turn_id.startswith(HANDOFF_TURN_PREFIX):
+        return False
+    from . import store
+
+    try:
+        row = store.get(svc.engine, sid)
+    except Exception:  # noqa: BLE001 — unknown is not a helper's
+        log.debug("could not read a Code-view session for Emergency stop", exc_info=True)
+        return False
+    return bool(row is not None and (getattr(row, "handed_from", "") or ""))
+
+
+def _loop_for(svc: Any, live: Any, turn: Any) -> asyncio.AbstractEventLoop | None:
+    """v1.512.0 (H3): the loop a Stop of ``turn`` runs on. A reply this
+    daemon started runs in its own task (that task's loop). A reply taken
+    back from the code host after a restart has no task: the service keeps
+    no loop of its own, so it is the loop of the service's reaper (started
+    by the adoption), else the one the adopted tool's lines are read on,
+    else the caller's own."""
+    candidates: list[Any] = []
+    task = getattr(turn, "task", None)
+    if task is not None:
+        candidates.append(task.get_loop())
+    reaper = getattr(svc, "_reaper", None)
+    if reaper is not None and not reaper.done():
+        candidates.append(reaper.get_loop())
+    candidates.append(getattr(getattr(live, "proc", None), "_loop", None))
+    for loop in candidates:
+        if isinstance(loop, asyncio.AbstractEventLoop) and not loop.is_closed():
+            return loop
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
 
 
 def reconcile_keep(keep: Collection[str] | None) -> set[str]:

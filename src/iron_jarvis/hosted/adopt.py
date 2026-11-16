@@ -137,11 +137,27 @@ def _iso(v: Any) -> str:
     return str(v or "")
 
 
+def _carry_state(turn: Any) -> dict[str, Any] | None:
+    """v1.512.0 (H3): what started the running reply when Iron Jarvis started
+    it BY ITSELF (``HostedTurn.carry``: a carry-on after a restart, a reset, a
+    move, a check-again; ``pressed`` when a person's press started it), in a
+    JSON form — or None (the user's own message). Emergency stop reads it
+    after a restart (``carry_on.stop_unattended_turns``)."""
+    carry = getattr(turn, "carry", None)
+    if not isinstance(carry, dict) or not carry:
+        return None
+    try:
+        return json.loads(json.dumps(carry, ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        return {"why": str(carry.get("why") or ""), "pressed": bool(carry.get("pressed"))}
+
+
 def state_blob(svc: Any, live: Any) -> tuple[bytes, bool]:
     """ON THE LOOP: the session's state as kept by the host (see 1. above)."""
     turn = live.turn if live.turn is not None and live.turn.running and not live.turn.ending else None
     service = {
-        "turn": {"id": turn.id, "started_at": _iso(turn.started_at)} if turn is not None else None,
+        "turn": {"id": turn.id, "started_at": _iso(turn.started_at), "carry": _carry_state(turn)}
+        if turn is not None else None,
         "asks": [s for s in (_ask_state(a) for a in list(live.asks.values())) if s is not None],
         "title": live.title,
         "caps": dict(live.caps or {}),
@@ -441,7 +457,8 @@ async def _adopt_one(svc: Any, link: HL.HostLink, t: dict[str, Any]) -> bool:
     kept_turn = service.get("turn") if isinstance(service.get("turn"), dict) else None
     open_turn = facts["open_turn"]
     if kept_turn and open_turn == str(kept_turn.get("id") or ""):
-        await _turn_back(svc, live, open_turn, str(kept_turn.get("started_at") or ""))
+        await _turn_back(svc, live, open_turn, str(kept_turn.get("started_at") or ""),
+                         carry=kept_turn.get("carry"))
     elif open_turn:
         # A reply the log shows open but the kept state does not know (its
         # message may never have reached the tool): closed, in words.
@@ -479,13 +496,18 @@ def _reopen(svc: Any, live: Any, a: Ask) -> None:
         watch_.start()
 
 
-async def _turn_back(svc: Any, live: Any, turn_id: str, started_at: str) -> None:
+async def _turn_back(svc: Any, live: Any, turn_id: str, started_at: str, *, carry: Any = None) -> None:
     from .history import public
     from .old_task_lines import reword
     from .service import HostedTurn
 
     events, _total, _dropped = await asyncio.to_thread(live.log.read, 0, turn=turn_id)
     turn = HostedTurn(turn_id, live.sid)
+    # v1.512.0 (H3): what started it, as the kept state says (None: the
+    # user's own message, or a state kept before this release). Emergency
+    # stop stops a reply Iron Jarvis carried on by itself; a state that says
+    # nothing is never read as one.
+    turn.carry = dict(carry) if isinstance(carry, dict) and carry else None
     # v1.481.1: a turn begun before the update can hold old "A helper …"
     # lines; a rejoin replays them the way the view shows them.
     turn.events = coalesce(reword([public(e) for e in events])[0])

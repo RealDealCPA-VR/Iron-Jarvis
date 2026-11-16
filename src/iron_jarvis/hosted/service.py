@@ -177,6 +177,25 @@ LIVE_MERGE_S = 0.04
 #: The interrupt route answers within this (the harness is told; the turn
 #: ends when it says so, or when its process goes).
 INTERRUPT_WAIT_S = 5.0
+#: v1.512.0 (second review H1): a reply whose tool was told to stop and still
+#: runs this long after (the service's clock) is closed by Iron Jarvis (a tree
+#: kill; the turn ends "interrupted", the conversation resumes with the next
+#: message). Why a minute: a tool that honours its interrupt ends the reply
+#: within a few seconds (it ends the step it is in and writes the conversation
+#: down — the work this bound must never cut off), so twelve times the
+#: :data:`INTERRUPT_WAIT_S` the route already gives it is far past a graceful
+#: wind-down, yet short enough that a wedged tool does not hold one of the six
+#: places and keep the PC awake until the user quits. Not measured per tool. A
+#: SECOND press of Stop (after :data:`INTERRUPT_WAIT_S`) or "Close it now"
+#: closes it at once.
+STOP_FORCE_AFTER_S = 60.0
+#: v1.512.0 (H1): how often a pending Stop looks at the clock against
+#: :data:`STOP_FORCE_AFTER_S` (a wait on the turn's end, never a busy loop).
+STOP_RECHECK_S = 5.0
+#: v1.512.0 (open shutdown item): how long ``shutdown`` waits for a start of a
+#: session's tool that is in flight to settle (the start then stops what it
+#: started itself) before it stops without waiting; it waits once more after.
+SHUTDOWN_START_WAIT_S = 5.0
 #: v1.412.0: a note sent while the tool is still STARTING its turn waits this
 #: long for the turn to be open before it is refused in words.
 STEER_WAIT_S = 20.0
@@ -922,6 +941,10 @@ class HostedTurn:
         #: included). A Stop then ends the turn itself: the tool has nothing to
         #: interrupt. False for every turn that did not begin in ``_drive``.
         self.unsent = False
+        #: v1.512.0 (second review H1): when (the service's clock) the tool was
+        #: first told to stop this reply, or None. While it runs on, a second
+        #: Stop, "Close it now" or :data:`STOP_FORCE_AFTER_S` closes the tool.
+        self.stop_asked_at: float | None = None
 
     @property
     def running(self) -> bool:
@@ -1036,6 +1059,12 @@ class LiveSession:
         #: never a second process on the same conversation.
         self.starting = False
         self.starting_conv = ""
+        #: v1.512.0 (second review H2): a start of this session's tool is in
+        #: flight (``_ensure_running`` under ``lock``, from its first step —
+        #: before a place in the pool is reserved). A claim (archive, delete,
+        #: Open in terminal, a move) is refused meanwhile; the reaper and the
+        #: pool leave the session be.
+        self.opening = False
         #: The process must restart before the next message (an effort change).
         self.restart = False
         self.limit: Any = None
@@ -1166,8 +1195,10 @@ def _stoppable(lv: "LiveSession", now: float) -> bool:
     Only an IDLE one — its process up, no start in flight, no reply running,
     no card open, nothing claimed, no background work (the pool's rules since
     v1.409.0 / v1.417.0; :func:`programs.evict_pick` then puts one that serves
-    a program, or that the user looks at, last)."""
-    return lv.running and not lv.starting and not lv.busy and not lv.keeps_working(now)
+    a program, or that the user looks at, last). v1.512.0 (H2): nor one whose
+    lock is held (a start or a stop of it is under way) — tried, never waited for."""
+    return (lv.running and not lv.starting and not lv.opening and not lv.lock.locked()
+            and not lv.busy and not lv.keeps_working(now))
 
 
 # --------------------------------------------------------------------------- #
@@ -1248,6 +1279,12 @@ class HostedService:
         #: (its turn id), and the background stops of a session's helpers.
         self.handoff_turns: dict[str, str] = {}
         self._handoff_tasks: set[asyncio.Task] = set()
+        #: v1.512.0 (open shutdown item): every session whose tool is starting
+        #: right now (``_ensure_running``), deleted ones included — ``shutdown``
+        #: waits for these too, so no start outlives it untracked.
+        self._opening: set[LiveSession] = set()
+        #: v1.512.0 (H1): the watchers of a Stop the tool has not acted on.
+        self._stop_watch: set[asyncio.Task] = set()
 
     # -- helpers -----------------------------------------------------------------
     def _lock(self) -> asyncio.Lock:
@@ -1289,7 +1326,18 @@ class HostedService:
             raise Refused(W.CLAIMED.format(what=live.claim))
         if live.turn is not None and live.turn.running:
             raise Refused(W.RUNNING)
+        if live.starting or live.opening:
+            # v1.512.0 (second review H2): a start of its tool is in flight (a
+            # Stop may already have ended the message it was for) — a delete,
+            # archive, terminal or move now would race that start.
+            raise Refused(W.RUNNING)
         live.claim = what
+
+    def _start_unwanted(self, live: LiveSession) -> bool:
+        """v1.512.0 (H2, the open shutdown item): a start for ``live`` must not
+        begin, or must undo itself once its process exists — Iron Jarvis is
+        closing, or the session left the table (deleted, rewound)."""
+        return self._closing or self.live.get(live.sid) is not live
 
     # -- the harnesses -----------------------------------------------------------
     def harnesses(self, *, recheck: str = "") -> list[dict[str, Any]]:
@@ -2521,8 +2569,14 @@ class HostedService:
         self._claim(live, "being deleted")
         HO.stop_helpers_soon(self, sid)  # v1.474.0: its helpers stop with it
         try:
-            await self._stop_process(live, why="deleted")
-            self.live.pop(sid, None)
+            async with live.lock:
+                # v1.512.0 (second review H2): under the session's lock — a
+                # start that holds it has settled first (and ``_claim`` refused
+                # while one was in flight), and the session leaves the table
+                # before the lock is let go, so a start waiting for it sees it
+                # gone and starts nothing.
+                await self._stop_process(live, why="deleted", lock_held=True)
+                self.live.pop(sid, None)
             await asyncio.to_thread(live.log.close)
             await asyncio.to_thread(store.delete, self.engine, sid)
             await asyncio.to_thread(self._drop_own_folder, row)
@@ -2554,8 +2608,26 @@ class HostedService:
 
     # -- the process ---------------------------------------------------------------
     async def _ensure_running(self, live: LiveSession, row: Any) -> None:
+        """The session's tool, started (or restarted) if it is not running.
+        The CALLER HOLDS ``live.lock`` (``_drive``, ``branching``): every
+        start and stop of a session's process is one at a time (v1.512.0,
+        second review H2)."""
         if live.running and not live.restart:
             return
+        assert live.lock.locked(), "a start runs under the session's lock"
+        if self._start_unwanted(live):
+            # v1.512.0 (H2, the open shutdown item): never begun once Iron
+            # Jarvis is closing, or for a session that was deleted.
+            raise _StoppedWhileWaiting()
+        live.opening = True
+        self._opening.add(live)
+        try:
+            await self._ensure_process(live, row)
+        finally:
+            live.opening = False
+            self._opening.discard(live)
+
+    async def _ensure_process(self, live: LiveSession, row: Any) -> None:
         if live.running and live.restart and live.keeps_working(self.clock()):
             # v1.417.0 review: a restart is a tree kill — it would stop every
             # helper still working in the background. It waits (``restart``
@@ -2572,7 +2644,7 @@ class HostedService:
             # end that very turn "interrupted" before it began, so a Claude
             # Code effort change or a model back to the default never reached
             # the next message (found by the OpenCode mode-change pin).
-            await self._stop_process(live, end_turn=False)
+            await self._stop_process(live, end_turn=False, lock_held=True)
             if ended:
                 self._said_stopped(live, ended, why="restart")
                 live.stopped_programs, live.stopped_note = [], ""  # said now, in this very reply
@@ -2594,7 +2666,9 @@ class HostedService:
             if victim is not None:
                 # Right after the decision, with no wait between: the victim
                 # stops counting the moment its stop begins (``live.proc`` is
-                # cleared before the stop's first wait).
+                # cleared before the stop's first wait). v1.512.0 (H2): under
+                # the VICTIM's lock (free when it was chosen, ``_stoppable``),
+                # so a message to it waits for its stop to finish.
                 await self._stop_process(victim)
                 victim.stopped_why = "evicted"  # v1.417.0 (C4.7)
                 self._said_stopped(victim, PG.known_programs(readings.get(victim.sid), victim), why="evicted")
@@ -2644,7 +2718,9 @@ class HostedService:
         deadline = time.monotonic() + POOL_WAIT_S
         turn = live.turn  # the message this start is for (``_start_turn_in`` set it)
         while True:
-            if turn is not None and not turn.running:
+            # v1.512.0 (H8, the open shutdown item): a turn that is ENDING is
+            # stopped too, and a start never begins once Iron Jarvis closes.
+            if (turn is not None and (not turn.running or turn.ending)) or self._start_unwanted(live):
                 raise _StoppedWhileWaiting()
             room = self._room_event()  # taken before the look (never cleared)
             async with self._lock():
@@ -2696,8 +2772,9 @@ class HostedService:
                 await asyncio.wait_for(room.wait(), min(left, POOL_RECHECK_S))
             except asyncio.TimeoutError:
                 pass
-            if turn is not None and not turn.running:
-                # Stopped while it waited: never started afterwards.
+            if (turn is not None and (not turn.running or turn.ending)) or self._start_unwanted(live):
+                # Stopped while it waited (or Iron Jarvis is closing): never
+                # started afterwards.
                 raise _StoppedWhileWaiting()
 
     async def _start_process(self, live: LiveSession, row: Any, argv0: list[str]) -> None:
@@ -2790,6 +2867,12 @@ class HostedService:
             except Exception:  # noqa: BLE001
                 log.warning("a %s frame could not be read", row.harness, exc_info=True)
 
+        if self._start_unwanted(live):
+            # v1.512.0 (the open shutdown item, H2): the waits above (the
+            # environment, the connection files) may have outlasted the session
+            # or Iron Jarvis itself — nothing is started then.
+            self.tokens.revoke(row.id)
+            raise _StoppedWhileWaiting()
         try:
             await asyncio.to_thread(proc.start, loop, on_message, on_exit)
         except OSError as exc:
@@ -2803,15 +2886,22 @@ class HostedService:
             from . import adopt as ADOPT
 
             ADOPT.watch(self, live, proc)
+        # v1.512.0 (H2, the open shutdown item): re-checked AFTER the spawn,
+        # under the session's lock — a start that finished for a deleted
+        # session, or after ``shutdown`` began, stops what it started (a tree
+        # kill) instead of leaving a tool nothing tracks.
+        await self._undo_unwanted_start(live)
         try:
             await driver.open(session_id=sid, resume=resume)
         except Exception as exc:  # noqa: BLE001 — said in words below
             # v1.439.0: the turn is NOT ended here as "interrupted" — the
             # refusal below is said as the reply's error and ends it "failed"
             # (it read "Stopped: the coding tool was closed", its reason lost).
-            await self._stop_process(live, end_turn=False)
+            await self._stop_process(live, end_turn=False, lock_held=True)
+            await self._undo_unwanted_start(live)  # closing: no words for a reply that is gone
             said = exc.args[0] if exc.args else type(exc).__name__
             raise Refused(f"{W.label(row.harness)} did not start: {clip(said, 200)}") from None
+        await self._undo_unwanted_start(live)  # the handshake is a wait too
         if not took_before and JT.takes(row.harness) and JT.wanted(live.caps) and url:
             # v1.441.0 (review of lane fix1): this start's handshake said the
             # tool DOES take Iron Jarvis's tools (a newer Antigravity) — too
@@ -2953,12 +3043,51 @@ class HostedService:
         except Exception:  # noqa: BLE001 — files that hold no credential
             log.debug("could not remove a Code session's connection files", exc_info=True)
 
-    async def _stop_process(self, live: LiveSession, *, why: str = "", end_turn: bool = True) -> None:
+    async def _undo_unwanted_start(self, live: LiveSession) -> None:
+        """v1.512.0 (H2, the open shutdown item): the CALLER HOLDS ``live.lock``
+        and has just started ``live``'s process. When the session was deleted
+        meanwhile, or Iron Jarvis is closing, that process is stopped now (a
+        tree kill) and the start ends as one that was stopped."""
+        if not self._start_unwanted(live):
+            return
+        if live.proc is not None:
+            log.info("Code-view session %s: a coding tool that finished starting after its session "
+                     "went (or Iron Jarvis began closing) was stopped", live.sid)
+        await self._stop_process(live, end_turn=False, lock_held=True)
+        raise _StoppedWhileWaiting()
+
+    async def _stop_process(self, live: LiveSession, *, why: str = "", end_turn: bool = True,
+                            lock_held: bool = False, notice: str = "") -> None:
         """Stop the process (tree kill, off the loop). ALWAYS: its open cards
         close and its running turn ends "interrupted" — a stop never leaves a
         follower waiting for a done that cannot come. ``end_turn=False``: only
         for a restart before the turn that is starting (it runs on the new
-        process)."""
+        process).
+
+        v1.512.0 (second review H2): ONE AT A TIME with a start. The stop runs
+        under ``live.lock`` — taken here, or ``lock_held=True`` when the CALLER
+        already holds it (a restart or a failed start inside ``_drive`` /
+        ``_ensure_running``, ``delete``; asserted). The turn it stops is read
+        BEFORE any wait and only THAT turn is ended, after the lock is let go:
+        a message that arrived meanwhile waited for the lock and runs on a
+        process of its own. ``notice`` replaces the words said when the turn
+        ends (a Stop the tool did not honour, H1)."""
+        turn = live.turn if end_turn else None
+        if lock_held:
+            assert live.lock.locked(), "lock_held=True, but the session's lock is not held"
+            await self._stop_now(live)
+        else:
+            async with live.lock:
+                await self._stop_now(live)
+        if turn is not None and live.turn is turn and turn.running and not turn.ending:
+            words = notice or (W.STOPPED_BECAUSE.format(why=why) if why else W.STOPPED_PLAIN)
+            self._emit(live, make("notice", text=words))
+            await self._end_turn(live, "interrupted")
+
+    async def _stop_now(self, live: LiveSession) -> None:
+        """The stop itself (:meth:`_stop_process`); the session's lock is held,
+        so the process, files, token and cards cleaned up here are the ones of
+        the process being stopped — never a newer one's."""
         proc = live.proc
         live.proc = None
         drv, live.driver = live.driver, None
@@ -2973,10 +3102,6 @@ class HostedService:
         self._expire_asks(live)
         self._close_open_steps(live)
         self._room_changed()  # v1.425.0 (B7): a place in the pool came free
-        turn = live.turn
-        if end_turn and turn is not None and turn.running and not turn.ending:
-            self._emit(live, make("notice", text=W.STOPPED_BECAUSE.format(why=why) if why else W.STOPPED_PLAIN))
-            await self._end_turn(live, "interrupted")
 
     # -- events ----------------------------------------------------------------
     def _emit(self, live: LiveSession, ev: dict[str, Any]) -> None:
@@ -3658,14 +3783,27 @@ class HostedService:
                 return
             await PN.record_turn_start_async(self.home, live.sid, str(getattr(row, "folder", "") or ""), turn.id)
             async with live.lock:
+                # v1.512.0 (second review H2): looked at again once the lock
+                # is held — a Stop, a delete, an archive or a shutdown that
+                # came while this message waited for it means no start.
+                if not turn.running or turn.ending or live.claim or self._start_unwanted(live):
+                    raise _StoppedWhileWaiting()
+                before = live.proc
                 self._say_start(live, row)  # v1.417.0 (C4.7)
                 await self._ensure_running(live, row)
+                if live.claim and live.proc is not None and live.proc is not before:
+                    # v1.512.0 (H2): claimed while it started (``_claim``
+                    # refuses that; a guard): what started is stopped.
+                    await self._stop_process(live, end_turn=False, lock_held=True)
+                    raise _StoppedWhileWaiting()
             started = True
             if live.driver is None:
                 raise HarnessGone("the coding tool stopped")
-            if not turn.running:
+            if not turn.running or turn.ending:
                 # v1.425.0 (B7): Stop ended this turn while its tool started (or
                 # while it waited for a place): the tool never hears it.
+                # v1.512.0 (H8): ENDING counts — ``_end_turn`` is mid-way (it
+                # stamps the row before the turn stops running).
                 raise _StoppedWhileWaiting()
             turn.unsent = False  # from here a Stop is the tool's to act on
             if builtin is not None:
@@ -3693,7 +3831,12 @@ class HostedService:
             self._emit(live, W.error(r.sentence, "Fix that, then send your message again.", ""))
             await self._end_turn(live, "failed")
         except _StoppedWhileWaiting:
-            pass  # v1.425.0 (B7): Stop already ended the turn; no tool heard it
+            # v1.425.0 (B7): Stop already ended the turn; no tool heard it.
+            if self._closing and turn.running and not turn.ending:
+                # v1.512.0 (the open shutdown item): no start once Iron Jarvis
+                # closes — said as ``shutdown`` says it for a running reply.
+                self._emit(live, W.error(STOPPED_TITLE, STOPPED_FIX, ""))
+                await asyncio.shield(self._end_turn(live, "interrupted"))
         except P.PiStillWorking:
             self._emit(live, W.error(W.PI_STILL_WORKING_TITLE, W.PI_STILL_WORKING_FIX, ""))
             await self._end_turn(live, "failed")
@@ -3919,8 +4062,20 @@ class HostedService:
             # ``_drive`` then never hands it over.
             await self._end_turn(live, "interrupted")
             return {"ok": True, "running": True}
+        if turn is not None and turn.running and turn.stop_asked_at is not None:
+            # v1.512.0 (second review H1): the tool was already told to stop
+            # this reply and still runs it. A press once the first one had
+            # its :data:`INTERRUPT_WAIT_S` closes the tool (a tree kill: the
+            # reply ends "interrupted", the conversation resumes with the next
+            # message); a quicker one (a double click) is the same Stop.
+            if self.clock() - turn.stop_asked_at >= INTERRUPT_WAIT_S:
+                closed = await self._close_unstopped(live, turn)
+                return {"ok": True, "running": True, "closed": closed}
+            return self._stop_pending_answer(live, turn)
         driver = live.driver
         if driver is not None and live.running:
+            if turn is not None:
+                turn.stop_asked_at = self.clock()  # v1.512.0 (H1): a Stop is pending from now
             async def tell() -> None:
                 stopping = getattr(driver, "stopping", None)
                 if callable(stopping):
@@ -3949,13 +4104,87 @@ class HostedService:
                     pass
 
             task = asyncio.ensure_future(tell())
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + INTERRUPT_WAIT_S
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=INTERRUPT_WAIT_S)
             except asyncio.TimeoutError:
                 pass  # the harness is slow to answer: the turn still ends when it does
+            left = deadline - loop.time()
+            if turn is not None and turn.running and left > 0:
+                # v1.512.0 (H1): a tool acknowledges its interrupt a moment
+                # before its reply ends — within the same bound, that end is
+                # waited for, so "not stopped yet" is said only when true.
+                try:
+                    await asyncio.wait_for(turn.finished.wait(), left)
+                except asyncio.TimeoutError:
+                    pass
+            if turn is not None and turn.running and not turn.ending and live.turn is turn:
+                # v1.512.0 (H1): told, and the reply still runs. Watched: past
+                # :data:`STOP_FORCE_AFTER_S` the tool is closed by itself.
+                self._watch_stop(live, turn)
+                return self._stop_pending_answer(live, turn)
         else:
             await self._end_turn(live, "interrupted")
         return {"ok": True, "running": True}
+
+    def _stop_pending_answer(self, live: LiveSession, turn: HostedTurn) -> dict[str, Any]:
+        """v1.512.0 (H1): the answer to a Stop the tool has not acted on yet —
+        ``stop_pending`` and the words the page can show beside Stop."""
+        return {"ok": True, "running": True, "stop_pending": True,
+                "words": W.STOP_ASKED.format(label=W.label(live.harness))}
+
+    async def _close_unstopped(self, live: LiveSession, turn: HostedTurn) -> bool:
+        """v1.512.0 (second review H1): the tool was told to stop ``turn`` and
+        did not — close it (``_stop_process``, a tree kill under the session's
+        lock): the turn ends "interrupted" with ONE plain notice, the
+        conversation stays, and Archive, Delete, Open in terminal and a new
+        message work as for any stopped session. False when the turn had
+        ended by itself meanwhile (nothing is closed then)."""
+        if live.turn is not turn or not turn.running or turn.ending:
+            return False
+        log.info("Code-view session %s: the coding tool did not stop when asked; it was closed", live.sid)
+        await self._stop_process(live, notice=W.STOP_NOT_HONOURED.format(label=W.label(live.harness)))
+        return True
+
+    def _watch_stop(self, live: LiveSession, turn: HostedTurn) -> None:
+        """v1.512.0 (H1): one watcher per pending Stop — it waits for the
+        turn's end in slices of :data:`STOP_RECHECK_S` and, once the service's
+        clock says :data:`STOP_FORCE_AFTER_S` passed since the tool was told,
+        closes the tool (:meth:`close_overdue_stops`)."""
+        async def watch() -> None:
+            while turn.running and not turn.ending and live.turn is turn and not self._closing:
+                try:
+                    await asyncio.wait_for(turn.finished.wait(), STOP_RECHECK_S)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+                try:
+                    await self.close_overdue_stops(only=live)
+                except Exception:  # noqa: BLE001 — the next slice looks again
+                    log.warning("could not close a coding tool that did not stop", exc_info=True)
+
+        with contextlib.suppress(RuntimeError):
+            task = asyncio.ensure_future(watch())
+            self._stop_watch.add(task)
+            task.add_done_callback(self._stop_watch.discard)
+
+    async def close_overdue_stops(self, now: float | None = None, *,
+                                  only: LiveSession | None = None) -> list[str]:
+        """v1.512.0 (H1): close every tool told to stop a reply at least
+        :data:`STOP_FORCE_AFTER_S` ago (``now``: the service's clock) that is
+        still running it. Returns the sessions closed."""
+        now = self.clock() if now is None else now
+        closed: list[str] = []
+        for live in [only] if only is not None else list(self.live.values()):
+            turn = live.turn
+            if turn is None or not turn.running or turn.ending or turn.stop_asked_at is None:
+                continue
+            if now - turn.stop_asked_at < STOP_FORCE_AFTER_S:
+                continue
+            if await self._close_unstopped(live, turn):
+                closed.append(live.sid)
+        return closed
 
     # -- the bell ----------------------------------------------------------------
     def waiting_rows(self) -> list[dict[str, Any]]:
@@ -4018,9 +4247,17 @@ class HostedService:
             quiet = now - max(live.last_active, live.last_heard)
             if not live.running or live.busy or live.keeps_working(now) or quiet < IDLE_S:
                 continue  # it changed while the trees were read (a message came)
+            if live.lock.locked() or live.starting or live.opening:
+                # v1.512.0 (second review H2): a start or a stop of it is under
+                # way — looked at again next minute; one slow start never holds
+                # up the pass.
+                continue
             verdict = PG.decide(live, readings.get(live.sid), quiet=quiet, now=now, base=IDLE_S)
             if verdict.keep:
                 continue
+            # v1.512.0 (H2): under the session's lock (free: just looked, no
+            # wait since) — a message sent during this stop waits for it, then
+            # starts a process of its own; this stop never ends that message.
             await self._stop_process(live)
             live.stopped_why = "idle"  # v1.417.0 (C4.7): said at the next start
             live.stopped_after_s = verdict.after_s or IDLE_S
@@ -4059,6 +4296,18 @@ class HostedService:
         live = self.live.get(sid)
         if live is None or not live.running:
             return {"ok": True, "closed": False}
+        turn = live.turn
+        if turn is not None and turn.running and not turn.ending and turn.stop_asked_at is not None \
+                and not live.claim:
+            # v1.512.0 (second review H1): the reply was Stopped and the tool
+            # did not stop — "Close it now" closes it at once (no wait for a
+            # second Stop or the time bound).
+            closed = await self._close_unstopped(live, turn)
+            live.stopped_why = ""
+            live.keeping = None
+            live.stopped_programs = []
+            live.stopped_note = ""
+            return {"ok": True, "closed": closed, "stopped": []}
         if (live.turn is not None and live.turn.running) or live.claim:
             raise Refused(W.RUNNING)
         now = self.clock()
@@ -4087,7 +4336,17 @@ class HostedService:
         self._closing = True
         if self._reaper is not None:
             self._reaper.cancel()
+        # Lead review: a watcher of a pending Stop has nothing left to watch
+        # (every tool goes below); never left to wake up after the service.
+        for watcher in list(self._stop_watch):
+            watcher.cancel()
+        # v1.512.0 (the open shutdown item): a message waiting for a place in
+        # the pool looks again now and sees Iron Jarvis closing (no start).
+        self._room_changed()
         lives = list(self.live.values())
+        # ...and a start in flight for a session no longer in the table (one
+        # deleted while it started) is waited for too.
+        lives += [lv for lv in list(self._opening) if lv not in lives]
         if keep_tools:
             kept = [lv for lv in lives if HL.kept_by_host(lv.proc)]
             for lv in kept:
@@ -4100,8 +4359,29 @@ class HostedService:
             if live.turn is not None and live.turn.running and not live.turn.ending:
                 self._emit(live, W.error(STOPPED_TITLE, STOPPED_FIX, ""))
         await asyncio.gather(*(self._end_turn(lv, "interrupted") for lv in lives), return_exceptions=True)
-        await asyncio.gather(*(self._stop_process(lv) for lv in lives), return_exceptions=True)
+        await asyncio.gather(*(self._stop_at_shutdown(lv) for lv in lives), return_exceptions=True)
         await asyncio.gather(*(asyncio.to_thread(lv.log.close) for lv in lives), return_exceptions=True)
+
+    async def _stop_at_shutdown(self, live: LiveSession) -> None:
+        """v1.512.0 (the open shutdown item): ``live``'s process stopped under
+        its lock. A start in flight holds that lock: it is waited for, bounded
+        (:data:`SHUTDOWN_START_WAIT_S`) — once it has its process it sees
+        Iron Jarvis closing and stops it itself (``_undo_unwanted_start``).
+        A start still not settled is not waited for any longer: what it has
+        is stopped now (its handshake then fails), and it is waited for once
+        more, then stopped again — no start outlives this untracked."""
+        for _attempt in range(2):
+            try:
+                await asyncio.wait_for(live.lock.acquire(), SHUTDOWN_START_WAIT_S)
+            except asyncio.TimeoutError:
+                log.warning("Code-view session %s: its coding tool was still starting at shutdown", live.sid)
+                await self._stop_now(live)
+                continue
+            try:
+                await self._stop_now(live)
+            finally:
+                live.lock.release()
+            return
 
     async def adopt(self, into: list[str] | None = None) -> list[str]:
         """v1.422.0 (boot): carry on every session whose tool the code host

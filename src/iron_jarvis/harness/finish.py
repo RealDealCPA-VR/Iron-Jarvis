@@ -235,6 +235,55 @@ MAX_GITIGNORE_BYTES = 64 * 1024
 #: most 30 s a call, so a longer run is polled with ``process_read``.
 PROCESS_BUDGET_S = 120
 _PROCESS_STEP_MS = 30_000
+#: Second review D6 (v1.512.0): why a test run the user stopped (the reply's
+#: Stop while the check waited for it) is NOT RUN — never "failed".
+STOPPED_BY_YOU = "stopped by you"
+#: How long the check waits for ``process_stop`` of a run it gives up on as
+#: the turn is cancelled (the program is never left running by choice).
+_PROCESS_STOP_WAIT_S = 10.0
+
+
+def _turn_stop(invoke: Any) -> Any:
+    """The running turn's Stop handle (``core/turns``) for the turn the
+    check's own ``invoke`` belongs to (``chat_turn.finish_invoke`` names it),
+    or None — ``stall.run_step``'s way of learning about a Stop. Never
+    raises."""
+    turn_id = str(getattr(invoke, "turn_id", "") or "").strip()
+    if not turn_id:
+        return None
+    try:
+        from ..core.turns import TURNS
+
+        return TURNS.handle(turn_id)
+    except Exception:  # noqa: BLE001 — no handle: nothing to race
+        return None
+
+
+async def _unless_stopped(read: "Awaitable[Any]", stop: Any) -> "tuple[Any, bool]":
+    """``(result, False)`` of ``read``, or ``(None, True)`` the moment the
+    turn's Stop (``stop``, a ``TurnHandle``) is pressed — the read is then
+    cancelled. A cancel of the caller cancels the read too."""
+    task = asyncio.ensure_future(read)
+    if stop is None:
+        return await task, False
+    waiter = asyncio.ensure_future(stop.wait_stopped())
+    try:
+        await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+        if waiter.done() and not task.done():
+            task.cancel()
+            await asyncio.wait({task})  # unwound (its own cleanup ran), never raised here
+            if not task.cancelled():
+                task.exception()  # retrieved: a read that failed as it was cut is not news
+            return None, True
+        # The read answered first: its answer counts (a run that ended
+        # meanwhile is judged by its own exit); a Stop is seen at the next read.
+        return task.result(), False
+    finally:
+        for fut in (task, waiter):
+            if not fut.done():
+                fut.cancel()
+
+
 #: What separates the reply the model wrote before the check from its answer.
 SEPARATOR = "\n\n"
 
@@ -4045,17 +4094,42 @@ class FinishCheck:
                 outputs = [text]
                 # The first wait already took part of the budget.
                 spent = min(budget, _PROCESS_STEP_MS / 1000)
-                while data.get("running"):
-                    left = budget - spent - (loop.time() - began)
-                    if left <= 0:
-                        break
-                    more = await invoke("process_read", {
-                        "id": handle, "wait_ms": int(min(left * 1000, _PROCESS_STEP_MS)),
-                    })
-                    if not getattr(more, "ok", False):
-                        break
-                    outputs.append(str(getattr(more, "output", "") or ""))
-                    data = dict(getattr(more, "data", None) or {})
+                # Second review D6 (v1.512.0): every read is raced against the
+                # turn's Stop — a Stop pressed while the check waited for a
+                # long test run did nothing until the budget ended (up to ten
+                # minutes), the program ran on, and the run read "failed".
+                stop = _turn_stop(invoke)
+                user_stop = False
+                try:
+                    while data.get("running"):
+                        left = budget - spent - (loop.time() - began)
+                        if left <= 0:
+                            break
+                        more, user_stop = await _unless_stopped(invoke("process_read", {
+                            "id": handle, "wait_ms": int(min(left * 1000, _PROCESS_STEP_MS)),
+                        }), stop)
+                        if user_stop:
+                            break
+                        if not getattr(more, "ok", False):
+                            break
+                        outputs.append(str(getattr(more, "output", "") or ""))
+                        data = dict(getattr(more, "data", None) or {})
+                except asyncio.CancelledError:
+                    # The turn itself was cancelled: the test program is not
+                    # left running behind it.
+                    try:
+                        await asyncio.wait_for(asyncio.shield(invoke("process_stop", {"id": handle})),
+                                               _PROCESS_STOP_WAIT_S)
+                    except BaseException:  # noqa: BLE001 — the cancel goes on either way
+                        pass
+                    raise
+                if user_stop:
+                    # Stopped by the user: the program is stopped, and the run
+                    # is NOT RUN (no exit status exists) — never "failed".
+                    await invoke("process_stop", {"id": handle})
+                    run.verdict, run.why = TESTS_NOT_RUN, STOPPED_BY_YOU
+                    run.output = "\n".join(o for o in outputs if o)
+                    return
                 if data.get("running"):
                     await invoke("process_stop", {"id": handle})
                     run.timed_out = True

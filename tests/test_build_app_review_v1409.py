@@ -33,7 +33,6 @@ from tests._build_app_helpers_v1409 import (
     client,
     frames,
     new_session,
-    sent,
     starts,
     stop_all,
     until,
@@ -574,7 +573,10 @@ async def test_the_interrupt_route_answers_quickly_even_when_the_harness_does_no
     live.proc, live.driver = _Proc(), _Driver()
     live.turn = S.HostedTurn("t", row.id)
     t0 = time.monotonic()
-    assert (await svc.interrupt(row.id)) == {"ok": True, "running": True}
+    got = await svc.interrupt(row.id)
+    # v1.512.0 (moved on purpose, H1): the tool was told and has not stopped
+    # yet — the answer says so (``stop_pending``, words the page can show).
+    assert got["ok"] is True and got["running"] is True and got["stop_pending"] is True
     assert time.monotonic() - t0 < 3
     live.proc, live.driver = None, None
 

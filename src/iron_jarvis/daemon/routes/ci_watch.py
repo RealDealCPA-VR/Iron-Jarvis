@@ -620,16 +620,26 @@ async def _after_fix(d: Any, thread_id: str, title: str, facts: dict[str, str], 
         await _end(d, thread_id, title, CI.ASKING, CI.KIND_ASKING, DECLINED_WORDS.format(steps=steps[:400]),
                    local_only=local_only)
         return
-    wt = B._live(facts)
     base_sha = str(rec.get("base_sha") or "")
+    try:
+        # Second review D9 (v1.512.0): a worktree deleted in Explorer, or on
+        # a drive that is away, ends the watch in words (as ``_check`` and
+        # ``_start_fix`` do) — it stayed "fixing" or "reviewing" for ever,
+        # every pass logging the same refusal and nothing said.
+        wt = B._live(facts)
 
-    def read_change() -> tuple[str, str, str, "list[str] | None"]:
-        # ONE locked read: the diff the reviewer gets, the fingerprint the
-        # push must still match, HEAD then, and the files that are not text.
-        return (CI.change_for_review(wt, base_sha), CI.change_fingerprint(wt, base_sha),
-                CI.ref_sha(wt, "HEAD"), CI.binary_changes(wt, base_sha))
+        def read_change() -> tuple[str, str, str, "list[str] | None"]:
+            # ONE locked read: the diff the reviewer gets, the fingerprint the
+            # push must still match, HEAD then, and the files that are not text.
+            return (CI.change_for_review(wt, base_sha), CI.change_fingerprint(wt, base_sha),
+                    CI.ref_sha(wt, "HEAD"), CI.binary_changes(wt, base_sha))
 
-    change, fingerprint, head, binaries = await asyncio.to_thread(_git_locked, thread_id, read_change)
+        change, fingerprint, head, binaries = await asyncio.to_thread(_git_locked, thread_id, read_change)
+    except B.GitRefused as exc:
+        await _end(d, thread_id, title, CI.STOPPED, CI.KIND_STOPPED,
+                   f"Iron Jarvis stopped fixing this pull request's checks, and nothing was pushed: {exc}",
+                   local_only=local_only)
+        return
     if not change.strip():
         await _end(d, thread_id, title, CI.GAVE_UP, CI.KIND_GAVE_UP, NO_CHANGE_WORDS, local_only=local_only)
         return
@@ -714,6 +724,22 @@ async def _review_and_land(d: Any, thread_id: str, title: str, facts: dict[str, 
                 if cur.get("state") == CI.REVIEWING:
                     await asyncio.shield(_end(d, thread_id, title, CI.STOPPED, CI.KIND_STOPPED, EMERGENCY_WORDS))
         raise
+    except Exception as exc:  # noqa: BLE001 — the watch rests, said once
+        # Second review D9 (v1.512.0): an unexpected error after the review
+        # (keeping the fix on its side branch, recording the push) left the
+        # watch REVIEWING, and the next pass paid for ANOTHER review of the
+        # same fix with no round counted. It rests in "gave up" now — only
+        # while the record still says reviewing (never over what the step
+        # already wrote), and without saying whether anything was pushed.
+        log.warning("the check-fix step after the review on %s failed", thread_id, exc_info=True)
+        from ...core.failures import plain_failure
+
+        with contextlib.suppress(Exception):
+            cur = await asyncio.to_thread(CI.get, engine, thread_id) or {}
+            if cur.get("state") == CI.REVIEWING:
+                await _end(d, thread_id, title, CI.GAVE_UP, CI.KIND_GAVE_UP, plain_failure(
+                    "Something went wrong after the fix was reviewed, so Iron Jarvis stopped fixing this pull "
+                    "request's checks. Look at the pull request and the session's branch before you go on.", exc))
     finally:
         if _REVIEWS.get(thread_id) is asyncio.current_task():
             _REVIEWS.pop(thread_id, None)

@@ -215,8 +215,11 @@ class HostLink:
         # about (its orphan rules wait for NO daemon), and the next message
         # would start a SECOND process for the same conversation. They are
         # stopped through the next link (made at once, in the background).
+        # v1.512.0 (H13): a tool counts as stopped only once the host CONFIRMED
+        # it — one whose stop was on its way when the link broke is still
+        # running there.
         lost = set() if self.deliberate else {
-            p.tool_id for p in procs if p.local is None and not p.stopped and not p._ended}
+            p.tool_id for p in procs if p.local is None and not p.stop_confirmed and not p._ended}
         for proc in procs:
             proc._link_lost()
         with contextlib.suppress(OSError):
@@ -279,6 +282,23 @@ def _stop_lost(lk: HostLink, key: str) -> None:
                 lk.request({"t": "stop", "tool": tid, "graceful": True}, timeout=STOP_REPLY_S)
             except Exception:  # noqa: BLE001 — the host's own orphan rules remain
                 log.debug("could not stop a tool a broken link left", exc_info=True)
+                # v1.512.0 (H13): not confirmed — the link after this one tries again.
+                if not lk.deliberate:
+                    _LOST.setdefault(key, set()).add(tid)
+
+
+def _still_to_stop(lk: HostLink, tool: str) -> None:
+    """v1.512.0 (H13): a stop the host never confirmed (its request failed or
+    went unanswered) — the tool may still run there, so it stays on the list
+    the next link stops (:func:`_stop_lost`). A link closed on purpose (a
+    restart's detach, a quit) keeps its tools as they are."""
+    if lk.deliberate:
+        return
+    key = _key(lk.home)
+    with _REG_LOCK:
+        _LOST.setdefault(key, set()).add(tool)
+    if not lk.alive:
+        threading.Thread(target=_stop_lost_soon, args=(lk.home,), name="codehost-lost", daemon=True).start()
 
 
 def _stop_lost_soon(home: Any) -> None:
@@ -487,6 +507,10 @@ class RemoteProcess:
         self.sid = sid
         self.tool_id = tool_id or uuid.uuid4().hex
         self.stopped = False
+        #: v1.512.0 (H13): the code host ANSWERED this tool's stop. ``stopped``
+        #: alone is only "a stop was asked for": a link that breaks before the
+        #: answer leaves the tool on the list the next link stops.
+        self.stop_confirmed = False
         self.exit_code: int | None = None
         #: The line being handed to the driver right now (None between lines).
         self.current: int | None = None
@@ -814,9 +838,14 @@ class RemoteProcess:
         if lk is None:
             return
         if lk.alive and not self._ended:
-            with contextlib.suppress(Exception):
+            try:
                 reply, _ = lk.request({"t": "stop", "tool": self.tool_id, "graceful": graceful},
                                       timeout=STOP_REPLY_S)
+            except Exception:  # noqa: BLE001 — not confirmed: the next link stops it
+                log.debug("the code host did not confirm a tool's stop", exc_info=True)
+                _still_to_stop(lk, self.tool_id)
+            else:
+                self.stop_confirmed = True
                 code = reply.get("code")
                 if isinstance(code, int) and self.exit_code is None:
                     self.exit_code = code

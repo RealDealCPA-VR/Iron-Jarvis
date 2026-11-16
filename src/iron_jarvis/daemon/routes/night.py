@@ -140,6 +140,40 @@ def _emergency(d: Any) -> bool:
     return emergency_stop_on(getattr(d.platform, "config", None))
 
 
+def _stop_turn(turn: str) -> bool:
+    """Stop a night task's turn AND its running steps (a turn's Stop waits for
+    the step in flight, so a hung command ran on for its whole deadline).
+    True when the turn was running. Thread-safe; never raises."""
+    from ...core.turns import TURNS
+    from ...harness.stall import running_steps, stop_step
+
+    if not turn:
+        return False
+    stopped = False
+    with contextlib.suppress(Exception):
+        stopped = bool(TURNS.stop(turn))
+    with contextlib.suppress(Exception):
+        for call_id in running_steps(turn):
+            stop_step(turn, call_id)
+    return stopped
+
+
+class _StoppedWhileStarting(Exception):
+    """Second review T1 (v1.512.0): the user's Cancel landed while the task
+    was starting (its worktree, snapshot and turn are made after it is marked
+    running): nothing is started."""
+
+
+async def _has_stop(engine: Any, task_id: str) -> bool:
+    """The task as it is NOW carries a stop note (the user's Cancel, or
+    Emergency stop's). Never raises (False)."""
+    try:
+        now = await asyncio.to_thread(N.get_task, engine, task_id)
+    except Exception:  # noqa: BLE001 — an unreadable record is read again at settle
+        return False
+    return bool(now) and N.task_has_stop(now)
+
+
 def _main_state(git: dict[str, Any], folder: str) -> dict[str, str]:
     """The user's main checkout now (``harness/night_guard.snapshot``), with
     the ``.venv`` this branch borrows. BLOCKING; never raises."""
@@ -622,6 +656,16 @@ async def settle_running(d: Any) -> list[str]:
         turn = _running_turn(d, thread)
         if turn or thread in _STARTING:
             _keep_held(d, tid)
+            if (turn and (emergency or N.task_has_stop(task))
+                    and turn in N.unattended_turns()):
+                # Second review T1 (v1.512.0): a task the user stopped (or
+                # Emergency stop) whose turn still runs is stopped HERE too —
+                # belt and braces for any path that wrote the note before the
+                # turn existed. Only a turn Iron Jarvis started by itself
+                # (never one the user typed into the session). It settles
+                # once the turn is over.
+                _stop_turn(turn)
+                continue
             # The backstop counts THIS turn's own time (a reply carried on
             # after a restart starts a new turn; the hours Iron Jarvis was
             # off are never counted — the reply cap's own rule).
@@ -866,6 +910,12 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
             # when the task ends (its commands are not confined to its branch).
             await asyncio.to_thread(_keep_main_before, engine, tid, git, S.folder_of(row))
             turn_id = "bt_" + secrets.token_hex(8)
+            # Second review T1 (v1.512.0): the task is read AGAIN right
+            # before its turn starts — a Cancel that landed while the worktree,
+            # the snapshot or the session were made found no turn to stop and
+            # only wrote its note; the task then ran anyway, unasked.
+            if await _has_stop(engine, tid):
+                raise _StoppedWhileStarting()
             picks = task.get("try_on") or []
             if picks:
                 from . import build_attempts as BA_routes
@@ -884,7 +934,18 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
                     model_note=TEAM_NOTE if task.get("team") else "",
                 )
             await asyncio.to_thread(N.set_session, engine, tid, turn_id=turn_id)
+            # ... and once more right after: a Cancel (or Emergency stop) that
+            # landed while the turn was being made stops it now, the way the
+            # Cancel route stops a running one. The settle pass ends the task
+            # STOPPED once the turn is over.
+            if _emergency(d) or await _has_stop(engine, tid):
+                _stop_turn(turn_id)
             return True
+        except _StoppedWhileStarting:
+            # Nothing started: the task ends STOPPED with the user's own note
+            # (already written by the Cancel); the caller gives its slot back.
+            await asyncio.to_thread(N.finish_task, engine, tid, N.STOPPED)
+            return False
         except CreateRefused as exc:
             why = str(exc)
         except HTTPException as exc:
