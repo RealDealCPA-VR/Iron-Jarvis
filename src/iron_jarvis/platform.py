@@ -2851,12 +2851,28 @@ def build_platform(
     # store exist.
     _grants = getattr(platform, "grants", None)
     if _grants is not None:
+        import weakref as _weakref
+
         from .workflows import store as _wf_store
         from .workflows.engine import workflow_grant_scope_id as _wf_scope
 
-        platform.scheduler.on_removed = lambda name: _grants.revoke_scope("schedule", str(name))
+        # v1.505.1: the hooks hold the grant store WEAKLY. The workflow
+        # hook lives in a module table keyed weakly by the engine; a
+        # callback that referred to the grant store (which holds that
+        # engine) kept every platform ever built alive: v1.505.0 freed
+        # none. One app per process never noticed; the test suite builds
+        # thousands, and its workers slowed down until tests timed out.
+        # Pinned by tests/test_north_star_platform_freed_v1505_1.py.
+        _grants_ref = _weakref.ref(_grants)
+
+        def _drop_oks(kind: str, scope_id: str) -> None:
+            store = _grants_ref()
+            if store is not None:
+                store.revoke_scope(kind, scope_id)
+
+        platform.scheduler.on_removed = lambda name: _drop_oks("schedule", str(name))
         _wf_store.on_removed(
-            platform.engine, lambda name: _grants.revoke_scope("workflow", _wf_scope(str(name)))
+            platform.engine, lambda name: _drop_oks("workflow", _wf_scope(str(name)))
         )
 
     # v1.433.0 (W1): a schedule of kind "event" publishes a name of the user's

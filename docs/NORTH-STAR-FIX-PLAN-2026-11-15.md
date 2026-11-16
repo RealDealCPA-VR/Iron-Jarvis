@@ -361,7 +361,12 @@ settles it; the sleep fix was not run on a sleeping PC or the frozen build.
 
 Area rules: `docs/rules/automations.md`, `daemon.md`, `tools.md`.
 
-**Shipped in v1.505.0.** As built, where it differs from the lines below:
+**Shipped in v1.505.1** (v1.505.0 reached master but was never published: its
+release run was cancelled at its time limit. The cause was the lead's own
+addition, the hook that drops a removed workflow's OKs: it kept every
+platform a test worker built alive, so the suite slowed until a test timed
+out. v1.505.1 holds the grant store weakly and pins it with a test.)
+As built, where it differs from the lines below:
 5.1 Cancel stops the tool call itself (a table of calls in flight kept by
 the engine, by run id), not the run's driver task: a scheduled workflow's
 driver is not registered anywhere to cancel, and cancelling it would write no
