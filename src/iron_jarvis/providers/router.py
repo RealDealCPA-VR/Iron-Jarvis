@@ -1198,6 +1198,21 @@ class ModelRouter:
         a model proxy sends to the cloud is cloud — v1.362.0)."""
         return _egress.stays_on_this_network(provider, self.manager, None, model)
 
+    def _same_server(self, one: str, other: str) -> bool:
+        """Do providers *one* and *other* talk to the SAME server (scheme,
+        host and port of ``egress.endpoint_url``)? False when either has no
+        address of its own (every cloud API and CLI). Never raises."""
+        try:
+            from urllib.parse import urlsplit
+
+            a = urlsplit(str(_egress.endpoint_url(one, self.manager, None) or ""))
+            b = urlsplit(str(_egress.endpoint_url(other, self.manager, None) or ""))
+            if not (a.hostname and b.hostname):
+                return False
+            return (a.scheme, a.hostname.lower(), a.port) == (b.scheme, b.hostname.lower(), b.port)
+        except Exception:  # noqa: BLE001 — unsure is "not the same server"
+            return False
+
     def _egress_ok(self, provider: str, model: str = "") -> bool:
         """A failover/swap candidate is allowed under the current scope only
         when it stays on this network. The one-message OK never reaches a
@@ -1954,9 +1969,18 @@ class ModelRouter:
         (``chat_turn._prepare_attachments``), so a picture read there never
         reaches this seam. MIRROR NOTE (lock-step): both lanes call this
         through :meth:`_enforce_capabilities`."""
+        # THE SAME SERVER IS NOT A MOVE (lead review, CI): another model on
+        # the server the primary itself talks to (the user's own gateway
+        # reached as ``custom`` and as ``fleet-custom``) sends the picture
+        # nowhere new, whether or not that server counts as "this network"
+        # (a gateway whose table routes a model on to a cloud service does
+        # not). Pinned by tests/test_gateway_key_review_v1382.py.
+        def _may_take(provider: str) -> bool:
+            return self._stays(provider) or self._same_server(adapter.provider, provider)
+
         local = self._first_capable(
             need_tools=need_tools, need_vision=True, exclude=adapter, avail=avail,
-            allow=self._stays, pay_ok=pay_ok,
+            allow=_may_take, pay_ok=pay_ok,
         )
         if local is not None and _supports_vision(local):
             return local
@@ -1964,7 +1988,7 @@ class ModelRouter:
             need_tools=need_tools, need_vision=True, exclude=adapter, avail=avail,
             pay_ok=pay_ok,
         )
-        if would is not None and _supports_vision(would) and not self._stays(would.provider):
+        if would is not None and _supports_vision(would) and not _may_take(would.provider):
             raise _egress.PictureKeptHere(
                 would.provider, str(getattr(would, "model", "") or ""),
                 primary=adapter.provider, manager=self.manager,

@@ -228,6 +228,11 @@ async def test_a_harness_turn_reads_several_files_in_one_call(tmp_path, monkeypa
     platform = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "ws"
     ws.mkdir()
+    # v1.502.0 (north-star D5, moved on purpose): the session's OWN repository
+    # (a Git folder), so what it reads is its own source and comes back as the
+    # file's text, unfenced. A folder that is not a repository gets the fence
+    # (tests/test_north_star_outside_text_v1502.py).
+    (ws / ".git").mkdir()
     no_finish_check(ws)
     (ws / "a.py").write_text("A = 1\n", encoding="utf-8")
     (ws / "b.py").write_text("B = 2\n", encoding="utf-8")
@@ -243,6 +248,11 @@ async def test_a_harness_turn_cuts_a_long_result_only_where_it_says_so(tmp_path,
     platform = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "ws"
     ws.mkdir()
+    # v1.502.0 (north-star D5, moved on purpose): the session's OWN repository
+    # (a Git folder), so what it reads is its own source and comes back as the
+    # file's text, unfenced. A folder that is not a repository gets the fence
+    # (tests/test_north_star_outside_text_v1502.py).
+    (ws / ".git").mkdir()
     no_finish_check(ws)
     cap = CT.harness_tool_message_chars(None)
     assert cap == 32_000  # a quarter of the planner's default 32k-token window
@@ -271,6 +281,11 @@ async def test_plain_chat_says_when_it_cuts_a_long_result(tmp_path, monkeypatch)
     platform = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "ws"
     ws.mkdir()
+    # v1.502.0 (north-star D5, moved on purpose): the session's OWN repository
+    # (a Git folder), so what it reads is its own source and comes back as the
+    # file's text, unfenced. A folder that is not a repository gets the fence
+    # (tests/test_north_star_outside_text_v1502.py).
+    (ws / ".git").mkdir()
     (ws / "spec.md").write_text("s" * 20_000, encoding="utf-8")
     model = wire(platform, monkeypatch, [[call("read_file", "r1", path="spec.md")], "Done."])
     await stream(platform, body(ws, tools=["read_file"]), harness=None, session_id="chat")

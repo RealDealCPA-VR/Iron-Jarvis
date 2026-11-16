@@ -3616,6 +3616,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'tell me about this photo',
         'check out this image for me',
     ),
+    'voice_backend': (
+        'keep my voice typing on this computer',
+        'where does my dictation get sent',
+        'use the online service for voice typing',
+        'stop sending my voice to the internet',
+        'choose how my speech becomes text',
+        'turn my talking into text offline',
+        'pick the service that hears my dictation',
+        'make dictation stay on my own network',
+    ),
     'voice_press': (
         'Can I talk to you instead of typing?',
         'Turn on voice so we can talk hands-free',
