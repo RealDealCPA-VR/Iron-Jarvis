@@ -527,6 +527,10 @@ _ELEMENT_KEYS: tuple[str, ...] = (
     "autocomplete",
     "sensitive",
     "value",
+    # v1.511.0 (second review B2): what Enter does in a field, and what its
+    # form's own submit button reads. The risk door judges an Enter by them.
+    "enter",
+    "form_submit",
 )
 
 #: Element-row keys that are booleans on the wire and must stay booleans here.
@@ -1096,6 +1100,10 @@ def _element_row(row: Mapping[str, Any], name_chars: int) -> tuple[dict[str, Any
             continue
         text, cut = _clip(value, name_chars)
         shortened = shortened or cut
+        if key == "form_submit" and cut:
+            # A button name cut short could hide the word that matters
+            # ("Save and transfer"): unknown, so an Enter there asks.
+            text = ""
         out[key] = text
     out.setdefault("id", "")
     out.setdefault("role", "")

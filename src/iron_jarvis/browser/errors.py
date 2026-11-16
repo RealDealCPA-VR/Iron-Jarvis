@@ -27,7 +27,7 @@ from typing import Any
 
 
 class BrowserErrorCode(str, Enum):
-    """The eighteen browser error codes of D15 (seventeen, plus PAGE_FAILED_TO_LOAD since v1.274.0).
+    """The nineteen browser error codes of D15 (seventeen, plus PAGE_FAILED_TO_LOAD since v1.274.0 and PAGE_CHANGED since v1.511.0).
 
     ``str`` mixin, so a code JSON-serialises as its own value and a comparison
     against a plain string read off the wire succeeds. That mirrors
@@ -59,6 +59,10 @@ class BrowserErrorCode(str, Enum):
     PAIRING_REQUIRED = "PAIRING_REQUIRED"
     AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED"
     CONNECTION_REPLACED = "CONNECTION_REPLACED"
+    #: v1.511.0 (second review B9): the add-on refused an acting frame because
+    #: the tab no longer shows the site the action was planned on (the page
+    #: moved while an approval card waited, say). Nothing was done on the page.
+    PAGE_CHANGED = "PAGE_CHANGED"
 
 
 #: Remedy sentence per code, in the enum's own order.
@@ -151,7 +155,19 @@ REMEDIES: dict[BrowserErrorCode, str] = {
         "abandoned rather than left hanging. Call browser_get_status and retry "
         "against the connected browser."
     ),
+    BrowserErrorCode.PAGE_CHANGED: (
+        "The tab no longer shows the site this was planned on, so nothing was "
+        "done. Call browser_read_page to read the page again before acting."
+    ),
 }
+
+#: v1.511.0 (B9): what the model reads for PAGE_CHANGED when the action had
+#: stopped for the user's OK first - the wait is the likeliest reason the page
+#: moved, and saying so tells the model nothing ran.
+PAGE_CHANGED_AFTER_WAIT_MESSAGE = (
+    "The page changed while this waited for your OK, so nothing was done. "
+    "Call browser_read_page to read the page again before acting."
+)
 
 
 #: v1.510.0 (second review B3): the codes that, on an ACTING call whose frame
@@ -246,6 +262,7 @@ class BrowserError(Exception):
 
 __all__ = [
     "ANSWER_LOST_CODES",
+    "PAGE_CHANGED_AFTER_WAIT_MESSAGE",
     "REMEDIES",
     "UNKNOWN_OUTCOME_MESSAGE",
     "BrowserError",

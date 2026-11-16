@@ -5,7 +5,8 @@
  * no known reason keeps the local-only line, as before).
  *
  * - "git" (v1.375.0): a commit, a push, a change on GitHub, a git setting or
- *   git that throws work away, on a Build session's own branch;
+ *   git that throws work away, on a Build session's own branch; since
+ *   v1.511.0 also everything but a commit in the user's own folder;
  * - "page" (v1.376.0 review): a click in the agent's browser that reads as
  *   deleting, sending or paying;
  * - "command" (v1.381.0): a shell step a project's or a plugin's Claude Code

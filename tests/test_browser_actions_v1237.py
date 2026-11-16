@@ -276,7 +276,12 @@ def _form_page() -> ScriptedBrowser:
                     # credential field, so typing into it ASKS. That is correct
                     # and it is pinned elsewhere; here it would have hidden every
                     # assertion about the ordinary path behind an approval.
-                    FakeElement(id="e7", role="textbox", name="Search", field_type="text"),
+                    # v1.511.0 (B2): its form's own button reads "Search", so
+                    # Enter there (a submit) is judged harmless and does not ask.
+                    FakeElement(
+                        id="e7", role="textbox", name="Search", field_type="text",
+                        enter=P.ENTER_SUBMITS, form_submit="Search",
+                    ),
                 ],
             ),
             FakeTab(id=43, title="Notes", url="https://notes.example/", text="Notes."),

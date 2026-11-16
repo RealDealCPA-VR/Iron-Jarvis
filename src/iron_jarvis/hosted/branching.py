@@ -153,6 +153,11 @@ FORK_AT_NOTE = "It holds the conversation before your message; the message is in
 FORK_FIRST_NOTE = "That was the first message, so the branch starts a new conversation."
 FORK_WHOLE_ONLY = "{label} branches the whole conversation, so this branch holds all of it."
 FORK_CLAUDE_LATER = "Claude Code makes the branch with your first message here."
+#: v1.511.0 (H9): what a branch does not carry without asking, said.
+FORK_NOT_FULL = "It starts on {mode}, not Full access: turn that on again here if you want it."
+FORK_PI_FOLDER_ASKED = ("Pi does not load this folder's own extensions in the branch until you press "
+                        "Load them for this session here.")
+FORK_KEEPS_TOOLS = "It can use the same Iron Jarvis tools as the original; change them in its Iron Jarvis tools."
 REWIND_DONE = "The conversation now ends before that message, which is back in the box."
 REWIND_CLAUDE_LATER = "Claude Code goes back with your next message."
 REWIND_FIRST = "That was the first message, so the next one starts a new conversation."
@@ -543,7 +548,7 @@ def _said(exc: BaseException) -> str:
 # -- Branch from here ---------------------------------------------------------------
 async def fork(svc: Any, sid: str, at: str = "") -> dict[str, Any]:
     """POST …/fork: a NEW session in the same folder, on the same tool, model,
-    mode and account, holding the conversation before message ``at`` (its
+    mode (never Full access: v1.511.0, H9) and account, holding the conversation before message ``at`` (its
     words come back for the box) or all of it. The original stays as it was."""
     from .driver import ControlRefused
     from .process import HarnessGone
@@ -673,7 +678,7 @@ async def fork(svc: Any, sid: str, at: str = "") -> dict[str, Any]:
             notes.append(FORK_WHOLE_ONLY.format(label=lab))
         elif at and not first:
             notes.append(FORK_AT_NOTE)
-        made = await asyncio.to_thread(_make_row, svc, row, new_hid, kept, dropped, pending, at)
+        made = await asyncio.to_thread(_make_row, svc, row, new_hid, kept, dropped, pending, at, notes)
     finally:
         live.claim = ""
     view = svc._with_live(store.view(made))
@@ -681,19 +686,45 @@ async def fork(svc: Any, sid: str, at: str = "") -> dict[str, Any]:
             "from_end": not at}
 
 
+def branch_consent(row: Any) -> tuple[str, list[str]]:
+    """v1.511.0 (H9): what a branch of ``row`` takes without asking, and the
+    plain words for what it does NOT carry — ``(mode, notes)``. Full access
+    (two presses of the user's own) starts again on the tool's default; Pi's
+    "load the folder's own extensions" press is asked again in the branch;
+    the Iron Jarvis tools boxes ARE the conversation's and stay — said."""
+    from . import jarvis_tools as JT
+    from .service import default_mode, mode_label
+
+    notes: list[str] = []
+    mode = row.mode or "ask"
+    if mode == "full":
+        mode = default_mode(row.harness)
+        notes.append(FORK_NOT_FULL.format(mode=mode_label(row.harness, mode)))
+    if bool(getattr(row, "load_folder_resources", False)):
+        notes.append(FORK_PI_FOLDER_ASKED)
+    if any(JT.load(getattr(row, "capabilities_json", "") or "").values()):
+        notes.append(FORK_KEEPS_TOOLS)
+    return mode, notes
+
+
 def _make_row(svc: Any, row: Any, new_hid: str, kept: list[dict[str, Any]], dropped: int,
-              pending: dict[str, Any] | None, at: str) -> Any:
+              pending: dict[str, Any] | None, at: str, notes: list[str] | None = None) -> Any:
     """BLOCKING: the branch's row, its log (the history it holds), its
-    references and (Claude Code) what its first start does."""
+    references and (Claude Code) what its first start does. v1.511.0 (H9):
+    never Full access or Pi's folder press without asking (:func:`branch_consent`);
+    what changed is added to ``notes``."""
     title = clip(f"{row.title or 'Session'} (branch)", 120)
+    mode, said = branch_consent(row)
     made = store.create(
         svc.engine, harness=row.harness, folder=row.folder or "", title=title,
         account=row.account or "", account_json=row.account_json or "", model=row.model or "",
-        effort=row.effort or "", mode=row.mode or "ask", harness_session_id=new_hid,
+        effort=row.effort or "", mode=mode, harness_session_id=new_hid,
         no_folder=bool(getattr(row, "no_folder", False)),
         capabilities_json=getattr(row, "capabilities_json", "") or "",
-        load_folder_resources=bool(getattr(row, "load_folder_resources", False)),
+        load_folder_resources=False,
     )
+    if notes is not None:
+        notes.extend(said)
     _write_events(svc.home, made.id, [_stripped(e) for e in kept], dropped)
     if new_hid:
         ids = {e.get("at") for e in kept if e.get("type") == "user" and e.get("at")}

@@ -93,6 +93,7 @@ import asyncio
 import hashlib
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from ..computeruse.base import Action, Selector
@@ -103,13 +104,20 @@ from ..tools.base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
 from . import protocol as P
 from .errors import (
     ANSWER_LOST_CODES,
+    PAGE_CHANGED_AFTER_WAIT_MESSAGE,
     UNKNOWN_OUTCOME_MESSAGE,
     BrowserError,
     BrowserErrorCode,
     browser_error,
 )
 from .protocol import METHOD_ACTIVE_TAB, METHOD_LIST_TABS
-from .risk import browser_risk_decision, request_text_of, risk_row, tab_is_flagged
+from .risk import (
+    browser_risk_decision,
+    own_app_refusal,
+    request_text_of,
+    risk_row,
+    tab_is_flagged,
+)
 from .screenshot import ScreenshotSaveFailed, capture_for_tool
 from .service import ACCESS_INTERACTIVE, ActionTarget
 from .snapshot import (
@@ -1098,6 +1106,15 @@ class _ActingTool(_BrowserTool):
         except BrowserError as exc:
             return self._refusal_from(exc)
 
+        # v1.511.0 (second review B9): the frame carries the origin the plan
+        # was made against, and the add-on refuses (PAGE_CHANGED) when the
+        # document it is about to act in is not that one — the page may have
+        # moved while the card below waited. Set HERE, before the door, so the
+        # origin the user's OK was given for is the one checked.
+        origin = P.page_origin(plan.page_url)
+        if self.method in P.ORIGIN_CHECKED_METHODS and origin:
+            params["origin"] = origin
+
         decision = browser_risk_decision(
             self.risk_name(args),
             target_label=plan.label,
@@ -1108,6 +1125,9 @@ class _ActingTool(_BrowserTool):
             page_flagged=tab_is_flagged(getattr(self.browser, "snapshots", None), plan.tab_id),
             request_text=request_text_of(self.browser),
             policy=getattr(self.browser, "policy", None),
+            # v1.511.0 (B2, decision E4): Enter is judged as the submit it is.
+            press_enter=self.method == P.METHOD_TYPE_TEXT and bool(args.get("press_enter")),
+            key=str(args.get("key") or "") if self.method == P.METHOD_PRESS_KEY else "",
         )
         if decision.requires_approval:
             pending = await self._require_approval(ctx, args, plan, decision)
@@ -1136,6 +1156,11 @@ class _ActingTool(_BrowserTool):
             lost = exc.code in ANSWER_LOST_CODES and (
                 exc.code != BrowserErrorCode.BROWSER_NOT_CONNECTED.value or sent_connected
             )
+            if exc.code == BrowserErrorCode.PAGE_CHANGED.value and decision.requires_approval:
+                # v1.511.0 (B9): the add-on refused because the page is no
+                # longer the site the user said yes for. Nothing ran; say why
+                # in the words that fit what happened.
+                exc = BrowserError(exc.code, message=PAGE_CHANGED_AFTER_WAIT_MESSAGE)
             answer = self._refusal_from(exc, outcome_unknown=lost)
             if lost and isinstance(answer.data, dict):
                 answer.data.update(
@@ -1314,7 +1339,17 @@ class _ActingTool(_BrowserTool):
             value = f"***REDACTED*** (sha256:{_text_digest(str(args.get('text') or ''))})"
         elif self.approval_kind == "navigate":
             value = str(args.get("url") or "")
-        return Action(kind=self.approval_kind, selector=selector, value=value)
+        # v1.511.0 (second review B6): the TAB and the SITE are part of the
+        # signature, so an approval is for this action on this site in this
+        # tab. One given later on the Browser page for a card nobody could
+        # answer used to be spent by the next identical click ANYWHERE.
+        return _SitedAction(
+            kind=self.approval_kind,
+            selector=selector,
+            value=value,
+            tab_id=plan.tab_id,
+            site=P.page_origin(plan.page_url),
+        )
 
     async def _require_approval(
         self,
@@ -1367,7 +1402,9 @@ class _ActingTool(_BrowserTool):
             # what stops one approval authorising a hundred identical clicks.
             await asyncio.to_thread(queue.consume, prior.id)
             return None
-        req = await asyncio.to_thread(queue.create_request, run_id, action, decision.reason)
+        req = await asyncio.to_thread(
+            queue.create_request, run_id, action, _row_reason(decision.reason, plan)
+        )
         # v1.449.0 (G54): WHO CAN ASK about this call — the chat stream
         # lane's resolver for its turn, the agent runtime's for its run, else
         # the runtime-wide one (the sidebar's, v1.276.0). None = nothing on
@@ -1418,6 +1455,41 @@ class _ActingTool(_BrowserTool):
         # first in-process resolver Ship 4 wires up.
         await asyncio.to_thread(queue.consume, req.id)
         return None
+
+
+@dataclass
+class _SitedAction(Action):
+    """An approval's :class:`Action` that also names the tab and the site
+    (v1.511.0, second review B6).
+
+    ``ApprovalQueue`` keys consume-on-use on ``json.dumps(action.to_dict())``,
+    so these two keys make the approval specific to that tab and that site
+    (the page's origin: scheme, host and port, never the path or the query).
+    A row written before them carries neither key and so matches no new call
+    — fail closed — while it can still be denied by its id.
+    """
+
+    tab_id: int | None = None
+    site: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        row = super().to_dict()
+        row["tab_id"] = self.tab_id
+        row["site"] = self.site
+        return row
+
+
+def _row_reason(reason: str, plan: ActionTarget) -> str:
+    """The reason stored on the approval row: the door's reason, then WHERE
+    (v1.511.0, B6), so the Browser page's row says which site and which tab an
+    approval is for. The host only, never the path or the query."""
+    where = _fence_label(P.page_site_words(plan.page_url))
+    bits = []
+    if where:
+        bits.append(f"on {where}")
+    if plan.tab_id is not None:
+        bits.append(f"in tab {plan.tab_id}")
+    return f"{reason} ({', '.join(bits)})" if bits else reason
 
 
 _DETACHED_DENIALS: set = set()
@@ -1623,6 +1695,10 @@ class BrowserCreateTabTool(_ActingTool):
             scheme = P.unsupported_page_scheme(url)
             if scheme:
                 raise BrowserError(BrowserErrorCode.UNSUPPORTED_PAGE, scheme=scheme)
+            # v1.511.0 (B10): never Iron Jarvis's own dashboard or daemon.
+            own = own_app_refusal(url)
+            if own is not None:
+                raise own
         active = args.get("active")
         params = P.create_tab_params(url or None, active=True if active is None else bool(active))
         return ActionTarget(tab={"url": url}), dict(params)
@@ -2047,7 +2123,15 @@ class BrowserNavigateTool(_ActingTool):
         # refusal: the allowlist the user configured for computer use keeps
         # applying to their real browser, and it applies through the gate they
         # already know instead of a second one.
-        return plan, dict(P.navigate_params(str(args.get("url") or ""), plan.tab_id))
+        params = dict(P.navigate_params(str(args.get("url") or ""), plan.tab_id))
+        # v1.511.0 (second review B10): Iron Jarvis's own dashboard and daemon
+        # are refused outright, before any card: with Auto-allow on, a steered
+        # turn could otherwise open the dashboard and press an approval's
+        # "Allow". Any other page on this computer asks, in the door.
+        own = own_app_refusal(params["url"])
+        if own is not None:
+            raise own
+        return plan, params
 
     def render(self, args, plan, result, risk) -> ToolResult:
         data = dict(result)

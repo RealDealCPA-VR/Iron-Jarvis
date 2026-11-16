@@ -22,6 +22,11 @@ export const DEFAULT_COMMAND_TIMEOUT_S = 15.0;
 export const DEFAULT_SNAPSHOT_MODE = "interactive";
 export const DIRECTIVE_DISCONNECT = "disconnect";
 export const DIRECTIVE_REQUEST_HOST_PERMISSIONS = "request_host_permissions";
+export const ENTER_EFFECTS = ["submits", "newline", "nothing", "page"] as const;
+export const ENTER_NEWLINE = "newline";
+export const ENTER_NOTHING = "nothing";
+export const ENTER_PAGE = "page";
+export const ENTER_SUBMITS = "submits";
 export const EVENT_DOWNLOAD_COMPLETED = "download_completed";
 export const EVENT_ID_PREFIX = "evt_";
 export const EVENT_NAVIGATION_COMPLETED = "navigation_completed";
@@ -70,6 +75,7 @@ export const METHOD_TYPE_TEXT = "type_text";
 export const MODE_FULL = "full";
 export const MODE_INTERACTIVE = "interactive";
 export const MODE_SUMMARY = "summary";
+export const ORIGIN_CHECKED_METHODS = ["click", "type_text", "press_key", "scroll"] as const;
 export const PAGE_ACTION_METHODS = ["click", "type_text", "press_key", "navigate"] as const;
 export const PAIRING_DEADLINE_S = 300.0;
 export const PAIRING_ID_PREFIX = "pair_";
@@ -147,9 +153,10 @@ export type BrowserErrorCode =
   | "EXTENSION_ERROR"
   | "PAIRING_REQUIRED"
   | "AUTHENTICATION_FAILED"
-  | "CONNECTION_REPLACED";
+  | "CONNECTION_REPLACED"
+  | "PAGE_CHANGED";
 
-export const BROWSER_ERROR_CODES = ["BROWSER_NOT_CONNECTED", "BROWSER_ACCESS_OFF", "READ_ONLY_MODE", "TAB_NOT_FOUND", "PAGE_NOT_READY", "ELEMENT_NOT_FOUND", "STALE_ELEMENT", "STALE_SNAPSHOT", "PERMISSION_DENIED", "ACTION_TIMEOUT", "NAVIGATION_FAILED", "PAGE_FAILED_TO_LOAD", "DOWNLOAD_FAILED", "UNSUPPORTED_PAGE", "EXTENSION_ERROR", "PAIRING_REQUIRED", "AUTHENTICATION_FAILED", "CONNECTION_REPLACED"] as const;
+export const BROWSER_ERROR_CODES = ["BROWSER_NOT_CONNECTED", "BROWSER_ACCESS_OFF", "READ_ONLY_MODE", "TAB_NOT_FOUND", "PAGE_NOT_READY", "ELEMENT_NOT_FOUND", "STALE_ELEMENT", "STALE_SNAPSHOT", "PERMISSION_DENIED", "ACTION_TIMEOUT", "NAVIGATION_FAILED", "PAGE_FAILED_TO_LOAD", "DOWNLOAD_FAILED", "UNSUPPORTED_PAGE", "EXTENSION_ERROR", "PAIRING_REQUIRED", "AUTHENTICATION_FAILED", "CONNECTION_REPLACED", "PAGE_CHANGED"] as const;
 
 export const REMEDIES: Record<BrowserErrorCode, string> = {
   "BROWSER_NOT_CONNECTED": "Your browser is not connected to Iron Jarvis. Ask the user to open the Browser page in Iron Jarvis and pair their browser, then retry.",
@@ -170,6 +177,7 @@ export const REMEDIES: Record<BrowserErrorCode, string> = {
   "PAIRING_REQUIRED": "This browser is not paired with Iron Jarvis. Ask the user to open the Browser page in Iron Jarvis and press Pair.",
   "AUTHENTICATION_FAILED": "Your browser's pairing was refused. Ask the user to press Forget on the Browser page in Iron Jarvis and pair the browser again.",
   "CONNECTION_REPLACED": "Another browser connected and replaced this one, so this call was abandoned rather than left hanging. Call browser_get_status and retry against the connected browser.",
+  "PAGE_CHANGED": "The tab no longer shows the site this was planned on, so nothing was done. Call browser_read_page to read the page again before acting.",
 };
 
 // --- Frame and payload shapes, from the TypedDicts in protocol.py ---
@@ -319,6 +327,8 @@ export interface ElementRow {
   autocomplete?: string;
   sensitive?: boolean;
   value?: null;
+  enter?: string;
+  form_submit?: string;
 }
 
 /** One heading, as ``{level, text}``. */
@@ -418,6 +428,7 @@ export interface ScrollParams {
   direction: string;
   tab_id?: number;
   amount?: number;
+  origin?: string;
 }
 
 /** ``create_tab`` params. ``active`` is always sent, never inferred. */
@@ -436,6 +447,7 @@ export interface ClickParams {
   target: Target;
   tab_id?: number;
   snapshot_id?: string;
+  origin?: string;
 }
 
 /** ``type_text`` params. */
@@ -446,6 +458,7 @@ export interface TypeTextParams {
   press_enter: boolean;
   tab_id?: number;
   snapshot_id?: string;
+  origin?: string;
 }
 
 /** ``press_key`` params. ``target`` is optional — a key can go to the page. */
@@ -454,6 +467,7 @@ export interface PressKeyParams {
   tab_id?: number;
   target?: Target;
   snapshot_id?: string;
+  origin?: string;
 }
 
 /** ``navigate`` params. */

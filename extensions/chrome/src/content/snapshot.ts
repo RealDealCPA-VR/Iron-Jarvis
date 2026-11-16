@@ -51,6 +51,10 @@
 // through the debugger protocol, which this add-on deliberately does not use.
 
 import {
+  ENTER_NEWLINE,
+  ENTER_NOTHING,
+  ENTER_PAGE,
+  ENTER_SUBMITS,
   FULL_TEXT_CHARS,
   MAX_AX_DEPTH,
   MAX_AX_NODES,
@@ -722,6 +726,13 @@ function describe(
     }
     row.sensitive = facts.sensitive;
     row.value = facts.value;
+    // v1.511.0 (second review B2): what Enter does here, and — when it submits
+    // a form — what that form's own button reads. The daemon's risk door
+    // judges an Enter as the submit it is, by that button's name.
+    row.enter = enterEffect(el);
+    if (row.enter === ENTER_SUBMITS) {
+      row.form_submit = formSubmitName(el);
+    }
   }
   state.elements.push(row);
   if (spec.links && tag === "A" && el.hasAttribute("href")) {
@@ -738,6 +749,58 @@ function describe(
       });
     }
   }
+}
+
+/**
+ * What pressing Enter in this FIELD does, judged exactly as `actions.pressOn`
+ * acts (v1.511.0, second review B2): an `<input>` inside a form submits it
+ * (`requestSubmit`), a `<textarea>` takes a newline, and a select or an
+ * editable region gets the key events and no default action. An `<input>` in
+ * no form is `page`: whatever the page's own script does with the key, which
+ * the daemon cannot judge, so it asks.
+ */
+export function enterEffect(el: Element): string {
+  if (el instanceof HTMLTextAreaElement) {
+    return ENTER_NEWLINE;
+  }
+  if (el instanceof HTMLInputElement) {
+    return el.form ? ENTER_SUBMITS : ENTER_PAGE;
+  }
+  return ENTER_NOTHING;
+}
+
+/**
+ * The accessible name of the submit control(s) of `el`'s form, joined with
+ * " / " when there are several — or `""` when the form has none, when one of
+ * them has no name, or when a name was cut short (v1.511.0, B2).
+ *
+ * `requestSubmit()` with no submitter is the form's DEFAULT button's submit,
+ * and a page may handle any of its buttons the same way, so every submit
+ * control is named: one that reads "Delete" beside "Save" makes the Enter ask.
+ * `""` makes the daemon ask too — an unnamed button is an unknown one. Page
+ * text: the daemon bounds it and fences it wherever it is printed.
+ */
+export function formSubmitName(el: Element): string {
+  const form = (el as Element & { form?: HTMLFormElement | null }).form;
+  if (!form) {
+    return "";
+  }
+  const names: string[] = [];
+  for (const control of Array.from(form.elements)) {
+    const submits =
+      (control instanceof HTMLButtonElement && control.type === "submit") ||
+      (control instanceof HTMLInputElement && (control.type === "submit" || control.type === "image"));
+    if (!submits) {
+      continue;
+    }
+    const [name, cut] = accessibleName(control, MAX_NAME_CHARS);
+    if (!name || cut) {
+      return "";
+    }
+    names.push(name);
+  }
+  const joined = names.join(" / ");
+  return joined.length <= MAX_NAME_CHARS ? joined : "";
 }
 
 /** The heading level of `el`, or 0. */

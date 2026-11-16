@@ -561,9 +561,11 @@ class ChatBody(BaseModel):
     auto_tools: bool = False
     #: Per-conversation permission POSTURE for the mid-turn ask (v1.188.0):
     #: "always_ask" | "approve_for_me" | "yolo". "" / unknown = approve_for_me
-    #: (v1.187.0's behaviour). Honoured by the STREAM lane only — the headless
-    #: lane has nobody present to answer a card, and yolo from a caller that
-    #: never showed the user a dropdown would be a grant nobody made.
+    #: (v1.187.0's behaviour). The STREAM lane cards by it. The plain lane
+    #: has nobody present to answer a card, so it REFUSES what the posture
+    #: would have asked about (the eased postures since v1.406.0, "always_ask"
+    #: since v1.511.0), and yolo from a caller that never showed the user a
+    #: dropdown would be a grant nobody made.
     approval_mode: str = ""
     #: Connectors the user TOGGLED ON for this conversation (the "+" menu).
     #: An MCP connector arms its whole tool group (additive to ``tools``,

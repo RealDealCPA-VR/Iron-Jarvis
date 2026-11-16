@@ -180,6 +180,17 @@ PI_FOLDER_ALREADY = "Pi already loads this folder's own extensions: your Pi sett
 PI_FOLDER_DECLINED = (
     "You told Pi not to trust this folder. To change that, open Pi in a Build terminal and type /trust."
 )
+#: v1.511.0 (A12): the stored "load them" press meets a folder the user has
+#: since told Pi not to trust — Pi starts without them, said once.
+PI_FOLDER_DECLINED_AT_START = (
+    "You told Pi not to trust this folder, so Pi starts without its own {things} and this session "
+    "stops loading them. To change that, open Pi in a Build terminal and type /trust."
+)
+#: v1.511.0 (H7): a mode change put back after a later part of the same
+#: change was refused — and the tool would not go back.
+MODE_NOT_PUT_BACK = (
+    "{label} could not be put back to {old}, so it works in {mode} until you change the mode."
+)
 PI_FOLDER_CANNOT_TELL = (
     "Iron Jarvis cannot read this folder's Pi settings safely, so it will not load them from here."
 )
@@ -441,6 +452,30 @@ JARVIS_TOOL_TITLES: dict[str, tuple[str, str]] = {
     "code_handoff_stop": ("Stop a helper coding tool", "Stop a helper coding tool"),
     "code_handoff_list": ("List the coding tools that can help", "List the coding tools that can help"),
 }
+#: v1.511.0 (A5): the hand-off card names the tool it will start; with no
+#: tool named the helper is the same tool as the session's.
+HANDOFF_TO_TOOL = ('Hand work to {label}: "{{q}}"', "Hand work to {label}")
+HANDOFF_TO_SAME = ('Hand work to a helper on this same coding tool: "{q}"',
+                   "Hand work to a helper on this same coding tool")
+HANDOFF_MORE = ('Hand more work to a helper: "{q}"', "Hand more work to a helper")
+
+
+def handoff_start_titles(args: dict[str, Any]) -> tuple[str, str]:
+    """(with the task, without one) for a ``code_handoff_start`` card."""
+    from .handoff import tool_id
+
+    if str(args.get("helper") or "").strip():
+        return HANDOFF_MORE  # an existing helper: its own tool, whatever ``tool`` says
+    raw = str(args.get("tool") or "").strip()
+    want = tool_id(raw)
+    if want:
+        lab = label(want)
+        return HANDOFF_TO_TOOL[0].format(label=lab), HANDOFF_TO_TOOL[1].format(label=lab)
+    if raw:
+        return JARVIS_TOOL_TITLES["code_handoff_start"]  # not a tool it can start: refused anyway
+    return HANDOFF_TO_SAME
+
+
 #: How many of a call's arguments a card lists (the rest are counted).
 MCP_ARG_LINES = 12
 #: v1.414.0 (fix): an MCP server's OWN form (a question with fields to fill,
@@ -462,6 +497,9 @@ def mcp_call_title(server: str, tool: str, args: Any) -> str:
         with_q, plain = JARVIS_TOOL_TITLES[tool]
         a = args if isinstance(args, dict) else {}
         q = one_line(a.get("query") or a.get("task") or "", 80)
+        if tool == "code_handoff_start":
+            # v1.511.0 (A5): the card names the tool it will start.
+            with_q, plain = handoff_start_titles(a)
         return with_q.format(q=q) if q else plain
     if server == SERVER_NAME:
         return f"Use Iron Jarvis › {tool}" if tool else "Use an Iron Jarvis tool"

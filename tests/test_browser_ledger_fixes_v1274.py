@@ -80,7 +80,8 @@ def test_page_failed_to_load_is_a_code_with_a_remedy_that_forbids_the_retry():
     assert "Do not read it again" in remedy and "Navigate" in remedy
     env = browser_error(BrowserErrorCode.PAGE_FAILED_TO_LOAD, tab_id=7)
     assert env["code"] == "PAGE_FAILED_TO_LOAD" and "Tab 7" in env["message"]
-    assert len(list(BrowserErrorCode)) == 18
+    # v1.511.0: PAGE_CHANGED (second review B9) is the nineteenth.
+    assert len(list(BrowserErrorCode)) == 19
 
 
 def test_the_addon_maps_the_browsers_error_page_to_that_code():

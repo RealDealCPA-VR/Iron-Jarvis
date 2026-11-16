@@ -40,8 +40,10 @@ may import from ``computeruse``; ``computeruse`` never imports ``browser``.
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Mapping
 from typing import Any, NotRequired, TypedDict
+from urllib.parse import urlsplit
 
 from ..computeruse.policy import _PASSWORD_AUTOCOMPLETE, _PAYMENT_AUTOCOMPLETE
 from ..core.jsonish import loads_object
@@ -170,6 +172,33 @@ PAGE_ACTION_METHODS: tuple[str, ...] = (
 )
 
 ALL_METHODS: tuple[str, ...] = READ_METHODS + LOCAL_UI_METHODS + PAGE_ACTION_METHODS
+
+#: v1.511.0 (second review B9): the acting methods that run INSIDE the page,
+#: whose frame carries ``origin`` — the page origin (:func:`page_origin`) the
+#: action was planned against. The content script refuses with
+#: ``PAGE_CHANGED`` when the document it is about to act in is not that one
+#: (the page moved while an approval card waited, say). A navigation is not
+#: here: it is judged by its destination, never by the page it leaves.
+ORIGIN_CHECKED_METHODS: tuple[str, ...] = (
+    METHOD_CLICK,
+    METHOD_TYPE_TEXT,
+    METHOD_PRESS_KEY,
+    METHOD_SCROLL,
+)
+
+#: v1.511.0 (second review B2, decision E4): what pressing Enter in a FIELD
+#: does, as the content script's ``pressOn`` acts — sent on every field row as
+#: ``enter``. ``submits``: an ``<input>`` inside a form (``requestSubmit``);
+#: ``newline``: a ``<textarea>``; ``nothing``: a select or an editable region
+#: (no default action); ``page``: an ``<input>`` in no form, so whatever the
+#: page's own script does. The risk door judges ``submits`` by the form's own
+#: button (``form_submit``) and asks for ``page`` and for a row that says
+#: nothing (an older add-on).
+ENTER_SUBMITS = "submits"
+ENTER_NEWLINE = "newline"
+ENTER_NOTHING = "nothing"
+ENTER_PAGE = "page"
+ENTER_EFFECTS: tuple[str, ...] = (ENTER_SUBMITS, ENTER_NEWLINE, ENTER_NOTHING, ENTER_PAGE)
 
 # --------------------------------------------------------------------------- #
 # Directive actions and event names
@@ -802,6 +831,14 @@ class ElementRow(TypedDict):
     autocomplete: NotRequired[str]
     sensitive: NotRequired[bool]
     value: NotRequired[None]
+    #: v1.511.0 (B2): on a field row, what Enter does there (one of
+    #: :data:`ENTER_EFFECTS`).
+    enter: NotRequired[str]
+    #: v1.511.0 (B2): on a field whose Enter submits its form, the accessible
+    #: name of that form's submit control(s), joined with " / " when there are
+    #: several; ``""`` when the form has none or one has no name. Page text:
+    #: bounded, and fenced wherever it is printed.
+    form_submit: NotRequired[str]
 
 
 class HeadingRow(TypedDict):
@@ -976,6 +1013,8 @@ class ScrollParams(TypedDict):
     direction: str
     tab_id: NotRequired[int]
     amount: NotRequired[int]
+    #: v1.511.0 (B9): the page origin this was planned against.
+    origin: NotRequired[str]
 
 
 class CreateTabParams(TypedDict):
@@ -1008,6 +1047,8 @@ class ClickParams(TypedDict):
     target: Target
     tab_id: NotRequired[int]
     snapshot_id: NotRequired[str]
+    #: v1.511.0 (B9): the page origin this was planned against.
+    origin: NotRequired[str]
 
 
 class TypeTextParams(TypedDict):
@@ -1028,6 +1069,8 @@ class TypeTextParams(TypedDict):
     press_enter: bool
     tab_id: NotRequired[int]
     snapshot_id: NotRequired[str]
+    #: v1.511.0 (B9): the page origin this was planned against.
+    origin: NotRequired[str]
 
 
 class PressKeyParams(TypedDict):
@@ -1037,6 +1080,8 @@ class PressKeyParams(TypedDict):
     tab_id: NotRequired[int]
     target: NotRequired[Target]
     snapshot_id: NotRequired[str]
+    #: v1.511.0 (B9): the page origin this was planned against.
+    origin: NotRequired[str]
 
 
 class NavigateParams(TypedDict):
@@ -1824,6 +1869,157 @@ def unsupported_page_scheme(url: str) -> str:
     return ""
 
 
+# --------------------------------------------------------------------------- #
+# v1.511.0 (second review B9, B10): where a page is
+# --------------------------------------------------------------------------- #
+
+#: The port a scheme implies, dropped from an origin the way a browser does.
+_DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443, "ws": 80, "wss": 443}
+
+
+def page_origin(url: str) -> str:
+    """The page's origin as the content script spells it: ``protocol//host``.
+
+    ``location.protocol + "//" + location.host`` on the page side: lowercased
+    host, the port only when it is not the scheme's own, IPv6 in brackets, and
+    ``file://`` (plus a server name, if any) for a file. No path, no query, no
+    user name. ``""`` when the address has no host to name (``about:``,
+    ``data:``, an unparseable string) — the frame then carries no origin and
+    the add-on checks nothing it cannot compare.
+    """
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+    except ValueError:
+        return ""
+    scheme = parts.scheme.lower()
+    if not scheme:
+        return ""
+    host = parts.hostname or ""
+    if scheme == "file":
+        return f"file://{host}"
+    if not host:
+        return ""
+    if ":" in host:
+        host = f"[{host}]"
+    if port is not None and port != _DEFAULT_PORTS.get(scheme):
+        return f"{scheme}://{host}:{port}"
+    return f"{scheme}://{host}"
+
+
+def _legacy_ipv4(host: str) -> ipaddress.IPv4Address | None:
+    """An IPv4 address in a browser's lenient spellings (``127.1``,
+    ``0x7f.0.0.1``, ``2130706433``, octal parts), or ``None``. A browser turns
+    each of these into ``127.0.0.1`` before it connects, so a check that read
+    only the dotted-quad form would miss the same page spelled another way."""
+    pieces = host.split(".")
+    if pieces and pieces[-1] == "":
+        pieces = pieces[:-1]
+    if not 1 <= len(pieces) <= 4:
+        return None
+    numbers: list[int] = []
+    for piece in pieces:
+        if not piece:
+            return None
+        try:
+            if piece[:2].lower() == "0x":
+                number = int(piece[2:] or "0", 16)
+            elif len(piece) > 1 and piece[0] == "0":
+                number = int(piece, 8)
+            else:
+                number = int(piece, 10)
+        except ValueError:
+            return None
+        numbers.append(number)
+    if any(n > 255 for n in numbers[:-1]) or numbers[-1] >= 256 ** (5 - len(numbers)):
+        return None
+    value = numbers[-1]
+    for index, number in enumerate(numbers[:-1]):
+        value += number * 256 ** (3 - index)
+    return ipaddress.IPv4Address(value)
+
+
+def _loopback_host(host: str) -> bool:
+    """Whether ``host`` names this computer: ``localhost``, a name ending in
+    ``.localhost``, 127.0.0.0/8, ``::1`` (and its IPv4-mapped form), or the
+    unspecified address a browser also reaches this computer by."""
+    name = str(host or "").strip().strip("[]").lower().rstrip(".")
+    if not name:
+        return False
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        ip: ipaddress.IPv4Address | ipaddress.IPv6Address | None = ipaddress.ip_address(name)
+    except ValueError:
+        ip = _legacy_ipv4(name)
+    if ip is None:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return bool(ip.is_loopback or ip.is_unspecified)
+
+
+def _host_and_port(url: str) -> tuple[str, int | None] | None:
+    """The host and port a browser would go to for ``url``, or ``None``.
+
+    An address with no ``//`` (``localhost:3000``) is also read as ``http://``
+    the way a person typing it means it."""
+    text = str(url or "").strip()
+    if text.lower().startswith("blob:"):
+        text = text[5:]
+    readings = [text] if "//" in text else [text, f"http://{text}"]
+    for reading in readings:
+        try:
+            parts = urlsplit(reading)
+            port = parts.port
+        except ValueError:
+            continue
+        host = parts.hostname or ""
+        if host:
+            scheme = parts.scheme.lower()
+            return host, port if port is not None else _DEFAULT_PORTS.get(scheme)
+    return None
+
+
+def local_page_kind(url: str) -> str:
+    """``"file"``, ``"loopback"`` or ``""``: whether ``url`` is a page on this
+    computer (v1.511.0, B10). Acting there, or going there, always asks."""
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    if text.lower().startswith("file:"):
+        return "file"
+    found = _host_and_port(text)
+    if found is not None and _loopback_host(found[0]):
+        return "loopback"
+    return ""
+
+
+def own_app_page(url: str, ports: Any) -> bool:
+    """Whether ``url`` is one of Iron Jarvis's own pages: a loopback address on
+    one of ``ports`` (the daemon's and the dashboard's). Never acted on,
+    opened or read through the browser (v1.511.0, B10)."""
+    found = _host_and_port(url)
+    if found is None or not _loopback_host(found[0]):
+        return False
+    return found[1] is not None and found[1] in set(ports or ())
+
+
+def page_site_words(url: str) -> str:
+    """Where a page is, in words a card can print: ``host[:port]``, or "a file
+    on this computer". Never the path or the query."""
+    if local_page_kind(url) == "file":
+        return "a file on this computer"
+    origin = page_origin(url)
+    if not origin and "//" not in str(url or ""):
+        origin = page_origin(f"http://{str(url or '').strip()}")
+    return origin.split("://", 1)[1] if "://" in origin else origin
+
+
 __all__ = [
     "ALL_DIRECTIVES",
     "ALL_EVENTS",
@@ -1837,6 +2033,11 @@ __all__ = [
     "DEFAULT_SNAPSHOT_MODE",
     "DIRECTIVE_DISCONNECT",
     "DIRECTIVE_REQUEST_HOST_PERMISSIONS",
+    "ENTER_EFFECTS",
+    "ENTER_NEWLINE",
+    "ENTER_NOTHING",
+    "ENTER_PAGE",
+    "ENTER_SUBMITS",
     "EVENT_DOWNLOAD_COMPLETED",
     "EVENT_ID_PREFIX",
     "EVENT_NAVIGATION_COMPLETED",
@@ -1887,6 +2088,7 @@ __all__ = [
     "MODE_FULL",
     "MODE_INTERACTIVE",
     "MODE_SUMMARY",
+    "ORIGIN_CHECKED_METHODS",
     "PAGE_ACTION_METHODS",
     "PAIRING_DEADLINE_S",
     "PAIRING_ID_PREFIX",
@@ -2017,6 +2219,10 @@ __all__ = [
     "response_frame",
     "screenshot_params",
     "unsupported_page_scheme",
+    "local_page_kind",
+    "own_app_page",
+    "page_origin",
+    "page_site_words",
     "activate_tab_params",
     "click_params",
     "close_tab_params",

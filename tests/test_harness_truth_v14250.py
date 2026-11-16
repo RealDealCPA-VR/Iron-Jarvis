@@ -354,7 +354,9 @@ def test_the_approval_sentence_is_true_for_each_posture(tmp_path):
     yolo = _turn(platform, mode="yolo").rendered
     assert "run without pausing, except a few calls that still wait" in yolo
     # v1.425.0 review (moved on purpose): the git guard's whole reach.
-    assert "git on this session's own branch that commits, pushes" in yolo
+    # v1.511.0 (second review T2, moved on purpose): both kinds of session.
+    assert "git that pushes, changes something on GitHub" in yolo
+    assert "on this session's own branch a commit asks too" in yolo
     assert M._GUARDED_EDITS_WORDS not in yolo, "Don't ask drops the guarded-edit card"
     # A turn whose only tools are allow-tier (no command, no page) is still
     # told about the guarded edits — except under "Don't ask".

@@ -41,13 +41,16 @@ server.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from typing import Any
 
 from ..computeruse.base import Action, Page, Selector
 from ..computeruse.policy import ComputerUsePolicy, Decision, escalate_browser
+from ..computeruse.safety import defang_fence_markers
 from ..tools.base import RiskClass
 from . import protocol as P
+from .errors import BrowserError, BrowserErrorCode
 
 # --------------------------------------------------------------------------- #
 # The base-risk table (plan §8.5)
@@ -157,6 +160,139 @@ UNCHECKED_TARGET_REASON = (
 INJECTION_JUSTIFICATION_REASON = (
     "page flagged for injection; this target was not in your request"
 )
+
+#: v1.511.0 (second review B10): the reason GOING TO a page on this computer
+#: asks, every time, whatever Auto-allow says. A loopback page can be a
+#: developer's own dev server, a local program's settings, or a file; a
+#: steered turn must not be able to take the browser there by itself.
+#: Lead review: only the navigation asks. Once the user has let the browser
+#: go there (or is already on such a tab and asks for work on it), a click or
+#: typing on it follows the ordinary rules: carding every click made the
+#: add-on unusable on a developer's own page, which is a real use, and Iron
+#: Jarvis's OWN pages are refused outright anyway (``own_app_refusal``).
+#: ``{where}`` is ``host:port`` or "a file on this computer".
+LOCAL_PAGE_REASON = "this is a page on your own computer ({where})"
+
+#: v1.511.0 (B10): Iron Jarvis's own ports when nothing moved them: the daemon
+#: (8787) and the dashboard (8788). The desktop app moves them with
+#: ``IJ_DAEMON_PORT`` / ``IJ_DASHBOARD_PORT`` (``desktop/main.js``), and the
+#: daemon reads ``IRONJARVIS_PORT`` in some launches; every one named is added,
+#: the defaults are never dropped.
+OWN_APP_DEFAULT_PORTS: tuple[int, ...] = (8787, 8788)
+OWN_APP_PORT_ENV: tuple[str, ...] = ("IJ_DAEMON_PORT", "IJ_DASHBOARD_PORT", "IRONJARVIS_PORT")
+
+#: v1.511.0 (B10): the refusal for one of Iron Jarvis's own pages. A refusal,
+#: not a card: with Auto-allow on, a steered turn could open the dashboard and
+#: press an approval's "Allow" (the vocabularies deliberately do not hold
+#: "allow" or "approve"), so there is nothing here a card could safely allow.
+OWN_APP_WORDS = (
+    "That page is Iron Jarvis's own app ({where}). Iron Jarvis does not open, "
+    "read or act on its own pages through your browser, so nothing was done. "
+    "If this needs doing, ask the user to do it in Iron Jarvis themselves."
+)
+
+#: How much of a page-authored name (a field's label, a form button's name) a
+#: risk reason quotes. A reason is stored on the approval row and printed on
+#: the card, so it is short.
+_REASON_NAME_CHARS = 80
+
+
+def own_app_ports() -> frozenset[int]:
+    """The ports Iron Jarvis's own daemon and dashboard answer on (B10)."""
+    ports = set(OWN_APP_DEFAULT_PORTS)
+    for name in OWN_APP_PORT_ENV:
+        raw = str(os.environ.get(name) or "").strip()
+        if raw.isdigit():
+            ports.add(int(raw))
+    return frozenset(ports)
+
+
+def own_app_refusal(url: str) -> BrowserError | None:
+    """The refusal for opening, reading or acting on one of Iron Jarvis's own
+    pages, or ``None`` when ``url`` is not one (v1.511.0, B10)."""
+    if not P.own_app_page(url, own_app_ports()):
+        return None
+    return BrowserError(
+        BrowserErrorCode.UNSUPPORTED_PAGE,
+        message=OWN_APP_WORDS.format(where=P.page_site_words(url) or "this computer"),
+    )
+
+
+def _quoted(text: object) -> str:
+    """A page-authored name, safe inside a reason: one line, no backtick, no
+    fence marker, bounded (the same steps as ``tools._fence_label``)."""
+    flat = defang_fence_markers(" ".join(str(text or "").split()).replace("`", "'"))
+    if len(flat) > _REASON_NAME_CHARS:
+        flat = flat[:_REASON_NAME_CHARS] + "..."
+    return flat.replace('"', "'")
+
+
+#: The key names that press Enter. ``actions.pressOn`` submits only on
+#: "Enter"; the others are judged the same way because a page's own script
+#: may read them as Enter, and asking once too often costs a card, not a form.
+_ENTER_KEYS = frozenset({"enter", "return", "numpadenter"})
+
+
+def _submit_decision(
+    target_label: str,
+    target_element: Mapping[str, Any] | None,
+    policy: ComputerUsePolicy | None,
+) -> Decision | None:
+    """The verdict for pressing Enter in this target, judged as a SUBMIT
+    (v1.511.0, second review B2, decision E4), or ``None`` when Enter there
+    submits nothing.
+
+    The add-on's ``pressOn`` calls ``form.requestSubmit()`` for Enter in an
+    ``<input>`` inside a form — the same event as pressing the form's own
+    button, so it is judged by that button's NAME through the same
+    vocabularies a click on it would meet. It asks unless that name is known
+    and reads as harmless. A textarea (a newline) and an editable region or a
+    select (no default action) submit nothing. An input in no form, a target
+    the snapshot does not hold, and a row that does not say (an older add-on)
+    all ask: what Enter would do there is not known.
+    """
+    field = _quoted(target_label) or "the field"
+    row = dict(target_element or {})
+    if row and "type" not in row:
+        # Not a field (a button, a link): Enter there is judged as the click it
+        # is, by the target's own name, before this.
+        return None
+    effect = str(row.get("enter") or "")
+    if effect in (P.ENTER_NEWLINE, P.ENTER_NOTHING):
+        return None
+    if effect != P.ENTER_SUBMITS:
+        return Decision(
+            allowed=True,
+            requires_approval=True,
+            reason=f'it will press Enter in "{field}", and what that submits is not known',
+        )
+    button = str(row.get("form_submit") or "").strip()
+    if not button:
+        return Decision(
+            allowed=True,
+            requires_approval=True,
+            reason=(
+                f'it will press Enter in "{field}", which submits the form, and the '
+                "form's button has no name to check"
+            ),
+        )
+    verdict = escalate_browser(
+        RiskClass.PAGE_ACTION,
+        Action(kind="click", selector=Selector()),
+        None,
+        target_label=button,
+        policy=policy,
+    )
+    if not verdict.requires_approval:
+        return None
+    return Decision(
+        allowed=True,
+        requires_approval=True,
+        reason=(
+            f'it will press Enter in "{field}", which submits the form '
+            f'(its button reads "{_quoted(button)}")'
+        ),
+    )
 
 
 def base_risk(tool_name: str) -> RiskClass:
@@ -306,6 +442,8 @@ def browser_risk_decision(
     page_flagged: bool = False,
     request_text: str | None = None,
     policy: ComputerUsePolicy | None = None,
+    press_enter: bool = False,
+    key: str = "",
 ) -> Decision:
     """The risk verdict for one browser tool call. The only door.
 
@@ -346,6 +484,10 @@ def browser_risk_decision(
             ``None`` or empty fails closed to requiring approval on a flagged tab.
         policy: the live :class:`ComputerUsePolicy`, so the domain allowlist and
             the sensitivity vocabulary are one configuration and not two.
+        press_enter: for ``browser_type``, whether Enter is pressed after the
+            text (v1.511.0, B2): judged as a SUBMIT of the field's form.
+        key: for ``browser_press_key``, the key (v1.511.0, B2): Enter on a
+            field is judged as a submit too.
 
     Returns:
         Decision: ``allowed`` is always ``True``; this function escalates, it
@@ -377,6 +519,25 @@ def browser_risk_decision(
     # Both run after the policy call and neither can lower its verdict. An
     # override that could lower would be a way to reach the page WITHOUT the
     # escalation vocabulary, which is the one thing this module must not offer.
+
+    # v1.511.0 (second review B10): A PAGE ON THIS COMPUTER ASKS, EVERY TIME.
+    # A navigation is judged by its destination; a page action (click, type,
+    # key) by the page it acts on. First, so the card says WHY in these words
+    # even when another rule (an empty allowlist host for ``file:``) would ask
+    # too. Iron Jarvis's own pages never get here: they are refused before
+    # the door (``own_app_refusal``).
+    method = _TOOL_METHOD.get(tool_name)
+    if base is RiskClass.PAGE_ACTION:
+        where_url = str(url or "") if method == P.METHOD_NAVIGATE else ""
+        if where_url and P.local_page_kind(where_url):
+            return Decision(
+                allowed=True,
+                requires_approval=True,
+                reason=LOCAL_PAGE_REASON.format(
+                    where=_quoted(P.page_site_words(where_url)) or "this computer"
+                ),
+            )
+
     if decision.requires_approval:
         return decision
 
@@ -447,6 +608,22 @@ def browser_risk_decision(
                 requires_approval=True,
                 reason=INJECTION_JUSTIFICATION_REASON,
             )
+
+    # 3) ENTER IS A SUBMIT (v1.511.0, second review B2, decision E4). Typing
+    # with ``press_enter``, or Enter pressed on a field, used to reach this
+    # door with only the FIELD's name ("Amount"), and the add-on then called
+    # ``form.requestSubmit()`` — the form's "Transfer" button, pressed with no
+    # card, where a click on that same button stops for one.
+    entering = bool(press_enter) or (
+        method == P.METHOD_PRESS_KEY and str(key or "").strip().lower() in _ENTER_KEYS
+    )
+    if base is RiskClass.PAGE_ACTION and entering and method in (
+        P.METHOD_TYPE_TEXT,
+        P.METHOD_PRESS_KEY,
+    ):
+        submit = _submit_decision(str(target_label or ""), target_element, policy)
+        if submit is not None:
+            return submit
 
     return decision
 
@@ -538,10 +715,15 @@ def request_text_of(runtime: Any) -> str:
 __all__ = [
     "BASE_RISK",
     "INJECTION_JUSTIFICATION_REASON",
+    "LOCAL_PAGE_REASON",
+    "OWN_APP_DEFAULT_PORTS",
+    "OWN_APP_WORDS",
     "UNCHECKED_TARGET_REASON",
     "STATE_CHANGING_TOOLS",
     "base_risk",
     "browser_risk_decision",
+    "own_app_ports",
+    "own_app_refusal",
     "request_text_of",
     "risk_row",
     "tab_is_flagged",

@@ -107,6 +107,12 @@ class FakeElement:
     enabled: bool = True
     field_type: str = ""
     autocomplete: str = ""
+    #: v1.511.0 (second review B2): what Enter does in this field
+    #: (``P.ENTER_EFFECTS``) and what its form's own button reads, as the
+    #: content script reports them. ``""`` / ``None``: not sent (an older
+    #: add-on, or a control that is not a field).
+    enter: str = ""
+    form_submit: str | None = None
 
     @property
     def sensitive(self) -> bool:
@@ -129,6 +135,10 @@ class FakeElement:
         if self.sensitive:
             row["sensitive"] = True
             row["value"] = None
+        if self.enter:
+            row["enter"] = self.enter
+        if self.form_submit is not None:
+            row["form_submit"] = self.form_submit
         return row
 
 

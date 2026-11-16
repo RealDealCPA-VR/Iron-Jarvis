@@ -118,8 +118,8 @@ def test_optional_frame_fields_generate_as_optional():
 
 
 def test_all_seventeen_d15_codes_exist():
-    # v1.274.0: seventeen from D15 plus PAGE_FAILED_TO_LOAD.
-    assert len(list(BrowserErrorCode)) == 18
+    # v1.274.0: seventeen from D15 plus PAGE_FAILED_TO_LOAD; v1.511.0 PAGE_CHANGED.
+    assert len(list(BrowserErrorCode)) == 19
     assert BrowserErrorCode.PAGE_FAILED_TO_LOAD.value == "PAGE_FAILED_TO_LOAD"
     expected = {
         "BROWSER_NOT_CONNECTED",
@@ -140,6 +140,7 @@ def test_all_seventeen_d15_codes_exist():
         "PAIRING_REQUIRED",
         "AUTHENTICATION_FAILED",
         "CONNECTION_REPLACED",
+        "PAGE_CHANGED",  # v1.511.0 (second review B9)
     }
     assert {code.value for code in BrowserErrorCode} == expected
 

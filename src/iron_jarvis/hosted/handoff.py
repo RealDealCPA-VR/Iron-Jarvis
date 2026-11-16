@@ -12,9 +12,10 @@ WHAT A HELPER IS. A real Build › Code session of the chosen coding tool
 the session that started it, named "Helper: …" and marked ``handed_from``.
 The user can open it like any other session, watch it, answer its cards and
 stop it. Its approval cards are its OWN (the bell lists them and opens the
-helper); nothing here answers them. It never runs in Full access: it takes
-the starting session's mode when the helper's tool offers that mode and it is
-not a dangerous one, else the helper tool's own default.
+helper); nothing here answers them. It never runs in Full access, and
+(v1.511.0, A5) never in a mode looser than the starting session's
+(:data:`MODE_STRICTNESS`, :func:`helper_mode`): a session on Ask first or
+Plan cannot hand work to a tool that would not ask — refused in words.
 
 WHY START / CHECK / STOP, NOT ONE CALL. Every coding tool bounds a single MCP
 tool call with a time limit of its own (Codex's is about a minute), and a
@@ -98,6 +99,88 @@ GROUP_NOT_READ = "Your accounts are not listed yet, so nothing was handed over. 
 STILL_WORKING = (
     "The helper is still working on the last piece. Check on it, or stop it, before handing it more."
 )
+
+#: v1.511.0 (A5, decision E6): how strict each mode of each coding tool is,
+#: by what it DOES (each tool's own ``MODE_ABOUT``), never by its name. A
+#: helper starts only in a mode at least as strict as the starting session's
+#: (a lower number). Four steps, not three: "Auto edits" changes files
+#: unasked but still asks before a command, so it is neither "asks before
+#: changes" nor "does not ask".
+READS_ONLY = 0      # changes nothing without the user's yes (a plan mode)
+ASKS = 1            # asks before it changes a file or runs a command
+EDITS_FREELY = 2    # changes files without asking; asks before a command
+DOES_NOT_ASK = 3    # runs without asking (a tool's own check, or nothing)
+MODE_STRICTNESS: dict[str, dict[str, int]] = {
+    "claude-code": {"plan": READS_ONLY, "ask": ASKS, "edits": EDITS_FREELY, "auto": DOES_NOT_ASK,
+                    "full": DOES_NOT_ASK},
+    # Codex's plan refuses every file change and asks before each command.
+    # "edits" exists off Windows only.
+    "codex": {"plan": READS_ONLY, "ask": ASKS, "edits": EDITS_FREELY, "full": DOES_NOT_ASK},
+    "opencode": {"plan": READS_ONLY, "ask": ASKS, "edits": EDITS_FREELY, "full": DOES_NOT_ASK},
+    "grok": {"ask": ASKS, "auto": DOES_NOT_ASK, "full": DOES_NOT_ASK},
+    # Pi asks nothing before a tool.
+    "pi": {"own": DOES_NOT_ASK},
+    # Antigravity's own rules change files unasked by default (inside and
+    # outside the folder) and ask before a command; its plan is NOT read-only.
+    "antigravity": {"own": EDITS_FREELY, "edits": EDITS_FREELY, "plan": EDITS_FREELY, "full": DOES_NOT_ASK},
+}
+#: Why a tool cannot take the work, by the strictness the session needs.
+CANNOT_BE_AS_STRICT = {
+    READS_ONLY: "{label} has no mode that only reads and plans",
+    ASKS: "{label} cannot ask before it changes files",
+    EDITS_FREELY: "{label} cannot ask before it runs a command",
+}
+HELPER_TOO_LOOSE = (
+    "{why}, and this session is on {mode}. Hand this to a tool that has one, or change this session's mode."
+)
+HELPER_TOO_LOOSE_ASK = (
+    "{why}, and this session is on {mode}. Hand this to a tool that can ask, or change this session's mode."
+)
+
+
+def strictness(harness: str, mode: str) -> int:
+    """How strict ``mode`` of ``harness`` is (:data:`MODE_STRICTNESS`). A mode
+    not in the table (one of the user's own OpenCode or Antigravity agents)
+    is taken as :data:`ASKS` for the STARTING session (never looser than what
+    it may be) — see :func:`helper_mode`."""
+    return MODE_STRICTNESS.get(harness, {}).get(str(mode or ""), ASKS)
+
+
+def helper_mode(parent_harness: str, parent_mode: str, want: str) -> str:
+    """The mode a helper on ``want`` starts in, for a starting session in
+    ``parent_mode`` — or :class:`~.service.Refused`, in one plain sentence.
+
+    The starting session's mode, when the helper's tool has it and it is not
+    Full access (the same tool: the very same rules; another tool: only when
+    it is at least as strict there). Otherwise: a session that already runs
+    without asking gives the helper its tool's default mode (as before);
+    one that asks or only reads gives it that tool's loosest mode that is
+    still at least as strict — never a read-only one for a session that
+    works — or refuses."""
+    from . import words as W
+    from .service import MODE_ORDER, Refused, check_mode, default_mode, mode_label, modes_for
+
+    parent_mode = str(parent_mode or "")
+    need = strictness(parent_harness, parent_mode)
+    table = MODE_STRICTNESS.get(want, {})
+    try:
+        same = check_mode(want, parent_mode, False)
+    except Refused:
+        same = ""
+    if same and (want == parent_harness and same == parent_mode or table.get(same, DOES_NOT_ASK) <= need):
+        return same
+    if need >= DOES_NOT_ASK:
+        return default_mode(want)
+    offered = [m for m in MODE_ORDER if m in modes_for(want) and m != "full"]
+    floor = READS_ONLY if need == READS_ONLY else ASKS
+    for level in range(need, floor - 1, -1):
+        for m in offered:
+            if table.get(m, DOES_NOT_ASK) == level:
+                return m
+    why = CANNOT_BE_AS_STRICT[need].format(label=W.label(want))
+    words = HELPER_TOO_LOOSE if need == READS_ONLY else HELPER_TOO_LOOSE_ASK
+    raise Refused(words.format(why=why, mode=mode_label(parent_harness, parent_mode)), 400)
+
 
 _ALIASES = {
     "claude": "claude-code", "claude code": "claude-code", "claude-code": "claude-code",
@@ -296,7 +379,7 @@ async def _start_locked(svc: Any, parent: str, prow: Any, *, tool: str, task: st
                         helper: str) -> dict[str, Any]:
     from . import store
     from . import words as W
-    from .service import Refused, check_mode, default_mode, first_message_title
+    from .service import Refused, first_message_title
 
     helpers = await asyncio.to_thread(_helper_rows, svc, parent)
     working = sum(1 for r in helpers if _running(svc, r.id))
@@ -321,10 +404,9 @@ async def _start_locked(svc: Any, parent: str, prow: Any, *, tool: str, task: st
             raise Refused(NOT_INSTALLED.format(label=W.label(want), choices=_choices(ready)), 400)
         if row.get("signed_in") is False:
             raise Refused(SIGNED_OUT.format(label=W.label(want), choices=_choices(ready)), 400)
-        try:
-            mode = check_mode(want, prow.mode or "", False)
-        except Refused:
-            mode = default_mode(want)
+        # v1.511.0 (A5, E6): never looser than the starting session's mode —
+        # refused in words when the tool has no mode that strict.
+        mode = helper_mode(prow.harness, prow.mode or "", want)
         name = str(title or "").strip() or first_message_title(task) or "a piece of work"
         made = await svc.create({
             "harness": want, "folder": prow.folder, "mode": mode,

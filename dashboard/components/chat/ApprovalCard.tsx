@@ -531,11 +531,14 @@ export function ApprovalCard({
 
       {/* Only a local-only chat's card says so: a plan ask is once-only for
           its own reason (the line above). v1.375.0: so is a commit or push
-          on a Build session's own branch, which says ITS reason. */}
+          on a Build session's own branch, which says ITS reason. v1.511.0
+          (second review T2): and a push or git that throws work away in the
+          user's own folder (src/iron_jarvis/harness/git_guard.py). */}
       {onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "git" ? (
         <p data-testid="approval-git-once" className="text-[11px] leading-relaxed text-zinc-400">
-          On this session&apos;s own branch, a commit, a push, a change on GitHub, a git setting or
-          git that throws work away asks you every time.
+          A push, a change on GitHub, a git setting, work taken from the stash or git that throws
+          work away or rewrites history asks you every time, and so does a commit on this
+          session&apos;s own branch.
         </p>
       ) : onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "page" ? (
         <p data-testid="approval-page-once" className="text-[11px] leading-relaxed text-zinc-400">

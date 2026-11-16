@@ -80,6 +80,7 @@ from ..core.logging import get_logger
 from . import protocol as P
 from .errors import BrowserError, BrowserErrorCode
 from .grants import TabGrants, is_acting_browser_tool, tab_key
+from .risk import own_app_refusal
 from .screenshot import decode_capture
 from .snapshot import PageSnapshot, SnapshotLimits, normalise_mode
 
@@ -656,6 +657,11 @@ class BrowserRuntime:
                 scheme = "These"
             if scheme:
                 raise BrowserError(BrowserErrorCode.UNSUPPORTED_PAGE, scheme=scheme)
+            # v1.511.0 (second review B10): Iron Jarvis's own dashboard and
+            # daemon are never read or acted on through the browser.
+            own = own_app_refusal(str(row.get("url") or ""))
+            if own is not None:
+                raise own
         return dict(row)
 
     async def read_page_snapshot(

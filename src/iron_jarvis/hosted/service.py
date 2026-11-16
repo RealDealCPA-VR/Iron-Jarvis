@@ -154,6 +154,9 @@ BACKGROUND_SILENT_MAX_S = 2 * 60 * 60.0
 SELF_REPLY_QUIET_S = 10 * 60.0
 #: How long a finished turn stays in memory for a rejoin.
 FINISHED_KEEP_S = 600.0
+#: v1.511.0 (A12): the longest a Pi start waits for the folder's trust to be
+#: read afresh (past it the session's press is kept, as before).
+PI_TRUST_START_S = 5.0
 #: v1.414.3: how long a reply's end waits for the tool's session id to be
 #: saved. v1.417.0 (C4.7): 10 -> 2 s — past it the save goes on in the
 #: background (it is shielded) and the reply ends now.
@@ -1094,6 +1097,9 @@ class LiveSession:
         #: kind, name, title, parent, turn) — closed ``stopped`` when the
         #: process ends (:mod:`.open_steps`).
         self.open_steps: dict[str, dict[str, Any]] = {}
+        #: v1.511.0 (A12): said at the next start — Pi starts without the
+        #: folder's own resources the user has since declined.
+        self.pi_folder_note = ""
 
     @property
     def running(self) -> bool:
@@ -2208,6 +2214,11 @@ class HostedService:
                 # field refuses (Full access with no confirm, a mode the
                 # tool refused) renames nothing, the tool included.
                 tell_title = fields["title"].strip()
+        # v1.511.0 (H7): EVERY field is checked before anything reaches the
+        # tool. A mode used to be applied live first, so a later refusal (a
+        # bad model, Pi keeping its last one) left the tool in the new mode
+        # while the row and the chip still showed the old one.
+        mode = ""
         if body.get("mode") is not None:
             if row.harness == ANTIGRAVITY:
                 await asyncio.to_thread(AGA.load, self._agy_agents)
@@ -2218,11 +2229,54 @@ class HostedService:
                 problem = AGA.agent_change_problem(row.mode, mode, row.harness_session_id)
                 if problem:
                     raise Refused(problem)
+        model = check_model(body["model"]) if body.get("model") is not None else ""
+        next_model = model if body.get("model") is not None else row.model
+        pi_rows = await asyncio.to_thread(self._models, row.harness) if row.harness in LISTED_MODELS else None
+        if row.harness in LISTED_MODELS and (
+            (body.get("model") is not None and not model and row.model)
+            or (body.get("effort") is not None
+                and not check_effort(row.harness, body["effort"], next_model, pi_rows) and row.effort)
+        ) and await asyncio.to_thread(pi_keeps_last, row):
+            # Back to "Pi's default" would change nothing: reopening a
+            # conversation with messages, Pi restores its LAST model and
+            # thinking level (core/sdk.js) — said, never pretended.
+            raise Refused(W.PI_KEEPS_LAST if row.harness == PI
+                          else W.GROK_KEEPS_LAST if row.harness == GROK else W.OPENCODE_KEEPS_LAST)
+        if body.get("effort") is None and body.get("model") is not None and row.effort \
+                and row.effort not in efforts_for(row.harness, next_model, pi_rows):
+            # v1.412.0 review: the new model does not take the effort kept on
+            # the session — it goes back to the default rather than being
+            # sent to a model that refuses it.
+            body = {**body, "effort": ""}
+            applied["effort_cleared"] = row.effort
+        effort = check_effort(row.harness, body["effort"], next_model, pi_rows) \
+            if body.get("effort") is not None else ""
+        if isinstance(body.get("capabilities"), dict):
+            if (getattr(row, "handed_from", "") or "") and \
+                    JT.normalise({HO.HANDOFF: body["capabilities"].get(HO.HANDOFF)})[HO.HANDOFF]:
+                # v1.474.0: a helper can never hand off again (no chain).
+                raise Refused(HO.HELPER_CANNOT_BOX, 400)
+        folder_got: dict[str, Any] | None = None
+        if body.get("load_folder_resources") is not None:
+            if row.harness != PI:
+                raise Refused(W.PI_FOLDER_NOT_PI)
+            folder_got = await asyncio.to_thread(PT.check, row.folder, fresh=True)
+            if bool(body["load_folder_resources"]):
+                problem = {PT.NONE: W.PI_FOLDER_NOTHING, PT.TRUSTED: W.PI_FOLDER_ALREADY,
+                           PT.DECLINED: W.PI_FOLDER_DECLINED,
+                           PT.UNKNOWN: W.PI_FOLDER_CANNOT_TELL}.get(folder_got["state"])
+                if problem:
+                    raise Refused(problem)
+        # Everything is valid: now the live changes. A later live step the
+        # tool refuses puts the mode back first (and says so if it cannot).
+        mode_was_set = False
+        if mode:
             if live and live.running and live.driver:
                 try:
                     applied["mode"] = await live.driver.set_mode(mode)
                 except ControlRefused as exc:
                     raise Refused(str(exc)) from None
+                mode_was_set = True
                 self._refresh_asks(live)
                 if getattr(live.driver, "restart_needed", False):
                     # v1.413.0: OpenCode's permission rules are its process's
@@ -2231,6 +2285,44 @@ class HostedService:
                     live.restart = True
             else:
                 applied["mode"] = "next"
+            fields["mode"] = mode
+        try:
+            if body.get("model") is not None:
+                if live and live.running and live.driver and model:
+                    try:
+                        applied["model"] = await live.driver.set_model(model)
+                    except ControlRefused as exc:
+                        raise Refused(str(exc)) from None
+                else:
+                    applied["model"] = "next"
+                    if live and live.running and row.harness in (CLAUDE, PI, OPENCODE, GROK, ANTIGRAVITY):
+                        live.restart = True  # back to the CLI's default: a restart
+                fields["model"] = model
+            if body.get("effort") is not None:
+                applied["effort"] = "next"
+                set_effort = getattr(live.driver, "set_effort", None) if live and live.running and live.driver \
+                    else None
+                if set_effort is not None:
+                    # Pi changes its thinking level live (`set_thinking_level`).
+                    try:
+                        applied["effort"] = await set_effort(effort)
+                    except ControlRefused as exc:
+                        raise Refused(str(exc)) from None
+                elif live and live.driver:
+                    live.driver.effort = effort
+                if ((row.harness == CLAUDE and applied["effort"] != "now")
+                        or (row.harness in LISTED_MODELS and not effort)) and live and live.running:
+                    # --effort is read at start only (v1.441.0: unless Claude Code
+                    # took it live — ClaudeDriver.set_effort reads it back); Pi's
+                    # own default (no --thinking) applies only to a process
+                    # started without one.
+                    live.restart = True
+                fields["effort"] = effort
+        except Refused as refused:
+            if mode_was_set and live is not None:
+                await self._put_mode_back(live, row, mode, refused)
+            raise
+        if mode:
             if row.harness == CODEX and running_turn and live is not None:
                 self._emit(live, make("notice", text=W.CODEX_MODE_NEXT.format(mode=MODE_LABELS[mode])))
             elif row.harness in (OPENCODE, GROK, ANTIGRAVITY) and running_turn and live is not None \
@@ -2242,58 +2334,6 @@ class HostedService:
                 # that card was asked under the old mode and still needs YOU.
                 self._emit(live, make("notice", text=W.MODE_CARD_STILL_OPEN.format(
                     label=W.label(row.harness), mode=mode_label(row.harness, mode))))
-            fields["mode"] = mode
-        next_model = check_model(body["model"]) if body.get("model") is not None else row.model
-        pi_rows = await asyncio.to_thread(self._models, row.harness) if row.harness in LISTED_MODELS else None
-        if row.harness in LISTED_MODELS and (
-            (body.get("model") is not None and not check_model(body["model"]) and row.model)
-            or (body.get("effort") is not None
-                and not check_effort(row.harness, body["effort"], next_model, pi_rows) and row.effort)
-        ) and await asyncio.to_thread(pi_keeps_last, row):
-            # Back to "Pi's default" would change nothing: reopening a
-            # conversation with messages, Pi restores its LAST model and
-            # thinking level (core/sdk.js) — said, never pretended.
-            raise Refused(W.PI_KEEPS_LAST if row.harness == PI
-                          else W.GROK_KEEPS_LAST if row.harness == GROK else W.OPENCODE_KEEPS_LAST)
-        if body.get("model") is not None:
-            model = check_model(body["model"])
-            if live and live.running and live.driver and model:
-                try:
-                    applied["model"] = await live.driver.set_model(model)
-                except ControlRefused as exc:
-                    raise Refused(str(exc)) from None
-            else:
-                applied["model"] = "next"
-                if live and live.running and row.harness in (CLAUDE, PI, OPENCODE, GROK, ANTIGRAVITY):
-                    live.restart = True  # back to the CLI's default: a restart
-            fields["model"] = model
-        if body.get("effort") is None and body.get("model") is not None and row.effort \
-                and row.effort not in efforts_for(row.harness, next_model, pi_rows):
-            # v1.412.0 review: the new model does not take the effort kept on
-            # the session — it goes back to the default rather than being
-            # sent to a model that refuses it.
-            body = {**body, "effort": ""}
-            applied["effort_cleared"] = row.effort
-        if body.get("effort") is not None:
-            effort = check_effort(row.harness, body["effort"], next_model, pi_rows)
-            applied["effort"] = "next"
-            set_effort = getattr(live.driver, "set_effort", None) if live and live.running and live.driver else None
-            if set_effort is not None:
-                # Pi changes its thinking level live (`set_thinking_level`).
-                try:
-                    applied["effort"] = await set_effort(effort)
-                except ControlRefused as exc:
-                    raise Refused(str(exc)) from None
-            elif live and live.driver:
-                live.driver.effort = effort
-            if ((row.harness == CLAUDE and applied["effort"] != "now")
-                    or (row.harness in LISTED_MODELS and not effort)) and live and live.running:
-                # --effort is read at start only (v1.441.0: unless Claude Code
-                # took it live — ClaudeDriver.set_effort reads it back); Pi's
-                # own default (no --thinking) applies only to a process
-                # started without one.
-                live.restart = True
-            fields["effort"] = effort
         if isinstance(body.get("capabilities"), dict):
             # v1.414.0: the session's Capabilities, a MERGE (the pane's own
             # rule: a box not named keeps its value). Read LIVE by the
@@ -2302,9 +2342,6 @@ class HostedService:
             # needed at all (the first box on, the last one off) reaches the
             # tool with a new process before the next message.
             before = JT.load(getattr(row, "capabilities_json", "") or "")
-            if (getattr(row, "handed_from", "") or "") and                     JT.normalise({HO.HANDOFF: body["capabilities"].get(HO.HANDOFF)})[HO.HANDOFF]:
-                # v1.474.0: a helper can never hand off again (no chain).
-                raise Refused(HO.HELPER_CANNOT_BOX, 400)
             merged = dict(before)
             for key, value in body["capabilities"].items():
                 if key in merged:
@@ -2319,20 +2356,13 @@ class HostedService:
                     if live.running and needs:
                         live.restart = True
                 applied["capabilities"] = "next" if live is not None and live.running and needs else "now"
-        if body.get("load_folder_resources") is not None:
+        if folder_got is not None:
             # v1.431.0: the ONE way a Pi session loads its folder's own
             # extensions, skills and settings — the user's press. Pi reads them
             # at start only, so a running Pi starts again (same conversation)
-            # before the next message.
-            if row.harness != PI:
-                raise Refused(W.PI_FOLDER_NOT_PI)
+            # before the next message. (Checked above, with every field.)
             load = bool(body["load_folder_resources"])
-            got = await asyncio.to_thread(PT.check, row.folder, fresh=True)
-            if load:
-                problem = {PT.NONE: W.PI_FOLDER_NOTHING, PT.TRUSTED: W.PI_FOLDER_ALREADY,
-                           PT.DECLINED: W.PI_FOLDER_DECLINED, PT.UNKNOWN: W.PI_FOLDER_CANNOT_TELL}.get(got["state"])
-                if problem:
-                    raise Refused(problem)
+            got = folder_got
             if load != bool(getattr(row, "load_folder_resources", False)):
                 fields["load_folder_resources"] = load
                 things = PT.found_words(got["found"])
@@ -2359,6 +2389,29 @@ class HostedService:
         if row.harness == PI:
             out["pi_folder"] = await asyncio.to_thread(self._pi_folder_view, row)
         return out
+
+    async def _put_mode_back(self, live: LiveSession, row: Any, mode: str, refused: Refused) -> None:
+        """v1.511.0 (H7): a PATCH a later live step refused changes nothing —
+        the mode the tool already took goes back to the row's. When the tool
+        refuses that too, the refusal says the tool stays in the new mode."""
+        old = row.mode or ""
+        if not old or old == mode or live.driver is None:
+            return
+        try:
+            await live.driver.set_mode(old)
+        except Exception:  # noqa: BLE001 — said in the refusal, never a second failure
+            log.warning("a Code session's mode could not be put back", exc_info=True)
+            refused.sentence = f"{refused.sentence} " + W.MODE_NOT_PUT_BACK.format(
+                label=W.label(row.harness), mode=mode_label(row.harness, mode),
+                old=mode_label(row.harness, old))
+            refused.args = (refused.sentence,)
+            try:
+                # The row says the mode the tool really works in.
+                await asyncio.to_thread(store.update, self.engine, row.id, mode=mode)
+            except Exception:  # noqa: BLE001
+                log.warning("could not record a Code session's mode", exc_info=True)
+            return
+        self._refresh_asks(live)
 
     async def _say_model_change(self, row: Any, before_model: str, before_effort: str,
                                 applied: dict[str, str]) -> None:
@@ -2792,6 +2845,8 @@ class HostedService:
         if isinstance(driver, PiDriver):
             driver.catalog_path = self._pi_catalog
             # v1.431.0: only the user's press sets this (the row's column).
+            # v1.511.0 (A12): a press the folder's later "do not trust" undid
+            # is cleared on the row before the start (`_pi_folder_at_start`).
             driver.approve_folder = bool(getattr(row, "load_folder_resources", False))
             driver.forget_ask = lambda ask_id: self._forget_ask(live, ask_id)
         if isinstance(driver, OpenCodeDriver):
@@ -3349,6 +3404,10 @@ class HostedService:
         builtin = await self._pi_typed(row, live, text, files) if row.harness == PI and not carry else None
         if row.harness in (CLAUDE, GROK) and not carry:
             builtin = await self._typed_setting(row, live, text, files)
+        # v1.511.0 (A12): a stored "load them" press is read against the
+        # folder's trust afresh before Pi starts again (never --approve over
+        # the user's later "do not trust").
+        row = await self._pi_folder_at_start(live, row)
         if row.terminal_id:
             if await asyncio.to_thread(self._opened_terminal_runs, row):
                 raise Refused(W.OPEN_IN_TERMINAL.format(label=W.label(row.harness), exit=W.exit_command(row.harness)))
@@ -3686,11 +3745,47 @@ class HostedService:
             if saving is not None and not saving.done():
                 saving.set_result(None)
 
+    async def _pi_folder_at_start(self, live: LiveSession, row: Any) -> Any:
+        """v1.511.0 (A12): before a Pi process (re)starts on a session whose
+        stored press loads the folder's own resources, the folder's trust is
+        read AFRESH (off the loop, bounded). A folder the user has since told
+        Pi not to trust is never second-guessed: the press is cleared on the
+        row (so the box shows what is true and ``_new_driver`` adds no
+        ``--approve``) and the start says so (:meth:`_say_start`). Any other
+        reading — or none in time — keeps the press. Returns the row to start
+        with. Never raises."""
+        if row.harness != PI or not getattr(row, "load_folder_resources", False):
+            return row
+        if live.running and not live.restart:
+            return row  # no start for this message
+        try:
+            got = await asyncio.wait_for(asyncio.to_thread(PT.check, row.folder, fresh=True), PI_TRUST_START_S)
+        except Exception:  # noqa: BLE001 — no reading in time: as before
+            log.debug("could not read a Pi folder's trust at start", exc_info=True)
+            return row
+        if got.get("state") != PT.DECLINED:
+            return row
+        try:
+            fresh = await asyncio.to_thread(store.update, self.engine, row.id, load_folder_resources=False)
+        except Exception:  # noqa: BLE001
+            log.warning("could not clear a Pi session's folder press", exc_info=True)
+            fresh = None
+        if fresh is None:
+            # Not saved: this start still goes without --approve.
+            row.load_folder_resources = False
+            fresh = row
+        live.pi_folder_note = W.PI_FOLDER_DECLINED_AT_START.format(things=PT.found_words(got.get("found") or []))
+        return fresh
+
     def _say_start(self, live: LiveSession, row: Any) -> None:
         """v1.417.0 (C4.7): a process (re)starting for this message is SAID —
         a cold start (the first message, after the idle reaper, after an
         effort change, after an eviction) used to show the same spinner with
         no word for many seconds."""
+        if live.pi_folder_note:
+            # v1.511.0 (A12): one notice, before the start's own.
+            self._emit(live, make("notice", text=live.pi_folder_note))
+            live.pi_folder_note = ""
         if live.running and not live.restart:
             return
         why = "restart" if live.running else live.stopped_why

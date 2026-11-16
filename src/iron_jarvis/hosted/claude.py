@@ -75,6 +75,9 @@ schema and its ``updatedPermissions`` validator):
   ``session`` — never written to a settings file. Claude Code's own
   suggestion stays offered, as "Allow similar commands". (Claude Code's own
   safety checks may still ask about a command its rules never allow alone.)
+  v1.511.0 (A2): that suggestion goes back with ``destination: "session"``
+  (:func:`session_suggestions`), as the card promises — never written to the
+  folder's ``.claude/settings.local.json``.
 * ``ExitPlanMode``'s ``input`` carries the plan (``plan``, Markdown): the card
   shows it (:data:`PLAN_CHARS`). A ``deny`` carries the user's own words as
   its ``message`` (the model reads them and stays in plan mode).
@@ -653,10 +656,43 @@ def control_refused_words(req: dict[str, Any]) -> str:
     return W.CONTROL_REFUSED.format(what=what)
 
 
+#: v1.511.0 (A2): the ``updatedPermissions`` types Iron Jarvis sends back, and
+#: the one destination it sends them to. Claude Code's own suggestion names
+#: ``localSettings`` (``<folder>/.claude/settings.local.json``: every later
+#: session of the folder, the user's own terminal included); the card says
+#: "for the rest of this session", so the answer says ``session`` — the value
+#: :data:`ALL_COMMANDS_RULE` already uses. A type not listed here is dropped
+#: (its shape is not known, so it cannot be kept to this session safely).
+SESSION_ONLY = "session"
+_RULE_TYPES: frozenset[str] = frozenset({"addRules", "replaceRules", "removeRules"})
+_DIRECTORY_TYPES: frozenset[str] = frozenset({"addDirectories", "removeDirectories"})
+
+
+def _for_this_session(s: dict[str, Any]) -> dict[str, Any] | None:
+    """A COPY of one suggestion that Claude Code keeps for this session only,
+    or None when its shape cannot be rewritten safely (never the stored one)."""
+    kind = s.get("type")
+    if kind in _RULE_TYPES:
+        rules = s.get("rules")
+        if not isinstance(rules, list) or not rules or not all(isinstance(r, dict) for r in rules):
+            return None
+        return {**s, "rules": [dict(r) for r in rules], "destination": SESSION_ONLY}
+    if kind in _DIRECTORY_TYPES:
+        dirs = s.get("directories")
+        if not isinstance(dirs, list) or not all(isinstance(d, str) for d in dirs):
+            return None
+        return {**s, "directories": list(dirs), "destination": SESSION_ONLY}
+    if kind == "setMode":
+        return {**s, "destination": SESSION_ONLY}
+    return None
+
+
 def session_suggestions(raw: Any) -> list[dict[str, Any]]:
     """Claude Code's ``permission_suggestions`` the card may offer as "Allow
     for this session" — NEVER one that switches on bypassPermissions (Full
-    access is two presses of its own, never a side effect of an allow)."""
+    access is two presses of its own, never a side effect of an allow).
+    v1.511.0 (A2): each one is a copy kept for THIS session only
+    (``destination: "session"``); one that cannot be is dropped."""
     out = []
     for s in raw or []:
         if not isinstance(s, dict):
@@ -667,7 +703,9 @@ def session_suggestions(raw: Any) -> list[dict[str, Any]]:
             # v1.412.0 review: nor Claude Code's own Auto (its classifier runs
             # actions without asking) — both are chosen in the mode chip.
             return []
-        out.append(s)
+        kept = _for_this_session(s)
+        if kept is not None:
+            out.append(kept)
     return out
 
 
@@ -1152,7 +1190,10 @@ class ClaudeDriver(Driver):
             resp = {"behavior": "allow", "updatedInput": inp,
                     "updatedPermissions": [all_commands_rule()]}
         elif decision == "allow_session":
-            sugg = ask.data.get("suggestions") or []
+            # v1.511.0 (A2): copies kept for this session only, whatever the
+            # ask holds (the stored suggestions are never changed or sent).
+            sugg = [k for k in (_for_this_session(s) for s in ask.data.get("suggestions") or []
+                                if isinstance(s, dict)) if k is not None]
             if not sugg:
                 raise AskRefused("Claude Code offers no session-wide allow for this one — allow it once.")
             resp = {"behavior": "allow", "updatedInput": inp, "updatedPermissions": sugg}

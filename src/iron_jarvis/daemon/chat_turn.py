@@ -13613,12 +13613,16 @@ async def run_chat_turn(
     # caller can see today; it is here so the two lanes read the field the
     # same way and neither silently drops it. A low-trust deny is never
     # granted back. MIRROR NOTE (lock-step): routes/chat.chat_stream.
-    armed_grant |= {
+    # Second review L7 (v1.511.0): kept apart as the stream lane's
+    # `card_grants` too — the only grant that lifts "Ask before every
+    # action" besides a standing grant (``armed_grant`` starts full).
+    _card_grants = {
         g for g in _conversation_grants(
             d.platform.registry, getattr(body, "granted_tools", None), set(armed)
         )
         if overrides.get(g) != "deny"
     }
+    armed_grant |= _card_grants
     # HELPER AGENTS (v1.372.0): what a harness turn's helper inherits (the
     # session, its folder, Local only, the account pin) — None off a harness
     # turn or when nothing is armed. MIRROR NOTE (lock-step): routes/chat.py
@@ -14263,6 +14267,42 @@ async def run_chat_turn(
                             )
                         else:
                             _auto_refuse[_i] = _auto.post_lane_refusal(_v)
+            # "ASK BEFORE EVERY ACTION" (second review L7, v1.511.0): the
+            # stream lane cards a STRICT_ASK_TOOLS call under always_ask
+            # unless a card allowed it for this conversation (`card_grants`),
+            # a standing grant covers it, or its own spend check decided
+            # (a free verdict lifts the card; a priced one is refused above).
+            # This lane cannot card, so the same call is REFUSED through the
+            # registry's ledgered deny path, in the words of a call that asks
+            # every time. MIRROR NOTE (lock-step): routes/chat.py
+            # `_needs_card` under `approval_mode == "always_ask"`.
+            _strict_refuse: dict[int, dict[str, str]] = {}
+            if _auto_mode == "always_ask" and calls:
+                _strict_cands: list[tuple[int, Any]] = []
+                for _si, _stc in enumerate(calls):
+                    if (_refused[_si] or _stc.name not in _gate_now
+                            or _stc.name not in STRICT_ASK_TOOLS or _stc.name in _card_grants
+                            or _spend.get(id(_stc)) is not None):
+                        continue
+                    _st = d.platform.registry.get(_stc.name)
+                    _spk = _st.perm_key() if _st is not None else _stc.name
+                    if d.platform.permissions.mode_for(_spk, overrides) is PermissionMode.DENY:
+                        continue  # the registry refuses it in its own words
+                    _strict_cands.append((_si, _stc))
+                if _strict_cands:
+                    _strict_scopes = chat_grant_scopes(pid if resolved_proj is not None else None)
+
+                    def _strict_uncovered() -> list[int]:
+                        return [
+                            _si for _si, _stc in _strict_cands
+                            if not _grant_covers(d.platform, _strict_scopes, _stc.name, _stc.arguments)
+                        ]
+
+                    for _si in await asyncio.to_thread(_strict_uncovered):
+                        _strict_refuse[_si] = {
+                            "deny_reason": f"{_auto.STRICT_WHY} — {ONCE_NOT_ASKED_TAIL}",
+                            "deny_label": SPEND_NOT_ASKED_LABEL,
+                        }
             _batched = [
                 not _refused[i] and _batchable_call(tc.name, tc.arguments)
                 for i, tc in enumerate(calls)
@@ -14309,6 +14349,10 @@ async def run_chat_turn(
                         # v1.406.0 part 2: Accept edits / Auto keeps a card
                         # for this call, and this lane cannot show one.
                         _deny_kw = {"deny_reason": _auto_refuse[i], "deny_label": "needs your OK"}
+                    if not _deny_kw and i in _strict_refuse:
+                        # Second review L7: "Ask before every action" would
+                        # card this call, and this lane cannot show one.
+                        _deny_kw = _strict_refuse[i]
                     if _helper_base is not None and tc.name in _HELPER_TOOLS and not _deny_kw:
                         # HELPER AGENTS (v1.372.0): the helper inherits the
                         # turn (``harness/helpers``). This lane draws no row

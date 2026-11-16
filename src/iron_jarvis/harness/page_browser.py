@@ -417,6 +417,32 @@ def risky_click_word(words: Any) -> str:
     return ""
 
 
+#: Second review S6 (v1.511.0), decision E4: Enter in a form field is judged
+#: as a SUBMIT — the click on the form's own submit button. NEVER the
+#: button's words (see CLICK_NOT_ASKED).
+SUBMIT_NOT_ASKED = (
+    "Nothing was typed: pressing Enter in that field submits a form whose button reads as "
+    "deleting, sending or paying, or could not be read, which asks the user first, and the user "
+    "was not asked about it as it reads now (the page may have changed it). Call page_type "
+    "again to ask."
+)
+
+
+def submit_needs_asking(words: Any) -> bool:
+    """Does pressing Enter in a field ask (pure)? Its form's submit button
+    reads as deleting, sending or paying (the click path's ONE vocabulary,
+    :func:`risky_click_word`), or nothing readable would be pressed (no form,
+    no submit button, a button with no words): the page may do anything."""
+    label = " ".join(str(words or "").split())
+    return not label or bool(risky_click_word(label))
+
+
+def _submit_target(target: Any) -> list[Any]:
+    """The key a submit's checked words are kept under, apart from a click
+    on the same target (a click target is a string or a dict, never a list)."""
+    return ["submit", target]
+
+
 def _target_key(target: Any) -> str:
     try:
         return json.dumps(target, sort_keys=True, default=str)
@@ -696,9 +722,8 @@ _WORDS_OF_ELEMENTS = """
 #: field (or a span inside it) read as "no type, no words" and the password
 #: was typed. The same walk is made here, and the words of both elements are
 #: kept.
-_FIELD_FACTS = """
-(el) => {
-  let t = el;
+#: (The walk is its own piece so the submit reading below follows it too.)
+_FIELD_WALK = """  let t = el;
   if (!t.matches('input, textarea, select') && !t.isContentEditable) {
     t = t.closest('button, [role=button], [role=checkbox], [role=radio]') || t;
   }
@@ -707,7 +732,10 @@ _FIELD_FACTS = """
     const lab = t.closest('label');
     if (lab && lab.control) t = lab.control;
   }
-  const wordsOf = (e) => [e.getAttribute('aria-label'),
+"""
+_FIELD_FACTS = """
+(el) => {
+""" + _FIELD_WALK + """  const wordsOf = (e) => [e.getAttribute('aria-label'),
     e.labels && e.labels[0] && e.labels[0].innerText,
     e.getAttribute('placeholder'), e.getAttribute('name'), e.id, e.getAttribute('title')];
   const words = [...wordsOf(t), ...(t === el ? [] : wordsOf(el))].filter(Boolean).join(' ');
@@ -735,6 +763,26 @@ _CLICK_WORDS = """
   return bits.filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim().slice(0, 200);
 }
 """
+
+#: Second review S6 (v1.511.0): what pressing Enter in a field would PRESS
+#: reads as — the field typing really reaches (``_FIELD_WALK``), its form,
+#: and that form's default button (the first submit control among the
+#: form's own elements, a ``form=`` button included; a type=button is not
+#: one), read with the click path's own words (``_CLICK_WORDS``). "" when
+#: there is no form or no submit control: nothing readable, so it asks.
+_SUBMIT_WORDS = (
+    "\n(el) => {\n  const clickWords = " + _CLICK_WORDS.strip() + ";\n" + _FIELD_WALK + """  const form = t.form || null;
+  if (!form) return '';
+  for (const e of Array.from(form.elements)) {
+    const k = String(e.type || '').toLowerCase();
+    if ((e.tagName === 'BUTTON' && k === 'submit') || (e.tagName === 'INPUT' && (k === 'submit' || k === 'image'))) {
+      return clickWords(e);
+    }
+  }
+  return '';
+}
+"""
+)
 
 #: Playwright's network errors, in words.
 _NET_WORDS = {
@@ -1277,6 +1325,16 @@ class EdgeBackend:
             words = ""
         return " ".join(str(words or "").split())[:200]
 
+    async def submit_label(self, target: Any) -> str:
+        """What the button Enter in the field ``target`` would press READS
+        as ("" when nothing readable would be pressed; second review S6)."""
+        loc = await self._resolve(target, "type")
+        try:
+            words = await loc.evaluate(_SUBMIT_WORDS, timeout=5000)
+        except Exception:  # noqa: BLE001
+            words = ""
+        return " ".join(str(words or "").split())[:200]
+
     async def field(self, target: Any) -> "tuple[Any, dict[str, Any]]":
         loc = await self._resolve(target, "type")
         try:
@@ -1609,6 +1667,15 @@ class AgentBrowsers:
             self._checked[(key, _target_key(target))] = (words, time.monotonic())
         return words
 
+    async def submit_words(self, key: str, target: Any) -> str:
+        """What the button Enter in the field ``target`` would press reads as
+        ("" for nothing readable), for page_type's check when it submits
+        (second review S6); remembered apart from a click's check."""
+        words = await self.run(self._click_words(key, target, probe="submit_label"))
+        with self._lock:
+            self._checked[(key, _target_key(_submit_target(target)))] = (words, time.monotonic())
+        return words
+
     def checked_words(self, key: str, target: Any) -> "str | None":
         """The words page_click's check read for ``target`` (None: never, or
         too long ago)."""
@@ -1775,7 +1842,7 @@ class AgentBrowsers:
         self._starting.pop(key, None)
         return sess
 
-    async def _click_words(self, key: str, target: Any) -> str:
+    async def _click_words(self, key: str, target: Any, probe: str = "label") -> str:
         sess = self._sessions.get(key)
         if sess is None:
             raise BrowserProblem(NO_PAGE)
@@ -1787,11 +1854,11 @@ class AgentBrowsers:
             if self._sessions.get(key) is not sess:
                 raise BrowserProblem(NO_PAGE)
             self._check_here(sess)
-            probe = getattr(sess.backend, "label", None)
-            if probe is None:
+            read = getattr(sess.backend, probe, None)
+            if read is None:
                 return ""
             async with asyncio.timeout(ACTION_TIMEOUT_S):
-                return str(await probe(target) or "")
+                return str(await read(target) or "")
         finally:
             sess.lock.release()
 
@@ -1925,6 +1992,17 @@ class AgentBrowsers:
             refusal = typing_refusal(facts, text)
             if refusal:
                 raise BrowserProblem(refusal)
+            probe = getattr(b, "submit_label", None) if kw.get("submit") else None
+            if probe is not None:
+                # Second review S6 (E4): Enter submits the field's form — the
+                # click on its button. Read AT the action, like a click: a
+                # submit that asks is made only when page_type's check showed
+                # the user these very words.
+                words = str(await probe(kw.get("target")) or "")
+                if submit_needs_asking(words):
+                    asked = self.checked_words(sess.key, _submit_target(kw.get("target")))
+                    if asked is None or " ".join(asked.split()).lower() != " ".join(words.split()).lower():
+                        raise BrowserProblem(SUBMIT_NOT_ASKED)
             await b.fill(loc, text, bool(kw.get("submit")), limit)
             if kw.get("submit"):
                 await b.settle()
@@ -2169,6 +2247,7 @@ def close_for_stop(session_id: str) -> list[int]:
 __all__ = [
     "ACTION_TIMEOUT_S", "AgentBrowsers", "BROWSERS", "BrowserProblem", "EdgeBackend", "IDLE_CLOSE_S",
     "IDLE_ENV", "NOT_LOCAL", "NO_EDGE", "NO_PAGE", "NO_PLAYWRIGHT", "OPEN_TIMEOUT_S", "STOPPED",
-    "Verdict", "blocked_words", "browser_key", "close_for_stop", "edge_executable", "idle_close_s",
-    "judge", "normalize", "playwright_problem", "risky_click_word", "typing_refusal", "where",
+    "SUBMIT_NOT_ASKED", "Verdict", "blocked_words", "browser_key", "close_for_stop", "edge_executable",
+    "idle_close_s", "judge", "normalize", "playwright_problem", "risky_click_word",
+    "submit_needs_asking", "typing_refusal", "where",
 ]

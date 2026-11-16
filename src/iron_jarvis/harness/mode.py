@@ -663,12 +663,18 @@ def _yolo_still_asks(gate: "set[str]") -> str:
     said "a git commit or push" while the git guard also cards a change on
     GitHub, git that throws away work not committed yet and a write to git's
     settings (``harness/git_guard``), and left out a click on a button that
-    reads as deleting, sending or paying (``page_act``'s once-only check))."""
+    reads as deleting, sending or paying (``page_act``'s once-only check)).
+    v1.511.0 (second review T2): true for BOTH kinds of session — in the
+    user's own folder the guard now asks too, and there a commit does not ask
+    while a force push, a rewrite or a deleted branch asks instead of being
+    refused."""
     parts: list[str] = []
     if gate & _COMMAND_RUNNERS:
         parts.append(
-            "git on this session's own branch that commits, pushes or changes something on "
-            "GitHub, throws away work not committed yet or changes git's settings"
+            "git that pushes, changes something on GitHub, throws away work not committed yet, "
+            "takes work from the stash, changes git's settings, rewrites history or deletes a "
+            "branch (on this session's own branch a commit asks too, and a force push, a history "
+            "rewrite or a deleted branch is refused)"
         )
         parts.append("a command a project's own command file asked for")
     if gate & _PAGE_REAL:

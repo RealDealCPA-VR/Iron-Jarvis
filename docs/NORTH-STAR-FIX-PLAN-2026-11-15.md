@@ -641,7 +641,7 @@ or types on the Windows desktop.
   `computeruse/safety.py:94-109` (`wrap_untrusted`) does not neutralise the
   closing marker; every browser read uses it (`browser/tools.py:309`). The
   cure exists in `memory/steward.py:352-362` (`_defang`).
-- [ ] **B2 (4, high, checked). Enter submits a form unjudged.**
+- [x] **B2 (4, high, checked). Enter submits a form unjudged.**
   `browser/tools.py:1075-1085` never passes `press_enter` or the key to the
   risk check; the add-on then calls `form.requestSubmit()`
   (`extensions/chrome/src/content/actions.ts:763-780`).
@@ -655,13 +655,13 @@ or types on the Windows desktop.
 - [ ] **B5 (2, medium, checked).** Text typed through `web_action` into a
   sensitive field is stored in plain text in the approvals table and shown
   on the card (`computeruse/tools.py:240-245, 278`; `approvals.py:60`).
-- [ ] **B6 (4, medium, pass only).** A risk approval nobody could be asked
+- [x] **B6 (4, medium, pass only).** A risk approval nobody could be asked
   about stays pending; approving it later lets the next identical call run
   on another page (`browser/tools.py:1245-1274, 1351-1366`).
 - [ ] **B7 (2, medium, pass only).** The isolated browser's site list is
   checked on the typed address only, not after a redirect or a click
   (`computeruse/tools.py:132-137`).
-- [ ] **B8-B14 (low; B8, B11 and B14 fixed in v1.509.0).** A download's name reaches the model unfenced
+- [ ] **B8-B14 (low; B8, B11 and B14 fixed in v1.509.0, B9 and B10 in v1.511.0).** A download's name reaches the model unfenced
   (`tools/download_tools.py:201-221`); after an approved card a click by
   role and name runs on whatever page the tab then shows (suspected);
   nothing stops Jarvis being sent to the app's own pages, the daemon's port
@@ -695,7 +695,7 @@ or types on the Windows desktop.
 - [x] **H6 (3, medium, checked).** A failed write of the session log drops
   that batch for good (`hosted/events.py:335-354`); a lost "done" can make
   the next start carry on a reply that had finished.
-- [ ] **H7-H14 (low).** A PATCH applies the tool's mode before the rest of
+- [ ] **H7-H14 (low; H7 and H9 fixed in v1.511.0).** A PATCH applies the tool's mode before the rest of
   the request is checked (`service.py:2211-2296`); a Stop as the start
   completes can still deliver the message (`service.py:3607`, checked); a
   branch copies Full access and the tool boxes without asking
@@ -713,7 +713,7 @@ or types on the Windows desktop.
   manager's `deleteProfile`, which removes the account's home recursively
   (`desktop/vendor/iron-proxy/iron-proxy.mjs:4726-4741`): its sign-in and
   every conversation kept on it. No trash, no check for a running session.
-- [ ] **A2 (1, high, checked in code and a recorded exchange). Claude Code's
+- [x] **A2 (1, high, checked in code and a recorded exchange). Claude Code's
   "Allow for this session" is saved for good.** `hosted/claude.py:656-671`
   passes Claude Code's own suggestion back whole, destination
   `localSettings` included, while the card says "for the rest of this
@@ -726,7 +726,7 @@ or types on the Windows desktop.
   routes need no token on this PC, so any local program can spend the
   subscriptions through it (`iron-proxy.mjs:5567-5576, 6316`). Fix is in
   the bundled program plus a switch at start.
-- [ ] **A5 (4, medium, checked).** A session in Ask first or Plan can hand
+- [x] **A5 (4, medium, checked).** A session in Ask first or Plan can hand
   work to a Pi or Antigravity helper that asks nothing
   (`hosted/handoff.py:324-327`, `hosted/service.py:308-311`); the card does
   not name the tool.
@@ -739,7 +739,7 @@ or types on the Windows desktop.
 - [ ] **A8 (2, medium, checked).** With every account of a provider turned
   off, chat runs on this PC's own login with nothing said
   (`iron_proxy/accounts.py:889-894`).
-- [ ] **A9-A13 (low).** Codex's move to another model is said without the
+- [ ] **A9-A13 (low; A12 fixed in v1.511.0).** Codex's move to another model is said without the
   model's name (`codex.py:1345-1346`); the usage check hands the vendor's
   program the daemon's whole environment, install token included
   (`iron_proxy/usage_read.py:286-299`, checked); Stop before Codex names the
@@ -766,7 +766,7 @@ or types on the Windows desktop.
 - [ ] **D4 (1, medium, checked).** The auto-fix reviews and pushes a fix
   whose own finish check recorded failing tests
   (`routes/ci_watch.py:594-666` never reads the line's finish record).
-- [ ] **D5 (4, medium, checked for the test).** A whole Maven, Gradle, tox
+- [x] **D5 (4, medium, checked for the test).** A whole Maven, Gradle, tox
   or nox line counts as "the tests", so `mvn test deploy` can be run a
   second time by the check (`finish.py:885-886, 923-924`).
 - [ ] **D6 (4, medium, pass only).** Stop is not honoured while the check
@@ -786,7 +786,7 @@ or types on the Windows desktop.
   `daemon/routes/night.py:1154-1159` stops a turn only if one exists;
   `start_task` (`882-885`) never re-reads the task; `settle_running` reads
   the stop note only after the turn is over (`622-624`, `661`).
-- [ ] **T2 (4, high, checked; the owner's call). The git guard is off when a
+- [x] **T2 (4, high, checked; the owner's call). The git guard is off when a
   session works in the folder directly**, the composer's default
   (`harness/git_guard.py:640-641, 662-663`;
   `dashboard/components/harness/HarnessStartComposer.tsx:294`). After one
@@ -807,7 +807,7 @@ or types on the Windows desktop.
   a "Needs you" row carries no reason.
 - [ ] **T7 (1, low, pass only).** A night task that changed nothing and ran
   no check is announced "Done" (`night.py:1050-1051`).
-- [ ] **T8 (3, medium, checked for checkout and stash).** On its own branch
+- [x] **T8 (3, medium, checked for checkout and stash).** On its own branch
   the guard misses `git remote set-url`, `git reset <branch>`,
   `git checkout <file>`, `git stash pop` and a separator inside a quoted
   message (`git_guard.py:72, 414, 488, 502`).
@@ -835,7 +835,7 @@ or types on the Windows desktop.
 - [ ] **S5 (1, medium, pass only).** A reply's failure marks never reach the
   next model or the summarizer (`harness/sessions.py:998-1022`,
   `compact.py:282-322`).
-- [ ] **S6-S12 (low; S8, S11 and S12 fixed in v1.510.0).** Typing with "submit" sends a form with no risky-click
+- [ ] **S6-S12 (low; S8, S11 and S12 fixed in v1.510.0, S6 in v1.511.0).** Typing with "submit" sends a form with no risky-click
   check (`page_browser.py:1921-1931`, suspected; the twin of B2); a lesson's
   first line goes into an event unmasked (`harness/library.py:1292-1304`,
   suspected); Delete stops a session's programs before it refuses, and
@@ -871,7 +871,7 @@ differences are at the edges.
 - [x] **L6 (3, low, checked).** A cancelled plain-lane turn leaves no usage
   row and no safety scan (`chat_turn.py:14547`; the streaming lane has
   `except BaseException` at `routes/chat.py:8120`).
-- [ ] **L7 (4, low, checked).** The plain lane does not honour "Ask before
+- [x] **L7 (4, low, checked).** The plain lane does not honour "Ask before
   every action" (`chat_turn.py:13462, 14041`); only a direct caller of the
   route reaches it today.
 - [ ] **L8 (7, low, pass only).** Engine words in replies: "stopped after 7
@@ -925,7 +925,7 @@ stalls, costs and wording.
 | 13 | Done means done in a coding session | D1, D2, D3, D4, D7, D8, D11, T5, T6, T7, T10, S3, S5, L5 |
 | 14 | What helpers, tools and servers report | H4, H10, F2, F4, F9, A7, A9, and the three status lines of A13 |
 | 15 | Secrets at rest and what leaves the PC | A3, A4, A6, A8, A10, B4, B5, B7, S1, S7, S9, S10, L1, L2, H12, the `proxy.json` line of A13, and the Settings model-server slot left open by group 9 |
-| 16 | Never stalls, every cost counted, plain words | S4, L9, T9, B13, F8, F15, L3, L8, B12, H11, F13, D10, the wording line of A13 |
+| 16 | Never stalls, every cost counted, plain words | S4, L9, T9 (and the git guard's file checks, left open by group 11), B13, F8, F15, L3, L8, B12, H11, F13, D10, the wording line of A13 |
 
 **Decisions taken as recommended.** Each changes something the owner will
 notice. Say so to change any of them.
@@ -1015,3 +1015,34 @@ Left open:
   helper left rows.
 - A Local only refusal after a tool round does not carry the "what it
   already did" sentence.
+
+### Group 11 as built (v1.511.0)
+
+Fixed: B2, S6, T2, T8, A2, A5, A12, H7, H9, B6, B9, B10, L7, D5.
+
+Where it differs from the plan:
+
+- **E3 (T2) is wider than written.** In the user's own folder everything
+  the guard reads except a commit asks every time: also a history rewrite, a
+  git settings change (where `origin` points), taking work out of the stash,
+  and a change on GitHub. Kept because both kinds of session then read the
+  same; the Handbook says so and invites the owner to shorten the list.
+- **B10 was narrowed in the lead's review.** The implementer made every
+  click on a local page ask. Only GOING to a page on this computer asks now;
+  Iron Jarvis's own pages are refused outright, which was the real risk.
+- **A5 uses four levels of strictness**, not three: "edits files freely,
+  asks before commands" is its own level, and Antigravity's "plan" is not
+  counted as read-only (its own description says it can change files).
+- **B9** is closed on the add-on side too, so it holds only once the
+  installed add-on is the new one.
+
+Left open:
+
+- The guard's one existence check for a `reset` / `checkout` word runs on
+  the event loop (group 16).
+- Handing more work to an existing helper does not re-check that helper's
+  mode against the parent's.
+- With network access on, the dashboard reached at the PC's own network
+  address is not refused by the browser tools (the check is loopback only).
+- A chat box that sends on Enter through its own script (a textarea) is not
+  judged as a submit, matching what the add-on does by default.

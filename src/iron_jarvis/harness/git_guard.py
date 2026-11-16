@@ -1,10 +1,31 @@
-"""What the AGENT may do with git while a Build session works on its own
-branch (v1.375.0, IJ harness part 2 Phase 4).
+"""What the AGENT may do with git in a coding session (v1.375.0, IJ harness
+part 2 Phase 4; the user's own folder since v1.511.0).
 
 The buttons (Commit, Push, Create PR, Merge, Discard) are a person's actions.
 The agent can still run git through its command tools (``shell``,
 ``process_start``, ``process_write`` — Claude Code's Bash and Codex's
-exec_command map onto them), so while a turn works on a branch
+exec_command map onto them). There are two kinds of coding session, and the
+guard reads each.
+
+IN THE USER'S OWN FOLDER (v1.511.0, second review T2, the owner's decision
+E3). Working in the folder directly is the composer's default kind of session
+(its "own branch" switch starts off), so there the agent's git acts on the
+user's REAL checkout and remote. In a coding session's turn whose folder is in
+a git repository (:data:`TURN_FOLDER`, armed by ``routes/build.
+start_build_turn``: the folder, and whether it is in a repository, found ONCE
+off the event loop — :func:`folder_facts` — never by a stat while a command is
+judged), every action this guard reads EXCEPT A COMMIT asks EVERY TIME, with
+words that say it acts on the user's own folder or remote: a push, a force
+push, a push that deletes a remote branch, git that throws work away, a
+history rewrite, deleting or force-moving a branch or tag, the repository's
+worktrees, taking work from the stash, a git setting, a pull request and any
+other GitHub change. Nothing is REFUSED there: what a session's own branch
+refuses is the user's to allow in their own folder, so it asks instead. A
+commit runs under the session's posture, as before. A folder that is not in a
+repository, and a command tool's call that is not a coding session's (chat,
+agents, schedules), are exactly as before: nothing here asks.
+
+ON A SESSION'S OWN BRANCH, while a turn works on a branch
 (``branches.current()``):
 
 * a ``git commit``, a ``git push``, a ``gh pr create`` / ``gh pr merge`` and
@@ -12,8 +33,11 @@ exec_command map onto them), so while a turn works on a branch
   EVERY posture (auto-approve included) and past every grant — and so does
   git that THROWS AWAY work not committed yet (``reset --hard``, ``clean
   -f``, ``checkout -- <paths>``, ``restore``, ``stash drop|clear``, ``switch
-  --discard-changes``) and ``git config`` that WRITES a setting (a
-  worktree's repository config is the one the user's checkout reads) — each
+  --discard-changes``, ``checkout <file>``), taking work from the stash
+  (``stash pop|apply|branch`` — the stash is shared by every worktree, so an
+  entry may be the user's own) and ``git config`` that WRITES a setting or
+  ``git remote add|remove|rename|set-url|…`` (a worktree's repository config
+  is the one the user's checkout reads) — each
   tool's ``spend_check`` answers
   ``SpendCheck(ask=True, once_only=True)``: the stream lane's card offers
   "Allow once" and Deny only, and the POST lane, which cannot show a card,
@@ -25,15 +49,31 @@ exec_command map onto them), so while a turn works on a branch
   remote branch (``--delete``, ``-d``, a ``:ref`` refspec, ``--prune``), a
   history REWRITE (``commit --amend``, ``rebase``, ``pull --rebase``, a
   ``reset`` to another commit, ``filter-branch``, ``filter-repo``,
-  ``update-ref``, ``replace``), deleting or force-moving a BRANCH or a tag
+  ``update-ref``, ``replace``; a ``reset`` to another commit includes
+  ``reset <branch or tag>`` — a reset's one word that is not a path of the
+  working tree is read as a commit), deleting or force-moving a BRANCH or a tag
   (``branch -d|-D|-f|-m``, ``checkout -B``, ``switch -C``, ``tag -d``),
   changing the user's WORKTREES (``worktree remove|prune|move`` — a prune
   forgets every worktree whose folder is missing right then) and ``gh repo
   delete``.
 
 Everything else stays under the harness guardrail line "only when the user
-asks for them" (``components.DEFAULT_GUARDRAILS``). A session that works in
-its folder directly is untouched — exactly as before.
+asks for them" (``components.DEFAULT_GUARDRAILS``).
+
+NOBODY TO ASK (the POST lane, the night shift, a check fix): a once-only card
+is refused there, or declined after the night's wait — in both kinds of
+session, exactly as for every once-only card.
+
+HOW A COMMAND IS CUT (v1.511.0, T8): a command ends at an unquoted ``;``,
+``&&``, ``||``, ``|``, ``&``, ``)`` or line break. Quotes are read the way
+BOTH shells read them (bash's backslash escape and PowerShell's backtick
+escape, each as its own reading) and every reading's actions are kept, so a
+separator inside a quoted message (``git commit -m "fix (a); b" --amend``)
+never ends the command; a quote that never closes FAILS CLOSED (the command is
+read both cut at its first separator and to the end of the line). Whether a
+``reset`` / ``checkout`` word is a path is read from the syntax (``--``) and
+an existing file or folder under the session's folder (one look, only for
+those two commands); a word that cannot be told is read the stricter way.
 
 HONEST LIMITS: this reads the command's text. It catches git as a model
 writes it (``git push``, ``git -C x commit``, ``cmd /c "git push"``,
@@ -57,6 +97,7 @@ from __future__ import annotations
 
 import os
 import re
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -81,7 +122,10 @@ class GitAct:
     """One git action found in a command. CARDED (asks every time):
     ``commit`` | ``push`` | ``pr`` (gh pr create / merge) | ``gh`` (another
     gh command that changes something) | ``discard`` (throws away work not
-    committed) | ``config`` (``git config`` that writes a setting). REFUSED: ``force`` (a force push) | ``delete_remote`` (a
+    committed) | ``stash`` (takes work from the shared stash) | ``config``
+    (``git config`` that writes a setting, ``git remote`` that changes one).
+    REFUSED on a session's own branch (asked every time in the user's own
+    folder): ``force`` (a force push) | ``delete_remote`` (a
     push that deletes a remote branch) | ``rewrite`` (a history rewrite) |
     ``delete_branch`` (deleting or force-moving a branch or tag) |
     ``worktree`` (``worktree remove|prune|move``) | ``delete_repo``."""
@@ -97,6 +141,100 @@ REFUSED_KINDS = frozenset({"force", "delete_remote", "rewrite", "delete_branch",
 #: Characters a quoted command line leaves around a word (``cmd /c "git
 #: push"`` reads ``push"``; ``bash -lc 'git push'`` reads ``push'``).
 _STRAY = "\"'`"
+
+
+# --------------------------------------------------------------------------- #
+# the user's own folder (v1.511.0, second review T2, decision E3)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class TurnFolder:
+    """A coding session's turn that works in its folder directly."""
+
+    #: The session's working folder.
+    folder: str
+    #: The top folder of the git repository it is in ("" = not in one).
+    repo: str = ""
+    #: That repository's config file, for the user's own aliases ("" = none).
+    config: str = ""
+
+
+#: The folder of THIS coding session's turn (``routes/build.start_build_turn``
+#: arms it beside the branch; the driver task and its helpers copy it). None
+#: for every other caller of a command tool: chat, agents, schedules.
+TURN_FOLDER: "ContextVar[TurnFolder | None]" = ContextVar("ij_git_guard_folder", default=None)
+
+#: How many folders up a repository's ``.git`` is looked for.
+_REPO_DEPTH = 64
+
+
+def folder_facts(folder: Any) -> "TurnFolder | None":
+    """The :class:`TurnFolder` of ``folder``: is it in a git repository (a
+    ``.git`` folder, or a worktree's ``.git`` file, in it or a folder above)?
+    BLOCKING (a few stats): the caller runs it off the event loop, once per
+    turn. Never raises (a folder that cannot be read is not a repository).
+    None for no folder."""
+    text = str(folder or "").strip()
+    if not text:
+        return None
+    repo = ""
+    try:
+        here = Path(text).resolve()
+        for i, p in enumerate((here, *here.parents)):
+            if i > _REPO_DEPTH:
+                break
+            if os.path.lexists(p / ".git"):
+                repo = str(p)
+                break
+    except (OSError, ValueError, RuntimeError):
+        repo = ""
+    cfg = _repo_config(repo) if repo else None
+    return TurnFolder(folder=text, repo=repo, config=str(cfg) if cfg is not None else "")
+
+
+def set_turn_folder(facts: "TurnFolder | None") -> "Token[TurnFolder | None]":
+    """Arm this coding session's turn folder (None = not a coding session)."""
+    return TURN_FOLDER.set(facts)
+
+
+def reset_turn_folder(token: "Token[TurnFolder | None]") -> None:
+    try:
+        TURN_FOLDER.reset(token)
+    except (ValueError, LookupError):  # another context's token
+        TURN_FOLDER.set(None)
+
+
+def _work_folder() -> str:
+    """The folder the turn's commands run in: the branch's worktree folder,
+    else the user's own folder, else ""."""
+    from .branches import current
+
+    tb = current()
+    if tb is not None:
+        return tb.folder or tb.worktree
+    facts = TURN_FOLDER.get()
+    return facts.folder if facts is not None else ""
+
+
+#: A word that is a pattern of paths (git reads it as a pathspec).
+_GLOB_RX = re.compile(r"[*?\[]")
+
+
+def _in_tree(word: str) -> bool:
+    """Does ``word`` name a file or folder of the turn's working tree (or a
+    pattern of paths)? One ``lexists``, only for a ``reset`` / ``checkout``
+    word. False when there is no folder to look in."""
+    if _GLOB_RX.search(word):
+        return True
+    folder = _work_folder()
+    if not folder or not word or word.startswith("-"):
+        return False
+    try:
+        path = word if os.path.isabs(word) else os.path.join(folder, word)
+        return os.path.lexists(path)
+    except (OSError, ValueError):
+        return False
 
 
 def _tokens(segment: str) -> list[str]:
@@ -347,6 +485,12 @@ def user_aliases() -> dict[str, str]:
             repo_cfg = _repo_config(tb.worktree) or _repo_config(tb.repo)
             if repo_cfg is not None:
                 files.append(repo_cfg)
+        else:
+            # v1.511.0 (T2): the user's own folder's repository config, found
+            # when the turn was armed (off the loop): one file, as on a branch.
+            facts = TURN_FOLDER.get()
+            if facts is not None and facts.config:
+                files.append(Path(facts.config))
         for f in files:
             _collect(f, out, 0, seen)
         try:
@@ -410,8 +554,15 @@ def _reset_act(args: list[str]) -> "str | None":
     words = [a for a in before_paths if not a.startswith("-")]
     moves_ref = any(m in low for m in ("--hard", "--soft", "--keep", "--merge"))
     # A mode that takes no paths names a commit with ANY word; a plain
-    # (mixed) reset only with a word that reads as a commit.
-    target = [w for w in words if moves_ref or _REV_RX.search(w)]
+    # (mixed) reset with a word that reads as a commit — or (v1.511.0, T8)
+    # its ONE word that is not a path of the working tree: `git reset main`
+    # moves the branch to main's commit. A path after `--`, or one that
+    # exists, only unstages (`git reset app.py`), and so does a reset with
+    # paths (`git reset main app.py` reads main's copy of app.py into the
+    # index; the branch stays).
+    paths_after = args[args.index("--") + 1:] if "--" in args else []
+    lone = len(words) == 1 and not paths_after
+    target = [w for w in words if moves_ref or _REV_RX.search(w) or (lone and not _in_tree(w))]
     if any(w.upper() not in ("HEAD", "@") for w in target):
         return "rewrite"
     if "--hard" in low or "--merge" in low or "--keep" in low:
@@ -458,9 +609,9 @@ def _git_act(sub: str, args: list[str]) -> "GitAct | None":
     short = _short_flags(args)
     if sub == "push":
         if _is_force(args):
-            return GitAct("force")
+            return GitAct("force", _remote_of(args))
         if _push_deletes(args):
-            return GitAct("delete_remote")
+            return GitAct("delete_remote", _remote_of(args))
         return GitAct("push", _remote_of(args))
     if sub == "commit":
         return GitAct("rewrite" if "--amend" in low else "commit")
@@ -487,6 +638,10 @@ def _git_act(sub: str, args: list[str]) -> "GitAct | None":
             return GitAct("delete_branch")
         if "--" in args or "." in args or "--force" in low or "f" in short:
             return GitAct("discard")
+        # v1.511.0 (T8): `git checkout <file>` (no `--`) overwrites that
+        # file's uncommitted changes; `git checkout <branch>` is a switch.
+        if any(_in_tree(w) for w in _checkout_words(args)):
+            return GitAct("discard")
         return None
     if sub == "switch":
         if "C" in short or "--force-create" in low:
@@ -501,9 +656,41 @@ def _git_act(sub: str, args: list[str]) -> "GitAct | None":
         return None if staged_only else GitAct("discard")
     if sub == "stash" and args and low[0] in ("drop", "clear"):
         return GitAct("discard")
+    if sub == "stash" and args and low[0] in ("pop", "apply", "branch"):
+        # v1.511.0 (T8): the stash is shared by every worktree of the
+        # repository — an entry popped here may be the user's own work.
+        return GitAct("stash")
     if sub == "config" and _config_writes(args):
         return GitAct("config")
+    if sub == "remote" and args and low[0] in _REMOTE_WRITES:
+        # v1.511.0 (T8): writes the repository config the user's own
+        # checkout reads, like `git config remote.origin.url <other>`.
+        return GitAct("config")
     return None
+
+
+#: ``git remote`` verbs that change the repository's config.
+_REMOTE_WRITES = frozenset({"add", "remove", "rm", "rename", "set-url", "set-head", "set-branches", "prune"})
+#: ``git checkout`` options whose next word is a NEW branch's name.
+_CHECKOUT_NAME_OPTS = frozenset({"-b", "--orphan"})
+
+
+def _checkout_words(args: list[str]) -> list[str]:
+    """The plain words of a ``git checkout`` (a branch, a commit or paths), a
+    new branch's name left out."""
+    out: list[str] = []
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a in _CHECKOUT_NAME_OPTS:
+            skip = True
+            continue
+        if a.startswith("-"):
+            continue
+        out.append(a)
+    return out
 
 
 #: gh commands that only READ (everything else asks first on a branch).
@@ -557,22 +744,71 @@ def classify(command: Any, _depth: int = 0) -> list[GitAct]:
         # A quoted path ("C:\Program Files\Git\cmd\git.exe" push) closes its
         # quote right after the program's name.
         rest = text[m.end():].lstrip("\"'")
-        end = _END_RX.search(rest)
-        segment = rest[: end.start()] if end else rest
-        toks = _tokens(segment)
-        if m.group("prog").lower() == "gh":
-            act = _gh_act(toks)
-        else:
-            sub, args = _subcommand(toks)
-            if sub == _SHELL_ALIAS:
-                # A shell alias (`!git push --force`, `!f() { git commit …; }; f`):
-                # its text is a command line of its own.
-                if _depth < _ALIAS_DEPTH:
-                    out.extend(classify(args[0] if args else "", _depth + 1))
-                continue
-            act = _git_act(sub, args)
-        if act is not None:
-            out.append(act)
+        # v1.511.0 (T8): cut with quotes respected, every shell's reading kept.
+        found: list[GitAct] = []
+        for segment in _segments(rest):
+            toks = _tokens(segment)
+            if m.group("prog").lower() == "gh":
+                acts = [a for a in (_gh_act(toks),) if a is not None]
+            else:
+                sub, args = _subcommand(toks)
+                if sub == _SHELL_ALIAS:
+                    # A shell alias (`!git push --force`, `!f() { git commit …; }; f`):
+                    # its text is a command line of its own.
+                    acts = (classify(args[0] if args else "", _depth + 1)
+                            if _depth < _ALIAS_DEPTH else [])
+                else:
+                    acts = [a for a in (_git_act(sub, args),) if a is not None]
+            found.extend(a for a in acts if a not in found)
+        out.extend(found)
+    return out
+
+
+def _scan_end(rest: str, esc: str) -> "int | None":
+    """Where the command at the start of ``rest`` ends (the index of its
+    separator, ``len(rest)`` for none), reading quotes as a shell whose escape
+    character is ``esc`` (bash ``\\``, PowerShell ``` ` ```): outside quotes
+    and inside double quotes it makes the next character plain; single quotes
+    have none (a doubled ``''`` / ``""`` closes and reopens: still inside).
+    None when a quote never closes."""
+    quote = ""
+    i, n = 0, len(rest)
+    while i < n:
+        ch = rest[i]
+        if ch == esc and quote != "'" and i + 1 < n:
+            i += 2
+            continue
+        if quote:
+            if ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif _END_RX.match(rest, i):
+            return i
+        i += 1
+    return None if quote else n
+
+
+def _segments(rest: str) -> list[str]:
+    """The command at the start of ``rest`` as each shell reads it (v1.511.0,
+    T8): bash's reading and PowerShell's (a separator inside a quoted message
+    never ends it), and — when a quote never closes — both the line cut at its
+    first separator and the whole line (FAIL CLOSED: every reading's actions
+    count, so the stricter one always wins)."""
+    out: list[str] = []
+    unclosed = False
+    for esc in ("\\", "`"):
+        end = _scan_end(rest, esc)
+        if end is None:
+            unclosed = True
+            continue
+        if rest[:end] not in out:
+            out.append(rest[:end])
+    if unclosed:
+        naive = _END_RX.search(rest)
+        for seg in (rest[: naive.start()] if naive else rest, rest):
+            if seg not in out:
+                out.append(seg)
     return out
 
 
@@ -626,15 +862,67 @@ def card_words(acts: list[GitAct]) -> str:
     if "discard" in kinds:
         return (f"This throws away changes on {branch} that are not committed yet. It asks you "
                 "every time.")
+    if "stash" in kinds:
+        return (f"This takes work from git's stash into {branch}. The stash is shared with your own "
+                "checkout, so the entry may be your work, not this session's. It asks you every time.")
     if "config" in kinds:
         return ("This changes a git setting (the repository's, which your own checkout reads too, "
                 "or yours). It asks you every time.")
     return f"This makes a commit on {branch}. Every commit asks you first."
 
 
+#: The user's own folder (v1.511.0, T2): what each kind does there, the most
+#: serious first. A commit is not here: it does not ask.
+_FOLDER_WORDS: "tuple[tuple[str, str], ...]" = (
+    ("delete_repo", "This deletes a repository on GitHub. It asks you every time."),
+    ("force", "This force-pushes from your own folder{to}, replacing what is there. It asks you "
+              "every time."),
+    ("delete_remote", "This deletes a branch on your remote{on}. It asks you every time."),
+    ("rewrite", "This rewrites history in your own folder (an amend, a rebase, or a reset to another "
+                "commit). It asks you every time."),
+    ("delete_branch", "This deletes, renames or force-moves a branch or a tag in your own folder. It "
+                      "asks you every time."),
+    ("worktree", "This changes which extra copies of your repository git keeps (a prune forgets "
+                 "every one whose folder is missing right now). It asks you every time."),
+    ("discard", "This throws away changes in your own folder that are not committed yet. It asks "
+                "you every time."),
+    ("pr", "This opens or merges a pull request on GitHub. Every pull request asks you first."),
+    ("gh", "This changes something on GitHub. Every GitHub change asks you first."),
+    ("push", "This pushes from your own folder{to}. Every push asks you first."),
+    ("stash", "This takes work from git's stash into your own folder. The stash is shared by every "
+              "copy of the repository, so the entry may hold other work. It asks you every time."),
+    ("config", "This changes a git setting of the repository in your own folder (or one of yours). "
+               "It asks you every time."),
+)
+
+
+def folder_card_words(acts: list[GitAct]) -> str:
+    """The card's one quiet line in the user's own folder (v1.511.0, T2)."""
+    kinds = {a.kind for a in acts}
+    for kind, words in _FOLDER_WORDS:
+        if kind in kinds:
+            remote = next((a.remote for a in acts if a.kind == kind and a.remote), "")
+            return words.format(to=f" to {remote}" if remote else " to a remote",
+                                on=f" ({remote})" if remote else "")
+    return "This changes something with git in your own folder. It asks you every time."
+
+
+def _users_folder() -> bool:
+    """Is this a coding session's turn that works in its folder directly, the
+    folder in a git repository (:data:`TURN_FOLDER`; no branch of its own)?"""
+    from .branches import current
+
+    if current() is not None:
+        return False
+    facts = TURN_FOLDER.get()
+    return facts is not None and bool(facts.repo)
+
+
 def refusal(command: Any) -> str:
     """The refusal for a command the plan rules out while the turn works on a
-    branch (:data:`REFUSED_KINDS`), else "" (no branch, or nothing refused)."""
+    branch (:data:`REFUSED_KINDS`), else "" (no branch, or nothing refused).
+    v1.511.0 (T2): never in the user's own folder — there those commands are
+    the user's to allow, and :func:`guard_check` asks every time instead."""
     from .branches import current
 
     if current() is None:
@@ -655,12 +943,27 @@ def guard_check(command: Any) -> Any:
     GitHub change / discarding work / a git setting; ``ask=False`` for a command the tool
     REFUSES (so no lane shows a card for a call that will not run — the
     tool's ``execute`` refuses it before anything runs); None for anything
-    else and whenever the turn has no branch."""
+    else.
+
+    v1.511.0 (second review T2, decision E3): in a coding session that works
+    in its folder directly, the folder in a git repository, every action read
+    here but a commit asks once, every time — refused kinds included (the
+    user's own folder is theirs: nothing is refused there). None for a folder
+    that is not in a repository and for any caller that is not a coding
+    session (nothing armed), exactly as before. Whether the folder is in a
+    repository is never looked up here: it was found when the turn was armed
+    (off the event loop)."""
     from ..tools.base import SpendCheck
     from .branches import current
 
     if current() is None:
-        return None
+        if not _users_folder():
+            return None
+        acts = [a for a in classify(command) if a.kind != "commit"]
+        if not acts:
+            return None
+        return SpendCheck(ask=True, words=folder_card_words(acts), cost_note="asks every time",
+                          once_only=True, reason="git")
     acts = classify(command)
     if not acts:
         return None
@@ -672,6 +975,7 @@ def guard_check(command: Any) -> Any:
 
 
 __all__ = [
-    "FORCE_REFUSAL", "GitAct", "REFUSED_KINDS", "card_words", "classify", "force_refusal",
-    "guard_check", "refusal", "user_aliases",
+    "FORCE_REFUSAL", "GitAct", "REFUSED_KINDS", "TURN_FOLDER", "TurnFolder", "card_words", "classify",
+    "folder_card_words", "folder_facts", "force_refusal", "guard_check", "refusal", "reset_turn_folder",
+    "set_turn_folder", "user_aliases",
 ]

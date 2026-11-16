@@ -807,7 +807,12 @@ class _Runtime(BrowserRuntime):
 #: payment ``autocomplete``): every one escalates on its NAME or not at all,
 #: which is what makes these pins fail when the label scan is removed.
 _GATE_PAGE_ELEMENTS: tuple[FakeElement, ...] = (
-    FakeElement(id="e1", role="textbox", name="Search", field_type="text"),
+    # v1.511.0 (B2): Enter in this field submits a form whose button reads
+    # "Search" (harmless), so a key press named to it still goes straight through.
+    FakeElement(
+        id="e1", role="textbox", name="Search", field_type="text",
+        enter=P.ENTER_SUBMITS, form_submit="Search",
+    ),
     FakeElement(id="e2", role="button", name="Expand details"),
     FakeElement(id="e3", role="button", name="Password"),
     FakeElement(id="e4", role="button", name="Update SSN"),

@@ -327,6 +327,40 @@ function requireActionable(resolved: Resolved): Element {
   return resolved.node;
 }
 
+/**
+ * This document's origin, spelled the way the daemon's `protocol.page_origin`
+ * spells it: `protocol//host` (the port only when it is not the scheme's own,
+ * which `location.host` already does). `location.origin` is not used: it reads
+ * "null" for a `file:` page, which the daemon writes as `file://`.
+ */
+export function originHere(): string {
+  return `${location.protocol}//${location.host}`.toLowerCase();
+}
+
+/**
+ * Refuse to act in a document that is not the page the action was planned on
+ * (v1.511.0, second review B9).
+ *
+ * The daemon puts the origin it resolved the action against on every acting
+ * frame. Between that and this moment an approval card may have waited for
+ * minutes, and the tab may by now show another site: a click addressed by role
+ * and name, or by CSS, would otherwise land on whatever page is there (an
+ * element id is caught by the registry's own URL check, the other two forms are
+ * not). Checked FIRST, before anything is resolved, focused or dispatched, by
+ * every acting operation — click, typing, a key and a scroll. A frame with no
+ * origin (an older daemon, a page whose address the daemon could not read)
+ * has nothing to compare and is not refused.
+ */
+export function requireSameOrigin(params: Record<string, unknown>): void {
+  const wanted = params["origin"];
+  if (typeof wanted !== "string" || wanted.trim() === "") {
+    return;
+  }
+  if (originHere() !== wanted.trim().toLowerCase()) {
+    throw new BridgeError("PAGE_CHANGED");
+  }
+}
+
 /** What every acting result reports about the page it left behind. */
 interface PageState {
   page_version: number;
@@ -409,6 +443,7 @@ function clickNode(node: Element): void {
 
 /** `click`: press one element and report what was pressed. */
 export function click(params: Record<string, unknown>): ClickResult {
+  requireSameOrigin(params);
   const before = location.href;
   const resolved = resolveTarget(
     params["target"] as Record<string, unknown> | undefined,
@@ -781,6 +816,7 @@ function pressOn(node: Element, key: string): boolean {
 
 /** `type_text`: fill one field and report WHAT was typed into, never what it holds. */
 export function typeText(params: Record<string, unknown>): TypeTextResult {
+  requireSameOrigin(params);
   const before = location.href;
   const resolved = resolveTarget(
     params["target"] as Record<string, unknown> | undefined,
@@ -818,6 +854,7 @@ export function typeText(params: Record<string, unknown>): TypeTextResult {
 
 /** `press_key`: send one key, to a named element or to whatever has focus. */
 export function pressKey(params: Record<string, unknown>): PressKeyResult {
+  requireSameOrigin(params);
   const before = location.href;
   const key = String(params["key"] ?? "").trim();
   if (!key) {
@@ -893,6 +930,7 @@ function scrolledTo(): string {
  * then reasons from, reporting content that is still off screen as absent.
  */
 export function scroll(params: Record<string, unknown>): ScrollResult {
+  requireSameOrigin(params);
   const before = location.href;
   const direction = String(params["direction"] ?? "");
   const rawAmount = Number(params["amount"]);

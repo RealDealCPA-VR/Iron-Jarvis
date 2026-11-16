@@ -3572,6 +3572,11 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             started_at=RC.WALL() - (float(resume.get("ran_s") or 0.0) if resume is not None else 0.0),
             spent_usd=float(resume.get("spent_usd") or 0.0) if resume is not None else 0.0,
         )
+        # v1.511.0 (second review T2): the git guard's reading of the folder
+        # (is it in a repository?) — found ONCE, off the loop, armed below.
+        from ...harness import git_guard as _git_guard
+
+        guard_folder = await asyncio.to_thread(_git_guard.folder_facts, folder)
         token = set_pin(pin) if pin is not None else None
         # v1.371.0: the Browser pane's address for this turn — armed while the
         # lane is built and the driver task created (the task copies the
@@ -3599,6 +3604,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         from ...harness import branches as _branches
 
         branch_token = _branches.set_turn_branch(_branches.facts_of(setup), folder)
+        # v1.511.0 (T2): and its folder — in the user's own repository a push
+        # or anything that throws work away asks every time.
+        guard_token = _git_guard.set_turn_folder(guard_folder)
         # v1.378.0: a failure in this turn is worded for a Build session
         # (`failure_words`: a safety refusal's way out is Rewind here, not a
         # new chat). The driver task copies the context, like the pin.
@@ -3773,6 +3781,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             _cmd_shell.reset_turn_rule(command_token)
             _team.reset_team(team_token)
             _failure_words.reset_surface(surface_token)
+            _git_guard.reset_turn_folder(guard_token)
             _branches.reset_turn_branch(branch_token)
             _compact.reset_summary(summary_token)
             reset_picked(picked_token)

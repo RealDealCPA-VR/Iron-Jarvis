@@ -23,6 +23,9 @@ WHO DECIDES WHAT THEY MAY DO:
   every time, in every posture (``page_click``'s spend check, which reads the
   button's own words off the page); "Ask first" (``always_ask``) cards every
   click and typed entry (``chat_turn.STRICT_ASK_TOOLS``).
+* v1.511.0 (second review S6, E4): ``page_type`` with ``submit`` is that
+  click on the field's form button (``page_type``'s spend check, the same
+  words and vocabulary); no form or no readable button asks once too.
 * Local only (``providers/egress.OPENS_PAGES_TOOLS``): ``page_open``,
   ``page_click`` and ``page_type`` card EVERY call (a page loads what it
   names); ``page_read`` reads what is already loaded.
@@ -147,6 +150,12 @@ def _target_args(args: dict[str, Any]) -> "dict[str, str] | str":
     if role and target:
         return {"role": role, "name": target}
     return target
+
+
+def _submits(args: dict[str, Any]) -> bool:
+    """Does page_type press Enter after typing? (One reading for the spend
+    check and the action.)"""
+    return str(args.get("submit")).strip().lower() in ("true", "1", "yes")
 
 
 _TARGET_PROPS: dict[str, Any] = {
@@ -318,13 +327,52 @@ class PageTypeTool(_PageTool):
             out["text"] = PB._mask(str(out.get("text") or ""))
         return out
 
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> "SpendCheck | None":
+        """Second review S6, decision E4: Enter in a form field is judged as
+        a SUBMIT — the click on the form's own submit button, with
+        ``page_click``'s rule: a button that reads as deleting, sending or
+        paying asks ONCE, every time, in every posture, with its own words
+        (read off the page); a field with no form, or a form whose button
+        cannot be read, asks once too (the page may do anything on Enter).
+        A harmless button, no ``submit``, no browser, a field that matches
+        nothing: no opinion (the posture decides; execute says why)."""
+        a = args or {}
+        if not _submits(a):
+            return None
+        target = _target_args(a)
+        if not target:
+            return None
+        key = PB.browser_key(ctx)
+        if not PB.BROWSERS.is_open(key):
+            return None
+        try:
+            words = await PB.BROWSERS.submit_words(key, target)
+        except PB.BrowserProblem:
+            return None
+        if not PB.submit_needs_asking(words):
+            return None
+        shown = PB.where(PB.BROWSERS.current_url(key)) or "its page"
+        label = PB._line(words)[:80]
+        if label:
+            text = (
+                f"Type into a field on {shown} in the agent's browser and press Enter, which submits "
+                f"its form: the form's button reads “{label}”. It reads as deleting, sending "
+                "or paying for something, so it asks every time."
+            )
+        else:
+            text = (
+                f"Type into a field on {shown} in the agent's browser and press Enter, which may "
+                "submit a form whose button could not be read, so it asks every time."
+            )
+        return SpendCheck(ask=True, words=text, cost_note="asks every time", once_only=True, reason="page")
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         a = args or {}
         target = _target_args(a)
         if not target:
             return ToolResult(ok=False, error="Say which field to type into: target (its label) or css.")
         text = str(a.get("text") if a.get("text") is not None else "")
-        submit = str(a.get("submit")).strip().lower() in ("true", "1", "yes")
+        submit = _submits(a)
         out = await run_action(ctx, lambda key, preview: PB.BROWSERS.type(
             key, target, text, submit=submit, preview=preview,
         ))

@@ -438,7 +438,10 @@ def parse_config(text: str) -> FinishConfig:
 #   pytest / py.test              python[3[.x]] / py … -m pytest | unittest
 #   npm test | t | run test…      pnpm / yarn test | run test…
 #   go test                       cargo test
-#   dotnet test                   mvn / mvnw / gradle / gradlew … test
+#   dotnet test                   mvn / mvnw / gradle / gradlew, tox, nox:
+#                                 only a line whose every goal, task,
+#                                 environment or session is a test one
+#                                 (v1.511.0: `mvn test deploy` is not)
 #   node --test                   a command the folder's own docs name for
 #                                 its tests (README, CONTRIBUTING, AGENTS.md,
 #                                 CLAUDE.md, TESTING.md — a code span on a line
@@ -874,7 +877,177 @@ def _js_runner(rest: list[str]) -> bool:
     return True
 
 
+#: v1.511.0 (second review D5): a build tool's line is a test run only when
+#: EVERY goal (Maven) or task (Gradle) is one of these — module-qualified
+#: too (``:app:test``, ``surefire:test``) — and one of them runs tests. A
+#: line that also deploys, publishes, installs or builds is never re-run by
+#: the check: the module's rule is that what runs beside the tests is not.
+_JVM_TEST_GOALS = frozenset({"clean", "test", "check", "verify"})
+_JVM_RUNS_TESTS = frozenset({"test", "check", "verify"})
+#: Options that take the NEXT word as their value.
+_MVN_VALUE_OPTS = frozenset({
+    "-pl", "--projects", "-f", "--file", "-s", "--settings", "-gs", "--global-settings", "-t",
+    "--toolchains", "-gt", "--global-toolchains", "-rf", "--resume-from", "-T", "--threads", "-l",
+    "--log-file", "-b", "--builder", "-P", "--activate-profiles", "-D", "--define",
+})
+_GRADLE_VALUE_OPTS = frozenset({
+    "--tests", "-x", "--exclude-task", "-p", "--project-dir", "-b", "--build-file", "-c",
+    "--settings-file", "-g", "--gradle-user-home", "-I", "--init-script", "-P", "--project-prop",
+    "-D", "--system-prop", "--console", "--warning-mode", "--max-workers", "--priority",
+    "--include-build", "--project-cache-dir",
+})
+#: A property / profile option whose value names a deploy, publish or
+#: release makes the line not a test run (``-DperformRelease=true``,
+#: ``-P release``).
+_PROPERTY_OPTS = frozenset({"-D", "-P", "--define", "--activate-profiles", "--project-prop",
+                            "--system-prop"})
+_SHIPS_RX = re.compile(r"deploy|publish|release", re.IGNORECASE)
+
+#: v1.511.0 (D5): the tox environments and nox sessions read as TEST runs —
+#: a name, or each of its ``-``-joined factors, is one of these or a Python
+#: version (``py311``, ``py3.12``, ``pypy3``, ``3.11``). Narrow on purpose: a
+#: lint, docs, release or any other environment is not re-run.
+TEST_ENV_WORDS = frozenset({"py", "pypy", "test", "tests", "unit", "unittest", "unittests"})
+_PY_VERSION_RX = re.compile(r"^(?:py|pypy)\d+(?:\.\d+)*$|^\d+(?:\.\d+)+$")
+#: tox's subcommands that run the environments (anything else — ``exec``,
+#: ``devenv``, ``list`` … — is not a test run).
+_TOX_RUN_WORDS = frozenset({"run", "r", "run-parallel", "p"})
+_TOX_VALUE_OPTS = frozenset({"-c", "--conf", "--root", "--workdir", "-x", "--override", "--hashseed",
+                             "--installpkg", "--result-json", "--discover", "--exit-and-dump-after"})
+_TOX_PARALLEL_RX = re.compile(r"^(?:auto|all|\d+)$")
+_NOX_VALUE_OPTS = frozenset({"-p", "--python", "--pythons", "-f", "--noxfile", "--envdir",
+                             "-db", "--default-venv-backend", "-fb", "--force-venv-backend",
+                             "--extra-python", "--extra-pythons"})
+
+
+def _redirect_words(words: list[str]) -> list[str]:
+    """``words`` without shell redirections (``2>&1``, ``> out.txt``)."""
+    out: list[str] = []
+    skip = False
+    for w in words:
+        if skip:
+            skip = False
+            continue
+        if _REDIRECT_RX.match(w):
+            skip = "&" not in w
+            continue
+        if _REDIRECT_TO_RX.match(w):
+            continue
+        out.append(w)
+    return out
+
+
+def _jvm_test_run(prog: str, args: list[str]) -> bool:
+    """Is a Maven / Gradle line (``args``: its words after the program, as
+    written) only a test run (v1.511.0, D5)?"""
+    value_opts = _MVN_VALUE_OPTS if prog in ("mvn", "mvnw") else _GRADLE_VALUE_OPTS
+    goals: list[str] = []
+    args = _redirect_words(args)
+    i = 0
+    while i < len(args):
+        w = args[i]
+        if w.startswith("-"):
+            name = w.split("=", 1)[0]
+            if name in value_opts and "=" not in w:
+                value = args[i + 1] if i + 1 < len(args) else ""
+                if name in _PROPERTY_OPTS and _SHIPS_RX.search(value):
+                    return False
+                i += 2
+                continue
+            if (w[:2] in ("-D", "-P") or name in _PROPERTY_OPTS) and _SHIPS_RX.search(w):
+                return False
+            i += 1
+            continue
+        goals.append(w.lower().rsplit(":", 1)[-1])
+        i += 1
+    return (bool(goals) and all(g in _JVM_TEST_GOALS for g in goals)
+            and any(g in _JVM_RUNS_TESTS for g in goals))
+
+
+def _test_env(name: str) -> bool:
+    """Is a tox environment / nox session name a TEST one (:data:`TEST_ENV_WORDS`)?"""
+    base = name.strip().lower().split("(", 1)[0]
+    factors = [f for f in base.split("-")]
+    return bool(base) and all(f in TEST_ENV_WORDS or _PY_VERSION_RX.match(f) for f in factors)
+
+
+def _tox_test_run(args: list[str], named: list[str]) -> bool:
+    """Is a tox line only a test run (v1.511.0, D5): no environment named, or
+    only test ones; no label / factor selection; no subcommand but a run?"""
+    envs = list(named)
+    args = _redirect_words(args)
+    i = 0
+    while i < len(args):
+        w = args[i]
+        low = w.lower()
+        if low == "--":
+            break
+        if low in ("-e", "--env"):
+            if i + 1 >= len(args):
+                return False
+            envs.extend(args[i + 1].split(","))
+            i += 2
+            continue
+        if low.startswith("--env="):
+            envs.extend(w.split("=", 1)[1].split(","))
+        elif low.startswith("-e") and not low.startswith("--"):
+            envs.extend(w[2:].lstrip("=").split(","))
+        elif low in ("-m", "--labels", "-f", "--factors") or low.startswith(("-m", "-f", "--labels=",
+                                                                              "--factors=")):
+            return False
+        elif low in ("-p", "--parallel"):
+            if i + 1 < len(args) and _TOX_PARALLEL_RX.match(args[i + 1].lower()):
+                i += 1
+        elif low in _TOX_VALUE_OPTS:
+            i += 1
+        elif not low.startswith("-") and low not in _TOX_RUN_WORDS:
+            return False
+        i += 1
+    return all(_test_env(e) for e in envs)
+
+
+def _nox_test_run(args: list[str], named: list[str]) -> bool:
+    """Is a nox line only a test run (v1.511.0, D5): no session named, or
+    only test ones; no keyword / tag selection?"""
+    sessions = list(named)
+    args = _redirect_words(args)
+    i = 0
+    taking = False  # after -s/-e: the following plain words are sessions
+    while i < len(args):
+        w = args[i]
+        low = w.lower()
+        if low == "--":
+            break
+        if low in ("-s", "-e", "--session", "--sessions"):
+            taking = True
+        elif low.startswith(("--session=", "--sessions=")):
+            sessions.extend(w.split("=", 1)[1].split(","))
+            taking = False
+        elif low.startswith(("-s", "-e")) and not low.startswith("--"):
+            sessions.extend(w[2:].lstrip("=").split(","))
+            taking = False
+        elif low in ("-k", "--keywords", "-t", "--tags") or low.startswith(("-k", "-t", "--keywords=",
+                                                                              "--tags=")):
+            return False
+        elif low in _NOX_VALUE_OPTS:
+            i += 1
+            taking = False
+        elif low.startswith("-"):
+            taking = False
+        elif taking:
+            sessions.extend(w.split(","))
+        else:
+            return False
+        i += 1
+    return all(_test_env(s) for s in sessions)
+
+
+#: Variables that pick the environments / sessions a tox / nox line runs.
+_ENV_PICKERS = {"tox": "TOXENV", "nox": "NOXSESSION"}
+
+
 def _is_test_head(words: list[str]) -> bool:
+    assigned = [w for w in words if _ASSIGN_RX.match(w)]
     words = _strip_prefix(words)
     if not words:
         return False
@@ -882,8 +1055,14 @@ def _is_test_head(words: list[str]) -> bool:
         return False
     prog = _program(words[0])
     rest = [w.lower() for w in words[1:]]
-    if prog in ("pytest", "py.test", "tox", "nox"):
+    if prog in ("pytest", "py.test"):
         return True
+    if prog in ("tox", "nox"):
+        # v1.511.0 (D5): only a line that runs TEST environments / sessions.
+        key = _ENV_PICKERS[prog] + "="
+        named = [v for a in assigned if a.upper().startswith(key)
+                 for v in a.split("=", 1)[1].split(",")]
+        return (_tox_test_run if prog == "tox" else _nox_test_run)(words[1:], named)
     if _js_runner([prog, *rest]):
         return True
     if prog in ("npx", "pnpx", "bunx"):
@@ -921,7 +1100,9 @@ def _is_test_head(words: list[str]) -> bool:
     if prog in ("go", "cargo", "dotnet", "bun", "deno"):
         return _first_plain(rest)[1] == "test"
     if prog in ("mvn", "mvnw", "gradle", "gradlew"):
-        return "test" in [w for w in rest if not w.startswith("-")]
+        # v1.511.0 (D5): every goal / task a test one (`mvn clean test
+        # deploy` is not a test run: the check never runs it again).
+        return _jvm_test_run(prog, words[1:])
     if prog == "node":
         return "--test" in rest
     return False

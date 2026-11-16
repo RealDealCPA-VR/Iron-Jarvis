@@ -135,6 +135,11 @@ def three_tabs() -> ScriptedBrowser:
                         role="textbox",
                         name="Search",
                         field_type="search",
+                        # v1.511.0 (B2): what the content script reports for
+                        # the search box: Enter submits a form whose buttons
+                        # read these two (harmless), so it does not ask.
+                        enter=P.ENTER_SUBMITS,
+                        form_submit="Google Search / I'm Feeling Lucky",
                     ),
                     FakeElement(id="lucky", role="button", name="I'm Feeling Lucky"),
                 ],

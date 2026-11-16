@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.510.0 (2026-11-15).*
+holds itself to. Current as of v1.511.0 (2026-11-15).*
 
 ---
 
@@ -2041,6 +2041,60 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Every OK is for what will really happen (v1.511.0)
+
+The third of eight releases from the second review. Each of these is a place
+where something risky could run without the question you would expect, or
+where an OK you gave covered more than you were shown.
+
+- **Enter in a form is a submit.** When Iron Jarvis types into a field in
+  your browser and presses Enter, that sends the form. It used to be judged
+  by the field's name ("Amount"), so no question was asked, even though a
+  click on the form's own "Transfer" or "Send" button always asks. It is now
+  judged by what the form's button says, and asks when that reads as paying,
+  sending or deleting, or when the button cannot be read. A search box still
+  goes straight through. The same holds in a coding session's own page
+  browser.
+- **An OK in the browser is for that site, in that tab.** An approval left
+  waiting on the Browser page used to fit the next matching click anywhere.
+  It now names its site and tab and is used only there. And if the page
+  changes to another site while a question waits for your answer, nothing is
+  done: Iron Jarvis is told to read the page again.
+- **Pages on your own computer.** Sending your browser to a page on this
+  computer (localhost, or a file) always asks first. Iron Jarvis's own pages
+  are refused outright: it does not open, read or click its own app through
+  your browser.
+- **Git in your own folder.** A coding session that works in your folder
+  directly (the usual kind) now asks every time before a push, a force push,
+  anything that throws away work (`reset --hard`, `clean`, checking a file
+  out over your changes), a history rewrite, deleting a branch, changing a
+  git setting such as where `origin` points, taking work out of git's stash,
+  or a change on GitHub. "Allow commands for this session" and "Don't ask"
+  no longer cover these. A commit does not ask. Before, none of this asked
+  once you had allowed commands. Say so if you want this list shorter.
+- **More git spellings are caught.** `git remote set-url`, `git reset
+  <branch>`, `git checkout <file>` and `git stash pop` are now recognised
+  for what they do, and a command hidden after a `;` inside a quoted commit
+  message no longer slips past.
+- **Claude Code's "Allow for this session" lasts for the session.** The card
+  said "for the rest of this session", but Claude Code was told to save the
+  rule in the folder's settings, where it applied to every later session and
+  to your own Claude Code in a terminal. It is now kept for the session
+  only.
+- **A helper is never looser than the session that hands it work.** A
+  session on Ask first or Plan can no longer hand work to a coding tool that
+  asks nothing (Pi, for example); the hand-off is refused with the reason,
+  and the hand-off question now names the tool. A branch of a Full-access
+  session starts on Ask first and says so.
+- **"Ask before every action" everywhere.** A caller that reaches chat
+  without a window (where no question can be shown) now has those actions
+  refused with the reason, instead of run.
+- **Smaller ones.** A change of a coding session's mode that is refused for
+  another reason no longer leaves the tool in the new mode. Pi stops loading
+  a folder's own extensions once you tell Pi not to trust that folder. The
+  end-of-reply check no longer runs `mvn test deploy` (or a release task of
+  Gradle, tox or nox) a second time.
 
 ## Nothing is lost, part two (v1.510.0)
 
