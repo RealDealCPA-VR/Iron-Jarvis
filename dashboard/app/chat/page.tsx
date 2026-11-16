@@ -4869,7 +4869,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // Replies are spoken through the shared TTS preference (same toggle as the
   // session page). Voice Chat = listen → auto-send on pause → speak the reply
   // (mic held while speaking, so it never hears itself) → listen again.
-  const dictation = useDictation();
+  // v1.502.0: dictation is the chat's words, so it carries the chat's Local
+  // only switch (a speech service off this network is then refused by name).
+  const dictation = useDictation("en-US", { localOnly, threadId });
   const tts = useTTS();
   // Token streaming: `stream` drives the live CHAT bubble (deltas + tool cards);
   // `runStream` drives the AGENT working bubble. Both are additive — the

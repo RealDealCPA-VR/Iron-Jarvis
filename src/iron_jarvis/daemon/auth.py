@@ -338,6 +338,30 @@ def _peer_is_this_computer(request: Request) -> bool:
     return bool((mapped or ip).is_loopback)
 
 
+#: v1.502.0 (north-star 2.15): the answer to another computer when this Iron
+#: Jarvis has no token. The words for whoever runs it; the caller sees 401.
+NO_TOKEN_FROM_NETWORK = (
+    "This Iron Jarvis has no token, so it only answers this PC. To let other "
+    "computers reach it, set IRONJARVIS_TOKEN before starting it."
+)
+
+
+def _from_another_computer(request: Request) -> bool:
+    """True when the TCP peer is an ADDRESS that is not this PC's loopback
+    (v1.502.0). Unlike :func:`_peer_is_this_computer` this does not fail
+    closed: a peer that is no address at all (``testclient``, a transport
+    with no client) is not another computer's address. Only the no-token
+    case reads it. Never raises."""
+    client = getattr(request, "client", None)
+    host = ((getattr(client, "host", "") if client else "") or "").strip().lower()
+    try:
+        ip = ipaddress.ip_address(host.strip("[]").split("%", 1)[0])
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return not bool((mapped or ip).is_loopback)
+
+
 def _exempt_for(request: Request) -> bool:
     """``_is_exempt`` for THIS request: a local-only read asked from another
     computer while the desktop opened the network is not exempt."""
@@ -644,7 +668,13 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next) -> Response:
         token = _configured_token()
-        if not token:  # auth disabled -> wide open (local dev)
+        if not token:  # auth disabled -> open to THIS PC only (local dev)
+            # v1.502.0 (north-star 2.15): with no token, a request from
+            # another computer's address is refused — an Iron Jarvis served
+            # on the network with no token was open to anyone on it. The
+            # doors that check their own token stay reachable.
+            if _from_another_computer(request) and not _exempt_for(request):
+                return JSONResponse({"detail": NO_TOKEN_FROM_NETWORK}, status_code=401)
             return await call_next(request)
 
         if _exempt_for(request):

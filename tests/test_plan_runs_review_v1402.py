@@ -121,7 +121,8 @@ async def test_a_plan_turn_that_went_to_low_trust_runs_its_plan_at_low_trust(app
     (work / "NOTES.md").write_bytes((INJ + "\n").encode("utf-8"))
     platform = app.state.platform
     # The folder's notes are untrusted text here (as a fetched page is).
-    monkeypatch.setattr(platform.registry.get("read_file"), "returns_untrusted_content", True, raising=False)
+    # v1.502.0 (north-star D5, moved on purpose): read_file's own rule now.
+    assert platform.registry.get("read_file").returns_untrusted_content is True
     sid = new_session(app, work, mode="plan", approval_mode="yolo")["id"]
     wire(app, Script([
         [ToolCall(id="r1", name="Read", arguments={"file_path": "NOTES.md"})],

@@ -230,10 +230,14 @@ async def test_a_real_attempt_lowered_by_a_tool_result_is_left_out_of_the_report
 
     if shutil.which("git") is None:
         pytest.skip("git is not installed")
-    # A file is third-party text: read_file's output is scanned here (the
-    # tools that do return untrusted content — a web page, an app's
-    # resource — are scanned the same way).
-    monkeypatch.setattr(ReadFileTool, "returns_untrusted_content", True, raising=False)
+    # A file is third-party text: read_file's output is scanned (v1.502.0,
+    # north-star D5: its own rule now). This repository's notes.txt would be
+    # the session's OWN source (a Git folder), so here it is read as a file
+    # someone else put there — the case the report must leave out.
+    from iron_jarvis.tools import builtins as _builtins
+
+    assert ReadFileTool.returns_untrusted_content is True
+    monkeypatch.setattr(_builtins, "own_source_path", lambda *_a: False)
     moves = {
         "glm-local": [[ToolCall(id="r1", name="read_file", arguments={"path": "notes.txt"})],
                       [ToolCall(id="r2", name="read_file", arguments={"path": "glmnosuchfile.txt"})],

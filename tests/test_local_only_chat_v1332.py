@@ -319,9 +319,13 @@ def test_an_image_on_a_text_only_local_model_names_the_vision_provider_and_calls
         asyncio.run(go())
     assert caught.value.provider == "claude-cli"
     assert cloud.calls == 0 and local.calls == 0
-    # Anti-vacuity: outside the scope the capability swap goes to the cloud.
-    asyncio.run(lane(r, messages=_msgs(images=True)))
-    assert cloud.calls == 1
+    # Anti-vacuity: it is the SCOPE's refusal (its own words). Outside the
+    # scope a local model's picture is not moved to the cloud either
+    # (v1.502.0, north-star 2.13, D1) — refused in the picture's own words.
+    assert type(caught.value) is egress.LocalOnlyRefused
+    with pytest.raises(egress.PictureKeptHere):
+        asyncio.run(lane(r, messages=_msgs(images=True)))
+    assert cloud.calls == 0
 
 
 def test_an_image_swaps_to_a_vision_model_on_this_network_when_there_is_one():

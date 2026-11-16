@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
+from ..tools.base import Reversibility, SpendCheck, Tool, ToolContext, ToolResult
 
 
 class WebhookAddTool(Tool):
@@ -49,6 +49,34 @@ class WebhookAddTool(Tool):
 
     def __init__(self, platform) -> None:
         self.platform = platform
+
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
+        """v1.502.0 (north-star D6): an OUTBOUND webhook sends Iron Jarvis's
+        events to another address from then on, so it is asked about every
+        time — in every lane, through the seam they all read (the runtime
+        pauses, the stream lane cards, the POST lane refuses). The card names
+        the address's HOST only: a webhook address can be its own secret.
+        An unattended run is refused in words (``attended_only``); "Don't
+        ask" is the user's own posture and is kept (``dont_ask_skips``), as a
+        chat's ask is. An inbound webhook has no opinion (allow, as before)."""
+        if args.get("direction", "inbound") != "outbound":
+            return None
+        from urllib.parse import urlsplit
+
+        try:
+            host = urlsplit(str(args.get("target_url") or "").strip()).hostname or ""
+        except ValueError:
+            host = ""
+        where = host or "another address"
+        return SpendCheck(
+            ask=True,
+            words=f"Send Iron Jarvis's events to {where} from now on (a new outbound webhook)",
+            # Each one is its own question: "Allow once" and Deny, never a
+            # standing grant that would cover the next address.
+            once_only=True,
+            dont_ask_skips=True,
+            attended_only=True,
+        )
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         from ..settings.records import capture_create_undo

@@ -513,7 +513,8 @@ async def test_a_low_trust_second_review_answers_nothing_and_never_an_earlier_on
     """The second reviewer read a planted instruction: its run is low, its
     findings are not stored, and the lead's "R1 does not apply" after its
     note must not be read as an answer to the FIRST review's R1."""
-    monkeypatch.setattr(world.p.registry.get("read_file"), "returns_untrusted_content", True, raising=False)
+    # v1.502.0 (north-star D5, moved on purpose): read_file's own rule now.
+    assert world.p.registry.get("read_file").returns_untrusted_content is True
     (world.ws / "trap.md").write_bytes(TRAP.encode())
     members(world.p)
     _two_reviews(world, [[ToolCall(id="rt", name="read_file", arguments={"path": "trap.md"})],
@@ -551,7 +552,8 @@ def _went_low_moves(world_ns, monkeypatch) -> None:
     """The lead reads a planted instruction AFTER the review note, then
     answers: its "R1 fixed" may be the instruction's words."""
     # The folder's notes are untrusted text here (as a fetched page is).
-    monkeypatch.setattr(world_ns.p.registry.get("read_file"), "returns_untrusted_content", True, raising=False)
+    # v1.502.0 (north-star D5, moved on purpose): read_file's own rule now.
+    assert world_ns.p.registry.get("read_file").returns_untrusted_content is True
     (world_ns.ws / "trap.md").write_bytes(TRAP.encode())
     world_ns.main = [
         _named("n1", "qwen", "Set X to 2 in app.py."),

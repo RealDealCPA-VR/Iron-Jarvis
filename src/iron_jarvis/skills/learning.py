@@ -73,6 +73,10 @@ _MIN_TOOL_CALLS = 3
 _MIN_DISTINCT_TOOLS = 2
 #: Unusable distillation replies before a candidate is dismissed for good.
 _MAX_ATTEMPTS = 3
+#: v1.502.0: pending candidates a sweep looks at past its ``limit``, so the
+#: Local only ones it holds back (no model on this network) never starve the
+#: rest.
+_HELD_WINDOW = 50
 #: Hardening caps on model output (the body is MODEL OUTPUT, possibly steered
 #: by untrusted session content — mirror chat's ``_sanitize_draft`` spirit).
 _MAX_NAME = 80
@@ -467,25 +471,52 @@ class SkillLearningEngine:
                 "dismissed": 0,
                 "note": "skill learning is disabled",
             }
+        want = max(1, int(limit))
         with session_scope(self.engine) as db:
+            # v1.502.0: a window past ``limit`` — a Local only run's candidate
+            # held back (below) must not starve the ones after it.
             candidates = list(
                 db.exec(
                     select(SkillCandidateRecord)
                     .where(SkillCandidateRecord.status == "pending")
                     .order_by(SkillCandidateRecord.created_at.asc())
-                    .limit(max(1, int(limit)))
+                    .limit(want + _HELD_WINDOW)
                 )
             )
+        from ..providers import egress as _egress
+
         proposal_ids: list[str] = []
         dismissed = 0
+        reviewed = 0
+        held = 0
         for cand in candidates:
-            if cand.kind == "refine":
-                outcome = await self._distill_refine(cand, complete)
-            else:
-                outcome = await self._distill_create(cand, complete)
+            if reviewed >= want:
+                break
+            # LOCAL ONLY (v1.502.0, north-star 2.3): a Local only run's task,
+            # summary and tool history are sent only inside the scope, so the
+            # one-shot gate refuses a model that leaves this network. Held
+            # pending (not dismissed, no attempt spent) until the model that
+            # writes skill drafts is one on this network.
+            local = self._candidate_local_only(cand)
+            try:
+                with _egress.local_only_scope(local):
+                    if cand.kind == "refine":
+                        outcome = await self._distill_refine(cand, complete)
+                    else:
+                        outcome = await self._distill_create(cand, complete)
+            except Exception as exc:  # noqa: BLE001 — only a Local only refusal is held
+                if _egress.refusal_of(exc) is None:
+                    raise
+                held += 1
+                continue
+            reviewed += 1
             if isinstance(outcome, SkillProposalRecord):
                 self._set_candidate_status(cand.id, "distilled")
-                outcome = self._maybe_auto_approve(outcome)
+                if not local:
+                    # A draft written from a Local only run is never added
+                    # unasked: once kept, a skill reaches every later prompt,
+                    # a cloud model's included. It waits for the owner.
+                    outcome = self._maybe_auto_approve(outcome)
                 proposal_ids.append(outcome.id)
                 self._notify(outcome)
             elif outcome == "dismiss":  # unfixable (e.g. the skill vanished)
@@ -493,11 +524,29 @@ class SkillLearningEngine:
                 dismissed += 1
             else:  # unusable reply — bounded retry
                 dismissed += self._bump_attempts(cand.id)
-        return {
-            "reviewed": len(candidates),
+        out: dict[str, Any] = {
+            "reviewed": reviewed,
             "proposals": proposal_ids,
             "dismissed": dismissed,
         }
+        if held:
+            out["held_local_only"] = held
+        return out
+
+    def _candidate_local_only(self, cand: SkillCandidateRecord) -> bool:
+        """Was the run this candidate came from Local only (v1.502.0)? Read
+        off its session row (``options.local_only``). A row that cannot be
+        read is treated as Local only: fail closed, the draft waits."""
+        try:
+            from ..agents.orchestrator import session_local_only
+
+            with session_scope(self.engine) as db:
+                sess = db.get(Session, cand.session_id)
+            if sess is None:
+                return False
+            return session_local_only(sess)
+        except Exception:  # noqa: BLE001
+            return True
 
     async def _distill_create(
         self, cand: SkillCandidateRecord, complete: Complete

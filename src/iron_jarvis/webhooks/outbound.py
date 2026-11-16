@@ -380,6 +380,16 @@ class OutboundWebhooks:
         records = list(self._subscribers().get(event.type) or ())
         if not records:
             return []
+        # LOCAL ONLY (v1.502.0, north-star 2.6): an event for Local only work
+        # (the bus's stamp, the session row, the saved chat) never reaches an
+        # address outside this PC. Skipped, and the descriptor says why.
+        from ..core.events import event_is_local_only
+
+        if event_is_local_only(event, self.engine):
+            return [
+                {"slug": rec.slug, "url": rec.target_url, "skipped": "local_only"}
+                for rec in records
+            ]
         payload = event.to_dict()
         body_bytes = canonical_bytes(payload)
 

@@ -424,6 +424,40 @@ def build_task_text(task: str, history: Any, caller: str) -> str:
     return text + "\n\nThe conversation so far on that computer:\n" + "\n".join(lines)
 
 
+def pinned_reply_to(peer: Any, reply_to: str) -> str:
+    """Where a PAIRED computer's answer goes (v1.502.0, north-star 2.16): the
+    address this computer stored when the two were paired (scheme, host and
+    port) with the inbound path ``reply_to`` names — never the host the task
+    named. ``""`` when the pairing holds no address (nothing is sent)."""
+    address = str(getattr(peer, "address", "") or "").strip().rstrip("/")
+    if not address:
+        return ""
+    try:
+        path = urlparse(str(reply_to or "").strip()).path or ""
+    except Exception:  # noqa: BLE001
+        return ""
+    if not _REPLY_PATH.match(path):
+        return ""
+    return address + path
+
+
+def _paired_reply_to(platform: Any, spec: dict[str, str]) -> tuple[bool, str]:
+    """``(paired, address)`` for a session's reply (BLOCKING: one row read).
+    A task from a paired computer (its caller is the pairing's name) answers
+    only at :func:`pinned_reply_to`; any other task keeps the address it
+    named (the hand-made door: no address of the sender is stored here)."""
+    try:
+        from ..peers.store import store_for
+
+        peer = store_for(platform).get(spec["caller"])
+    except Exception:  # noqa: BLE001 — unreadable: fail closed, nothing is sent
+        log.warning("task door: the paired computers could not be read", exc_info=True)
+        return True, ""
+    if peer is None:
+        return False, spec["to"]
+    return True, pinned_reply_to(peer, spec["to"])
+
+
 def reply_spec(*, reply_to: str, conversation_id: str, caller: str) -> dict[str, str]:
     """The run option a task carries when its answer has somewhere to go."""
     return {
@@ -651,6 +685,14 @@ async def send_reply(platform: Any, session: Any) -> dict[str, Any]:
         detail = "no answer key for this task is held here (it never came, or was lost)"
         await _record_reply(platform, session, ok=False, detail=detail, caller=caller)
         return {"ok": False, "sent": False, "detail": detail}
+    # A PAIRED COMPUTER'S ANSWER GOES TO ITS STORED ADDRESS (v1.502.0,
+    # north-star 2.16): the answer and the files the run made never go to a
+    # host the task named instead.
+    _paired, target = await asyncio.to_thread(_paired_reply_to, platform, spec)
+    if not target:
+        detail = "this computer does not know that paired computer's address any more (pair them again)"
+        await _record_reply(platform, session, ok=False, detail=detail, caller=caller)
+        return {"ok": False, "sent": False, "detail": detail}
     message = _reply_message(session)
     files, left = await asyncio.to_thread(_reply_files, platform.engine, sid)
     if left:
@@ -676,7 +718,7 @@ async def send_reply(platform: Any, session: Any) -> dict[str, Any]:
     try:
         async with deadline:
             async with httpx.AsyncClient(timeout=REPLY_TIMEOUT_S, follow_redirects=False) as client:
-                resp = await client.post(spec["to"], json=body, headers=headers)
+                resp = await client.post(target, json=body, headers=headers)
         status = int(getattr(resp, "status_code", 0) or 0)
         try:
             text = str(resp.text or "")[:500]

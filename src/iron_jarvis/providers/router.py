@@ -1896,7 +1896,7 @@ class ModelRouter:
 
     def _enforce_capabilities(
         self, adapter: LLMAdapter, need_tools: bool, need_vision: bool, avail: set[str],
-        pay_ok: bool = True,
+        pay_ok: bool = True, explicit: bool = False,
     ) -> LLMAdapter | None:
         """Return a replacement adapter when the primary can't satisfy the
         request's hard capability (tools), else ``None`` to keep it. A tool-using
@@ -1915,7 +1915,14 @@ class ModelRouter:
         the swap; with no other capable model the primary keeps the request
         (it answers as it can, and a failure then says it was not moved to a
         pay-per-use key). Under the local-only scope every candidate already
-        stays on this network, which is never pay per use."""
+        stays on this network, which is never pay per use.
+
+        A PICTURE STAYS ON THIS NETWORK (v1.502.0, the owner's decision D1):
+        ``explicit`` — the caller named the provider. When the primary that
+        cannot see is a local provider (``is_local_provider``) or was picked
+        by name, only a model on this network may take the picture
+        (:meth:`_picture_stays`); a default-route cloud primary still moves
+        to another connected cloud model, under the money rule."""
         if _egress.current_scope().on:
             return self._enforce_capabilities_local(adapter, need_tools, need_vision, avail)
         if need_tools and not _supports_tools(adapter):
@@ -1924,9 +1931,44 @@ class ModelRouter:
                 pay_ok=pay_ok,
             )
         if need_vision and not _supports_vision(adapter):
+            if explicit or is_local_provider(adapter.provider):
+                return self._picture_stays(adapter, need_tools, avail, pay_ok=pay_ok)
             return self._first_capable(
                 need_tools=need_tools, need_vision=True, exclude=adapter, avail=avail,
                 pay_ok=pay_ok,
+            )
+        return None
+
+    def _picture_stays(
+        self, adapter: LLMAdapter, need_tools: bool, avail: set[str], *, pay_ok: bool,
+    ) -> LLMAdapter | None:
+        """A picture on a primary that cannot see, which is on this network or
+        was picked by name (v1.502.0, D1). A model on this network that can
+        see takes it; else, when a model off the network could (one the money
+        rule would let take it), NOTHING is sent and :class:`~.egress.
+        PictureKeptHere` names that model, so the page offers "send it once"
+        (which re-sends the message on that model). With no model anywhere
+        that can see, the primary keeps the turn — never a blind stand-in off
+        the network (the old vision fallback moved it to a cloud model that
+        could not see it either). The chat reads the picture on this PC first
+        (``chat_turn._prepare_attachments``), so a picture read there never
+        reaches this seam. MIRROR NOTE (lock-step): both lanes call this
+        through :meth:`_enforce_capabilities`."""
+        local = self._first_capable(
+            need_tools=need_tools, need_vision=True, exclude=adapter, avail=avail,
+            allow=self._stays, pay_ok=pay_ok,
+        )
+        if local is not None and _supports_vision(local):
+            return local
+        would = self._first_capable(
+            need_tools=need_tools, need_vision=True, exclude=adapter, avail=avail,
+            pay_ok=pay_ok,
+        )
+        if would is not None and _supports_vision(would) and not self._stays(would.provider):
+            raise _egress.PictureKeptHere(
+                would.provider, str(getattr(would, "model", "") or ""),
+                primary=adapter.provider, manager=self.manager,
+                primary_stays=bool(self._stays(adapter.provider)),
             )
         return None
 
@@ -2191,7 +2233,9 @@ class ModelRouter:
             repl = (
                 None if session_held
                 else self._enforce_capabilities(
-                    adapter, need_tools, need_vision, avail, pay_ok=pick_pays
+                    adapter, need_tools, need_vision, avail, pay_ok=pick_pays,
+                    # D1 (v1.502.0): a picture on a pick by name stays.
+                    explicit=bool(provider) and not auto_selected,
                 )
             )
             if repl is not None:
@@ -2729,7 +2773,9 @@ class ModelRouter:
             repl = (
                 None if session_held
                 else self._enforce_capabilities(
-                    adapter, need_tools, need_vision, avail, pay_ok=pick_pays
+                    adapter, need_tools, need_vision, avail, pay_ok=pick_pays,
+                    # D1 (v1.502.0): a picture on a pick by name stays.
+                    explicit=bool(provider) and not auto_selected,
                 )
             )
             if repl is not None:

@@ -240,6 +240,10 @@ def default_permissions() -> dict[str, str]:
         "tool_delete": "ask",
         # Agent self-service (local, user-visible, reversible) — allowed.
         "schedule_create": "allow",
+        # v1.502.0 (north-star D6): allow is for an INBOUND trigger; an
+        # OUTBOUND webhook (Iron Jarvis's events sent to another address) is
+        # asked about every time by the tool's own check
+        # (``webhooks/tools.WebhookAddTool.spend_check``), in every lane.
         "webhook_add": "allow",
         "workflow_create": "allow",
         # v1.170.0: chat can SEE saved workflows — listing is read-only.
@@ -898,6 +902,11 @@ class Config(BaseModel):
     # to an OpenAI key, then the custom endpoint (with model auto-discovery). The
     # optional key for a dedicated endpoint lives in the vault as
     # `voice_transcribe_key`.
+    # v1.502.0 (north-star 2.12, decision D9): WHERE dictation is turned into
+    # words. "this_pc" (the default): the offline model, or a speech server the
+    # owner set below. "openai": OpenAI's audio service, with the OpenAI key.
+    # An OpenAI key added for CHAT used to send every dictated clip to OpenAI.
+    voice_backend: str = "this_pc"
     voice_transcribe_base_url: str = ""  # OpenAI-compatible /v1 base for STT
     voice_transcribe_model: str = ""  # exact model id the STT server serves
     # BUNDLED OFFLINE speech-to-text (Vosk) — a fully local, real-time dictation

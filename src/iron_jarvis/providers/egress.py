@@ -542,6 +542,41 @@ class LocalOnlyRefused(ProviderError):
         }
 
 
+class PictureKeptHere(LocalOnlyRefused):
+    """Nothing was sent: the message carries a picture, the model chosen for
+    it cannot see, and the one model connected that could runs off this
+    network (v1.502.0, the owner's decision D1). The chosen model was a model
+    on this network or one the user picked by name, so moving the picture to
+    *provider* is the user's call, never a routing fallback. A
+    :class:`LocalOnlyRefused` on purpose: ``code="local_only"`` gives the
+    page the same two answers ("Send to X once" re-sends this message on X,
+    "Choose a local model"), and nothing fails over from it."""
+
+    def __init__(
+        self, provider: str, model: str = "", *, primary: str = "", manager: Any = None,
+        primary_stays: bool = True,
+    ) -> None:
+        self.provider = str(provider or "")
+        self.model = str(model or "")
+        self.primary = str(primary or "")
+        name = friendly_name(self.provider, manager)
+        chosen = friendly_name(self.primary, manager) if self.primary else "The model chosen for this message"
+        # The true reason, for each of the two cases (lead review): a model on
+        # this network kept the picture here; a model the user PICKED that
+        # itself runs off this network kept it because it was their pick.
+        if primary_stays:
+            why = "which runs off this network. Choose a model on this network that can see pictures"
+        else:
+            why = "which is not the model you picked. Choose a model that can see pictures"
+        ProviderError.__init__(
+            self,
+            f"{chosen[:1].upper() + chosen[1:]} can't see pictures, so nothing was sent."
+            f" Iron Jarvis didn't move this message to {name}, {why}, or"
+            f" send it to {name} once.",
+            transient=False,
+        )
+
+
 def refusal_of(exc: BaseException | None) -> "LocalOnlyRefused | None":
     """*exc* (or what it was raised from) when it is a local-only refusal."""
     seen = 0
@@ -1050,6 +1085,7 @@ __all__ = [
     "LOCAL_ONLY",
     "LocalOnlyRefused",
     "LocalOnlyScope",
+    "PictureKeptHere",
     "PRIVATE_SUFFIXES",
     "RUNS_COMMANDS_TOOLS",
     "SETS_OUTSIDE_ADDRESS_TOOLS",

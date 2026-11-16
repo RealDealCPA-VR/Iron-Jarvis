@@ -509,6 +509,16 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="allow", section="Model team",
       aliases=("team notes", "working habits", "habits from reviews", "learn from reviewers",
                "member habits")),
+    # v1.502.0 (north-star 2.12, D9): an OpenAI key added for chat no longer
+    # sends dictation to OpenAI; that is this choice, off until it is made.
+    S("voice_backend", "Voice: where dictation is turned into words", "models", "enum",
+      "On this PC uses the offline speech model that comes with Iron Jarvis, or a speech server "
+      "you set below; your voice stays on your network. OpenAI sends each dictated clip to "
+      "OpenAI's audio service with your OpenAI key, which is billed per use. A Local only chat "
+      "never sends dictation off your network, whatever is chosen here.",
+      tier="ask", section="Voice",
+      options=(("this_pc", "On this PC (default)"), ("openai", "OpenAI")),
+      aliases=("dictation", "speech to text", "voice typing", "whisper")),
     S("voice_transcribe_base_url", "Voice: speech-to-text server address", "models", "string",
       "Optional dedicated whisper server for dictation. Its key is set under Connections.",
       tier="ask", section="Voice", advanced=True, aliases=("speech-to-text endpoint",)),
@@ -591,7 +601,9 @@ SETTINGS: tuple[SettingDef, ...] = (
       "Off unless you turn it on. When on, Iron Jarvis also listens on this PC's address on your "
       "network after it restarts, so another computer running Iron Jarvis can pair with it and "
       "hand it tasks (Settings, Connections, Your other computers). Every request still needs "
-      "its own token. Windows may ask once whether to allow Iron Jarvis on your network.",
+      "its own token. The link between the two computers is not encrypted, so use it only on a "
+      "network you trust (your own, or Tailscale). Windows may ask once whether to allow Iron "
+      "Jarvis on your network.",
       tier="ask-floor", restart=True, section="Another computer",
       aliases=("lan access", "network access", "another computer", "other computers",
                "reach from another computer", "local network")),

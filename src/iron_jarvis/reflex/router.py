@@ -49,6 +49,21 @@ _PLACEHOLDER = _re.compile(r"\{(" + "|".join(_TEMPLATE_KEYS) + r")\}")
 _FENCE_MARKER = _re.compile(r"\[(\s*(?:END\s+)?UNTRUSTED\s+CONTENT)", _re.IGNORECASE)
 
 
+#: v1.502.0 (north-star 2.8): the sources whose signal is written OUTSIDE this
+#: PC (a webhook's body, an email, a Slack message, a calendar invite, a phone
+#: message). A rule they fire starts its work at LOW trust — the phone door's
+#: rule (``comm/inbound._comm_trust``, ``config.comm_trust``) applied to every
+#: signal — so a planted sentence cannot reach what an inbound message is kept
+#: from. ``comm_trust = "full"`` (the owner's choice) keeps it full.
+OUTSIDE_SOURCES: dict[str, str] = {
+    "webhook": "a webhook",
+    "email": "an email",
+    "slack": "a Slack message",
+    "calendar": "a calendar event",
+    "comm": "a phone message",
+}
+
+
 def _defanged(value: str) -> str:
     """Outside text that cannot close (or open) an untrusted fence."""
     return _FENCE_MARKER.sub(r"(\1", value or "")
@@ -214,12 +229,16 @@ class ReflexRouter:
             reason = why
         else:
             try:
+                # v1.502.0 (north-star 2.8): the posture the work starts at.
+                # Passed only when low, so a full fire calls exactly as before.
+                trust = self._signal_trust(rule, attended=attended)
+                trust_kw = {"trust": trust} if trust else {}
                 if rule.action == "workflow":
-                    result = self._run_workflow(rule, context)
+                    result = self._run_workflow(rule, context, **trust_kw)
                 elif rule.action == "remote_agent":
                     result = self._run_remote(rule, context)
                 elif rule.action == "session":
-                    result = await self._run_session(rule, context)
+                    result = await self._run_session(rule, context, **trust_kw)
                 else:
                     result = {"ok": False, "error": f"unknown action '{rule.action}'"}
             except Exception as exc:  # noqa: BLE001 — one bad rule never breaks the rest
@@ -253,7 +272,22 @@ class ReflexRouter:
             )
         return {"rule": rule.name, "rule_id": rule.id, **result}
 
-    def _run_workflow(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:
+    def _signal_trust(self, rule: ReflexRule, *, attended: bool) -> dict[str, str]:
+        """``{"trust": "low", "trust_reason": …}`` for work a rule fired by an
+        OUTSIDE signal starts (:data:`OUTSIDE_SOURCES`), else ``{}``. A fire a
+        person is watching (the Reflex page's Test press) and an owner who set
+        ``comm_trust`` to "full" keep full trust. Never raises."""
+        label = OUTSIDE_SOURCES.get(str(getattr(rule, "source", "") or ""))
+        if attended or not label:
+            return {}
+        cfg = getattr(self.p, "config", None)
+        if str(getattr(cfg, "comm_trust", "low") or "low").strip().lower() == "full":
+            return {}
+        return {"trust": "low", "trust_reason": f"started by {label} (rule {rule.name})"}
+
+    def _run_workflow(
+        self, rule: ReflexRule, context: dict[str, str], *, trust: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         from ..workflows.engine import WorkflowEngine
         from ..workflows.store import WorkflowStore
 
@@ -284,8 +318,13 @@ class ReflexRouter:
         # ran (wrong context chains, wrong run-history truth) — the def owns
         # the name, so the injection simply steps aside.
         collides = any(s.name == "Trigger" for s in wf.steps)
+        # v1.502.0 (north-star 2.8): the Trigger output is marked as a
+        # signal's words (``kind`` "trigger": an agent step's task renders it
+        # FENCED, ``workflows/engine.render_template``) and carries the run's
+        # posture, so its agent steps start low like the session action.
         outputs = (
-            {"Trigger": {"status": "completed", "summary": trigger_text[:1500], "kind": "trigger"}}
+            {"Trigger": {"status": "completed", "summary": trigger_text[:1500], "kind": "trigger",
+                         **(trust or {})}}
             if trigger_text and not collides
             else None
         )
@@ -343,7 +382,9 @@ class ReflexRouter:
             )
         return out
 
-    async def _run_session(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:
+    async def _run_session(
+        self, rule: ReflexRule, context: dict[str, str], *, trust: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         task = _render(rule.task_template, context) or _default_task(rule, context)
         # v1.200.0 — context spine: a rule tagged with a project spawns a
         # session CARRYING it, so the whole grounding pipeline (the runtime's
@@ -360,6 +401,9 @@ class ReflexRouter:
             AgentType.SUPERVISOR,
             project_id=rule.project_id or None,
             origin=f"reflex:{rule.name}",
+            # v1.502.0 (north-star 2.8): an outside signal's work starts LOW
+            # (passed only then, so a test double's call is unchanged).
+            **(trust or {}),
         )
         self._launch(self.orch.run_session(session.id), session.id)
         return {"ok": True, "kind": "session", "session_id": session.id}

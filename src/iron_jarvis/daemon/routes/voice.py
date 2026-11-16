@@ -12,9 +12,20 @@ import json
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
 
-from ...providers.adapters.base import scrub_sent_credentials
+from ...providers.adapters.base import ProviderError, scrub_sent_credentials
+from ...providers.egress import LocalOnlyRefused
 from ..app import _ws_token_ok
 from ..schemas import TranscribeBody
+
+
+class _TranscribeBody(TranscribeBody):
+    """``TranscribeBody`` plus the chat's Local only posture (v1.502.0,
+    north-star 2.12): ``local_only`` as the composer sends it, and the saved
+    chat's id — a saved Local only chat stays Local only even when a stale
+    page leaves the flag out (``egress.effective_local_only``)."""
+
+    local_only: bool = False
+    thread_id: str = ""
 
 
 def voice_capability(d) -> dict[str, Any]:
@@ -46,10 +57,14 @@ def voice_capability(d) -> dict[str, Any]:
             "hint": "",
         }
     if backend is None:
+        # v1.502.0 (D9): an OpenAI key alone no longer turns dictation on —
+        # the offline model is the default, and OpenAI is used for voice only
+        # when the owner picks it.
         hint = (
-            "Connect an OpenAI API key (Connections page), or set a dedicated "
-            "speech-to-text endpoint (voice_transcribe_base_url) pointing at a "
-            "whisper server, to enable voice dictation in the desktop app."
+            "The offline speech model isn't here. Set a dedicated speech-to-text "
+            "endpoint (voice_transcribe_base_url) pointing at a whisper server, or "
+            "choose OpenAI under Settings (Voice: where dictation is turned into words) with an OpenAI API key on the "
+            "Connections page, to enable voice dictation in the desktop app."
         )
     elif label == "custom":
         # Reusing the chat endpoint — which only transcribes if it's actually a
@@ -71,8 +86,47 @@ def voice_capability(d) -> dict[str, Any]:
     }
 
 
+class SpeechKeptHere(LocalOnlyRefused):
+    """Nothing was sent: the chat is Local only and the speech service runs
+    off this network (v1.502.0, north-star 2.12). A :class:`LocalOnlyRefused`
+    so the app's one handler answers it: 409 ``{detail, code: "local_only",
+    provider, model}``."""
+
+    def __init__(self, provider: str, who: str) -> None:
+        self.provider = str(provider or "")
+        self.model = ""
+        ProviderError.__init__(
+            self,
+            f"This chat is local only, so nothing was sent to {who} for "
+            "speech-to-text. Use the offline speech model or a speech server on "
+            "this network, or type the message.",
+            transient=False,
+        )
+
+
+def _refuse_off_network(label: str, url: str) -> None:
+    """Raise :class:`SpeechKeptHere` when the speech service at *url* runs
+    off this network (v1.502.0). ``openai`` is OpenAI's cloud; any other
+    backend is judged by its address (``egress.private_host``, no DNS, fail
+    closed)."""
+    from ...providers import egress as _egress
+
+    if label != "openai" and _egress.private_host(url):
+        return
+    if label == "openai":
+        raise SpeechKeptHere("openai", "OpenAI")
+    try:
+        from urllib.parse import urlsplit
+
+        who = urlsplit(url).hostname or "that speech server"
+    except Exception:  # noqa: BLE001
+        who = "that speech server"
+    raise SpeechKeptHere(label, who)
+
+
 async def transcribe_clip(
-    d, *, audio_b64: str, mime: str = "audio/webm", language: str = ""
+    d, *, audio_b64: str, mime: str = "audio/webm", language: str = "",
+    local_only: bool = False,
 ) -> dict[str, Any]:
     """Transcribe one finished clip through the configured HTTP backend (v1.269.0: shared).
 
@@ -81,18 +135,28 @@ async def transcribe_clip(
     ``HTTPException`` exactly as the route does (424 = no backend / backend refused,
     400 = bad audio, 413 = too large); the route re-raises, the panel turns the
     ``detail`` into one sentence.
+
+    ``local_only`` (v1.502.0, north-star 2.12): the chat this dictation is for
+    is Local only — a speech service off this network is refused (409, by
+    name), before anything is read or sent.
     """
     backend = d._voice_backend()
     if backend is None:
         raise HTTPException(
             status_code=424,
             detail=(
-                "No speech-to-text backend connected. Add an OpenAI API key on "
-                "the Connections page (or a custom endpoint serving "
-                "/v1/audio/transcriptions) to use voice in the desktop app."
+                "No speech-to-text backend connected. Set a speech-to-text server "
+                "(voice_transcribe_base_url, or a custom endpoint serving "
+                "/v1/audio/transcriptions), or choose OpenAI for voice with an "
+                "OpenAI API key on the Connections page, to use voice in the "
+                "desktop app."
             ),
         )
     label, url, key = backend
+    if local_only:
+        # LOCAL ONLY (v1.502.0, north-star 2.12): the chat's words never
+        # leave this network unasked, and dictation IS the chat's words.
+        _refuse_off_network(label, url)
     import base64
 
     try:
@@ -219,13 +283,20 @@ def register(app: FastAPI, d) -> None:
         return voice_capability(d)
 
     @app.post("/voice/transcribe")
-    async def voice_transcribe(body: TranscribeBody) -> dict[str, Any]:
+    async def voice_transcribe(body: _TranscribeBody) -> dict[str, Any]:
         """Transcribe one dictation clip. Explicit error (never fabricated text)
         when no speech-to-text backend is connected. 424, not 5xx: a missing
         backend is a config precondition, and the dashboard's api client shows a
-        global "daemon error" banner for any 5xx — wrong signal here."""
+        global "daemon error" banner for any 5xx — wrong signal here. Under the
+        chat's Local only (v1.502.0) a speech service off this network is 409."""
+        from ...providers import egress as _egress
+
+        local_only = await _egress.effective_local_only(
+            getattr(d.platform, "engine", None), body.local_only, body.thread_id
+        )
         return await transcribe_clip(
-            d, audio_b64=body.audio_b64, mime=body.mime, language=body.language
+            d, audio_b64=body.audio_b64, mime=body.mime, language=body.language,
+            local_only=local_only,
         )
 
     @app.websocket("/voice/stream")

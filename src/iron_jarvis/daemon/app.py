@@ -1444,6 +1444,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                                             "ONLY a JSON array of strings."
                                         ),
                                         messages=[LLMMessage(role="user", content=prompt)],
+                                        named=False,  # a stand-in nobody named
                                     )
                                     return resp.text or ""
 
@@ -2709,11 +2710,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         Preference order: (1) a DEDICATED transcription endpoint
         (``voice_transcribe_base_url`` — a real whisper server, separate from the
-        chat endpoint); (2) an OpenAI API KEY (a ChatGPT OAuth token is
-        deliberately NOT used — the audio API rejects account tokens); (3) the
-        ``custom`` chat endpoint (works ONLY if it actually serves
-        /v1/audio/transcriptions with a whisper model — an Ollama LLM endpoint
-        does not). None = no backend, be honest.
+        chat endpoint); (2) an OpenAI API KEY, ONLY when the owner picked
+        OpenAI for voice (a ChatGPT OAuth token is deliberately NOT used — the
+        audio API rejects account tokens); (3) the ``custom`` chat endpoint
+        (works ONLY if it actually serves /v1/audio/transcriptions with a
+        whisper model — an Ollama LLM endpoint does not). None = no backend,
+        be honest.
+
+        DICTATION STAYS ON THIS PC UNLESS PICKED (v1.502.0, north-star 2.12,
+        the owner's decision D9): an OpenAI key in the vault was added for
+        chat, not for voice. It reaches dictation only when the owner chose
+        it for voice (``config.voice_backend == "openai"``; any other value,
+        or none, is "on this PC"), so the bundled offline model wins
+        (``routes/voice.voice_capability``).
         """
         def _v1(raw: str) -> str:
             u = raw.strip().rstrip("/")
@@ -2738,18 +2747,31 @@ def create_app(project_root: str | None = None) -> FastAPI:
             if not skey:
                 skey = _saved_key_for(stt)
             return ("stt", _v1(stt) + "/audio/transcriptions", skey)
-        # (2) OpenAI key.
-        try:
-            key = platform.secrets.get("openai_api_key")
-        except Exception:  # noqa: BLE001 - vault miss = not available
-            key = None
-        if key:
-            return ("openai", "https://api.openai.com/v1/audio/transcriptions", key)
+        # (2) OpenAI key — only when OpenAI was picked for voice (D9).
+        if _voice_choice() == "openai":
+            try:
+                key = platform.secrets.get("openai_api_key")
+            except Exception:  # noqa: BLE001 - vault miss = not available
+                key = None
+            if key:
+                return ("openai", "https://api.openai.com/v1/audio/transcriptions", key)
         # (3) the custom chat endpoint (may or may not serve transcription).
         base = (getattr(platform.config, "custom_base_url", None) or "").strip()
         if base:
             return ("custom", _v1(base) + "/audio/transcriptions", _custom_slot_key())
         return None
+
+    def _voice_choice() -> str:
+        """The voice backend the owner picked (v1.502.0, D9): ``"openai"``
+        when OpenAI was chosen for dictation, else ``""`` — on this PC (the
+        offline model), the default. Read live off the config
+        (``voice_backend``); a missing or unreadable value is "on this PC".
+        Never raises."""
+        try:
+            raw = str(getattr(platform.config, "voice_backend", "") or "")
+        except Exception:  # noqa: BLE001
+            return ""
+        return "openai" if raw.strip().lower() == "openai" else ""
 
     def _custom_slot_key() -> str | None:
         """The custom endpoint's saved key through THE one helper (the
@@ -2840,6 +2862,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             resp, _p, _m = await _one_shot_complete(
                 provider, adapter, system=system,
                 messages=[LLMMessage(role="user", content=doc.prompt[:8000])],
+                named=bool(doc.provider),  # v1.502.0: the document's own pick
             )
             out_dir = platform.config.home / "livedocs"
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -3073,12 +3096,35 @@ def create_app(project_root: str | None = None) -> FastAPI:
         except Exception:  # noqa: BLE001 — wording only
             return ""
 
-    async def _one_shot_complete(provider: str, adapter, *, system: str, messages):
+    def _one_shot_named(provider: str, named: "bool | None") -> bool:
+        """Did the one-shot's CALLER name *provider* (v1.502.0, north-star
+        2.14)? The caller says so with ``named``; when it does not, a provider
+        that is not the configured default was named (a caller that falls
+        back to the default passes the default). Never raises."""
+        if named is not None:
+            return bool(named)
+        p = (provider or "").strip()
+        try:
+            dp = str(getattr(platform.config, "default_provider", "") or "").strip()
+        except Exception:  # noqa: BLE001
+            dp = ""
+        return bool(p) and p not in ("mock", "auto") and p != dp
+
+    async def _one_shot_complete(
+        provider: str, adapter, *, system: str, messages, named: "bool | None" = None,
+    ):
         """Complete a ONE-SHOT utility call (terminal assist / workflow builder)
         with retry-on-transient, then CROSS-PROVIDER failover when the provider
         stays rate-limited. Mirrors the router: iterate ALL connected candidates
         (CLI-first) until one succeeds, not just the first. Returns
         (response, used_provider, used_model). Raises a clean HTTPException.
+
+        STRICT MODEL PIN (v1.502.0, north-star 2.14): with the pin on, a
+        provider the caller NAMED (:func:`_one_shot_named`) answers or the
+        call fails, in words that name it — never another provider, as the
+        router does for an explicit pick. A move that does happen publishes
+        ``provider.failover`` (``{from, to, reason}``, the router's payload),
+        so the move is on the record and on the phone like the router's.
 
         LOCAL ONLY (v1.332.0): these utilities call the adapter DIRECTLY, so
         the router's egress gate never sees them. Under a local-only chat's
@@ -3147,6 +3193,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # the session did not choose.
             if _pin_armed():
                 raise _provider_error_http(exc)
+            # STRICT MODEL PIN (v1.502.0, north-star 2.14): a provider the
+            # caller named answers or the call fails — by name, never moved.
+            if bool(getattr(platform.config, "strict_model_pin", False)) and _one_shot_named(
+                provider, named
+            ):
+                base = _provider_error_http(exc, platform.providers)
+                who = _egress.friendly_name(primary, platform.providers)
+                raise HTTPException(
+                    status_code=base.status_code,
+                    detail=(
+                        f"{base.detail} Strict model pin is on, so Iron Jarvis"
+                        f" didn't move this to another model than {who}."
+                    ),
+                ) from exc
             # MONEY (v1.424.0, the owner's decision D1): the pick is the
             # adapter this one-shot was handed (the default, or the stand-in
             # ``_failover_adapter`` chose for a demo-model default — itself
@@ -3165,7 +3225,6 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     resp = await _complete_with_retry(
                         alt, system=system, messages=messages, tools=[]
                     )
-                    return resp, alt_provider, getattr(alt, "model", None)
                 except Exception as aexc:  # noqa: BLE001 — try the next candidate
                     # v1.378.0 review: a candidate that DECLINES ends it —
                     # the request is never handed on until one accepts.
@@ -3176,6 +3235,23 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     if declined is not None:
                         raise declined from aexc
                     continue
+                # v1.502.0 (north-star 2.14): the move is on the record, in
+                # the router's own event and payload. A bus fault never
+                # loses the answer.
+                try:
+                    from ..providers.router import failure_reason
+
+                    await platform.event_bus.publish(
+                        EventType.PROVIDER_FAILOVER,
+                        {
+                            "from": primary,
+                            "to": getattr(alt, "provider", "") or alt_provider,
+                            "reason": failure_reason(exc),
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    log.debug("one-shot failover event failed", exc_info=True)
+                return resp, alt_provider, getattr(alt, "model", None)
             # Every connected provider is rate-limited: surface the ORIGINAL error
             # — plus, when pay-per-use models were left out (v1.424.0), the
             # one sentence that says so.
@@ -3213,6 +3289,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 adapter,
                 system=system,
                 messages=[LLMMessage(role="user", content=prompt)],
+                named=False,  # the default or a stand-in: nobody named it
             )
             return resp.text or ""
 
@@ -3240,6 +3317,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # its compaction with no provider, and the summary of its transcript
         # is written by the session's model, never the configured default.
         _hold = current_hold()
+        # v1.502.0 (north-star 2.14): the caller named the provider (Strict
+        # model pin holds it); the default or a stand-in below is not named.
+        _named = bool((provider or "").strip())
         if (
             not (provider or "").strip()
             and _hold is not None and _hold.provider and _hold.provider != "auto"
@@ -3258,6 +3338,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 # (the deterministic recap keeps the job), never a stand-in.
                 return None
             adapter, prov = _failover_adapter("mock")
+            _named = False
         if adapter is None:
             return None
         # LOCAL ONLY (v1.332.0): under a local-only chat's scope the summary
@@ -3279,6 +3360,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 adapter,
                 system=system,
                 messages=[LLMMessage(role="user", content=user)],
+                named=_named,
             )
             return (resp.text or ""), (used_provider or prov), (used_model or mdl)
 
@@ -3320,6 +3402,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     if platform.skill_learning is not None:
         platform.skill_learning.on_proposal = _publish_skill_proposal
+
+    # LOCAL ONLY (v1.502.0, north-star 2.6): the phone alerts read a Local
+    # only run's session row (or chat) for an event the bus did not stamp —
+    # a run finished at boot after a restart, a chat's finished answer.
+    try:
+        if getattr(platform.notifier, "engine", None) is None:
+            platform.notifier.engine = platform.engine
+    except Exception:  # noqa: BLE001 — a bare platform keeps the stamp alone
+        pass
 
     def _on_skill_session_completed(event: Any) -> None:
         """SESSION_COMPLETED → schedule a distill sweep (the _on_livedoc_event
@@ -3380,6 +3471,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         from ..providers.adapters.base import LLMMessage
 
+        # v1.502.0 (north-star 2.14): a provider the caller NAMED is held by
+        # Strict model pin; the default (or a stand-in below) is not.
+        _named = bool((provider or "").strip())
         provider = provider or platform.config.default_provider
         model = model or platform.config.default_model
         try:
@@ -3404,6 +3498,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # crystallize_chat_thread / _skill_distill_complete /
             # _compaction_complete) all reassign; this one had drifted.
             adapter, provider = _failover_adapter("mock")
+            _named = False
             if adapter is None:
                 raise HTTPException(
                     status_code=400,
@@ -3432,6 +3527,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             adapter,
             system=system,
             messages=[LLMMessage(role="user", content=user)],
+            named=_named,
         )
 
         # Extract the workflow JSON from the reply (string-aware; tolerant of
@@ -3479,6 +3575,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     adapter,
                     system=repair_system,
                     messages=[LLMMessage(role="user", content=(resp.text or "")[:8000])],
+                    named=_named,
                 )
                 steps = _steps_from(resp2.text or "")
             except Exception:  # noqa: BLE001 — the repair is best-effort

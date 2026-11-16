@@ -80,6 +80,7 @@ from ..core.trust import (
     LOW_TRUST_PROMPT,
     TRUST_FULL,
     TRUST_LOW,
+    deny_names,
     kept_away,
     low_trust_note,
     low_trust_overrides,
@@ -4159,6 +4160,7 @@ async def _run_tool_round(batched: list[bool], invoke, settle, side: "asyncio.Qu
 
 async def _fence_tool_output(
     d, state: dict[str, Any], overrides: dict[str, str], name: str, tool, content,
+    result: Any = None,
 ):
     """FENCE externally-sourced tool output before the model (and the client)
     sees it — a planted file / web page / memory / PDF can't inject
@@ -4169,8 +4171,13 @@ async def _fence_tool_output(
     nothing is added to the prompt. Returns the content to hand on.
     v1.311.0: ONE copy for both lanes (it was a hand-mirrored block in each),
     called from :func:`_run_tool_round`'s settle step, so a batched reader's
-    taint has landed before any writer of the round starts."""
-    if not getattr(tool, "returns_untrusted_content", False):
+    taint has landed before any writer of the round starts.
+    v1.502.0 (D5): ``result`` — the call's own result, when the lane has it —
+    lets a coding session's OWN repository file through unfenced
+    (``tools/builtins.is_own_source``); every other caller passes none."""
+    from ..tools.builtins import is_own_source
+
+    if not getattr(tool, "returns_untrusted_content", False) or is_own_source(result):
         return content
     from ..computeruse.safety import detect_injection, wrap_untrusted
 
@@ -4195,7 +4202,8 @@ def _low_trust_invoke_kwargs(state: dict[str, Any], name: str) -> dict[str, Any]
     invoke stays byte-identical and older doubles take no new keyword."""
     if not (state.get("low") or state.get("tainted")):
         return {}
-    if name not in LOW_TRUST_DENY:
+    # v1.502.0 (D4): a TAINTED turn loses the web tools too.
+    if name not in deny_names(bool(state.get("tainted"))):
         return {}
     return {
         "deny_reason": low_trust_refusal(name, bool(state.get("tainted"))),
@@ -4309,7 +4317,7 @@ def _can_always(platform: Any, scopes: list[tuple[str, str]], state: dict[str, A
     but the rule is stated where the payload is built)."""
     if _grant_store(platform) is None or _pick_scope(scopes) is None:
         return False
-    if (state.get("low") or state.get("tainted")) and name in LOW_TRUST_DENY:
+    if (state.get("low") or state.get("tainted")) and name in deny_names(bool(state.get("tainted"))):
         return False
     if _quarantined(platform, name):
         return False  # a standing grant could not lift it anyway (review fix)
@@ -4358,7 +4366,8 @@ async def _taint_chat_turn(
         return
     state["tainted"] = True
     state["reason"] = taint_reason(tool, str(inj.get("category") or ""))
-    overrides.update(low_trust_overrides(overrides))
+    # v1.502.0 (D4): the web tools join the kept-away names from here on.
+    overrides.update(low_trust_overrides(overrides, deny_names(True)))
     # v1.398.0 review (night shift N1): a NIGHT task's record keeps it at
     # once — every later turn of that task (a carry-on after a restart,
     # Resume when ready) starts at low trust from it (``routes/build.
@@ -8340,9 +8349,10 @@ def apply_team_unlock(harness_turn: Any, platform: Any, *, armed: list, ask_arme
     if team is None or not team.take_unlock():
         return False
     gained_armed, gained_ask = harness_turn.unlock_lead()
+    _kept = deny_names(bool(trust_state.get("tainted")))
     if trust_state.get("low") or trust_state.get("tainted"):
-        gained_armed = [n for n in gained_armed if n not in LOW_TRUST_DENY]
-        gained_ask = [n for n in gained_ask if n not in LOW_TRUST_DENY]
+        gained_armed = [n for n in gained_armed if n not in _kept]
+        gained_ask = [n for n in gained_ask if n not in _kept]
     registry = getattr(platform, "registry", None)
     for name in gained_armed:
         if name not in armed:
@@ -8356,7 +8366,7 @@ def apply_team_unlock(harness_turn: Any, platform: Any, *, armed: list, ask_arme
             ask_armed.append(name)
     harness_turn.narrow(overrides, registry, getattr(platform, "permissions", None))
     if trust_state.get("low") or trust_state.get("tainted"):
-        overrides.update(low_trust_overrides(overrides))
+        overrides.update(low_trust_overrides(overrides, _kept))
     for name in gained_armed:
         tool = registry.get(name) if registry is not None else None
         for key in {name, tool.perm_key() if tool is not None else name}:
@@ -10089,7 +10099,28 @@ def _attachment_budgets(d, provider: str, model: str) -> tuple[int, int, int]:
 
 
 def _vision_unavailable_reason(d, provider: str, model: str) -> str:
-    """Why the images on this turn will NOT be seen — or ``""`` when they may be.
+    """Why the images on this turn will NOT be seen — or ``""`` when they may
+    be. The words of :func:`_vision_verdict` (which also says whether a model
+    off this network was kept from the picture)."""
+    return _vision_verdict(d, provider, model)[0]
+
+
+def _vision_verdict(d, provider: str, model: str) -> "tuple[str, list[str]]":
+    """``(reason, kept_off)``: why the images on this turn will NOT be seen
+    (``""`` when they may be), and the models off this network that COULD
+    see them but may not take them (v1.502.0, D1) — empty otherwise.
+
+    A PICTURE STAYS ON THIS NETWORK (the owner's decision D1): when the pick
+    (the explicit provider, else the default) is a local provider or was
+    named, the router moves the picture only to a model on this network
+    (``ModelRouter._picture_stays``), so a cloud model that can see is not
+    "a provider that can see" for this turn. Mirrored here so the offline
+    reading below runs for it; a ``kept_off`` verdict also tells the
+    attachment preparer that a picture read on this PC takes the turn.
+
+    The rest of this docstring is :func:`_vision_unavailable_reason`'s own:
+
+    Why the images on this turn will NOT be seen — or ``""`` when they may be.
 
     An image attachment rides on the last user message and the router prefers a
     vision-capable adapter for it (``_enforce_capabilities``). But that
@@ -10129,11 +10160,11 @@ def _vision_unavailable_reason(d, provider: str, model: str) -> str:
         router = getattr(d.platform, "router", None)
         manager = getattr(d.platform, "providers", None)
         if router is None or manager is None:
-            return ""
+            return "", []
         snapshot = getattr(router, "_snapshot", None)
         avail = set(snapshot()) if callable(snapshot) else set()
         if not avail:
-            return ""
+            return "", []
         health = getattr(router, "health", None)
         allow = getattr(health, "allow", None)
 
@@ -10162,8 +10193,22 @@ def _vision_unavailable_reason(d, provider: str, model: str) -> str:
                 )
             except Exception:  # noqa: BLE001 — unreadable pick: no filter (no false note)
                 pick_pays = True
+        # D1 (v1.502.0): a pick on this network, or one named, keeps the
+        # picture on this network — the router's ``_picture_stays`` rule.
+        from ..providers import egress as _egress_v
+        from ..providers.local import is_local_provider as _is_local
+
+        keep_here = False
+        if chosen and chosen not in ("auto", "mock"):
+            keep_here = bool(pick) or _is_local(chosen)
+            if not keep_here:
+                try:
+                    keep_here = _is_local(str(getattr(manager.get(chosen), "provider", "") or ""))
+                except Exception:  # noqa: BLE001 — unreadable: the old reading
+                    keep_here = False
         checked: list[str] = []
         left_out: list[str] = []
+        kept_off: list[str] = []
         for name in dict.fromkeys(order):
             if not name or name == "mock" or not _routable(name):
                 continue
@@ -10185,26 +10230,42 @@ def _vision_unavailable_reason(d, provider: str, model: str) -> str:
                 if _capabilities(adapter).get("vision", True):
                     left_out.append(str(getattr(adapter, "provider", "") or name))
                 continue
-            if _capabilities(adapter).get("vision", True):
-                return ""
+            sees = _capabilities(adapter).get("vision", True)
+            served = str(getattr(adapter, "provider", "") or name)
+            if (
+                sees and keep_here and name != chosen
+                and not _egress_v.stays_on_this_network(served, manager, cfg)
+            ):
+                if served not in kept_off:
+                    kept_off.append(served)
+                continue
+            if sees:
+                return "", []
             checked.append(name)
         if not checked:
-            return ""
+            return "", []
+        if kept_off:
+            names = ", ".join(_egress_v.friendly_name(p, manager) for p in kept_off)
+            return (
+                "the model answering this turn cannot accept images, and the "
+                f"connected models that can ({names}) run off this network, so "
+                "this image was NOT seen and nothing was sent to them"
+            ), kept_off
         if left_out:
             return (
                 "the model answering this turn cannot accept images and no "
                 "connected model you can use without paying per use can ("
                 + ", ".join(checked) + "), so this image was NOT seen. "
                 + _billing.not_moved_sentence(left_out, manager)
-            )
+            ), []
         return (
             "the model answering this turn cannot accept images and no "
             "connected provider can (" + ", ".join(checked) + "), so this "
             "image was NOT seen; connect a vision-capable model (Anthropic/"
             "Google, or a local llava/qwen-VL) and send it again"
-        )
+        ), []
     except Exception:  # noqa: BLE001 — a probe must never break a turn
-        return ""
+        return "", []
 
 
 def _attachable_file(p: "Path") -> bool:
@@ -10551,8 +10612,8 @@ async def _prepare_attachments(
                 )
             )
     if images:
-        blind = await asyncio.to_thread(
-            _vision_unavailable_reason, d, provider_choice, model_choice
+        blind, _kept_off = await asyncio.to_thread(
+            _vision_verdict, d, provider_choice, model_choice
         )
         if blind:
             # NO VISION MODEL IS NOT THE SAME AS NOBODY CAN READ IT (C-05).
@@ -10571,13 +10632,15 @@ async def _prepare_attachments(
             _local_ready = _local_ocr.local_enabled(cfg) and await asyncio.to_thread(
                 _local_ocr.available
             )
-            for slot, name, path in image_slots:
+            _read_here: set[int] = set()
+            for i, (slot, name, path) in enumerate(image_slots):
                 read = (
                     await asyncio.to_thread(_local_ocr.local_ocr_image, path)
                     if _local_ready
                     else None
                 )
                 if read is not None and read.text.strip():
+                    _read_here.add(i)
                     parts[slot] = (
                         f"\n\n## Attached image: {name}\n"
                         f"[{_local_ocr.note_for(read)}]\n{read.text}"
@@ -10586,6 +10649,15 @@ async def _prepare_attachments(
                     parts[slot] = (
                         f"\n\n## Attached image: {name}\n(NOT analyzed — {blind}.)"
                     )
+            # A PICTURE STAYS ON THIS NETWORK (v1.502.0, D1): the model
+            # chosen cannot see, and the only ones that could run off this
+            # network. A picture read HERE takes the turn as its text and no
+            # longer rides on the message — else the router, seeing a picture
+            # on a model that cannot see, would refuse the whole turn. One
+            # nobody here could read stays, and the router refuses by name
+            # with the "send once" offer.
+            if _kept_off and _read_here:
+                images[:] = [img for i, img in enumerate(images) if i not in _read_here]
 
     # THE CONVERSATION'S EARLIER FILES (v1.251.0, C-01). The user's report:
     # attach a return, ask for a summary, then "now turn that into a memo" —
@@ -13732,7 +13804,7 @@ async def run_chat_turn(
                     # batched reader this lands before any writer runs.
                     content = await _fence_tool_output(
                         d, _trust_state, overrides, tc.name,
-                        d.platform.registry.get(tc.name), content,
+                        d.platform.registry.get(tc.name), content, result,
                     )
                 _slots[i] = {"result": result, "content": content, "ran": ran}
 

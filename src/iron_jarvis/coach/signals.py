@@ -244,4 +244,18 @@ def run_signals(platform, session: Session) -> dict[str, Any]:
         "read_repeats": max(read_counts.values()) if read_counts else 0,
         "continued": continued,
         "created_at": session.created_at.isoformat() if session.created_at else None,
+        # v1.502.0 (north-star 2.3): the run was Local only — its evidence
+        # reaches the coach's model only on this network. Additive, last.
+        "local_only": _run_local_only(session),
     }
+
+
+def _run_local_only(session: Session) -> bool:
+    """``agents.orchestrator.session_local_only`` for one run. Never raises;
+    an unreadable answer is True (fail closed: the evidence stays home)."""
+    try:
+        from ..agents.orchestrator import session_local_only
+
+        return bool(session_local_only(session))
+    except Exception:  # noqa: BLE001
+        return True

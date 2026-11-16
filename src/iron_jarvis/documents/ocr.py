@@ -593,6 +593,19 @@ def local_only_ocr_note(name: str) -> str:
     )
 
 
+def picture_kept_ocr_note(name: str, chosen: str) -> str:
+    """The note a scan carries when the model chosen for it (*chosen*) cannot
+    see and the one that could (*name*) runs off this network (v1.502.0, the
+    owner's decision D1): nothing was sent. Like :func:`local_only_ocr_note`
+    it tells the answering model to say so."""
+    return (
+        f"scanned document — NOT read: {chosen} can't see pictures, and reading"
+        f" this scan needs {name}, which runs off this network, so nothing was"
+        " sent. Tell the user this file was not read. They can pick a model on"
+        f" this network that can read images, or send it to {name} once"
+    )
+
+
 async def _transcribe(
     blobs: "list[bytes]",
     router: Any,
@@ -645,11 +658,16 @@ async def _transcribe(
             # is off this network and the chat is local only. Not a fault and
             # not "connect a vision model": say what happened and what the user
             # can do, in words the answering model passes on.
-            from ..providers.egress import friendly_name, refusal_of
+            from ..providers.egress import PictureKeptHere, friendly_name, refusal_of
 
             refused = refusal_of(exc)
             if refused is not None:
                 name = friendly_name(refused.provider, getattr(router, "manager", None))
+                if isinstance(refused, PictureKeptHere):
+                    # v1.502.0 (D1): not Local only — the chosen model is on
+                    # this network (or named) and cannot see; its own words.
+                    chosen = friendly_name(refused.primary, getattr(router, "manager", None))
+                    return [], picture_kept_ocr_note(name, chosen)
                 return [], local_only_ocr_note(name)
             return [], (
                 "scanned document — OCR needs a vision-capable model and the "

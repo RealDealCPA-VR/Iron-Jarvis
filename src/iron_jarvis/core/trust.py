@@ -199,6 +199,30 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
     }
 )
 
+#: v1.502.0 (north-star D4): the WEB tools a run loses once it has READ
+#: flagged content (a TAINT), for the rest of the run. A page or a file that
+#: said "now open this address with the notes in it" must not have its words
+#: carried out. Kept apart from ``LOW_TRUST_DENY`` on purpose: a run that is
+#: low only because of its DOOR (a phone message) has read nothing flagged
+#: and keeps web search, and Auto's always-ask list (``core/auto_approve.
+#: _standing_tools``, which reads ``LOW_TRUST_DENY``) does not start asking
+#: about every search. Read through :func:`deny_names`.
+TAINTED_DENY: frozenset[str] = frozenset(
+    {
+        "web_fetch",
+        "web_search",
+        "browse",
+        "web_action",
+    }
+)
+
+
+def deny_names(tainted: bool) -> frozenset[str]:
+    """The names kept away from a low run NOW: ``LOW_TRUST_DENY``, plus
+    ``TAINTED_DENY`` once the run has read flagged content."""
+    return (LOW_TRUST_DENY | TAINTED_DENY) if tainted else LOW_TRUST_DENY
+
+
 #: The ONE sentence a run that starts low reads in its system prompt. A run
 #: tainted MID-run gets nothing appended (prompt caching) — the refusal text
 #: on its next kept-away call is its signal.

@@ -179,12 +179,18 @@ async def test_a_held_stream_never_reroutes_a_picture_either(held):
 
 
 async def test_without_a_hold_the_picture_is_rerouted():
-    """The control for the test above."""
+    """The control for the test above: without the hold the named model does
+    not keep the picture. Since v1.502.0 (north-star 2.13, D1) a model picked
+    by name is not swapped for one off this network either — the picture is
+    refused by name, nothing sent (it used to move to another provider)."""
+    from iron_jarvis.providers.egress import PictureKeptHere
+
     blind = _Ok("openai", "gpt-x", caps={"tool_use": True, "vision": False})
     router, _picked, default, other = _setup(blind)
     pic = [LLMMessage(role="user", content="look", images=[{"data_b64": "AA==", "media_type": "image/png"}])]
-    res = await router.complete(provider="openai", model="gpt-x", system="", messages=pic, tools=[])
-    assert res.provider != "openai"
+    with pytest.raises(PictureKeptHere):
+        await router.complete(provider="openai", model="gpt-x", system="", messages=pic, tools=[])
+    assert blind.calls == 0 and default.calls == 0 and other.calls == 0
 
 
 async def test_a_held_text_only_model_keeps_the_prompted_tools_wrap(held):

@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.502.0
+
+**Nothing leaves your PC as a side effect.** The second part of the review fixes.
+
 ## v1.501.0
 
 **One client's notes stay with that client, and Iron Jarvis asks before it keeps what it guessed.** A review of the app against its own promises found places where something learned during one client's work could be told in another client's chat, and places where Iron Jarvis kept what a model guessed as if you had said it.
@@ -77,7 +81,3 @@
 ## v1.490.3
 
 **Empty folders are listed, and "find me the current rate" looks it up.** **A folder that is there but empty is no longer "missing".** Asked to move files "into the Facturen 2026 folder", Jarvis listed the files, did not see the folder (it was empty, and the listing only showed files) and told you the folder did not exist.
-
-## v1.490.2
-
-**A second look, and fewer cards for memory.** **A request the first reading missed still gets its card.** Since v1.490.1 two readings must agree before a card shows.

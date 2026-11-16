@@ -34,9 +34,9 @@ from ..core.grants import args_hash as _grant_hash
 from ..core.grants import grant_label as _grant_label
 from ..core.grants import pick_scope as _pick_scope
 from ..core.trust import (
-    LOW_TRUST_DENY,
     LOW_TRUST_PROMPT,
     TRUST_LOW,
+    deny_names,
     effective_trust,
     low_trust_overrides,
     low_trust_refusal,
@@ -46,6 +46,7 @@ from ..envelope.profile import CapabilityProfile
 from ..providers.adapters.base import LLMMessage
 from ..sandbox.native import host_os_line
 from ..tools.base import SpendCheck, ToolContext, spend_checks_for, spend_words_for
+from ..tools.builtins import is_own_source
 from ..tools.permissions import SAFE_HEADLESS_TOOLS
 from ..tools.reversible import reversible_flag
 from . import chat_delivery as _chat_delivery
@@ -169,14 +170,17 @@ def _user_facing_tool_output(name: str, content: str) -> str:
     again``) becomes plain words; the untrusted fence keeps only its body; the
     repeat note goes; a head-cut says it was cut."""
     text = str(content or "")
+    m = _FENCE.match(text.strip())
+    if m:
+        # v1.502.0: unwrapped FIRST — a refusal of an outside-text tool
+        # (read_file since D5) is fenced like its output, and the breaker's
+        # words then sat behind the fence's header.
+        text = m.group(1)
     if "repeated-failure breaker" in text[:200]:
         return (
             f"Its last call to {name} was refused: the same call had already "
             "failed repeatedly with the same arguments."
         )
-    m = _FENCE.match(text.strip())
-    if m:
-        text = m.group(1)
     text = _LOOP_NOTE.sub("", text).strip()
     if len(text) > _SNIPPET_CHARS:
         text = text[:_SNIPPET_CHARS].rstrip() + " … (cut; the full output is in the transcript)"
@@ -1622,12 +1626,14 @@ class AgentRuntime:
     # TRUST (v1.298.0) — the posture a call runs under, and how it lowers
     # ------------------------------------------------------------------ #
 
-    def _low_trust_keys(self) -> frozenset[str]:
-        """``LOW_TRUST_DENY`` plus each listed tool's permission KEY — the
-        engine authorises on ``perm_key()``, so a grouped tool's key must be
-        denied beside its name."""
-        keys = set(LOW_TRUST_DENY)
-        for name in LOW_TRUST_DENY:
+    def _low_trust_keys(self, tainted: bool = False) -> frozenset[str]:
+        """``LOW_TRUST_DENY`` (plus the web tools once the run is TAINTED,
+        ``core.trust.deny_names``) and each listed tool's permission KEY —
+        the engine authorises on ``perm_key()``, so a grouped tool's key must
+        be denied beside its name."""
+        names = deny_names(tainted)
+        keys = set(names)
+        for name in names:
             tool = self.p.registry.get(name)
             if tool is not None:
                 keys.add(tool.perm_key())
@@ -1778,6 +1784,14 @@ class AgentRuntime:
             getattr(session, "trust", ""), bool(self._tainted.get(session.id))
         )
 
+    def _has_read_flagged(self, session: Session) -> bool:
+        """v1.502.0 (D4): has this run READ flagged content — tainted in this
+        process, or a row whose ``tainted_at`` says an earlier run of the same
+        conversation did (a continue carries the flagged words on)?"""
+        return bool(self._tainted.get(session.id)) or (
+            getattr(session, "tainted_at", None) is not None
+        )
+
     def _trust_overrides(self, session: Session, agent_def: AgentDefinition) -> dict[str, str]:
         """The permission overrides a call is authorised with: the
         definition's own, NARROWED by ``low_trust_overrides`` when the run's
@@ -1785,7 +1799,7 @@ class AgentRuntime:
         base = agent_def.permission_overrides
         if self._effective_trust(session) != TRUST_LOW:
             return base
-        return low_trust_overrides(base, self._low_trust_keys())
+        return low_trust_overrides(base, self._low_trust_keys(self._has_read_flagged(session)))
 
     def _low_trust_refusal_for(self, session: Session, name: str) -> str:
         """The sentence a kept-away call is refused with under low trust, or
@@ -1794,7 +1808,8 @@ class AgentRuntime:
             return ""
         tool = self.p.registry.get(name)
         perm = tool.perm_key() if tool is not None else name
-        if name in LOW_TRUST_DENY or perm in LOW_TRUST_DENY:
+        names = deny_names(self._has_read_flagged(session))
+        if name in names or perm in names:
             return low_trust_refusal(name, bool(self._tainted.get(session.id)))
         return ""
 
@@ -5038,7 +5053,9 @@ class AgentRuntime:
                     # the scan entirely. Both chat loops already fence unconditionally
                     # — this aligns the runtime with them.
                     tool = self.p.registry.get(tc.name)
-                    if getattr(tool, "returns_untrusted_content", False):
+                    # v1.502.0 (D5): a coding session's OWN repository file
+                    # (``tools/builtins.is_own_source``) is not outside text.
+                    if getattr(tool, "returns_untrusted_content", False) and not is_own_source(result):
                         from ..computeruse.safety import (
                             detect_injection,
                             wrap_untrusted,

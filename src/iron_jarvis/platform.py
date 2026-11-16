@@ -1382,6 +1382,10 @@ def build_platform(
         http_post=httpx_post,
         http_get=httpx_get,
     )
+    # v1.502.0 (north-star 2.6): the database the Local only reading uses for
+    # an event the bus did not stamp (the session row, the saved chat), set
+    # HERE so every platform has it, not only one built by ``create_app``.
+    notifier.engine = engine
     for tool in notify_tools(notifier):
         registry.register(tool)
     event_bus.add_handler(notifier.on_event)
@@ -1682,8 +1686,8 @@ def build_platform(
     # (<home>/mcp/manifests) so a write-like tool that APPEARED or CHANGED since
     # the user last looked is flagged `quarantined`. Applied here, once, next to
     # the resolver that consults the flag — the one seam both must agree at.
+    from .mcp.tools import auto_approve_withheld_in_flight as _mcp_withheld_in_flight
     from .mcp.tools import quarantine_registered as _mcp_quarantine_registered
-    from .mcp.tools import quarantined_in_flight as _mcp_quarantined_in_flight
 
     _mcp_quarantine_registered(registry, config.home)
     if ask_resolver is not None and _mcp_auto:
@@ -1701,7 +1705,10 @@ def build_platform(
                 # by `invoke` immediately before this question (see
                 # mcp/tools._ASKING_ABOUT); a question about `mcp_call` with
                 # no MCP tool in flight keeps the blanket grant.
-                return not _mcp_quarantined_in_flight()
+                # v1.502.0 (north-star 2.9): nor a LOCKED pack's tool
+                # (Microsoft 365 asks before each use, whatever this switch,
+                # or another pack's own flag, says).
+                return not _mcp_withheld_in_flight()
             return _b(name, args)
 
         # Carry the wrapped resolver's `interactive` marker across (v1.154.2).

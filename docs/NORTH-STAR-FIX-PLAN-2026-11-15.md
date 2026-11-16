@@ -139,58 +139,81 @@ from a stated one; outcome credit is forgotten on restart.
 Area rules: `docs/rules/tools.md`, `providers.md`, `connections.md`,
 `messaging.md`, `automations.md`.
 
-- [ ] **2.1 A tainted run cannot fetch (D4).** `core/trust.py` `LOW_TRUST_DENY`
+**Shipped in v1.502.0.** As built, where it differs from the lines below:
+2.1 the web tools are kept from a run only after it has READ flagged content
+(a separate list, `TAINTED_DENY`); a phone chat, low only because of its
+door, keeps web search. The browser add-on's page actions are not listed
+(each already asks). 2.3 the autonomy finding did not reproduce (its events
+carry no payload) and is struck; a skill drafted from a Local only run is
+also never approved automatically. 2.4 a command's output in a session's own
+Git repository counts as its own source (the lead's correction: otherwise a
+project's own test output could taint a coding session, which then loses the
+shell). 2.6 one Local only chat no longer marks every later chat (the lead's
+correction: all chats share one session id). 2.8 tool arguments and notify
+messages keep the signal's words; only the agent step's task is fenced. 2.10
+a description that changed but is not flagged is not quarantined. 2.11
+`secret_set` stays registered but takes no value. 2.13 "picked" means any
+provider the caller named, so a named cloud model that cannot see is refused
+with "send once" too. 2.16 only a PAIRED computer's reply is pinned.
+Left open: an unpaired, hand-made task door still answers at the address the
+task named (pinning it needs the sender's address stored at intake);
+`workflow.completed`, `build.*` and `skill.proposal_created` events carry no
+Local only mark when published outside a scope; one-shot callers outside
+`daemon/app.py` do not yet pass `named=`; a signal-fired workflow's TOOL
+steps still run at full trust.
+
+- [x] **2.1 A tainted run cannot fetch (D4).** `core/trust.py` `LOW_TRUST_DENY`
   lacks the web tools. Fix: add `web_fetch`, `web_search`, `browse`,
   `web_action`. Test through the registry (the layer that refuses).
-- [ ] **2.2 App packs get a clean environment.** `mcp/tools.py:483` hands a
+- [x] **2.2 App packs get a clean environment.** `mcp/tools.py:483` hands a
   pack `os.environ`, the install token included. Fix: build the pack's
   environment the way `sandbox/native.py` and `terminals/manager.py` do, then
   add the pack's own `env` and `env_secrets`. Test: `IRONJARVIS_TOKEN` and a
   provider key are absent from a pack's environment.
-- [ ] **2.3 Background learning honours Local only.** `daemon/app.py:3312`
+- [x] **2.3 Background learning honours Local only.** `daemon/app.py:3312`
   (skill learning), `coach/engine.py:320`, `motivation/engine.py:550`. Fix:
   a Local only run's material is used only inside `local_only_scope(True)`,
   so the existing gate refuses a model that leaves the network.
-- [ ] **2.4 File and command output is outside text (D5).**
+- [x] **2.4 File and command output is outside text (D5).**
   `tools/builtins.py:694` `read_file`, plus `grep` and `shell`. Fix: set
   `returns_untrusted_content` (not for a coding session's own repository
   files). Update `tests/test_build_stop_trust_v14230.py:165`.
-- [ ] **2.5 "Open in its app" opens documents only.**
+- [x] **2.5 "Open in its app" opens documents only.**
   `daemon/routes/documents.py:95, 644`. Fix: folders and a list of document
   and media types open; anything else answers "show in folder". Test: `.bat`,
   `.hta`, `.exe`, `.lnk`, `.js`, `.ps1` are refused.
-- [ ] **2.6 Alerts and webhooks honour Local only.** `comm/notifier.py:301`,
+- [x] **2.6 Alerts and webhooks honour Local only.** `comm/notifier.py:301`,
   `webhooks/outbound.py:380`. Fix: an event published under the scope is
   stamped; the notifier sends the title-only line and the webhook sender
   skips it.
-- [ ] **2.7 An agent asks before making an outbound webhook (D6).**
+- [x] **2.7 An agent asks before making an outbound webhook (D6).**
   `core/config.py:243`. Fix: `webhook_add` with `direction="outbound"` asks.
-- [ ] **2.8 A signal's text is fenced, and its run starts at low trust.**
+- [x] **2.8 A signal's text is fenced, and its run starts at low trust.**
   `reflex/router.py:288, 358`. Fix: fence the `Trigger` output in
   `workflows/engine.render_template`; a rule fired by a webhook, email, Slack
   or calendar signal starts at low trust (the `comm_trust` rule).
-- [ ] **2.9 The app-tools switch never lifts a locked app.**
+- [x] **2.9 The app-tools switch never lifts a locked app.**
   `platform.py:1692`. Fix: the resolver answers False for a tool whose pack is
   locked.
-- [ ] **2.10 A pack's tool descriptions are capped and scanned.**
+- [x] **2.10 A pack's tool descriptions are capped and scanned.**
   `mcp/tools.py:292`. Fix: cap and scan at registration; a flagged or changed
   description is quarantined as a changed tool already is.
-- [ ] **2.11 A secret is never a tool argument.** `secrets/tools.py:53`. Fix:
+- [x] **2.11 A secret is never a tool argument.** `secrets/tools.py:53`. Fix:
   agent runs get the name-only tool that raises the secure card, as chat does.
-- [ ] **2.12 Dictation stays on the PC unless picked (D9).**
+- [x] **2.12 Dictation stays on the PC unless picked (D9).**
   `daemon/app.py:2729`, `daemon/routes/voice.py:40`. Fix: the offline model
   unless a voice backend is chosen; the route takes the chat's Local only flag.
-- [ ] **2.13 A picture never moves the turn off this network (D1).**
+- [x] **2.13 A picture never moves the turn off this network (D1).**
   `providers/router.py:1926, 2187` and the `stream()` mirror. Fix: when the
   primary is local or explicitly picked, no swap to a provider that leaves the
   network: offline OCR first, else a refusal by name with "send once".
-- [ ] **2.14 One-shot helpers honour Strict model pin.** `daemon/app.py:3136`.
+- [x] **2.14 One-shot helpers honour Strict model pin.** `daemon/app.py:3136`.
   Fix: no failover when the caller named a provider and the pin is on; publish
   the failover event when a move does happen.
-- [ ] **2.15 `serve --host` on the network needs a token.**
+- [x] **2.15 `serve --host` on the network needs a token.**
   `daemon/auth.py:646`, `daemon/cli.py:404`. Fix: refuse to start on a
   non-loopback host with no token.
-- [ ] **2.16 A task's reply goes only to the paired address.**
+- [x] **2.16 A task's reply goes only to the paired address.**
   `agents/task_door.py:667`. Fix: pin `reply_to` to the paired computer's
   stored address; the pairing and network cards say the link is not encrypted.
 

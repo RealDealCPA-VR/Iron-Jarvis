@@ -129,8 +129,19 @@ const VAD = {
  * through the daemon's /voice/transcribe. Availability is checked up front via
  * /voice/status so the mic can be offered — or greyed with a reason — honestly.
  */
-export function useDictation(lang = "en-US"): UseDictation {
+/** The chat a dictation is for (v1.502.0): a clip sent to the daemon carries
+ *  the chat's Local only switch and its id, so a Local only chat's words are
+ *  never sent to a speech service off this network. Other pages pass nothing. */
+export interface DictationChat {
+  localOnly?: boolean;
+  threadId?: string | null;
+}
+
+export function useDictation(lang = "en-US", chat?: DictationChat): UseDictation {
   const web = useSpeechRecognition(lang);
+  // Read at send time, so a switch flipped mid-dictation counts.
+  const chatRef = useRef<DictationChat | undefined>(chat);
+  chatRef.current = chat;
 
   const [engine, setEngine] = useState<DictationEngine | null>(null);
   const [serverReady, setServerReady] = useState<boolean | null>(null);
@@ -239,6 +250,10 @@ export function useDictation(lang = "en-US"): UseDictation {
         audio_b64,
         mime,
         language: (langRef.current || "").split("-")[0] || "",
+        // v1.502.0: the chat's Local only posture (the daemon also reads a
+        // saved chat's own switch by its id).
+        local_only: chatRef.current?.localOnly === true,
+        thread_id: chatRef.current?.threadId || "",
       });
       const text = (res.text || "").trim();
       if (text) {

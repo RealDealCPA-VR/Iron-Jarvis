@@ -1068,6 +1068,54 @@ def _with_chat(event: Any, payload: dict) -> Any:
     }
 
 
+#: v1.502.0 (north-star 2.6): the payload keys that carry the WORK's own
+#: words into an alert line — a run's model-written summary, a chat's or
+#: coding session's title, a workflow's question, a check's body, a reason.
+#: An alert for Local only work leaves them out: the title line only.
+LOCAL_ONLY_DROPPED_KEYS: tuple[str, ...] = (
+    "summary", "title", "chat_title", "question", "body", "reason",
+)
+
+
+def _local_only_stamped(event: Any, engine: Any) -> Any:
+    """*event* as a dict with ``payload["local_only"] = True`` when it is for
+    Local only work (``core/events.event_is_local_only``: the bus's stamp,
+    the session row, the saved chat), else *event* unchanged. BLOCKING with
+    an engine (the bus runs this handler off the loop). Never raises."""
+    try:
+        from ..core.events import LOCAL_ONLY_KEY, event_is_local_only
+
+        payload = _event_field(event, "payload", {}) or {}
+        if not isinstance(payload, dict) or payload.get(LOCAL_ONLY_KEY) is True:
+            return event
+        if not event_is_local_only(event, engine):
+            return event
+        return {
+            "type": _event_field(event, "type"),
+            "payload": {**payload, LOCAL_ONLY_KEY: True},
+            "session_id": _event_field(event, "session_id"),
+        }
+    except Exception:  # noqa: BLE001 — wording only
+        return event
+
+
+def _title_only(event: Any) -> Any:
+    """For an event stamped Local only: the same event with the work's own
+    words (:data:`LOCAL_ONLY_DROPPED_KEYS`) left out, so the line is its
+    title alone. Any other event unchanged. Never raises."""
+    try:
+        payload = _event_field(event, "payload", {}) or {}
+        if not isinstance(payload, dict) or payload.get("local_only") is not True:
+            return event
+        return {
+            "type": _event_field(event, "type"),
+            "payload": {k: v for k, v in payload.items() if k not in LOCAL_ONLY_DROPPED_KEYS},
+            "session_id": _event_field(event, "session_id"),
+        }
+    except Exception:  # noqa: BLE001
+        return event
+
+
 class Notifier:
     def __init__(
         self,
@@ -1082,6 +1130,11 @@ class Notifier:
             set(event_types) if event_types is not None else set(DEFAULT_ALERT_EVENTS)
         )
         self._formatter = formatter or format_event
+        #: v1.502.0 (north-star 2.6): the database the Local only reading uses
+        #: for an event the bus did not stamp (the session row, the saved
+        #: chat) — set by the daemon (``create_app``); None reads the stamp
+        #: alone.
+        self.engine: Any = None
         #: v1.455.0 review: turn id -> the newest provider failure inside that
         #: chat turn, held until the turn ends (:meth:`_said_at_turn_end`).
         self._turn_failures: dict[str, tuple[Any, dict]] = {}
@@ -1146,6 +1199,10 @@ class Notifier:
         etype = _event_field(event, "type")
         if etype not in self.event_types:
             return None
+        # LOCAL ONLY (v1.502.0, north-star 2.6): an alert for Local only work
+        # is still sent (the owner asked to hear it ended), as its title
+        # line only — stamped here so a held chat-turn failure keeps it.
+        event = _local_only_stamped(event, self.engine)
         if etype == EventType.PROVIDER_FAILED:
             # v1.378.0 review: a provider's SAFETY REFUSAL is not an outage —
             # the turn or run that was declined already says so where it was
@@ -1280,4 +1337,4 @@ class Notifier:
             targets = self.without_desktop(targets)
         if not targets:
             return {}
-        return self.notify(self._formatter(event), targets)
+        return self.notify(self._formatter(_title_only(event)), targets)

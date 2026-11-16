@@ -684,10 +684,15 @@ async def test_a_tools_picture_never_moves_the_turn_to_another_provider():
     tools = [{"name": "page_screenshot", "description": "d", "input_schema": {"type": "object"}}]
     res = await router.complete(provider="fleet-local", system="", messages=_tool_turn(), tools=tools)
     assert res.provider == "fleet-local" and local.calls == 1 and vision.calls == 0
-    # A picture the USER sent still asks for a model that can see it.
+    # A picture the USER sent still asks for a model that can see it — and
+    # since v1.502.0 (north-star 2.13, D1) a picked model on this network
+    # never hands it to one off the network: refused by name, nothing sent.
+    from iron_jarvis.providers.egress import PictureKeptHere
+
     asked = [LLMMessage(role="user", content="what is this?", images=[PIC])]
-    res = await router.complete(provider="fleet-local", system="", messages=asked, tools=tools)
-    assert res.provider == "anthropic"
+    with pytest.raises(PictureKeptHere) as caught:
+        await router.complete(provider="fleet-local", system="", messages=asked, tools=tools)
+    assert caught.value.provider == "anthropic" and vision.calls == 0
 
 
 async def test_a_picture_too_big_for_any_model_is_named_not_attached(tmp_path, monkeypatch):

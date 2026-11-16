@@ -64,10 +64,11 @@ def work(tmp_path):
     return folder
 
 
-def _untrusted_reads(app, monkeypatch) -> None:
-    # The folder's notes are untrusted text here (as a fetched page is).
-    monkeypatch.setattr(app.state.platform.registry.get("read_file"), "returns_untrusted_content", True,
-                        raising=False)
+def _untrusted_reads(app, monkeypatch) -> None:  # noqa: ARG001
+    # The folder's notes are untrusted text (as a fetched page is). v1.502.0
+    # (north-star D5, moved on purpose): that is read_file's own rule now —
+    # this folder is not a Git repository, so its files are outside text.
+    assert app.state.platform.registry.get("read_file").returns_untrusted_content is True
 
 
 def _reads(*, words: str = ""):
@@ -162,7 +163,11 @@ async def test_a_full_trust_reply_stopped_before_a_word_keeps_a_plain_line(home,
     purpose: it kept no line, so the steps that ran left no record), and its
     failed call is still read by the report."""
     app = create_app(home)
-    sid = new_session(app, work)["id"]  # read_file is trusted here: no taint
+    # v1.502.0 (north-star D5, moved on purpose): read_file is trusted here
+    # because this folder is the session's OWN repository (a Git folder) —
+    # its files are its own source, never outside text: no taint.
+    (work / ".git").mkdir()
+    sid = new_session(app, work)["id"]
     hold = Hold()
     wire(app, Script([_reads(), hold]))
     drop = asyncio.Event()

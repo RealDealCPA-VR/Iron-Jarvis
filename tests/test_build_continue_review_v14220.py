@@ -98,7 +98,8 @@ async def test_a_failed_reply_that_went_to_low_trust_is_continued_at_low_trust(h
     (work / "NOTES.md").write_bytes((INJ + "\n").encode("utf-8"))
     platform = app.state.platform
     # The folder's notes are untrusted text here (as a fetched page is).
-    monkeypatch.setattr(platform.registry.get("read_file"), "returns_untrusted_content", True, raising=False)
+    # v1.502.0 (north-star D5, moved on purpose): read_file's own rule now.
+    assert platform.registry.get("read_file").returns_untrusted_content is True
     sid = new_session(app, work)["id"]
     from iron_jarvis.providers.adapters.base import ToolCall
 
@@ -140,7 +141,8 @@ async def test_the_post_lane_says_a_low_trust_failure_too(tmp_path, monkeypatch)
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "NOTES.md").write_bytes((INJ + "\n").encode("utf-8"))
-    monkeypatch.setattr(platform.registry.get("read_file"), "returns_untrusted_content", True, raising=False)
+    # v1.502.0 (north-star D5, moved on purpose): read_file's own rule now.
+    assert platform.registry.get("read_file").returns_untrusted_content is True
     model = Flaky([
         [ToolCall(id="r1", name="Read", arguments={"file_path": "NOTES.md"})],
         *[ProviderError("anthropic API error 529: overloaded_error", status_code=529) for _ in range(5)],

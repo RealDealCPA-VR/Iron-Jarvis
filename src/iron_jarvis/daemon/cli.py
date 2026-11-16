@@ -52,6 +52,23 @@ def _port_in_use(host: str, port: int) -> bool:
             return False
 
 
+def _is_loopback_host(host: str) -> bool:
+    """True when *host* is this PC's own loopback: ``localhost``, 127.0.0.0/8
+    or ``::1`` (v1.502.0, north-star 2.15). A wildcard (``0.0.0.0``, ``::``,
+    ``""``), any other address and any other name are not."""
+    h = (host or "").strip().lower().strip("[]")
+    if h == "localhost":
+        return True
+    try:
+        import ipaddress
+
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return bool((mapped or ip).is_loopback)
+
+
 def _is_ironjarvis_daemon(host: str, port: int) -> bool:
     """True only if the listener on host:port is actually an Iron Jarvis daemon
     (probes the auth-exempt /health). Distinguishes 'already running' from an
@@ -413,6 +430,24 @@ def serve(
 ) -> None:
     """Start the daemon (FastAPI) for the dashboard and HTTP clients."""
     import uvicorn
+
+    # v1.502.0 (north-star 2.15): never an open Iron Jarvis on the network.
+    # With no token every route is open (local development), which is safe
+    # only while it listens on this PC's own loopback. The packaged app
+    # always has a token, so its "other computers" start is unchanged.
+    from .auth import auth_enabled
+
+    if not _is_loopback_host(host) and not auth_enabled():
+        print(
+            f"Iron Jarvis did not start: it would listen on {host or 'every address'}, "
+            "where other computers can reach it, and no token is set, so anyone "
+            "there could use it. Set IRONJARVIS_TOKEN to a long random value "
+            "first (PowerShell: $env:IRONJARVIS_TOKEN = \"<your value>\"), or "
+            "start it on this PC only with --host 127.0.0.1.",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise typer.Exit(code=2)
 
     # Pre-flight: if something is already listening on host:port, don't run the
     # whole lifespan startup (auto-backup, rehydration) only to die on bind with a

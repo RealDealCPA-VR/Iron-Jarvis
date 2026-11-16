@@ -49,6 +49,33 @@ _APP_LABEL = {
 }
 
 
+#: v1.502.0 (north-star 2.5): the ONLY file types "Open in its app" hands to
+#: the OS — documents, pictures, audio and video. An ALLOW list, never a deny
+#: list: for a ``.bat``, ``.hta``, ``.exe``, ``.lnk``, ``.js``, ``.ps1`` (and
+#: every type nobody listed) the OS's "open" is RUN, and the path can come
+#: from a model's reply or a file someone sent. A folder still opens.
+OPENABLE_SUFFIXES = frozenset({
+    # documents
+    ".pdf", ".doc", ".docx", ".rtf", ".odt", ".txt", ".md", ".markdown", ".log",
+    ".xls", ".xlsx", ".xlsm", ".csv", ".tsv", ".ods",
+    ".ppt", ".pptx", ".odp", ".html", ".htm", ".json", ".xml", ".eml", ".msg",
+    # pictures
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".heic", ".svg",
+    # audio and video
+    ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma",
+    ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".wmv",
+})
+
+
+def not_openable_words(name: str) -> str:
+    """The refusal for a file "Open in its app" will not start (v1.502.0)."""
+    return (
+        f"Iron Jarvis opens documents, pictures, audio and video only. "
+        f"“{name}” could run a program, so it was not opened: open its "
+        f"folder instead and decide there."
+    )
+
+
 def _folder_app() -> str:
     """What opens a FOLDER on this OS (v1.351.0, G11), in the answer's words."""
     import sys
@@ -649,6 +676,11 @@ def register(app: FastAPI, d) -> None:
                 raise HTTPException(status_code=422, detail=f"could not open: {exc}")
             return {"ok": True, "app": _folder_app(), "folder": True}
         p = _preview_path(body.path)
+        # v1.502.0 (north-star 2.5): a file opens only when its type is a
+        # document, picture or media type (``OPENABLE_SUFFIXES``); anything
+        # else would be RUN by the OS's open, so it is refused in words.
+        if p.suffix.lower() not in OPENABLE_SUFFIXES:
+            raise HTTPException(status_code=415, detail=not_openable_words(p.name))
         try:
             _open_native(str(p))
         except Exception as exc:  # noqa: BLE001

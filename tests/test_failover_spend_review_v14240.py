@@ -62,14 +62,20 @@ def test_a_local_pick_whose_only_seeing_model_is_a_paid_key_is_told_the_image_wa
 
 
 def test_a_subscription_that_can_see_still_silences_the_note(platform, monkeypatch):
-    """The control: the router reroutes a local pick's picture to Claude Code
-    (a plan), so no note — a warning there would be the lie."""
+    """The control: a DEFAULT-route cloud pick that cannot see is moved to
+    Claude Code (a plan), so no note — a warning there would be the lie.
+    v1.502.0 (north-star 2.13, D1): a LOCAL pick's picture is no longer moved
+    off this network, so for it the note says so, naming Claude."""
     _fleet(platform, monkeypatch, {
         "ollama": _Ad("ollama", vision=False, endpoint=LOCAL),
+        "codex-cli": _Ad("codex-cli", vision=False),
         "openai": _Ad("openai", vision=True),
         "claude-cli": _Ad("claude-cli", vision=True),
     })
-    assert _vision_unavailable_reason(SimpleNamespace(platform=platform), "ollama", "") == ""
+    monkeypatch.setattr(platform.router, "_default_provider", "codex-cli")
+    assert _vision_unavailable_reason(SimpleNamespace(platform=platform), "", "") == ""
+    kept = _vision_unavailable_reason(SimpleNamespace(platform=platform), "ollama", "")
+    assert "NOT seen" in kept and "Claude" in kept and "nothing was sent" in kept
 
 
 def test_a_paid_pick_may_still_send_the_picture_to_a_paid_key(platform, monkeypatch):
@@ -79,7 +85,10 @@ def test_a_paid_pick_may_still_send_the_picture_to_a_paid_key(platform, monkeypa
         "xai": _Ad("xai", vision=False),
         "openai": _Ad("openai", vision=True),
     })
-    assert _vision_unavailable_reason(SimpleNamespace(platform=platform), "xai", "") == ""
+    # v1.502.0 (north-star 2.13, D1): on the DEFAULT route (a pick by name
+    # keeps its picture on this network and is refused by name instead).
+    monkeypatch.setattr(platform.router, "_default_provider", "xai")
+    assert _vision_unavailable_reason(SimpleNamespace(platform=platform), "", "") == ""
 
 
 def test_nothing_left_out_keeps_the_old_words(platform, monkeypatch):

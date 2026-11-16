@@ -691,6 +691,58 @@ def multi_read_spec(spec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# A FILE'S TEXT IS OUTSIDE TEXT (v1.502.0, north-star D5)
+#
+# ``read_file``, ``grep`` and ``shell`` return words someone else may have
+# written (a client's document, a downloaded file, a command's output), so they
+# are ``returns_untrusted_content``: fenced, scanned, and a flagged result
+# taints the run. The ONE exception is a coding session reading its OWN
+# repository: a plain-text file inside the session's workspace when that
+# workspace is a Git repository. Its result carries ``data["own_source"]``
+# (read by every fence through :func:`is_own_source`), so the session's own
+# code is neither fenced nor able to taint it. An extracted document, a file
+# outside the workspace (the task's scratch folder included), a ``.git``
+# internal and every command's output are always outside text.
+# --------------------------------------------------------------------------- #
+
+#: The ``ToolResult.data`` key that marks a result as the session's own source.
+OWN_SOURCE_KEY = "own_source"
+
+
+def is_own_source(result: Any) -> bool:
+    """Did the tool say this result is the session's own repository text?
+    Only an exact ``True`` under :data:`OWN_SOURCE_KEY` counts. Never raises."""
+    data = getattr(result, "data", None)
+    return isinstance(data, dict) and data.get(OWN_SOURCE_KEY) is True
+
+
+def own_source_path(workspace: Path, target: Path) -> bool:
+    """Is ``target`` inside ``workspace`` (not under its ``.git``), with the
+    workspace a Git repository (a ``.git`` folder or worktree file at its
+    root)? BLOCKING (stats): call it off the event loop. Never raises."""
+    try:
+        root = Path(workspace).resolve()
+        if not (root / ".git").exists():
+            return False
+        resolved = Path(target).resolve()
+        if resolved != root and not resolved.is_relative_to(root):
+            return False
+        return ".git" not in resolved.relative_to(root).parts
+    except (OSError, ValueError):
+        return False
+
+
+def _as_own_source(result: ToolResult) -> ToolResult:
+    """``result`` with :data:`OWN_SOURCE_KEY` set (a new result; never mutated)."""
+    data = dict(result.data or {})
+    data[OWN_SOURCE_KEY] = True
+    return ToolResult(
+        ok=result.ok, output=result.output, data=data, error=result.error,
+        created_paths=result.created_paths, images=result.images,
+    )
+
+
 class ReadFileTool(Tool):
     name = "read_file"
     description = (
@@ -703,6 +755,9 @@ class ReadFileTool(Tool):
         "showed and how many the file has."
     )
     reversibility = Reversibility.READONLY  # a read has no side effect to undo
+    #: v1.502.0 (D5): a file's text is outside text — a coding session's own
+    #: repository file excepted, per result (:func:`is_own_source`).
+    returns_untrusted_content = True
     input_schema = {
         "type": "object",
         "properties": {
@@ -739,6 +794,28 @@ class ReadFileTool(Tool):
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if args.get("paths") is not None:
             return await self._read_many(args, ctx)
+        result = await self._read_one(args, ctx)
+        # v1.502.0 (D5): a plain-text read of the session's own repository is
+        # its own source; an extracted document never is. A FAILED read
+        # carries Iron Jarvis's own words ("no such file", "could not read"),
+        # never the file's text, so it is not outside text either (the runtime
+        # fences a failure too, and a fenced "no such file" fed the repeat
+        # breaker the fence's words instead of the reason).
+        if not result.ok:
+            return _as_own_source(result)
+        if (result.data or {}).get("extracted"):
+            return result
+        try:
+            target = safe_path(ctx.workspace, args["path"])
+        except (OSError, ValueError):
+            return result
+        if target.suffix.lower() in _DOC_EXTENSIONS:
+            return result
+        if await asyncio.to_thread(own_source_path, ctx.workspace, target):
+            return _as_own_source(result)
+        return result
+
+    async def _read_one(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = safe_path(ctx.workspace, args["path"])
         # Stat + (for a directory) one listing — off the event loop like every
         # other filesystem step here (v1.153.1).
@@ -853,11 +930,16 @@ class ReadFileTool(Tool):
         files: list[dict[str, Any]] = []
         left_out: list[str] = []
         used = 0
+        # v1.502.0 (D5): the call is the session's own source only when every
+        # file it read is.
+        own = True
         for name in names:
             if used >= READ_MANY_MAX_CHARS:
                 left_out.append(name)
                 continue
             res = await self._read_one_of_many(name, args, ctx)
+            if res.ok and not is_own_source(res):
+                own = False
             body = (res.output if res.ok else f"[not read: {res.error or 'it could not be read'}]") or ""
             head = f"==> {name} <=="
             room = READ_MANY_MAX_CHARS - used - len(head) - 2
@@ -891,7 +973,11 @@ class ReadFileTool(Tool):
             "files": files, "not_read": left_out, "bytes": len(out),
         }
         if not read_ok:
+            # Every file failed: the text is the reasons only (our words).
+            data[OWN_SOURCE_KEY] = True
             return ToolResult(ok=False, error=out or "no file could be read", data=data)
+        if own:
+            data[OWN_SOURCE_KEY] = True
         return ToolResult(ok=True, output=out, data=data)
 
 
@@ -1569,6 +1655,9 @@ class GrepTool(Tool):
         "the reply says when it could not cover everything."
     )
     reversibility = Reversibility.READONLY  # a search has no side effect
+    #: v1.502.0 (D5): matching lines are the files' own words — outside text,
+    #: a search of a coding session's own repository excepted.
+    returns_untrusted_content = True
     input_schema = {
         "type": "object",
         "properties": {
@@ -1621,6 +1710,21 @@ class GrepTool(Tool):
         )
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        result = await self._grep(args, ctx)
+        # v1.502.0 (D5): a search inside the session's own repository is its
+        # own source (the walk never leaves the folder it was given). A
+        # failure ("bad regex", "no such file") is our own words.
+        if not result.ok:
+            return _as_own_source(result)
+        try:
+            base = safe_path(ctx.workspace, args.get("path", "."))
+        except (OSError, ValueError):
+            return result
+        if await asyncio.to_thread(own_source_path, ctx.workspace, base):
+            return _as_own_source(result)
+        return result
+
+    async def _grep(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         import asyncio
 
         from ..harness.search import wants_new_grep
@@ -1754,6 +1858,9 @@ class ShellTool(Tool):
     name = "shell"
     description = "Run a shell command in the workspace. (Sandboxing arrives in Phase 4.)"
     permission_key = "shell"  # defaults to 'ask' — fail-closed in headless mode
+    #: v1.502.0 (D5): what a command prints is outside text (it can print any
+    #: file, page or message). Same as ``sandbox/shell_tool``.
+    returns_untrusted_content = True
     input_schema = {
         "type": "object",
         "properties": {"command": {"type": "string"}},

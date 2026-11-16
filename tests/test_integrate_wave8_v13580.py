@@ -315,6 +315,9 @@ def test_serve_on_every_interface_still_finds_a_running_copy_on_loopback(monkeyp
     from iron_jarvis.daemon import cli
 
     asked: list[tuple[str, int]] = []
+    # v1.502.0 (north-star 2.15): serve on the network needs a token (the
+    # desktop always has one); without it serve stops before this preflight.
+    monkeypatch.setenv("IRONJARVIS_TOKEN", "not-a-real-token-just-a-test-value")
 
     def _in_use(h, p):
         asked.append((h, p))
@@ -332,6 +335,8 @@ def test_serve_on_a_named_address_probes_that_address(monkeypatch):
     from iron_jarvis.daemon import cli
 
     asked: list[str] = []
+    # v1.502.0 (north-star 2.15): serve on the network needs a token.
+    monkeypatch.setenv("IRONJARVIS_TOKEN", "not-a-real-token-just-a-test-value")
     monkeypatch.setattr(cli, "_port_in_use", lambda h, p: asked.append(h) or True)
     monkeypatch.setattr(cli, "_is_ironjarvis_daemon", lambda h, p: asked.append(h) or True)
     with pytest.raises(typer.Exit):

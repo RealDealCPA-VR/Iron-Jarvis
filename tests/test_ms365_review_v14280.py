@@ -23,7 +23,6 @@ v14280.py`` pins the card itself):
 from __future__ import annotations
 
 import asyncio
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -68,7 +67,11 @@ def test_the_pack_never_inherits_the_daemons_microsoft_settings(client, monkeypa
     for k in STRAY:
         assert k.upper() not in env or env[k.upper()] == cfg["env"].get(k.upper()), k
     assert env["ENABLED_TOOLS"] == cfg["env"]["ENABLED_TOOLS"]
-    assert env.get("PATH") == os.environ.get("PATH")
+    # v1.502.0 (north-star 2.2, moved on purpose): every pack's base is the
+    # clean environment, whose PATH is the user's minus this app's own folders.
+    from iron_jarvis.sandbox.native import build_env
+
+    assert env.get("PATH") == next(v for k, v in build_env().items() if k.upper() == "PATH")
 
 
 def test_an_unlocked_pack_still_inherits_the_daemons_environment(monkeypatch):

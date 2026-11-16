@@ -53,10 +53,11 @@ def work(tmp_path):
     return folder
 
 
-def _untrusted_reads(app, monkeypatch) -> None:
-    # The folder's notes are untrusted text here (as a fetched page is).
-    monkeypatch.setattr(app.state.platform.registry.get("read_file"), "returns_untrusted_content", True,
-                        raising=False)
+def _untrusted_reads(app, monkeypatch) -> None:  # noqa: ARG001
+    # The folder's notes are untrusted text (as a fetched page is). v1.502.0
+    # (north-star D5, moved on purpose): that is read_file's own rule now —
+    # this folder is not a Git repository, so its files are outside text.
+    assert app.state.platform.registry.get("read_file").returns_untrusted_content is True
 
 
 async def _cut_after_a_flagged_read(app, sid: str, turn_id: str, *, stop: str) -> None:
@@ -134,8 +135,11 @@ async def test_a_low_trust_reply_cut_off_by_a_restart_carries_on_at_low_trust(ho
 
 async def test_a_full_trust_reply_cut_off_by_a_restart_carries_on_at_full_trust(home, work):
     first = create_app(home)
+    # v1.502.0 (north-star D5, moved on purpose): read_file is trusted here
+    # because this folder is the session's OWN repository (a Git folder).
+    (work / ".git").mkdir()
     sid = new_session(first, work)["id"]
-    await _cut_after_a_flagged_read(first, sid, "bt-full", stop="shutdown")  # read_file is trusted here
+    await _cut_after_a_flagged_read(first, sid, "bt-full", stop="shutdown")
     with session_scope(first.state.platform.engine) as db:
         row = db.get(RunTranscript, RR.run_id_for("bt-full"))
         assert row is not None and not row.low_trust

@@ -81,12 +81,18 @@ def tool_entry(spec: dict[str, Any]) -> dict[str, Any]:
     if schema is None:
         schema = spec.get("input_schema")
     sha = spec.get("schema_sha") if isinstance(spec.get("schema_sha"), str) else None
-    return {
+    entry = {
         "name": name,
         "write_like": write_like,
         "risk": risk,
         "schema_sha": sha or schema_sha(schema),
     }
+    if spec.get("flagged"):
+        # v1.502.0 (north-star 2.10): its description or schema text was
+        # flagged by the scan (``mcp/tools._vet_text``). Only written when set,
+        # so every other pack's manifest reads as before.
+        entry["flagged"] = True
+    return entry
 
 
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]")
@@ -197,8 +203,28 @@ class PackManifest:
                 }
         else:
             trusted = set(trusted_names)
+        # v1.502.0 (north-star 2.10): a FLAGGED tool (its description or
+        # schema text tripped the scan) is trusted only by the user — never by
+        # a first load and never for being read-only — and keeps the user's
+        # trust while it stays flagged with the same shape.
+        flag_trusted: set[str] = set()
+        if saved is not None:
+            changed = set(self.diff(server, specs)["changed"])
+            flag_trusted = {
+                str(t.get("name"))
+                for t in saved.get("tools", [])
+                if isinstance(t, dict) and t.get("flagged") and t.get("trusted") is True
+                and str(t.get("name")) not in changed
+            }
         tools = [
-            {**e, "trusted": (not e["write_like"]) or e["name"] in trusted}
+            {
+                **e,
+                "trusted": (
+                    ((e["name"] in trusted) if trusted_names is not None else (e["name"] in flag_trusted))
+                    if e.get("flagged")
+                    else (not e["write_like"]) or e["name"] in trusted
+                ),
+            }
             for e in current
         ]
         doc = {
@@ -228,7 +254,9 @@ class PackManifest:
 
     def quarantined(self, server: str) -> set[str]:
         """Write-like tools in the saved manifest that are NOT trusted. A
-        read-only tool is never here, by construction of ``record``."""
+        read-only tool is never here, by construction of ``record`` — except
+        a FLAGGED one (v1.502.0, north-star 2.10), held until the user trusts
+        it."""
         saved = self.load(server)
         if saved is None:
             return set()
@@ -237,6 +265,6 @@ class PackManifest:
             for t in saved.get("tools", [])
             if isinstance(t, dict)
             and t.get("name")
-            and bool(t.get("write_like", True))
+            and (bool(t.get("write_like", True)) or bool(t.get("flagged")))
             and t.get("trusted") is not True
         }

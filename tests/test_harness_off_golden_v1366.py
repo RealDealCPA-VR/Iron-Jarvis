@@ -124,6 +124,10 @@ async def _capture(tmp_path: Path, monkeypatch, **harness_kw) -> dict[str, Any]:
     platform = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "ws"
     ws.mkdir(exist_ok=True)
+    # v1.502.0 (north-star D5): the folder is a coding project's own
+    # repository, so `a.py` is its own source and is read back unfenced, as
+    # the golden captured it (a file outside a repository is fenced now).
+    (ws / ".git").mkdir(exist_ok=True)
     (ws / "a.py").write_text("x = 1\n", encoding="utf-8")
     out: dict[str, Any] = {}
     for lane in ("stream", "post"):

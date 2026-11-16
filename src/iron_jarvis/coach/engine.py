@@ -76,6 +76,12 @@ REASON_DECLINED = "you declined a proposal for the same evidence recently — su
 REASON_ACCEPTED = "you already accepted a change for the same evidence — the coach waits {days} days for new runs"
 REASON_NOTHING_SMALL = "the coach had nothing small enough to say"
 REASON_MODEL_FAILED = "the model call failed"
+#: v1.502.0 (north-star 2.3): the evidence quotes a Local only run and the
+#: model that would read it runs off this network.
+REASON_LOCAL_ONLY = (
+    "some of these runs were Local only, and {name} runs off this network, so "
+    "nothing was sent — choose a model on this network to coach from them"
+)
 STALE_SENTENCE = "the instructions changed since this was written — ask the coach again"
 
 
@@ -308,21 +314,32 @@ class CoachEngine:
         lines.append("Reply with ONLY the full new instructions inside a ``` fence.")
         return system, "\n".join(lines)
 
-    async def _complete(self, system: str, prompt: str) -> str | None:
+    async def _complete(self, system: str, prompt: str, *, local_only: bool = False) -> str | None:
         """ONE router completion, the way ``ImprovementEngine._router_reflect``
-        makes it. ``None`` on any failure — never an exception to the caller."""
+        makes it. ``None`` on any failure — never an exception to the caller,
+        except a Local only refusal (``egress.LocalOnlyRefused``), which the
+        caller turns into its own reason.
+
+        LOCAL ONLY (v1.502.0, north-star 2.3): ``local_only`` — the evidence
+        quotes a Local only run — makes the call inside
+        ``local_only_scope(True)``, so the router's gate refuses a model that
+        leaves this network (nothing is sent)."""
+        from ..providers import egress as _egress
         from ..providers.adapters.base import LLMMessage
 
         router = getattr(self.p, "router", None)
         if router is None:
             return None
         try:
-            route = await router.complete(
-                system=system,
-                messages=[LLMMessage(role="user", content=prompt)],
-                tools=[],
-            )
-        except Exception:  # noqa: BLE001 — a model error is a reason, not a crash
+            with _egress.local_only_scope(bool(local_only)):
+                route = await router.complete(
+                    system=system,
+                    messages=[LLMMessage(role="user", content=prompt)],
+                    tools=[],
+                )
+        except Exception as exc:  # noqa: BLE001 — a model error is a reason, not a crash
+            if _egress.refusal_of(exc) is not None:
+                raise
             log.exception("coach model call failed")
             return None
         response = getattr(route, "response", route)
@@ -380,7 +397,21 @@ class CoachEngine:
             self.last_reason = REASON_UNKNOWN
             return None
         system, prompt = self._prompt(before, found)
-        raw = await self._complete(system, prompt)
+        # LOCAL ONLY (v1.502.0, north-star 2.3): a run quoted in the evidence
+        # was Local only — the call is made on this network or not at all.
+        quoted = set(session_ids)
+        local_only = any(r.get("local_only") for r in runs if r.get("session_id") in quoted)
+        from ..providers import egress as _egress
+
+        try:
+            raw = await self._complete(system, prompt, local_only=local_only)
+        except Exception as exc:  # noqa: BLE001 — only a Local only refusal reaches here
+            refused = _egress.refusal_of(exc)
+            if refused is None:
+                raise
+            name = _egress.friendly_name(refused.provider, getattr(self.p, "providers", None))
+            self.last_reason = REASON_LOCAL_ONLY.format(name=name)
+            return None
         if raw is None:
             self.last_reason = REASON_MODEL_FAILED
             return None

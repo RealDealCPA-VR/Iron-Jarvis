@@ -71,7 +71,8 @@ export const TASKS_LINE =
 export const NETWORK_OFF =
   "Other computers cannot reach this one yet. To pair, turn this on here and on the other computer. " +
   "Iron Jarvis restarts to apply it, and another computer can ask this one for nothing until you pair it " +
-  "or connect it yourself.";
+  "or connect it yourself. The link between the two computers is not encrypted, so pair only over a " +
+  "network you trust (your own, or Tailscale).";
 export const TURN_ON = "Turn on and restart";
 export const NETWORK_SAVED = "Turned on. It takes effect when Iron Jarvis restarts.";
 export const RESTART_NOW = "Restart now";

@@ -34,8 +34,15 @@ def voice_backend_present(platform) -> tuple[bool, str | None]:
         stt = ""
     if stt:
         return True, "stt"
+    # v1.502.0 (north-star 2.12, D9): an OpenAI key counts for VOICE only when
+    # the owner picked OpenAI for dictation (``voice_backend``), as the daemon's
+    # own choice now reads it; a key added for chat does not.
     try:
-        if platform.secrets.get("openai_api_key"):
+        picked = str(getattr(platform.config, "voice_backend", "") or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        picked = ""
+    try:
+        if picked == "openai" and platform.secrets.get("openai_api_key"):
             return True, "openai"
     except Exception:  # noqa: BLE001 — vault miss = not available
         pass

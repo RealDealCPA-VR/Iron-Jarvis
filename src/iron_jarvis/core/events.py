@@ -513,6 +513,86 @@ def _drop_build_turn_scope() -> None:
         pass
 
 
+#: v1.502.0 (north-star 2.6): the payload key an event published for Local
+#: only work carries (``True``). Read by the phone alerts (the title-only line)
+#: and the outbound webhooks (the event is skipped).
+LOCAL_ONLY_KEY = "local_only"
+
+#: How many Local only sessions the bus remembers, so an event published for
+#: one AFTER its scope ended (``session.completed``) is stamped too.
+_LOCAL_ONLY_SESSIONS_MAX = 2000
+
+#: The session id every chat turn's tools and events share
+#: (``chat_turn.turn_session_id``). Never remembered as a Local only session.
+_SHARED_CHAT_SESSION = "chat"
+
+
+def _local_only_now() -> bool:
+    """Is the work publishing right now under a Local only scope? Lazy import
+    (``providers`` imports this module); never raises."""
+    try:
+        from ..providers.egress import current_scope
+
+        return bool(current_scope().on)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _session_row_local_only(engine: Any, session_id: str) -> bool:
+    """The session row's ``options.local_only`` (BLOCKING, one indexed read).
+    A missing row, junk in the column or a read fault is False."""
+    try:
+        import json as _json
+
+        from sqlmodel import select
+
+        from .db import session_scope
+        from .models import Session
+
+        with session_scope(engine) as db:
+            raw = db.exec(select(Session.options_json).where(Session.id == session_id)).first()
+        opts = _json.loads(raw) if isinstance(raw, str) and raw else {}
+        return isinstance(opts, dict) and opts.get("local_only") is True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def event_is_local_only(event: Any, engine: Any = None) -> bool:
+    """Was *event* published for Local only work (v1.502.0, north-star 2.6)?
+
+    True when its payload carries the bus's stamp (:data:`LOCAL_ONLY_KEY`);
+    else, with an *engine*, when the session it names was created Local only
+    (``options.local_only``) or the saved chat it names is switched to Local
+    only (``setup.local_only``) — for an event the bus never saw run (a run
+    cut by a restart and finished at boot, a chat's ``chat.turn_finished``,
+    published after the turn's scope ended). BLOCKING with an engine (up to
+    two indexed reads): a sync event handler runs off the loop. Never raises."""
+    try:
+        if isinstance(event, dict):
+            payload = event.get("payload") or {}
+            sid = event.get("session_id")
+        else:
+            payload = getattr(event, "payload", None) or {}
+            sid = getattr(event, "session_id", None)
+        if not isinstance(payload, dict):
+            payload = {}
+        if payload.get(LOCAL_ONLY_KEY) is True:
+            return True
+        if engine is None:
+            return False
+        sid = str(sid or payload.get("session_id") or "").strip()
+        if sid and _session_row_local_only(engine, sid):
+            return True
+        tid = str(payload.get("thread_id") or "").strip()
+        if tid:
+            from ..providers.egress import thread_local_only
+
+            return bool(thread_local_only(engine, tid))
+        return False
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class EventBus:
     def __init__(self, history_size: int = 1000) -> None:
         self._subscribers: set[asyncio.Queue[Event]] = set()
@@ -522,6 +602,36 @@ class EventBus:
         self._queue_loops: dict[int, asyncio.AbstractEventLoop] = {}
         self._handlers: list[Callable[[Event], None]] = []
         self.history: deque[Event] = deque(maxlen=history_size)
+        #: v1.502.0 (north-star 2.6): sessions seen publishing under a Local
+        #: only scope (insertion-ordered, bounded), so their later events —
+        #: ``session.completed`` is published after the run's scope ended —
+        #: carry the stamp too.
+        self._local_only_sessions: dict[str, None] = {}
+
+    def _stamp_local_only(
+        self, payload: dict[str, Any], session_id: "str | None"
+    ) -> dict[str, Any]:
+        """*payload* with ``local_only: True`` when it is published for Local
+        only work: under the scope now, or for a session seen under it. A
+        COPY (never the caller's dict); a payload that already says
+        ``local_only`` keeps its own value. Never raises."""
+        try:
+            sid = str(session_id or "").strip()
+            on = _local_only_now()
+            # EVERY chat turn publishes as the one session id "chat" (lead
+            # review): remembering it would stamp every later chat, Local
+            # only or not. Only an id that names ONE piece of work is kept.
+            if sid == _SHARED_CHAT_SESSION:
+                return {**payload, LOCAL_ONLY_KEY: True} if on and LOCAL_ONLY_KEY not in payload else payload
+            if on and sid and sid not in self._local_only_sessions:
+                if len(self._local_only_sessions) >= _LOCAL_ONLY_SESSIONS_MAX:
+                    self._local_only_sessions.pop(next(iter(self._local_only_sessions)))
+                self._local_only_sessions[sid] = None
+            if (on or (sid and sid in self._local_only_sessions)) and LOCAL_ONLY_KEY not in payload:
+                return {**payload, LOCAL_ONLY_KEY: True}
+        except Exception:  # noqa: BLE001 — a stamp never breaks a publish
+            pass
+        return payload
 
     def add_handler(self, handler: Callable[[Event], None]) -> None:
         """Register a synchronous handler (logging, persistence)."""
@@ -533,7 +643,11 @@ class EventBus:
         payload: dict[str, Any] | None = None,
         session_id: str | None = None,
     ) -> Event:
-        event = Event(type=type, payload=payload or {}, session_id=session_id)
+        event = Event(
+            type=type,
+            payload=self._stamp_local_only(payload or {}, session_id),
+            session_id=session_id,
+        )
         self.history.append(event)
         # Deliver to subscribers (the dashboard WS) FIRST so a slow/blocking sync
         # handler (e.g. an offline Slack/webhook POST) can't withhold or reorder

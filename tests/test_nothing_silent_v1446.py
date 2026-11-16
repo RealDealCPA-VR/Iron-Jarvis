@@ -149,7 +149,9 @@ async def test_a_successful_fire_stays_quiet(tmp_path, monkeypatch):
     platform = build_platform(str(tmp_path))
     router = ReflexRouter(platform, _Orch())
     rule = router.store.add(name="ok", source="webhook", match="x", action="workflow", target="w")
-    monkeypatch.setattr(router, "_run_workflow", lambda r, c: {"ok": True, "kind": "workflow", "run_id": "wfr"})
+    # v1.502.0 (north-star 2.8): a webhook rule's run is handed its low trust
+    # (``trust=``), so the double takes keywords.
+    monkeypatch.setattr(router, "_run_workflow", lambda r, c, **kw: {"ok": True, "kind": "workflow", "run_id": "wfr"})
     out = await router.execute(router.store.get(rule.id), {})
     assert out["ok"] is True and _failed(platform) == []
 

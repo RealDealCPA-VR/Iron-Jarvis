@@ -444,7 +444,13 @@ async def test_webhook_add_from_chat_has_an_undo_and_a_reused_slug_comes_back(tm
     p = app.state.platform
     p.outbound_webhooks.register("deploys", PUBLIC, ["session.completed"])
     deploys_before = _wh_row(p, "deploys")
-    frames = await _drive_stream(app, {**_body("add an ingest webhook and repoint deploys"), "tools": ["webhook_add"]}, _never)
+    # v1.502.0 (north-star D6, moved on purpose): an OUTBOUND webhook is asked
+    # about every time (the tool's own check), so the repoint cards once and
+    # is answered here; the inbound one still runs unasked.
+    seen: list[str] = []
+    frames = await _drive_stream(app, {**_body("add an ingest webhook and repoint deploys"), "tools": ["webhook_add"]},
+                                 await _approve_all(app, seen))
+    assert seen == ["webhook_add"], seen
     assert _wh_row(p, "ingest") is not None
     assert (await p.inbound_webhooks.dispatch("ingest", {}))["ok"] is True
     assert _wh_row(p, "deploys")["target_url"] == OTHER

@@ -2042,6 +2042,59 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Nothing leaves your PC as a side effect (v1.502.0)
+
+The second part of the review fixes. Each of these closed a way for your
+work to reach a service or a computer you had not chosen for it.
+
+- **A picture stays with the model you chose.** If you send a picture or a
+  scan to a model on your network that cannot see pictures (or to a model you
+  picked by name), Iron Jarvis first tries to read it on this PC. If that is
+  not enough, it stops and says so: "… can't see pictures, so nothing was
+  sent", with a **Send to … once** button. Before, the whole message was
+  quietly moved to another connected service.
+- **Dictation stays on this PC.** Adding an OpenAI key for chat used to send
+  every dictated clip to OpenAI. Dictation now uses the offline speech model
+  unless you choose OpenAI under Settings › Models › **Voice: where dictation
+  is turned into words**. In a Local only chat, dictation never leaves your
+  network.
+- **Local only work stays out of alerts, webhooks and background learning.**
+  A phone alert for Local only work now gives only its title ("A run
+  finished"), an outbound webhook skips it, and the skill and coaching
+  suggestions Iron Jarvis writes after a run are made on a model on your
+  network or not at all.
+- **Files and command output are treated as someone else's words.** Text
+  Iron Jarvis reads from a file or a command is now marked as information,
+  never as instructions, the way documents and web pages already were. A
+  coding session reading its own Git repository is not slowed by this.
+- **After reading something suspicious, a run cannot browse.** If a run
+  reads text that looks like an attempt to give it orders, it loses web
+  search and page fetching for the rest of that run, so it cannot be talked
+  into carrying your data to another address.
+- **A rule fired by an email or a webhook starts with fewer powers**, and the
+  message that fired it is passed to the agent as information only.
+- **An agent asks before it creates an outbound webhook.** Chat already did.
+- **Apps you added start with a clean environment.** They no longer inherit
+  Iron Jarvis's own access token or keys from your PC's environment. If an
+  app relied on a key set in Windows' environment variables, put that key in
+  the app's own settings.
+- **An app's tool descriptions are checked.** One that reads like an attempt
+  to instruct Iron Jarvis is replaced with a neutral line, and the tool waits
+  for your OK.
+- **"Run app tools without asking" never covers a locked app** such as
+  Microsoft 365, which still asks each time.
+- **An agent never handles a password or key.** Asked to save one, it tells
+  you where to type it.
+- **"Open in its app" opens documents, pictures, audio and video only.** For
+  anything else (a script, a program, a file with no type) it says to open
+  the folder instead, because Windows could run it.
+- **Your other computers.** A task's answer goes back only to the address
+  stored when the two computers were paired. The pairing card now says the
+  link is not encrypted, so pair only on a network you trust (your own, or
+  Tailscale).
+- **Starting Iron Jarvis from source on the network needs a token.** The
+  installed app always has one and is not affected.
+
 ## One client's notes stay with that client, and Iron Jarvis asks before it keeps what it guessed (v1.501.0)
 
 A review of the app against its own promises found places where something

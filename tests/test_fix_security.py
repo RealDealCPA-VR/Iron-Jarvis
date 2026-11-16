@@ -128,14 +128,17 @@ async def test_secret_set_redacts_plaintext_in_transcript(tmp_path):
     )
     await p.registry.invoke(
         "secret_set",
-        {"name": "apikey", "value": "sk-super-secret-XYZ", "kind": "api_key"},
+        {"name": "apikey", "value": "plain-words-for-the-test", "kind": "api_key"},
         ctx, p.permissions, agent_overrides={"secret_set": "allow"},
     )
-    assert p.secrets.get("apikey") == "sk-super-secret-XYZ"  # stored (encrypted)
+    # v1.502.0 (north-star 2.11, moved on purpose): a secret is never a tool
+    # argument — a value a model still writes is NOT stored...
+    assert p.secrets.get("apikey") is None
     with session_scope(p.engine) as db:
         inv = db.exec(select(ToolInvocation).where(ToolInvocation.tool == "secret_set")).first()
     assert inv is not None
-    assert "sk-super-secret-XYZ" not in (inv.args_json or "")  # plaintext never persisted
+    # ...and, as before, never persisted on the ledger row.
+    assert "plain-words-for-the-test" not in (inv.args_json or "")
     assert "REDACTED" in inv.args_json
 
 

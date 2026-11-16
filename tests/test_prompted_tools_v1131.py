@@ -520,8 +520,14 @@ async def test_vision_reroute_survives_the_wrap():
             images=[{"data_b64": "aGk=", "media_type": "image/png"}],
         )
     ]
-    res = await router.complete(
-        provider="fleet-local", system="", messages=msgs, tools=_TOOLS
-    )
-    assert res.provider == "anthropic"
-    assert vision.calls == 1 and inner.calls == []
+    # v1.502.0 (north-star 2.13, D1): the seam still runs after the wrap, and
+    # a picked model on this network no longer hands the picture to a cloud
+    # model: the refusal names the model that could see it, nothing is sent.
+    from iron_jarvis.providers.egress import PictureKeptHere
+
+    with pytest.raises(PictureKeptHere) as caught:
+        await router.complete(
+            provider="fleet-local", system="", messages=msgs, tools=_TOOLS
+        )
+    assert caught.value.provider == "anthropic"
+    assert vision.calls == 0 and inner.calls == []

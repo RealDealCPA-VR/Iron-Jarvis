@@ -252,6 +252,12 @@ class SandboxedShellTool(Tool):
     name = "shell"
     description = "Run a shell command inside the sandboxed session workspace (§16/§17)."
     permission_key = "shell"  # defaults to 'ask' — fail-closed in headless mode
+    #: v1.502.0 (north-star D5): what a command prints is OUTSIDE TEXT — it can
+    #: `type` any file, print a fetched page or a message — so it is fenced and
+    #: scanned, and a flagged print taints the run, as ``read_document`` and
+    #: ``run_code`` already are. (A coding session's own files read through
+    #: ``read_file``/``grep`` are excepted per result; a command never is.)
+    returns_untrusted_content = True
     input_schema = {
         "type": "object",
         "properties": {
@@ -304,6 +310,30 @@ class SandboxedShellTool(Tool):
         return tool_check(args.get("command") if isinstance(args, dict) else "")
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """Run the command (:meth:`_run`), then say whose words the output is.
+
+        v1.502.0 (north-star D5, lead review): a command's output is outside
+        text, EXCEPT in a session working in its own Git repository. There the
+        output is the session's own build, test and git text (the same
+        exception ``read_file`` and ``grep`` make, ``tools/builtins.
+        own_source_path``): fencing it would let a project's own test output
+        (a failing test that prints an injection sample) taint the run, and a
+        tainted run loses this very tool. A folder that is not a repository
+        (a client's documents) gets no exception: what `type` or `curl`
+        prints there is fenced and scanned. A refusal or failure carries Iron
+        Jarvis's own words, never a file's."""
+        result = await self._run(args, ctx)
+        from ..tools.builtins import _as_own_source, is_own_source, own_source_path
+
+        if is_own_source(result):
+            return result
+        if not result.ok and not (result.output or "").strip():
+            return _as_own_source(result)  # our own refusal words only
+        if await asyncio.to_thread(own_source_path, ctx.workspace, ctx.workspace):
+            return _as_own_source(result)
+        return result
+
+    async def _run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         # v1.375.0: git the plan rules out on a session's branch (a force
         # push, deleting a branch, a history rewrite — harness/git_guard) is
         # refused before anything runs, whatever the posture.

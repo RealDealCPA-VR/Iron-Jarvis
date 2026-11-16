@@ -253,8 +253,40 @@ def _refusal_words(exc: BaseException) -> str:
         return ""
 
 
-def render_template(text: str, outputs: dict[str, Any]) -> str:
+#: The ``kind`` of the synthetic output a rule's signal seeds (``{{Trigger}}``,
+#: ``reflex/router._run_workflow``): the signal's own words — an email body,
+#: a webhook body — written by someone outside.
+TRIGGER_KIND = "trigger"
+
+_FENCE_MARKER = re.compile(r"\[(\s*(?:END\s+)?UNTRUSTED\s+CONTENT)", re.IGNORECASE)
+
+
+def _fenced_outside(value: str) -> str:
+    """Outside words as a fenced untrusted block that they cannot close."""
+    from ..computeruse.safety import wrap_untrusted
+
+    return "\n" + wrap_untrusted(_FENCE_MARKER.sub(r"(\1", value or "")) + "\n" if value else ""
+
+
+def signal_trust(outputs: dict[str, Any]) -> dict[str, str]:
+    """``{"trust": "low", "trust_reason": …}`` when the run was started by an
+    outside signal the router marked low (its ``Trigger`` output carries it),
+    else ``{}`` — so every other run's ``create_session`` call is unchanged."""
+    trig = outputs.get("Trigger") if isinstance(outputs, dict) else None
+    if isinstance(trig, dict) and trig.get("kind") == TRIGGER_KIND and trig.get("trust") == "low":
+        return {"trust": "low", "trust_reason": str(trig.get("trust_reason") or "started by an outside signal")}
+    return {}
+
+
+def render_template(text: str, outputs: dict[str, Any], *, fence_outside: bool = False) -> str:
     """Replace ``{{Step Name}}`` with that step's recorded summary/output.
+
+    ``fence_outside`` (v1.502.0, north-star 2.8): for an AGENT step's task —
+    the ``{{Trigger}}`` output (a signal's own words, :data:`TRIGGER_KIND`)
+    goes in as a fenced untrusted block, defanged, as the session action's
+    ``{body}`` does (``reflex/router._render``). Off for a tool step's
+    arguments, a notify message and a question: those are values handed to a
+    tool or shown to the user, never a prompt, and a fence would corrupt them.
 
     ``{{Step Name.data}}`` (v1.170.0) resolves to that step's bounded
     structured ``data`` — the serialized JSON a tool step recorded — so a
@@ -280,6 +312,8 @@ def render_template(text: str, outputs: dict[str, Any]) -> str:
             summary = str(out.get("summary") or "")
             if out.get("status") == "failed":
                 return f"[step {ref} failed: {summary}]"[:_MAX_STEP_SUMMARY]
+            if fence_outside and out.get("kind") == TRIGGER_KIND:
+                return _fenced_outside(summary[:_MAX_STEP_SUMMARY])
             return summary[:_MAX_STEP_SUMMARY]
         if ref.endswith(".data"):
             base = outputs.get(ref[: -len(".data")].strip())
@@ -1067,7 +1101,9 @@ class WorkflowEngine:
         self, orch, run_id, workflow, step, outputs, completed,
         workspace_root, session_ids, *, person_started: bool = False,
     ) -> dict:
-        task_text = render_template(step.task, outputs) + self._context_block(completed)
+        # v1.502.0 (north-star 2.8): a signal's words go in FENCED, and a run
+        # an outside signal started runs its agent steps at LOW trust.
+        task_text = render_template(step.task, outputs, fence_outside=True) + self._context_block(completed)
         # The def's explicit pin (None for unpinned workflows) grounds each
         # step in the project — its instructions/knowledge inject at run
         # time — and, when the project has a valid folder, runs the step
@@ -1085,6 +1121,8 @@ class WorkflowEngine:
             # v1.352.0: passed ONLY for a person's run, so every other door's
             # call (and a test double's create_session) is byte-identical.
             **({"started_by_person": True} if person_started else {}),
+            # v1.502.0: passed ONLY for a signal the router marked low.
+            **signal_trust(outputs),
         )
         session_ids.append(session.id)
         # Record the live session id BEFORE running, so a cancel arriving

@@ -197,6 +197,20 @@ def quarantined_in_flight() -> bool:
     return bool(tool is not None and getattr(tool, "quarantined", False))
 
 
+def auto_approve_withheld_in_flight() -> bool:
+    """True when the ``mcp_call`` question being answered RIGHT NOW is about
+    a tool no auto-approve may answer: a quarantined tool (v1.299.0) or one
+    from a LOCKED pack (v1.502.0, north-star 2.9 — Microsoft 365's card says
+    it asks before each use, and the switch "Run app tools without asking"
+    covers every pack through the one shared key). Reads and clears the
+    in-flight tool, like :func:`quarantined_in_flight`."""
+    tool = take_asking_about()
+    return bool(
+        tool is not None
+        and (getattr(tool, "quarantined", False) or getattr(tool, "locked", False))
+    )
+
+
 #: v1.428.0: why a tool kept on the user's own models was not run.
 LOCAL_ONLY_APP_REFUSAL = (
     "{app} is set to stay on your own models, so it can't be used in this chat. "
@@ -260,6 +274,63 @@ async def _hold_chat_local(ctx: Any, app_id: str) -> None:
         log.debug("local-only hold for %s failed", app_id, exc_info=True)
 
 
+#: v1.502.0 (north-star 2.10): the most of a pack's tool description, and of
+#: one text in its schema (an argument's ``description`` / ``title``), the
+#: model is shown. A pack writes these and they ride EVERY request that arms
+#: the tool, read by the model alone.
+DESCRIPTION_CAP = 2_000
+SCHEMA_TEXT_CAP = 400
+#: The most of a pack's text the scan reads (a longer text is cut first).
+_SCAN_READ_MAX = 50_000
+
+
+def _vet_text(text: Any, cap: int) -> "tuple[str, bool]":
+    """``(text capped, flagged)`` for one pack-written text. Scanned WHOLE (up
+    to :data:`_SCAN_READ_MAX`) by ``core/promptguard`` before the cap, so an
+    instruction past the cap still marks the tool. Never raises: a scanner
+    fault passes the capped text, unflagged (promptguard's own rule)."""
+    raw = str(text or "")
+    try:
+        from ..core.promptguard import scan_context
+
+        flagged = bool(scan_context(raw[:_SCAN_READ_MAX], source="an app's tool description", cap=None).blocked)
+    except Exception:  # noqa: BLE001
+        flagged = False
+    if flagged:
+        return "", True
+    if len(raw) > cap:
+        raw = raw[: cap - 1].rstrip() + "…"
+    return raw, False
+
+
+def _vet_schema(node: Any, depth: int = 0) -> "tuple[Any, bool]":
+    """A COPY of a pack's input schema with every ``description`` / ``title``
+    text capped, and a flagged one dropped; and whether any was flagged."""
+    if depth > 12:
+        return node, False
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        flagged = False
+        for key, value in node.items():
+            if key in ("description", "title") and isinstance(value, str):
+                text, bad = _vet_text(value, SCHEMA_TEXT_CAP)
+                flagged = flagged or bad
+                if not bad:
+                    out[key] = text
+                continue
+            out[key], bad = _vet_schema(value, depth + 1)
+            flagged = flagged or bad
+        return out, flagged
+    if isinstance(node, list):
+        items, flagged = [], False
+        for value in node:
+            v, bad = _vet_schema(value, depth + 1)
+            items.append(v)
+            flagged = flagged or bad
+        return items, flagged
+    return node, False
+
+
 class MCPRemoteTool(Tool):
     """A native ``Tool`` that proxies to one remote MCP tool via an ``MCPClient``."""
 
@@ -289,10 +360,18 @@ class MCPRemoteTool(Tool):
         self.server_name = server_name
         self.remote_name = remote_name
         self.name = f"mcp__{server_name}__{remote_name}"
-        self.description = description or (
-            f"Remote MCP tool '{remote_name}' from server '{server_name}'."
-        )
-        self.input_schema = input_schema or {"type": "object", "properties": {}}
+        default = f"Remote MCP tool '{remote_name}' from server '{server_name}'."
+        # v1.502.0 (north-star 2.10): the pack's words are capped and scanned
+        # HERE, at registration — a flagged description becomes the neutral
+        # default, a flagged schema text is dropped, and the tool is held
+        # (``description_flagged`` -> the manifest's ``flagged`` -> quarantine).
+        text, desc_bad = _vet_text(description, DESCRIPTION_CAP)
+        self.description = text or default
+        #: The schema AS THE PACK SENT IT — what the manifest compares, so the
+        #: cap never makes an existing tool look "changed" (quarantined).
+        self._raw_input_schema = input_schema or {"type": "object", "properties": {}}
+        self.input_schema, schema_bad = _vet_schema(self._raw_input_schema)
+        self.description_flagged: bool = bool(desc_bad or schema_bad)
         # v1.299.0: the server's hints, mapped once (see the module note above).
         self.mcp_annotations: dict[str, Any] = dict(annotations or {})
         spec = {"annotations": self.mcp_annotations}
@@ -303,6 +382,11 @@ class MCPRemoteTool(Tool):
         #: Microsoft 365): usable only in a turn on the user's own models, and
         #: a chat that used it stays Local only (``egress.hold_local_only``).
         self.local_only = False
+        #: v1.502.0 (north-star 2.9): the pack's row is ``locked`` (Microsoft
+        #: 365): its card says it asks before each use, so no auto-approve —
+        #: the global switch or another pack's flag — ever answers for it
+        #: (:func:`auto_approve_withheld_in_flight`).
+        self.locked = False
         self.app_name = server_name
 
     @classmethod
@@ -327,12 +411,16 @@ class MCPRemoteTool(Tool):
 
     def manifest_spec(self) -> dict[str, Any]:
         """This tool as the pack manifest compares it (see ``mcp/manifest.py``)."""
-        return {
+        spec = {
             "name": self.remote_name,
             "write_like": self.write_like,
             "risk": self.risk_class.value,
-            "inputSchema": self.input_schema,
+            "inputSchema": getattr(self, "_raw_input_schema", self.input_schema),
         }
+        if getattr(self, "description_flagged", False):
+            # v1.502.0 (north-star 2.10): held until the user trusts it.
+            spec["flagged"] = True
+        return spec
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if self.local_only:
@@ -456,10 +544,20 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
     # ENV_VAR -> vault secret name) resolved through ``secret_resolver`` at LAUNCH
     # — so a connector's token (GitHub PAT, Slack bot token, …) stays encrypted in
     # the vault instead of living plaintext in config.toml. Anything provided is
-    # MERGED onto ``os.environ`` (never replaces it): Popen(env=…) replaces the
-    # whole environment, so a bare {TOKEN: …} would drop PATH and npx/uvx would
-    # fail to launch. When nothing is added we pass ``None`` to inherit as before.
-    import os as _os
+    # MERGED onto a base environment (never replaces it): Popen(env=…) replaces
+    # the whole environment, so a bare {TOKEN: …} would drop PATH and npx/uvx
+    # would fail to launch.
+    #
+    # v1.502.0 (north-star 2.2): the base is NEVER the daemon's own
+    # ``os.environ``. A pack is a program someone else wrote, and the daemon's
+    # environment holds the install token (``IRONJARVIS_TOKEN``, the key to the
+    # whole daemon) and any provider key it was started with. The base is
+    # ``sandbox/native.build_env`` — the one drop list a coding session's
+    # commands get (secrets by name, the vendors' and this app's own
+    # variables, a URL's sign-in), keeping PATH, the home folders, APPDATA,
+    # proxy and npm/pip settings — and the pack's OWN ``env``/``env_secrets``
+    # go on AFTER it, so what the user gave this pack always reaches it.
+    from ..sandbox.native import build_env as _clean_base
 
     env: dict[str, str] = dict(cfg.get("env") or {})
     env_secrets = cfg.get("env_secrets")
@@ -478,9 +576,9 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
         # wider ENABLED_TOOLS / NODE_OPTIONS must not hand it on.
         from ..connectors.locked_pack import clean_env as _clean_env
 
-        merged_env = {**_clean_env(_os.environ), **env}
+        merged_env = {**_clean_env(_clean_base()), **env}
     else:
-        merged_env = {**_os.environ, **env} if env else None
+        merged_env = {**_clean_base(), **env}
     # v1.351.0 (G12): an argument that carried a secret (an mcp-remote
     # `--header "Authorization: Bearer …"`, `--api-key …`, a connection
     # string's password) is stored MASKED with `arg_secrets[i]` naming its
@@ -1716,6 +1814,8 @@ def _load_one_server(
         if cfg.get("locked") and str(spec.get("name")) in LOCKED_HIDDEN_TOOLS:
             continue
         tool = MCPRemoteTool.from_spec(client, name, spec)
+        if cfg.get("locked"):
+            tool.locked = True
         if keep_local:
             tool.local_only = True
             tool.app_name = app_name
@@ -1878,6 +1978,7 @@ __all__ = [
     "clear_quarantine",
     "take_asking_about",
     "quarantined_in_flight",
+    "auto_approve_withheld_in_flight",
     "FakeTransport",
     "MCPClient",
     "StdioTransport",

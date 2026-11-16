@@ -126,11 +126,14 @@ def test_readiness_carries_voice_field_absent_by_default(platform):
 
 
 def test_voice_backend_present_detects_openai_key(platform):
-    """An OpenAI API key in the vault flips voice readiness to available."""
+    """An OpenAI API key counts for voice once the owner PICKED OpenAI for
+    dictation (v1.502.0, decision D9); a key added for chat alone does not."""
     assert voice_backend_present(platform) == (False, None)
 
-    platform.secrets.set("openai_api_key", "sk-test-voice")
+    platform.secrets.set("openai_api_key", "test-voice-key")
+    assert voice_backend_present(platform) == (False, None)  # a key for chat only
 
+    platform.config.voice_backend = "openai"
     assert voice_backend_present(platform) == (True, "openai")
 
     report = readiness(platform)
@@ -198,11 +201,15 @@ def test_voice_backend_present_detects_local_vosk_v1197(platform, tmp_path):
 
 
 def test_openai_key_outranks_local_vosk_v1197(platform, tmp_path):
-    """Precedence mirrors /voice/status: an explicit OpenAI key (higher
-    accuracy, user-configured) wins over the bundled offline model."""
+    """Precedence mirrors /voice/status (v1.502.0, D9): the offline model is
+    used unless the owner picked OpenAI for voice; only then does the OpenAI
+    key win over it."""
     platform.config.voice_vosk_model_path = str(_make_vosk_dir(tmp_path))
-    platform.secrets.set("openai_api_key", "sk-test-voice")
+    platform.secrets.set("openai_api_key", "test-voice-key")
 
+    assert voice_backend_present(platform) == (True, "local")
+
+    platform.config.voice_backend = "openai"
     assert voice_backend_present(platform) == (True, "openai")
 
 

@@ -379,9 +379,16 @@ async def test_a_picture_is_never_rerouted_to_a_paid_key(lane):
     openai, claude = _A("openai"), _A("claude-cli")
     router = ModelRouter(_Mgr({"ollama": local, "openai": openai, "claude-cli": claude}),
                          "openai", EventBus())
-    served, reason = await _run(router, lane, provider="ollama", messages=[_user(PICTURE)])
-    assert (served, reason) == ("claude-cli", "failover")
-    assert openai.calls == 0
+    # v1.502.0 (north-star 2.13, D1): a local pick's picture is no longer
+    # moved off this network at all — refused by name. The money rule still
+    # decides WHICH model the "send once" offer names: Claude Code, never
+    # the key.
+    from iron_jarvis.providers.egress import PictureKeptHere
+
+    with pytest.raises(PictureKeptHere) as caught:
+        await _run(router, lane, provider="ollama", messages=[_user(PICTURE)])
+    assert caught.value.provider == "claude-cli"
+    assert openai.calls == 0 and claude.calls == 0
 
 
 @pytest.mark.parametrize("lane", LANES)
@@ -397,9 +404,20 @@ async def test_with_only_a_paid_key_able_to_see_the_pick_keeps_the_picture(lane)
 async def test_a_paid_pick_that_cannot_see_still_moves_a_picture_to_a_key(lane):
     xai = _A("xai", vision=False)
     openai = _A("openai")
-    router = ModelRouter(_Mgr({"xai": xai, "openai": openai}), "openai", EventBus())
-    served, reason = await _run(router, lane, provider="xai", messages=[_user(PICTURE)])
+    # v1.502.0 (north-star 2.13, D1): on the DEFAULT route a pay-per-use
+    # cloud model that cannot see still moves the picture to a key.
+    router = ModelRouter(_Mgr({"xai": xai, "openai": openai}), "xai", EventBus())
+    served, reason = await _run(router, lane, messages=[_user(PICTURE)])
     assert (served, reason) == ("openai", "failover")
+    # Picked BY NAME, it is not moved: refused, the offer naming the key
+    # (the pick pays, so a key is a model the money rule lets it use).
+    from iron_jarvis.providers.egress import PictureKeptHere
+
+    openai.calls = 0
+    router = ModelRouter(_Mgr({"xai": xai, "openai": openai}), "openai", EventBus())
+    with pytest.raises(PictureKeptHere) as caught:
+        await _run(router, lane, provider="xai", messages=[_user(PICTURE)])
+    assert caught.value.provider == "openai" and openai.calls == 0
 
 
 # --------------------------------------------------------------------------- #

@@ -400,6 +400,10 @@ async def test_a_long_read_stops_at_a_whole_line_inside_one_result_and_says_whic
     window's note claimed lines the model never saw. Now the window stops
     inside the turn's limit and says exactly which lines came back."""
     platform, ws, wire = lane
+    # v1.502.0 (north-star D5, moved on purpose): the session's OWN repository
+    # (a Git folder), so its file is its own source and comes back unfenced —
+    # the note is the result's last line.
+    (ws / ".git").mkdir(exist_ok=True)
     (ws / "big.txt").write_text("".join(f"line {i:05d} " + "x" * 90 + "\n" for i in range(1, 3001)),
                                 encoding="utf-8")
     model = wire([[ToolCall(id="r1", name="Read", arguments={"file_path": "big.txt"})]])

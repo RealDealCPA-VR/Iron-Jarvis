@@ -7562,7 +7562,7 @@ async def chat_stream(
                         # this lands before any writer of the round runs.
                         content = await _fence_tool_output(
                             d, _trust_state, overrides, tc.name,
-                            _plans[i]["t"], content,
+                            _plans[i]["t"], content, result,
                         )
                     _slots[i] = {"result": result, "content": content, "ran": ran}
 

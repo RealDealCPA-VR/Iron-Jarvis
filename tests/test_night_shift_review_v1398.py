@@ -427,7 +427,13 @@ async def test_a_night_task_that_reads_something_flagged_stays_low_and_ends_need
     app = create_app(str(tmp_path / "home"))
     platform = app.state.platform
     # This repository's notes are untrusted text (as a fetched page is).
-    platform.registry.get("read_file").returns_untrusted_content = True
+    # v1.502.0 (north-star D5, moved on purpose): read_file is outside text by
+    # its own rule, but a Git repository's own files are its own source — so
+    # here the notes are read as a file someone else put there.
+    from iron_jarvis.tools import builtins as _builtins
+
+    assert platform.registry.get("read_file").returns_untrusted_content is True
+    monkeypatch.setattr(_builtins, "own_source_path", lambda *_a: False)
     shell_args: list[dict] = []
 
     async def _shell(args, ctx):  # noqa: ANN001

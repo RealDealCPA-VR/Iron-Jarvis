@@ -126,14 +126,17 @@ async def test_secret_tools_via_registry(manager, engine, ctx):
         registry.register(tool)
     perms = PermissionEngine({"secret_set": "allow", "secret_list": "allow"})
 
-    # SecretSetTool stores a secret (encrypted) via the registry.
+    # v1.502.0 (north-star 2.11, moved on purpose): SecretSetTool never takes
+    # a value — a secret is never a tool argument; the owner saves it.
     res = await registry.invoke(
         "secret_set",
         {"name": "notion", "value": PLAINTEXT, "kind": "token"},
         ctx,
         perms,
     )
-    assert res.ok
+    assert res.ok is False and PLAINTEXT not in (res.error or "")
+    assert manager.get("notion") is None
+    manager.set("notion", PLAINTEXT, kind="token")  # the owner's own save
     assert manager.get("notion") == PLAINTEXT  # server-side retrieval works
 
     # SecretListTool returns names/kinds but never the value.
