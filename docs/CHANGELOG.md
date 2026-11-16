@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.516.0
+
+**Never stalls, every cost counted, plain words.** The last of eight releases from the second review.
+
 ## v1.515.0
 
 **Secrets at rest, and what leaves this PC.** The seventh of eight releases from the second review.
@@ -77,7 +81,3 @@
 ## v1.499.4
 
 **A deep review of the whole app: fixes for privacy, safety and lost work.** Seven reviewers read the whole app area by area; every finding below was reproduced or traced in the code before it was fixed, and each fix has a test that failed first.
-
-## v1.499.2
-
-**The rest of the review: clients, terminal help and pairing.** **Your answer about a client is never undone by Jarvis.** When you pressed Yes or No on a name at the same moment Jarvis was looking through your folders again, that look could delete the name you had just answered about.
