@@ -29,10 +29,6 @@ WINDOWS_ONLY: dict[str, tuple[str, ...]] = {
     "test_generate_media_tool_v1346.py": ("test_append_inline_media_never_doubles_a_path_the_reply_shows",),
     "test_capability_proposal_v1178.py": ("test_a_windows_suffixed_interpreter_is_the_same_shell",),
     "test_desktop_logs_v1229.py": ("test_open_logs_handler_behaviour",),
-    "test_desktop_spotlight_outcome_v1449.py": (
-        "test_a_row_with_a_folder_names_it_and_offers_open_folder",
-        "test_on_windows_a_click_on_the_toast_opens_the_folder_it_names",
-    ),
     # cmd.exe's words and a .cmd shim.
     "test_bash_dialect_review_v1386.py": ("test_the_posix_hint_checks_the_path_the_line_ran_with",),
     "test_cli_resolution_v1124.py": ("test_which_cli_falls_past_bare_path",),

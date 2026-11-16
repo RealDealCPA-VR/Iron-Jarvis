@@ -442,7 +442,11 @@ def test_a_vault_that_refuses_the_write_is_503_and_changes_nothing(client, monke
     res = client.patch("/mcp/servers/gh", json={"env": {"API_TOKEN": TOKEN2, "REGION": "eu"}})
     assert res.status_code == 503, res.text
     _no_values(res.text)
-    assert "API_TOKEN" in res.json()["detail"] and "RuntimeError" in res.json()["detail"]
+    # v1.506.0 (north-star 8.1, moved on purpose): the key is named, and no
+    # exception class or raw text reaches the screen.
+    detail = res.json()["detail"]
+    assert "API_TOKEN" in detail and "was not changed" in detail
+    assert "RuntimeError" not in detail
     assert platform.config.mcp_servers == before, "the plain key did not land either"
     assert _toml_text(platform) == toml_before
 
