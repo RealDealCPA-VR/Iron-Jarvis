@@ -53,7 +53,7 @@ import { useDaemon } from "@/lib/daemon";
 import { useModels } from "@/lib/useModels";
 import { answeredModelName } from "@/lib/answeredModel";
 import { useChatStream, StreamError } from "@/lib/useChatStream";
-import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
+import { answeringTurn, mintTurnId, stampQuestion } from "@/lib/turnRejoin";
 import { getDeviceId } from "@/lib/device";
 import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
 import { DETAILS_WORDS, failureFacts, isRefusal } from "@/lib/failureActions";
@@ -410,7 +410,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         // v1.339.0: the pane was reloaded (or left) while a turn ran. The
         // daemon kept running it; follow it, so its answer lands here.
         if (loaded.length && loaded[loaded.length - 1]?.role === "user") {
-          void answeringTurn(get, t.id, loaded[loaded.length - 1]?.at).then((turn) => {
+          // Third plan CS10: a question that carries its turn's name is
+          // answered only by that turn.
+          const asked = loaded[loaded.length - 1];
+          void answeringTurn(get, t.id, asked?.at, asked?.turnId).then((turn) => {
             if (cancelled || !turn) return;
             setSending(true);
             void completeTurn(loaded, [], turn.turn_id);
@@ -874,6 +877,9 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
       // v1.329.0: when it was sent (the changes line's window falls back to
       // it for a reply with no timing).
       at: new Date().toISOString(),
+      // Third plan point 1: the question carries the name of the turn that
+      // answers it, from its first save.
+      turnId: mintTurnId(),
     };
     const history = [...messagesRef.current, userMsg];
     setMessages(history);
@@ -883,7 +889,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     // v1.339.0: the question is saved as it is sent, so a reload mid-turn
     // still has it — and can follow the turn that answers it.
     queueSave(history);
-    await completeTurn(history, atts);
+    await completeTurn(history, atts, undefined, userMsg.turnId);
   }
 
   /** Run (or, with `rejoin`, follow) the turn that answers `history`'s last
@@ -892,8 +898,12 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     history: PaneMessage[],
     atts: typeof attachmentsRef.current,
     rejoin?: string,
+    // Third plan point 1: the name the question was sent with (a Retry
+    // passes none and mints a NEW one for the new question/answer pair).
+    named?: string,
   ) {
-    const turnId = rejoin ?? mintTurnId();
+    const turnId = rejoin ?? named ?? mintTurnId();
+    history = stampQuestion(history, turnId);
     const saveBox = saveTargetRef.current;
     if (!rejoin && !saveBox.id) {
       // A NEW conversation: its first save (queued above) names it; link the
@@ -942,6 +952,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
       const reply: PaneMessage = {
         role: "assistant",
         content: res.reply,
+        turnId, // third plan point 1: the reply carries its turn's name
         ...(res.route ? { route: res.route } : {}),
         ...(res.adapted ? { adapted: res.adapted } : {}),
         ...(res.tools_used?.length ? { toolsUsed: res.tools_used } : {}),
@@ -984,7 +995,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
       // the failed turn still saves so nothing is lost to a pane close.
       const partial = e instanceof StreamError ? e.partial : "";
       const full: PaneMessage[] = partial
-        ? [...history, { role: "assistant", content: partial, interrupted: true }]
+        ? [...history, { role: "assistant", content: partial, interrupted: true, turnId }]
         : history;
       setMessages(full);
       queueSave(full);

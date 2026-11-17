@@ -1097,6 +1097,22 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 log.info("kept %d Build session answer(s) a restart or crash cut off", m)
 
         _rehydrate_step("reconcile_chat_turns", _reconcile_chat_turns)
+        # Third plan G6 / RB9: AFTER the coding sessions' replies were put
+        # back (above), a chat reply that never reached its chat is written
+        # into it, and only THEN are old turn records removed — never one
+        # whose reply has not reached its chat or session. Off the loop,
+        # bounded; never blocks the start.
+        try:
+            from .durable_turns import home_and_tidy as _home_and_tidy
+
+            _homed, _tidied = await asyncio.wait_for(
+                asyncio.to_thread(_home_and_tidy, platform.engine), timeout=60.0
+            )
+            if _homed or _tidied:
+                log.info("chat replies written home: %d; old turn records removed: %d",
+                         _homed, _tidied)
+        except Exception:  # noqa: BLE001 — never block boot
+            log.warning("could not write chat replies home at start", exc_info=True)
         # v1.409.0: a Code-view turn a crash cut off gets its done (interrupted)
         # appended to its events.jsonl, so a reopened window shows it ended. Off
         # the loop (a tail read per session), bounded, never blocks boot.

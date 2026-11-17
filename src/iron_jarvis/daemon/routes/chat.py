@@ -348,6 +348,9 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
         # v1.499.3: its older messages go with it — "delete" means all of it.
         if older_ok:
             drop_older(db, thread_id)
+        # Third plan CS7: and its turn records (each reply's text, thinking,
+        # tool inputs and results), in this same transaction.
+        _durable.drop_thread_records(db, thread_id)
         try:
             index = search_index(engine)
             if index is not None:
@@ -356,6 +359,10 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
             log.warning("history-search drop failed for thread %s", thread_id,
                         exc_info=True)
         db.commit()
+    # CS7: ...and in memory — a finished turn of it is unknown from now on (its
+    # stream answers 404); a running one is not stopped (deleting a chat never
+    # stopped its reply), and its record goes when it ends.
+    _durable.forget_thread(engine, thread_id)
     if build:
         _end_build_programs(thread_id)
     return True
@@ -2408,7 +2415,11 @@ def register(app: FastAPI, d) -> None:
             ensure_older_table,
             keep_older,
             leaving_live_window,
+            one_reply_per_turn,
+            reply_turn_ids,
         )
+
+        saved_turns: set[str] = set()
 
         # v1.499.3: before the transaction (a CREATE inside it would wait on it).
         older_ok = ensure_older_table(d.platform.engine)
@@ -2491,7 +2502,13 @@ def register(app: FastAPI, d) -> None:
                 # transaction — it used to be deleted ("msgs[-200:]") while
                 # the compaction header told the model the whole transcript
                 # was still stored. When they cannot be kept, they stay live.
-                kept = list(msgs)
+                # Third plan G6 (CS2): ONE reply per turn — two windows that
+                # both followed a turn, or the daemon's own line beside the
+                # page's, keep one (the page's; between two of the page's, the
+                # later). Nothing without a ``turnId`` and no question is ever
+                # dropped; with no ``turnId`` it is the very same list.
+                kept = list(one_reply_per_turn(list(msgs)))
+                saved_turns = reply_turn_ids(kept)
                 if len(kept) > _LIVE_MAX and older_ok:
                     try:
                         stored_live = json.loads(r.messages_json or "[]")
@@ -2583,6 +2600,12 @@ def register(app: FastAPI, d) -> None:
                             exc_info=True)
             db.commit()
             db.refresh(r)
+        # Third plan G6: the replies this save holds (at the top level or in a
+        # fork) have reached their chat — their turns are never written home
+        # again, whatever this chat's array looks like later (a Continue
+        # merges a reply into the next and keeps only the newest turn's name).
+        if saved_turns:
+            _durable.mark_home(d.platform.engine, saved_turns)
         return {
             "id": r.id, "title": r.title, "project_id": r.project_id,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
@@ -3492,10 +3515,21 @@ def register(app: FastAPI, d) -> None:
             lg._dirty = True
             lg.maybe_persist(d.platform.engine)
             linked = "running" if lg.status == "running" else "kept"
+            # Third plan G6 / CS6: the usage rows it wrote before name this
+            # chat now, and a turn that already ended has its reply written
+            # into the chat now named (after the grace when a page followed
+            # it, and only if the chat holds no reply for it yet).
+            await logs.linked(lg, lg.thread_id)
         else:
             logs.link_later(turn_id, tid)
             await asyncio.to_thread(_durable.link_record, d.platform.engine, turn_id, tid)
             linked = "later"
+            # A turn this process no longer holds: its reply from its record
+            # (only a record this version marked).
+            await asyncio.to_thread(
+                _durable.bring_home_record, d.platform.engine, turn_id,
+                event_bus=getattr(d.platform, "event_bus", None),
+            )
         # v1.471.0: the first turn's script worker becomes the chat's, so the
         # variables a script kept are there for the next message.
         from ...tools.tool_script import adopt_turn_worker
@@ -3551,6 +3585,30 @@ def register(app: FastAPI, d) -> None:
         from ...hosted.news import running_rows as _code_rows
 
         return {"replies": rows + _code_rows(d.platform)}
+
+    @app.get("/chat/turns/{turn_id}")
+    async def chat_turn_state(turn_id: str) -> dict[str, Any]:
+        """ONE turn by its name (third plan CS10): ``{turn_id, status,
+        running, started_at, thread_id}`` — ``status`` is the record's own
+        (running, done, error, stopped, interrupted). The page asks it after
+        a silence (is the reply still being written?) and to follow only the
+        turn a question names. A turn this process holds answers live; one
+        known only from its record (after a restart) answers from it; 404
+        for a turn never recorded. Registered AFTER ``/chat/turns/running``,
+        so that path keeps its own route."""
+        lg = _turn_logs(d).get(turn_id)
+        if lg is not None:
+            return {
+                "turn_id": lg.turn_id,
+                "status": lg.status,
+                "running": lg.status == "running",
+                "started_at": _durable._iso_utc(lg.started_at),
+                "thread_id": str(lg.thread_id or ""),
+            }
+        row = await asyncio.to_thread(_durable.turn_state, d.platform.engine, turn_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"no such chat turn: {turn_id}")
+        return row
 
     @app.get("/chat/turns")
     def list_chat_turns(thread_id: str, limit: int = 3) -> dict[str, Any]:

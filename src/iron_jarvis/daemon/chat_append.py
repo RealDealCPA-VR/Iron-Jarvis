@@ -29,7 +29,10 @@ Rules, each pinned in ``tests/test_chat_append_v1345.py``:
   has a line in the thread is SKIPPED (idempotent — a session's terminal
   path and a page that still composes must not make two replies); so is a
   line whose ``mediaJob`` already has one (v1.347.0 — a job's own finish
-  and the turn-link route may both try to deliver the same result);
+  and the turn-link route may both try to deliver the same result); so is a
+  REPLY for a turn (``turnId``) the chat already holds a reply for, at the
+  top level or inside a fork (third plan G6: the daemon writes every reply
+  home, ``durable_turns.write_home``, and a reply is in a chat once);
 * ``updated_at`` moves the way the PUT route moves it (strictly monotonic,
   the v1.326.0 tick rule) and ``archived_at`` is cleared (a reply un-archives,
   like ``comm/threads.append``);
@@ -84,7 +87,18 @@ LINE_KEYS: tuple[str, ...] = (
     "runResult",
     "receipt",
     "remembered",
+    # Third plan G6 (CS5): the turn a reply belongs to (the name the page
+    # minted, ``body.turn_id``), who saved it ("daemon": a reply the daemon
+    # wrote home itself, ``durable_turns.write_home``), and whether it was
+    # cut short — the keys the page's own reply for a turn carries.
+    "turnId",
+    "savedBy",
+    "interrupted",
 )
+
+#: The ``who`` on ``CHAT_THREAD_UPDATED`` when the daemon wrote a turn's reply
+#: into its chat itself (third plan G6); the event also names ``turn_id``.
+REPLY_WHO = "reply"
 
 #: The PUT route keeps the newest 200 messages LIVE; so does an append. The
 #: older ones move to :class:`ChatOlderMessage` (v1.499.3), never deleted.
@@ -308,6 +322,108 @@ def _line_key(line: dict[str, Any]) -> str:
     return f"media:{job}" if job else ""
 
 
+def _turn_of(line: Any) -> str:
+    """The turn an ASSISTANT line answers (third plan G6), "" for any other
+    line — a question carries its turn's name too, and is never a reply."""
+    if not isinstance(line, dict) or str(line.get("role") or "") != "assistant":
+        return ""
+    return str(line.get("turnId") or "").strip()
+
+
+def _line_keys(line: dict[str, Any]) -> set[str]:
+    """Every name that makes a line a repeat: its session or media job
+    (:func:`_line_key`) and, for a reply, ``turn:<id>`` (third plan G6: one
+    reply per turn)."""
+    keys = set()
+    key = _line_key(line)
+    if key:
+        keys.add(key)
+    turn = _turn_of(line)
+    if turn:
+        keys.add(f"turn:{turn}")
+    return keys
+
+
+#: How deep :func:`reply_turn_ids` follows forks inside forks.
+_BRANCH_DEPTH = 8
+
+
+def reply_turn_ids(msgs: Any, _depth: int = 0) -> set[str]:
+    """The turns a chat's messages hold a reply for (third plan G6): every
+    assistant message's ``turnId`` at the top level AND inside a message's
+    ``branch`` (the page's fork after a Try again or an edited question:
+    ``{"tails": [[message, ...] | null, ...]}``, where the older reply is kept
+    out of the top level). Pure; never raises."""
+    out: set[str] = set()
+    if not isinstance(msgs, list) or _depth > _BRANCH_DEPTH:
+        return out
+    try:
+        for m in msgs:
+            if not isinstance(m, dict):
+                continue
+            turn = _turn_of(m)
+            if turn:
+                out.add(turn)
+            fork = m.get("branch")
+            tails = fork.get("tails") if isinstance(fork, dict) else None
+            if isinstance(tails, list):
+                for tail in tails:
+                    out |= reply_turn_ids(tail, _depth + 1)
+    except Exception:  # noqa: BLE001 — a malformed fork is "no fork"
+        log.debug("could not read a chat's forks", exc_info=True)
+    return out
+
+
+def has_turn_reply(msgs: Any, turn_id: str) -> bool:
+    """Does the chat's message list hold a reply for ``turn_id`` (at the top
+    level or inside a fork)? Pure."""
+    turn = str(turn_id or "").strip()
+    return bool(turn) and turn in reply_turn_ids(msgs)
+
+
+def one_reply_per_turn(msgs: list) -> list:
+    """The messages with ONE reply per turn (third plan G6, CS2), order kept.
+
+    When two assistant messages carry the same ``turnId``, one is kept: the
+    page's own message wins over a ``savedBy: "daemon"`` one (the page's
+    carries the steps, receipts and documents); between two of the same
+    kind, the later. A message with no ``turnId``, every user message, and a
+    line that is an agent's, a media job's or a panel's (they are matched by
+    their own names, ``_line_key``) are never dropped. No ``turnId`` anywhere:
+    the very same list. Pure; never raises."""
+    try:
+        if not isinstance(msgs, list):
+            return msgs
+        winner: dict[str, int] = {}
+        counted: dict[str, int] = {}
+        for i, m in enumerate(msgs):
+            turn = _turn_of(m)
+            if not turn or _line_key(m) or str(m.get("panelWho") or ""):
+                continue
+            counted[turn] = counted.get(turn, 0) + 1
+            best = winner.get(turn)
+            if best is None:
+                winner[turn] = i
+                continue
+            mine_daemon = str(m.get("savedBy") or "") == "daemon"
+            best_daemon = str(msgs[best].get("savedBy") or "") == "daemon"
+            if not mine_daemon or best_daemon:
+                winner[turn] = i  # the page over the daemon; else the later
+        if not any(n > 1 for n in counted.values()):
+            return msgs
+        out = []
+        for i, m in enumerate(msgs):
+            turn = _turn_of(m)
+            if turn and counted.get(turn, 0) > 1 and not _line_key(m) \
+                    and not str(m.get("panelWho") or "") and winner.get(turn) != i:
+                continue
+            out.append(m)
+        return out
+    except Exception:  # noqa: BLE001 — a save never fails on this; nothing dropped
+        log.warning("could not match chat replies by turn", exc_info=True)
+        return msgs
+
+
 def _clean_line(raw: Any, stamp: str) -> dict[str, Any] | None:
     """One whitelisted, server-stamped line — or None for a non-dict / a
     line with no role (nothing the page could render)."""
@@ -358,16 +474,18 @@ def _index(db: Any, engine: Any, record: ChatThreadRecord, msgs: list) -> None:
         log.warning("history-search sync failed for chat thread %s", record.id, exc_info=True)
 
 
-def _publish(event_bus: Any, thread_id: str, who: str, entries: int) -> None:
+def _publish(event_bus: Any, thread_id: str, who: str, entries: int,
+             extra: "dict[str, Any] | None" = None) -> None:
     """Best-effort CHAT_THREAD_UPDATED — on the loop as a task, off it under
     ``asyncio.run`` (the bus wakes each subscriber's own loop thread-safely).
-    Never raises."""
+    ``extra`` (third plan G6): more keys, after the three (a turn's reply
+    names its ``turn_id``). Never raises."""
     if event_bus is None:
         return
     try:
         coro = event_bus.publish(
             EventType.CHAT_THREAD_UPDATED,
-            {"thread_id": thread_id, "who": who, "entries": entries},
+            {"thread_id": thread_id, "who": who, "entries": entries, **(extra or {})},
         )
         try:
             asyncio.get_running_loop().create_task(coro)
@@ -384,6 +502,7 @@ def append_to_chat_thread(
     *,
     event_bus: Any = None,
     who: str = "",
+    event_extra: "dict[str, Any] | None" = None,
 ) -> dict[str, Any]:
     """Append ``lines`` to the saved chat ``thread_id`` (see the module doc).
 
@@ -410,8 +529,10 @@ def append_to_chat_thread(
                 return out
             if (getattr(r, "owner", "user") or "user") == "daemon":
                 out["why"] = "a messaging thread — Iron Jarvis's messaging store writes it"
+                out["refused"] = True  # third plan G6: another writer's chat
                 return out
             if str(getattr(r, "surface", "") or "") == "build":
+                out["refused"] = True
                 # v1.367.0 (Phase 4 review): a Build session has ONE writer —
                 # its own turns (harness/sessions.append_lines). A chat-shaped
                 # line from an @-panel round, an agent's delivery, a media job
@@ -425,17 +546,21 @@ def append_to_chat_thread(
                     msgs = []
             except Exception:  # noqa: BLE001 — a corrupt blob must not wedge the append
                 msgs = []
-            known = {
-                _line_key(m) for m in msgs if isinstance(m, dict) and _line_key(m)
-            }
+            known: set[str] = set()
+            for m in msgs:
+                if isinstance(m, dict):
+                    known |= _line_keys(m)
+            # ...and a reply kept inside a fork (a Try again's older reply).
+            known |= {f"turn:{t}" for t in reply_turn_ids(msgs)}
             added: list[dict[str, Any]] = []
             for line in cleaned:
-                sid = _line_key(line)
-                if sid and sid in known:
+                # Third plan G6: a reply for a turn that already has one is a
+                # repeat too (``turn:<id>``), like a session's second line.
+                keys = _line_keys(line)
+                if keys & known:
                     out["skipped"] += 1
                     continue
-                if sid:
-                    known.add(sid)
+                known |= keys
                 added.append(line)
             if not added:
                 # Nothing new — the thread is untouched, its stamp unchanged
@@ -472,5 +597,5 @@ def append_to_chat_thread(
         out["why"] = f"could not append: {type(exc).__name__}"
         return out
     speaker = (who or "").strip() or str(added[0].get("panelWho") or "").strip() or "daemon"
-    _publish(event_bus, thread_id, speaker, count)
+    _publish(event_bus, thread_id, speaker, count, event_extra)
     return out

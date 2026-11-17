@@ -1372,7 +1372,7 @@ Both files were read whole.
   the action. `panel.py:841-854` waits with no look at Stop; the Chat
   page's twin checks Stop every second
   (`daemon/routes/chat.py:5543-5565`).
-- [ ] **SB3 (3, medium, checked; the code calls it deliberate). The sidebar
+- [x] **SB3 (3, medium, checked; the code calls it deliberate). The sidebar
   conversation is kept in memory only.** A restart of Iron Jarvis (every
   update) forgets it while the panel still shows it, so "now the second
   one" is answered with no context and nothing says so; once the panel is
@@ -1536,6 +1536,7 @@ The whole file was read, in two halves.
   (`build.py:2432-2441, 2468-2471`); the resume pass never checks that the
   session already holds the finished reply.
 - [ ] **RB6 to RB14 (low, pass only; RB12 by two passes).** A "Resume when
+  *Done so far: RB9 (v1.521.0).*
   ready" wait whose carry-on is refused for a lasting reason (folder gone,
   model no longer usable) is tried every 60 seconds for ever and never said
   (`build.py:3996-4002`); a failed write of the question at a reply's start
@@ -1692,20 +1693,20 @@ text it runs.
 `durable_turns.py` was read whole; the two chat lanes and the Chat page
 only along the save path.
 
-- [ ] **CS1 (1, medium, checked). Opening a chat whose reply the daemon ran
+- [x] **CS1 (1, medium, checked). Opening a chat whose reply the daemon ran
   or is still running, while another chat's reply is on screen, shows it as
   a failed turn with Retry.** Retry asks the question again, so its steps
   run a second time, and the first reply is never shown.
   `dashboard/app/chat/page.tsx:6707` reads "busy" as it was when the click
   happened (the other chat's).
-- [ ] **CS2 (3, medium, checked for the merge; the two-pages path pass
+- [x] **CS2 (3, medium, checked for the merge; the two-pages path pass
   only). Ask, go to another page of the app, come back to Chat while the
   reply is still being written: the reply is saved twice.** The same with
   two windows on one chat. The first page never ends its stream; both save
   at the end, and the second save's merge adds its copy after the first
   (`page.tsx:6505-6516`); nothing matches the two by their turn. Suspected:
   a reply that hands off to an agent starts the agent run twice.
-- [ ] **CS3 (1, medium, checked). When the page hears nothing for 60
+- [x] **CS3 (1, medium, checked). When the page hears nothing for 60
   seconds it says the turn "was stopped … press Retry", but the daemon's
   turn keeps running, steps included.** The cut text is saved as the reply,
   so the finished reply never reaches the chat, and Retry starts a second
@@ -1717,7 +1718,7 @@ only along the save path.
   its end with nobody watching, steps included
   (`daemon/routes/chat.py:3795-3840`: up to four waits before the turn is
   registered; `page.tsx:11037-11065`).
-- [ ] **CS5 (3, medium, checked). A reply that finishes while no page
+- [x] **CS5 (3, medium, checked). A reply that finishes while no page
   follows it is only in the turn's record, not in its chat.** It is not in
   history search until someone opens that chat, and a start more than seven
   days later deletes the record: the chat then ends on the question with
@@ -1726,6 +1727,7 @@ only along the save path.
   age with no check that the reply reached its chat. `docs/rules/chat.md`
   says a line the daemon can write must be written by the daemon.
 - [ ] **CS6 to CS10 (low; CS6 and CS10 partly suspected, the rest pass
+  *Done so far: CS6, CS7, CS10 (v1.521.0).*
   only).** The first reply of every new chat runs with no chat id, so its
   cost is missing from that chat's usage line (`page.tsx:8666, 9240-9252`;
   `routes/chat.py:5710`); deleting a chat leaves its turn records (each
@@ -2117,3 +2119,62 @@ another session released v1.519.0 while this one was being tested):
   app's own 10-second limit, which a loaded test machine can miss; it now
   runs the listing with a limit of its own. The second full run was green
   with no retried test.
+
+### Group 18 as built (v1.521.0)
+
+Fixed: CS1, CS2, CS3, CS5, CS6, CS7, CS10, SB3, RB9.
+
+Where it differs from the plan:
+
+- **The page still saves its own copy of a reply; the daemon's copy is the
+  floor, not the only writer.** The plan said the page would stop saving
+  replies. A reply's steps, receipts and documents are built by the page
+  from the stream, and a line built by the daemon is plain text; had the
+  page stopped saving, every chat would have lost them. As built: the
+  daemon writes a plain reply at once when no page is following, and after
+  fifteen seconds when a page was following and has not saved; each message
+  of a reply carries the reply's name, the page's fuller message replaces
+  the daemon's by that name, and a second copy is merged away on both
+  sides. Decision G6's result holds: a reply that finished while the user
+  was elsewhere is in its chat and in search at once.
+- **Decision G7 as built.** The sidebar's chat is listed with a "Browser
+  sidebar" label and can be read, searched, archived and deleted from the
+  Chat page; it is carried on in the sidebar only (the banner says so, and
+  so does typing in it).
+- **Deleting a chat does not stop a reply of it that is still running**
+  (it never did); the reply writes nothing and leaves no record.
+
+Left open:
+
+- The two halves were built to a written contract and tested apart: the
+  page's tests answer for the daemon, the daemon's tests have no page.
+  What must be tried on the installed app: a long reply left running with
+  the Chat page closed, then the chat opened in two windows; a reply
+  followed across a minute with the app asleep.
+- Suspected, not proven and not fixed: with two pages on one chat, a reply
+  that hands off to an agent may start the agent run twice. Each hand-off
+  line now carries the reply's name, which a guard could check.
+- The Build pane's own chat saves its whole conversation with no merge,
+  links a new chat's first reply the old way, and still says "this turn was
+  stopped" after a minute of silence. So does a coding session.
+- After a silence, when Iron Jarvis cannot be reached at all, the half
+  reply is saved under the reply's name; if the reply was in fact still
+  running, its end is then not written over the half.
+- A reply nobody watched keeps its steps and receipts only if the chat is
+  opened within seven days while it is still the last reply; after that it
+  stays plain text.
+- A reply whose chat was never saved (no chat ever named) is removed with
+  its record after seven days: there is nowhere to write it.
+- The sidebar: a failed save of its chat is logged and the panel is not
+  told; its usage is not counted on its chat; a very long sidebar chat
+  keeps its newest 200 messages; `learning/went_wrong.py` would label a
+  sidebar chat's evidence "phone".
+- Words: the Stop button's hint still says "Stop this turn"; typing in a
+  phone chat with no phone linked says "no longer linked to a destination".
+- No test pins: the page following a held reply once it is free, the quiet
+  put-back when filling in a plain reply fails, the Build pane chat's
+  stamps.
+
+Tested with stand-ins only: the models; the daemon, in every page test;
+the browser sidebar (never run in Chrome or Edge; it needs the new add-on
+for the "starts fresh" line to show).

@@ -111,7 +111,7 @@ import {
   unarchiveChat,
 } from "@/lib/archiveChat";
 import { cacheDrop, cachedGet, cacheSet } from "@/lib/apiCache";
-import { CommThreadBanner } from "@/components/chat/CommThreadBanner";
+import { CommThreadBanner, SIDEBAR_CHAT_WORDS, isSidebarChat } from "@/components/chat/CommThreadBanner";
 import {
   CompactionCard,
   CompactionChip,
@@ -418,7 +418,14 @@ import {
   type PrepStep,
   type PriorToolResult,
 } from "@/lib/useChatStream";
-import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
+import {
+  answeringTurn,
+  hasReplyFor,
+  lookupTurn,
+  mergeByTurn,
+  mintTurnId,
+  stampQuestion,
+} from "@/lib/turnRejoin";
 import { postFailureFields, turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
 import { couldnt, failureOf, type FailureLike } from "@/lib/loadFailed";
 import { isFailedMediaLine, MEDIA_RETRY_GONE, MEDIA_TRY_AGAIN, mediaRetryText } from "@/lib/mediaRetry";
@@ -913,6 +920,16 @@ interface ChatMessage {
    *  guide, notes saved or not) — the receipt says it. Absent when no
    *  profile applied and on older messages. */
   brain?: BrainReceipt;
+  /** Third plan, group 18: the name of the turn this message belongs to (the
+   *  one `mintTurnId` gave it, sent as `turn_id`) — on the question and on
+   *  the reply built from that turn, a stopped or cut one included. A reply
+   *  is in a chat ONCE per turn (lib/turnRejoin `mergeByTurn`), and a
+   *  question is answered only by its own turn. Absent on older messages. */
+  turnId?: string;
+  /** "daemon": the daemon wrote this reply into the chat itself (nobody was
+   *  following it when it ended). The page's own message for the same turn
+   *  replaces it. */
+  savedBy?: string;
 }
 
 /** v1.325.0: a message written while a reply was running — sent after it. */
@@ -927,6 +944,20 @@ interface QueuedMessage {
 }
 /** v1.325.0: at most this many messages wait for the running reply. */
 const MAX_QUEUED = 3;
+/** Third plan CS1: an opened chat's reply is still being written while this
+ *  page follows another one; it is followed here as soon as the page is free. */
+const STILL_ANSWERING_WORDS =
+  "Jarvis is still answering in this chat. The reply will show here in a moment.";
+/** Third plan CS3 (decision G8): nothing came back for a minute, but Iron
+ *  Jarvis says it is still working on the reply — so it is followed again. */
+const LOST_CONTACT_WORDS =
+  "Lost contact with Iron Jarvis for a minute. It is still working on this reply, which will show here.";
+/** Third plan CS3: after the silence, Iron Jarvis says the reply is no longer
+ *  running (it never started, failed, or was cut off by a restart). */
+const STILL_WORKING_AWAY_WORDS =
+  "Iron Jarvis is still working on this reply, but this page keeps losing contact with it. The reply will be saved in this chat when it is done.";
+const SILENCE_GONE_WORDS =
+  "Nothing came back from Iron Jarvis for a minute, and this reply is no longer running. What it already wrote is kept. Press Retry to ask again.";
 // v1.336.0's rejoin rule and the turn's name live in lib/turnRejoin.ts since
 // v1.339.0, so the Build pane's chat follows its turns the same way.
 
@@ -1510,6 +1541,10 @@ interface SaveTarget {
   /** Sequence of the newest save queued for this box (CL2): the chip only
    *  retires when the LATEST save landed, not an older one. */
   seq?: number;
+  /** Third plan CS6: turns asked before this NEW chat had an id; each is
+   *  linked to the chat (`POST /chat/turns/{id}/thread`) by the first save
+   *  that names it, however late (the reply may have finished first). */
+  unlinked?: string[];
 }
 
 /** One /connectors gallery entry, as the "+" Connectors flyout consumes it. */
@@ -6088,6 +6123,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     }
     if (chatGenRef.current !== gen || saveTargetRef.current !== target) return;
     if (!t || !Array.isArray(t.messages)) return; // not a thread this window can adopt
+    // Third plan CS5: the daemon wrote home the reply THIS page is still
+    // following (a grace ran out, or the page lost contact for a while).
+    // Showing it would put the same reply on screen twice, beside the one
+    // being written; this page's own save replaces it (the 409 merge matches
+    // by turn), so it is left for that save.
+    const following = turnIdRef.current;
+    if (following && hasReplyFor(t.messages, following)) return;
     const waited = awaitingIdRef.current;
     if (waited && daemonLineFor(t.messages, waited)) {
       void finalize(waited);
@@ -6454,17 +6496,32 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     });
   }
 
+  /** Third plan CS6: link every turn asked before this NEW chat had an id to
+   *  the chat, now that a save has named it (the reply may have finished
+   *  before that save: its usage then still counts on this chat). Best-effort
+   *  and silent, once per turn. */
+  function linkTurnsToChat(target: SaveTarget) {
+    if (!target.id || target.daemon || !target.unlinked?.length) return;
+    const threadId = target.id;
+    const turns = target.unlinked;
+    target.unlinked = [];
+    for (const turnId of turns)
+      post(`/chat/turns/${encodeURIComponent(turnId)}/thread`, { thread_id: threadId }).catch(() => {});
+  }
+
   /** Rebase a save onto a 409 merge from earlier in the same turn: the
    *  closures of an in-flight turn keep building on the array they captured
    *  (by reference), so a later save whose head IS that captured base is
-   *  rewritten onto the server's array the merge established. */
+   *  rewritten onto the server's array the merge established. Third plan
+   *  CS2: matched by turn — a reply the server array already holds for the
+   *  same turn (the daemon's line) is replaced, never joined. */
   function rebased(target: SaveTarget, msgs: ChatMessage[]): ChatMessage[] {
     const rb = target.rebase;
     if (!rb) return msgs;
     const k = rb.local.length;
     if (msgs.length < k) return msgs;
     for (let i = 0; i < k; i++) if (msgs[i] !== rb.local[i]) return msgs;
-    return [...rb.server, ...msgs.slice(k)];
+    return mergeByTurn(rb.server, msgs.slice(k));
   }
 
   /** The ONE thread PUT (CL3, v1.232.0). Carries the version stamp this
@@ -6510,13 +6567,17 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       target.rebase = { local: sent.slice(0, k), server };
       target.updatedAt = fresh.updated_at ?? undefined;
       stampAtSend = target.updatedAt;
-      sent = [...server, ...sent.slice(k)];
+      // Third plan CS2: matched by turn first. A reply already stored for a
+      // turn (another window's, or the daemon's line) is not added again;
+      // the daemon's line is REPLACED by this window's own message.
+      sent = mergeByTurn(server, sent.slice(k));
       res = await put<ThreadSaveResult>(
         `/chat/threads/${target.id}`,
         conditional(sent),
       );
     }
     target.id = res.id; // "new" → real id; later saves in this convo reuse it
+    linkTurnsToChat(target); // third plan CS6: the chat has an id now
     if (target.updatedAt === stampAtSend) {
       // nothing adopted a newer version meanwhile: the answer is the newest
       if (res.updated_at) target.updatedAt = res.updated_at;
@@ -6697,20 +6758,60 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   /** v1.336.0: the chat ends on a question with no reply. If the daemon ran
    *  (or is running) the turn that answers it, follow that turn — its frames
    *  build the reply exactly as a live turn's do. Otherwise it is the failed
-   *  turn it always was, with Retry. Only the newest turn, and only one that
-   *  started after the question was asked, can answer it. */
+   *  turn it always was, with Retry. Third plan CS10: a question that carries
+   *  its turn's name is answered only by that turn; one saved before names
+   *  were kept falls back to the newest turn, when it started after the
+   *  question was asked.
+   *
+   *  Third plan CS1: "is this page busy?" is read NOW, through the refs —
+   *  never from this render's `busy`, which is the chat being LEFT (another
+   *  chat's reply on screen when the click happened). A turn that answers the
+   *  question is never offered as Retry (that asks again and runs its steps
+   *  twice): when the page is still busy, it says Jarvis is still answering
+   *  and follows the reply as soon as it is free. */
   async function rejoinOrRetry(id: string, msgs: ChatMessage[], openGen: number) {
     const last = msgs[msgs.length - 1];
     const retry = () => setFailedTurn({ history: msgs, atts: attachmentsOf(last) });
     // An older daemon, or no turn that answers it: the Retry it always offered.
-    const turn = await answeringTurn(get, id, last?.at);
+    const turn = await answeringTurn(get, id, last?.at, last?.turnId);
     if (chatGenRef.current !== openGen) return;
-    if (!turn || busy || sendingRef.current) {
+    if (!turn) {
       retry();
+      return;
+    }
+    if (busyRef.current || sendingRef.current) {
+      heldRejoinRef.current = { gen: openGen, threadId: id, msgs, turnId: turn.turn_id };
+      setNotice(STILL_ANSWERING_WORDS);
       return;
     }
     sendingRef.current = true;
     void completeChat(msgs, attachmentsOf(last), { rejoin: turn.turn_id });
+  }
+
+  /** Third plan point 3: the newest reply of an opened chat was written by the
+   *  DAEMON (its words only: nobody followed it when it ended). While the
+   *  daemon still has that turn's record, follow it again once — a replay runs
+   *  no step and no model call — to rebuild the page's full message (steps,
+   *  receipts, files) and save it in the plain line's place. A record that is
+   *  gone (or any failure) leaves the plain reply as it is, with no word. */
+  async function upgradeDaemonReply(id: string, msgs: ChatMessage[], openGen: number) {
+    const last = msgs[msgs.length - 1];
+    const asked = msgs[msgs.length - 2];
+    const turnId = last?.turnId;
+    if (!turnId || last.role !== "assistant" || last.savedBy !== "daemon" || asked?.role !== "user") return;
+    const found = await lookupTurn(get, turnId);
+    if (!found.known || chatGenRef.current !== openGen) return;
+    if (busyRef.current || sendingRef.current) return;
+    const target = saveTargetRef.current;
+    if (target.id !== id) return;
+    // The rebuilt reply takes the plain line's PLACE: a save that meets a
+    // newer chat (409) then matches it by turn and replaces it there too.
+    target.syncedLen = msgs.length - 1;
+    sendingRef.current = true;
+    void completeChat(msgs.slice(0, -1), attachmentsOf(asked), {
+      rejoin: turnId,
+      quietly: msgs,
+    });
   }
 
   async function openThread(id: string, opts: { restore?: boolean } = {}) {
@@ -6734,6 +6835,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     awaitingWhoRef.current = null;
     setAwaitingId(null);
     setChatBusy(false);
+    // Third plan CS1: the chat being left no longer makes this page busy —
+    // said NOW, not at the next render, so this open's own "is the page
+    // free?" (rejoinOrRetry) never reads the other chat's reply.
+    busyRef.current = false;
+    heldRejoinRef.current = null;
     setFailedTurn(null);
     setSaveFailure(null); // its Retry belonged to the conversation being left
     setSessionId(null);
@@ -6939,6 +7045,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         // the chat) — then the answer is followed and saved like any other.
         if (!isDaemon && last && last.role === "user")
           void rejoinOrRetry(t.id, msgs, openGen);
+        // Third plan point 3: the newest reply is the daemon's plain line —
+        // rebuilt once from its turn while the daemon still has it.
+        else if (!isDaemon && last && last.role === "assistant" && last.savedBy === "daemon")
+          void upgradeDaemonReply(t.id, msgs, openGen);
       }
       // Context follows the conversation: a project-tagged thread scopes the
       // chat to its project; an untagged one unscopes it. armDefaults stays
@@ -8002,6 +8112,23 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // in the same pinned-only, instant-while-streaming shape.
   const busyRef = useRef(busy);
   busyRef.current = busy;
+  // Third plan CS1: an opened chat's reply the daemon is still running, met
+  // while this page was busy (it follows one reply at a time). It is followed
+  // as soon as the page is free — never offered as Retry.
+  const heldRejoinRef = useRef<{ gen: number; threadId: string; msgs: ChatMessage[]; turnId: string } | null>(null);
+  useEffect(() => {
+    const held = heldRejoinRef.current;
+    if (!held || busy) return;
+    heldRejoinRef.current = null;
+    if (chatGenRef.current !== held.gen || saveTargetRef.current.id !== held.threadId) return;
+    // Still the same unanswered question (nothing was sent meanwhile).
+    if (messagesRef.current[messagesRef.current.length - 1] !== held.msgs[held.msgs.length - 1]) return;
+    if (sendingRef.current) return;
+    setNotice((n) => (n === STILL_ANSWERING_WORDS ? null : n));
+    sendingRef.current = true;
+    void completeChat(held.msgs, attachmentsOf(held.msgs[held.msgs.length - 1]), { rejoin: held.turnId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
   // A3 review (v1.448.0): the LATEST `send`. A handler a card captured at
   // its last render (an approval card is drawn only while a turn runs)
   // closes over that render's `busy` — true — so calling its `send` once the
@@ -9175,15 +9302,39 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // v1.336.0: `rejoin` = the id of a turn the DAEMON is (or was) running
     // for this chat — follow it instead of asking again (a reload, a closed
     // window, leaving the chat or a restart no longer loses the answer).
-    opts: { choice?: string; cloudOnce?: string; rejoin?: string } = {},
-  ) {
+    // Third plan CS3: `afterSilence` = this follow is the ONE follow-again
+    // after a silence (a second silence is not followed again).
+    // Third plan point 3: `quietly` = rebuilding a reply the daemon saved as
+    // plain words; on any failure the chat goes back to exactly this array,
+    // with no word on screen, no save, and no hand-off started again.
+    opts: {
+      choice?: string;
+      cloudOnce?: string;
+      rejoin?: string;
+      afterSilence?: boolean;
+      quietly?: ChatMessage[];
+    } = {},
+  ): Promise<void> {
     const gen = chatGenRef.current;
+    // v1.278.0: the turn is NAMED so a steer note can reach it while it runs.
+    // v1.336.0: and so the daemon runs it as its own — see `rejoin` above.
+    // Third plan point 1: the name rides the question it answers (and, below,
+    // the reply built from it): a Retry, a Try again or a Continue mints a
+    // NEW name for the new question/answer pair.
+    const turnId = opts.rejoin ?? mintTurnId();
+    history = stampQuestion(history, turnId);
     // v1.325.0: "Try again with…" — this turn only; read by buildChatBody and
     // servedByOther, cleared in the finally below.
     turnChoiceRef.current = opts.choice ?? null;
     stoppedRef.current = false;
     setFollowups(null); // they answered the reply this turn replaces or follows
     setMessages(history);
+    // Third plan CS6: a NEW chat's first question goes out before its first
+    // save has named the chat; the save that names it (the one below, or any
+    // later one when that fails) links this turn to it.
+    const saveBox = saveTargetRef.current;
+    if (!opts.rejoin && !saveBox.id && !saveBox.daemon)
+      saveBox.unlinked = [...(saveBox.unlinked ?? []), turnId];
     // DURABLE AT SEND (v1.226.0): the typed message is on disk BEFORE the
     // model is asked — a reload or route change mid-stream aborted the fetch
     // and lost the question with the partial. The end-of-turn save below
@@ -9200,6 +9351,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     setLocalRefusal(null); // v1.332.0: and its "local only" refusal
     setGrantCapNote(null); // read by now; this turn carries the grant regardless
     setChatBusy(true);
+    busyRef.current = true; // third plan CS1: read through the ref, said now
     ttsStreamStartedRef.current = false; // new turn — feedTTS will reset the counter
     // Files the user GAVE this turn join the rail up front (v1.166.0): "made
     // or was given" — an upload the user has to re-find on disk defeats the
@@ -9233,33 +9385,19 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // from the message too, and the same body goes to both lanes.
     const turnRefs = chatRefIds(asked?.role === "user" ? asked.chatRefs : undefined);
     if (turnRefs.length) body.thread_refs = turnRefs;
-    // v1.278.0: the turn is NAMED so a steer note can reach it while it runs.
-    // v1.336.0: and so the daemon runs it as its own — see `rejoin` above.
-    const turnId = opts.rejoin ?? mintTurnId();
-    body.turn_id = turnId;
+    body.turn_id = turnId; // named above (v1.278.0, v1.336.0)
     turnIdRef.current = turnId;
-    // v1.336.0: a NEW chat's first question goes out before its first save
-    // has named the chat, so the turn is linked to it once the save lands
-    // (in the background — the send never waits for it).
-    const saveBox = saveTargetRef.current;
-    if (!opts.rejoin && !saveBox.id && !saveBox.daemon) {
-      void saveChainRef.current
-        .then(() =>
-          saveBox.id
-            ? post(`/chat/turns/${encodeURIComponent(turnId)}/thread`, { thread_id: saveBox.id })
-            : undefined,
-        )
-        .catch(() => {});
-    }
     setPendingSteers([]);
     setSteerBack(false);
+    // A quiet rebuild reads out nothing: the reply was already there.
+    const speak = !opts.quietly;
     try {
       // --- Attempt token streaming (live deltas + tool cards + voice) ---
       try {
         const streamRes = await stream.run(
           body,
-          (_delta, full) => feedTTS(full, false),
-          resetTTSFeed,
+          speak ? (_delta, full) => feedTTS(full, false) : undefined,
+          speak ? resetTTSFeed : undefined,
           // Readiness 12B (G05): the page's viewer id rides every follow.
           {
             ...(opts.rejoin ? { rejoin: opts.rejoin } : {}),
@@ -9313,7 +9451,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         // outrun React's batched setTools render).
         await new Promise<void>((r) => window.setTimeout(r, 0));
         if (chatGenRef.current !== gen) return;
-        feedTTS(reply, true); // flush any trailing fragment
+        if (speak) feedTTS(reply, true); // flush any trailing fragment
         const toolsUsed = (tools_used ?? []).filter((t) => Boolean(t));
         // v1.351.0 (G15): an app this turn connected (or found already
         // connected) is turned ON for this chat — its tools ride the next
@@ -9424,6 +9562,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           {
             role: "assistant",
             content: finalReply,
+            // Third plan point 1: the reply carries its turn's name (before
+            // the receipt, whose fields are kept last).
+            turnId,
             ...(toolsUsed.length ? { toolsUsed } : {}),
             ...(sources.length ? { sources } : {}),
             ...(via ? { viaProvider: via } : {}),
@@ -9441,6 +9582,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               role: "assistant",
               content:
                 (reply ?? "").trim() || "Here's that as a reusable workflow:",
+              turnId,
               workflowDraft,
               // Earlier rounds of THIS turn may have run tools — their
               // provenance must survive the draft exit like any other turn.
@@ -9452,7 +9594,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           ];
           setMessages(done);
           queueSave(done);
-          showDocPreview(madeDocs); // docs written before the exit still count
+          if (!opts.quietly) showDocPreview(madeDocs); // docs written before the exit still count
+          return;
+        }
+        // Third plan point 3: a quiet rebuild never hands off again (the
+        // agent run started when the reply first ended); the chat goes back
+        // to the line it had.
+        if (escalate && opts.quietly) {
+          setMessages(opts.quietly);
           return;
         }
         // ONE SURFACE (v1.108.0): the turn decided it needs the full agent, so
@@ -9466,6 +9615,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
             escalatedFrom: {
               atts,
               reason: escalateReason || "this one needs the full agent",
+              turnId, // third plan point 1: the hand-off line is this turn's reply
             },
             // The turn's own validated roster pick (v1.139.0); null/absent
             // keeps the builder default.
@@ -9478,12 +9628,50 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         const settled = mergeContinuation(full);
         setMessages(settled);
         queueSave(settled); // the turn is complete — persist it
-        askFollowups(settled, route);
-        showDocPreview(madeDocs); // a generated doc appears beside the chat
+        if (!opts.quietly) {
+          askFollowups(settled, route);
+          showDocPreview(madeDocs); // a generated doc appears beside the chat
+        }
         return; // streamed successfully
       } catch (e) {
         turnIdRef.current = ""; // v1.278.0: nothing to steer any more
         if (chatGenRef.current !== gen) return; // torn down — no fallback
+        // Third plan point 3: a quiet rebuild that failed changes nothing —
+        // the daemon's plain reply stays, and nothing is said.
+        if (opts.quietly) {
+          setMessages(opts.quietly);
+          return;
+        }
+        // Third plan CS3 (decision G8): NOTHING came back for a minute. That
+        // is not a stop — the turn is the daemon's and may still be running —
+        // so the daemon is asked before anything is said or saved.
+        let silenceGone = false; // the daemon says the reply is not running
+        let silenceUnanswered = false; // ...or could not be asked at all
+        if (e instanceof StreamError && e.stalled) {
+          const found = await lookupTurn(get, turnId);
+          if (chatGenRef.current !== gen) return;
+          const st = found.known ? (found.turn.status ?? "") : "";
+          const running = found.known && (found.turn.running === true || st === "running");
+          const ended = found.known && !running && (st === "done" || st === "stopped");
+          if ((running || ended) && !opts.afterSilence) {
+            // Follow it again, ONCE: the replay rebuilds the reply so far and
+            // carries on live; a finished one is shown whole. The cut text is
+            // never saved as this reply.
+            if (running) setNotice(LOST_CONTACT_WORDS);
+            await completeChat(history, atts, { ...opts, rejoin: turnId, afterSilence: true });
+            setNotice((n) => (n === LOST_CONTACT_WORDS ? null : n));
+            return;
+          }
+          if (running || ended) {
+            // Contact was lost twice: still no Retry over a reply that runs
+            // (or ran) — Iron Jarvis writes it into this chat itself.
+            setMessages(history);
+            setNotice(STILL_WORKING_AWAY_WORDS);
+            return;
+          }
+          if (found.known || found.reachable) silenceGone = true;
+          else silenceUnanswered = true;
+        }
 
         // A non-streaming re-POST re-runs the WHOLE turn from round 0. When the
         // stream already committed server-side work (streamed a token or ran a
@@ -9540,12 +9728,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     // v1.378.0 review: the rest was declined (typed fix_kind).
                     ...(isRefusal(failureFacts(e)) ? { refused: true } : {}),
                     ...(keptWork ?? {}),
+                    turnId, // third plan point 1: the cut reply is this turn's
                   },
                 ]
               : history;
           if (partial || keptWork) setMessages(withPartial);
           if (keptDocs.length) showDocPreview(keptDocs);
-          if (se?.offline || (e instanceof ApiError && e.status === 0 && !se))
+          if (se?.offline || (e instanceof ApiError && e.status === 0 && !se) || silenceUnanswered)
             setOffline(true);
           else {
             // v1.354.0 (G28): the daemon's plain sentence ("OpenRouter
@@ -9553,7 +9742,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
             // words a failed run's summary ends with — with its masked
             // technical text on the line's hover only (lib/failureLine). A
             // failure without a title keeps its message, as before.
-            const line = turnErrorText(e);
+            // Third plan CS3: after a silence, what the daemon said about it.
+            const line = silenceGone ? SILENCE_GONE_WORDS : turnErrorText(e);
             // v1.355.0 (G29): the headline and the press ride with the line.
             errorTechRef.current = {
               text: line,
@@ -9683,6 +9873,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         {
           role: "assistant",
           content: reply,
+          turnId, // third plan point 1 — MIRROR NOTE: the stream lane stamps it too
           ...(toolsUsed.length ? { toolsUsed } : {}),
           ...(viaPost ? { viaProvider: viaPost } : {}),
           ...receiptPost,
@@ -9698,6 +9889,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           {
             role: "assistant",
             content: caption,
+            turnId,
             workflowDraft: res.workflow_draft,
             // Earlier rounds of THIS turn may have run tools — their
             // provenance must survive the draft exit like any other turn.
@@ -9725,6 +9917,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           escalatedFrom: {
             atts,
             reason: res.escalate_reason || "this one needs the full agent",
+            turnId, // MIRROR NOTE: the stream lane's hand-off names it too
           },
           // The turn's own validated roster pick (v1.139.0); null/absent
           // keeps the builder default.
@@ -10279,7 +10472,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   async function sendAgent(
     message: string,
     opts: {
-      escalatedFrom?: { atts: UploadedFile[]; reason: string };
+      /** Third plan point 1: `turnId` names the chat turn that handed off, so
+       *  the hand-off line is that turn's reply (the daemon never writes a
+       *  second one for it). */
+      escalatedFrom?: { atts: UploadedFile[]; reason: string; turnId?: string };
       /** Roster target the escalating turn chose (v1.139.0): a builtin name
        *  rides as the opening session's agent_type, "custom:<slug>" opens via
        *  POST /agents/{slug}/spawn, "remote:<name>" degrades to the default
@@ -10381,6 +10577,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
             role: "assistant" as const,
             content: "",
             escalated: esc.reason,
+            ...(esc.turnId ? { turnId: esc.turnId } : {}),
             ...(target ? { escalatedTo: agentPhrase(target) } : {}),
             ...(droppedRemote ? { droppedRemote } : {}),
           }
@@ -10666,6 +10863,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // v1.325.0: an edit being sent keeps what it replaced as another version.
     const editBefore = editUndo?.before ?? null;
     setEditUndo(null);
+    // A chat FROM THE BROWSER SIDEBAR (third plan SB3, decision G7) is written
+    // by the sidebar's own conversation; it has no phone to send to, so a
+    // message typed here would only meet "no longer linked". Said plainly,
+    // before the box is cleared, so the words typed are kept.
+    if (commMetaRef.current && isSidebarChat(commMetaRef.current.channel)) {
+      setNotice(SIDEBAR_CHAT_WORDS);
+      return;
+    }
     // MESSAGING threads take plain text only — refuse honestly instead of
     // silently dropping the files (the composer keeps both text and chips).
     if (commMetaRef.current && attachmentsRef.current.length > 0) {
@@ -11060,6 +11265,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           content: partial || "Stopped.",
           ...(partial ? { interrupted: true } : {}),
           ...(partial && sources.length ? { sources } : {}),
+          // Third plan point 1: the stopped reply is this turn's — the daemon
+          // writes no second one for it.
+          ...(stopId ? { turnId: stopId } : {}),
         },
       ];
       setMessages(full);
@@ -12503,7 +12711,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       t.owner === "daemon" ? (
                         <span
                           className="shrink-0 text-[11px] text-accent-soft/80"
-                          title="Messaging thread"
+                          title={
+                            isSidebarChat(t.comm_channel)
+                              ? "From the browser sidebar"
+                              : "Messaging thread"
+                          }
                         >
                           {capitalize(t.comm_channel || "linked")}
                         </span>

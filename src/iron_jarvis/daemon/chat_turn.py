@@ -11437,6 +11437,17 @@ def _persist_chat_usage(
 
     ``label`` (v1.516.0): what a row that is not a turn's own was for, in the
     user's words (the row's ``result``) — a conversation summary's row."""
+    # Third plan CS6 (ONE place, both lanes): a NEW chat's first turn starts
+    # with no chat id — the page names the chat a moment later
+    # (``POST /chat/turns/{id}/thread``). The row takes the chat the turn
+    # learned meanwhile; a row written before the link is named by the link
+    # (``durable_turns.note_usage_row``). Outside a daemon-owned turn (the
+    # POST lane, a follow-up, a reflection) this changes nothing.
+    from . import durable_turns as _durable
+
+    _turn, _turn_thread = _durable.current_turn()
+    if not str(thread_id or "").strip():
+        thread_id = _turn_thread
     try:
         from ..core.ids import utcnow as _now
         from ..core.models import AgentRun
@@ -11460,6 +11471,8 @@ def _persist_chat_usage(
             run_id = run.id
             db.add(run)
             db.commit()
+        if _turn and not str(thread_id or "").strip():
+            _durable.note_usage_row(_turn, run_id)  # CS6: the link names it
     except Exception:  # noqa: BLE001 — accounting must never break a reply
         return
     # DETECTIONS (v1.290.0): this is the ONE end-of-turn point both chat lanes

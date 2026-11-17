@@ -145,11 +145,11 @@ function runs.
 | `learning` | memory | 7 | **10**: coach, daemon, improvement, inbox, memory, onboarding, platform, profile, settings, workmap | core, tools | agents, detections, history, memory, profile, settings, workmap |
 | `sandbox` | tools | 9 | **10**: agents, daemon, harness, iron_proxy, mcp, platform, providers, repl, scheduling, tools | core, tools | detections, git, harness |
 | `terminals` | build | 18 | **9**: daemon, harness_bench, hosted, mcp, onboarding, platform, profile, providers, tools | browser, core, detections, iron_proxy, providers | connectors, daemon |
-| `browser` | browser | 18 | **8**: daemon, hosted, mcpserver, onboarding, platform, providers, terminals, tools | computeruse, core, providers, tools | daemon, detections, harness, skills |
+| `browser` | browser | 19 | **8**: daemon, hosted, mcpserver, onboarding, platform, providers, terminals, tools | computeruse, core, providers, tools | comm, daemon, detections, harness, skills |
+| `comm` | messaging | 12 | **8**: browser, daemon, peers, platform, providers, reflex, settings, workflows | core, tools | agents, daemon, harness, providers, scheduling, workflows |
 | `projects` | memory | 7 | **8**: agents, daemon, harness, hosted, mcp, mcpserver, scheduling, workmap | core | agents, assignments, harness, hosted, providers |
 | `workflows` | automations | 7 | **8**: agents, comm, daemon, goals, guide, platform, reflex, settings | core, tools | agents, comm, computeruse, providers, reflex, settings |
 | `workmap` | memory | 15 | **8**: agents, daemon, inbox, learning, memory, platform, search, settings | core | agents, daemon, detections, harness, history, hosted, iron_proxy, learning, projects, providers |
-| `comm` | messaging | 12 | **7**: daemon, peers, platform, providers, reflex, settings, workflows | core, tools | agents, daemon, harness, providers, scheduling, workflows |
 | `context` | context | 6 | **7**: agents, capability_search, daemon, harness, hosted, providers, skills | core | agents |
 | `documents` | documents | 32 | **7**: daemon, filesearch, hosted, ltm, onboarding, platform, tools | core, tools | excel_worker, providers |
 | `eval` | providers | 9 | **7**: agents, daemon, goals, harness, harness_bench, platform, providers | core, providers | harness, tools |

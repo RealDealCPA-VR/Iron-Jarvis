@@ -39,6 +39,7 @@ import { useRouter } from "next/navigation";
 import { Archive, Search } from "lucide-react";
 
 import { LoadFailedLine } from "@/components/LoadFailedLine";
+import { isSidebarChat } from "@/components/chat/CommThreadBanner";
 import OtherToolChats from "@/components/chat/OtherToolChats";
 import ThreadGroups, { GROUP_LIMIT, ShowOlderChats, ThreadSnippet } from "@/components/chat/ThreadGroups";
 import {
@@ -173,7 +174,10 @@ export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }
           rowBadge={(t) =>
             // A messaging chat names where it comes from, as on the chat page.
             t.owner === "daemon" ? (
-              <span className="shrink-0 text-[11px] text-accent-soft/80" title="Messaging thread">
+              <span
+                className="shrink-0 text-[11px] text-accent-soft/80"
+                title={isSidebarChat(t.comm_channel) ? "From the browser sidebar" : "Messaging thread"}
+              >
                 {(t.comm_channel || "linked").replace(/^./, (c) => c.toUpperCase())}
               </span>
             ) : null

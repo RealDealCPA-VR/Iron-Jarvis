@@ -125,6 +125,9 @@ def bind_event_bus(engine: Any, bus: Any) -> None:
 #: turn's log leaves with its registry) — read by the notifier, off the loop,
 #: through :func:`turn_looked_at` / :func:`turn_chat`.
 _LIVE: "_weakref.WeakValueDictionary[str, TurnLog]" = _weakref.WeakValueDictionary()
+#: Third plan CS7: every turn registry, weakly (a dropped platform's goes with
+#: it) — deleting a chat forgets its turns in whichever registry holds them.
+_REGISTRIES: "_weakref.WeakSet[TurnLogs]" = _weakref.WeakSet()
 
 
 def turn_looked_at(turn_id: str) -> "bool | None":
@@ -213,8 +216,42 @@ ORPHAN_STOP_S = 3600.0
 #: Stored frames are capped; past it, later TOKEN detail is not stored (the
 #: final ``done`` frame still carries the whole reply).
 MAX_STORED_CHARS = 8_000_000
-#: Finished records older than this are removed at boot.
+#: Finished records older than this are removed at boot — never one whose
+#: reply has not reached its chat or coding session (:func:`drop_old_records`,
+#: third plan G6 and RB9).
 KEEP_RECORDS_DAYS = 7
+
+# --------------------------------------------------------------------------- #
+# THE REPLY'S HOME (third plan G6, CS5): the daemon writes every reply into
+# its chat. Before, only a Chat PAGE wrote a finished reply into the chat: a
+# reply that ended while no page followed it was in no chat and no history
+# search until that chat was opened, and was deleted with its record after a
+# week. Now, when a chat turn ends, its reply is appended through the ONE
+# server-side writer (``chat_append.append_to_chat_thread``) as
+# ``{role: "assistant", content, turnId, savedBy: "daemon"}`` — at once when
+# no page follows the turn; after :data:`HOME_GRACE_S` when one does (that
+# page normally saves its own, richer message first, and then nothing is
+# written); when ``POST /chat/turns/{id}/thread`` names a new chat's first
+# turn's chat; and at start-up for a record a restart left behind.
+# ``ChatTurnRecord.home`` keeps whether that happened: "due" until the reply
+# is seen in its chat (or written, or there is nothing to write), then
+# "home". A record from an older version (None) is never written home: its
+# reply was saved by the page without a turn name, and a second copy would
+# be a duplicate.
+# --------------------------------------------------------------------------- #
+HOME_DUE = "due"
+HOME_DONE = "home"
+#: How long the daemon waits, after a turn a page FOLLOWED ended, for that
+#: page to save the reply itself before writing it home (a page saves at
+#: once; a 409 and its re-read take a second or two).
+HOME_GRACE_S = 15.0
+#: The longest the turn's end waits for the write (it goes on in its thread).
+HOME_WRITE_TIMEOUT_S = 30.0
+#: The most records the start-up pass writes home in one start (bounded).
+HOME_BOOT_LIMIT = 500
+#: What a turn's reply text is when the reply was empty — the page's own
+#: placeholder (``page.tsx``: ``(reply ?? "").trim() || "(no response)"``).
+NO_RESPONSE = "(no response)"
 #: Readiness 0j.5 item 17: WHY the orphan guard stopped a chat turn, in the
 #: turn's own error frame (and so on its record). The title / fix split the
 #: page's failure line reads (``chat_turn.error_payload``'s keys).
@@ -338,6 +375,227 @@ def parse_chunk(chunk: str) -> list[tuple[str, str]]:
     return out
 
 
+def _frame_data(data: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(data) if isinstance(data, str) else data
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def reply_line(turn_id: str, frames: Any, status: str) -> "dict[str, Any] | None":
+    """The chat line a turn's stored frames make (third plan G6): what the
+    Chat page would have saved for this turn, so a reply written home reads as
+    the one the user would have read. None = the page would save nothing.
+
+    The text is the page's: the ``token`` frames joined, a ``reset`` taking
+    them back (all of them, or its ``drop`` characters), the ``done`` frame's
+    ``reply`` winning when it has one; never thinking, steps or tool frames.
+
+    * ``done``: that text, or the page's ``(no response)``;
+    * ``error``: the words written before it failed, marked ``interrupted``;
+      with none, the sentence of what the turn kept (``kept_note``, with its
+      documents); with neither, nothing (no empty bubble);
+    * ``stopped`` / ``interrupted``: the words written, ``interrupted``; with
+      none, nothing.
+    Pure; never raises."""
+    try:
+        acc = ""
+        done: "dict[str, Any] | None" = None
+        err: "dict[str, Any] | None" = None
+        for frame in frames if isinstance(frames, list) else []:
+            if not (isinstance(frame, (list, tuple)) and len(frame) == 2):
+                continue
+            event, data = frame
+            if event == "token":
+                acc += str(_frame_data(data).get("text") or "")
+            elif event == "reset":
+                drop = _frame_data(data).get("drop")
+                if isinstance(drop, int) and not isinstance(drop, bool) and drop > 0:
+                    acc = acc[:-drop] if drop < len(acc) else ""
+                else:
+                    acc = ""
+            elif event == "done":
+                done = _frame_data(data)
+            elif event == "error":
+                err = _frame_data(data)
+        base: dict[str, Any] = {"role": "assistant", "turnId": turn_id, "savedBy": "daemon"}
+        partial = acc.strip()
+        if status == "done":
+            text = (str((done or {}).get("reply") or "") or acc).strip()
+            return {**base, "content": text or NO_RESPONSE}
+        if status == "error":
+            if partial:
+                return {**base, "content": partial, "interrupted": True}
+            kept = str((err or {}).get("kept_note") or "").strip()
+            if not kept:
+                return None
+            line = {**base, "content": kept}
+            docs = (err or {}).get("documents")
+            if isinstance(docs, list) and docs:
+                line["documents"] = [d for d in docs if d]
+            return line
+        if status in ("stopped", "interrupted") and partial:
+            return {**base, "content": partial, "interrupted": True}
+        return None
+    except Exception:  # noqa: BLE001 — nothing written rather than a guess
+        log.warning("could not read turn %s's reply", turn_id, exc_info=True)
+        return None
+
+
+def _set_home(engine: Any, turn_ids: "list[str] | set[str]", *, only_due: bool = True) -> int:
+    """Mark records home in one statement. BLOCKING; never raises."""
+    ids = sorted({str(t) for t in turn_ids if str(t or "").strip()})
+    if not ids:
+        return 0
+    try:
+        from sqlalchemy import update
+
+        stmt = update(ChatTurnRecord).where(ChatTurnRecord.id.in_(ids))  # type: ignore[attr-defined]
+        if only_due:
+            stmt = stmt.where(ChatTurnRecord.home == HOME_DUE)
+        with session_scope(engine) as db:
+            res = db.exec(stmt.values(home=HOME_DONE))  # type: ignore[call-overload]
+            db.commit()
+            return int(getattr(res, "rowcount", 0) or 0)
+    except Exception:  # noqa: BLE001
+        log.warning("could not mark chat turns as saved to their chat", exc_info=True)
+        return 0
+
+
+#: What :func:`write_home` answers, and which answers mean the record is done.
+HOME_WRITTEN, HOME_THERE, HOME_NOTHING, HOME_NOT_OURS = "written", "there", "nothing", "not ours"
+HOME_NO_CHAT, HOME_FAILED = "no chat", "failed"
+_SETTLED = frozenset({HOME_WRITTEN, HOME_THERE, HOME_NOTHING, HOME_NOT_OURS})
+
+
+def write_home(engine: Any, turn_id: str, thread_id: str, frames: Any, status: str, *,
+               event_bus: Any = None) -> str:
+    """Write turn ``turn_id``'s reply into its chat ``thread_id`` unless the
+    chat already holds a reply for that turn (third plan G6). Returns one of
+    "written", "there" (the page saved it), "nothing" (nothing to write),
+    "not ours" (a messaging or coding-session thread: its own writer),
+    "no chat" (none named, or it is gone) or "failed"; on the first four the
+    record is marked home. BLOCKING (the shared conversation lock and one
+    write): call it off the loop. Never raises."""
+    thread = str(thread_id or "").strip()
+    if not thread:
+        return HOME_NO_CHAT
+    line = reply_line(turn_id, frames, status)
+    if line is None:
+        outcome = HOME_NOTHING
+    else:
+        from .chat_append import REPLY_WHO, append_to_chat_thread
+
+        res = append_to_chat_thread(
+            engine, thread, [line], event_bus=event_bus, who=REPLY_WHO,
+            event_extra={"turn_id": turn_id},
+        )
+        if res.get("ok"):
+            outcome = HOME_WRITTEN if res.get("appended") else HOME_THERE
+        elif res.get("refused"):
+            outcome = HOME_NOT_OURS
+        elif res.get("why") == "no such chat":
+            outcome = HOME_NO_CHAT
+        else:
+            outcome = HOME_FAILED
+    if outcome in _SETTLED:
+        _set_home(engine, [turn_id])
+    return outcome
+
+
+def bring_home_record(engine: Any, turn_id: str, *, event_bus: Any = None) -> str:
+    """:func:`write_home` for a turn this process no longer holds, from its
+    record — only a record the current code marked "due" and that finished.
+    BLOCKING; never raises ("" when there was nothing to do)."""
+    try:
+        with session_scope(engine) as db:
+            row = db.get(ChatTurnRecord, turn_id)
+            if row is None or row.home != HOME_DUE or row.status == "running":
+                return ""
+            thread, status, raw = row.thread_id, row.status, row.frames_json
+        try:
+            frames = json.loads(raw or "[]")
+        except ValueError:
+            frames = []
+        return write_home(engine, turn_id, thread, frames, status, event_bus=event_bus)
+    except Exception:  # noqa: BLE001
+        log.warning("could not bring chat turn %s's reply home", turn_id, exc_info=True)
+        return HOME_FAILED
+
+
+def mark_home(engine: Any, turn_ids: "set[str] | list[str]") -> int:
+    """A page saved replies for these turns into their chat (``PUT
+    /chat/threads/{id}``): their records are home, in the database and in
+    this process — none is written home again, whatever the chat's array
+    looks like later (a Continue that merges a reply into the next keeps only
+    the newest turn's name). BLOCKING; never raises."""
+    ids = {str(t) for t in turn_ids if str(t or "").strip()}
+    if not ids:
+        return 0
+    for turn in ids:
+        try:
+            lg = _LIVE.get(turn)
+            if lg is not None:
+                lg.home = HOME_DONE
+        except Exception:  # noqa: BLE001
+            pass
+    return _set_home(engine, ids)
+
+
+def stamp_usage_rows(engine: Any, run_ids: "list[str]", thread_id: str) -> int:
+    """CS6: the usage rows a turn wrote before its chat was named now name it
+    (only rows that name none). BLOCKING; never raises."""
+    ids = sorted({str(r) for r in run_ids if str(r or "").strip()})
+    thread = str(thread_id or "").strip()[:80]
+    if not ids or not thread:
+        return 0
+    try:
+        from sqlalchemy import update
+
+        from ..core.models import AgentRun
+
+        with session_scope(engine) as db:
+            res = db.exec(  # type: ignore[call-overload]
+                update(AgentRun)
+                .where(AgentRun.id.in_(ids))  # type: ignore[attr-defined]
+                .where(AgentRun.thread_id.is_(None))  # type: ignore[union-attr]
+                .values(thread_id=thread)
+            )
+            db.commit()
+            return int(getattr(res, "rowcount", 0) or 0)
+    except Exception:  # noqa: BLE001 — accounting never breaks a link
+        log.warning("could not name the chat on a turn's usage", exc_info=True)
+        return 0
+
+
+def current_turn() -> "tuple[str, str]":
+    """``(turn id, chat id)`` of the daemon-owned chat turn the code running
+    now belongs to (``core.turn_ref``), ``("", "")`` outside one or once it
+    ended. The chat id is the LIVE one: a new chat's first turn learns it from
+    the link. Never raises."""
+    try:
+        from ..core.turn_ref import CURRENT
+
+        ref = CURRENT.get()
+        if ref is None or not ref.turn_id or not ref.running():
+            return "", ""
+        return str(ref.turn_id), str(ref.thread_id() or "")
+    except Exception:  # noqa: BLE001
+        return "", ""
+
+
+def note_usage_row(turn_id: str, run_id: str) -> None:
+    """CS6: turn *turn_id* wrote usage row *run_id* before its chat was
+    named; the link names it (:func:`stamp_usage_rows`). Never raises."""
+    try:
+        lg = _LIVE.get(str(turn_id or ""))
+        if lg is not None and run_id and len(lg.usage_rows) < 50:
+            lg.usage_rows.append(str(run_id))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class TurnLog:
     """The frames of one daemon-owned turn, and the windows following it."""
 
@@ -402,6 +660,17 @@ class TurnLog:
         self._end_hooks: list[Any] = []
         self._end_lock = _threading.Lock()
         self.ended: "tuple[str, bool] | None" = None
+        #: Third plan G6: has the reply reached its chat (see the module's
+        #: "THE REPLY'S HOME")? Kept on the record from its first write, so a
+        #: record a restart left behind is known to be this code's.
+        self.home = HOME_DUE
+        #: Was a window following the turn as it ended (its page saves the
+        #: reply itself; the daemon then waits :data:`HOME_GRACE_S`)?
+        self.followed_at_end = False
+        #: CS7: the turn's chat was deleted — its record goes when it ends.
+        self.chat_deleted = False
+        #: CS6: usage rows this turn wrote before its chat was named.
+        self.usage_rows: list[str] = []
 
     # -- the stored frames ---------------------------------------------------
     @property
@@ -753,6 +1022,7 @@ class TurnLog:
             "status": self.status,
             "frames_json": [[e, d] for e, d in self.frames],
             "updated_at": utcnow(),
+            "home": self.home,
         }
 
     def persist_interval(self) -> float:
@@ -835,6 +1105,15 @@ class TurnLogs:
         self._logs: dict[str, TurnLog] = {}
         #: chat ids linked before their turn started (bounded).
         self._links: dict[str, str] = {}
+        #: Third plan G6: turn id -> the pending end-of-grace write home (a
+        #: loop timer, never a sleeping task: nothing waits on it, and a
+        #: closed loop drops it), and the writes it started.
+        self._home_timers: dict[str, asyncio.TimerHandle] = {}
+        self._home_tasks: set[asyncio.Task] = set()
+        try:
+            _REGISTRIES.add(self)
+        except Exception:  # noqa: BLE001
+            pass
 
     def link_later(self, turn_id: str, thread_id: str) -> None:
         if len(self._links) > 200:
@@ -942,6 +1221,9 @@ class TurnLogs:
                 looked = bool(lg.looked_at())
             except Exception:  # noqa: BLE001
                 looked = False
+            # Third plan G6: and whether a page follows it (that page saves
+            # the reply itself; the daemon then waits before writing it home).
+            lg.followed_at_end = lg.watched()
             hooks = lg.end(status, looked)
             lg.finished_at = time.monotonic()
             lg._end_followers()
@@ -950,10 +1232,152 @@ class TurnLogs:
                 await asyncio.shield(lg.persist_now(self.engine))
             except BaseException:  # noqa: BLE001 — shutdown: the boot reconcile covers it
                 pass
+        # Third plan G6 (CS5): the reply goes into its chat. Outside the
+        # ``finally``: a turn a shutdown cut off is written home by the next
+        # start (its record is marked).
+        await self._after_end(lg, status)
         # v1.420.0 (C6.10): a long CHAT reply that ended says so from the
         # tray. Outside the ``finally``: a cut-off (``CancelledError``) never
         # reaches here, and a stopped turn is not news.
-        await self._announce_finished(lg, status)
+        if not lg.chat_deleted:
+            await self._announce_finished(lg, status)
+
+    # -- the reply's home (third plan G6) -------------------------------------
+    async def _after_end(self, lg: TurnLog, status: str) -> None:
+        """Where the ended turn's reply goes: nowhere for a coding session's
+        (its own writer); its record goes when its chat was deleted (CS7);
+        nothing yet with no chat (the link brings it home); after the grace
+        when a page followed it; else at once. Never raises."""
+        try:
+            if _surface_of(lg) == "build":
+                return
+            if not str(lg.thread_id or "").strip():
+                return
+            if lg.followed_at_end:
+                self._home_later(lg)
+            else:
+                await self._home_now(lg)  # writes nothing for a deleted chat
+            if lg.chat_deleted:  # deleted while it ran, or as its end was written
+                await self._forget_ended(lg)
+        except Exception:  # noqa: BLE001 — a reply's home never fails its turn
+            log.warning("chat turn %s: writing its reply into its chat failed", lg.turn_id,
+                        exc_info=True)
+
+    async def _forget_ended(self, lg: TurnLog) -> None:
+        self._logs.pop(lg.turn_id, None)
+        with contextlib.suppress(Exception):
+            _LIVE.pop(lg.turn_id, None)
+        await asyncio.shield(asyncio.to_thread(forget_records, self.engine, [lg.turn_id]))
+
+    async def _home_now(self, lg: TurnLog) -> str:
+        """Write the reply home now, off the loop, shielded (a shutdown in
+        that instant does not lose it) and bounded. Never raises."""
+        timer = self._home_timers.pop(lg.turn_id, None)
+        if timer is not None:
+            timer.cancel()
+        if lg.home != HOME_DUE or lg.chat_deleted or lg.status == "running":
+            return ""
+        frames = [[e, d] for e, d in lg.frames]  # a snapshot, on the loop
+        try:
+            outcome = await asyncio.wait_for(
+                asyncio.shield(asyncio.to_thread(
+                    write_home, self.engine, lg.turn_id, lg.thread_id, frames, lg.status,
+                    event_bus=_bus_for(self.engine),
+                )),
+                timeout=HOME_WRITE_TIMEOUT_S,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — the next start writes it home
+            log.warning("chat turn %s: its reply could not be written into its chat yet",
+                        lg.turn_id, exc_info=True)
+            return HOME_FAILED
+        if outcome in _SETTLED:
+            lg.home = HOME_DONE
+        return outcome
+
+    def _home_later(self, lg: TurnLog, delay: "float | None" = None) -> None:
+        """The write home after :data:`HOME_GRACE_S` (one per turn)."""
+        if lg.turn_id in self._home_timers:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        def _fire() -> None:
+            self._home_timers.pop(lg.turn_id, None)
+            self._start_home_write(lg)
+
+        self._home_timers[lg.turn_id] = loop.call_later(
+            HOME_GRACE_S if delay is None else delay, _fire,
+        )
+
+    def _start_home_write(self, lg: TurnLog) -> "asyncio.Task | None":
+        try:
+            task = asyncio.ensure_future(self._home_now(lg))
+        except RuntimeError:
+            return None
+        self._home_tasks.add(task)
+        task.add_done_callback(self._home_tasks.discard)
+        return task
+
+    async def home_due_now(self, turn_id: str) -> str:
+        """End the grace of turn *turn_id* now and write its reply home (if
+        the chat still has none). "" when no write was waiting."""
+        timer = self._home_timers.pop(turn_id, None)
+        lg = self._logs.get(turn_id)
+        if timer is None or lg is None:
+            return ""
+        timer.cancel()
+        return await self._home_now(lg)
+
+    def home_pending(self, turn_id: str) -> bool:
+        """Is a write home waiting out its grace for *turn_id*?"""
+        return turn_id in self._home_timers
+
+    async def linked(self, lg: TurnLog, thread_id: str) -> None:
+        """``POST /chat/turns/{id}/thread`` named the chat of a turn this
+        process holds (third plan G6, CS6): the usage rows it wrote before
+        name the chat now, and a turn that already ENDED has its reply
+        written home — after the grace when a page followed it, else now.
+        Never raises."""
+        try:
+            if lg.usage_rows:
+                rows, lg.usage_rows = list(lg.usage_rows), []
+                await asyncio.to_thread(stamp_usage_rows, self.engine, rows, thread_id)
+            if lg.status == "running" or _surface_of(lg) == "build" or lg.chat_deleted:
+                return
+            if lg.followed_at_end:
+                self._home_later(lg)
+            else:
+                await self._home_now(lg)
+        except Exception:  # noqa: BLE001 — the link itself already landed
+            log.warning("chat turn %s: its reply could not be written home on link", lg.turn_id,
+                        exc_info=True)
+
+    def forget_thread(self, thread_id: str) -> None:
+        """CS7: the chat *thread_id* was deleted. Its finished turns leave
+        memory now; a running one is marked, and its record goes when it
+        ends (whether a running turn stops is the delete's own rule: it does
+        not stop it). Called from any thread; never raises."""
+        tid = str(thread_id or "").strip()
+        if not tid:
+            return
+        try:
+            for turn_id, linked in list(self._links.items()):
+                if linked == tid:
+                    self._links.pop(turn_id, None)
+            for turn_id, lg in list(self._logs.items()):
+                if str(lg.thread_id or "") != tid:
+                    continue
+                lg.chat_deleted = True
+                if lg.status != "running" and (lg.task is None or lg.task.done()):
+                    self._logs.pop(turn_id, None)
+                    with contextlib.suppress(Exception):
+                        _LIVE.pop(turn_id, None)
+        except Exception:  # noqa: BLE001
+            log.warning("could not forget the turns of deleted chat %s", tid, exc_info=True)
 
     async def _announce_finished(self, lg: TurnLog, status: str) -> None:
         """``chat.turn_finished`` (v1.420.0, C6.10) for a CHAT reply longer
@@ -988,6 +1412,11 @@ class TurnLogs:
 
     async def shutdown(self) -> None:
         """Lifespan exit: cut every running turn off and keep what it wrote."""
+        # Third plan G6: a write home still in its grace is not waited for —
+        # its record stays "due" and the next start writes it home.
+        for timer in list(self._home_timers.values()):
+            timer.cancel()
+        self._home_timers.clear()
         tasks = [lg.task for lg in self.running() if lg.task is not None]
         for t in tasks:
             t.cancel()
@@ -1001,6 +1430,10 @@ class TurnLogs:
         ]
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        # A write home already started finishes (it is short and shielded).
+        writes = [t for t in list(self._home_tasks) if not t.done()]
+        if writes:
+            await asyncio.gather(*writes, return_exceptions=True)
 
 
 def waiting_unwatched(
@@ -1259,27 +1692,291 @@ def _iso_utc(when: Any) -> "str | None":
 def reconcile_interrupted_turns(engine: Any) -> int:
     """Boot step: a turn still "running" on disk was cut off by the stop of
     the process that ran it. Its log ends with an error frame that says so.
-    Finished records older than ``KEEP_RECORDS_DAYS`` are removed."""
+
+    Third plan G6 / RB9: old records are no longer removed HERE — that ran
+    before a coding session's unsaved reply was put back
+    (``sessions.reconcile_unsaved_replies``) and before a chat's reply was
+    written home, and deleted the very record either needed. The start
+    removes them after both, with :func:`drop_old_records`. Only the running
+    rows are read (never every record whole)."""
+    from sqlmodel import select
+
+    marked = 0
+    with session_scope(engine) as db:
+        for row in db.exec(select(ChatTurnRecord).where(ChatTurnRecord.status == "running")).all():
+            try:
+                frames = json.loads(row.frames_json or "[]")
+            except ValueError:
+                frames = []
+            frames.append(["error", json.dumps({"detail": INTERRUPTED_DETAIL})])
+            row.frames_json = json.dumps(frames)
+            row.status = "interrupted"
+            row.updated_at = utcnow()
+            db.add(row)
+            marked += 1
+        db.commit()
+    return marked
+
+
+def turn_state(engine: Any, turn_id: str) -> "dict[str, Any] | None":
+    """``{turn_id, status, running, started_at, thread_id}`` of a turn known
+    only from its record (third plan CS10: ``GET /chat/turns/{id}``); None
+    when there is none. One primary-key read, never the frames. BLOCKING."""
+    from sqlmodel import select
+
+    with session_scope(engine) as db:
+        row = db.exec(
+            select(ChatTurnRecord.status, ChatTurnRecord.started_at, ChatTurnRecord.thread_id)
+            .where(ChatTurnRecord.id == turn_id)
+        ).first()
+    if row is None:
+        return None
+    status, started, thread = row
+    return {
+        "turn_id": turn_id,
+        "status": str(status or ""),
+        # This process does not hold it, so it is not running here (a record
+        # says "running" only until the next start reconciles it).
+        "running": False,
+        "started_at": _iso_utc(started),
+        "thread_id": str(thread or ""),
+    }
+
+
+def forget_records(engine: Any, turn_ids: "list[str]") -> int:
+    """Delete these turn records. BLOCKING; never raises."""
+    ids = sorted({str(t) for t in turn_ids if str(t or "").strip()})
+    if not ids:
+        return 0
+    try:
+        from sqlalchemy import delete
+
+        with session_scope(engine) as db:
+            res = db.exec(delete(ChatTurnRecord).where(ChatTurnRecord.id.in_(ids)))  # type: ignore[call-overload, attr-defined]
+            db.commit()
+            return int(getattr(res, "rowcount", 0) or 0)
+    except Exception:  # noqa: BLE001
+        log.warning("could not delete chat turn records", exc_info=True)
+        return 0
+
+
+def drop_thread_records(db: Any, thread_id: str) -> int:
+    """CS7: delete chat *thread_id*'s turn records in the CALLER's
+    transaction (the chat is being deleted: each reply's text, thinking and
+    tool inputs and results go with it). Never raises."""
+    try:
+        from sqlalchemy import delete
+
+        res = db.exec(delete(ChatTurnRecord).where(ChatTurnRecord.thread_id == thread_id))  # type: ignore[call-overload]
+        return int(getattr(res, "rowcount", 0) or 0)
+    except Exception:  # noqa: BLE001
+        log.warning("could not delete the turn records of chat %s", thread_id, exc_info=True)
+        return 0
+
+
+def forget_thread(engine: Any, thread_id: str) -> None:
+    """CS7: chat *thread_id* was deleted — every turn registry on *engine*
+    forgets its turns (:meth:`TurnLogs.forget_thread`). Never raises."""
+    try:
+        for reg in list(_REGISTRIES):
+            if getattr(reg, "engine", None) is engine:
+                reg.forget_thread(thread_id)
+    except Exception:  # noqa: BLE001
+        log.warning("could not forget the turns of deleted chat %s", thread_id, exc_info=True)
+
+
+def _thread_rows(engine: Any, thread_ids: "set[str]", *, messages: bool) -> dict[str, Any]:
+    """``{id: (id, surface, owner[, messages_json])}`` for these chats in ONE
+    query (500 ids a statement). BLOCKING."""
+    from sqlmodel import select
+
+    from ..core.models import ChatThreadRecord as T
+
+    ids = sorted({t for t in thread_ids if t})
+    if not ids:
+        return {}
+    cols = [T.id, T.surface, T.owner] + ([T.messages_json] if messages else [])
+    out: dict[str, Any] = {}
+    with session_scope(engine) as db:
+        for i in range(0, len(ids), 500):
+            for row in db.exec(select(*cols).where(T.id.in_(ids[i:i + 500]))):  # type: ignore[attr-defined, call-overload]
+                out[str(row[0])] = tuple(row)
+    return out
+
+
+def _messages_of(raw: Any) -> list:
+    try:
+        data = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _record_frames(engine: Any, turn_id: str) -> list:
+    with session_scope(engine) as db:
+        rec = db.get(ChatTurnRecord, turn_id)
+        return _messages_of(rec.frames_json if rec is not None else "[]")
+
+
+def bring_replies_home(engine: Any, *, event_bus: Any = None, limit: int = HOME_BOOT_LIMIT) -> int:
+    """Start-up (third plan G6): a FINISHED record this code marked "due" —
+    its reply ended while nobody saved it, its grace was cut by a stop, or a
+    shutdown cut the turn off — has its reply written into its chat now,
+    unless the chat already holds one for that turn (at the top level or in a
+    fork). A record from an older version (no mark) is never touched. The
+    chats are read in ONE query; bounded by *limit*. Returns the replies
+    written. BLOCKING (run it off the loop); never raises."""
+    from sqlmodel import select
+
+    from .chat_append import has_turn_reply
+
+    written = 0
+    try:
+        with session_scope(engine) as db:
+            rows = list(db.exec(
+                select(ChatTurnRecord.id, ChatTurnRecord.thread_id, ChatTurnRecord.status)
+                .where(ChatTurnRecord.home == HOME_DUE)
+                .where(ChatTurnRecord.status != "running")
+                .where(ChatTurnRecord.thread_id != "")
+                .order_by(ChatTurnRecord.started_at)  # type: ignore[arg-type]
+                .limit(max(1, int(limit)))
+            ))
+        if not rows:
+            return 0
+        threads = _thread_rows(engine, {str(r[1] or "") for r in rows}, messages=True)
+        settled: list[str] = []
+        for turn_id, thread_id, _status in rows:
+            t = threads.get(str(thread_id or ""))
+            if t is None:
+                continue  # the chat is gone: the clean-up removes it by age
+            _id, surface, owner, raw = t
+            if str(surface or "") == "build" or str(owner or "user") == "daemon":
+                settled.append(turn_id)  # its own writer's, not a chat's
+                continue
+            if has_turn_reply(_messages_of(raw), turn_id):
+                settled.append(turn_id)  # the page saved it
+                continue
+            if bring_home_record(engine, turn_id, event_bus=event_bus) == HOME_WRITTEN:
+                written += 1
+        _set_home(engine, settled)
+    except Exception:  # noqa: BLE001 — a boot step never blocks the boot
+        log.warning("could not write chat replies into their chats at start", exc_info=True)
+    if written:
+        log.info("wrote %d chat reply(ies) into their chats at start", written)
+    return written
+
+
+#: The states a turn's record ends in (``_drive``, the boot reconcile).
+_ENDED = ("done", "error", "stopped", "interrupted")
+
+
+def _build_reply_due(engine: Any, turn_id: str, status: str, started: Any, msgs: list) -> bool:
+    """RB9: does a coding session still need this record to put its reply
+    back (``sessions.reconcile_interrupted_turns`` /
+    ``reconcile_unsaved_replies``)? The session holds the turn's question and
+    no reply, and the record would give it a reply line. Never raises (True
+    when unsure: a record is kept rather than lost)."""
+    try:
+        if str(status) not in _ENDED:
+            return False
+        if any(isinstance(m, dict) and m.get("role") == "assistant" and m.get("turnId") == turn_id
+               for m in msgs):
+            return False
+        if not any(isinstance(m, dict) and m.get("role") == "user" and m.get("turnId") == turn_id
+                   and not m.get("steer") for m in msgs):
+            return False
+        if str(status) == "interrupted":
+            return True  # the cut-off pass always writes a line for it
+        from datetime import timezone
+
+        from .routes.build import replayed_reply_line
+
+        when = 0.0
+        if started is not None:
+            when = (started if started.tzinfo is not None else started.replace(tzinfo=timezone.utc)).timestamp()
+        lines = replayed_reply_line(
+            turn_id, _record_frames(engine, turn_id), started_at=when, status=str(status),
+        ) or []
+        return bool(lines) and lines[-1].get("role") == "assistant"
+    except Exception:  # noqa: BLE001
+        log.warning("could not tell whether coding reply %s is saved", turn_id, exc_info=True)
+        return True
+
+
+def drop_old_records(engine: Any) -> int:
+    """Start-up clean-up: finished records older than ``KEEP_RECORDS_DAYS``
+    are removed — run AFTER the passes that put replies back (the coding
+    session's, :func:`bring_replies_home`). Never one whose reply has not
+    reached its home (third plan G6, RB9):
+
+    * a chat's record marked "due" whose chat still lacks its reply is kept
+      (the next start tries again) — unless the chat is gone, the record names
+      no chat (a chat never saved: there is nowhere to put it), or there is
+      nothing to write;
+    * a coding session's record is kept while the session holds its question
+      and no reply and the record would give one (:func:`_build_reply_due`).
+
+    Reads only the old rows' ids and marks (never their frames), and their
+    chats in one query. Returns how many were removed. BLOCKING; never raises."""
     from datetime import timedelta
 
     from sqlmodel import select
 
-    marked = 0
-    cutoff = utcnow() - timedelta(days=KEEP_RECORDS_DAYS)
-    with session_scope(engine) as db:
-        for row in db.exec(select(ChatTurnRecord)).all():
-            if row.status == "running":
-                try:
-                    frames = json.loads(row.frames_json or "[]")
-                except ValueError:
-                    frames = []
-                frames.append(["error", json.dumps({"detail": INTERRUPTED_DETAIL})])
-                row.frames_json = json.dumps(frames)
-                row.status = "interrupted"
-                row.updated_at = utcnow()
-                db.add(row)
-                marked += 1
-            elif row.updated_at is not None and row.updated_at.replace(tzinfo=None) < cutoff.replace(tzinfo=None):
-                db.delete(row)
-        db.commit()
-    return marked
+    from .chat_append import has_turn_reply
+
+    try:
+        cutoff = (utcnow() - timedelta(days=KEEP_RECORDS_DAYS)).replace(tzinfo=None)
+        with session_scope(engine) as db:
+            rows = [
+                tuple(r) for r in db.exec(select(  # type: ignore[call-overload]
+                    ChatTurnRecord.id, ChatTurnRecord.thread_id, ChatTurnRecord.status,
+                    ChatTurnRecord.home, ChatTurnRecord.updated_at, ChatTurnRecord.started_at,
+                ))
+                if r[2] != "running" and r[4] is not None and r[4].replace(tzinfo=None) < cutoff
+            ]
+        if not rows:
+            return 0
+        kinds = _thread_rows(engine, {str(r[1] or "") for r in rows}, messages=False)
+        # The messages only of the chats that must be looked into.
+        look = {
+            str(r[1]) for r in rows
+            if str(r[1] or "") in kinds
+            and (r[3] == HOME_DUE or str(kinds[str(r[1])][1] or "") == "build")
+        }
+        bodies = _thread_rows(engine, look, messages=True) if look else {}
+        gone: list[str] = []
+        for turn_id, thread_id, status, home, _updated, started in rows:
+            tid = str(thread_id or "")
+            kind = kinds.get(tid)
+            if not tid or kind is None:
+                gone.append(turn_id)  # no chat, or the chat is gone
+                continue
+            msgs = _messages_of(bodies[tid][3]) if tid in bodies else []
+            if str(kind[1] or "") == "build":
+                if not _build_reply_due(engine, turn_id, status, started, msgs):
+                    gone.append(turn_id)
+                continue
+            if (
+                home == HOME_DUE
+                and str(kind[2] or "user") != "daemon"
+                and not has_turn_reply(msgs, turn_id)
+                and reply_line(turn_id, _record_frames(engine, turn_id), str(status)) is not None
+            ):
+                continue  # its reply has not reached its chat yet: kept
+            gone.append(turn_id)
+        removed = 0
+        for i in range(0, len(gone), 500):
+            removed += forget_records(engine, gone[i:i + 500])
+        return removed
+    except Exception:  # noqa: BLE001 — a boot step never blocks the boot
+        log.warning("could not remove old chat turn records", exc_info=True)
+        return 0
+
+
+def home_and_tidy(engine: Any, *, event_bus: Any = None) -> "tuple[int, int]":
+    """The start's chat pass, in its order (third plan G6, RB9): write the
+    replies that never reached their chat, THEN remove the old records.
+    ``(written, removed)``. BLOCKING; never raises."""
+    written = bring_replies_home(engine, event_bus=event_bus)
+    removed = drop_old_records(engine)
+    return written, removed

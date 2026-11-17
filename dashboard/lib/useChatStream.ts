@@ -1085,6 +1085,10 @@ export interface StreamWatch {
    *  with — sent as the `X-IJ-Viewer` header (lib/chatAway), so the request's
    *  address stays exactly what it was. Absent: no header. */
   viewer?: string;
+  /** Third plan CS3: the silence watchdog fired (no bytes for `stallMs`).
+   *  Called once, before the stall's `error` frame — the frame itself is
+   *  unchanged, so a caller that does not ask reads exactly what it did. */
+  onStall?: () => void;
 }
 
 /**
@@ -1215,6 +1219,7 @@ export async function* streamSSE(
       if (stallTimer !== undefined) clearTimeout(stallTimer);
       stallTimer = setTimeout(() => {
         stalled = true;
+        watch.onStall?.();
         inner.abort();
         reader.cancel().catch(() => {
           /* already closed */
@@ -1368,6 +1373,11 @@ export class StreamError extends ApiError {
   readonly toolsUsed: string[];
   readonly documents: string[];
   readonly steps: TurnStep[];
+  /** Third plan CS3: the page heard NOTHING from Iron Jarvis for the silence
+   *  limit and stopped listening. The daemon's turn may well still be
+   *  running (it is the daemon's, not the connection's), so this is never a
+   *  stop: the caller asks the daemon before it says anything. */
+  readonly stalled: boolean;
   constructor(
     message: string,
     status: number,
@@ -1388,6 +1398,7 @@ export class StreamError extends ApiError {
       tools_used?: string[];
       documents?: string[];
       steps?: TurnStep[];
+      stalled?: boolean;
     } = {},
   ) {
     super(message, status);
@@ -1408,6 +1419,7 @@ export class StreamError extends ApiError {
     this.toolsUsed = [...(refusal.tools_used ?? [])];
     this.documents = [...(refusal.documents ?? [])];
     this.steps = [...(refusal.steps ?? [])];
+    this.stalled = refusal.stalled === true;
   }
 }
 
@@ -1835,7 +1847,12 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
         noteEvent(t0);
         publishFinish(null);
       }
+      // Third plan CS3: did the silence watchdog end this stream?
+      let stalledOut = false;
       const watch: StreamWatch = {
+        onStall: () => {
+          stalledOut = true;
+        },
         onOpen: () => {
           if (abortRef.current !== controller) return;
           // A kept state already says where the turn is; a frame moves it.
@@ -2248,6 +2265,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                   tools_used: ev.tools_used,
                   documents: ev.documents,
                   ...(ev.kept_note ? { steps: stepsFromTools(cards) } : {}),
+                  ...(stalledOut ? { stalled: true } : {}),
                 },
               );
             default:

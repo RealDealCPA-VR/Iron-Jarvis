@@ -427,6 +427,13 @@ class ChatTurnRecord(SQLModel, table=True):
     frames_json: str = "[]"
     started_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+    #: Third plan G6 (CS5): has the reply reached its chat? "due" = not yet
+    #: (the daemon writes it home, ``durable_turns.write_home``), "home" = it
+    #: is there (or there is nothing to write). None = a record written by an
+    #: older version, whose reply the page saved WITHOUT a turn name: never
+    #: written home again (it would be a second copy). Additive nullable
+    #: column (auto-reconciled).
+    home: str | None = None
 
 
 class UndoJournal(SQLModel, table=True):

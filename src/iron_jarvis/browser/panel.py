@@ -130,6 +130,18 @@ and ``open`` replays the conversation (``history``) so a reopened panel shows
 what was said. ``reset`` forgets it. A stopped turn keeps the answer it had
 streamed — that is what the user read.
 
+AND IT IS A CHAT (third review SB3, decision G7). Memory alone was forgotten by
+every restart (every update) while the panel still showed the conversation, so
+"now the second one" was answered with no context and nothing said so; and a
+closed panel's conversation was in no chat list and no search. Each exchange is
+now ALSO appended, before its terminal frame, to a chat the daemon writes
+(``panel_chat``: daemon-owned like a phone chat, marked as the browser
+sidebar's, never bound to a phone line so never sent anywhere). ``open`` after
+a restart reads it back; ``reset`` leaves it in the chat list and the next
+exchange starts a new one; a chat deleted in the chat list, or one that cannot
+be read, is said in one sentence (``panel_chat.NOT_AVAILABLE``) and the
+conversation starts fresh.
+
 THE ONE SWITCH (v1.270.0). "Instead of permissions in the browser extension,
 there should just be a simple toggle for all permissions required while using
 the extension so I don't have to keep approving." ``auto_allow {on}`` flips
@@ -653,6 +665,23 @@ class PanelTurns:
         #: own ``finally`` and replaying a question with no answer.
         self._turn_text: str = ""
         self._remembered: bool = True
+        #: SB3 (third review): the conversation is ALSO a chat the daemon
+        #: writes (``panel_chat``), so a restart restores it and the chat list
+        #: and history search find it. The chat's id ("" until the first
+        #: exchange is saved, and after Reset), the store (built on first use,
+        #: ``None`` with no database), whether the restore has been done, and
+        #: whether the panel has been told its conversation is gone (once).
+        self._chat_id: str = ""
+        self._chat: Any = None
+        self._chat_built = False
+        self._restored = False
+        self._unavailable_said = False
+        #: The restore found no conversation to carry on (until Reset or the
+        #: next saved exchange).
+        self._lost = False
+        #: One read or write of the chat at a time (a save still in flight
+        #: and the next question's check must not cross).
+        self._chat_lock = asyncio.Lock()
 
     # --- narration --------------------------------------------------------
 
@@ -714,13 +743,24 @@ class PanelTurns:
             if isinstance(params.get("auto_allow"), bool):
                 self._set_auto_allow(bool(params["auto_allow"]))
             await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
+            # SB3: after a restart the conversation is read back from its chat
+            # first, so the replay below and the next question carry it. The
+            # panel says how many messages it shows (`shown`): when it shows a
+            # conversation that cannot be carried on, it is told so, once.
+            shown = params.get("shown")
+            notice = await self._restore(
+                shown if isinstance(shown, int) and not isinstance(shown, bool) else 0
+            )
             # v1.270.0: the conversation so far, so a reopened panel shows it —
             # BEFORE the model list, because that list may probe providers and
             # shell out to CLIs (seconds on a busy machine), and a reopened
             # panel must not sit empty while the picker is being filled. The
             # parallel suite found exactly that: a replay that arrived after
             # the probe, past the reader's budget.
-            await self.emit(conn, P.PANEL_EVENT_HISTORY, self.history_view())
+            view = self.history_view()
+            if notice:
+                view["notice"] = notice
+            await self.emit(conn, P.PANEL_EVENT_HISTORY, view)
             # v1.454.0: the skills the "/" list offers. A dictionary read of
             # the registry (no file, no probe), so it rides the open inline.
             await self.emit(conn, P.PANEL_EVENT_SKILLS, self.skills_view())
@@ -1264,6 +1304,14 @@ class PanelTurns:
                 conn, P.PANEL_EVENT_ERROR, {"text": skill_refusal, "reason": "skill_unknown"}
             )
             return
+        # SB3: the conversation this question continues is its chat. Read back
+        # first if nothing has been (a send before any open), then checked: a
+        # chat deleted in the chat list is not carried to the model any more,
+        # the panel is told in one sentence, and this question starts a new one.
+        await self._restore(0)
+        gone = await self._chat_gone()
+        if gone:
+            await self.emit(conn, P.PANEL_EVENT_HISTORY, {"turns": [], "notice": gone})
         self._conn = conn
         self._turn_id = f"panel_{secrets.token_hex(8)}"
         self._steers.clear()
@@ -1335,27 +1383,153 @@ class PanelTurns:
         if self.history_limit > 0:
             del self._history[: -self.history_limit]
 
-    def _remember_exchange(self) -> None:
+    async def _remember_exchange(self) -> None:
         """Write the running turn's question and what the user READ, once.
 
         Called at every exit — the ``done`` branch of :meth:`_translate` (before
         the frame is sent), the failure branch and the ``finally`` of
         :meth:`_run` — and idempotent, so the first caller wins and a stopped
         turn (no ``done`` frame at all) is still written before its stop frame.
+
+        SB3: written to the conversation in memory at once (an ``open`` racing
+        this replays it), then to its chat, off the event loop, before this
+        returns, so the terminal frame that follows leaves after both.
         """
         if self._remembered:
             return
         self._remembered = True
-        self._remember("user", self._turn_text)
-        self._remember(
-            "assistant",
-            "".join(self._answer) or "(Iron Jarvis gave no answer.)",
-        )
+        question = str(self._turn_text or "").strip()
+        answer = ("".join(self._answer) or "(Iron Jarvis gave no answer.)").strip()
+        self._remember("user", question)
+        self._remember("assistant", answer)
         self._answer = []
+        await self._save_exchange(question, answer)
+
+    # --- the conversation as a chat (SB3, third review) -----------------------
+
+    def _sidebar_chat(self) -> Any:
+        """The sidebar's chat writer (``panel_chat.SidebarChat``), or ``None``
+        when this platform has no database (a stand-in in a unit test): the
+        conversation then lives in memory only, exactly as before."""
+        if self._chat_built:
+            return self._chat
+        self._chat_built = True
+        try:
+            from sqlalchemy.engine import Engine
+
+            engine = getattr(self.platform, "engine", None)
+            if not isinstance(engine, Engine):
+                return None
+            from .panel_chat import SidebarChat
+
+            store = getattr(self.deps, "comm_thread_store", None)
+            if store is None:
+                from ..comm.threads import CommThreadStore
+
+                store = CommThreadStore(
+                    engine, event_bus=getattr(self.platform, "event_bus", None)
+                )
+            self._chat = SidebarChat(store, engine)
+        except Exception:  # noqa: BLE001 — no chat is still a working sidebar
+            logger.warning("the sidebar's chat could not be set up", exc_info=True)
+            self._chat = None
+        return self._chat
+
+    async def _save_exchange(self, question: str, answer: str) -> None:
+        """Append one exchange to the sidebar's chat (created on the first).
+        Never raises: the conversation in memory is kept either way."""
+        chat = self._sidebar_chat()
+        if chat is None:
+            return
+        async with self._chat_lock:
+            try:
+                self._chat_id = await asyncio.to_thread(
+                    chat.save_exchange, self._chat_id, question, answer
+                )
+                # A conversation exists now: nothing may be restored over it.
+                self._restored = True
+                self._unavailable_said = False
+                self._lost = False
+            except Exception:  # noqa: BLE001 — the reply itself was delivered
+                logger.warning("the sidebar's exchange could not be saved as a chat",
+                               exc_info=True)
+
+    def _say_unavailable(self, shown: int) -> str:
+        """The one sentence for a panel that shows a conversation the daemon
+        cannot carry on, said once; "" when the panel shows nothing."""
+        if shown <= 0 or self._unavailable_said:
+            return ""
+        from .panel_chat import NOT_AVAILABLE
+
+        self._unavailable_said = True
+        return NOT_AVAILABLE
+
+    async def _restore(self, shown: int) -> str:
+        """After a restart, read the conversation back from its chat (once).
+
+        Returns the sentence to show when the panel shows ``shown`` messages
+        that cannot be carried on (the chat was deleted, or the database could
+        not be read), else "". A read fault is tried again at the next ``open``.
+        """
+        if self._restored:
+            # Nothing was found to restore and nothing has been said since: a
+            # panel (another window's, or this one after a reconnect) that
+            # shows a conversation is told it cannot be carried on.
+            if self._lost and not self._history and not self._chat_id:
+                return self._say_unavailable(shown)
+            return ""
+        chat = self._sidebar_chat()
+        if chat is None or self.running or self._history or self._chat_id:
+            self._restored = True
+            return ""
+        from .panel_chat import SidebarChatUnreadable
+
+        async with self._chat_lock:
+            try:
+                found = await asyncio.to_thread(chat.current)
+            except SidebarChatUnreadable:
+                return self._say_unavailable(shown)
+            except Exception:  # noqa: BLE001 — a stand-in that raises otherwise
+                logger.warning("the sidebar's chat could not be read", exc_info=True)
+                return self._say_unavailable(shown)
+            self._restored = True
+            if found is None:
+                self._lost = True
+                return self._say_unavailable(shown)
+            if self._history or self._chat_id:
+                return ""  # a conversation began meanwhile: it stands
+            self._chat_id, rows = found
+            for row in rows:
+                self._remember(row["role"], row["content"])
+            return ""
+
+    async def _chat_gone(self) -> str:
+        """Before a question: is the conversation's chat still there? When it
+        was deleted in the chat list, the conversation is forgotten here too
+        (it is not carried to the model again) and the sentence to show is
+        returned; "" otherwise."""
+        chat = self._sidebar_chat()
+        if chat is None or not self._chat_id:
+            return ""
+        async with self._chat_lock:
+            chat_id = self._chat_id
+            if not chat_id or await asyncio.to_thread(chat.exists, chat_id):
+                return ""
+        if self._chat_id != chat_id:
+            return ""
+        from .panel_chat import NOT_AVAILABLE
+
+        self._chat_id = ""
+        self._history.clear()
+        return NOT_AVAILABLE
 
     async def _reset(self, conn: Any) -> None:
         """Forget the conversation. Refused while a turn runs — its answer would
-        land in a conversation the user just emptied."""
+        land in a conversation the user just emptied.
+
+        SB3: its chat stays in the chat list, whole; it is no longer the
+        sidebar's conversation, so the next exchange starts a new chat and a
+        restart restores nothing from before the Reset."""
         if self.running:
             await self.emit(
                 conn,
@@ -1368,6 +1542,17 @@ class PanelTurns:
             )
             return
         self._history.clear()
+        self._chat_id = ""
+        self._restored = True
+        self._unavailable_said = False
+        self._lost = False
+        chat = self._sidebar_chat()
+        if chat is not None:
+            async with self._chat_lock:
+                try:
+                    await asyncio.to_thread(chat.close_all)
+                except Exception:  # noqa: BLE001 — the new conversation starts anyway
+                    logger.warning("the sidebar's chat could not be closed", exc_info=True)
         await self.emit(conn, P.PANEL_EVENT_HISTORY, self.history_view())
 
     def _auto_allowed(self) -> bool:
@@ -1703,7 +1888,7 @@ class PanelTurns:
         except Exception as exc:  # noqa: BLE001 — an honest failure, never silence
             logger.debug("panel turn failed", exc_info=True)
             # v1.270.0: what was read is remembered BEFORE the panel is told.
-            self._remember_exchange()
+            await self._remember_exchange()
             # v1.516.0 (second review B12): never the exception's own text on
             # the sidebar. A sentence the app wrote is kept after the colon;
             # anything else is logged (masked) and the plain line stands.
@@ -1724,7 +1909,7 @@ class PanelTurns:
             # v1.270.0: a STOPPED turn reaches here with no `done` frame sent
             # and its exchange unwritten — the half-answer the user read is
             # written now, before the stop's own terminal frame below.
-            self._remember_exchange()
+            await self._remember_exchange()
             if not emitted_done:
                 # A STOPPED turn returns with no terminal `done` frame — it
                 # writes the CANCELLED usage row and returns. Without this the
@@ -1918,7 +2103,7 @@ class PanelTurns:
                 await self.emit(conn, P.PANEL_EVENT_TOOL, {"name": "route", "text": notice})
             # v1.270.0: the exchange is written BEFORE `done` leaves, so an
             # `open` that arrives on that frame replays a complete conversation.
-            self._remember_exchange()
+            await self._remember_exchange()
             await self.emit(conn, P.PANEL_EVENT_DONE, {"text": final})
             return
         if event == "error":
@@ -1936,7 +2121,7 @@ class PanelTurns:
             if sentence and technical and technical != sentence:
                 payload["technical"] = technical[:TECHNICAL_CHARS]
             # What was read is remembered BEFORE the terminal frame leaves.
-            self._remember_exchange()
+            await self._remember_exchange()
             await self.emit(conn, P.PANEL_EVENT_ERROR, payload)
             return
 

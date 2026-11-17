@@ -64,6 +64,13 @@ export interface PaneMsg {
   refit?: TurnRefit;
   approved?: ApprovedCall[];
   remembered?: string[];
+  /** Third plan, group 18: the name of the turn this message belongs to (the
+   *  chat page's field, lib/turnRejoin): on the question and on the reply
+   *  built from it, so the daemon never writes a second copy of a reply the
+   *  pane saved, and a question is answered only by its own turn. */
+  turnId?: string;
+  /** "daemon": the daemon wrote this reply into the chat itself. */
+  savedBy?: string;
 }
 
 // ------------------------------------------------------------ thread + title

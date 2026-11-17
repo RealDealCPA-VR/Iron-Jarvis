@@ -2042,6 +2042,55 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## A reply lives in its chat, whoever was watching (v1.521.0)
+
+A reply that finishes while you are on another page, or with the window
+closed, is now written into its chat by Iron Jarvis itself, and the browser
+sidebar's conversation is a chat like the others. This is the second of
+seven releases from the third review.
+
+Until now Iron Jarvis ran every reply and kept a record of it for seven
+days, but only an open Chat page wrote the reply into the chat. Everything
+below follows from that.
+
+- **A reply nobody watched is in its chat at once.** Ask something, go to
+  another page or close the window: when the reply is done it is in the
+  chat and in history search, without that chat having to be opened first.
+  Before, it was in neither until you opened the chat, and after a week it
+  was gone for good, with the chat ending on your question and a Retry
+  button. A reply written this way is plain text at first; when you open the
+  chat within seven days and it is still the last reply, its steps and
+  receipts are filled in.
+- **A reply is in its chat once.** Asking, moving to another page of the app
+  and coming back while the reply was still being written saved it twice.
+  So did two windows on one chat. Each reply now carries the name of the
+  question it answers, and a second copy is merged away.
+- **A minute of silence no longer says "stopped".** When the page heard
+  nothing for sixty seconds it said the reply "was stopped", kept the half
+  it had, and offered Retry, while Iron Jarvis went on working; Retry then
+  started the same work a second time. The page now asks Iron Jarvis first.
+  If the reply is still being worked on it says "Lost contact with Iron
+  Jarvis for a minute. It is still working on this reply" and follows it
+  again. Retry is offered only when the reply really is not running.
+- **Opening a chat whose reply is ready never shows "failed, Retry".** That
+  happened when you opened it while another chat was answering.
+- **A question is answered only by its own reply.** Reopening a chat whose
+  last question never started could show the reply to the question before
+  it.
+- **The browser sidebar's conversation is a chat.** It is in the chat list
+  with a "Browser sidebar" label, it is found by history search, and a
+  restart of Iron Jarvis (every update) no longer makes the sidebar forget
+  what you were talking about. Reset in the sidebar starts a new chat and
+  keeps the old one. A sidebar chat is carried on in the sidebar: opened on
+  the Chat page it can be read, and typing there says so.
+- **Deleting a chat deletes the kept copies of its replies** (their text,
+  thinking and steps), which used to stay in the database and its backups
+  for up to a week.
+- **The first reply of a new chat counts on that chat's usage line.**
+- **A coding reply waiting to be put back is no longer cleaned away.** The
+  line "It will be put back when Iron Jarvis next starts" was untrue when
+  the next start came more than seven days later.
+
 ## Every way in is judged, and what a program prints stays data (v1.520.0)
 
 A new tool in a connected app now asks before it runs even when its app is

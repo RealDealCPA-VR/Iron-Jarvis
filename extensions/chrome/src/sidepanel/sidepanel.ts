@@ -407,6 +407,11 @@ function clearTranscript(): void {
  * holds it, so nothing is painted twice.
  */
 function paintHistory(payload: Record<string, unknown>): void {
+  // Third review SB3: the conversation this panel shows could not be carried on
+  // (its chat was deleted in Iron Jarvis, or could not be read after a
+  // restart). One plain line says so, whatever the transcript already holds.
+  const notice = typeof payload["notice"] === "string" ? (payload["notice"] as string) : "";
+  if (notice) say("tool", notice);
   const turns = Array.isArray(payload["turns"]) ? (payload["turns"] as Array<Record<string, unknown>>) : [];
   // v1.339.0: the turn still running when this panel was reopened — its
   // question and the answer so far. The deltas that follow extend that answer.
@@ -1044,7 +1049,18 @@ async function loadAuto(): Promise<void> {
  * daemon's answer.
  */
 export function openParams(auto: boolean | null): Record<string, unknown> {
-  return auto === null ? {} : { auto_allow: auto };
+  const params: Record<string, unknown> = auto === null ? {} : { auto_allow: auto };
+  // Third review SB3: how many messages this panel shows, so a daemon that
+  // restarted and cannot carry that conversation on says so instead of
+  // answering the next question with no context.
+  const shown = shownMessages();
+  if (shown > 0) params["shown"] = shown;
+  return params;
+}
+
+/** The questions and answers on screen (not steps, errors or notes). */
+function shownMessages(): number {
+  return el.transcript?.querySelectorAll('.turn[data-who="you"], .turn[data-who="jarvis"]').length ?? 0;
 }
 
 async function setAuto(on: boolean): Promise<void> {

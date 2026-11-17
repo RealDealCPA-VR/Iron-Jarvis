@@ -135,6 +135,13 @@ class _Bus:
     async def publish(self, etype, payload, **kw):
         self.events.append((etype, payload, kw))
 
+    def notices(self) -> list:
+        """Only the "reply finished" notices. Since the third fix plan (group
+        18) a turn that ends with nobody following also writes its reply into
+        its chat, which publishes ``chat.thread_updated``: not what these
+        tests are about."""
+        return [e for e in self.events if e[0] == EventType.CHAT_TURN_FINISHED]
+
 
 @pytest.fixture
 def engine(tmp_path):
@@ -170,8 +177,8 @@ async def _run_turn(engine, bus, *, last="done", age_s=180.0, surface="", thread
 async def test_a_long_chat_reply_that_ended_is_announced(engine):
     bus = _Bus()
     await _run_turn(engine, bus)
-    assert len(bus.events) == 1, bus.events
-    etype, payload, _kw = bus.events[0]
+    assert len(bus.notices()) == 1, bus.events
+    etype, payload, _kw = bus.notices()[0]
     assert etype == EventType.CHAT_TURN_FINISHED == "chat.turn_finished"
     assert payload["thread_id"] == "chat_q3" and payload["title"] == "Q3 numbers"
     assert payload["outcome"] == "done" and payload["seconds"] >= 180
@@ -180,7 +187,7 @@ async def test_a_long_chat_reply_that_ended_is_announced(engine):
 async def test_a_failed_long_chat_reply_says_failed(engine):
     bus = _Bus()
     await _run_turn(engine, bus, last="error")
-    assert [e[1]["outcome"] for e in bus.events] == ["failed"]
+    assert [e[1]["outcome"] for e in bus.notices()] == ["failed"]
 
 
 @pytest.mark.parametrize(
@@ -200,7 +207,7 @@ async def test_no_notice_for_what_is_not_news(engine, kw, monkeypatch):
     if not kw.get("bind", True):
         monkeypatch.setattr(DT, "_BUSES", weakref.WeakKeyDictionary())
     await _run_turn(engine, bus, **kw)
-    assert bus.events == []
+    assert bus.notices() == []
 
 
 def test_the_app_binds_its_bus_for_the_turns(tmp_path):
