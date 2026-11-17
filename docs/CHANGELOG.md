@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.516.1
+
+**Linux: every test passes there, and two real faults are fixed.** Nothing changes on Windows in this release.
+
 ## v1.516.0
 
 **Never stalls, every cost counted, plain words.** The last of eight releases from the second review.
@@ -77,7 +81,3 @@
 ## v1.500.0
 
 **One sidebar.** The app now has one left sidebar.
-
-## v1.499.4
-
-**A deep review of the whole app: fixes for privacy, safety and lost work.** Seven reviewers read the whole app area by area; every finding below was reproduced or traced in the code before it was fixed, and each fix has a test that failed first.
