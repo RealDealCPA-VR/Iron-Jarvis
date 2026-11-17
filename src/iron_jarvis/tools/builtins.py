@@ -144,6 +144,14 @@ def _walk_files(base: Path, *, limit: int, deadline_s: float = _WALK_DEADLINE_S,
                 and len(empty_dirs) < _MAX_EMPTY_DIRS and Path(root) != base):
             empty_dirs.append(Path(root))
         dirs[:] = [dd for dd in dirs if dd not in _SKIP_DIRS and not dd.startswith(".")]
+        if os.name != "nt":
+            # Windows' own disks hand names back in order (capitals do not
+            # matter); Linux's and macOS's hand them back in whatever order the
+            # disk keeps. Ordered here, a listing, a search and the place a
+            # limit cuts are the same on every run there too. Windows is left
+            # exactly as its disk answers.
+            dirs.sort(key=str.upper)
+            files.sort(key=str.upper)
         for fn in files:
             out.append(Path(root) / fn)
             if len(out) >= limit:
