@@ -1274,3 +1274,647 @@ For the owner to decide:
 8. Trying the two things that were tested with stand-ins only on the
    installed app: starting and stopping a real coding tool (group 12), and a
    search with a group in its pattern in a coding session (group 16).
+
+## Third review (2026-11-16, at v1.516.0)
+
+Ten read-only passes over everything the second review listed under "Still
+not read" (the bundled account manager apart). Nothing was run and nothing
+was changed; nothing here is fixed. Whether to fix it is the owner's call.
+
+**Checked** means the lead read the lines and found no guard; **pass only**
+means the pass reported it as confirmed and the lead has not re-read it;
+**suspected** means a step on the path was not verified (the entry says
+which). Every medium finding was re-read by the lead; most low ones are pass
+only. The number in brackets is the north-star behaviour it breaks. Line
+numbers are as of v1.516.0.
+
+90 findings. Severity counts: 1 high, 35 medium, 54 low. By area: sidebar
+14, the add-on's daemon side 6, the tools door and code host 8,
+coding-session routes 14, attempts at night 8, permissions and the command
+guard 10, saving a chat reply 10, terminals 20.
+
+**For the owner: the findings that matter most**
+
+1. **A held-back app tool can run in chat with no card (PG1, the one high
+   finding).** When a connected app's update brings a new tool that can
+   change things, Iron Jarvis is meant to ask before that tool runs until
+   you trust it. With the app switched on for a chat, it runs unasked.
+   Nearby, and medium: a command such as
+   `del /q *.tmp >nul 2>&1; python run.py` gets past the guard that should
+   refuse it and deletes `run.py` (PG6), and a scheduled workflow can add
+   an outgoing webhook with nobody asked (PG2).
+2. **A chat reply's only home is the page that shows it (CS1 to CS5).** The
+   daemon runs the reply and keeps a record of it for seven days, but only a
+   Chat page writes the reply into the chat. So: a reply that finishes with
+   no page watching is not in the chat or in history search until that chat
+   is opened, and is gone for good if that takes more than a week; coming
+   back to Chat mid-reply can save the reply twice; opening such a chat
+   while another chat is answering shows "failed, Retry" over a reply that
+   ran; and after 60 seconds of silence the page says the turn "was stopped"
+   while the daemon carries on with it.
+3. **Stop is not remembered (RB1, CS4, SB2).** A Stop is a note in memory
+   only. If Iron Jarvis closes before a stopped coding reply has wound
+   down, the next start carries that reply on by itself and runs its steps.
+   A Stop pressed right after Send can arrive before the daemon knows the
+   turn, and the turn then runs to its end with "Stopped." on screen. In the
+   browser sidebar, Stop does not end a turn waiting at a risk card, and
+   Allow pressed afterwards still does the action.
+4. **A night task tried on several models skips the night's own rules (NA1
+   to NA3).** It reads "Done" in the morning whatever its attempts did (all
+   failed, all cut off), shows no usage on the Last night row, and the
+   pay-per-use limit is not applied to a pick that is the default model.
+
+Also worth knowing:
+
+- Text printed in a terminal reaches a model with no fence in the pane's
+  "ask AI" and "make a workflow from this terminal", so a file or a
+  program's output can steer the command the pane offers or the steps of a
+  saved workflow (TM1).
+- The Continue strip says "Continue on X", but the daemon is never told
+  which account and picks one itself (TM4).
+- After any restart of Iron Jarvis (every update), a coding tool that was
+  kept running loses Iron Jarvis's tools until it is started again (MC3).
+- Undo is refused for a renamed, moved or copied download, although its
+  own answer says it can be reversed (PG4).
+
+What the review found sound is listed under each area ("Holds"). In short:
+the doors check who is calling, tokens stay out of files, logs and command
+lines, page text stays inside its fence, and nothing a terminal prints
+makes Jarvis type or change account by itself.
+
+**The shared causes**
+
+| Cause | Findings |
+|---|---|
+| The page, not the daemon, writes the reply into its chat | CS1, CS2, CS3, CS5, CS10, SB1, SB3 |
+| A Stop lives in memory only and is not tied to the start or to a restart | RB1, RB5, CS4, SB2, SB5, SB13 |
+| The screen names one thing and the daemon does another, or is never told | TM4, TM5, RB3, SB4, SB6, MC1, MC2, BR1, PG5 |
+| A second way in that the gate does not judge | PG1, PG2, PG3, PG6, PG7, PG8, PG9 |
+| "Try on several models" at night went around the night's checks | NA1, NA2, NA3, NA7 |
+| Terminal output handed to a model with no fence | TM1, TM14 |
+| A Python exception's name, or engine words, still reach the screen or another tool | RB12, RB13, MC8, NA6, TM7, TM8, PG4, PG10 |
+
+### The browser sidebar's own code (`extensions/chrome/src/sidepanel/sidepanel.ts`, `browser/panel.py`)
+
+Both files were read whole.
+
+- [ ] **SB1 (4, medium, checked). A sidebar reply keeps talking to the
+  connection it started on.** If the add-on's connection drops and comes
+  back mid-reply, the rest of the answer, any approval card and the end of
+  the turn go nowhere. The panel shows "running"; a turn that reaches an
+  ordinary card waits with no limit, and every later Send is refused with
+  "still working on the last message". `browser/panel.py:1267, 1603-1700`
+  (the turn keeps `conn`), `802-828`; `open` on the new connection does not
+  re-bind the turn or show the waiting card again (`709-736`).
+- [ ] **SB2 (4, medium, checked). Stop or Esc does not end a sidebar turn
+  that is waiting at a risk card** (payment, password, delete). It stays
+  "running" for up to five minutes, and Allow pressed after Stop still does
+  the action. `panel.py:841-854` waits with no look at Stop; the Chat
+  page's twin checks Stop every second
+  (`daemon/routes/chat.py:5543-5565`).
+- [ ] **SB3 (3, medium, checked; the code calls it deliberate). The sidebar
+  conversation is kept in memory only.** A restart of Iron Jarvis (every
+  update) forgets it while the panel still shows it, so "now the second
+  one" is answered with no context and nothing says so; once the panel is
+  closed the conversation is in no chat list. `panel.py:640-655,
+  1329-1354`; `sidepanel.ts:409-416`.
+- [ ] **SB4 (4, medium, checked). With the sidebar open in two browser
+  windows, turning "Auto-allow" off in one is undone at the next tab
+  switch.** The other window still holds "on" and sends it again; the
+  daemon takes whichever arrives last. `sidepanel.ts:1028-1038, 1621,
+  1627-1629` (read once, never re-read); `panel.py:714-715`.
+- [ ] **SB5 (1, medium, checked). Stop prints "Stop requested" and Allow or
+  Deny hide the card without checking that the press reached Iron Jarvis.**
+  With the connection down nothing was stopped or answered. Send, Steer and
+  Reset do check. `sidepanel.ts:979, 1008, 1019, 1081`.
+- [ ] **SB6 (4, low, checked).** A risk card in the sidebar still offers
+  "Allow all page actions": one press allows that risky action and turns
+  Auto-allow on for every tab. The daemon marks the card (`floor`,
+  `panel.py:837`); the panel never reads the mark.
+- [ ] **SB7 to SB14 (low, pass only).** Stopping a dictation makes the
+  add-on's whole connection wait for the transcription, so a page action
+  another chat is running can time out (`panel.py:1127-1175`); any error
+  that is not about voice ends the turn on screen while it still runs
+  (`sidepanel.ts:741-763`); a click whose answer was lost reads "Could not
+  click …" followed by a sentence written for the model
+  (`panel.py:1817-1825`); a Send the daemon refuses has already emptied the
+  box and drawn a sent bubble (`sidepanel.ts:891, 912-948`); the add-on's
+  worker passes on a sidebar action from any sender inside the add-on, a
+  page script included (`extensions/chrome/src/background/index.ts:608-671`);
+  "Start new chats local only" does not cover the sidebar or its dictation
+  (`panel.py:1629-1654`); with two windows, closing one stops the other's
+  reply, which then reads as finished (`sidepanel.ts:1586-1590`); the
+  microphone stays open after a dictation the daemon ended at its size
+  limit, and the final transcript wipes what was typed meanwhile
+  (`sidepanel.ts:1265-1284`).
+
+Holds: the panel never draws model or page text as HTML; a connection that
+is not paired cannot send sidebar actions; the panel can answer only cards
+it was shown; a sidebar turn gets only the browser tools; what the user
+read is kept before the turn's end is announced; dictation audio goes only
+to the daemon.
+
+### The add-on's daemon side (`browser/snapshot.py`, `screenshot.py`, `pairing.py`, `panetokens.py`)
+
+All four were read whole.
+
+- [ ] **BR1 (1, medium, checked). With Browser access off, Forget says
+  "Forgotten" but keeps that browser's waiting connection.** When Browser
+  access is switched back on, the forgotten browser is connected and usable
+  again with no pairing. `browser/service.py:1345-1360` closes only the
+  live connection (there is none while access is off);
+  `daemon/routes/browser.py:1027-1041` promotes the waiting one without
+  checking its token again. A second Forget does close it.
+- [ ] **BR2 (1, medium, suspected).** In a run held to a model that cannot
+  take pictures, a screenshot with a question can come back with a
+  "description" from a model that never saw the picture:
+  `browser/screenshot.py:508-610` lacks the check `tools/images.py:253-271`
+  has. Not verified: that such a run is given the screenshot tool, and what
+  each adapter does with a picture it cannot take.
+- [ ] **BR3 to BR6 (low; BR3 and BR4 pass only, BR5 and BR6 suspected).** A
+  Pair press that lands while Browser access is off makes that browser the
+  live one anyway (`browser/extension_backend.py:818-846`; the card does not
+  offer Pair then); the screenshot tool promises "the result names the
+  provider that saw it" and the result never does
+  (`screenshot.py:581-610, 415-430`); a screenshot is of whichever tab is
+  on screen at that instant but is filed under the tab asked for
+  (`extensions/chrome/src/background/tabs.ts:312-348`); the shared scan for
+  hidden instructions slows with the square of a long run of blank lines
+  (`computeruse/safety.py:59-64`; not reachable through the add-on, other
+  callers not checked).
+
+Holds: the pairing token is random, stored only as a hash, compared safely
+and never logged (a token in a logged address is masked,
+`core/logging.py:248-336`); a web page cannot open the add-on's connection;
+page text reaches a model only inside the fence; no field value passes the
+daemon; a terminal's token lives in memory only and dies with its terminal.
+
+### The door that gives coding tools Jarvis's tools, and the code host (`mcpserver/`, `codehost.py`)
+
+All of both were read whole.
+
+- [ ] **MC1 (2, medium, checked on the restore side). A Memory, Browser or
+  Hand off box turned OFF on a Build › Code session can be ON again after
+  Iron Jarvis is killed and restarted.** The restore takes the boxes from
+  the state kept beside the running tool, not from the session's record
+  (`hosted/adopt.py:439-444`), and turning a box off does not refresh that
+  kept state (`hosted/service.py:2402-2423`, pass only). The chip shows off
+  while the tool is still served.
+- [ ] **MC2 (4, medium, checked on the daemon side). When a coding tool
+  asks to click or type in the user's browser through this door, the only
+  card is a bell row "An agent run wants to …".** It does not say which
+  session asks, on which page, or what is clicked or typed, and it lapses
+  after 45 seconds (`mcpserver/server.py:692-733`; the bell's words pass
+  only, `dashboard/components/NotificationBell.tsx:1857-1945`). On the same
+  card: "Allow for this run" is offered but counts once (`678-683`), and
+  two of the card's answers are read as "nobody answered" (`727-733`).
+- [ ] **MC3 (4, medium, checked for the bridge; suspected for tools that
+  connect by themselves). After any restart of Iron Jarvis, or an hour
+  without a call, a running coding tool loses Jarvis's tools until it is
+  started again.** The door forgets the tool's session and answers every
+  later call "no MCP session" (`mcpserver/server.py:917-922`,
+  `session.py:59, 259-266`); the bridge never starts a new one
+  (`stdio_shim.py:226-244`). Not verified: what each tool's own client does
+  with that answer.
+- [ ] **MC4 to MC8 (low; MC4 and MC7 suspected, the rest pass only).**
+  Stopping a tool that left a program holding its output open can hang the
+  stop for 60 seconds (`codehost.py:547-559`; the daemon's own copy has the
+  guard); a call through the door has no time limit and is not re-checked
+  after its card, so a card left open when the session is stopped can still
+  be allowed (`server.py:785-825`); the Browser box says clicks ask first
+  and does not say that what the tool reads from any open tab goes to its
+  vendor with no card (`dashboard/lib/buildApp.ts:684`); on a PC with a
+  proxy set, the bridge may send its call to the proxy
+  (`stdio_shim.py:94-98`); a crash while serving a call is answered to the
+  tool as the exception's name and text
+  (`daemon/routes/mcpserver.py:250-261`).
+
+Holds: the door takes only a terminal's or a session's own token, never the
+install token; the token is never on disk or a command line; a call goes
+through the same tool gate as chat with a card for anything that asks, and
+only the browser tools, five read-only memory tools and four hand-off tools
+are served, so a session in Plan or Ask first reaches no write, send or
+shell tool through it; the code host listens on this PC only and starts and
+stops tools as a tree.
+
+### Coding-session routes (`daemon/routes/build.py`: the reply watch, the save, the resume pass, the session routes)
+
+The whole file was read, in two halves.
+
+- [ ] **RB1 (4, medium, checked; found by both halves). A reply the user
+  stopped can carry on by itself at the next start.** If Iron Jarvis closes
+  after Stop but before the reply has wound down (a running command gets up
+  to three seconds), the reply is recorded "cut off by a restart", its kept
+  work stays, and the resume pass has no check for "the user pressed Stop"
+  (`build.py:2439-2441, 2468-2471, 4102-4137`). Stop is never written down
+  (`core/turns.py:162`).
+- [ ] **RB2 (4, medium, suspected). A reply that finished normally can get
+  an "account limit" card, arm a wait, and later start a hidden "carry on"
+  turn on work that was done.** A limit note left by a side call (a helper,
+  the reviewer, the summary) is read at any end of the reply, a good one
+  included (`build.py:2380-2388`), and the limit branch comes before the
+  "it finished" branch (`1884-1901`). Not verified: that a refused side
+  call lets the main reply end normally.
+- [ ] **RB3 (4, medium, checked on the route; the lane pass only). Changing
+  the permission level, or switching Plan on, while a reply runs is shown
+  as applied at once, but the running reply keeps its old level.** A user
+  going from "Don't ask" to "Ask before every action" to rein a reply in
+  still gets commands run unasked until it ends, and nothing says so
+  (`build.py:4816-4880`; the level is read once, `routes/chat.py:5063`).
+- [ ] **RB4 (2, medium, suspected). "Branch from here" does not copy the
+  hold that keeps a session Local only after it read an app kept on the
+  user's own models.** In the branch Local only can be switched off, and
+  the copied conversation then goes to a cloud model
+  (`build.py:5215-5226`; the hold is `providers/egress.py:789`). Not
+  verified: that a coding session's reply gets such a hold written.
+- [ ] **RB5 (4, low, checked for the code; a narrow window).** A reply that
+  had finished and was saved is carried on again at the next start if the
+  app stops between the save and the removal of its kept copy
+  (`build.py:2432-2441, 2468-2471`); the resume pass never checks that the
+  session already holds the finished reply.
+- [ ] **RB6 to RB14 (low, pass only; RB12 by two passes).** A "Resume when
+  ready" wait whose carry-on is refused for a lasting reason (folder gone,
+  model no longer usable) is tried every 60 seconds for ever and never said
+  (`build.py:3996-4002`); a failed write of the question at a reply's start
+  answers "no such coding session" after the wait and its card were already
+  removed (`3693-3702, 3737-3741`); Delete does not hold the session while
+  it moves folders, so a reply Jarvis starts by itself in that moment
+  begins in a session being deleted (`4931-4994`); "It will be put back
+  when Iron Jarvis next starts" is false when the next start is more than
+  seven days away (`2058-2060`, `daemon/durable_turns.py:1282-1283`); the
+  bell, the tray and the phone say "Your coding session finished" for a
+  reply cut at its step limit, its limit or its length (`1991-1993,
+  2502-2514`); while the session cannot be written, every later piece of
+  the reply tries again and logs a full error, and an unsaved "for this
+  conversation" approval is dropped with no word (`2411-2412, 1689-1705`);
+  a reply that breaks outside its own error handling puts the Python
+  exception in the live stream and the stored record
+  (`daemon/durable_turns.py:933-936`); when the folder check itself fails
+  the user reads "This folder cannot be used: that folder cannot be used:
+  PermissionError" (`harness/sessions.py:1775-1776`); a session's reply
+  limit does not go with a branch made from it (`build.py:5215-5226`).
+
+Holds: the reply and its limit card are written before the end is
+announced; a failed write is retried, said, and put back at the next start;
+the resume pass cannot run twice for one reply and never takes one that was
+waiting on the user; Rewind is all or nothing and says truthfully what it
+put back; a session route checks every field before it changes anything;
+blocking work is off the event loop.
+
+### Several attempts, as the night uses them (`harness/attempts.py`)
+
+Read whole, with the night's call sites.
+
+- [ ] **NA1 (1, medium, checked). A night task tried on several models is
+  announced "Done" whatever its attempts did.** All failed, all cut at a
+  limit, or stopped by the night's own backstop: the morning notice still
+  counts it under done with "open the session to keep one". The attempts'
+  ending carries only the summary and the card (`attempts.py:1859`), and
+  the night reads only fields that ending never has
+  (`harness/night.py:1024-1056`); nothing in the night's code reads the
+  card.
+- [ ] **NA2 (8, medium, checked). The Last night row of such a task shows
+  no usage.** Up to three models worked for up to the task's whole time
+  limit; `harness/night_morning.py:266-276` adds only the reply's own usage
+  and its helpers', and each attempt's usage sits on the card. Not checked:
+  whether the app-wide usage record still counts them.
+- [ ] **NA3 (2, medium, checked for the default-model gap; the dollar limit
+  pass only). At night the pay-per-use limit is not applied to a pick that
+  is the default model**, even at $0 or already spent
+  (`daemon/routes/night.py:894-899` skips the night's check for such a
+  task; `attempts.py:826` skips its own for the session's model, which at
+  night is the default). No attempt gets the night's "what is left of the
+  limit" dollar limit either (`harness/night.py:815-819`).
+- [ ] **NA4 (2, medium, suspected).** An attempt can start with no account
+  chosen when the accounts list could not be read: the refusal an ordinary
+  reply gets is swallowed (`daemon/routes/build_attempts.py:192-195`,
+  checked). Not verified: which login then answers.
+- [ ] **NA5 (2, medium, suspected for what is pushed). In a session that
+  works in its folder directly, "Try on…" commits every file not yet
+  committed and not ignored, new files included, onto each attempt's
+  branch with no screen for secrets or size** (`attempts.py:928-981`,
+  checked). The night's own commit is screened; this one is not. After
+  Keep, a later Push sends it. Not verified: what the Changes view shows
+  before that Push.
+- [ ] **NA6 to NA8 (low; NA6 and NA7 pass only, NA8 suspected).** A night
+  task that fails to start keeps the note "It could not start (KeyError)."
+  (`routes/night.py:975-977`); "Runs at once" counts such a task as one
+  although it runs three replies at once (`routes/night.py:1036-1047`);
+  deleting a session in the seconds after its attempts end can leave their
+  folders and branches with no session that knows them (nothing is
+  deleted; `routes/build.py:4936`).
+
+Holds: each attempt works on its own branch in its own folder; clean-up
+only moves folders to the trash; nobody picks a winner at night; Keep
+refuses rather than overwrite; Stop, Cancel and Emergency stop reach every
+attempt and its programs; a restart never leaves an attempt "running".
+
+### Permissions and the command guard (`tools/permissions.py`, `sandbox/cmd_guard.py`, and their callers)
+
+Both files were read whole, and each caller along the path of a call.
+`cmd_guard.py` is only the guard for `;` in Windows cmd; whether a command
+is dangerous is decided in `core/auto_approve.py`, read in part.
+
+- [ ] **PG1 (4, high, checked for the gate; that such a tool is armed with
+  its app is pass only; the pass said medium, raised by the lead). A
+  held-back app tool runs in chat with no card whenever its app is switched
+  on for that chat.** A tool that arrives in a later update of a connected
+  app and can change things is meant to ask until the user trusts it.
+  Switching the app on arms every one of its tools by name
+  (`daemon/chat_turn.py:5345`), every armed name becomes a grant
+  (`daemon/routes/chat.py:5309-5314, 5342`), the card is skipped for a
+  granted name (`6869-6873`), and the gate's one exception for a held-back
+  tool is "its own name is in the grant" (`tools/permissions.py:266-268`).
+  Both chat lanes. The test for the hold-back calls the gate directly,
+  never a chat with the app switched on.
+- [ ] **PG2 (2, medium, checked). A workflow's tool step skips the tool's
+  own "ask every time" check.** A scheduled workflow can add an outgoing
+  webhook (Jarvis's events sent to another address from then on) with
+  nobody asked: `workflows/engine.py:1497-1542` asks only the tier, and the
+  tool's own check (`webhooks/tools.py:53`) is called by the chat lanes and
+  agent runs only. An agent can write such a workflow unasked
+  (`schedule_create` and `workflow_create` do not ask,
+  `core/config.py:242-248`). Not verified: which agents are given those
+  tools.
+- [ ] **PG3 (2, medium, checked; `repl` suspected). After a run reads
+  flagged text it loses the web tools and its shell is isolated, but
+  `run_code` and `code_run` still run model-written code on this PC with
+  the network open.** Neither is on the lists in `core/trust.py`, and only
+  the tool named `shell` is isolated (`agents/runtime.py:5102-5108`,
+  `daemon/chat_turn.py:4358-4369`). It needs `run_code` already allowed
+  for the run.
+- [ ] **PG4 (3, medium, checked). Undo is refused for a change made by any
+  tool set to "Ask first".** On a default install that is every rename,
+  move or copy of a download, whose own answer says it can be reversed from
+  the receipt. `daemon/routes/undo.py:267-279` asks the gate with nobody to
+  ask, and the refusal shows engine words ("grant it for one task with
+  allow_tools …", `tools/permissions.py:309-315`). A user who sets file
+  edits to "Ask first" loses every edit's Undo, and Rewind of a coding
+  session then refuses (`harness/rewind.py:571-583`, pass only).
+- [ ] **PG5 (1, medium, checked on the daemon side). Setting web search or
+  web fetch to "Ask first" in Settings is saved and shown, and both still
+  run without asking.** `tools/permissions.py:206-212` turns "ask" into
+  "allow" for these two on purpose (so unattended runs can search); the
+  setting still offers the choice.
+- [ ] **PG6 (3, medium, checked by reading; not run). The `;` guard misses
+  a command where `2>&1` comes before the `;`.**
+  `del /q *.tmp >nul 2>&1; python run.py` is not refused, and Windows cmd
+  hands `del` the later words, so `run.py` is deleted.
+  `sandbox/cmd_guard.py:153-157` splits the line at the `&` inside `2>&1`.
+  A command line has no Undo.
+- [ ] **PG7 (4, medium, checked for the match; the card suspected).
+  "Always allow exactly this" ignores every argument whose name starts
+  with an underscore** (`core/grants.py:102-120`). Meant for two of the
+  app's own names, it also drops an app tool's `_id`, so an exact approval
+  for one record covers every other. Not verified: that the card offers
+  Always for such a tool.
+- [ ] **PG8 to PG10 (low; PG8 suspected, the rest pass only).** A line an
+  agent types into a Build terminal meets none of the shell tool's checks
+  (no git guard, no `;` guard), and a terminal it opens can be in any
+  folder (`tools/pane_tools.py:202-210, 273-274`; both ask first);
+  `if exist out.txt del out.txt; python gen.py` is not refused either
+  (`cmd_guard.py:344-399`; its own notes list this limit); the refusal
+  with nobody to ask advises a Settings change that Settings refuses for
+  the shell and its like (`permissions.py:309-315`).
+
+Holds: an unknown tool or level means ask, ask with nobody to ask means
+refuse, and a deny is decided before any approval is read; a tool on the
+floor cannot be raised to allow by an agent or by Settings; every refusal
+is recorded; only the tool gate runs a tool; a helper's approvals come from
+its parent, never from the model; the shell tool gives the guard the exact
+text it runs.
+
+### How a reply is saved to its chat, and `daemon/durable_turns.py`
+
+`durable_turns.py` was read whole; the two chat lanes and the Chat page
+only along the save path.
+
+- [ ] **CS1 (1, medium, checked). Opening a chat whose reply the daemon ran
+  or is still running, while another chat's reply is on screen, shows it as
+  a failed turn with Retry.** Retry asks the question again, so its steps
+  run a second time, and the first reply is never shown.
+  `dashboard/app/chat/page.tsx:6707` reads "busy" as it was when the click
+  happened (the other chat's).
+- [ ] **CS2 (3, medium, checked for the merge; the two-pages path pass
+  only). Ask, go to another page of the app, come back to Chat while the
+  reply is still being written: the reply is saved twice.** The same with
+  two windows on one chat. The first page never ends its stream; both save
+  at the end, and the second save's merge adds its copy after the first
+  (`page.tsx:6505-6516`); nothing matches the two by their turn. Suspected:
+  a reply that hands off to an agent starts the agent run twice.
+- [ ] **CS3 (1, medium, checked). When the page hears nothing for 60
+  seconds it says the turn "was stopped … press Retry", but the daemon's
+  turn keeps running, steps included.** The cut text is saved as the reply,
+  so the finished reply never reaches the chat, and Retry starts a second
+  turn beside the first (`dashboard/lib/useChatStream.ts:1042-1061,
+  1214-1236`; `page.tsx:9483-9548` sends no Stop and does not rejoin).
+- [ ] **CS4 (4, medium, checked). A Stop pressed right after Send can land
+  before the daemon knows the turn.** The daemon answers "no such turn",
+  the page ignores that, shows and saves "Stopped.", and the turn runs to
+  its end with nobody watching, steps included
+  (`daemon/routes/chat.py:3795-3840`: up to four waits before the turn is
+  registered; `page.tsx:11037-11065`).
+- [ ] **CS5 (3, medium, checked). A reply that finishes while no page
+  follows it is only in the turn's record, not in its chat.** It is not in
+  history search until someone opens that chat, and a start more than seven
+  days later deletes the record: the chat then ends on the question with
+  Retry and the reply's words are gone (the record of its steps stays).
+  `durable_turns.py:894-956` writes the record only; `1282-1283` deletes by
+  age with no check that the reply reached its chat. `docs/rules/chat.md`
+  says a line the daemon can write must be written by the daemon.
+- [ ] **CS6 to CS10 (low; CS6 and CS10 partly suspected, the rest pass
+  only).** The first reply of every new chat runs with no chat id, so its
+  cost is missing from that chat's usage line (`page.tsx:8666, 9240-9252`;
+  `routes/chat.py:5710`); deleting a chat leaves its turn records (each
+  reply's text, thinking, and tool inputs and results) in the database and
+  in backups for up to seven days and until the next start
+  (`routes/chat.py:333-361`); a turn's usage is written once, at the end,
+  on the event loop, and a failed write is dropped with no log line
+  (`daemon/chat_turn.py:11440-11464`); every start loads every stored turn
+  record whole into memory on the event loop
+  (`durable_turns.py:1269-1284`); a question whose own turn never started
+  can be "answered" on reopening by replaying the turn before it
+  (`dashboard/lib/turnRejoin.ts:11, 33-38`).
+
+Holds: a second send of a turn that is running follows it and never starts
+it twice; Stop reaches a turn after a page rejoined it; leaving a chat
+mid-reply saves no half reply into the chat opened next; a tidy shutdown
+marks running turns cut off; replaying a record runs no step and no model
+call again.
+
+### Build terminals (`terminals/`, `daemon/routes/terminals.py`)
+
+All eighteen files in `terminals/` were read whole.
+
+- [ ] **TM1 (2, medium, checked). The pane's "ask AI" and "make a workflow
+  from this terminal" send the terminal's output to a model with no
+  fence.** Text a program printed (a downloaded file shown on screen, a
+  repository's log) can steer the command the pane then offers on "Type it
+  in", or the steps of a workflow that is saved
+  (`daemon/routes/terminals.py:1206, 1277-1295` and `1427-1444`, where the
+  output can also close the marks put around it). The second review's fix
+  covered the three pane tools only.
+- [ ] **TM2 (7, medium, checked for the missing limit; the rest pass
+  only). The first time a page shows a reopened terminal at a different
+  size, its shell is started a second time with no time limit.** If Windows
+  hangs that start (the known Store PowerShell hang), the pane is blank and
+  takes no keys until it is closed, and its still-working old shell is cut
+  off from the screen (`routes/terminals.py:1051-1057`;
+  `terminals/session.py:379-440`).
+- [ ] **TM3 (3, medium, checked). A terminal whose shell cannot be started
+  at a restart for any reason other than "stuck" is dropped with no word.**
+  A program that was uninstalled or moved is enough: no terminal, nothing
+  on the Build page, a debug log line only (`terminals/manager.py:1410-1411,
+  1463-1464`), and its kept history is deleted at the next save
+  (`985-996`, pass only).
+- [ ] **TM4 (2, medium, checked). The Continue strip says Continue on "X"
+  and "Your conversation is copied to X", but the daemon is never told X
+  and picks the account itself.** With three or more Claude accounts the
+  two can differ, and the conversation is then copied into and resumed
+  under another account than the one agreed to
+  (`dashboard/components/terminal/ContinueStrip.tsx:151, 160, 226`;
+  `routes/terminals.py:663-732`; `terminals/continue_on.py:587-680`).
+- [ ] **TM5 (1, medium, checked on the daemon side). The Launch menu's
+  "With Iron Jarvis's tools (opens a new terminal)" rows say "Jarvis tools
+  ready", and pressing one opens a bare terminal:** nothing is set up and
+  no tool is started, because no boxes are ticked when the terminal is
+  made and the set-up runs only then. The sentence that would say why goes
+  to the log (`platform.py:403-426`; `terminals/recipes.py:545-557,
+  716-718`; `dashboard/app/terminals/page.tsx:1118`).
+- [ ] **TM6 to TM20 (low; TM10, TM14, TM15 and TM20 suspected, the rest
+  pass only), in the order written:**
+  - Kept on this PC and in backups: each terminal's last 64 KB of output
+    is written in the clear and carried by every backup, where it stays
+    after the terminal is closed (`manager.py:927-946`,
+    `maintenance.py:142-191`).
+  - Raw errors: opening a terminal in a folder that is gone answers the
+    raw Windows error (`backend.py:1232-1237`); "could not be carried over
+    (PermissionError)" is said after the conversation file was in fact
+    copied (`continue_on.py:421-447`).
+  - Other systems and fallbacks: a terminal an agent opens has no reader
+    on Linux and Mac, so its output is never recorded and reads "printed
+    nothing" (`tools/pane_tools.py:192-217`; worth a look for the Linux
+    work); on the older Windows fallback, closing a terminal ends only the
+    shell (`backend.py:245-251`); one shell that exits at once marks
+    terminals broken for the rest of the daemon's life
+    (`manager.py:694-712`).
+  - What is said: after a restart a terminal that was running an ordinary
+    program comes back as a fresh shell with no line saying that it ended
+    (`manager.py:1211-1252`); a script's echoed line such as "> vitest
+    run" is read as "the tool is idle", so a wait reports finished while
+    it has just begun (`terminals/agent_state.py:187-232`).
+  - "Type it in" sends a block of several lines as is, and a bash-family
+    shell runs the first lines without the user's Enter
+    (`dashboard/components/terminal/TerminalPane.tsx:1000-1004`).
+  - Accounts: a line on screen such as "resets in 90000 hours" parks the
+    account for years on Continue (`terminals/limit_state.py:155,
+    169-171`); Continue can refuse after it already told the account
+    manager the account is limited (`continue_on.py:629-654`); Continue
+    and "start fresh" leave no record in history
+    (`routes/terminals.py:663-829`).
+  - Light on the PC: the pane's "ask AI" reads and a resize run on the
+    event loop (`routes/terminals.py:1224-1232, 1067`); a terminal the
+    start gave up on cannot be dismissed and is tried again at every start
+    (`manager.py:778-782`).
+  - Only when run by hand with no token and open to the network (not the
+    packaged app): the terminal connection is not held to this PC
+    (`daemon/app.py:99-111`).
+
+Holds: a terminal never inherits the install token; every terminal route
+and its connection need the token; a model can type into a terminal only
+through two tools that ask first and are refused to a low-trust run;
+nothing a terminal prints makes Jarvis type or change account by itself
+(a strip and a click only); close asks first and takes the whole tree;
+buffers are bounded; a dead terminal is shown dead.
+
+### Still not read
+
+- Browser: the record-a-task path (`extensions/chrome/src/sidepanel/recording.ts`,
+  `browser/recording.py`), `browser/protocol.py`, `models.py`, `risk.py`,
+  the add-on's `bridge/socket.ts` and `content/scrub.ts`; whether
+  screenshots are ever cleaned up, and whether the picture question is on
+  a receipt.
+- The tools door: whether the client wall applies to a memory read through
+  it (`memory/origin.py`); what each coding tool's own client does when the
+  door forgets its session; how such an ask reaches the phone.
+- Coding sessions: `daemon/routes/build_git.py` (push, the Changes view),
+  `harness/rewind.py`, `branches.py`, `compact.py`, `reply_summary.py`,
+  `patience.py`, `attempt_spend.py`, `reply_cap.py`; the end of
+  `daemon/routes/night.py`; `daemon/chat_stream.py`.
+- Chat: the plain lane's body and the rest of the streaming lane beyond
+  the save path; the Chat page's hand-off to an agent; the phone doors'
+  recovery of a turn in flight; the tool gate's own record writes.
+- Terminals: the Studio code that types into a terminal
+  (`daemon/routes/creative.py`); the account manager's `signal` and `pick`
+  (`iron_proxy/client.py`); the list of places allowed to start a process
+  outside `core/procs`.
+- From the second review's list and still open: the bundled account
+  manager beyond its server and delete code.
+- Permissions: most of `core/auto_approve.py` (where a command is judged
+  dangerous or outward), `sandbox/git_bash.py`, `sandbox/manager.py` and
+  the Docker sandbox, `harness/command_shell.py`, `harness/session_grants.py`,
+  `core/approvals.py`, `repl/`, and the dashboard's Permissions page and
+  approval card.
+
+## Third fix plan (groups 17 to 23)
+
+Written 2026-11-16 at v1.517.0. The 90 findings above are fixed the way the
+first two plans' were ("How the fixes are made", points 2, 4 and 5): one
+release per group, Opus 5.5 at high effort implementing, each implementer
+with its own files and its own new test file, the lead reading every diff
+and proving each new test red by changing the code it pins. A finding marked
+"pass only" or "suspected" is first proven with a failing test; one that
+cannot be made to fail is marked "not a defect" here with the reason, and
+not changed.
+
+**The shared causes, and the one piece that closes each**
+
+| Cause | The one piece | Closes |
+|---|---|---|
+| A second way in that the gate does not judge | a held-back tool is decided before any approval that came from switching its app on; a workflow step asks the tool's own check through the same call as chat; the `;` guard reads `2>&1` as one word | PG1, PG2, PG3, PG6, PG7, PG8, PG9 |
+| The page, not the daemon, writes the reply into its chat | the daemon adds the finished reply to its chat itself, matched by its turn; the page's save matches by turn too, so a reply is there once | CS1, CS2, CS3, CS5, CS10 |
+| A Stop lives in memory only | a Stop is written on the turn's record before it is acted on; a Stop that arrives before its turn is kept for it; the resume pass refuses a stopped or finished reply | RB1, RB5, CS4, SB2, SB5, SB13, MC5 |
+| "Try on several models" at night went around the night's checks | one reading of the attempts card that the night's outcome, usage and limits all use | NA1, NA2, NA3, NA7 |
+| Terminal output handed to a model with no fence | `wrap_untrusted` at both terminal routes; a block typed in is one press of Enter | TM1, TM14 |
+| The screen names one thing and the daemon does another | the page sends what it names, and the daemon does that or refuses in words | TM4, TM5, RB3, SB4, SB6, MC1, MC2, BR1, PG5 |
+| A Python exception's name, or engine words, on screen | `core.failures.plain_failure` | RB12, RB13, MC8, NA6, TM7, TM8, PG4, PG10 |
+
+**Order.** The one high finding and its neighbours first, then the review's
+own order: a reply's home, Stop, the night, terminals, then the sidebar and
+the coding session's remaining routes.
+
+| Group | Theme | Findings |
+|---|---|---|
+| 17 | Every way in meets the gate | PG1 to PG10 |
+| 18 | A chat reply lives in its chat | CS1, CS2, CS3, CS5, CS6 to CS10, RB12 |
+| 19 | Stop is remembered | RB1, RB5, RB8, CS4, SB2, SB5, SB13, MC5 |
+| 20 | The night's rules cover every attempt | NA1 to NA8 |
+| 21 | Terminals | TM1 to TM20 |
+| 22 | The browser sidebar and the add-on | SB1, SB3, SB4, SB6 to SB12, SB14, BR1 to BR6 |
+| 23 | Coding sessions and the door to Jarvis's tools | MC1 to MC4, MC6 to MC8, RB2, RB3, RB4, RB6, RB7, RB9, RB10, RB11, RB13, RB14 |
+
+**Decisions taken as recommended.** Each changes something the owner will
+notice. Say so to change any of them.
+
+| # | Decision | Taken |
+|---|---|---|
+| K1 | A held-back app tool in a chat with its app switched on (PG1) | Asks every time until the tool is trusted on the app's own page, whatever is switched on for the chat |
+| K2 | A workflow step whose tool asks every time (PG2) | The step waits as "Needs you" with the card. "Always for this schedule" (decision D10) is how it is made to run unattended |
+| K3 | Code a run writes after it has read flagged text (PG3) | `run_code` and `code_run` run with the network closed, as the shell does; where that cannot be done they are refused by name for the rest of the run |
+| K4 | Undo of a change made by a tool set to "Ask first" (PG4) | The Undo press is the consent: it is not asked again and not refused |
+| K5 | Web search and web fetch set to "Ask first" (PG5) | Honoured wherever someone can answer. The Settings row says in words what unattended work does. Decided on reading the setting |
+| K6 | A line an agent types into a Build terminal (PG8) | Meets the same `;` guard and git guard as the shell tool (it already asks first) |
+| K7 | A reply nobody watched finish (CS5) | The daemon writes it into its chat. The seven-day clean-up never removes a reply that has not reached its chat |
+| K8 | Sixty seconds of silence in Chat (CS3) | The page says contact was lost and follows the turn again. It never says "stopped" for a turn that is running |
+| K9 | A reply the user stopped (RB1) | The Stop is written down. A stopped reply is never carried on after a restart |
+| K10 | The sidebar's conversation across a restart (SB3) | Kept on this PC and restored; where it cannot be, the panel says the conversation starts fresh. Listing sidebar conversations among chats is a new feature, left for the owner |
+| K11 | A night task tried on several models (NA1) | "Done" only when at least one attempt finished its work; otherwise "Needs you" with what happened to each |
+| K12 | The pay-per-use limit at night (NA3) | Covers every attempt, the default model included; each attempt gets what is left of the limit |
+| K13 | "Try on…" in a session that works in the folder directly (NA5) | The same screen as the night's commit (secrets, very large files) before anything is committed to an attempt's branch |
+| K14 | The Continue strip (TM4) | The page sends the account it names; the daemon uses that account or refuses in words |
+| K15 | "With Iron Jarvis's tools" in the Launch menu (TM5) | The row really sets the tools up and starts the tool; a row that cannot does not say "ready" |
+| K16 | A terminal's kept output (TM6) | Left out of backups, and removed when the terminal is closed |
+| K17 | Changing the permission level while a reply runs (RB3) | A stricter level holds from the running reply's next step; a looser one from the next reply, and the page says which |
+| K18 | A coding tool asking to click or type in the browser (MC2) | The card names the session, the page and what is clicked or typed, and waits as long as chat's card; only answers the card can honour are offered |
+| K19 | A coding tool kept running across a restart (MC3) | Gets Iron Jarvis's tools back by itself |
+| K20 | "Start new chats local only" and the sidebar (SB12) | Covers the sidebar and its dictation |
