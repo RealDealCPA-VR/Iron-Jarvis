@@ -30,6 +30,12 @@ def _result(
     return {"name": name, "ok": bool(ok), "detail": detail, "fix": fix, "level": level}
 
 
+#: ONE name for "this is Windows" where the health check's WORDS differ by
+#: system, so a test can read both systems' words on any machine (never by
+#: changing ``os.name``, which breaks ``pathlib`` under the test).
+_ON_WINDOWS = os.name == "nt"
+
+
 def _which(*names: str) -> str | None:
     """First executable among ``names`` found on PATH, else None (read-only)."""
     for n in names:
@@ -55,6 +61,7 @@ def _find_browser() -> str | None:
         "chromium",
         "chromium-browser",
         "msedge",
+        *_LINUX_EDGE_NAMES,
     )
     if path:
         return path
@@ -114,8 +121,13 @@ def check_uv() -> dict:
         else "uv (the Python package/runtime manager) is not on PATH.",
         fix=""
         if ok
-        else "Install uv: https://docs.astral.sh/uv/ "
-        "(PowerShell: `irm https://astral.sh/uv/install.ps1 | iex`).",
+        else (
+            "Install uv: https://docs.astral.sh/uv/ "
+            "(PowerShell: `irm https://astral.sh/uv/install.ps1 | iex`)."
+            if _ON_WINDOWS
+            else "Install uv: https://docs.astral.sh/uv/ "
+            "(in a terminal: `curl -LsSf https://astral.sh/uv/install.sh | sh`)."
+        ),
         # RECOMMENDED, not REQUIRED: uv is a source/dev tool (self-update, repair).
         # A packaged/frozen install ships its own runtime and runs fine without it,
         # so a missing uv must NOT make the app's self-diagnosis report "broken".
@@ -209,13 +221,21 @@ _BROWSER_PATH_NAMES = (
     "msedge",
 )
 
+#: Edge on Linux is not called ``msedge``: its package puts ``microsoft-edge``
+#: (and ``microsoft-edge-stable``) on PATH and the program itself under
+#: /opt/microsoft/msedge. Without these a Linux PC WITH Edge was told to
+#: install Edge. Looked for off Windows only; Windows' list is as it was.
+_LINUX_EDGE_NAMES: tuple[str, ...] = () if os.name == "nt" else ("microsoft-edge", "microsoft-edge-stable")
+_LINUX_EDGE_PLACES: tuple[str, ...] = () if os.name == "nt" else ("/opt/microsoft/msedge/msedge",)
+
 
 def _browser_candidates() -> list[str]:
     found: list[str] = []
-    for name in _BROWSER_PATH_NAMES:
+    for name in (*_BROWSER_PATH_NAMES, *_LINUX_EDGE_NAMES):
         path = shutil.which(name)
         if path:
             found.append(path)
+    found += list(_LINUX_EDGE_PLACES)
     for env in ("ProgramFiles", "ProgramFiles(x86)", "LocalAppData"):
         base = os.environ.get(env)
         if not base:
@@ -261,7 +281,7 @@ def _browser_label(path: str) -> str:
     generic word left the user unsure the add-on applied to them)."""
     lowered = (path or "").lower()
     base = os.path.basename(lowered)
-    if "msedge" in base or "microsoft edge" in lowered:
+    if "msedge" in base or "microsoft edge" in lowered or base.startswith("microsoft-edge"):
         return "Microsoft Edge"
     if "chrome" in base or "google chrome" in lowered:
         return "Google Chrome"
@@ -704,6 +724,17 @@ def check_local_ocr() -> dict:
     result = self_test()
     ok = bool(result.get("ok"))
     langs = ", ".join(result.get("languages") or []) or "none"
+    if not ok and not _ON_WINDOWS:
+        # Off Windows there is nothing to switch on: the reader this check is
+        # about is Windows' own. The words say so, and what works instead.
+        return _result(
+            "local_ocr",
+            False,
+            "Scans are not read on this computer without a model: the built-in reader "
+            "is part of Windows. Scanned pages need a vision-capable model instead.",
+            fix="Choose a model that can read images in Settings. There is nothing to install.",
+            level=RECOMMENDED,
+        )
     return _result(
         "local_ocr",
         ok,
@@ -735,6 +766,11 @@ def check_legacy_office() -> dict:
     word_ok = word_available()
     if xls_ok and word_ok:
         detail = "Old .xls files open directly, and .doc files open through Microsoft Word."
+    elif xls_ok and not _ON_WINDOWS:
+        detail = (
+            "Old .xls files open directly. .doc files are opened through Microsoft Word "
+            "on Windows, which this system does not have — save those as .docx to use them."
+        )
     elif xls_ok:
         detail = (
             "Old .xls files open directly. .doc files need Microsoft Word, which "
@@ -751,7 +787,11 @@ def check_legacy_office() -> dict:
         else (
             _xls_missing_fix()
             if not xls_ok
-            else "Install Microsoft Word, or save .doc files as .docx before using them."
+            else (
+                "Install Microsoft Word, or save .doc files as .docx before using them."
+                if _ON_WINDOWS
+                else "Save .doc files as .docx before using them."
+            )
         ),
         level=RECOMMENDED,
     )

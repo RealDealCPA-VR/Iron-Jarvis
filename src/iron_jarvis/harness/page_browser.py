@@ -499,7 +499,8 @@ def edge_executable() -> str:
         if not path:
             continue
         base = os.path.basename(path).lower()
-        if "msedge" not in base and "microsoft edge" not in path.lower():
+        # "microsoft-edge": Edge's name on Linux (the doctor's list has it there).
+        if "msedge" not in base and "microsoft edge" not in path.lower() and not base.startswith("microsoft-edge"):
             continue
         if os.path.isfile(path):
             return str(path)

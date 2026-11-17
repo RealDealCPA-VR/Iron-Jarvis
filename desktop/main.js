@@ -54,6 +54,15 @@ const path = require("path");
 if (process.platform === "linux" && process.env.APPIMAGE_EXIT_AFTER_INSTALL === "true") {
   process.exit(0);
 }
+// LINUX ONLY, the single-file app: the program it runs from sits in a folder
+// that exists only while the app is open, so a restart (Retry, repair, the
+// screen fallback) must start the FILE the user runs. Every `app.relaunch()`
+// below goes through this; other systems keep Electron's own.
+if (process.platform === "linux" && process.env.APPIMAGE) {
+  const relaunchOwn = app.relaunch.bind(app);
+  app.relaunch = (options) =>
+    relaunchOwn({ execPath: process.env.APPIMAGE, args: process.argv.slice(1), ...(options || {}) });
+}
 
 const windowState = require("./windowState");
 // FAIL-OPEN require: v1.126.0 shipped with integrity.js missing from
@@ -766,7 +775,60 @@ function hideToTray() {
 // Packaged builds only: in dev the login item would point at electron.exe and
 // leave junk startup entries behind.
 
+//: Where "start at login" is this shell's to set: the installed app on
+//: Windows (a login item) and on Linux (an autostart entry).
+function startAtLoginWorksHere() {
+  return IS_PACKAGED && (process.platform === "win32" || process.platform === "linux");
+}
+
+// LINUX: Electron has no login item there (the calls did nothing, and the
+// switch still read On). The desktop's own way is a small file under
+// ~/.config/autostart that names the program to start.
+function linuxAutostartFile() {
+  const base = process.env.XDG_CONFIG_HOME || path.join(require("os").homedir(), ".config");
+  return path.join(base, "autostart", "iron-jarvis.desktop");
+}
+//: What a Linux sign-in should start: the single file the user runs, else
+//: this program itself (the installed package).
+function linuxLaunchTarget() {
+  return process.env.APPIMAGE || process.execPath;
+}
+//: The entry's text. The path is quoted as the desktop-entry rules ask:
+//: in double quotes, with " ` $ and \ escaped.
+function linuxAutostartEntry(target) {
+  const quoted = '"' + String(target).replace(/(["`$\\])/g, "\\$1") + '"';
+  return [
+    "[Desktop Entry]",
+    "Type=Application",
+    "Name=Iron Jarvis",
+    `Exec=${quoted} --hidden`,
+    "Terminal=false",
+    "X-GNOME-Autostart-enabled=true",
+    "",
+  ].join("\n");
+}
+//: The single file may have been moved since the entry was written: an entry
+//: that is ON is rewritten at start, so it names the file as it is now.
+function refreshLinuxAutostart() {
+  if (!IS_PACKAGED || process.platform !== "linux") return;
+  try {
+    const file = linuxAutostartFile();
+    if (!fs.existsSync(file)) return;
+    const want = linuxAutostartEntry(linuxLaunchTarget());
+    if (fs.readFileSync(file, "utf8") !== want) fs.writeFileSync(file, want, { mode: 0o644 });
+  } catch (err) {
+    desktopLog("warn", "[login-item] could not refresh the autostart entry:", err && err.message);
+  }
+}
+
 function getStartAtLogin() {
+  if (process.platform === "linux") {
+    try {
+      return fs.existsSync(linuxAutostartFile());
+    } catch {
+      return false;
+    }
+  }
   try {
     return app.getLoginItemSettings().openAtLogin;
   } catch {
@@ -775,6 +837,21 @@ function getStartAtLogin() {
 }
 
 function setStartAtLogin(enabled) {
+  if (process.platform === "linux") {
+    try {
+      const file = linuxAutostartFile();
+      if (enabled) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, linuxAutostartEntry(linuxLaunchTarget()), { mode: 0o644 });
+      } else {
+        fs.rmSync(file, { force: true });
+      }
+    } catch (err) {
+      desktopLog("error", "[login-item] could not update:", err && err.message);
+    }
+    refreshMenus();
+    return;
+  }
   try {
     app.setLoginItemSettings({
       openAtLogin: !!enabled,
@@ -909,7 +986,7 @@ function desktopSwitchDecision(setting, seen, pending, before) {
 //: and the close choice (true/false, or null = ask when the window closes).
 function rawDesktopSwitch(key) {
   if (key === START_WITH_WINDOWS_KEY) {
-    return IS_PACKAGED && process.platform === "win32" ? !!getStartAtLogin() : null;
+    return startAtLoginWorksHere() ? !!getStartAtLogin() : null;
   }
   return typeof keepRunningPref === "boolean" ? keepRunningPref : null;
 }
@@ -917,7 +994,7 @@ function rawDesktopSwitch(key) {
 //: Put back what `rawDesktopSwitch` kept. Never written back to the daemon.
 function revertDesktopSwitch(key, before) {
   if (key === START_WITH_WINDOWS_KEY) {
-    if (IS_PACKAGED && process.platform === "win32" && (before === true || before === false)) {
+    if (startAtLoginWorksHere() && (before === true || before === false)) {
       setStartAtLogin(before);
     }
   } else {
@@ -957,7 +1034,7 @@ function writeAppSwitch(field, key, value) {
 function localDesktopSwitch(key) {
   if (key === START_WITH_WINDOWS_KEY) {
     // Only an existing login item is a choice; "off" may just be the default.
-    return IS_PACKAGED && process.platform === "win32" && getStartAtLogin() ? true : null;
+    return startAtLoginWorksHere() && getStartAtLogin() ? true : null;
   }
   return typeof keepRunningPref === "boolean" ? keepRunningPref : null;
 }
@@ -965,7 +1042,7 @@ function localDesktopSwitch(key) {
 //: Apply a value that came from Iron Jarvis's settings — never written back.
 function applyDesktopSwitch(key, value) {
   if (key === START_WITH_WINDOWS_KEY) {
-    if (IS_PACKAGED && process.platform === "win32") {
+    if (startAtLoginWorksHere()) {
       setStartAtLogin(!!value);
       writeDesktopSetting("startWithWindowsAsked", true); // chosen: never asked again
     } else {
@@ -4925,8 +5002,9 @@ function windowIcon() {
 function createTray() {
   if (tray) return;
   // Windows renders tray icons crispest from .ico; fall back to the png.
+  // Linux cannot read an .ico at all (the tray came up blank there): the png.
   const icoPath = path.join(__dirname, "assets", "icon.ico");
-  const iconPath = fs.existsSync(icoPath)
+  const iconPath = process.platform !== "linux" && fs.existsSync(icoPath)
     ? icoPath
     : path.join(__dirname, "assets", "icon.png");
   let image;
@@ -6366,6 +6444,7 @@ async function startup() {
   setInterval(checkForUpdates, UPDATE_RECHECK_MS);
   installKeepAwake(); // v1.391.0: no sleep while work runs (Settings › System)
   installDesktopSwitches(); // v1.438.0: Start with Windows / keep running, from settings
+  refreshLinuxAutostart(); // Linux: an entry that is on names the file as it is now
 }
 
 // The last lines a child wrote, for the failure classifier (v1.249.0, R-06).

@@ -370,9 +370,20 @@ def test_the_doctor_reports_local_ocr(monkeypatch):
         "self_test",
         lambda: {"ok": False, "languages": [], "detail": "no OCR language is installed"},
     )
+    # Windows' own fix (where to add the OCR language), on any machine: off
+    # Windows there is nothing to switch on and the words say so
+    # (tests/test_linux_desktop_v1519.py reads both).
+    import importlib
+
+    doctor_mod = importlib.import_module("iron_jarvis.onboarding.doctor")
+    monkeypatch.setattr(doctor_mod, "_ON_WINDOWS", True)
     bad = check_local_ocr()
     assert not bad["ok"] and "vision" in bad["detail"]
     assert "Optical character recognition" in bad["fix"]
+    monkeypatch.setattr(doctor_mod, "_ON_WINDOWS", False)
+    elsewhere = check_local_ocr()
+    assert not elsewhere["ok"] and "vision" in elsewhere["detail"]
+    assert "Optical character recognition" not in elsewhere["fix"] and elsewhere["level"] == "recommended"
     assert bad["level"] == "recommended", "a missing engine must never block a boot"
     assert check_local_ocr in CHECKS
 

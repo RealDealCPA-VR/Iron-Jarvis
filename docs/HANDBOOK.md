@@ -2042,6 +2042,38 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Linux: start at sign-in, the tray icon, Edge, and true words (v1.519.0)
+
+Nothing changes on Windows in this release. These are things the Linux app
+did wrong or said wrong, each found by reading the app with Linux in mind.
+
+- **Start at login works.** The switch in the tray, the app menu and Settings
+  said On and did nothing, because Linux has no "login item" of the kind
+  Windows has. Iron Jarvis now writes the Linux desktop's own start-up entry,
+  and the switch reads that entry back, so On means it will start. If you
+  move the single-file app, the entry is corrected the next time you start it.
+- **The tray icon shows.** It was a Windows icon file that Linux cannot read,
+  so the tray could come up blank.
+- **A restart from inside the single-file app works.** Retry after a failed
+  start, and the restart after a repair, started a program in a folder that
+  is gone once the app closes. They now start the file you run.
+- **Microsoft Edge is found.** On Linux, Edge has another name than on
+  Windows. A PC with Edge installed was told to install Edge, and a coding
+  session's own browser would not start.
+- **The health check says true things.** It told a Linux user to open
+  Windows Settings to read scans, to install Microsoft Word for old `.doc`
+  files, and gave a PowerShell line for a tool. It now says what is true
+  there: scanned pages need a model that can read images, save a `.doc` as
+  `.docx`, and the Linux line for that tool.
+- **"Install Claude Code" and "Install Codex" type the Linux install line.**
+  They typed the PowerShell one into a Linux terminal, which fails at once.
+
+**Still not right on Linux:** the setting is still labelled "Start Iron
+Jarvis with Windows"; on a desktop with no tray, closing the window hides the
+app; the single file has no app-menu entry; global hotkeys on newer desktops;
+commands from coding tools run in the plain system shell, not bash; programs
+left running are not tracked. Nobody has used the Linux app on a real PC yet.
+
 ## Your Claude Code and Codex chats, in the chat list and in memory (v1.518.0)
 
 Chats you had in Claude Code (the desktop app's Code tab, or a terminal) and in

@@ -112,6 +112,7 @@ SETUP_LAUNCHES: list[dict[str, str]] = [
         "label": "Install Claude Code",
         "command": "irm https://claude.ai/install.ps1 | iex",
         "command_cmd": "curl -fsSL https://claude.ai/install.cmd -o install.cmd && install.cmd && del install.cmd",
+        "command_sh": "curl -fsSL https://claude.ai/install.sh | bash",
         "agent_cli": "",
         "provider": "Anthropic",
         "url": "https://code.claude.com/docs/en/setup",
@@ -121,6 +122,7 @@ SETUP_LAUNCHES: list[dict[str, str]] = [
         "label": "Install Codex",
         "command": "irm https://chatgpt.com/codex/install.ps1 | iex",
         "command_cmd": 'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
+        "command_sh": "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
         "agent_cli": "",
         "provider": "OpenAI",
         "url": "https://github.com/openai/codex",
@@ -185,6 +187,11 @@ def _installed_program(exe: str) -> str | None:
     return _find(exe)
 
 
+#: ONE name for "this is Windows" where a line typed into a pane differs by
+#: system, so a test can read both systems' lines on any machine.
+_ON_WINDOWS = os.name == "nt"
+
+
 def launch_line(entry: dict[str, str], shell: str | None) -> str:
     """The exact line ``POST /terminals/launch`` types into a new pane for
     ``entry`` (the route adds Enter, unless the line ends in a space).
@@ -204,6 +211,12 @@ def launch_line(entry: dict[str, str], shell: str | None) -> str:
     # v1.449.0 (item 20): an install job carries a Command Prompt form; a
     # cmd pane gets it, every other shell the PowerShell line. Decided by the
     # pane's shell NAME (terminals/shells: "pwsh", "powershell", "cmd").
+    # Off Windows a pane's shell is bash, zsh or sh, and PowerShell's line
+    # ("irm ... | iex") is "command not found" there: the vendors' own shell
+    # installers (``command_sh``; both addresses answered on 2026-11-16).
+    # Windows keeps its two forms, whatever the pane.
+    if entry.get("command_sh") and not _ON_WINDOWS:
+        return entry["command_sh"]
     if entry.get("command_cmd") and (shell or "").strip().lower() == "cmd":
         return entry["command_cmd"]
     try:
