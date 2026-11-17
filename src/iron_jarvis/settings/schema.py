@@ -926,10 +926,11 @@ SETTINGS: tuple[SettingDef, ...] = (
       "reads the start and end of each file, calls no model, and changes nothing in those tools. "
       "The first words of a chat from one tool can reach the model of another, the same way the "
       "title of an Iron Jarvis chat can. Chats a program started, and chats in temporary folders, "
-      "are left out. Neither: nothing from those tools is kept or told; the list in the sidebar "
-      "still shows them to you.",
+      "are left out. Claude desktop's Chat tab counts too once Claude is connected: what Claude "
+      "records about each chat, and its Cowork sessions on this PC. Neither: nothing from those "
+      "tools is kept or told; the list in the sidebar still shows them to you.",
       tier="allow", aliases=("chats from other tools", "Claude Code and Codex chats in memory"),
-      options=(("all", "Claude Code and Codex (default)"), ("claude-code", "Claude Code only"),
+      options=(("all", "Claude and Codex (default)"), ("claude-code", "Claude only (its Code and Chat tabs)"),
                ("codex", "Codex only"), ("none", "Neither")),
       ),
     # v1.406.0 (brain/): which Brain Profile chat and agent runs use, app-wide.

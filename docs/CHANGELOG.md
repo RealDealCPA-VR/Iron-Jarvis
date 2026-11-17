@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.528.0
+
+**Claude desktop's Chat tab and Codex can record their chats here.** Claude desktop keeps the chats in its **Chat** tab on claude.ai, not on this PC, so Iron Jarvis cannot read them.
+
 ## v1.527.0
 
 **Plain words, and nothing dropped without a word.** The last of seven releases from the third review: coding sessions say why they stopped waiting or could not save, failures read as sentences, and the start-up no longer slows down as the history grows.
@@ -77,7 +81,3 @@
 ## v1.510.0
 
 **Nothing is lost, part two.** The second of eight releases from the second review.
-
-## v1.509.0
-
-**Other computers and web pages stay outside.** A second review read the parts of Iron Jarvis the first one skipped (coding sessions, the browser, your other computers) and found 98 more things to fix.

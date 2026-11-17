@@ -886,6 +886,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'turn on local-only for every new chat',
         'keep my chats offline unless I say so',
     ),
+    'chat_record': (
+        'save this conversation to Iron Jarvis',
+        'remember what we did in this chat',
+        'log this chat in my work record',
+        'tell Jarvis what we just worked on',
+        'keep a note of this conversation for later',
+        'record this session so my other tools know',
+        'add this chat to my history',
+        'note down what we finished here',
+    ),
     'ci_autofix': (
         'fix my failing pull request checks',
         'have it repair broken checks automatically',
@@ -4344,6 +4354,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'let later chats here know what was done',
         "write a recap once we've gone quiet",
         'show what got done and what is still open',
+    ),
+    'work_search': (
+        'what did we already do in this folder',
+        'look up my earlier work on this',
+        'have I worked on this before',
+        'find what was done for this project last month',
+        'check my history for this topic',
+        'what happened in this folder before',
+        'search my past work',
+        'did another tool already do this',
     ),
     'workflow_create': (
         'save these steps as a routine',

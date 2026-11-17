@@ -243,14 +243,22 @@ def _other_tools_never_read_the_real_homes():
     daemon would read the developer's real ``~/.claude`` into its work record
     and its prompts, so that source is off for the whole session; a test of
     it turns ``READS_DISK`` on and points both tools at its own folders."""
+    from iron_jarvis.mcpserver import apps
     from iron_jarvis.workmap import outside
 
     prev = outside.READS_DISK
     outside.READS_DISK = False
+    # v1.528.0: Claude desktop's settings and Cowork sessions, and Codex's
+    # settings when CODEX_HOME is unset, are looked for under an empty folder,
+    # so no test reads or CHANGES the developer's own apps (Connect writes
+    # into those apps' settings files).
+    prev_root = apps.TEST_ROOT
+    apps.TEST_ROOT = tempfile.mkdtemp(prefix="ij-test-otherapps-")
     try:
         yield
     finally:
         outside.READS_DISK = prev
+        apps.TEST_ROOT = prev_root
 
 
 @pytest.fixture(autouse=True, scope="session")

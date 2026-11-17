@@ -160,10 +160,18 @@ class CapabilityTools:
 CAPABILITY_HANDOFF = "handoff"
 from ..hosted.handoff import TOOL_NAMES as _HANDOFF_TOOLS  # noqa: E402 — no cycle: it imports tools.base only
 
+#: v1.528.0: a CONNECTED APP's one box (Claude desktop, Codex:
+#: ``mcpserver/apps.py``): record its chats and look up the owner's work. Only
+#: an app's key holds it (a pane's or a Code session's boxes never do), and an
+#: app's key holds nothing else.
+CAPABILITY_RECORD = "record"
+from ..workmap.connector_tools import TOOL_NAMES as _RECORD_TOOLS  # noqa: E402 — imports tools.base only
+
 CAPABILITY_TOOLS: dict[str, CapabilityTools] = {
     CAPABILITY_BROWSER: CapabilityTools(prefix="browser_"),
     CAPABILITY_MEMORY: CapabilityTools(names=MEMORY_READ_TOOLS),
     CAPABILITY_HANDOFF: CapabilityTools(names=_HANDOFF_TOOLS),
+    CAPABILITY_RECORD: CapabilityTools(names=_RECORD_TOOLS),
 }
 
 #: How each enforced capability is named in a sentence to a harness.
@@ -171,6 +179,7 @@ _CAPABILITY_LABELS: dict[str, str] = {
     CAPABILITY_BROWSER: "Browser",
     CAPABILITY_MEMORY: "Memory",
     CAPABILITY_HANDOFF: "Hand off",
+    CAPABILITY_RECORD: "Record and look up",
 }
 
 #: The methods this server answers. Anything else is ``METHOD_NOT_FOUND`` with
@@ -200,6 +209,16 @@ CODE_NO_CAPABILITY_MESSAGE = (
     "this Build › Code session has none of Iron Jarvis's tools turned on — turn on "
     "Memory or Browser under Iron Jarvis tools in the session's header in Build"
 )
+
+
+def app_of_grant(pane_id: str) -> str:
+    """v1.528.0: the connected app a grant belongs to ("" for a pane or a
+    Code session)."""
+    from .apps import APPS, PANE_PREFIX
+
+    text = str(pane_id or "")
+    app = text[len(PANE_PREFIX):] if text.startswith(PANE_PREFIX) else ""
+    return app if app in APPS else ""
 
 
 def _code_grant(pane_id: str) -> bool:
@@ -261,6 +280,18 @@ MCP_SCOPE_LINE = (
     "includes writing to memory. "
     "Files, Shell and Extensions are recorded on the pane but are not yet "
     "enforced here, so no tools for them are offered."
+)
+
+#: v1.528.0: what a connected app (Claude desktop, Codex) is told at the
+#: handshake. The tools' own descriptions say the same, because not every
+#: app shows a server's instructions to its model.
+MCP_APP_LINE = (
+    "This connects you to the user's Iron Jarvis on their own PC. Near the end of every "
+    "conversation in which you did real work for the user, call chat_record with a short title, "
+    "a few lines on what was done and what is still open, and the folders and files involved, so "
+    "their other tools know what was done. Call work_search when the user mentions earlier work, "
+    "or when you start in a folder and want to know what was done there before. Work for the "
+    "user's clients is kept inside Iron Jarvis and is never shared with other apps."
 )
 
 #: The instructions are a SNAPSHOT, and say so (v1.238.0 review). MCP gives a
@@ -374,7 +405,18 @@ def capability_refused_message(tool_name: str, pane_id: str = "") -> str:
     — a file tool, ``memory_write`` — gets a sentence that offers no box to tick,
     because ticking one would not help and saying so would send the user to the
     wrong fix.
+
+    v1.528.0: a connected app (Claude desktop, Codex) has no box to tick: it
+    is told which two tools it has.
     """
+    app = app_of_grant(pane_id)
+    if app:
+        from .apps import LABELS
+
+        return (
+            f"{tool_name} is not one of the tools Iron Jarvis gives {LABELS[app]}: it has "
+            f"{' and '.join(sorted(_RECORD_TOOLS))} only."
+        )
     for capability, family in CAPABILITY_TOOLS.items():
         if family.admits(tool_name):
             label = _CAPABILITY_LABELS.get(capability, capability)
@@ -410,6 +452,12 @@ def instructions_heading(pane_id: str) -> str:
     if code:
         # v1.414.0: a Build › Code session's grant.
         return f"Iron Jarvis tools for Build › Code session {code}."
+    app = app_of_grant(pane_id)
+    if app:
+        from .apps import LABELS
+
+        # v1.528.0: a connected app's grant.
+        return f"Iron Jarvis connector for {LABELS[app]}."
     return f"Iron Jarvis tools for Build pane {pane_id}."
 
 
@@ -451,7 +499,15 @@ def granted_capabilities(grant) -> list[str]:
     """
     if grant is None:
         return []
-    return sorted(name for name in CAPABILITY_TOOLS if bool(grant.allows(name)))
+    names = [name for name in CAPABILITY_TOOLS if bool(grant.allows(name))]
+    # v1.528.0: the "record" box belongs to a connected app's key ALONE, and
+    # that key holds nothing else. A pane's boxes are free-form text
+    # (``panetokens.normalise_capabilities`` keeps any name), so a pane that
+    # claims "record" gets nothing for it, and an app that claimed more gets
+    # only "record".
+    if app_of_grant(getattr(grant, "pane_id", "")):
+        return [CAPABILITY_RECORD] if CAPABILITY_RECORD in names else []
+    return sorted(name for name in names if name != CAPABILITY_RECORD)
 
 
 def permitted_tool_names(d, grant) -> list[str]:
@@ -567,6 +623,13 @@ def server_instructions(d, grant) -> str:
     """
     pane_id = getattr(grant, "pane_id", "") or ""
     caps = granted_capabilities(grant)
+    if app_of_grant(pane_id):
+        # v1.528.0: a connected app (Claude desktop, Codex) is told what its
+        # two tools are for, and nothing about panes or browsers.
+        return "\n".join([
+            instructions_heading(pane_id), "", MCP_APP_LINE, "",
+            MCP_MEMORY_UNTRUSTED_LINE, "", MCP_SNAPSHOT_LINE,
+        ])
     lines = [
         instructions_heading(pane_id),
         "",
@@ -981,6 +1044,11 @@ def _grant_now(d, grant) -> Any:
     pane_id = getattr(grant, "pane_id", "") or ""
     platform = getattr(d, "platform", None)
     try:
+        if app_of_grant(pane_id):
+            # v1.528.0: a connected app's key stands while the owner has not
+            # disconnected it; its one box is fixed.
+            apps = getattr(platform, "app_connections", None)
+            return grant if apps is not None and apps.has_pane(pane_id) else None
         if session_of(pane_id):
             tokens = getattr(getattr(platform, "hosted", None), "tokens", None)
             store = getattr(tokens, "store", None)
@@ -1260,6 +1328,9 @@ async def dispatch(
 __all__ = [
     "CAPABILITY_BROWSER",
     "CAPABILITY_MEMORY",
+    "CAPABILITY_RECORD",
+    "MCP_APP_LINE",
+    "app_of_grant",
     "CAPABILITY_TOOLS",
     "MCP_APPROVAL_TIMEOUT_S",
     "MCP_ASK_DENIED_MESSAGE",

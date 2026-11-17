@@ -143,6 +143,8 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   code_handoff_check: { did: "Checked on a helper coding tool", noun: "helper check" },
   code_handoff_stop: { did: "Stopped a helper coding tool", noun: "helper stop" },
   code_handoff_list: { did: "Listed the coding tools that can help", noun: "helper listing" },
+  chat_record: { did: "Saved a chat to the work record", noun: "saved chat" },
+  work_search: { did: "Looked up earlier work", noun: "work lookup" },
   excel_live_look: { did: "Looked at the workbook open in Excel", noun: "look at Excel", nouns: "looks at Excel" },
   excel_live_edit: { did: "Changed the workbook open in Excel", noun: "change in Excel", nouns: "changes in Excel" },
   excel_sheet_spec: { did: "Captured a sheet's layout", noun: "sheet layout capture" },

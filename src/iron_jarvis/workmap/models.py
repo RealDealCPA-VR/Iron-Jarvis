@@ -259,7 +259,47 @@ class WorkClientPreference(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class ReportedChat(SQLModel, table=True):
+    """A chat ANOTHER APP reported through Iron Jarvis's connector (v1.528.0):
+    Claude desktop's Chat tab, or Codex. Written ONLY by the ``chat_record``
+    tool over a connected app's own key (``mcpserver/apps.py``); the app is
+    the key's, never an argument the model gave. Model-written (the other
+    app's model summarised its own chat), so every text is DATA: it reaches a
+    prompt only through the work record's lines, which promptguard scans.
+
+    Its own table, never columns of :class:`WorkEntry` (that row is rebuilt
+    whole from its sources). A Claude Chat report is its own piece of work
+    (``workmap/outside.py``, tool ``claude-chat``); a Codex report only adds a
+    summary to the Codex chat it matches, because Codex's chats are already
+    read from its own files.
+    """
+
+    __tablename__ = "reportedchat"
+
+    #: ``core.ids.new_id("rchat")``.
+    id: str = Field(primary_key=True)
+    #: The connected app: ``claude-desktop`` | ``codex``.
+    app: str = Field(default="", index=True)
+    #: What makes a second report of the same chat update this row: the
+    #: app's own chat id when it gave one, else the title's key and the day.
+    chat_key: str = Field(default="", index=True)
+    title: str = ""
+    #: A few lines, plain text, at most ``reported.SUMMARY_CHARS``.
+    summary: str = ""
+    #: ``[<absolute folder>, …]`` (≤ 5), the first is the chat's folder.
+    folders_json: str = "[]"
+    #: ``[<absolute path>, …]`` (≤ 20): files the chat made or changed.
+    files_json: str = "[]"
+    #: A link back to the chat in its own app ("" when none was given).
+    link: str = ""
+    #: Times the app reported this chat (a long chat may report twice).
+    reports: int = 1
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
+
+
 __all__ = [
+    "ReportedChat",
     "CLIENT_ADDED", "CLIENT_CONFIRMED", "CLIENT_DECLINED", "CLIENT_FOLDER_ADDED",
     "CLIENT_FOLDER_FOUND", "CLIENT_NOTICED", "CLIENT_PREF_CONFIRMED", "CLIENT_PREF_SAID",
     "CLIENT_PREF_TYPED", "CLIENT_PROPOSED", "CLIENT_STATUSES", "KINDS", "KIND_CHAT",

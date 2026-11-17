@@ -69,6 +69,13 @@ from typing import Any, Callable, Iterable, TextIO
 #: are the definitions and the test pins these against them.
 MCP_URL_ENV = "IRONJARVIS_MCP_URL"
 MCP_TOKEN_ENV = "IRONJARVIS_MCP_TOKEN"
+#: v1.528.0: a CONNECTED APP (Claude desktop, Codex) starts the bridge with
+#: the PATH of its key file in Iron Jarvis's own secrets folder
+#: (``mcpserver/apps.py``), so the key itself is never written into the other
+#: app's settings. Read only when ``IRONJARVIS_MCP_TOKEN`` is not set.
+MCP_TOKEN_FILE_ENV = "IRONJARVIS_MCP_TOKEN_FILE"
+#: The most of a key file read (a key is 43 characters).
+TOKEN_FILE_MAX = 4096
 
 #: The session header, spelled here for the same reason.
 SESSION_HEADER = "Mcp-Session-Id"
@@ -118,6 +125,23 @@ NO_TOKEN_MESSAGE = (
     f"{MCP_TOKEN_ENV} is not set: start this coding tool from a Build terminal in Iron "
     "Jarvis so the terminal token reaches it"
 )
+
+#: v1.528.0: what it says when a connected app's key file is gone (the owner
+#: pressed Disconnect, or connected again since this app last started).
+NO_KEY_FILE_MESSAGE = (
+    "Iron Jarvis's key for this app is not on this PC any more: connect this app again in "
+    "Iron Jarvis (Other tools, in the chat list), then restart this app"
+)
+
+
+def token_from_file(path: str) -> str:
+    """The key in a connected app's key file, or "" when it cannot be read."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return fh.read(TOKEN_FILE_MAX).strip()
+    except OSError:
+        return ""
+
 
 #: Waits between tries while Iron Jarvis is not answering (MC3): about 15 s in
 #: all, the time a restart takes, then the plain sentence. Short: the coding
@@ -505,6 +529,12 @@ def main(
     url = (args[1] if len(args) > 1 else "") or environ.get(MCP_URL_ENV, "")
     token = environ.get(MCP_TOKEN_ENV, "")
     err = stderr if stderr is not None else sys.stderr
+    key_file = environ.get(MCP_TOKEN_FILE_ENV, "")
+    if not token and key_file:
+        token = token_from_file(key_file)
+        if not token:
+            err.write(NO_KEY_FILE_MESSAGE + "\n")
+            return 2
     if not token:
         err.write(NO_TOKEN_MESSAGE + "\n")
         return 2

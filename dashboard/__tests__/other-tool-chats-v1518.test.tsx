@@ -111,8 +111,13 @@ describe("the list's data", () => {
         tool: "claude-code",
         label: "claude-code",
         total: 1,
+        openable: true,
         folders: [
-          { folder: "C:\\B", name: "C:\\B", chats: [{ id: "1", title: "Kept", folder: "C:\\B", started: "", ended: "" }] },
+          {
+            folder: "C:\\B",
+            name: "C:\\B",
+            chats: [{ id: "1", title: "Kept", folder: "C:\\B", started: "", ended: "", summary: "", link: "" }],
+          },
         ],
       },
     ]);

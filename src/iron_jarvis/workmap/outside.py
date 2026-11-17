@@ -51,6 +51,7 @@ RULES THIS MODULE KEEPS
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -73,15 +74,27 @@ READS_DISK = True
 CLAUDE = "claude-code"
 CODEX = "codex"
 TOOLS: tuple[str, ...] = (CLAUDE, CODEX)
-LABELS = {CLAUDE: "Claude Code", CODEX: "Codex"}
+#: v1.528.0: Claude desktop's Chat tab. Its chats live on claude.ai, so they
+#: come from two other places: what Claude REPORTS through Iron Jarvis's
+#: connector (``workmap/reported.py``, ref ``claude-chat:r:<row id>``), and
+#: the Cowork sessions the app keeps on this PC (``claude-chat:c:<id>``).
+#: Read-only: a Chat-tab chat is carried on in Claude, not here.
+CLAUDE_CHAT = "claude-chat"
+REF_TOOLS: tuple[str, ...] = (CLAUDE, CLAUDE_CHAT, CODEX)
+LABELS = {CLAUDE: "Claude Code", CLAUDE_CHAT: "Claude Chat", CODEX: "Codex"}
 
 #: ``config.other_tools_in_memory`` -> the tools whose chats enter the record.
+#: "claude-code" means all of Claude (v1.528.0): its Code tab and its Chat tab.
 SWITCH = {
-    "all": frozenset(TOOLS),
-    CLAUDE: frozenset({CLAUDE}),
+    "all": frozenset(REF_TOOLS),
+    CLAUDE: frozenset({CLAUDE, CLAUDE_CHAT}),
     CODEX: frozenset({CODEX}),
     "none": frozenset(),
 }
+#: The most Cowork sessions read (newest first).
+COWORK_MAX = 200
+#: A reported or Cowork chat's summary as the work record keeps it.
+NOTE_CHARS = 240
 SWITCH_DEFAULT = "all"
 
 #: The newest files read per tool: the bound Build › Code's opener reads
@@ -320,25 +333,130 @@ def used_ids(db: Any) -> set[str]:
 
 
 # --------------------------------------------------------------------------- #
+# Claude desktop's Chat tab (v1.528.0)
+# --------------------------------------------------------------------------- #
+def cowork_root() -> Path:
+    """Where Claude desktop keeps its Cowork sessions on this PC."""
+    from ..mcpserver.apps import claude_config_path
+
+    return claude_config_path().parent / "local-agent-mode-sessions"
+
+
+def _when(value: Any) -> str:
+    """An ISO time from Claude desktop's own stamps (seconds or milliseconds
+    since 1970, or ISO text); "" when it is neither."""
+    if isinstance(value, (int, float)) and value > 0:
+        seconds = value / 1000 if value > 1e12 else value
+        try:
+            return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return ""
+    stamp = _naive(value) if isinstance(value, str) and value.strip() else None
+    return stamp.replace(tzinfo=timezone.utc).isoformat() if stamp else ""
+
+
+def cowork_sessions() -> list[dict[str, Any]]:
+    """BLOCKING: the Cowork sessions Claude desktop keeps on this PC, newest
+    first (its own small record per session: title, times, the folders the
+    owner chose). Archived ones are left out. Nothing is written."""
+    if not READS_DISK:
+        return []
+    root = cowork_root()
+    try:
+        files = [(p.stat().st_mtime_ns, p.stat().st_size, p) for p in root.glob("*/*/local_*.json")]
+    except OSError:
+        return []
+    files.sort(key=lambda f: f[0], reverse=True)
+    out: list[dict[str, Any]] = []
+    for mtime_ns, size, path in files[:COWORK_MAX]:
+        key = (int(mtime_ns), int(size))
+        with _lock:
+            hit = _light.get(str(path))
+        if hit is not None and hit[0] == key:
+            row = dict(hit[1])
+        else:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            chosen = [f for f in (data.get("userSelectedFolders") or []) if isinstance(f, str) and _ABSOLUTE.match(f)]
+            sid = str(data.get("sessionId") or path.stem.removeprefix("local_"))
+            stamp = _iso_of_ns(mtime_ns)
+            row = {
+                "id": f"c:{sid}",
+                "title": _SPACES.sub(" ", str(data.get("title") or "")).strip()[:TITLE_CHARS],
+                "folder": chosen[0] if chosen else "",
+                "started": _when(data.get("createdAt")) or stamp,
+                "ended": _when(data.get("lastActivityAt")) or stamp,
+                "summary": "",
+                "link": "",
+                "archived": bool(data.get("isArchived")),
+                "path": str(path),
+            }
+            with _lock:
+                _light[str(path)] = (key, row)
+        if row["archived"] or not row["title"]:
+            continue
+        out.append(row)
+    return out
+
+
+def reported_claude(engine: Any) -> list[dict[str, Any]]:
+    """BLOCKING: the chats Claude desktop reported through the connector."""
+    from . import reported
+
+    if engine is None:
+        return []
+    return [{
+        "id": f"r:{r['id']}", "title": r["title"], "folder": r["folder"], "started": r["started"],
+        "ended": r["ended"], "summary": r["summary"], "link": r["link"], "files": r["files"],
+    } for r in reported.rows(engine, reported.APP_CLAUDE)]
+
+
+def _codex_reports(engine: Any) -> list[dict[str, Any]]:
+    from . import reported
+
+    return reported.rows(engine, reported.APP_CODEX) if engine is not None else []
+
+
+# --------------------------------------------------------------------------- #
 # the sidebar's list
 # --------------------------------------------------------------------------- #
-def listing_view(used: "set[str] | None" = None) -> dict[str, Any]:
+def _grouped(chats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Chats by project folder, newest first; "" is "No folder"."""
+    groups: dict[str, dict[str, Any]] = {}
+    for chat in chats:
+        home = project_of(chat["folder"]) if chat.get("folder") else ""
+        group = groups.setdefault(keys.folder_key(home) if home else "", {
+            "folder": home, "name": (keys.file_name(home) or home) if home else "No folder", "chats": [],
+        })
+        group["chats"].append(chat)
+    for group in groups.values():
+        group["chats"].sort(key=lambda c: str(c.get("ended") or ""), reverse=True)
+    return sorted(groups.values(), key=lambda g: str(g["chats"][0].get("ended") or ""), reverse=True)
+
+
+def listing_view(used: "set[str] | None" = None, engine: Any = None) -> dict[str, Any]:
     """BLOCKING: the owner's chats in the other tools, by tool then by
-    folder, newest first: ``{tools: [{tool, label, total, folders: [{folder,
-    name, chats: [{id, title, folder, started, ended}]}]}], hidden, whole}``.
+    folder, newest first: ``{tools: [{tool, label, total, openable, folders:
+    [{folder, name, chats: [{id, title, folder, started, ended, summary?,
+    link?}]}]}], hidden, whole}``.
+
     A group's folder is the project; a chat's own ``folder`` is where it ran
     and is opened (a Claude Code copy of the project). A chat whose folder is
-    gone is left out (``HIDDEN_GONE``). A tool with nothing to show is left
-    out."""
+    gone is left out (``HIDDEN_GONE``). Claude Chat's chats (reported, and
+    Cowork sessions) are not ``openable``: they are carried on in Claude. A
+    Codex chat carries the ``summary`` Codex reported for it, if any. A tool
+    with nothing to show is left out."""
     used = used or set()
-    tools: list[dict[str, Any]] = []
+    found: dict[str, list[dict[str, Any]]] = {}
     hidden = 0
     whole = True
-    if not READS_DISK:
-        return {"tools": [], "hidden": 0, "whole": True}
-    roots = _scratch_roots()
+    roots = _scratch_roots() if READS_DISK else []
     there: dict[str, bool] = {}
-    for tool in TOOLS:
+    for tool in TOOLS if READS_DISK else ():
         try:
             files, all_of_them = _files(tool)
         except Exception:  # noqa: BLE001 — one tool's folder never hides the other's
@@ -346,8 +464,7 @@ def listing_view(used: "set[str] | None" = None) -> dict[str, Any]:
             whole = False
             continue
         whole = whole and all_of_them
-        groups: dict[str, dict[str, Any]] = {}
-        total = 0
+        chats: list[dict[str, Any]] = []
         for mtime_ns, size, _sid, path in files:
             chat = light(tool, path, mtime_ns, size)
             if chat is None:
@@ -360,21 +477,35 @@ def listing_view(used: "set[str] | None" = None) -> dict[str, Any]:
             if not there[chat["folder"]]:
                 hidden += 1  # HIDDEN_GONE: it cannot be continued
                 continue
-            home = chat.get("home") or chat["folder"]
-            group = groups.setdefault(keys.folder_key(home), {
-                "folder": home, "name": keys.file_name(home) or home, "chats": [],
-            })
             # ``folder`` is where the chat ran, which is where it is opened.
-            group["chats"].append({
-                "id": chat["id"], "title": chat["title"], "folder": chat["folder"],
-                "started": chat["started"], "ended": chat["ended"],
-            })
-            total += 1
-        if total:
-            for group in groups.values():
-                group["chats"].sort(key=lambda c: str(c.get("ended") or ""), reverse=True)
-            folders = sorted(groups.values(), key=lambda g: str(g["chats"][0].get("ended") or ""), reverse=True)
-            tools.append({"tool": tool, "label": LABELS[tool], "total": total, "folders": folders})
+            chats.append({"id": chat["id"], "title": chat["title"], "folder": chat["folder"],
+                          "started": chat["started"], "ended": chat["ended"]})
+        found[tool] = chats
+    if found.get(CODEX):
+        try:
+            from .reported import match_codex
+
+            for cid, rep in match_codex(_codex_reports(engine), found[CODEX]).items():
+                for chat in found[CODEX]:
+                    if chat["id"] == cid:
+                        chat["summary"] = rep.get("summary") or ""
+        except Exception:  # noqa: BLE001 — a summary is extra
+            log.debug("other tools: Codex's reports could not be read", exc_info=True)
+    claude_chat: list[dict[str, Any]] = []
+    try:
+        claude_chat += reported_claude(engine)
+    except Exception:  # noqa: BLE001 — the reports are one source of this group
+        log.debug("other tools: Claude's reported chats could not be read", exc_info=True)
+        whole = False
+    claude_chat += [{k: c[k] for k in ("id", "title", "folder", "started", "ended", "summary", "link")}
+                    for c in cowork_sessions()]
+    found[CLAUDE_CHAT] = claude_chat
+    tools: list[dict[str, Any]] = []
+    for tool in REF_TOOLS:
+        chats = found.get(tool) or []
+        if chats:
+            tools.append({"tool": tool, "label": LABELS[tool], "total": len(chats),
+                          "openable": tool != CLAUDE_CHAT, "folders": _grouped(chats)})
     return {"tools": tools, "hidden": hidden, "whole": whole}
 
 
@@ -387,7 +518,7 @@ def ref_of(tool: str, chat_id: str) -> str:
 
 def split_ref(ref: str) -> tuple[str, str]:
     tool, _, chat_id = str(ref or "").partition(":")
-    return (tool, chat_id) if tool in TOOLS and chat_id else ("", "")
+    return (tool, chat_id) if tool in REF_TOOLS and chat_id else ("", "")
 
 
 def _naive(iso: Any) -> datetime | None:
@@ -398,44 +529,89 @@ def _naive(iso: Any) -> datetime | None:
     return value if value.tzinfo is None else value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _note(summary: Any) -> str:
+    return storable_text(_SPACES.sub(" ", str(summary or "")).strip())[:NOTE_CHARS]
+
+
+def _claude_chat_row(chat: dict[str, Any]) -> dict[str, Any] | None:
+    """A Claude Chat chat as a work-record row (None without a folder: the
+    record holds work that has a folder)."""
+    folder = chat.get("folder") or ""
+    if not folder or is_scratch(keys.folder_key(folder), []):
+        return None
+    home = project_of(folder)
+    files = [{"path": p, "how": "wrote"} for p in (chat.get("files") or [])]
+    return {
+        "title": storable_text(chat["title"]),
+        "folder": storable_text(home),
+        "folder_key": storable_text(keys.folder_key(home)),
+        "tool": LABELS[CLAUDE_CHAT],
+        "note": _note(chat.get("summary")),
+        "files_json": json.dumps(files, ensure_ascii=True),
+        "files_total": len(files),
+        "started_at": _naive(chat.get("started")),
+        "updated_at": _naive(chat.get("ended")) or datetime.now(timezone.utc).replace(tzinfo=None),
+    }
+
+
 def candidates(db: Any, candidate: Callable[..., Any]) -> tuple[list[Any], bool]:
     """The work record's candidates for the other tools' chats, and whether
     the listing was read whole. ``candidate`` is ``collect.Candidate``. A
-    candidate's stamp comes from one stat; its file is opened by ``build``."""
-    if not READS_DISK:
-        return [], True
+    coding tool's candidate's stamp comes from one stat, and its file is
+    opened by ``build``; a Codex stamp also carries the newest Codex report,
+    so a report that arrives later rebuilds the row with its summary."""
     tools = allowed(db)
     if not tools:
         return [], True  # switched off: the rows this source wrote are removed
-    used = used_ids(db)
-    roots = _scratch_roots()
+    engine = db.get_bind()
     out: list[Any] = []
     whole = True
-    for tool in TOOLS:
-        if tool not in tools:
-            continue
-        files, all_of_them = _files(tool)  # a folder that cannot be read RAISES
-        whole = whole and all_of_them
-        for mtime_ns, size, sid, path in files:
-            if sid in used:
-                continue  # already a Build › Code session: that row is the record
+    if READS_DISK and (tools & set(TOOLS)):
+        used = used_ids(db)
+        roots = _scratch_roots()
+        codex_reports = _codex_reports(engine) if CODEX in tools else []
+        codex_mark = f"{len(codex_reports)}:{max((r['ended'] for r in codex_reports), default='')}"
+        for tool in TOOLS:
+            if tool not in tools:
+                continue
+            files, all_of_them = _files(tool)  # a folder that cannot be read RAISES
+            whole = whole and all_of_them
+            for mtime_ns, size, sid, path in files:
+                if sid in used:
+                    continue  # already a Build › Code session: that row is the record
 
-            def build(_db: Any, *, tool=tool, path=path, mtime_ns=mtime_ns, size=size) -> dict[str, Any] | None:
-                chat = light(tool, path, mtime_ns, size)
-                if chat is None or hidden_reason(chat, frozenset(), roots):
-                    return None
-                home = chat.get("home") or chat["folder"]
-                return {
-                    "title": storable_text(chat["title"]),
-                    "folder": storable_text(home),
-                    "folder_key": storable_text(keys.folder_key(home)),
-                    "tool": LABELS[tool],
-                    "started_at": _naive(chat["started"]),
-                    "updated_at": _naive(chat["ended"]) or _naive(_iso_of_ns(mtime_ns)),
-                }
+                def build(_db: Any, *, tool=tool, path=path, mtime_ns=mtime_ns, size=size) -> dict[str, Any] | None:
+                    chat = light(tool, path, mtime_ns, size)
+                    if chat is None or hidden_reason(chat, frozenset(), roots):
+                        return None
+                    home = chat.get("home") or chat["folder"]
+                    row = {
+                        "title": storable_text(chat["title"]),
+                        "folder": storable_text(home),
+                        "folder_key": storable_text(keys.folder_key(home)),
+                        "tool": LABELS[tool],
+                        "note": "",
+                        "started_at": _naive(chat["started"]),
+                        "updated_at": _naive(chat["ended"]) or _naive(_iso_of_ns(mtime_ns)),
+                    }
+                    if tool == CODEX and codex_reports:
+                        from .reported import match_codex
 
-            ref = ref_of(tool, sid)
-            out.append(candidate(f"{KIND_OUTSIDE}:{ref}", KIND_OUTSIDE, ref, f"{mtime_ns}|{size}", build))
+                        rep = match_codex(codex_reports, [chat]).get(chat["id"])
+                        row["note"] = _note(rep.get("summary")) if rep else ""
+                    return row
+
+                ref = ref_of(tool, sid)
+                stamp = f"{mtime_ns}|{size}" + (f"|{codex_mark}" if tool == CODEX else "")
+                out.append(candidate(f"{KIND_OUTSIDE}:{ref}", KIND_OUTSIDE, ref, stamp, build))
+    if CLAUDE_CHAT in tools:
+        chats = reported_claude(engine)  # a read that fails RAISES: rows are left as they are
+        sessions = cowork_sessions()
+        for chat in [*chats, *sessions]:
+            ref = ref_of(CLAUDE_CHAT, chat["id"])
+            stamp = f"{chat['ended']}|{chat['title']}|{chat.get('summary', '')[:40]}|{chat.get('folder', '')}"
+            out.append(candidate(f"{KIND_OUTSIDE}:{ref}", KIND_OUTSIDE, ref, stamp,
+                                 lambda _db, chat=chat: _claude_chat_row(chat)))
     return out, whole
 
 
@@ -444,17 +620,37 @@ def live_state(db: Any, refs: list[str]) -> dict[str, dict[str, Any]]:
     chat is still on disk, whose tool is still switched on, and which has not
     become an Iron Jarvis session since. Anything else is simply absent, so
     it is never told."""
-    if not READS_DISK or not refs:
+    if not refs:
         return {}
     tools = allowed(db)
     if not tools:
         return {}
+    out: dict[str, dict[str, Any]] = {}
+    if CLAUDE_CHAT in tools:
+        # v1.528.0: a reported chat still on record; a Cowork session whose
+        # own record is still on disk and not archived.
+        from sqlmodel import select
+
+        from .models import ReportedChat
+
+        wanted = [sid for tool, sid in (split_ref(r) for r in refs) if tool == CLAUDE_CHAT]
+        ids = [w[2:] for w in wanted if w.startswith("r:")]
+        if ids:
+            have = {str(i) for i in db.exec(select(ReportedChat.id).where(ReportedChat.id.in_(ids)))}  # type: ignore[attr-defined]
+            for i in have:
+                out[ref_of(CLAUDE_CHAT, f"r:{i}")] = {"local_only": False, "archived": False}
+        if any(w.startswith("c:") for w in wanted):
+            live = {c["id"] for c in cowork_sessions()}
+            for w in wanted:
+                if w.startswith("c:") and w in live:
+                    out[ref_of(CLAUDE_CHAT, w)] = {"local_only": False, "archived": False}
+    if not READS_DISK:
+        return out
     used = used_ids(db)
     listed: set[str] = set()
-    out: dict[str, dict[str, Any]] = {}
     for ref in refs:
         tool, sid = split_ref(ref)
-        if tool not in tools or sid in used:
+        if tool not in TOOLS or tool not in tools or sid in used:
             continue
         with _lock:
             path = _paths.get((tool, sid))

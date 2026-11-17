@@ -180,6 +180,9 @@ _OFF_ROSTER_BY_DESIGN = {
     # link while its "Hand off" box is ticked (mcpserver CAPABILITY_TOOLS);
     # an agent run is never a Code session, so no roster carries them.
     "code_handoff_start", "code_handoff_check", "code_handoff_stop", "code_handoff_list",
+    # CONNECTED APPS (v1.528.0): served ONLY over the connector to an app the
+    # owner connected (Claude desktop, Codex), through its one "record" box.
+    "chat_record", "work_search",
     # Reached through `with_worklist`, not through a roster — asserted in §3.
     "worklist_add", "worklist_next", "worklist_done", "worklist_status",
     # YOUR BROWSER (v1.235.0) — reached from CHAT and, from Ship 4, from an

@@ -204,6 +204,10 @@
       "ok": "changed Local only for this chat",
       "failed": "tried a Local only change and it failed"
     },
+    "chat_record": {
+      "ok": "saved a chat to the work record",
+      "failed": "tried a saved chat and it failed"
+    },
     "client_answer": {
       "ok": "noted whether a name is one of your clients",
       "failed": "tried a client answer and it failed"
@@ -791,6 +795,10 @@
     "webhook_update": {
       "ok": "changed a webhook",
       "failed": "tried a webhook change and it failed"
+    },
+    "work_search": {
+      "ok": "looked up earlier work",
+      "failed": "tried a work lookup and it failed"
     },
     "workflow_create": {
       "ok": "saved a workflow",

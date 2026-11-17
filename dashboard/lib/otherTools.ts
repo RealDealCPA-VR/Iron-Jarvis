@@ -28,9 +28,15 @@ export interface OtherChat {
   folder: string;
   started: string;
   ended: string;
+  /** v1.528.0: what the app said it did (Claude Chat; a Codex chat Codex
+   *  reported on). Data, shown as text. */
+  summary: string;
+  /** v1.528.0: a web link back to the chat in its own app ("" when none). */
+  link: string;
 }
 
 export interface OtherFolder {
+  /** "" is "No folder" (a Claude Chat chat that named none). */
   folder: string;
   name: string;
   chats: OtherChat[];
@@ -40,10 +46,41 @@ export interface OtherTool {
   tool: string;
   label: string;
   total: number;
+  /** v1.528.0: false for Claude Chat: those chats are carried on in Claude,
+   *  so a press shows what is known about one instead of opening it. */
+  openable: boolean;
   folders: OtherFolder[];
 }
 
+/** v1.528.0: an app that can be connected to Iron Jarvis. */
+export interface OtherApp {
+  app: string;
+  label: string;
+  installed: boolean;
+  connected: boolean;
+  /** Connected here, but the app's own list lost the entry. */
+  entryMissing: boolean;
+  /** Chats it reported, and when it last did. */
+  count: number;
+  last: string;
+}
+
+/** Which tool's list an app's chats appear in. */
+export const APP_TOOL: Record<string, string> = { "claude-desktop": "claude-chat", codex: "codex" };
+/** The line drawn for a connected app that has reported nothing yet. */
+export const TOOL_LABEL: Record<string, string> = { "claude-chat": "Claude Chat", codex: "Codex" };
+
 export const OTHER_TOOLS_PATH = "/work-record/other-tools";
+export const appConnectPath = (app: string) => `/work-record/other-apps/${encodeURIComponent(app)}/connect`;
+export const appDisconnectPath = (app: string) => `/work-record/other-apps/${encodeURIComponent(app)}/disconnect`;
+/** What Connect does, said before the press that does it. */
+export const CONNECT_WORDS: Record<string, string> = {
+  "claude-desktop":
+    "Adds Iron Jarvis to the tools Claude desktop can use. Claude then records each chat it has here and can look up your earlier work. Nothing leaves this PC. Restart Claude afterwards.",
+  codex:
+    "Adds Iron Jarvis to the tools Codex can use. Codex then adds a summary to each chat and can look up your earlier work. Nothing leaves this PC.",
+};
+export const DISCONNECT_WORDS = "It stops recording here and can no longer look anything up. What it recorded stays.";
 /** Build › Code's own "open a saved conversation" request. */
 export const OPEN_SAVED_PATH = "/build/app/sessions";
 /** Chats shown per folder before "Show more". */
@@ -73,36 +110,72 @@ export function decodeOtherTools(raw: unknown): OtherTool[] {
     const o = obj(t);
     const tool = text(o?.tool, 60).trim();
     if (!o || !tool) continue;
+    // Only an explicit false: an older daemon's rows can all be opened.
+    const openable = o.openable !== false;
     const folders: OtherFolder[] = [];
     for (const f of Array.isArray(o.folders) ? o.folders : []) {
       const fo = obj(f);
       const folder = text(fo?.folder, 1000).trim();
-      if (!fo || !folder) continue;
+      // A chat that can be opened needs its folder; a Claude Chat chat may
+      // have named none ("No folder").
+      if (!fo || (!folder && openable)) continue;
       const chats: OtherChat[] = [];
       for (const c of Array.isArray(fo.chats) ? fo.chats : []) {
         const co = obj(c);
         const id = text(co?.id, 200).trim();
         const title = text(co?.title, 300).trim();
         if (!co || !id || !title) continue;
+        const link = text(co.link, 500).trim();
         chats.push({
           id,
           title,
           folder: text(co.folder, 1000).trim() || folder,
           started: text(co.started, 60),
           ended: text(co.ended, 60),
+          summary: text(co.summary, 1200).trim(),
+          // Only a web address is ever drawn as a link.
+          link: /^https:\/\/\S+$/.test(link) ? link : "",
         });
       }
-      if (chats.length) folders.push({ folder, name: text(fo.name, 200).trim() || folder, chats });
+      if (chats.length) folders.push({ folder, name: text(fo.name, 200).trim() || folder || "No folder", chats });
     }
     if (!folders.length) continue;
     out.push({
       tool,
       label: text(o.label, 60).trim() || tool,
       total: folders.reduce((n, f) => n + f.chats.length, 0),
+      openable,
       folders,
     });
   }
   return out;
+}
+
+/** v1.528.0: the apps that can be connected, from the same answer. */
+export function decodeOtherApps(raw: unknown): OtherApp[] {
+  const list = obj(raw)?.apps;
+  if (!Array.isArray(list)) return [];
+  const out: OtherApp[] = [];
+  for (const a of list) {
+    const o = obj(a);
+    const app = text(o?.app, 40).trim();
+    if (!o || !(app in APP_TOOL)) continue;
+    out.push({
+      app,
+      label: text(o.label, 60).trim() || app,
+      installed: o.installed === true,
+      connected: o.connected === true,
+      entryMissing: o.entry_missing === true,
+      count: typeof o.count === "number" && Number.isFinite(o.count) ? o.count : 0,
+      last: text(o.last, 60),
+    });
+  }
+  return out;
+}
+
+/** The connectable app whose chats a tool's list holds, if any. */
+export function appForTool(apps: OtherApp[], tool: string): OtherApp | null {
+  return apps.find((a) => APP_TOOL[a.app] === tool) ?? null;
 }
 
 export type Seen = Record<string, string>;

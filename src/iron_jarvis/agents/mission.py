@@ -481,6 +481,9 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "code_handoff_check": ("checked on a helper coding tool", "helper check"),
     "code_handoff_stop": ("stopped a helper coding tool", "helper stop"),
     "code_handoff_list": ("listed the coding tools that can help", "helper listing"),
+    # v1.528.0: a connected app (Claude desktop, Codex) over the connector.
+    "chat_record": ("saved a chat to the work record", "saved chat"),
+    "work_search": ("looked up earlier work", "work lookup"),
     "message_agent": ("messaged a teammate", "message to a teammate"),
     "blackboard_post": ("posted a note for the team", "team note"),
     "blackboard_read": ("read the team's notes", "team notes read"),

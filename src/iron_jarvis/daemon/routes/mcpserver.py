@@ -147,22 +147,29 @@ def _tokens(d) -> Any:
     # revokes every pane id it does not know). One door still: the same
     # ``authorize_mcp`` checks, then either store's grant.
     code = getattr(getattr(getattr(d, "platform", None), "hosted", None), "tokens", None)
-    if store is None or code is None:
+    # v1.528.0: a connected app's key (Claude desktop, Codex) is a third
+    # store (``mcpserver/apps.py``), kept across restarts by its digest.
+    apps = getattr(getattr(d, "platform", None), "app_connections", None)
+    if store is None:
         return store
-    return _EitherStore(store, code)
+    stores = [s for s in (store, code, apps) if s is not None]
+    return stores[0] if len(stores) == 1 else _EitherStore(*stores)
 
 
 class _EitherStore:
-    """``resolve`` through the terminals' store, then Build › Code's. Both are
-    random 32-byte tokens checked in constant time; a token is in one store."""
+    """``resolve`` through the terminals' store, then Build › Code's, then
+    (v1.528.0) the connected apps'. All are random 32-byte tokens checked in
+    constant time; a token is in one store."""
 
-    def __init__(self, panes: Any, code: Any) -> None:
-        self._panes = panes
-        self._code = code
+    def __init__(self, *stores: Any) -> None:
+        self._stores = stores
 
     def resolve(self, token: str) -> Any:
-        grant = self._panes.resolve(token)
-        return grant if grant is not None else self._code.resolve(token)
+        for store in self._stores:
+            grant = store.resolve(token)
+            if grant is not None:
+                return grant
+        return None
 
 
 def _sessions(d) -> Any:

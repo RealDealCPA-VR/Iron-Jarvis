@@ -2042,6 +2042,63 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Claude desktop's Chat tab and Codex can record their chats here (v1.528.0)
+
+Claude desktop keeps the chats in its **Chat** tab on claude.ai, not on this
+PC, so Iron Jarvis cannot read them. Instead you can now **connect** Claude
+desktop: Iron Jarvis becomes one of the tools Claude can use, and Claude
+records each chat it has with you here. Codex can be connected the same way.
+
+**Connecting, once.** In the chat list, under **Other tools**, press
+**Connect Claude desktop** (or **Connect Codex**). It says what it will do
+first; press **Connect** to go ahead. Then restart Claude desktop. That is all:
+from then on it happens by itself.
+
+**What a connected app can do, and nothing else:**
+
+- **Record a chat.** Near the end of a chat in which it did real work, Claude
+  saves a short title, a few lines on what was done and what is still open,
+  the folders and files involved, and a link back to the chat. You can also
+  just say "save this to Iron Jarvis".
+- **Look up your earlier work.** In a Claude or Codex chat you can ask "what
+  did we already do in this folder?" and it answers from your work record,
+  including what was done in Iron Jarvis and in your other tools.
+
+It cannot use your browser, your files, your other tools or your memory, and
+**work for a client is never shared with another app**. It all stays on this
+PC: the connection only works between programs on this computer.
+
+**Where the chats show up:**
+
+- **Other tools › Claude Chat** in the chat list. Press a chat to read
+  Claude's summary, with **Open in Claude** to carry it on there. Your Claude
+  desktop **Cowork** sessions are listed here too.
+- **Codex** chats were already listed; a connected Codex adds its summary to
+  each one.
+- **Memory › Your work, by folder**, and a later chat in the same folder is
+  told what was done there, with Claude's summary.
+
+**Switching it off.** Open the tool's line in **Other tools** and press
+**Disconnect**. Iron Jarvis is removed from that app's list of tools and the
+app can no longer reach it, at once. What it already recorded stays. The
+memory setting **Remember chats from other coding tools** also decides whether
+these chats are told to other chats.
+
+**What changes in the other app.** Connect adds one entry, named
+`iron-jarvis`, to Claude desktop's or Codex's own settings file, and
+Disconnect removes exactly that entry. Everything else in that file is left as
+it was, and a copy of the file as it was is kept first. If the file already
+has an entry of that name that Iron Jarvis did not add, nothing is changed and
+it says so.
+
+**Good to know:**
+
+- Recording depends on Claude actually doing it. Most chats with real work
+  will be recorded; if one is missed, say "save this to Iron Jarvis".
+- Chats from before you connected are not there. Older Chat-tab chats would
+  need one export from Claude, which is not built yet.
+- ChatGPT chats and Codex cloud tasks stay online and cannot be connected.
+
 ## Plain words, and nothing dropped without a word (v1.527.0)
 
 The last of seven releases from the third review: coding sessions say why

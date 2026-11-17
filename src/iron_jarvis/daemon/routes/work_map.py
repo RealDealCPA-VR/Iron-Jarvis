@@ -96,6 +96,58 @@ def _with_clients(platform, folders: list[dict[str, Any]]) -> None:
 
 
 OTHER_TOOLS_UNREADABLE = "Your chats in other tools could not be read right now. Try again in a moment."
+APPS_NOT_READY = "Iron Jarvis is still starting. Try again in a moment."
+APPS_UNKNOWN = "Iron Jarvis connects to Claude desktop or Codex."
+
+
+def _apps_view(d) -> list[dict[str, Any]]:
+    """v1.528.0: each app that can be connected: whether it is set up on this
+    PC, whether it is connected, and how many chats it reported. Nothing when
+    that cannot be read (the list itself still answers)."""
+    from ...workmap import reported
+
+    apps = getattr(d.platform, "app_connections", None)
+    if apps is None:
+        return []
+    try:
+        rows = apps.status()
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        counts = reported.stats(getattr(d.platform, "engine", None))
+    except Exception:  # noqa: BLE001
+        counts = {}
+    for row in rows:
+        row.update(counts.get(row["app"]) or {"count": 0, "last": ""})
+    return rows
+
+
+async def _apps_change(d, name: str, *, connect: bool) -> dict[str, Any]:
+    import asyncio
+
+    from ...mcpserver.apps import APP_CLAUDE, APPS, LABELS, AppConnectError
+    from ...platform import own_mcp_url
+
+    apps = getattr(d.platform, "app_connections", None)
+    if apps is None:
+        raise HTTPException(status_code=503, detail=APPS_NOT_READY)
+    if name not in APPS:
+        raise HTTPException(status_code=404, detail=APPS_UNKNOWN)
+    try:
+        if connect:
+            row = await asyncio.to_thread(apps.connect, name, own_mcp_url())
+        else:
+            row = await asyncio.to_thread(apps.disconnect, name)
+    except AppConnectError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    label = LABELS[name]
+    if connect:
+        then = (f"Restart {label} to start using it." if name == APP_CLAUDE
+                else "New Codex chats use it; restart Codex if it is open.")
+        words = f"{label} is connected. {then}"
+    else:
+        words = f"{label} is no longer connected. What it recorded stays."
+    return {**row, "words": words}
 
 
 def register(app: FastAPI, d) -> None:
@@ -104,7 +156,9 @@ def register(app: FastAPI, d) -> None:
         """v1.518.0: the owner's chats in Claude Code and Codex, by tool and
         by folder (the sidebar's "Other tools" row). The owner's own screen:
         it does not depend on the memory switch, and it lists no chat that is
-        already an Iron Jarvis coding session. Names only, never a transcript."""
+        already an Iron Jarvis coding session. Names only, never a transcript.
+        v1.528.0: also Claude desktop's Chat tab (what Claude reported, and
+        its Cowork sessions), and ``apps``: which apps can be connected."""
         from ...core.db import session_scope
         from ...workmap import outside
 
@@ -114,9 +168,24 @@ def register(app: FastAPI, d) -> None:
             if engine is not None:
                 with session_scope(engine) as db:
                     used = outside.used_ids(db)
-            return outside.listing_view(used)
+            out = outside.listing_view(used, engine)
         except Exception as exc:  # noqa: BLE001 — said, never an empty list
             raise HTTPException(status_code=503, detail=OTHER_TOOLS_UNREADABLE) from exc
+        out["apps"] = _apps_view(d)
+        return out
+
+    @app.post("/work-record/other-apps/{name}/connect")
+    async def other_app_connect(name: str) -> dict[str, Any]:
+        """v1.528.0: the owner's press: add Iron Jarvis to Claude desktop's or
+        Codex's own connectors (``mcpserver/apps.py``). Nothing else calls
+        this: no tool, no chat. The app must be restarted to use it."""
+        return await _apps_change(d, name, connect=True)
+
+    @app.post("/work-record/other-apps/{name}/disconnect")
+    async def other_app_disconnect(name: str) -> dict[str, Any]:
+        """v1.528.0: the owner's press: remove Iron Jarvis from that app's
+        connectors and end its key at once. What it recorded stays."""
+        return await _apps_change(d, name, connect=False)
 
     @app.get("/work-record/folders")
     def work_folders() -> dict[str, Any]:

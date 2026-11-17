@@ -55,6 +55,7 @@
     "channel_remove",
     "channel_toggle",
     "chat_local_only",
+    "chat_record",
     "client_answer",
     "client_list",
     "client_preference_add",
@@ -227,6 +228,7 @@
     "webhook_add",
     "webhook_delete",
     "webhook_update",
+    "work_search",
     "workflow_create",
     "workflow_delete",
     "workflow_list",
@@ -295,6 +297,7 @@
     "channel_remove": "remove a notification destination",
     "channel_toggle": "turn a channel's two-way messages on or off",
     "chat_local_only": "change Local only for this chat",
+    "chat_record": "save a chat to the work record",
     "client_answer": "say whether a name is one of your clients",
     "client_list": "list your clients",
     "client_preference_add": "keep a preference for one client",
@@ -467,6 +470,7 @@
     "webhook_add": "add a webhook",
     "webhook_delete": "remove a webhook",
     "webhook_update": "change a webhook",
+    "work_search": "look up earlier work",
     "workflow_create": "save a workflow",
     "workflow_delete": "remove a saved workflow",
     "workflow_list": "list your workflows",
@@ -636,6 +640,10 @@
     "chat_local_only": [
       "Changed Local only for this chat",
       "Changing Local only for this chat"
+    ],
+    "chat_record": [
+      "Saved a chat to the work record",
+      "Saving a chat to the work record"
     ],
     "client_answer": [
       "Noted whether a name is one of your clients",
@@ -1173,6 +1181,10 @@
       "Changed a webhook",
       "Changing a webhook"
     ],
+    "work_search": [
+      "Looked up earlier work",
+      "Looking up earlier work"
+    ],
     "workflow_create": [
       "Saved a workflow",
       "Saving a workflow"
@@ -1269,6 +1281,7 @@
     "channel_remove": "",
     "channel_toggle": "",
     "chat_local_only": "",
+    "chat_record": "",
     "client_answer": "",
     "client_list": "",
     "client_preference_add": "",
@@ -1441,6 +1454,7 @@
     "webhook_add": "",
     "webhook_delete": "",
     "webhook_update": "",
+    "work_search": "",
     "workflow_create": "",
     "workflow_delete": "",
     "workflow_list": "",

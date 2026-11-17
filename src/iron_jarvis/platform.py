@@ -1635,6 +1635,14 @@ def build_platform(
 
     for tool in handoff_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # CONNECTED APPS (v1.528.0): chat_record / work_search. Served ONLY over
+    # the connector to an app the owner connected (Claude desktop, Codex:
+    # mcpserver/apps.py), through its one box ("record"); on no roster and
+    # never armed in chat.
+    from .workmap.connector_tools import connector_tools
+
+    for tool in connector_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
     # THE LOOKUP (capability search plan, Phase 1): ``find_capability`` lets
     # the model ask what Iron Jarvis can do, in its own words, and answers
     # from one index of every built-in tool, setting, page step and "not
@@ -2874,6 +2882,11 @@ def build_platform(
     from .goals.engine import GoalEngine
 
     platform.goal_engine = GoalEngine(platform)
+    # v1.528.0: the keys of the apps the owner connected (Claude desktop,
+    # Codex). Read by POST /mcp beside the panes' and Code sessions' stores.
+    from .mcpserver.apps import AppConnections
+
+    platform.app_connections = AppConnections(config.home)
 
     platform.scheduler = Scheduler(engine, _run_scheduled)
     # v1.505.0 (north-star 5.2): a REMOVED schedule or saved workflow drops

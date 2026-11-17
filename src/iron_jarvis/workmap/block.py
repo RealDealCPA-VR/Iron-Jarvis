@@ -167,6 +167,9 @@ def entry_line(row: dict[str, Any], now: datetime, *, with_folder: bool = False,
         line += f" (files: {shown}{f', and {more} more' if more > 0 else ''})"
     if row["kind"] == KIND_RUN and row.get("note"):
         line += f". Result: {_clip(row['note'], NOTE_CHARS)}"
+    elif row["kind"] == KIND_OUTSIDE and row.get("note"):
+        # v1.528.0: what the other app said it did (data, scanned like the rest).
+        line += f". Summary: {_clip(row['note'], NOTE_CHARS)}"
     return line
 
 
@@ -277,12 +280,18 @@ def _client_rows(wm: Any, roots: Any, *, exclude_ref: str, limit: int) -> list[d
 
 
 def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref: str = "",
-               list_folder: bool = True, now: datetime | None = None) -> str:
+               list_folder: bool = True, now: datetime | None = None, outside: bool = False) -> str:
     """The block for one turn, or "". ``folder`` is the folder the turn works
     in ("" = none); ``list_folder`` False leaves the "In this folder" part to
     another block (a project's own recent activity) while still keeping that
     folder out of "other folders". ``query`` is the OWNER's words: it points
-    at earlier work and names clients for the wall. Never raises."""
+    at earlier work and names clients for the wall. Never raises.
+
+    ``outside`` (v1.528.0): the asker is ANOTHER APP over the connector
+    (``work_search``). Its folder and words were written by that app's
+    model, never by the owner, so neither builds the wall: it is the wall of
+    a turn with no folder and no words, and work for a client (confirmed, or
+    waiting for the owner's answer) is never told to another app."""
     try:
         from .clients import wall
 
@@ -294,8 +303,9 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         wm.refresh(budget=TURN_REBUILD)
         now = now or datetime.now(timezone.utc).replace(tzinfo=None)
         withhold = _withhold_local_only()
-        # THE WALL (v1.499.0): built from this turn's own folder and words.
-        turn, cmap = wall.turn_and_map(engine, folder, query)
+        # THE WALL (v1.499.0): built from this turn's own folder and words
+        # (v1.528.0: never from another app's, see ``outside``).
+        turn, cmap = wall.turn_and_map(engine, "", "") if outside else wall.turn_and_map(engine, folder, query)
 
         def allowed(r: dict[str, Any]) -> bool:
             if r["archived"]:

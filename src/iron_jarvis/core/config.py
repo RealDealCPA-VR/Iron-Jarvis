@@ -189,6 +189,12 @@ def default_permissions() -> dict[str, str]:
         "code_handoff_check": "allow",
         "code_handoff_stop": "allow",
         "code_handoff_list": "allow",
+        # v1.528.0: reached only over the connector to an app the owner
+        # CONNECTED (Claude desktop, Codex; the press is the consent). One
+        # writes into Iron Jarvis's own table (with Undo), one reads the work
+        # record behind the strictest client wall.
+        "chat_record": "allow",
+        "work_search": "allow",
         "brain_save": "allow",
         "brain_change": "ask",
         # Memory housekeeping (v1.143.0): FILE a suggest-only cleanup proposal.
